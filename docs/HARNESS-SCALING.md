@@ -21,23 +21,33 @@ regexes (code in the signed daemon).
 
 ## 2. Harness names in core
 
-Four places still name a harness:
+`openai` and `anthropic` may appear in core when they name an API wire format or a provider
+(decoder family ids, secret shapes, provider prefixes); the ban is on harness and product names
+(codex, claude-code, hermes, …). `crates/goalcup-protocol/tests/it/no_family_literals.rs`
+enforces it on every source file of the protocol, daemon and verifier crates, with each allowed
+literal listed by file and reason.
 
-- **The Claude tool allowance** (`--capture-claude-allowed-tool`), checked by connector id in the
-  CLI, daemon, verifier and protocol. Since D52 the shipped Claude profile bypasses permission
-  prompts, so the allowance cannot apply. Delete the CLI flag and the daemon path; keep the
-  protocol field and the reader's check, because v5 traces that carry it stay valid.
-- **Native decoders**: the verifier reads Codex and Claude Code transcripts (`Format { Codex,
-  ClaudeCode }`); any other harness's session file is recorded but not decoded. Make decoding a
-  small declared set of *families* a connector picks by `protocol_hint` (it already does for the
-  wire: OpenAI Responses, Anthropic Messages, Chat Completions). A new harness that writes, say,
-  Chat-Completions-shaped JSONL picks that family; only a new shape is a verifier PR.
-- **`CODEX_SCOPE_WAIT`** (120 s), the wait for a session id on stdout, used by every
-  `stdout_json` harness: a connector field with a bounded default.
-- **`native_scope.rs`** always forbids `~/.codex`, `~/.claude` and `~/.hermes`, beside the
-  manifest's own `real_dirs`, which already does the job. Keep `real_dirs`, drop the three names.
-  The same goes for `HARNESS_RESERVED_PREFIXES = ["HERMES_"]`, which can become a per-connector
-  "reserved prefix" field or go.
+One place still names a harness:
+
+- **Native decoders**: the verifier reads two transcript shapes (`Format { Codex, ClaudeCode }`
+  in `capture_analysis/native.rs`), chosen by the connector's `protocol_hint` (`codex-jsonl`,
+  `claude-code-jsonl`); any other harness's session file is recorded but not decoded. Name them
+  as *families* instead, as the wire already does (OpenAI Responses, Anthropic Messages, Chat
+  Completions). A new harness that writes, say, Chat-Completions-shaped JSONL picks that family;
+  only a new shape is a verifier PR.
+
+Already data or gone:
+
+- **The tool allowance** (`allowed_tool_rule`): no CLI flag and no daemon path write it since D52.
+  The protocol and verifier hold it to shape only (both fields present, bounded text and a
+  SHA-256 hex digest, or both absent) for any `profile_id`, so v5 traces that carry it stay valid
+  (D52, amended 2026-10-15).
+- **The identity wait**: `capture.identity.wait_seconds`, a connector field defaulting to
+  `DEFAULT_STDOUT_WAIT_SECONDS` (120 s).
+- **Home directories**: each connector's `real_dirs` names its own (`{user_home}/.codex` and so
+  on); no core code lists them.
+- **Reserved variable prefixes**: `capture.reserved_env_prefixes`, a connector field (Hermes sets
+  `HERMES_`).
 
 ## 3. The same facts typed three times
 

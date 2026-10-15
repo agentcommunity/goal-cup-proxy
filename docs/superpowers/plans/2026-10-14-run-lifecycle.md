@@ -28,7 +28,7 @@
 - Emails: 20 min without a heartbeat → "your run stopped; run `goalcup continue`", once per silence; 3 h and again at 6 h without model calls → "your agent made no model calls for N hours: is it finished, out of tokens, or offline?", once each per idle period; neither after the deadline.
 - The tracer records; it never sends the agent a message, never types "keep going", never relaunches the harness by itself, has no finish tool, never force-pushes.
 - v5 records are frozen; additions are D53-style optional skip-if-none fields or file-layout rows, each a DECISIONS row (D54 seal, D55 interactive connectors, D56 chain parts; D40 amended).
-- No harness or vendor name in core code: new source files join the list in `crates/goalcup-protocol/tests/it/no_family_literals.rs`.
+- No harness or product name in core code: `crates/goalcup-protocol/tests/it/no_family_literals.rs` scans every protocol, daemon and verifier source file automatically, so a new file needs no list entry. `openai` and `anthropic` may appear where they name an API wire format or a provider.
 - Never set a model base URL; never write `~/.codex`, `~/.claude`, `~/.hermes`. A `connectors/` edit runs `sh scripts/pin-manifests.sh` in the same commit.
 - Every cargo command `--offline`. Each task is one PR that passes `sh scripts/gate.sh fast` (Worker tasks also `cd server/worker && npm test`), run under `/tmp/goalcup-heavy.lock`.
 - A run stays on the machine that started it: `continue` works only there, with that run's saved credential; there is no re-approval or move path.
