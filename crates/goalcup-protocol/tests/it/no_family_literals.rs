@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 /// Lower-case fragments no string literal may contain, compared case-insensitively. They cover
 /// the connector ids (`claude-code-cli`, `codex-cli`, `hermes-cli`), the native formats
 /// (`codex-jsonl`, `claude-code-jsonl`) and the vendor CA variables (`CODEX_CA_CERTIFICATE`,
-/// `HERMES_CA_BUNDLE`).
+/// `HERMES_CA_BUNDLE`), which are connector data (`capture.ca.env`).
 const FORBIDDEN: &[&str] = &["hermes", "codex", "claude"];
 
 /// The literals the CLI and platform capture paths may not be.
@@ -30,16 +30,6 @@ const FAMILY_LITERALS: &[&str] = &["hermes", "codex", "claude-code"];
 /// literal's text with line continuations joined, reason). Any other hit in the same file
 /// fails, and an entry no literal matches any more fails as stale.
 const ALLOWED: &[(&str, &str, &str)] = &[
-    (
-        "crates/goalcup-protocol/src/capture_policy.rs",
-        "CODEX_CA_CERTIFICATE",
-        "a CA_REGISTRY row: the variable a harness reads its extra CA from (D41, D43)",
-    ),
-    (
-        "crates/goalcup-protocol/src/capture_policy.rs",
-        "HERMES_CA_BUNDLE",
-        "a CA_REGISTRY row: the variable a harness reads its CA bundle from (D41, D43)",
-    ),
     (
         "crates/goalcup-protocol/src/capture_policy.rs",
         "CLAUDE_CODE_SHELL_PREFIX",

@@ -4,8 +4,9 @@
 //! code, each is a trust decision about the participant's machine (D1, D36, D38, D41, D43),
 //! and:
 //!
-//! * **every row needs a DECISIONS entry**; a new CA variable, credential name, interpreter
-//!   exemption or startup-file class is a core PR, not a harness PR;
+//! * **every row needs a DECISIONS entry**; a new credential name, CA mode or CA-name shape,
+//!   interpreter exemption or startup-file class is a core PR, not a harness PR (a harness's
+//!   own CA variable is connector data held to the [`CA_ENV_SUFFIXES`] shape);
 //! * **tightening a row that a shipped connector uses migrates that connector in the same
 //!   PR**, and `tests/it/harness_conformance.rs` fails until it does;
 //! * the lists that name *spellings* (interpreters, startup files, env names, argument words)
@@ -43,7 +44,10 @@ pub(crate) const MAX_GOAL_FLAG_BYTES: usize = 32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CaMode {
-    /// Measured to add the proxy's CA to the harness's roots.
+    /// Measured to add the proxy's CA to the harness's roots. A harness's own variable is
+    /// handed the proxy's CA alone. A [`SHARED_CA_ENV`] row is declared `extend` too: it
+    /// replaces the roots of whatever reads it, so it is handed the system's roots plus the
+    /// proxy's CA, and the resulting trust is the same as an extending variable's.
     Extend,
     /// Names a file that REPLACES the harness's provider-client roots with the proxy's CA.
     /// That fails closed (the harness then trusts only the proxy, which verifies the real
@@ -54,34 +58,63 @@ pub enum CaMode {
 impl CaMode {
     /// The spellings `capture.ca.mode` accepts, in declaration order.
     pub(crate) const VALUES: &'static [&'static str] = &["extend", "replace"];
-
-    /// The TOML spelling.
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            CaMode::Extend => "extend",
-            CaMode::Replace => "replace",
-        }
-    }
 }
 
-/// The only CA variables a capture profile may name, with their mode (D41 as amended by D43).
-///
-/// Any connector may declare a replace-mode row. A new CA variable, in either mode, is a row
-/// here plus a DECISIONS entry. `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
-/// `REQUESTS_CA_BUNDLE` stay refused: they replace the roots of every tool child, not only the
-/// harness's.
-pub const CA_REGISTRY: &[(&str, CaMode)] = &[
-    ("CODEX_CA_CERTIFICATE", CaMode::Extend),
-    ("NODE_EXTRA_CA_CERTS", CaMode::Extend),
-    ("HERMES_CA_BUNDLE", CaMode::Replace),
+/// The CA variables every tool child reads too (OpenSSL's, and Python `requests`'). They replace
+/// the roots of whatever reads them, so the launch hands them a file of the system's roots plus
+/// the proxy's CA, and a profile names them only with `mode = "extend"` (the resulting trust is
+/// the real roots plus the proxy). That gives up failing closed: a connection the harness makes
+/// past the proxy still verifies, and nothing records it (CHEAT-CHECKLIST). A harness with a
+/// replace-mode variable of its own names that instead.
+pub const SHARED_CA_ENV: &[&str] = &["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"];
+
+/// How a harness's own CA variable ends (D43, closed). The name itself is connector data
+/// (`capture.ca.env`), so a new harness is no core PR: `NODE_EXTRA_CA_CERTS`, a
+/// `<HARNESS>_CA_CERTIFICATE` or a `<HARNESS>_CA_BUNDLE` fits. The shape keeps every other
+/// variable (a code loader, a command, a home) out of the field: a CA variable is only ever handed
+/// the path of a certificate file.
+pub const CA_ENV_SUFFIXES: &[&str] = &[
+    "_CA_CERTIFICATE",
+    "_CA_CERTIFICATES",
+    "_CA_CERT",
+    "_CA_CERTS",
+    "_CA_BUNDLE",
+    "_CA_FILE",
 ];
 
-/// The registry mode of a CA variable, or `None` when it is not a registry row.
-pub(crate) fn ca_registry_mode(name: &str) -> Option<CaMode> {
-    CA_REGISTRY
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, mode)| *mode)
+/// Whether an (upper-cased) name is a CA variable: a [`SHARED_CA_ENV`] row, or a name with a
+/// [`CA_ENV_SUFFIXES`] ending. Such a name belongs in `capture.ca.env` and nowhere else.
+pub fn is_ca_env_name(upper: &str) -> bool {
+    SHARED_CA_ENV.contains(&upper) || CA_ENV_SUFFIXES.iter().any(|s| upper.ends_with(s))
+}
+
+/// Why `name` is refused as a `capture.ca.env` entry declared with `mode`, or `None`.
+pub fn ca_env_problem(name: &str, mode: CaMode) -> Option<&'static str> {
+    let shape = name.bytes().next().is_some_and(|b| b.is_ascii_uppercase())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        && name.len() <= MAX_CAPTURE_ENV_KEY_BYTES;
+    if !shape {
+        return Some("must be an upper-case variable name (`^[A-Z][A-Z0-9_]*$`)");
+    }
+    if TRUST_ONLY.contains(&name) {
+        return Some("changes certificate trust in a way no capture profile sets");
+    }
+    if !is_ca_env_name(name) {
+        return Some(
+            "is not a CA variable: one of SSL_CERT_FILE and REQUESTS_CA_BUNDLE, or a name \
+             ending `_CA_CERTIFICATE`, `_CA_CERTIFICATES`, `_CA_CERT`, `_CA_CERTS`, \
+             `_CA_BUNDLE` or `_CA_FILE`",
+        );
+    }
+    if SHARED_CA_ENV.contains(&name) && mode != CaMode::Extend {
+        return Some(
+            "is read by every tool child, so the launch hands it the system's roots plus the \
+             proxy CA, and it takes `mode = \"extend\"`",
+        );
+    }
+    env_name_denied(name, EnvContext::CaEnv)
 }
 
 /// The provider-credential variables a capture profile may name. Closed on purpose (D43,
@@ -116,16 +149,13 @@ pub fn mentions_goalcup(s: &str) -> bool {
 /// Names a capture launch pins itself, over anything a profile's `env` says.
 const PINNED_ENV: &[&str] = &["HOME", "PATH", "USER", "LOGNAME", "TMPDIR"];
 
-/// Trust and TLS variables no capture profile may set that are NOT [`CA_REGISTRY`] rows: the four
-/// roots that replace every tool child's, and the switch that turns verification off. Every
-/// `CA_REGISTRY` name is refused too, derived from the registry itself (see `env_name_denied`), so
-/// a new registry row cannot be settable through `capture.env` or `home.env`. A name is in one of
-/// the two lists, never both.
+/// Trust and TLS variables no profile may set in any field: a directory of roots (the launch
+/// writes a file), curl's own bundle, and the switch that turns verification off. Every CA
+/// variable ([`is_ca_env_name`]) is refused in `capture.env` and `home.env` too (see
+/// `env_name_denied`): `capture.ca` is the one field that sets one.
 pub const TRUST_ONLY: &[&str] = &[
-    "SSL_CERT_FILE",
     "SSL_CERT_DIR",
     "CURL_CA_BUNDLE",
-    "REQUESTS_CA_BUNDLE",
     "NODE_TLS_REJECT_UNAUTHORIZED",
 ];
 
@@ -269,6 +299,10 @@ pub enum EnvContext {
     /// home-relocator rule and the self-pin row do not (so `HERMES_HOME` passes), and `SHELL` is
     /// refused.
     HomeEnv,
+    /// A `capture.ca.env` name, held to [`ca_env_problem`]'s shape first: the substring rules,
+    /// the injection, command and pinned lists and the injection and provider prefixes apply;
+    /// the CA rule (a CA variable belongs in this field) and the home rules do not.
+    CaEnv,
 }
 
 /// Other tools' home, config and cache variables, refused as `home.env` (S2 review I-3).
@@ -423,13 +457,11 @@ fn env_name_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
     }
     // The exact names come before the prefixes and suffixes, so a name that matches both is
     // told the more specific reason.
-    let registry_row = ca_registry_mode(&upper).is_some();
-    if registry_row || TRUST_ONLY.contains(&upper.as_str()) {
-        return Some(if registry_row {
-            CA_REASON_V2
-        } else {
-            "changes certificate trust, which no capture profile sets"
-        });
+    if TRUST_ONLY.contains(&upper.as_str()) {
+        return Some("changes certificate trust, which no capture profile sets");
+    }
+    if ctx != EnvContext::CaEnv && is_ca_env_name(&upper) {
+        return Some(CA_REASON_V2);
     }
     if INJECTION_ENV.contains(&upper.as_str()) {
         return Some("injects code or startup files into the harness");

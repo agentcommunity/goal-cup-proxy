@@ -12,7 +12,7 @@
 //!   process handle, the redaction patterns, and the argv and environment probes whose verdict
 //!   for this connector differs from the shared policy.
 //! * Shared files, which no connector changes: `policy.json` (the generic argv and environment
-//!   deny verdicts over fixed probe lists, the CA registry and the credential names),
+//!   deny verdicts over fixed probe lists, the CA-variable rules and the credential names),
 //!   `identity-grammar.json` (the stdout JSON tee and the stderr marker grammar over fixture
 //!   streams) and `loader-script.json`.
 //!
@@ -32,6 +32,7 @@
 
 use crate::common::m2_profile_support;
 
+use goalcup_cli::ca_bundle::{HandedFile, handed_file};
 use goalcup_cli::connector::HarnessConnector;
 use goalcup_cli::launch::{
     LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan, build_capture_launch,
@@ -40,7 +41,8 @@ use goalcup_cli::launch::{
 use goalcup_cli::per_run_home::create_per_run_home;
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::capture_policy::{
-    CA_REGISTRY, CREDENTIAL_ENV, CaMode, EnvContext, capture_arg_denied, env_key_denied,
+    CA_ENV_SUFFIXES, CREDENTIAL_ENV, CaMode, EnvContext, SHARED_CA_ENV, TRUST_ONLY,
+    capture_arg_denied, env_key_denied,
 };
 use goalcup_protocol::harness::{CaptureSpec, HarnessManifest, Origin};
 use goalcup_protocol::pins::shipped_connector_ids;
@@ -563,6 +565,7 @@ fn profile_json(p: &CaptureSpec) -> Value {
     out.insert("interactive".into(), json!(p.interactive));
     out.insert("resume_args".into(), json!(p.resume_args));
     out.insert("skills_dir".into(), json!(p.home.skills_dir));
+    out.insert("providers".into(), json!(p.providers));
     out.insert(
         "hosts".into(),
         json!(
@@ -609,28 +612,30 @@ fn credential_json(p: &CaptureSpec) -> Value {
     })
 }
 
-/// Each CA variable the profile names: its registry mode and the value the plan gives it.
+/// Each CA variable the profile names, the profile's mode, the file the launch hands it, and the
+/// value the plan gives it (the proxy CA's path for a harness's own variable).
 fn ca_json(l: &s::Layout, p: &CaptureSpec, plan: &LaunchPlan) -> Value {
+    let mode = match p.ca.mode {
+        CaMode::Extend => "extend",
+        CaMode::Replace => "replace",
+        _ => "unknown",
+    };
     let rows: Vec<Value> =
         p.ca.env
             .iter()
             .map(|name| {
                 json!({
                     "name": name,
-                    "registry_mode": ca_mode(name),
+                    "mode": mode,
+                    "file": match handed_file(name) {
+                        HandedFile::ProxyCa => "proxy_ca",
+                        HandedFile::SystemRootsAndProxyCa => "system_roots_and_proxy_ca",
+                    },
                     "value_in_plan": plan.env_set.get(name).map(|v| norm(l, v)),
                 })
             })
             .collect();
     json!(rows)
-}
-
-fn ca_mode(name: &str) -> &'static str {
-    match CA_REGISTRY.iter().find(|(n, _)| *n == name) {
-        Some((_, CaMode::Extend)) => "extend",
-        Some((_, CaMode::Replace)) => "replace",
-        Some(_) | None => "unlisted",
-    }
 }
 
 /// What validation says when `edit` is applied to the connector's manifest.
@@ -863,7 +868,7 @@ fn the_controlled_workload_capture_behaviour_is_pinned() {
 // ---------------------------------------------------------------------------------------
 
 /// The capture policy every connector shares, over the fixed probe lists: the generic argv and
-/// environment deny verdicts, the CA registry and the admitted credential names. A connector's
+/// environment deny verdicts, the CA-variable rules and the admitted credential names. A connector's
 /// own file lists only the probes whose verdict differs for it, so a policy change rewrites this
 /// one file, not one per connector.
 #[test]
@@ -879,10 +884,11 @@ fn the_shared_capture_policy_is_pinned() {
                 .iter()
                 .map(|name| json!({"name": name, "denied": env_key_denied(name, EnvContext::CaptureEnv)}))
                 .collect::<Vec<_>>(),
-            "ca_registry": CA_REGISTRY
-                .iter()
-                .map(|(name, _)| json!({"name": name, "mode": ca_mode(name)}))
-                .collect::<Vec<_>>(),
+            "ca": {
+                "shared_extend_only": SHARED_CA_ENV,
+                "own_name_suffixes": CA_ENV_SUFFIXES,
+                "refused": TRUST_ONLY,
+            },
             "credential_env_names": CREDENTIAL_ENV,
         }),
     );

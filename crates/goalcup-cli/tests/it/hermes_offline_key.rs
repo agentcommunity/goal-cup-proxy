@@ -374,6 +374,7 @@ fn run_hermes(reply: Reply, auth_seed: Option<&[u8]>) -> Run {
             config_home: &hermes_home,
             proxy_url: &proxy_url,
             ca_certificate: &ca,
+            ca_bundle: None,
             parent_env: &parent,
         },
     )

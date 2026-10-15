@@ -29,6 +29,7 @@
 
 pub mod account;
 pub(crate) mod arming;
+pub mod ca_bundle;
 pub mod capture_tee;
 pub mod commands;
 pub mod config;

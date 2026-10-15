@@ -361,20 +361,25 @@
       "denied": null
     }
   ],
-  "ca_registry": [
-    {
-      "mode": "extend",
-      "name": "CODEX_CA_CERTIFICATE"
-    },
-    {
-      "mode": "extend",
-      "name": "NODE_EXTRA_CA_CERTS"
-    },
-    {
-      "mode": "replace",
-      "name": "HERMES_CA_BUNDLE"
-    }
-  ],
+  "ca": {
+    "own_name_suffixes": [
+      "_CA_CERTIFICATE",
+      "_CA_CERTIFICATES",
+      "_CA_CERT",
+      "_CA_CERTS",
+      "_CA_BUNDLE",
+      "_CA_FILE"
+    ],
+    "refused": [
+      "SSL_CERT_DIR",
+      "CURL_CA_BUNDLE",
+      "NODE_TLS_REJECT_UNAUTHORIZED"
+    ],
+    "shared_extend_only": [
+      "SSL_CERT_FILE",
+      "REQUESTS_CA_BUNDLE"
+    ]
+  },
   "credential_env_names": [
     "DEEPSEEK_API_KEY",
     "AMP_API_KEY"
@@ -573,7 +578,7 @@
       "name": "NODE_EXTRA_CA_CERTS"
     },
     {
-      "denied": "changes certificate trust, which no capture profile sets",
+      "denied": "changes certificate trust: a CA variable belongs in `capture.ca`, not `capture.env`",
       "name": "SSL_CERT_FILE"
     },
     {
@@ -585,7 +590,7 @@
       "name": "CURL_CA_BUNDLE"
     },
     {
-      "denied": "changes certificate trust, which no capture profile sets",
+      "denied": "changes certificate trust: a CA variable belongs in `capture.ca`, not `capture.env`",
       "name": "REQUESTS_CA_BUNDLE"
     },
     {

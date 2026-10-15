@@ -337,6 +337,7 @@ fn launch_uses_the_harness_bytes_captured_at_load_time() {
             config_home: &config_home,
             proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
             ca_certificate: &ca,
+            ca_bundle: None,
             parent_env: &parent,
         },
     )
@@ -414,6 +415,7 @@ fn the_env_follows_the_running_platform() {
             config_home: &config_home,
             proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
             ca_certificate: &ca,
+            ca_bundle: None,
             parent_env: &parent,
         },
     )
@@ -428,6 +430,168 @@ fn the_env_follows_the_running_platform() {
             assert_eq!(plan.env_set.get(k), Some(v), "{k}");
         }
     }
+}
+
+/// The CA files `goalcup start` hands, built the way it builds them (`ca_bundle::bundle_for`,
+/// then the launch): every certificate in the file each `capture.ca.env` variable is pointed at.
+fn handed_ca_files(
+    connector: &goalcup_cli::connector::HarnessConnector,
+    root: &Path,
+) -> (BTreeMap<String, Vec<Vec<u8>>>, Vec<u8>, bool) {
+    use goalcup_cli::ca_bundle::{bundle_for, certificates};
+    use goalcup_cli::launch::{CaptureLaunch, build_capture_launch, resolve_harness_executable};
+
+    let exe = root.join("harness");
+    std::fs::write(&exe, b"any build\n").unwrap();
+    let resolved = resolve_harness_executable(&exe).unwrap();
+    let workspace = root.join("workspace");
+    let run_home = root.join("run-home");
+    let config_home = root.join("config-home");
+    let ca_dir = root.join("ca");
+    for dir in [&workspace, &run_home, &config_home, &ca_dir] {
+        std::fs::create_dir(dir).unwrap();
+    }
+    let proxy = goalcup_cli::proxy::tls::ProxyCa::generate(&["api.example.org".to_string()])
+        .expect("a proxy CA");
+    let ca = proxy.write_certificate(&ca_dir).expect("the proxy CA file");
+    let capture = &connector.loaded.manifest.capture;
+    let bundle = bundle_for(capture, &ca_dir, proxy.certificate_der()).expect("the bundle");
+    let mut vars = TemplateVars::new();
+    vars.set("workspace", workspace.display().to_string());
+    vars.set("session_id", "00000000-0000-4000-8000-000000000001");
+    let parent = BTreeMap::new();
+    let goal: &[u8] = b"goal";
+    let plan = build_capture_launch(
+        connector,
+        &vars,
+        &workspace,
+        &CaptureLaunch {
+            goal: (!capture.interactive).then_some(goal),
+            executable: &resolved,
+            run_home: &run_home,
+            config_home: &config_home,
+            proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
+            ca_certificate: &ca,
+            ca_bundle: bundle.as_deref(),
+            parent_env: &parent,
+        },
+    )
+    .unwrap();
+    let files = capture
+        .ca
+        .env
+        .iter()
+        .map(|name| {
+            let file = plan.env_set.get(name).expect("every CA variable is set");
+            (name.clone(), certificates(&std::fs::read(file).unwrap()))
+        })
+        .collect();
+    (files, proxy.certificate_der().to_vec(), bundle.is_some())
+}
+
+/// Which file `goalcup start` hands each CA variable (D41, WP12): a harness's own variable, in
+/// either mode, gets a file holding the proxy CA and nothing else, so a replace-mode harness
+/// fails closed on a connection that skips the proxy; no shipped connector names a shared row,
+/// so no roots file is written for one.
+#[test]
+fn every_shipped_connector_hands_its_own_ca_variable_the_proxy_ca_alone() {
+    use goalcup_protocol::capture_policy::{CaMode, SHARED_CA_ENV};
+
+    let mut replace = 0;
+    for id in shipped_connector_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let connector =
+            goalcup_cli::connector::load_harness(&connectors(), &id, false).expect("shipped");
+        if connector.loaded.manifest.capture.ca.mode == CaMode::Replace {
+            replace += 1;
+        }
+        let (files, proxy, bundle) = handed_ca_files(&connector, &root);
+        assert!(!files.is_empty(), "{id}");
+        assert!(!bundle, "{id}: no shared row, so no roots file");
+        for (name, certs) in files {
+            assert!(!SHARED_CA_ENV.contains(&name.as_str()), "{id}: {name}");
+            assert_eq!(
+                certs,
+                std::slice::from_ref(&proxy),
+                "{id}: {name} trusts the proxy CA alone"
+            );
+        }
+    }
+    assert!(
+        replace > 0,
+        "a shipped connector keeps the fail-closed replace mode"
+    );
+}
+
+/// A connector that trusts the proxy through `SSL_CERT_FILE` needs no CA variable of its own and
+/// no Rust row (WP12): `goalcup start` hands that shared row the proxy CA first and then the
+/// system's roots, and in the same profile still hands the harness's own variable the proxy CA
+/// alone. Env values that name the run's two homes render to them.
+#[test]
+fn a_shared_ca_row_gets_the_roots_and_an_own_variable_beside_it_does_not() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let dir = write_unpinned(&root, "example", "example-cli");
+    let path = dir.join("harness.toml");
+    let text = without_platform(&std::fs::read_to_string(&path).unwrap())
+        .replace("program = \"claude\"", "program = \"harness\"")
+        .replace(
+            "env = [\"NODE_EXTRA_CA_CERTS\"]\nmode = \"extend\"",
+            "env = [\"SSL_CERT_FILE\", \"NODE_EXTRA_CA_CERTS\"]\nmode = \"extend\"",
+        )
+        .replace(
+            "[capture.env]\n",
+            "[capture.env]\nEXAMPLE_DATA_DIR = \"{config_home}/data\"\n\
+             EXAMPLE_CACHE_DIR = \"{run_home}/.cache/example\"\n",
+        );
+    assert!(text.contains("SSL_CERT_FILE") && text.contains("EXAMPLE_DATA_DIR"));
+    std::fs::write(&path, &text).unwrap();
+    let connector = goalcup_cli::connector::load_harness(&root, "example-cli", true).unwrap();
+
+    let (files, proxy, bundle) = handed_ca_files(&connector, &root);
+    assert!(bundle, "a shared row has a roots file written for it");
+    let shared = &files["SSL_CERT_FILE"];
+    assert_eq!(shared[0], proxy, "the proxy CA comes first");
+    assert!(
+        shared.len() >= 21,
+        "the system's roots follow: {}",
+        shared.len()
+    );
+    assert_eq!(files["NODE_EXTRA_CA_CERTS"], [proxy]);
+
+    // The same launch, with the token values, and a launch with no roots file is refused.
+    use goalcup_cli::launch::{CaptureLaunch, build_capture_launch, resolve_harness_executable};
+    let resolved = resolve_harness_executable(&root.join("harness")).unwrap();
+    let mut vars = TemplateVars::new();
+    vars.set("workspace", root.join("workspace").display().to_string());
+    let parent = BTreeMap::new();
+    let ca = root.join("ca.pem");
+    std::fs::write(&ca, b"test CA\n").unwrap();
+    let (run_home, config_home) = (root.join("run-home"), root.join("config-home"));
+    let launch = |ca_bundle| CaptureLaunch {
+        goal: None,
+        executable: &resolved,
+        run_home: &run_home,
+        config_home: &config_home,
+        proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
+        ca_certificate: &ca,
+        ca_bundle,
+        parent_env: &parent,
+    };
+    let workspace = root.join("workspace");
+    let refused = build_capture_launch(&connector, &vars, &workspace, &launch(None))
+        .expect_err("a shared row without a roots file");
+    assert!(refused.to_string().contains("SSL_CERT_FILE"), "{refused}");
+    let plan = build_capture_launch(&connector, &vars, &workspace, &launch(Some(&ca))).unwrap();
+    assert_eq!(
+        plan.env_set.get("EXAMPLE_DATA_DIR"),
+        Some(&format!("{}/data", config_home.display()))
+    );
+    assert_eq!(
+        plan.env_set.get("EXAMPLE_CACHE_DIR"),
+        Some(&format!("{}/.cache/example", run_home.display()))
+    );
 }
 
 /// A connector without `home.env` gets no home variable: the harness keeps its state under the
@@ -479,6 +643,7 @@ fn a_harness_without_a_home_variable_gets_only_the_private_home() {
             config_home: &config_home,
             proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
             ca_certificate: &ca,
+            ca_bundle: None,
             parent_env: &parent,
         },
     )
@@ -528,6 +693,7 @@ fn an_interactive_plan_places_no_goal_and_keeps_the_terminal() {
         config_home: &config_home,
         proxy_url: "http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123",
         ca_certificate: &ca,
+        ca_bundle: None,
         parent_env: &parent,
     };
     let mut chat = 0;

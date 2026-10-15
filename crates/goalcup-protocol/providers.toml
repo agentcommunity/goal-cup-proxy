@@ -1,0 +1,22 @@
+# The shared provider host table (WP12): one reviewed `[[capture.hosts]]` row per model provider
+# API. A connector names a provider here with `capture.providers = ["<name>"]` instead of
+# repeating the row; the loader appends each named row to the connector's `capture.hosts`, and
+# every host rule then applies to it as to a row the connector wrote itself.
+#
+# This file is compiled into the tracer (`harness::provider_hosts`), so a row is a reviewed core
+# change, like a pin. A row names a provider's public API host, the request paths that carry
+# model turns, and the decoder hint for that wire format. Add a row only from a measured run.
+#
+# The key is the provider's name: a lowercase letter, then `[a-z0-9-]`, at most 32 bytes.
+
+# Anthropic Messages API (measured with Claude Code, docs/harnesses/claude-code-cli.md).
+[anthropic]
+host = "api.anthropic.com"
+evidence_paths = ["/v1/messages"]
+protocol_hint = "anthropic-messages"
+
+# DeepSeek's OpenAI-compatible chat completions (measured with Hermes, docs/harnesses/hermes-cli.md).
+[deepseek]
+host = "api.deepseek.com"
+evidence_paths = ["/v1/chat/completions"]
+protocol_hint = "openai-chat-completions"

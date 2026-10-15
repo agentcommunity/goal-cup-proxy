@@ -75,7 +75,7 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 - **Telemetry.** OpenTelemetry export is opt-in via `CLAUDE_CODE_ENABLE_TELEMETRY=1` and `OTEL_*` (vendor docs). Any default telemetry hosts: unknown.
 - **Update host.** unknown (the updater is disabled with `DISABLE_AUTOUPDATER=1`).
 - **Proxy.** `HTTPS_PROXY` is honoured; a loopback forward proxy captured the exchange above (measured, 2.1.283). Transport is plain HTTP/1.1 with server-sent events; no WebSocket seen.
-- **Custom CA.** `NODE_EXTRA_CA_CERTS`, extends the roots (code: CA registry). The live check was qualified on 2.1.281 first; the 2.1.283 wire capture then worked with it.
+- **Custom CA.** `NODE_EXTRA_CA_CERTS`, extends the roots (connector `capture.ca`, mode `extend`). The live check was qualified on 2.1.281 first; the 2.1.283 wire capture then worked with it.
 - **Base-URL overrides (Goal Cup never sets these).** `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_URL`; vendor docs say `ANTHROPIC_BASE_URL` works with a subscription login and disables Remote Control.
 
 ## 7. Process model

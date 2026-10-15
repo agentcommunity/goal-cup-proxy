@@ -113,8 +113,9 @@
   ],
   "ca": [
     {
+      "file": "proxy_ca",
+      "mode": "replace",
       "name": "HERMES_CA_BUNDLE",
-      "registry_mode": "replace",
       "value_in_plan": "<TMP>/proxy-ca.pem"
     }
   ],
@@ -160,6 +161,9 @@
       "source": "stderr_line"
     },
     "interactive": false,
+    "providers": [
+      "deepseek"
+    ],
     "resume_args": [],
     "skills_dir": null
   },

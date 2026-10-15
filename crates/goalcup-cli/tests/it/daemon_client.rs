@@ -1089,8 +1089,10 @@ fn pause_points_exist_only_under_test_support() {
 
 /// The only places this crate starts a process are the launch module's one command builder
 /// (which the ordinary spawn and the gate both run), the run-scoped daemon's start
-/// (`daemon/spawn.rs`), the D53 version probe (`harness_version.rs`) and the `git` that clones
-/// the participant's GitHub repository (`account/github.rs`); the V1 version probe
+/// (`daemon/spawn.rs`), the D53 version probe (`harness_version.rs`), the `git` that clones
+/// the participant's GitHub repository (`account/github.rs`) and macOS's `/usr/bin/security`,
+/// which exports the system's trusted roots for a shared CA row's file (`ca_bundle.rs`, with a
+/// cleared environment and no input); the V1 version probe
 /// went with the V1 manifest (OS-29). The child-only credential is set on the one launch
 /// builder, so another site would be another place a key could be forgotten or leaked. The
 /// daemon's start and the version probe carry no key: both clear their environment, which
@@ -1131,8 +1133,19 @@ fn the_only_command_site_is_the_launch_builder() {
     let files: Vec<&str> = found.iter().map(|f| f.split(':').next().unwrap()).collect();
     assert_eq!(
         files,
-        ["github.rs", "harness_version.rs", "launch.rs", "spawn.rs"],
+        [
+            "ca_bundle.rs",
+            "github.rs",
+            "harness_version.rs",
+            "launch.rs",
+            "spawn.rs"
+        ],
         "{found:?}"
+    );
+    let bundle = include_str!("../../src/ca_bundle.rs");
+    assert!(
+        bundle.contains("Command::new(\"/usr/bin/security\")") && bundle.contains(".env_clear()"),
+        "the trust-store export runs one absolute program from nothing"
     );
     let spawn = include_str!("../../src/daemon/spawn.rs");
     assert!(

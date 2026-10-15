@@ -212,10 +212,18 @@ The contract is `connectors/<id>/harness.toml`, schema 1.
 2. Credentials are a closed list (`CREDENTIAL_ENV`): `DEEPSEEK_API_KEY`, `AMP_API_KEY` (D49). A
    credential needs a per-run config home and either `stderr_line` + `deferred` or
    `stdout_json` + `at_launch` identity (D50). `preassigned` and `none` stay refused.
-3. A replace-mode CA variable is allowed for any connector, only if it is a `CA_REGISTRY` row of
-   mode Replace (today `HERMES_CA_BUNDLE`). A new CA variable is a DECISIONS entry. `SSL_CERT_FILE`,
-   `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and `REQUESTS_CA_BUNDLE` stay refused: they replace the roots
-   of every tool child.
+3. *(Amended by WP12.)* A CA variable's name is connector data, held to a closed shape: a name
+   ending `_CA_CERTIFICATE`, `_CA_CERTIFICATES`, `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or
+   `_CA_FILE`, under the shared env-name rules, or one of the two shared rows `SSL_CERT_FILE` and
+   `REQUESTS_CA_BUNDLE`. A harness's own variable is handed the proxy CA alone, in either mode;
+   a replace-mode one means the harness trusts only the proxy, which fails closed (D41). The
+   shared rows are read by every tool child, so they are handed the system's roots plus the proxy
+   CA, built for each run from the OS trust store, and take `mode = "extend"` only. That gives up
+   failing closed for that harness (CHEAT-CHECKLIST), so a connector names a shared row only when
+   the harness has no CA variable of its own. `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
+   `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. A new mode, shared row or name shape is a
+   DECISIONS entry. This narrows D41's 'SSL_CERT_FILE stays refused' to connectors that have a CA
+   variable of their own; D41's proxy-only trust for a replace-mode variable is unchanged.
 4. The server keeps acceptable connector directory digests as data. The compiled pins in
    `pins/connector-dirs.txt` stay the local gate. A harness PR has no `.rs` file (D51).
 5. Stranger harness PRs are accepted once the conformance and pin tests run in CI, the
@@ -289,9 +297,10 @@ per-connector allowlist rows. A new connector, a model bump or a new variable is
   How much the harness may do (model, sandbox, permissions) is not a capture rule.
 - **Review sees** what a rule cannot: a dropped flag that capture needs, a value that re-enables
   self-update. These are on the reviewer checklist ([HARNESS-ONBOARDING](HARNESS-ONBOARDING.md)).
-- **Closed lists stay core PRs with a DECISIONS entry:** `CREDENTIAL_ENV`, `CA_REGISTRY`, and
-  the redaction rule forms (`harness::RedactionRule`). The field name or header prefix a form
-  takes is connector data (WP12).
+- **Closed lists stay core PRs with a DECISIONS entry:** `CREDENTIAL_ENV`, the CA modes and
+  CA-name shape (`capture_policy::ca_env_problem`), the shared provider host table
+  (`providers.toml`), and the redaction rule forms (`harness::RedactionRule`). The field name or
+  header prefix a form takes, and a CA variable's name, are connector data (WP12).
 
 Reconsider if a connector PR is ever merged without code-owner review.
 

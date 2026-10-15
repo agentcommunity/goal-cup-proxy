@@ -38,7 +38,7 @@ use crate::capture_policy::{
     CREDENTIAL_ENV, CaMode, EnvContext, MAX_CAPTURE_ARG_BYTES, MAX_CAPTURE_ARGS, MAX_CAPTURE_ENV,
     MAX_CAPTURE_ENV_KEY_BYTES, MAX_CAPTURE_ENV_VALUE_BYTES, MAX_CAPTURE_HOSTS,
     MAX_CAPTURE_PATHS_PER_HOST, MAX_CONTINUATION_BYTES, MAX_GOAL_FLAG_BYTES, arg_path_denied,
-    ca_registry_mode, capture_arg_denied, capture_path_problem, env_key_denied, env_value_denied,
+    ca_env_problem, capture_arg_denied, capture_path_problem, env_key_denied, env_value_denied,
     goal_flag_denied, has_duplicate, is_capture_host, is_interpreter_program, is_tracker_host,
     local_host_problem, mentions_goalcup, seed_content_problem, startup_file_problem,
 };
@@ -160,9 +160,8 @@ closed_enum! {
     Ro0400 = "0400",
 }
 
-/// `capture.ca.mode` is the policy type itself, so a manifest's declaration and a
-/// [`CA_REGISTRY`](crate::capture_policy::CA_REGISTRY) row are compared as one value. It refuses an
-/// unknown value as `closed_enum!` does.
+/// `capture.ca.mode` is the policy type itself: it decides which file the launch hands the
+/// variables. It refuses an unknown value as `closed_enum!` does.
 impl<'de> Deserialize<'de> for CaMode {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
@@ -323,9 +322,14 @@ pub struct CaptureSpec {
     pub argv_guard: Option<ArgvGuard>,
     #[serde(default)]
     pub termination: Option<TerminationSpec>,
-    /// The hosts the proxy terminates TLS for.
+    /// The hosts the proxy terminates TLS for. After loading this also holds the row of each
+    /// [`Self::providers`] name, appended in order.
     #[serde(default)]
     pub hosts: Vec<HostSpec>,
+    /// Names in the shared provider table ([`provider_hosts`]): a model provider's host row,
+    /// reviewed once in core, that the loader appends to [`Self::hosts`].
+    #[serde(default)]
+    pub providers: Vec<String>,
     /// Per-platform replacements for env entries. Everything else is the same recipe on every
     /// platform.
     #[serde(default)]
@@ -445,12 +449,22 @@ pub struct CredentialSpec {
     pub env: String,
 }
 
-/// `[capture.ca]`.
+/// `[capture.ca]`: the variables the launch points at a certificate file, and which file.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct CaSpec {
+    /// One or two CA variables ([`ca_env_problem`]): a [`SHARED_CA_ENV`] row, or the harness's
+    /// own variable with a [`CA_ENV_SUFFIXES`] ending.
+    ///
+    /// [`SHARED_CA_ENV`]: crate::capture_policy::SHARED_CA_ENV
+    /// [`CA_ENV_SUFFIXES`]: crate::capture_policy::CA_ENV_SUFFIXES
     pub env: Vec<String>,
+    /// `extend` or `replace` ([`CaMode`]). A harness's own variable is handed the proxy's CA
+    /// alone in either mode. A [`SHARED_CA_ENV`] row takes `extend` and is handed the system's
+    /// roots plus the proxy's CA, so a `replace` profile never names one and stays fail-closed.
+    ///
+    /// [`SHARED_CA_ENV`]: crate::capture_policy::SHARED_CA_ENV
     pub mode: CaMode,
 }
 
@@ -620,6 +634,66 @@ pub struct HostSpec {
     /// An open decoder hint. An unknown one is capture-only, not refused (D43, ruling 8).
     #[serde(default)]
     pub protocol_hint: Option<String>,
+}
+
+/// The shared provider host table, `crates/goalcup-protocol/providers.toml`, compiled in.
+const PROVIDERS_TOML: &str = include_str!("../providers.toml");
+
+/// The shared provider host table: each provider's name and its one `[[capture.hosts]]` row
+/// (WP12). A connector names rows with `capture.providers`, so a provider's host, paths and
+/// hint are written once, not once per connector. The table is code-reviewed data, like the
+/// pins; every host rule still applies to a row once a connector names it.
+pub fn provider_hosts() -> Result<&'static BTreeMap<String, HostSpec>, ProtocolError> {
+    static TABLE: std::sync::OnceLock<Result<BTreeMap<String, HostSpec>, String>> =
+        std::sync::OnceLock::new();
+    TABLE
+        .get_or_init(|| {
+            let table: BTreeMap<String, HostSpec> =
+                toml::from_str(PROVIDERS_TOML).map_err(|e| e.message().to_string())?;
+            match table.keys().find(|name| !is_provider_name(name)) {
+                Some(bad) => Err(format!(
+                    "`{bad}` is not a provider name (`^[a-z][a-z0-9-]{{0,31}}$`)"
+                )),
+                None => Ok(table),
+            }
+        })
+        .as_ref()
+        .map_err(|why| refuse("capture.providers", format!("the provider table {why}")))
+}
+
+fn is_provider_name(name: &str) -> bool {
+    let mut b = name.bytes();
+    name.len() <= 32
+        && b.next().is_some_and(|c| c.is_ascii_lowercase())
+        && b.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+}
+
+impl CaptureSpec {
+    /// Append the row of each [`Self::providers`] name to [`Self::hosts`]. An unknown or
+    /// repeated name is refused.
+    fn add_provider_hosts(&mut self) -> Result<(), ProtocolError> {
+        if let Some(d) = has_duplicate(self.providers.iter().map(String::as_str)) {
+            return Err(refuse("capture.providers", format!("`{d}` is named twice")));
+        }
+        if self.providers.is_empty() {
+            return Ok(());
+        }
+        let table = provider_hosts()?;
+        for name in &self.providers {
+            let Some(row) = table.get(name) else {
+                return Err(refuse(
+                    "capture.providers",
+                    format!(
+                        "`{name}` is not in the shared provider table ({}); a new provider is a \
+                         row in crates/goalcup-protocol/providers.toml",
+                        table.keys().cloned().collect::<Vec<_>>().join(", ")
+                    ),
+                ));
+            };
+            self.hosts.push(row.clone());
+        }
+        Ok(())
+    }
 }
 
 /// `[redaction]`.
@@ -870,7 +944,8 @@ fn map_toml_error(text: &str, e: &toml::de::Error) -> ProtocolError {
 
 impl HarnessManifest {
     /// Parse `harness.toml`: the schema dispatch (rule 1) and the strict deserialization
-    /// (rule 2). Does not validate; call [`Self::validate`].
+    /// (rule 2), then the rows of `capture.providers` appended to `capture.hosts`. Does not
+    /// validate; call [`Self::validate`].
     pub fn from_toml_str(text: &str) -> Result<HarnessManifest, ProtocolError> {
         let table: toml::Table = text
             .parse()
@@ -896,7 +971,10 @@ impl HarnessManifest {
             }
         }
         refuse_retired_pin_keys(&table)?;
-        toml::from_str::<HarnessManifest>(text).map_err(|e| map_toml_error(text, &e))
+        let mut manifest =
+            toml::from_str::<HarnessManifest>(text).map_err(|e| map_toml_error(text, &e))?;
+        manifest.capture.add_provider_hosts()?;
+        Ok(manifest)
     }
 }
 
@@ -942,12 +1020,24 @@ fn refuse_retired_pin_keys(table: &toml::Table) -> Result<(), ProtocolError> {
 // Validation
 // ---------------------------------------------------------------------------------------
 
-/// Template variables an `args` element or an env value may use. `{session_id}` additionally
-/// needs `identity.source = "preassigned"` (a cross-field rule).
-const TEMPLATE_TOKENS: &[&str] = &["workspace", "session_id"];
+/// Template variables an `args` element may use. `{session_id}` additionally needs
+/// `identity.source = "preassigned"` (a cross-field rule).
+const ARG_TOKENS: &[&str] = &["workspace", "session_id"];
 
-/// A template that may name only [`TEMPLATE_TOKENS`].
-fn check_template(field: &str, what: &str, value: &str) -> Result<(), ProtocolError> {
+/// Template variables a `capture.env` value may use: the argument tokens, and the two homes the
+/// launch makes for the run (`{config_home}`, the isolated harness home, and `{run_home}`, the
+/// private `HOME`), so a harness with a second state variable can point it inside them. Each
+/// renders to a tracker-made private path; the value rule still refuses a value that starts
+/// with `/` or `~` or holds `..`, so a value cannot leave them.
+const ENV_TOKENS: &[&str] = &["workspace", "session_id", "config_home", "run_home"];
+
+/// A template that may name only `allowed` tokens.
+fn check_template(
+    field: &str,
+    what: &str,
+    value: &str,
+    allowed: &[&str],
+) -> Result<(), ProtocolError> {
     let tokens = crate::template::tokens(value).map_err(|why| {
         refuse(
             field,
@@ -955,12 +1045,12 @@ fn check_template(field: &str, what: &str, value: &str) -> Result<(), ProtocolEr
         )
     })?;
     for t in tokens {
-        if !TEMPLATE_TOKENS.contains(&t) {
+        if !allowed.contains(&t) {
             return Err(refuse(
                 field,
                 format!(
                     "{what} names `{{{t}}}`, which is not a token here: only {} are",
-                    TEMPLATE_TOKENS
+                    allowed
                         .iter()
                         .map(|t| format!("`{{{t}}}`"))
                         .collect::<Vec<_>>()
@@ -995,7 +1085,7 @@ fn check_arg(field: &str, origin: Origin, a: &str) -> Result<(), ProtocolError> 
     {
         return Err(refuse(field, format!("`{a}` {why}")));
     }
-    check_template(field, &format!("`{a}`"), a)
+    check_template(field, &format!("`{a}`"), a, ARG_TOKENS)
 }
 
 /// Whether `value` uses `{name}` as a token.
@@ -1448,7 +1538,7 @@ impl HarnessManifest {
                 ));
             }
             // Template tokens are checked on the template, before rendering.
-            check_template("capture.env", &format!("`{k}`'s value"), v)?;
+            check_template("capture.env", &format!("`{k}`'s value"), v, ENV_TOKENS)?;
             if let Some(why) = env_value_denied(k, v) {
                 return Err(refuse("capture.env", format!("`{k}`'s value {why}")));
             }
@@ -1576,27 +1666,8 @@ impl HarnessManifest {
             return Err(refuse("capture.ca.env", format!("`{d}` is named twice")));
         }
         for name in &ca.env {
-            let Some(registry_mode) = ca_registry_mode(name) else {
-                return Err(refuse(
-                    "capture.ca.env",
-                    format!(
-                        "`{name}` is not a CA variable in the registry: a new CA variable is a \
-                         policy row and a DECISIONS entry, and SSL_CERT_FILE, SSL_CERT_DIR, \
-                         CURL_CA_BUNDLE and REQUESTS_CA_BUNDLE stay refused because they \
-                         replace the roots of every tool child"
-                    ),
-                ));
-            };
-            if registry_mode != ca.mode {
-                return Err(refuse(
-                    "capture.ca.mode",
-                    format!(
-                        "`{name}` is a `{}`-mode variable in the registry, and the manifest \
-                         declares `{}`",
-                        registry_mode.as_str(),
-                        ca.mode.as_str()
-                    ),
-                ));
+            if let Some(why) = ca_env_problem(name, ca.mode) {
+                return Err(refuse("capture.ca.env", format!("`{name}` {why}")));
             }
         }
         Ok(())

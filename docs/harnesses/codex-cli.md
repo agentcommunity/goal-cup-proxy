@@ -76,7 +76,7 @@ Compressed rollouts: vendor docs say a background job compresses rollouts older 
 - **Telemetry.** OTel export is opt-in: `[otel] exporter` defaults to none (vendor docs). Other telemetry hosts: unknown.
 - **Update host.** unknown (the prompt runs `npm install -g`, so the npm registry is involved).
 - **Proxy.** `HTTPS_PROXY` / `https_proxy` are honoured; a loopback forward proxy relayed the WebSocket (measured, 0.153.0, 2026-09-28). `NO_PROXY` set to loopback by Goal Cup.
-- **Custom CA.** `CODEX_CA_CERTIFICATE`, extends the trust roots (code: CA registry, mode `extend`).
+- **Custom CA.** `CODEX_CA_CERTIFICATE`, extends the trust roots (connector `capture.ca`, mode `extend`).
 - **Base-URL overrides (Goal Cup never sets these).** `OPENAI_BASE_URL`, `CODEX_BASE_URL`; the launcher removes both and preflight refuses them (code).
 
 ## 7. Process model

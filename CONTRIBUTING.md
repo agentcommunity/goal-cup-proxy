@@ -93,8 +93,9 @@ A data-only harness PR contains:
 - the last lines of `sh scripts/check-connector.sh <id>` and `sh scripts/gate.sh fast`.
 
 Your PR contains no `.rs` file. A connector's arguments, model name and environment variables are
-data, held to generic rules (D51). A new policy row (credential, CA variable, redaction form,
-identity carrier, native-store form or interpreter) is a separate core PR with a
+data, held to generic rules (D51). So are a CA variable's name and a `providers` name. A new
+policy row (credential, CA mode or name shape, provider host, redaction form, identity carrier,
+native-store form or interpreter) is a separate core PR with a
 `docs/DECISIONS.md` entry. A semantic decoder is a separate verifier PR.
 
 The kit uses stand-ins and a test-owned proxy. A pass means "synthetic tested", not "works with

@@ -33,6 +33,9 @@ resume_args = ["<RESUME-FLAG>"]
 # {session_id} is allowed in values only with identity "preassigned".
 # Sign-in/token-refresh hosts, tunnelled opaquely and never recorded. Delete if none.
 # auth_hosts = ["<AUTH_HOST>"]
+# Model hosts from the shared provider table (crates/goalcup-protocol/providers.toml), in place
+# of writing their [[capture.hosts]] rows below. Delete if none.
+# providers = ["anthropic", "deepseek"]
 # Your harness's own variable namespace, if it has switches that would silently stop capture
 # (a safe mode, "ignore config"): capture.env may then set no name under it. Delete if none.
 # reserved_env_prefixes = ["<HARNESS>_"]
@@ -45,6 +48,8 @@ version_args = ["--version"]            # how the harness prints its version; de
 # provider, XDG_*, GIT_*, OPENSSL_*, CA, *KEYLOG*, *_COMMAND/*PAGER or server names (*_URL,
 # *_BASE, *_HOST, *_ADDR, *_SERVER, ...); no value with "/" "~" "$" or "://".
 # SHELL is the one path value allowed: "/bin/zsh", "/bin/bash" or "/bin/sh".
+# A value may name the run's homes: {config_home} (the harness home) or {run_home} (the private
+# HOME), for a second state variable: <HARNESS>_DATA_DIR = "{config_home}/data".
 [capture.env]
 SHELL = "/bin/zsh"                      # the shell the harness's tools run in, per platform below
 # Is the harness Node (an npm package, or a script starting `#!/usr/bin/env node`)? Then keep
@@ -95,8 +100,14 @@ skills_dir = "skills"
 # env = "DEEPSEEK_API_KEY"
 
 [capture.ca]
-# One to two names from the CA registry, all with the same mode:
-# CODEX_CA_CERTIFICATE (extend), NODE_EXTRA_CA_CERTS (extend), HERMES_CA_BUNDLE (replace).
+# One or two CA variables the harness reads (facts sheet section 6); no core change needed:
+# - its own variable, ending _CA_CERTIFICATE, _CA_CERTIFICATES, _CA_CERT, _CA_CERTS, _CA_BUNDLE
+#   or _CA_FILE (NODE_EXTRA_CA_CERTS for Node and Bun). It gets the proxy CA alone.
+#   mode "extend": the variable ADDS to the harness's roots.
+#   mode "replace": the variable REPLACES them, so the harness trusts only the proxy (fails closed).
+# - only if it has none: SSL_CERT_FILE / REQUESTS_CA_BUNDLE, with mode "extend". Tool children read
+#   these too, so they get the system roots plus the proxy CA, and a connection the harness makes
+#   past the proxy is not recorded (docs/CHEAT-CHECKLIST.md). Prefer the harness's own variable.
 env = ["<CA_VARIABLE>"]
 mode = "<extend|replace>"
 
@@ -151,9 +162,10 @@ grace_seconds = 10                      # 1-60
 #   { kind = "<harness>_billing_header", header_prefix = "x-<vendor>-billing-" },
 # ]
 
-# One to 16 intercepted model hosts. Each needs at least one recorded path. A harness that lets
-# the participant pick the provider lists every provider host it can reach: traffic to an
-# unlisted host passes through unrecorded.
+# One to 16 intercepted model hosts, counting the `providers` rows. Each needs at least one
+# recorded path. A harness that lets the participant pick the provider lists every provider host
+# it can reach (a `providers` name, or a row here): traffic to an unlisted host passes through
+# unrecorded. Delete this row if `providers` covers every host.
 [[capture.hosts]]
 host = "<api.provider.example>"         # public DNS name; no scheme, port, wildcard or localhost
 evidence_paths = ["</v1/chat/completions>"]
