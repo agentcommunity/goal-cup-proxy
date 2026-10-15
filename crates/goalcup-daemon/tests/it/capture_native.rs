@@ -2541,3 +2541,70 @@ fn a_refused_entry_is_one_loss_across_a_capped_cycle() {
     assert_eq!(loss.lost_entries, 1);
     sink.assert_clean();
 }
+
+#[test]
+fn a_refusal_counts_only_since_the_run_start() {
+    // A shared store's old symlink is not this run's, like an old session file (D57); one
+    // made during the run is a loss.
+    let root = root();
+    fs::create_dir_all(root.path("sessions")).unwrap();
+    std::os::unix::fs::symlink(
+        root.outside.join("elsewhere.jsonl"),
+        root.path("sessions/rollout-old-link.jsonl"),
+    )
+    .unwrap();
+    let started = run_start();
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![since(&root, started)],
+        NativeCaptureLimits::default(),
+        &sink,
+    );
+    assert_eq!(capture.poll().refused_entries, 0);
+    assert_eq!(capture.loss_report().lost_entries, 0);
+    std::os::unix::fs::symlink(
+        root.outside.join("elsewhere.jsonl"),
+        root.path("sessions/rollout-new-link.jsonl"),
+    )
+    .unwrap();
+    assert_eq!(capture.poll().refused_entries, 1);
+    assert_eq!(capture.loss_report().lost_entries, 1);
+    let finished = capture.finish(generous());
+    assert!(finished.closed && !finished.discovery_capped);
+    assert_eq!(capture.loss_report().lost_entries, 1);
+    sink.assert_clean();
+}
+
+#[test]
+fn a_finish_that_walked_a_whole_cycle_is_not_capped() {
+    // Four passes of three entries walk the ten files whole; the byte budget then ends the
+    // finish in the fifth, a capped pass of the next cycle, which is no loss.
+    let root = root();
+    for n in 0..10 {
+        root.write(
+            &format!("sessions/{n:02}.jsonl"),
+            &pattern_bytes(4 * MAX_SEGMENT_BYTES, n),
+        );
+    }
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![rollout(&root, "sessions/*.jsonl")],
+        NativeCaptureLimits {
+            max_dir_entries: 3,
+            poll_bytes: MAX_SEGMENT_BYTES as u64,
+            ..NativeCaptureLimits::default()
+        },
+        &sink,
+    );
+    let finished = capture.finish(NativeFinishBudget {
+        max_bytes: 5 * MAX_SEGMENT_BYTES as u64,
+        max_duration_ns: u64::MAX,
+    });
+    assert!(finished.closed);
+    assert_eq!(finished.bytes_drained, 5 * MAX_SEGMENT_BYTES as u64);
+    assert!(
+        !finished.discovery_capped,
+        "the finish walked a whole cycle before it stopped"
+    );
+    sink.assert_clean();
+}

@@ -92,10 +92,11 @@
 //!
 //! Losses that have no stream to carry a `Gap` frame are reported in [`NativeLossReport`] and
 //! [`NativeFinishReport`]. A matched entry kept out for good — a file over `max_files`, or an
-//! entry refused (symlink, special file, over-long label) — counts in
-//! [`NativeLossReport::lost_entries`], the most found in one discovery cycle, so a lasting
-//! loss counts once and a new one raises it. The entry owner records a stream-less
-//! `CaptureRecord::Gap { LimitExceeded }` when it first rises and again when it grows. The
+//! entry refused (symlink, special file, over-long label), each since the source's start —
+//! counts in [`NativeLossReport::lost_entries`], the most found in one discovery cycle, so a
+//! lasting loss counts once and a cycle with more losses than any before raises it. The entry
+//! owner records a stream-less `CaptureRecord::Gap { LimitExceeded }` when it first rises and
+//! again when it grows. The
 //! finish walks a whole discovery cycle when its budget allows; one that could not is
 //! [`NativeFinishReport::discovery_capped`], and the owner records that too. An entry
 //! unavailable in one poll is retried in the next and is not a loss. A finish report with none
@@ -456,14 +457,18 @@ pub struct NativeLossReport {
     pub tracked_files: usize,
     /// Some matched file was never tracked because `max_files` was reached.
     pub file_limit_reached: bool,
-    /// Lifetime discovery facts; see [`NativeFinishReport::discovery_capped`].
+    /// Discovery stopped at `max_dir_entries` at least once, every poll and finish pass
+    /// included. With rotation this is a cost, not a loss; the finish's own loss is
+    /// [`NativeFinishReport::discovery_capped`].
     pub discovery_capped: bool,
     pub refused_entries: u64,
     pub unavailable: u64,
     pub untracked_files: u64,
-    /// Matched entries kept out for good (refused, or past `max_files`): the most found in one
-    /// discovery cycle, which examines each entry once. It never falls; a lasting loss does
-    /// not raise it and a new one does.
+    /// Matched entries kept out for good (refused, or past `max_files`), written or changed
+    /// since the source's start: the most found in one discovery cycle, which examines each
+    /// entry once. It never falls and a lasting loss does not raise it. A high-water mark, it
+    /// rises only when a cycle finds more than any cycle before: a new loss that replaces one
+    /// gone since is not seen here.
     pub lost_entries: u64,
 }
 
@@ -486,8 +491,8 @@ pub struct NativeFinishReport {
     pub bytes_drained: u64,
     /// The producer-wide loss, if latched.
     pub latched: Option<GapReason>,
-    /// The finish's discovery stopped at `max_dir_entries` and its budget ended before the
-    /// cycle was whole: an entry it never reached may hold a file no stream carries.
+    /// The finish's budget ended before any of its discovery cycles was whole: an entry it
+    /// never reached may hold a file no stream carries.
     pub discovery_capped: bool,
     /// Lifetime discovery facts, every poll and finish pass included: matched entries refused
     /// (symlink, special file, directory, over-long label), summed over passes, so an entry
@@ -663,12 +668,14 @@ impl NativeCapture {
             // poll may hold a file written since.
             self.resume_at = 0;
             self.facts.cycle = 0;
+            let mut whole = false;
             loop {
                 let mut pass = NativePollReport::new(NativeAdmission::Ready);
                 self.pass(left.min(self.limits.poll_bytes), &mut pass);
                 left = left.saturating_sub(pass.bytes);
                 report.bytes_drained += pass.bytes;
-                report.discovery_capped = pass.discovery_capped;
+                whole |= !pass.discovery_capped;
+                report.discovery_capped = !whole;
                 let settled = pass.bytes == 0 && !pass.discovery_capped;
                 if !self.emitter.live() || settled || left == 0 {
                     break;
@@ -1250,8 +1257,11 @@ impl Walker<'_> {
                     Err(_) => self.report.unavailable += 1,
                 },
                 (SourceKind::Regular, false) => {}
+                // An entry from before the run is not this run's, refused or not (D57).
                 (SourceKind::Directory | SourceKind::SymbolicLink | SourceKind::Special, _) => {
-                    self.report.refused_entries += 1;
+                    if self.since_start(&observed) {
+                        self.report.refused_entries += 1;
+                    }
                 }
             }
         }
@@ -1298,18 +1308,23 @@ impl Walker<'_> {
         Ok(names)
     }
 
+    /// Written or changed since the run started, or the source has no start. Otherwise the
+    /// entry is not this run's yet and is not counted (D57). The no-follow observation's change
+    /// time cannot be set back, so a backdated entry is still seen.
+    fn since_start(&self, observed: &SourceObservation) -> bool {
+        self.source.modified_since.is_none_or(|since| {
+            let facts = observed.facts();
+            facts.modified_seconds.max(facts.changed_seconds) >= since
+        })
+    }
+
     fn register(&mut self, components: &[SourceName], observed: &SourceObservation) {
         let key = (self.index, render_relative(components));
         if self.files.contains_key(&key) {
             return;
         }
-        // Not written or changed since the run started: not this run's yet, and not counted
-        // (D57). The change time cannot be set back, so a backdated file is still seen.
-        if let Some(since) = self.source.modified_since {
-            let facts = observed.facts();
-            if facts.modified_seconds.max(facts.changed_seconds) < since {
-                return;
-            }
+        if !self.since_start(observed) {
+            return;
         }
         let label_bytes = self.source.name.len() + 1 + key.1.len() + GENERATION_SUFFIX_BYTES;
         if label_bytes > MAX_METADATA_STRING_BYTES {
