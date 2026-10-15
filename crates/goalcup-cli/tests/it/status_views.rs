@@ -1177,6 +1177,88 @@ fn status_names_heartbeats_that_keep_failing() {
     assert!(!text.contains("heartbeats"), "{text}");
 }
 
+/// Start a practice run P, then a competition run C, then continue P: P's new segment is the
+/// newest entry while C is still the newest run. `goalcup status` with no id shows the pinned
+/// entry, and the run section must be that entry's run (P), never the newest run's (C).
+#[test]
+fn status_with_no_id_never_mixes_the_newest_entry_with_the_newest_run() {
+    use goalcup_cli::entries::{EntryRecord, write_entry};
+    use goalcup_cli::run::{
+        EntryRef, HarnessState, Recording, RunRecord, RunState, StateKeeper, now_unix, run_dir,
+        write,
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = tmp.path().to_path_buf();
+    let entry = |entry_id: &str, created_at: &str| EntryRecord {
+        entry_id: entry_id.to_string(),
+        process_generation: info.process_generation,
+        connector_id: "claude-code-cli".to_string(),
+        run_public_key: info.run_public_key.clone(),
+        workspace: info.workspace.clone(),
+        artifact_root: info.artifact_root.clone(),
+        harness_home: info.harness_home.clone(),
+        session_id: info.session_id.clone(),
+        last_pid: None,
+        status_url: info.status_url.clone(),
+        created_at: created_at.to_string(),
+        dev: false,
+    };
+    let run = |run_id: &str, practice: bool, started: u64, entries: &[&str]| RunRecord {
+        run_id: run_id.to_string(),
+        server_url: None,
+        practice,
+        test: false,
+        connector_id: "claude-code-cli".to_string(),
+        workspace: PathBuf::from("/w"),
+        started_at_unix: started,
+        deadline_at: None,
+        entries: entries
+            .iter()
+            .map(|id| EntryRef {
+                entry_id: (*id).to_string(),
+                trace_dir: PathBuf::from("/t"),
+            })
+            .collect(),
+    };
+    let state = |recording: Recording| {
+        let mut state = RunState::launched("x", Ok(()));
+        state.updated_at = now_unix();
+        state.recording = recording;
+        state.harness = HarnessState::Running;
+        state
+    };
+    // The practice run P: first segment, then (after C) a continued segment, the mock's entry.
+    write_entry(&cfg, &entry("p-1", "2026-09-01T00:00:00Z")).unwrap();
+    write_entry(&cfg, &entry("c-1", "2026-09-02T00:00:00Z")).unwrap();
+    write_entry(&cfg, &entry(&info.entry_id, "2026-09-03T00:00:00Z")).unwrap();
+    write(&cfg, &run("run-p", true, 100, &["p-1", &info.entry_id])).unwrap();
+    write(&cfg, &run("run-c", false, 200, &["c-1"])).unwrap();
+
+    let text_of = |cfg: &std::path::Path| {
+        let mut out = Vec::new();
+        status_with(&m, cfg, None, false, support::NOW, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    };
+
+    // C is failing, P is healthy: the status is P's, so no problem of C's may be printed.
+    StateKeeper::begin(&run_dir(&cfg, "run-p"), state(Recording::Ok));
+    StateKeeper::begin(&run_dir(&cfg, "run-c"), state(Recording::Failed));
+    let text = text_of(&cfg);
+    assert!(text.contains(&m.status_detail()), "P's own status: {text}");
+    assert!(
+        !text.contains("PROBLEM"),
+        "C's problem leaked into P: {text}"
+    );
+
+    // P is failing, C is healthy: P's problem is shown.
+    StateKeeper::begin(&run_dir(&cfg, "run-p"), state(Recording::Failed));
+    StateKeeper::begin(&run_dir(&cfg, "run-c"), state(Recording::Ok));
+    let text = text_of(&cfg);
+    assert!(text.starts_with("PROBLEM: recording failed\n"), "{text}");
+}
+
 #[test]
 fn status_with_no_problem_prints_no_problem_line() {
     use goalcup_cli::run::{HarnessState, Recording, RunState};
@@ -1314,4 +1396,107 @@ fn a_run_records_mode_is_what_continue_restarts_it_in() {
         assert_eq!(kept.mode(), mode);
         assert_eq!(kept.mode().is_practice(), practice);
     }
+}
+
+/// The binary's text for a machine that has started nothing: `status` says to run `prep` then
+/// `start --harness <id>` (a chat-mode harness refuses `--goal-file`), and the help leads with
+/// that same command before it mentions `--goal-file`.
+#[test]
+fn the_binary_leads_with_chat_mode_start() {
+    let goalcup = env!("CARGO_BIN_EXE_goalcup");
+    let cfg = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        std::process::Command::new(goalcup)
+            .args(args)
+            .env("GOALCUP_CONFIG_DIR", cfg.path())
+            .output()
+            .unwrap()
+    };
+
+    let out = run(&["status"]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(
+        said.contains("`goalcup prep`, then `goalcup start --harness <id>`"),
+        "{said}"
+    );
+    assert!(!said.contains("--goal-file"), "{said}");
+
+    let out = run(&["--help"]);
+    let help = String::from_utf8_lossy(&out.stdout);
+    let chat = help
+        .find("goalcup start --harness <id>")
+        .expect("the start line");
+    let headless = help.find("--goal-file").expect("the headless note");
+    assert!(chat < headless, "chat-mode start leads: {help}");
+}
+
+/// `goalcup upload` with no id works on the newest run only, skips entries already sent, says
+/// so when nothing is left, and says plainly that a local run has nothing to send.
+#[test]
+fn upload_with_no_id_picks_the_newest_runs_unsent_entries() {
+    use goalcup_cli::commands::upload::{unsent_of_newest_run, upload_newest_with};
+    use goalcup_cli::run::{EntryRef, RunRecord, write};
+    let cfg = tempfile::tempdir().unwrap();
+    let cfg = cfg.path();
+
+    // Nothing started yet.
+    let error = unsent_of_newest_run(cfg).unwrap_err();
+    assert!(error.to_string().contains("nothing to upload"), "{error}");
+
+    let run = |run_id: &str, server: Option<&str>, started: u64, entries: &[&str]| RunRecord {
+        run_id: run_id.to_string(),
+        server_url: server.map(str::to_string),
+        practice: false,
+        test: false,
+        connector_id: "claude-code-cli".to_string(),
+        workspace: PathBuf::from("/w"),
+        started_at_unix: started,
+        deadline_at: None,
+        entries: entries
+            .iter()
+            .map(|id| EntryRef {
+                entry_id: (*id).to_string(),
+                trace_dir: PathBuf::from("/t"),
+            })
+            .collect(),
+    };
+    let mark_sent = |entry_id: &str| {
+        let spool = cfg.join(goalcup_cli::upload::UPLOADS_DIR_NAME);
+        std::fs::create_dir_all(&spool).unwrap();
+        std::fs::write(spool.join(format!("{entry_id}.sent")), b"sent\n").unwrap();
+    };
+    // An older run with an unsent entry, and the newest run with three segments, the middle one
+    // already sent.
+    write(cfg, &run("old", Some("https://s.example"), 100, &["o-1"])).unwrap();
+    write(
+        cfg,
+        &run(
+            "new",
+            Some("https://s.example"),
+            200,
+            &["n-1", "n-2", "n-3"],
+        ),
+    )
+    .unwrap();
+    mark_sent("n-2");
+    let (run_id, unsent) = unsent_of_newest_run(cfg).unwrap();
+    assert_eq!(run_id, "new");
+    assert_eq!(unsent, ["n-1", "n-3"], "oldest first, the sent one skipped");
+
+    // Everything of the newest run sent: said so, and the older run is left alone.
+    mark_sent("n-1");
+    mark_sent("n-3");
+    let mut out = Vec::new();
+    upload_newest_with(cfg, Default::default(), &mut out).unwrap();
+    let said = String::from_utf8(out).unwrap();
+    assert!(
+        said.contains("everything of run new is already sent"),
+        "{said}"
+    );
+
+    // A newest run that was never opened on a server has nothing to send.
+    write(cfg, &run("local", None, 300, &["l-1"])).unwrap();
+    let error = unsent_of_newest_run(cfg).unwrap_err();
+    assert!(error.to_string().contains("is local"), "{error}");
 }

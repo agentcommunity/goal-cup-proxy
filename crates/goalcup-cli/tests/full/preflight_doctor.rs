@@ -25,7 +25,6 @@ fn opts() -> DoctorOptions {
 #[test]
 fn doctor_reports_on_a_machine_with_no_daemon_and_fails_only_without_a_daemon_binary() {
     let mut out = Vec::new();
-    let mut err = Vec::new();
     let code = run_with(
         None,
         &support::connectors_dir(),
@@ -33,7 +32,6 @@ fn doctor_reports_on_a_machine_with_no_daemon_and_fails_only_without_a_daemon_bi
         &no_path(),
         &opts(),
         &mut out,
-        &mut err,
     )
     .unwrap();
     let text = String::from_utf8(out).unwrap();
@@ -66,7 +64,6 @@ fn doctor_sweeps_the_probe_files_a_killed_run_left_in_the_configuration_director
     std::fs::write(&keep, b"").expect("a file that is none of this command's business");
 
     let mut out = Vec::new();
-    let mut err = Vec::new();
     run_with(
         None,
         &support::connectors_dir(),
@@ -74,7 +71,6 @@ fn doctor_sweeps_the_probe_files_a_killed_run_left_in_the_configuration_director
         &no_path(),
         &opts(),
         &mut out,
-        &mut err,
     )
     .unwrap();
     assert!(!stale.exists(), "the stale probe file is swept");
@@ -105,8 +101,7 @@ fn doctor_at(
     o: &DoctorOptions,
 ) -> Result<(u8, String), goalcup_cli::CliError> {
     let mut out = Vec::new();
-    let mut err = Vec::new();
-    let code = run_with(None, connectors, cfg, &no_path(), o, &mut out, &mut err)?;
+    let code = run_with(None, connectors, cfg, &no_path(), o, &mut out)?;
     Ok((code, String::from_utf8(out).unwrap()))
 }
 
@@ -287,7 +282,6 @@ fn doctor_fails_naming_a_missing_harness_and_passes_any_build_it_finds() {
         &env,
         &scoped,
         &mut out,
-        &mut Vec::new(),
     )
     .unwrap();
     let text = String::from_utf8(out).unwrap();
@@ -317,7 +311,6 @@ fn doctor_fails_naming_a_missing_harness_and_passes_any_build_it_finds() {
         &env,
         &scoped,
         &mut out,
-        &mut Vec::new(),
     )
     .unwrap();
     let text = String::from_utf8(out).unwrap();
@@ -377,7 +370,6 @@ fn doctor_fails_naming_both_versions_when_the_control_file_speaks_another_api() 
     write_control_file(&cfg, theirs, 1);
 
     let mut out = Vec::new();
-    let mut err = Vec::new();
     let code = run_with(
         None,
         &support::connectors_dir(),
@@ -385,7 +377,6 @@ fn doctor_fails_naming_both_versions_when_the_control_file_speaks_another_api() 
         &no_path(),
         &opts(),
         &mut out,
-        &mut err,
     )
     .unwrap();
     let text = String::from_utf8(out).unwrap();
@@ -420,7 +411,6 @@ fn doctor_reports_a_control_file_whose_port_nothing_is_listening_on_as_no_daemon
         .expect("a client for a version this build speaks, whatever is on the far end");
 
     let mut out = Vec::new();
-    let mut err = Vec::new();
     let code = run_with(
         Some(&client),
         &support::connectors_dir(),
@@ -428,7 +418,6 @@ fn doctor_reports_a_control_file_whose_port_nothing_is_listening_on_as_no_daemon
         &no_path(),
         &opts(),
         &mut out,
-        &mut err,
     )
     .unwrap();
     let text = String::from_utf8(out).unwrap();

@@ -286,7 +286,7 @@ impl RunState {
 
     /// The host ended the agent on purpose because the run is over (the deadline, a newer run);
     /// a full disk is not an end.
-    fn stopped_for_its_end(&self) -> bool {
+    pub(crate) fn stopped_for_its_end(&self) -> bool {
         self.stopped
             .as_deref()
             .is_some_and(|why| why != watch::DISK_STOP_REASON)
