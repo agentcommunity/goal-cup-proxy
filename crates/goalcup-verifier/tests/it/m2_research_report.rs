@@ -811,7 +811,7 @@ fn mixed_observations_end_in_one_bound_summary() {
     assert_eq!(&result.summary, summary);
     assert_eq!(result.exit_code, 0, "{summary:#}");
     assert_eq!(summary["exit_code"], 0);
-    assert_eq!(summary["schema_version"], 2);
+    assert_eq!(summary["schema_version"], 3);
     assert_eq!(
         summary["verifier_version"],
         goalcup_verifier::VERIFIER_VERSION
@@ -926,7 +926,7 @@ fn the_report_echoes_launch_keys_and_presents_connector_pin_provenance() {
     assert_eq!(summary["run"]["connector"], "Dev/unpinned");
     assert_eq!(
         hex::encode(Sha256::digest(&bytes)),
-        "79ba47046eda71666ff5d90c45cc841850b4d8a75196cc03c2b6c576bdda8a92"
+        "d6a3efededdca07b46a30b0c1a088e29e46f83c39dfec3fce0d0059c49ac0dfa"
     );
 
     let (pinned_id, pinned_digest) = CONNECTOR_DIR_SHA256S[0];
@@ -991,7 +991,8 @@ fn complete_local_report_without_server_exits_zero() {
     assert_eq!(
         summary["delivery"],
         json!({"anchor": "local_only", "state": "local_only", "verified_ack": null,
-            "receipt_clock": null})
+            "receipt_clock": null, "records_after_deadline": null,
+            "last_seq_at_or_before_deadline": null, "last_ack_at": null})
     );
     // The typed terminal, exactly as the local finish wrote it.
     let finish = trace.finish.as_ref().unwrap();
@@ -1013,10 +1014,14 @@ fn complete_local_report_without_server_exits_zero() {
             "reason": "participant_stop", "termination": confirmed(),
             "seal_manifest_sha256": seal_manifest_sha256})
     );
-    // No signed duration, and no duration of any kind, is claimed.
+    // No signed duration, and no duration of any kind, is claimed. The deadline counts are the
+    // one exception to the word "deadline": they are in the delivery block, and the equality
+    // above pins them to null for a trace with no receipt.
     for key in keys(summary) {
         for word in ["duration", "deadline", "elapsed", "latency"] {
-            assert!(!key.contains(word), "{key}");
+            let deadline_fact = key.ends_with("records_after_deadline")
+                || key.ends_with("last_seq_at_or_before_deadline");
+            assert!(deadline_fact || !key.contains(word), "{key}");
         }
     }
     assert_eq!(summary["analysis"]["state"], "available");
@@ -1142,6 +1147,12 @@ fn verified_reader_facts_are_the_only_terminal_and_delivery_authority() {
             json!(report.verified_ack),
             json!(report.receipt_clock),
             json!(report.terminal),
+            // The deadline facts travel with the delivery, exactly as the reader found them.
+            json!([
+                report.records_after_deadline,
+                report.last_seq_at_or_before_deadline,
+                report.last_ack_at
+            ]),
         )
     };
     let delivered = |summary: &Value| {
@@ -1149,6 +1160,11 @@ fn verified_reader_facts_are_the_only_terminal_and_delivery_authority() {
             summary["delivery"]["verified_ack"].clone(),
             summary["delivery"]["receipt_clock"].clone(),
             summary["run"]["terminal"].clone(),
+            json!([
+                summary["delivery"]["records_after_deadline"],
+                summary["delivery"]["last_seq_at_or_before_deadline"],
+                summary["delivery"]["last_ack_at"]
+            ]),
         )
     };
 
@@ -1180,6 +1196,9 @@ fn verified_reader_facts_are_the_only_terminal_and_delivery_authority() {
         assert_eq!(summary["delivery"]["state"], state);
         assert_eq!(summary["delivery"]["anchor"], "local_only");
         assert_eq!(summary["key_source"], "supplied");
+        // The server's signed time is copied; with no receipt there is no deadline to count against.
+        assert_eq!(summary["delivery"]["last_ack_at"], "2026-09-29T12:01:00Z");
+        assert_eq!(summary["delivery"]["records_after_deadline"], Value::Null);
 
         if !at_terminal {
             // An ACK at the terminal under another key is not verified evidence: the reader
@@ -1264,11 +1283,17 @@ fn verified_reader_facts_are_the_only_terminal_and_delivery_authority() {
     let summary = summary_of(&lines);
     assert_eq!(result.exit_code, 0, "{summary:#}");
     assert_eq!(delivered(summary), reader_facts(dir.path()));
+    let delivery = &summary["delivery"];
+    assert_eq!(delivery["anchor"], "signed");
+    assert_eq!(delivery["state"], "none_acknowledged");
+    assert_eq!(delivery["verified_ack"], Value::Null);
+    assert_eq!(delivery["last_ack_at"], Value::Null);
     assert_eq!(
-        summary["delivery"],
-        json!({"anchor": "signed", "state": "none_acknowledged", "verified_ack": null,
-            "receipt_clock": {"started_at": STARTED_AT, "deadline_at": DEADLINE_AT}})
+        delivery["receipt_clock"],
+        json!({"started_at": STARTED_AT, "deadline_at": DEADLINE_AT})
     );
+    // A verified, bound receipt gives the deadline counts a clock to be set against.
+    assert!(delivery["records_after_deadline"].is_u64(), "{delivery:#}");
     assert_eq!(
         summary["run"]["terminal"],
         json!({"seq": final_link.seq, "hash": final_link.hash, "observed": null,

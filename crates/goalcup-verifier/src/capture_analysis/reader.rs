@@ -62,9 +62,10 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 
 /// The capture-integrity report document schema version. 2 added the deadline facts
-/// (`records_after_deadline`, `last_seq_at_or_before_deadline`, `last_ack_at`); schema 1
-/// documents still parse, those fields reading as absent.
-pub(crate) const CAPTURE_INTEGRITY_SCHEMA_VERSION: u32 = 2;
+/// (`records_after_deadline`, `last_seq_at_or_before_deadline`, `last_ack_at`). 3 added the
+/// identity (`entry_id`, `profile_id`) and `first_failure`. Schema 1 and 2 documents still
+/// parse, those fields reading as absent.
+pub(crate) const CAPTURE_INTEGRITY_SCHEMA_VERSION: u32 = 3;
 
 /// The most characters of a recorded Git reason the report repeats.
 const GIT_UNREADABLE_CHARS: usize = 200;
@@ -156,6 +157,13 @@ const MAX_SEGMENT_B64_BYTES: usize = MAX_SEGMENT_BYTES.div_ceil(3) * 4;
 /// does not guess delivery or live network state, and an ACK behind the terminal is
 /// progress, not complete delivery.
 ///
+/// **Identity** (`entry_id`, `profile_id`). They let a batch join a report to the server's rows
+/// without carrying the directory name on the side. Both are read from the chain's validated
+/// prefix, so they are as good as the chain, and `None` when the prefix does not reach them.
+///
+/// **First failure** (`first_failure`). Where the scan first found a problem, so a judge need not
+/// infer it from `validated_records`. See [`FirstFailure`].
+///
 /// **Deadline facts** (`records_after_deadline`, `last_seq_at_or_before_deadline`). They compare
 /// each record's `recorded_at` with the receipt's `deadline_at`. `recorded_at` is the participant
 /// machine's own clock: the chain hash covers it, but nothing makes it true, and a participant who
@@ -215,6 +223,38 @@ pub struct CaptureIntegrityReport {
     /// value as `verified_ack.acked_at`, repeated here beside the other deadline facts.
     #[serde(default)]
     pub last_ack_at: Option<String>,
+    /// The entry the validated prefix belongs to: the `entry_id` every validated record carries,
+    /// read from the first record that passed every check. `None` when no record validated.
+    #[serde(default)]
+    pub entry_id: Option<String>,
+    /// The `profile_id` (connector id) of the first validated `Launch` record. `None` when the
+    /// prefix has no Launch, as in a chain pruned past it, or when no record validated.
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    /// The first thing that kept the report from `valid`. `None` for a valid report, and for an
+    /// incomplete one whose only cause is coverage (`gap_recorded`, `producer_recovered`,
+    /// `producer_unclosed`), which are facts about the capture and not failures of the scan.
+    #[serde(default)]
+    pub first_failure: Option<FirstFailure>,
+}
+
+/// The first problem the scan found, in the order the scan looks: the receipt first (before the
+/// chain, so `seq` is `None`), then the chain record by record in seq order, then the documents
+/// and whole-chain facts (`seq` `None`). So a bad receipt hides a bad record at seq 5 here; both
+/// are still in `findings`. An `invalid` report names its first violation; an
+/// `incomplete` one names its first missing or unproven piece (`chain_unsealed`,
+/// `seal_manifest_missing`, `chain_pruned_locally` and the like). The scan stops at the first
+/// bad record, so the code is also the reason `validated_records` stops where it does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FirstFailure {
+    /// The chain position the scan was at. For a record that failed it is the seq that record
+    /// should have had (so the seq of the first bad record, which is not in `validated_records`).
+    /// A chain that starts above byte 0 (pruned locally) has no trusted position for its first
+    /// record, so a failure on that record is `None` too.
+    /// `None` for a problem in a document and not in the chain: the receipt, `baseline.json`,
+    /// `seal.json`, or a fact only the whole chain shows (`launch_missing`, `chain_unsealed`).
+    pub seq: Option<u64>,
+    pub code: String,
 }
 
 impl CaptureIntegrityReport {
@@ -279,6 +319,8 @@ pub fn scan_capture_trace(
     }
     let mut acks = open_file(&root, ACKS_FILE)?.map(AckStream::new);
     scan.read_chain(chain, acks.as_mut(), emit)?;
+    // What follows is about the documents and the chain as a whole, not one record.
+    scan.at = None;
     if scan.chain_clean {
         scan.finish_acks(acks.as_mut())?;
         scan.bind_baseline(&root)?;
@@ -503,6 +545,16 @@ struct Scan<'k> {
     deadline_secs: Option<u64>,
     records_after_deadline: u64,
     last_seq_at_or_before_deadline: Option<u64>,
+    /// The profile of the first validated Launch.
+    profile_id: Option<String>,
+    /// The chain position of the record being read, for `first_failure`. `None` outside the
+    /// chain pass, and for a pruned chain's first record, whose position is only its own claim.
+    at: Option<u64>,
+    /// The entry of the first record that passed every check, for the report's `entry_id`.
+    validated_entry: Option<String>,
+    /// The first `fail` (an invalid verdict) and the first `short` (an incomplete one).
+    first_invalid: Option<FirstFailure>,
+    first_incomplete: Option<FirstFailure>,
 }
 
 impl<'k> Scan<'k> {
@@ -537,6 +589,11 @@ impl<'k> Scan<'k> {
             deadline_secs: None,
             records_after_deadline: 0,
             last_seq_at_or_before_deadline: None,
+            profile_id: None,
+            at: None,
+            validated_entry: None,
+            first_invalid: None,
+            first_incomplete: None,
         }
     }
 
@@ -551,11 +608,23 @@ impl<'k> Scan<'k> {
 
     fn fail(&mut self, code: &str) {
         self.invalid = true;
+        if self.first_invalid.is_none() {
+            self.first_invalid = Some(FirstFailure {
+                seq: self.at,
+                code: code.to_string(),
+            });
+        }
         self.findings.add(code);
     }
 
     fn short(&mut self, code: &str) {
         self.incomplete = true;
+        if self.first_incomplete.is_none() {
+            self.first_incomplete = Some(FirstFailure {
+                seq: self.at,
+                code: code.to_string(),
+            });
+        }
         self.findings.add(code);
     }
 
@@ -640,6 +709,12 @@ impl<'k> Scan<'k> {
         let mut line = Vec::with_capacity(16 * 1024);
         loop {
             line.clear();
+            // The position a failure here is reported at: the seq this record should have.
+            self.at = if self.pruned && self.validated_records == 0 {
+                None
+            } else {
+                Some(self.first_seq + self.validated_records)
+            };
             let read = (&mut reader).take(limit).read_until(b'\n', &mut line)?;
             if read == 0 {
                 match parts.next() {
@@ -723,12 +798,16 @@ impl<'k> Scan<'k> {
             }
             match &self.entry_id {
                 None => {
-                    if let Some(receipt) = &mut self.receipt
-                        && receipt.receipt.claims.entry_id != env.entry_id
-                    {
-                        receipt.bound = false;
-                        self.invalid = true;
-                        self.findings.add("receipt_entry_mismatch");
+                    let mismatch = self.receipt.as_mut().is_some_and(|receipt| {
+                        let differs = receipt.receipt.claims.entry_id != env.entry_id;
+                        if differs {
+                            receipt.bound = false;
+                        }
+                        differs
+                    });
+                    if mismatch {
+                        // Not a stop: the chain is still read on.
+                        self.fail("receipt_entry_mismatch");
                     }
                     self.entry_id = Some(env.entry_id.clone());
                 }
@@ -768,6 +847,16 @@ impl<'k> Scan<'k> {
             self.validated_records += 1;
             self.validated_bytes += read as u64;
             self.head.clone_from(&env.link.hash);
+            if self.validated_entry.is_none() {
+                self.validated_entry = Some(env.entry_id.clone());
+            }
+            if self.profile_id.is_none()
+                && let EventBody::Capture {
+                    record: CaptureRecord::Launch { profile_id, .. },
+                } = &env.body
+            {
+                self.profile_id = Some(profile_id.clone());
+            }
             if let (Some(deadline), Some(stamped)) = (self.deadline_secs, env.recorded_at_secs()) {
                 if stamped > deadline {
                     self.records_after_deadline += 1;
@@ -1083,6 +1172,12 @@ impl<'k> Scan<'k> {
         // The deadline counts mean something only against a receipt that verified and bound.
         let deadline_facts = receipt_clock.is_some();
         let last_ack_at = self.verified_ack.as_ref().map(|ack| ack.acked_at.clone());
+        // An invalid report names its first violation, an incomplete one its first missing piece.
+        let first_failure = match integrity {
+            CaptureIntegrity::Invalid => self.first_invalid.take(),
+            CaptureIntegrity::Incomplete => self.first_incomplete.take(),
+            CaptureIntegrity::Valid => None,
+        };
         CaptureIntegrityReport {
             schema_version: CAPTURE_INTEGRITY_SCHEMA_VERSION,
             integrity,
@@ -1109,6 +1204,9 @@ impl<'k> Scan<'k> {
                 .last_seq_at_or_before_deadline
                 .filter(|_| deadline_facts),
             last_ack_at,
+            entry_id: self.validated_entry,
+            profile_id: self.profile_id,
+            first_failure,
         }
     }
 }

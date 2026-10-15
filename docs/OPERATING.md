@@ -456,6 +456,34 @@ signer) gives `receipt_key_not_accepted` or `ack_signature_unverified`. `--dev-k
 key for one run, and the report records `key_source: "supplied"` so a development run is never mistaken for a
 production one.
 
+### Judging a run from the server's copy
+
+A participant's folder may have been pruned (`chain_pruned_locally`), or you may hold only the server's
+copy. `scripts/fetch-run.sh` rebuilds a trace directory from the database's chunk index and the R2 bucket:
+
+```sh
+sh scripts/fetch-run.sh <run-id | entry-id> <outdir>      # prints <outdir>/<entry-id> for each entry
+goalcup-verify --capture-integrity <outdir>/<entry-id>
+```
+
+A run id builds one directory per entry (a continued run has several). The chunks come from the database's
+chunk index, never from an R2 listing, because a lost race can leave an orphan object. The script checks
+that every chunk matches the index's SHA-256 and length and that the offsets run on from 0 with no gap, and it
+writes nothing into `<outdir>` unless the entry is whole. It never overwrites a directory. It writes
+`chain.jsonl`, `acks.jsonl`, `receipt.json` and, for a sealed entry, `seal.json` and `baseline.json`.
+
+It needs `zstd`, `python3`, `psql` and `curl`, and in the environment `DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_API_TOKEN`. Use read-only credentials: a Postgres role that can only `SELECT` from
+`goal_cup_tracer.entries` and `goal_cup_tracer.chunks` (and has `USAGE` on the schema, and `BYPASSRLS` or a
+policy), and an R2 token with object read access only. The script runs its one query inside `BEGIN READ ONLY`
+and only sends `GET` requests to R2. It prints no credential (not under `sh -x` either) and puts none on a
+command line: the database URL goes to psql in a mode-600 service file, the token to curl on its stdin. Files
+it writes are private to you (`umask 077`). It also checks the index reaches the end the server holds
+(`upload_offset`, and the final heartbeat's seq and head when one was sent). `--bucket
+goalcup-traces-staging` reads the staging bucket, and a staging or test trace also needs `--dev-key`.
+`--index FILE` and `--store DIR` replace the database and R2 with a saved index and a mirror of the bucket.
+`scripts/test_fetch_run.py` tests it against such a fake.
+
 ## Pinning connectors
 
 ```
@@ -480,7 +508,21 @@ the first invalid line, so the first code it adds is the cause. (`receipt_*` cod
 starts.) Codes after it only say what the validated prefix lacks (for example `launch_missing` after a
 dropped line). `validated_records` and `validated_head` say where the good prefix ends.
 
-**Deadline facts.** The report (schema 2) also has `records_after_deadline` and
+**Who and where.** The report (schema 3) names the run and the first problem, so a batch can join it to the
+server's rows and a judge need not infer where the scan stopped. `entry_id` is the entry the validated
+prefix belongs to. `profile_id` is the connector id of its first `Launch` (`null` if the prefix holds none).
+`first_failure` is `{"seq", "code"}`: for an `invalid` report the first violation, for an `incomplete` one the
+first missing or unproven piece (`chain_unsealed`, `seal_manifest_missing` and the like), and `null` for a
+`valid` one or an incomplete one that is only about coverage (`gap_recorded`, `producer_recovered`,
+`producer_unclosed`). `seq` is the position the bad record should have had, which is also
+`validated_records` when the chain starts at 0. It is `null` for a problem in a document (the receipt,
+`seal.json`, `baseline.json`), in the chain as a whole, or on the first record of a chain pruned locally (its
+position is only its own claim). "First" is the order the verifier looks, not the lowest seq: the receipt, then
+the records in seq order, then the documents. A bad receipt is therefore named even when a record also breaks;
+`findings` lists both. A batch is then
+`for d in runs/*; do goalcup-verify --capture-integrity "$d" | jq -c '{entry_id, profile_id, integrity, first_failure}'; done`.
+
+**Deadline facts.** The report (schema 2 and later) also has `records_after_deadline` and
 `last_seq_at_or_before_deadline`. They compare each record's `recorded_at` with the receipt's `deadline_at`.
 `recorded_at` is the **participant's machine clock**: the chain hash covers it, but nothing makes it true, and a
 participant can set the clock back. Treat the two fields as a hint, not proof. They never change the exit.
@@ -488,7 +530,8 @@ A run finished early has `records_after_deadline` 0. A run cut at its deadline u
 finalization after it, but a record in the deadline's own second counts as before it. Both fields are empty
 (`null`) without a verified receipt. The **trusted time is the server's**: `last_ack_at` (the same value as
 `verified_ack.acked_at`, signed with the server key) compared with `receipt_clock.deadline_at`, and the
-server's own chunk acknowledgements.
+server's own chunk acknowledgements. The research summary (`--research-json`, schema 3) repeats the three
+fields under `delivery`, unchanged, with the same caveat.
 
 The **Exit** column is the exit a code gives alone: 2 invalid evidence, 1 incomplete (not proven, not
 forged), `-` a note that changes nothing by itself. Exit 2 beats exit 1. When a trace is invalid, compare it

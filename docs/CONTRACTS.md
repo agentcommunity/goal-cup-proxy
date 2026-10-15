@@ -264,7 +264,7 @@ leaves its mark.
 - Reader facts a consumer may rely on: `verified_ack`, `receipt_clock`, `last_ack_at` and `terminal`
   (`LocalFinish`, `SignedFinalization` or `LegacySeal`). A missing receipt or ACK is never invented.
   `records_after_deadline` and `last_seq_at_or_before_deadline` use the participant's machine clock: a
-  hint, not proof.
+  hint, not proof. Schema 3 adds `entry_id`, `profile_id` and `first_failure` (`{seq, code}`).
   A complete local trace may exit 0 with anchor `LocalOnly` and delivery `LocalOnly`; that asserts
   neither signed eligibility nor absence of assistance.
 - Decoders are the verifier's `DecoderV1` API (`capture_analysis/api.rs`). A decoder sees the

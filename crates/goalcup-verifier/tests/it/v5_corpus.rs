@@ -233,6 +233,34 @@ fn the_corpus_directory_and_the_table_agree() {
 // The chain as rotating parts (D55).
 // ---------------------------------------------------------------------------------------
 
+/// A first record that fails a check after its entry id was read does not name the entry, and a
+/// chain that starts above byte 0 has no trusted position for its first record. The mismatching
+/// Launch of `signed-receipt-key-mismatch` is its sixth record; keeping only the parts from it on
+/// makes it the first record of a locally pruned chain.
+#[test]
+fn a_pruned_chains_failing_first_record_names_neither_entry_nor_seq() {
+    let root = support::materialize_private(&corpus_dir().join("signed-receipt-key-mismatch"));
+    support::split_into_parts(root.path(), &[5]);
+    std::fs::remove_file(root.path().join(CHAIN_FILE)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"))
+        .args(["--capture-integrity".as_ref(), root.path().as_os_str()])
+        .args([
+            "--dev-key",
+            &support::capture_records::server_public_key_hex(),
+        ])
+        .output()
+        .unwrap();
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(2), "{report:#}");
+    assert_eq!(report["validated_records"], 0, "{report:#}");
+    assert_eq!(report["entry_id"], Value::Null, "{report:#}");
+    assert_eq!(
+        report["first_failure"],
+        serde_json::json!({"seq": null, "code": "record_field_invalid"}),
+        "{report:#}"
+    );
+}
+
 /// Part naming and reading are on-disk format, and the uploader depends on them. Every corpus
 /// trace, cut into parts the way a rotating writer leaves them, must read exactly as the one
 /// file does and as `expected.toml` says. Nothing here regenerates a byte of the corpus: the
