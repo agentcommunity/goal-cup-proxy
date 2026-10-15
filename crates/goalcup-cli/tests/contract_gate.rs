@@ -22,13 +22,11 @@ fn goalcup() -> Command {
 }
 
 #[test]
-fn the_exit_ladder_reserves_two_for_a_verdict_and_gives_a_gate_four() {
+fn the_exit_ladder_reserves_two_for_a_verdict_and_leaves_four_unused() {
     assert_eq!(CliError::Refused("x".into()).exit_code(), 1);
-    assert_eq!(CliError::Gate("x".into()).exit_code(), 4);
     assert_eq!(CliError::Internal("x".into()).exit_code(), 3);
     for e in [
         CliError::Refused("a".into()),
-        CliError::Gate("b".into()),
         CliError::Internal("c".into()),
     ] {
         assert_ne!(
@@ -119,8 +117,8 @@ fn a_control_file_over_the_cap_is_refused_naming_the_cap() {
 
     // A document exactly at the cap is still read. The bound is a bound, not a tighter
     // limit on the daemon's own file by one byte.
-    let real = r#"{"control_api_version":3,"daemon_version":"0.1.0","address":"127.0.0.1:53310",
-            "port":53310,"receiver_address":"127.0.0.1:53311","token":"t"}"#;
+    let real = r#"{"control_api_version":7,"daemon_version":"0.1.0","address":"127.0.0.1:53310",
+            "port":53310,"token":"t"}"#;
     let padding = usize::try_from(cap).unwrap() - real.len();
     std::fs::write(&path, format!("{real}{}", " ".repeat(padding))).unwrap();
     assert_eq!(
@@ -132,27 +130,10 @@ fn a_control_file_over_the_cap_is_refused_naming_the_cap() {
     assert_eq!(f.port, 53310, "a file exactly at the cap still reads");
 }
 
-#[test]
-fn the_control_file_this_cli_reads_is_the_five_field_document_the_daemon_writes() {
-    let tmp = tempfile::tempdir().unwrap();
-    // Byte for byte the shape of `goalcup_daemon::control::ControlFile`.
-    std::fs::write(
-        goalcup_cli::config::control_path(tmp.path()),
-        r#"{"control_api_version":3,"daemon_version":"0.1.0","address":"127.0.0.1:53310",
-            "port":53310,"token":"t"}"#,
-    )
-    .unwrap();
-    let f = goalcup_cli::config::read_control_file(tmp.path()).unwrap();
-    assert_eq!(
-        (f.control_api_version, f.port, f.token.as_str()),
-        (3, 53310, "t")
-    );
-}
-
 /// Every rung of the ladder, from every variant, and the one place `2` is allowed to come
 /// from.
 ///
-/// The test above pins the three variants a command raises by hand. This one walks
+/// The ladder test pins the two variants a command raises by hand. This one walks
 /// the whole enum — including the four wrapped errors, whose numbers no test named — so a
 /// variant added later without a rung is a failure here rather than a participant reading a
 /// verdict's number off a CLI that could not open a file.
@@ -164,9 +145,8 @@ fn every_variant_lands_on_a_rung_and_no_variant_lands_on_two() {
         ))
         .exit_code(),
         1,
-        "2026-09-06, M1c Task 10: 4 is D16's arming gate and nothing else. A preflight \
-         refusal is raised before an entry exists and is fixed by installing a matching \
-         build, so it is a rung-1 refusal the participant can act on"
+        "a preflight refusal is raised before an entry exists and is fixed by installing a \
+         matching build, so it is a rung-1 refusal the participant can act on"
     );
     let variants = [
         CliError::Io {
@@ -179,108 +159,15 @@ fn every_variant_lands_on_a_rung_and_no_variant_lands_on_two() {
         )),
         CliError::Protocol(goalcup_protocol::ProtocolError::Signature("x".into())),
         CliError::Refused("a".into()),
-        CliError::Gate("b".into()),
         CliError::Internal("c".into()),
     ];
     for e in variants {
         let code = e.exit_code();
         assert!(
-            [1, 3, 4].contains(&code),
+            [1, 3].contains(&code),
             "{e:?} left under {code}, which is not a rung of the ladder"
         );
     }
-}
-
-/// Rung 4 is a GATE's, and this enumerates every site in `src/` that raises one.
-///
-/// D48 removed the V1 arming wait and the `goalcup resume` lock gate, so the CLI raises no
-/// rung-4 site of its own. A sweep of only the refusals `goalcup start` can raise would miss
-/// a new site elsewhere, and `--help`, `lib.rs` and README would come to say three different
-/// things about one number.
-///
-/// So the sweep is over the whole of `src/`, in the shape of `start_launch.rs`'s
-/// `retry_busy` walk: every `CliError::Gate(` construction, wherever it sits, is reported. A
-/// new site is not forbidden. It is a decision, and this test is where the decision has to
-/// be written down before it ships, beside the ladder in `lib.rs` and the sentence in
-/// `--help`.
-#[test]
-fn four_is_a_gates_rung_and_every_site_that_raises_it_is_a_gate() {
-    assert_eq!(
-        CliError::Gate("the arming gate closed on entry e1".into()).exit_code(),
-        4
-    );
-    // Everything else `goalcup start` can refuse with, and not one of them is a 4.
-    for (name, e) in [
-        (
-            "no grant",
-            CliError::Refused("run `goalcup auth` first".into()),
-        ),
-        (
-            "no daemon",
-            CliError::Control(goalcup_protocol::control::ControlError::Unreachable(
-                "no control.json".into(),
-            )),
-        ),
-        (
-            "a preflight the daemon refused",
-            CliError::Control(goalcup_protocol::control::ControlError::PreflightFailed(
-                "the daemon ships a different manifest".into(),
-            )),
-        ),
-        (
-            "an entry that is already sealed",
-            CliError::Control(goalcup_protocol::control::ControlError::Conflict(
-                "already sealed".into(),
-            )),
-        ),
-        (
-            "a document this CLI could not parse",
-            CliError::Internal("not written yet".into()),
-        ),
-        // The same fact `goalcup seal` puts on rung 1. A daemon still holding an entry after
-        // the retry is spent has decided nothing about this run, and one fact on two rungs
-        // is a number no script can branch on.
-        (
-            "a tracker still busy when the retry is spent",
-            CliError::Refused("still busy after 3 attempts".into()),
-        ),
-    ] {
-        assert_ne!(
-            e.exit_code(),
-            4,
-            "{name} is not a gate, and 4 is a gate's number"
-        );
-    }
-
-    // Every construction of the rung, enumerated. One line per site, which is how this crate
-    // already writes them — `CliError::Gate(format!(` opens the call and the sentence
-    // follows underneath.
-    let mut sites: Vec<(String, usize, String)> = Vec::new();
-    for entry in support::walk("crates/goalcup-cli/src") {
-        let Ok(source) = std::fs::read_to_string(&entry) else {
-            continue;
-        };
-        for (n, line) in source.lines().enumerate() {
-            let trimmed = line.trim_start();
-            // The match arm in `lib.rs` reads the rung; it does not raise it.
-            if !trimmed.contains("CliError::Gate(")
-                || trimmed.contains("CliError::Gate(_)")
-                || trimmed.starts_with("//")
-            {
-                continue;
-            }
-            let file = entry
-                .strip_prefix(support::repo_root())
-                .unwrap_or(&entry)
-                .display()
-                .to_string();
-            sites.push((file, n + 1, trimmed.to_string()));
-        }
-    }
-    // The CLI raises no rung-4 site of its own since D48 removed the V1 arming wait and the
-    // `resume` gates, and control API v6 removed the daemon's `arming_timeout` code. A new
-    // site is a new gate; say which in `lib.rs`'s ladder, in `AFTER_HELP`, and here.
-    assert!(sites.is_empty(), "an unexpected rung-4 site: {sites:#?}");
 }
 
 /// clap exits `2` on a usage error, and `2` is a verdict here — so this binary parses with

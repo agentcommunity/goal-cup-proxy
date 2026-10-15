@@ -409,12 +409,13 @@ fn a_body_that_stopped_early_or_is_not_utf8_is_malformed_and_not_unreachable() {
     }
 }
 
-/// `from_config_dir` reads the daemon's own six-field document — the field names are only
-/// checked at runtime, so the fixture below is written as the daemon writes it and the
-/// round trip is proved by the request that comes out the other side carrying that file's
-/// token.
+/// The control file the daemon writes is the control file this CLI reads. The daemon writes
+/// it with its own `write_control_file`, and both halves of the CLI read it back: the plain
+/// `read_control_file`, and `from_config_dir`, whose request must then carry the file's port
+/// and token. Nothing here is a hand-written copy of the document, so a field the daemon adds,
+/// renames or re-types is a failure here and not a fixture that keeps passing.
 #[test]
-fn from_config_dir_round_trips_the_daemons_six_field_control_file() {
+fn the_control_file_the_daemon_writes_is_the_one_this_cli_reads() {
     let srv = support::recording_daemon();
     let cfg = support::empty_cfg();
     let port = srv
@@ -423,19 +424,15 @@ fn from_config_dir_round_trips_the_daemons_six_field_control_file() {
         .next()
         .and_then(|p| p.parse::<u16>().ok())
         .expect("the recording daemon's port");
-    let document = serde_json::json!({
-        "control_api_version": goalcup_protocol::control::CONTROL_API_VERSION,
-        "daemon_version": "0.1.0",
-        "address": format!("127.0.0.1:{port}"),
-        "port": port,
-        "receiver_address": format!("127.0.0.1:{}", port + 1),
-        "token": "the-token-in-the-file",
-    });
-    std::fs::write(
-        cfg.join("control.json"),
-        serde_json::to_string(&document).unwrap(),
-    )
-    .unwrap();
+    let written = goalcup_daemon::control::write_control_file(&cfg, port, "the-token-in-the-file")
+        .expect("the daemon writes its control file");
+    assert_eq!(written, goalcup_cli::config::control_path(&cfg));
+
+    let file = goalcup_cli::config::read_control_file(&cfg).expect("the CLI reads it back");
+    assert_eq!(file.control_api_version, control::CONTROL_API_VERSION);
+    assert_eq!(file.port, port);
+    assert_eq!(file.address, format!("127.0.0.1:{port}"));
+    assert_eq!(file.token, "the-token-in-the-file");
 
     let c = HttpDaemonClient::from_config_dir(&cfg).expect("the daemon's own control.json");
     let _ = c.entries();

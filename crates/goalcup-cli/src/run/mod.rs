@@ -596,11 +596,6 @@ pub fn run_dir(cfg: &Path, run_id: &str) -> PathBuf {
     runs_dir(cfg).join(run_id)
 }
 
-/// `<cfg>/runs/<run_id>/state.json`.
-pub fn state_path(cfg: &Path, run_id: &str) -> PathBuf {
-    run_dir(cfg, run_id).join(STATE_FILE_NAME)
-}
-
 /// Whether `id` can be a directory name here: ids come from the server and the daemon, and a
 /// path separator or a dot must not make one a path.
 fn is_safe_name(id: &str) -> bool {
