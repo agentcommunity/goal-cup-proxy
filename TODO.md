@@ -57,6 +57,7 @@ fast` before every commit.
   [OPERATING](docs/OPERATING.md).
 
 ### WP1: Event window and event switch (server). Land first.
+Status (16 Oct): done. #165 and website #305 merged; production migration applied (cup 7-8 Nov 00:00 UTC, dry run 23 Oct to 6 Nov 00:00); Workers Logs on with invocation logs off (#169); deployed to prod and staging. Left: the 6 Nov `EVENT_ID` switch (runbook in `server/worker/README.md`).
 - The events row is 16 h early. `goalcup-cup-2026` opens 6 Nov 16:00 UTC. Add a new website migration (agentCommunity_PAGE `supabase/migrations/`) that sets opens `2026-11-07T00:00:00Z` and closes `2026-11-08T00:00:00Z` (staging=false), and opens the dry-run row from the first release to 6 Nov 00:00 UTC, so a dry run can start any day. Copy it into `server/worker/sql/goal-cup-tracer-upload.sql`. Fix the stale comment at `:1788-1789`. Drop `[CONFIRM]` at `server/worker/README.md:236-239`. [C6-01, docs]
 - The `EVENT_ID` switch: `wrangler.toml:37-40` still says `goalcup-dryrun-2026`. Write a dated runbook step: "~30 Oct: set `goalcup-cup-2026`, `npm test`, `npx wrangler deploy`, open one practice and one test run, check the R2 prefix `traces/goalcup-cup-2026/`." Do it on 6 Nov with the last release. [C6-02]
 - Turn on Workers Logs: `[observability] enabled = true` at top level and in `[env.staging]`, pinned in `test/config.test.ts`. [C6-04]
@@ -64,6 +65,7 @@ fast` before every commit.
 - Accept: `select id,start_window_opens,start_window_closes from goal_cup_tracer.events` shows the new values. `npm --prefix server/worker test` passes.
 
 ### WP2: Release pipeline shakedown. Start 17 Oct; four runners are untested.
+Status (16 Oct): code done (#164: 0.6.0 single source, `install.sh`, every connector ships, `release.sh prepare`/`tag`, no Homebrew). Left: the first real tag and publish (WP10).
 - Version, one source: workspace `Cargo.toml:13` says `0.1.0` while tag `v0.5.0` exists. Make the workspace version the only place a version is written; every crate, binary, report field (`verifier_version`, `tracer_version`, `DAEMON_VERSION`), the Worker's expected tracer version if any, the install script and the release notes read it. `scripts/release.sh <x.y.z>` sets it, updates `Cargo.lock`, commits and tags; `release.yml` refuses a tag that differs from it. Docs never write a version number by hand (they say "the latest release"); a gate test fails on any other hard-coded version string in the repo. Start at `0.6.0`. Also fix the stale `v0.5.1` at `:15` and "dev-only signer" at `:82`. [C5-F5, C6-05, C6-15, docs]
 - Ship every connector. `scripts/package-release.sh:38` archives only codex-cli and claude-code-cli. Archive all of `connectors/`, with no list of names (Hermes ships too; H-21 is closed). Fix the comment at `:11-13`, `packaging/README.md:28,38-39`, and SKILL step 12 ("ships once merged"). [C3-F2, C6-06]
 - Run `gh workflow run release.yml` by hand now. It publishes nothing. Fix what fails (`macos-15-intel`, `ubuntu-22.04-arm`, `third-party-licenses.py`). [C6-05]
@@ -73,6 +75,7 @@ fast` before every commit.
 - Accept: the manual release run is green on all four targets, and `install.sh` installs it on macOS and Linux. The tarball holds every non-excluded `connectors/*`. `python3 -m pytest scripts/test_gate.py` passes.
 
 ### WP3: Participant-facing CLI and daemon fixes
+Status (16 Oct): done (#159, #158).
 - `goalcup status` with no id can mix two runs. `cli/src/commands/status.rs:154-158` takes the newest run, while `:221-224` pins the newest entry. Use `crate::run::of_entry(cfg, &record.entry_id)`. [C4-F4]
 - Keep one definition of "run over". Replace `commands/start.rs:2472-2478` with `!on_server || crate::run::is_over(&record, Some(&keeper.snapshot()), now_unix())`. [C4-F1]
 - `goalcup status` tells participants "nothing is uploaded" during an uploaded run. Reword `daemon/src/status.rs:118-121`. [C2-F6]
@@ -83,6 +86,7 @@ fast` before every commit.
 - Accept: a new `it/status_views.rs` case (practice, then competition, then continue the practice run). `gate.sh fast`.
 
 ### WP4: Deadline and long-run tests in chat mode
+Status (16 Oct): done (#175).
 - Server deadline in chat mode: `Rig::chat()` with `short_server(…, 8, …)` in `cli/tests/full/upload_e2e.rs`. The TUI stops, the terminal comes back, and the run seals and uploads. [T2-F2a]
 - A continued segment: crash segment 0, then `continue`. Segment 1 must stop on the server's `stop`, and with the server away it must stop on `LocalDeadline::until` (`upload/uploader.rs:1420`, which has zero tests). Add a skewed-clock unit test. [T2-F2b, T2-§5]
 - Real part rotation through the CLI: `set_chain_part_limits_for_test(4096, 1h)` plus `GOALCUP_TEST_DISK`, then prune, kill, continue and finish. Every record reaches the server exactly once. [T2-F3]
@@ -90,6 +94,7 @@ fast` before every commit.
 - Accept: `cargo nextest run --offline -p goalcup-cli --test full upload_e2e` passes, and `scripts/linux-check.sh` passes.
 
 ### WP5: Harness onboarding for #4..#15. Land before the connector cut-off.
+Status (16 Oct): #160 merged. #172 (chat-mode onboarding) is in review.
 - The template and skill build headless (Hermes) connectors, but the product is chat mode (D57). Add a chat-mode block, on by default, to `skills/adding-a-capture-harness/templates/connector-harness.toml:14-22,41`. In SKILL `:71,:102`, point at codex-cli. The facts sheet starts in chat mode and asks for the CA variable and every provider host. [C3-F1, C3-F7, C3-F13]
 - Chat-mode kit: replace the id list at `cli/tests/full/harness_contract_kit.rs:1069` (and the match at `:1005`) with every pinned `interactive = true` connector. Pass `KIT_NATIVE_FILE`, derived from `[[capture.native]]`. Drop the per-harness branches in `tests/fixtures/m2-fake-chat-harness.sh:18-33`. [C3-F1, T2-F1]
 - Find connectors by discovery, not hard-coded ids. One `shipped_connector_ids()` helper replaces the lists at `cli/tests/shipped_connectors.rs:95,143,220,258,544` (compare `:258` to the pins file), `protocol/tests/it/harness_conformance.rs:35`, `full/preflight_doctor.rs:44,138,206,252` and `it/harness_launch_plan.rs:287`. Delete the per-harness recipe asserts (`shipped_connectors.rs:26-82`, `harness_launch_plan.rs:19-56`). Loop the generic rules over every connector. [T1-F4, T2-F1, T2-F12]
@@ -100,6 +105,7 @@ fast` before every commit.
 - Accept: a scratch chat connector under `connectors/` passes `sh scripts/check-connector.sh <id>` on macOS and Linux with no Rust edit. Remove it afterwards.
 
 ### WP6: Test infrastructure and flakes
+Status (16 Oct): #168 merged (races; the x86_64 timing was already fixed by 39ba14f). Gate tiers, `test = false` on bins and the Linux smoke fix are in progress (R2).
 - Serial drift: add `launcher_sweep` to the cli serial regex (`.config/nextest.toml:41`). `TableLock::acquire()` panics when `NEXTEST_TEST_GROUP` is set and is not `serial` (`daemon/tests/common/support/table_lock.rs`). `capture_gate.rs:28` `ONE_AT_A_TIME` becomes `TableLock`. [T1-F2]
 - Sleep races: use a ready-file handshake in `daemon/tests/full/capture_finish_budget.rs:767,810`, and poll the handler state at `:196`. [T1-F3]
 - x86_64: the README says `gate fast` fails there because two timing tests time out. Fix both the same way (wait for the condition, not a fixed budget), then delete the README caveat. [docs, T1-F3]
@@ -108,16 +114,18 @@ fast` before every commit.
 - Accept: `gate.sh fast` passes on macOS and in `linux-x86_64.yml`. `scripts/linux-check.sh` passes.
 
 ### WP7: Safe deletes (pure deletion, before any of it becomes a compatibility promise)
+Status (16 Oct): done except the cross-family golden delete (harness lane). Merged: #161, #162, #174, #167. `hermes_offline_key.rs` stays (see below).
 - Dead tests and fixtures: `daemon/tests/it/terminate_sim.rs:1307,1497`, `daemon/tests/fixtures/wrapper-exit-after-term.sh`, `protocol/tests/it/harness_schema.rs:3206-3219` with `tests/fixtures/harness/*.chat-mode.toml`, and the dead `harness_legacy_equal.rs` mention at `:13`. [T1-F7, T3-F8]
 - The cross-family golden: the test at `cli/tests/full/harness_contract_golden.rs:942`, `cross-family.json`, `FAMILIES` (`:68-74`), `legacy_*` (`:685-706,905-940`), `streams_json` (`:512`), and the orphan `*.native.json` and `native-families.json`. Regenerate once with `GOALCUP_REGEN_HARNESS_GOLDEN=1` and review the diff. [C3, T2-F4, T3-F7]
 - Daemon config: delete the 14 dead keys, `ReceiptBindingPolicy` and `submission_types.rs` (`config.rs:39-53,81-104,154-274`, `lib.rs:37`). Keep `deny_unknown_fields`. Update `tests/it/config_load.rs` and `docs/OPERATING.md:238-240`. [C2-F2]
 - Daemon: `unread_stores` (`native_scope.rs:19,92,99`, `capture/mod.rs:1278-1280`) and `DAEMON_VERSION_TEXT` (`lib.rs:49-52`). [C2-F8, C2-F13]
 - CLI: `CliError::Gate` and exit 4 (`lib.rs:117-121,141`) with the test at `contract_gate.rs:207`, `GateOutcome` (`arming.rs:34`, `start.rs:146,2681`), `run::state_path` (`run/mod.rs:600`), and the dangling link at `lib.rs:7`. [C4, T2-F8]
 - Protocol: `ForeignScanRoot` (`manifest.rs:36-42`). Move the CLI ack writer into `export::append_ack_to`, then delete `export.rs:1349,1366,1375`. Swap the two `libc::flock` calls for `File::try_lock` (`start.rs:594`, `uploader.rs:362`). Platform uses `libc.workspace = true`. [C1-F11, C1-F5, C1-F3, C1-F15]
-- Tests: delete `cli/tests/it/hermes_offline_key.rs` (nothing runs it) and the `upload_open.rs:1141` twin. Merge the two stale control-file tests (`contract_gate.rs:136`, `daemon_client.rs:412-433`) into one cross-crate test. Move `daemon/tests/it/contract_present.rs` into protocol `m2_contract.rs` so CI runs it. [T2-F10, T2-F9, T2-F7, T3-F10]
+- Tests: keep `cli/tests/it/hermes_offline_key.rs`: it is the only real-Hermes P1 promise test, and Hermes ships (promise tests are never deleted). Delete the `upload_open.rs:1141` twin. Merge the two stale control-file tests (`contract_gate.rs:136`, `daemon_client.rs:412-433`) into one cross-crate test. Move `daemon/tests/it/contract_present.rs` into protocol `m2_contract.rs` so CI runs it. [T2-F10, T2-F9, T2-F7, T3-F10]
 - Accept: `gate.sh fast` and `cargo build --offline` pass with no new warnings.
 
 ### WP8: Stale references in code comments and docs
+Status (16 Oct): #157, #170, #173, #177, #178 merged. Left: the code-comment sweep (`CONTRACTS.md` refs in crates, `chunks.ts:2`, `capture_policy.rs:90`, `ack.rs:3`, generic module docs) and the connector comments (re-pin).
 - `grep -rn CONTRACTS.md crates server` finds ~35 comments citing old section titles; update them. `uploader.rs:11,61` and `server/worker/src/chunks.ts:2` cite SERVER-DESIGN sections that no longer exist. `capture_policy.rs:90` cites a deleted Amp record, and `ack.rs:3` cites the deleted VISION.md. [docs]
 - Comments in `connectors/*/harness.toml` cite missing docs. Fix them and run `sh scripts/pin-manifests.sh` in the same commit. This must land before the release cut, because pins are compiled in. [docs]
 - Generic modules: `platform/src/lib.rs:1`, `filecap.rs:1`, `protocol/src/template.rs:3`, `manifest.rs:24-29`, `released_child.rs:9`, `handle_budget.rs:1,10`. [C1-F12]
@@ -127,6 +135,7 @@ fast` before every commit.
 - Accept: `python3 scripts/check-links.py` passes. `grep -rn 'goalhack@\|VISION.md\|proposed-goalcup'` finds nothing. The pins test passes.
 
 ### WP9: Upload contract and verifier guards (organiser side)
+Status (16 Oct): done (#166).
 - SQL↔Worker parity test in `server/worker/test/supabase.test.ts`: every `#rpc` name and `p_` argument in `db-supabase.ts` exists in the SQL. [T3-F1]
 - Shared signing vectors: commit `server/worker/test/vectors/signing.json`. `protocol/tests/it/signing_vectors.rs` asserts the same hex, and `sign.test.ts` reads that file. [T3-F3]
 - In `verifier/tests/it/m2_capture_integrity.rs`, add the tamper-table test `line_level_tampering_names_its_finding`. Add a rotated-corpus test to `v5_corpus.rs`. [T3-F4, T3-F5]
@@ -135,6 +144,7 @@ fast` before every commit.
 - Accept: `npm --prefix server/worker test` passes, and so does `cargo nextest run --offline -p goalcup-verifier -p goalcup-protocol`.
 
 ### WP11: The server is the clock
+Status (16 Oct): done (#163, plus #175 for status and reserve).
 - Today: the server stamps `official_start` and `deadline_at` at open, and each heartbeat answer
   says `stop` and repeats `deadline_at` (`server/worker/src/runs.ts:93-97`). Offline, the tracer
   counts the run's length on a clock that keeps running while the machine sleeps
@@ -148,6 +158,7 @@ fast` before every commit.
   a chat-mode run stops on the server's `stop` (WP4).
 
 ### WP12: A harness is one plug-in folder
+Status (16 Oct): not started (next, harness lane).
 - Everything harness-specific lives in `connectors/<id>/`: launch, chat mode, env, CA variables,
   redaction rules, provider hosts, native session files. Core reads it; core never names a harness.
 - Move the redaction rules and the CA-variable list from Rust tables into manifest data
@@ -190,6 +201,8 @@ UTC. Every change passes `gate.sh fast`; Worker changes also pass `npm test`; ev
 Run these in parallel worktrees, two writers never on the same files. Items 3 and 7 are WP12.
 Anything not done by 4 Nov moves to after the event.
 
+Status (16 Oct): 11 done (#171 verifier and `fetch-run.sh`, #176 `DaemonHealth`). 10 and 12 in progress. 1, 2 and 5 wait until after the first release.
+
 1. **Run lifecycle module.** Add a persisted `enum StopReason` that falls back to the old strings, and `run/lifecycle.rs` `phase()`, read by status, reserve and finish. Add `HarnessState::Exited.code`. Move `RunMode` to `run/`. Rename the wire field `reserve_bytes` to `chain_quota_bytes` with an alias. [C4-F1, F10, F11]
 2. **Split `start.rs` and `uploader.rs`.** `commands/start/` plus `crate::shared_home`, and `uploader.rs` in five parts, keeping `pub use`. After the move: an Undo guard, `StartCx`, `SealArgs`, `TestDoors` and shared helpers. [C4-F2, F3, F8, F9, F12]
 3. **Redaction rules from manifest data.** Typed `{json_field, value}` and `{header_prefix}` forms. Delete `EXTRA_PATTERN_SOURCES`, `EXTRA_SHAPES` and `BILLING_PREFIX`. Merge `RedactionPattern` into `ExtraPattern`. Re-pin. [C2-F1, C3-F8, C1-F6]
@@ -225,7 +238,8 @@ These look odd but are right. Do not "fix" them.
 
 ## Open owner questions
 
-None open (16 Oct).
+- Create a read-only Postgres role for `scripts/fetch-run.sh`? Until then it uses `DATABASE_URL_REMOTE` inside `BEGIN READ ONLY`.
+- WP0 needs your harness logins and the Little Snitch rule.
 
 ## Known issues
 
@@ -244,15 +258,13 @@ None open (16 Oct).
 - **H-28 (before any research access):** Anthropic usage objects pass through the private research
   observations. Allowlist token fields and strip plan, credit and billing data (D26) before anything
   is published or read from R2.
-- **T24:** the release tarballs are unsigned and carry only the Codex and Claude connectors
-  (`scripts/package-release.sh`).
+- **T24:** the release tarballs are unsigned. They carry every connector since #164.
 - **H-26:** when a stop cannot be confirmed (`Unresolved`), record the final pushed Git commit as a
   "last known state" marker. Open question: which branch counts when the work is not on main.
 - **Linux:** the fast gate passes in Docker (arm64). The reservation works on ext4 and XFS. A run
-  with no login launches both measured builds (arm64 and x86_64), fails on auth and seals. On a
-  4-vCPU x86_64 runner the daemon's `capture_redaction::seeded_long_inputs_*` tests hit the 180 s
-  timeout and the CLI's `subreaper::linux::tests::the_bound_reports_what_keeps_arriving` stops
-  before its bound. Not proven: termination of a fork-and-leave wrapper against a real harness
+  with no login launches both measured builds (arm64 and x86_64), fails on auth and seals. The
+  x86_64 timing failures are fixed (39ba14f): the x86_64 fast gate passed 1933 tests on 16 Oct
+  (run 38775727986). Not proven: termination of a fork-and-leave wrapper against a real harness
   ([TERMINATION](docs/TERMINATION.md)), a logged-in harness capture on Linux (where each harness
   keeps its login there is not checked), the end-to-end suites on x86_64, a real Linux host, and
   long runs.
