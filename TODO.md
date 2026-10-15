@@ -47,6 +47,20 @@ updated if behaviour changed ([AGENTS.md](AGENTS.md)).
   `capture_redaction_extra::seeded_random_chunking_matches_the_oracle_with_extra_patterns`); they
   floor the fast gate.
 
+## After 6 Nov
+
+Wait until the event is over: each one changes a wire or touches several lanes for little gain now.
+
+- Delete `goalcup_protocol::control::WorkspaceInfo`. It is test-only (the code uses
+  `CaptureWorkspaceInfo`); its uses are in protocol tests (`control_shapes.rs`,
+  `control_consumer.rs`) and CLI test files.
+- Rename the capture-create request's `reserve_bytes` to a quota name and drop the always-0
+  `reserved_bytes` from the capture status. Chains are quota-only since D40's amendment; both are
+  control and status wire changes, so the CLI changes with them.
+- Move the remaining libc process, clock and termination code from `goalcup-protocol`
+  (`process.rs`, `clock.rs`) and `goalcup-daemon` (`terminate/*`) into `goalcup-platform`, a pure
+  move before the native Windows port.
+
 ## Known issues
 
 Carried over from the old ledger's open tickets; only those that bear on the five steps.
