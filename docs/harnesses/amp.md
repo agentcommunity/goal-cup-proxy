@@ -13,6 +13,7 @@ How to read this sheet. "(live)" marks a fact measured in the logged-in macOS pr
 - **Wire.** All traffic went to `ampcode.com` and `authapi.ampcode.com` over HTTP/1.1, through the proxy, trusting the proxy CA. The thread travels over one WebSocket as plain-text JSON-RPC: the user message goes up; text, thinking, tool calls and deltas come down; tool results go up (live). See section 6.
 - **System prompt.** Amp's base system prompt did not appear on the wire. The client sends its tool descriptions up. Per-model mode prompts are downloaded to the client cache (live). See section 6.
 - **Fit for Goal Cup.** A wire-only capture of the local CLI is possible with Goal Cup's existing proxy design plus an Amp protocol decoder. A native leg in the Claude Code sense does not exist.
+- **Orbs.** A CLI on the participant's machine that starts an orb thread joins it as an observer and receives the same thread stream, so an orb thread can be recorded the same way (live, one run). See "Orbs" in section 7.
 
 ## 1. Run one prompt, headless
 
@@ -92,6 +93,13 @@ Skills are scanned from the cwd and every ancestor up to `/`; Amp also loads ski
 - Behaviour on SIGTERM and Ctrl-C, and the exit codes other than 0 and 1: unknown (please confirm).
 - Subagents (`Task`, `oracle`, `librarian`, `finder` and others appear in the init tool list): where they run and whether their traffic uses the same WebSocket: unknown (please confirm).
 
+### Orbs (live, one run)
+
+- `amp --stream-json --execute=<goal> --orb-execute --mode low` (the `-ox` shorthand) from a directory with no Git remote ran the thread in an orb without a repository and printed a warning on stderr that no Amp project matched. The orb was a Debian 12 x86_64 VM (`uname` host `e2b.local`). Exit 0, wall time 22.5 s.
+- The CLI sent the goal in `POST /api/internal?createRemoteExecutorThread` (fields `agentMode`, `content`, `features`, `userState`, `projectID`, `threadMeta`), then joined the thread WebSocket as an **observer**: the per-thread log records `"role":"observer"` and no executor callbacks. Its only upward message was `client_resume`.
+- Down the observer's WebSocket came the whole thread: `message_added`, `delta`, `text`, `tool_use` (the orb's `shell_command`), `tool_progress`, the tool output (the `uname` text), `snapshot`, `agent_state`, `executor_status` and `complete`. stdout printed the same Claude Code-shaped stream as a local run, with the orb's tool call and result.
+- So a client on the participant's machine can record an orb thread through the same proxy, with nothing executed locally. Not yet tested: whether an observer that connects late or reconnects receives the full history; whether threads that an orb spawns (`create_thread`) must be followed separately; and a run long enough for the orb to sleep and wake.
+
 ## 8. Things Goal Cup cannot isolate
 
 - Machine-wide managed settings: `/etc/ampcode/managed-settings.json` on Linux was read during the probe, outside any private home (measured). The macOS and Windows locations are from docs (please confirm).
@@ -124,3 +132,4 @@ Questions 1 (local thread record: none), 2 (identity carrier: `T-<uuid>`, bound 
 10. What else does `AMP_HOME` change?
 11. Are `AGENTS.md` guidance files searched in ancestors of the workspace?
 12. Are the macOS x64 and Windows installed executable bytes the same as the extracted tarball bytes?
+13. Orbs: does an observer that connects late, or reconnects after a drop, receive the full thread history? Is there a supported read-only way to follow a thread (and the threads it spawns) for many hours?
