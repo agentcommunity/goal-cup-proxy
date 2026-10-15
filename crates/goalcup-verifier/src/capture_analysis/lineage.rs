@@ -4,10 +4,24 @@
 use goalcup_protocol::capture::MAX_PRODUCERS;
 use std::collections::BTreeSet;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct Lineage {
     seen: BTreeSet<String>,
+    /// Wire producers no recovery has superseded yet. A superseded producer is never recovered
+    /// again, so it leaves this set, and each producer is walked by at most one recovery.
     wire: BTreeSet<String>,
+    /// [`MAX_PRODUCERS`]; unit tests reach the edge with a smaller one.
+    limit: usize,
+}
+
+impl Default for Lineage {
+    fn default() -> Self {
+        Self {
+            seen: BTreeSet::new(),
+            wire: BTreeSet::new(),
+            limit: MAX_PRODUCERS,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -21,11 +35,19 @@ pub(super) struct Supersession {
 }
 
 impl Lineage {
+    #[cfg(test)]
+    pub(super) fn with_limit(limit: usize) -> Self {
+        Self {
+            limit,
+            ..Self::default()
+        }
+    }
+
     /// Notes a producer. `false` means a new id did not fit; existing ids still update their
     /// wire classification.
     pub(super) fn note(&mut self, producer: &str, wire: bool) -> bool {
         if !self.seen.contains(producer) {
-            if self.seen.len() >= MAX_PRODUCERS {
+            if self.seen.len() >= self.limit {
                 return false;
             }
             self.seen.insert(producer.to_string());
@@ -37,13 +59,14 @@ impl Lineage {
     }
 
     /// Determines and records one recovery. A recorded predecessor supersedes only itself. An
-    /// unrecorded predecessor means every previously seen wire producer belongs to the lost
-    /// lineage; native/goal producers survive. When the two ids do not fit, the returned rule is
+    /// unrecorded predecessor means every wire producer not yet superseded belongs to the lost
+    /// lineage; native/goal producers survive. Producers an earlier recovery superseded are not
+    /// named again: they are already lost, and the reader refuses any later record of theirs. When the two ids do not fit, the returned rule is
     /// still usable by the non-validating decode session, while the reader rejects the trace.
     pub(super) fn supersedes(&mut self, previous: &str, fresh: &str) -> Supersession {
         let unrecorded = !self.seen.contains(previous);
         let mut producers = if unrecorded {
-            self.wire.clone()
+            std::mem::take(&mut self.wire)
         } else {
             BTreeSet::new()
         };
@@ -54,18 +77,19 @@ impl Lineage {
             .filter(|id| !self.seen.contains(*id))
             .collect::<BTreeSet<_>>()
             .len();
-        let predecessor_fits = self.seen.contains(previous) || self.seen.len() < MAX_PRODUCERS;
-        let admitted = self.seen.len().saturating_add(new_ids) <= MAX_PRODUCERS;
+        let predecessor_fits = self.seen.contains(previous) || self.seen.len() < self.limit;
+        let admitted = self.seen.len().saturating_add(new_ids) <= self.limit;
         if admitted {
             self.note(previous, true);
             self.note(fresh, true);
         } else {
             // DecodeSession intentionally accepts unvalidated input without panicking. Preserve
-            // its historical bounded behavior at the 127/128 edge: the fresh producer is the
+            // its historical bounded behavior one below the limit: the fresh producer is the
             // recovery record's owner and consumes the one remaining slot; the unrecorded
             // predecessor is not partially invented. The validating reader rejects this record.
             self.note(fresh, true);
         }
+        self.wire.remove(previous);
         Supersession {
             unrecorded,
             producers,
@@ -90,13 +114,10 @@ mod tests {
 
         let unrecorded = lineage.supersedes("lost-in-flight", "wire-c");
         assert!(unrecorded.unrecorded);
+        // wire-a was superseded by the first recovery and is not named again.
         assert_eq!(
             unrecorded.producers,
-            BTreeSet::from([
-                "lost-in-flight".to_string(),
-                "wire-a".to_string(),
-                "wire-b".to_string(),
-            ])
+            BTreeSet::from(["lost-in-flight".to_string(), "wire-b".to_string()])
         );
         assert!(!unrecorded.producers.contains("native-a"));
     }

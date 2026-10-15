@@ -10,9 +10,10 @@
 //! **Bounded.** One chain line is held at a time. Each line is read into a reused buffer
 //! capped at `MAX_ENVELOPE_BYTES` (newline included) before it is decoded. Base64 is
 //! decoded only after its encoded length is checked. The retained state is also bounded:
-//! at most `MAX_PRODUCERS` producer summaries, `MAX_OPEN_STREAMS` live streams and
-//! `MAX_OPEN_CONNECTIONS` live connections, at most `MAX_PRODUCERS` launch goal streams and
-//! as many completed goal streams, plus one baseline claim, one terminal and one cutoff.
+//! at most `MAX_PRODUCERS` producer summaries (a few flags each), `MAX_OPEN_STREAMS` live
+//! streams and `MAX_OPEN_CONNECTIONS` live connections, at most `MAX_GOAL_STREAMS` launch goal
+//! streams and as many completed goal streams, plus one baseline claim, one terminal and one
+//! cutoff.
 //! No other completed stream is kept and there is no per-record index, so a longer run
 //! grows none of it. Acknowledgements stream alongside the chain in the same pass, one line
 //! at a time.
@@ -41,8 +42,7 @@ use goalcup_protocol::ack::AckCheckpoint;
 use goalcup_protocol::capture::{
     CaptureFrame, CaptureRecord, CaptureSource, CaptureTime, ConnectionEvent, EndReason,
     FrameEvent, M2_PROTOCOL_VERSION, MAX_ENVELOPE_BYTES, MAX_METADATA_STRING_BYTES,
-    MAX_OPEN_CONNECTIONS, MAX_OPEN_STREAMS, MAX_PRODUCERS, MAX_SEGMENT_BYTES, StreamKey,
-    is_capture_id,
+    MAX_OPEN_CONNECTIONS, MAX_OPEN_STREAMS, MAX_SEGMENT_BYTES, StreamKey, is_capture_id,
 };
 use goalcup_protocol::capture_status::AnchorState;
 use goalcup_protocol::chain::GENESIS;
@@ -65,6 +65,9 @@ pub(crate) const CAPTURE_INTEGRITY_SCHEMA_VERSION: u32 = 1;
 /// At most this many distinct finding codes are retained; the rest are counted into one
 /// final `findings_omitted:<n>` code.
 pub const MAX_FINDING_CODES: usize = 128;
+/// Launch goal streams, and separately completed goal streams, per entry. It kept the value of
+/// `MAX_PRODUCERS` when that bound was raised (D58), so these verdicts did not change.
+const MAX_GOAL_STREAMS: usize = 128;
 
 /// Whole-trace evidence integrity. Serialized words are frozen by capture-integrity schema 1 and
 /// reused unchanged by research-report schema 1.
@@ -1209,7 +1212,7 @@ fn remember(
     limit: Violation,
 ) -> Result<(), Violation> {
     if !set.contains(key) {
-        if set.len() >= MAX_PRODUCERS {
+        if set.len() >= MAX_GOAL_STREAMS {
             return Err(limit);
         }
         set.insert(key.clone());
@@ -1723,5 +1726,103 @@ mod tests {
             Err("segment_data_too_large")
         );
         assert_eq!(state.apply(&segment(MAX_SEGMENT_BYTES)), Ok(()));
+    }
+
+    /// The distinct-producer bound at its edges, reached through a smaller lineage limit: a
+    /// trace of `MAX_PRODUCERS` producers takes seconds to build (D58). Each sequence's last
+    /// record is the one judged.
+    #[test]
+    fn producer_bound_edges_keep_the_sequential_rule() {
+        use goalcup_protocol::capture::GapReason;
+
+        const LIMIT: usize = 4;
+        let id = |n: usize| format!("{n:032x}");
+        let (live, in_flight, fresh) = (id(800), id(801), id(802));
+        let at = |clock: &str| CaptureTime {
+            wall: "2026-09-27T12:00:01Z".to_string(),
+            mono_ns: 1,
+            clock_id: clock.to_string(),
+        };
+        let closed = |count: usize| -> Vec<CaptureRecord> {
+            (1..=count)
+                .map(|n| CaptureRecord::ProducerClosed {
+                    producer: id(n),
+                    observed: at("daemon"),
+                    final_seq: None,
+                })
+                .collect()
+        };
+        let wire_open = CaptureRecord::Connection {
+            producer: live.clone(),
+            connection: id(900),
+            observed: at(&live),
+            event: ConnectionEvent::Open {
+                alpn: None,
+                already_open: false,
+            },
+        };
+        let recovery = |previous: &str| CaptureRecord::Recovery {
+            previous_producer: previous.to_string(),
+            producer: fresh.clone(),
+            observed: at(&fresh),
+            reason: GapReason::IngestLost,
+        };
+        let run = |records: Vec<CaptureRecord>, last: Result<(), Violation>| {
+            let mut state = CaptureState {
+                lineage: Lineage::with_limit(LIMIT),
+                ..CaptureState::default()
+            };
+            let (judged, before) = records.split_last().unwrap();
+            for record in before {
+                state.apply(record).unwrap();
+            }
+            assert_eq!(state.apply(judged), last);
+            state
+        };
+        let with = |mut records: Vec<CaptureRecord>, more: &[&CaptureRecord]| {
+            records.extend(more.iter().map(|r| (*r).clone()));
+            records
+        };
+
+        // One more distinct producer than the limit, completed epochs included.
+        run(closed(LIMIT), Ok(()));
+        run(closed(LIMIT + 1), Err("producer_limit_exceeded"));
+
+        // An unseen predecessor and the fresh producer fit exactly in the last two slots.
+        let state = run(with(closed(LIMIT - 2), &[&recovery(&in_flight)]), Ok(()));
+        assert_eq!(state.unrecorded_recoveries, 1);
+
+        // One slot left: the unrecorded predecessor takes it and the fresh producer does not
+        // fit, but the recovery still names an unrecorded producer.
+        let state = run(
+            with(closed(LIMIT - 1), &[&recovery(&in_flight)]),
+            Err("producer_limit_exceeded"),
+        );
+        assert_eq!(state.unrecorded_recoveries, 1);
+
+        // With a live wire epoch among the admitted, the failed recovery supersedes it first,
+        // so finalization adds no `producer_unclosed` to the limit error.
+        let state = run(
+            with(closed(LIMIT - 2), &[&wire_open, &recovery(&in_flight)]),
+            Err("producer_limit_exceeded"),
+        );
+        assert_eq!(state.unrecorded_recoveries, 1);
+        assert!(!state.has_unclosed_producer());
+
+        // A full table admits nothing, so no unrecorded predecessor is noted.
+        let state = run(
+            with(closed(LIMIT), &[&recovery(&in_flight)]),
+            Err("producer_limit_exceeded"),
+        );
+        assert_eq!(state.unrecorded_recoveries, 0);
+
+        // A full table with a recorded live predecessor: it is marked lost before the fresh
+        // admission fails.
+        let state = run(
+            with(closed(LIMIT - 1), &[&wire_open, &recovery(&live)]),
+            Err("producer_limit_exceeded"),
+        );
+        assert_eq!(state.unrecorded_recoveries, 0);
+        assert!(!state.has_unclosed_producer());
     }
 }
