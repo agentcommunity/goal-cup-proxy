@@ -38,10 +38,10 @@
 //!
 //! The adapter is one capture producer. It mints a fresh 128-bit producer ID, asks
 //! [`CaptureSink::try_begin_epoch`] on each poll until the answer is `Ready`, and submits no
-//! frame before that. `Pending` keeps the ID; `RetryFresh` retires it for a fresh one (bounded
-//! by `MAX_PRODUCERS`); `Disabled` latches the loss. `seq` starts at zero and increases across
-//! every frame of every file; payload streams start at one; stream zero is never used, because
-//! a native producer emits no `Connection` or `Recovery` control. Each observation carries
+//! frame before that. `Pending` keeps the ID; `RetryFresh` retires it for a fresh one (at most
+//! `MAX_FRESH_IDS` IDs in all); `Disabled` latches the loss. `seq` starts at zero and increases
+//! across every frame of every file; payload streams start at one; stream zero is never used,
+//! because a native producer emits no `Connection` or `Recovery` control. Each observation carries
 //! `clock_id = producer` and the injected [`NativeClock`]'s wall and monotonic readings; no
 //! timestamp is ever taken from file content.
 //!
@@ -150,7 +150,7 @@ use goalcup_platform::sourcecap::{
 use goalcup_protocol::capture::{
     CaptureFrame, CaptureMeta, CaptureSink, CaptureSource, CaptureTime, EndReason, EpochAdmission,
     FrameEvent, GapReason, MAX_CAPTURE_QUEUE_BYTES, MAX_METADATA_STRING_BYTES, MAX_OPEN_STREAMS,
-    MAX_PRODUCERS, MAX_SEGMENT_BYTES, StreamKey, SubmitResult,
+    MAX_SEGMENT_BYTES, StreamKey, SubmitResult,
 };
 use goalcup_protocol::hints::valid_hint;
 use std::collections::BTreeMap;
@@ -170,6 +170,11 @@ pub(crate) const MAX_NATIVE_PATTERN_DEPTH: usize = 8;
 pub(crate) const MAX_NATIVE_FILES: usize = 20_000;
 /// Hard ceiling on [`NativeCaptureLimits::max_dir_entries`].
 pub(crate) const MAX_NATIVE_DIR_ENTRIES: usize = 65_536;
+
+/// Most producer IDs one adapter proposes. A sink retires only an ID it saw before, so a freshly
+/// minted one is never answered `RetryFresh`; this stops a sink that answers it forever. It is
+/// not the entry's producer bound (D58).
+const MAX_FRESH_IDS: usize = 128;
 
 const MAX_SOURCE_NAME_BYTES: usize = 64;
 const MAX_PATTERN_BYTES: usize = 1024;
@@ -798,7 +803,7 @@ struct Emitter {
     clock: Box<dyn NativeClock>,
     producer: String,
     /// Producer IDs that may have reached the receiver (the initial one and each
-    /// `RetryFresh` replacement), bounded by `MAX_PRODUCERS`.
+    /// `RetryFresh` replacement), bounded by `MAX_FRESH_IDS`.
     consumed: usize,
     admission: Admission,
     next_seq: u64,
@@ -828,7 +833,7 @@ impl Emitter {
             EpochAdmission::Ready => self.admission = Admission::Ready,
             EpochAdmission::Pending => {}
             EpochAdmission::RetryFresh => {
-                if self.consumed >= MAX_PRODUCERS {
+                if self.consumed >= MAX_FRESH_IDS {
                     self.admission = Admission::Lost(GapReason::LimitExceeded);
                 } else {
                     self.consumed += 1;

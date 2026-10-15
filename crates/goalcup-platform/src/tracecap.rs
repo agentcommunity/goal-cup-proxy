@@ -152,7 +152,7 @@ impl TraceDir {
     /// Open a retained child when it already exists, or create that one component and
     /// acquire it through the same parent capability.  A raced replacement is still opened
     /// with no-follow semantics; it can make construction fail but cannot redirect it.
-    pub(crate) fn open_or_create_child_dir(&self, name: &str) -> Result<Self, TraceCapError> {
+    pub fn open_or_create_child_dir(&self, name: &str) -> Result<Self, TraceCapError> {
         validate_component(name)?;
         match self.create_child_dir(name) {
             Ok(child) => Ok(child),

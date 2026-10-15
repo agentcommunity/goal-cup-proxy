@@ -103,8 +103,8 @@ use goalcup_protocol::capture::{
     AnalysisState, AnchorState, CaptureFrame, CaptureMeta, CaptureRecord, CaptureSink,
     CaptureSource, CaptureState, CaptureTime, ConnectionEvent, DeliveryState, DurableFrontier,
     EndReason, EpochAdmission, FrameEvent, GapReason, M2_PROTOCOL_VERSION, M2Status,
-    MAX_CAPTURE_QUEUE_BYTES, MAX_OPEN_CONNECTIONS, MAX_OPEN_STREAMS, MAX_PRODUCERS,
-    MAX_SEGMENT_BYTES, RunState, StreamKey, SubmitResult, is_capture_id,
+    MAX_CAPTURE_QUEUE_BYTES, MAX_LIVE_PRODUCERS, MAX_OPEN_CONNECTIONS, MAX_OPEN_STREAMS,
+    MAX_PRODUCERS, MAX_SEGMENT_BYTES, RunState, StreamKey, SubmitResult, is_capture_id,
 };
 
 use goalcup_protocol::chain::Link;
@@ -187,6 +187,9 @@ pub(crate) struct CaptureEntry {
     ingest: Option<Arc<IngestEntry>>,
     sink: Arc<OwnerSink>,
     writer: Arc<Mutex<ChainWriter>>,
+    /// The entry's workspace, fixed at creation: a finish reads it without the run lock, which
+    /// another finish may hold.
+    workspace: PathBuf,
     /// Taken before `writer` whenever both are held.
     run: Mutex<CaptureRun>,
     owner: Arc<OwnerControl>,
@@ -311,7 +314,13 @@ impl Daemon {
         native_since: Option<u64>,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
         let config_home = isolated_config_home(config_home, every_loaded_real_dir)?;
-        let plan = native_plan(&manifest.capture, run_home, &config_home, native_since)?;
+        // The run's start, or else this entry's create time, which its row keeps (D57).
+        let created_at = now_rfc3339();
+        let since = match native_since {
+            Some(since) => since,
+            None => create_time_floor(&created_at)?,
+        };
+        let plan = native_plan(&manifest.capture, run_home, &config_home, since)?;
         let extra_patterns = crate::redact::extra_patterns_of(manifest);
         StreamRedactor::with_extra_patterns(&extra_patterns)?;
         let artifact_dir = self
@@ -330,6 +339,9 @@ impl Daemon {
                 ("config_dir", &self.config().config_dir),
             ],
         )?;
+        // After the cheap checks, so a create they refuse makes no directory; before anything
+        // opens a root (D57).
+        create_config_home_roots(&manifest.capture, &config_home)?;
         let artifact = self
             .artifact_root()
             .create_entry(&entry_id)
@@ -351,6 +363,7 @@ impl Daemon {
             &artifact,
             &artifact_dir,
             plan,
+            created_at,
         );
         if let Err(error) = &opened {
             let created = (!workspace_existed).then_some(workspace);
@@ -377,6 +390,7 @@ impl Daemon {
         artifact: &EntryArtifactRoot,
         artifact_dir: &Path,
         plan: NativePlan,
+        created_at: String,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
         let trace = artifact.create_trace().map_err(|error| {
             DaemonError::Refused(format!(
@@ -432,6 +446,8 @@ impl Daemon {
             keys,
         );
         entry.connector_dir_sha256 = Some(digests.connector_dir_sha256.clone());
+        // The instant the native floor was taken from, when the request named no run start.
+        entry.created_at = created_at;
         entry.capture = Some(CaptureRowV1 {
             reserve_bytes,
             finished: None,
@@ -458,8 +474,9 @@ impl Daemon {
         );
         // Prepare the fixed isolated source root before spawn: the leaf opens it once.
         if let Some(source) = &plan.scoped {
-            // An unavailable native root must not stop the harness. The Launch constructor
-            // reports the required-source gap if preparation could not make it available.
+            // A `{config_home}` root was created above, and a failure there refused the create.
+            // For a `{run_home}` root, an unavailable root must not stop the harness: the Launch
+            // constructor reports the required-source gap if this could not make it available.
             let _ = std::fs::create_dir_all(&source.root);
         }
         capture.scoped_native = plan.scoped;
@@ -1044,6 +1061,7 @@ impl CaptureEntry {
             ingest: None,
             sink: Arc::new(OwnerSink::default()),
             writer: Arc::new(Mutex::new(writer)),
+            workspace: entry.workspace.clone(),
             run: Mutex::new(CaptureRun { entry, goal }),
             owner: Arc::new(OwnerControl::default()),
             thread: Mutex::new(None),

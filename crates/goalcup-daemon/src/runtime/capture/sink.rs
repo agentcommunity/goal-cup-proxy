@@ -15,7 +15,7 @@ pub(super) const RECOVERY_LOW_WATER_BYTES: usize = PAYLOAD_QUEUE_BYTES / 2;
 /// The fixed accounting cost of one control item.
 pub(super) const CONTROL_ITEM_COST: usize = 512;
 
-const _: () = assert!(MAX_PRODUCERS * CONTROL_ITEM_COST <= CONTROL_RESERVE_BYTES);
+const _: () = assert!(MAX_LIVE_PRODUCERS * CONTROL_ITEM_COST <= CONTROL_RESERVE_BYTES);
 
 /// One item the owner drains, in admission order.
 #[derive(Debug)]
@@ -98,7 +98,7 @@ pub(super) struct SinkState {
     pub(super) payload_bytes: usize,
     control_bytes: usize,
     pub(super) producers: BTreeMap<String, Producer>,
-    /// IDs answered `Pending`: each holds a producer slot until admitted.
+    /// IDs answered `Pending`: each holds one of the entry's `MAX_PRODUCERS` IDs.
     pending_ids: BTreeSet<String>,
     /// Open payload streams across every producer, a lost one's until a Recovery supersedes it.
     open_streams: usize,
@@ -116,9 +116,10 @@ pub(super) struct SinkState {
 /// one short lock and never waits on disk or network, and none calls back into the receiver.
 ///
 /// Queued payload is accounted in encoded bytes and refused with `QueueFull` above
-/// [`PAYLOAD_QUEUE_BYTES`]. Closes and loss markers spend a separate reserve that at most one
-/// terminal control per producer can fill, so a full payload queue never blocks a close or
-/// hides a loss.
+/// [`PAYLOAD_QUEUE_BYTES`]. Closes and loss markers spend a separate reserve, so a full payload
+/// queue never blocks a close or hides a loss. Each live producer queues at most one, and a
+/// fresh epoch is answered `Pending` while live producers and queued controls together number
+/// `MAX_LIVE_PRODUCERS`, so the reserve holds every one.
 ///
 /// A Recovery supersedes the producer it names. When the chain records nothing under that
 /// producer's name (it admitted no frame, or only `Loss` frames), it also supersedes every other
@@ -312,7 +313,13 @@ impl CaptureSink for OwnerSink {
         if !known_pending && state.producers.len() + state.pending_ids.len() >= MAX_PRODUCERS {
             return EpochAdmission::Disabled(GapReason::LimitExceeded);
         }
-        if state.payload_bytes > RECOVERY_LOW_WATER_BYTES {
+        let live = state
+            .producers
+            .values()
+            .filter(|p| p.status == ProducerStatus::Live)
+            .count();
+        let controls = state.control_bytes / CONTROL_ITEM_COST;
+        if live + controls >= MAX_LIVE_PRODUCERS || state.payload_bytes > RECOVERY_LOW_WATER_BYTES {
             state.pending_ids.insert(producer.to_string());
             return EpochAdmission::Pending;
         }

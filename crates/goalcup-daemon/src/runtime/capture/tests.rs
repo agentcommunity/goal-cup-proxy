@@ -1060,6 +1060,73 @@ fn full_queue_gap_is_sticky() {
     assert_eq!(lock(&writer).gaps, 1);
 }
 
+/// A producer ID past the 255 that `id` spells.
+fn wide(n: u32) -> String {
+    format!("{n:032x}")
+}
+
+#[test]
+fn five_hundred_recovered_epochs_are_admitted_and_chained() {
+    // Each daemon stall ends an epoch and its recovery is a fresh producer (D58).
+    const EPOCHS: u32 = 500;
+    let dir = tempfile::tempdir().unwrap();
+    let writer = writer(dir.path(), 64 << 20);
+    let sink = Arc::new(OwnerSink::default());
+    let mut owner = Owner::new(sink.clone(), writer.clone(), clock(), &[], None, None);
+    let socket = id(200);
+    assert_eq!(sink.try_begin_epoch(&wide(1)), EpochAdmission::Ready);
+    assert_eq!(
+        sink.try_submit(connection(&wide(1), 0, &socket, connection_open(false))),
+        SubmitResult::Queued
+    );
+    for n in 2..=EPOCHS {
+        let fresh = wide(n);
+        assert_eq!(
+            sink.try_begin_epoch(&fresh),
+            EpochAdmission::Ready,
+            "epoch {n}"
+        );
+        assert_eq!(
+            sink.try_submit(recovery(&fresh, &wide(n - 1))),
+            SubmitResult::Queued
+        );
+        assert_eq!(
+            sink.try_submit(connection(&fresh, 1, &socket, connection_open(true))),
+            SubmitResult::Queued
+        );
+        owner.drain_all();
+    }
+    owner.flush_all();
+    let records = records(dir.path());
+    let recoveries = records
+        .iter()
+        .filter(|r| matches!(r, CaptureRecord::Recovery { .. }))
+        .count();
+    assert_eq!(recoveries, EPOCHS as usize - 1);
+    assert_eq!(gaps(&records, GapReason::ProducerLost), EPOCHS as usize - 1);
+    assert_eq!(lock(&writer).connections.get(&socket), Some(&wide(EPOCHS)));
+}
+
+#[test]
+fn a_fresh_epoch_waits_while_max_live_producers_are_live_or_queued() {
+    let sink = OwnerSink::default();
+    for n in 1..=MAX_LIVE_PRODUCERS as u32 {
+        assert_eq!(sink.try_begin_epoch(&wide(n)), EpochAdmission::Ready);
+    }
+    let over = wide(MAX_LIVE_PRODUCERS as u32 + 1);
+    assert_eq!(sink.try_begin_epoch(&over), EpochAdmission::Pending);
+
+    // A close moves one live producer to a queued control: the reserve still counts it.
+    assert_eq!(sink.try_close_epoch(&wide(1), None), SubmitResult::Queued);
+    assert_eq!(sink.try_begin_epoch(&over), EpochAdmission::Pending);
+    assert_eq!(sink.drain(usize::MAX, Duration::ZERO).len(), 1);
+    assert_eq!(sink.try_begin_epoch(&over), EpochAdmission::Ready);
+    assert_eq!(
+        sink.try_begin_epoch(&wide(MAX_LIVE_PRODUCERS as u32 + 2)),
+        EpochAdmission::Pending
+    );
+}
+
 #[test]
 fn capacity_exhaustion_uses_bounded_terminal_records() {
     let dir = tempfile::tempdir().unwrap();
@@ -1310,21 +1377,32 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
     };
     // Zero is refused before anything starts.
     assert!(matches!(
-        FinishBudget::from_request(&request(Some(0))),
+        FinishBudget::from_request(&request(Some(0)), false),
         Err(DaemonError::FinishDeadline {
             stage: "not_started"
         })
     ));
 
-    // The full budget (D56): a 148 s drain share, 30 s left for a clone's Git read, a 2 s
-    // commit reserve, 1 s of it the margin.
-    let full = FinishBudget::from_request(&request(None)).unwrap();
+    // The full budget of a workspace that is not a clone: a 178 s drain share and a 2 s commit
+    // reserve, 1 s of it the margin. No Git read, so no floor.
+    let full = FinishBudget::from_request(&request(None), false).unwrap();
+    assert_eq!(full.deadline - full.drain_end, FINISH_COMMIT_RESERVE);
+    let native = full.native_budget();
+    assert!(native <= Duration::from_secs(178) && native > Duration::from_millis(177_500));
+
+    // A clone (D56): the drain share ends 30 s earlier, left for the Git read: 148 s.
+    let clone = FinishBudget::from_request(&request(None), true).unwrap();
     assert_eq!(
-        full.deadline - full.drain_end,
+        clone.deadline - clone.drain_end,
         FINISH_COMMIT_RESERVE + GIT_READ_FLOOR
     );
-    let native = full.native_budget();
+    let native = clone.native_budget();
     assert!(native <= Duration::from_secs(148) && native > Duration::from_millis(147_500));
+    // Less than the floor and the reserve: no drain share, the Git read gets it all.
+    let small = FinishBudget::from_request(&request(Some(4_000)), true).unwrap();
+    assert_eq!(small.native_budget(), Duration::ZERO);
+    let small = FinishBudget::from_request(&request(Some(4_000)), false).unwrap();
+    assert!(small.native_budget() > Duration::from_millis(1_500));
     assert!(full.admits(Duration::ZERO));
     assert_eq!(
         full.last_start(Duration::ZERO) + FINISH_RESPONSE_MARGIN,
@@ -1333,7 +1411,7 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
 
     // Less than the reserve left: no drain share at all, and no stage is admitted inside the
     // margin.
-    let tight = FinishBudget::from_request(&request(Some(900))).unwrap();
+    let tight = FinishBudget::from_request(&request(Some(900)), false).unwrap();
     assert_eq!(tight.native_budget(), Duration::ZERO);
     assert!(
         !tight.admits(Duration::ZERO),
@@ -1345,7 +1423,7 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
     );
 
     // Larger than the budget is clamped to it.
-    let large = FinishBudget::from_request(&request(Some(u64::MAX))).unwrap();
+    let large = FinishBudget::from_request(&request(Some(u64::MAX)), false).unwrap();
     assert!(
         large.deadline - tokio::time::Instant::now()
             <= goalcup_protocol::control::LOCAL_CAPTURE_FINISH_BUDGET
@@ -1485,7 +1563,7 @@ fn schema_native_plan_copies_binding_label_hint_and_form() {
             &manifest.capture,
             Path::new("/run"),
             Path::new("/config"),
-            None,
+            0,
         )
         .unwrap();
         let source = plan.scoped.expect("the shipped source is scoped");
@@ -1498,7 +1576,7 @@ fn schema_native_plan_copies_binding_label_hint_and_form() {
         &workload.capture,
         Path::new("/run"),
         Path::new("/config"),
-        None,
+        0,
     )
     .unwrap();
     assert_eq!(plan.initial_binding, NativeBinding::NotRequired);
@@ -1507,7 +1585,7 @@ fn schema_native_plan_copies_binding_label_hint_and_form() {
 }
 
 #[test]
-fn a_since_run_start_source_needs_the_run_start_and_filters_from_it() {
+fn a_since_run_start_source_filters_from_the_run_start() {
     let text = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors/codex-cli/harness.toml"),
     )
@@ -1517,21 +1595,12 @@ fn a_since_run_start_source_needs_the_run_start_and_filters_from_it() {
         "form = \"append_only\"\nsince_run_start = true",
     );
     let manifest = HarnessManifest::from_toml_str(&text).unwrap();
-    let error = native_plan(
-        &manifest.capture,
-        Path::new("/run"),
-        Path::new("/config"),
-        None,
-    )
-    .err()
-    .expect("no run start, no plan");
-    assert!(error.to_string().contains("native_since"), "{error}");
     // A start no clock can hold is refused, not a panic.
     let error = native_plan(
         &manifest.capture,
         Path::new("/run"),
         Path::new("/config"),
-        Some(u64::MAX),
+        u64::MAX,
     )
     .err()
     .expect("an unrepresentable start, no plan");
@@ -1540,7 +1609,7 @@ fn a_since_run_start_source_needs_the_run_start_and_filters_from_it() {
         &manifest.capture,
         Path::new("/run"),
         Path::new("/config"),
-        Some(1_760_000_000),
+        1_760_000_000,
     )
     .unwrap();
     assert_eq!(
@@ -1553,10 +1622,15 @@ fn a_since_run_start_source_needs_the_run_start_and_filters_from_it() {
         &shipped.capture,
         Path::new("/run"),
         Path::new("/config"),
-        Some(1_760_000_000),
+        1_760_000_000,
     )
     .unwrap();
     assert_eq!(plan.scoped.unwrap().modified_since, None);
+    // With no run start in the request, the floor is the row's own create time.
+    assert_eq!(
+        create_time_floor("2025-10-09T08:53:20Z").unwrap(),
+        1_760_000_000
+    );
 }
 
 #[test]
@@ -1574,7 +1648,7 @@ fn unknown_valid_native_hint_is_copied_byte_for_byte() {
         &manifest.capture,
         Path::new("/run"),
         Path::new("/config"),
-        None,
+        0,
     )
     .unwrap();
     assert_eq!(

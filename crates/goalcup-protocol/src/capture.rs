@@ -43,8 +43,12 @@ pub const TERMINAL_RESERVE_BYTES: u64 = 1024 * 1024;
 pub const MAX_OPEN_STREAMS: usize = 128;
 /// Active captured connections per entry.
 pub const MAX_OPEN_CONNECTIONS: usize = 128;
-/// Distinct producers per entry, completed epochs included.
-pub const MAX_PRODUCERS: usize = 128;
+/// Distinct producers per entry, completed epochs included. Every recovered epoch spends one,
+/// so the bound outlasts a week of stalls (D58): one every 9.2 s for 168 hours.
+pub const MAX_PRODUCERS: usize = 65_536;
+/// Producers of one entry live at the same time. Every bound that holds memory or queue
+/// capacity per live producer uses this one, not [`MAX_PRODUCERS`] (D58).
+pub const MAX_LIVE_PRODUCERS: usize = 128;
 /// Each metadata string is at most 1 KiB.
 pub const MAX_METADATA_STRING_BYTES: usize = 1024;
 /// All metadata strings of one stream total at most 8 KiB.
