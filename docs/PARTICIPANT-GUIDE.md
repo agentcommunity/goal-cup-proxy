@@ -202,8 +202,8 @@ agent is stopped in whatever state it is in. There is no grace period.
   `goalcup upload <entry>` finishes the job later. Run `goalcup entries` to see the entry ids.
 - The server records the latest commit in your GitHub repository at the deadline. That commit is
   what is judged, so your agent must push its work before then. The tracer never pushes for it.
-- After the run you hand in a demo video and answer a questionnaire. They are due either 24 hours
-  after the run ends or on a fixed date around 15 November: **[owner to confirm]**.
+- After the run you hand in a demo video and answer a questionnaire. They are due 24 hours
+  after your run's 168 hours end. You hand them in on the website, not through the tracer.
 - Without a network at the deadline, the tracer stops the run once 168 hours have passed on the
   machine's own clock, which keeps counting while the machine sleeps.
 - 24 hours after the end, the server closes the run. A run whose last upload has not arrived by

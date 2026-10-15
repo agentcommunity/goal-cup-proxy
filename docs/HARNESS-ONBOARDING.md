@@ -395,6 +395,20 @@ opens a key file. For a key-bearing run, a clean key-fragment scan is mandatory 
 is accepted. That run is evidence for that build of the harness, not a release or a general
 qualification.
 
+## Getting a harness into the event
+
+A harness can join until the last release, **6 Nov 2026 12:00 UTC**. After a connector PR merges:
+
+1. You run one real practice run with the harness: `goalcup start --harness <id> --practice`, then
+   `goalcup-verify --capture-integrity <trace>`. Send the verifier's report (never the transcript) to
+   goalcup@agentcommunity.org or attach it to the PR.
+2. The organizers run a 1-hour test run of the harness themselves before it ships.
+3. Model access for testing: if the harness lets you pick the model provider, the organizers can
+   supply test API access. If the model comes only through the harness's own subscription and there
+   are no free credits, the organizers ask you how to test it.
+
+The harness ships in the next release once both runs pass.
+
 ## Reach us
 
 Open an issue on [goal-cup-tracer](https://github.com/agentcommunity/goal-cup-tracer/issues) for
