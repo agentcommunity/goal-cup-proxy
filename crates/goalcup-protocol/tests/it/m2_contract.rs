@@ -21,7 +21,7 @@ const CONNECTION: &str = "00112233445566778899aabbccddeeff";
 const DAEMON_CLOCK: &str = "daemon-5b0c3a1e";
 
 #[test]
-fn optional_claude_launch_provenance_preserves_old_bytes_and_round_trips() {
+fn optional_launch_tool_allowance_preserves_old_bytes_and_round_trips() {
     let old = CaptureRecord::Launch {
         observed: at(DAEMON_CLOCK, 9),
         goal_stream: key(1),
@@ -59,13 +59,6 @@ fn optional_claude_launch_provenance_preserves_old_bytes_and_round_trips() {
         serde_json::from_str::<CaptureRecord>(&new_json).unwrap(),
         new
     );
-    assert!(is_claude_capture_allowed_tool_rule(
-        "Bash(python3 demo.py *)"
-    ));
-    assert!(!is_claude_capture_allowed_tool_rule("Bash(*)"));
-    assert!(!is_claude_capture_allowed_tool_rule(
-        "Bash(python3 -m.py *)"
-    ));
 }
 
 fn fixtures() -> PathBuf {

@@ -447,6 +447,9 @@ mod retries {
         /// (`null` for none): a server that says the run is over, as W2's does for a run a
         /// newer start replaced.
         stop_reason: Arc<Mutex<Option<Option<String>>>>,
+        /// How many final heartbeats still have their answer lost: the stand-in stores them,
+        /// and the tracer is answered `503`.
+        lose_finals: Arc<Mutex<u32>>,
     }
 
     impl Front {
@@ -459,21 +462,28 @@ mod retries {
             let fault = Arc::new(Mutex::new(fault));
             let lie = Arc::new(Mutex::new(None));
             let stop_reason = Arc::new(Mutex::new(None));
-            let (seen_in, stop_in, lie_in, reason_in) =
-                (seen.clone(), stop.clone(), lie.clone(), stop_reason.clone());
+            let lose_finals = Arc::new(Mutex::new(0u32));
+            let (seen_in, stop_in, lie_in, reason_in, lose_in) = (
+                seen.clone(),
+                stop.clone(),
+                lie.clone(),
+                stop_reason.clone(),
+                lose_finals.clone(),
+            );
             std::thread::spawn(move || {
                 while !stop_in.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((stream, _)) => {
-                            let (target, fault, seen, lie, reason) = (
+                            let (target, fault, seen, lie, reason, lose) = (
                                 target.clone(),
                                 fault.clone(),
                                 seen_in.clone(),
                                 lie_in.clone(),
                                 reason_in.clone(),
+                                lose_in.clone(),
                             );
                             std::thread::spawn(move || {
-                                answer(stream, &target, &fault, &seen, &lie, &reason)
+                                answer(stream, &target, &fault, &seen, &lie, &reason, &lose)
                             });
                         }
                         Err(_) => std::thread::sleep(Duration::from_millis(5)),
@@ -486,6 +496,7 @@ mod retries {
                 stop,
                 lie,
                 stop_reason,
+                lose_finals,
             }
         }
 
@@ -512,6 +523,7 @@ mod retries {
         seen: &Mutex<Vec<String>>,
         lie: &Mutex<Option<(u64, u64, String)>>,
         stop_reason: &Mutex<Option<Option<String>>>,
+        lose_finals: &Mutex<u32>,
     ) {
         stream.set_nonblocking(false).unwrap();
         stream
@@ -544,6 +556,12 @@ mod retries {
         let (method, path) = (parts.next().unwrap(), parts.next().unwrap());
         let label = format!("{method} {path}");
         seen.lock().unwrap().push(label.clone());
+        // A final heartbeat is marked in the order of what was seen, for the tests that ask
+        // what came after it.
+        if path.ends_with("/heartbeat") && String::from_utf8_lossy(&body).contains("\"final\":true")
+        {
+            seen.lock().unwrap().push("FINAL".to_string());
+        }
         let injected = (fault.lock().unwrap())(&label);
         let (status, content_type, reply) = match injected {
             Some(status) => (
@@ -570,8 +588,19 @@ mod retries {
                     .header("Content-Type")
                     .unwrap_or("application/json")
                     .to_string();
-                let status = response.status();
+                let mut status = response.status();
                 let mut reply = response.into_string().unwrap().into_bytes();
+                let is_final = path.ends_with("/heartbeat")
+                    && String::from_utf8_lossy(&body).contains("\"final\":true");
+                if is_final && status == 200 && {
+                    let mut left = lose_finals.lock().unwrap();
+                    let lose = *left > 0;
+                    *left = left.saturating_sub(1);
+                    lose
+                } {
+                    status = 503;
+                    reply = br#"{"error":"lost","message":"the answer was lost"}"#.to_vec();
+                }
                 if method == "GET"
                     && path.matches('/').count() == 3
                     && let Some((offset, next_seq, head)) = lie.lock().unwrap().clone()
@@ -1023,5 +1052,362 @@ mod retries {
             );
             drop(running);
         }
+    }
+
+    // --------------------------------------------- a local error is retried, never the end
+
+    use std::os::unix::fs::PermissionsExt;
+
+    fn chmod(path: &std::path::Path, mode: u32) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// A finish whose `say` runs `on_first_retry` once, at the first thing it says.
+    fn finish_curing(run: &Run, on_first_retry: impl Fn()) -> (Report, Vec<String>) {
+        let mut uploader = run.uploader();
+        let mut said = Vec::new();
+        let report = uploader.finish(Some(WrapUp::after(Duration::from_secs(20))), &mut |line| {
+            if said.is_empty() {
+                on_first_retry();
+            }
+            said.push(line.to_string());
+        });
+        (report, said)
+    }
+
+    #[test]
+    fn a_chunk_that_cannot_be_built_is_retried_and_then_sent() {
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        // Not sealed: the build is the first thing that goes wrong. The chain file cannot be
+        // opened for a while (a part briefly unreadable); it is a local error, not the end.
+        std::fs::remove_file(trace.join("seal.json")).unwrap();
+        let chain_file = trace.join("chain.jsonl");
+        chmod(&chain_file, 0o000);
+        let (report, said) = finish_curing(&run, || chmod(&chain_file, 0o644));
+        assert!(report.caught_up, "{report:?}\n{said:?}");
+        assert!(
+            said[0].contains("the next chunk could not be built")
+                && said[0].contains("trying again"),
+            "the retry was said: {said:?}"
+        );
+        assert_eq!(run.server.chunks(&run.record.run_id).len(), 1);
+        assert_eq!(run.front.count("PUT /v1/runs/"), 1);
+    }
+
+    #[test]
+    fn a_chain_that_does_not_continue_the_servers_copy_still_ends_the_upload() {
+        // The one build error that is not this machine's trouble: the two copies differ.
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        std::fs::remove_file(trace.join("seal.json")).unwrap();
+        let mut uploader = run.uploader();
+        let wrong = String::from_utf8(chain(3).0)
+            .unwrap()
+            .replace("\"seq\":0", "\"seq\":9");
+        std::fs::write(trace.join("chain.jsonl"), wrong).unwrap();
+        let report = uploader.finish(Some(WrapUp::after(Duration::from_secs(20))), &mut |_| {});
+        assert!(!report.caught_up, "{report:?}");
+        assert!(
+            report
+                .why
+                .as_deref()
+                .unwrap_or("")
+                .contains("does not continue"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn an_acknowledgement_that_cannot_be_written_is_retried_and_its_chunk_is_not_sent_again() {
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        let acks = trace.join("acks.jsonl");
+        // A link where `acks.jsonl` belongs, to a file elsewhere: the write must be refused,
+        // not followed.
+        let elsewhere = trace.parent().unwrap().join("elsewhere.jsonl");
+        std::os::unix::fs::symlink(&elsewhere, &acks).unwrap();
+        let (report, said) = finish_curing(&run, || std::fs::remove_file(&acks).unwrap());
+        assert!(report.caught_up && report.sealed, "{report:?}\n{said:?}");
+        assert!(
+            said.iter()
+                .any(|line| line.contains("acks.jsonl") && line.contains("trying again")),
+            "the retry was said: {said:?}"
+        );
+        assert!(!elsewhere.exists(), "the link was followed");
+        let kept = std::fs::read_to_string(&acks).unwrap();
+        assert_eq!(
+            kept.lines().count(),
+            1,
+            "the acknowledgement is kept once: {kept}"
+        );
+        assert_eq!(
+            run.front.count("PUT /v1/runs/"),
+            1,
+            "the chunk the server took is not sent again for the file's sake"
+        );
+    }
+
+    #[test]
+    fn the_final_heartbeat_reads_a_chain_it_could_not_read_again() {
+        // One I/O error from the chain was taken for "no whole record" for good; it is asked
+        // again after a backoff, whether the directory or a part is what cannot be read.
+        for directory in [true, false] {
+            let run = Run::new(Box::new(|_| None));
+            let trace = std::path::PathBuf::from(&run.record.trace_dir);
+            let (locked, open_mode) = if directory {
+                // Names can be looked up, but the directory cannot be listed.
+                (trace.clone(), 0o755)
+            } else {
+                (trace.join("chain.jsonl"), 0o644)
+            };
+            chmod(&locked, if directory { 0o311 } else { 0o000 });
+            let (report, said) = finish_curing(&run, || chmod(&locked, open_mode));
+            assert!(report.caught_up && report.sealed, "{report:?}\n{said:?}");
+            assert!(
+                said[0].contains("the final heartbeat could not read the chain"),
+                "{said:?}"
+            );
+            assert!(run.server.final_commit(&run.record.run_id).is_some());
+        }
+    }
+
+    // ------------------------------------------------------------------- the heartbeat
+
+    #[test]
+    fn heartbeat_failures_are_counted_and_one_stored_clears_them() {
+        let failing = Arc::new(AtomicBool::new(true));
+        let in_fault = failing.clone();
+        let run = Run::new(Box::new(move |label| {
+            (label.ends_with("/heartbeat") && in_fault.load(Ordering::SeqCst)).then_some(503)
+        }));
+        let vitals = Vitals::default();
+        let (running, stopped) = start_beating(&run, vitals.clone());
+        let trouble = wait_for("three failed heartbeats", || {
+            let trouble = vitals.heartbeat_trouble();
+            (trouble.failures >= 3).then_some(trouble)
+        });
+        assert!(
+            trouble
+                .last_failure
+                .as_deref()
+                .unwrap_or("")
+                .contains("503"),
+            "{trouble:?}"
+        );
+        assert!(stopped.try_recv().is_err(), "a 503 does not stop the run");
+        failing.store(false, Ordering::SeqCst);
+        wait_for("a stored heartbeat", || {
+            (vitals.heartbeat_trouble().failures == 0).then_some(())
+        });
+        assert_eq!(vitals.heartbeat_trouble().last_failure, None);
+        drop(running);
+    }
+
+    #[test]
+    fn a_401_or_410_on_a_heartbeat_stops_the_run_and_names_it() {
+        for status in [401, 410] {
+            let run = Run::new(Box::new(move |label| {
+                label.ends_with("/heartbeat").then_some(status)
+            }));
+            let (running, stopped) = start_beating(&run, Vitals::default());
+            let reason = stopped
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the run was not stopped");
+            assert!(
+                goalcup_cli::upload::uploader::refused_run(&reason)
+                    && reason.contains(&status.to_string()),
+                "{reason}"
+            );
+            drop(running);
+        }
+        // Any other refusal is counted and asked again.
+        let run = Run::new(Box::new(|label| {
+            label.ends_with("/heartbeat").then_some(404)
+        }));
+        let vitals = Vitals::default();
+        let (running, stopped) = start_beating(&run, vitals.clone());
+        wait_for("failed heartbeats", || {
+            (vitals.heartbeat_trouble().failures >= 2).then_some(())
+        });
+        assert!(stopped.try_recv().is_err());
+        drop(running);
+    }
+
+    #[test]
+    fn no_ordinary_heartbeat_is_sent_after_the_final_one() {
+        // The seal takes half a second: the heartbeat thread, beating every 50 ms, would send
+        // ordinary heartbeats behind the final one for the whole of it.
+        let run = Run::new(Box::new(|label| {
+            if label.ends_with("/seal") {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            None
+        }));
+        let (running, _stopped) = start_beating(&run, Vitals::default());
+        wait_for("a first heartbeat", || {
+            (run.front.count("POST /v1/runs/") >= 1).then_some(())
+        });
+        let report = running.finish(WrapUp::after(Duration::from_secs(20)));
+        assert!(report.caught_up && report.sealed, "{report:?}");
+        let seen = run.front.seen.lock().unwrap().clone();
+        let end = seen
+            .iter()
+            .position(|line| line == "FINAL")
+            .expect("a final heartbeat");
+        let seal = seen
+            .iter()
+            .position(|line| line.ends_with("/seal"))
+            .expect("a seal");
+        assert!(end < seal, "{seen:?}");
+        let behind: Vec<_> = seen[end + 1..]
+            .iter()
+            .filter(|line| line.ends_with("/heartbeat"))
+            .collect();
+        assert!(
+            behind.is_empty(),
+            "heartbeats after the final one: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn no_ordinary_heartbeat_is_sent_while_a_lost_final_is_asked_again() {
+        // The final heartbeat is stored, but its answer is lost; it is asked again after a
+        // backoff of 400 ms, during which a heartbeat every 50 ms must not be sent.
+        let run = Run::new(Box::new(|_| None));
+        *run.front.lose_finals.lock().unwrap() = 1;
+        let client = ServerClient::with_credential(&run.front.url, &run.credential);
+        let (stop, _stopped) = std::sync::mpsc::channel();
+        let slow = Policy::from_test_spec("60000,20,400,400,5000,268435456,2000,50").unwrap();
+        let running = begin(
+            client,
+            run.record.clone(),
+            run.key.clone(),
+            slow,
+            run.spool.clone(),
+            None,
+            stop,
+            Vitals::default(),
+        )
+        .unwrap();
+        wait_for("a first heartbeat", || {
+            (run.front.count("POST /v1/runs/") >= 1).then_some(())
+        });
+        let report = running.finish(WrapUp::after(Duration::from_secs(20)));
+        assert!(report.caught_up && report.sealed, "{report:?}");
+        let seen = run.front.seen.lock().unwrap().clone();
+        let first = seen
+            .iter()
+            .position(|line| line == "FINAL")
+            .expect("a final heartbeat");
+        assert!(
+            seen.iter().filter(|line| *line == "FINAL").count() >= 2,
+            "the lost final was asked again: {seen:?}"
+        );
+        // A heartbeat the forwarder marked FINAL is followed by the marker; any other is ordinary.
+        let ordinary: Vec<_> = seen[first..]
+            .windows(2)
+            .filter(|pair| pair[0].ends_with("/heartbeat") && pair[1] != "FINAL")
+            .collect();
+        assert!(
+            ordinary.is_empty(),
+            "ordinary heartbeats after the final: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn an_acknowledgement_still_owed_is_not_an_idle_upload() {
+        // The chunk goes, and the server's acknowledgement cannot be written (a link where
+        // acks.jsonl belongs). The chain is then idle, but the upload is not well: it must not
+        // be marked as working while the acknowledgement waits.
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        std::fs::remove_file(trace.join("seal.json")).unwrap();
+        let acks = trace.join("acks.jsonl");
+        std::os::unix::fs::symlink(trace.parent().unwrap().join("elsewhere.jsonl"), &acks).unwrap();
+        let vitals = Vitals::default();
+        let (running, _stopped) = start_beating(&run, vitals.clone());
+        wait_for("the acknowledgement to be refused", || {
+            vitals
+                .upload_problem()
+                .0
+                .is_some_and(|why| why.contains("acks.jsonl"))
+                .then_some(())
+        });
+        let last_ok = running.last_ok();
+        last_ok.store(0, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(
+            last_ok.load(Ordering::SeqCst),
+            0,
+            "marked as working while an ack is owed"
+        );
+        assert!(vitals.upload_problem().0.is_some());
+        // Written at last, the upload is well again.
+        std::fs::remove_file(&acks).unwrap();
+        wait_for("the upload to be well", || {
+            (last_ok.load(Ordering::SeqCst) > 0 && vitals.upload_problem().0.is_none())
+                .then_some(())
+        });
+        assert_eq!(std::fs::read_to_string(&acks).unwrap().lines().count(), 1);
+        drop(running);
+    }
+
+    #[test]
+    fn a_servers_acknowledgement_that_cannot_be_written_on_resume_is_held() {
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        std::fs::remove_file(trace.join("seal.json")).unwrap();
+        let (report, said, _) = finish(&run, Duration::from_secs(20));
+        assert!(report.caught_up, "{report:?}\n{said:?}");
+        // The acknowledgement the server holds is lost here, and a link blocks its return.
+        let acks = trace.join("acks.jsonl");
+        std::fs::remove_file(&acks).unwrap();
+        std::os::unix::fs::symlink(trace.parent().unwrap().join("elsewhere.jsonl"), &acks).unwrap();
+        let mut uploader = run.uploader();
+        assert!(
+            std::fs::symlink_metadata(&acks)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let report = uploader.finish(Some(WrapUp::after(Duration::from_secs(20))), &mut |line| {
+            if std::fs::symlink_metadata(&acks).is_ok_and(|m| m.file_type().is_symlink()) {
+                assert!(line.contains("acks.jsonl"), "{line}");
+                std::fs::remove_file(&acks).unwrap();
+            }
+        });
+        assert!(report.caught_up, "{report:?}");
+        assert_eq!(
+            std::fs::read_to_string(&acks).unwrap().lines().count(),
+            1,
+            "the held acknowledgement was written once the file could be"
+        );
+    }
+
+    #[test]
+    fn a_dropped_running_ends_its_upload_thread() {
+        // An upload that retries for good (a link where acks.jsonl belongs) stops, and stays
+        // stopped, when its Running is dropped.
+        let run = Run::new(Box::new(|_| None));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        std::os::unix::fs::symlink(
+            trace.parent().unwrap().join("elsewhere.jsonl"),
+            trace.join("acks.jsonl"),
+        )
+        .unwrap();
+        let vitals = Vitals::default();
+        let (running, _stopped) = start_beating(&run, vitals.clone());
+        wait_for("a retry", || vitals.upload_problem().0.map(|_| ()));
+        let began = Instant::now();
+        drop(running);
+        assert!(
+            began.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            began.elapsed()
+        );
+        vitals.upload_ok();
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(vitals.upload_problem().0, None, "it retried after the drop");
     }
 }

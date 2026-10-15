@@ -1300,21 +1300,19 @@ fn local_terminal_preserves_monotonic_clock_identity() {
 }
 
 #[test]
-fn verifier_accepts_paired_claude_launch_provenance_and_refuses_unpaired_claims() {
+fn verifier_accepts_a_paired_tool_allowance_for_any_profile_and_refuses_an_unpaired_one() {
     let mut records = launched(complete_wire(None));
     let launch = records
         .iter_mut()
         .find(|record| matches!(record, CaptureRecord::Launch { .. }))
         .unwrap();
     if let CaptureRecord::Launch {
-        profile_id,
         allowed_tool_rule,
         process_handoff_digest,
         ..
     } = launch
     {
-        *profile_id = "claude-code-cli".into();
-        *allowed_tool_rule = Some("Bash(python3 demo.py *)".into());
+        *allowed_tool_rule = Some("Bash(*)".into());
         *process_handoff_digest = Some("d".repeat(64));
     }
     let (accepted, _) = scan(make_trace(&records, true).path());
@@ -1329,6 +1327,25 @@ fn verifier_accepts_paired_claude_launch_provenance_and_refuses_unpaired_claims(
     } = launch
     {
         *process_handoff_digest = None;
+    }
+    let (refused, _) = scan(make_trace(&records, true).path());
+    assert_eq!(refused.exit_code(), 2, "{refused:#?}");
+    assert!(has(&refused, "record_field_invalid"), "{refused:#?}");
+}
+
+#[test]
+fn verifier_refuses_a_paired_tool_allowance_whose_rule_is_not_bounded_text() {
+    let mut records = launched(complete_wire(None));
+    if let Some(CaptureRecord::Launch {
+        allowed_tool_rule,
+        process_handoff_digest,
+        ..
+    }) = records
+        .iter_mut()
+        .find(|record| matches!(record, CaptureRecord::Launch { .. }))
+    {
+        *allowed_tool_rule = Some("Bash(\n)".into());
+        *process_handoff_digest = Some("d".repeat(64));
     }
     let (refused, _) = scan(make_trace(&records, true).path());
     assert_eq!(refused.exit_code(), 2, "{refused:#?}");
@@ -2757,6 +2774,7 @@ fn exit_code_follows_canonical_precedence() {
         torn_tail: false,
         key_source: KeySource::None,
         findings: vec![],
+        git_unreadable: vec![],
         verified_ack: None,
         receipt_clock: None,
         terminal: None,
@@ -2824,6 +2842,7 @@ fn typed_reader_statuses_keep_the_schema_one_words_and_report_bytes() {
         torn_tail: false,
         key_source: KeySource::None,
         findings: vec![],
+        git_unreadable: vec![],
         verified_ack: None,
         receipt_clock: None,
         terminal: None,

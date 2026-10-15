@@ -288,6 +288,9 @@ pub enum CaptureRecord {
         harness_version: String,
         recorder_revision: String,
         continuation: String,
+        /// A tool allowance the launch claimed, as bounded text, always paired with
+        /// `process_handoff_digest` (SHA-256 hex). No daemon writes the pair since D52; the
+        /// reader still admits it, by shape alone, so older traces stay valid.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         allowed_tool_rule: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -339,25 +342,6 @@ pub struct HarnessBuildV1 {
     pub image_sha256: Option<String>,
     /// The daemon's platform, `<os>-<arch>` as Rust spells them (`macos-aarch64`).
     pub platform: String,
-}
-
-/// The single bounded command-text allowance admitted for a Claude M2 launch.
-/// This validates the launch claim's shape; Claude remains the policy authority.
-pub fn is_claude_capture_allowed_tool_rule(rule: &str) -> bool {
-    let Some(name) = rule
-        .strip_prefix("Bash(python3 ")
-        .and_then(|s| s.strip_suffix(".py *)"))
-    else {
-        return false;
-    };
-    name.len() <= 64
-        && name
-            .as_bytes()
-            .first()
-            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// Synchronous admission of one frame or close. `Queued` is volatile acceptance only: never

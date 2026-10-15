@@ -23,7 +23,8 @@
 //! ends one. A bearer that is not a credential is looked up among `ServerOptions::tokens`.
 //!
 //! The run lifecycle: a competition start replaces the member's other open competition run, a
-//! practice credential opens a practice run (never replacing, no window), and
+//! practice credential opens a practice run (never replacing, no window), a test credential opens a
+//! test run (a competition run that replaces, and is replaced by, only another test run), and
 //! `ServerOptions::start_window_opens` / `start_window_closes` bound competition starts.
 //!
 //! What the Worker does on its own (the 5-minute cron: closing runs, the commit at the deadline
@@ -251,6 +252,11 @@ impl UploadServer {
     /// lasts an hour, like an approved one.
     pub fn mint_credential(&self, member: &str) -> String {
         handlers::mint_credential(&self.shared, member, "competition", state::now_secs())
+    }
+
+    /// The same for a test credential.
+    pub fn mint_test_credential(&self, member: &str) -> String {
+        handlers::mint_credential(&self.shared, member, "test", state::now_secs())
     }
 
     /// The same for a practice credential.

@@ -1,22 +1,24 @@
-# Codex CLI 0.153.0, capture profile (T14; D38, D39). Recipe: docs/qualification/m2/launch-recipes.md §8.
+# Codex CLI 0.153.0, capture profile (T14; D38, D39, D57). Recipe: docs/qualification/m2/launch-recipes.md §8.
 schema_version = 1
 id = "codex-cli"
 
 [capture]
 auth_hosts = ["auth.openai.com"]
-# No model, effort or sandbox limit (owner direction, 2026-10-14): the harness's own defaults,
-# full access with network. `danger-full-access` because `codex exec` alone is read-only.
-continuation = "none: codex exec one turn, approval_policy=never, full access with network, stdin /dev/null"
+# Chat mode (D57): Codex opens in the participant's terminal and the participant types the prompt.
+# No model, effort, approval, sandbox or permission option (owner direction, 2026-10-14; D57):
+# the harness's own defaults and the participant's own settings. The workspace is trusted, so no
+# trust prompt stands between the participant and the prompt (measured 14 Oct 2026,
+# docs/harnesses/codex-cli.md).
+interactive = true
+continuation = "chat: the participant types the prompt and may type keep going"
 args = [
-  "exec", "--json",
-  "-c", 'approval_policy="never"',
   "-c", "check_for_update_on_startup=false",
   "-c", 'projects={{ "{workspace}" = {{ trust_level = "trusted" }} }}',
-  "-s", "danger-full-access",
-  "--skip-git-repo-check",
   "-C", "{workspace}",
-  "--",
 ]
+# `goalcup continue` (T7): reopen the most recent session in the tracer's home. Not yet measured
+# against a logged-in home (docs/harnesses/codex-cli.md, section 10).
+resume_args = ["resume", "--last"]
 
 [capture.executable]
 program = "codex"
@@ -24,6 +26,8 @@ version_args = ["--version"]
 
 [capture.env]
 SHELL = "/bin/zsh"
+# Node's built-in HTTP client honours HTTPS_PROXY (the run's loopback recorder) only with this (D59).
+NODE_USE_ENV_PROXY = "1"
 
 [capture.platform.linux-x86_64.env]
 SHELL = "/bin/bash"
@@ -37,24 +41,25 @@ run_home = "empty"
 config_home = "shared"
 env = "CODEX_HOME"
 real_dirs = ["{user_home}/.codex"]
+# The goal-cup skill is put in the harness home's `skills/goal-cup/` before each launch.
+skills_dir = "skills"
 
 [capture.ca]
 env = ["CODEX_CA_CERTIFICATE"]
 mode = "extend"
 
+# D57: no session id is known at launch. The run's sessions are every rollout new or written
+# since the run started, which is safe because runs on the shared home are serialized (D39).
 [capture.identity]
-source = "stdout_json"
-binding = "at_launch"
-match_field = "type"
-match_value = "thread.started"
-id_field = "thread_id"
+source = "none"
 
 [[capture.native]]
 name = "rollout"
 root = "{config_home}/sessions"
-pattern = "*/*/*/rollout-*-{id}.jsonl"
+pattern = "*/*/*/rollout-*.jsonl"
 form = "append_only"
 protocol_hint = "codex-jsonl"
+since_run_start = true
 
 # D22: the npm wrapper hides the native binary.
 [capture.termination]

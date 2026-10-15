@@ -785,17 +785,14 @@ fn read_capture(
     .unwrap()
 }
 
-/// Codex has one required rollout source; supplemental history is excluded.
-#[cfg(target_os = "macos")]
-const CODEX_STORES: u64 = 1;
-
 /// A v5 capture of a shipped profile through the real daemon and this CLI's own client: the
 /// status view verifies against the key the create call returned, and the v5 reader finds the
-/// goal, launch and baseline bound. The absent native scope chains one required-source gap,
-/// so local finish seals a trace that reads incomplete (exit 1), never valid.
+/// goal, launch and baseline bound. The shipped Codex profile runs in chat mode (D57): it
+/// names no session at launch and reads every rollout since the run started, so no
+/// required-source gap is chained and the local finish seals a trace that reads valid.
 #[cfg(target_os = "macos")]
 #[test]
-fn a_shipped_profile_capture_reads_incomplete_while_its_stores_go_unread() {
+fn a_shipped_chat_profile_capture_records_and_seals_valid() {
     use goalcup_cli::daemon::HttpDaemonClient;
 
     let tmp = tempfile::tempdir().unwrap();
@@ -831,8 +828,7 @@ fn a_shipped_profile_capture_reads_incomplete_while_its_stores_go_unread() {
     )
     .unwrap();
     let text = String::from_utf8(out).unwrap();
-    assert!(text.contains("capture: incomplete — run running"), "{text}");
-    assert!(text.contains(&format!("gaps: {CODEX_STORES};")), "{text}");
+    assert!(text.contains("capture: recording — run running"), "{text}");
     assert!(
         text.contains("0 producer(s) consumed, 0 refused admission"),
         "{text}"
@@ -840,18 +836,17 @@ fn a_shipped_profile_capture_reads_incomplete_while_its_stores_go_unread() {
 
     let report = read_capture(&config, &info.entry_id);
     assert!(!report.torn_tail);
-    assert!(report.coverage_incomplete, "{:?}", report.findings);
+    assert!(!report.coverage_incomplete, "{:?}", report.findings);
     assert!(!report.sealed);
     assert_eq!(report.anchor, AnchorState::LocalOnly);
-    assert_eq!(report.gap_count, CODEX_STORES);
+    assert_eq!(report.gap_count, 0);
     assert_eq!(
         report.findings,
-        vec!["chain_unsealed".to_string(), "gap_recorded".to_string()],
-        "every producer closed, the launch bound, the baseline bound: only the seal and the \
-         unread stores are missing"
+        vec!["chain_unsealed".to_string()],
+        "every producer closed, the launch bound, the baseline bound: only the seal is missing"
     );
 
-    // The local finish, with no server anywhere: sealed, and still incomplete.
+    // The local finish, with no server anywhere: sealed and valid.
     let finished = client
         .seal_capture(
             &info.entry_id,
@@ -867,14 +862,13 @@ fn a_shipped_profile_capture_reads_incomplete_while_its_stores_go_unread() {
     let report = read_capture(&config, &info.entry_id);
     runtime.block_on(daemon.stop());
     assert!(report.sealed, "{:?}", report.findings);
-    assert_eq!(report.findings, vec!["gap_recorded".to_string()]);
-    assert_eq!(report.exit_code(), 1);
+    assert_eq!(report.findings, Vec::<String>::new());
+    assert_eq!(report.exit_code(), 0);
 }
 
 /// The daemon goes away under a launched run with no producer attached, which is what a
 /// crash leaves behind: nothing is chained as it goes. The reopened entry admits nothing, so
-/// the chain records that loss beside the launch's required-source gap, and the sealed trace
-/// never reads as complete.
+/// the chain records that loss, and the sealed trace never reads as complete.
 #[cfg(target_os = "macos")]
 #[test]
 fn a_capture_reopened_under_its_live_run_seals_with_the_loss_chained() {
@@ -906,7 +900,7 @@ fn a_capture_reopened_under_its_live_run_seals_with_the_loss_chained() {
     let report = read_capture(&config, &info.entry_id);
     runtime.block_on(daemon.stop());
     assert!(report.sealed, "{:?}", report.findings);
-    assert_eq!(report.gap_count, CODEX_STORES + 1, "{:?}", report.findings);
+    assert_eq!(report.gap_count, 1, "{:?}", report.findings);
     assert!(report.coverage_incomplete);
     assert_eq!(report.findings, vec!["gap_recorded".to_string()]);
     assert_eq!(report.exit_code(), 1);
@@ -923,6 +917,7 @@ fn run_with_state(cfg: &std::path::Path, entry_id: &str, state: goalcup_cli::run
             run_id: entry_id.to_string(),
             server_url: None,
             practice: false,
+            test: false,
             connector_id: "claude-code-cli".to_string(),
             workspace: PathBuf::from("/w"),
             started_at_unix: 1,
@@ -1024,6 +1019,45 @@ fn status_puts_every_problem_first() {
 }
 
 #[test]
+fn status_names_heartbeats_that_keep_failing() {
+    use goalcup_cli::run::{HEARTBEATS_FAILING_AFTER, HarnessState, HeartbeatState, RunState};
+    use goalcup_cli::run::{Recording, now_unix};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.updated_at = now_unix();
+    state.recording = Recording::Ok;
+    state.harness = HarnessState::Running;
+
+    // One short of the threshold is a blip, not a problem.
+    state.heartbeat = HeartbeatState {
+        failures: HEARTBEATS_FAILING_AFTER - 1,
+        last_failure: Some("the server answered HTTP 503".to_string()),
+    };
+    run_with_state(&cfg, &info.entry_id, state.clone());
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(!text.contains("PROBLEM"), "{text}");
+
+    state.heartbeat.failures = HEARTBEATS_FAILING_AFTER;
+    run_with_state(&cfg, &info.entry_id, state.clone());
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(
+        text.starts_with(
+            "PROBLEM: the last 3 heartbeats to the server failed: the server answered HTTP 503\n"
+        ),
+        "{text}"
+    );
+
+    // A run that is over has no heartbeats to worry about.
+    state.ended = true;
+    run_with_state(&cfg, &info.entry_id, state);
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(!text.contains("heartbeats"), "{text}");
+}
+
+#[test]
 fn status_with_no_problem_prints_no_problem_line() {
     use goalcup_cli::run::{HarnessState, Recording, RunState};
     let tmp = tempfile::tempdir().unwrap();
@@ -1040,6 +1074,7 @@ fn status_with_no_problem_prints_no_problem_line() {
                 run_id: info.entry_id.clone(),
                 server_url: None,
                 practice: false,
+                test: false,
                 connector_id: "claude-code-cli".to_string(),
                 workspace: PathBuf::from("/w"),
                 started_at_unix: 1,
@@ -1071,4 +1106,92 @@ fn status_with_no_problem_prints_no_problem_line() {
     assert!(!text.contains("PROBLEM"), "{text}");
     assert!(!text.contains("no run state yet"), "{text}");
     assert!(text.contains(&m.status_detail()), "{text}");
+}
+
+/// An organizer test run says so first, before the daemon is asked and before any problem line.
+#[test]
+fn status_of_a_test_run_says_test_run_first() {
+    use goalcup_cli::run::{RunState, read, write};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    run_with_state(
+        &cfg,
+        &info.entry_id,
+        RunState::launched(&info.entry_id, Ok(())),
+    );
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(!text.contains("TEST RUN"), "{text}");
+
+    let mut record = read(&cfg, &info.entry_id).unwrap();
+    record.test = true;
+    write(&cfg, &record).unwrap();
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(text.starts_with("TEST RUN"), "{text}");
+    // Still the same status below it.
+    assert!(text.contains(&m.status_detail()), "{text}");
+    // `--json` stays the daemon's document alone.
+    let json = status_text(&m, &cfg, &info.entry_id, true);
+    assert!(!json.contains("TEST RUN"), "{json}");
+}
+
+/// A `run.json` written before `--test` existed has no `test` field and still reads, as a run
+/// that is not a test run.
+#[test]
+fn a_run_json_without_the_test_field_still_reads() {
+    use goalcup_cli::run::{read, run_dir, write};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    run_with_state(
+        &cfg,
+        &info.entry_id,
+        goalcup_cli::run::RunState::launched(&info.entry_id, Ok(())),
+    );
+    let mut record = read(&cfg, &info.entry_id).unwrap();
+    record.test = true;
+    write(&cfg, &record).unwrap();
+    let file = run_dir(&cfg, &info.entry_id).join("run.json");
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(json["test"], true, "{json}");
+    json.as_object_mut().unwrap().remove("test").unwrap();
+    std::fs::write(&file, serde_json::to_vec_pretty(&json).unwrap()).unwrap();
+    let old = read(&cfg, &info.entry_id).unwrap();
+    assert!(!old.test && !old.practice, "{old:?}");
+    assert_eq!(
+        old.mode(),
+        goalcup_cli::account::device::RunMode::Competition
+    );
+}
+
+/// `continue` starts its next segment in the mode the run was started in, read from `mode()`:
+/// a test run stays a test run, a practice run a practice run.
+#[test]
+fn a_run_records_mode_is_what_continue_restarts_it_in() {
+    use goalcup_cli::account::device::RunMode;
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    run_with_state(
+        &cfg,
+        &info.entry_id,
+        goalcup_cli::run::RunState::launched(&info.entry_id, Ok(())),
+    );
+    let mut record = goalcup_cli::run::read(&cfg, &info.entry_id).unwrap();
+    for (practice, test, mode) in [
+        (false, false, RunMode::Competition),
+        (true, false, RunMode::Practice),
+        (false, true, RunMode::Test),
+    ] {
+        record.practice = practice;
+        record.test = test;
+        goalcup_cli::run::write(&cfg, &record).unwrap();
+        let kept = goalcup_cli::run::read(&cfg, &info.entry_id).unwrap();
+        assert_eq!(kept.mode(), mode);
+        assert_eq!(kept.mode().is_practice(), practice);
+    }
 }

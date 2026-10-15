@@ -179,8 +179,10 @@ pub fn watch_beside(watch: Watch) -> Watching {
                     let (problem, stopped) = beat.vitals.upload_problem();
                     let last_ok_at = uploads.iter().map(|last| last.load(Ordering::SeqCst)).max();
                     let disk = tick.disk();
+                    let heartbeat = beat.vitals.heartbeat_trouble();
                     beat.keeper.update(|state| {
                         state.recording = recording;
+                        state.heartbeat = heartbeat;
                         state.upload = UploadState {
                             last_ok_at,
                             problem,

@@ -397,6 +397,33 @@ fn practice_never_replaces_and_has_no_window_and_its_own_length() {
 }
 
 #[test]
+fn a_test_start_replaces_only_an_open_test_run_and_a_competition_start_leaves_it() {
+    let rig = Rig::new();
+    let [t1c, t2c] = [(); 2].map(|_| rig.server.mint_test_credential("member-1"));
+    let [c1, c2] = [(); 2].map(|_| rig.server.mint_credential("member-1"));
+    let t1 = rig.start(&t1c, "t1");
+    assert_eq!(rig.server.mode(&t1.run).as_deref(), Some("test"));
+    // A competition start does not end the test run, and a test start does not end it either
+    // until it is itself a test start.
+    let c1 = rig.start(&c1, "c1");
+    assert_eq!(rig.server.replaced_at(&t1.run), None);
+    assert_eq!(
+        rig.beat(&t1, &t1.entry, 0, GENESIS, false).body["stop"],
+        false
+    );
+    // A test start replaces the open test run, and only that one.
+    let t2 = rig.start(&t2c, "t2");
+    assert!(rig.server.replaced_at(&t1.run).is_some());
+    assert_eq!(rig.server.replaced_at(&c1.run), None);
+    assert_eq!(rig.server.replaced_at(&t2.run), None);
+    // And a second competition start replaces the competition run, not the test one.
+    let c2 = rig.start(&c2, "c2");
+    assert!(rig.server.replaced_at(&c1.run).is_some());
+    assert_eq!(rig.server.replaced_at(&t2.run), None);
+    assert_eq!(rig.server.replaced_at(&c2.run), None);
+}
+
+#[test]
 fn a_practice_run_ends_after_its_length() {
     let rig = Rig::with(ServerOptions {
         practice_run_seconds: 1,

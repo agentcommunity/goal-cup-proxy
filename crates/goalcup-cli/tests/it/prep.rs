@@ -188,10 +188,16 @@ fn log_in(rig: &Rig, url: &str) {
 
 /// A practice run of the chat connector with `entries`, each `(entry id, sent)`.
 fn practice_run(rig: &Rig, run_id: &str, entries: &[(&str, bool)]) {
+    kept_run(rig, run_id, entries, true, false);
+}
+
+/// A kept run of the chat connector: practice, test or (neither) competition.
+fn kept_run(rig: &Rig, run_id: &str, entries: &[(&str, bool)], practice: bool, test: bool) {
     let record = RunRecord {
         run_id: run_id.to_string(),
         server_url: Some("http://127.0.0.1:1".to_string()),
-        practice: true,
+        practice,
+        test,
         connector_id: CHAT_ID.to_string(),
         workspace: rig.root.join("work").join(run_id),
         started_at_unix: 1_700_000_000,
@@ -306,6 +312,13 @@ fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
     let (code, text) = prep(&rig, &[], &facts);
     assert_eq!(code, 1, "{text}");
     assert!(line(&text, "harness_home").starts_with("[ok]"), "{text}");
+    assert!(line(&text, "practice").starts_with("[todo]"), "{text}");
+
+    // A fully uploaded organizer test run (and a competition run) is not the practice run.
+    kept_run(&rig, "run-test-1", &[("entry-test", true)], false, true);
+    kept_run(&rig, "run-comp-1", &[("entry-comp", true)], false, false);
+    let (code, text) = prep(&rig, &[], &facts);
+    assert_eq!(code, 1, "{text}");
     assert!(line(&text, "practice").starts_with("[todo]"), "{text}");
 
     // A practice run that is not all uploaded does not count, and says which entry to send.
@@ -424,38 +437,115 @@ fn a_second_prep_skips_passed_steps() {
 }
 
 #[test]
-fn prep_fails_a_wsl_work_root_on_a_windows_drive() {
+fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
     let rig = Rig::chat();
     let github = FakeGithub::good();
-    let wsl = facts(&github.base, &["wsl=1"]);
-    let on_drive = "/mnt/c/Users/me/goalcup-work";
+    // The filesystem is judged by its type, not by where it is mounted: a Windows drive mounted
+    // at an odd place is refused, and a Linux mount under `/mnt/c` is not.
+    let wsl = facts(
+        &github.base,
+        &[
+            "wsl=2",
+            "fs=/odd/place=9p",
+            "fs=/mnt/c/linux=ext4",
+            "fs=/mnt/c=drvfs",
+        ],
+    );
+    let on_drive = "/odd/place/goalcup-work";
 
     let (code, text) = prep(&rig, &["--work-root", on_drive], &wsl);
     assert_eq!(code, 1, "{text}");
     let machine = line(&text, "machine");
     assert!(
-        machine.starts_with("[fail] machine:") && machine.contains("Windows drive"),
+        machine.starts_with("[fail] machine:")
+            && machine.contains("work folder /odd/place/goalcup-work")
+            && machine.contains("Windows-host filesystem (9p)"),
         "{text}"
     );
     // A refused folder is not kept for `goalcup start` to find.
     assert_ne!(prep_file(&rig.cfg).work_root, on_drive);
 
-    // The Linux home is fine on WSL2; the same folder is fine on a machine that is not WSL2.
+    let (_, text) = prep(&rig, &["--work-root", "/mnt/c/Users/me/work"], &wsl);
+    assert!(line(&text, "machine").contains("(drvfs)"), "{text}");
+    let (_, text) = prep(&rig, &["--work-root", "/mnt/c/linux/work"], &wsl);
+    assert!(!line(&text, "machine").contains("Windows-host"), "{text}");
+
+    // The Linux home is fine on WSL2; the same folder is fine on a machine that is not WSL.
     let (_, text) = prep(&rig, &["--work-root", "/home/me/goalcup-work"], &wsl);
-    assert!(!line(&text, "machine").contains("Windows drive"), "{text}");
-    let (_, text) = prep(&rig, &["--work-root", on_drive], &facts(&github.base, &[]));
+    assert!(!line(&text, "machine").contains("Windows-host"), "{text}");
+    let (_, text) = prep(
+        &rig,
+        &["--work-root", on_drive],
+        &facts(&github.base, &["wsl=0", "fs=/odd/place=9p"]),
+    );
     assert!(line(&text, "machine").starts_with("[ok]"), "{text}");
 
     // On WSL2 the machine is not asked to be kept awake: Windows decides, and prep says so.
     let (_, text) = prep(
         &rig,
         &["--work-root", "/home/me/goalcup-work"],
-        &facts(&github.base, &["wsl=1", "awake=no_inhibitor"]),
+        &facts(&github.base, &["wsl=2", "awake=no_inhibitor"]),
     );
     let machine = line(&text, "machine");
     assert!(
         machine.starts_with("[todo] machine:") && machine.contains("Windows decides"),
         "{text}"
+    );
+}
+
+#[test]
+fn prep_fails_wsl_artifact_root_and_config_folder_on_a_windows_host_filesystem() {
+    let rig = Rig::chat();
+    let github = FakeGithub::good();
+    let work = "/home/me/goalcup-work";
+    let artifacts = format!("{}-artifacts", rig.cfg.display());
+
+    let on_artifacts = facts(&github.base, &["wsl=2", &format!("fs={artifacts}=9p")]);
+    let (code, text) = prep(&rig, &["--work-root", work], &on_artifacts);
+    assert_eq!(code, 1, "{text}");
+    let machine = line(&text, "machine");
+    assert!(
+        machine.starts_with("[fail] machine:")
+            && machine.contains(&format!("artifact root {artifacts}"))
+            && !machine.contains("config folder"),
+        "{text}"
+    );
+    // The work folder is fine, and is kept.
+    assert_eq!(prep_file(&rig.cfg).work_root, work);
+
+    let on_config = facts(
+        &github.base,
+        &["wsl=2", &format!("fs={}=virtiofs", rig.cfg.display())],
+    );
+    let (_, text) = prep(&rig, &["--work-root", work], &on_config);
+    let machine = line(&text, "machine");
+    assert!(
+        machine.contains("config folder") && machine.contains("(virtiofs)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn prep_fails_wsl1_in_one_sentence() {
+    let rig = Rig::chat();
+    let github = FakeGithub::good();
+    let (code, text) = prep(
+        &rig,
+        &["--work-root", "/home/me/goalcup-work"],
+        &facts(&github.base, &["wsl=1"]),
+    );
+    assert_eq!(code, 1, "{text}");
+    let machine = line(&text, "machine");
+    assert!(
+        machine.starts_with("[fail] machine:")
+            && machine.contains("WSL1 cannot run Goal Cup: convert this distribution to WSL2 with")
+            && machine.contains("`wsl --set-version <distro> 2`"),
+        "{text}"
+    );
+    assert_ne!(
+        prep_file(&rig.cfg).work_root,
+        "/home/me/goalcup-work",
+        "a work folder is not kept on WSL1"
     );
 }
 

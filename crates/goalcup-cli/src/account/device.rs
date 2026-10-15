@@ -49,8 +49,46 @@ const MAX_WAIT_SECS: u64 = 15 * 60;
 pub enum Purpose {
     /// `goalcup login`: the account, nothing else.
     Login,
-    /// A run, in the competition or as practice.
-    Run { practice: bool },
+    /// A run, in the competition, as practice, or as an organizer test.
+    Run { mode: RunMode },
+}
+
+/// The wire value of a competition run.
+pub const MODE_COMPETITION: &str = "competition";
+/// The wire value of a practice run (also what a login asks with).
+pub const MODE_PRACTICE: &str = "practice";
+/// The wire value of an organizer test run: full length, opened only by allowlisted accounts,
+/// deletable in one go on the server. The server side is new; this is the one place the word
+/// lives.
+pub const MODE_TEST: &str = "test";
+
+/// What kind of run `goalcup start` asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RunMode {
+    /// The run that counts.
+    #[default]
+    Competition,
+    /// `--practice`: kept apart from the competition, never pushes.
+    Practice,
+    /// `--test`: an organizer test run. Everything but the server's bookkeeping is a
+    /// competition run: the same clone with the push helper, the same deadline.
+    Test,
+}
+
+impl RunMode {
+    /// The mode word the device request carries.
+    pub fn wire(self) -> &'static str {
+        match self {
+            RunMode::Competition => MODE_COMPETITION,
+            RunMode::Practice => MODE_PRACTICE,
+            RunMode::Test => MODE_TEST,
+        }
+    }
+
+    /// Whether a run of this mode is a practice run.
+    pub fn is_practice(self) -> bool {
+        self == RunMode::Practice
+    }
 }
 
 /// What an approval returned.
@@ -128,9 +166,8 @@ pub fn approve(
     out: &mut dyn Write,
 ) -> Result<Approved, CliError> {
     let (purpose_name, mode) = match purpose {
-        Purpose::Login => ("login", "practice"),
-        Purpose::Run { practice: false } => ("run", "competition"),
-        Purpose::Run { practice: true } => ("run", "practice"),
+        Purpose::Login => ("login", MODE_PRACTICE),
+        Purpose::Run { mode } => ("run", mode.wire()),
     };
     let created: Created = server
         .json(

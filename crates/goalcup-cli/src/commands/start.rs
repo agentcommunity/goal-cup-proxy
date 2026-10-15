@@ -21,7 +21,7 @@
 //! # A run on the server
 //!
 //! With a server (`goalcup login`) the order is: the prep checks (`goalcup prep` ran: its repo,
-//! work folder and GitHub token), the WSL2 check on the work folder, **the participant's
+//! work folder and GitHub token), the WSL checks on every folder the run writes to, **the participant's
 //! approval of this run in the browser** ([`crate::account::device`]), and only then anything
 //! local: the run directory, the clone of the participant's repository that is the run's
 //! workspace, the run opened on the server with the credential the approval returned
@@ -90,7 +90,7 @@ use goalcup_protocol::control::{
     CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest, CaptureWorkspaceInfo,
     CaptureWorkspaceRequest, DaemonClient, FINISH_COMMIT_RESERVE, ProxyCounters, SignedStatus,
 };
-use goalcup_protocol::harness::{CaptureSpec, ConfigHome, RunHome};
+use goalcup_protocol::harness::{CAPTURE_HOMES_DIR, CaptureSpec, ConfigHome, RunHome};
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration, termination_bound};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -117,10 +117,11 @@ pub struct StartOptions {
     /// The sizes of the run's disk reservation and how often it is watched. The shipped values
     /// ([`DiskPolicy::default`]); only a test build can name others.
     pub disk: DiskPolicy,
-    /// `--practice`: a practice run, which the server keeps apart from the competition and
-    /// which never replaces the account's competition run. Only meaningful for a run on a
-    /// server.
-    pub practice: bool,
+    /// `--practice` / `--test`: a practice run, which the server keeps apart from the
+    /// competition and which never replaces the account's competition run, or an organizer
+    /// test run, which is a competition run in every way this build can see. Only meaningful
+    /// for a run on a server.
+    pub mode: crate::account::device::RunMode,
     /// Opens the approval address in the participant's browser, and says whether a program
     /// started: [`goalcup_platform::machine::open_url`] in every shipped build.
     pub open_url: OpenUrlFn,
@@ -425,10 +426,6 @@ fn panic_while_quiet_for_test() {}
 /// descriptors, and the rest is room for the runtime, the sender and this process.
 const OPEN_FILES_WANTED: u64 = 2 * MAX_CONNECTION_TASKS + 256;
 
-/// `<cfg>/capture-homes/<connector>`: the one isolated harness home every capture run of a
-/// connector shares (D39). It is created here and never seeded.
-const CAPTURE_HOMES_DIR: &str = "capture-homes";
-
 /// What every phase of one capture run is given and none changes.
 struct CaptureRun<'a> {
     client: &'a (dyn DaemonClient + Sync),
@@ -469,6 +466,10 @@ struct CapturePrep {
     /// The harness home every run of this connector shares (D39); `None` when each run makes its
     /// own inside its run directory.
     shared_home: Option<SharedCaptureHome>,
+    /// The run `HOME` every run of this connector shares (D59, `run_home = "shared"`): the
+    /// folder `<cfg>/capture-homes/<id>.run-home`, under the same lock. `None` when each run
+    /// gets a `HOME` of its own.
+    shared_run_home: Option<SharedCaptureHome>,
     /// The lock that keeps a second run off that shared home: held from the claim, moved into
     /// the [`Forked`] run at the fork and let go at its seal (the upload that follows needs no
     /// home), and released by the OS if this process dies. A `goalcup continue` takes it before
@@ -637,11 +638,10 @@ pub(crate) fn lock_home_for_continue(
     connector: &HarnessConnector,
     run_id: &str,
 ) -> Result<Option<std::fs::File>, CliError> {
-    if connector.loaded.manifest.capture.home.config_home == ConfigHome::PerRun {
-        return Ok(None);
-    }
     let id = &connector.loaded.manifest.id;
-    let config_home = cfg.join(CAPTURE_HOMES_DIR).join(id);
+    let Some((config_home, _)) = shared_leaf(cfg, &connector.loaded.manifest.capture, id) else {
+        return Ok(None);
+    };
     private_dir(config_home.parent().expect("a capture-home parent"), true)?;
     match try_lock_shared_home(&config_home, id)? {
         Ok(lock) => {
@@ -657,6 +657,26 @@ pub(crate) fn lock_home_for_continue(
     }
 }
 
+/// Which home of a connector is kept across runs, and so serialized under its one
+/// `<capture-homes>/<id>.lock`: its config home (D39, `config_home = "shared"`), at
+/// `<cfg>/capture-homes/<id>`, or its run `HOME` (D59, `run_home = "shared"`), at
+/// `<cfg>/capture-homes/<id>.run-home`. The schema never admits both. The `bool` is whether it
+/// is the run `HOME`. `None`: every home is made per run.
+///
+/// The run home's leaf has a `.` in it, which no connector id has, so it is never another
+/// connector's home or a lock, and a connector that moves its shared home from the one to the
+/// other does not inherit the old tree as its `HOME`.
+fn shared_leaf(cfg: &Path, profile: &CaptureSpec, id: &str) -> Option<(PathBuf, bool)> {
+    let homes = cfg.join(CAPTURE_HOMES_DIR);
+    if profile.home.config_home == ConfigHome::Shared {
+        Some((homes.join(id), false))
+    } else if profile.home.run_home == RunHome::Shared {
+        Some((homes.join(format!("{id}.run-home")), true))
+    } else {
+        None
+    }
+}
+
 /// The harness home `goalcup prep` opens the harness in: the one every run of the connector
 /// shares, made if there is none, and the lock that keeps it from a run that is recording (and
 /// a run from it) while the participant is signed in there. `None` for a connector whose home
@@ -665,6 +685,13 @@ pub(crate) fn claim_home_for_prep(
     cfg: &Path,
     connector: &HarnessConnector,
 ) -> Result<Option<(PathBuf, std::fs::File)>, CliError> {
+    if connector.loaded.manifest.capture.home.run_home == RunHome::Shared {
+        return Err(CliError::Refused(format!(
+            "`goalcup prep` does not support a shared run HOME yet (`{}` keeps one, D59); it \
+             comes with the next prep change. Nothing was changed.",
+            connector.loaded.manifest.id
+        )));
+    }
     if connector.loaded.manifest.capture.home.config_home == ConfigHome::PerRun {
         return Ok(None);
     }
@@ -1131,6 +1158,31 @@ fn capture(
     out: &mut dyn std::io::Write,
 ) -> Result<StartOutcome, CliError> {
     let goal = goal_file.map(read_goal).transpose()?;
+    let beside = match goal_file {
+        Some(goal_file) => beside_goal(goal_file),
+        None => match &opts.run_folder {
+            Some(folder) => folder.clone(),
+            None => std::env::current_dir().map_err(|source| CliError::Io {
+                path: "the current directory".to_string(),
+                source,
+            })?,
+        },
+    };
+    // Under WSL: WSL1 cannot run this, and WSL2 cannot keep a run on a Windows drive. Judged
+    // before anything is created or removed, over every folder the run writes to.
+    let work_folder = match &opening {
+        Opening::Fresh => prepared_work_folder(cfg),
+        Opening::Continue(continuing) => {
+            continuing.record.workspace.parent().map(Path::to_path_buf)
+        }
+    };
+    refuse_wsl(
+        env,
+        cfg,
+        &beside,
+        work_folder.as_deref(),
+        "Nothing was created.",
+    )?;
     // A run past its deadline and a day has sent what it will: its reservation goes back.
     release_stale(cfg, &artifact_root(cfg), crate::run::now_unix());
     let c = crate::connector::load_harness(connectors, &opts.harness, opts.dev)?;
@@ -1161,16 +1213,6 @@ fn capture(
         )?,
         Some(_) => continue_fits(&c.loaded.manifest.id, profile.interactive)?,
     }
-    let beside = match goal_file {
-        Some(goal_file) => beside_goal(goal_file),
-        None => match &opts.run_folder {
-            Some(folder) => folder.clone(),
-            None => std::env::current_dir().map_err(|source| CliError::Io {
-                path: "the current directory".to_string(),
-                source,
-            })?,
-        },
-    };
     // With a server: the prep checks, before any other work and before the participant is asked
     // for anything. A continued run was prepared when it started.
     let serving = match &continuing {
@@ -1178,7 +1220,7 @@ fn capture(
             cfg,
             env,
             &beside,
-            opts.practice,
+            opts.mode,
             profile.credential.is_some(),
             out,
         )?,
@@ -1462,8 +1504,10 @@ fn prepare(
     let executable = crate::launch::capture_executable(c, profile, env)?;
     // The provider hosts answer a TCP connect before anything is created (the proxy module's
     // preflight; it names a firewall holding this binary when they do not).
-    crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
-        .map_err(|unreachable| CliError::Refused(unreachable.to_string()))?;
+    if !offline_upstreams_for_test(env) {
+        crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
+            .map_err(|unreachable| CliError::Refused(unreachable.to_string()))?;
+    }
     // A per-run home is made inside the run directory below. A run directory beside a goal file
     // inside a Git work tree is refused before anything is created: it would hold what the
     // harness wrote, which can include a fragment of the provider key (D41).
@@ -1480,14 +1524,15 @@ fn prepare(
         matcher,
         executable,
         shared_home: None,
+        shared_run_home: None,
         shared_home_lock: None,
     })
 }
 
-/// The harness home every run of a connector shares (D39), taken for this run: its folder made
-/// if there is none, and the lock that keeps a second run off it. A connector whose home is made
-/// per run has none to take. This creates things on disk, so a run on a server takes it only
-/// after the participant has approved the run.
+/// The harness home every run of a connector shares (D39), or its shared run `HOME` (D59), taken
+/// for this run: its folder made (0700) if there is none, and the lock that keeps a second run
+/// off it. A connector whose homes are made per run has none to take. This creates things on
+/// disk, so a run on a server takes it only after the participant has approved the run.
 fn claim_shared_home(cx: &CaptureRun<'_>, prep: &mut CapturePrep) -> Result<(), CliError> {
     let CaptureRun {
         cfg,
@@ -1495,17 +1540,21 @@ fn claim_shared_home(cx: &CaptureRun<'_>, prep: &mut CapturePrep) -> Result<(), 
         profile,
         ..
     } = *cx;
-    if profile.home.config_home == ConfigHome::PerRun {
+    let Some((config_home, is_run_home)) = shared_leaf(cfg, profile, &c.loaded.manifest.id) else {
         return Ok(());
-    }
-    let config_home = cfg.join(CAPTURE_HOMES_DIR).join(&c.loaded.manifest.id);
+    };
     private_dir(config_home.parent().expect("a capture-home parent"), true)?;
     // `goalcup continue` took the lock before it closed anything, and hands it over.
     let lock = match prep.shared_home_lock.take() {
         Some(held) => held,
         None => lock_shared_home(&config_home, &c.loaded.manifest.id)?,
     };
-    prep.shared_home = Some(ensure_shared_home(&config_home)?);
+    let home = ensure_shared_home(&config_home)?;
+    if is_run_home {
+        prep.shared_run_home = Some(home);
+    } else {
+        prep.shared_home = Some(home);
+    }
     prep.shared_home_lock = Some(lock);
     Ok(())
 }
@@ -1536,9 +1585,15 @@ fn create_and_gate<'a>(
         .as_ref()
         .map(SharedCaptureHome::recheck)
         .transpose()?;
+    let shared_run_home = prep
+        .shared_run_home
+        .as_ref()
+        .map(SharedCaptureHome::recheck)
+        .transpose()?;
     let run = RunDir::create(
         beside,
         profile.home.run_home,
+        shared_run_home.as_deref(),
         env,
         match (cx.continuing, upload.map(|u| &u.how)) {
             // A continued run goes on in the clone it has.
@@ -1581,7 +1636,7 @@ fn create_and_gate<'a>(
 
     // The last alias/target identity check is directly before the create request. Preserve the
     // exact D39 leaf spelling in the request, local entry and child environment.
-    if let Some(home) = prep.shared_home.as_ref() {
+    if let Some(home) = prep.shared_home.as_ref().or(prep.shared_run_home.as_ref()) {
         pause_at("capture-shared-home-pre-create");
         if let Err(error) = home.recheck() {
             let _ = run.remove();
@@ -1670,7 +1725,8 @@ fn create_and_gate<'a>(
                 .as_ref()
                 .map_or_else(|| info.entry_id.clone(), |o| o.run.run_id.clone()),
             server_url: upload.map(|u| u.server.base().to_string()),
-            practice: opts.practice,
+            practice: opts.mode.is_practice(),
+            test: opts.mode == crate::account::device::RunMode::Test,
             connector_id: c.loaded.manifest.id.clone(),
             workspace: run.workspace.clone(),
             started_at_unix,
@@ -2201,6 +2257,7 @@ fn run_harness<'a>(
             keeper.update(|state| state.stopped = Some(reason.to_string()));
             let label = if reason == crate::run::watch::DISK_STOP_REASON
                 || reason == crate::upload::uploader::REPLACED_REASON
+                || crate::upload::uploader::refused_run(reason)
             {
                 "stopped"
             } else {
@@ -2750,12 +2807,20 @@ pub(crate) enum WorkspaceAt<'a> {
 }
 
 impl RunDir {
+    /// `shared_home` is the connector's shared run `HOME` (D59), claimed and checked by the
+    /// caller: with `RunHome::Shared` it is the run's `HOME`, used as it is and never removed.
     pub(crate) fn create(
         beside: &Path,
         home: RunHome,
+        shared_home: Option<&Path>,
         env: &BTreeMap<String, String>,
         workspace_at: WorkspaceAt<'_>,
     ) -> Result<RunDir, CliError> {
+        if (home == RunHome::Shared) != shared_home.is_some() {
+            return Err(CliError::Internal(
+                "a shared run home was not claimed for the run that keeps one".into(),
+            ));
+        }
         let beside = std::fs::canonicalize(beside).map_err(|source| CliError::Io {
             path: beside.display().to_string(),
             source,
@@ -2774,26 +2839,31 @@ impl RunDir {
         let run = RunDir {
             workspace,
             separate_workspace,
-            home: dir.join("home"),
+            // Outside `dir`, so `remove` never touches it.
+            home: shared_home.map_or_else(|| dir.join("home"), Path::to_path_buf),
             ca: dir.join("ca"),
             dir,
         };
-        let made = private_dir(&run.home, false)
-            .and_then(|()| private_dir(&run.ca, false))
-            .and_then(|()| match home {
-                RunHome::Empty => Ok(()),
-                // The home's one entry: the user's keychain, so a subscription login is found
-                // and nothing else of theirs is (D38).
-                RunHome::KeychainLink => {
-                    let keychains = crate::per_run_home::home_from(env)?.join("Library/Keychains");
-                    let library = run.home.join("Library");
-                    private_dir(&library, false)?;
-                    symlink(&keychains, &library.join("Keychains"))
-                }
-                _ => Err(CliError::Refused(
-                    "the harness uses a run-home mode this goalcup does not support".into(),
-                )),
-            });
+        let made = match shared_home {
+            // Kept across runs, made by the claim: nothing is made in it here.
+            Some(_) => Ok(()),
+            None => private_dir(&run.home, false),
+        }
+        .and_then(|()| private_dir(&run.ca, false))
+        .and_then(|()| match home {
+            RunHome::Empty | RunHome::Shared => Ok(()),
+            // The home's one entry: the user's keychain, so a subscription login is found
+            // and nothing else of theirs is (D38).
+            RunHome::KeychainLink => {
+                let keychains = crate::per_run_home::home_from(env)?.join("Library/Keychains");
+                let library = run.home.join("Library");
+                private_dir(&library, false)?;
+                symlink(&keychains, &library.join("Keychains"))
+            }
+            _ => Err(CliError::Refused(
+                "the harness uses a run-home mode this goalcup does not support".into(),
+            )),
+        });
         if let Err(e) = made {
             let _ = run.remove();
             return Err(e);
@@ -3177,39 +3247,39 @@ fn finish(
 /// The upload server this run opens with: `None` with no `goalcup login`, and for a harness
 /// handed a provider key (`keyed`), whose run must pass the key scan at its end before
 /// anything leaves the machine. With a server, `goalcup prep` must have run: its repository,
-/// its work folder and the GitHub token are checked here, and the work folder must not be on a
-/// Windows drive under WSL2, all before the participant is asked for anything and before
-/// anything is created. A `--dev` run is uploaded like any other; the server refuses a
+/// its work folder and the GitHub token are checked here, all before the participant is asked for
+/// anything and before anything is created. A `--dev` run is uploaded like any other; the server refuses a
 /// connector it does not accept.
 fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,
     beside: &Path,
-    practice: bool,
+    mode: crate::account::device::RunMode,
     keyed: bool,
     out: &mut dyn std::io::Write,
 ) -> Result<Option<Serving>, CliError> {
-    // A practice run is a run on the server: without one there is nothing to practise on.
-    let needs_server = || {
-        CliError::Refused(
-            "`--practice` needs `goalcup login` and `goalcup prep` first. Nothing was created."
-                .to_string(),
-        )
+    use crate::account::device::RunMode;
+    // A practice run or an organizer test run is a run on the server: without one there is
+    // nothing to practise on, and a test run that never reaches the server is no test.
+    let (flag, kind) = match mode {
+        RunMode::Practice => (Some("--practice"), "practice"),
+        RunMode::Test => (Some("--test"), "test"),
+        RunMode::Competition => (None, "competition"),
     };
     let Some(server) = crate::server::read_server_config(cfg)? else {
-        return if practice {
-            Err(needs_server())
-        } else {
-            Ok(None)
+        return match flag {
+            Some(flag) => Err(CliError::Refused(format!(
+                "`{flag}` needs `goalcup login` and `goalcup prep` first. Nothing was created."
+            ))),
+            None => Ok(None),
         };
     };
     if keyed {
-        if practice {
-            return Err(CliError::Refused(
-                "`--practice` cannot be used with this harness: a harness handed a provider key \
-                 is never uploaded, so it cannot make a practice run. Nothing was created."
-                    .to_string(),
-            ));
+        if let Some(flag) = flag {
+            return Err(CliError::Refused(format!(
+                "`{flag}` cannot be used with this harness: a harness handed a provider key \
+                 is never uploaded, so it cannot make a {kind} run. Nothing was created."
+            )));
         }
         say(
             out,
@@ -3228,7 +3298,6 @@ fn uploading(
     if !work_root.is_absolute() {
         return Err(CliError::Refused(crate::prep_file::PREP_FIRST.to_string()));
     }
-    refuse_windows_drive(&work_root, goalcup_platform::machine::is_wsl())?;
     refuse_goal_folder_inside_work_root(&work_root, beside)?;
     #[cfg(feature = "test-support")]
     let clone_source = env.get(TEST_CLONE_SOURCE).cloned();
@@ -3275,20 +3344,40 @@ pub(crate) fn run_folder_for_continue(
     Ok(beside)
 }
 
-/// WSL2 only: a work folder on a Windows drive (`/mnt/c/...`) is refused, because a clone there is
-/// slow and cannot keep file modes. The path as it exists is looked at, so a link cannot hide the
-/// drive. `wsl` is whether this machine is WSL2.
-fn refuse_windows_drive(work_root: &Path, wsl: bool) -> Result<(), CliError> {
-    let resolved = std::fs::canonicalize(work_root).unwrap_or_else(|_| work_root.to_path_buf());
-    if goalcup_platform::machine::on_windows_drive_with(&resolved, wsl) {
-        return Err(CliError::Refused(format!(
-            "the work folder {} is on a Windows drive, which WSL2 reads slowly and cannot keep \
-             file modes on. Choose a folder in the Linux home (for example under ~/goalcup) and \
-             run `goalcup prep` again. Nothing was created.",
-            work_root.display()
-        )));
+/// The work folder `goalcup prep` kept, when a server is set up (a run with none makes no clone).
+fn prepared_work_folder(cfg: &Path) -> Option<PathBuf> {
+    crate::server::read_server_config(cfg).ok().flatten()?;
+    let kept = crate::prep_file::read_prep_lenient(cfg).work_root;
+    (!kept.is_empty()).then(|| PathBuf::from(kept))
+}
+
+/// The WSL checks over every folder a run writes to: the work folder (when there is one), the
+/// folder the run's own directory is made in, the artifact root and the configuration folder.
+/// See [`crate::wsl_gate`]. `env` states the machine in a test build only.
+pub(crate) fn refuse_wsl(
+    env: &BTreeMap<String, String>,
+    cfg: &Path,
+    run_folder: &Path,
+    work_folder: Option<&Path>,
+    untouched: &str,
+) -> Result<(), CliError> {
+    #[cfg(feature = "test-support")]
+    let host = crate::wsl_gate::Host::from_env(env);
+    #[cfg(not(feature = "test-support"))]
+    let host = {
+        let _ = env;
+        crate::wsl_gate::Host::here()
+    };
+    let artifacts = artifact_root(cfg);
+    let mut folders = vec![
+        ("run folder", run_folder),
+        ("artifact root", artifacts.as_path()),
+        ("config folder", cfg),
+    ];
+    if let Some(work_folder) = work_folder {
+        folders.insert(0, ("work folder", work_folder));
     }
-    Ok(())
+    host.refuse(&folders, untouched)
 }
 
 /// The run directory is made beside the goal file (for a chat-mode run, in the folder `goalcup
@@ -3321,6 +3410,22 @@ fn same_repo(url: &str) -> String {
     url.strip_suffix(".git").unwrap_or(url).to_ascii_lowercase()
 }
 
+/// A test build's door past the provider-host probe, so the harness contract kit can run the
+/// shipped connectors (whose hosts are real providers) with no network and reach no provider.
+/// A shipped build compiles none of this, and always probes.
+#[cfg(feature = "test-support")]
+pub const TEST_OFFLINE_UPSTREAMS: &str = "GOALCUP_TEST_OFFLINE_UPSTREAMS";
+
+#[cfg(feature = "test-support")]
+fn offline_upstreams_for_test(env: &BTreeMap<String, String>) -> bool {
+    env.contains_key(TEST_OFFLINE_UPSTREAMS)
+}
+
+#[cfg(not(feature = "test-support"))]
+fn offline_upstreams_for_test(_env: &BTreeMap<String, String>) -> bool {
+    false
+}
+
 /// A test build's one door to the clone: a repository on this machine that stands in for the
 /// participant's repository on GitHub (`account::github::clone_from`). A shipped build compiles
 /// none of this.
@@ -3351,9 +3456,7 @@ impl Serving {
         let anonymous = crate::upload::http::ServerClient::anonymous(&self.url);
         let approved = crate::account::device::approve(
             &anonymous,
-            crate::account::device::Purpose::Run {
-                practice: opts.practice,
-            },
+            crate::account::device::Purpose::Run { mode: opts.mode },
             connector_id,
             &opts.open_url,
             out,
@@ -3375,7 +3478,7 @@ impl Serving {
                 cfg: self.cfg,
                 github: self.github,
                 work_root: self.work_root,
-                practice: opts.practice,
+                practice: opts.mode.is_practice(),
                 clone_source: self.clone_source,
             })),
         })
@@ -3775,8 +3878,14 @@ mod tests {
         let beside = tmp.path().join("beside");
         std::fs::create_dir_all(&beside).unwrap();
         let env = BTreeMap::new();
-        let run =
-            RunDir::create(&beside, RunHome::Empty, &env, WorkspaceAt::Existing(&clone)).unwrap();
+        let run = RunDir::create(
+            &beside,
+            RunHome::Empty,
+            None,
+            &env,
+            WorkspaceAt::Existing(&clone),
+        )
+        .unwrap();
         assert_eq!(run.workspace, clone);
         run.remove().unwrap();
         assert!(!run.dir.exists(), "the segment's own folder goes");
@@ -3789,6 +3898,7 @@ mod tests {
         let fresh = RunDir::create(
             &beside,
             RunHome::Empty,
+            None,
             &env,
             WorkspaceAt::Clone(tmp.path()),
         )
@@ -3845,17 +3955,6 @@ mod tests {
         let reopened = crate::arming::interrupted();
         crate::arming::clear_interrupt();
         assert!(reopened, "the next start's window is open again");
-    }
-
-    /// A work folder on a Windows drive is refused under WSL2, and only there.
-    #[test]
-    fn a_work_folder_on_a_windows_drive_is_refused_under_wsl_only() {
-        let drive = Path::new("/mnt/c/Users/ada/work");
-        let refused = refuse_windows_drive(drive, true).expect_err("a Windows drive under WSL2");
-        assert_eq!(refused.exit_code(), 1);
-        assert!(refused.to_string().contains("Windows drive"), "{refused}");
-        assert!(refuse_windows_drive(drive, false).is_ok(), "not WSL2");
-        assert!(refuse_windows_drive(Path::new("/home/ada/work"), true).is_ok());
     }
 
     /// #11: two runs on one shared harness home. The second is refused plainly while the first

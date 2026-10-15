@@ -1109,3 +1109,42 @@ mod parts {
         ));
     }
 }
+
+/// D56: a manifest's `git` is the read state or `{"unreadable": "<why>"}`, nothing else. An
+/// unknown field, both forms at once or an empty reason is malformed; the read state keeps its
+/// old bytes.
+#[test]
+fn the_git_state_admits_exactly_its_two_forms() {
+    use goalcup_protocol::seal::{GitState, WorkspaceGit};
+    let parse = |json: &str| serde_json::from_str::<GitState>(json);
+    let read = format!(r#"{{"commit":null,"dirty_sha256":"{}"}}"#, "ab".repeat(32));
+    let state = parse(&read).unwrap();
+    assert_eq!(
+        state,
+        GitState::Read(WorkspaceGit {
+            commit: None,
+            dirty_sha256: "ab".repeat(32),
+        })
+    );
+    assert_eq!(serde_json::to_string(&state).unwrap(), read);
+    assert_eq!(
+        parse(r#"{"unreadable":"it has no .git directory"}"#).unwrap(),
+        GitState::Unreadable {
+            unreadable: "it has no .git directory".to_string()
+        }
+    );
+    for bad in [
+        r#"{"unreadable":""}"#.to_string(),
+        r#"{"unreadable":"x","extra":1}"#.to_string(),
+        format!(
+            r#"{{"commit":null,"dirty_sha256":"{}","extra":1}}"#,
+            "ab".repeat(32)
+        ),
+        format!(
+            r#"{{"commit":null,"dirty_sha256":"{}","unreadable":"x"}}"#,
+            "ab".repeat(32)
+        ),
+    ] {
+        assert!(parse(&bad).is_err(), "{bad} must not parse");
+    }
+}

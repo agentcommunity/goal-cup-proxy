@@ -79,21 +79,34 @@ impl Sink {
     }
 }
 
-/// The shipped Codex profile (`stdout_json` identity) with a credential and a per-run home: the
-/// combination this change admits.
+/// The shipped Codex profile made headless again (`stdout_json` identity, a goal after `--`, the
+/// rollout scoped by its id) with a credential and a per-run home: the combination this change
+/// admits. The shipped profile itself runs in chat mode (D57), which takes no credential.
 fn keyed_stdout_json_profile() -> CaptureSpec {
     let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
     let text = std::fs::read_to_string(dir.join("codex-cli/harness.toml")).unwrap();
-    // Two edits to the shipped text: a per-run config home, and a credential table placed
-    // before `[capture.identity]` so it is a sibling of the other `[capture.*]` tables.
-    let keyed = text
-        .replacen("config_home = \"shared\"", "config_home = \"per_run\"", 1)
-        .replacen(
-            "[capture.identity]",
-            "[capture.credential]\nenv = \"DEEPSEEK_API_KEY\"\n\n[capture.identity]",
-            1,
-        );
-    assert_ne!(keyed, text);
+    let mut keyed = text.clone();
+    for (from, to) in [
+        ("interactive = true\n", ""),
+        (
+            "  \"-C\", \"{workspace}\",\n]",
+            "  \"-C\", \"{workspace}\",\n  \"--\",\n]",
+        ),
+        ("config_home = \"shared\"", "config_home = \"per_run\""),
+        (
+            "[capture.identity]\nsource = \"none\"",
+            "[capture.credential]\nenv = \"DEEPSEEK_API_KEY\"\n\n[capture.identity]\n\
+             source = \"stdout_json\"\nbinding = \"at_launch\"\nmatch_field = \"type\"\n\
+             match_value = \"thread.started\"\nid_field = \"thread_id\"",
+        ),
+        (
+            "pattern = \"*/*/*/rollout-*.jsonl\"",
+            "pattern = \"*/*/*/rollout-*-{id}.jsonl\"",
+        ),
+    ] {
+        assert!(keyed.contains(from), "the shipped text has no {from:?}");
+        keyed = keyed.replacen(from, to, 1);
+    }
     let manifest = goalcup_protocol::harness::HarnessManifest::from_toml_str(&keyed).unwrap();
     manifest
         .validate(Origin::Pinned)

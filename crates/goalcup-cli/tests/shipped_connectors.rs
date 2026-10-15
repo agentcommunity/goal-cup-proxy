@@ -24,7 +24,7 @@ fn load_harness(id: &str) -> goalcup_cli::connector::HarnessConnector {
 }
 
 #[test]
-fn claude_capture_recipe_is_the_pinned_headless_launch() {
+fn claude_capture_recipe_is_its_chat_mode() {
     let m = load_harness("claude-code-cli").loaded.manifest;
     let c = &m.capture;
     assert_eq!(c.executable.program, "claude");
@@ -33,12 +33,12 @@ fn claude_capture_recipe_is_the_pinned_headless_launch() {
         ["--version"],
         "docs/harnesses/claude-code-cli.md"
     );
-    let session = c
-        .args
-        .iter()
-        .position(|a| a == "--session-id")
-        .expect("the session id is preassigned on the command line");
-    assert_eq!(c.args[session + 1], "{session_id}");
+    // D57: `claude` alone in the participant's terminal; `goalcup continue` appends
+    // `--continue`, measured to reopen and append to the workspace's most recent session.
+    assert!(c.interactive);
+    assert!(c.args.is_empty(), "{:?}", c.args);
+    assert_eq!(c.resume_args, ["--continue"]);
+    assert!(c.native.iter().all(|n| n.since_run_start));
     assert!(
         !c.args.iter().any(|a| a == "--no-session-persistence"),
         "the native transcript is what the capture reads: {:?}",
