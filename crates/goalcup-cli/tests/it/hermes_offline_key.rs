@@ -368,7 +368,7 @@ fn run_hermes(reply: Reply, auth_seed: Option<&[u8]>) -> Run {
         &vars,
         &dir.join("workspace"),
         &CaptureLaunch {
-            goal: b"hi",
+            goal: Some(b"hi"),
             executable: &resolved,
             run_home: &dir.join("home"),
             config_home: &hermes_home,

@@ -101,3 +101,21 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 - Whether another install's updater could prune 2.1.283 while an unlocked run uses it: not measured.
 - Open: every "unknown" still above for Linux and Windows (a logged-in run, the config-dir default); the Linux credential store; the managed-settings paths; the update and connector hosts; how to install an exact version.
 - Compiled from records dated 2026-09-03 to 2026-10-07 and the public connector; none of the runs were repeated for this sheet. The Linux facts come from the 2026-10-13 arm64 Docker run (PR #55) and the x86_64 runner smoke (PR #81).
+
+## 10. Chat mode (measured 14 Oct 2026)
+
+D57 runs the shipped connectors in their normal chat mode in the participant's terminal, and the participant types the prompt. `goalcup start` can host such a run (`[capture] interactive = true`); **this connector is still headless in this build (section 1):** its chat-mode recipe has no arguments at all (`args = []`, `claude` alone), and the connector schema refuses an empty `capture.args` ("must hold 1 to 64 arguments"); the daemon's and the protocol crate's own tests also load the shipped connector and expect its headless recipe. Its chat-mode data (`interactive = true`, `args = []`, identity `none`, native root `{config_home}/projects` with pattern `*/*.jsonl` and `since_run_start = true`, `skills_dir = "skills"`, `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_RETRY_WATCHDOG` kept) waits for the schema to admit no arguments in an `interactive` profile and for those tests.
+
+Measured on macOS arm64, Claude Code 2.1.283, 2026-10-14, by driving the TUI on a pseudo-terminal (120x40) in a fresh `git init` workspace, with `CLAUDE_CONFIG_DIR` the tracer's isolated home and a `HOME` holding only `Library/Keychains`. That home was **logged out** (the assistant answered "Not logged in · Please run /login"), so no model reply was seen:
+
+- A new workspace shows "Quick safety check: Is this a project you created or one you trust?" with the cursor on **"No, exit"**. The participant must pick "Yes, I trust this folder" (Down, then Enter). Every fresh clone of a run shows it once.
+- The transcript is **not** created at startup or after the trust prompt. It is created when the first message is submitted, at `projects/<cwd with / replaced by ->/<session uuid>.jsonl`.
+- The typed message is a `type: "user"` record whose `message.content` is the text.
+- `/exit` prints `Resume this session with: claude --resume <uuid>`.
+- `claude --continue` in the same working directory reopens that directory's most recent session and **appends to the same file** (no new file); the file is written at startup, before any message. Under `since_run_start` such a file is old but written during the run, so it is recorded.
+- Side effect: Claude Code created `.local/` and `Applications/` in the run's `HOME` (not in the config home).
+
+PENDING (need a logged-in home, which the owner must restore; nobody on our side logs in for a test):
+
+- A model reply in chat mode through the recording proxy.
+- One 10-minute practice run of this connector on this Mac against staging (staging is deployed on 19 Oct), once the connector is in chat mode.

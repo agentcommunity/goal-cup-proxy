@@ -147,7 +147,20 @@ pub fn launch<'a>(
     parent: &'a BTreeMap<String, String>,
 ) -> CaptureLaunch<'a> {
     CaptureLaunch {
-        goal,
+        goal: Some(goal),
+        ..chat_launch(layout, exe, proxy, parent)
+    }
+}
+
+/// [`launch`] for a chat-mode connector (D57): no goal, the participant types the prompt.
+pub fn chat_launch<'a>(
+    layout: &'a Layout,
+    exe: &'a ResolvedExecutable,
+    proxy: &'a str,
+    parent: &'a BTreeMap<String, String>,
+) -> CaptureLaunch<'a> {
+    CaptureLaunch {
+        goal: None,
         executable: exe,
         run_home: &layout.run_home,
         config_home: &layout.harness_home,

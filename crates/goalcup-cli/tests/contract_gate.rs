@@ -636,15 +636,27 @@ fn goalcup_start_requires_a_goal_file_and_offers_no_v1_flags() {
             "`goalcup start --help` must not offer {flag}: {text}"
         );
     }
+    // A headless harness without its goal file is refused before a daemon is started or
+    // anything is made, in a configuration directory of the test's own all the same. The
+    // connectors are found beside the binary only in a target directory inside the checkout;
+    // say where they are, as the Linux check's relocated target needs.
+    let cfg = tempfile::tempdir().unwrap();
     let out = goalcup()
         .args(["start", "--harness", "codex-cli"])
+        .env("GOALCUP_CONFIG_DIR", cfg.path())
+        .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(1), "a usage error is rung 1");
+    assert_eq!(out.status.code(), Some(1), "a refusal is rung 1");
     let said = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
         said.contains("--goal-file"),
         "and names the missing flag: {said}"
+    );
+    assert_eq!(
+        std::fs::read_dir(cfg.path()).unwrap().count(),
+        0,
+        "no daemon was started and nothing was written"
     );
     let refused = goalcup()
         .args([

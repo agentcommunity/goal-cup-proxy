@@ -195,7 +195,7 @@ pub(crate) fn seal_locally_until(
 ) -> Result<CaptureFinishReport, CliError> {
     let mut waited = std::time::Duration::ZERO;
     let mut asked = 0u32;
-    let mut say = |line: &str| eprintln!("goalcup: {line}");
+    let mut say = crate::host_log::say;
     let finish: CaptureFinishReport = retry_capture_seal_until(until, &mut say, || {
         asked += 1;
         let deadline = if asked == 1 {

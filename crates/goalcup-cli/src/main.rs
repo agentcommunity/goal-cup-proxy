@@ -23,8 +23,8 @@ use clap::{Parser, Subcommand};
 use goalcup_cli::{CliError, commands};
 use std::process::ExitCode;
 
-/// Record one coding agent's run for the /goal Cup: launch the harness on your goal, record what
-/// it does, and seal the record when it finishes.
+/// Record one coding agent's run for the /goal Cup: launch the harness, record what it does, and
+/// seal the record when it finishes.
 #[derive(Parser)]
 #[command(
     name = "goalcup",
@@ -49,8 +49,9 @@ struct Args {
 /// Every `goalcup --help` footer: where verification lives, and the rungs a capture run can
 /// leave under.
 const AFTER_HELP: &str = "\
-Start a run with `goalcup start --harness <id> --goal-file <file>`. It starts the recording \
-daemon (`goalcup-daemon`, beside this binary) for the run, and the daemon exits once every run \
+Start a run with `goalcup start --harness <id> --goal-file <file>`, or for a harness in chat mode \
+`goalcup start --harness <id>`, which opens it in your terminal for you to type the prompt. It \
+starts the recording daemon (`goalcup-daemon`, beside this binary) for the run, and the daemon exits once every run \
 is sealed. `status` and `entries` start it again to answer, sealed runs included; it stays up \
 while a run whose daemon died is unsealed, until `goalcup seal`.
 
@@ -79,7 +80,11 @@ are not using can make this command exit 1.";
 /// is deliberately absent: see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
-    /// Run the harness on a goal file, record the run, and seal it when the harness exits.
+    /// Run the harness, record the run, and seal it when the harness exits.
+    ///
+    /// A harness in chat mode opens in this terminal: type your prompt there, and after it only
+    /// "keep going". Until the harness exits, goalcup prints nothing here. A headless harness
+    /// takes `--goal-file` instead.
     Start {
         /// Which harness to run, for example `claude-code-cli` or `codex-cli` (`goalcup doctor`
         /// lists every one this build ships).
@@ -89,10 +94,11 @@ enum Command {
         /// run says so, and it does not count as a competition entry.
         #[arg(long)]
         dev: bool,
-        /// A text file holding your goal. Its text is the agent's first and only prompt. The
-        /// run's folder is created next to this file, so put it in an empty folder of its own,
-        /// outside any git repository.
-        #[arg(long, value_name = "PATH", required = true)]
+        /// For a headless harness only: a text file holding your goal, the
+        /// agent's first and only prompt. The run's folder is created next to this file, so put
+        /// it in an empty folder of its own, outside any git repository. A chat-mode harness
+        /// refuses it; its run's folder is created in the folder you run `goalcup start` from.
+        #[arg(long, value_name = "PATH")]
         goal_file: Option<std::path::PathBuf>,
         /// A practice run: the server keeps it apart from the competition, and it never
         /// replaces your competition run. Needs `goalcup login` and `goalcup prep` first,
@@ -192,11 +198,11 @@ fn main() -> ExitCode {
         // `goalcup doctor` answers its own 0 or 1; every other arm of `run` answers 0.
         Ok(code) => ExitCode::from(code),
         Err(e) => {
-            // One line, on stderr, prefixed with the program's name, and never a panic.
-            // Nothing here formats a document that holds a secret: `ControlFile` and the
-            // control API's own types redact their bearers in `Debug`, and this prints
-            // `Display`.
-            eprintln!("goalcup: {e}");
+            // One line, on stderr, prefixed with the program's name, and never a panic, even on
+            // a terminal that was closed under a chat-mode run (`host_log`). Nothing here
+            // formats a document that holds a secret: `ControlFile` and the control API's own
+            // types redact their bearers in `Debug`, and this prints `Display`.
+            goalcup_cli::host_log::say(&e.to_string());
             ExitCode::from(e.exit_code())
         }
     }
@@ -213,6 +219,7 @@ fn run(command: Command) -> Result<u8, CliError> {
             harness,
             dev,
             goal_file,
+            run_folder: std::env::current_dir().ok(),
             disk: disk_policy()?,
             practice,
             open_url: browser_opener(),
@@ -318,6 +325,9 @@ fn login(server: Option<String>) -> Result<(), CliError> {
 fn start(opts: commands::start::StartOptions) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
+    // `--goal-file` is for a headless harness only, and a headless one needs it: said before a
+    // daemon is started or anything else is done.
+    commands::start::goal_file_fits_connector(&connectors, &opts)?;
     let client = ensure_daemon(
         &cfg,
         goalcup_cli::daemon::MissingConfig::WriteDefault {

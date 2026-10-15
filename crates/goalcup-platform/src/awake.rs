@@ -131,6 +131,14 @@ pub fn hold_with(
         .stdin(Stdio::null())
         .stdout(if proof { Stdio::piped() } else { Stdio::null() })
         .stderr(Stdio::null());
+    // A process group of its own: what a terminal sends its foreground group (a Ctrl-C, a closed
+    // window) reaches the host, which rides it out to seal and upload, and must not end the
+    // lock that keeps the machine awake meanwhile. Its life stays tied to the host's:
+    // `caffeinate -w <pid>` on macOS, `PR_SET_PDEATHSIG` on Linux, and the owning thread.
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
     start(command, proof)
 }
 

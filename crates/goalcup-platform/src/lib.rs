@@ -26,6 +26,8 @@ pub mod machine;
 pub mod process_image;
 pub mod readcap;
 pub mod sourcecap;
+/// The terminal a chat-mode harness shares with its launcher: its signals, its foreground group.
+pub mod terminal;
 pub mod tracecap;
 
 use std::ffi::OsString;

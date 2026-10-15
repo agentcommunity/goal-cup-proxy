@@ -211,3 +211,544 @@ fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
         .unwrap();
     assert_eq!(odd.status.code(), Some(1));
 }
+
+// ------------------------------------------------------------- chat mode (D57)
+
+/// The harness in chat mode in the participant's terminal (D57): `goalcup start` shares the
+/// terminal with it, stays silent while it runs, survives what the terminal sends the harness,
+/// and still seals and uploads when the window is closed.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod chat {
+    use crate::common::m2_cli_support::{CHAT_ID, Hooked, Launcher, OnPty, Rig};
+    use crate::common::upload_server::{ServerOptions, UploadServer};
+    use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    const RESERVE: u64 = 4 * 1024 * 1024;
+    /// What `goalcup start` prints last before the harness owns the terminal.
+    const LAUNCH_LINE: &str = "Recording in chat mode";
+    /// A test build's disk sizes: the reservation, no margin, a 50 ms watch.
+    const DISK: (&str, &str) = ("GOALCUP_TEST_DISK", "4194304,0,50");
+    /// A short wrap-up for a run without a server.
+    const LOCAL_WRAP_UP: (&str, &str) = ("GOALCUP_TEST_LOCAL_WRAP_UP", "2000,100");
+    /// The uploader's cadence a test can watch, with a heartbeat every 100 ms.
+    const BEATING: (&str, &str) = (
+        "GOALCUP_TEST_UPLOAD_POLICY",
+        "200,25,100,400,10000,268435456,3000,100",
+    );
+
+    fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !done() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{what} never happened"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
+    fn harness(rig: &Rig, name: &str) -> String {
+        rig.harness_file(name)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+
+    /// The newest run's own directory (`<cfg>/runs/<run_id>`), where `host.log` is.
+    fn run_dir(rig: &Rig) -> PathBuf {
+        let record = goalcup_cli::run::newest(&rig.cfg)
+            .expect("the run records are readable")
+            .expect("a run was recorded");
+        goalcup_cli::run::run_dir(&rig.cfg, &record.run_id)
+    }
+
+    fn newest_entry(rig: &Rig) -> String {
+        goalcup_cli::entries::latest_entry(&rig.cfg)
+            .unwrap()
+            .expect("an entry was recorded")
+            .entry_id
+    }
+
+    /// Every byte of the trace's native streams, joined.
+    fn native_bytes(records: &[CaptureRecord]) -> String {
+        use base64::Engine;
+        let natives: Vec<_> = records
+            .iter()
+            .filter_map(|r| match r {
+                CaptureRecord::Open {
+                    stream,
+                    source: CaptureSource::Native,
+                    ..
+                } => Some(stream.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut bytes = Vec::new();
+        for r in records {
+            if let CaptureRecord::Segment {
+                stream, data_b64, ..
+            } = r
+                && natives.contains(stream)
+            {
+                bytes.extend(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(data_b64)
+                        .unwrap(),
+                );
+            }
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// The lines the terminal showed after the launch line and before `end`.
+    fn between_launch_and(shown: &str, end: &str) -> Vec<String> {
+        let launch = shown
+            .find(LAUNCH_LINE)
+            .unwrap_or_else(|| panic!("no launch line:\n{shown}"));
+        let after = &shown[launch..];
+        let after = &after[after.find('\n').map_or(after.len(), |i| i + 1)..];
+        let window = &after[..after
+            .find(end)
+            .unwrap_or_else(|| panic!("never showed {end:?}:\n{shown}"))];
+        window
+            .split('\n')
+            .map(|l| l.trim_matches('\r').to_string())
+            .collect()
+    }
+
+    /// Every file under `root` with its bytes, by path relative to it, `skip` left out.
+    fn tree(root: &Path, skip: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        fn walk(dir: &Path, root: &Path, skip: &Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.starts_with(skip) {
+                    continue;
+                }
+                if path.is_dir() {
+                    walk(&path, root, skip, out);
+                } else {
+                    out.insert(
+                        path.strip_prefix(root).unwrap().to_path_buf(),
+                        std::fs::read(&path).unwrap(),
+                    );
+                }
+            }
+        }
+        let mut out = BTreeMap::new();
+        walk(root, root, skip, &mut out);
+        out
+    }
+
+    fn private_dir(dir: &Path) {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .unwrap();
+    }
+
+    /// A typed Ctrl-C reaches the whole foreground group. The harness is in it and ends; the
+    /// host is in it and rides it out. From the launch line to the harness's exit the terminal
+    /// shows the harness's bytes and nothing of the host's, and once the harness is gone the
+    /// host seals the run.
+    #[test]
+    fn the_host_is_silent_and_survives_ctrl_c() {
+        let rig = Rig::chat();
+        let mut run = rig.start_on_pty(&[DISK, LOCAL_WRAP_UP]);
+        run.wait_shown("tui: ready");
+        assert_eq!(harness(&rig, "tui.stdin"), "tty", "{}", run.shown());
+        assert_eq!(harness(&rig, "tui.argv").lines().next(), Some("chat"));
+        // The harness is in the terminal's foreground group, or its first read would stop it.
+        let tui: i32 = harness(&rig, "tui.pid").parse().unwrap();
+        // SAFETY: an integer; the pid is the fake harness's own.
+        assert_eq!(unsafe { libc::getpgid(tui) }, run.foreground_group());
+
+        run.type_line("hello");
+        run.wait_shown("tui: noted hello");
+        run.signal_foreground(libc::SIGINT);
+        let status = run.wait();
+        let shown = run.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+        assert_eq!(harness(&rig, "tui.end"), "int", "{shown}");
+
+        for line in between_launch_and(&shown, "tui: interrupted") {
+            assert!(
+                line.is_empty() || line.starts_with("tui:") || line == "hello",
+                "the host wrote {line:?} to the terminal while the harness ran:\n{shown}"
+            );
+        }
+        let after = &shown[shown.find("tui: interrupted").unwrap()..];
+        assert!(after.contains("harness exited"), "{shown}");
+
+        let (report, records) = rig.read_trace(&newest_entry(&rig));
+        assert!(report.sealed, "{:?}", report.findings);
+        assert!(
+            native_bytes(&records).contains(r#""text":"hello""#),
+            "{shown}"
+        );
+        let log = run_dir(&rig).join("host.log");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&log)
+            .unwrap_or_else(|e| panic!("{}: {e}", log.display()))
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "{}", log.display());
+    }
+
+    /// The window is closed while the harness runs, as a participant closes it: the terminal's
+    /// master side goes, the kernel hangs up the shell that leads the session, and then the
+    /// foreground group (the host and the harness). The harness ends, and the host, which cannot
+    /// print any more, still seals the run, sends the final heartbeat and uploads it. What it
+    /// would have said is in `host.log`.
+    #[test]
+    fn closing_the_window_still_seals_and_uploads_the_segment() {
+        let rig = Rig::chat();
+        let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+        rig.prepare_for(&server.url());
+        let mut run = rig.start_under_a_shell_on_pty(&[DISK, BEATING]);
+        run.wait_shown("tui: ready");
+        let shell = run.child.id();
+        let host = OnPty::descendant(shell, "goalcup").expect("goalcup below the shell");
+        run.type_line("hello");
+        run.wait_shown("tui: noted hello");
+        run.close();
+        run.wait();
+        crate::common::support::wait_until_gone(host);
+        // The hangup may reach the harness's read before its signal does.
+        let end = harness(&rig, "tui.end");
+        assert!(end == "hup" || end == "eof", "{end}");
+
+        let runs = server.run_ids();
+        assert_eq!(runs.len(), 1);
+        let run_id = &runs[0];
+        assert_eq!(server.status(run_id).as_deref(), Some("sealed"));
+        assert!(
+            server.heartbeats(run_id).iter().any(|h| h.final_),
+            "a final heartbeat"
+        );
+        assert!(!server.chunks(run_id).is_empty(), "chunks were uploaded");
+        let entry = newest_entry(&rig);
+        let trace = rig.trace(&entry);
+        let (seal, _) = server.seal(run_id).expect("the seal was sent");
+        assert_eq!(
+            seal.as_bytes(),
+            std::fs::read(trace.join("seal.json")).unwrap()
+        );
+        let log = std::fs::read_to_string(run_dir(&rig).join("host.log")).unwrap();
+        assert!(log.contains("uploaded:"), "{log}");
+    }
+
+    /// A Ctrl-\ reaches the foreground group: the harness ends on it, the host rides it out and
+    /// seals the run.
+    #[test]
+    fn a_quit_from_the_terminal_ends_the_harness_and_the_run_still_seals() {
+        let rig = Rig::chat();
+        let mut run = rig.start_on_pty(&[DISK, LOCAL_WRAP_UP]);
+        run.wait_shown("tui: ready");
+        run.signal_foreground(libc::SIGQUIT);
+        let status = run.wait();
+        assert!(status.success(), "{status:?}\n{}", run.shown());
+        assert_eq!(harness(&rig, "tui.end"), "quit");
+        let (report, _) = rig.read_trace(&newest_entry(&rig));
+        assert!(report.sealed, "{:?}", report.findings);
+    }
+
+    /// The terminal's Ctrl-C, Ctrl-\ and a hangup reach the harness, and neither the host nor the
+    /// lock that keeps the machine awake: the inhibitor leads a process group of its own.
+    #[test]
+    fn the_terminals_signals_spare_the_host_and_the_sleep_lock() {
+        let rig = Rig::chat();
+        rig.tell("tui.endure", "");
+        let mut run = rig.start_on_pty(&[DISK, LOCAL_WRAP_UP]);
+        run.wait_shown("tui: ready");
+        let host = run.child.id();
+        let inhibitor = OnPty::descendant(host, "caffeinate")
+            .or_else(|| OnPty::descendant(host, "systemd-inhibit"));
+        if cfg!(target_os = "macos") {
+            assert!(inhibitor.is_some(), "macOS ships caffeinate");
+        }
+        for (signal, said) in [
+            (libc::SIGINT, "tui: endured int"),
+            (libc::SIGQUIT, "tui: endured quit"),
+            (libc::SIGHUP, "tui: endured hup"),
+        ] {
+            run.signal_foreground(signal);
+            run.wait_shown(said);
+            assert!(matches!(run.child.try_wait(), Ok(None)), "the host lives");
+            if let Some(inhibitor) = inhibitor {
+                assert!(
+                    goalcup_protocol::process::is_alive(inhibitor),
+                    "the sleep lock lives after {said}"
+                );
+            }
+        }
+        run.type_line("/exit");
+        let status = run.wait();
+        assert!(status.success(), "{status:?}\n{}", run.shown());
+        let (report, _) = rig.read_trace(&newest_entry(&rig));
+        assert!(report.sealed, "{:?}", report.findings);
+    }
+
+    /// A harness that suspends itself (its own Ctrl-Z handling, alone or with its whole group) is
+    /// continued at once: a run cannot be suspended, and a stopped harness would hold the
+    /// participant's terminal frozen behind a host still waiting for it. The run still seals.
+    #[test]
+    fn a_harness_that_suspends_itself_is_continued_and_the_run_seals() {
+        let rig = Rig::chat();
+        // Under a job-control shell: a process group with no parent in its session is orphaned,
+        // and the kernel discards a stop signal sent to one.
+        let mut run = rig.start_under_a_shell_on_pty(&[DISK, LOCAL_WRAP_UP]);
+        run.wait_shown("tui: ready");
+        run.type_line("/suspend");
+        run.wait_shown("tui: resumed");
+        run.type_line("/suspend-group");
+        wait_until("the second resume", || {
+            run.shown().matches("tui: resumed").count() == 2
+        });
+        run.type_line("/exit");
+        run.wait_shown("shell: ");
+        assert!(run.shown().contains("shell: 0"), "{}", run.shown());
+        run.wait();
+        assert_eq!(harness(&rig, "tui.end"), "exit");
+        let log = std::fs::read_to_string(run_dir(&rig).join("host.log")).unwrap();
+        assert_eq!(
+            log.matches("the harness stopped itself").count(),
+            2,
+            "{log}"
+        );
+        let (report, _) = rig.read_trace(&newest_entry(&rig));
+        assert!(report.sealed, "{:?}", report.findings);
+    }
+
+    /// A panic on one of the host's threads while it is quiet is a message like any other: it is
+    /// in `host.log`, and the terminal does not show it.
+    #[test]
+    fn a_panic_while_quiet_goes_to_the_log_not_the_terminal() {
+        let rig = Rig::chat();
+        let mut run =
+            rig.start_on_pty(&[DISK, LOCAL_WRAP_UP, ("GOALCUP_TEST_PANIC_WHILE_QUIET", "1")]);
+        run.wait_shown("tui: ready");
+        run.type_line("/exit");
+        let status = run.wait();
+        let shown = run.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+        assert!(!shown.contains("panicked"), "{shown}");
+        let log = std::fs::read_to_string(run_dir(&rig).join("host.log")).unwrap();
+        assert!(
+            log.contains("panicked") && log.contains("a test panic while the host is quiet"),
+            "{log}"
+        );
+    }
+
+    /// A chat-mode run needs its terminal for input and for output: from a pipe, or with its
+    /// output in a file, it is refused before anything is created.
+    #[test]
+    fn a_chat_run_needs_the_terminal_for_its_input_and_its_output() {
+        let rig = Rig::chat();
+        let out = rig
+            .chat_command(&[DISK], Launcher::Direct)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{said}");
+        assert!(said.contains("foreground of a terminal"), "{said}");
+        assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
+
+        let file = std::fs::File::create(rig.root.join("stdout.txt")).unwrap();
+        let mut run = rig.start_on_pty_writing_to(&[DISK], file);
+        let status = run.wait();
+        assert_eq!(status.code(), Some(1), "{}", run.shown());
+        assert!(
+            run.shown().contains("foreground of a terminal"),
+            "{}",
+            run.shown()
+        );
+        assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
+        assert!(rig.harness_file("tui.pid").is_none(), "no harness ran");
+    }
+
+    /// The prompt is typed, not passed: it reaches the record through the session file the
+    /// harness writes in its home, which is read because it was made after the run started.
+    #[test]
+    fn the_typed_prompt_is_recorded_from_the_session_file() {
+        let rig = Rig::chat();
+        // An old session in the shared home, from before this run: it is not this run's.
+        let sessions = rig.chat_home().join("sessions");
+        private_dir(&sessions);
+        let old = sessions.join("session-old.jsonl");
+        std::fs::write(&old, "{\"type\":\"user\",\"text\":\"an older run\"}\n").unwrap();
+        let yesterday = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(yesterday)
+            .unwrap();
+        // The change time cannot be set back: let it fall behind the run's start.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        let mut run = rig.start_on_pty(&[DISK, LOCAL_WRAP_UP]);
+        run.wait_shown("tui: ready");
+        run.type_line("hello");
+        run.wait_shown("tui: noted hello");
+        run.type_line("/exit");
+        let status = run.wait();
+        assert!(status.success(), "{status:?}\n{}", run.shown());
+        assert_eq!(harness(&rig, "tui.end"), "exit");
+
+        let (report, records) = rig.read_trace(&newest_entry(&rig));
+        assert!(report.sealed, "{:?}", report.findings);
+        let native = native_bytes(&records);
+        assert!(native.contains(r#""text":"hello""#), "{native}");
+        assert!(!native.contains("an older run"), "{native}");
+        // The verifier's reading of a chat-mode trace (lane R owns the verifier: findings are
+        // reported, not changed here).
+        let verified = std::process::Command::new(crate::common::support::verify_binary())
+            .arg("--capture-integrity")
+            .arg(rig.trace(&newest_entry(&rig)))
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&verified.stdout)
+            .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&verified.stdout)));
+        println!("goalcup-verify on a chat-mode trace: {report:#}");
+        assert_eq!(report["findings"], serde_json::json!([]), "{report:#}");
+        assert_eq!(verified.status.code(), Some(0), "{report:#}");
+        // No goal was handed to the harness: its argv is the connector's args alone.
+        assert_eq!(
+            harness(&rig, "tui.argv").lines().collect::<Vec<_>>().len(),
+            3,
+            "{}",
+            harness(&rig, "tui.argv")
+        );
+    }
+
+    /// The uploader's heartbeats run from the launch, before the participant has typed anything
+    /// and so before the harness has written a session file. What the uploader has to say
+    /// meanwhile (a chunk the server refused) goes to `host.log`, never to the terminal.
+    #[test]
+    fn heartbeats_flow_before_the_first_session_file_appears() {
+        let rig = Rig::chat();
+        let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+        rig.prepare_for(&server.url());
+        server.fail_next_chunks(2);
+        let mut run = rig.start_on_pty(&[DISK, BEATING]);
+        run.wait_shown("tui: ready");
+        wait_until("two heartbeats", || {
+            server
+                .run_ids()
+                .first()
+                .is_some_and(|run| server.heartbeats(run).len() >= 2)
+        });
+        let sessions: Vec<_> = std::fs::read_dir(rig.chat_home().join("sessions"))
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(sessions.is_empty(), "no session file yet: {sessions:?}");
+        let log = run_dir(&rig).join("host.log");
+        wait_until("the uploader to say a chunk failed", || {
+            std::fs::read_to_string(&log).is_ok_and(|said| said.contains("goalcup: upload: "))
+        });
+        run.type_line("/exit");
+        let status = run.wait();
+        let shown = run.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+        for line in between_launch_and(&shown, "tui: bye") {
+            assert!(
+                line.is_empty() || line.starts_with("tui:") || line == "/exit",
+                "the host wrote {line:?} to the terminal while the harness ran:\n{shown}"
+            );
+        }
+        let run_id = &server.run_ids()[0];
+        assert_eq!(server.status(run_id).as_deref(), Some("sealed"));
+    }
+
+    /// A chat-mode connector takes no goal file, and a headless one needs one: both are
+    /// refused before anything is created, with a sentence that says which.
+    #[test]
+    fn a_goal_file_with_an_interactive_connector_is_refused() {
+        let rig = Rig::chat();
+        let goal = rig.goal("write hello.txt");
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let mut opts = rig.chat_options(RESERVE);
+        opts.goal_file = Some(goal.clone());
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("a goal file with a chat-mode connector");
+        let said = refused.to_string();
+        assert_eq!(refused.exit_code(), 1, "{said}");
+        assert!(
+            said.contains(CHAT_ID) && said.contains("chat mode"),
+            "{said}"
+        );
+        assert!(said.contains("--goal-file"), "{said}");
+        assert!(client.book().calls.is_empty(), "{out}");
+        assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
+        assert!(!rig.chat_home().exists(), "the shared home was not claimed");
+
+        // The headless connector still needs its goal file.
+        let mut opts = rig.options(&goal, RESERVE);
+        opts.goal_file = None;
+        let (result, _) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("a headless connector with no goal file");
+        assert!(refused.to_string().contains("--goal-file"), "{refused}");
+        assert!(client.book().calls.is_empty());
+
+        // The binary says the same, before anything is created.
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_goalcup"))
+            .args(["start", "--harness", CHAT_ID, "--dev", "--goal-file"])
+            .arg(&goal)
+            .env_clear()
+            .env("PATH", rig.path())
+            .env("GOALCUP_CONFIG_DIR", &rig.cfg)
+            .env("GOALCUP_CONNECTORS_DIR", &rig.capture_connectors)
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{said}");
+        assert!(said.contains("chat mode"), "{said}");
+        assert!(rig.run_dirs().is_empty());
+    }
+
+    /// Before the launch the goal-cup skill is put in the harness's skills folder, replacing
+    /// only its own folder: the participant's other skills and settings are untouched.
+    #[test]
+    fn the_goal_cup_skill_is_in_the_harness_home_and_nothing_else_changed() {
+        let rig = Rig::chat();
+        let home = rig.chat_home();
+        private_dir(&home.join("skills/theirs"));
+        private_dir(&home.join("skills/goal-cup"));
+        std::fs::write(home.join("skills/theirs/SKILL.md"), "the participant's own").unwrap();
+        std::fs::write(home.join("skills/goal-cup/stale.md"), "an older copy").unwrap();
+        std::fs::write(home.join("settings.json"), "{\"theme\":\"dark\"}").unwrap();
+        let ours = home.join("skills/goal-cup");
+        let before = tree(&home, &ours);
+
+        let mut run = rig.start_on_pty(&[DISK, LOCAL_WRAP_UP]);
+        run.wait_shown("tui: ready");
+        run.type_line("/exit");
+        let status = run.wait();
+        assert!(status.success(), "{status:?}\n{}", run.shown());
+
+        // The harness found the skill at its start, and only it.
+        assert_eq!(harness(&rig, "tui.skills"), "SKILL.md");
+        let shipped =
+            std::fs::read(crate::common::support::repo_root().join("skills/goal-cup/SKILL.md"))
+                .unwrap();
+        assert_eq!(std::fs::read(ours.join("SKILL.md")).unwrap(), shipped);
+        let names: Vec<_> = std::fs::read_dir(&ours)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(names, ["SKILL.md"]);
+        assert_eq!(
+            tree(&home, &ours),
+            before,
+            "nothing else in the home changed"
+        );
+    }
+}
