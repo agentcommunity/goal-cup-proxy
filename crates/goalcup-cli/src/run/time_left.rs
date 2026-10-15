@@ -47,10 +47,12 @@ impl TimeLeft {
     }
 
     /// [`TimeLeft::up`] with the continuous clock and the boot given. A reboot is a boot id
-    /// that changed (both known), or a clock below the count's start.
+    /// that changed (both known), or a clock below the count's start. A count with no boot id
+    /// cannot tell its own boot from another: once the new uptime passes the count's start the
+    /// clock cannot show the reboot, so such a count says nothing and the date decides.
     pub fn up_at(&self, now_ns: u64, boot: Option<&str>) -> Option<bool> {
-        let other_boot =
-            matches!((self.boot.as_deref(), boot), (Some(then), Some(now)) if then != now);
+        let then = self.boot.as_deref()?;
+        let other_boot = boot.is_some_and(|now| now != then);
         if other_boot || now_ns < self.counted_from_ns {
             return None;
         }
@@ -127,14 +129,30 @@ mod tests {
         assert_eq!(left.up_at(5_000 * SECOND, Some("b")), None);
         assert_eq!(left.up_at(99 * SECOND, Some("a")), None);
         assert_eq!(left.up_at(99 * SECOND, None), None);
-        // No boot id on either side, and the clock past the start: the count holds.
+        // This machine cannot name its boot now, and the clock is past the start: the count
+        // holds.
         assert_eq!(left.up_at(1_100 * SECOND, None), Some(true));
+    }
+
+    /// A count stored with no boot id says nothing at any clock reading, so the date decides.
+    /// The clock check alone misses a reboot once the new uptime passes the count's start.
+    #[test]
+    fn a_count_with_no_boot_id_says_nothing() {
         let unknown = TimeLeft {
+            seconds: 100,
+            counted_from_ns: 1_000 * SECOND,
             boot: None,
-            ..left.clone()
         };
-        assert_eq!(unknown.up_at(1_099 * SECOND, Some("b")), Some(false));
-        assert_eq!(unknown.up_at(99 * SECOND, Some("b")), None);
+        // Below the start, past the start, and past the count's end: all `None`.
+        for now in [99, 1_050, 1_100, 90_000] {
+            assert_eq!(unknown.up_at(now * SECOND, Some("b")), None, "{now}");
+            assert_eq!(unknown.up_at(now * SECOND, None), None, "{now}");
+        }
+        // So `time_up` reads the server's `deadline_at` against the date.
+        let deadline = 1_000_000;
+        let deadline_at = goalcup_protocol::control::format_z(deadline);
+        assert!(!time_up(Some(&unknown), Some(&deadline_at), deadline - 1));
+        assert!(time_up(Some(&unknown), Some(&deadline_at), deadline));
     }
 
     /// After a reboot the run ends at the server's `deadline_at` by this machine's date, as it

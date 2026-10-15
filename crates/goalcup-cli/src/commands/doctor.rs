@@ -368,18 +368,44 @@ fn daemon_check(client: Option<&dyn DaemonClient>, cfg: &Path) -> Check {
     // daemon has no reason to answer `busy` on it; the helper costs nothing when it does not,
     // and an exemption is a rule nobody can grep for.
     match crate::retry::retry_busy(|| client.health()) {
-        Ok(h) => Check::pass(
-            "daemon",
-            format!(
+        Ok(h) => {
+            let up = format!(
                 "daemon v{} is up (control API v{}, {} entr{} open).",
                 h.daemon_version,
                 h.control_api_version,
                 h.entries_open,
                 if h.entries_open == 1 { "y" } else { "ies" }
-            ),
-        ),
+            );
+            if h.reopen_failed.is_empty() {
+                Check::pass("daemon", up)
+            } else {
+                reopen_failed_warning(&up, &h.reopen_failed)
+            }
+        }
         Err(e) => unreachable(e.to_string()),
     }
+}
+
+/// The daemon is up but could not reopen some entries at start: a `Warn`, since the daemon
+/// itself works and the run can go on. Such an entry has no status and routes nothing, and
+/// `goalcup seal` refuses it. `goalcup continue` closes it from the tail of its chain as an
+/// incomplete segment (nothing repaired) and opens the next one.
+fn reopen_failed_warning(up: &str, ids: &[String]) -> Check {
+    let one = ids.len() == 1;
+    Check::new(
+        "daemon",
+        Level::Warn,
+        format!(
+            "{up} It could not reopen {}: {}. {} no status and route{} nothing.",
+            if one { "this entry" } else { "these entries" },
+            ids.join(", "),
+            if one { "It has" } else { "They have" },
+            if one { "s" } else { "" },
+        ),
+        "run `goalcup continue` to close the entry from the tail of its chain as an incomplete \
+         segment and go on; `goalcup seal` cannot finish it. Its trace bytes stay as they are, \
+         for `goalcup-verify --capture-integrity`.",
+    )
 }
 
 /// Every byte this command prints goes through here, so a closed pipe is a [`CliError::Io`]
@@ -395,4 +421,81 @@ fn put_named(out: &mut dyn Write, name: &str, text: &str) -> Result<(), CliError
             path: name.to_string(),
             source,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use goalcup_protocol::control::{
+        ControlError, DaemonHealth, EntrySummary, SealResponse, SignedStatus,
+    };
+    use goalcup_protocol::process::ProcessRegistration;
+
+    /// A daemon that answers `health` and nothing else.
+    struct HealthOnly(DaemonHealth);
+
+    impl DaemonClient for HealthOnly {
+        fn status(&self, _: &str) -> Result<SignedStatus, ControlError> {
+            Err(ControlError::Unsupported("test".to_string()))
+        }
+        fn entries(&self) -> Result<Vec<EntrySummary>, ControlError> {
+            Err(ControlError::Unsupported("test".to_string()))
+        }
+        fn seal(&self, _: &str) -> Result<SealResponse, ControlError> {
+            Err(ControlError::Unsupported("test".to_string()))
+        }
+        fn register_process(&self, _: &str, _: &ProcessRegistration) -> Result<(), ControlError> {
+            Err(ControlError::Unsupported("test".to_string()))
+        }
+        fn health(&self) -> Result<DaemonHealth, ControlError> {
+            Ok(self.0.clone())
+        }
+        fn current_entry(&self) -> Result<Option<String>, ControlError> {
+            Err(ControlError::Unsupported("test".to_string()))
+        }
+        fn abandon(&self, _: &str, _: &str) -> Result<(), ControlError> {
+            Err(ControlError::Unsupported("test".to_string()))
+        }
+    }
+
+    fn health(reopen_failed: &[&str]) -> DaemonHealth {
+        DaemonHealth {
+            control_api_version: CONTROL_API_VERSION,
+            daemon_version: "a-test-daemon".to_string(),
+            uptime_seconds: 1,
+            entries_open: 2,
+            cycles: Default::default(),
+            reopen_failed: reopen_failed.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    /// A daemon that could not reopen an entry is a warning that names the entry ids and the
+    /// command to run, and it is not a failure: the daemon works and the run can go on. With
+    /// none failed, the check is the plain pass it was.
+    #[test]
+    fn a_daemon_that_could_not_reopen_entries_is_a_warning_naming_their_ids() {
+        let cfg = Path::new("/nonexistent-goalcup-cfg");
+
+        let clean = HealthOnly(health(&[]));
+        let check = daemon_check(Some(&clean), cfg);
+        assert_eq!(check.level, Level::Pass, "{check:?}");
+
+        let lost = HealthOnly(health(&["entry-aaa", "entry-bbb"]));
+        let check = daemon_check(Some(&lost), cfg);
+        assert_eq!(check.level, Level::Warn, "{check:?}");
+        assert!(check.detail.contains("entry-aaa, entry-bbb"), "{check:?}");
+        assert!(
+            check.detail.contains("daemon va-test-daemon is up"),
+            "{check:?}"
+        );
+        assert!(check.fix.contains("goalcup continue"), "{check:?}");
+        let text = check.render();
+        assert!(text.contains("WARN"), "{text}");
+        assert!(text.contains("entry-aaa"), "{text}");
+
+        let one = HealthOnly(health(&["entry-aaa"]));
+        let check = daemon_check(Some(&one), cfg);
+        assert!(check.detail.contains("this entry: entry-aaa"), "{check:?}");
+        assert!(check.detail.contains("It has no status"), "{check:?}");
+    }
 }
