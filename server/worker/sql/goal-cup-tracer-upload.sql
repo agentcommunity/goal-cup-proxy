@@ -7,7 +7,8 @@
 --   supabase/migrations/20261015160000_goal_cup_tracer_test_mode.sql (organizer test runs; delete_test_runs)
 --   supabase/migrations/20261015170000_goal_cup_tracer_test_replaces_test.sql (a test run replaces the open test run)
 --   supabase/migrations/20261016120000_goal_cup_tracer_event_windows.sql (the confirmed dry-run and cup start windows)
--- Applied to the Agent Community Supabase project on 2026-10-15. It replaces the earlier proposal
+-- Applied to the Agent Community Supabase project on 2026-10-15 (20261016120000: applied before this
+-- copy of it merged). It replaces the earlier proposal
 -- (proposed-goalcup-functions.sql): tables in the private schema goal_cup_tracer, functions renamed
 -- public.goal_cup_upload_* (src/db-supabase.ts adds the prefix), the website approval functions,
 -- and the mailer pair goal_cup_upload_claim_notices / goal_cup_upload_finish_notice (src/mail.ts).

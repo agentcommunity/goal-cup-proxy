@@ -133,15 +133,23 @@ Without `routes = []`, a staging deploy would move `ingest.agentcommunity.org` t
 Production `EVENT_ID` stays `goalcup-dryrun-2026` until then. The start windows are database rows
 (website migration `20261016120000_goal_cup_tracer_event_windows.sql`): the dry run closes
 6 Nov 00:00 UTC and the cup opens 7 Nov 00:00 UTC, so any time on 6 Nov is safe. If the switch is
-missed, cup runs land under `traces/goalcup-dryrun-2026/`, which the 180-day bucket lock does not cover.
+missed, every cup start on 7 Nov is refused ("after the start window ..."): competition starts read
+the dry-run row, which closed 6 Nov 00:00 UTC.
 
-1. In `wrangler.toml` `[vars]`, set `EVENT_ID = "goalcup-cup-2026"`. Do not touch `[env.staging.vars]`.
-2. `npm test` (in `server/worker`).
-3. `CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy` (production: top level, no `--env`).
-4. Open one practice run and one organizer test run against production; both start.
-5. A competition start now answers "The start window has not opened yet." (before the switch it
-   answered "after the start window ..."). After 7 Nov 00:00 UTC, the first cup run's chunks are under
-   the R2 prefix `traces/goalcup-cup-2026/`, never `traces/goalcup-dryrun-2026/`.
+1. On a branch, set `EVENT_ID = "goalcup-cup-2026"` in `wrangler.toml` `[vars]` (not
+   `[env.staging.vars]`). Open a PR and merge it to main.
+2. On main at that merge commit: `npm test` (in `server/worker`).
+3. From main at that merge commit: `CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy` (production: top
+   level, no `--env`). Every later production deploy is from main, so it keeps the cup (a 7 Nov hotfix too).
+4. Check the live Worker: `npx wrangler deployments status` names the live version, and
+   `npx wrangler versions view <version-id>` shows `EVENT_ID` = `goalcup-cup-2026` (or the dashboard:
+   goalcup-ingest, Settings, Variables).
+5. Open one practice run and one organizer test run against production; both start. Then
+   `sh scripts/delete-test-runs.sh --yes`.
+6. A competition start now answers "The start window has not opened yet." (before the switch it
+   answered "after the start window ..."). After 7 Nov 00:00 UTC, `select distinct event_id from
+   goal_cup_tracer.runs where mode = 'competition' and official_start >= '2026-11-07'` shows only
+   `goalcup-cup-2026`, and the R2 prefix `traces/goalcup-cup-2026/` holds its chunks.
 
 ## Decisions where the contract is silent
 
