@@ -6,9 +6,9 @@
 //! `Origin::Pinned`, every `files/**` entry is a seed, nothing else sits beside `harness.toml`,
 //! every seed exists and is small) is NOT restated
 //! here: `load_dir` is the one loader the CLI and the daemon share, so `check_dir` calls it and
-//! the sensitivity tests prove it refuses (`validate` also owns "`extra_patterns` are on the
-//! protocol mirror of the recognizers"). What this file adds on top, each proven by a test that
-//! no earlier gate refuses first:
+//! the sensitivity tests prove it refuses (the parser also owns "every `extra_patterns` row is a
+//! typed form"). What this file adds on top, each proven by a test that no earlier gate refuses
+//! first:
 //! * the declared id is the folder name (`load_dir` does not compare with the folder name);
 //! * no non-comment line of `harness.toml` names the tracker, a rule broader than
 //!   `validate`'s (which scans args, goal flag, env and hosts, not `continuation` or
@@ -22,7 +22,7 @@
 //!
 //! The kit (offline stand-ins, macOS and Linux) is `cli/tests/it/harness_contract_kit.rs`.
 
-use goalcup_protocol::capture_policy::{EXTRA_PATTERN_SOURCES, mentions_goalcup};
+use goalcup_protocol::capture_policy::mentions_goalcup;
 use goalcup_protocol::harness::{Origin, load_dir};
 use goalcup_protocol::pins::shipped_connector_ids;
 use std::path::{Path, PathBuf};
@@ -132,38 +132,6 @@ fn every_connector_passes_every_static_check() {
     }
 }
 
-/// The mirror is the set of patterns the shipped `harness.toml` files carry, over every
-/// connector: `validate` refuses a pattern off the mirror, and this refuses a mirror row no
-/// connector uses. The daemon's own test `extra_shapes_follow_the_shipped_harnesses` equates
-/// the same patterns with `EXTRA_SHAPES`, so the mirror equals the recorder's recognizers by
-/// transitivity, without a daemon edit. The mirror's ORDER is the daemon's to pin, against
-/// `EXTRA_SHAPES`, not any connector's.
-#[test]
-fn the_extra_pattern_mirror_equals_the_shipped_harness_patterns() {
-    let mut shipped: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for id in shipped_connector_ids() {
-        let dir = root().join("connectors").join(&id);
-        let loaded = load_dir(&dir, Origin::Pinned).unwrap_or_else(|e| panic!("{id}: {e}"));
-        shipped.extend(
-            loaded
-                .manifest
-                .redaction
-                .iter()
-                .flat_map(|r| &r.extra_patterns)
-                .map(|p| p.regex.clone()),
-        );
-    }
-    let mirror: std::collections::BTreeSet<String> = EXTRA_PATTERN_SOURCES
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    assert_eq!(
-        shipped, mirror,
-        "capture_policy::EXTRA_PATTERN_SOURCES must be exactly the patterns the shipped \
-         connectors declare"
-    );
-}
-
 // ---------------------------------------------------------------------------------------
 // Sensitivity: break one value in a temp copy, and `check_dir` must refuse it
 // ---------------------------------------------------------------------------------------
@@ -258,16 +226,16 @@ fn sensitivity_load_dir_refuses_a_seed_the_directory_lacks() {
 }
 
 #[test]
-fn sensitivity_load_dir_refuses_an_extra_pattern_off_the_mirror() {
+fn sensitivity_load_dir_refuses_an_extra_rule_that_is_not_a_form() {
     let (_tmp, dir) = copy_connector("claude-code-cli");
     mutate(
         &dir.join("harness.toml"),
-        "x-anthropic-billing-[a-z0-9-]+",
-        "x-anthropic-billing-[a-z0-9]+",
+        r#"header_prefix = "x-anthropic-billing-""#,
+        r#"header_prefix = "x-anthropic-billing-[a-z0-9]+""#,
     );
-    let err = check_dir(&dir).expect_err("a pattern the recorder does not recognize");
+    let err = check_dir(&dir).expect_err("a prefix the recognizer cannot compare");
     assert!(
-        err.contains("is not one the recorder's streaming redactor can hold"),
+        err.contains("header_prefix") && err.contains("must match"),
         "{err}"
     );
 }

@@ -64,9 +64,9 @@ grace_seconds = 10
 
 [redaction]
 extra_patterns = [
-  { kind = "codex_rate_limits", regex = '"rate_limits"\s*:\s*(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})' },
-  { kind = "codex_plan_type", regex = '"plan_type"\s*:\s*"([^"\\]+)"' },
-  { kind = "codex_credits_remaining", regex = '"credits_remaining"\s*:\s*("[^"\\]*"|[^,}\s]+)' },
+  { kind = "codex_rate_limits", json_field = "rate_limits", value = "object" },
+  { kind = "codex_plan_type", json_field = "plan_type", value = "string" },
+  { kind = "codex_credits_remaining", json_field = "credits_remaining", value = "scalar" },
 ]
 
 [[capture.hosts]]

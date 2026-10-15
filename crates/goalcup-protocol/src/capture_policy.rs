@@ -36,7 +36,7 @@ pub(crate) const MAX_CONTINUATION_BYTES: usize = 512;
 pub(crate) const MAX_GOAL_FLAG_BYTES: usize = 32;
 
 // ---------------------------------------------------------------------------------------
-// CA trust, credentials, redaction mirror, tracker hosts
+// CA trust, credentials, tracker hosts
 // ---------------------------------------------------------------------------------------
 
 /// Whether a CA variable extends the harness's roots or replaces them.
@@ -89,18 +89,6 @@ pub(crate) fn ca_registry_mode(name: &str) -> Option<CaMode> {
 /// one grammar by the launcher (`child_secret_named`): 20 to 256 bytes of `[A-Za-z0-9_-]`.
 /// `AMP_API_KEY` is Amp's access token (D49).
 pub const CREDENTIAL_ENV: &[&str] = &["DEEPSEEK_API_KEY", "AMP_API_KEY"];
-
-/// The regex sources of the daemon's streaming recognizers (`redact/stream.rs`
-/// `EXTRA_SHAPES`), in order. A `[redaction].extra_patterns` regex must equal one of them
-/// exactly: the daemon's redactor refuses any other, and the protocol crate must refuse it
-/// first so a fork PR sees the failure in CI. `tests/it/harness_schema.rs` ties this list to the
-/// shipped manifests, which the daemon's own test ties to `EXTRA_SHAPES`.
-pub const EXTRA_PATTERN_SOURCES: &[&str] = &[
-    r#""rate_limits"\s*:\s*(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})"#,
-    r#""plan_type"\s*:\s*"([^"\\]+)""#,
-    r#""credits_remaining"\s*:\s*("[^"\\]*"|[^,}\s]+)"#,
-    r#"x-anthropic-billing-[a-z0-9-]+:\s*[^\r\n"]+"#,
-];
 
 /// Hosts that belong to the tracker's own delivery path. A harness may name none of them, nor a
 /// subdomain (the delivery-agnostic rule, F7). Empty until a project domain is chosen; a host

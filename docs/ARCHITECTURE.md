@@ -206,7 +206,7 @@ and disk ([redact/stream.rs](../crates/goalcup-daemon/src/redact/stream.rs), rul
 At most `MAX_HELD_BYTES` (16 KiB) of undecided bytes are held per stream. Past that the stream
 **fails closed**: everything from the earliest undecided byte is replaced up to the next safe
 terminator. Below the bound, output equals whole-stream redaction whatever the chunking. A
-connector regex without a pinned recognizer is refused. Redaction is best effort. The residuals are
+connector rule is a typed form with its own recognizer, never a regex. Redaction is best effort. The residuals are
 in the [checklist](CHEAT-CHECKLIST.md). The proxy also strips credential headers by name.
 
 ## 10. Upload and the server

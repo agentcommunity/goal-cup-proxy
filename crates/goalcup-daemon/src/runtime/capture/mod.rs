@@ -122,8 +122,7 @@ use goalcup_protocol::export::{
 };
 use goalcup_protocol::seal::SealManifest;
 
-use goalcup_protocol::harness::{CaptureSpec, HarnessManifest};
-use goalcup_protocol::manifest::RedactionPattern;
+use goalcup_protocol::harness::{CaptureSpec, ExtraPattern, HarnessManifest};
 
 use goalcup_protocol::process::{ProcessRegistration, validate_live_process_handle};
 
@@ -170,7 +169,7 @@ pub(crate) struct CaptureEntry {
     /// Creation owns the capture mutators. Reopen deliberately retains only status and seal.
     authority: CaptureAuthority,
     /// The profile's carried patterns, compiled into each producer's own redactor.
-    extra_patterns: Vec<RedactionPattern>,
+    extra_patterns: Vec<ExtraPattern>,
     /// The schema-1 termination binary a registered harness handle may name.
     pub(super) native_binary: Option<String>,
     /// Schema-declared scoped source, enabled once its session identity is bound: at launch or
@@ -396,7 +395,7 @@ impl Daemon {
         manifest: &HarnessManifest,
         digests: &ProfileDigests,
         reserve_bytes: u64,
-        extra_patterns: Vec<RedactionPattern>,
+        extra_patterns: Vec<ExtraPattern>,
         artifact: &EntryArtifactRoot,
         artifact_dir: &Path,
         plan: NativePlan,

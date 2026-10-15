@@ -1,7 +1,7 @@
 //! The small vocabulary the launch, daemon and registry code share with the harness schema:
-//! how a harness is killed, how it is launched, which root a foreign-session scan starts at,
-//! and a connector-declared redaction pattern. No `manifest.toml` is parsed anywhere;
-//! `harness.toml` (schema 1, `harness.rs`) is the only connector manifest.
+//! how a harness is killed, how it is launched, and which root a foreign-session scan starts
+//! at. No `manifest.toml` is parsed anywhere; `harness.toml` (schema 1, `harness.rs`) is the
+//! only connector manifest, and its redaction rules are `harness::ExtraPattern`.
 
 use serde::{Deserialize, Serialize};
 
@@ -29,13 +29,6 @@ pub enum LaunchMode {
     /// Desktop attach mode: nothing is spawned; the folder is armed and the participant
     /// opens a session in it (D7).
     AttachOnly,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RedactionPattern {
-    pub kind: String,
-    pub regex: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -373,22 +373,39 @@ overlap; model hosts belong in `capture.hosts`, not `auth_hosts`.
 
 ## `[redaction]`
 
-`redaction.extra_patterns` defaults to `[]`. Each inline row has two required fields:
+`redaction.extra_patterns` defaults to `[]`, which is the shared redaction set alone. Each inline
+row is one rule. A row names a form and the connector's own field or header; it never carries a
+regex. The recorder derives the regex and its bounded streaming recognizer from the form.
 
 | Field | Contract |
 |---|---|
-| `redaction.extra_patterns[].kind` | 1–48 bytes; `^[a-z][a-z0-9_]{0,47}$`. |
-| `redaction.extra_patterns[].regex` | Must byte-equal one of the four core streaming recognizer sources below. |
+| `kind` | Required. `^[a-z][a-z0-9_]{0,47}$`. Every marker and audit span of the rule names it. |
+| `json_field` | The JSON field whose value is removed. 1–64 bytes of `[A-Za-z0-9_-]`. Needs `value`. |
+| `value` | `object`, `string` or `scalar`: the value form of `json_field`. |
+| `header_prefix` | The start of a header name; the whole header line is removed. `^[a-z][a-z0-9-]{0,63}$`. Alone. |
 
-```text
-"rate_limits"\s*:\s*(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})
-"plan_type"\s*:\s*"([^"\\]+)"
-"credits_remaining"\s*:\s*("[^"\\]*"|[^,}\s]+)
-x-anthropic-billing-[a-z0-9-]+:\s*[^\r\n"]+
+A row has either `json_field` with `value`, or `header_prefix` alone. A row with a `regex`, with
+both forms or with neither is refused when the file is parsed. The regex each form stands for
+(`harness::ExtraPattern::regex`):
+
+| Form | Regex | Span |
+|---|---|---|
+| `json_field = "F", value = "object"` | `"F"\s*:\s*(\{(?:[^{}]\|\{(?:[^{}]\|\{[^{}]*\})*\})*\})` | the object, nested at most three deep |
+| `json_field = "F", value = "string"` | `"F"\s*:\s*"([^"\\]+)"` | the string's interior |
+| `json_field = "F", value = "scalar"` | `"F"\s*:\s*("[^"\\]*"\|[^,}\s]+)` | a string, else a bare token such as a number |
+| `header_prefix = "P"` | `P[a-z0-9-]+:\s*[^\r\n"]+` | the whole header line |
+
+A JSON-field marker keeps the record JSON: the key and colon stay, and a value that was not a
+string gets a quoted marker. A new form is a core PR: it needs a recognizer in the daemon's
+streaming redactor, reviewed at the hold bound, and a variant of `harness::RedactionRule`.
+
+```toml
+[redaction]
+extra_patterns = [
+  { kind = "codex_plan_type", json_field = "plan_type", value = "string" },
+  { kind = "anthropic_billing_header", header_prefix = "x-anthropic-billing-" },
+]
 ```
-
-A connector cannot introduce a regex. A new recognizer is a core PR that changes both the
-daemon's streaming redactor and `EXTRA_PATTERN_SOURCES`.
 
 ## Cross-field rules
 

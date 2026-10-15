@@ -289,8 +289,9 @@ per-connector allowlist rows. A new connector, a model bump or a new variable is
   How much the harness may do (model, sandbox, permissions) is not a capture rule.
 - **Review sees** what a rule cannot: a dropped flag that capture needs, a value that re-enables
   self-update. These are on the reviewer checklist ([HARNESS-ONBOARDING](HARNESS-ONBOARDING.md)).
-- **Closed lists stay core PRs with a DECISIONS entry:** `CREDENTIAL_ENV`, `CA_REGISTRY`,
-  `EXTRA_PATTERN_SOURCES`.
+- **Closed lists stay core PRs with a DECISIONS entry:** `CREDENTIAL_ENV`, `CA_REGISTRY`, and
+  the redaction rule forms (`harness::RedactionRule`). The field name or header prefix a form
+  takes is connector data (WP12).
 
 Reconsider if a connector PR is ever merged without code-owner review.
 

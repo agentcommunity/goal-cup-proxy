@@ -135,9 +135,9 @@ denies unknown fields; a missing `Option` field reads as `None`.
 - Past the hold bound it fails closed: an undecided candidate or keyword context is replaced from
   its earliest byte to the next newline (or `End`, `Gap`, interrupt), with one marker.
 - On interrupt an unresolved suffix is dropped and a gap is reported.
-- A connector's `redaction.extra_patterns` must equal one of the daemon's four streaming
-  recognizers. `StreamRedactor::with_extra_patterns` refuses any other regex, and the launcher
-  builds it at preflight and fails closed on `Err`.
+- A connector's `redaction.extra_patterns` are typed forms (a JSON field with a value form, or a
+  header prefix), never a regex. `StreamRedactor::with_extra_patterns` refuses a form it has no
+  recognizer for. The launcher builds it at preflight and fails closed on `Err`.
 - Redaction is best effort. It is not a universal secret guarantee.
 
 ### Storage and the terminal allowance

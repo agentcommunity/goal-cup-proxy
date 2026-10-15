@@ -824,7 +824,7 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         "env_differs_from_policy": env_differences(m, origin),
         "redaction": {
             "extra_patterns": m.redaction.as_ref()
-                .map(|r| r.extra_patterns.iter().map(|p| json!({"kind": p.kind, "regex": p.regex})).collect::<Vec<_>>())
+                .map(|r| r.extra_patterns.iter().map(|p| json!({"kind": p.kind, "regex": p.regex()})).collect::<Vec<_>>())
                 .unwrap_or_default(),
         },
     })

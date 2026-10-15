@@ -10,12 +10,10 @@
 //! events and Claude request bodies and headers. Every value below is synthetic.
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use goalcup_daemon::DaemonError;
 use goalcup_daemon::redact::stream::{MAX_HELD_BYTES, StreamRedactor};
 use goalcup_daemon::redact::{Redactor, extra_patterns_of};
 use goalcup_protocol::capture::*;
-use goalcup_protocol::harness::HarnessManifest;
-use goalcup_protocol::manifest::RedactionPattern;
+use goalcup_protocol::harness::{ExtraPattern, FieldValue, HarnessManifest, RedactionRule};
 use goalcup_protocol::redaction::RedactionAuditSpan;
 
 use crate::common::redaction;
@@ -23,7 +21,7 @@ use redaction::*;
 
 // ── the shipped rules and the oracle ─────────────────────────────────────────────────
 
-fn harness_patterns(connector: &str) -> Vec<RedactionPattern> {
+fn harness_patterns(connector: &str) -> Vec<ExtraPattern> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../connectors")
         .join(connector)
@@ -34,7 +32,7 @@ fn harness_patterns(connector: &str) -> Vec<RedactionPattern> {
 
 /// Codex's three rules, then Claude's billing header: one list, one order, used by both
 /// the stream and the oracle.
-fn shipped() -> Vec<RedactionPattern> {
+fn shipped() -> Vec<ExtraPattern> {
     let mut all = harness_patterns("codex-cli");
     all.extend(harness_patterns("claude-code-cli"));
     all
@@ -874,71 +872,72 @@ fn cuts_at_every_offset_never_release_a_held_connector_value() {
 
 // ── construction ─────────────────────────────────────────────────────────────────────
 
-fn config_error(extra: &[RedactionPattern]) -> String {
-    match StreamRedactor::with_extra_patterns(extra) {
-        Ok(_) => panic!("accepted {extra:?}"),
-        Err(DaemonError::Config(message)) => message,
-        Err(other) => panic!("not a config error: {other}"),
-    }
-}
-
+/// Every rule form streams under names of the connector's own choosing, with no core change,
+/// and equals the whole-record oracle with the same rules at every split point. A rule that
+/// cannot be built never reaches the redactor ([`ExtraPattern::new`] refuses it).
 #[test]
-fn a_pattern_without_a_pinned_recognizer_is_refused() {
-    let pattern = |kind: &str, regex: &str| RedactionPattern {
-        kind: kind.into(),
-        regex: regex.into(),
+fn every_rule_form_streams_under_any_valid_name() {
+    let field = |kind: &str, field: &str, value| {
+        ExtraPattern::new(
+            kind,
+            RedactionRule::JsonField {
+                field: field.into(),
+                value,
+            },
+        )
+        .unwrap()
     };
-    // Regexes no recognizer is pinned to: a new rule, one that can match across lines with
-    // no bounded prefix, and one-character edits of shipped rules.
-    for (kind, regex) in [
-        ("tailer_test_secret", "tailer-secret-[A-Z0-9]+"),
-        ("anything_secret", r"(?s).*secret"),
-        ("codex_plan_type", r#""plan_type"\s*:\s*"([^"]+)""#),
-        ("codex_plan_type", r#""plan_type"\s*:\s*"([^"\\]*)""#),
-        (
-            "anthropic_billing_header",
-            r#"x-anthropic-billing-[a-z0-9-]+:\s*[^\n"]+"#,
-        ),
-        (
-            "codex_credits_remaining",
-            r#"(?i)"credits_remaining"\s*:\s*("[^"\\]*"|[^,}\s]+)"#,
-        ),
-    ] {
-        let mut extra = shipped();
-        extra.push(pattern(kind, regex));
-        let message = config_error(&extra);
-        assert!(message.contains(kind), "{regex}: {message}");
+    let rules = vec![
+        field("acme_usage", "usage-2", FieldValue::Object),
+        field("acme_tier", "Tier", FieldValue::String),
+        field("acme_left", "left", FieldValue::Scalar),
+        ExtraPattern::new("acme_quota", RedactionRule::HeaderPrefix("x-acme-".into())).unwrap(),
+    ];
+    let input: &[u8] = b"{\"usage-2\": {\"in\": {\"n\": 3}}, \"Tier\": \"gold\", \"left\": 12.5}\n\
+POST /v1 HTTP/1.1\r\nx-acme-quota: 900; window=1h\r\n\r\n\
+{\"note\":\"x-acme-seen: yes\", \"left\": \"9\", \"Tier\": \"\", \"usage-2\": null}\n";
+    let whole = Redactor::for_patterns("acme", &rules).unwrap().apply(input);
+    let kinds = kinds_of(&whole.spans);
+    for kind in ["acme_usage", "acme_tier", "acme_left", "acme_quota"] {
         assert!(
-            message.contains("no bounded streaming recognizer"),
-            "{regex}: {message}"
+            kinds.contains(kind),
+            "the input exercises {kind}: {kinds:?}"
         );
     }
-    // What the V1 compiler refuses is refused here, for the same reason.
-    let message = config_error(&[pattern("broken", "([unclosed")]);
-    assert!(
-        message.contains("broken") && message.contains("unclosed"),
-        "{message}"
-    );
-    let message = config_error(&[pattern("byte_mode", r"(?-u)\xff+")]);
-    assert!(
-        message.contains("byte_mode") && message.contains("Unicode"),
-        "{message}"
-    );
-    // A pinned regex under a kind no audit reader can carry.
-    let plan = shipped()[1].regex.clone();
-    let too_long = "k".repeat(65);
+    for split in 0..=input.len() {
+        let mut p =
+            Producer::with_redactor(P1, StreamRedactor::with_extra_patterns(&rules).unwrap());
+        let mut records = p.open(1, CaptureSource::WireRequest);
+        records.extend(p.bytes(1, &input[..split]));
+        records.extend(p.redactor.flush(daemon_time(1)).unwrap());
+        records.extend(p.bytes(1, &input[split..]));
+        records.extend(p.end(1, EndReason::Complete));
+        assert_eq!(
+            retained(&records),
+            (whole.bytes.clone(), whole.spans.clone()),
+            "split at {split}"
+        );
+    }
+    // The kind is checked when the rule is built: the markers and audit spans carry it.
+    let too_long = "k".repeat(49);
     for kind in [
         "",
         "plan\ntype",
         "plan\"type",
         "plan type",
+        "my-plan",
         too_long.as_str(),
     ] {
-        let message = config_error(&[pattern(kind, &plan)]);
-        assert!(message.contains("kind"), "{kind:?}: {message}");
+        let err = ExtraPattern::new(kind, RedactionRule::HeaderPrefix("x-a".into())).unwrap_err();
+        assert!(err.contains("kind"), "{kind:?}: {err}");
     }
-    // The shipped patterns, under any valid kind, and none at all, are accepted.
-    StreamRedactor::with_extra_patterns(&[pattern("my-plan_2", &plan)]).unwrap();
+    // The shipped rules, under any valid kind, and none at all, are accepted.
+    let renamed: Vec<ExtraPattern> = shipped()
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| ExtraPattern::new(format!("my_plan_{i}"), p.rule).unwrap())
+        .collect();
+    StreamRedactor::with_extra_patterns(&renamed).unwrap();
     StreamRedactor::with_extra_patterns(&[]).unwrap();
     StreamRedactor::with_extra_patterns(&shipped()).unwrap();
 }

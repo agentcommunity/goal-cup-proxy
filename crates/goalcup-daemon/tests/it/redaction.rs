@@ -4,6 +4,7 @@
 use goalcup_daemon::redact::Redactor;
 use goalcup_daemon::redact::stream::StreamRedactor;
 use goalcup_protocol::capture::CaptureRecord;
+use goalcup_protocol::harness::{ExtraPattern, FieldValue, RedactionRule};
 
 use crate::common::redaction::stream_through;
 
@@ -315,18 +316,34 @@ fn invalid_utf8_around_a_secret_is_preserved_and_the_secret_is_still_removed() {
     assert!(!out.bytes.windows(12).any(|w| w == b"sk-ant-api03"));
 }
 
-/// A connector whose `extra_patterns[]` will not compile is refused at build time, not
-/// silently dropped: a pattern the participant can read in `harness.toml` but that never
-/// fires is a privacy hole with a paper trail saying otherwise.
+/// A connector rule that cannot be built is refused, not silently dropped: a rule the
+/// participant can read in `harness.toml` but that never fires is a privacy hole with a paper
+/// trail saying otherwise. A rule is a typed form, so what cannot be built is a name the
+/// regex would read differently from the recognizer (a quote, a backslash, a metacharacter).
 #[test]
-fn an_uncompilable_extra_pattern_is_an_error_not_a_silent_drop() {
-    let mut m = connector("codex-cli");
-    m.push(goalcup_protocol::manifest::RedactionPattern {
-        kind: "broken".to_string(),
-        regex: "([unclosed".to_string(),
-    });
-    let err = Redactor::for_patterns("codex-cli", &m).unwrap_err();
-    assert!(format!("{err}").contains("broken"), "the kind names itself");
+fn an_unbuildable_extra_rule_is_an_error_not_a_silent_drop() {
+    for (field, prefix) in [
+        ("plan\"type", "x-a\""),
+        ("([unclosed", "x-a("),
+        ("plan.type", "x.a"),
+    ] {
+        let err = ExtraPattern::new(
+            "broken",
+            RedactionRule::JsonField {
+                field: field.into(),
+                value: FieldValue::String,
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("broken"), "the kind names itself: {err}");
+        let err =
+            ExtraPattern::new("broken", RedactionRule::HeaderPrefix(prefix.into())).unwrap_err();
+        assert!(err.contains("broken"), "the kind names itself: {err}");
+    }
+    // Every rule that can be built compiles, in both redactors.
+    let m = connector("codex-cli");
+    Redactor::for_patterns("codex-cli", &m).unwrap();
+    StreamRedactor::with_extra_patterns(&m).unwrap();
 }
 
 /// The marker carries only the public pattern kind. The original byte offsets are carried
@@ -554,23 +571,31 @@ fn the_shared_set_finds_nothing_new_in_the_committed_m0_fixtures() {
     }
 }
 
-/// `(?-u)` turns Unicode mode off, and a `regex::bytes` pattern in that mode may match
-/// bytes that are not valid UTF-8. That would widen a text-pattern contract to arbitrary
-/// binary bytes and could cut a span boundary through the middle of a codepoint. A
+/// A `regex::bytes` pattern matches bytes, and the recognizers compare a rule's field name
+/// or header prefix byte for byte with ASCII. A name outside ASCII would let the regex and
+/// the recognizer disagree about a match, and could cut a span through a codepoint. A
 /// connector's `harness.toml` may not ask for that.
 #[test]
-fn an_extra_pattern_that_turns_unicode_mode_off_is_refused() {
-    let base = connector("codex-cli");
-    for regex in [r"(?-u)\xff+", r"(?i-u)secret", r"(?-ui:secret)"] {
-        let mut m = base.clone();
-        m.push(goalcup_protocol::manifest::RedactionPattern {
-            kind: "byte_mode".to_string(),
-            regex: regex.to_string(),
-        });
-        let err = Redactor::for_patterns("codex-cli", &m).unwrap_err();
-        let text = format!("{err}");
-        assert!(text.contains("byte_mode"), "{regex}: {text}");
-        assert!(text.contains("Unicode"), "{regex}: {text}");
+fn an_extra_rule_naming_a_non_ascii_field_or_header_is_refused() {
+    for name in ["pl\u{e4}n", "x-\u{17f}", "\u{2028}x", "x\u{0}"] {
+        let err = ExtraPattern::new(
+            "byte_mode",
+            RedactionRule::JsonField {
+                field: name.into(),
+                value: FieldValue::String,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("byte_mode") && err.contains("json_field"),
+            "{name:?}: {err}"
+        );
+        let err =
+            ExtraPattern::new("byte_mode", RedactionRule::HeaderPrefix(name.into())).unwrap_err();
+        assert!(
+            err.contains("byte_mode") && err.contains("header_prefix"),
+            "{name:?}: {err}"
+        );
     }
 }
 
@@ -595,7 +620,7 @@ fn the_codex_harness_strips_the_credit_balance_it_names() {
 // ---------------------------------------------------------------------------------------
 
 /// One shipped connector's `[redaction].extra_patterns`, read from its `harness.toml`.
-fn connector(id: &str) -> Vec<goalcup_protocol::manifest::RedactionPattern> {
+fn connector(id: &str) -> Vec<ExtraPattern> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../connectors")
         .join(id)
@@ -1859,20 +1884,18 @@ fn spikes_redact_py_is_never_weaker_than_the_daemon() {
 }
 
 /// Softness belongs to the shared rule's slot, not to a kind name. A
-/// connector's own pattern that happens to be called `masked_key` is an ordinary hard rule,
+/// connector's own rule that happens to be called `masked_key` is an ordinary hard rule,
 /// and two rules of that name overlapping cannot make `apply` panic.
 #[test]
 fn a_connector_pattern_named_masked_key_is_an_ordinary_rule() {
     let mut m = connector("codex-cli");
-    m.push(goalcup_protocol::manifest::RedactionPattern {
-        kind: "masked_key".to_string(),
-        regex: r"k-ab\.\.\.wx".to_string(),
-    });
+    m.push(ExtraPattern::new("masked_key", RedactionRule::HeaderPrefix("k-ab".into())).unwrap());
     let mut r = Redactor::for_patterns("codex-cli", &m).expect("the connector compiles");
     for line in [
         &b"see sk-ab...wxyz now"[..],
         b"sk-ab...wxyz sk-ab...wxyz",
-        b"k-ab...wx sk-ab***wxyz",
+        b"sk-ab-x: sk-ab...wxyz",
+        b"k-ab-q: wx sk-ab***wxyz",
     ] {
         let out = r.apply(line);
         let text = String::from_utf8(out.bytes).unwrap();
@@ -2008,21 +2031,27 @@ fn a_claim_across_a_pem_edge_is_merged_into_the_block() {
     assert_eq!(out.spans.len(), 3);
 }
 
-/// Only the shared block rule absorbs. A connector pattern that reuses the name `private_key`
-/// is an ordinary rule, last in the list, and loses an overlap as any extra pattern does.
+/// Only the shared block rule absorbs. A connector rule that reuses the name `private_key`
+/// is an ordinary rule, last in the list, and loses an overlap as any extra rule does.
 #[test]
 fn a_connector_pattern_named_private_key_is_an_ordinary_rule() {
     let mut m = connector("codex-cli");
-    m.push(goalcup_protocol::manifest::RedactionPattern {
-        kind: "private_key".to_string(),
-        regex: r"A{10}-ZZZZ".to_string(),
-    });
+    m.push(
+        ExtraPattern::new(
+            "private_key",
+            RedactionRule::JsonField {
+                field: "k".into(),
+                value: FieldValue::String,
+            },
+        )
+        .unwrap(),
+    );
     let mut r = Redactor::for_patterns("codex-cli", &m).expect("the connector compiles");
-    let text = format!("ghp_{}-ZZZZ", "A".repeat(20));
+    let text = format!(r#"{{"k":"ghp_{}-ZZZZ"}}"#, "A".repeat(20));
     let out = r.apply(text.as_bytes());
     assert_eq!(
         String::from_utf8(out.bytes).unwrap(),
-        "<redacted:github_token>-ZZZZ",
+        r#"{"k":"<redacted:github_token>-ZZZZ"}"#,
         "the connector's rule lost the overlap whole, as an ordinary rule does"
     );
 }
