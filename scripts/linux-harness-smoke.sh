@@ -222,8 +222,13 @@ smoke() {
     case $mode in
     chat)
         write_chat_driver
-        run timeout 900 python3 "$work/chat_driver.py" "$d/tty.out" \
-            goalcup start --harness "$h" >"$d/start.out" 2>&1
+        # The run's workspace is made in the current directory, which must not be inside a Git
+        # worktree (a CI checkout is one), so start from the empty goal directory.
+        (
+            cd "$d/goal" &&
+                run timeout 900 python3 "$work/chat_driver.py" "$d/tty.out" \
+                    goalcup start --harness "$h" >"$d/start.out" 2>&1
+        )
         ;;
     *)
         echo "Print the word hello." >"$d/goal/goal.txt"
