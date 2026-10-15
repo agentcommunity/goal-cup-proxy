@@ -269,7 +269,7 @@ clocks.
 
 | Symptom | Do |
 |---|---|
-| A bad deploy, or anything you cannot explain | Set `MAINTENANCE = "on"` in `wrangler.toml` and deploy. Every call answers `503 maintenance` with `Retry-After` (default 300 s), tracers back off, and the cron pauses. Then `npx wrangler rollback`, and set the switch back to `off`. It blocks new starts too: there is no separate pause. |
+| A bad deploy, or anything you cannot explain | Switch maintenance on with `npx wrangler deploy --var MAINTENANCE:on` from a clean checkout of the commit that is live now ([steps](../server/worker/README.md#maintenance-on-and-off)); do not edit `wrangler.toml`. Every call answers `503 maintenance` with `Retry-After` (default 300 s), tracers back off, and the cron pauses. Any deploy during maintenance must repeat `--var MAINTENANCE:on`, or maintenance ends. Then fix the cause or `npx wrangler rollback <version-id>`, and switch it off by a deploy without the flag. It blocks new starts too: there is no separate pause. |
 | Supabase is down or read-only | The Worker answers `502 upstream_error`; tracers retry for as long as the run lasts. Nothing is lost. Optionally switch maintenance on for a clean `503`. Check again when Supabase is back; the cron catches up. |
 | R2 is down | Chunk puts answer `502`; same as above. A retried chunk is safe. |
 | GitHub is down or rate-limits | Opens answer `502` (the tracer retries). The cron retries the deadline commit each tick for 48 hours; the `ended` mail waits an hour for the commit, then goes without it. Check that `GITHUB_TOKEN` is valid. |
