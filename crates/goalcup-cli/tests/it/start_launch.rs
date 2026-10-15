@@ -576,11 +576,19 @@ mod chat {
         if cfg!(target_os = "macos") {
             assert!(inhibitor.is_some(), "macOS ships caffeinate");
         }
-        for (signal, said) in [
+        for (waited, (signal, said)) in [
             (libc::SIGINT, "tui: endured int"),
             (libc::SIGQUIT, "tui: endured quit"),
             (libc::SIGHUP, "tui: endured hup"),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            // The harness is back at its read (it says so before each one) before the next
+            // signal: one that lands while the last is still being handled can be lost.
+            wait_until("the harness waiting at its read", || {
+                run.shown().matches("tui: waiting").count() > waited
+            });
             run.signal_foreground(signal);
             run.wait_shown(said);
             assert!(matches!(run.child.try_wait(), Ok(None)), "the host lives");
