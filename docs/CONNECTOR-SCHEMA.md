@@ -50,6 +50,7 @@ optional field or table is absent.
 | `schema_version` | required | Integer `1`; this build's closed supported set is `{1}`. |
 | `id` | required | 2–48 bytes; `^[a-z][a-z0-9-]{1,47}$`. |
 | `capture` | required table | The complete launch-and-capture profile below. |
+| `participant` | optional, default absent | `[participant]`: the harness's display name and first-screen hint for messages to the participant; see below. |
 | `redaction` | optional, default absent | Connector-selected rows from the core redaction mirror. |
 | `capture.args` | required | 1–64 strings (0–64 with `interactive`); each at most 4096 bytes and without control characters. |
 | `capture.goal_flag` | optional, default absent | One long option, at most 32 bytes, matching `--[a-z][a-z0-9-]*`; no `=` or value. Refused with `interactive`. |
@@ -410,6 +411,29 @@ a capture launch sets `NO_PROXY=127.0.0.1,localhost`, so loopback traffic is nev
 (`capture_policy::local_host_problem`). Kit cases and the controlled workload (`Origin::Dev`)
 keep their `*.localhost` stand-ins. An authentication host and intercepted host cannot
 overlap; model hosts belong in `capture.hosts`, not `auth_hosts`.
+
+## `[participant]`
+
+Optional. Core messages name a harness only through this table, so no core code holds a harness
+name. When it is absent, messages use the connector `id`. Unknown keys are refused, as everywhere.
+Both strings are printed to a terminal, so they are held to plain text.
+
+| Field | Required/default | Contract |
+|---|---|---|
+| `participant.display_name` | required when the table is present | The name as a person says it ("Claude Code"). 1–40 characters, not blank, no leading or trailing space. |
+| `participant.first_screen` | optional, default absent | What the harness shows first and what to do about it, shown just before the harness opens. Plain text on one line, 1–200 characters, not blank, no leading or trailing space. Leave it out when the harness asks nothing. |
+
+Both fields refuse: any control character (ESC and so any ANSI sequence, CR, LF, tab, DEL, the C1
+range), and the invisible formatting characters that change how a line reads (zero-width
+characters, bidirectional overrides and isolates, line and paragraph separators, the soft hyphen,
+the byte-order mark). `harness_conformance.rs` also requires every shipped connector to declare a
+`display_name`.
+
+```toml
+[participant]
+display_name = "Claude Code"
+first_screen = "Claude Code may ask whether you trust this folder. Choose Yes."
+```
 
 ## `[redaction]`
 

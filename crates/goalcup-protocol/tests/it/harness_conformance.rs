@@ -74,6 +74,22 @@ fn check_dir(dir: &Path) -> Result<(), String> {
         }
     }
 
+    // Core messages name the harness through its manifest alone: every connector declares a
+    // display name, and it is plain text fit for a terminal (`validate` already ran above).
+    let Some(participant) = &m.participant else {
+        return Err(format!("{}: no [participant] display_name", m.id));
+    };
+    if let Some(why) = goalcup_protocol::harness::display_name_problem(&participant.display_name) {
+        return Err(format!("{}: participant.display_name {why}", m.id));
+    }
+    if let Some(why) = participant
+        .first_screen
+        .as_deref()
+        .and_then(goalcup_protocol::harness::first_screen_problem)
+    {
+        return Err(format!("{}: participant.first_screen {why}", m.id));
+    }
+
     Ok(())
 }
 
@@ -254,6 +270,21 @@ fn sensitivity_f7_catches_a_value_validate_does_not_scan() {
     load_dir(&dir, Origin::Pinned).expect("validate does not scan `continuation`");
     let err = check_dir(&dir).expect_err("a continuation naming the tracker");
     assert!(err.contains("(F7)"), "{err}");
+}
+
+/// The display-name rule is `check_dir`'s own: the loader accepts a connector with no
+/// `[participant]` table, so only this check can ask for one.
+#[test]
+fn sensitivity_a_connector_without_a_display_name_is_refused() {
+    let (_tmp, dir) = copy_connector("codex-cli");
+    mutate(
+        &dir.join("harness.toml"),
+        "[participant]\ndisplay_name = \"Codex\"\n",
+        "",
+    );
+    load_dir(&dir, Origin::Pinned).expect("the loader accepts a manifest with no [participant]");
+    let err = check_dir(&dir).expect_err("a connector with no display_name");
+    assert!(err.contains("no [participant] display_name"), "{err}");
 }
 
 /// The id-versus-folder rule is `check_dir`'s own. The copy has an untouched id, so no earlier

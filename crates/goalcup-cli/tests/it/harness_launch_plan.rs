@@ -163,6 +163,16 @@ fn unpinned_harness_uses_the_one_dev_door() {
     assert_eq!(dev.dir.file_name().unwrap(), "unexpected-folder");
 }
 
+/// A manifest with no `[participant]` table is named by its id, and has no first-screen hint.
+#[test]
+fn a_connector_without_a_participant_table_is_named_by_its_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_unpinned(tmp.path(), "example-cli", "example-cli");
+    let loaded = goalcup_cli::connector::load_harness(tmp.path(), "example-cli", true).unwrap();
+    assert_eq!(loaded.display_name(), "example-cli");
+    assert_eq!(loaded.first_screen(), None);
+}
+
 #[test]
 fn a_mixed_pinned_and_development_root_loads_each_by_its_captured_identity() {
     let tmp = tempfile::tempdir().unwrap();

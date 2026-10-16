@@ -2,6 +2,9 @@
 schema_version = 1
 id = "hermes-cli"
 
+[participant]
+display_name = "Hermes"
+
 [capture]
 # hermes chat -Q --provider deepseek --query=<goal>. The provider follows the one admitted
 # credential (DEEPSEEK_API_KEY); the model is Hermes's own default (owner direction, 2026-10-14).

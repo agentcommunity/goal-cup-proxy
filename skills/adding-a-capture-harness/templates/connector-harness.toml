@@ -12,6 +12,14 @@
 schema_version = 1                      # always 1
 id = "<HARNESS_ID>"                     # must equal the folder name; ^[a-z][a-z0-9-]{1,47}$
 
+# How messages to the participant name this harness. Required in practice: without it they
+# say the connector id. Plain text only: the strings are printed to a terminal.
+[participant]
+display_name = "<HARNESS NAME>"         # 1 to 40 printable characters, as a person says it
+# What the harness shows first and what to do about it (a trust or login question). Shown just
+# before the harness opens. At most 200 characters, one plain line. Delete if it asks nothing.
+# first_screen = "<HARNESS NAME> may ask <QUESTION>. Choose <ANSWER>."
+
 [capture]
 # A) Chat mode (the default): the harness opens in the participant's terminal and the participant
 # types the prompt. No goal slot, no [capture.credential], identity source "none". The sign-in

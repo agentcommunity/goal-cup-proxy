@@ -2718,6 +2718,124 @@ fn the_closed_sets_are_non_exhaustive_so_a_downstream_match_must_end_in_a_wildca
 }
 
 // ---------------------------------------------------------------------------------------
+// `[participant]`: the display name and first-screen hint
+// ---------------------------------------------------------------------------------------
+
+/// `t` with `[participant]` holding `display_name` and, when given, `first_screen`.
+fn with_participant(mut t: Table, display_name: &str, first_screen: Option<&str>) -> Table {
+    let mut p = Table::new();
+    p.insert("display_name".into(), Value::String(display_name.into()));
+    if let Some(f) = first_screen {
+        p.insert("first_screen".into(), Value::String(f.into()));
+    }
+    t.insert("participant".into(), Value::Table(p));
+    t
+}
+
+#[test]
+fn the_participant_table_is_optional_and_the_name_falls_back_to_the_id() {
+    // The frozen fixtures predate the table: they still load and validate.
+    for id in ["hermes-cli", "codex-cli", "claude-code-cli"] {
+        let m = parsed(&fixture(id));
+        assert!(m.participant.is_none(), "{id}");
+        assert_eq!(m.display_name(), id);
+        assert_eq!(m.first_screen(), None);
+    }
+}
+
+#[test]
+fn a_participant_table_names_the_harness_and_its_first_screen() {
+    let hint = "Claude Code may ask whether you trust this folder. Choose Yes.";
+    let m = parsed(&with_participant(claude(), "Claude Code", Some(hint)));
+    assert_eq!(m.display_name(), "Claude Code");
+    assert_eq!(m.first_screen(), Some(hint));
+    // The hint may be absent.
+    let m = parsed(&with_participant(codex(), "Codex", None));
+    assert_eq!(m.display_name(), "Codex");
+    assert_eq!(m.first_screen(), None);
+    // The limits are inclusive.
+    admitted(
+        &with_participant(codex(), &"n".repeat(40), Some(&"h".repeat(200))),
+        PINNED,
+    );
+    // Ordinary non-ASCII text is plain text.
+    admitted(
+        &with_participant(codex(), "Kodex \u{00e9}\u{4e2d}", None),
+        PINNED,
+    );
+}
+
+#[test]
+fn a_display_name_that_is_not_plain_text_is_refused() {
+    let bad = [
+        ("", "empty"),
+        ("   ", "blank"),
+        (" Codex", "leading space"),
+        ("Codex ", "trailing space"),
+        (&"n".repeat(41)[..], "41 characters"),
+        ("Co\x1b[31mdex", "ESC starts an ANSI sequence"),
+        ("Co\x1b]0;title\x07dex", "ESC and BEL, an OSC title"),
+        ("Co\u{9b}31mdex", "the C1 CSI"),
+        ("Co\ndex", "a newline"),
+        ("Co\rdex", "a carriage return"),
+        ("Co\tdex", "a tab"),
+        ("Co\x7fdex", "DEL"),
+        ("Co\u{202e}xedoc", "a right-to-left override"),
+        ("Co\u{200b}dex", "a zero-width space"),
+        ("Co\u{2028}dex", "a line separator"),
+        ("Co\u{feff}dex", "a byte-order mark"),
+    ];
+    for (name, why) in bad {
+        refused(
+            &with_participant(codex(), name, None),
+            PINNED,
+            &["participant.display_name"],
+        );
+        let _ = why;
+    }
+}
+
+#[test]
+fn a_first_screen_that_is_not_one_plain_line_is_refused() {
+    let long = "h".repeat(201);
+    let bad = [
+        "",
+        "  ",
+        " leading",
+        "trailing ",
+        long.as_str(),
+        "Choose \x1b[2Jyes",
+        "Choose \u{9b}2Jyes",
+        "Line one.\nLine two.",
+        "Choose \u{202e}yes",
+    ];
+    for hint in bad {
+        refused(
+            &with_participant(codex(), "Codex", Some(hint)),
+            PINNED,
+            &["participant.first_screen"],
+        );
+    }
+    // The same text is refused under Dev: this rule has no exemption.
+    refused(
+        &with_participant(codex(), "Co\x1b[0mdex", None),
+        DEV,
+        &["participant.display_name"],
+    );
+}
+
+#[test]
+fn the_participant_table_keeps_the_schema_strict() {
+    // An unknown key is refused as a newer schema's, and a table without a name is a TOML error.
+    let mut t = with_participant(codex(), "Codex", None);
+    set(&mut t, &["participant"], "colour", "red");
+    refused(&t, PINNED, &["colour"]);
+    let mut t = codex();
+    t.insert("participant".into(), Value::Table(Table::new()));
+    refused(&t, PINNED, &["display_name"]);
+}
+
+// ---------------------------------------------------------------------------------------
 // `[capture.platform.<os>-<arch>]`: the per-platform env
 // ---------------------------------------------------------------------------------------
 
