@@ -201,9 +201,20 @@ pub(super) async fn create_capture_workspace(
     State(state): State<ControlState>,
     body: Bytes,
 ) -> Response {
-    let request: CaptureWorkspaceRequest = match parse_body(&body) {
+    // Not `parse_body`: serde's message quotes a value of the wrong type, and this body
+    // carries the run's secret values (D60). Only where it failed is said.
+    let request: CaptureWorkspaceRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
-        Err(e) => return e.into_response(),
+        Err(e) => {
+            return ControlErrorResponse::new(ControlError::Malformed(format!(
+                "the request body is not the capture-workspace document this route takes \
+                 ({:?} error at line {}, column {})",
+                e.classify(),
+                e.line(),
+                e.column()
+            )))
+            .into_response();
+        }
     };
     for (field, path) in [
         ("workspace", &request.workspace),
@@ -259,6 +270,15 @@ pub(super) async fn create_capture_workspace(
         }
         None => mint_entry_id(),
     };
+    // The run's exact secret values, held for this entry in memory only (D60). A refusal names
+    // the rule, never a value.
+    let secrets = match crate::redact::RunSecrets::new(&request.run_secrets) {
+        Ok(secrets) => secrets,
+        Err(e) => {
+            return ControlErrorResponse::new(ControlError::Malformed(e.to_string()))
+                .into_response();
+        }
+    };
     match state.daemon.create_capture(
         entry_id,
         FsPath::new(&request.workspace),
@@ -269,6 +289,7 @@ pub(super) async fn create_capture_workspace(
         &every_loaded_real_dir,
         request.reserve_bytes,
         request.native_since,
+        secrets,
     ) {
         Ok(info) => axum::Json(info).into_response(),
         Err(e) => ControlErrorResponse::from(e).into_response(),

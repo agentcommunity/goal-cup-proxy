@@ -54,8 +54,10 @@ TypeScript).
 | Verifier | Integrity reader and research report. Five built-in decoders: native `codex-native` and `claude-code-native`; wire `openai-responses`, `anthropic-messages`, `openai-chat-completions` | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
 | Upload server | Checks the run credential, stores chunks in R2, signs receipts and acknowledgements, sends the run emails | [server/worker](../server/worker/README.md), [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DESIGN.md) |
 
-The control API (version `CONTROL_API_VERSION`, now 8) requires its version on mutating requests.
-Create binds the connector-directory digest and may carry the server's entry id.
+The control API (version `CONTROL_API_VERSION`, now 9) requires its version on mutating requests.
+Create binds the connector-directory digest, may carry the server's entry id, and carries the
+run's own secret, the proxy credential (`run_secrets`, D60), which the daemon redacts by exact
+value and holds in memory for that entry only.
 
 ## 4. A harness is data
 
@@ -275,6 +277,7 @@ Paths are under `crates/`.
 | One orphan rule | `goalcup-daemon/src/runtime/capture/tests.rs`, `goalcup-daemon/tests/it/capture_ingest.rs`, `goalcup-verifier/tests/it/m2_capture_integrity.rs` |
 | Integrity exits 0/1/2/3; baseline and seal binding | `goalcup-verifier/tests/it/m2_capture_integrity.rs`, `goalcup-verifier/tests/it/v5_corpus.rs` |
 | Streaming equals whole-stream redaction; 16 KiB fail closed | `goalcup-daemon/tests/it/capture_redaction.rs`, `goalcup-daemon/tests/it/capture_redaction_extra.rs`, `goalcup-daemon/tests/it/redaction.rs` |
+| The run's proxy credential redacted by exact value, wrapped and escaped forms included (D60) | `goalcup-protocol/src/run_secret.rs` (unit), `goalcup-daemon/tests/it/capture_redaction_run_secrets.rs`, `goalcup-cli/tests/full/keyed_lifecycle.rs` (`the_proxy_credential_a_harness_records_…`) |
 | Native scope, no symlink, deferred scope | `goalcup-daemon/tests/it/capture_native.rs`, `goalcup-daemon/tests/it/capture_deferred_scope.rs` |
 | TLS, CONNECT, HTTP and WebSocket relay | `goalcup-cli/tests/it/m2_tls_connect.rs`, `goalcup-cli/tests/it/m2_http_relay.rs`, `goalcup-cli/tests/it/m2_websocket_relay.rs` |
 | Frozen wire contracts; connector pins | `goalcup-protocol/tests/it/m2_contract.rs`, `harness_schema.rs`, `harness_loader.rs`, `harness_conformance.rs`, `connector_pins.rs` (same folder) |

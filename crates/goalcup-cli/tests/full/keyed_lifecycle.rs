@@ -686,3 +686,65 @@ fn a_goal_file_in_a_synced_folder_refuses_before_anything_is_created() {
     assert!(client.names().is_empty(), "{:?}", client.names());
     assert!(!rig.harness_started());
 }
+
+/// End to end (D60): the run's own proxy credential, which the harness holds in `HTTPS_PROXY`,
+/// reaches the daemon on the capture create and is removed by exact value from what it records.
+/// The fake writes it into its session file raw, in GNU `base64` wrapped at 76 columns, and with
+/// that base64 inside a doubly escaped JSON tool result (as Hermes records one): the snapshot is
+/// captured, and neither the trace's text nor its decoded streams hold any form of it.
+#[test]
+fn the_proxy_credential_a_harness_records_is_redacted_by_exact_value() {
+    use base64::Engine as _;
+    let _lock = table_lock::TableLock::acquire();
+    let rig = Rig::keyed();
+    rig.with_env("DEEPSEEK_API_KEY", KEY);
+    // The snapshot's content, built by the shell from the harness's own `HTTPS_PROXY`.
+    rig.tell(
+        "steps.sh",
+        r#"b64=$(printf 'PAD=0123456789012\nHTTPS_PROXY=%s\n' "$HTTPS_PROXY" | base64 | tr -d '\n' | fold -w 76 | awk '{printf "%s\\\\n", $0}')
+printf '{"session_id":"%s","messages":[{"role":"tool","content":"{\\"output\\": \\"%s\\"}"},{"role":"tool","content":"HTTPS_PROXY=%s"}]}' "$sid" "$b64" "$HTTPS_PROXY" > "$snap.tmp" && mv "$snap.tmp" "$snap"
+: > "$out/no-snapshot"
+"#,
+    );
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let (_result, out) = run(&rig, &client);
+    let env = rig
+        .harness_file("env")
+        .expect("the fake recorded its environment");
+    let proxy = env
+        .lines()
+        .find_map(|l| l.strip_prefix("HTTPS_PROXY=http://goalcup:"))
+        .and_then(|rest| rest.split('@').next())
+        .expect("the proxy credential")
+        .to_string();
+    assert_eq!(proxy.len(), 32, "{out}");
+    let entry = client.created().entry_id;
+    let (_, records) = rig.read_trace(&entry);
+    let mut decoded = Vec::new();
+    for record in &records {
+        if let CaptureRecord::Segment { data_b64, .. } = record {
+            decoded.extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(data_b64)
+                    .unwrap(),
+            );
+        }
+    }
+    let text = std::fs::read(rig.trace(&entry).join("chain.jsonl")).unwrap();
+    let forms = goalcup_protocol::run_secret::WrappedForms::of(proxy.as_bytes()).unwrap();
+    let decoded_text = String::from_utf8_lossy(&decoded);
+    assert!(
+        decoded_text.contains("output"),
+        "the snapshot was captured: {decoded_text}"
+    );
+    assert!(!forms.contains(&decoded), "a form survived: {decoded_text}");
+    assert!(
+        !forms.contains(&text),
+        "a form survived in the chain's text"
+    );
+    assert!(
+        decoded_text.matches("<redacted:run_secret>").count() >= 2,
+        "{decoded_text}"
+    );
+}

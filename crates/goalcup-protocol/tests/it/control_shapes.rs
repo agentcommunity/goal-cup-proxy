@@ -455,9 +455,10 @@ fn the_remaining_types_round_trip() {
         serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap()
     );
     assert_eq!(
-        CONTROL_API_VERSION, 8,
-        "v8 removed the V1 vocabulary nothing produced; v7 added the server-issued entry id \
-         and the chain head and trace directory a capture create answers",
+        CONTROL_API_VERSION, 9,
+        "v9 added the run's exact secret values to a capture create; v8 removed the V1 \
+         vocabulary nothing produced; v7 added the server-issued entry id and the chain head \
+         and trace directory a capture create answers",
     );
 }
 
@@ -501,6 +502,37 @@ fn capture_workspace_requires_one_canonical_connector_directory_digest() {
     };
     let response = serde_json::to_value(response).unwrap();
     assert!(response.get("connector_dir_sha256").is_none());
+}
+
+/// A capture create may carry the run's exact secret values (D60): they cross the control API
+/// as plain strings, and the request's `Debug` (what a log or a panic would print) never shows
+/// one. A request without them is the v8 request byte for byte.
+#[test]
+fn a_capture_create_carries_run_secrets_that_debug_never_prints() {
+    use goalcup_protocol::control::CaptureWorkspaceRequest;
+    let value = "sk-SYNTHETICsyntheticSYNTHETIC0123";
+    let request = serde_json::json!({
+        "workspace": "/private/tmp/run/workspace",
+        "profile_id": "codex-cli",
+        "connector_dir_sha256": "ab".repeat(32),
+        "reserve_bytes": 4 * 1024 * 1024,
+        "run_home": "/private/tmp/run/home",
+        "config_home": "/private/tmp/config/codex-cli",
+        "run_secrets": [value]
+    });
+    let decoded: CaptureWorkspaceRequest = serde_json::from_value(request.clone()).unwrap();
+    assert_eq!(decoded.run_secrets.len(), 1);
+    assert_eq!(decoded.run_secrets[0].expose(), value.as_bytes());
+    assert!(!format!("{decoded:?}").contains("SYNTHETIC"), "{decoded:?}");
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), request);
+    let mut without = decoded;
+    without.run_secrets.clear();
+    assert!(
+        serde_json::to_value(&without)
+            .unwrap()
+            .get("run_secrets")
+            .is_none()
+    );
 }
 
 #[test]

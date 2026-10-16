@@ -54,7 +54,9 @@ pub const STATUS_DOMAIN: &[u8] = b"goalcup-status-v1\0";
 /// `start_signal_seen` and `refused`, and every `HealthState` but `online`, `sealed` and
 /// `sealing_recovery_needed`. The CLI and the daemon ship together, so a pair from two
 /// releases is refused rather than bridged.
-pub const CONTROL_API_VERSION: u32 = 8;
+/// V9 adds `run_secrets` to the capture create: the run's own exact secret values (the proxy
+/// credential), which the daemon redacts from every recorded body (D60).
+pub const CONTROL_API_VERSION: u32 = 9;
 
 pub const ROUTE_ENTRIES: &str = "/v0/entries";
 pub const ROUTE_HEALTH: &str = "/v0/health";
@@ -593,6 +595,14 @@ pub struct CaptureWorkspaceRequest {
     /// reads from the entry's create time (D57); ignored by a source without `since_run_start`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_since: Option<u64>,
+    /// The run's own exact secret values, at most [`crate::run_secret::MAX_RUN_SECRETS`]: the
+    /// proxy credential the launch puts in the harness's `HTTPS_PROXY`. The daemon holds them in
+    /// memory for this entry only and redacts every
+    /// form of each ([`crate::run_secret::encoded_forms`]) from every recorded body (D60). They
+    /// are never written to a file, a log, the registry or the chain, and `Debug` never shows
+    /// them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub run_secrets: Vec<crate::run_secret::RunSecret>,
 }
 
 fn lowercase_sha256<'de, D>(deserializer: D) -> Result<String, D::Error>

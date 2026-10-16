@@ -43,8 +43,18 @@
 //! is one more literal: held, released, followed through a fail-closed redaction and replaced
 //! at a discontinuity exactly as a shared one is.
 //!
+//! # A run's exact secret values (D60)
+//!
+//! [`StreamRedactor::for_run`] adds, after the connector's rules, one literal rule per form of
+//! each of the run's secret values (`super::RunSecrets`): fixed printable-ASCII bytes with at
+//! most one line break (LF, CR LF, or either as JSON text) between any two of them, held from
+//! the first byte until the last completes the match, and a block in `super::select`, so the
+//! claims they overlap join them. The longest wrapped form fits [`MAX_HELD_BYTES`]. Any held
+//! byte of one is replaced at a discontinuity.
+//!
 //! Consequences, each pinned by `tests/it/capture_redaction.rs`,
-//! `tests/it/capture_redaction_extra.rs` and the unit tests below:
+//! `tests/it/capture_redaction_extra.rs`, `tests/it/capture_redaction_run_secrets.rs` and the unit
+//! tests below:
 //!
 //! * While no stream's held bytes reach [`MAX_HELD_BYTES`], the retained bytes and audit
 //!   of a completed stream are exactly `Redactor::apply(whole stream)` — `Redactor::new()`,
@@ -111,6 +121,10 @@ use std::sync::{Arc, OnceLock};
 /// bound: long enough for every realistic secret of the built-in rules (an RSA-8192 PEM
 /// block is about 6.4 KiB), small enough that 128 open streams hold at most 2 MiB.
 pub const MAX_HELD_BYTES: usize = MAX_SEGMENT_BYTES / 4;
+
+// A run secret's form is held from its first byte to its last, line breaks included (D60): the
+// longest wrapped form fits the hold, so it never fails closed on its length alone.
+const _: () = assert!(goalcup_protocol::run_secret::MAX_WRAPPED_FORM_BYTES <= MAX_HELD_BYTES);
 
 /// Live recognizer states per stream. Equivalent states are merged as they arise, so real
 /// input stays in single digits; reaching this fails closed exactly like a full hold.
@@ -335,6 +349,12 @@ enum Form {
     /// (`harness::RedactionRule::HeaderPrefix`).
     HeaderPrefix {
         prefix: Box<[u8]>,
+    },
+    /// One form of a run's exact secret value (`super::RunSecrets`, D60): these bytes, all
+    /// printable ASCII, with at most one line break in each gap between two of them
+    /// (`goalcup_protocol::run_secret::Progress`).
+    Literal {
+        bytes: Box<[u8]>,
     },
 }
 
@@ -579,6 +599,16 @@ struct Extra {
     form: Form,
 }
 
+/// A run secret's form is wiped with its rule (D60); the compiled regex keeps its own copy,
+/// which is hygiene and not a boundary (D37).
+impl Drop for Extra {
+    fn drop(&mut self) {
+        if let Form::Literal { bytes } = &mut self.form {
+            goalcup_protocol::run_secret::wipe(bytes);
+        }
+    }
+}
+
 /// The rule set one redactor streams: the shared literals (`lit` below [`SHAPES`]'s length,
 /// in `super::SHARED` order), then the connector's rules in declaration order. A `lit` is a
 /// rule's position in this list, which is also its priority in `super::select`.
@@ -658,6 +688,18 @@ impl Policy {
             rules.push(Extra { pattern, form });
         }
         Ok(Policy { extra: rules })
+    }
+
+    /// The run's exact values after every other rule, one literal rule per form (D60).
+    fn with_secrets(mut self, secrets: &super::RunSecrets) -> Result<Policy, DaemonError> {
+        for (pattern, bytes) in secrets.patterns().into_iter().zip(secrets.forms()) {
+            let bytes = bytes.into();
+            self.extra.push(Extra {
+                pattern,
+                form: Form::Literal { bytes },
+            });
+        }
+        Ok(self)
     }
 }
 
@@ -977,16 +1019,29 @@ impl Masked {
 /// one can be dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Walk {
-    Prefixed { pos: u8, count: u8 },
+    Prefixed {
+        pos: u8,
+        count: u8,
+    },
     Masked(Masked),
-    Bearer { pos: u8, spaced: bool, count: u8 },
-    Jwt { pos: u8, seg: u8, count: u8 },
+    Bearer {
+        pos: u8,
+        spaced: bool,
+        count: u8,
+    },
+    Jwt {
+        pos: u8,
+        seg: u8,
+        count: u8,
+    },
     Pem(Pem),
     Json(Json),
     Shell(Shell),
     Email(Email),
     Field(Field),
     Header(Header),
+    /// How far a [`Form::Literal`] matched, a line break in progress included.
+    Literal(goalcup_protocol::run_secret::Progress),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1477,6 +1532,7 @@ impl Candidate {
             Form::Email => local_part(u) && !prev_local,
             Form::Field { key, .. } => key.first().is_some_and(|&b| is(u, b)),
             Form::HeaderPrefix { prefix } => prefix.first().is_some_and(|&b| is(u, b)),
+            Form::Literal { bytes } => bytes.first().is_some_and(|&b| is(u, b)),
         };
         if !starts {
             return None;
@@ -1509,6 +1565,7 @@ impl Candidate {
                 value_start: 0,
             }),
             Form::HeaderPrefix { .. } => Walk::Header(Header::Lit(0)),
+            Form::Literal { .. } => Walk::Literal(Default::default()),
         })
     }
 
@@ -1555,6 +1612,18 @@ impl Candidate {
             (Walk::Header(header), Form::HeaderPrefix { prefix }) => {
                 return header.step(prefix, u);
             }
+            // A literal cannot extend once complete: its last byte ends it.
+            (Walk::Literal(progress), Form::Literal { bytes }) => {
+                use goalcup_protocol::run_secret::Advance;
+                let Some(b) = ascii(u) else {
+                    return Step::Dead;
+                };
+                return match progress.step(bytes, b) {
+                    Advance::Live => Step::Live,
+                    Advance::Complete => Step::Last,
+                    Advance::Dead => Step::Dead,
+                };
+            }
             _ => false,
         })
     }
@@ -1590,6 +1659,8 @@ impl Candidate {
             },
             // A header's name and colon are complete: the whole match is the span.
             (Walk::Header(Header::Value { .. }), _) => Some(self.start),
+            // Any held byte of a run's secret value is part of it: none is released at a cut.
+            (Walk::Literal(progress), _) => (progress.matched() >= 1).then_some(self.start),
             _ => None,
         }
     }
@@ -2344,6 +2415,20 @@ impl StreamRedactor {
     /// held by `ExtraPattern` itself. An empty list is [`Self::new`].
     pub fn with_extra_patterns(extra: &[ExtraPattern]) -> Result<Self, DaemonError> {
         Ok(StreamRedactor::with_policy(Policy::with_extra(extra)?))
+    }
+
+    /// [`Self::with_extra_patterns`] plus the run's exact secret values, applied last (D60):
+    /// below the hold bound a completed stream's retained bytes and audit are exactly
+    /// `Redactor::for_run(id, extra, secrets).apply(whole stream)`. A value's recognizer holds
+    /// from its first byte until it completes, so a value split across pushes is one value, and
+    /// a cut never releases a held byte of one.
+    pub fn for_run(
+        extra: &[ExtraPattern],
+        secrets: &super::RunSecrets,
+    ) -> Result<Self, DaemonError> {
+        Ok(StreamRedactor::with_policy(
+            Policy::with_extra(extra)?.with_secrets(secrets)?,
+        ))
     }
 
     fn with_policy(policy: Policy) -> Self {

@@ -164,6 +164,7 @@ impl Rig {
             config_home: self.root.join("config-home").display().to_string(),
             entry_id: None,
             native_since: None,
+            run_secrets: Vec::new(),
         }
     }
 
