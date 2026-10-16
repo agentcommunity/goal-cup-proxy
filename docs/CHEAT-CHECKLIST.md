@@ -94,9 +94,10 @@ consistent, not that the participant followed the rules.
   `AIza`, `glpat-`) lies more than 16 KiB before the run's end. Codex rollouts persist
   `encrypted_content` on reasoning items, so such runs are common. Re-measure on a long chain.
 - **Redaction residuals (H-20).** A PEM block runs from its `BEGIN` line to the first `END` line
-  that starts within 15 872 bytes, else it is those bytes. Only the parts inside JSON strings are
-  redacted, so a key streamed as many SSE text deltas loses every delta's text, the JSON between
-  the deltas stays, and every record parses. What still leaks:
+  that starts within 15 872 bytes, else it is those bytes. In it, the parts inside JSON strings are
+  redacted, and so is a part outside them that holds a run of 16 or more base64 characters with a
+  letter (a key in raw text whose quotes do not pair). So a key streamed as many SSE text deltas
+  loses every delta's text and the JSON between the deltas stays. What still leaks:
   - **A `BEGIN` line split across two strings (H-29).** It is no `BEGIN` to the rule, and nothing
     of the key is redacted. Model output arrives token by token, so this is the common case for a
     key the model prints. Measured on 216 synthetic SSE streams (Anthropic, chat-completions and
@@ -108,9 +109,14 @@ consistent, not that the participant followed the rules.
     measured fits (15 504 bytes at most, escaped twice with `\u2192`); escaped three times that
     way (16 284 bytes) it does not.
   - **Over-redaction, not a leak.** A lone `BEGIN` (code that parses PEM, `grep` output) empties
-    every string, keys included, for the next 15 872 bytes; the records still parse. A lone
-    `BEGIN` followed within the bound by another key's `END` is one block across records, cut
-    the same way.
+    every string, keys included, for the next 15 872 bytes. A lone `BEGIN` followed within the
+    bound by another key's `END` is one block across records, cut the same way. A second `BEGIN`
+    inside a block is part of it, in the stream as in the whole-record policy. The records inside
+    a block still parse, with three exceptions, each of which redacts more: framing outside the
+    strings that holds a base64 run with a letter (an SSE `id:` line carrying a ULID, say) is
+    replaced whole; a connector rule's claim that spans quotes (a JSON object value) merges with
+    the block and takes the quotes between; and a `BEGIN` line longer than about 450 bytes (no real
+    label is) makes the stream fail closed to the end of that record, or of a one-line body.
 
   An invalid UTF-8 byte reads as `0` when the rules match, so it no longer ends a key.
 - **The proxy credential reaches the provider, not the trace (H8).** The harness's

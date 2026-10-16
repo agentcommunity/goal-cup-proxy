@@ -750,12 +750,19 @@ pub(crate) fn candidates<'a>(
     found_all
 }
 
-/// The parts of a PEM block's range `start..end` that lie inside JSON strings: the range is
-/// cut at every unescaped `"` (one after an even run of backslashes), starting inside a string,
-/// because the `BEGIN` that starts it is text. So a key streamed as many string deltas loses
-/// every delta's text and keeps the JSON between them, and each record still parses. A piece
-/// loses any backslashes it ends on, so an escaped quote at the bound (`\"`) is never split.
-/// Text with no quote is one piece, the whole range. A piece left empty is dropped.
+/// The parts of a PEM block's range `start..end` that are redacted: the range is cut at every
+/// unescaped `"` (one after an even run of backslashes), starting inside a string, because the
+/// `BEGIN` that starts it is text, and every piece inside a string is kept as a claim. So a key
+/// streamed as many string deltas loses every delta's text and keeps the JSON between them, and
+/// each record still parses. A piece loses any backslashes it ends on, so an escaped quote at
+/// the bound (`\"`) is never split. Text with no quote is one piece, the whole range. A piece
+/// left empty is dropped.
+///
+/// A piece outside the strings is a claim too when it holds a key-shaped run
+/// ([`holds_a_base64_run`]). JSON and SSE framing never does: event names break at `_` and
+/// `.`, and a number has no letter. Raw text does, when the quotes do not pair as JSON (a note
+/// that mentions a BEGIN, then quotes once, then prints a whole key), so there the key's body is
+/// still redacted, as it was before the cut (H-20 re-review).
 pub fn string_pieces(bytes: &[u8], start: usize, end: usize) -> Vec<(usize, usize)> {
     let mut pieces = Vec::new();
     let mut push = |from: usize, mut to: usize| {
@@ -769,19 +776,36 @@ pub fn string_pieces(bytes: &[u8], start: usize, end: usize) -> Vec<(usize, usiz
     let (mut inside, mut from, mut slashes) = (true, start, 0usize);
     for (at, &b) in bytes.iter().enumerate().take(end).skip(start) {
         if b == b'"' && slashes % 2 == 0 {
-            if inside {
+            if inside || holds_a_base64_run(&bytes[from..at]) {
                 push(from, at);
-            } else {
-                from = at + 1;
             }
+            from = at + 1;
             inside = !inside;
         }
         slashes = if b == b'\\' { slashes + 1 } else { 0 };
     }
-    if inside {
+    if inside || holds_a_base64_run(&bytes[from..end]) {
         push(from, end);
     }
     pieces
+}
+
+/// Whether `bytes` holds a run of sixteen or more base64 characters (`[A-Za-z0-9+/=]`) with at
+/// least one letter in it: a line of a key's body, and nothing JSON framing holds.
+pub fn holds_a_base64_run(bytes: &[u8]) -> bool {
+    let (mut run, mut letter) = (0usize, false);
+    for &b in bytes {
+        if b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=') {
+            run += 1;
+            letter |= b.is_ascii_alphabetic();
+            if run >= 16 && letter {
+                return true;
+            }
+        } else {
+            (run, letter) = (0, false);
+        }
+    }
+    false
 }
 
 /// The end of the UTF-8 character that `end` falls inside, or `end` on a boundary. The block

@@ -854,6 +854,11 @@ enum Pem {
 /// (`super::PEM_BODY_MAX`, which says why 15.5 KiB): an END line must start within them, and
 /// without one the block is them. A block this long, with a BEGIN and an END line, fits the
 /// hold, so a lone BEGIN is decided below it.
+///
+/// The 512 bytes left are room for a BEGIN line and an END line with real labels (the longest,
+/// `-----BEGIN ENCRYPTED PRIVATE KEY-----`, is 37 bytes). The label is `[A-Z ]*`, unbounded: a
+/// BEGIN line longer than about 450 bytes holds its block past the hold, and the stream fails
+/// closed there. That redacts more than the whole-record policy, never less.
 const PEM_BODY_MAX: u32 = super::PEM_BODY_MAX as u32;
 const _: () = assert!(super::PEM_BODY_MAX + 512 <= MAX_HELD_BYTES);
 
@@ -1509,6 +1514,19 @@ fn jwt_step(seg: &mut u8, count: &mut u8, u: Unit) -> bool {
     }
 }
 
+/// Whether a PEM walk, already stepped with this unit, is in its body with this unit inside
+/// its bounded window (body bytes `0..PEM_BODY_MAX`; a BEGIN starts on a one-byte `-`, so the
+/// unit's body offset is `n - 1`). Then no BEGIN starts here: the whole-record regex's match from
+/// the earlier BEGIN covers this byte whatever follows (the lazy arm ends at an END after it, or
+/// the bounded arm takes it), and `find_iter` resumes after that match. Holding a second BEGIN
+/// the regex never reports would keep the first block undecided past the hold and fail the
+/// stream closed (H-20 re-review).
+fn in_a_pem_window(candidates: &[Candidate]) -> bool {
+    candidates
+        .iter()
+        .any(|c| matches!(c.walk, Walk::Pem(Pem::Body { n, .. }) if n <= PEM_BODY_MAX))
+}
+
 /// One live candidate: a literal, where it started, and its recognizer.
 #[derive(Debug, Clone)]
 struct Candidate {
@@ -1893,7 +1911,11 @@ impl Scanner {
             self.end_redaction(off, out);
             return false;
         }
+        let in_block = in_a_pem_window(&red.live);
         for lit in 0..policy.len() {
+            if in_block && matches!(policy.form(lit), Some(Form::PrivateKey)) {
+                continue;
+            }
             if let Some(walk) = Candidate::spawn(policy, lit, u, self.prev_local) {
                 let mut c = Candidate {
                     lit,
@@ -1918,7 +1940,11 @@ impl Scanner {
     fn step_unit(&mut self, policy: &Policy, u: Unit, off: u64, len: usize) {
         self.candidates
             .retain_mut(|c| c.step(policy, u, off, len) == Step::Live);
+        let in_block = in_a_pem_window(&self.candidates);
         for lit in 0..policy.len() {
+            if in_block && matches!(policy.form(lit), Some(Form::PrivateKey)) {
+                continue;
+            }
             if let Some(walk) = Candidate::spawn(policy, lit, u, self.prev_local) {
                 let mut c = Candidate {
                     lit,

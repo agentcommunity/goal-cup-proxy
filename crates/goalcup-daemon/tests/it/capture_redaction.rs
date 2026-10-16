@@ -4044,3 +4044,147 @@ fn a_key_streamed_as_sse_deltas_is_redacted_in_every_delta() {
     }
     assert!(checked > 10_000);
 }
+
+/// H-20 re-review: a second BEGIN inside a lone BEGIN's block is no match to the whole-record
+/// regex (it lies inside the first match), but the stream held it to its own bound, so the first
+/// block outlived the hold and the stream failed closed: a one-line request body lost every
+/// later turn. The stream no longer starts a BEGIN inside an open block. Two BEGIN mentions
+/// 0.5, 4, 8 and 15.9 KB apart, in a one-line JSON body and in JSONL: the stream equals the
+/// whole-record policy at three chunkings (and `spikes/redact.py` agrees), every record parses,
+/// and every later turn's marker past the blocks is kept.
+#[test]
+fn a_second_begin_inside_a_block_keeps_the_stream_equal_to_the_record() {
+    const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
+    for gap in [500usize, 4000, 8000, 15_900] {
+        for one_line in [true, false] {
+            let name = format!("gap {gap}, one line {one_line}");
+            let (open, sep, close) = if one_line {
+                (r#"{"model":"m","messages":["#, ",", "]}\n")
+            } else {
+                ("", "\n", "\n")
+            };
+            let turn = |text: &str| format!(r#"{{"role":"user","content":"{text}"}}"#);
+            let mut turns = vec![turn(&format!("parse lines that start with {BEGIN} please"))];
+            let mut filler = 0;
+            loop {
+                let so_far: usize = turns.iter().map(|t| t.len() + 1).sum();
+                if so_far + 40 >= gap {
+                    break;
+                }
+                let n = (gap - so_far - 40).min(200);
+                turns.push(turn(&"x".repeat(n.saturating_sub(30).max(1))));
+                filler += 1;
+            }
+            turns.push(turn(&format!("and also {BEGIN} here")));
+            let first_later = turns.len();
+            for i in 0..1000 {
+                turns.push(turn(&format!("later turn MARK-{i:04} ordinary text")));
+            }
+            let input = format!("{open}{}{close}", turns.join(sep));
+            assert!(filler > 0 || gap < 600, "{name}");
+            let (out, spans) = all_three_agree(&name, input.as_bytes());
+            let text = String::from_utf8(out).unwrap();
+            for line in text.lines() {
+                serde_json::from_str::<serde_json::Value>(line).expect("each record parses");
+            }
+            // Every marker that starts past the last block's bound is kept.
+            let last = spans.iter().map(|s| s.end).max().unwrap() as usize;
+            let mut kept = 0;
+            for t in &turns[first_later..] {
+                let at = input.find(t.as_str()).unwrap();
+                if at > last {
+                    assert!(text.contains(t.as_str()), "{name}: {t} lost");
+                    kept += 1;
+                }
+            }
+            assert!(kept > 600, "{name}: {kept} later turns kept");
+        }
+    }
+}
+
+/// H-20 re-review: in raw text the quotes need not pair as JSON. A note mentions a BEGIN, quotes
+/// once, then prints a whole key: the key's body fell outside the pieces the block cut at quotes
+/// and was kept. A piece outside the strings that holds a key-shaped run is redacted too, so no
+/// 16-character run of the key survives, and the stream, the whole-record policy and
+/// `spikes/redact.py` agree. With the quotes paired, ordinary JSON framing is still kept.
+#[test]
+fn a_key_after_an_odd_quote_in_raw_text_is_still_redacted() {
+    let b64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut rng = Rng(0x0DD_9007E);
+    let lines: Vec<String> = (0..26)
+        .map(|_| (0..64).map(|_| char::from(b64[rng.below(64)])).collect())
+        .collect();
+    for quotes in [1, 3] {
+        let note = format!(
+            "# Notes\n\nKeys start with a `-----BEGIN PRIVATE KEY-----` line.\n{}He said \"use this one:\n\
+             -----BEGIN RSA PRIVATE KEY-----\n{}\n-----END RSA PRIVATE KEY-----\nThanks.\n",
+            "a \"quoted\" word, ".repeat((quotes - 1) / 2),
+            lines.join("\n")
+        );
+        let name = format!("{quotes} quotes");
+        let (out, _) = all_three_agree(&name, note.as_bytes());
+        for line in &lines {
+            if let Some(run) = no_run_of_len(&out, line.as_bytes(), 16) {
+                panic!("{name}: {run:?} of the key survives");
+            }
+        }
+        assert!(out.starts_with(b"# Notes\n\nKeys start with a `"), "{name}");
+    }
+}
+
+/// No `n`-byte run of `secret` is in `out`.
+fn no_run_of_len(out: &[u8], secret: &[u8], n: usize) -> Option<String> {
+    secret
+        .windows(n)
+        .find(|w| contains(out, w))
+        .map(|w| String::from_utf8_lossy(w).into_owned())
+}
+
+/// H-20 re-review (Minor): the 512 bytes the bound leaves under the hold are room for a real
+/// BEGIN line. A label far longer than any real one holds its block past the hold, and the
+/// stream fails closed there: it may redact more than the whole-record policy, but never less,
+/// and no run of the key survives in either.
+#[test]
+fn a_long_begin_label_fails_safe() {
+    let b64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut rng = Rng(0x1AB_E15);
+    let lines: Vec<String> = (0..26)
+        .map(|_| (0..64).map(|_| char::from(b64[rng.below(64)])).collect())
+        .collect();
+    for label in [450usize, 500, 1100, 4000] {
+        let begin = format!("-----BEGIN {} PRIVATE KEY-----", "A".repeat(label));
+        for (shape, input) in [
+            (
+                "json",
+                format!(
+                    "{{\"text\":\"{begin}\\n{}\"}}\n{{\"next\":1}}\n",
+                    lines.join("\\n")
+                ),
+            ),
+            ("raw", format!("{begin}\n{}\n", lines.join("\n"))),
+        ] {
+            let name = format!("label {label} {shape}");
+            let input = input.as_bytes();
+            let want = legacy(input);
+            let mut rng = Rng(label as u64);
+            for chunks in [
+                vec![MAX_SEGMENT_BYTES],
+                vec![1],
+                random_chunks(&mut rng, 97),
+            ] {
+                let got = retained_of(&stream_through(StreamRedactor::new(), input, &chunks, 2), 1);
+                assert!(
+                    uncovered(&want.1, &got.1).is_empty(),
+                    "{name}: the stream redacts less than the whole-record policy"
+                );
+                for (what, out) in [("stream", &got.0), ("record", &want.0)] {
+                    for line in &lines {
+                        if let Some(run) = no_run_of_len(out, line.as_bytes(), 16) {
+                            panic!("{name}: the {what} keeps {run:?} of the key");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

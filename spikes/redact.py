@@ -108,9 +108,11 @@ def union(spans):
 
 
 def string_pieces(text, start, end):
-    """The parts of text[start:end] inside JSON strings: cut at every unescaped quote (one after
-    an even run of backslashes), starting inside. A piece loses the backslashes it ends on, and
-    an empty piece is dropped. The daemon's `string_pieces` in redact.rs."""
+    """The parts of text[start:end] a block redacts: cut at every unescaped quote (one after an
+    even run of backslashes), starting inside a string, every piece inside a string, and a piece
+    outside one when it holds a key-shaped run (holds_a_base64_run): raw text whose quotes do
+    not pair as JSON. A piece loses the backslashes it ends on, and an empty piece is dropped.
+    The daemon's `string_pieces` in redact.rs."""
     pieces, inside, frm, slashes = [], True, start, 0
 
     def push(a, b):
@@ -122,15 +124,23 @@ def string_pieces(text, start, end):
     for at in range(start, end):
         c = text[at]
         if c == '"' and slashes % 2 == 0:
-            if inside:
+            if inside or holds_a_base64_run(text[frm:at]):
                 push(frm, at)
-            else:
-                frm = at + 1
+            frm = at + 1
             inside = not inside
         slashes = slashes + 1 if c == "\\" else 0
-    if inside:
+    if inside or holds_a_base64_run(text[frm:end]):
         push(frm, end)
     return pieces
+
+
+BASE64_RUN = re.compile(r"[A-Za-z0-9+/=]{16,}")
+
+
+def holds_a_base64_run(text):
+    """A run of sixteen or more base64 characters with a letter in it (the daemon's
+    `holds_a_base64_run`)."""
+    return any(re.search(r"[A-Za-z]", m.group(0)) for m in BASE64_RUN.finditer(text))
 
 
 def block_spans(text):
