@@ -2,7 +2,7 @@ schema_version = 1
 id = "kit-synthetic-stdout-json"
 
 [capture]
-args = ["-I", "-S", "@STAND_IN@", "@PORT@", "@TEST_ID@", "@MARKER@", "--"]
+args = ["-I", "-S", "@STAND_IN@", "@PORT@", "@TEST_ID@", "@MARKER@", "@GO@", "--"]
 continuation = "one stdout-bound offline echo and one snapshot"
 
 [capture.executable]

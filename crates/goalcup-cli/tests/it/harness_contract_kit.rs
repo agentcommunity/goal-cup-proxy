@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, UNIX_EPOCH};
 use support::{KIT_CREDENTIAL, KIT_CREDENTIAL_MARKER_PREFIX};
 
@@ -65,6 +66,9 @@ struct Staged {
     case: Case,
     connector_dir: PathBuf,
     marker: PathBuf,
+    /// The file a gated stand-in waits for before it rewrites its snapshot. `Some` when the
+    /// case's manifest names `@GO@`.
+    go: Option<PathBuf>,
 }
 
 struct Completed {
@@ -199,11 +203,14 @@ impl Staged {
         let stand_in = stand_ins.join(format!("{}.py", case.name));
         std::fs::copy(case.dir.join("stand-in.py"), &stand_in).unwrap();
         let marker = markers.join(&case.name);
+        let go_path = markers.join(format!("{}.go", case.name));
 
-        let manifest = std::fs::read_to_string(case.dir.join("harness.toml"))
-            .unwrap()
+        let template = std::fs::read_to_string(case.dir.join("harness.toml")).unwrap();
+        let go = template.contains("@GO@").then(|| go_path.clone());
+        let manifest = template
             .replace("@STAND_IN@", &toml_fragment(&stand_in))
             .replace("@MARKER@", &toml_fragment(&marker))
+            .replace("@GO@", &toml_fragment(&go_path))
             .replace("@PORT@", &endpoint["port"].as_u64().unwrap().to_string())
             .replace("@TEST_ID@", endpoint["test_id"].as_str().unwrap());
         let connector_dir = world.connectors.join(&case.expect.id);
@@ -217,10 +224,72 @@ impl Staged {
             case: case.clone(),
             connector_dir,
             marker,
+            go,
         }
     }
 
     fn start(&self, dev: bool) -> Output {
+        match self.go.as_deref() {
+            Some(go) if dev => self.start_gated(go),
+            _ => self.command(dev).output().unwrap(),
+        }
+    }
+
+    /// Run a case whose stand-in waits for `go` between its first and its second snapshot.
+    /// The runner writes `go` once the sealed-to-be chain holds the first snapshot, so the
+    /// gap between the two writes is the daemon's own progress, never a sleep that a loaded
+    /// host can outrun.
+    fn start_gated(&self, go: &Path) -> Output {
+        use std::process::Stdio;
+        let child = self
+            .command(true)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let first = format!(
+            "{}:{}#g1",
+            self.case.expect.native_source, self.case.expect.native_path
+        );
+        let first_bytes = self.case.expect.native_g1.as_bytes();
+        // The releaser stops when the child is gone; the stand-in's own wait is bounded too.
+        let finished = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let until = std::time::Instant::now() + Duration::from_secs(60);
+                while std::time::Instant::now() < until && !finished.load(Ordering::SeqCst) {
+                    if let Ok(Some(entry)) = goalcup_cli::entries::latest_entry(&self.world.cfg) {
+                        if !self
+                            .world
+                            .trace(&entry.entry_id)
+                            .join("chain.jsonl")
+                            .is_file()
+                        {
+                            std::thread::sleep(Duration::from_millis(50));
+                            continue;
+                        }
+                        let chain = self.world.chain(&entry.entry_id);
+                        let held = chain.streams().values().any(|stream| {
+                            stream.source == CaptureSource::Native
+                                && stream.meta.label == first
+                                && stream.data == first_bytes
+                        });
+                        if held {
+                            std::fs::write(go, b"").unwrap();
+                            return;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            });
+            let output = child.wait_with_output().unwrap();
+            finished.store(true, Ordering::SeqCst);
+            output
+        })
+    }
+
+    fn command(&self, dev: bool) -> Command {
         use std::os::unix::process::CommandExt;
         let mut command = Command::new(env!("CARGO_BIN_EXE_goalcup"));
         command
@@ -248,9 +317,8 @@ impl Staged {
             .arg("--goal-file")
             .arg(&self.world.goal)
             .env("GOALCUP_TEST_DISK", format!("{RESERVE},0,50"))
-            .process_group(0)
-            .output()
-            .unwrap()
+            .process_group(0);
+        command
     }
 
     fn complete(self) -> Completed {

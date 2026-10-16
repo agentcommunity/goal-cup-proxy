@@ -87,6 +87,35 @@ fn doctor_lists_a_harness_only_unknown_hint_as_capture_only() {
     assert!(said.contains("capture-only"), "{said}");
 }
 
+/// A hint a built-in decoder accepts is reported as accepted and never as capture-only. The
+/// `chat-shared-home` fixture declares `anthropic-messages` (wire) and `claude-code-jsonl`
+/// (native), both decoded.
+#[test]
+fn doctor_lists_a_hint_a_decoder_accepts_as_accepted() {
+    let tmp = tempfile::tempdir().unwrap();
+    support::copy_fixture_connector("chat-shared-home", tmp.path(), "decoded", "example-decoded");
+    let cfg = tempfile::tempdir().unwrap();
+    let mut out = Vec::new();
+    run_with(
+        None,
+        tmp.path(),
+        cfg.path(),
+        &std::collections::BTreeMap::new(),
+        &opts(None),
+        &mut out,
+    )
+    .expect("doctor reports even with no daemon");
+    let said = String::from_utf8(out).unwrap();
+    let line = said
+        .lines()
+        .find(|line| line.contains("registry accepted:"))
+        .unwrap_or_else(|| panic!("no `accepted:` line: {said}"));
+    assert!(line.contains("anthropic-messages"), "{said}");
+    assert!(line.contains("claude-code-jsonl"), "{said}");
+    assert!(!said.contains("no decoder accepts"), "{said}");
+    assert!(!said.contains("capture-only"), "{said}");
+}
+
 /// With no `--harness`, doctor checks the harness `goalcup prep` settled, so a harness the
 /// participant never installed cannot fail the report; `--harness all` still checks them all.
 #[test]

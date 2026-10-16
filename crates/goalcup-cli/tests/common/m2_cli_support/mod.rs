@@ -687,8 +687,7 @@ fn write_keyed_connector(connectors: &Path, capture_connectors: &Path, exe: &Pat
         KEYED_FAKE_ID,
     );
     let path = dir.join("harness.toml");
-    let harness = std::fs::read_to_string(&path).unwrap();
-    let mut harness = harness;
+    let mut harness = std::fs::read_to_string(&path).unwrap();
     // `goalcup start` probes every provider host that is not loopback before it creates
     // anything; a test never reaches the network, and the fake never calls its provider.
     for (from, to) in [

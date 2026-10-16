@@ -186,13 +186,44 @@ else
 fi
 
 # 1b. A Node harness needs NODE_USE_ENV_PROXY. Counted only when it fails.
+# The interpreter a shebang line names, as a basename: `#!/usr/bin/env -S node --x` and
+# `#!/opt/node/bin/node` both give `node`. The basename is what counts: a path that merely
+# contains "node" (/Users/me/node-apps/venv/bin/python) names `python`. Prints nothing when
+# the line is not a shebang.
+shebang_interpreter() {
+  line=$(printf '%s' "$1" | tr -d '\r')
+  case $line in
+    '#!'*) ;;
+    *) return 0 ;;
+  esac
+  set -f
+  # shellcheck disable=SC2086
+  set -- ${line#??}
+  set +f
+  [ $# -gt 0 ] || return 0
+  prog=${1##*/}
+  if [ "$prog" = env ]; then
+    shift
+    while [ $# -gt 0 ]; do
+      case $1 in
+        -u) shift 2 || return 0 ;;
+        -* | *=*) shift ;;
+        *) break ;;
+      esac
+    done
+    [ $# -gt 0 ] || return 0
+    prog=${1##*/}
+  fi
+  printf '%s\n' "$prog"
+}
+
 program=$(sed -n 's/^[[:space:]]*program[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
   "connectors/$id/harness.toml" | head -n 1)
 exe=''
 [ -z "$program" ] || exe=$(command -v -- "$program" 2>/dev/null || true)
 if [ -n "$exe" ] && [ -f "$exe" ]; then
-  case $(head -c 128 "$exe" 2>/dev/null | head -n 1) in
-    '#!'*node*)
+  case $(shebang_interpreter "$(head -c 128 "$exe" 2>/dev/null | head -n 1)") in
+    node | nodejs)
       if grep -Eq '^[[:space:]]*NODE_USE_ENV_PROXY[[:space:]]*=[[:space:]]*"1"' \
         "connectors/$id/harness.toml"; then
         echo "node harness: $exe is a node script and NODE_USE_ENV_PROXY is set"

@@ -24,9 +24,10 @@ priority = 100
 # one-at-a-time for exactly those modules.
 [test-groups]
 serial = { max-threads = 1 }
-# The two suites that run connectors through the real binaries, one at a time: the kit's timed
-# snapshot case (a rewrite 0.75 s after the first write) lost its first generation on Linux while
-# the connector contract's runs shared the CPU.
+# The two suites that run connectors through the real binaries, one at a time. The kit's snapshot
+# cases wait for the runner to see their first write before they rewrite it; only the
+# controlled-workload case still rewrites 0.75 s after its first write, and it lost its first
+# generation on Linux while the connector contract's runs shared the CPU.
 connector-runs = { max-threads = 1 }
 
 [[profile.default.overrides]]

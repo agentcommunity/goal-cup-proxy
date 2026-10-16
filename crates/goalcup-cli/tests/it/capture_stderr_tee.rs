@@ -2,8 +2,9 @@
 //!
 //! The harness prints one `session_id: <id>` line on stderr after its turn (the rule here is
 //! `support::stderr_marker_rule`). The tee forwards every byte of both streams unchanged, scans
-//! them for the key's fragments, and reads that one line under a strict grammar. Everything here uses in-memory readers, a socket pair, or a
-//! `/bin/sh` child; the synthetic key is `secret_support::KEY`.
+//! them for the key's fragments, and reads that one line under a strict grammar. Everything here
+//! uses in-memory readers, a socket pair, or a `/bin/sh` child; the synthetic key is
+//! `secret_support::KEY`.
 
 use crate::common::secret_support;
 use crate::common::support;

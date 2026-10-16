@@ -1,5 +1,5 @@
-# The whole private Hermes configuration of a capture run (readiness record, "Native snapshot
-# activation and collection"). It names no provider, host, key or base URL, and it must not:
+# The whole private Hermes configuration of a capture run (facts: docs/harnesses/hermes-cli.md,
+# "Snapshot Goal Cup reads"). It names no provider, host, key or base URL, and it must not:
 # no `fallback_providers`, no `model.base_url`, no `providers:` block, no auxiliary override.
 sessions:
   write_json_snapshots: true
@@ -8,7 +8,7 @@ auxiliary:
     enabled: false
 compression:
   enabled: false
-# Secret review I-2. Hermes would download a `tirith` command scanner from GitHub at start and
+# Hermes would download a `tirith` command scanner from GitHub at start and
 # run it with its whole environment, the provider key included. The pinned run has no scanner
 # and wants none (the scanner is fail-open by default), so it is off and nothing is fetched.
 security:

@@ -329,8 +329,8 @@ class CheckConnectorTest(unittest.TestCase):
 
     # A Node harness without NODE_USE_ENV_PROXY.
 
-    def node_harness(self, manifest_env: str) -> None:
-        write(self.bin / "toy", "#!/usr/bin/env node\nconsole.log('hi')\n", 0o755)
+    def node_harness(self, manifest_env: str, shebang: str = "#!/usr/bin/env node") -> None:
+        write(self.bin / "toy", shebang + "\nconsole.log('hi')\n", 0o755)
         write(
             self.repo / "connectors/toy-cli/harness.toml",
             'id = "toy-cli"\n[capture.executable]\nprogram = "toy"\n[capture.env]\n'
@@ -351,6 +351,33 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("NODE_USE_ENV_PROXY is set", result.stdout)
         self.assertIn("toy-cli: 6 passed, 0 failed, 0 skipped", result.stdout)
+
+    def test_a_node_path_in_a_non_node_shebang_is_not_a_node_script(self) -> None:
+        # The path contains "node", but the interpreter is python: no false FAIL.
+        for shebang in (
+            "#!/Users/me/node-apps/venv/bin/python",
+            "#!/usr/bin/env -S /opt/node_modules/.bin/python3 -u",
+            "#!/usr/local/nodejs-tools/bin/bash",
+        ):
+            with self.subTest(shebang=shebang):
+                self.node_harness('# NODE_USE_ENV_PROXY = "1"\n', shebang)
+                result = self.run_script("toy-cli", uname="Darwin")
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertNotIn("is a node script", result.stdout)
+                self.assertNotIn("FAIL node proxy", result.stdout)
+
+    def test_node_is_found_by_the_interpreter_basename(self) -> None:
+        for shebang in (
+            "#!/usr/bin/env node",
+            "#!/usr/bin/env -S node --no-warnings",
+            "#!/opt/homebrew/opt/node@22/bin/node",
+            "#!/usr/bin/nodejs",
+        ):
+            with self.subTest(shebang=shebang):
+                self.node_harness('# NODE_USE_ENV_PROXY = "1"\n', shebang)
+                result = self.run_script("toy-cli", uname="Darwin")
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("FAIL node proxy (NODE_USE_ENV_PROXY missing)", result.stdout)
 
     def test_a_program_not_on_path_skips_the_node_check_with_a_note(self) -> None:
         write(

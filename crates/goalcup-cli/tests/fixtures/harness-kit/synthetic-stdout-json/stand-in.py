@@ -55,6 +55,20 @@ def echo(port, test_id):
         raise RuntimeError("echo mismatch")
 
 
+def wait_for_go(path, patience=60.0):
+    """Wait for the runner to say it holds the first snapshot, so the rewrite is a second one.
+
+    The runner creates `path` once the recorded chain holds the first snapshot. A fixed sleep
+    here raced the recorder on a loaded host; this wait depends on the recorder, not the clock.
+    """
+    deadline = time.monotonic() + patience
+    while not os.path.exists(path):
+        if time.monotonic() > deadline:
+            print("kit stand-in: the runner never released the rewrite", file=sys.stderr, flush=True)
+            sys.exit(4)
+        time.sleep(0.02)
+
+
 def write_snapshot(path, message):
     pending = path + ".pending"
     with open(pending, "w") as stream:
@@ -64,7 +78,7 @@ def write_snapshot(path, message):
     os.replace(pending, path)
 
 
-port, test_id, marker = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+port, test_id, marker, go = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 open(marker, "w").close()
 print(json.dumps({"event": {"kind": "session.started"},
                   "session": {"id": IDENTITY}}), flush=True)
@@ -73,6 +87,6 @@ write_snapshot(snapshot, "snapshot first")
 decoy = os.path.join(os.environ["SYNTHJSON_HOME"], "snapshots", "wrong_json_case.json")
 with open(decoy, "w") as stream:
     json.dump({"message": "stdout decoy"}, stream)
-time.sleep(0.75)
+wait_for_go(go)
 write_snapshot(snapshot, "stdout snapshot")
 echo(port, test_id)

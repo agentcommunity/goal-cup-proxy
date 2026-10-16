@@ -18,6 +18,7 @@ use goalcup_cli::launch::{
     build_capture_launch, build_resumed_launch, child_secret_for_harness, harness_arg_refusal,
 };
 use goalcup_cli::preflight::{Level, harness_pin_gate};
+use goalcup_protocol::capture::{CaptureSource, StreamKey};
 use goalcup_protocol::capture_policy::{SHARED_CA_ENV, capture_arg_denied};
 use goalcup_protocol::harness::{
     ConfigHome, HarnessManifest, IdentitySource, Origin, PlatformKey, Strategy,
@@ -25,6 +26,8 @@ use goalcup_protocol::harness::{
 use goalcup_protocol::manifest::LaunchMode;
 use goalcup_protocol::pins::shipped_connector_ids;
 use goalcup_protocol::template::{TemplateVars, render};
+use goalcup_verifier::capture_analysis::api::StreamOpen;
+use goalcup_verifier::capture_analysis::registry::DecoderRegistry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -181,6 +184,12 @@ fn every_connector_refuses_its_own_home_variable_reserved_prefixes_and_guarded_o
     for id in shipped_connector_ids() {
         let m = load(&id).loaded.manifest;
         let c = &m.capture;
+        // The control: the unedited manifest validates, so a refusal below is the edit's.
+        assert_eq!(
+            refusal_with(&m, |_| {}),
+            None,
+            "{id}: the pinned manifest does not validate on its own"
+        );
         let mut names: Vec<String> = c.home.env.iter().cloned().collect();
         names.extend(c.reserved_env_prefixes.iter().map(|p| format!("{p}X")));
         names.extend(c.ca.env.iter().cloned());
@@ -189,8 +198,10 @@ fn every_connector_refuses_its_own_home_variable_reserved_prefixes_and_guarded_o
                 p.capture.env.insert(name.clone(), "1".to_string());
             });
             assert!(
-                refused.is_some(),
-                "{id}: its own `{name}` was admitted in capture.env"
+                refused
+                    .as_deref()
+                    .is_some_and(|why| why.contains("capture.env")),
+                "{id}: its own `{name}` was not refused in capture.env: {refused:?}"
             );
         }
         for arg in own_guard_probes(&m) {
@@ -200,8 +211,10 @@ fn every_connector_refuses_its_own_home_variable_reserved_prefixes_and_guarded_o
             );
             let refused = refusal_with(&m, |p| p.capture.args.insert(0, arg.clone()));
             assert!(
-                refused.is_some(),
-                "{id}: `{arg}` was admitted in capture.args"
+                refused
+                    .as_deref()
+                    .is_some_and(|why| why.contains("capture.args")),
+                "{id}: `{arg}` was not refused in capture.args: {refused:?}"
             );
         }
     }
@@ -660,20 +673,62 @@ fn doctor_reports_every_connector_and_each_of_its_protocol_hints() {
         let said = String::from_utf8(out).unwrap();
         assert!(said.contains(&format!("{id} only")), "{id}: {said}");
         let capture = load(&id).loaded.manifest.capture;
-        let hints = capture
+        // Each hint is judged by the registry, the way doctor judges it: a wire hint as a
+        // request stream, a native hint as a native stream.
+        let registry = DecoderRegistry::builtin();
+        let key = StreamKey {
+            producer: "contract".into(),
+            stream: 1,
+        };
+        let judged = |source, hint: &str| {
+            registry
+                .accepting(&StreamOpen::new(&key, source, Some(hint), None))
+                .is_empty()
+        };
+        let mut accepted = BTreeSet::new();
+        let mut undecoded = BTreeSet::new();
+        let wire = capture
             .hosts
             .iter()
             .filter_map(|h| h.protocol_hint.as_deref())
-            .chain(
-                capture
-                    .native
-                    .iter()
-                    .filter_map(|n| n.protocol_hint.as_deref()),
-            );
-        for hint in hints {
+            .map(|hint| (CaptureSource::WireRequest, hint));
+        let native = capture
+            .native
+            .iter()
+            .filter_map(|n| n.protocol_hint.as_deref())
+            .map(|hint| (CaptureSource::Native, hint));
+        for (source, hint) in wire.chain(native) {
             assert!(
                 said.contains(hint),
                 "{id}: `{hint}` is not reported: {said}"
+            );
+            if judged(source, hint) {
+                undecoded.insert(hint);
+            } else {
+                accepted.insert(hint);
+            }
+        }
+        // A hint a decoder accepts is on the `accepted:` line and in no `no decoder accepts`
+        // line; a hint none accepts is the reverse. A doctor that called every hint
+        // capture-only would still name each one, so naming is not enough.
+        let accepted_line = said
+            .lines()
+            .find(|line| line.contains("registry accepted:"))
+            .unwrap_or_default();
+        let refused_line = said
+            .lines()
+            .find(|line| line.contains("no decoder accepts"))
+            .unwrap_or_default();
+        for hint in &accepted {
+            assert!(
+                accepted_line.contains(hint) && !refused_line.contains(hint),
+                "{id}: `{hint}` has a decoder but doctor did not say accepted: {said}"
+            );
+        }
+        for hint in &undecoded {
+            assert!(
+                refused_line.contains(&format!("`{hint}`")) && !accepted_line.contains(hint),
+                "{id}: `{hint}` has no decoder but doctor did not say capture-only: {said}"
             );
         }
     }

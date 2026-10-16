@@ -1,4 +1,4 @@
-# Hermes Agent 0.19.0, capture only (D40, D41). Provenance: docs/qualification/m2-hermes-readiness.md.
+# Hermes Agent 0.19.0, capture only (D40, D41). Facts: docs/harnesses/hermes-cli.md.
 schema_version = 1
 id = "hermes-cli"
 
