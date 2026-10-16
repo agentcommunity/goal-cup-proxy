@@ -14,30 +14,33 @@ fn opts(harness: Option<&str>) -> DoctorOptions {
     }
 }
 
-/// `start` of a keyed connector (the `keyed-per-run` fixture): a `--goal-file` start reaches the
-/// launch's own checks. With no provider key in the environment it refuses, naming the variable
-/// and never a value, before the daemon is asked for anything, so no capture workspace or
-/// reserved chain is left behind.
+/// `start` of a headless connector (the `headless-per-run` fixture): a `--goal-file` start
+/// reaches the launch's own checks. With its harness not installed it refuses before the daemon
+/// is asked for anything, so no capture workspace or reserved chain is left behind. A provider
+/// key in the environment changes nothing and is never repeated.
 #[test]
-fn a_goal_file_start_of_a_keyed_connector_refuses_without_a_key_before_the_daemon() {
+fn a_goal_file_start_of_a_headless_connector_refuses_before_the_daemon() {
+    const KEY: &str = crate::common::secret_support::KEY;
     let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "keyed-per-run");
+    let m = support::mock_armed(&tmp, "headless-per-run");
     let goal = tmp.path().join("goal.txt");
     std::fs::write(&goal, "write result.txt").unwrap();
-    let mut o = support::start_options("keyed-per-run");
+    let mut o = support::start_options("headless-per-run");
     o.goal_file = Some(goal);
     o.dev = true;
+    let mut env = support::clean_env_with_no_harness_installed();
+    env.insert("DEEPSEEK_API_KEY".to_string(), KEY.to_string());
     let err = start_with(
         &m,
         &support::fixture_connectors_dir(),
         tmp.path(),
-        &support::clean_env_with_no_harness_installed(),
+        &env,
         &o,
         &mut Vec::new(),
     )
-    .expect_err("no provider key");
+    .expect_err("no harness installed");
     assert_eq!(err.exit_code(), 1, "{err}");
-    assert!(err.to_string().contains("DEEPSEEK_API_KEY"), "{err}");
+    assert!(!err.to_string().contains(KEY), "{err}");
     assert!(
         !err.to_string()
             .contains("cannot be launched for capture by this build yet"),

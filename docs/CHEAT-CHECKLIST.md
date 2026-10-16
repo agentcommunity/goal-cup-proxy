@@ -122,49 +122,27 @@ consistent, not that the participant followed the rules.
   payload, so one stall can lose up to about 2.1 MiB. `seal.json` sits outside the reservation, so
   a failed seal write reads `incomplete` with no further policy.
 
-## Hermes reference row (D41): what the key scan cannot see
+## Provider keys (D61): what the tracer does not hold
 
-The key-fragment scan (`crates/goalcup-cli/src/key_scan.rs`) and the `masked_key` redaction rule
-fail closed where they can. These shapes they do not see.
+The tracer never sees, forwards or stores a participant's provider key. A harness keeps its key
+in its own home, from its own login. So there is no key-fragment scan and no `key-scan.txt`: the
+tracer has no key to scan for. What keeps a key out of a trace is the daemon's redaction of what
+the harness records (the shared rules and `masked_key`), and these shapes it does not see.
 
-- **Since D61 no shipped connector passes a key, so the scan runs for none.** Hermes reads the
-  participant's key from its own `$HERMES_HOME/.env`, which the tracer never reads. What is left
-  is the daemon's shape redaction: a key printed raw or JSON-escaped is removed when a shared rule
-  names its shape (`openai_key` for `sk-…`, `generic_secret_assignment` for `NAME_KEY=…`;
-  `hermes_offline_key.rs` pins it through the trace, the upload chunks and the baseline).
-  **Not caught:** a key the agent encodes before printing it (`base64`, hex, any transform), and a
-  key of a shape no shared rule names, because the tracer never knows the value to derive the
-  forms from. The base64 of a `.env` printed into the session reaches the trace and the upload as
-  base64 text.
-
-- **Encodings read:** the key; its first and last eight bytes; masks of 4, 6 and 8 key bytes with
-  `...`, `…` or `***`; any mask with a gap of at most 16 bytes between the first and last four; the
-  first 16 hex digits of its SHA-256; each of these inside base64 (both alphabets, three
-  alignments). **Not caught:** UTF-16, a JSON `\u00XX`-escaped key, double base64, the key in hex,
-  gzip beyond what is stored literally.
-- **Mask shapes not named:** a suffix-only mask (`****abcd`), `sk-...abcd`, an upper-case prefix, a
-  window gap over 16 bytes. Four characters is not a fragment (D41), so a 16-bit residue can reach
-  the trace and a terminal.
-- **Split masks.** A mask split across two `data_b64` segments is invisible to a text scan of the
-  chain file. `key_scan::scan_run` also decodes each stream through the verifier's reader and scans
-  the bytes in order. A trace it cannot read is `incomplete`, never `clean`. A fragment the
-  redactor already removed is invisible to it.
-- **The verdict file is bound, not locked (H-18).** `<run>/key-scan.txt` ends with the trace digest
-  and a digest of the sorted run and trace listing. `check_verdict` returns Current, Stale,
-  Unbound or Missing, and only Current is clean. No retention step calls it yet. An in-place
-  rewrite that restores the old modification time is not detected, and the verdict word can be
-  edited. A Ctrl-C that kills `goalcup` writes nothing, which a retention step must read as not clean.
-- **The tee withholds what it sees, not what it cannot.** A shape the scan does not name is
-  forwarded to the terminal. Output held when a descendant keeps a stream open past the finish
-  deadline is never sent.
-- **A JSON `\u`-escaped key reaches the terminal.** The tee and the scans match raw bytes. Only a
-  bound identity is checked decoded (D50).
+- **Hermes reads the participant's key from its own `$HERMES_HOME/.env`**, which the tracer never
+  reads. A key printed raw or JSON-escaped is removed when a shared rule names its shape
+  (`openai_key` for `sk-…`, `generic_secret_assignment` for `NAME_KEY=…`; `hermes_offline_key.rs`
+  pins it through the trace, the upload chunks and the baseline). **Not caught:** a key the agent
+  encodes before printing it (`base64`, hex, any transform), and a key of a shape no shared rule
+  names, because the tracer never knows the value to derive the forms from. The base64 of a `.env`
+  printed into the session reaches the trace and the upload as base64 text.
+- **The harness's home is the participant's.** A key the harness stores there is not read by
+  the tracer. An agent that prints that file into its session is recorded through the same
+  redaction, no more.
 - **"Stays local" is checked by local signal only.** A goal file under Git, `Library/Mobile
   Documents`, `Library/CloudStorage` or a folder named Dropbox, OneDrive, Google Drive or iCloud
   Drive is refused. `~/Desktop` and `~/Documents` are refused only when local state says iCloud
   owns them. No network call. A folder synced in a way those signals do not show is not caught.
-- **Hermes' tool-child environment is source-only evidence.** The blocklist covering
-  `DEEPSEEK_API_KEY` is read from Hermes source; no exercised tool child has shown it.
 - **`masked_key` is soft and has no boundary.** It never wins an overlap, so a mask glued to a
   longer secret is redacted by the longer rule. `spikes/redact.py` (fixtures only) may redact more
   than the daemon, never less.

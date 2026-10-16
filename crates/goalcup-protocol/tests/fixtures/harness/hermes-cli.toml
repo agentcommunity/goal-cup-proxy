@@ -30,9 +30,6 @@ seed = [
   { file = ".update_check" },
 ]
 
-[capture.credential]
-env = "DEEPSEEK_API_KEY"
-
 [capture.ca]
 env = ["HERMES_CA_BUNDLE"]
 mode = "replace"

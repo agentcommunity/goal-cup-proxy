@@ -10,7 +10,6 @@
 //! nextest): each forks, and a fork taken while another test
 //! holds a freshly written script open is how a "text file busy" is made.
 
-use crate::common::secret_support;
 use crate::common::support;
 use crate::common::table_lock::TableLock;
 
@@ -18,11 +17,10 @@ use goalcup_cli::CliError;
 use goalcup_cli::launch::{
     GOAL_ARG_MARKER, GatedSpawn, HeadlessCapture, LaunchPlan, Pipes, ReleasedChildEnd, Spawned,
     StdoutJsonRule, end_released_child, gated_handle, launched_at_now, spawn_gated,
-    stdout_tee_with_rule, tee_marked_capture_with_rule, tee_scoped_capture_with_rule,
+    stdout_tee_with_rule, tee_scoped_capture_with_rule,
 };
 use goalcup_protocol::manifest::{Kill, KillStrategy, LaunchMode};
 use goalcup_protocol::process::{ProcessHandle, is_alive, process_start_identity};
-use secret_support::KEY;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -91,7 +89,7 @@ impl World {
 
     fn gated(&self, script: &str) -> (LaunchPlan, GatedSpawn) {
         let plan = self.plan(script, None, 1);
-        let gated = spawn_gated(&plan, Pipes::default(), PATIENCE, None).expect("a parked child");
+        let gated = spawn_gated(&plan, Pipes::default(), PATIENCE).expect("a parked child");
         (plan, gated)
     }
 
@@ -198,7 +196,7 @@ fn gate_release_execs_with_stable_pid_and_start_identity() {
 fn gated_handle_has_no_native_hint() {
     let w = World::new();
     let plan = w.plan(RAN, Some(NATIVE), 7);
-    let gated = spawn_gated(&plan, Pipes::default(), PATIENCE, None).unwrap();
+    let gated = spawn_gated(&plan, Pipes::default(), PATIENCE).unwrap();
     let handle = gated_handle(&plan, &gated, &launched_at_now()).unwrap();
     assert_eq!(handle.pid, gated.pid);
     assert_eq!(handle.native_pid, None);
@@ -224,7 +222,7 @@ fn parked_child_death_is_never_released() {
     let w = World::new();
     let plan = w.plan(RAN, None, 1);
     // A ready timeout far longer than the assertion below: only EOF or EPIPE can end it early.
-    let gated = spawn_gated(&plan, Pipes::default(), Duration::from_secs(60), None).unwrap();
+    let gated = spawn_gated(&plan, Pipes::default(), Duration::from_secs(60)).unwrap();
     let pid = gated.pid;
     kill9(pid);
     wait_for("the killed child to die", || !is_alive(pid));
@@ -255,7 +253,7 @@ fn pid_read_ends_on_child_death_or_fork_failure() {
     let mut plan = w.plan(RAN, None, 1);
     plan.cwd = w.path("no-such-directory");
     let began = Instant::now();
-    let refused = spawn_gated(&plan, Pipes::default(), Duration::from_secs(60), None).err();
+    let refused = spawn_gated(&plan, Pipes::default(), Duration::from_secs(60)).err();
     assert!(
         matches!(refused, Some(CliError::Io { .. })),
         "the spawn failure is the answer: {refused:?}"
@@ -270,7 +268,7 @@ fn pid_read_ends_on_child_death_or_fork_failure() {
     // A death after the pid is seen as EOF, because the launcher dropped the child's end once
     // the pid arrived; with the end retained the release would wait out its whole 60 s.
     let plan = w.plan(RAN, None, 1);
-    let gated = spawn_gated(&plan, Pipes::default(), Duration::from_secs(60), None).unwrap();
+    let gated = spawn_gated(&plan, Pipes::default(), Duration::from_secs(60)).unwrap();
     kill9(gated.pid);
     wait_for("the killed child to die", || !is_alive(gated.pid));
     let began = Instant::now();
@@ -293,7 +291,6 @@ fn a_piped_stdout_is_the_childs_after_the_release() {
             stderr: false,
         },
         PATIENCE,
-        None,
     )
     .unwrap();
     let mut spawned = gated.release().unwrap();
@@ -352,14 +349,17 @@ fn a_tee_on_a_child_without_its_pipe_refuses_and_ends_the_child() {
     let w = World::new();
     for scoped in [true, false] {
         let plan = w.plan("sleep 30\n", None, 1);
-        let gated = spawn_gated(&plan, Pipes::default(), PATIENCE, None).unwrap();
+        let gated = spawn_gated(&plan, Pipes::default(), PATIENCE).unwrap();
         let pid = gated.pid;
         let mut spawned = gated.release().unwrap();
         let refused = if scoped {
             tee_scoped_capture_with_rule(&mut spawned, support::stdout_event_rule()).err()
         } else {
-            tee_marked_capture_with_rule(&mut spawned, None, Some(support::stderr_marker_rule()))
-                .err()
+            goalcup_cli::capture_tee::tee_stderr_capture_with_rule(
+                &mut spawned,
+                support::stderr_marker_rule(),
+            )
+            .err()
         };
         let error = refused.expect("a tee without its pipe refuses");
         assert!(
@@ -370,60 +370,12 @@ fn a_tee_on_a_child_without_its_pipe_refuses_and_ends_the_child() {
     }
 }
 
-/// The child-only credential reaches the child's environment and nothing else. The
-/// stub reports the variable's presence and length, never its value, into a file the test reads;
-/// the plan the child was started from holds no trace of it.
-#[test]
-fn a_child_secret_is_in_the_childs_environment_only() {
-    let w = World::new();
-    let key = KEY;
-    let secret = keyed_secret(key);
-    let script = "if [ -n \"${DEEPSEEK_API_KEY+x}\" ]; then echo \"present ${#DEEPSEEK_API_KEY}\" > \"$OUT/seen\"; \
-                  else echo absent > \"$OUT/seen\"; fi\n\
-                  /usr/bin/env > \"$OUT/env-names\"\n";
-    let plan = w.plan(script, None, 1);
-    assert!(!plan.env_set.contains_key("DEEPSEEK_API_KEY"));
-    let gated = spawn_gated(&plan, Pipes::default(), PATIENCE, Some(&secret)).unwrap();
-    let handle = gated_handle(&plan, &gated, &launched_at_now()).unwrap();
-    let mut spawned = gated.release().unwrap();
-    let _ = spawned.child.wait();
-    wait_for("the stub's report", || w.path("seen").exists());
-    let seen = std::fs::read_to_string(w.path("seen")).unwrap();
-    assert_eq!(seen.trim(), format!("present {}", key.len()));
-    // The child's environment really carries it (the stub's `env` output is test-owned and holds
-    // the value; the registration below must not).
-    let env_names = std::fs::read_to_string(w.path("env-names")).unwrap();
-    assert!(env_names.contains("DEEPSEEK_API_KEY="));
-    // Neither the plan, nor the handle that is registered, nor its bytes, name the value.
-    let registered = serde_json::to_string(&handle).unwrap();
-    for text in [format!("{plan:?}"), format!("{handle:?}"), registered] {
-        assert!(!text.contains(key), "a surface shows the key");
-        assert!(!text.contains(&key[..8]), "a surface shows its prefix");
-    }
-    assert!(
-        !handle.env_keys.iter().any(|k| k == "DEEPSEEK_API_KEY"),
-        "the handle records the plan's names, and the key is not the plan's"
-    );
-}
-
-/// A `ChildSecret` from the keyed fixture profile (`keyed-per-run`), with this synthetic value.
-fn keyed_secret(value: &str) -> goalcup_cli::launch::ChildSecret {
-    let profile = support::fixture_connector("keyed-per-run")
-        .loaded
-        .manifest
-        .capture;
-    let env = BTreeMap::from([("DEEPSEEK_API_KEY".to_string(), value.to_string())]);
-    goalcup_cli::launch::child_secret_for_harness(&profile, &env)
-        .unwrap()
-        .unwrap()
-}
-
 // ------------------------------------------------------------------ ending a released child
 
 /// A released gated child and its handle, registered the way `capture()` does.
 fn released(w: &World, script: &str, native: Option<&str>, grace: u64) -> (ProcessHandle, Spawned) {
     let plan = w.plan(script, native, grace);
-    let gated = spawn_gated(&plan, Pipes::default(), PATIENCE, None).unwrap();
+    let gated = spawn_gated(&plan, Pipes::default(), PATIENCE).unwrap();
     let handle = gated_handle(&plan, &gated, &launched_at_now()).unwrap();
     let spawned = gated.release().unwrap();
     (handle, spawned)
@@ -626,7 +578,7 @@ fn end_released_child_on_exited_root_with_a_named_native_binary_is_unverified() 
 fn a_parked_child_that_died_is_refused_in_its_own_words() {
     let w = World::new();
     let plan = w.plan(RAN, None, 1);
-    let gated = spawn_gated(&plan, Pipes::default(), PATIENCE, None).unwrap();
+    let gated = spawn_gated(&plan, Pipes::default(), PATIENCE).unwrap();
     kill9(gated.pid);
     wait_for("the killed child to die", || !is_alive(gated.pid));
     let refused = gated_handle(&plan, &gated, &launched_at_now())

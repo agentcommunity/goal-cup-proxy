@@ -1,4 +1,4 @@
-//! The per-run private harness home of a keyed capture (D39, D41).
+//! The per-run private harness home of a capture (D39).
 //!
 //! A profile whose `config_home` is `per_run` gets a harness home made fresh inside the run
 //! directory, holding only the connector's own seed files. The harness reads and writes there
@@ -25,8 +25,8 @@
 //!
 //! # A run directory beside a goal file must not be in a repository
 //!
-//! The run directory holds what a harness wrote while it ran, and a keyed harness can write
-//! request dumps that carry a masked fragment of the provider key (Hermes does, D41).
+//! The run directory holds what a harness wrote while it ran, its own login and request dumps
+//! included.
 //! [`refuse_inside_git_work_tree`] stops a launch whose goal file sits inside a Git work tree,
 //! before anything is created, so those files are never one `git add .` away from a commit.
 
@@ -277,8 +277,8 @@ pub fn refuse_inside_git_work_tree(dir: &Path) -> Result<(), CliError> {
         if std::fs::symlink_metadata(ancestor.join(".git")).is_ok() {
             return Err(CliError::Refused(format!(
                 "the goal file is inside a Git work tree ({}), and this run's directory would \
-                 be made beside it: it holds what the harness wrote, which can include a \
-                 fragment of the provider key. Put the goal file in a directory outside any \
+                 be made beside it: it holds what the harness wrote, which can include \
+                 its login. Put the goal file in a directory outside any \
                  repository. Nothing was created.",
                 ancestor.display()
             )));
@@ -345,8 +345,8 @@ pub fn refuse_synced_folder_probing(
     if synced {
         return Err(CliError::Refused(format!(
             "the goal file is in a folder a sync client uploads ({}), and this run's directory \
-             would be made beside it: it holds what the harness wrote, which can include a \
-             fragment of the provider key. Put the goal file in a directory that is not synced. \
+             would be made beside it: it holds what the harness wrote, which can include its \
+             login. Put the goal file in a directory that is not synced. \
              Nothing was created.",
             resolved.display()
         )));

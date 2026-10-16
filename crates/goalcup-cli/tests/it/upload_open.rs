@@ -791,28 +791,6 @@ mod server_runs {
         assert!(!rig.harness_started());
     }
 
-    /// A harness handed a provider key never uploads, so `--test` with it is refused too.
-    #[test]
-    fn test_with_a_keyed_harness_is_refused_in_its_own_words() {
-        let rig = Rig::keyed();
-        let server = server(&rig);
-        rig.prepare_for(&server.url());
-        let goal = rig.goal(GOAL);
-        let http = rig.client();
-        let client = Hooked::new(&http, &rig);
-        let mut opts = rig.keyed_options(&goal, RESERVE);
-        opts.mode = RunMode::Test;
-        let (result, out) =
-            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
-        let refused = result.expect_err("refused").to_string();
-        assert!(refused.contains("`--test` cannot be used"), "{refused}");
-        assert!(refused.contains("provider key"), "{refused}");
-        assert!(refused.contains("test run"), "{refused}");
-        assert!(server.device_requests().is_empty(), "{out}");
-        assert!(client.book().creates.is_empty());
-        assert!(rig.run_dirs().is_empty());
-    }
-
     /// A start that fails after the run opened, with the server away so the run cannot be given
     /// back then, keeps that run's credential: the next start gives the run back with it.
     #[test]
@@ -892,28 +870,6 @@ mod server_runs {
         assert!(rig.run_dirs().is_empty());
         assert!(rig.clones().is_empty(), "{:?}", rig.clones());
         assert!(!goalcup_cli::run::runs_dir(&rig.cfg).exists());
-    }
-
-    /// A harness handed a provider key never uploads, so `--practice` with it is refused with a
-    /// sentence of its own, before anything is created.
-    #[test]
-    fn practice_with_a_keyed_harness_is_refused_in_its_own_words() {
-        let rig = Rig::keyed();
-        let server = server(&rig);
-        rig.prepare_for(&server.url());
-        let goal = rig.goal(GOAL);
-        let http = rig.client();
-        let client = Hooked::new(&http, &rig);
-        let mut opts = rig.keyed_options(&goal, RESERVE);
-        opts.mode = RunMode::Practice;
-        let (result, out) =
-            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
-        let refused = result.expect_err("refused").to_string();
-        assert!(refused.contains("provider key"), "{refused}");
-        assert!(!refused.contains("goalcup login"), "{refused}");
-        assert!(server.device_requests().is_empty(), "{out}");
-        assert!(client.book().creates.is_empty());
-        assert!(rig.run_dirs().is_empty());
     }
 
     /// A kept note that this start cannot act on is dropped with its credential: it names another

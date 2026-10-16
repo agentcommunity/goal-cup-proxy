@@ -13,7 +13,8 @@
 use crate::common::m2_cli_support::OnPty;
 use crate::common::m2_vertical_support::{self, GOAL, RESERVE, Vertical};
 use crate::common::real_home_guard::with_real_home_guard;
-use crate::common::support::{self, KIT_CREDENTIAL};
+use crate::common::secret_support::KEY;
+use crate::common::support;
 
 use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
 use goalcup_protocol::capture_policy::SHARED_CA_ENV;
@@ -196,9 +197,9 @@ fn run_connector(id: &str) {
             command.env(key, value);
         }
     }
-    // The launcher reads the key from its own environment and hands it to the child alone.
-    if let Some(credential) = &c.credential {
-        command.env(&credential.env, KIT_CREDENTIAL);
+    // A provider key exported in the participant's shell never reaches the harness (D61).
+    for name in ["DEEPSEEK_API_KEY", "AMP_API_KEY", "OPENAI_API_KEY"] {
+        command.env(name, KEY);
     }
     if c.interactive {
         let mut run = OnPty::spawn(command, None);
@@ -302,17 +303,11 @@ fn run_connector(id: &str) {
     };
     assert_eq!(env.get("TERM").map(String::as_str), chat_only, "{id}");
     let argv = report("argv");
-    if let Some(credential) = &c.credential {
-        assert_eq!(
-            env.get(&credential.env).map(String::as_str),
-            Some(KIT_CREDENTIAL),
-            "{id}: the child has its key"
-        );
-        assert!(
-            !argv.contains(KIT_CREDENTIAL),
-            "{id}: the key is in no argument"
-        );
-    }
+    assert!(
+        env.values().all(|v| !v.contains(KEY)),
+        "{id}: the child was handed a provider key"
+    );
+    assert!(!argv.contains(KEY), "{id}: the key is in no argument");
     // `goalcup start` hands each CA variable the file its row names (D41): a harness's own
     // variable the proxy's CA alone, a shared row the proxy's CA and the system's roots.
     for name in &c.ca.env {

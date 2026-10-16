@@ -155,7 +155,7 @@ impl Swept {
     }
 
     /// The refusal `goalcup start` ends with, after the seal, when [`Swept::still_running`]:
-    /// exit 1, the participant's to act on, as a key scan that failed after the seal is.
+    /// exit 1, the participant's to act on.
     pub fn refusal(&self, entry_id: &str) -> Option<crate::CliError> {
         self.still_running().then(|| {
             crate::CliError::Refused(format!(

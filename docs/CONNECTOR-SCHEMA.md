@@ -15,10 +15,11 @@ those sources disagree, the sources refuse the manifest.
 
 ## Parse and load
 
-`harness.toml` is UTF-8 TOML. The loader first reads `schema_version` from a generic table, then
+`harness.toml` is UTF-8 TOML. The loader first reads `schema_version` from a generic table and refuses a
+`[capture.credential]` table there (D61), then
 deserializes every table with unknown fields denied, appends the `capture.providers` rows to
 `capture.hosts`, then validates in this fixed order:
-executable; arguments and goal; configure commands; environment; home; credential; CA; identity;
+executable; arguments and goal; configure commands; environment; home; CA; identity;
 native source; argument guard; termination; hosts; redaction; delivery independence; cross-field
 rules; then each `capture.platform` entry, in the fixed order `linux-x86_64`, `linux-aarch64`,
 `macos-aarch64`, `macos-x86_64`, whatever order the file uses. The first refusal is deterministic. Unknown keys and
@@ -64,7 +65,7 @@ optional field or table is absent.
 | `capture.executable` | required table | The executable name on `PATH`, and how to ask it its version. |
 | `capture.platform` | optional, default `{}` | Per-platform env entries; see below. |
 | `capture.home` | required table | Run `HOME`, isolated harness home and any seeds. |
-| `capture.credential` | optional, default absent | One core-allowlisted child credential variable. |
+| `capture.credential` | refused (D61) | A connector may not pass a provider key; the harness keeps its own login in its home. |
 | `capture.ca` | required table | The harness's CA variables and which file they get. |
 | `capture.identity` | required table | How this run's native-session identity is obtained and bound. |
 | `capture.native` | defaults to `[]`, validation requires exactly one | One `[[capture.native]]` table. |
@@ -80,7 +81,7 @@ core deny policy and the optional argument guard.
 
 With `interactive = true` (D57) there is no goal slot: the participant types the prompt in the
 harness. The profile then takes no `goal_flag`, its `args` need not end in `--` and may be
-empty, it takes no `[capture.credential]` and its `identity.source` must be `none`. With `false`, the default, every
+empty, and its `identity.source` must be `none`. With `false`, the default, every
 rule above holds unchanged. `resume_args` may be set either way; `goalcup continue` appends it
 after `args`.
 
@@ -220,7 +221,7 @@ only ASCII letters, digits or `_`. Names compare uppercase for policy. The valid
   `GIT_`, `NPM_CONFIG_`, `PIP_`, `XDG_`, `GOALCUP_` and the cloud-provider prefixes;
 - any `*_HOME`, `*_CONFIG_DIR` or `*_CONFIG_HOME` name: a harness's own relocator is
   `capture.home.env`, and any other would move some program's state out of the run's isolation;
-- any name pinned by this manifest's home, credential or CA fields; and
+- any name pinned by this manifest's home or CA fields; and
 - any name under one of this connector's `capture.reserved_env_prefixes` (up to 4, each
   `^[A-Z][A-Z0-9_]{0,30}_$`): the harness's own namespace, declared as data, so that switches
   such as Hermes's `HERMES_SAFE_MODE` cannot silently stop capture. No harness is named in the
@@ -281,14 +282,19 @@ runs, held to the rules of a shared config home. Runs on it are serialized; the 
 at the participant's `HOME`, at a `real_dirs` path or anywhere but directly under
 `<config_dir>/capture-homes`; the baseline lists it in place of the config home; a missing
 `{run_home}` native root is created as a `{config_home}` root is; a `{run_home}` native root with
-identity `none` needs `since_run_start = true`; and a credential is refused. It is refused with
+identity `none` needs `since_run_start = true`. It is refused with
 `capture.home.env`: such a harness shares its config home instead.
 
 ## Credential and CA
 
+The tracer never sees, forwards or stores a participant's provider key (D61). A
+`[capture.credential]` table, in the base profile or in a `[capture.platform.<key>]` override, is
+refused with "a connector may not pass a provider key; the harness keeps its own login in its
+home". A harness that reads its key from an environment variable only is set up with its own
+login command, which stores the key in its home.
+
 | Field | Required/default | Contract |
 |---|---|---|
-| `capture.credential.env` | required when the optional table exists; refused with `interactive` | Closed registry: `DEEPSEEK_API_KEY`, `AMP_API_KEY`. The value: 20 to 256 bytes of `[A-Za-z0-9_-]`. |
 | `capture.ca.env` | required | 1–2 unique CA variable names (below). |
 | `capture.ca.mode` | required | Closed values: `extend`, `replace`. What the harness's own variable does with the file. |
 
@@ -346,12 +352,12 @@ new name shape is a core policy and DECISIONS change.
 `timestamp-hex` means `\d{8}_\d{6}_[0-9a-f]{6}`. `token` means 1–128 characters from
 `[A-Za-z0-9_-]`; a lowercase UUID is a token. The only admitted source/binding pairs are:
 
-| Source | Binding | Credential |
-|---|---|---|
-| `preassigned` | `at_launch` | refused |
-| `stdout_json` | `at_launch` | admitted, and requires `config_home = "per_run"` |
-| `stderr_line` | `deferred` | admitted, and requires `config_home = "per_run"` |
-| `none` | absent | refused |
+| Source | Binding |
+|---|---|
+| `preassigned` | `at_launch` |
+| `stdout_json` | `at_launch` |
+| `stderr_line` | `deferred` |
+| `none` | absent |
 
 JSON selector fields are forbidden on all other sources; stderr fields are forbidden on all other
 sources. `none` takes no binding. Widening this table is a core change with an offline harness-kit
@@ -537,9 +543,7 @@ In addition to the local rules above, all of these apply:
 
 1. `preassigned` requires `{session_id}` in `capture.args`. `{session_id}` anywhere in `args`,
    `resume_args` or an environment value requires `preassigned`.
-2. A credential requires `stderr_line` plus `deferred`, or `stdout_json` plus `at_launch`,
-   identity, a `per_run` config home and a run home that is not `shared`. One stdout reader
-   feeds the key-fragment scan and the `stdout_json` identity matcher.
+2. (Retired by D61: the credential rules. A `[capture.credential]` table is refused.)
 3. `capture.home.seed`, `dirs` and an explicit `per_run_dir` require `config_home = "per_run"`.
 4. With `identity.source = "none"`, the native root must be `{run_home}/...` with a run home
    that is not `shared`, or `{config_home}/...` with a per-run config home, or the native
@@ -549,7 +553,7 @@ In addition to the local rules above, all of these apply:
 5. The native root plus pattern, compared case-insensitively with `{id}` treated as `*`, cannot
    match a seed destination. A `{run_home}` root is checked both with the config home coincident
    with the run home and nested below `per_run_dir`.
-6. `capture.home.env` (when present), `capture.credential.env` and all `capture.ca.env` names are pairwise
+6. `capture.home.env` (when present) and all `capture.ca.env` names are pairwise
    distinct case-insensitively. No `capture.env` key may duplicate one.
 7. `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` are named only with `capture.ca.mode = "extend"`.
 8. Authentication and intercepted host sets are disjoint; every intercepted host has at least one
@@ -622,7 +626,7 @@ directory with its pin.
 
 - [`connectors/hermes-cli/harness.toml`](../connectors/hermes-cli/harness.toml): chat mode with a
   `configure` command, a `snapshot` native source read from the run's start, an argv guard and a
-  reserved prefix. Its headless form, with a credential and `stderr_line` identity, is frozen at
+  reserved prefix. Its headless form, with `stderr_line` identity, is frozen at
   [`headless-connectors/hermes-cli`](../crates/goalcup-protocol/tests/fixtures/headless-connectors/hermes-cli/harness.toml)
   for the tests of that recipe.
 - [`connectors/codex-cli/harness.toml`](../connectors/codex-cli/harness.toml): chat mode

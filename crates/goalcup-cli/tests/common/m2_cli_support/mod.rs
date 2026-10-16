@@ -6,7 +6,7 @@
 //! Every wait is bounded; every child the fake harness becomes is ended by its own owner.
 //!
 //! Several test binaries pull this file in (`m2_cli_lifecycle`, and `full` for
-//! `keyed_lifecycle` and the upload suites) and none uses all of it.
+//! the per-run lifecycle and the upload suites) and none uses all of it.
 
 #![allow(dead_code)]
 
@@ -32,10 +32,10 @@ use tokio::io::AsyncWriteExt;
 /// The development connector every test launches.
 pub const FAKE_ID: &str = "m2-fake";
 
-/// The keyed development connector: the fixture connector `tests/fixtures/connectors/keyed-per-run`
-/// (manifest and seed files) under this id, with its program replaced by
-/// `fixtures/m2-fake-keyed.sh`.
-pub const KEYED_FAKE_ID: &str = "m2-fake-keyed";
+/// The per-run-home development connector: the fixture connector
+/// `tests/fixtures/connectors/headless-per-run` (manifest and seed files) under this id, with its
+/// program replaced by `fixtures/m2-fake-per-run.sh`.
+pub const PER_RUN_FAKE_ID: &str = "m2-fake-per-run";
 
 /// The chat-mode development connector (D57): `interactive = true`, identity `none`, a native
 /// source read from the run's start, and `fixtures/m2-fake-tui.sh` as its harness ([`Rig::chat`]).
@@ -70,7 +70,7 @@ pub struct Rig {
     pub runtime: tokio::runtime::Runtime,
     pub daemon: Option<goalcup_daemon::runtime::Daemon>,
     pub config: goalcup_daemon::config::DaemonConfig,
-    /// Added to the environment `goalcup start` is given (the provider key, in a keyed test).
+    /// Added to the environment `goalcup start` is given.
     pub extra_env: Mutex<std::collections::BTreeMap<String, String>>,
     _tmp: tempfile::TempDir,
 }
@@ -80,10 +80,10 @@ impl Rig {
         Rig::with_capture(true)
     }
 
-    /// A capture rig whose connector is the keyed `m2-fake-keyed` (see [`KEYED_FAKE_ID`]): a
-    /// per-run home, a goal flag, a child-only credential and a harness that prints its session
+    /// A capture rig whose connector is `m2-fake-per-run` (see [`PER_RUN_FAKE_ID`]): a per-run
+    /// home, a goal flag, and a harness that writes a session file and prints its session
     /// identity on stderr.
-    pub fn keyed() -> Rig {
+    pub fn per_run() -> Rig {
         Rig::build(true, Some(2), false, true, true)
     }
 
@@ -258,7 +258,7 @@ impl Rig {
         capture: bool,
         grace: Option<u64>,
         stdout_identity: bool,
-        keyed: bool,
+        per_run: bool,
         start_daemon: bool,
     ) -> Rig {
         // These tests cut a finish that cannot complete; the shipped budget is three minutes
@@ -270,8 +270,8 @@ impl Rig {
         std::fs::create_dir(&out).unwrap();
         let exe = root.join("bin").join("m2-fake-harness");
         std::fs::create_dir(root.join("bin")).unwrap();
-        let fixture = if keyed {
-            "m2-fake-keyed.sh"
+        let fixture = if per_run {
+            "m2-fake-per-run.sh"
         } else {
             "m2-fake-harness.sh"
         };
@@ -284,8 +284,8 @@ impl Rig {
         // refusal is that no schema-1 harness declares the requested id, not an I/O failure
         // because the test forgot to make the root it passed in.
         std::fs::create_dir_all(&capture_connectors).unwrap();
-        if keyed {
-            write_keyed_connector(&connectors, &capture_connectors, &exe, &out);
+        if per_run {
+            write_per_run_connector(&connectors, &capture_connectors, &exe, &out);
         } else {
             write_connector(
                 &connectors,
@@ -356,10 +356,10 @@ impl Rig {
         opts
     }
 
-    /// [`Rig::options`] for the keyed connector ([`Rig::keyed`]).
-    pub fn keyed_options(&self, goal: &Path, reserve: u64) -> StartOptions {
+    /// [`Rig::options`] for the per-run connector ([`Rig::per_run`]).
+    pub fn per_run_options(&self, goal: &Path, reserve: u64) -> StartOptions {
         let mut opts = self.options(goal, reserve);
-        opts.harness = KEYED_FAKE_ID.to_string();
+        opts.harness = PER_RUN_FAKE_ID.to_string();
         opts
     }
 
@@ -676,11 +676,11 @@ protocol_hint = "openai-responses"
     }
 }
 
-/// The keyed fixture connector (`tests/fixtures/connectors/keyed-per-run`) rendered into the
+/// The fixture connector (`tests/fixtures/connectors/headless-per-run`) rendered into the
 /// shared schema-1 test root, with its id and program replaced. The fake's report directory is
 /// injected into its private script, not the manifest. A new id is unpinned and admitted only
 /// through `--dev`.
-fn write_keyed_connector(connectors: &Path, capture_connectors: &Path, exe: &Path, out: &Path) {
+fn write_per_run_connector(connectors: &Path, capture_connectors: &Path, exe: &Path, out: &Path) {
     assert_eq!(connectors, capture_connectors, "the schema root is shared");
     let out = out.display().to_string();
     assert!(!out.contains('\''), "the test path must be shell-quotable");
@@ -692,10 +692,10 @@ fn write_keyed_connector(connectors: &Path, capture_connectors: &Path, exe: &Pat
     )
     .unwrap();
     let dir = super::support::copy_fixture_connector(
-        "keyed-per-run",
+        "headless-per-run",
         capture_connectors,
-        KEYED_FAKE_ID,
-        KEYED_FAKE_ID,
+        PER_RUN_FAKE_ID,
+        PER_RUN_FAKE_ID,
     );
     let path = dir.join("harness.toml");
     let mut harness = std::fs::read_to_string(&path).unwrap();
@@ -703,12 +703,12 @@ fn write_keyed_connector(connectors: &Path, capture_connectors: &Path, exe: &Pat
     // anything; a test never reaches the network, and the fake never calls its provider.
     for (from, to) in [
         (
-            "program = \"keyed-harness\"",
+            "program = \"per-run-harness\"",
             "program = \"m2-fake-harness\"",
         ),
         (
-            "host = \"api.keyed.example\"",
-            "host = \"api.keyed.localhost\"",
+            "host = \"api.per-run.example\"",
+            "host = \"api.per-run.localhost\"",
         ),
     ] {
         assert!(harness.contains(from), "the fixture has no `{from}`");

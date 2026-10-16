@@ -46,7 +46,7 @@ TypeScript).
 
 | Part | Does | Code |
 |---|---|---|
-| `goalcup start` | Preflight; creates the entry; runs the recording proxy in process; gates and launches the harness; seals when it exits; scans for key fragments; uploads | [commands/start.rs](../crates/goalcup-cli/src/commands/start.rs) |
+| `goalcup start` | Preflight; creates the entry; runs the recording proxy in process; gates and launches the harness; seals when it exits; uploads | [commands/start.rs](../crates/goalcup-cli/src/commands/start.rs) |
 | `goalcup login`, `prep`, `continue`, `upload` | Device-flow login; machine and repository readiness; next segment of a run; finish an upload | [commands/](../crates/goalcup-cli/src/commands/), [account/](../crates/goalcup-cli/src/account/), [upload/](../crates/goalcup-cli/src/upload/) |
 | `goalcup seal`, `status`, `entries`, `doctor` | End a run early; read status; list runs; check the machine | [commands/](../crates/goalcup-cli/src/commands/) |
 | Proxy | Loopback CONNECT proxy. Relays bytes unchanged; tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
@@ -99,9 +99,8 @@ decoder is added.
   serialized by a lock (D39). Claude Code's run home links the macOS Keychains directory. Hermes
   shares one `HERMES_HOME` the same way; the participant's own Hermes setup keeps its provider and
   key there, and the tracer passes it none (D61).
-- **Contract kit.** Six synthetic cases (`controlled-workload`, `synthetic-preassigned`,
-  `synthetic-stderr-token`, `synthetic-stdout-json`, and keyed `synthetic-keyed-stderr` and
-  `synthetic-keyed-stdout-json`) under `crates/goalcup-cli/tests/fixtures/harness-kit/` test the
+- **Contract kit.** Four synthetic cases (`controlled-workload`, `synthetic-preassigned`,
+  `synthetic-stderr-token` and `synthetic-stdout-json`) under `crates/goalcup-cli/tests/fixtures/harness-kit/` test the
   shared modules with stand-ins. A new connector adds a case. A passing kit says "synthetic
   tested", not "works with the real harness".
 
@@ -138,7 +137,7 @@ CLI phases are in `commands/start.rs` (`prepare`, `create_and_gate`, `register_a
    `LOCAL_CAPTURE_FINISH_BUDGET` (180 s) with a 2 s commit reserve (D40, D56).
 6. **Termination.** SIGTERM, the connector's grace, SIGKILL, sweep and reconfirm. This runs outside
    the finish budget ([TERMINATION](TERMINATION.md)).
-7. **Seal, scan, verify.** Bind seal and termination, run the key scan, print the `verify:` line,
+7. **Seal, verify.** Bind seal and termination, print the `verify:` line,
    upload the rest (the wrap-up).
 
 A restart reopens an unfinished entry with status and seal authority only. Every other
@@ -278,16 +277,16 @@ Paths are under `crates/`.
 | One orphan rule | `goalcup-daemon/src/runtime/capture/tests.rs`, `goalcup-daemon/tests/it/capture_ingest.rs`, `goalcup-verifier/tests/it/m2_capture_integrity.rs` |
 | Integrity exits 0/1/2/3; baseline and seal binding | `goalcup-verifier/tests/it/m2_capture_integrity.rs`, `goalcup-verifier/tests/it/v5_corpus.rs` |
 | Streaming equals whole-stream redaction; 16 KiB fail closed | `goalcup-daemon/tests/it/capture_redaction.rs`, `goalcup-daemon/tests/it/capture_redaction_extra.rs`, `goalcup-daemon/tests/it/redaction.rs` |
-| The run's proxy credential redacted by exact value, wrapped and escaped forms included (D60) | `goalcup-protocol/src/run_secret.rs` (unit), `goalcup-daemon/tests/it/capture_redaction_run_secrets.rs`, `goalcup-cli/tests/full/keyed_lifecycle.rs` (`the_proxy_credential_a_harness_records_…`) |
+| The run's proxy credential redacted by exact value, wrapped and escaped forms included (D60) | `goalcup-protocol/src/run_secret.rs` (unit), `goalcup-daemon/tests/it/capture_redaction_run_secrets.rs`, `goalcup-cli/tests/full/per_run_lifecycle.rs` (`the_proxy_credential_a_harness_records_…`) |
 | Native scope, no symlink, deferred scope | `goalcup-daemon/tests/it/capture_native.rs`, `goalcup-daemon/tests/it/capture_deferred_scope.rs` |
 | TLS, CONNECT, HTTP and WebSocket relay | `goalcup-cli/tests/it/m2_tls_connect.rs`, `goalcup-cli/tests/it/m2_http_relay.rs`, `goalcup-cli/tests/it/m2_websocket_relay.rs` |
 | Frozen wire contracts; connector pins | `goalcup-protocol/tests/it/m2_contract.rs`, `harness_schema.rs`, `harness_loader.rs`, `harness_conformance.rs`, `connector_pins.rs` (same folder) |
 | v5 create, goal, launch, status through the daemon | `goalcup-daemon/tests/it/capture_lifecycle.rs` |
 | Profile launch, executable resolution, env refusals | `goalcup-cli/tests/it/harness_launch_plan.rs`, `goalcup-cli/tests/it/start_launch.rs` |
-| Key child-only, private home, key scan | `goalcup-cli/tests/it/child_secret.rs`, `per_run_home.rs`, `key_scan.rs`, `key_scan_run.rs`, `capture_stderr_tee.rs`, `hermes_offline_key.rs` (same folder), `goalcup-cli/tests/full/keyed_lifecycle.rs` |
+| No provider key handed to a harness (D61), private home, stderr marker | `goalcup-cli/tests/it/connector_contract.rs`, `per_run_home.rs`, `capture_stderr_tee.rs`, `hermes_offline_key.rs` (same folder), `goalcup-cli/tests/full/per_run_lifecycle.rs`, `goalcup-protocol/tests/it/harness_schema.rs` |
 | Every connector folder: the connector contract | `goalcup-cli/tests/it/connector_contract.rs` (static), `goalcup-cli/tests/full/connector_contract.rs` (one run each) |
 | Crash, torn tail, restart | `goalcup-cli/tests/full/capture_crash_campaign.rs` |
 | Whole vertical on a synthetic workload | `goalcup-cli/tests/full/m2_synthetic_vertical.rs` |
-| Six contract-kit cases | `goalcup-cli/tests/it/harness_contract_kit.rs` |
+| Four contract-kit cases | `goalcup-cli/tests/it/harness_contract_kit.rs` |
 | Research report | `goalcup-verifier/tests/it/m2_research_report.rs` |
 | Upload against the real Worker | `goalcup-cli/tests/full/upload_worker.rs`, `server/worker/test` |

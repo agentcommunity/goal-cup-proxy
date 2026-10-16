@@ -48,19 +48,6 @@
 #                              https://github.com/agentcommunity/goalcup-matrix-empty).
 #   MATRIX_PROMPT              what is typed into the harness, or for a headless connector
 #                              written to its goal file (default: a one-line greeting).
-#   MATRIX_KEY_ENV_FILE        for a connector whose harness.toml declares the credential
-#                              DEEPSEEK_API_KEY (hermes-cli): a mode 0600 file with one
-#                              DEEPSEEK_API_KEY=... line. The start then goes through
-#                              scripts/with-deepseek-key.sh, which reads the key itself. The key
-#                              never enters this script's environment, arguments, log or files.
-#                              The path is not printed or written to a file; it is in the start
-#                              wrapper's environment and in the loader's argument list (a
-#                              same-user `ps` sees the path, never the key). Ignored (and logged
-#                              so) for a connector with no such credential.
-#                              TODAY a connector with that credential is refused up front: a
-#                              harness given a provider key is never uploaded (RULES), and the
-#                              real `goalcup start --practice` refuses it. The plumbing waits
-#                              behind MATRIX_KEYED_UPLOADED=1, for when that rule changes.
 #   MATRIX_PROMPT_DELAY        seconds between "the harness is up" and the prompt (fake: 1,
 #                              any other connector: 30). Chat mode only.
 #   MATRIX_SUBMIT_DELAY        seconds between the typed prompt and the Enter that submits it
@@ -115,7 +102,6 @@ PRODUCTION_HOST="ingest.agentcommunity.org"
 FAKE_ID="m2-fake-tui"
 FAKE_HEADLESS_ID="m2-fake-headless"
 DEFAULT_REPO_URL="https://github.com/agentcommunity/goalcup-matrix-empty"
-LOADER="$HERE/with-deepseek-key.sh"
 
 usage() {
   # The whole header: every comment line after the first, up to the first line that is not one.
@@ -193,26 +179,6 @@ if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
   echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE must name a regular file this user can read" >&2
   exit 2
 fi
-# The key loader's env file: a path again, and again out of the environment at once. It is named
-# in no message, log or file; it reaches the start's wrapper in that one process's environment.
-KEYENV=${MATRIX_KEY_ENV_FILE:-}
-unset MATRIX_KEY_ENV_FILE
-if [ -n "$KEYENV" ]; then
-  if [ ! -f "$KEYENV" ] || [ ! -r "$KEYENV" ]; then
-    echo "matrix: MATRIX_KEY_ENV_FILE must name a regular file this user can read" >&2
-    exit 2
-  fi
-  case $KEYENV in /*) ;; *) KEYENV=$PWD/$KEYENV ;; esac
-  case $KEYENV in
-    *\'* | *[[:space:]]*)
-      echo "matrix: the path in MATRIX_KEY_ENV_FILE may hold no space or quote" >&2
-      exit 2
-      ;;
-  esac
-fi
-# Whether a keyed harness's run is uploaded. Today it is not (RULES), so a keyed connector is
-# refused before anything starts; this is the switch for the day the rule changes.
-KEYED_UPLOADED=${MATRIX_KEYED_UPLOADED:-0}
 PRE_KEYS=${MATRIX_PRE_PROMPT_KEYS:-}
 case $PRE_KEYS in
   *\'* | *%* | *\$* | *\`*)
@@ -472,32 +438,19 @@ scan_and_approve() {
 # A wrapper script that runs goalcup in the matrix's isolated environment. It records its own
 # process id (the id goalcup keeps after the exec) so a stuck run can be ended by id.
 #
-# With a fifth argument "keyed", goalcup is not run directly but through scripts/with-deepseek-key.sh
-# (`/bin/sh -p`), which reads the key file named by MATRIX_KEY_ENV_FILE in the wrapper's own
-# environment (the caller sets it for that one process; the wrapper expands it into the loader's
-# argument and drops it from the environment goalcup and the harness get). The loader finds
-# `goalcup` on PATH, so the directory of the binary this script chose goes first on it. Nothing
-# about the key file is written into the wrapper.
-#
 # GOALCUP_NO_BROWSER keeps goalcup from opening a browser page for each approval: the script
 # approves through the test route or prints the address for you. (GOALCUP_TEST_NO_BROWSER is the
 # same switch for a build with test-support.)
-write_wrapper() { # file name "goalcup arguments" [stty] [keyed]
+write_wrapper() { # file name "goalcup arguments" [stty]
   {
     echo '#!/bin/sh'
     [ -z "${4:-}" ] || echo 'stty cols 120 rows 40 2>/dev/null'
     echo "echo \$\$ >$(shq "$ROOT/$2.pid")"
     echo "cd $(shq "$RUNS") || exit 1"
-    printf 'exec env -u MATRIX_KEY_ENV_FILE HOME=%s GOALCUP_CONFIG_DIR=%s' "$(shq "$HOME_DIR")" "$(shq "$CFG")"
+    printf 'exec env HOME=%s GOALCUP_CONFIG_DIR=%s' "$(shq "$HOME_DIR")" "$(shq "$CFG")"
     [ -z "$CONNECTORS_ENV" ] || printf ' GOALCUP_CONNECTORS_DIR=%s' "$(shq "$CONNECTORS_ENV")"
-    if [ "${5:-}" = keyed ]; then
-      printf ' GOALCUP_NO_BROWSER=1 GOALCUP_TEST_NO_BROWSER=1 PATH=%s TERM=%s' \
-        "$(shq "$(dirname "$GOALCUP"):$HARNESS_PATH")" "$MATRIX_TERM"
-      printf ' /bin/sh -p %s "$MATRIX_KEY_ENV_FILE" %s\n' "$(shq "$LOADER")" "$3"
-    else
-      printf ' GOALCUP_NO_BROWSER=1 GOALCUP_TEST_NO_BROWSER=1 PATH=%s TERM=%s' "$(shq "$HARNESS_PATH")" "$MATRIX_TERM"
-      printf ' %s %s\n' "$(shq "$GOALCUP")" "$3"
-    fi
+    printf ' GOALCUP_NO_BROWSER=1 GOALCUP_TEST_NO_BROWSER=1 PATH=%s TERM=%s' "$(shq "$HARNESS_PATH")" "$MATRIX_TERM"
+    printf ' %s %s\n' "$(shq "$GOALCUP")" "$3"
   } >"$1"
 }
 
@@ -590,9 +543,6 @@ run_matrix() {
   fi
   MATRIX_TERM=${MATRIX_TERM:-$([ "$CONNECTOR" = "$FAKE_ID" ] && echo dumb || echo xterm-256color)}
   read_manifest || return 1
-  if [ -n "$CRED_ENV" ] && [ "$KEYED_UPLOADED" != 1 ]; then
-    fail "keyed harnesses are not uploaded today (RULES); matrix cannot test them" || return 1
-  fi
   PROMPT=${MATRIX_PROMPT:-"Goal Cup matrix check: reply with the single word ok."}
 
   if [ "$OWN_CONFIG" = 1 ]; then
@@ -630,7 +580,6 @@ run_matrix() {
   WRAP="$ROOT/start-wrapper.sh"
   START_ARGS="start --harness $CONNECTOR $DEV_FLAG --practice"
   WRAP_KIND=""
-  KEYED_START=""
   if [ "$MODE" = headless ]; then
     # The goal is a file: the goal of a headless harness is its only input, typed by nobody.
     printf '%s\n' "$PROMPT" >"$ROOT/goal.txt"
@@ -638,21 +587,12 @@ run_matrix() {
   else
     WRAP_KIND=stty
   fi
-  if [ -n "$KEYENV" ] && [ "$CRED_ENV" = DEEPSEEK_API_KEY ]; then
-    [ -f "$LOADER" ] || fail "the key loader is missing: $LOADER" || return 1
-    KEYED_START=keyed
-    log "the start goes through scripts/with-deepseek-key.sh (key file supplied; its path is not logged)"
-  elif [ -n "$KEYENV" ]; then
-    log "MATRIX_KEY_ENV_FILE is ignored: $CONNECTOR declares no DEEPSEEK_API_KEY credential"
-  elif [ "$CRED_ENV" = DEEPSEEK_API_KEY ]; then
-    log "note: $CONNECTOR declares the credential DEEPSEEK_API_KEY and MATRIX_KEY_ENV_FILE is not set"
-  fi
-  write_wrapper "$WRAP" start "$START_ARGS" "$WRAP_KIND" "$KEYED_START"
+  write_wrapper "$WRAP" start "$START_ARGS" "$WRAP_KIND"
   if [ "$MODE" = headless ]; then
     say "start --practice, headless (the harness ends the run; then waiting for the server's deadline)"
     # No terminal and nothing typed: the harness's input is empty. (Started from a subshell, as the
-    # login is.) The key file's path is in the wrapper process's environment alone.
-    ( ( (MATRIX_KEY_ENV_FILE=$KEYENV sh "$WRAP" >"$ROOT/start.out" 2>&1 </dev/null); echo $? >"$ROOT/start.rc") 2>/dev/null & )
+    # login is.)
+    ( ( (sh "$WRAP" >"$ROOT/start.out" 2>&1 </dev/null); echo $? >"$ROOT/start.rc") 2>/dev/null & )
   else
     # The feeder holds the terminal's input open until the run is over (an end of input would be
     # an end of the chat) and types the prompt once, when the main loop says the harness is up.
@@ -669,9 +609,9 @@ run_matrix() {
   done"
     say "start --practice (the run lasts the server's practice length; waiting for its deadline)"
     if [ "$OS" = macos ]; then
-      ( ( (eval "$FEED") | (MATRIX_KEY_ENV_FILE=$KEYENV script -q /dev/null sh "$WRAP" >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
+      ( ( (eval "$FEED") | (script -q /dev/null sh "$WRAP" >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
     else
-      ( ( (eval "$FEED") | (MATRIX_KEY_ENV_FILE=$KEYENV script -qec "sh $(shq "$WRAP")" /dev/null >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
+      ( ( (eval "$FEED") | (script -qec "sh $(shq "$WRAP")" /dev/null >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
     fi
     READY_AT=""
     PRE_AT=""
@@ -952,13 +892,11 @@ print(v if not isinstance(v, bool) else str(v).lower())' "$1" "$2"
 }
 
 # What the connector's harness.toml says about how it runs: MODE (chat when `interactive = true`,
-# headless otherwise: it takes its goal as an argument) and CRED_ENV (the `capture.credential`
-# variable, or empty). Read the way goalcup finds its connectors: GOALCUP_CONNECTORS_DIR, else the
+# headless otherwise: it takes its goal as an argument). Read the way goalcup finds its connectors: GOALCUP_CONNECTORS_DIR, else the
 # directory beside the binary, else this checkout's. A manifest nowhere is a failure. One key
 # per line, as the shipped manifests have them.
 read_manifest() {
   MODE=chat
-  CRED_ENV=""
   manifest=""
   if [ -n "$CONNECTORS_ENV" ]; then
     manifest="$CONNECTORS_ENV/$CONNECTOR/harness.toml"
@@ -980,7 +918,6 @@ read_manifest() {
 import re, sys
 table = ""
 interactive = False
-credential = ""
 for raw in open(sys.argv[1]):
     line = raw.strip()
     if line.startswith("#") or not line:
@@ -995,15 +932,11 @@ for raw in open(sys.argv[1]):
     key, value = m.group(1), m.group(2)
     if table == "capture" and key == "interactive":
         interactive = value == "true"
-    elif table == "capture.credential" and key == "env":
-        credential = value.strip(chr(34))
 print("mode=" + ("chat" if interactive else "headless"))
-print("credential=" + credential)
 PY
   facts=$(python3 "$ROOT/manifest.py" "$manifest") || fail "cannot read $manifest" || return 1
   MODE=$(printf '%s\n' "$facts" | sed -n 's/^mode=//p')
-  CRED_ENV=$(printf '%s\n' "$facts" | sed -n 's/^credential=//p')
-  log "connector $CONNECTOR: $MODE mode${CRED_ENV:+, credential $CRED_ENV}"
+  log "connector $CONNECTOR: $MODE mode"
 }
 
 # The connector for m2-fake-tui: this script's own copy of the test suite's chat-mode fake, in

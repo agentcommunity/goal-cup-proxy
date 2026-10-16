@@ -15,7 +15,7 @@ use crate::common::support;
 use goalcup_cli::connector::HarnessConnector;
 use goalcup_cli::launch::{
     CAPTURE_NO_PROXY, CaptureLaunch, LaunchScope, StderrUse, StdoutUse, StreamPlan,
-    build_capture_launch, build_resumed_launch, child_secret_for_harness, harness_arg_refusal,
+    build_capture_launch, build_resumed_launch, harness_arg_refusal,
 };
 use goalcup_cli::preflight::{Level, harness_pin_gate};
 use goalcup_protocol::capture::{CaptureSource, StreamKey};
@@ -37,7 +37,7 @@ fn load(id: &str) -> HarnessConnector {
     support::connector(id)
 }
 
-/// The value the plan tests hand a credential: synthetic, of the launcher's grammar.
+/// The provider key the plan tests put in the participant's environment: synthetic.
 const KEY: &str = crate::common::secret_support::KEY;
 
 /// `--goal`-shaped on purpose: a headless connector places it as one element.
@@ -81,9 +81,15 @@ fn no_connector_passes_a_provider_key() {
     let ids = shipped_connector_ids();
     assert!(!ids.is_empty(), "connectors/ holds the shipped connectors");
     for id in ids {
-        let capture = load(&id).loaded.manifest.capture;
+        // The schema refuses the table (D61), so a connector that loads declares none.
+        let _ = load(&id);
+        let text =
+            std::fs::read_to_string(support::connectors_dir().join(&id).join("harness.toml"))
+                .unwrap();
         assert!(
-            capture.credential.is_none(),
+            !text
+                .lines()
+                .any(|l| l.trim_start().starts_with("[capture.credential]")),
             "{id}: declares `[capture.credential]`, a provider key the launch would pass"
         );
     }
@@ -303,8 +309,7 @@ fn every_connector_argv_passes_its_own_guard_and_the_shared_deny_list() {
     }
 }
 
-/// Every connector's stream and identity plans follow from its manifest by one rule. A key
-/// scan runs exactly when a credential is passed, and reads both streams. A chat-mode
+/// Every connector's stream and identity plans follow from its manifest by one rule. A chat-mode
 /// connector (D57) leaves the terminal to the harness: both streams inherited, and no identity
 /// at launch, because its sessions are the files its native source finds.
 #[test]
@@ -314,15 +319,6 @@ fn every_connector_has_the_stream_and_identity_plan_its_manifest_asks_for() {
         let capture = load(&id).loaded.manifest.capture;
         let plan = StreamPlan::for_spec(&capture).unwrap_or_else(|e| panic!("{id}: {e}"));
         let scope = LaunchScope::for_spec(&capture).unwrap_or_else(|e| panic!("{id}: {e}"));
-        assert_eq!(plan.scan_for_key, capture.credential.is_some(), "{id}");
-        if plan.scan_for_key {
-            // The scan reads both streams, so neither may go straight to the terminal.
-            assert_ne!(plan.stdout, StdoutUse::Inherit, "{id}");
-            assert_ne!(plan.stderr, StderrUse::Inherit, "{id}");
-            if capture.identity.source != IdentitySource::StdoutJson {
-                assert_eq!(plan.stdout, StdoutUse::Forward, "{id}");
-            }
-        }
         // When the session is bound follows from the identity carrier alone.
         let bound = match capture.identity.source {
             IdentitySource::None => LaunchScope::None,
@@ -337,7 +333,6 @@ fn every_connector_has_the_stream_and_identity_plan_its_manifest_asks_for() {
             assert_eq!(plan.stdout, StdoutUse::Inherit, "{id}");
             assert_eq!(plan.stderr, StderrUse::Inherit, "{id}");
             assert_eq!(scope, LaunchScope::None, "{id}");
-            assert!(capture.credential.is_none(), "{id}: chat mode takes no key");
         }
     }
     assert!(
@@ -350,8 +345,8 @@ fn every_connector_has_the_stream_and_identity_plan_its_manifest_asks_for() {
 // The launch plan, against a fake executable.
 // ---------------------------------------------------------------------------------------
 
-/// A tracker environment a participant could have: their identity, a proxy, a base URL, a
-/// provider key of their own, an injection variable, and the connector's own credential.
+/// A tracker environment a participant could have: their identity, a proxy, a base URL,
+/// provider keys of their own, and an injection variable.
 fn hostile_parent(c: &goalcup_protocol::harness::CaptureSpec) -> BTreeMap<String, String> {
     let mut parent = s::parent_env();
     for (k, v) in [
@@ -360,6 +355,8 @@ fn hostile_parent(c: &goalcup_protocol::harness::CaptureSpec) -> BTreeMap<String
         ("OPENAI_BASE_URL", "http://evil.example"),
         ("ANTHROPIC_BASE_URL", "http://evil.example"),
         ("OPENAI_API_KEY", "sk-not-a-real-key-0123456789"),
+        ("DEEPSEEK_API_KEY", KEY),
+        ("AMP_API_KEY", KEY),
         ("NODE_OPTIONS", "--require /evil.js"),
         ("SSL_CERT_FILE", "/evil/roots.pem"),
         ("TERM", "xterm-256color"),
@@ -373,18 +370,15 @@ fn hostile_parent(c: &goalcup_protocol::harness::CaptureSpec) -> BTreeMap<String
     for name in &c.ca.env {
         parent.insert(name.clone(), "/evil/ca.pem".to_string());
     }
-    if let Some(credential) = &c.credential {
-        parent.insert(credential.env.clone(), KEY.to_string());
-    }
     parent
 }
 
 /// Every connector's launch environment is built from nothing (D36): only the connector's own
 /// entries, the launch's pins (`HOME`, `PATH`, the loopback proxy and its exemptions, the
 /// harness home, the CA rows) and the identity and terminal names are set, each pin has the
-/// launch's value and not the participant's, and no model base URL is set. A provider key the
-/// connector names is in no argv, no plan `Debug` and no plan environment, and the parent
-/// environment is left exactly as it was.
+/// launch's value and not the participant's, and no model base URL is set. A provider key in the
+/// participant's environment is in no argv, no plan `Debug` and no plan environment (D61), and
+/// the parent environment is left exactly as it was.
 #[test]
 fn every_connector_launch_environment_is_built_from_nothing() {
     for id in shipped_connector_ids() {
@@ -462,19 +456,13 @@ fn every_connector_launch_environment_is_built_from_nothing() {
             assert_eq!(get(k), Some(v.as_str()), "{id}: its own `{k}`");
         }
 
-        if let Some(credential) = &capture.credential {
-            let name = credential.env.as_str();
+        for name in ["OPENAI_API_KEY", "DEEPSEEK_API_KEY", "AMP_API_KEY"] {
             assert!(!plan.env_set.contains_key(name), "{id}: `{name}`");
-            assert!(plan.env_set.values().all(|v| v != KEY), "{id}");
-            assert!(plan.argv.iter().all(|a| !a.contains(KEY)), "{id}");
-            for text in [format!("{plan:?}"), format!("{plan:#?}")] {
-                assert!(!text.contains(KEY) && !text.contains(&KEY[..8]), "{id}");
-            }
-            let secret = child_secret_for_harness(capture, &parent)
-                .unwrap_or_else(|e| panic!("{id}: {e}"))
-                .expect("the connector names a credential");
-            assert_eq!(secret.name(), name, "{id}");
-            assert!(!format!("{secret:?}").contains(KEY), "{id}");
+        }
+        assert!(plan.env_set.values().all(|v| !v.contains(KEY)), "{id}");
+        assert!(plan.argv.iter().all(|a| !a.contains(KEY)), "{id}");
+        for text in [format!("{plan:?}"), format!("{plan:#?}")] {
+            assert!(!text.contains(KEY) && !text.contains(&KEY[..8]), "{id}");
         }
     }
 }

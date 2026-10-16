@@ -45,9 +45,8 @@ binaries with one stand-in, in chat mode or headless, and checks the argv, the e
 recorded session file and the sealed trace.
 
 Arguments, the goal flag, the model name and `capture.env` are data. Generic rules shared by all
-connectors check them. Four lists stay in core code, because each is a security boundary: the
-credential variable names, the CA modes and CA-name shape, the redaction forms, and the identity
-carriers and native forms. A new entry in one of them is a separate core change (see
+connectors check them. Three lists stay in core code, because each is a security boundary: the
+CA modes and CA-name shape, the redaction forms, and the identity carriers and native forms. A new entry in one of them is a separate core change (see
 [Do I need a core change?](#do-i-need-a-core-change)).
 
 <a id="row-0"></a>
@@ -132,7 +131,7 @@ is the harness executable. Run every command from the repository root.
    | 2. Install and version | `[capture.executable]` |
    | 3. Where it keeps things | `[capture.home]`, `[[capture.native]].root` |
    | 4. Session format and identity | `[[capture.native]]` `pattern` and `form`, `[capture.identity]` |
-   | 5. Auth | `auth_hosts`, `[capture.home]` `run_home` and `config_home` (headless: `[capture.credential]`) |
+   | 5. Auth | `auth_hosts`, `[capture.home]` `run_home` and `config_home` (the harness's own login, in its home) |
    | 6. Network | `[capture.ca]`, `[[capture.hosts]]` |
    | 7. Process model | `[capture.termination]`, `[capture.argv_guard]` |
    | 8. Things Goal Cup cannot isolate | nothing; it stays in the sheet |
@@ -165,7 +164,7 @@ is the harness executable. Run every command from the repository root.
    ```
    Replace every `<PLACEHOLDER>` and delete unused options. The template is chat mode:
    - **Chat mode** (`interactive = true`, the default): the harness opens in the participant's
-     terminal and the participant types the prompt. No goal slot, no credential, identity `none`,
+     terminal and the participant types the prompt. No goal slot, identity `none`,
      and `since_run_start = true` on the native row. Claude Code and Codex use it. The sign-in
      must last across runs, so pick the home by one question, "does the harness have a variable
      that moves its config?":
@@ -221,10 +220,9 @@ is the harness executable. Run every command from the repository root.
    Follow the comments in the three files. The case mirrors the connector's home, identity and
    native shape with a Python stand-in. It uses id `kit-<id>` and copies any seeds into
    `$k/files/`. Read the closest baseline case beside it: `controlled-workload`,
-   `synthetic-preassigned`, `synthetic-stderr-token`, `synthetic-keyed-stderr`,
-   `synthetic-stdout-json` or `synthetic-keyed-stdout-json`. A keyed case names `credential_env`
-   in `expect.toml` and copies the connector's `[capture.credential]`; the kit gives the stand-in
-   an invented key and checks that no fragment of it leaks. `native_path` is relative to the native
+   `synthetic-preassigned`, `synthetic-stderr-token` or `synthetic-stdout-json`. The kit puts an
+   invented provider key in `goalcup start`'s environment and checks that no fragment of it
+   reaches the trace, the run directory or the output. `native_path` is relative to the native
    root; `native_decoy_path` is a suffix under the run directory and includes the root's last
    directory. Check:
    ```sh
@@ -294,9 +292,9 @@ moves). Never spell around a rule.
 
 | # | Rule | Data-only fits when | Otherwise |
 |---|---|---|---|
-| 1 | Credential name | no key variable, `DEEPSEEK_API_KEY`, or `AMP_API_KEY` (headless only; see row 14) | core change |
-| 2 | Credential with identity | per-run config home, and identity `stderr_line` + `deferred` or `stdout_json` + `at_launch` | core change |
-| 3 | Credential in the kit | none, or the case names it in `credential_env` | core change |
+| 1 | Provider key | the harness's own login stores it in its home; the tracer passes none (D61) | not possible: see row 14 |
+| 2 | (retired by D61) | | |
+| 3 | (retired by D61) | | |
 | 4 | Identity carrier | `none`, `preassigned`, `stdout_json` or `stderr_line` | core change |
 | 5 | Home variable | `home.env` is `<WORD>_HOME` or `<WORD>_CONFIG_DIR`, or is left out | core change |
 | 6 | XDG | the harness falls back to `$HOME` and needs no XDG variable | core change |
@@ -309,18 +307,13 @@ moves). Never spell around a rule.
 | 13 | Argv and env | always, when no generic rule refuses them | refused by row 12 |
 | 14 | Chat-mode sign-in | the harness keeps its sign-in in its own config home (a login command, or the macOS Keychain) | core change: chat mode cannot pass an env-only API key |
 
-The security lists (rows 1, 7 and the redaction regex in row 12) are closed on purpose. A
-credential name decides which secret the tracer copies from the participant's shell. A CA mode
+The security lists (row 7 and the redaction regex in row 12) are closed on purpose. A CA mode
 is a trust statement about the participant's machine, so the two modes and the CA-name shape are
 core; the CA variable's name is connector data. A redaction regex runs inside the signed
 daemon.
 
-1. **Credential name.** Subscription or login auth needs no `[capture.credential]` table.
-2. **Credential with identity.** One stdout reader feeds both the key-fragment scan and the
-   `stdout_json` identity matcher. A credential with `preassigned` or `none` identity is refused.
-3. **Credential in the kit.** The case names the variable in `expect.toml` as `credential_env`. Copy
-   the connector's `[capture.credential]` into the case, and write the marker as
-   `synthetic-keyed-stderr/stand-in.py` does.
+1. **Provider key.** The tracer never sees, forwards or stores a participant's provider key
+   (D61): `[capture.credential]` is refused. The harness's own login keeps the key in its home.
 4. **Identity carrier.** Four ways exist, each with its binding:
    - `none` (no binding): no id; the native root is private to the run, or the native row sets
      `since_run_start`.
@@ -339,7 +332,7 @@ daemon.
    `NPM_*`) are refused. A harness with no such variable leaves `home.env` out. It then keeps its
    state under the private run `HOME`, so its native `root` is `{run_home}/...`, `config_home` is
    `per_run`, and it takes no seeds or `dirs`. A login in that home lasts one run, so such a harness
-   needs a credential (row 1), keeps its login in the macOS Keychain (`run_home =
+   keeps its login in the macOS Keychain (`run_home =
    "keychain_link"`), or uses `run_home = "shared"`.
 6. **XDG.** Every `XDG_*` name is refused in `capture.env` and as `home.env`. The launch
    environment starts empty, so the harness uses `$HOME`, the private run home.
@@ -373,12 +366,11 @@ daemon.
     safety flag, or a value that turns self-update back on. Write in the sheet why each flag and
     variable is there. How much the harness may do (model, sandbox, permissions) is the
     participant's choice. A connector does not limit it.
-14. **Chat-mode sign-in.** An `interactive` profile takes no `[capture.credential]`, and the chat
+14. **Chat-mode sign-in.** No profile takes a `[capture.credential]` (D61), and the chat
     launch passes only `PATH`, `TERM`, `COLORTERM`, `LANG` and `SHELL` from the participant's
     shell. So a harness that reads its provider key only from an environment variable (many
-    "any model" CLIs do) cannot run in chat mode. It fits only if its own login command stores the
-    key inside its isolated config home, which `config_home = "shared"` keeps across runs. An
-    env-only key is a core decision: open an issue, do not relax the rule in the connector.
+    "any model" CLIs do) cannot run. It fits only if its own login command stores the key inside
+    its isolated config home, which `config_home = "shared"` keeps across runs.
 
 <a id="reviewing-a-connector-pr"></a>
 
@@ -405,13 +397,13 @@ It does not make a careless seed safe. A code owner reads every field and every 
    registry or unrelated host. Auth hosts are sign-in and refresh tunnels and cannot supply model
    evidence. The protocol hint is declared, never inferred.
 6. **Native capture.** The root is inside the run or config home. `{id}` scopes a shared store. The
-   pattern cannot match request dumps, future credential stores, seed files or key-fragment logs.
+   pattern cannot match request dumps, credential stores or seed files.
 7. **Redaction.** Plan, billing, quota and key fields seen in fixtures are covered by the admitted
    recognizers. Committed fixtures went through `spikes/redact.py` and were read by eye. They hold
    no real prompt, trace or key.
 8. **Home and secrets.** A private `HOME` every time. `shared` is justified and serialized.
-   Per-run seeds hold no credential, URL or user data, and use safe modes. An API key stays
-   child-only and out of homes, logs, records and evidence.
+   Per-run seeds hold no credential, URL or user data, and use safe modes. The connector passes
+   no API key (D61).
 9. **Identity.** The source matches the measured carrier. The `stderr_line` grammar is exact.
    `stdout_json` start fields come before model text, and model text inside events is escaped.
 10. **Pin, goldens, kit.** Re-run `sh scripts/pin-manifests.sh` and confirm one pin-line diff.
@@ -425,7 +417,7 @@ What each manifest field must establish:
 |---|---|
 | `capture.args`, executable | headless argv or chat mode, goal placement, entry point, version |
 | `capture.home`, `env` | private HOME and config home, real state dirs, seed contents and modes |
-| `capture.credential`, `capture.ca` | variable names and process scope; no secret value; no app-wide trust; the CA variable and its mode cite a source or a measurement in the facts sheet, and an own-name variable is not one that tool children also read |
+| `capture.ca` | variable names and process scope; no secret value; no app-wide trust; the CA variable and its mode cite a source or a measurement in the facts sheet, and an own-name variable is not one that tool children also read |
 | `capture.hosts`, `auth_hosts` | provider host, narrow evidence paths, protocol hint |
 | `capture.native` | one own-session store, its form, root, pattern and scope; no request dump or credential store |
 | `capture.identity` | the measured carrier, its grammar and fields, and its binding to that store |
@@ -443,9 +435,8 @@ What each manifest field must establish:
 | Task fails while the recorder passes, or the reverse | Report each outcome separately |
 
 A passing kit is **synthetic tested** only. A maintainer may run one short real run with their own
-subscription or key, with a private launch directory and the reviewed connector. A contributor never
-opens a key file. For a key-bearing run, a clean key-fragment scan is mandatory before the evidence
-is accepted. That run is evidence for that build of the harness, not a release or a general
+subscription or login, with a private launch directory and the reviewed connector. A contributor
+never opens a key file. That run is evidence for that build of the harness, not a release or a general
 qualification.
 
 ## Getting a harness into the event

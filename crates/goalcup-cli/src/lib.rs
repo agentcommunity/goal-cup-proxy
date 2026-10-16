@@ -21,7 +21,7 @@
 //! | Exit | Meaning |
 //! |---|---|
 //! | 0 | The command did what it was asked. |
-//! | 1 | Refused, and the participant can fix it: no daemon, a busy tracker, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. Also, after the seal, a run whose key scan was not clean, and on Linux a run whose launcher sweep left a process running (`subreaper.rs`). |
+//! | 1 | Refused, and the participant can fix it: no daemon, a busy tracker, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. Also, after the seal, on Linux a run whose launcher sweep left a process running (`subreaper.rs`). |
 //! | 2 | **Never produced by this CLI.** It is `goalcup-verify`'s "invalid evidence" exit; the V1 `goalcup doctor --verify` that relayed it was removed by D48. |
 //! | 3 | The CLI could not do its job: a file it could not read, a response it could not parse. |
 //! | 4 | **Never produced by this CLI.** It was a gate's number; the V1 arming and `goalcup resume` gates were removed (D48), and control API v6 removed the daemon's `arming_timeout` code. |
@@ -41,7 +41,6 @@ pub mod entries;
 pub mod harness_version;
 /// Where `goalcup start` says things while a chat-mode harness owns the terminal (D57).
 pub mod host_log;
-pub mod key_scan;
 pub mod launch;
 /// Every sentence the participant reads during a run, worded in one place.
 pub mod participant;

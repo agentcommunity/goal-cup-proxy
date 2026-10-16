@@ -1111,7 +1111,7 @@ fn the_only_command_site_is_the_launch_builder() {
                 sites(&path, found);
             } else if path.extension().is_some_and(|e| e == "rs") {
                 let text = std::fs::read_to_string(&path).unwrap();
-                // The test module of `key_scan.rs` makes a FIFO with `mkfifo`; it is test code.
+                // A file's test module may spawn helpers; it is test code.
                 let shipped = text.split("#[cfg(test)]").next().unwrap();
                 for (n, line) in shipped.lines().enumerate() {
                     if line.contains("Command::new(") && !line.trim_start().starts_with("//") {
@@ -1161,18 +1161,18 @@ fn the_only_command_site_is_the_launch_builder() {
 }
 
 /// D40 (CONTRACTS.md, C6 capture spawn gate): every capture child is spawned only through the pre-exec gate, whatever
-/// pipes or child-only secret it carries, and is released only after its registration. A scan
+/// pipes it carries, and is released only after its registration. A scan
 /// of the one function that launches a capture run and of the launch module's spawners.
 #[test]
 fn capture_children_spawn_only_through_the_gate() {
     let start = include_str!("../../src/commands/start.rs");
     // The capture launch is its phase functions, which run in the order they are written:
-    // `capture` through `finish_and_scan`, up to the note a run that never finished leaves.
+    // `capture` through `finish_run`, up to the words for a harness's end.
     let (_, rest) = start
         .split_once("\nfn capture(")
         .expect("the capture launch");
     let (body, _) = rest
-        .split_once("\n/// A run that ended before its finish")
+        .split_once("\n/// A harness's end in words")
         .expect("the end of the capture phases");
     let flat_body = body
         .split_whitespace()
@@ -1220,28 +1220,17 @@ fn capture_children_spawn_only_through_the_gate() {
         1,
         "the gated capture has one authoritative schema-selected identity tee"
     );
-    // A keyed child's marked tee also reads a stdout JSON identity, with one stdout reader.
-    let marked_call = "tee_marked_capture_with_identity(&mut spawned, prep.secret.as_ref(), \
-                       stdout_rule, marker_rule)";
-    assert_eq!(
-        flat_body.matches(marked_call).count(),
-        1,
-        "the gated capture has one authoritative schema-selected marked tee"
-    );
-    let marked_tee = "tee_marked_capture_with_identity(";
     let stderr_tee = "tee_stderr_capture_with_rule(&mut spawned, rule)";
     assert_eq!(
         body.matches(stderr_tee).count(),
         1,
         "the gated capture has one authoritative schema-selected stderr tee"
     );
-    for tee in [scoped_tee, marked_tee, stderr_tee] {
+    for tee in [scoped_tee, stderr_tee] {
         assert!(at("gated.release()") < at(tee));
     }
-    // The child-only credential rides on the gate itself and nowhere else.
-    assert!(flat_body.contains(
-        "spawn_gated(&plan, prep.streams.pipes(), GATE_READY_WITHIN, prep.secret.as_ref())"
-    ));
+    // The gate is handed the plan and its pipes, and nothing else: no secret rides on it (D61).
+    assert!(flat_body.contains("spawn_gated(&plan, prep.streams.pipes(), GATE_READY_WITHIN)"));
 
     // And the spawners the launch module still has are the ungated ordinary one and the gate.
     let launch = include_str!("../../src/launch.rs");

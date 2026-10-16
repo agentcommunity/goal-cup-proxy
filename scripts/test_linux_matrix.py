@@ -56,9 +56,8 @@ class LinuxMatrixTests(unittest.TestCase):
             "LINUX_MATRIX_LOG_DIR": str(self.base / "logs"),
             "GOALCUP_TEST_APPROVAL_KEY_FILE": str(self.key),
         }
-        for name in ("GOALCUP_TEST_APPROVAL_KEY", "MATRIX_KEY_ENV_FILE", "LINUX_MATRIX_SERVER",
-                     "GOALCUP_TEST_MEMBER_ID", "GOALCUP_HEAVY_LOCK_HELD", "LINUX_MATRIX_LOCK_WAIT",
-                     "LINUX_MATRIX_ALLOW_KEYED"):
+        for name in ("GOALCUP_TEST_APPROVAL_KEY", "LINUX_MATRIX_SERVER",
+                     "GOALCUP_TEST_MEMBER_ID", "GOALCUP_HEAVY_LOCK_HELD", "LINUX_MATRIX_LOCK_WAIT"):
             self.env.pop(name, None)
 
     def run_script(self, *args: str, **env: str) -> subprocess.CompletedProcess:
@@ -113,19 +112,6 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertTrue(any("cargo build --offline --locked --workspace" in x
                             for x in self.docker_lines("exec")))
 
-    def test_a_provider_key_file_is_mounted_and_passed_to_matrix_by_path(self) -> None:
-        keyenv = self.base / "key.env"
-        keyenv.write_text("DEEPSEEK_API_KEY=" + SENTINEL + "\n")
-        keyenv.chmod(0o600)
-        run = self.run_script("run", "hermes-cli", MATRIX_KEY_ENV_FILE=str(keyenv),
-                              LINUX_MATRIX_ALLOW_KEYED="1")
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        [docker_run] = self.docker_lines("run")
-        self.assertIn(f"-v {keyenv}:/run/goalcup/key.env:ro", docker_run)
-        [inner] = [x for x in self.docker_lines("exec") if "inner-run hermes-cli" in x]
-        self.assertIn("-e MATRIX_KEY_ENV_FILE=/run/goalcup/key.env", inner)
-        self.assertNotIn(SENTINEL, self.log.read_text() + run.stdout + run.stderr)
-
     def test_a_key_in_the_environment_is_refused_before_docker_runs(self) -> None:
         run = self.run_script("run", "codex-cli", GOALCUP_TEST_APPROVAL_KEY=SENTINEL)
         self.assertNotEqual(run.returncode, 0)
@@ -154,20 +140,14 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertTrue(run.stdout.rstrip().splitlines()[-1].startswith("linux-matrix: signed in"))
         self.assertFalse(any("goalcup prep" in x for x in self.docker_lines("exec")))
 
-    def test_a_keyed_connector_is_refused_as_blocked_in_one_line(self) -> None:
-        for action in ("run", "login"):
-            run = self.run_script(action, "hermes-cli")
-            self.assertEqual(run.returncode, 1, action)
-            lines = run.stdout.splitlines()
-            self.assertEqual(len(lines), 1, run.stdout)
-            self.assertTrue(lines[0].startswith("linux-matrix: FAIL blocked: hermes-cli"), lines[0])
-        self.assertEqual(self.log.read_text(), "")
-
-    def test_login_of_a_headless_connector_is_refused(self) -> None:
-        run = self.run_script("login", "hermes-cli", LINUX_MATRIX_ALLOW_KEYED="1")
-        self.assertEqual(run.returncode, 1)
-        self.assertIn("headless", run.stdout)
-        self.assertEqual(self.log.read_text(), "")
+    def test_login_of_hermes_stops_at_the_owner_step_as_codex_does(self) -> None:
+        # Hermes runs in chat mode from its own home (D61): its sign-in is kept like Codex's, and
+        # no provider key file is asked for.
+        run = self.run_script("login", "hermes-cli")
+        self.assertEqual(run.returncode, 3, run.stdout + run.stderr)
+        self.assertIn("linux-matrix: OWNER STEP", run.stdout)
+        self.assertIn("sh scripts/linux-matrix.sh login hermes-cli", run.stdout)
+        self.assertTrue(any("inner-login hermes-cli" in x for x in self.docker_lines("exec")))
 
     def test_a_caller_holding_the_lock_is_refused_at_once(self) -> None:
         self.lock.mkdir()

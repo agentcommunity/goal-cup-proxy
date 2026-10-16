@@ -1,19 +1,19 @@
-# NON-SHIPPING fixture connector: the keyed, headless, per-run-home shape. Engine tests load it
-# so that no test of a launch rule depends on one shipped connector's values. It has a goal flag,
-# a reserved env prefix, a private home made from its own seed files, a child-only provider key,
-# a replace-mode CA variable of its own, a session id read from stderr at the finish, one
+# NON-SHIPPING fixture connector: the headless, per-run-home shape. Engine tests load it so that
+# no test of a launch rule depends on one shipped connector's values. It has a goal flag, a
+# reserved env prefix, a private home made from its own seed files, a replace-mode CA variable
+# of its own, a session id read from stderr at the finish, one
 # snapshot session file and an argv guard. No build pins it, so it loads only through `--dev`.
 schema_version = 1
-id = "keyed-per-run"
+id = "headless-per-run"
 
 [capture]
 args = ["chat", "-Q"]
 goal_flag = "--query"
-reserved_env_prefixes = ["KEYED_"]
+reserved_env_prefixes = ["PERRUN_"]
 continuation = "none: one turn, session snapshot on, stdin /dev/null"
 
 [capture.executable]
-program = "keyed-harness"
+program = "per-run-harness"
 
 [capture.env]
 TOOL_HOME_MODE = "profile"
@@ -21,20 +21,17 @@ TOOL_HOME_MODE = "profile"
 [capture.home]
 run_home = "empty"
 config_home = "per_run"
-env = "KEYED_HOME"
-per_run_dir = "keyed"
+env = "PERRUN_HOME"
+per_run_dir = "perrun"
 dirs = ["home"]
-real_dirs = ["{user_home}/.keyed"]
+real_dirs = ["{user_home}/.perrun"]
 seed = [
   { file = "config.yaml" },
   { file = "auth.json" },
 ]
 
-[capture.credential]
-env = "DEEPSEEK_API_KEY"
-
 [capture.ca]
-env = ["KEYED_CA_BUNDLE"]
+env = ["PERRUN_CA_BUNDLE"]
 mode = "replace"
 
 [capture.identity]
@@ -62,6 +59,6 @@ grace_seconds = 10
 # A reserved name: nothing answers there, and a test start that runs this connector renames it
 # to a loopback one, which is never probed.
 [[capture.hosts]]
-host = "api.keyed.example"
+host = "api.per-run.example"
 evidence_paths = ["/v1/chat/completions"]
 protocol_hint = "openai-chat-completions"

@@ -531,7 +531,7 @@ fn goalcup_start_requires_a_goal_file_for_a_headless_harness_and_offers_no_v1_fl
     let cfg = tempfile::tempdir().unwrap();
     // The two shapes are the fixture connectors (`tests/fixtures/connectors`), through `--dev`.
     let out = goalcup()
-        .args(["start", "--harness", "keyed-per-run", "--dev"])
+        .args(["start", "--harness", "headless-per-run", "--dev"])
         .env("GOALCUP_CONFIG_DIR", cfg.path())
         .env("GOALCUP_CONNECTORS_DIR", support::fixture_connectors_dir())
         .output()

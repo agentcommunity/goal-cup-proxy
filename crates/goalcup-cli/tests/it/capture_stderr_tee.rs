@@ -1,21 +1,15 @@
 //! The stderr tee that carries a `stderr_line` harness's session identity.
 //!
 //! The harness prints one `session_id: <id>` line on stderr after its turn (the rule here is
-//! `support::stderr_marker_rule`). The tee forwards every byte of both streams unchanged, scans
-//! them for the key's fragments, and reads that one line under a strict grammar. Everything here
-//! uses in-memory readers, a socket pair, or a `/bin/sh` child; the synthetic key is
-//! `secret_support::KEY`.
+//! `support::stderr_marker_rule`). The tee forwards every byte of stderr unchanged and reads
+//! that one line under a strict grammar. Everything here uses in-memory readers, a socket pair,
+//! or a `/bin/sh` child.
 
-use crate::common::secret_support;
 use crate::common::support;
-use goalcup_cli::capture_tee::{NATIVE_FINISH_MIN, marker_wait_end};
-use goalcup_cli::key_scan::FragmentMatcher;
-use goalcup_cli::launch::{
-    ScopeMarker, Spawned, StderrLineRule, tee_marked_capture_with_rule, tee_marked_with_rule,
-};
+use goalcup_cli::capture_tee::{NATIVE_FINISH_MIN, marker_wait_end, tee_stderr_capture_with_rule};
+use goalcup_cli::launch::{ScopeMarker, Spawned, StderrLineRule, tee_marked_with_rule};
 use goalcup_protocol::control::FINISH_COMMIT_RESERVE;
 use goalcup_protocol::harness::IdGrammar;
-use secret_support::KEY;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -85,7 +79,6 @@ fn marker(chunks: &[&[u8]]) -> ScopeMarker {
     let tee = tee_marked_with_rule(
         Chunks::new(chunks),
         Sink::default(),
-        None,
         support::stderr_marker_rule(),
     )
     .unwrap();
@@ -109,7 +102,6 @@ fn marker_rule_honors_custom_prefix_and_token_grammar() {
     let tee = tee_marked_with_rule(
         Chunks::new(&[b"session_id: ignored\nrun: Token_9-ok\n"]),
         Sink::default(),
-        None,
         rule,
     )
     .unwrap();
@@ -128,7 +120,6 @@ fn token_marker_accepts_exactly_128_bytes() {
     let tee = tee_marked_with_rule(
         Chunks::new(&[input.as_bytes()]),
         Sink::default(),
-        None,
         StderrLineRule {
             prefix: "run: ".into(),
             grammar: IdGrammar::Token,
@@ -147,13 +138,8 @@ fn token_marker_refuses_empty_overlong_and_punctuation() {
     };
     let overlong = "x".repeat(129);
     let input = format!("run: \nrun: bad.dot\nrun: {overlong}\n");
-    let tee = tee_marked_with_rule(
-        Chunks::new(&[input.as_bytes()]),
-        Sink::default(),
-        None,
-        rule,
-    )
-    .unwrap();
+    let tee =
+        tee_marked_with_rule(Chunks::new(&[input.as_bytes()]), Sink::default(), rule).unwrap();
     assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
     assert_eq!(tee.marker_until(Instant::now()), ScopeMarker::Absent);
 }
@@ -304,7 +290,6 @@ fn bytes_are_forwarded_verbatim() {
         let tee = tee_marked_with_rule(
             Chunks::new(&chunks),
             sink.clone(),
-            None,
             support::stderr_marker_rule(),
         )
         .unwrap();
@@ -320,7 +305,6 @@ fn a_closed_destination_does_not_stop_the_reading() {
     let tee = tee_marked_with_rule(
         Chunks::new(&[b"noise\n", &line(ID)]),
         Closed,
-        None,
         support::stderr_marker_rule(),
     )
     .unwrap();
@@ -336,8 +320,7 @@ fn a_closed_destination_does_not_stop_the_reading() {
 #[test]
 fn the_wait_decides_from_the_lines_seen_when_stderr_is_held_open() {
     let (mut writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
-    let tee =
-        tee_marked_with_rule(reader, Sink::default(), None, support::stderr_marker_rule()).unwrap();
+    let tee = tee_marked_with_rule(reader, Sink::default(), support::stderr_marker_rule()).unwrap();
     writer.write_all(b"progress\n").unwrap();
     writer.write_all(&line(ID)).unwrap();
     writer.flush().unwrap();
@@ -368,7 +351,6 @@ fn the_wait_ends_at_eof_not_at_its_deadline() {
     let tee = tee_marked_with_rule(
         Chunks::new(&[&line(ID)]),
         Sink::default(),
-        None,
         support::stderr_marker_rule(),
     )
     .unwrap();
@@ -378,123 +360,51 @@ fn the_wait_ends_at_eof_not_at_its_deadline() {
     assert!(started.elapsed() < Duration::from_secs(10));
 }
 
-/// The tee's key scan: a fragment of the key anywhere in either stream is a live hit, however
-/// the reads cut it, and a clean stream is not one.
-#[test]
-fn the_tee_reports_a_key_fragment_split_across_reads() {
-    let masked = format!(
-        "Authorization: Bearer {}...{}\n",
-        &KEY[..8],
-        &KEY[KEY.len() - 4..]
-    );
-    for cut in [1usize, 5, 12, 30] {
-        let (a, b) = masked.as_bytes().split_at(cut);
-        let matcher = FragmentMatcher::new(KEY.as_bytes()).unwrap();
-        let tee = tee_marked_with_rule(
-            Chunks::new(&[a, b]),
-            Sink::default(),
-            Some(matcher),
-            support::stderr_marker_rule(),
-        )
-        .unwrap();
-        assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
-        assert!(tee.key_hit(), "cut at {cut}");
-    }
-    let matcher = FragmentMatcher::new(KEY.as_bytes()).unwrap();
-    let tee = tee_marked_with_rule(
-        Chunks::new(&[b"nothing to see\n", &line(ID)]),
-        Sink::default(),
-        Some(matcher),
-        support::stderr_marker_rule(),
-    )
-    .unwrap();
-    assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
-    assert!(!tee.key_hit());
-}
-
 /// A marker on stdout is never used. Only a child's stderr is read for the identity.
 #[test]
 fn a_marker_on_stdout_is_never_used() {
-    let secret = {
-        let mut env = std::collections::BTreeMap::new();
-        env.insert("DEEPSEEK_API_KEY".to_string(), KEY.to_string());
-        let profile = keyed_profile();
-        goalcup_cli::launch::child_secret_for_harness(&profile, &env)
-            .unwrap()
-            .unwrap()
-    };
     let script = format!("printf 'session_id: {ID}\\n'; printf 'warn\\n' >&2");
-    let mut command = std::process::Command::new("/bin/sh");
-    command
-        .args(["-c", &script])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let child = command.spawn().unwrap();
-    let mut spawned = Spawned {
-        child,
-        program: "/bin/sh".to_string(),
-    };
-    let tee = tee_marked_capture_with_rule(
-        &mut spawned,
-        Some(&secret),
-        Some(support::stderr_marker_rule()),
-    )
-    .unwrap();
-    let status = spawned.child.wait().unwrap();
-    assert!(status.success());
+    let (spawned, tee) = tee_a_real_child(&script);
+    assert!(spawned.success());
     assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
     assert_eq!(tee.marker_until(Instant::now()), ScopeMarker::Absent);
-    assert!(!tee.key_hit());
 }
 
-/// The wrapper takes both pipes off a real child, finds the marker on its stderr, and sees a
-/// key fragment on its stdout.
+/// The capture tee takes stderr off a real child and finds the marker on it.
 #[test]
-fn the_capture_tee_reads_a_real_childs_stderr_and_scans_both_streams() {
-    let secret = {
-        let mut env = std::collections::BTreeMap::new();
-        env.insert("DEEPSEEK_API_KEY".to_string(), KEY.to_string());
-        goalcup_cli::launch::child_secret_for_harness(&keyed_profile(), &env)
-            .unwrap()
-            .unwrap()
-    };
-    // The child prints a masked form of the key it is not given; the tee scans for it anyway.
-    let masked = format!("{}...{}", &KEY[..8], &KEY[KEY.len() - 4..]);
-    let script = format!("printf 'out %s\\n' '{masked}'; printf 'session_id: {ID}\\n' >&2");
-    let mut command = std::process::Command::new("/bin/sh");
-    command
-        .args(["-c", &script])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let child = command.spawn().unwrap();
-    let mut spawned = Spawned {
-        child,
-        program: "/bin/sh".to_string(),
-    };
-    let tee = tee_marked_capture_with_rule(
-        &mut spawned,
-        Some(&secret),
-        Some(support::stderr_marker_rule()),
-    )
-    .unwrap();
-    spawned.child.wait().unwrap();
+fn the_capture_tee_reads_a_real_childs_stderr() {
+    let script = format!("printf 'out\\n'; printf 'session_id: {ID}\\n' >&2");
+    let (spawned, tee) = tee_a_real_child(&script);
+    assert!(spawned.success());
     assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
     assert_eq!(
         tee.marker_until(Instant::now()),
         ScopeMarker::One(ID.to_string())
     );
-    assert!(tee.key_hit(), "the fragment on stdout is a live hit");
 }
 
-/// A keyed profile (the `keyed-per-run` fixture connector), whose credential is
-/// `DEEPSEEK_API_KEY`.
-fn keyed_profile() -> goalcup_protocol::harness::CaptureSpec {
-    support::fixture_connector("keyed-per-run")
-        .loaded
-        .manifest
-        .capture
+/// Run `script` under `/bin/sh` with stderr piped to the capture tee and stdout discarded, and
+/// wait for it.
+fn tee_a_real_child(
+    script: &str,
+) -> (
+    std::process::ExitStatus,
+    goalcup_cli::capture_tee::CaptureStderr,
+) {
+    let mut command = std::process::Command::new("/bin/sh");
+    command
+        .args(["-c", script])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    let child = command.spawn().unwrap();
+    let mut spawned = Spawned {
+        child,
+        program: "/bin/sh".to_string(),
+    };
+    let tee = tee_stderr_capture_with_rule(&mut spawned, support::stderr_marker_rule()).unwrap();
+    let status = spawned.child.wait().unwrap();
+    (status, tee)
 }
 
 /// Review amendment (c): the wait for the marker ends the commit reserve and the daemon's native
@@ -515,8 +425,7 @@ fn the_marker_wait_ends_before_the_drain_share_does() {
 
     // A held-open stderr with a marker already seen is answered at that end, not at EOF.
     let (mut writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
-    let tee =
-        tee_marked_with_rule(reader, Sink::default(), None, support::stderr_marker_rule()).unwrap();
+    let tee = tee_marked_with_rule(reader, Sink::default(), support::stderr_marker_rule()).unwrap();
     writer.write_all(&line(ID)).unwrap();
     let begun = Instant::now();
     let decided = tee.marker_until(marker_wait_end(
@@ -525,272 +434,4 @@ fn the_marker_wait_ends_before_the_drain_share_does() {
     assert_eq!(decided, ScopeMarker::One(ID.to_string()));
     assert!(begun.elapsed() < Duration::from_secs(5));
     drop(writer);
-}
-
-// ---------------------------------------------------------------------------------------
-// A fragment the tee sees is not forwarded to the terminal.
-// ---------------------------------------------------------------------------------------
-
-/// Every form of the key a leak could take on a screen.
-fn forms() -> Vec<String> {
-    let n = KEY.len();
-    vec![
-        KEY.to_string(),
-        KEY[..8].to_string(),
-        KEY[n - 8..].to_string(),
-        format!("{}***{}", &KEY[..8], &KEY[n - 4..]),
-        format!("{}...{}", &KEY[..6], &KEY[n - 4..]),
-    ]
-}
-
-fn assert_no_form(what: &str, bytes: &[u8]) {
-    let text = String::from_utf8_lossy(bytes);
-    for form in forms() {
-        assert!(!text.contains(&form), "{what}: the output shows `{form}`");
-    }
-}
-
-const WITHHELD: &str = "[goalcup: output withheld: a fragment of the provider key]";
-
-/// With a matcher the tee holds back the bytes a fragment could still be completed by, and
-/// flushes them at the end of the stream: clean output is still forwarded byte for byte.
-#[test]
-fn a_matching_tee_still_forwards_clean_output_verbatim() {
-    let mut payload: Vec<u8> = (0..=255u8).collect();
-    payload.extend_from_slice(b"\r\n\0\xff\xfe not utf-8 \n");
-    payload.extend(line(ID));
-    payload.extend((0..200_000u32).map(|i| (i % 251) as u8));
-    // A near miss is not a fragment.
-    payload.extend_from_slice(b" sk-abcdefgh and sk-xxxx...yyyy ");
-    for size in [1usize, 7, 4096, 65_536] {
-        let chunks: Vec<&[u8]> = payload.chunks(size).collect();
-        let sink = Sink::default();
-        let matcher = FragmentMatcher::new(KEY.as_bytes()).unwrap();
-        let tee = tee_marked_with_rule(
-            Chunks::new(&chunks),
-            sink.clone(),
-            Some(matcher),
-            support::stderr_marker_rule(),
-        )
-        .unwrap();
-        assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
-        assert!(!tee.key_hit(), "chunk size {size}");
-        assert_eq!(*sink.0.lock().unwrap(), payload, "chunk size {size}");
-        assert_eq!(
-            tee.marker_until(Instant::now()),
-            ScopeMarker::One(ID.to_string())
-        );
-    }
-}
-
-/// A fragment never reaches the destination, however the reads cut it: not whole, not as a prefix
-/// or a mask, and not as a part held and sent later. The bytes read with it (at most one read and
-/// the held tail) are withheld too, a fixed line says something was, the hit is recorded, and the
-/// output that follows still arrives.
-#[test]
-fn a_fragment_is_withheld_however_the_reads_cut_it() {
-    let tail = "z".repeat(300);
-    for form in forms() {
-        let text = format!("start of the output\nthe provider said: {form}.\n{tail}\nTHE-END\n");
-        for size in [1usize, 2, 3, 5, 8, 13, 64, 4096] {
-            let chunks: Vec<&[u8]> = text.as_bytes().chunks(size).collect();
-            let sink = Sink::default();
-            let matcher = FragmentMatcher::new(KEY.as_bytes()).unwrap();
-            let tee = tee_marked_with_rule(
-                Chunks::new(&chunks),
-                sink.clone(),
-                Some(matcher),
-                support::stderr_marker_rule(),
-            )
-            .unwrap();
-            assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
-            let sent = sink.0.lock().unwrap().clone();
-            assert_no_form(&format!("`{form}` cut every {size}"), &sent);
-            assert!(tee.key_hit(), "`{form}` cut every {size}");
-            let shown = String::from_utf8_lossy(&sent);
-            assert!(shown.contains(WITHHELD), "{shown}");
-            if size <= 64 {
-                assert!(
-                    shown.ends_with("THE-END\n"),
-                    "output after the hit still arrives (cut every {size}): {shown}"
-                );
-            }
-        }
-    }
-}
-
-/// The wrapper over a real child: the key printed in pieces on stdout and stderr reaches neither
-/// destination, and the marker on stderr is still read.
-#[test]
-fn a_real_childs_two_streams_are_withheld_before_they_reach_the_terminal() {
-    use goalcup_cli::launch::{child_secret_for_harness, tee_marked_capture_with_identity_to};
-    let secret = {
-        let mut env = std::collections::BTreeMap::new();
-        env.insert("DEEPSEEK_API_KEY".to_string(), KEY.to_string());
-        child_secret_for_harness(&keyed_profile(), &env)
-            .unwrap()
-            .unwrap()
-    };
-    let n = KEY.len();
-    let script = format!(
-        "printf 'out one %s' '{a}'; printf '%s done\\n' '{b}'; \
-         printf 'err one %s' '{a}' >&2; printf '%s done\\n' '{b}' >&2; \
-         printf 'Incorrect API key provided: {c}.\\n' >&2; printf 'session_id: {ID}\\n' >&2",
-        a = &KEY[..4],
-        b = &KEY[4..],
-        c = format_args!("{}***{}", &KEY[..8], &KEY[n - 4..]),
-    );
-    let mut command = std::process::Command::new("/bin/sh");
-    command
-        .args(["-c", &script])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut spawned = Spawned {
-        child: command.spawn().unwrap(),
-        program: "/bin/sh".to_string(),
-    };
-    let (out, err) = (Sink::default(), Sink::default());
-    let (_, tee) = tee_marked_capture_with_identity_to(
-        &mut spawned,
-        Some(&secret),
-        None,
-        Some(support::stderr_marker_rule()),
-        out.clone(),
-        err.clone(),
-    )
-    .unwrap();
-    spawned.child.wait().unwrap();
-    assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
-    assert!(tee.key_hit());
-    for (what, sink) in [("stdout", &out), ("stderr", &err)] {
-        let sent = sink.0.lock().unwrap().clone();
-        assert_no_form(what, &sent);
-        assert!(String::from_utf8_lossy(&sent).contains(WITHHELD), "{what}");
-    }
-    assert_eq!(
-        tee.marker_until(Instant::now()),
-        ScopeMarker::One(ID.to_string())
-    );
-}
-
-// ---------------------------------------------------------------------------------------
-// A stderr marker that holds a fragment of the key is never bound (D50).
-// ---------------------------------------------------------------------------------------
-
-fn token_rule() -> StderrLineRule {
-    StderrLineRule {
-        prefix: "scope: ".into(),
-        grammar: IdGrammar::Token,
-    }
-}
-
-/// The `token` grammar's alphabet is a key's, so a keyed child can print `scope: <key>`. That
-/// id would be the daemon's deferred scope, written into the chain: a marker whose line holds
-/// any key-scan form is not bound, however the reads cut it and whatever marker follows, and it
-/// is a key hit. Its bytes are withheld from the terminal as any fragment is.
-#[test]
-fn a_marker_holding_a_key_form_is_never_bound() {
-    let n = KEY.len();
-    let ids = [
-        KEY.to_string(),
-        KEY[n - 8..].to_string(),
-        format!("run_{}_0001", &KEY[n - 8..]),
-    ];
-    for id in &ids {
-        for after in ["", "scope: clean_one\n"] {
-            let input = format!("before\nscope: {id}\n{after}after\n");
-            for size in [1usize, 7, 4096] {
-                let chunks: Vec<&[u8]> = input.as_bytes().chunks(size).collect();
-                let sink = Sink::default();
-                let matcher = FragmentMatcher::new(KEY.as_bytes()).unwrap();
-                let tee = tee_marked_with_rule(
-                    Chunks::new(&chunks),
-                    sink.clone(),
-                    Some(matcher),
-                    token_rule(),
-                )
-                .unwrap();
-                assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
-                let what = format!(
-                    "marker of {} bytes, then {after:?}, cut every {size}",
-                    id.len()
-                );
-                assert_eq!(
-                    tee.marker_until(Instant::now()),
-                    ScopeMarker::Absent,
-                    "{what}"
-                );
-                assert!(tee.key_hit(), "{what}");
-                assert_no_form(&what, &sink.0.lock().unwrap());
-            }
-        }
-    }
-}
-
-/// The same marker rule with the key matcher still binds a clean marker, and an unkeyed tee
-/// (no matcher) binds what it always bound.
-#[test]
-fn a_clean_marker_still_binds_on_a_keyed_tee() {
-    let matcher = FragmentMatcher::new(KEY.as_bytes()).unwrap();
-    let tee = tee_marked_with_rule(
-        Chunks::new(&[b"scope: Token_9-ok\n"]),
-        Sink::default(),
-        Some(matcher),
-        token_rule(),
-    )
-    .unwrap();
-    assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
-    assert_eq!(
-        tee.marker_until(Instant::now()),
-        ScopeMarker::One("Token_9-ok".into())
-    );
-    assert!(!tee.key_hit());
-}
-
-/// The launcher's keyed `stderr_line` path over a real child: `scope: <key>` on stderr binds
-/// nothing, is a hit, and no fragment reaches either destination.
-#[test]
-fn a_real_childs_key_bearing_stderr_marker_binds_nothing() {
-    use goalcup_cli::launch::{child_secret_for_harness, tee_marked_capture_with_identity_to};
-    let secret = {
-        let mut env = std::collections::BTreeMap::new();
-        env.insert("DEEPSEEK_API_KEY".to_string(), KEY.to_string());
-        child_secret_for_harness(&keyed_profile(), &env)
-            .unwrap()
-            .unwrap()
-    };
-    let n = KEY.len();
-    for id in [KEY, &KEY[n - 8..]] {
-        let script = format!("printf 'hello\\n'; printf 'scope: {id}\\n' >&2");
-        let mut command = std::process::Command::new("/bin/sh");
-        command
-            .args(["-c", &script])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        let mut spawned = Spawned {
-            child: command.spawn().unwrap(),
-            program: "/bin/sh".to_string(),
-        };
-        let (out, err) = (Sink::default(), Sink::default());
-        let (scope, tee) = tee_marked_capture_with_identity_to(
-            &mut spawned,
-            Some(&secret),
-            None,
-            Some(token_rule()),
-            out.clone(),
-            err.clone(),
-        )
-        .unwrap();
-        assert!(scope.is_none(), "no stdout rule, no scope receiver");
-        spawned.child.wait().unwrap();
-        assert!(tee.finish(Instant::now() + PATIENCE).unwrap());
-        assert_eq!(tee.marker_until(Instant::now()), ScopeMarker::Absent);
-        assert!(tee.key_hit());
-        for (what, sink) in [("stdout", &out), ("stderr", &err)] {
-            assert_no_form(what, &sink.0.lock().unwrap());
-        }
-        assert_eq!(*out.0.lock().unwrap(), b"hello\n");
-    }
 }

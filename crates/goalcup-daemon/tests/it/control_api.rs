@@ -1091,9 +1091,10 @@ async fn a_capture_create_refuses_a_run_start_in_the_future() {
     assert!(!info.entry_id.is_empty());
 }
 
-/// The run's exact secret values on a capture create (D60): more than two, or one that is not
-/// a usable value, is refused as malformed before anything is created, and the refusal never
-/// repeats a value. Two good ones are taken.
+/// The run's exact secret values on a capture create (D60): more than one
+/// ([`goalcup_protocol::run_secret::MAX_RUN_SECRETS`]), or one that is not a usable value, is
+/// refused as malformed before anything is created, and the refusal never repeats a value. One
+/// good one is taken.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_capture_create_refuses_unusable_run_secrets_without_echoing_them() {

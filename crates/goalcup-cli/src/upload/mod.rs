@@ -1,7 +1,7 @@
 //! The upload server's side of a run (docs/SERVER-DESIGN.md, docs/UPLOAD-API.md).
 //!
-//! Off unless `goalcup login` stored a server ([`crate::server`]): with no `server.json`, and
-//! for a harness given a provider key, nothing here is called and the run is local only.
+//! Off unless `goalcup login` stored a server ([`crate::server`]): with no `server.json`,
+//! nothing here is called and the run is local only.
 //!
 //! What a run with a server does, in `goalcup start`'s order:
 //!

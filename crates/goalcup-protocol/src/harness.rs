@@ -17,12 +17,12 @@
 //! 1. The text is parsed as a generic TOML table and `schema_version` is read first
 //!    (`SUPPORTED_SCHEMA_VERSIONS`). The executable pin's retired keys (`sha256`, `version`) are
 //!    refused here with their own sentence (D53), before the strict deserialization would call
-//!    them a newer schema's.
+//!    them a newer schema's, and so is a `[capture.credential]` table (D61).
 //! 2. It is then deserialized with `deny_unknown_fields` everywhere. An unknown key, and an
 //!    unknown value of a closed-set field, are refused with one sentence ([`NEWER_SENTENCE`]):
 //!    serde's own "unknown variant" text never reaches the user.
 //! 3. [`HarnessManifest::validate`] runs the checks in a fixed order, so the first refusal
-//!    is deterministic: executable, args and goal, env, home, credential, CA, identity,
+//!    is deterministic: executable, args and goal, env, home, CA, identity,
 //!    native, argv guard, termination, hosts, the delivery-agnostic rule (F7), the
 //!    cross-field rules, and then every rule again on the recipe each `[capture.platform.<key>]`
 //!    resolves to (an override may replace only env entries).
@@ -35,7 +35,7 @@
 
 use crate::ProtocolError;
 use crate::capture_policy::{
-    CREDENTIAL_ENV, CaMode, EnvContext, MAX_CAPTURE_ARG_BYTES, MAX_CAPTURE_ARGS, MAX_CAPTURE_ENV,
+    CaMode, EnvContext, MAX_CAPTURE_ARG_BYTES, MAX_CAPTURE_ARGS, MAX_CAPTURE_ENV,
     MAX_CAPTURE_ENV_KEY_BYTES, MAX_CAPTURE_ENV_VALUE_BYTES, MAX_CAPTURE_HOSTS,
     MAX_CAPTURE_PATHS_PER_HOST, MAX_CONTINUATION_BYTES, MAX_GOAL_FLAG_BYTES, arg_path_denied,
     ca_env_problem, capture_arg_denied, capture_path_problem, env_key_denied, env_value_denied,
@@ -364,7 +364,7 @@ pub struct CaptureSpec {
     /// is no slot, and the arguments (none at all is allowed) start the harness's chat.
     pub args: Vec<String>,
     /// The harness runs in its normal chat mode in the participant's terminal and the
-    /// participant types the prompt (D57): no goal slot, no credential, identity `none`.
+    /// participant types the prompt (D57): no goal slot, identity `none`.
     #[serde(default)]
     pub interactive: bool,
     /// Appended after [`Self::args`] when a run is continued, under the same rules (D51).
@@ -391,13 +391,11 @@ pub struct CaptureSpec {
     pub env: BTreeMap<String, String>,
     /// Name prefixes of the harness's own variables (`HERMES_`) that `env` may not set: switches
     /// such as a safe mode that would silently stop capture. Data, so no harness is named in the
-    /// policy; `home.env`, `ca.env` and `credential.env` are pinned by the launch and unaffected.
+    /// policy; `home.env` and `ca.env` are pinned by the launch and unaffected.
     #[serde(default)]
     pub reserved_env_prefixes: Vec<String>,
     pub executable: ExecutableSpec,
     pub home: HomeSpec,
-    #[serde(default)]
-    pub credential: Option<CredentialSpec>,
     pub ca: CaSpec,
     pub identity: IdentitySpec,
     /// Exactly one entry in schema 1 (an array so that 1..=N is a later additive widening).
@@ -523,15 +521,6 @@ impl SeedFile {
     pub(crate) fn mode(&self) -> SeedMode {
         self.mode.unwrap_or(SeedMode::Rw0600)
     }
-}
-
-/// `[capture.credential]`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct CredentialSpec {
-    /// A name on [`CREDENTIAL_ENV`].
-    pub env: String,
 }
 
 /// `[capture.ca]`: the variables the launch points at a certificate file, and which file.
@@ -1085,6 +1074,7 @@ impl HarnessManifest {
             }
         }
         refuse_retired_pin_keys(&table)?;
+        refuse_credential_table(&table)?;
         let mut manifest =
             toml::from_str::<HarnessManifest>(text).map_err(|e| map_toml_error(text, &e))?;
         manifest.capture.add_provider_hosts()?;
@@ -1123,6 +1113,38 @@ fn refuse_retired_pin_keys(table: &toml::Table) -> Result<(), ProtocolError> {
                         "`{retired}` is no longer a connector field (D53): the tracer records the \
                          build that runs instead of pinning one; delete the line."
                     ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// What a `[capture.credential]` table is told (D61). The table once named a provider key the
+/// launcher read from its own environment and handed to the harness; the tracer no longer
+/// sees, forwards or stores one, so the table is refused by name rather than as a newer
+/// schema's field.
+pub const CREDENTIAL_REFUSAL: &str =
+    "a connector may not pass a provider key; the harness keeps its own login in its home";
+
+/// Refuse `capture.credential` and `capture.platform.<key>.credential` (D61), read from the
+/// generic table before the strict deserialization.
+fn refuse_credential_table(table: &toml::Table) -> Result<(), ProtocolError> {
+    let Some(capture) = table.get("capture").and_then(toml::Value::as_table) else {
+        return Ok(());
+    };
+    if capture.contains_key("credential") {
+        return Err(refuse("capture.credential", CREDENTIAL_REFUSAL));
+    }
+    if let Some(platforms) = capture.get("platform").and_then(toml::Value::as_table) {
+        for (key, value) in platforms {
+            if value
+                .as_table()
+                .is_some_and(|t| t.contains_key("credential"))
+            {
+                return Err(refuse(
+                    format!("capture.platform.{key}.credential"),
+                    CREDENTIAL_REFUSAL,
                 ));
             }
         }
@@ -1384,7 +1406,7 @@ fn platform_refusal(key: PlatformKey, e: ProtocolError) -> ProtocolError {
 
 impl HarnessManifest {
     /// Refuse every manifest the refusal table names. The order is fixed, so the first
-    /// refusal is deterministic: executable, args and goal, env, home, credential, CA,
+    /// refusal is deterministic: executable, args and goal, env, home, CA,
     /// identity, native, argv guard, termination, hosts, the delivery-agnostic
     /// rule, the cross-field rules, and then each `[capture.platform.<key>]` in [`PlatformKey`]'s
     /// declaration order (`linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `macos-x86_64`),
@@ -1467,7 +1489,6 @@ impl HarnessManifest {
         self.check_configure(origin)?;
         self.check_env()?;
         self.check_home()?;
-        self.check_credential()?;
         self.check_ca()?;
         self.check_identity()?;
         self.check_native()?;
@@ -1843,30 +1864,6 @@ impl HarnessManifest {
             if let Some(why) = relative_path_problem(rel, 8) {
                 return Err(refuse("capture.home.real_dirs", format!("`{r}` {why}")));
             }
-        }
-        Ok(())
-    }
-
-    fn check_credential(&self) -> Result<(), ProtocolError> {
-        if self.capture.interactive && self.capture.credential.is_some() {
-            return Err(refuse(
-                "capture.credential",
-                "an `interactive` profile takes no credential: the participant signs in to the \
-                 harness as they always do",
-            ));
-        }
-        if let Some(c) = &self.capture.credential
-            && !CREDENTIAL_ENV.contains(&c.env.as_str())
-        {
-            return Err(refuse(
-                "capture.credential.env",
-                format!(
-                    "`{}` is not one of the provider credential variables a capture profile may \
-                     name ({}): a new provider is a core PR with a DECISIONS entry",
-                    c.env,
-                    CREDENTIAL_ENV.join(", ")
-                ),
-            ));
         }
         Ok(())
     }
@@ -2342,40 +2339,6 @@ impl HarnessManifest {
         let per_run = c.home.config_home == ConfigHome::PerRun;
         let run_shared = c.home.run_home == RunHome::Shared;
 
-        // Credential: two identity sources are exercised in schema 1, and both need a per-run
-        // home. A `stdout_json` identity is read by the same stdout reader that scans for key
-        // fragments (`capture_tee::tee_marked_capture_with_identity`).
-        if c.credential.is_some() {
-            match i.source {
-                IdentitySource::StderrLine | IdentitySource::StdoutJson => {}
-                IdentitySource::Preassigned | IdentitySource::None => {
-                    return Err(refuse(
-                        "capture.credential",
-                        format!(
-                            "a credential with `{}` identity is not supported by this build: \
-                             schema 1 admits one only with `stderr_line` or `stdout_json` (a \
-                             later core PR can widen the table with a kit case)",
-                            i.source.as_str()
-                        ),
-                    ));
-                }
-            }
-            if !per_run {
-                return Err(refuse(
-                    "capture.credential",
-                    "requires `capture.home.config_home = \"per_run\"`: the key-fragment scan \
-                     covers the run directory only (D41)",
-                ));
-            }
-            if run_shared {
-                return Err(refuse(
-                    "capture.credential",
-                    "requires a per-run `HOME`, not `capture.home.run_home = \"shared\"`: the \
-                     key-fragment scan covers the run directory only (D41)",
-                ));
-            }
-        }
-
         // `{session_id}` and `preassigned` imply each other.
         let resume_uses_session = c.resume_args.iter().any(|a| uses_token(a, "session_id"));
         let uses_session = c.args.iter().any(|a| uses_token(a, "session_id"))
@@ -2532,9 +2495,6 @@ impl HarnessManifest {
         let mut pinned: Vec<(&str, String)> = Vec::new();
         if let Some(env) = &c.home.env {
             pinned.push(("capture.home.env", env.to_ascii_uppercase()));
-        }
-        if let Some(cr) = &c.credential {
-            pinned.push(("capture.credential.env", cr.env.to_ascii_uppercase()));
         }
         for e in &c.ca.env {
             pinned.push(("capture.ca.env", e.to_ascii_uppercase()));

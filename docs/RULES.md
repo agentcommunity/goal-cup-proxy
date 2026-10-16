@@ -212,8 +212,9 @@ disclosure and no-side-channel rules.
   one config home in the tracker's own config directory, shared by that connector's runs. The tracker
   never copies your own settings into it: `goalcup prep` opens the harness there so you sign in and add
   the settings, MCP servers and skills you want. Claude Code's run `HOME` on macOS holds a link to your
-  `~/Library/Keychains`, for your subscription login. Hermes gets a fresh per-run home seeded only with
-  the connector's own files, and its provider key comes from your environment.
+  `~/Library/Keychains`, for your subscription login. Hermes uses one such home too, set up by its
+  own wizard when `goalcup prep` opens it. The tracker never sees, forwards or stores your provider
+  key: each harness keeps its own login in its home.
 - **What the evidence covers.** Every token your agent saw is captured. Every byte a tool produced is
   not: several harnesses truncate large tool output before writing it, and on some the untruncated
   bytes exist nowhere on disk. A few internal model calls, such as title generators and follow-up
@@ -271,8 +272,7 @@ This build ships two connectors for chat mode, on macOS, Linux and Windows throu
 | Claude Code CLI | `claude-code-cli` | Any build. The build that ran is recorded. |
 | Codex CLI | `codex-cli` | The tracker launches the real binary, not the npm wrapper. |
 
-`hermes-cli` also ships, but it needs a provider key, and a run of a harness given a provider key is
-never uploaded, so it cannot make an entry. Other harnesses can join through a merged, tested
+`hermes-cli` also ships, and is not on the supported list yet. Other harnesses can join through a merged, tested
 connector pull request before the window opens; the supported list is final when the window opens.
 Only modes that meet the minimum capture contract and pass the public conformance suite appear in
 the supported list. A harness not on it has no recording path, and its runs are not entries.
