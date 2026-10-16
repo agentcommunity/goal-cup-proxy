@@ -42,6 +42,10 @@ Owner decisions of 16 Oct 2026:
   the owner has API access for harnesses whose model provider is free to choose; for a harness whose
   model comes only through its own subscription, ask the owner or the builder.
 - The install command goes into RULES and the participant guide (WP2).
+- Research data is stripped of personal and entity information (people, organisations, emails,
+  accounts, repo and host identifiers) before any research group gets it. Researchers never get
+  access to our database or R2; each group gets a cleaned export through custom, narrow access
+  (clean-up 14).
 
 ## Work to the feature stop (4 Nov), in order
 
@@ -94,7 +98,7 @@ Status (16 Oct): done (#175).
 - Accept: `cargo nextest run --offline -p goalcup-cli --test full upload_e2e` passes, and `scripts/linux-check.sh` passes.
 
 ### WP5: Harness onboarding for #4..#15. Land before the connector cut-off.
-Status (16 Oct): #160 merged. #172 (chat-mode onboarding) is in review.
+Status (16 Oct): done (#160, #172).
 - The template and skill build headless (Hermes) connectors, but the product is chat mode (D57). Add a chat-mode block, on by default, to `skills/adding-a-capture-harness/templates/connector-harness.toml:14-22,41`. In SKILL `:71,:102`, point at codex-cli. The facts sheet starts in chat mode and asks for the CA variable and every provider host. [C3-F1, C3-F7, C3-F13]
 - Chat-mode kit: replace the id list at `cli/tests/full/harness_contract_kit.rs:1069` (and the match at `:1005`) with every pinned `interactive = true` connector. Pass `KIT_NATIVE_FILE`, derived from `[[capture.native]]`. Drop the per-harness branches in `tests/fixtures/m2-fake-chat-harness.sh:18-33`. [C3-F1, T2-F1]
 - Find connectors by discovery, not hard-coded ids. One `shipped_connector_ids()` helper replaces the lists at `cli/tests/shipped_connectors.rs:95,143,220,258,544` (compare `:258` to the pins file), `protocol/tests/it/harness_conformance.rs:35`, `full/preflight_doctor.rs:44,138,206,252` and `it/harness_launch_plan.rs:287`. Delete the per-harness recipe asserts (`shipped_connectors.rs:26-82`, `harness_launch_plan.rs:19-56`). Loop the generic rules over every connector. [T1-F4, T2-F1, T2-F12]
@@ -105,7 +109,7 @@ Status (16 Oct): #160 merged. #172 (chat-mode onboarding) is in review.
 - Accept: a scratch chat connector under `connectors/` passes `sh scripts/check-connector.sh <id>` on macOS and Linux with no Rust edit. Remove it afterwards.
 
 ### WP6: Test infrastructure and flakes
-Status (16 Oct): #168 merged (races; the x86_64 timing was already fixed by 39ba14f). Gate tiers, `test = false` on bins and the Linux smoke fix are in progress (R2).
+Status (16 Oct): done (#168, #181, #194). The x86_64 workflow is green. `linux-check.sh` works from worktrees (#188, #191).
 - Serial drift: add `launcher_sweep` to the cli serial regex (`.config/nextest.toml:41`). `TableLock::acquire()` panics when `NEXTEST_TEST_GROUP` is set and is not `serial` (`daemon/tests/common/support/table_lock.rs`). `capture_gate.rs:28` `ONE_AT_A_TIME` becomes `TableLock`. [T1-F2]
 - Sleep races: use a ready-file handshake in `daemon/tests/full/capture_finish_budget.rs:767,810`, and poll the handler state at `:196`. [T1-F3]
 - x86_64: the README says `gate fast` fails there because two timing tests time out. Fix both the same way (wait for the condition, not a fixed budget), then delete the README caveat. [docs, T1-F3]
@@ -114,7 +118,7 @@ Status (16 Oct): #168 merged (races; the x86_64 timing was already fixed by 39ba
 - Accept: `gate.sh fast` passes on macOS and in `linux-x86_64.yml`. `scripts/linux-check.sh` passes.
 
 ### WP7: Safe deletes (pure deletion, before any of it becomes a compatibility promise)
-Status (16 Oct): done except the cross-family golden delete (harness lane). Merged: #161, #162, #174, #167. `hermes_offline_key.rs` stays (see below).
+Status (16 Oct): done (#161, #162, #167, #174), including the cross-family golden (#187). `hermes_offline_key.rs` stays (see below).
 - Dead tests and fixtures: `daemon/tests/it/terminate_sim.rs:1307,1497`, `daemon/tests/fixtures/wrapper-exit-after-term.sh`, `protocol/tests/it/harness_schema.rs:3206-3219` with `tests/fixtures/harness/*.chat-mode.toml`, and the dead `harness_legacy_equal.rs` mention at `:13`. [T1-F7, T3-F8]
 - The cross-family golden: the test at `cli/tests/full/harness_contract_golden.rs:942`, `cross-family.json`, `FAMILIES` (`:68-74`), `legacy_*` (`:685-706,905-940`), `streams_json` (`:512`), and the orphan `*.native.json` and `native-families.json`. Regenerate once with `GOALCUP_REGEN_HARNESS_GOLDEN=1` and review the diff. [C3, T2-F4, T3-F7]
 - Daemon config: delete the 14 dead keys, `ReceiptBindingPolicy` and `submission_types.rs` (`config.rs:39-53,81-104,154-274`, `lib.rs:37`). Keep `deny_unknown_fields`. Update `tests/it/config_load.rs` and `docs/OPERATING.md:238-240`. [C2-F2]
@@ -125,7 +129,7 @@ Status (16 Oct): done except the cross-family golden delete (harness lane). Merg
 - Accept: `gate.sh fast` and `cargo build --offline` pass with no new warnings.
 
 ### WP8: Stale references in code comments and docs
-Status (16 Oct): #157, #170, #173, #177, #178 merged. Left: the code-comment sweep (`CONTRACTS.md` refs in crates, `chunks.ts:2`, `capture_policy.rs:90`, `ack.rs:3`, generic module docs) and the connector comments (re-pin).
+Status (16 Oct): done (#157, #170, #173, #177, #178, #185, #186, #193 connector comments).
 - `grep -rn CONTRACTS.md crates server` finds ~35 comments citing old section titles; update them. `uploader.rs:11,61` and `server/worker/src/chunks.ts:2` cite SERVER-DESIGN sections that no longer exist. `capture_policy.rs:90` cites a deleted Amp record, and `ack.rs:3` cites the deleted VISION.md. [docs]
 - Comments in `connectors/*/harness.toml` cite missing docs. Fix them and run `sh scripts/pin-manifests.sh` in the same commit. This must land before the release cut, because pins are compiled in. [docs]
 - Generic modules: `platform/src/lib.rs:1`, `filecap.rs:1`, `protocol/src/template.rs:3`, `manifest.rs:24-29`, `released_child.rs:9`, `handle_budget.rs:1,10`. [C1-F12]
@@ -158,7 +162,7 @@ Status (16 Oct): done (#163, plus #175 for status and reserve).
   a chat-mode run stops on the server's `stop` (WP4).
 
 ### WP12: A harness is one plug-in folder
-Status (16 Oct): not started (next, harness lane).
+Status (16 Oct): done (#187, #189, #190, #192, #193). A scratch fifth connector passes every check with zero Rust edits.
 - Everything harness-specific lives in `connectors/<id>/`: launch, chat mode, env, CA variables,
   redaction rules, provider hosts, native session files. Core reads it; core never names a harness.
 - Move the redaction rules and the CA-variable list from Rust tables into manifest data
@@ -201,7 +205,7 @@ UTC. Every change passes `gate.sh fast`; Worker changes also pass `npm test`; ev
 Run these in parallel worktrees, two writers never on the same files. Items 3 and 7 are WP12.
 Anything not done by 4 Nov moves to after the event.
 
-Status (16 Oct): 11 done (#171 verifier and `fetch-run.sh`, #176 `DaemonHealth`). 10 and 12 in progress. 1, 2 and 5 wait until after the first release.
+Status (16 Oct): 3, 4, 7 and 9 done (WP12). 10 done (#183, #184); the Anthropic port to the shared tracker waits until after the event. 11 and 12 done. 1, 2 and 5 wait until after the first release.
 
 1. **Run lifecycle module.** Add a persisted `enum StopReason` that falls back to the old strings, and `run/lifecycle.rs` `phase()`, read by status, reserve and finish. Add `HarnessState::Exited.code`. Move `RunMode` to `run/`. Rename the wire field `reserve_bytes` to `chain_quota_bytes` with an alias. [C4-F1, F10, F11]
 2. **Split `start.rs` and `uploader.rs`.** `commands/start/` plus `crate::shared_home`, and `uploader.rs` in five parts, keeping `pub use`. After the move: an Undo guard, `StartCx`, `SealArgs`, `TestDoors` and shared helpers. [C4-F2, F3, F8, F9, F12]
@@ -216,6 +220,7 @@ Status (16 Oct): 11 done (#171 verifier and `fetch-run.sh`, #176 `DaemonHealth`)
 11. **Observability and judging.** `scripts/fetch-run.sh` rebuilds a trace from the DB chunk index; needed before judging. Add `first_failure`, `entry_id` and `profile_id` to the report. Add `cycles` and `reopen_failed` to `DaemonHealth`. [C5-F2, F3a, F4; C2-F5]
 12. **Control vocabulary at the next `CONTROL_API_VERSION`.** Drop `WorkspaceInfo`, `status_cache_path`, `[event]`, `/v0/entries/current`, the V1 registry fields, the unproduced `HealthState` variants (add `serde(other)`), `status_url` and the mock arming. The mock defaults to a capture status, and the legacy branch at `status.rs:266-370` goes with its six tests. [C1-F11, F13; C2-F3, F7, F9; C4; T2-F5]
 13. **Product decisions.** Should the server hold the admitted connector digests (no release per harness)? Does headless capture stay or freeze? [C3-F3, F12]
+14. **Research export (after the event).** A cleaning step strips people, organisations, emails, accounts, and repo and host identifiers, and strips plan, credit and billing data (H-28, D26). Each research group gets a cleaned export through custom, narrow access. Researchers never touch our database or R2. `fetch-run.sh` stays organiser-only.
 
 ## Keep as is
 
@@ -238,7 +243,6 @@ These look odd but are right. Do not "fix" them.
 
 ## Open owner questions
 
-- Create a read-only Postgres role for `scripts/fetch-run.sh`? Until then it uses `DATABASE_URL_REMOTE` inside `BEGIN READ ONLY`.
 - WP0 needs your harness logins and the Little Snitch rule.
 
 ## Known issues
@@ -255,12 +259,14 @@ These look odd but are right. Do not "fix" them.
   false on the pilot path. Re-measure on the eight-hour chain.
 - **H-20:** invalid UTF-8 inside a key body leaves the key raw, and a lone `BEGIN` redacts to the
   end of the record. Fix before any upload surface sees raw bytes.
-- **H-28 (before any research access):** Anthropic usage objects pass through the private research
+- **H-28 (before any research access; clean-up 14):** Anthropic usage objects pass through the private research
   observations. Allowlist token fields and strip plan, credit and billing data (D26) before anything
   is published or read from R2.
 - **T24:** the release tarballs are unsigned. They carry every connector since #164.
 - **H-26:** when a stop cannot be confirmed (`Unresolved`), record the final pushed Git commit as a
   "last known state" marker. Open question: which branch counts when the work is not on main.
+- **Linux finish:** about 3% of `m2_synthetic_vertical::finish_drains_once…` runs end with
+  ProcessAuthorityUnavailable while the run is Running; under investigation (D7).
 - **Linux:** the fast gate passes in Docker (arm64). The reservation works on ext4 and XFS. A run
   with no login launches both measured builds (arm64 and x86_64), fails on auth and seals. The
   x86_64 timing failures are fixed (39ba14f): the x86_64 fast gate passed 1933 tests on 16 Oct
