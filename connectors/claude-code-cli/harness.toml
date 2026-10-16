@@ -1,4 +1,4 @@
-# Claude Code 2.1.283, capture profile (T14; D38, D39, D57). Recipe: docs/qualification/m2/launch-recipes.md §8.
+# Claude Code 2.1.283, capture profile (D38, D39, D57). Facts: docs/harnesses/claude-code-cli.md.
 schema_version = 1
 id = "claude-code-cli"
 
@@ -13,7 +13,7 @@ providers = ["anthropic"]
 interactive = true
 continuation = "chat: the participant types the prompt and may type keep going"
 args = []
-# `goalcup continue` (T7): reopen the workspace's most recent session; measured to append to the
+# `goalcup continue`: reopen the workspace's most recent session; measured to append to the
 # same session file (docs/harnesses/claude-code-cli.md, section 10).
 resume_args = ["--continue"]
 

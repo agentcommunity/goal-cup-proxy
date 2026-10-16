@@ -191,9 +191,9 @@
         "sha256": "4f91563bdf8e30e3023507aa8d209e32dd052a041374f1fddaf9e820ade5702e"
       },
       {
-        "bytes": 992,
+        "bytes": 974,
         "name": "config.yaml",
-        "sha256": "bbc59adb9d704c0218caa9fdbd99b111fdc12bac4fe3edcc16b14c97a6d50fec"
+        "sha256": "fcf8429427a68e2be72cfe74589b10149b70e5c36210d624be736d8949bc5d1a"
       }
     ],
     "id": "hermes-cli",
@@ -252,10 +252,10 @@
         "type": "file"
       },
       {
-        "bytes": 992,
+        "bytes": 974,
         "mode": "0600",
         "path": "config.yaml",
-        "sha256": "bbc59adb9d704c0218caa9fdbd99b111fdc12bac4fe3edcc16b14c97a6d50fec",
+        "sha256": "fcf8429427a68e2be72cfe74589b10149b70e5c36210d624be736d8949bc5d1a",
         "type": "file"
       },
       {

@@ -1,4 +1,4 @@
-# Codex CLI 0.153.0, capture profile (T14; D38, D39, D57). Recipe: docs/qualification/m2/launch-recipes.md §8.
+# Codex CLI 0.153.0, capture profile (D38, D39, D57). Facts: docs/harnesses/codex-cli.md.
 schema_version = 1
 id = "codex-cli"
 
@@ -16,7 +16,7 @@ args = [
   "-c", 'projects={{ "{workspace}" = {{ trust_level = "trusted" }} }}',
   "-C", "{workspace}",
 ]
-# `goalcup continue` (T7): reopen the most recent session in the tracer's home. Not yet measured
+# `goalcup continue`: reopen the most recent session in the tracer's home. Not yet measured
 # against a logged-in home (docs/harnesses/codex-cli.md, section 10).
 resume_args = ["resume", "--last"]
 
