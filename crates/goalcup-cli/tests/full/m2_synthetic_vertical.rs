@@ -712,6 +712,17 @@ fn finish_drains_once_and_never_appends_after_terminal() {
             .any(|s| s.source == CaptureSource::WireResponse && s.segments.len() >= 4)
     };
     m2_vertical_support::wait_until("the SSE response, streaming", streaming);
+    // The response is on the wire as soon as the harness has connected, and the launcher
+    // registers the harness with the daemon (what lets a seal end it) and posts the launch
+    // after that, a step that is slower on some machines (seen on Linux: a seal in that gap
+    // ended nothing and reported `ProcessAuthorityUnavailable`). `Running` is the daemon's word
+    // that the launch is recorded, and the registration comes before it.
+    m2_vertical_support::wait_until("the launch, recorded", || {
+        v.status(&entry)
+            .payload
+            .capture
+            .is_some_and(|capture| capture.run == RunState::Running)
+    });
 
     // The seal while traffic flows: one drain deadline, then the harness is ended.
     let (sealed, said, took) = v.seal(&entry);

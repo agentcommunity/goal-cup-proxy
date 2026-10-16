@@ -54,7 +54,7 @@ impl FakeGithub {
                     break;
                 }
                 let Ok(mut stream) = stream else { continue };
-                let head = read_head(&mut stream);
+                let head = read_request(&mut stream);
                 let mut lines = head.lines();
                 let path = lines
                     .next()
@@ -72,7 +72,14 @@ impl FakeGithub {
                     body.len()
                 );
                 let _ = stream.write_all(reply.as_bytes());
-                let _ = stream.shutdown(Shutdown::Both);
+                // Send the end of the answer, then let the client be the one to close. A server
+                // that closes first, with a byte of the request still on its way, answers that
+                // byte with a reset, and macOS then refuses the client's next `setsockopt`
+                // (`set_read_timeout` on the answer) with EINVAL: "Invalid argument (os error 22)".
+                let _ = stream.shutdown(Shutdown::Write);
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+                let mut rest = [0u8; 512];
+                while matches!(stream.read(&mut rest), Ok(n) if n > 0) {}
             }
         });
         FakeGithub {
@@ -89,6 +96,21 @@ impl Drop for FakeGithub {
         self.stop.store(true, Ordering::SeqCst);
         let _ = TcpStream::connect(("127.0.0.1", self.port));
     }
+}
+
+/// The whole request, so that nothing of it is left unread when the answer goes out: the head,
+/// then the `Content-Length` bytes of the body (ureq sends the two as separate writes). Returns
+/// the head.
+fn read_request(stream: &mut TcpStream) -> String {
+    let head = read_head(stream);
+    let length = head
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    let _ = std::io::copy(&mut stream.take(length), &mut std::io::sink());
+    head
 }
 
 fn read_head(stream: &mut TcpStream) -> String {

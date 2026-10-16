@@ -290,6 +290,21 @@ pub fn wait_resuming(
 mod tests {
     use super::*;
 
+    /// Signal dispositions belong to the process, not to a test thread. Plain `cargo test` runs
+    /// the tests of this module as threads of one process, so a test that installs or reads
+    /// handlers (`Shield`, `EchoOff`) and one that raises signals at itself would otherwise
+    /// overwrite each other's handlers (`EchoOff` takes `SIGINT` and `SIGHUP` too, with
+    /// `SA_RESETHAND`: a `raise(SIGINT)` that meets it ends the process). Every test that
+    /// touches a disposition holds this for its whole body. Under nextest each test is its own
+    /// process and the lock holds nothing.
+    static DISPOSITIONS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Take [`DISPOSITIONS`]. A test that panicked while holding it only poisons the lock; the
+    /// next one still gets it, because its own `Drop`s put the handlers back.
+    fn dispositions() -> std::sync::MutexGuard<'static, ()> {
+        DISPOSITIONS.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn current(signal: libc::c_int) -> libc::sighandler_t {
         // SAFETY: a zeroed local the call writes.
         unsafe {
@@ -304,6 +319,11 @@ mod tests {
     /// shield drops.
     #[test]
     fn a_shield_absorbs_the_terminal_signals_and_gives_them_back() {
+        let _one_at_a_time = dispositions();
+        // "What they were before" is whatever this process inherited: a runner started in the
+        // background of a non-interactive shell, or under `nohup`, has `SIGINT` ignored.
+        let before = CAUGHT.map(|s| (s, current(s)));
+        let before_ttou = current(libc::SIGTTOU);
         let mut shield = Shield::take().unwrap();
         // SAFETY: signals to this process, whose handlers were just installed.
         unsafe {
@@ -315,16 +335,23 @@ mod tests {
         }
         assert!(hangup_seen());
         shield.harness_exited();
-        assert_eq!(current(libc::SIGINT), libc::SIG_DFL);
-        assert_eq!(current(libc::SIGTSTP), libc::SIG_DFL);
+        for (signal, was) in before.iter().filter(|(s, _)| GIVEN_BACK.contains(s)) {
+            assert_eq!(current(*signal), *was, "signal {signal} is given back");
+        }
         assert_eq!(
             current(libc::SIGHUP),
             absorb as *const () as libc::sighandler_t
         );
         assert_eq!(current(libc::SIGTTOU), libc::SIG_IGN);
         drop(shield);
-        assert_eq!(current(libc::SIGHUP), libc::SIG_DFL);
-        assert_eq!(current(libc::SIGTTOU), libc::SIG_DFL);
+        for (signal, was) in before {
+            assert_eq!(
+                current(signal),
+                was,
+                "signal {signal} is back after the drop"
+            );
+        }
+        assert_eq!(current(libc::SIGTTOU), before_ttou);
     }
 
     /// A descriptor that is not a terminal has no echo to switch off.
@@ -340,6 +367,7 @@ mod tests {
     /// have.
     #[test]
     fn a_signal_while_the_echo_is_off_puts_the_terminal_back() {
+        let _one_at_a_time = dispositions();
         let (mut master, mut slave) = (-1, -1);
         // SAFETY: `openpty` writes the two descriptors; the rest is null (not wanted).
         let opened = unsafe {
