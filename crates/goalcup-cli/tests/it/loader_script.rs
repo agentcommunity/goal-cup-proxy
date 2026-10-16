@@ -231,6 +231,22 @@ fn only_the_fixed_hermes_start_is_ever_executed() {
             vec![f, "start", "--harness", "hermes-cli", "--dev"],
         ),
         (
+            "an extra option after --practice",
+            vec![f, "start", "--harness", "hermes-cli", "--practice", "--dev"],
+        ),
+        (
+            "--practice given a value",
+            vec![f, "start", "--harness", "hermes-cli", "--practice=1"],
+        ),
+        (
+            "--practice abbreviated",
+            vec![f, "start", "--harness", "hermes-cli", "--pract"],
+        ),
+        (
+            "a competition-start option",
+            vec![f, "start", "--harness", "hermes-cli", "--test"],
+        ),
+        (
             "an extra word",
             vec![
                 f,
@@ -269,6 +285,25 @@ fn only_the_fixed_hermes_start_is_ever_executed() {
     );
     assert!(out.status.success(), "{}", printed(&out));
     assert!(w.ran());
+    // `--practice` is the one other option, in either order with the goal file.
+    let out = w.run(
+        &[],
+        &[
+            f,
+            "start",
+            "--harness",
+            "hermes-cli",
+            "--practice",
+            "--goal-file",
+            "/tmp/g",
+        ],
+        &[],
+    );
+    assert!(out.status.success(), "{}", printed(&out));
+    assert_eq!(
+        std::fs::read_to_string(w.path("argv")).unwrap(),
+        "start\n--harness\nhermes-cli\n--practice\n--goal-file\n/tmp/g\n"
+    );
 }
 
 /// Every unusable key file is refused without a value in the message, and nothing runs.

@@ -359,15 +359,27 @@ const TEST_DISK_POLICY: &str = "GOALCUP_TEST_DISK";
 #[cfg(feature = "test-support")]
 const TEST_UPLOAD_POLICY: &str = "GOALCUP_TEST_UPLOAD_POLICY";
 
-/// What opens the approval address: the participant's browser, or in a test build with
-/// [`TEST_NO_BROWSER`] set, nothing (a test must never start a browser on its machine).
+/// What opens the approval address: the participant's browser, or nothing when `GOALCUP_NO_BROWSER`
+/// is set to a non-empty value (in every build) or, in a test build, [`TEST_NO_BROWSER`] is set
+/// (a test must never start a browser on its machine). The address and code are printed either
+/// way, so the participant, or `scripts/matrix.sh` with its test approval key, approves them.
 fn browser_opener() -> fn(&str) -> bool {
     #[cfg(feature = "test-support")]
     if std::env::var_os(TEST_NO_BROWSER).is_some() {
         return |_| false;
     }
+    browser_opener_unless(std::env::var_os(NO_BROWSER).is_some_and(|v| !v.is_empty()))
+}
+
+fn browser_opener_unless(no_browser: bool) -> fn(&str) -> bool {
+    if no_browser {
+        return |_| false;
+    }
     goalcup_platform::machine::open_url
 }
+
+/// The shipped switch that keeps `goalcup` from opening a browser.
+const NO_BROWSER: &str = "GOALCUP_NO_BROWSER";
 
 /// A test build's door that keeps a test's `goalcup` from opening a real browser.
 #[cfg(feature = "test-support")]
@@ -698,4 +710,18 @@ fn doctor(opts: commands::doctor::DoctorOptions) -> Result<u8, CliError> {
         .map(|c| c as &dyn goalcup_protocol::control::DaemonClient);
     let env = goalcup_cli::launch::process_env();
     commands::doctor::run_with(client, &connectors, &cfg, &env, &opts, &mut out)
+}
+
+#[cfg(test)]
+mod tests {
+    /// `GOALCUP_NO_BROWSER` is how a scripted approval (`scripts/matrix.sh`) keeps one browser
+    /// page per approval from opening on the machine; the opener it picks must not be the real one.
+    #[test]
+    fn the_no_browser_switch_replaces_the_real_opener() {
+        let real = goalcup_platform::machine::open_url as fn(&str) -> bool;
+        assert_eq!(super::browser_opener_unless(false) as usize, real as usize);
+        let off = super::browser_opener_unless(true);
+        assert_ne!(off as usize, real as usize);
+        assert!(!off("https://example.invalid/approve"));
+    }
 }
