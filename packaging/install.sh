@@ -192,7 +192,8 @@ main() {
     *":$prefix/bin:"*) ;;
     *)
         say ""
-        say "$prefix/bin is not on your PATH. Add it for this shell with:"
+        # The folder as the guide spells it (~/.local/bin); the export line keeps the full path.
+        say "$where is not on your PATH. Add it for this shell with:"
         say "  export PATH=\"$prefix/bin:\$PATH\""
         say "and put the same line in your shell profile (~/.zshrc or ~/.bashrc) to keep it."
         ;;

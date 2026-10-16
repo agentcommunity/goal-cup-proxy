@@ -56,7 +56,7 @@ optional field or table is absent.
 | `capture.args` | required | 1–64 strings (0–64 with `interactive`); each at most 4096 bytes and without control characters. |
 | `capture.goal_flag` | optional, default absent | One long option, at most 32 bytes, matching `--[a-z][a-z0-9-]*`; no `=` or value. Refused with `interactive`. |
 | `capture.interactive` | optional, default `false` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57); see below. |
-| `capture.resume_args` | optional, default `[]` | Strings appended after `capture.args` when a run is continued; each held to every `args` rule, and `args` and `resume_args` together hold at most 64. |
+| `capture.resume_args` | optional, default `[]` | Strings appended after `capture.args` when a run is continued and already has a file in one of its `[[capture.native]]` stores; otherwise the harness opens the normal way. Each is held to every `args` rule, and `args` and `resume_args` together hold at most 64. |
 | `capture.configure` | optional, default `[]` | `interactive` only. At most 4 commands, each 1–16 arguments of 1–256 bytes. Each argument is held to every `args` rule and takes no template (`{` and `}` are refused). See [Configure commands](#configure-commands). |
 | `capture.continuation` | required | Non-blank, one line, 1–512 bytes; declarative provenance for unattended continuation. |
 | `capture.auth_hosts` | optional, default `[]` | At most 16 unique lowercase DNS hosts; always opaque tunnels. |
@@ -114,14 +114,14 @@ configure = [
 - **Failure.** A command that exits non-zero, is ended by a signal or outlives its 60 seconds
   stops at once. Prep marks the home not ready (`[fail] harness_home`, naming the command and how
   it ended); start launches nothing and says to run `goalcup prep --harness <id>` again.
-- **What it may change.** Only how the harness stores its session (capture and storage
-  settings), in the harness home. Never how the agent behaves: not the model, the provider, the
-  tools, the prompts, or whether compression is on. Core refuses an argument that has `model`,
-  `provider`, `base_url`, `api_key`, `key`, `token` or `secret` as a `.`-separated part (compared
-  in any case, leading dashes ignored: `model.provider`, `--model` and `auth.Token` are refused;
-  `max_tokens` is not). The `args` rules also refuse the endpoint, credential, proxy and trust
-  spellings, a profile switch and the connector's own guarded options. Review is the control for
-  the rest.
+- **What it may change.** Only how the harness stores its session (capture and storage settings), in
+  the harness home. Never how the agent behaves: not the model, the provider, the tools, the
+  prompts, or whether compression is on. Core refuses an argument that has `model`, `provider`,
+  `base_url`, `api_key`, `key`, `token` or `secret` as a `.`- or `=`-separated part (compared in any
+  case, leading dashes ignored: `model.provider`, `--model`, `--model=x`, `provider=x` and
+  `auth.Token` are refused; `max_tokens` is not). The `args` rules also refuse the endpoint,
+  credential, proxy and trust spellings, a profile switch and the connector's own guarded options.
+  Review is the control for the rest.
 
 Argument templates (`args` and `resume_args`) admit only `{workspace}` and `{session_id}`.
 `capture.env` value templates also admit `{config_home}` (the isolated harness home) and

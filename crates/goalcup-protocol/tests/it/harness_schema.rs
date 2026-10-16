@@ -3732,12 +3732,17 @@ fn a_configure_command_is_held_to_the_argument_rules() {
         refused(&t, PINNED, needles);
     }
     // D61: a configure command stores the session, and never sets the model, the provider, an
-    // address or a credential: a dotted key with one of those words as a part is refused.
+    // address or a credential: a dotted key with one of those words as a part is refused, and
+    // so is the `key=value` form of one.
     for arg in [
         "model.provider",
         "MODEL.default",
         "model",
         "--model",
+        "--model=x",
+        "provider=x",
+        "model.default=gpt",
+        "auth=token",
         "providers.deepseek.provider",
         "providers.x.api_key",
         "auth.key",
@@ -3769,12 +3774,15 @@ fn a_configure_command_is_held_to_the_argument_rules() {
             "only how the harness stores its session",
         ],
     );
-    // A word that only holds one of them is not one of them.
+    // A word that only holds one of them is not one of them, in either form.
     for arg in [
         "compression.in_place",
         "max_tokens",
         "keys_seen",
         "tokenizer.cache",
+        "compression.in_place=false",
+        "max_tokens=8",
+        "sessions.write_json_snapshots=true",
     ] {
         let mut t = chat();
         set(

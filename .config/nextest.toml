@@ -26,8 +26,10 @@ priority = 100
 serial = { max-threads = 1 }
 # The two suites that run connectors through the real binaries, one at a time. Every kit stand-in
 # that writes twice now waits for the runner to see its first write before it makes the second
-# (the `@GO@` file), so no case depends on the clock and this group is no longer needed for
-# correctness. It is kept to spare the CPU: each run starts a daemon, a proxy and a Python child.
+# (the `@GO@` file), so no case should depend on the clock, and the group should no longer be
+# needed for correctness. That rests on five of five runs with the group off under load, which is
+# not proof. The group is kept for that reason, and to spare the CPU: each run starts a daemon, a
+# proxy and a Python child.
 connector-runs = { max-threads = 1 }
 
 [[profile.default.overrides]]

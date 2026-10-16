@@ -245,6 +245,15 @@ impl Staged {
     /// host can outrun.
     fn start_gated(&self, go: &Path) -> Output {
         use std::process::Stdio;
+        let expect = &self.case.expect;
+        // Said at once, not after a silent 60-second stall: for an append-only store,
+        // `native_g1` is both writes, so the first write alone never matches it.
+        assert!(
+            expect.native_form != "append_only" || expect.native_gate.is_some(),
+            "kit case {}: an append_only case whose stand-in waits for `@GO@` needs `native_gate` \
+             in expect.toml: what the native stream holds after the stand-in's first write",
+            expect.id
+        );
         let child = self
             .command(true)
             .stdin(Stdio::null())

@@ -85,7 +85,8 @@ goalcup prep
 Prep checks six steps, one line each: `[ok]`, `[todo]` and what to do, or `[fail]` and why. Run it
 again as often as you like. What prep has settled (your harness, its sign-in, your repository
 and token) is not asked again; the rest is checked each time. Prep never starts a run. When
-every step is ok it says `goalcup prep: ready.` and prints the start command.
+every step is ok it says `goalcup prep: ready.` and prints the start command. Otherwise its last
+line names the first step that needs you.
 
 1. **login.** You have run `goalcup login`.
 2. **harness.** The harness you will run, found on your `PATH`, with its version. This build
@@ -188,18 +189,22 @@ start of every run, whether you trust the folder. The cursor is on "No, exit". C
 trust this folder", then type your prompt. Answering this dialog is yours to do, and it is
 allowed. It is not a message to the agent. If you choose "No, exit", Claude Code quits and the
 tracer ends the part of the run it recorded. Run `goalcup status` and do what its `Next:` line
-says.
+says. When that is `goalcup continue`, Claude Code opens again with a new session and asks again.
 
 While the harness is open, `goalcup` prints nothing in this terminal. Use `goalcup status` from
 another terminal to see the run.
 
-When the harness exits, `goalcup` takes the terminal back. Under the heading `Details for
-support` it prints technical lines. Those are for support; you can skip them. Below them it says
-what happened and what to do. If the agent exited before the deadline, it says
-`Claude Code has exited (<how>).`, `Your run is still open until <time>.`, and
-`To go on, run: goalcup continue <run id> (you can do it in another terminal now).` It then prints
-`Uploading the rest of the run… keep this terminal open until it says the upload is done.` Keep the
-terminal open until `Upload done.` appears.
+When the harness exits, `goalcup` takes the terminal back:
+
+1. Under the heading `Details for support` it prints technical lines. They are for support. You
+   can skip them.
+2. Below them it says what happened. If the agent exited before the deadline, it says
+   `Claude Code has exited (<how>).` and `Your run is still open until <time>.`
+3. Then it says what to do:
+   `To go on, run: goalcup continue <run id> (you can do it in another terminal now).`
+4. Last, it prints
+   `Uploading the rest of the run… keep this terminal open until it says the upload is done.`
+   Keep this terminal open until `Upload done.` appears.
 
 **One run counts.** Your account has one main run. If you start a second competition run inside
 the window, it replaces the first: the server stops the first run, and only the new one counts.
@@ -279,9 +284,11 @@ goalcup continue
 ```
 
 When the agent stops before the deadline (a crash, a reboot, a closed window), this starts it
-again in the same run: same deadline, same clone, the harness resuming its last session. No
-approval is needed, and it says so: `Your run goes on. No approval is needed: this computer kept
-the run's key.` While it opens, it prints `The earlier part of this run uploads in the background.`
+again in the same run: same deadline, same clone. The harness picks up its last session. If the
+run has no session yet (the harness closed before your first message), the harness starts a new
+one, and `goalcup` says so in one line. No approval is needed, and it says so: `Your run goes on.
+No approval is needed: this computer kept the approval for this run.` While it opens, it prints
+`The earlier part of this run uploads in the background.`
 
 The harness may show its folder-trust dialog again (section 5). If the agent has stopped, type
 "keep going". If you never sent your prompt, send it now: it is still your one prompt. Run
@@ -298,13 +305,17 @@ agent is stopped in whatever state it is in. There is no grace period.
 
 - At the deadline the server tells the tracer to stop. The tracer stops the agent and the
   recording, seals the record, tells the server which commit your clone had, and uploads what is
-  left. It prints `Time is up. Claude Code was stopped.`, then `Uploading the rest of the run… keep
-  this terminal open until it says the upload is done.` When everything is sent it prints `Your
-  run is sealed and uploaded. Nothing more to do.` It keeps trying for up to one hour. If that is
-  not enough it says `Your run is sealed on this computer.` and `Part of the run is not uploaded
-  yet. Next: when you are online, run: goalcup upload`, and `goalcup upload` finishes the job
-  later. With no entry id it sends the unsent entries of your newest
-  run. To send one entry, run `goalcup upload <entry>`. `goalcup entries` shows the entry ids.
+  left. It prints, in this order:
+  1. `Time is up. Claude Code was stopped.`
+  2. `Uploading the rest of the run… keep this terminal open until it says the upload is done.`
+  3. When everything is sent: `Your run is sealed and uploaded. Nothing more to do.`
+
+  It keeps trying for up to one hour. If that is not enough, it says
+  `Your run is sealed on this computer.` and
+  `Part of the run is not uploaded yet. Next: when you are online, run: goalcup upload`.
+  Then, when you are online:
+  - Run `goalcup upload`. With no entry id, it sends the unsent entries of your newest run.
+  - To send one entry, run `goalcup upload <entry>`. `goalcup entries` shows the entry ids.
 - The server records the latest commit in your GitHub repository at the deadline. That commit is
   what is judged, so your agent must push its work before then. The tracer never pushes for it.
 - After the run you hand in a demo video and answer a questionnaire. They are due 24 hours
@@ -323,10 +334,11 @@ Every message you type into the harness is recorded. Any other message (an answe
 approval, a correction) is seen at review, and it may remove the run at review.
 
 One thing is not a message to the agent, and it is allowed: the harness's own start-up dialog.
-Claude Code asks, at the start of each run, whether you trust the folder. Your answer to that
-question is yours to give. Answer it before you type your prompt (section 5). After the start,
-answer a trust dialog only to let the harness open. Do not answer a question the agent asks or an
+Claude Code asks, at the start of each run, whether you trust the folder. The dialog appears once
+`goalcup start` has opened the harness. Answer it before you type your prompt (section 5), and
+again if it comes back after `goalcup continue`. Do not answer a question the agent asks or an
 approval the agent needs.
+
 The tracer itself never types to the agent, never says "keep going" for you, and never restarts
 it by itself.
 

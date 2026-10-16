@@ -31,7 +31,9 @@ continuation = "chat: the participant types the prompt and may type keep going"
 # absolute paths. No model, effort, approval or sandbox option: those are the participant's.
 args = []
 # How `goalcup continue` reopens the most recent session, appended after args (for example
-# ["--continue"] or ["resume", "--last"]). Delete if the harness cannot reopen one.
+# ["--continue"] or ["resume", "--last"]). Used only when the run already has a file in one of
+# the [[capture.native]] stores below; otherwise the harness opens the normal way. Delete if the
+# harness cannot reopen one.
 resume_args = ["<RESUME-FLAG>"]
 # Commands of the harness's own program that switch on what the native source needs, when the
 # harness has a setting for it but no environment variable (D61). Only how the harness STORES its

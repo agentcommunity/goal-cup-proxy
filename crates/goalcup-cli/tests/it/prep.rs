@@ -266,13 +266,18 @@ fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
             && practice.contains("goalcup start --harness m2-fake-tui --practice"),
         "{text}"
     );
-    // The last line is the next action: the first step that needs the person.
+    // The last line points at the next action: the first step that needs the person. What to
+    // do is said once, on that step's own line.
     let last = text.lines().last().unwrap();
-    assert!(
-        last.starts_with("goalcup prep: 4 of 6 steps need you. Next: ")
-            && last.contains("goalcup login"),
+    assert_eq!(
+        last, "goalcup prep: 4 of 6 steps need you. Next: the login step above.",
         "{text}"
     );
+    let login_say = line(&text, "login")
+        .split_once(": ")
+        .map(|(_, say)| say)
+        .unwrap();
+    assert_eq!(text.matches(login_say).count(), 1, "{text}");
     // The six steps are printed in order.
     let order: Vec<&str> = text
         .lines()
@@ -498,11 +503,30 @@ fn prep_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
     on_pty.type_line(&token());
     on_pty.wait();
     let shown = on_pty.shown();
-    // The terminal echoes the typed Ctrl-D (`^D`, then backspaces on macOS) and no newline, so
-    // the report line begins after that echo, not at the start of its terminal line.
-    let step = line(&shown, "harness_home");
-    let step = &step[step.find('[').expect("the report line's state")..];
-    assert!(step.starts_with("[todo] harness_home:"), "{shown}");
+    // The terminal echoes the typed Ctrl-D (`^D`, then backspaces on macOS) and no newline.
+    // Prep ends that line, so the report line is a line of its own, word for word.
+    let lines: Vec<&str> = shown.lines().map(|l| l.trim_end_matches('\r')).collect();
+    let at = lines
+        .iter()
+        .position(|l| l.contains("harness_home:"))
+        .unwrap_or_else(|| panic!("no harness_home line in:\n{shown}"));
+    assert_eq!(
+        lines[at],
+        format!(
+            "[todo] harness_home: {CHAT_ID} was not opened. Run `goalcup prep` again, then \
+             press Enter"
+        ),
+        "{shown}"
+    );
+    // Only the echo of the Ctrl-D is on the line between the question and the report line.
+    assert!(
+        at >= 2
+            && lines[at - 1]
+                .chars()
+                .all(|c| matches!(c, '^' | 'D' | '\u{8}')),
+        "{shown}"
+    );
+    assert!(lines[at - 2].starts_with("Press Enter to open"), "{shown}");
     assert!(
         !rig.out.join("tui.pid").exists(),
         "the harness opened:\n{shown}"
@@ -1438,11 +1462,13 @@ fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
             prep_command(&rig, &["--harness", id, "--repo", REPO], &facts),
             None,
         );
-        press_enter(&on_pty);
         let status = on_pty.wait();
         let shown = on_pty.shown();
         let what = format!("{kind}, holder {holder:?}:\n{shown}");
         assert_eq!(status.code(), Some(1), "{what}");
+        // The home is looked at before the pause: a held home is said at once, and prep never
+        // asks for an Enter it cannot use.
+        assert!(!shown.contains("Press Enter to open"), "{what}");
         let home = line(&shown, "harness_home");
         assert!(home.starts_with("[fail] harness_home:"), "{what}");
         match holder {

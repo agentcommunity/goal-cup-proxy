@@ -286,9 +286,9 @@ pub const MAX_CONFIGURE_COMMANDS: usize = 4;
 pub const MAX_CONFIGURE_ARGS: usize = 16;
 /// The longest argument of a `capture.configure` command.
 pub const MAX_CONFIGURE_ARG_BYTES: usize = 256;
-/// The words no `.`-separated part of a `capture.configure` argument may be (compared ignoring
-/// case and leading dashes): a configure command changes how the harness stores its session,
-/// never its model, provider, endpoint or credentials (D61).
+/// The words no `.`- or `=`-separated part of a `capture.configure` argument may be (compared
+/// ignoring case and leading dashes): a configure command changes how the harness stores its
+/// session, never its model, provider, endpoint or credentials (D61).
 pub const CONFIGURE_DENIED_KEYS: &[&str] = &[
     "model", "provider", "base_url", "api_key", "key", "token", "secret",
 ];
@@ -1274,8 +1274,9 @@ fn is_dot_path(s: &str) -> bool {
             .all(|g| !g.is_empty() && g.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
 }
 
-/// A single-component glob matcher: `*` any run (including none), `?` one character.
-fn glob_matches(name: &str, pattern: &str) -> bool {
+/// A single-component glob matcher: `*` any run (including none), `?` one character. The
+/// matcher of a `[[capture.native]]` pattern's components.
+pub fn glob_matches(name: &str, pattern: &str) -> bool {
     let name: Vec<char> = name.chars().collect();
     let pattern: Vec<char> = pattern.chars().collect();
     let (mut i, mut j) = (0usize, 0usize);
@@ -1675,16 +1676,17 @@ impl HarnessManifest {
                 }
                 check_arg(FIELD, origin, a)?;
                 // D61: a configure command changes how the harness stores its session, never how
-                // the agent behaves or what it signs in with. Each `.`-separated part of an
-                // argument is compared whole, ignoring case and leading dashes.
-                if let Some(word) =
-                    a.split('.')
-                        .map(|part| part.trim_start_matches('-'))
-                        .find(|part| {
-                            CONFIGURE_DENIED_KEYS
-                                .iter()
-                                .any(|denied| part.eq_ignore_ascii_case(denied))
-                        })
+                // the agent behaves or what it signs in with. Each `.`- or `=`-separated part
+                // of an argument is compared whole, ignoring case and leading dashes, so
+                // `--model=x` and `provider=x` are refused as `model.x` is.
+                if let Some(word) = a
+                    .split(['.', '='])
+                    .map(|part| part.trim_start_matches('-'))
+                    .find(|part| {
+                        CONFIGURE_DENIED_KEYS
+                            .iter()
+                            .any(|denied| part.eq_ignore_ascii_case(denied))
+                    })
                 {
                     return Err(refuse(
                         FIELD,

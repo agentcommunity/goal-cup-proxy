@@ -9,7 +9,9 @@
 //!   approval: a run stays on the machine that started it, and a run with no record or no
 //!   credential here is refused, whoever asks;
 //! - the run's clone as the workspace, the harness started with its `args` followed by its
-//!   `resume_args`, and the run's one disk reservation (a reserve file is not taken again).
+//!   `resume_args` when the run has a saved session (a file in one of the connector's native
+//!   stores; otherwise with its `args` alone), and the run's one disk reservation (a reserve
+//!   file is not taken again).
 //!
 //! In this order, each step settled before the next: the run and its credential are found; every
 //! refusal that needs no server is made (the connector is a chat-mode one, the terminal is

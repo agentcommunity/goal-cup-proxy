@@ -136,13 +136,16 @@ pub trait Doors {
     /// Wait for the participant to press Enter before the harness takes the terminal; `false`
     /// when the input ended without one (the participant chose not to go on).
     fn wait_for_enter(&self) -> bool;
-    /// Open the harness in its home for the participant; whether it exited 0.
+    /// Open the harness in its home for the participant. The home is held first, so a home in
+    /// use is said before the participant is asked anything; then `go` is asked, and `false`
+    /// opens nothing. `None` when nothing was opened, else whether the harness exited 0.
     fn open_harness(
         &self,
         connector: &HarnessConnector,
         cfg: &Path,
         env: &BTreeMap<String, String>,
-    ) -> Result<bool, CliError>;
+        go: &mut dyn FnMut() -> Result<bool, CliError>,
+    ) -> Result<Option<bool>, CliError>;
 }
 
 /// This machine.
@@ -206,16 +209,21 @@ impl Doors for Here {
         connector: &HarnessConnector,
         cfg: &Path,
         env: &BTreeMap<String, String>,
-    ) -> Result<bool, CliError> {
+        go: &mut dyn FnMut() -> Result<bool, CliError>,
+    ) -> Result<Option<bool>, CliError> {
         use crate::commands::start::{WorkspaceAt, claim_home_for_prep};
         let profile = &connector.loaded.manifest.capture;
         // The home every run of this connector keeps (its config home, D39, or its run
         // `HOME`, D59), held so no run is recording in it while the participant is signed in
-        // there.
+        // there. It is held before the pause: a run recording there is said at once, not after
+        // the participant pressed Enter.
         let Some(home) = claim_home_for_prep(cfg, connector)? else {
-            return Ok(true);
+            return Ok(Some(true));
         };
         let executable = crate::launch::capture_executable(connector, profile, env)?;
+        if !go()? {
+            return Ok(None);
+        }
         // A `HOME` that is made fresh for each run is made fresh for this, and removed after:
         // nothing the participant sets up lives there, it lives in the harness home. A kept run
         // `HOME` is the home itself, used as it is and never removed.
@@ -258,7 +266,7 @@ impl Doors for Here {
         if let Some(configured) = configured {
             configured?;
         }
-        Ok(status.success())
+        Ok(Some(status.success()))
     }
 }
 
@@ -417,17 +425,17 @@ pub fn prep_with(
         )?;
     } else {
         let waiting = report.steps.iter().filter(|s| s.state != State::Ok).count();
-        // The last line on the screen is the next action: the first step that needs the person.
+        // The last line on the screen points at the next action: the first step that needs the
+        // person. That step's own line says what to do, so it is said once, not again here.
         let next = report
             .steps
             .iter()
             .find(|s| s.state != State::Ok)
-            .map(|s| s.say.as_str())
-            .unwrap_or_default();
+            .map_or("", |s| s.step);
         put(
             report.out,
             &format!(
-                "goalcup prep: {waiting} of {} steps need you. Next: {next}\n",
+                "goalcup prep: {waiting} of {} steps need you. Next: the {next} step above.\n",
                 report.steps.len()
             ),
         )?;
@@ -644,19 +652,28 @@ fn home_step(
             ),
         ));
     }
-    report.tell(&format!(
-        "Next, {id} opens here in its own Goal Cup home (not your usual setup). Nothing is \
-         recorded.\n  1. Sign in.\n  2. Add the settings, MCP servers and skills you want your \
-         agent to have.\n  3. Exit {id} the normal way.\nPress Enter to open {id}, or Ctrl-C to stop."
-    ))?;
-    if !doors.wait_for_enter() {
-        return Ok(human(
+    // Asked once the home is held, so a home in use is said before the pause.
+    let mut go = || -> Result<bool, CliError> {
+        report.tell(&format!(
+            "Next, {id} opens here in its own Goal Cup home (not your usual setup). Nothing is \
+             recorded.\n  1. Sign in.\n  2. Add the settings, MCP servers and skills you want \
+             your agent to have.\n  3. Exit {id} the normal way.\nPress Enter to open {id}, or \
+             Ctrl-C to stop."
+        ))?;
+        let entered = doors.wait_for_enter();
+        if !entered {
+            // The input ended (Ctrl-D) with no Enter, so the terminal's cursor is still on the
+            // question's line: the next report line starts on a line of its own.
+            report.tell("")?;
+        }
+        Ok(entered)
+    };
+    match doors.open_harness(connector, cfg, env, &mut go) {
+        Ok(None) => Ok(human(
             State::Todo,
             format!("{id} was not opened. Run `goalcup prep` again, then press Enter"),
-        ));
-    }
-    match doors.open_harness(connector, cfg, env) {
-        Ok(true) => {
+        )),
+        Ok(Some(true)) => {
             file.home_ready = true;
             Ok(step(
                 STEP_HARNESS_HOME,
@@ -665,7 +682,7 @@ fn home_step(
                 format!("{id} is set up in its Goal Cup home. Your runs use it."),
             ))
         }
-        Ok(false) => Ok(human(
+        Ok(Some(false)) => Ok(human(
             State::Todo,
             format!(
                 "{id} did not exit normally. Run `goalcup prep` again, then exit {id} the \
@@ -1195,8 +1212,9 @@ impl Doors for Injected {
         connector: &HarnessConnector,
         cfg: &Path,
         env: &BTreeMap<String, String>,
-    ) -> Result<bool, CliError> {
-        Here.open_harness(connector, cfg, env)
+        go: &mut dyn FnMut() -> Result<bool, CliError>,
+    ) -> Result<Option<bool>, CliError> {
+        Here.open_harness(connector, cfg, env, go)
     }
 }
 

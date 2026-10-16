@@ -108,6 +108,9 @@ class InstallTests(unittest.TestCase):
         # The last line is the next step for a new participant, and the folder reads as typed.
         self.assertIn("~/.local/bin", result.stdout)
         self.assertEqual(result.stdout.strip().splitlines()[-1], "Next: goalcup login")
+        # The PATH note names the folder as the guide does, and the export line is the full path.
+        self.assertIn("~/.local/bin is not on your PATH", result.stdout)
+        self.assertIn(f'export PATH="{self.home}/.local/bin:$PATH"', result.stdout)
 
     def test_wrong_checksum_installs_nothing(self) -> None:
         release = make_release(self.root, {"codex-cli": "a"})

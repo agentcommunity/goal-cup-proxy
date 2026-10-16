@@ -595,6 +595,8 @@ mod chat {
                 if run.shown().matches(said).count() > before {
                     return true;
                 }
+                // Never a resend into a host that has gone: that is the failure, said as such.
+                assert!(matches!(run.child.try_wait(), Ok(None)), "the host lives");
                 if sent.is_none_or(|at| at.elapsed() > std::time::Duration::from_secs(1)) {
                     run.signal_foreground(signal);
                     sent = Some(std::time::Instant::now());
@@ -610,11 +612,16 @@ mod chat {
             }
         }
         // A signal sent twice can reach the harness while it is part way through reading this
-        // line, and the half it had read is gone. Type the line again until the run ends.
+        // line, and the half it had read is gone. Type the line again until the harness has
+        // read it (it says `tui: bye`), then wait for the run to end: the host's wrap-up after
+        // that reads no terminal.
         let mut typed = None::<std::time::Instant>;
         wait_until("the run to end on /exit", || {
             if matches!(run.child.try_wait(), Ok(Some(_))) {
                 return true;
+            }
+            if run.shown().contains("tui: bye") {
+                return false;
             }
             if typed.is_none_or(|at| at.elapsed() > std::time::Duration::from_secs(2)) {
                 run.type_line("/exit");
@@ -831,6 +838,53 @@ mod chat {
         let run_id = &server.run_ids()[0];
         assert_eq!(server.entry_ids(run_id).len(), 2, "two segments");
         assert!(home.is_dir(), "the shared run home is never removed");
+    }
+
+    /// A harness that closed before the first message (a trust question answered "no", a setup
+    /// that ends the program) left no session. `goalcup continue` opens it the normal way, with
+    /// no resume arguments, and says so in one line instead of promising the last session. Once
+    /// the run has a session, the next continue picks it up.
+    #[test]
+    fn a_continue_of_a_run_with_no_session_opens_the_harness_the_normal_way() {
+        let rig = Rig::chat();
+        let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+        rig.prepare_for(&server.url());
+        let new_session = "with a new session: no saved session was found for this run.";
+
+        // The first part: the harness opens and closes, and no message is sent.
+        let mut first = rig.start_on_pty(&[DISK, BEATING]);
+        first.wait_shown("tui: ready");
+        first.type_line("/exit");
+        let status = first.wait();
+        assert!(status.success(), "{status:?}\n{}", first.shown());
+
+        let mut second = rig.continue_on_pty(&[DISK, BEATING], None);
+        second.wait_shown("tui: ready");
+        let argv = harness(&rig, "tui.argv");
+        assert!(!argv.contains("resume"), "no resume arguments: {argv}");
+        let shown = second.shown();
+        assert_eq!(shown.matches(new_session).count(), 1, "{shown}");
+        assert!(!shown.contains("picks up its last session"), "{shown}");
+        assert!(shown.contains("Type your one prompt"), "{shown}");
+        second.type_line("hello");
+        second.wait_shown("tui: noted hello");
+        second.type_line("/exit");
+        let status = second.wait();
+        assert!(status.success(), "{status:?}\n{}", second.shown());
+
+        // Now the run has a session: the next part resumes it.
+        let mut third = rig.continue_on_pty(&[DISK, BEATING], None);
+        third.wait_shown("tui: ready");
+        let argv = harness(&rig, "tui.argv");
+        assert!(argv.ends_with("resume\n--last"), "{argv}");
+        let shown = third.shown();
+        assert!(shown.contains("picks up its last session"), "{shown}");
+        assert!(!shown.contains(new_session), "{shown}");
+        third.type_line("/exit");
+        let status = third.wait();
+        assert!(status.success(), "{status:?}\n{}", third.shown());
+        let run_id = &server.run_ids()[0];
+        assert_eq!(server.entry_ids(run_id).len(), 3, "three segments");
     }
 
     /// A chat-mode run needs its terminal for input and for output: from a pipe, or with its
