@@ -142,8 +142,13 @@ scripts/matrix.sh --check-copy <config-dir> [run-id]
 ```
 
 It makes a temporary configuration directory, work folder and `HOME`, runs `goalcup login` and
-`goalcup start --practice` in them (the harness under a pseudo-terminal into which it types one prompt),
-waits for the tracer's own stop at the practice deadline (10 minutes), and deletes the temporary directory.
+`goalcup start --practice` in them, waits for the run to end, and deletes the temporary directory. It reads
+the connector's `harness.toml` to tell the two kinds apart. A chat-mode connector (`interactive = true`) runs
+under a pseudo-terminal into which the script types one prompt; the tracer stops it at the practice deadline
+(10 minutes). A headless connector (like `hermes-cli`) runs with `--goal-file` holding `MATRIX_PROMPT`, with
+nothing typed; it ends when the harness does, and the script then waits for the server's deadline before it
+asks for the server's copy. `--timeout` is one budget for both waits together. A connector id that is not one of
+the two fakes needs its `harness.toml` to be found (see Connectors below), or the row FAILs and says so.
 It prints the log path and one row:
 
 ```
@@ -154,7 +159,9 @@ It prints the log path and one row:
 stderr and in the log. PASS means:
 
 1. both approvals (the login, then the run) were given, the run opened, and the harness was up;
-2. the run ended at its deadline: the tracer printed its `deadline:` line and `uploaded: … and the seal`;
+2. the run ended: a chat-mode run at its deadline (the tracer's `deadline:` line, which it writes to the
+   run's `host.log`, not the terminal, so the script reads both), a headless run at its deadline or with
+   `harness exited: exit code 0.`; and `uploaded: … and the seal` in both;
 3. `goalcup-verify --capture-integrity <trace>` exited 0 with `integrity: valid` and `anchor: signed`;
 4. the server's copy agrees with the local chain.
 
@@ -162,7 +169,8 @@ stderr and in the log. PASS means:
 download it. It asks `GET /v1/runs/{id}?entry_id=…` with the run's own credential and requires the answer
 to equal the local chain the verifier just checked: `offset` equal to the bytes of `chain.jsonl`,
 `next_seq` to the record count, `head` and the last acknowledgement's `hash` to the verifier's
-`validated_head`, `final` to the last record, `status: sealed` and `stop: true`. The server stores a chunk
+`validated_head`, `final` to the last record, `status: sealed` and `stop: true` (for a headless run, once the server's deadline
+has passed: the script polls until then, within what is left of `--timeout`). The server stores a chunk
 only if its SHA-256 matches, at the offset, previous hash and sequence it holds, and signs an
 acknowledgement the verifier checks. Equal positions therefore mean the server holds the chain the tracer
 sent, in order. It does not prove the stored bytes; only the verify job (not built) would.
@@ -178,6 +186,18 @@ invocation (`key_source: "supplied"`).
   environment so no child learns the path. A key in an environment variable is refused. Never `cat` the
   file or put its value in an argument, a log or a command line.
 - The member comes from `GOALCUP_TEST_MEMBER_ID`.
+- `goalcup` is started with `GOALCUP_NO_BROWSER=1`, so it opens no browser page per approval. (That variable
+  is a switch of the shipped `goalcup`: set it and `goalcup login` and `goalcup start` print the address and
+  code and open nothing.)
+- A provider key comes from a file too: `MATRIX_KEY_ENV_FILE=<path>`, a mode 0600 file with one
+  `DEEPSEEK_API_KEY=` line. When the connector's `harness.toml` declares that credential (`hermes-cli`), the
+  start goes through `scripts/with-deepseek-key.sh`, which reads the key itself. The key is never in this
+  script's environment, arguments, log or files. The path is not printed or written to a file: it is in the
+  start wrapper's environment and in the loader's argument list (a same-user `ps` can see the path, never the
+  key). **Today a keyed connector is refused up front:** a harness given a provider key is never uploaded (RULES),
+  so the real `goalcup start --practice` refuses it, and `matrix.sh` says "keyed harnesses are not uploaded today
+  (RULES); matrix cannot test them" before it starts anything. The plumbing stays behind `MATRIX_KEYED_UPLOADED=1`
+  for when that rule changes. The key file is ignored for a connector with no such credential.
 - With no key file, it prints the approval address and code and waits while you approve in a browser.
 - It approves at most one device code per phase and stops looking for codes once the harness is up.
 - It never reads or writes the real goalcup configuration directory, `~/.codex`, `~/.claude` or `~/.hermes`.
@@ -206,9 +226,16 @@ login. A PASS proves the tracker, daemon, pseudo-terminal handling, server and v
 real harness. A shipped connector id (`codex-cli`, `claude-code-cli`) runs that harness for real. It needs the
 harness installed and logged in inside a prepared configuration directory of its own:
 `GOALCUP_CONFIG_DIR=<dir> goalcup prep`, then `MATRIX_CONFIG_DIR=<dir> sh scripts/matrix.sh codex-cli <url>`.
-The script types `MATRIX_PROMPT` once, `MATRIX_PROMPT_DELAY` seconds (30) after the harness is up. In
-real-harness mode a PASS does not prove the prompt was typed; check the session in the kept directory
-(`--keep`) or the research report. Only the fake has been run through the script so far.
+For a chat-mode connector the script types `MATRIX_PROMPT` once, `MATRIX_PROMPT_DELAY` seconds (30) after the
+harness is up, and sends the Enter `MATRIX_SUBMIT_DELAY` seconds (2) later in a write of its own: Codex reads
+text and Enter in one write as a paste and leaves the text in its composer. A first-run dialog that would
+swallow the prompt can be answered first with `MATRIX_PRE_PROMPT_KEYS` (a `printf` format sent
+`MATRIX_PRE_PROMPT_DELAY` seconds, default 5, after the harness is up). Claude Code asks "Is this a project you
+created or one you trust?" in every new workspace and selects "No, exit" first, so
+`MATRIX_PRE_PROMPT_KEYS='\033[B\r'` (Down, Enter) answers "Yes, I trust this folder". In real-harness mode a
+PASS does not prove the prompt was submitted; check the session in the kept directory (`--keep`) or the
+trace. `m2-fake-tui` (chat) and `m2-fake-headless` (headless, a fake that exits at once with code 0) are the
+two that need no harness.
 
 **Other environment.** `MATRIX_REPO_URL` (default: the public empty repository
 `https://github.com/agentcommunity/goalcup-matrix-empty`), `MATRIX_BIN_DIR`, `--keep`, `--timeout`
@@ -358,6 +385,10 @@ declared id.
 how a second, isolated tracker runs on one machine (a test, a development build beside an installed one).
 The default is `~/Library/Application Support/goalcup` on macOS and `$XDG_CONFIG_HOME/goalcup` (else
 `~/.config/goalcup`) elsewhere.
+
+`$GOALCUP_NO_BROWSER` set to any non-empty value makes `goalcup login` and `goalcup start` open no browser. The
+approval address and code are printed as always, with a line saying a browser did not open. It is for a headless
+or remote machine and for scripts that approve another way (`scripts/matrix.sh` sets it).
 
 ## Running the daemon
 

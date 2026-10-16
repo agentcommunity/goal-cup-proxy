@@ -89,6 +89,8 @@ The quickstart works on Linux with three differences:
   recorded in place of the binary.
 - **The configuration directory** is `$XDG_CONFIG_HOME/goalcup`, else `~/.config/goalcup`
   (macOS: `~/Library/Application Support/goalcup`). `GOALCUP_CONFIG_DIR` overrides both.
+- **A headless or remote machine** has no browser to open. Set `GOALCUP_NO_BROWSER=1` and `goalcup login` and
+  `goalcup start` print the approval address and code and open nothing; open the address on any device.
 - **The Claude Code login.** Linux has no Keychain. Sign in once with
   `goalcup prep --harness claude-code-cli`, which opens Claude Code in the tracer's own home.
 

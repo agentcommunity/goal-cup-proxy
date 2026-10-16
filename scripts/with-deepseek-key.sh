@@ -4,7 +4,7 @@
 # pasted into an interactive shell, and in privileged mode:
 #
 #   /bin/sh -p scripts/with-deepseek-key.sh ENV_FILE start --harness hermes-cli \
-#       --goal-file GOAL
+#       [--practice] --goal-file GOAL
 #
 # (Executing the file does the same: the shebang line above says -p. Invoked without -p, the
 # script runs itself again under `/bin/sh -p` before it does anything else.)
@@ -20,9 +20,10 @@
 #   * it refuses unless ENV_FILE is mode 0600 and holds exactly one such line, whose value is
 #     20 to 256 characters of [A-Za-z0-9_-], bare or in double quotes (no CR, no single
 #     quotes, no trailing comment, no `export`);
-#   * it executes exactly `goalcup start --harness hermes-cli` with the two goal options below,
-#     and refuses any other command, harness or option: the key is for the Hermes row and for
-#     nothing else it could be handed to;
+#   * it executes exactly `goalcup start --harness hermes-cli` with `--goal-file` and, when asked,
+#     `--practice` (a practice run: `scripts/matrix.sh` uses it, because staging refuses a
+#     competition start before its dry-run window), and refuses any other command, harness or
+#     option: the key is for the Hermes row and for nothing else it could be handed to;
 #   * it never prints the value, in a message or anywhere.
 #
 # What this does not defend against is a same-user process reading the environment of `goalcup`
@@ -45,6 +46,7 @@ refuse() {
 }
 
 # Only the fixed target, and only these options after it (checked before the file is opened).
+# `--practice` takes no value, and `--practice=...` is not it.
 check_rest() {
   while [ $# -gt 0 ]; do
     case $1 in
@@ -53,12 +55,13 @@ check_rest() {
         shift 2
         ;;
       --goal-file=*) shift ;;
-      *) refuse "only --goal-file may follow \`start --harness hermes-cli\`" ;;
+      --practice) shift ;;
+      *) refuse "only --goal-file and --practice may follow \`start --harness hermes-cli\`" ;;
     esac
   done
 }
 
-[ $# -ge 4 ] || refuse "usage: /bin/sh -p with-deepseek-key.sh ENV_FILE start --harness hermes-cli --goal-file GOAL"
+[ $# -ge 4 ] || refuse "usage: /bin/sh -p with-deepseek-key.sh ENV_FILE start --harness hermes-cli [--practice] --goal-file GOAL"
 f=$1
 shift
 [ "$1" = start ] && [ "$2" = --harness ] && [ "$3" = hermes-cli ] ||
