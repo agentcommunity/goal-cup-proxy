@@ -468,9 +468,9 @@ Hermes runs however the participant set it up, as Codex does (D39, D57).
   the only identity an interactive profile takes (D57). The banner prints `Session: <id>` on the
   terminal, which the tracer does not read. Runs on the shared home are serialized, so every
   snapshot new or written since the start is the run's. A `request_dump_*` file is never matched.
-- **`capture.configure` (schema 1, additive).** A connector may list up to 4 commands of its own
-  program (each 1 to 16 arguments of at most 256 bytes, held to the `args` rules, no template).
-  `goalcup prep` runs them in the harness home after the participant's setup exits 0; `goalcup
+- **`capture.configure` (schema 1, additive).** A chat-mode connector may list up to 4 commands
+  of its own program (each 1 to 16 arguments of at most 256 bytes, held to the `args` rules, no
+  template). `goalcup prep` runs them in the harness home after the participant's setup exits 0; `goalcup
   start` and `goalcup continue` run them again before each launch. They get the harness's
   environment without a proxy or CA variable, stdin `/dev/null`, a process group of their own and
   60 seconds each; their output goes to `<cfg>/prep.log` or the run's `host.log` only. A failure

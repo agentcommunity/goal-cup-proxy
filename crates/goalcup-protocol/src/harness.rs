@@ -367,8 +367,9 @@ pub struct CaptureSpec {
     /// Commands of the harness's own program that put a setting the capture needs into its
     /// home (D61): each an argument list, run with the harness's environment and no proxy, by
     /// `goalcup prep` after the participant's own setup and by `goalcup start` before each
-    /// launch, so each must be safe to run again. At most [`MAX_CONFIGURE_COMMANDS`], each held
-    /// to the `args` rules, with no template token. Their output goes to the run's log only.
+    /// launch, so each must be safe to run again. Chat mode only; at most
+    /// [`MAX_CONFIGURE_COMMANDS`], each held to the `args` rules, with no template token. Their
+    /// output goes to a log only.
     #[serde(default)]
     pub configure: Vec<Vec<String>>,
     /// The long option that carries the goal as one `--flag=<goal>` argument.
@@ -1607,6 +1608,15 @@ impl HarnessManifest {
     fn check_configure(&self, origin: Origin) -> Result<(), ProtocolError> {
         const FIELD: &str = "capture.configure";
         let commands = &self.capture.configure;
+        // The commands run in the home `goalcup prep` opens and with the environment of that
+        // launch, which only a chat-mode profile has (D57).
+        if !commands.is_empty() && !self.capture.interactive {
+            return Err(refuse(
+                FIELD,
+                "is for a chat-mode profile (`interactive = true`): its commands run with the \
+                 environment and in the home that `goalcup prep` opens the harness with",
+            ));
+        }
         if commands.len() > MAX_CONFIGURE_COMMANDS {
             return Err(refuse(
                 FIELD,

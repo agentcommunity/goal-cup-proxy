@@ -3736,7 +3736,11 @@ fn a_configure_command_is_held_to_the_argument_rules() {
     );
     admitted(&t, DEV);
     // The connector's own argument guard covers its configure commands too.
-    let mut t = hermes();
+    let mut t = chat();
+    let mut guard = Table::new();
+    guard.insert("long".to_string(), strings(&["tui"]));
+    set(&mut t, &["capture"], "argv_guard", Value::Table(guard));
+    admitted(&t, PINNED);
     set(
         &mut t,
         &["capture"],
@@ -3744,4 +3748,8 @@ fn a_configure_command_is_held_to_the_argument_rules() {
         commands(&[&["--tui", "config"]]),
     );
     refused(&t, PINNED, &["capture.configure", "--tui"]);
+    // A headless profile has no prep launch to run them with.
+    let mut t = hermes();
+    set(&mut t, &["capture"], "configure", commands(&[ok]));
+    refused(&t, PINNED, &["capture.configure", "chat-mode"]);
 }
