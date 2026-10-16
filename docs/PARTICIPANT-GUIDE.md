@@ -46,12 +46,35 @@ native Windows comes later.
 goalcup login
 ```
 
-It prints an address and a short code and opens your browser. Check that the page shows the same
-code, and approve. Nothing secret is typed or stored: the tracer keeps the server's address and
+It opens your browser and prints:
+
+```
+Connect this computer to your Goal Cup account.
+You do this once per computer. Each run asks for its own approval later; that is normal.
+Your browser opened the approval page. Check that the page shows the code <code>.
+If you do not see it, open this address: <address>
+Waiting for you to approve… (the code expires in 15 min; press Ctrl-C to cancel)
+```
+
+Check that the page shows the same code, and approve. Then **return to the terminal now**. It
+prints `Approved. This computer is connected to your Goal Cup account (<your name>).` and
+`Next: goalcup prep`. Nothing secret is typed or stored: the tracer keeps the server's address and
 your account's name. The server is `https://ingest.agentcommunity.org`; you do not need to name it.
 
+**Two approvals are normal.** You approve once here, and once at each `goalcup start`. They do
+different jobs:
+
+- The login approval signs this computer in to your account. It gives the tracer no credential for
+  any run, and it starts nothing. You do it once per computer.
+- The approval at `goalcup start` approves that one run. Each run gets its own, so nothing records
+  or opens a run on your account unless you approved that run, at that moment. For a competition
+  run it is also the moment you accept that the new run replaces an earlier one.
+
+`goalcup continue` asks for no approval: it restarts a run you already approved.
+
 If you have no account yet, or have not signed up for the Goal Cup, the website sends you through
-that first.
+that first. On a machine with no browser (a remote server), set `GOALCUP_NO_BROWSER=1`. The
+tracer then prints the address and the code and opens nothing: open the address on any device.
 
 ## 3. Get ready: `goalcup prep`
 
@@ -71,7 +94,8 @@ every step is ok it says `goalcup prep: ready.` and prints the start command.
 3. **harness_home.** Prep opens the harness once, in the home the tracer keeps for it. This is
    never your own `~/.claude` or `~/.codex`. Sign in there, and add the settings, MCP servers and
    skills you want your agent to have. Then exit the harness normally. Your runs use this home.
-   Nothing is recorded while prep has it open.
+   Nothing is recorded while prep has it open. Prep first lists these steps and says `Press Enter
+   to open <harness>, or Ctrl-C to stop.` It opens the harness only after you press Enter.
 4. **github.** Create a new repository on GitHub: public and empty (create it without a README,
    licence or `.gitignore`, so it has no commits). Then create a fine-grained token for that one
    repository with Contents set to read and write. Run `goalcup prep --repo
@@ -89,7 +113,9 @@ every step is ok it says `goalcup prep: ready.` and prints the start command.
 6. **practice.** A practice run of this harness, sealed and uploaded (the next section).
 
 If a firewall such as Little Snitch asks about `goalcup`, allow it: the machine step fails when
-the server or the provider cannot be reached.
+the server or the provider cannot be reached. Each tracer update is a new program file, so the
+firewall may ask again after every update. Allow it again each time, and check it before you start
+a run you care about.
 
 ## 4. A practice run: `goalcup start --practice`
 
@@ -100,6 +126,17 @@ goalcup start --harness <id> --practice
 A practice run goes through the whole path: approve it in the browser, the harness opens in your
 terminal in a fresh clone of your repository, you type a prompt, and the run records and uploads.
 It lasts about ten minutes; then the server stops it, and the tracer seals and uploads it.
+
+This is the second approval. You approved the login in section 2. This one approves this one
+practice run, and it says so:
+
+```
+Approve this practice run of Claude Code in your browser.
+Every run needs its own approval, so this is normal: login connected this computer, and this approval starts this one run.
+```
+
+Approve it in the browser, then **return to the terminal now**: the run starts there. Section 5
+walks through what you see.
 
 A practice run never pushes. Its clone has no way to push, so your repository stays empty until
 your competition run. Practice runs do not count, never replace your competition run, send no
@@ -120,17 +157,49 @@ Run it from your home folder or another folder of your own: `goalcup start` make
 run. Do not run it from any folder inside your work folder; the tracer refuses that. Under WSL2,
 do not run it from a Windows drive.
 
-1. The tracer prints `Open <address> and check that it shows the code <code>.` and opens your
-   browser. Approve this run. Each competition run is approved this way.
-2. It clones your repository into your work folder (`goalcup-` followed by a random name). That
-   clone is the agent's workspace.
-3. It opens the run on the server and prints the official start and the deadline. Your 168 hours
-   start here, on the server's clock.
-4. The harness opens in this terminal. Type your prompt as the first message. After that, type
-   nothing but "keep going" (below).
+1. **Approve.** The tracer prints `Approve your competition run of Claude Code in your browser.`
+   and the same line as above about the second approval, then opens your browser:
+   `Your browser opened the approval page. Check that the page shows the code <code>.` Check the
+   code, approve this run, and **return to the terminal now**. If you already have a competition
+   run open, it first says so (`You already have a competition run open (started …). Approving
+   replaces it: that run stops, and only the new run counts.`). Each competition run is approved
+   this way. The tracer prints `Approved.` when the approval arrives.
+2. **Clone.** It prints `Cloning your repository…` and clones your repository into your work
+   folder (`goalcup-` followed by a random name). That clone is the agent's workspace.
+3. **Open the run.** It opens the run on the server. Your 168 hours start here, on the server's
+   clock.
+4. **The harness opens in this terminal.** Before it does, goalcup prints a short block. It says
+   `Your competition run is open.` and `Claude Code opens now in this terminal.`, and then what to
+   do:
+
+   ```
+   Claude Code may ask whether you trust this folder. Choose Yes.
+   Type your one prompt and press Enter. After that you may only type "keep going", when the agent has stopped.
+   Your run ends at <day, time and zone, with UTC in brackets>, <N> h <M> min left. You do not need to stop it.
+   goalcup prints nothing here until Claude Code exits. To see the run, run goalcup status in another terminal.
+   Recording in chat mode: Claude Code opens now.
+   ```
+
+   Type your prompt as the first message, and press Enter. After that, type nothing but "keep
+   going" (section 10).
+
+**The folder-trust dialog (Claude Code).** Each run is a fresh clone, so Claude Code asks, at the
+start of every run, whether you trust the folder. The cursor is on "No, exit". Choose "Yes, I
+trust this folder", then type your prompt. Answering this dialog is yours to do, and it is
+allowed. It is not a message to the agent. If you choose "No, exit", Claude Code quits and the
+tracer ends the part of the run it recorded. Run `goalcup status` and do what its `Next:` line
+says.
 
 While the harness is open, `goalcup` prints nothing in this terminal. Use `goalcup status` from
 another terminal to see the run.
+
+When the harness exits, `goalcup` takes the terminal back. Under the heading `Details for
+support` it prints technical lines. Those are for support; you can skip them. Below them it says
+what happened and what to do. If the agent exited before the deadline, it says
+`Claude Code has exited (<how>).`, `Your run is still open until <time>.`, and
+`To go on, run: goalcup continue <run id> (you can do it in another terminal now).` It then prints
+`Uploading the rest of the run… keep this terminal open until it says the upload is done.` Keep the
+terminal open until `Upload done.` appears.
 
 **One run counts.** Your account has one main run. If you start a second competition run inside
 the window, it replaces the first: the server stops the first run, and only the new one counts.
@@ -166,26 +235,42 @@ the recording has a problem; and when the run has ended and its commit is record
 goalcup status
 ```
 
-It shows the newest run started on this machine. It lists anything wrong first, one `PROBLEM:`
-line each, then the recording's state, health and storage. A run with nothing wrong has no
-`PROBLEM:` line.
+It shows the newest run started on this machine. A run that records, with nothing wrong, looks
+like this:
+
+```
+Your competition run with Claude Code: recording.
+  Ends: Sat 14 Nov, 10:12 CET (09:12 UTC), 95 h 10 min left.
+  Claude Code: running.
+  Upload: up to date (last sent 2 min ago).
+  Problems: none.
+Next: nothing to do. The run ends by itself.
+```
+
+The header says which run it is, its state, when it ends and how much time is left, whether the
+agent runs, how the upload stands, and how many problems there are. If there are problems, one
+`PROBLEM:` line each follows the header, and each says what to do. The last line is always
+`Next:`, and it says what to do now. A block headed `Details:` follows, for support. On a machine
+that has not started a run, `goalcup status` says `no run has been started from this machine yet`.
 
 | The line says | What it means | What to do |
 |---|---|---|
-| `run state not updated for …: the tracer may have stopped` | The `goalcup start` process is not running: the machine rebooted or slept, or the process was killed. | If the line ends `run goalcup continue`, do that. |
-| `recording has gaps` or `recording failed` | Part of the record is missing. The server is told and the run is flagged for review. | Leave the run going. |
-| `last upload … ago: …` | Uploads have been failing for half an hour or more. Nothing recorded is lost: it waits on the disk. | Check the network. After the run, `goalcup upload` sends what is left of your newest run. `goalcup upload <entry>` sends one entry. |
-| `the last … heartbeats to the server failed: …` | The server has not heard from the run for about a quarter of an hour. | Check the network. |
-| `disk: … free beyond the reservation` | Less than 5 GiB is free beyond the run's reservation. | Free some disk. If the disk fills while uploads are failing, the tracer stops the agent and the run stays open: free space, then `goalcup continue`. |
-| `the machine may sleep: …` | The tracer could not keep the machine awake. Under WSL2 this line is always there, because Windows decides. | Plug the machine in, or turn sleep off yourself (WSL2: the Windows power setting above). |
-| `the agent's process exited (…): run goalcup continue` | The agent ended before the deadline: it crashed, you closed the window, or it quit. | Run `goalcup continue`. |
-| `the agent's process exited (…); the run is over` | The agent left on its own, and the run's time has passed since. | Nothing. |
-| `the agent's process exited (…); this run cannot be continued` | The agent left, and this run cannot be restarted: it is not on the server, its harness runs headless, or this machine has no credential for it. | Nothing to restart. |
+| `goalcup has not updated this run for …. The computer may have slept or restarted.` | The `goalcup start` process is not running: the machine rebooted or slept, or the process was killed. | The line ends with the fix. Most often it is `To go on, run: goalcup continue <run id>`. |
+| `the recording has gaps` or `the recording failed` | Part of the record is missing. The server is told and the run is flagged for review. | Leave the run going. If it says to write to support, name the run id it gives. |
+| `nothing was uploaded for … Nothing is lost; it waits on this computer. Check the network.` | Uploads have been failing for half an hour or more. Nothing recorded is lost: it waits on the disk. | Check the network. After the run, `goalcup upload` sends what is left of your newest run. `goalcup upload <entry>` sends one entry. |
+| `the server has not heard from this run for about … min` | The server has not heard from the run for about a quarter of an hour. | Check the network. |
+| `only … of disk is free. Free some space.` | Less than 5 GiB is free beyond the run's reservation. | Free some disk. If the disk fills while uploads are failing, the tracer stops the agent and the run stays open: free space, then `goalcup continue`. |
+| `this computer may go to sleep (…)` | The tracer could not keep the machine awake. Under WSL2 this line is always there, because Windows decides. | Keep it on mains power with the lid open, or turn sleep off yourself (WSL2: the Windows power setting above). |
+| `Claude Code has exited (…). Your run is still open until … To go on, run: goalcup continue <run id>` | The agent ended before the deadline: it crashed, you closed the window, or it quit. | Run the command it names. |
+| `Claude Code has exited (…) and the run is over. Nothing to continue.` | The agent left on its own, and the run's time has passed since. | Nothing. |
+| `Claude Code has exited (…) and this run cannot be continued.` | The agent left, and this run cannot be restarted: it is not on the server, its harness runs headless, or this machine has no credential for it. | Nothing to restart. |
+
+(The tracer writes the harness's own name where this table says Claude Code.)
 
 When the tracer stops the agent itself, at the deadline or because a newer run replaced this one,
-`status` shows no line about it. An agent that exited normally gets a plain line, not a
-`PROBLEM:`: `the agent finished; the run is over` or `the agent finished; this run cannot be
-continued`.
+`status` shows no `PROBLEM:` line about it. An agent that exited normally gets a plain line, not a
+`PROBLEM:`: `Claude Code finished, and the run is over.` or `Claude Code finished, and this run
+cannot be continued.`
 
 ## 8. Restarting the agent: `goalcup continue`
 
@@ -194,9 +279,14 @@ goalcup continue
 ```
 
 When the agent stops before the deadline (a crash, a reboot, a closed window), this starts it
-again in the same run: same deadline, same clone, the harness resuming its last session. Nothing
-is approved again. Run it from the same kind of folder as `goalcup start` (section 5), in a
-terminal you will leave open.
+again in the same run: same deadline, same clone, the harness resuming its last session. No
+approval is needed, and it says so: `Your run goes on. No approval is needed: this computer kept
+the run's key.` While it opens, it prints `The earlier part of this run uploads in the background.`
+
+The harness may show its folder-trust dialog again (section 5). If the agent has stopped, type
+"keep going". If you never sent your prompt, send it now: it is still your one prompt. Run
+`goalcup continue` from the same kind of folder as `goalcup start` (section 5), in a terminal you
+will leave open.
 
 A run can be continued only on the machine that started it. The tracer never restarts the agent
 on its own.
@@ -208,8 +298,12 @@ agent is stopped in whatever state it is in. There is no grace period.
 
 - At the deadline the server tells the tracer to stop. The tracer stops the agent and the
   recording, seals the record, tells the server which commit your clone had, and uploads what is
-  left. It keeps trying for up to one hour. If that is not enough it says so, and
-  `goalcup upload` finishes the job later. With no entry id it sends the unsent entries of your newest
+  left. It prints `Time is up. Claude Code was stopped.`, then `Uploading the rest of the run… keep
+  this terminal open until it says the upload is done.` When everything is sent it prints `Your
+  run is sealed and uploaded. Nothing more to do.` It keeps trying for up to one hour. If that is
+  not enough it says `Your run is sealed on this computer.` and `Part of the run is not uploaded
+  yet. Next: when you are online, run: goalcup upload`, and `goalcup upload` finishes the job
+  later. With no entry id it sends the unsent entries of your newest
   run. To send one entry, run `goalcup upload <entry>`. `goalcup entries` shows the entry ids.
 - The server records the latest commit in your GitHub repository at the deadline. That commit is
   what is judged, so your agent must push its work before then. The tracer never pushes for it.
@@ -227,6 +321,12 @@ is "keep going". Use it when the agent has stopped and you want it to carry on.
 
 Every message you type into the harness is recorded. Any other message (an answer, a hint, an
 approval, a correction) is seen at review, and it may remove the run at review.
+
+One thing is not a message to the agent, and it is allowed: the harness's own start-up dialog.
+Claude Code asks, at the start of each run, whether you trust the folder. Your answer to that
+question is yours to give. Answer it before you type your prompt (section 5). After the start,
+answer a trust dialog only to let the harness open. Do not answer a question the agent asks or an
+approval the agent needs.
 The tracer itself never types to the agent, never says "keep going" for you, and never restarts
 it by itself.
 

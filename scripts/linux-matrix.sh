@@ -440,7 +440,8 @@ if ! [ -t 0 ] || ! [ -t 1 ]; then
     exit 3
 fi
 cat <<EOF
-linux-matrix: the owner's step. $h opens next, inside the Linux container, in the tracker home
+linux-matrix: the owner's step. Prep lists its steps, then says "Press Enter to open $h, or
+Ctrl-C to stop." Press Enter. $h then opens inside the Linux container, in the tracker home
 its runs use. Nothing is recorded.
   1. On the sign-in screen choose "Sign in with Device Code". (The browser sign-in cannot reach
      the container.)

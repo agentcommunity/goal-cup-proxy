@@ -23,6 +23,21 @@ the rules are [docs/RULES.md](../../docs/RULES.md). This skill gets them as far 
 - Never write to `~/.claude`, `~/.codex` or any harness's own config, and never set a model base
   URL or a proxy variable. The tracer keeps its own home for each harness.
 
+## Tell the person this early
+
+Say these plainly, once, before the first human step:
+
+- **Two approvals are normal.** `goalcup login` approves this computer once. It signs the person
+  in and gives the tracer no credential for any run. Each `goalcup start` then approves that one
+  run, so no run starts on their account without their approval. It is not a mistake when the
+  browser asks again.
+- **After each browser approval, return to the terminal now.** The next step happens there.
+- **A firewall such as Little Snitch may ask about `goalcup`.** Allow it. Each tracer update is a
+  new program file, so the firewall may ask again after every update. Allow it again.
+- **Claude Code asks, at the start of each run, whether to trust the folder.** The person answers
+  it themselves (Yes) before they type their prompt. That is allowed. Do not answer it for them.
+- **The person types one prompt, and after that only "keep going".**
+
 ## The loop
 
 1. Check the tracer is installed: `goalcup --version`. If it is not, tell the person how to
@@ -44,7 +59,8 @@ the rules are [docs/RULES.md](../../docs/RULES.md). This skill gets them as far 
    Show that sentence to the person verbatim.
 3. If every `state` is `ok`, tell the person they are ready, and that they start their run with
    `goalcup start --harness <id>` inside the start window. The window opens on 7 November 2026 at
-   00:00 UTC and lasts 24 hours. If the `machine` step's `say` asks them
+   00:00 UTC and lasts 24 hours. `goalcup start` asks for its own browser approval; that is the
+   second approval, and it is normal. If the `machine` step's `say` asks them
    to keep the machine awake themselves, pass that on too. Stop.
 4. Otherwise take the **first** step whose `state` is not `ok`:
    - **`"human": false`**: do it yourself where a command can. Run the command its `say` names,
@@ -57,7 +73,9 @@ the rules are [docs/RULES.md](../../docs/RULES.md). This skill gets them as far 
      `say` and wait.
    - **`"human": true`**: stop. Show the person the `say` text exactly as printed, word for word,
      and wait until they say it is done. Do not try to do it for them. These are the browser
-     login, opening the harness to sign in and add their settings, creating the repository and
+     login (the approval page shows a code; tell them to check it matches the one in the terminal,
+     approve, and return to the terminal now), opening the harness to sign in and add their
+     settings, creating the repository and
      pasting its token, and the practice run. Several of them need `goalcup prep` run in the
      person's own terminal, because `--json` never asks or opens anything.
 5. Go back to step 2. Repeat until every step is `ok`.
