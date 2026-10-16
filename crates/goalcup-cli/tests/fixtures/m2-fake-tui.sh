@@ -74,8 +74,10 @@ trap 'on_signal quit 131' QUIT
 trap 'on_signal hup 129' HUP
 echo "tui: ready"
 echo ready > "$out/tui.ready"
-# In endure mode it says when it is waiting for the next signal (here, and when a handler is
-# done), so a test sends one only once the last is fully dealt with.
+# In endure mode it says when it is about to wait for the next signal (here, and when a handler
+# is done). The line comes just before the read starts, so it does not prove the read has begun:
+# a signal sent in that gap is held until the read returns. A test that sends signals therefore
+# sends again when no answer comes (`it/start_launch.rs`).
 [ -f "$out/tui.endure" ] && echo "tui: waiting"
 session=""
 while :; do

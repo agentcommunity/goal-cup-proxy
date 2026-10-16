@@ -595,6 +595,8 @@ mod chat {
                 if run.shown().matches(said).count() > before {
                     return true;
                 }
+                // Never a resend into a host that has gone: that is the failure, said as such.
+                assert!(matches!(run.child.try_wait(), Ok(None)), "the host lives");
                 if sent.is_none_or(|at| at.elapsed() > std::time::Duration::from_secs(1)) {
                     run.signal_foreground(signal);
                     sent = Some(std::time::Instant::now());
@@ -610,11 +612,16 @@ mod chat {
             }
         }
         // A signal sent twice can reach the harness while it is part way through reading this
-        // line, and the half it had read is gone. Type the line again until the run ends.
+        // line, and the half it had read is gone. Type the line again until the harness has
+        // read it (it says `tui: bye`), then wait for the run to end: the host's wrap-up after
+        // that reads no terminal.
         let mut typed = None::<std::time::Instant>;
         wait_until("the run to end on /exit", || {
             if matches!(run.child.try_wait(), Ok(Some(_))) {
                 return true;
+            }
+            if run.shown().contains("tui: bye") {
+                return false;
             }
             if typed.is_none_or(|at| at.elapsed() > std::time::Duration::from_secs(2)) {
                 run.type_line("/exit");
