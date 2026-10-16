@@ -20,6 +20,8 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 pub use time_left::TimeLeft;
 
+use crate::participant::{self, Restart, Who};
+
 /// `<cfg>/runs`: one directory per run.
 pub const RUNS_DIR_NAME: &str = "runs";
 
@@ -229,12 +231,12 @@ pub enum Advice {
 }
 
 impl Advice {
-    /// The clause that ends a problem line: what to do, or what is true.
-    fn clause(self) -> &'static str {
+    /// What a problem line says about restarting the agent, for the run `who`.
+    fn restart<'a>(self, who: &Who<'a>) -> Restart<'a> {
         match self {
-            Advice::Continue => "run goalcup continue",
-            Advice::Over => "the run is over",
-            Advice::Cannot => "this run cannot be continued",
+            Advice::Continue => Restart::Continue { run_id: who.run_id },
+            Advice::Over => Restart::Over,
+            Advice::Cannot => Restart::Cannot,
         }
     }
 }
@@ -325,29 +327,37 @@ impl RunState {
 
     /// The plain line for a run whose agent finished normally and which `goalcup continue` cannot
     /// restart: a normal end, not a problem.
-    pub fn finished(&self, advice: Advice) -> Option<String> {
+    pub fn finished(&self, advice: Advice, who: &Who<'_>) -> Option<String> {
         (self.exited_cleanly() && !self.stopped_for_its_end() && advice != Advice::Continue)
-            .then(|| format!("the agent finished; {}", advice.clause()))
+            .then(|| participant::agent_finished(who.harness, advice == Advice::Over))
     }
 
-    /// Everything wrong with the run at `now` (unix seconds), one sentence each, worst first.
-    /// Nothing wrong is an empty list. `advice` says whether `goalcup continue` can restart the
-    /// run: the lines say to run it only when it can.
-    pub fn problems(&self, now: u64, advice: Advice) -> Vec<String> {
+    /// Whether no tracker writes this state any more: the host has not finished, and the tick has
+    /// not written it for a few watch periods.
+    pub fn is_stale(&self, now: u64) -> bool {
+        !self.ended
+            && now.saturating_sub(self.updated_at)
+                > STATE_STALE_AFTER_TICKS * reserve::WATCH_PERIOD.as_secs()
+    }
+
+    /// Everything wrong with the run at `now` (unix seconds), one sentence each, worst first, each
+    /// ending with what to do about it. Nothing wrong is an empty list. `advice` says whether
+    /// `goalcup continue` can restart the run: the lines say to run it only when it can. `who`
+    /// names the harness and the run in the words.
+    pub fn problems(&self, now: u64, advice: Advice, who: &Who<'_>) -> Vec<String> {
         let mut lines = Vec::new();
         // The tick writes the state every watch period; a run not over whose state has not
         // moved for a few of them has no tracker writing it.
-        let silent = now.saturating_sub(self.updated_at);
-        if !self.ended && silent > STATE_STALE_AFTER_TICKS * reserve::WATCH_PERIOD.as_secs() {
-            lines.push(format!(
-                "run state not updated for {}: the tracer may have stopped; {}",
-                age_words(silent),
-                advice.clause()
+        if self.is_stale(now) {
+            let silent = now.saturating_sub(self.updated_at);
+            lines.push(participant::problem_state_stale(
+                &age_words(silent),
+                advice.restart(who),
             ));
         }
         match self.recording {
-            Recording::Gaps => lines.push("recording has gaps".to_string()),
-            Recording::Failed => lines.push("recording failed".to_string()),
+            Recording::Gaps => lines.push(participant::problem_recording_gaps()),
+            Recording::Failed => lines.push(participant::problem_recording_failed(who.run_id)),
             Recording::Ok | Recording::Unknown => {}
         }
         if let Some(why) = &self.upload.problem {
@@ -359,28 +369,31 @@ impl RunState {
                 .map_or(0, |last_ok| now.saturating_sub(last_ok));
             let failing = age >= reserve::UPLOAD_FAILING_AFTER.as_secs();
             if self.ended || self.upload.stopped || failing {
-                lines.push(format!("last upload {} ago: {why}", age_words(age)));
+                lines.push(participant::problem_upload(
+                    &age_words(age),
+                    why,
+                    self.ended || self.upload.stopped,
+                ));
             }
         }
         if self.heartbeat.failures >= HEARTBEATS_FAILING_AFTER
             && !self.ended
             && let Some(why) = &self.heartbeat.last_failure
         {
-            lines.push(format!(
-                "the last {} heartbeats to the server failed: {why}",
-                self.heartbeat.failures
+            lines.push(participant::problem_heartbeats(
+                self.heartbeat.failures,
+                why,
             ));
         }
         if self.disk.low && !self.ended {
-            lines.push(format!(
-                "disk: {} free beyond the reservation",
-                reserve::human(self.disk.free_bytes)
-            ));
+            lines.push(participant::problem_disk(&reserve::human(
+                self.disk.free_bytes,
+            )));
         }
         if let Err(why) = &self.sleep_lock
             && !self.ended
         {
-            lines.push(format!("the machine may sleep: {why}"));
+            lines.push(participant::problem_sleep(why));
         }
         // An agent the host ended because the run is over (its deadline, a newer run) is not a
         // problem; one that left while the run is open, or that a full disk stopped, is.
@@ -389,13 +402,11 @@ impl RunState {
             // A clean exit of a run that cannot be continued is a normal end ([`Self::finished`]).
             && !(self.exited_cleanly() && advice != Advice::Continue)
         {
-            let then = match advice {
-                Advice::Continue => ": ",
-                Advice::Over | Advice::Cannot => "; ",
-            };
-            lines.push(format!(
-                "the agent's process exited ({status}){then}{}",
-                advice.clause()
+            lines.push(participant::problem_agent_exited(
+                who,
+                status,
+                self.stopped.as_deref() == Some(watch::DISK_STOP_REASON),
+                advice.restart(who),
             ));
         }
         lines
@@ -406,7 +417,7 @@ impl RunState {
 pub const STATE_STALE_AFTER_TICKS: u64 = 3;
 
 /// A span in words: `45 s`, `12 min`, `3 h 5 min`, `2 d 4 h`.
-fn age_words(secs: u64) -> String {
+pub(crate) fn age_words(secs: u64) -> String {
     match secs {
         0..60 => format!("{secs} s"),
         60..3600 => format!("{} min", secs / 60),
@@ -918,74 +929,152 @@ mod tests {
         assert!(!written.ended, "the live segment's state is not replaced");
     }
 
+    fn who() -> Who<'static> {
+        Who {
+            harness: "Some Agent",
+            run_id: "r0123456789abcdef",
+            until: Some("Sat 14 Nov, 10:12 UTC"),
+        }
+    }
+
     #[test]
     fn problems_come_in_the_order_the_participant_should_act() {
         let now = 1_000_000;
+        let who = who();
         let mut state = RunState::launched("e1", Ok(()));
-        assert!(state.problems(now, Advice::Continue).is_empty());
+        assert!(state.problems(now, Advice::Continue, &who).is_empty());
         state.recording = Recording::Unknown;
         state.upload.problem = Some("busy".to_string());
         state.upload.last_ok_at = Some(now - 29 * 60);
         assert!(
-            state.problems(now, Advice::Continue).is_empty(),
+            state.problems(now, Advice::Continue, &who).is_empty(),
             "29 minutes is not yet a problem"
         );
         state.upload.last_ok_at = Some(now - 3 * 3600 - 5 * 60);
-        assert_eq!(
-            state.problems(now, Advice::Continue),
-            ["last upload 3 h 5 min ago: busy"]
-        );
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        // The age, the cause, that nothing is lost, and what to do.
+        assert!(lines[0].contains("3 h 5 min"), "{lines:?}");
+        assert!(lines[0].contains("busy"), "{lines:?}");
+        assert!(lines[0].contains("Nothing is lost"), "{lines:?}");
+        assert!(lines[0].contains("Check the network"), "{lines:?}");
         // A run that is over is told how its upload ended, whatever the age, and nothing about
-        // what only matters while it records.
+        // what only matters while it records. The fix is the command.
         state.upload.last_ok_at = Some(now - 10);
         state.ended = true;
         state.disk.low = true;
         state.sleep_lock = Err("x".into());
-        assert_eq!(
-            state.problems(now, Advice::Continue),
-            ["last upload 10 s ago: busy"]
-        );
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("10 s"), "{lines:?}");
+        assert!(lines[0].contains("run: goalcup upload"), "{lines:?}");
+    }
+
+    /// Each problem line ends with what to do, and says nothing a participant cannot act on.
+    #[test]
+    fn every_problem_line_carries_its_fix() {
+        let now = 1_000_000;
+        let who = who();
+        let mut state = RunState::launched("e1", Err("no sleep inhibitor".into()));
+        state.updated_at = now;
+        state.recording = Recording::Gaps;
+        state.heartbeat = HeartbeatState {
+            failures: HEARTBEATS_FAILING_AFTER,
+            last_failure: Some("the server answered HTTP 503".to_string()),
+        };
+        state.disk = DiskState {
+            free_bytes: 3 << 30,
+            reserve_bytes: 0,
+            low: true,
+        };
+        let lines = state.problems(now, Advice::Continue, &who);
+        let said = lines.join("\n");
+        assert_eq!(lines.len(), 4, "{said}");
+        assert!(lines[0].contains("gaps") && lines[0].contains(participant::SUPPORT_ADDRESS));
+        assert!(lines[1].contains("15 min") && lines[1].contains("Check the network"));
+        assert!(lines[2].contains("3 GiB") && lines[2].contains("Free some space"));
+        assert!(lines[3].contains("sleep") && lines[3].contains("power"));
+        state.recording = Recording::Failed;
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert!(lines[0].contains(who.run_id), "{lines:?}");
+        assert!(lines[0].contains(participant::SUPPORT_ADDRESS), "{lines:?}");
+        for word in ["tracer", "heartbeat", "entry", "segment", "daemon"] {
+            assert!(!said.contains(word), "{word}: {said}");
+        }
     }
 
     #[test]
     fn a_state_nobody_has_written_for_three_ticks_is_a_problem_until_the_run_ends() {
+        let who = who();
         let mut state = RunState::launched("e1", Ok(()));
         state.updated_at = 1_000;
         let period = reserve::WATCH_PERIOD.as_secs();
         let fresh = 1_000 + STATE_STALE_AFTER_TICKS * period;
         assert!(
-            state.problems(fresh, Advice::Continue).is_empty(),
+            state.problems(fresh, Advice::Continue, &who).is_empty(),
             "three ticks late is not yet stale"
         );
-        assert_eq!(
-            state.problems(fresh + 1, Advice::Continue),
-            ["run state not updated for 1 min: the tracer may have stopped; run goalcup continue"]
+        let lines = state.problems(fresh + 1, Advice::Continue, &who);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("1 min"), "{lines:?}");
+        assert!(
+            lines[0].contains("goalcup continue r0123456789abcdef"),
+            "{lines:?}"
         );
+        // A run nothing can continue is not told to.
+        for advice in [Advice::Over, Advice::Cannot] {
+            let lines = state.problems(fresh + 1, advice, &who);
+            assert!(!lines[0].contains("goalcup continue"), "{lines:?}");
+        }
         state.ended = true;
-        assert!(state.problems(fresh + 10_000, Advice::Continue).is_empty());
+        assert!(
+            state
+                .problems(fresh + 10_000, Advice::Continue, &who)
+                .is_empty()
+        );
     }
 
     #[test]
     fn an_agent_that_left_is_a_problem_unless_the_run_is_over() {
+        let who = who();
         let mut state = RunState::launched("e1", Ok(()));
         state.harness = HarnessState::Exited {
             status: "exit code 1".to_string(),
         };
         let now = state.updated_at;
-        let line = "the agent's process exited (exit code 1): run goalcup continue";
-        // It left while the run is open.
-        assert_eq!(state.problems(now, Advice::Continue), [line]);
+        // It left while the run is open: who left, how, until when, and the command with the id.
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].starts_with("Some Agent has exited (exit code 1)."),
+            "{lines:?}"
+        );
+        assert!(lines[0].contains(participant::STILL_OPEN), "{lines:?}");
+        assert!(lines[0].contains("Sat 14 Nov, 10:12 UTC"), "{lines:?}");
+        assert!(
+            lines[0].ends_with("goalcup continue r0123456789abcdef"),
+            "{lines:?}"
+        );
         // The host ended it because the run is over: the deadline, or a newer run.
         for why in [
             "the server says the run is over (its deadline was 2026-10-21T00:00:00Z)",
             "a newer run on your account replaced this one",
         ] {
             state.stopped = Some(why.to_string());
-            assert!(state.problems(now, Advice::Continue).is_empty(), "{why}");
+            assert!(
+                state.problems(now, Advice::Continue, &who).is_empty(),
+                "{why}"
+            );
         }
-        // A full disk ended it, the run is still open: it can be continued.
+        // A full disk ended it, the run is still open: free space first, then continue.
         state.stopped = Some(watch::DISK_STOP_REASON.to_string());
-        assert_eq!(state.problems(now, Advice::Continue), [line]);
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("disk"), "{lines:?}");
+        assert!(
+            lines[0].contains("goalcup continue r0123456789abcdef"),
+            "{lines:?}"
+        );
     }
 
     /// WP11: the run is over by the count of the server's last answer, never by this machine's
@@ -1047,22 +1136,25 @@ mod tests {
             status: "exit code 1".to_string(),
         };
         let now = 5_000;
-        let exited = "the agent's process exited (exit code 1)";
+        let who = who();
+        let has_exited = "Some Agent has exited (exit code 1)";
 
         // A server run, a chat-mode connector, a credential here, the deadline ahead.
         assert_eq!(advice(cfg.path(), &run, &state, now), Advice::Continue);
-        assert_eq!(
-            state.problems(now, Advice::Continue),
-            [format!("{exited}: run goalcup continue")]
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert!(lines[0].contains(has_exited), "{lines:?}");
+        assert!(
+            lines[0].contains("goalcup continue r0123456789abcdef"),
+            "{lines:?}"
         );
 
         // The deadline has passed: the run is over, and the line says so.
         let over = advice(cfg.path(), &run, &state, 10_000);
         assert_eq!(over, Advice::Over);
-        assert_eq!(
-            state.problems(10_000, over),
-            [format!("{exited}; the run is over")]
-        );
+        let lines = state.problems(10_000, over, &who);
+        assert!(lines[0].contains(has_exited), "{lines:?}");
+        assert!(lines[0].contains("the run is over"), "{lines:?}");
+        assert!(!lines[0].contains("goalcup continue"), "{lines:?}");
 
         // A newer run replaced it.
         let mut replaced = state.clone();
@@ -1074,8 +1166,10 @@ mod tests {
         headless.continuable = false;
         let cannot = advice(cfg.path(), &run, &headless, now);
         assert_eq!(cannot, Advice::Cannot);
-        let lines = headless.problems(now, cannot);
-        assert_eq!(lines, [format!("{exited}; this run cannot be continued")]);
+        let lines = headless.problems(now, cannot, &who);
+        assert!(lines[0].contains(has_exited), "{lines:?}");
+        assert!(lines[0].contains("cannot be continued"), "{lines:?}");
+        assert!(!lines[0].contains("goalcup continue"), "{lines:?}");
 
         // A run with no server.
         let mut local = run.clone();
@@ -1101,11 +1195,9 @@ mod tests {
         for advice in [Advice::Over, Advice::Cannot] {
             let mut stale = RunState::launched("e1", Ok(()));
             stale.updated_at = 0;
-            let lines = stale.problems(10_000, advice);
+            let lines = stale.problems(10_000, advice, &who);
             assert!(
-                lines
-                    .iter()
-                    .all(|line| !line.contains("run goalcup continue")),
+                lines.iter().all(|line| !line.contains("goalcup continue")),
                 "{lines:?}"
             );
         }
@@ -1115,37 +1207,36 @@ mod tests {
     /// non-zero exit is still one.
     #[test]
     fn a_clean_exit_of_a_run_that_cannot_be_continued_is_not_a_problem() {
+        let who = who();
         let mut state = RunState::launched("e1", Ok(()));
         state.harness = HarnessState::Exited {
             status: "exit code 0".to_string(),
         };
         let now = state.updated_at;
         for advice in [Advice::Cannot, Advice::Over] {
-            assert!(state.problems(now, advice).is_empty(), "{advice:?}");
+            assert!(state.problems(now, advice, &who).is_empty(), "{advice:?}");
         }
-        assert_eq!(
-            state.finished(Advice::Cannot).as_deref(),
-            Some("the agent finished; this run cannot be continued")
-        );
-        assert_eq!(
-            state.finished(Advice::Over).as_deref(),
-            Some("the agent finished; the run is over")
-        );
+        let cannot = state.finished(Advice::Cannot, &who).unwrap();
+        assert!(cannot.starts_with("Some Agent finished"), "{cannot}");
+        assert!(cannot.contains("cannot be continued"), "{cannot}");
+        let over = state.finished(Advice::Over, &who).unwrap();
+        assert!(over.contains("the run is over"), "{over}");
         // A run `continue` can restart: the participant is still told, as a problem.
-        assert_eq!(
-            state.problems(now, Advice::Continue),
-            ["the agent's process exited (exit code 0): run goalcup continue"]
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert!(lines[0].contains("exit code 0"), "{lines:?}");
+        assert!(
+            lines[0].contains("goalcup continue r0123456789abcdef"),
+            "{lines:?}"
         );
-        assert_eq!(state.finished(Advice::Continue), None);
+        assert_eq!(state.finished(Advice::Continue, &who), None);
         // A non-zero exit is a problem whatever the advice.
         state.harness = HarnessState::Exited {
             status: "exit code 1".to_string(),
         };
-        assert_eq!(
-            state.problems(now, Advice::Cannot),
-            ["the agent's process exited (exit code 1); this run cannot be continued"]
-        );
-        assert_eq!(state.finished(Advice::Cannot), None);
+        let lines = state.problems(now, Advice::Cannot, &who);
+        assert!(lines[0].contains("exit code 1"), "{lines:?}");
+        assert!(lines[0].contains("cannot be continued"), "{lines:?}");
+        assert_eq!(state.finished(Advice::Cannot, &who), None);
     }
 
     #[test]

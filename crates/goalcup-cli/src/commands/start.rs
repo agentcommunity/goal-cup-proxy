@@ -548,16 +548,20 @@ fn file_identity(metadata: &std::fs::Metadata) -> FileIdentity {
 /// it, so the harness never sees it. The descriptor is close-on-exec (std's default), so the
 /// harness never inherits the lock either.
 ///
-/// `name` is the harness's display name, for the refusal.
+/// `name` is the harness's display name, for the refusal. `replaces`: this start is a competition
+/// start that would replace an open competition run, which the refusal then says.
 #[cfg(unix)]
 fn lock_shared_home(
     config_home: &Path,
     connector: &str,
     name: &str,
+    replaces: bool,
 ) -> Result<std::fs::File, CliError> {
     match try_lock_shared_home(config_home, connector)? {
         Ok(file) => Ok(file),
-        Err(_busy) => Err(CliError::Refused(crate::participant::home_busy(name))),
+        Err(_busy) => Err(CliError::Refused(crate::participant::home_busy(
+            name, replaces,
+        ))),
     }
 }
 
@@ -1602,7 +1606,20 @@ fn claim_shared_home(cx: &CaptureRun<'_>, prep: &mut CapturePrep) -> Result<(), 
     // `goalcup continue` took the lock before it closed anything, and hands it over.
     let lock = match prep.shared_home_lock.take() {
         Some(held) => held,
-        None => lock_shared_home(&config_home, &c.loaded.manifest.id, c.display_name())?,
+        None => {
+            // A competition start replaces an open competition run of this account: the refusal
+            // says so only then (a practice or test start never replaces one).
+            let replaces = cx.opts.mode == crate::account::device::RunMode::Competition
+                && cx
+                    .upload
+                    .is_some_and(|up| open_competition_run(cfg, up.server.base()).is_some());
+            lock_shared_home(
+                &config_home,
+                &c.loaded.manifest.id,
+                c.display_name(),
+                replaces,
+            )?
+        }
     };
     let home = ensure_shared_home(&config_home)?;
     if is_run_home {
@@ -4316,16 +4333,26 @@ mod tests {
     fn a_second_run_on_a_shared_home_is_refused_until_the_first_ends() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("some-cli");
-        let first =
-            lock_shared_home(&home, "some-cli", "Some").expect("the first run takes the home");
+        let first = lock_shared_home(&home, "some-cli", "Some", false)
+            .expect("the first run takes the home");
 
-        let refused =
-            lock_shared_home(&home, "some-cli", "Some").expect_err("a second run is refused");
+        let refused = lock_shared_home(&home, "some-cli", "Some", false)
+            .expect_err("a second run is refused");
         let said = refused.to_string();
         assert!(matches!(refused, CliError::Refused(_)), "{said}");
         assert!(said.contains("already recording"), "{said}");
+        // A practice or test start never replaces a competition run, and does not say so.
+        assert!(!said.contains("replaces"), "{said}");
+        let replacing = lock_shared_home(&home, "some-cli", "Some", true)
+            .expect_err("a second run is refused")
+            .to_string();
+        assert!(
+            replacing.contains("replaces your current competition run"),
+            "{replacing}"
+        );
 
         drop(first);
-        lock_shared_home(&home, "some-cli", "Some").expect("free again once the first run ends");
+        lock_shared_home(&home, "some-cli", "Some", false)
+            .expect("free again once the first run ends");
     }
 }

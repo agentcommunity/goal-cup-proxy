@@ -11,6 +11,7 @@
 //! has not finished ([`upload_newest_with`]).
 
 use crate::CliError;
+use crate::participant;
 use crate::upload::http::ServerClient;
 use crate::upload::uploader::{Policy, Uploader};
 use std::path::Path;
@@ -19,18 +20,11 @@ use std::path::Path;
 /// has one entry per segment), with the run's id. Refuses when there is no run, or when the
 /// newest run is local (it was never opened on a server, so it has nothing to send).
 pub fn unsent_of_newest_run(cfg: &Path) -> Result<(String, Vec<String>), CliError> {
-    let run = crate::run::newest(cfg)?.ok_or_else(|| {
-        CliError::Refused(
-            "no run has been started from this machine, so there is nothing to upload. \
-             Name an entry with `goalcup upload <entry>`."
-                .to_string(),
-        )
-    })?;
+    let run =
+        crate::run::newest(cfg)?.ok_or_else(|| CliError::Refused(participant::upload_no_run()))?;
     if run.server_url.is_none() {
-        return Err(CliError::Refused(format!(
-            "the newest run ({}) is local: it was not opened on a server, so there is nothing \
-             to upload. Name an entry with `goalcup upload <entry>`.",
-            run.run_id
+        return Err(CliError::Refused(participant::upload_local_run(
+            &run.run_id,
         )));
     }
     let spool = cfg.join(crate::upload::UPLOADS_DIR_NAME);
@@ -59,17 +53,51 @@ pub fn upload_newest_with(
             &crate::run::reserve::artifact_root(cfg),
             crate::run::now_unix(),
         );
-        let _ = writeln!(out, "everything of run {run_id} is already sent.");
+        let _ = writeln!(out, "{}", participant::upload_nothing_left(&run_id));
         return Ok(());
     }
     let mut first_error = None;
+    // The parts are sent one after the other; the plain word on how it went comes once, at the
+    // end, because a part sent early does not say the run is done.
+    let mut last = None;
     for entry_id in &unsent {
-        if let Err(error) = upload_with(cfg, entry_id, policy, out) {
-            let _ = writeln!(out, "entry {entry_id}: {error}");
-            first_error.get_or_insert(error);
+        match upload_entry(cfg, entry_id, policy, out) {
+            Ok(sent) => last = Some(sent),
+            Err(error) => {
+                // The first refusal is returned, and so printed by the caller; the others are
+                // said here so that one bad part does not hide them.
+                if first_error.is_some() {
+                    let _ = writeln!(out, "{error}");
+                }
+                first_error.get_or_insert(error);
+            }
         }
     }
+    if first_error.is_none()
+        && let Some(sent) = last
+    {
+        let _ = writeln!(out, "{}", sent.plain());
+    }
     first_error.map_or(Ok(()), Err)
+}
+
+/// How far one part of a run got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sent {
+    /// All of it is on the server, with its seal.
+    Sealed,
+    /// All of it so far is on the server; the run is not sealed yet.
+    NotSealedYet,
+}
+
+impl Sent {
+    /// The plain line for the end of an upload, the next action first.
+    fn plain(self) -> String {
+        match self {
+            Sent::Sealed => participant::upload_finished(),
+            Sent::NotSealedYet => participant::upload_not_sealed(),
+        }
+    }
 }
 
 /// The testable half: `entry_id` uploaded to the server it was opened on, with its run's own
@@ -80,27 +108,30 @@ pub fn upload_with(
     policy: Policy,
     out: &mut dyn std::io::Write,
 ) -> Result<(), CliError> {
+    let sent = upload_entry(cfg, entry_id, policy, out)?;
+    let _ = writeln!(out, "{}", sent.plain());
+    Ok(())
+}
+
+/// [`upload_with`] without its closing plain line: the `uploaded:` line is the technical record,
+/// and the caller says how it went.
+fn upload_entry(
+    cfg: &Path,
+    entry_id: &str,
+    policy: Policy,
+    out: &mut dyn std::io::Write,
+) -> Result<Sent, CliError> {
     // A reserve nothing will use again goes back to the disk, whatever becomes of this upload.
     crate::run::reserve::release_stale(
         cfg,
         &crate::run::reserve::artifact_root(cfg),
         crate::run::now_unix(),
     );
-    let record = crate::upload::read_record(cfg, entry_id)?.ok_or_else(|| {
-        CliError::Refused(format!(
-            "entry {entry_id} was not opened on a server from this machine (there is no {}), \
-             so there is nothing to upload.",
-            crate::upload::record_path(cfg, entry_id).display()
-        ))
-    })?;
+    let record = crate::upload::read_record(cfg, entry_id)?
+        .ok_or_else(|| CliError::Refused(participant::upload_not_opened(entry_id)))?;
     // The run holds the credential its approval returned, in its own directory: found from the
     // entry, so the participant need not be logged in to, or name, anything.
-    let not_here = || {
-        CliError::Refused(format!(
-            "this run was not started on this machine: entry {entry_id} has no saved \
-             credential here, and only the machine that started a run can upload it."
-        ))
-    };
+    let not_here = || CliError::Refused(participant::upload_not_here(entry_id));
     let run = crate::run::of_entry(cfg, entry_id)?.ok_or_else(not_here)?;
     let run_dir = crate::run::run_dir(cfg, &run.run_id);
     if !crate::account::credential::credential_path(&run_dir).exists() {
@@ -138,22 +169,23 @@ pub fn upload_with(
                     failures,
                     error.retry_after().map(std::time::Duration::from_secs),
                 );
-                say(&format!(
-                    "upload: {error}; trying again in {}s",
-                    wait.as_secs().max(1)
+                say(&participant::upload_waiting(
+                    &error.to_string(),
+                    wait.as_secs().max(1),
                 ));
                 std::thread::sleep(wait);
             }
             Err(error) => {
-                return Err(CliError::Refused(format!(
-                    "the server at {} refused entry {entry_id}: {error}",
-                    record.server_url
+                return Err(CliError::Refused(participant::upload_refused(
+                    &record.server_url,
+                    entry_id,
+                    &error.to_string(),
                 )));
             }
         }
     };
     let report = uploader.finish(None, &mut say);
-    match report {
+    let sent = match report {
         crate::upload::uploader::Report {
             caught_up: true,
             sealed: true,
@@ -172,23 +204,27 @@ pub fn upload_with(
                 report.run_ended,
                 crate::run::now_unix(),
             );
+            Sent::Sealed
         }
         crate::upload::uploader::Report {
             caught_up: true,
             why: None,
             ..
-        } => say(&format!(
-            "uploaded: {} bytes of entry {entry_id}, acknowledged. The run is not sealed yet; \
-             run this again once it is.",
-            report.offset
-        )),
+        } => {
+            say(&format!(
+                "uploaded: {} bytes of entry {entry_id}, acknowledged. The run is not sealed yet; \
+                 run this again once it is.",
+                report.offset
+            ));
+            Sent::NotSealedYet
+        }
         crate::upload::uploader::Report { why, .. } => {
-            return Err(CliError::Refused(format!(
-                "entry {entry_id} is not fully uploaded ({} bytes are): {}",
+            return Err(CliError::Refused(participant::upload_incomplete(
+                entry_id,
                 report.offset,
-                why.unwrap_or_default()
+                &why.unwrap_or_default(),
             )));
         }
-    }
-    Ok(())
+    };
+    Ok(sent)
 }
