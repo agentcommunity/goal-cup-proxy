@@ -67,11 +67,9 @@
 use crate::CliError;
 use crate::connector::HarnessConnector;
 use crate::entries::{EntryRecord, remove_entry, write_entry};
-use crate::key_scan::FragmentMatcher;
 use crate::launch::{
     CaptureStderr, LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan,
-    child_secret_for_harness, gated_handle, spawn_gated, tee_marked_capture_with_identity,
-    tee_scoped_capture_with_rule, tee_stderr_capture_with_rule,
+    gated_handle, spawn_gated, tee_scoped_capture_with_rule, tee_stderr_capture_with_rule,
 };
 use crate::preflight::Level;
 use crate::proxy::api::{CapturePath, CapturePolicy};
@@ -453,14 +451,8 @@ struct CaptureRun<'a> {
 struct CapturePrep {
     /// The goal file's bytes; `None` for a chat-mode run, whose participant types the prompt.
     goal: Option<Vec<u8>>,
-    /// The provider key, if the profile names one. Taken (and so dropped) once the tees hold what
-    /// they need: nothing after that reads the key from here.
-    secret: Option<crate::launch::ChildSecret>,
     streams: StreamPlan,
     scope: LaunchScope,
-    /// The scan of this run's artifacts for fragments of that key (D41), derived once, in
-    /// memory, from the same bytes the child receives.
-    matcher: Option<FragmentMatcher>,
     /// The harness file this run resolved and hashed; the release refuses it if it changed.
     executable: crate::launch::ResolvedExecutable,
     /// The harness home every run of this connector shares (D39); `None` when each run makes its
@@ -876,16 +868,13 @@ pub fn validate_shared_capture_home_for_uid(path: &Path, uid: u32) -> Result<(),
 ///
 /// Every way out of the later phases that does not run to the harness's own end goes through
 /// [`Forked::unlaunched`] or [`Forked::sealed_launch`], so a run that ends early is sealed the
-/// same way and, if it holds a provider key, is marked unscanned the same way.
+/// same way.
 struct Forked<'a> {
     client: &'a (dyn DaemonClient + Sync),
     cfg: &'a Path,
     info: CaptureWorkspaceInfo,
-    run: RunDir,
     /// The recording proxy; `None` once a deadline finish has stopped it.
     proxied: Option<Proxied>,
-    /// The run was given a provider key, so its directory is scanned and judged.
-    scanning: bool,
     /// This machine's record of the entry, with no pid yet.
     template: EntryRecord,
     /// For a run opened on a server: given back if the harness is never launched.
@@ -995,7 +984,6 @@ impl Forked<'_> {
         if let Some(proxied) = self.proxied {
             finish_unlaunched(self.client, &self.info.entry_id, proxied, out);
         }
-        note_unscanned(self.scanning, &self.run.dir, out);
         if let Some(reserve) = self.reserve {
             end_reserve(reserve, keeps_reserve);
         }
@@ -1036,7 +1024,6 @@ impl Forked<'_> {
         tees: &Tees,
         out: &mut dyn std::io::Write,
     ) -> CliError {
-        note_unscanned(self.scanning, &self.run.dir, out);
         let keeps_reserve = self.keeps_reserve();
         if let Some(reserve) = self.reserve.take() {
             end_reserve(reserve, keeps_reserve);
@@ -1116,25 +1103,18 @@ struct Gate {
 
 /// The tees on a released child's streams.
 struct Tees {
-    /// A keyless `stdout_json` child's stdout tee, which also reads the thread id.
+    /// A `stdout_json` child's stdout tee, which also reads the thread id.
     stdout: Option<crate::launch::CaptureStdout>,
-    /// A keyed `stdout_json` child's thread id, read by the marked tee, which reads stdout
-    /// once for both jobs and reports its end through `marked`.
-    keyed_scope: Option<crate::launch::ScopeReceiver>,
-    /// A keyed child's two tees, which also scan and read the session marker.
+    /// A `stderr_line` child's stderr tee, which reads the session marker.
     marked: Option<CaptureStderr>,
-    /// Only a stderr-line identity is sent with the finish. A credential may require the same
-    /// two tees while the identity itself was preassigned.
+    /// Only a stderr-line identity is sent with the finish.
     late_scope: bool,
 }
 
 impl Tees {
-    /// The receiver of the stdout JSON identity, from whichever tee reads it.
-    fn scope(&self) -> Option<&crate::launch::ScopeReceiver> {
-        self.stdout
-            .as_ref()
-            .map(|tee| &tee.scope)
-            .or(self.keyed_scope.as_ref())
+    /// The receiver of the stdout JSON identity, from the stdout tee.
+    fn scope(&self) -> Option<&std::sync::mpsc::Receiver<Option<String>>> {
+        self.stdout.as_ref().map(|tee| &tee.scope)
     }
 
     /// Let the tees finish while the entry seals, within what remains of the one finish deadline.
@@ -1218,7 +1198,7 @@ fn recording_of(
 ///
 /// Five phases, whose boundaries are the window rules above: [`prepare`] (every refusal that
 /// precedes anything created), [`create_and_gate`] (the abandon window, which ends at the fork),
-/// [`register_and_release`], [`run_harness`] and [`finish_and_scan`] (the entry is sealed from the
+/// [`register_and_release`], [`run_harness`] and [`finish_run`] (the entry is sealed from the
 /// fork on).
 #[allow(clippy::too_many_arguments)]
 fn capture(
@@ -1288,14 +1268,7 @@ fn capture(
     // With a server: the prep checks, before any other work and before the participant is asked
     // for anything. A continued run was prepared when it started.
     let serving = match &continuing {
-        None => uploading(
-            cfg,
-            env,
-            &beside,
-            opts.mode,
-            profile.credential.is_some(),
-            out,
-        )?,
+        None => uploading(cfg, env, &beside, opts.mode)?,
         Some(_) => None,
     };
     let uncleaned = std::cell::Cell::new(false);
@@ -1363,12 +1336,7 @@ fn capture(
         };
     let released = register_and_release(forked, gate, &mut prep, out)?;
     let exited = run_harness(&cx, prep.scope, released, sleep_lock, out)?;
-    let finished = finish_and_scan(
-        exited,
-        prep.matcher.as_ref(),
-        std::mem::take(&mut draining.drains),
-        out,
-    );
+    let finished = finish_run(exited, std::mem::take(&mut draining.drains), out);
     drop(awake);
     finished
 }
@@ -1439,7 +1407,6 @@ pub(crate) fn continue_preflight(
             pin.render().trim_end()
         )));
     }
-    child_secret_for_harness(profile, env)?;
     crate::launch::capture_executable(connector, profile, env)?;
     Ok(())
 }
@@ -1545,19 +1512,10 @@ fn prepare(
         Level::Warn => say(out, pin.render().trim_end())?,
         _ => {}
     }
-    // The provider key, if the profile names one, is read from this process's own environment
-    // before anything is created, and is handed to the child alone (D40). A missing or unusable
-    // key is a refusal with no daemon request behind it.
-    let secret = child_secret_for_harness(profile, env)?;
     // What is done with the child's output, and where its native scope comes from, is decided
-    // here once: a child handed a provider key (a profile naming a credential; none ships,
-    // D61) has both streams tee'd, scanned and withheld when they hold a fragment.
+    // here once.
     let streams = StreamPlan::for_spec(profile)?;
     let scope = LaunchScope::for_spec(profile)?;
-    let matcher = match secret.as_ref() {
-        Some(secret) => Some(FragmentMatcher::new(secret.expose())?),
-        None => None,
-    };
     if profile.interactive {
         holds_the_terminal(c.display_name(), "Nothing was created.")?;
     }
@@ -1570,7 +1528,7 @@ fn prepare(
     }
     // A per-run home is made inside the run directory below. A run directory beside a goal file
     // inside a Git work tree is refused before anything is created: it would hold what the
-    // harness wrote, which can include a fragment of the provider key (D41).
+    // harness wrote, its own login included.
     let per_run = profile.home.config_home == ConfigHome::PerRun;
     if per_run {
         crate::per_run_home::refuse_inside_git_work_tree(beside)?;
@@ -1578,10 +1536,8 @@ fn prepare(
     }
     Ok(CapturePrep {
         goal,
-        secret,
         streams,
         scope,
-        matcher,
         executable,
         shared_home: None,
         shared_run_home: None,
@@ -1945,12 +1901,7 @@ fn create_and_gate<'a>(
         // The only way a capture child is spawned (D40): forked and parked before `exec`,
         // and released only once its registration is durable. Its pipes are the one
         // manifest-derived `StreamPlan` decision.
-        let gated = spawn_gated(
-            &plan,
-            prep.streams.pipes(),
-            GATE_READY_WITHIN,
-            prep.secret.as_ref(),
-        )?;
+        let gated = spawn_gated(&plan, prep.streams.pipes(), GATE_READY_WITHIN)?;
         Ok((proxied, plan, goal_stream, gated, scope_deadline, bound))
     });
     let (proxied, plan, goal_stream, gated, scope_deadline, bound) = match launched {
@@ -1995,9 +1946,7 @@ fn create_and_gate<'a>(
         client,
         cfg,
         info,
-        run,
         proxied: Some(proxied),
-        scanning: prep.matcher.is_some(),
         template,
         upload: bound.map(|(record, key)| UploadStart {
             server: upload.map(|u| u.server.clone()),
@@ -2168,47 +2117,29 @@ fn register_and_release<'a>(
     spawned_at.clock_id = forked.info.producer_id.clone();
     let stdout_rule = match prep.streams.stdout.clone() {
         StdoutUse::IdentityJson(rule) => Some(rule),
-        StdoutUse::Inherit | StdoutUse::Forward => None,
+        StdoutUse::Inherit => None,
     };
-    // A keyed child: both streams forwarded verbatim and scanned for key fragments, stderr read
-    // for a `stderr_line` session marker (the late scope of the finish).
+    // A `stderr_line` child's stderr is read for its session marker (the late scope of the
+    // finish). A tee that cannot start ends the child it could not forward; it is registered,
+    // so the seal answers for it.
     let marker_rule = match prep.streams.stderr.clone() {
         StderrUse::IdentityLine(rule) => Some(rule),
-        StderrUse::Inherit | StderrUse::Forward => None,
+        StderrUse::Inherit => None,
     };
-    let (stdout, keyed_scope, marked) = if prep.streams.scan_for_key {
-        // A keyed child: both streams scanned, and a stdout JSON identity, if any, read by the
-        // same stdout reader (one tee per stream).
-        match tee_marked_capture_with_identity(
-            &mut spawned,
-            prep.secret.as_ref(),
-            stdout_rule,
-            marker_rule,
-        ) {
-            Ok((scope, tee)) => (None, scope, Some(tee)),
-            // The tee ended the child it could not forward; it is registered, so the seal
-            // answers for it.
+    let stdout = match stdout_rule {
+        Some(rule) => match tee_scoped_capture_with_rule(&mut spawned, rule) {
+            Ok(stdout) => Some(stdout),
             Err(e) => return Err(forked.unlaunched(e, out)),
-        }
-    } else {
-        let stdout = match stdout_rule {
-            Some(rule) => match tee_scoped_capture_with_rule(&mut spawned, rule) {
-                Ok(stdout) => Some(stdout),
-                Err(e) => return Err(forked.unlaunched(e, out)),
-            },
-            None => None,
-        };
-        let marked = match marker_rule {
-            Some(rule) => match tee_stderr_capture_with_rule(&mut spawned, rule) {
-                Ok(tee) => Some(tee),
-                Err(e) => return Err(forked.unlaunched(e, out)),
-            },
-            None => None,
-        };
-        (stdout, None, marked)
+        },
+        None => None,
     };
-    // The tees hold what they need; nothing after this reads the key from here.
-    drop(prep.secret.take());
+    let marked = match marker_rule {
+        Some(rule) => match tee_stderr_capture_with_rule(&mut spawned, rule) {
+            Ok(tee) => Some(tee),
+            Err(e) => return Err(forked.unlaunched(e, out)),
+        },
+        None => None,
+    };
     let child = spawned.child;
     if let Err(e) = write_entry(forked.cfg, &forked.record(Some(handed.pid))) {
         let _ = say(
@@ -2223,7 +2154,6 @@ fn register_and_release<'a>(
         spawned_at,
         tees: Tees {
             stdout,
-            keyed_scope,
             marked,
             late_scope: prep.scope == LaunchScope::AtFinish,
         },
@@ -2488,7 +2418,7 @@ fn run_harness<'a>(
         chat.harness_exited();
     }
     // The technical lines that follow (the stop, the seal, the upload) go under one heading; what
-    // the participant does next is said after them, last (`finish_and_scan`).
+    // the participant does next is said after them, last (`finish_run`).
     let _ = say(out, "");
     let _ = say(
         out,
@@ -2520,7 +2450,7 @@ fn run_harness<'a>(
                 finished
             });
     // What was swept is said on stdout; what may still be running goes to stderr now, and makes
-    // the command exit 1 after the seal (`finish_and_scan`), so a script that reads only the exit
+    // the command exit 1 after the seal (`finish_run`), so a script that reads only the exit
     // code still learns of it. The trace is unchanged either way.
     let swept = sweep.map(|sweep| sweep.run(Duration::from_secs(handed.grace_seconds)));
     if let Some(swept) = &swept {
@@ -2543,12 +2473,10 @@ fn run_harness<'a>(
     })
 }
 
-/// Phase five: stop the proxy and seal within the one finish budget, let the tees drain, and scan
-/// the run for fragments of the provider key. The scan never changes how the harness or the seal
-/// ended, and a run that is not clean is a failed row whose directory stays local.
-fn finish_and_scan(
+/// Phase five: stop the proxy and seal within the one finish budget, let the tees drain, and say
+/// what became of the run.
+fn finish_run(
     exited: Exited<'_>,
-    matcher: Option<&FragmentMatcher>,
     draining: Vec<crate::upload::uploader::Draining>,
     out: &mut dyn std::io::Write,
 ) -> Result<StartOutcome, CliError> {
@@ -2567,7 +2495,6 @@ fn finish_and_scan(
         client,
         cfg,
         info,
-        run,
         proxied,
         watching,
         chat,
@@ -2783,53 +2710,7 @@ fn finish_and_scan(
         }
         None => {}
     }
-    // After the finish report, before this run's artifacts are called anything: the key scan.
-    let trace_scanned = finished
-        .as_ref()
-        .ok()
-        .map(|report| report.trace_dir.as_str());
-    // What the verdict is about is fixed before the scan reads anything (H-18a), so a change
-    // made while or after it ran reads as stale, never as covered.
-    let binding = matcher
-        .is_some()
-        .then(|| crate::key_scan::Binding::capture(&run.dir, trace_scanned.map(Path::new)));
-    let verdict =
-        matcher.map(|matcher| key_verdict(matcher, tees.marked.as_ref(), &run.dir, trace_scanned));
-    let failed = match (&verdict, &binding) {
-        (Some(outcome), Some(binding)) => {
-            match crate::key_scan::write_verdict_bound(&run.dir, outcome, binding) {
-                Ok(()) if outcome.is_clean() => {
-                    let _ = say(
-                        out,
-                        &format!(
-                            "key scan: clean ({} binds it to this run).",
-                            run.dir.join("key-scan.txt").display()
-                        ),
-                    );
-                    None
-                }
-                Ok(()) => Some(key_scan_sentence(outcome, &run.dir)),
-                // A verdict that was not written cannot be read as clean by whatever retains the
-                // run, so the row is failed whatever the scan found.
-                Err(e) => Some(format!(
-                    "The key-scan verdict {} could not be written ({e}), so the row is failed. This \
-                 run's directory stays local: do not commit, upload or share it.",
-                    run.dir.join("key-scan.txt").display()
-                )),
-            }
-        }
-        _ => None,
-    };
-    match (finished, failed) {
-        (Ok(_), None) => {}
-        (Ok(_), Some(sentence)) => return Err(CliError::Refused(sentence)),
-        (Err(error), failed) => {
-            if let Some(sentence) = failed {
-                let _ = say(out, &sentence);
-            }
-            return Err(error);
-        }
-    }
+    finished?;
     if let Some(refusal) = left_running {
         return Err(refusal);
     }
@@ -2852,75 +2733,6 @@ fn describe_exit(status: &ExitStatus) -> String {
         }
     }
     status.to_string()
-}
-
-/// A run that ended before its finish (a parked harness never released, a sealed entry, a tee
-/// that could not start) was not scanned: it leaves `key-scan.txt` saying `incomplete`, so no
-/// retention step reads a missing file as an absence of trouble. Only a run given a provider key.
-fn note_unscanned(scanning: bool, run_dir: &Path, out: &mut dyn std::io::Write) {
-    if !scanning {
-        return;
-    }
-    let outcome = crate::key_scan::ScanOutcome::Incomplete {
-        reason: "the run ended before its finish, so it was not scanned",
-    };
-    if let Err(e) = crate::key_scan::write_verdict(run_dir, &outcome) {
-        let _ = say(
-            out,
-            &format!("  (the key-scan verdict could not be written: {e})"),
-        );
-    }
-}
-
-/// The most bytes the key scan reads of one run: its directory and its trace together.
-const KEY_SCAN_BOUND: u64 = 512 * 1024 * 1024;
-
-/// The key scan of one keyed run, as one outcome: the run directory and the trace (text and decoded
-/// streams) when the finish returned a report, the run directory alone and an incomplete verdict
-/// when it did not, and a live hit on the harness's own output counted as a hit. Only `Clean`
-/// is clean.
-fn key_verdict(
-    matcher: &FragmentMatcher,
-    marked: Option<&CaptureStderr>,
-    run_dir: &Path,
-    trace_dir: Option<&str>,
-) -> crate::key_scan::ScanOutcome {
-    use crate::key_scan::ScanOutcome;
-    let scanned = match trace_dir {
-        Some(trace) => {
-            crate::key_scan::scan_run(matcher, &[run_dir], Path::new(trace), KEY_SCAN_BOUND)
-        }
-        None => crate::key_scan::scan_tree(matcher, &[run_dir], KEY_SCAN_BOUND).merge(
-            ScanOutcome::Incomplete {
-                reason: "the finish did not complete, so the trace was not scanned",
-            },
-        ),
-    };
-    if marked.is_some_and(CaptureStderr::key_hit) {
-        return scanned.merge(ScanOutcome::Hit {
-            relative_paths: vec![PathBuf::from("(the harness's own output)")],
-        });
-    }
-    scanned
-}
-
-/// What the participant is told when the scan is not clean: fixed words and the verdict file's
-/// path, never a path inside the run or any fragment.
-fn key_scan_sentence(outcome: &crate::key_scan::ScanOutcome, run_dir: &Path) -> String {
-    let what = match outcome {
-        crate::key_scan::ScanOutcome::Hit { .. } => {
-            "A fragment of the provider key was found in this run's artifacts".to_string()
-        }
-        crate::key_scan::ScanOutcome::Incomplete { reason } => {
-            format!("The key-fragment scan of this run could not read everything ({reason})")
-        }
-        crate::key_scan::ScanOutcome::Clean => String::new(),
-    };
-    format!(
-        "{what}, so the row is failed ({} says where). This run's directory stays local: do not \
-         commit, upload or share it.",
-        run_dir.join("key-scan.txt").display()
-    )
 }
 
 /// Seal an entry whose harness never ran (or was never told about), within the one budget.
@@ -3545,27 +3357,23 @@ fn finish(
     sealed
 }
 
-/// The upload server this run opens with: `None` with no `goalcup login`, and for a harness
-/// handed a provider key (`keyed`), whose run must pass the key scan at its end before
-/// anything leaves the machine. With a server, `goalcup prep` must have run: its repository,
-/// its work folder and the GitHub token are checked here, all before the participant is asked for
-/// anything and before anything is created. A `--dev` run is uploaded like any other; the server refuses a
-/// connector it does not accept.
+/// The upload server this run opens with: `None` with no `goalcup login`. With a server, `goalcup
+/// prep` must have run: its repository, its work folder and the GitHub token are checked here, all
+/// before the participant is asked for anything and before anything is created. A `--dev` run is
+/// uploaded like any other; the server refuses a connector it does not accept.
 fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,
     beside: &Path,
     mode: crate::account::device::RunMode,
-    keyed: bool,
-    out: &mut dyn std::io::Write,
 ) -> Result<Option<Serving>, CliError> {
     use crate::account::device::RunMode;
     // A practice run or an organizer test run is a run on the server: without one there is
     // nothing to practise on, and a test run that never reaches the server is no test.
-    let (flag, kind) = match mode {
-        RunMode::Practice => (Some("--practice"), "practice"),
-        RunMode::Test => (Some("--test"), "test"),
-        RunMode::Competition => (None, "competition"),
+    let flag = match mode {
+        RunMode::Practice => Some("--practice"),
+        RunMode::Test => Some("--test"),
+        RunMode::Competition => None,
     };
     let Some(server) = crate::server::read_server_config(cfg)? else {
         return match flag {
@@ -3575,19 +3383,6 @@ fn uploading(
             None => Ok(None),
         };
     };
-    if keyed {
-        if let Some(flag) = flag {
-            return Err(CliError::Refused(format!(
-                "`{flag}` cannot be used with this harness: a harness handed a provider key \
-                 is never uploaded, so it cannot make a {kind} run. Nothing was created."
-            )));
-        }
-        say(
-            out,
-            "A run of a harness given a provider key is not uploaded: it stays on this machine.",
-        )?;
-        return Ok(None);
-    }
     // Each of these is the one sentence `run goalcup prep first`.
     let prepared = crate::prep_file::read_prep(cfg)?;
     let github = crate::account::github::GithubSetup::load(cfg)

@@ -21,7 +21,6 @@ from pathlib import Path
 
 MATRIX = Path(__file__).with_name("matrix.sh")
 
-KEY = "sk-synthetic0000111122223333"
 PROMPT = "Goal Cup test prompt: say ok."
 
 GOALCUP = r'''#!/usr/bin/env python3
@@ -43,15 +42,8 @@ if args[0] == "login":
 
 assert args[0] == "start", args
 note("start.argv", "\n".join(args))
-if os.environ.get("STUB_REAL_REFUSAL") == "1" and "--practice" in args:
-    # What the real goalcup says to --practice for a keyed harness (start.rs, `uploading`).
-    sys.exit(print("goalcup: `--practice` cannot be used with this harness: a harness handed a provider key "
-                   "is never uploaded, so it cannot make a practice run. Nothing was created.", file=sys.stderr) or 1)
 note("start.no_browser", os.environ.get("GOALCUP_NO_BROWSER", "unset"))
 note("start.stdin_is_tty", str(os.isatty(0)))
-if "DEEPSEEK_API_KEY" in os.environ:
-    note("start.key_length", str(len(os.environ["DEEPSEEK_API_KEY"])))
-note("start.has_key_env_file_var", str("MATRIX_KEY_ENV_FILE" in os.environ))
 if "--goal-file" in args:
     note("start.goal", Path(args[args.index("--goal-file") + 1]).read_text())
 
@@ -134,10 +126,6 @@ id = "{id}"
 interactive = true
 args = []
 """
-CREDENTIAL = """
-[capture.credential]
-env = "DEEPSEEK_API_KEY"
-"""
 
 
 def executable(path: Path, text: str) -> None:
@@ -165,15 +153,10 @@ class World:
         self.connectors = self.root / "connectors"
         for name, text in (
             ("stubhead", HEADLESS.format(id="stubhead", extra="")),
-            ("hermes-cli", HEADLESS.format(id="hermes-cli", extra=CREDENTIAL)),
             ("stubchat", CHAT.format(id="stubchat")),
         ):
             (self.connectors / name).mkdir(parents=True)
             (self.connectors / name / "harness.toml").write_text(text)
-        self.keyfile = self.root / "secret-place" / "deepseek.env"
-        self.keyfile.parent.mkdir()
-        self.keyfile.write_text(f"OTHER=1\nDEEPSEEK_API_KEY={KEY}\n")
-        self.keyfile.chmod(0o600)
         environment = {
             "PATH": f"{self.bin}:{os.environ['PATH']}",
             "HOME": str(self.root),
@@ -188,7 +171,7 @@ class World:
             "STUB_PROMPT": PROMPT,
         }
         for key, value in (env or {}).items():
-            environment[key] = value.replace("KEYFILE", str(self.keyfile))
+            environment[key] = value
         log = self.root / "matrix.log"
         self.run = subprocess.run(
             ["sh", str(MATRIX), connector, "http://localhost:8787", "--log", str(log), "--keep",
@@ -216,15 +199,7 @@ SCENARIOS = {
     "headless": ("stubhead", "headless", {}),
     "exits_non_zero": ("stubhead", "headless", {"STUB_EXIT": "3"}),
     "no_seal": ("stubhead", "headless", {"STUB_NO_SEAL": "1"}),
-    # Today a keyed connector is refused up front, before any login or start.
-    "keyed_refused": ("hermes-cli", "headless", {"MATRIX_KEY_ENV_FILE": "KEYFILE"}),
-    # The plumbing behind MATRIX_KEYED_UPLOADED=1. The stub accepts --practice here; the real
-    # goalcup does not (next scenario), so this proves the key handling and nothing more.
-    "keyed": ("hermes-cli", "headless", {"MATRIX_KEY_ENV_FILE": "KEYFILE", "MATRIX_KEYED_UPLOADED": "1"}),
-    "keyed_real_refusal": ("hermes-cli", "headless", {"MATRIX_KEY_ENV_FILE": "KEYFILE", "MATRIX_KEYED_UPLOADED": "1", "STUB_REAL_REFUSAL": "1"}),
     "no_manifest": ("nosuchconnector", "headless", {}),
-    "key_ignored": ("stubhead", "headless", {"MATRIX_KEY_ENV_FILE": "KEYFILE"}),
-    "bad_key_file": ("hermes-cli", "headless", {"MATRIX_KEY_ENV_FILE": "/nonexistent/secret-place/x.env", "MATRIX_KEYED_UPLOADED": "1"}),
     "chat": ("stubchat", "chat", {"MATRIX_PRE_PROMPT_KEYS": r"\033[B\r", "MATRIX_PRE_PROMPT_DELAY": "1"}),
 }
 
@@ -266,52 +241,11 @@ class MatrixTests(unittest.TestCase):
         self.assertNotEqual(w.run.returncode, 0)
         self.assertIn("and the seal", w.run.stderr)
 
-    def test_a_keyed_connector_is_refused_before_anything_starts(self) -> None:
-        w = self.worlds["keyed_refused"]
-        self.assertNotEqual(w.run.returncode, 0)
-        self.assertIn("keyed harnesses are not uploaded today (RULES); matrix cannot test them", w.run.stderr)
-        self.assertFalse((w.out / "start.argv").exists())
-        self.assertFalse((w.out / "login.no_browser").exists())
-        self.assertNotIn(KEY, w.everything_matrix_wrote())
-
-    def test_the_real_refusal_of_practice_for_a_keyed_harness_fails_the_row(self) -> None:
-        w = self.worlds["keyed_real_refusal"]
-        self.assertNotEqual(w.run.returncode, 0)
-        self.assertIn("is never uploaded, so it cannot make a practice run", w.run.stderr)
-        self.assertIn("FAIL", w.run.stdout)
-
     def test_a_connector_with_no_manifest_fails_and_says_where_to_look(self) -> None:
         w = self.worlds["no_manifest"]
         self.assertNotEqual(w.run.returncode, 0)
         self.assertIn("GOALCUP_CONNECTORS_DIR", w.run.stderr)
         self.assertFalse((w.out / "start.argv").exists())
-
-    def test_the_key_goes_through_the_loader_and_leaves_no_trace(self) -> None:
-        # Plumbing only (MATRIX_KEYED_UPLOADED=1): see the scenario's comment.
-        w = self.worlds["keyed"]
-        self.assertEqual(w.run.returncode, 0, w.said())
-        argv = w.seen("start.argv").split("\n")
-        self.assertEqual(argv[:4], ["start", "--harness", "hermes-cli", "--practice"])
-        self.assertEqual(argv[4], "--goal-file")
-        # The loader read the key and exported it; the path was dropped from the environment.
-        self.assertEqual(w.seen("start.key_length"), str(len(KEY)))
-        self.assertEqual(w.seen("start.has_key_env_file_var"), "False")
-        everything = w.everything_matrix_wrote()
-        self.assertNotIn(KEY, everything)
-        self.assertNotIn(str(w.keyfile), everything)
-        self.assertNotIn("secret-place", everything)
-
-    def test_a_key_file_is_ignored_for_a_connector_with_no_such_credential(self) -> None:
-        w = self.worlds["key_ignored"]
-        self.assertEqual(w.run.returncode, 0, w.said())
-        self.assertFalse((w.out / "start.key_length").exists())
-        self.assertEqual(w.seen("start.argv").split("\n")[2], "stubhead")
-        self.assertNotIn(KEY, w.everything_matrix_wrote())
-
-    def test_a_bad_key_file_is_refused_without_naming_its_path(self) -> None:
-        w = self.worlds["bad_key_file"]
-        self.assertEqual(w.run.returncode, 2)
-        self.assertNotIn("secret-place", w.run.stdout + w.run.stderr)
 
     @unittest.skipUnless(shutil.which("script"), "needs script(1)")
     def test_a_chat_connector_types_the_prompt_and_submits_it_apart(self) -> None:

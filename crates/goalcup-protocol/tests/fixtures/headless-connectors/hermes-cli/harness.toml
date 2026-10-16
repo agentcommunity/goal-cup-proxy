@@ -6,8 +6,8 @@ id = "hermes-cli"
 display_name = "Hermes"
 
 [capture]
-# hermes chat -Q --provider deepseek --query=<goal>. The provider follows the one admitted
-# credential (DEEPSEEK_API_KEY); the model is Hermes's own default (owner direction, 2026-10-14).
+# hermes chat -Q --provider deepseek --query=<goal>. The model is Hermes's own default (owner
+# direction, 2026-10-14). The tracer passes no key (D61): Hermes reads its own login.
 args = ["chat", "-Q", "--provider", "deepseek"]
 goal_flag = "--query"
 # Hermes's own switches (HERMES_SAFE_MODE, HERMES_IGNORE_USER_CONFIG) would silently stop the
@@ -35,9 +35,6 @@ seed = [
   { file = "auth.json" },
   { file = ".update_check" },
 ]
-
-[capture.credential]
-env = "DEEPSEEK_API_KEY"
 
 # HERMES_CA_BUNDLE replaces the roots of Hermes's provider clients with the proxy CA alone, which
 # fails closed (D41).

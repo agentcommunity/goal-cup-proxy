@@ -180,8 +180,10 @@ cheapest-model clause is superseded by D52.
   and released after the last upload. A chain is quota-only (`CHAIN_QUOTA_BYTES`, 1 TiB logical).
   It preallocates nothing, so no grow-then-shrink release exists to fail.
 - **Hermes** uses its `deepseek` provider with `DEEPSEEK_API_KEY` passed to the child only. No
-  DeepSeek base URL is set. *Superseded by D61: no key is passed, and Hermes uses the provider
-  the participant set up in its home.*
+  DeepSeek base URL is set.
+
+*Superseded in part by D61: no key is passed, and Hermes uses the provider the participant set up
+in its home.*
 
 ## D41. **(M2)** Hermes reference row: model, CA trust, key-fingerprint and key-fragment rules.
 
@@ -189,15 +191,16 @@ cheapest-model clause is superseded by D52.
   closed: Hermes trusts only the proxy, and the proxy verifies the real upstream. `SSL_CERT_FILE`
   stays refused. D43 generalises this to any connector.
 - **Key fingerprint.** The private `auth.json` is pre-seeded so that Hermes never seeds its
-  credential pool from the env key or writes `secret_fingerprint`. *Superseded by D61: Hermes's
-  home is the participant's own and is not seeded.*
+  credential pool from the env key or writes `secret_fingerprint`.
 - **Key fragments.** Before any Hermes run artifact is kept, a scan with the in-memory key (never
   stored) looks for its prefix (`key[:8]`), suffix (`key[-8:]`) and masked forms. A hit fails the
   row and the run folder stays local. Masked-key forms are also redacted on the wire (`masked_key`,
-  a soft rule that only adds redaction). *The scan is superseded by D61 for Hermes: the tracer
-  holds no key to scan with. The `masked_key` rule stays.*
+  a soft rule that only adds redaction).
 - **Isolation.** Every Hermes call, version probes included, uses a private `HOME` and
   `HERMES_HOME`. The model clause is superseded by D52.
+
+*Superseded in part by D61: Hermes's home is the participant's own and is not seeded, and the
+tracer holds no key, so no run is scanned for one. The `masked_key` rule stays.*
 
 ## D42. Open source: data-only harnesses, open harness PRs.
 
@@ -215,6 +218,7 @@ The contract is `connectors/<id>/harness.toml`, schema 1.
 2. Credentials are a closed list (`CREDENTIAL_ENV`): `DEEPSEEK_API_KEY`, `AMP_API_KEY` (D49). A
    credential needs a per-run config home and either `stderr_line` + `deferred` or
    `stdout_json` + `at_launch` identity (D50). `preassigned` and `none` stay refused.
+   *Superseded in part by D61: the list is gone, and `[capture.credential]` is refused.*
 3. *(Amended by WP12.)* A CA variable's name is connector data, held to a closed shape: a name
    ending `_CA_CERTIFICATE`, `_CA_CERTIFICATES`, `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or
    `_CA_FILE`, under the shared env-name rules, or one of the two shared rows `SSL_CERT_FILE` and
@@ -274,20 +278,24 @@ daemon refuses a registry whose V1 row still owes work. The daemon config first 
 `upload_url`, `server_public_key` and `receipt_binding`, and they drove nothing. Those keys and
 the V1 cadence keys were deleted before release, and `DaemonConfig` refuses them as unknown fields.
 
-## D49. **(M2)** Admit `AMP_API_KEY` as a child credential.
+## D49. **(M2)** Admit `AMP_API_KEY` as a child credential. *(Superseded by D61/D60.)*
 
 `AMP_API_KEY` joins `CREDENTIAL_ENV`. It goes to the harness child only, through the child-secret
 seam, under the shared grammar (20 to 256 bytes of `[A-Za-z0-9_-]`). It is never a manifest value.
 D41's key-fragment scan applies. This admits a name only; it admits no Amp connector.
-*Superseded in intent by D61 (the tracer passes no provider key). The name stays in
-`CREDENTIAL_ENV` until the credential mechanism itself is removed.*
 
-## D50. **(M2)** Amend D43 ruling 3 for `stdout_json` identity.
+*Superseded by D61/D60: the child-credential list and seam are gone (D61). The one secret the
+tracer hands a harness is its own proxy credential (D60).*
+
+## D50. **(M2)** Amend D43 ruling 3 for `stdout_json` identity. *(Superseded by D61.)*
 
 A credential may pair with `stdout_json` + `at_launch` identity. One reader of the child's stdout
 feeds both the key-fragment scan and the identity matcher, and the identity is read as bytes
 arrive. Output holding a fragment is withheld and fails the row. A key-bearing identity line (or a
 key-bearing `stderr_line` marker) binds no identity. The per-run config home stays required.
+
+*Superseded by D61: no connector passes a credential, so there is no key scan. A `stdout_json`
+identity is read by its own stdout tee.*
 
 ## D51. A connector's argv and env are data; review is the control.
 
@@ -302,7 +310,7 @@ per-connector allowlist rows. A new connector, a model bump or a new variable is
   How much the harness may do (model, sandbox, permissions) is not a capture rule.
 - **Review sees** what a rule cannot: a dropped flag that capture needs, a value that re-enables
   self-update. These are on the reviewer checklist ([HARNESS-ONBOARDING](HARNESS-ONBOARDING.md)).
-- **Closed lists stay core PRs with a DECISIONS entry:** `CREDENTIAL_ENV`, the CA modes and
+- **Closed lists stay core PRs with a DECISIONS entry:** the CA modes and
   CA-name shape (`capture_policy::ca_env_problem`), the shared provider host table
   (`providers.toml`), and the redaction rule forms (`harness::RedactionRule`). The field name or
   header prefix a form takes, and a CA variable's name, are connector data (WP12).
@@ -436,8 +444,8 @@ leg. A verifier built before this entry flags a trace with more than 128 produce
 ## D60. The daemon redacts the run's own secret by exact value.
 
 16 Oct 2026. The tracer hands a harness one secret of its own: the per-run proxy credential in
-`HTTPS_PROXY` (H8). It never handles a participant's API key; the harness holds that in its own
-config. The launcher makes the credential before the capture create and passes it to the daemon
+`HTTPS_PROXY` (H8). It never sees, forwards or stores a participant's provider key (D61); the
+harness keeps that in its own home. The launcher makes the credential before the capture create and passes it to the daemon
 in `run_secrets` (control API v9), in memory only: never a file, a log, argv, the registry or the
 chain. Both redactors add every form of it (`goalcup_protocol::run_secret::encoded_forms`: the
 value, every byte percent-encoded or `\u`-escaped in either case, base64 at all three alignments
@@ -502,5 +510,13 @@ Hermes runs however the participant set it up, as Codex does (D39, D57).
 - **Baseline.** The home's `.env` and `auth.json` are listed in the uploaded baseline by name,
   size and SHA-256 only (D56), as Codex's `auth.json` is: their bytes are hashed, never copied.
 
-This supersedes D40's Hermes clause and D41's seed and key-scan clauses for Hermes, and D49 in
-intent.
+- **No credential mechanism.** The schema refuses `[capture.credential]` (in the base profile
+  and in a platform override) with "a connector may not pass a provider key; the harness keeps
+  its own login in its home". The launcher reads no provider key from its own environment and
+  hands none to a harness; the child's environment is built from nothing (D36), so a key the
+  participant's shell exported never reaches it. With no key in hand there is no key-fragment
+  scan (`key-scan.txt`), no secret-aware tee and no keyed-run upload rule: every run uploads
+  under the same rules. Redaction of what the harness itself sends (D36, D60, `masked_key`) is
+  unchanged.
+
+This supersedes D40's Hermes clause, D41's seed and key-scan clauses, D43 ruling 2, D49 and D50.

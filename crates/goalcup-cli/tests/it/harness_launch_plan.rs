@@ -1,5 +1,5 @@
 //! Pure decisions derived from harness-contract schema 1, on the fixture connectors
-//! (`tests/fixtures/connectors/`): the keyed headless shape and the chat-mode shared-home shape.
+//! (`tests/fixtures/connectors/`): the headless per-run shape and the chat-mode shared-home shape.
 //! What every shipped connector is held to is the connector contract, `it/connector_contract.rs`.
 
 use crate::common::support;
@@ -43,29 +43,6 @@ fn with_identity(id: &str, identity: &str) -> HarnessManifest {
 }
 
 #[test]
-fn preassigned_scope_does_not_change_when_a_credential_is_present() {
-    let manifest = with_identity(
-        "chat-shared-home",
-        "source = \"preassigned\"\nbinding = \"at_launch\"",
-    );
-    assert_eq!(
-        LaunchScope::for_spec(&manifest.capture).unwrap(),
-        LaunchScope::Preassigned
-    );
-    let mut capture = manifest.capture.clone();
-    capture.credential = fixture("keyed-per-run").manifest.capture.credential.clone();
-    assert!(capture.credential.is_some());
-    assert_eq!(
-        LaunchScope::for_spec(&capture).unwrap(),
-        LaunchScope::Preassigned
-    );
-    let streams = StreamPlan::for_spec(&capture).unwrap();
-    assert!(streams.scan_for_key);
-    assert_eq!(streams.stdout, StdoutUse::Forward);
-    assert_eq!(streams.stderr, StderrUse::Forward);
-}
-
-#[test]
 fn identity_rules_are_copied_from_the_manifest() {
     let json = with_identity(
         "chat-shared-home",
@@ -87,11 +64,11 @@ fn identity_rules_are_copied_from_the_manifest() {
         LaunchScope::FromStdout
     );
 
-    let keyed = fixture("keyed-per-run");
+    let per_run = fixture("headless-per-run");
     let StreamPlan {
         stderr: StderrUse::IdentityLine(rule),
         ..
-    } = StreamPlan::for_spec(&keyed.manifest.capture).unwrap()
+    } = StreamPlan::for_spec(&per_run.manifest.capture).unwrap()
     else {
         panic!("a stderr_line profile must use its stderr identity rule")
     };
@@ -101,10 +78,10 @@ fn identity_rules_are_copied_from_the_manifest() {
 
 #[test]
 fn argv_guard_comes_from_the_harness_manifest() {
-    let keyed = fixture("keyed-per-run");
+    let per_run = fixture("headless-per-run");
     for arg in ["--profile", "--pro", "--tui", "--he", "-p", "-h", "-Qp"] {
         assert!(
-            harness_arg_refusal(&keyed.manifest.capture, arg).is_some(),
+            harness_arg_refusal(&per_run.manifest.capture, arg).is_some(),
             "the guard must refuse {arg}"
         );
     }
@@ -119,7 +96,7 @@ fn argv_guard_comes_from_the_harness_manifest() {
         "plain",
     ] {
         assert_eq!(
-            harness_arg_refusal(&keyed.manifest.capture, arg),
+            harness_arg_refusal(&per_run.manifest.capture, arg),
             None,
             "the guard must allow {arg}"
         );
@@ -636,4 +613,78 @@ fn a_node_script_harness_resolves_only_with_node_on_the_path_it_is_given() {
     std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).unwrap();
     let resolved = capture_executable(&connector, profile, &env).expect("node is there now");
     assert_eq!(resolved.search_path(), bin.display().to_string());
+}
+
+/// A hostile goal is one `--query=<goal>` element wherever it would otherwise be read by the
+/// harness's raw argv scan (its `argv_guard`) or by its argument parser, and the plan's `Debug`
+/// shows its length, never the goal. The subject is the headless fixture connector
+/// (`goal_flag = "--query"`).
+#[test]
+fn hostile_goals_stay_one_goal_flag_element_and_the_plan_never_shows_them() {
+    use crate::common::m2_profile_support as s;
+    let l = s::Layout::new();
+    let exe = s::fake_harness(&l.bin);
+    let c = support::fixture_connector("headless-per-run");
+    let resolved = s::resolved(&exe);
+    let proxy = s::proxy_url();
+    let parent = s::parent_env();
+    let profile = &c.loaded.manifest.capture;
+    for goal in [
+        "--profile=x",
+        "-p x",
+        "--tui",
+        "-h",
+        "a=b",
+        "-leading dash",
+        "line one\n--tui\nline three",
+        "--query=twice",
+        "--",
+    ] {
+        let plan = goalcup_cli::launch::build_capture_launch(
+            &c,
+            &s::vars(&l),
+            &l.workspace,
+            &s::launch(&l, goal.as_bytes(), &resolved, &proxy, &parent),
+        )
+        .unwrap_or_else(|e| panic!("{goal:?}: {e}"));
+        assert_eq!(plan.argv.len(), profile.args.len() + 1, "{goal:?}");
+        assert_eq!(
+            &plan.argv[..profile.args.len()],
+            profile.args.as_slice(),
+            "{goal:?}: the profile's args come first and unchanged"
+        );
+        assert_eq!(
+            plan.argv.last().unwrap(),
+            &format!("--query={goal}"),
+            "{goal:?}: the goal is the value of the one flag element"
+        );
+        assert!(
+            !plan.argv.iter().any(|a| a == "--"),
+            "{goal:?}: this recipe has no `--`"
+        );
+        let capture = plan.capture.as_ref().unwrap();
+        assert_eq!(capture.goal_index, plan.argv.len() - 1);
+        assert_eq!(capture.goal_prefix, "--query=".len());
+
+        for (surface, text) in [
+            ("Debug", format!("{plan:?}")),
+            ("pretty Debug", format!("{plan:#?}")),
+        ] {
+            // A two-byte goal such as `-h` occurs inside ordinary path text (`run-home`), so the
+            // whole goal is searched for only when it is long enough to mean something, and the
+            // element the goal rides in is searched for always.
+            assert!(
+                !text.contains(&format!("--query={goal}")),
+                "{goal:?}: {surface} shows the goal element"
+            );
+            if goal.len() >= 6 {
+                assert!(!text.contains(goal), "{goal:?}: {surface} shows the goal");
+            }
+        }
+        let debugged = format!("{plan:?}");
+        assert!(
+            debugged.contains(&format!("--query=<goal: {} bytes>", goal.len())),
+            "{debugged}"
+        );
+    }
 }

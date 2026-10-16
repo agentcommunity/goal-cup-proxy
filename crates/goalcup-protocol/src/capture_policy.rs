@@ -4,7 +4,7 @@
 //! code, each is a trust decision about the participant's machine (D1, D36, D38, D41, D43),
 //! and:
 //!
-//! * **every row needs a DECISIONS entry**; a new credential name, CA mode or CA-name shape,
+//! * **every row needs a DECISIONS entry**; a new CA mode or CA-name shape,
 //!   interpreter exemption or startup-file class is a core PR, not a harness PR (a harness's
 //!   own CA variable is connector data held to the [`CA_ENV_SUFFIXES`] shape);
 //! * **tightening a row that a shipped connector uses migrates that connector in the same
@@ -116,12 +116,6 @@ pub fn ca_env_problem(name: &str, mode: CaMode) -> Option<&'static str> {
     }
     env_name_denied(name, EnvContext::CaEnv)
 }
-
-/// The provider-credential variables a capture profile may name. Closed on purpose (D43,
-/// ruling 3): a new provider is a reviewed edit and a DECISIONS entry. Every value is held to
-/// one grammar by the launcher (`child_secret_named`): 20 to 256 bytes of `[A-Za-z0-9_-]`.
-/// `AMP_API_KEY` is Amp's access token (D49).
-pub const CREDENTIAL_ENV: &[&str] = &["DEEPSEEK_API_KEY", "AMP_API_KEY"];
 
 /// Hosts that belong to the tracker's own delivery path. A harness may name none of them, nor a
 /// subdomain (the delivery-agnostic rule, F7). Empty until a project domain is chosen; a host
@@ -517,8 +511,8 @@ fn env_name_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
 }
 
 /// Why an environment variable NAME is refused for `ctx`, or `None`. Names compare
-/// upper-cased. The names a manifest pins in other fields (`home.env`, `ca.env`,
-/// `credential.env`) are checked for distinctness by the validator, not here.
+/// upper-cased. The names a manifest pins in other fields (`home.env`, `ca.env`) are checked
+/// for distinctness by the validator, not here.
 pub fn env_key_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
     env_name_denied(key, ctx)
 }

@@ -189,15 +189,7 @@ invocation (`key_source: "supplied"`).
 - `goalcup` is started with `GOALCUP_NO_BROWSER=1`, so it opens no browser page per approval. (That variable
   is a switch of the shipped `goalcup`: set it and `goalcup login` and `goalcup start` print the address and
   code and open nothing.)
-- A provider key comes from a file too: `MATRIX_KEY_ENV_FILE=<path>`, a mode 0600 file with one
-  `DEEPSEEK_API_KEY=` line. When the connector's `harness.toml` declares that credential (`hermes-cli`), the
-  start goes through `scripts/with-deepseek-key.sh`, which reads the key itself. The key is never in this
-  script's environment, arguments, log or files. The path is not printed or written to a file: it is in the
-  start wrapper's environment and in the loader's argument list (a same-user `ps` can see the path, never the
-  key). **Today a keyed connector is refused up front:** a harness given a provider key is never uploaded (RULES),
-  so the real `goalcup start --practice` refuses it, and `matrix.sh` says "keyed harnesses are not uploaded today
-  (RULES); matrix cannot test them" before it starts anything. The plumbing stays behind `MATRIX_KEYED_UPLOADED=1`
-  for when that rule changes. The key file is ignored for a connector with no such credential.
+- No provider key is passed: a harness signs in with its own login, kept in its tracker home (D61).
 - With no key file, it prints the approval address and code and waits while you approve in a browser.
 - It approves at most one device code per phase and stops looking for codes once the harness is up.
 - It never reads or writes the real goalcup configuration directory, `~/.codex`, `~/.claude` or `~/.hermes`.
@@ -255,8 +247,7 @@ test member unless `GOALCUP_TEST_MEMBER_ID` says otherwise, and the server is st
 the heavy-run lock itself (never run it inside the lock: it refuses when `GOALCUP_HEAVY_LOCK_HELD=1` and
 gives up after 30 minutes), with `--cpus=6`. Codex's tracker home is set to `gpt-5.6-luna` at low
 reasoning effort before each run; the run fails unless every Codex turn it recorded says exactly that.
-The harness can read the checkout and the key files, so run it from a clean checkout. `hermes-cli` is
-refused as blocked: a harness given a provider key is never uploaded, so it cannot make a practice run. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
+The harness can read the checkout and the key files, so run it from a clean checkout. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
 
 **`--check-copy`.** For a run you made by hand, verifies every entry of the run locally and compares each
 with the server's position, using the run's credential from the configuration directory. It starts and

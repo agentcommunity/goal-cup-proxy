@@ -380,10 +380,6 @@
       "REQUESTS_CA_BUNDLE"
     ]
   },
-  "credential_env_names": [
-    "DEEPSEEK_API_KEY",
-    "AMP_API_KEY"
-  ],
   "env": [
     {
       "denied": "is pinned by the capture launch itself",

@@ -11,27 +11,19 @@ mod capture_gate;
 mod capture_only_refusal;
 #[cfg(unix)]
 mod capture_stderr_tee;
-mod child_secret;
 #[cfg(unix)]
 mod connector_contract;
-#[cfg(unix)]
-mod credential_stdout_identity;
 mod daemon_client;
 mod dependency_bans;
 #[cfg(unix)]
 mod harness_contract_golden;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod harness_contract_kit;
-mod harness_kit_credential;
 mod harness_launch_plan;
 #[cfg(unix)]
 mod harness_version_probe;
 #[cfg(unix)]
 mod hermes_offline_key;
-mod key_scan;
-mod key_scan_run;
-#[cfg(unix)]
-mod loader_script;
 mod login;
 mod m2_capture_sender;
 mod m2_emitter;

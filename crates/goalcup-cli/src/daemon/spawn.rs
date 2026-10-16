@@ -10,9 +10,9 @@
 //! # What the started daemon inherits
 //!
 //! - **No environment of this process.** It is built from nothing: the variables in
-//!   [`INHERITED_ENV`] and a fixed `PATH`. A shell that exported `DEEPSEEK_API_KEY`,
-//!   `AMP_API_KEY` or a `*_PROXY` hands none of it to the recorder, which holds every
-//!   run's chain and has no use for a provider key.
+//!   [`INHERITED_ENV`] and a fixed `PATH`. A shell that exported a provider key
+//!   or a `*_PROXY` hands none of it to the recorder, which holds every run's chain and has
+//!   no use for one.
 //! - **No session.** `setsid` in the child before `exec`: closing the terminal (`SIGHUP`) or
 //!   typing Ctrl-C (`SIGINT` to the foreground process group) reaches the harness and the
 //!   launcher, never the chain writer. A launcher killed mid-run leaves a daemon that can

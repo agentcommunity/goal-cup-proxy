@@ -61,8 +61,8 @@ goalcup-verify --capture-integrity <trace>        # copy the `verify:` line that
 `prep` steps that need a login print `[todo]`. That is fine for a local run. A local run asks for no
 browser approval; a run on the server asks for one at each `goalcup start`, and `goalcup login`
 asks once ([why](docs/PARTICIPANT-GUIDE.md#2-log-in-goalcup-login)). There is no daemon to
-install: `goalcup start` starts `goalcup-daemon` for the run. Both shipped chat-mode harnesses (Codex
-CLI, Claude Code) refuse `--goal-file`; Hermes is headless and needs it. From another terminal with
+install: `goalcup start` starts `goalcup-daemon` for the run. The shipped harnesses (Codex CLI,
+Claude Code, Hermes) run in chat mode and refuse `--goal-file`. From another terminal with
 the same `GOALCUP_CONFIG_DIR`, `goalcup status` shows the run and `goalcup seal` ends it early.
 Only one run per harness can record at a time.
 
@@ -161,7 +161,7 @@ A test that guards one of these is never deleted. It may move tier.
 
 | | Promise | Where the tests are |
 |---|---|---|
-| P1 | No key fragment leaks | cli key scan, stderr tee, child-secret suites; daemon redaction suites |
+| P1 | No key fragment leaks | daemon redaction suites; cli connector contract and kit (no provider key reaches a harness, D61), Hermes offline key |
 | P2 | The chain catches a stray edit | protocol chain golden; verifier capture integrity, v5 corpus, containment |
 | P3 | Capture policy refuses endpoints, proxies, credentials and bad args | protocol harness schema and conformance; cli launch plan, dependency bans |
 | P4 | Connectors load and pins match | protocol connector pins and loader; cli shipped connectors |
@@ -188,9 +188,11 @@ in [OPERATING](docs/OPERATING.md#running-the-daemon).
   made in the folder you run `goalcup start` from, or beside the goal file for a headless harness.
   The sealed trace is under the daemon's `artifact_root`. A run on the server works in a clone of
   the participant's GitHub repository instead.
-- **What the harness sees.** Its environment is built from nothing. Of your shell only `USER`,
-  `LOGNAME`, `TMPDIR` and, for a keyed connector, its one API key reach it. The tracer never sets a
-  model base URL. The only proxy the harness gets is the tracer's own loopback recorder.
+- **What the harness sees.** Its environment is built from nothing. Of your shell only these
+  reach it: `USER`, `LOGNAME` and `TMPDIR` for every harness, and for a chat-mode harness also
+  `PATH`, `TERM`, `COLORTERM`, `LANG`, `SHELL` and every `LC_*` (a headless harness gets a fixed
+  `PATH`). Never a provider key (D61): a harness keeps its own login in its home. The tracer never
+  sets a model base URL. The only proxy the harness gets is the tracer's own loopback recorder.
 - <a id="the-daemon"></a>**The daemon.** `goalcup start` uses the daemon that answers on
   `$GOALCUP_CONFIG_DIR/control.json` and starts `goalcup-daemon --exit-when-idle` when none does. It
   is found beside `goalcup` or on `PATH`, runs in its own session with an environment built from
@@ -205,9 +207,9 @@ in [OPERATING](docs/OPERATING.md#running-the-daemon).
   deadline is 168 hours after the server's official start, on the server's clock: at the deadline
   the CLI stops the agent and seals. Wire contract: [docs/UPLOAD-API.md](docs/UPLOAD-API.md).
   Server code: [server/worker](server/worker/README.md).
-- **Hermes** (`hermes-cli`) is headless, needs a provider key, and is run by the maintainer only:
-  `/bin/sh -p scripts/with-deepseek-key.sh <ENV_FILE> start --harness hermes-cli --goal-file <PATH>`
-  with a mode 0600 file holding one `DEEPSEEK_API_KEY=` line. Never paste the key into a shell.
+- **Hermes** (`hermes-cli`) runs in chat mode from its own home: `goalcup prep` opens it there
+  and its own setup keeps the provider, model and key. The tracer hands no harness a provider key
+  (D61).
 
 **`goalcup-verify --capture-integrity` exit codes:** 0 complete
 and valid, 1 incomplete or not sealed, 2 invalid (including a torn last record), 3 no usable report.

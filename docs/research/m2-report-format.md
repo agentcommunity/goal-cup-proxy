@@ -199,10 +199,8 @@ traces whose streams it does not accept; the pinned report bytes under
 
 Library use. `write_research_report` is `write_research_report_with` over the built-in registry:
 it scans the trace through `scan_capture_trace` and feeds the validated records to
-`DecodeSession`. `scan_capture_trace_default` is the CLI source-walk convenience wrapper: it
-scans a trace with default verification options and calls the supplied callback for each validated
-record without making CLI source code name `VerifyOptions`. Library callers that need non-default
-keys or development mode use `scan_capture_trace` directly. A host that holds records instead
+`DecodeSession`. Library callers that need non-default keys or development mode use
+`scan_capture_trace` directly. A host that holds records instead
 composes `decode_records` (observations to an `ObservationSink`, here `JsonLinesSink`), the reader's integrity report and
 `research_summary` (given the sink's kind tally); the output equals the folder entry's for the
 same records. The decode outcome's capture-only streams (`undecoded`) are the summary's

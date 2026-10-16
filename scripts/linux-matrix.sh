@@ -27,20 +27,14 @@
 # every turn of the run's new Codex sessions must say gpt-5.6-luna at effort low; a turn with any
 # other model, or no turn found at all, fails the run.
 #
-# Blocked: a connector given a provider key ([capture.credential], hermes-cli) is refused. A
-# keyed harness is never uploaded today, so `goalcup start --practice` refuses it (start.rs,
-# docs/RULES.md), and no matrix row can pass. The owner decides whether that changes. The code
-# path for it (install recipe, MATRIX_KEY_ENV_FILE) is kept; LINUX_MATRIX_ALLOW_KEYED=1 lets it
-# through for that work.
+# The tracer never hands a harness a provider key (D61): a harness signs in with its own login,
+# kept in its tracker home, as Codex does.
 #
 # Environment. A secret is only ever a FILE, mounted read-only; its path goes to the one command
 # that reads it, and its value is never in an argument, a `-e`, a log or this script's output.
 #   GOALCUP_TEST_APPROVAL_KEY_FILE  the server's test approval key (needed by both modes).
 #   GOALCUP_TEST_MEMBER_ID          the member approved as
 #                                   (default 00000000-0000-4000-8000-0000000c0de1).
-#   MATRIX_KEY_ENV_FILE             a keyed harness's provider key file (hermes-cli: a
-#                                   DEEPSEEK_API_KEY= line, mode 0600), passed to matrix.sh as
-#                                   MATRIX_KEY_ENV_FILE. Blocked, see above.
 #   LINUX_MATRIX_SERVER             default https://goalcup-ingest-staging.b-9a5.workers.dev;
 #                                   production is refused.
 #   LINUX_MATRIX_LOG_DIR            where matrix.sh's log lands on this machine
@@ -71,7 +65,6 @@ LUNA=gpt-5.6-luna
 VOL=/vol
 CFG=$VOL/cfg
 KEY_IN=/run/goalcup/approval-key
-KEYENV_IN=/run/goalcup/key.env
 
 fail() {
     echo "linux-matrix: FAIL $*"
@@ -301,12 +294,8 @@ codex-cli) install="npm install -g @openai/codex@$version && codex --version" ;;
 hermes-cli) install="python3 -m venv /opt/hermes && /opt/hermes/bin/pip install --no-cache-dir hermes-agent==$version && ln -s /opt/hermes/bin/hermes /usr/local/bin/hermes" ;;
 *) fail "no install recipe for $h in this script" ;;
 esac
-# A harness given a provider key is never uploaded, so it cannot make the practice run a row is.
-if grep -q '^\[capture\.credential\]' "$manifest" && [ "${LINUX_MATRIX_ALLOW_KEYED:-0}" != 1 ]; then
-    fail "blocked: $h is given a provider key, and a keyed harness is never uploaded, so goalcup start refuses --practice (docs/RULES.md); the owner decides"
-fi
 [ "$action" = run ] || [ "$mode" = chat ] ||
-    fail "login: $h is headless (no sign-in to keep); give its key with MATRIX_KEY_ENV_FILE to run"
+    fail "login: $h is headless (no sign-in to keep); use run"
 
 server=${LINUX_MATRIX_SERVER:-$STAGING}
 case $server in
@@ -321,8 +310,7 @@ case $member in *[!A-Za-z0-9_-]* | "") fail "GOALCUP_TEST_MEMBER_ID may hold onl
 [ -z "${GOALCUP_TEST_APPROVAL_KEY:-}" ] ||
     fail "GOALCUP_TEST_APPROVAL_KEY in the environment is refused: give the file as GOALCUP_TEST_APPROVAL_KEY_FILE"
 keyfile=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
-keyenv=${MATRIX_KEY_ENV_FILE:-}
-unset GOALCUP_TEST_APPROVAL_KEY_FILE MATRIX_KEY_ENV_FILE
+unset GOALCUP_TEST_APPROVAL_KEY_FILE
 [ -n "$keyfile" ] || fail "GOALCUP_TEST_APPROVAL_KEY_FILE is needed (the login and the run are approved with it)"
 secret_file() { # path
     case $1 in /*) ;; *) fail "secret files are given as absolute paths" ;; esac
@@ -330,9 +318,7 @@ secret_file() { # path
     [ -f "$1" ] && [ -r "$1" ] || fail "$1 is not a regular file this user can read"
 }
 secret_file "$keyfile"
-[ -z "$keyenv" ] || secret_file "$keyenv"
 set -- -v "$keyfile:$KEY_IN:ro"
-[ -z "$keyenv" ] || set -- "$@" -v "$keyenv:$KEYENV_IN:ro"
 
 registry=$cargo_home/registry
 [ -d "$registry" ] || fail "registry (run cargo fetch --locked first)"
@@ -420,7 +406,6 @@ step "build" -w /src "$name" cargo build --offline --locked --workspace
 
 if [ "$action" = run ]; then
     set -- -e GOALCUP_TEST_APPROVAL_KEY_FILE=$KEY_IN
-    [ -z "$keyenv" ] || set -- "$@" -e MATRIX_KEY_ENV_FILE=$KEYENV_IN
     echo "linux-matrix: run (about 12 minutes; the practice run ends at the server's deadline)"
     docker exec -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" &
     wait $!

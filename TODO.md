@@ -46,8 +46,10 @@ Owner decisions of 16 Oct 2026:
   accounts, repo and host identifiers) before any research group gets it. Researchers never get
   access to our database or R2; each group gets a cleaned export through custom, narrow access
   (clean-up 14). The design doc is kept privately; it is built after the event.
-- Keyed runs (a harness given an API key, such as Hermes) are uploaded. #208 is in progress: it
-  redacts the exact key values and adds a check before upload.
+- No keyed runs: the tracer never sees, forwards or stores a provider key (D61). Every harness,
+  Hermes included, keeps its own login in its home, and every run uploads under the same rules.
+  #208 redacts the run's own proxy credential by exact value; #214 runs Hermes in chat mode from
+  its own home; #215 removes the key-forwarding mechanism.
 - Amp ships. Its metadata log is a native source, labelled as such. #206 waits for the owner's live
   run (the thread log is not yet measured in chat mode).
 - Claude Code's folder-trust dialog: the participant answers it. The RULES exemption for that one
@@ -104,7 +106,7 @@ are the order found.
 24. Page buttons "Approve/Deny" for every purpose. Fixed: website #307.
 25. Replace warning had no start time. Fixed: website #307 (migration applied to prod), SQL mirror #207.
 26. Prep opened the harness with no pause. Fixed: #204.
-Also open: keyed runs not uploaded (#208, in progress); Amp (#206, waits for the owner's run).
+Also open: Amp (#206, waits for the owner's run). Keyed runs are gone (D61, #214, #215).
 Participant-guide text is one pass at the end (UX-F): approvals, trust dialog, Little Snitch.
 
 ### WP1: Event window and event switch (server). Land first.
@@ -283,7 +285,7 @@ These look odd but are right. Do not "fix" them.
 - The refusal order in `continue_run.rs`, seal never signalling, doctor tolerating a missing daemon, the `practice`/`test` bools, `GiveBack` with `pending-open.json`, and `LONGEST_RUN`. [C4]
 - The v5 corpus (add cases, never regenerate to pass), `chain_golden` reading the spike fixtures, the envelope-bytes pin, and the serde-wording pin. [T3]
 - The test layout: `it`/`full` binaries, nextest one-process-per-test, the self dev-dependency with a feature, the three process-global binaries, the child-half pattern, the kit cases, and independent m2 oracles. [T1, T2]
-- Lean `ci.yml`, the manual `linux-x86_64.yml`, the manual release run, and `with-deepseek-key.sh`. [T1, C6]
+- Lean `ci.yml`, the manual `linux-x86_64.yml`, and the manual release run. [T1, C6]
 - Worker: the staging block repeats every var and sets `routes = []`, prod `TEST_EVENT_ID`, the two-layer test fence, `/v1/health` before maintenance, a retried chunk answered first, and `db-local.ts`. [C6]
 - The Rust upload stand-in until After-event step 8 decides. Negative-window sleeps (give them a helper, do not remove them). The 25 s SIGSTOP scenario. [T1, C6]
 - `--dev-key` alongside the one pinned key, and the report-file rules. Harness names in comments are examples only. [C5, C2, C4]

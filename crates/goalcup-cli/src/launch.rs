@@ -146,15 +146,10 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
-pub(crate) use crate::capture_tee::{
-    CaptureStderr, ScopeReceiver, tee_marked_capture_with_identity, tee_stderr_capture_with_rule,
-};
-/// The tees of a keyed or `stderr_line` capture child's streams live in their own file; they
-/// are part of this module's interface (D40, D41).
-pub use crate::capture_tee::{
-    ScopeMarker, tee_marked_capture_with_identity_to, tee_marked_capture_with_rule,
-    tee_marked_with_rule,
-};
+pub(crate) use crate::capture_tee::{CaptureStderr, tee_stderr_capture_with_rule};
+/// The stderr tee of a `stderr_line` capture child lives in its own file; it is part of this
+/// module's interface (D40).
+pub use crate::capture_tee::{ScopeMarker, tee_marked_with_rule};
 /// The ending of a child this process just released lives in its own file, which the
 /// "this crate never terminates anything" sweep exempts by name; it is part of this module's
 /// interface (D40, the root ruling).
@@ -429,113 +424,6 @@ fn chat_passthrough(
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
-}
-
-/// The longest provider key a capture launch hands a child.
-pub(crate) const MAX_CHILD_SECRET_BYTES: usize = 256;
-
-/// The provider credential of a capture launch, held for the child alone (D40, D41).
-///
-/// Made only by [`child_secret_for_harness`], from the variable the profile's credential
-/// names. It is applied by the one command builder, after the plan's own environment, and by
-/// nothing else: it is never in a [`LaunchPlan`], an argv, a TOML file, a log, the registered
-/// handle or any evidence. It is not `Clone` and not `Serialize`, its `Debug` prints the
-/// variable's name and no value, and its bytes are overwritten when it drops.
-///
-/// Zeroing is hygiene and not a boundary: the value stays in this process's environment for the
-/// process's whole life, where any process of the same user can read it, which D37 accepts. What
-/// this type keeps is the value out of every place this crate would otherwise print or store it.
-pub struct ChildSecret {
-    name: &'static str,
-    /// Printable ASCII of `[A-Za-z0-9_-]` only, checked when it was made.
-    value: Vec<u8>,
-}
-
-impl ChildSecret {
-    /// The variable the child receives it in.
-    pub fn name(&self) -> &'static str {
-        self.name
-    }
-
-    /// The value, for the one command builder and the key scan. Not public: a caller outside
-    /// this crate has no use for it.
-    pub(crate) fn expose(&self) -> &[u8] {
-        &self.value
-    }
-
-    fn value_str(&self) -> &str {
-        // Checked as ASCII when made; a value that somehow is not is an empty variable, never
-        // a panic.
-        std::str::from_utf8(&self.value).unwrap_or("")
-    }
-}
-
-impl fmt::Debug for ChildSecret {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ChildSecret({}={REDACTED})", self.name)
-    }
-}
-
-impl Drop for ChildSecret {
-    fn drop(&mut self) {
-        crate::key_scan::wipe(&mut self.value);
-    }
-}
-
-/// The child-only credential of `profile`, read from the launcher's own `env`, or `None` for a
-/// profile that names none (Codex, Claude Code).
-///
-/// The value must be one provider-key token: [`crate::key_scan::MIN_KEY_BYTES`] to
-/// [`MAX_CHILD_SECRET_BYTES`] bytes of `[A-Za-z0-9_-]`, which is every key shape the closed
-/// [`CAPTURE_CREDENTIAL_ENV`] list admits and nothing a shell could reinterpret. A missing or
-/// unusable value is a [`CliError::Refused`] that names the variable and never the value, so a
-/// run with no key is refused before the daemon is asked for anything.
-/// The child-only provider credential declared by a schema-1 capture profile.
-pub fn child_secret_for_harness(
-    profile: &CaptureSpec,
-    env: &BTreeMap<String, String>,
-) -> Result<Option<ChildSecret>, CliError> {
-    child_secret_named(profile.credential.as_ref().map(|c| c.env.as_str()), env)
-}
-
-fn child_secret_named(
-    wanted: Option<&str>,
-    env: &BTreeMap<String, String>,
-) -> Result<Option<ChildSecret>, CliError> {
-    let Some(wanted) = wanted else {
-        return Ok(None);
-    };
-    let Some(name) = goalcup_protocol::capture_policy::CREDENTIAL_ENV
-        .iter()
-        .find(|n| **n == wanted)
-    else {
-        return Err(CliError::Internal(format!(
-            "the capture profile names `{wanted}` as its credential, which is not a variable this build hands a child"
-        )));
-    };
-    let Some(value) = env.get(*name) else {
-        return Err(CliError::Refused(format!(
-            "`{name}` is not set in the environment `goalcup start` was run from. The harness's \
-             provider key is read from it and handed to the harness only. Nothing was created."
-        )));
-    };
-    let bytes = value.as_bytes();
-    let usable = (crate::key_scan::MIN_KEY_BYTES..=MAX_CHILD_SECRET_BYTES).contains(&bytes.len())
-        && bytes
-            .iter()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'));
-    if !usable {
-        return Err(CliError::Refused(format!(
-            "`{name}` is not a usable provider key: it must be {} to {MAX_CHILD_SECRET_BYTES} \
-             characters of letters, digits, `_` and `-`, with no quotes, spaces or line breaks. \
-             Nothing was created.",
-            crate::key_scan::MIN_KEY_BYTES
-        )));
-    }
-    Ok(Some(ChildSecret {
-        name,
-        value: bytes.to_vec(),
-    }))
 }
 
 /// A harness executable as a launch resolved it: the canonical path it runs.
@@ -1026,10 +914,7 @@ fn build_launch(
         },
         capture,
     };
-    let credential = profile.credential.as_ref().map_or(0, |credential| {
-        (credential.env.len() + 1 + MAX_CHILD_SECRET_BYTES + 1 + 8) as u64
-    });
-    let needed = exec_footprint(&plan) + credential;
+    let needed = exec_footprint(&plan);
     let limit = exec_limit();
     if needed > limit {
         return Err(CliError::Refused(format!(
@@ -1162,7 +1047,7 @@ pub fn configure_harness(
         // started.
         let mut one = plan.clone();
         one.argv = command.clone();
-        let (mut cmd, _) = build_command(&one, Pipes::default(), None);
+        let (mut cmd, _) = build_command(&one, Pipes::default());
         cmd.stdin(std::process::Stdio::null());
         let handles = (log.try_clone(), log.try_clone());
         let (Ok(stdout), Ok(stderr)) = handles else {
@@ -1374,7 +1259,7 @@ pub(crate) fn quote(s: &str) -> String {
 /// launch stops with a child that never started rather than continuing with a handle that is
 /// wrong about the one field it exists to carry.
 pub fn spawn(p: &LaunchPlan) -> Result<Spawned, CliError> {
-    let (mut command, program) = build_command(p, Pipes::default(), None);
+    let (mut command, program) = build_command(p, Pipes::default());
     let child = command.spawn().map_err(|source| CliError::Io {
         path: program.clone(),
         source,
@@ -1383,9 +1268,8 @@ pub fn spawn(p: &LaunchPlan) -> Result<Spawned, CliError> {
 }
 
 /// Which of a capture child's output streams are piped to this process; the rest are
-/// inherited. A `stdout_json` launch pipes stdout (its scope tee); a keyed launch pipes both
-/// (stdout and stderr are forwarded verbatim and scanned for key fragments, and a `stderr_line`
-/// identity rides on stderr).
+/// inherited. A `stdout_json` launch pipes stdout (its scope tee), and a `stderr_line` launch
+/// pipes stderr (its marker tee).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Pipes {
     pub stdout: bool,
@@ -1411,7 +1295,6 @@ pub struct StderrLineRule {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StdoutUse {
     Inherit,
-    Forward,
     IdentityJson(StdoutJsonRule),
 }
 
@@ -1419,34 +1302,22 @@ pub enum StdoutUse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StderrUse {
     Inherit,
-    Forward,
     IdentityLine(StderrLineRule),
 }
 
 /// The child-output decision derived from one validated harness capture profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamPlan {
-    pub scan_for_key: bool,
     pub stdout: StdoutUse,
     pub stderr: StderrUse,
 }
 
 impl StreamPlan {
     pub fn for_spec(spec: &CaptureSpec) -> Result<Self, CliError> {
-        let scan_for_key = spec.credential.is_some();
         let (stdout, stderr) = match spec.identity.source {
-            IdentitySource::Preassigned | IdentitySource::None => (
-                if scan_for_key {
-                    StdoutUse::Forward
-                } else {
-                    StdoutUse::Inherit
-                },
-                if scan_for_key {
-                    StderrUse::Forward
-                } else {
-                    StderrUse::Inherit
-                },
-            ),
+            IdentitySource::Preassigned | IdentitySource::None => {
+                (StdoutUse::Inherit, StderrUse::Inherit)
+            }
             IdentitySource::StdoutJson => (
                 StdoutUse::IdentityJson(StdoutJsonRule {
                     match_field: required_identity_field(
@@ -1462,18 +1333,10 @@ impl StreamPlan {
                         "id_field",
                     )?,
                 }),
-                if scan_for_key {
-                    StderrUse::Forward
-                } else {
-                    StderrUse::Inherit
-                },
+                StderrUse::Inherit,
             ),
             IdentitySource::StderrLine => (
-                if scan_for_key {
-                    StdoutUse::Forward
-                } else {
-                    StdoutUse::Inherit
-                },
+                StdoutUse::Inherit,
                 StderrUse::IdentityLine(StderrLineRule {
                     prefix: required_identity_field(spec.identity.prefix.as_deref(), "prefix")?,
                     grammar: spec.identity.grammar.ok_or_else(|| {
@@ -1489,11 +1352,7 @@ impl StreamPlan {
                 ));
             }
         };
-        Ok(Self {
-            scan_for_key,
-            stdout,
-            stderr,
-        })
+        Ok(Self { stdout, stderr })
     }
 
     pub fn pipes(&self) -> Pipes {
@@ -1542,8 +1401,8 @@ pub fn harness_arg_refusal(spec: &CaptureSpec, arg: &str) -> Option<&'static str
 /// directory, the built environment, `/dev/null` for a capture child's stdin, the process
 /// group a server leads, and the requested pipes. [`spawn`] and [`spawn_gated`] both run what
 /// this builds, so a gated capture child's argv, environment and stdio are exactly an
-/// ungated one's. The child-only `secret` is set here, last, and is the one place it is.
-fn build_command(p: &LaunchPlan, pipes: Pipes, secret: Option<&ChildSecret>) -> (Command, String) {
+/// ungated one's.
+fn build_command(p: &LaunchPlan, pipes: Pipes) -> (Command, String) {
     let program = resolved_program(&p.program, &p.env_base);
     let mut command = Command::new(&program);
     command.args(&p.argv).current_dir(&p.cwd);
@@ -1556,9 +1415,6 @@ fn build_command(p: &LaunchPlan, pipes: Pipes, secret: Option<&ChildSecret>) -> 
     }
     for (k, v) in &p.env_set {
         command.env(k, v);
-    }
-    if let Some(secret) = secret {
-        command.env(secret.name(), secret.value_str());
     }
     // A headless capture launch has no input channel: both measured harnesses append piped
     // stdin to the goal, so the child never inherits ours. A chat-mode launch (`capture` is
@@ -1584,8 +1440,6 @@ fn build_command(p: &LaunchPlan, pipes: Pipes, secret: Option<&ChildSecret>) -> 
 
 /// The two bounded messages from a capture stdout tee: its one scope identity and its
 /// completion after EOF and all forwarding. Waiting for completion never joins the thread.
-/// A keyed `stdout_json` launch has no such tee: its stdout is read by the key-scanning tee,
-/// which hands back only the scope receiver and reports the stream's end itself.
 pub struct CaptureStdout {
     pub scope: std::sync::mpsc::Receiver<Option<String>>,
     completed: std::sync::mpsc::Receiver<std::io::Result<()>>,
@@ -1689,13 +1543,6 @@ pub fn stdout_tee_with_rule(
 /// at most 1 MiB, at most 64 of them, until the first event whose `match_field` is
 /// `match_value`. It sends exactly one message: that event's `id_field` (or `None` when the id
 /// is unusable), or `None` when the line budget or the stream ends first.
-///
-/// For a keyed launch it also holds a key-fragment matcher of its own ([`Self::with_key_scan`]).
-/// The id it sends is what the daemon writes into the chain as the scope, so a matching event
-/// whose line or decoded id holds any key-scan form is not bound: it sends `None`, the same
-/// unbound path an unusable id takes, and records a key hit, which fails the row. The line
-/// buffer is overwritten before it is cleared and when the matcher is dropped, as the tee's own
-/// buffer is.
 pub(crate) struct StdoutIdentityScan {
     rule: StdoutJsonRule,
     sender: std::sync::mpsc::Sender<Option<String>>,
@@ -1703,10 +1550,6 @@ pub(crate) struct StdoutIdentityScan {
     overlong: bool,
     scanning: bool,
     complete_lines: usize,
-    key_scan: Option<(
-        crate::key_scan::FragmentMatcher,
-        std::sync::Arc<std::sync::atomic::AtomicBool>,
-    )>,
 }
 
 impl StdoutIdentityScan {
@@ -1724,41 +1567,7 @@ impl StdoutIdentityScan {
             overlong: false,
             scanning: true,
             complete_lines: 0,
-            key_scan: None,
         }
-    }
-
-    /// Refuse to bind an id that holds a fragment of the launch's key, and set `hit` when a
-    /// matching event held one.
-    pub(crate) fn with_key_scan(
-        mut self,
-        matcher: crate::key_scan::FragmentMatcher,
-        hit: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    ) -> Self {
-        self.key_scan = Some((matcher, hit));
-        self
-    }
-
-    /// Empty the held line, overwriting it first when this scan holds key material (a keyed
-    /// launch's line may hold a fragment of the key).
-    fn clear_line(&mut self) {
-        if self.key_scan.is_some() {
-            crate::key_scan::wipe(&mut self.line);
-        }
-        self.line.clear();
-    }
-
-    /// The id to send for a matching event: `None` when it is unusable, and `None` with a key
-    /// hit recorded when the line or the id holds a fragment of the key.
-    fn bound_id(&self, id: Option<&str>) -> Option<String> {
-        if let Some((matcher, hit)) = &self.key_scan
-            && (matcher.contains(&self.line)
-                || id.is_some_and(|id| matcher.contains(id.as_bytes())))
-        {
-            hit.store(true, std::sync::atomic::Ordering::Release);
-            return None;
-        }
-        id.map(str::to_owned)
     }
 
     pub(crate) fn feed(&mut self, bytes: &[u8]) {
@@ -1773,14 +1582,15 @@ impl StdoutIdentityScan {
                     && json_path(&event, &self.rule.match_field).and_then(|v| v.as_str())
                         == Some(self.rule.match_value.as_str())
                 {
-                    let id = self
-                        .bound_id(json_path(&event, &self.rule.id_field).and_then(|v| v.as_str()));
+                    let id = json_path(&event, &self.rule.id_field)
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned);
                     let _ = self.sender.send(id);
                     self.scanning = false;
-                    self.clear_line();
+                    self.line.clear();
                     return;
                 }
-                self.clear_line();
+                self.line.clear();
                 self.overlong = false;
                 if self.complete_lines == Self::LINE_COUNT_LIMIT {
                     let _ = self.sender.send(None);
@@ -1789,7 +1599,7 @@ impl StdoutIdentityScan {
                 }
             } else if !self.overlong {
                 if self.line.len() == Self::LINE_LIMIT {
-                    self.clear_line();
+                    self.line.clear();
                     self.overlong = true;
                 } else {
                     self.line.push(byte);
@@ -1810,33 +1620,6 @@ impl StdoutIdentityScan {
 impl Drop for StdoutIdentityScan {
     fn drop(&mut self) {
         self.end();
-        self.clear_line();
-    }
-}
-
-/// A stdout reader that feeds what it reads to a [`StdoutIdentityScan`] before handing it on,
-/// so the key-scanning tee and the identity matcher share one reader of one pipe. The identity
-/// is seen when the bytes are read, before the tee decides whether to forward them.
-pub(crate) struct IdentityReader<R> {
-    inner: R,
-    scan: StdoutIdentityScan,
-}
-
-impl<R> IdentityReader<R> {
-    pub(crate) fn new(inner: R, scan: StdoutIdentityScan) -> Self {
-        Self { inner, scan }
-    }
-}
-
-impl<R: std::io::Read> std::io::Read for IdentityReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let n = self.inner.read(buf)?;
-        if n == 0 {
-            self.scan.end();
-        } else {
-            self.scan.feed(&buf[..n]);
-        }
-        Ok(n)
     }
 }
 
@@ -2113,8 +1896,7 @@ fn above_stdio(
 }
 
 /// The only way a capture child is spawned (D40). It returns once the child is parked and its
-/// pid is known; the harness has not run. A `secret` is the provider credential the child alone
-/// receives, set on the command before the fork and nowhere else (a keyed connector, D40).
+/// pid is known; the harness has not run.
 ///
 /// `ready_within` bounds the wait for the pid and, later, for the child's acknowledgement.
 #[cfg(unix)]
@@ -2122,13 +1904,12 @@ pub fn spawn_gated(
     p: &LaunchPlan,
     pipes: Pipes,
     ready_within: std::time::Duration,
-    secret: Option<&ChildSecret>,
 ) -> Result<GatedSpawn, CliError> {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::CommandExt;
 
-    let (mut command, program) = build_command(p, pipes, secret);
+    let (mut command, program) = build_command(p, pipes);
     let io = |source: std::io::Error| CliError::Io {
         path: "the capture spawn gate".to_string(),
         source,

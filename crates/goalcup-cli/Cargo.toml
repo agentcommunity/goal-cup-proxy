@@ -73,8 +73,8 @@ flate2.workspace = true
 # Fresh random 128-bit producer and connection identifiers (`proxy::api::CaptureEmitter`).
 # The workspace version the daemon already links, so no new crate.
 rand.workspace = true
-# The key-fragment scan decodes each trace stream's base64 segments (`src/key_scan.rs`). The
-# workspace version the daemon and the verifier already link, so no new crate.
+# The CA bundle reads PEM's base64 bodies (`src/ca_bundle.rs`). The workspace version the
+# daemon and the verifier already link, so no new crate.
 base64.workspace = true
 # The upload chunks (`src/upload/uploader.rs`): each is one zstd frame, built in a spool file
 # and streamed from it. `hex` spells their SHA-256 and the acknowledgement signatures.

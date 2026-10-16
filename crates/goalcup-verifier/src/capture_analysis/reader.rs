@@ -330,19 +330,6 @@ pub fn scan_capture_trace(
     Ok(scan.report())
 }
 
-/// [`scan_capture_trace`] with the default options: no extra server keys.
-///
-/// Naming `VerifyOptions` is reserved to the verifier binary and `goalcup doctor`: a walk of
-/// `goalcup-cli/src` in `goalcup-cli/tests/full/preflight_doctor.rs` fails on any other file that
-/// does. This wrapper lets the launcher's key scan, which only reads a trace's records, read
-/// one with the defaults without naming the type.
-pub fn scan_capture_trace_default(
-    dir: &Path,
-    emit: &mut dyn FnMut(&CaptureRecord) -> io::Result<()>,
-) -> io::Result<CaptureIntegrityReport> {
-    scan_capture_trace(dir, &VerifyOptions::default(), emit)
-}
-
 /// The report and its serialized document together: the one seam the binary prints and a
 /// test compares, so the two cannot drift.
 pub fn capture_integrity_document(

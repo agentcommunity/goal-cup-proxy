@@ -15,9 +15,9 @@
 
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::capture_policy::{
-    CREDENTIAL_ENV, EnvContext, INJECTION_ENV, INJECTION_PREFIXES, INTERPRETER_PROGRAMS,
-    PROVIDER_PREFIXES, SHELL_VALUES, STARTUP_BASENAMES, STARTUP_COMPONENTS, arg_path_denied,
-    env_key_denied, env_value_denied, is_interpreter_program, startup_file_problem,
+    EnvContext, INJECTION_ENV, INJECTION_PREFIXES, INTERPRETER_PROGRAMS, PROVIDER_PREFIXES,
+    SHELL_VALUES, STARTUP_BASENAMES, STARTUP_COMPONENTS, arg_path_denied, env_key_denied,
+    env_value_denied, is_interpreter_program, startup_file_problem,
 };
 use goalcup_protocol::harness::{HarnessManifest, NEWER_SENTENCE, Origin, PlatformKey};
 use std::path::{Path, PathBuf};
@@ -97,7 +97,7 @@ fn admitted(t: &Table, origin: Origin) {
 const PINNED: Origin = Origin::Pinned;
 const DEV: Origin = Origin::Dev;
 
-/// Hermes with the keyed credential row, the claude and codex shapes, and a controlled
+/// Hermes (headless, `stderr_line`), the claude and codex shapes, and a controlled
 /// workload: the four identity shapes a row can need.
 fn hermes() -> Table {
     fixture("hermes-cli")
@@ -202,10 +202,6 @@ fn the_parsed_fixtures_carry_the_values_the_design_gives() {
     assert_eq!(h.capture.home.env.as_deref(), Some("HERMES_HOME"));
     assert_eq!(h.capture.home.seed.len(), 3);
     assert_eq!(h.capture.native[0].pattern, "session_{id}.json");
-    assert_eq!(
-        h.capture.credential.as_ref().unwrap().env,
-        "DEEPSEEK_API_KEY"
-    );
     assert_eq!(h.termination().grace_seconds(), 10);
     assert!(h.capture.argv_guard.as_ref().unwrap().long_abbreviations);
     let c = HarnessManifest::from_toml_str(&fixture_text("codex-cli")).unwrap();
@@ -568,89 +564,103 @@ fn identity_none_needs_a_per_run_root_and_no_id_placeholder() {
 // ---------------------------------------------------------------------------------------
 
 fn with_credential(mut t: Table, per_run: bool) -> Table {
-    t.get_mut("capture")
-        .and_then(Value::as_table_mut)
-        .unwrap()
-        .insert(
-            "credential".into(),
-            Value::Table(
-                [("env".to_string(), Value::String("DEEPSEEK_API_KEY".into()))]
-                    .into_iter()
-                    .collect(),
-            ),
-        );
+    with_credential_named(&mut t, "DEEPSEEK_API_KEY");
     if per_run {
         set(&mut t, &["capture", "home"], "config_home", "per_run");
     }
     t
 }
 
+fn with_credential_named(t: &mut Table, name: &str) {
+    t.get_mut("capture")
+        .and_then(Value::as_table_mut)
+        .unwrap()
+        .insert(
+            "credential".into(),
+            Value::Table(
+                [("env".to_string(), Value::String(name.into()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+}
+
+/// The words every `[capture.credential]` refusal carries (D61): the tracer never sees,
+/// forwards or stores a participant's provider key.
+const NO_KEY: &[&str] = &["capture.credential", "may not pass a provider key"];
+
+#[test]
+fn a_connector_with_a_credential_table_is_refused() {
+    use goalcup_protocol::harness::CREDENTIAL_REFUSAL;
+    // The table is refused by name, whatever it holds, before any other rule reads it.
+    for mut t in [claude(), codex(), with_credential(codex(), true)] {
+        tbl(&mut t, &["capture"]).insert("credential".into(), Value::Table(Table::new()));
+        refused(&t, PINNED, &["capture.credential", CREDENTIAL_REFUSAL]);
+    }
+    let mut t = with_credential(workload(), false);
+    tbl(&mut t, &["capture", "credential"]).insert("anything".into(), "x".into());
+    refused(&t, DEV, &["capture.credential", CREDENTIAL_REFUSAL]);
+    // A platform override may not bring one back either.
+    let mut t = with_platform(codex(), "linux-x86_64", &[]);
+    set(
+        &mut t,
+        &["capture", "platform", "linux-x86_64"],
+        "credential",
+        Value::Table(Table::new()),
+    );
+    refused(
+        &t,
+        PINNED,
+        &[
+            "capture.platform.linux-x86_64.credential",
+            CREDENTIAL_REFUSAL,
+        ],
+    );
+}
+
 #[test]
 fn a_credential_with_preassigned_identity_is_refused() {
-    // Even with the per-run home, so the identity pair is what refuses.
-    refused(
-        &with_credential(claude(), true),
-        PINNED,
-        &["credential", "`preassigned`", "not supported by this build"],
-    );
+    refused(&with_credential(claude(), true), PINNED, NO_KEY);
 }
 
 #[test]
 fn a_credential_with_no_identity_is_refused() {
-    refused(
-        &with_credential(workload(), true),
-        DEV,
-        &["credential", "`none`", "not supported by this build"],
-    );
+    refused(&with_credential(workload(), true), DEV, NO_KEY);
 }
 
 #[test]
-fn a_credential_with_stdout_json_identity_is_admitted_with_a_per_run_home() {
-    // One stdout reader feeds both the key-fragment scan and the identity matcher, so the pair
-    // is admitted; the key-fragment scan still needs the run directory to hold the config home.
-    admitted(&with_credential(codex(), true), PINNED);
-    refused(
-        &with_credential(codex(), false),
-        PINNED,
-        &["per_run", "key-fragment scan", "D41"],
-    );
+fn a_credential_with_stdout_json_identity_is_refused() {
+    // Once admitted with a per-run home (D50); refused with and without one now.
+    refused(&with_credential(codex(), true), PINNED, NO_KEY);
+    refused(&with_credential(codex(), false), PINNED, NO_KEY);
 }
 
 #[test]
 fn a_credential_without_a_per_run_home_is_refused() {
-    let mut t = hermes();
+    let mut t = with_credential(codex(), false);
     set(&mut t, &["capture", "home"], "config_home", "shared");
-    refused(&t, PINNED, &["per_run", "key-fragment scan", "D41"]);
+    refused(&t, PINNED, NO_KEY);
 }
 
 #[test]
-fn the_credential_name_is_a_closed_list() {
+fn every_credential_name_is_refused() {
+    // The names the closed list once admitted (D49) are refused like any other.
     for name in [
+        "DEEPSEEK_API_KEY",
+        "AMP_API_KEY",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "MY_KEY",
-        "deepseek_api_key",
-        "amp_api_key",
     ] {
-        let mut t = hermes();
-        set(&mut t, &["capture", "credential"], "env", name);
-        refused(
-            &t,
-            PINNED,
-            &["not one of the provider credential variables"],
-        );
+        let mut t = codex();
+        with_credential_named(&mut t, name);
+        refused(&t, PINNED, NO_KEY);
     }
-    assert_eq!(CREDENTIAL_ENV, ["DEEPSEEK_API_KEY", "AMP_API_KEY"]);
 }
 
 #[test]
-fn amp_credential_is_admitted_only_in_credential_field() {
-    // The Hermes fixture already has a per-run home and `stderr_line` identity, so the name is
-    // the only change.
-    let mut t = hermes();
-    set(&mut t, &["capture", "credential"], "env", "AMP_API_KEY");
-    admitted(&t, PINNED);
-    // The same name as a manifest env pin is a credential in a manifest, which is never allowed.
+fn a_provider_key_name_is_refused_in_every_field() {
+    // As a manifest env pin it is a credential in a manifest, which is never allowed.
     let mut t = codex();
     set(&mut t, &["capture", "env"], "AMP_API_KEY", "x");
     refused(
@@ -662,14 +672,10 @@ fn amp_credential_is_admitted_only_in_credential_field() {
             "would carry a credential, and a manifest never does",
         ],
     );
-    // Admitting the name does not lift the identity or home rules for it.
+    // As the credential table's name, the table itself is refused.
     let mut t = with_credential(claude(), true);
-    set(&mut t, &["capture", "credential"], "env", "AMP_API_KEY");
-    refused(&t, PINNED, &["credential", "`preassigned`"]);
-    let mut t = hermes();
-    set(&mut t, &["capture", "credential"], "env", "AMP_API_KEY");
-    set(&mut t, &["capture", "home"], "config_home", "shared");
-    refused(&t, PINNED, &["per_run", "key-fragment scan"]);
+    with_credential_named(&mut t, "AMP_API_KEY");
+    refused(&t, PINNED, NO_KEY);
 }
 
 #[test]
@@ -3037,7 +3043,6 @@ fn an_override_with_any_other_field_is_refused() {
         ("auth_hosts", strings(&["evil.example"])),
         ("goal_flag", "--goal".into()),
         ("ca", Value::Table(Table::new())),
-        ("credential", Value::Table(Table::new())),
         ("executable", Value::Table(Table::new())),
         ("version_args", strings(&["--version"])),
     ];
@@ -3297,12 +3302,12 @@ fn a_shared_run_home_is_for_a_harness_without_a_home_variable() {
             &["capture.home.run_home", "`shared`", "capture.home.env"],
         );
     }
-    // A credential needs a per-run `HOME`: the key-fragment scan covers the run directory only.
-    admitted(&with_credential(without_home_env(), true), PINNED);
+    // No credential, on a per-run or a shared `HOME` (D61).
+    refused(&with_credential(without_home_env(), true), PINNED, NO_KEY);
     refused(
         &with_credential(on_a_shared_run_home(without_home_env()), true),
         PINNED,
-        &["capture.credential", "run_home"],
+        NO_KEY,
     );
 }
 
@@ -3503,9 +3508,9 @@ fn an_interactive_profile_takes_no_goal_and_no_credential() {
     let mut t = chat();
     set(&mut t, &["capture"], "goal_flag", "--prompt");
     refused(&t, PINNED, &["capture.goal_flag", "interactive"]);
-    // No credential, even with the per-run home a credential otherwise needs.
+    // No credential (D61).
     let t = with_credential(chat(), true);
-    refused(&t, PINNED, &["capture.credential", "interactive"]);
+    refused(&t, PINNED, NO_KEY);
     // Identity `none` only.
     let mut t = chat();
     let id = tbl(&mut t, &["capture", "identity"]);

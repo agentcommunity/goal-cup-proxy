@@ -34,13 +34,6 @@ per_run_dir = "<harness>-home"          # delete for "shared"
 # seed = [{ file = "<file>" }]          # per_run only; the file goes in this case's files/
 real_dirs = ["{user_home}/.<harness>"]
 
-# A keyed connector: copy its [capture.credential] here and name the same variable as
-# credential_env in expect.toml. The kit hands the stand-in an invented key; the stand-in
-# must write the marker as synthetic-keyed-stderr/stand-in.py does (docs/HARNESS-ONBOARDING.md,
-# "Do I need a core change?", credential rows). Leave it out for a connector with no credential.
-# [capture.credential]
-# env = "<CREDENTIAL_ENV>"
-
 # Any CA variable works (docs/CONNECTOR-SCHEMA.md, "Credential and CA"); the stand-in reads
 # the file this variable names (CA_ENV in stand-in.py).
 [capture.ca]

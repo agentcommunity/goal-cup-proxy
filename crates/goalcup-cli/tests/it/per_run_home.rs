@@ -1,8 +1,8 @@
 //! The per-run private harness home (`config_home = "per_run"`).
 //!
 //! The home is made inside the run directory, from the connector's own seed files, and nothing
-//! outside the run is read or written through it. The subject is the keyed fixture connector
-//! (`tests/fixtures/connectors/keyed-per-run`); every shipped per-run connector is held to the
+//! outside the run is read or written through it. The subject is the headless fixture connector
+//! (`tests/fixtures/connectors/headless-per-run`); every shipped per-run connector is held to the
 //! same tree by `connector_contract`. Every directory here is a private temporary one: nothing
 //! resolves a real `HOME`.
 
@@ -19,16 +19,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 fn connector_dir() -> PathBuf {
-    support::fixture_connectors_dir().join("keyed-per-run")
+    support::fixture_connectors_dir().join("headless-per-run")
 }
 
-fn loaded_keyed() -> goalcup_protocol::harness::LoadedConnector {
+fn loaded_per_run() -> goalcup_protocol::harness::LoadedConnector {
     goalcup_protocol::harness::load_dir(&connector_dir(), goalcup_protocol::harness::Origin::Pinned)
         .unwrap()
 }
 
 fn create_home(run: &Path) -> Result<PathBuf, CliError> {
-    let loaded = loaded_keyed();
+    let loaded = loaded_per_run();
     create_per_run_home(run, &loaded.manifest.capture.home, &loaded.seeds)
 }
 
@@ -62,14 +62,15 @@ fn loaded_temp_home_connector(
     std::fs::create_dir_all(connector.join("files")).unwrap();
     let original = std::fs::read_to_string(connector_dir().join("harness.toml")).unwrap();
     let old_home = r#"dirs = ["home"]
-real_dirs = ["{user_home}/.keyed"]
+real_dirs = ["{user_home}/.perrun"]
 seed = [
   { file = "config.yaml" },
   { file = "auth.json" },
 ]"#;
-    let new_home = format!("dirs = {dirs}\nreal_dirs = [\"{{user_home}}/.keyed\"]\nseed = {seeds}");
+    let new_home =
+        format!("dirs = {dirs}\nreal_dirs = [\"{{user_home}}/.perrun\"]\nseed = {seeds}");
     let manifest = original
-        .replace("id = \"keyed-per-run\"", "id = \"per-run-home-test\"")
+        .replace("id = \"headless-per-run\"", "id = \"per-run-home-test\"")
         .replace(old_home, &new_home);
     assert_ne!(manifest, original, "the schema-1 fixture was not rewritten");
     std::fs::write(connector.join("harness.toml"), manifest).unwrap();
@@ -169,7 +170,7 @@ fn nested_seed_parents_are_synthesized_once_with_exact_modes_and_bytes() {
 fn the_home_is_a_private_tree_of_exactly_the_connectors_seed_files() {
     let (_tmp, run) = run_dir();
     let home = create_home(&run).expect("a per-run home");
-    assert_eq!(home, run.join("keyed"));
+    assert_eq!(home, run.join("perrun"));
     assert_eq!(mode(&home), 0o700);
     assert_eq!(mode(&home.join("home")), 0o700, "the declared `dirs` entry");
     assert!(home.join("home").is_dir());
@@ -198,7 +199,7 @@ fn the_home_is_a_private_tree_of_exactly_the_connectors_seed_files() {
 #[test]
 fn an_existing_home_is_refused_and_left_alone() {
     let (_tmp, run) = run_dir();
-    let existing = run.join("keyed");
+    let existing = run.join("perrun");
     std::fs::create_dir(&existing).unwrap();
     std::fs::write(existing.join("sentinel"), b"mine").unwrap();
     let err = create_home(&run).expect_err("it already exists");
@@ -213,7 +214,7 @@ fn an_existing_home_is_refused_and_left_alone() {
     // A symlink there is refused too, and what it names is not written through.
     let (_tmp2, run2) = run_dir();
     let elsewhere = tempfile::tempdir().unwrap();
-    std::os::unix::fs::symlink(elsewhere.path(), run2.join("keyed")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), run2.join("perrun")).unwrap();
     assert!(create_home(&run2).is_err());
     assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
 }
@@ -222,7 +223,7 @@ fn an_existing_home_is_refused_and_left_alone() {
 #[test]
 fn connector_mutation_after_load_cannot_change_written_seed_bytes() {
     let connector = tempfile::tempdir().unwrap();
-    let copied = connector.path().join("keyed-copy");
+    let copied = connector.path().join("per-run-copy");
     std::fs::create_dir_all(copied.join("files")).unwrap();
     std::fs::copy(
         connector_dir().join("harness.toml"),

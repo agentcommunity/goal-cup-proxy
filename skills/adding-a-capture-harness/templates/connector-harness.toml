@@ -23,8 +23,8 @@ display_name = "<HARNESS NAME>"         # 1 to 40 printable ASCII characters, as
 
 [capture]
 # A) Chat mode (the default): the harness opens in the participant's terminal and the participant
-# types the prompt. No goal slot, no [capture.credential], identity source "none". The sign-in
-# must live in the harness's own config home: chat mode cannot pass an env-only API key.
+# types the prompt. No goal slot, identity source "none". The sign-in must live in the
+# harness's own config home: the tracer never passes an API key (D61).
 interactive = true
 continuation = "chat: the participant types the prompt and may type keep going"
 # The argv WITHOUT the program; may be empty. Templates allowed in values: {workspace}. No
@@ -110,12 +110,8 @@ skills_dir = "skills"
 # No credential, URL or user data. mode is "0600" (default) or "0400".
 # seed = [{ file = "config.yaml" }, { file = "settings.json", mode = "0400" }]
 
-# Headless only: chat mode takes no credential. Only if the harness needs a provider key.
-# Closed list: DEEPSEEK_API_KEY, AMP_API_KEY (D49).
-# Requires config_home = "per_run" and identity stderr_line + deferred, or
-# stdout_json + at_launch (D50). Any other name is a core PR.
-# [capture.credential]
-# env = "DEEPSEEK_API_KEY"
+# No [capture.credential]: a connector may not pass a provider key; the harness keeps its own
+# login in its home (D61).
 
 [capture.ca]
 # One or two CA variables the harness reads (facts sheet section 6); no core change needed:

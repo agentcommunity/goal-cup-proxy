@@ -8,13 +8,11 @@
 //! * One file per connector, `<id>.json`: the capture profile as declared, whether the folder's
 //!   digest matches its pin, the resolved capture plan (program, argv with the goal placement,
 //!   environment, process group, kill fields), the stream decision and its pipes, the per-run
-//!   home tree where there is one, the CA variables, the credential verdicts, the registered
-//!   process handle, the redaction patterns, and the argv and environment probes whose verdict
+//!   home tree where there is one, the CA variables, the registered process handle, the redaction patterns, and the argv and environment probes whose verdict
 //!   for this connector differs from the shared policy.
 //! * Shared files, which no connector changes: `policy.json` (the generic argv and environment
-//!   deny verdicts over fixed probe lists, the CA-variable rules and the credential names),
-//!   `identity-grammar.json` (the stdout JSON tee and the stderr marker grammar over fixture
-//!   streams) and `loader-script.json`.
+//!   deny verdicts over fixed probe lists and the CA-variable rules) and `identity-grammar.json`
+//!   (the stdout JSON tee and the stderr marker grammar over fixture streams).
 //!
 //! The connector list is `shipped_connector_ids()`, and every per-connector field is derived
 //! from the connector's own files. Adding a connector folder therefore needs no edit here and
@@ -37,13 +35,13 @@ use goalcup_cli::ca_bundle::{HandedFile, handed_file};
 use goalcup_cli::connector::HarnessConnector;
 use goalcup_cli::launch::{
     LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan, build_capture_launch,
-    child_secret_for_harness, handle, spawn, stdout_tee_with_rule, tee_marked_with_rule,
+    handle, spawn, stdout_tee_with_rule, tee_marked_with_rule,
 };
 use goalcup_cli::per_run_home::create_per_run_home;
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::capture_policy::{
-    CA_ENV_SUFFIXES, CREDENTIAL_ENV, CaMode, EnvContext, SHARED_CA_ENV, TRUST_ONLY,
-    capture_arg_denied, env_key_denied,
+    CA_ENV_SUFFIXES, CaMode, EnvContext, SHARED_CA_ENV, TRUST_ONLY, capture_arg_denied,
+    env_key_denied,
 };
 use goalcup_protocol::harness::{CaptureSpec, HarnessManifest, Origin};
 use goalcup_protocol::pins::shipped_connector_ids;
@@ -52,15 +50,13 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The controlled test workload: a fixture of this file, never a folder under `connectors/`.
 const CONTROLLED: &str = "m2-controlled-workload";
-/// The synthetic provider key every probe uses where a key must be well formed.
-const WELL_FORMED_KEY: &str = "sk-0000111122223333444455556666";
 
 // ---------------------------------------------------------------------------------------
 // The golden files.
@@ -489,27 +485,17 @@ fn tree(root: &Path) -> Vec<Value> {
 }
 
 /// The stream decision of one connector, named from the launcher's own plan over its profile:
-/// the `StreamPlan` stream uses and the `LaunchScope`. A key scan pipes both streams; otherwise
-/// the stream that carries the identity and when the native store binds name the decision.
+/// the `StreamPlan` stream uses and the `LaunchScope`: the stream that carries the identity and
+/// when the native store binds name the decision.
 fn connector_streams_json(p: &CaptureSpec) -> Value {
     let plan = StreamPlan::for_spec(p).expect("a validated profile has a stream plan");
     let scope = LaunchScope::for_spec(p).expect("a validated profile has a launch scope");
-    let decision = if plan.scan_for_key {
-        "MarkedAndScanned"
-    } else {
-        match (&plan.stdout, &plan.stderr, scope) {
-            (StdoutUse::IdentityJson(_), StderrUse::Inherit, LaunchScope::FromStdout) => {
-                "CodexStdout"
-            }
-            (StdoutUse::Inherit, StderrUse::IdentityLine(_), LaunchScope::AtFinish) => {
-                "MarkedStderr"
-            }
-            (StdoutUse::Inherit, StderrUse::Inherit, LaunchScope::Preassigned) => {
-                "PreassignedSession"
-            }
-            (StdoutUse::Inherit, StderrUse::Inherit, LaunchScope::None) => "Inherit",
-            other => panic!("a launcher plan this golden does not name: {other:?}"),
-        }
+    let decision = match (&plan.stdout, &plan.stderr, scope) {
+        (StdoutUse::IdentityJson(_), StderrUse::Inherit, LaunchScope::FromStdout) => "CodexStdout",
+        (StdoutUse::Inherit, StderrUse::IdentityLine(_), LaunchScope::AtFinish) => "MarkedStderr",
+        (StdoutUse::Inherit, StderrUse::Inherit, LaunchScope::Preassigned) => "PreassignedSession",
+        (StdoutUse::Inherit, StderrUse::Inherit, LaunchScope::None) => "Inherit",
+        other => panic!("a launcher plan this golden does not name: {other:?}"),
     };
     let pipes = plan.pipes();
     json!({
@@ -526,9 +512,6 @@ fn profile_json(p: &CaptureSpec) -> Value {
     out.insert("ca_env".into(), json!(p.ca.env));
     out.insert("config_home".into(), json!(p.home.config_home.as_str()));
     out.insert("continuation".into(), json!(p.continuation));
-    if let Some(credential) = &p.credential {
-        out.insert("credential_env".into(), json!(credential.env));
-    }
     out.insert("env".into(), json!(p.env));
     out.insert(
         "executable".into(),
@@ -582,35 +565,6 @@ fn profile_json(p: &CaptureSpec) -> Value {
         ),
     );
     Value::Object(out)
-}
-
-/// The credential verdicts over a fixed set of launcher environments.
-fn credential_json(p: &CaptureSpec) -> Value {
-    let cases: [(&str, Option<&str>); 6] = [
-        ("unset", None),
-        ("empty", Some("")),
-        ("too_short", Some("sk-short")),
-        ("bad_characters", Some("sk-0000111122223333444455556666 x")),
-        ("quote", Some("\"sk-0000111122223333444455556666\"")),
-        ("well_formed", Some(WELL_FORMED_KEY)),
-    ];
-    let mut out = BTreeMap::new();
-    for (label, value) in cases {
-        let mut env = BTreeMap::new();
-        if let (Some(name), Some(value)) = (p.credential.as_ref().map(|c| c.env.as_str()), value) {
-            env.insert(name.to_string(), value.to_string());
-        }
-        let result = match child_secret_for_harness(p, &env) {
-            Ok(None) => "none".to_string(),
-            Ok(Some(secret)) => format!("secret:{}", secret.name()),
-            Err(e) => format!("error:exit{}", e.exit_code()),
-        };
-        out.insert(label, result);
-    }
-    json!({
-        "credential_env": p.credential.as_ref().map(|c| c.env.as_str()),
-        "child_secret_from_env": out,
-    })
 }
 
 /// Each CA variable the profile names, the profile's mode, the file the launch hands it, and the
@@ -864,7 +818,6 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         "streams": connector_streams_json(dp),
         "home": home,
         "ca": ca_json(&l, dp, &plan),
-        "credential": credential_json(dp),
         "termination": {
             "kill": termination_json(m),
             "registered_handle": handle_json,
@@ -933,7 +886,6 @@ fn the_shared_capture_policy_is_pinned() {
                 "own_name_suffixes": CA_ENV_SUFFIXES,
                 "refused": TRUST_ONLY,
             },
-            "credential_env_names": CREDENTIAL_ENV,
         }),
     );
 }
@@ -1031,7 +983,6 @@ fn stderr_marker(chunks: Vec<Vec<u8>>) -> Value {
     let tee = tee_marked_with_rule(
         Chunks::new(chunks),
         Sink::default(),
-        None,
         support::stderr_marker_rule(),
     )
     .unwrap();
@@ -1250,187 +1201,6 @@ fn the_identity_grammars_are_pinned() {
 }
 
 // ---------------------------------------------------------------------------------------
-// The loader script.
-// ---------------------------------------------------------------------------------------
-
-fn script() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/with-deepseek-key.sh")
-}
-
-/// Run the loader against a fake `goalcup` that records its argv and whether
-/// `DEEPSEEK_API_KEY` reached it (never the value).
-fn loader(args: &dyn Fn(&Path) -> Vec<String>, env_text: &str, mode: u32) -> Value {
-    let dir = tempfile::tempdir().unwrap();
-    let bin = dir.path().join("bin");
-    std::fs::create_dir(&bin).unwrap();
-    let fake = bin.join("goalcup");
-    std::fs::write(
-        &fake,
-        "#!/bin/sh -p\nprintf '%s\\n' \"$@\" > \"$OUT/argv\"\n\
-         if [ -n \"${DEEPSEEK_API_KEY+x}\" ]; then printf '%s' \"${#DEEPSEEK_API_KEY}\" > \"$OUT/key-length\"; fi\n\
-         env | /usr/bin/sed -n 's/^\\(OTHER_[A-Z_]*\\)=.*/\\1/p' > \"$OUT/leaked\"\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let file = dir.path().join("key.env");
-    std::fs::write(&file, env_text).unwrap();
-    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(mode)).unwrap();
-    let out = std::process::Command::new("/bin/sh")
-        .arg("-p")
-        .arg(script())
-        .args(args(&file))
-        .env_clear()
-        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
-        .env("OUT", dir.path())
-        .output()
-        .unwrap();
-    let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).ok();
-    json!({
-        "exit": out.status.code(),
-        "ran_goalcup": dir.path().join("argv").exists(),
-        "goalcup_argv": read("argv").map(|a| a.lines().map(|l| l.replace(dir.path().to_str().unwrap(), "<TMP>")).collect::<Vec<_>>()),
-        "key_length_in_goalcup_env": read("key-length"),
-        "other_variables_leaked": read("leaked").map(|t| t.lines().map(str::to_string).collect::<Vec<_>>()),
-        "stderr_has_key": String::from_utf8_lossy(&out.stderr).contains(WELL_FORMED_KEY),
-        "stdout_has_key": String::from_utf8_lossy(&out.stdout).contains(WELL_FORMED_KEY),
-        "refusal_prefix": String::from_utf8_lossy(&out.stderr).starts_with("refused: "),
-    })
-}
-
-#[test]
-fn the_deepseek_loader_script_behaviour_is_pinned() {
-    let good = format!("OTHER_SECRET=nope\nDEEPSEEK_API_KEY={WELL_FORMED_KEY}\n");
-    let start = |harness: &'static str, tail: Vec<&'static str>| {
-        move |file: &Path| -> Vec<String> {
-            let mut v = vec![
-                file.display().to_string(),
-                "start".into(),
-                "--harness".into(),
-                harness.into(),
-            ];
-            v.extend(tail.iter().map(|t| t.to_string()));
-            v
-        }
-    };
-    let cases: Vec<(&str, Value)> = vec![
-        (
-            "hermes_with_goal_file",
-            loader(
-                &start("hermes-cli", vec!["--goal-file", "/g.txt"]),
-                &good,
-                0o600,
-            ),
-        ),
-        (
-            "hermes_with_equals_options",
-            loader(
-                &start("hermes-cli", vec!["--goal-file=/g.txt"]),
-                &good,
-                0o600,
-            ),
-        ),
-        (
-            "codex_is_refused",
-            loader(
-                &start("codex-cli", vec!["--goal-file", "/g.txt"]),
-                &good,
-                0o600,
-            ),
-        ),
-        (
-            "claude_is_refused",
-            loader(
-                &start("claude-code-cli", vec!["--goal-file", "/g.txt"]),
-                &good,
-                0o600,
-            ),
-        ),
-        (
-            "another_option_is_refused",
-            loader(
-                &start("hermes-cli", vec!["--goal-file", "/g.txt", "--dev"]),
-                &good,
-                0o600,
-            ),
-        ),
-        (
-            "another_subcommand_is_refused",
-            loader(
-                &|file: &Path| {
-                    vec![
-                        file.display().to_string(),
-                        "status".into(),
-                        "--harness".into(),
-                        "hermes-cli".into(),
-                        "--goal-file".into(),
-                        "/g".into(),
-                    ]
-                },
-                &good,
-                0o600,
-            ),
-        ),
-        (
-            "mode_0644_is_refused",
-            loader(
-                &start("hermes-cli", vec!["--goal-file", "/g.txt"]),
-                &good,
-                0o644,
-            ),
-        ),
-        (
-            "no_key_line_is_refused",
-            loader(
-                &start("hermes-cli", vec!["--goal-file", "/g.txt"]),
-                "OTHER_SECRET=x\n",
-                0o600,
-            ),
-        ),
-        (
-            "two_key_lines_are_refused",
-            loader(
-                &start("hermes-cli", vec!["--goal-file", "/g.txt"]),
-                &format!(
-                    "DEEPSEEK_API_KEY={WELL_FORMED_KEY}\nDEEPSEEK_API_KEY={WELL_FORMED_KEY}\n"
-                ),
-                0o600,
-            ),
-        ),
-        (
-            "short_key_is_refused",
-            loader(
-                &start("hermes-cli", vec!["--goal-file", "/g.txt"]),
-                "DEEPSEEK_API_KEY=sk-short\n",
-                0o600,
-            ),
-        ),
-        (
-            "quoted_key_is_accepted",
-            loader(
-                &start("hermes-cli", vec!["--goal-file", "/g.txt"]),
-                &format!("DEEPSEEK_API_KEY=\"{WELL_FORMED_KEY}\"\n"),
-                0o600,
-            ),
-        ),
-        (
-            "key_with_a_space_is_refused",
-            loader(
-                &start("hermes-cli", vec!["--goal-file", "/g.txt"]),
-                "DEEPSEEK_API_KEY=sk-0000111122223333 44445555\n",
-                0o600,
-            ),
-        ),
-    ];
-    check_golden(
-        "loader-script.json",
-        &json!({
-            "script": "scripts/with-deepseek-key.sh",
-            "cases": cases.into_iter().collect::<BTreeMap<_, _>>(),
-        }),
-    );
-}
-
-// ---------------------------------------------------------------------------------------
 // The connectors this tree ships.
 // ---------------------------------------------------------------------------------------
 
@@ -1450,7 +1220,6 @@ const SHARED_GOLDENS: &[&str] = &[
     "decoder-selection.json",
     "identity-grammar.json",
     "launch-allowance-reader.json",
-    "loader-script.json",
     "policy.json",
     "redaction-extra-patterns.json",
 ];
