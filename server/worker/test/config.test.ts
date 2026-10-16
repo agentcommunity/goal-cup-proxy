@@ -213,8 +213,13 @@ test("the 5-minute cron runs in production and in staging; staging is a Worker o
   assert.equal(tables["env.staging.triggers"]!.crons, '["*/5 * * * *"]');
   assert.equal(tables[""]!.name, "goalcup-ingest");
   assert.equal(tables["env.staging"]!.name, "goalcup-ingest-staging");
-  assert.equal(tables["env.staging.vars"]!.NOTICE_RECIPIENT_OVERRIDE, "delivered@resend.dev"); // staging never emails a member
-  assert.ok(!("NOTICE_RECIPIENT_OVERRIDE" in tables.vars!));
+  assert.equal(tables["env.staging.vars"]!.NOTICE_MAIL, "on");
+  assert.equal(tables.vars!.NOTICE_MAIL, "off");
+  for (const [name, keys] of Object.entries(tables)) {
+    for (const removed of ["NOTICE_FROM", "NOTICE_RECIPIENT_OVERRIDE", "RESEND_API_KEY"]) {
+      assert.ok(!(removed in keys), `${removed} does not belong in [${name}]`);
+    }
+  }
   assert.equal(tables[""]!.workers_dev, "false"); // production: custom domain only
   assert.equal(tables[""]!.routes, '[{ pattern = "ingest.agentcommunity.org", custom_domain = true }]');
   // wrangler DOES inherit `routes`: without this, a staging deploy moves the production custom domain

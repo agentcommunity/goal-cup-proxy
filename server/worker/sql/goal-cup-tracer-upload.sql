@@ -1,11 +1,13 @@
 -- COPY, for reference. The authority is the website repo (agentCommunity_PAGE), supabase/migrations/.
--- This file is every *goal_cup_tracer*.sql migration there, in name order, one after the other, each
--- under a "-- ===== <file name> =====" line. Do not edit it by hand. After a website migration merges,
+-- This file includes every *goal_cup_tracer*.sql and *goal_cup_notices_via_email_queue.sql migration
+-- there, in name order, each under a "-- ===== <file name> =====" line. Do not edit migration bodies
+-- by hand. After a website migration merges,
 -- run this from the root of the website checkout (at its main), with F set to this file, to rewrite it
 -- (the header above the REGEN-END line is kept, the rest is regenerated):
---   F=<tracer>/server/worker/sql/goal-cup-tracer-upload.sql; { sed '/^-- REGEN-END/q' "$F"; for m in supabase/migrations/*goal_cup_tracer*.sql; do printf '\n-- ======================== %s ========================\n' "${m##*/}"; cat "$m"; done; } > "$F.new" && mv "$F.new" "$F"
+--   F=<tracer>/server/worker/sql/goal-cup-tracer-upload.sql; { sed '/^-- REGEN-END/q' "$F"; find supabase/migrations -maxdepth 1 -type f \( -name '*goal_cup_tracer*.sql' -o -name '*goal_cup_notices_via_email_queue.sql' \) -print | LC_ALL=C sort | while IFS= read -r m; do printf '\n-- ======================== %s ========================\n' "${m##*/}"; cat "$m"; done; } > "$F.new" && mv "$F.new" "$F"
 -- Change a migration there first, then regenerate here. Applied to the Agent Community Supabase
 -- project on 2026-10-15 (20261016120000: applied before this copy of it merged).
+-- The 20261017150200 notice-handoff migration is mirrored for review; application is a separate step.
 -- REGEN-END
 
 -- ======================== 20261015120000_goal_cup_tracer_upload.sql ========================
@@ -2304,3 +2306,78 @@ UPDATE goal_cup_tracer.events
    SET start_window_opens  = '2026-10-23T00:00:00Z',
        start_window_closes = '2026-11-06T00:00:00Z'
  WHERE id = 'goalcup-dryrun-2026' AND mode = 'dry_run' AND staging = false;
+
+-- ======================== 20261017150200_goal_cup_notices_via_email_queue.sql ========================
+-- Goal Cup notices now hand off to the email service atomically under the notice
+-- row lock. sent_at means durable email-service handoff, never provider delivery.
+-- Returning [] prevents an older upload Worker from submitting the mail itself.
+-- queue_id deliberately has no FK: queue retention is independent of run evidence.
+ALTER TABLE goal_cup_tracer.notices ADD COLUMN queue_id bigint;
+
+DO $migration$
+DECLARE old_expression text;
+BEGIN
+  SELECT pg_get_expr(conbin, conrelid) INTO old_expression FROM pg_constraint
+   WHERE conrelid = 'public.email_tracking'::regclass AND conname = 'email_tracking_email_type_check';
+  IF old_expression IS NULL THEN RAISE EXCEPTION 'email tracking constraint missing' USING ERRCODE = '55000'; END IF;
+  ALTER TABLE public.email_tracking DROP CONSTRAINT email_tracking_email_type_check;
+  EXECUTE 'ALTER TABLE public.email_tracking ADD CONSTRAINT email_tracking_email_type_check CHECK (('
+    || old_expression || ') OR email_type = ''goalcup_run_notice'')';
+END $migration$;
+
+CREATE OR REPLACE FUNCTION public.goal_cup_upload_claim_notices(p_limit integer, p_now text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_now timestamptz := p_now::timestamptz;
+  v_staging boolean := caller_is_staging();
+  v_n record;
+  v_to text;
+  v_data jsonb;
+  v_queue_id bigint;
+BEGIN
+  FOR v_n IN
+    SELECT n.* FROM notices n JOIN runs r ON r.id = n.run_id AND r.staging = v_staging
+     WHERE n.sent_at IS NULL AND n.queue_id IS NULL AND n.skipped_at IS NULL
+       AND (n.claimed_at IS NULL OR n.claimed_at < v_now - interval '15 minutes')
+       AND n.attempts < 5
+     ORDER BY n.created_at, n.id
+     LIMIT greatest(least(coalesce(p_limit, 20), 200), 0)
+     FOR UPDATE OF n SKIP LOCKED
+  LOOP
+    IF v_staging THEN
+      v_to := 'delivered@resend.dev';
+    ELSE
+      SELECT u.email INTO v_to FROM auth.users u WHERE u.id = v_n.member_id;
+    END IF;
+    IF v_to IS NULL OR btrim(v_to) = '' THEN
+      UPDATE notices SET skipped_at = v_now, skipped_reason = 'no_address' WHERE id = v_n.id;
+      CONTINUE;
+    END IF;
+    v_to := lower(btrim(v_to));
+    v_data := test_marked(notice_text(v_n.kind, v_n.payload, v_n.run_id), v_n.run_id)
+      || jsonb_build_object('run_id', v_n.run_id, 'kind', v_n.kind);
+    IF v_staging THEN
+      v_data := jsonb_set(v_data, '{subject}', to_jsonb('[staging] ' || (v_data ->> 'subject')));
+    END IF;
+
+    -- Delivery policy and unsubscribe links belong to the gateway. This named
+    -- site template has no stored content row and follows site-announcement retries.
+    INSERT INTO public.email_queue(template, recipient_email, data, source, user_id,
+                                   metadata, writer, kind, list_key, content_id)
+    VALUES ('goalcup_run_notice', v_to, v_data, 'cron',
+            CASE WHEN v_staging THEN NULL ELSE v_n.member_id END,
+            jsonb_build_object('goal_cup_notice_id', v_n.id, 'run_id', v_n.run_id, 'kind', v_n.kind),
+            'goalcup', 'announcement', 'goalcup', NULL)
+    RETURNING id INTO v_queue_id;
+
+    UPDATE notices SET sent_at = v_now, sent_to = v_to, queue_id = v_queue_id,
+                       claimed_at = v_now, attempts = attempts + 1
+     WHERE id = v_n.id;
+  END LOOP;
+  RETURN '[]'::jsonb;
+END $$;
+
+-- CREATE OR REPLACE preserves the existing service/ingest-role grants and signature.
+-- finish_notice stays unchanged for an older Worker with an outstanding claim.
+REVOKE ALL ON FUNCTION public.goal_cup_upload_claim_notices(integer, text) FROM PUBLIC, anon, authenticated;

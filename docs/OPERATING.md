@@ -33,7 +33,7 @@ names secrets only.
 | Test event | `test` (prefix `traces/test/`, never locked) | `test-staging` | any |
 | Database | the website's Supabase project, schema `goal_cup_tracer` | the same project | JSON state in the simulated bucket |
 | Supabase key / role | `goalcup_ingest_production` / `goal_cup_ingest_production` | `goalcup_ingest_staging` / `goal_cup_ingest_staging` | none |
-| Resend key | `goalcup-ingest-production` (send-only) | `goalcup-ingest-staging` (every mail goes to `delivered@resend.dev`) | none |
+| Run-notice handoff | `NOTICE_MAIL=off` pending owner activation | `NOTICE_MAIL=on` (database routes to test inbox) | off unless explicitly on; marks notices without mail |
 | Test approval route | never | on (`STAGING=on` and the `TEST_APPROVAL_KEY` secret) | on (`.dev.vars`) |
 | Approval page | `https://agentcommunity.org/goalcup/approve` (the website) | the same | the test route |
 
@@ -70,8 +70,10 @@ Before the window opens:
    `traces/goalcup-cup-2026/`.
 6. Check that `MAINTENANCE` is `off`.
 
-Emails go out at most 20 each 5-minute tick (240 an hour). A burst of 1,500 `started` mails at the
-window opening drains over about six hours. The limit is `NOTICES_PER_TICK` in `server/worker/src/mail.ts`.
+The Worker hands at most 200 notices to the website email queue each 5-minute tick when
+`NOTICE_MAIL=on`. The limit is `NOTICES_PER_TICK` in `server/worker/src/notices.ts`. The website
+gateway owns delivery throughput, suppression and retries. Queue handoff is not delivery proof.
+Production remains off pending owner activation; the mirrored website migration must be applied first.
 
 ## Deploy
 
@@ -90,7 +92,7 @@ CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy --env staging # staging
 - Roll back with `npx wrangler rollback` (the same account variable). Wrangler keeps recent versions.
 - Secrets are set with `wrangler secret put <NAME>` (add `--env staging` for staging):
   `RECEIPT_SIGNING_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `RATE_LIMIT_KEY`, `GITHUB_TOKEN`,
-  `RESEND_API_KEY`, and for staging only `TEST_APPROVAL_KEY`. The signing seed is made offline and kept in
+  and for staging only `TEST_APPROVAL_KEY`. The signing seed is made offline and kept in
   the owner's password manager, never in a repo. Meanings: [server/worker/README](../server/worker/README.md#configuration).
 - Watch a deploy with `npx wrangler tail`. Useful log lines: `tick <step> <run_id>: …` (a cron step failed),
   `r2-put-unrecognised-error` (R2 refused a put for a reason the Worker does not know), `misconfigured: …`.
@@ -279,9 +281,9 @@ clocks.
 | A participant's run shows `incomplete` | Its last piece did not arrive within 24 hours of the end. It is judged on what arrived. Nothing to repair. |
 | A participant lost their machine mid-run | `goalcup continue` works only on the machine that started the run. The run ends at its deadline with what was uploaded. |
 | Wrong run is the main run | An account has one main run; a later competition start replaced it. `GET /v1/runs/{id}` on the first shows `ends_at` = the second's start. This is by design. |
-| Emails are late | At most 20 go out per 5-minute tick. The queue drains by itself; raise `NOTICES_PER_TICK` in `mail.ts` to speed it. Check `RESEND_API_KEY` and `NOTICE_FROM` are set. |
+| Emails are late | Check `NOTICE_MAIL` and `tick handOffNotices` errors. At most 200 notices reach the website email queue per tick; inspect that queue and its gateway for delivery status. Notice `sent_at` proves handoff only. |
 | The signing key may be compromised | Add the new public key to `SERVER_PUBLIC_KEYS` in `crates/goalcup-verifier/src/lib.rs` (keep the old one so existing acknowledgements still verify), release the verifier, then `wrangler secret put RECEIPT_SIGNING_KEY` with a seed made offline. Avoid rotating mid-event unless the key leaked. |
-| A secret leaked (Supabase, Resend, GitHub, Cloudflare) | Revoke it at its provider, create a new one, `wrangler secret put` it, deploy. Treat the old value as public. |
+| A secret leaked (Supabase, GitHub, Cloudflare) | Revoke it at its provider, create a new one, `wrangler secret put` it, deploy. Treat the old value as public. |
 
 # Part 2: the tracer
 

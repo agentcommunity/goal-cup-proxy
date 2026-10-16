@@ -16,7 +16,6 @@ import type {
   AbandonResult,
   ApproveDeviceResult,
   ChunkRecord,
-  ClaimedNotice,
   CommitChunkArgs,
   CommitChunkResult,
   ContinueRunArgs,
@@ -29,7 +28,6 @@ import type {
   HeartbeatArgs,
   HeartbeatResult,
   NoticeArgs,
-  NoticeOutcome,
   OpenRunArgs,
   OpenRunResult,
   RunRow,
@@ -102,14 +100,6 @@ const ENTRY_SHAPE: Record<string, Check> = {
   seal_sha256: nullable(hex64),
   baseline_sha256: nullable(hex64),
   sealed_at: nullable(isTime),
-};
-const NOTICE_SHAPE: Record<string, Check> = {
-  id: uint,
-  kind: oneOf("started", "silence", "idle_3h", "idle_6h", "recording", "ended"),
-  run_id: RUN_SHAPE.run_id!,
-  to: nullable(text),
-  subject: text,
-  text: text,
 };
 const CHUNK_SHAPE: Record<string, Check> = {
   entry_id: isEntryId,
@@ -374,18 +364,12 @@ export class SupabaseDb implements Db {
     throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
   }
 
-  async claimNotices(limit: number, now: string): Promise<ClaimedNotice[]> {
+  async handOffNotices(limit: number, now: string): Promise<void> {
     const v = await this.#rpc("upload_claim_notices", { p_limit: limit, p_now: now });
     if (!Array.isArray(v)) {
-      console.error(`supabase upload_claim_notices: expected a list of notices`);
+      console.error("supabase upload_claim_notices: expected a list");
       throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
     }
-    return v.map((row) => this.#row<ClaimedNotice>("upload_claim_notices", row, "notice", NOTICE_SHAPE));
-  }
-
-  async finishNotice(id: number, outcome: NoticeOutcome, to: string | null, detail: string, now: string): Promise<void> {
-    const v = await this.#rpc("upload_finish_notice", { p_id: id, p_outcome: outcome, p_to: to, p_detail: detail, p_now: now });
-    this.#word("upload_finish_notice", v, ["ok", "not_found"] as const);
   }
 
   async recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void> {

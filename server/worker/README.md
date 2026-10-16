@@ -52,8 +52,7 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/auth.ts` | Bearer run credential to member, and the one run it may touch |
 | `src/runs.ts` | Open, continue, receipt, abandon, position, heartbeat, seal |
 | `src/chunks.ts` | The chunk upload: early refusals, retry rule, streaming to R2, atomic commit |
-| `src/notices.ts` | The 5-minute cron: close runs, record the GitHub commit at the deadline, queue the run emails |
-| `src/mail.ts` | Sends each queued notice once through Resend |
+| `src/notices.ts` | The 5-minute cron: close runs, record the GitHub commit at the deadline, queue run notices and hand them to the website email queue |
 | `src/sign.ts` | Ed25519 receipts and acknowledgements (byte-exact with the Rust formats) |
 | `src/db.ts` | The `Db` interface: one method per step, and the run-state rules (`endsAt`, `statusAt`) |
 | `src/db-supabase.ts` | Production: one Postgres function per step, through PostgREST RPC |
@@ -61,7 +60,7 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/context.ts`, `env.ts`, `errors.ts`, `util.ts` | Configuration, bindings, error types, helpers |
 | `sql/goal-cup-tracer-upload.sql` | Copy of the website's migration that `db-supabase.ts` calls. The website repo is the authority. |
 | `scripts/delete-test-runs.sh` | Deletes all organizer test runs, rows and R2 objects ([OPERATING](../../docs/OPERATING.md#test-runs)) |
-| `test/` | `sign.test.ts` (the signing vectors shared with the Rust crate), `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
+| `test/` | `sign.test.ts` (the signing vectors shared with the Rust crate), `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
 
 ## Configuration
 
@@ -80,8 +79,7 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `GITHUB_CHECK` | off | `on` makes `POST /v1/runs` ask GitHub that `repo_url` is a public repository (`wrangler.toml` sets `on`; `npm run dev` and the tests turn it off). A missing or private repository is `400`; GitHub unreachable or rate-limiting is `502`, which the tracer retries. |
 | `MAINTENANCE`, `MAINTENANCE_RETRY_AFTER` | off, `300` | `on` makes every call answer `503 maintenance` with that `Retry-After`, before authentication and before any body is read. The cron does nothing while it is on. |
 | `DEVICE_START_PER_MINUTE`, `DEVICE_POLL_PER_MINUTE`, `DEVICE_TOKEN_PER_MINUTE` | `120`, `30`, `1200` | Device-flow limits: starts per client address, polls per device code, polls per client address (abuse cap). |
-| `NOTICE_FROM` | none | Sender of the run emails. Needed once `RESEND_API_KEY` is set. |
-| `NOTICE_RECIPIENT_OVERRIDE` | none | Send every run email to this one address instead of the member. A staging Worker refuses to send without it. |
+| `NOTICE_MAIL` | off | Exactly `on` hands notices to the website email queue. Production is `off` pending owner activation; staging is `on`, and the database routes staging to the test inbox. |
 | `RUN_SECONDS`, `CLOSE_AFTER_SECONDS`, `START_WINDOW_OPENS`, `START_WINDOW_CLOSES` | none | **Tests only, honoured only with `DB_BACKEND=local`** (anywhere else the Worker answers `500 misconfigured`). Run length in seconds, seconds until a finished run closes (production: 24 hours, fixed), and the competition start window (RFC 3339; an unset edge is open). In production the window is the event's row in the database. |
 
 Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
@@ -92,7 +90,6 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 | `SUPABASE_URL`, `SUPABASE_KEY` | The project URL, and a Supabase secret API key whose role may only run `public.goal_cup_upload_*`. Not the community-wide service key. |
 | `RATE_LIMIT_KEY` | Random, at least 32 characters: the HMAC key of every rate-limit key. A deployment answers every device call `500 misconfigured` without it. |
 | `GITHUB_TOKEN` | Read-only token for public repositories. Required in production and staging: the cron reads each run's commit at its deadline, and the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses. |
-| `RESEND_API_KEY` | Switches the run emails on. Send-only. |
 | `TEST_APPROVAL_KEY` | **Tests and staging only.** Switches on `POST /v1/device/approve`, which approves a device request as any member. Set anywhere else, every call answers `500 misconfigured`. Unset, the route is `404`. Never set it in production. |
 
 `test/config.test.ts` reads `wrangler.toml` and fails if the top level names `TEST_APPROVAL_KEY` or
@@ -232,7 +229,7 @@ cannot find a good version, switch maintenance on and ask the owner.
 
 - Workers Logs are on in `wrangler.toml` for production and for staging. They keep the Worker's own
   `console.error` lines: `misconfigured: ...`, `supabase <fn>: ...`, `tick <step> <run_id>: ...`,
-  `unhandled: ...` (a `500 internal`), `mail notice ...` and `r2-put-unrecognised-error`. Read them in the Cloudflare dashboard: Workers & Pages, the Worker, Observability (Logs).
+  `unhandled: ...` (a `500 internal`), `tick handOffNotices: ...` and `r2-put-unrecognised-error`. Read them in the Cloudflare dashboard: Workers & Pages, the Worker, Observability (Logs).
   Search for the text you need.
 - Invocation logs are off on purpose (`invocation_logs = false`). An invocation log keeps request details,
   such as the `Authorization` header and the client address. The data policy does not allow that. Because of
@@ -364,14 +361,21 @@ or on production. Treat both as open. When you run one, write the date and the r
 ## The cron
 
 `scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes. Four steps, in this
-order, each in its own try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`, `sendNotices`
-(`src/mail.ts`). All take the time as a parameter. They read `Db.runsForTick(now)` (open runs, and runs
+order, each in its own try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`, `handOffNotices`.
+All take the time as a parameter. The first three read `Db.runsForTick(now)` (open runs, and runs
 that ended in the last 48 hours; never abandoned ones). The constants (20 minutes of silence, idle at 3
-and 6 hours, an hour to wait for the commit, 50 GitHub calls per tick, 20 emails per tick) are in
-`notices.ts` and `mail.ts` and have no variable. The rules are in
+and 6 hours, an hour to wait for the commit, 50 GitHub calls per tick, 200 notice handoffs per tick)
+are in `notices.ts` and have no variable. The rules are in
 [UPLOAD-API](../../docs/UPLOAD-API.md#what-the-server-does-on-its-own).
 
-Cost: each step reads the run list with one call. `queueNotices` makes one call for the whole batch
+`handOffNotices` does nothing unless `NOTICE_MAIL` is exactly `on`. Its single RPC,
+`goal_cup_upload_claim_notices`, durably inserts due notices into the website's `email_queue` and
+returns `[]`. Notice `sent_at` records queue handoff, not provider delivery. The website gateway owns
+suppression, unsubscribe policy, retries and provider delivery; this Worker needs no provider key.
+Local mode marks each notice once with `provider_id = "local:no-mail"` and sends no mail.
+The mirrored notice-handoff migration must be applied separately before enabling handoff.
+
+Cost: the first three steps each read the run list with one call. `queueNotices` makes one call for the whole batch
 however many runs there are. `closeRuns` makes one call per run due to close. `recordFinalCommits` makes
 at most 50 GitHub fetches and 50 writes. That is about a hundred subrequests in a busy tick, so the cron
 needs the paid Workers plan (the free plan allows 50 per invocation). A failed step is logged

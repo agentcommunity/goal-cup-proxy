@@ -21,8 +21,8 @@ Owner decisions of 16 Oct 2026:
 - Support contact: goalcup@agentcommunity.org.
 - Windows means WSL2 for the event ([README](README.md#windows-use-wsl2)). Native Windows later.
 - Security contact: goalcup@agentcommunity.org too.
-- Emails: no throughput work here. The website is building one central mail system (hundreds of
-  mails every 5 seconds); the Worker moves to it later.
+- Email rollout: the Worker hands notices to the website email queue locally; production
+  `NOTICE_MAIL` remains off until the website migration and owner-approved activation.
 - The lead agent applies production database migrations and Worker deploys (additive only, existing
   storage intact). The owner approves terminal prompts.
 - The program version comes from one place and updates everywhere automatically (WP2).

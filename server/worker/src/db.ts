@@ -331,7 +331,7 @@ export const TICK_LOOKBACK_SECONDS = 48 * 3600;
 
 export type NoticeKind = "started" | "silence" | "idle_3h" | "idle_6h" | "recording" | "ended";
 
-/** One row for the outbox: src/mail.ts sends it, once, with the text and address the database gives. */
+/** One row for the outbox: the database hands it to the website email queue once. */
 export interface NoticeArgs {
   run_id: string;
   member_id: string;
@@ -341,22 +341,6 @@ export interface NoticeArgs {
   payload: Record<string, unknown>;
   at: string;
 }
-
-/**
- * A queued notice claimed for sending: the database decided the address (null only for a member it
- * has no account for, such as a synthetic staging member), checked suppression, and wrote the email.
- */
-export interface ClaimedNotice {
-  id: number;
-  kind: NoticeKind;
-  run_id: string;
-  to: string | null;
-  subject: string;
-  text: string;
-}
-
-/** How sending one claimed notice ended: `detail` is the provider's message id, the skip reason, or a short error. */
-export type NoticeOutcome = "sent" | "skipped" | "failed";
 
 export interface Db {
   /** Start a device request. The two hashes must be new. */
@@ -392,13 +376,8 @@ export interface Db {
    * many this call queued. A batch that fails is retried whole: the key makes that safe.
    */
   queueNotices(notices: NoticeArgs[]): Promise<number>;
-  /**
-   * Claim up to `limit` unsent notices for the mailer. A claim lasts 15 minutes, so a send that died
-   * is claimed again; suppressed or address-less members are skipped by the database and not returned.
-   */
-  claimNotices(limit: number, now: string): Promise<ClaimedNotice[]>;
-  /** Record how sending a claimed notice ended. `to` is the address used (for `sent`). */
-  finishNotice(id: number, outcome: NoticeOutcome, to: string | null, detail: string, now: string): Promise<void>;
+  /** Hand up to `limit` notices to the website email queue; local mode only marks them, without mail. */
+  handOffNotices(limit: number, now: string): Promise<void>;
   /** Store the commit found at the deadline (a 40-hex sha, or `none`). The first one stored stays. */
   recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void>;
   /** A stored chunk of the entry that starts at `offset`, or null. */

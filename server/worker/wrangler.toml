@@ -58,8 +58,8 @@ APPROVAL_URL = "https://agentcommunity.org/goalcup/approve"
 # Never commit "on". Switch it on with `wrangler deploy --var MAINTENANCE:on`: see README "Maintenance on and off".
 MAINTENANCE = "off"
 MAINTENANCE_RETRY_AFTER = "300"
-# Sender of the run emails (src/mail.ts); mail stays off until the RESEND_API_KEY secret is set.
-NOTICE_FROM = "Agent Community <updates@member.agentcommunity.org>"
+# Run-notice handoff to the website email queue. Production stays off pending owner activation.
+NOTICE_MAIL = "off"
 # Device-flow limits, calls a minute (src/ratelimit.ts). One tracer starts once and polls its own
 # code 12 times a minute. Starts are per client address, generous for a venue or campus NAT; polls
 # are per device code, so a NAT does not share them; the per-address poll cap is an abuse guard.
@@ -71,7 +71,6 @@ DEVICE_TOKEN_PER_MINUTE = "1200"
 #   RECEIPT_SIGNING_KEY  Ed25519 seed, 64 hex characters, generated offline
 #   SUPABASE_URL         https://<project>.supabase.co
 #   SUPABASE_KEY         a Supabase secret API key whose role may only execute public.goal_cup_upload_*
-#   RESEND_API_KEY       optional: switches the run emails on (the website's Resend account)
 #   GITHUB_TOKEN         read-only; required in production and staging (the cron's commit fetch fails without it)
 #   RATE_LIMIT_KEY       random, at least 32 characters: HMAC key of the rate-limit keys (src/ratelimit.ts)
 #   TEST_APPROVAL_KEY    never in production. Staging only (with STAGING = "on"): switches on
@@ -143,9 +142,8 @@ GITHUB_CHECK = "on"
 APPROVAL_URL = "https://agentcommunity.org/goalcup/approve"
 MAINTENANCE = "off"
 MAINTENANCE_RETRY_AFTER = "300"
-NOTICE_FROM = "Agent Community <updates@member.agentcommunity.org>"
-# Staging never emails a member: every notice goes to Resend's test inbox.
-NOTICE_RECIPIENT_OVERRIDE = "delivered@resend.dev"
+# The database routes staging notices to the test inbox through the website email queue.
+NOTICE_MAIL = "on"
 # Low test limits, so a burst shows the 429: one code trips at 5 polls, one address at 10.
 DEVICE_START_PER_MINUTE = "5"
 DEVICE_POLL_PER_MINUTE = "5"

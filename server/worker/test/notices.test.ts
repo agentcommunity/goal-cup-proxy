@@ -4,8 +4,14 @@
 // (test/helpers/inproc.ts), and `tick` runs the cron once at that time.
 
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, mock, test } from "node:test";
 import { LocalDb } from "../src/db-local.ts";
+import { SupabaseDb } from "../src/db-supabase.ts";
+import { ApiError } from "../src/errors.ts";
+import * as noticeWorker from "../src/notices.ts";
+import { FakeBucket, asR2 } from "./helpers/fake-r2.ts";
 import { queueNotices, runTick } from "../src/notices.ts";
 import { T0, WINDOW, type Rig, lifecycle } from "./helpers/rig.ts";
 
@@ -560,4 +566,82 @@ lifecycle("the cron reads every run, however many there are, a page at a time", 
   r.bucket.pageLimit = 3;
   await r.tick();
   assert.equal(only(r, "started").length, 7);
+});
+
+
+lifecycle("hand-off is off unless NOTICE_MAIL is on", async (r) => {
+  await r.start(await r.cred("alice"), "s1");
+  await r.tick();
+  const ctx = await r.ctx();
+  for (const value of [undefined, "", "off", "ON", " on "]) {
+    await noticeWorker.handOffNotices({ ...ctx, env: { ...ctx.env, NOTICE_MAIL: value } }, new Date(T0));
+    assert.equal((outbox(r)[0] as Notice & { sent_at: string | null }).sent_at, null);
+  }
+  await runTick({ ...r.env, NOTICE_MAIL: "on" });
+  assert.equal((outbox(r)[0] as Notice & { sent_at: string | null }).sent_at, T0);
+});
+
+lifecycle("SupabaseDb.handOffNotices calls goal_cup_upload_claim_notices only", async (r) => {
+  const calls: { url: string; method: string | undefined; body: unknown }[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(input), method: init?.method, body: JSON.parse(init?.body as string) });
+    return new Response("[]", { status: 200 });
+  }) as typeof fetch;
+  const ctx = await r.ctx();
+  const db = new SupabaseDb("https://p.example", "fake-key");
+  assert.equal(await noticeWorker.handOffNotices({ ...ctx, db, env: { ...ctx.env, NOTICE_MAIL: "on" } }, new Date(T0)), undefined);
+  assert.deepEqual(calls, [{ url: "https://p.example/rest/v1/rpc/goal_cup_upload_claim_notices", method: "POST", body: { p_limit: 200, p_now: T0 } }]);
+});
+
+test("a non-list hand-off reply is an error", async () => {
+  const db = new SupabaseDb("https://p.example", "fake-key");
+  const log = mock.method(console, "error", () => {});
+  try {
+    for (const reply of [null, {}, "ok", 0]) {
+      globalThis.fetch = (async () => new Response(JSON.stringify(reply), { status: 200 })) as typeof fetch;
+      await assert.rejects(db.handOffNotices(200, T0), (e) => e instanceof ApiError && e.status === 502);
+    }
+  } finally {
+    log.mock.restore();
+  }
+});
+
+test("LocalDb hands each due notice off once, across pages, limits and concurrent ticks", async () => {
+  const bucket = new FakeBucket();
+  bucket.pageLimit = 1;
+  const db = LocalDb.create(asR2(bucket));
+  await db.queueNotices(["a", "b", "c"].map((run_id) => ({ run_id, member_id: "member", kind: "started", dedupe_key: "", payload: {}, at: T0 })));
+  await db.handOffNotices(0, T0);
+  assert.ok([...bucket.map.values()].every((v) => JSON.parse(v.text).sent_at === null));
+  await db.handOffNotices(1, T0);
+  assert.equal([...bucket.map.values()].filter((v) => JSON.parse(v.text).sent_at === T0).length, 1);
+  const later = t(60);
+  await Promise.all([db.handOffNotices(200, later), db.handOffNotices(200, t(120))]);
+  for (const v of bucket.map.values()) {
+    const row = JSON.parse(v.text) as { sent_at: string | null; provider_id: string };
+    assert.ok(row.sent_at !== null);
+    assert.equal(row.provider_id, "local:no-mail");
+  }
+  const handedOff = [...bucket.map.entries()];
+  await db.handOffNotices(200, t(180));
+  assert.deepEqual([...bucket.map.entries()], handedOff, "a repeat does not rewrite any notice");
+});
+
+test("LocalDb preserves skipped and active-claim notices, and retries expired claims conditionally", async () => {
+  const bucket = new FakeBucket();
+  const db = LocalDb.create(asR2(bucket));
+  for (const [run, extra] of Object.entries({ active: { claimed_at: t(-15 * 60) }, stale: { claimed_at: t(-15 * 60 - 1) }, skipped: { skipped_at: t(-1) } })) {
+    await bucket.put(`state/notices/${run}.json`, JSON.stringify({ run_id: run, kind: "started", member_id: "member", payload: {}, created_at: t(-3600), sent_at: null, ...extra }));
+  }
+  const before = new Map(bucket.map);
+  await db.handOffNotices(200, T0);
+  for (const run of ["active", "skipped"]) assert.deepEqual(bucket.map.get(`state/notices/${run}.json`), before.get(`state/notices/${run}.json`));
+  assert.equal(JSON.parse(bucket.map.get("state/notices/stale.json")!.text).sent_at, T0);
+});
+
+test("no source file calls Resend", () => {
+  const root = new URL("../src/", import.meta.url).pathname;
+  for (const file of readdirSync(root, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".ts"))) {
+    assert.ok(!readFileSync(join(root, file), "utf8").includes("api.resend.com"), file);
+  }
 });

@@ -1,7 +1,7 @@
 // What the server does on its own, every 5 minutes (the `scheduled` export; wrangler.toml has the
 // cron): close runs that are over, record the GitHub commit at each deadline, queue the run
-// emails into the outbox, and send them (src/mail.ts: each queued row once, through Resend; the
-// database writes the email and picks the address, and gives a staging Worker none). Contract: docs/UPLOAD-API.md,
+// emails into the outbox, and hand them to the website email queue. The database writes the
+// email and picks the address; the website gateway owns delivery. Contract: docs/UPLOAD-API.md,
 // "What the server does on its own".
 //
 // Every notice is decided here, in `queueNotices`, never in a request handler. A notice is
@@ -10,7 +10,6 @@
 import { type Ctx, makeCtx } from "./context.ts";
 import { type NoticeKind, type TickRun, endsAt, isReplaced, statusAt } from "./db.ts";
 import type { Env } from "./env.ts";
-import { sendNotices } from "./mail.ts";
 import { githubHeaders } from "./runs.ts";
 import { REPO_URL, addSeconds, formatTime } from "./util.ts";
 
@@ -22,6 +21,8 @@ export const IDLE_HOURS = [3, 6] as const;
 export const ENDED_WAIT = 3600;
 /** The most runs one tick asks GitHub about (oldest first; the rest wait for the next tick). */
 export const COMMITS_PER_TICK = 50;
+/** The most notices one database call hands to the website email queue per tick. */
+export const NOTICES_PER_TICK = 200;
 
 const earlier = (now: Date, seconds: number) => formatTime(addSeconds(now, -seconds));
 
@@ -131,6 +132,12 @@ export async function queueNotices(ctx: Ctx, now: Date): Promise<number> {
   return batch.length === 0 ? 0 : ctx.db.queueNotices(batch);
 }
 
+/** Hand due notices to the website email queue only when explicitly enabled. */
+export async function handOffNotices(ctx: Ctx, now: Date): Promise<void> {
+  if (ctx.env.NOTICE_MAIL !== "on") return;
+  await ctx.db.handOffNotices(NOTICES_PER_TICK, formatTime(now));
+}
+
 /** One cron tick. Each step is on its own: one that fails is logged and the others still run. */
 export async function runTick(env: Env): Promise<void> {
   // While the maintenance switch is on tracers cannot beat, so silence would be false news.
@@ -143,7 +150,7 @@ export async function runTick(env: Env): Promise<void> {
     return;
   }
   const now = ctx.now();
-  for (const [name, step] of [["closeRuns", closeRuns], ["recordFinalCommits", recordFinalCommits], ["queueNotices", queueNotices], ["sendNotices", sendNotices]] as const) {
+  for (const [name, step] of [["closeRuns", closeRuns], ["recordFinalCommits", recordFinalCommits], ["queueNotices", queueNotices], ["handOffNotices", handOffNotices]] as const) {
     try {
       await step(ctx, now);
     } catch (e) {

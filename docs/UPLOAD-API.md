@@ -391,11 +391,12 @@ The previous entry is not sealed or closed by this; it may still upload its wrap
 A cron runs every 5 minutes. It does four things, in this order, and a step that fails is logged
 and does not stop the next: it closes runs that are over (so a run's status is final without any
 call naming it), it records the GitHub commit at each deadline, it queues the run emails in an
-outbox, and it sends them. A tracer sees none of this. Each outbox row is sent once through Resend
-(`server/worker/src/mail.ts`); the database writes the email, picks the member's address and checks
-suppression. A staging Worker is never given an address by the database and sends every email to
-its test address. (While the maintenance switch is on the
-cron does nothing, since no tracer can send a heartbeat.)
+outbox, and, when `NOTICE_MAIL` is exactly `on`, it hands up to 200 notices to the website email
+queue through `goal_cup_upload_claim_notices`. A tracer sees none of this. The database writes the
+email and picks the member's address; staging goes to the test inbox. The website gateway owns
+suppression, unsubscribe policy, retries and provider delivery. Notice `sent_at` means durable queue
+handoff, not delivery. Local mode marks each notice once without sending mail. (While the
+maintenance switch is on the cron does nothing, since no tracer can send a heartbeat.)
 
 **The commit at the deadline.** For a competition run that reached its deadline (not a replaced run,
 not practice), the server asks GitHub for the head commit of `repo_url`

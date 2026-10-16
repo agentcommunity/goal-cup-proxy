@@ -65,15 +65,8 @@ export interface Env {
   GITHUB_CHECK?: string;
   GITHUB_TOKEN?: string;
 
-  /**
-   * The run emails (src/mail.ts). Mail is off while RESEND_API_KEY (a secret) is unset. NOTICE_FROM
-   * is the sender, e.g. `Agent Community <updates@member.agentcommunity.org>`. With
-   * NOTICE_RECIPIENT_OVERRIDE set every notice goes to that one address instead of the member; a
-   * staging Worker refuses to send without it.
-   */
-  RESEND_API_KEY?: string;
-  NOTICE_FROM?: string;
-  NOTICE_RECIPIENT_OVERRIDE?: string;
+  /** "on" hands run notices to the website email queue. Unset or any other value keeps handoff off. */
+  NOTICE_MAIL?: string;
 
   /** Secret: Ed25519 seed, 64 hex characters. */
   RECEIPT_SIGNING_KEY: string;
