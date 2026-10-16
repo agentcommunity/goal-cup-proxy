@@ -15,9 +15,9 @@ id = "<HARNESS_ID>"                     # must equal the folder name; ^[a-z][a-z
 # How messages to the participant name this harness. Required in practice: without it they
 # say the connector id. Plain text only: the strings are printed to a terminal.
 [participant]
-display_name = "<HARNESS NAME>"         # 1 to 40 printable characters, as a person says it
+display_name = "<HARNESS NAME>"         # 1 to 40 printable ASCII characters, as a person says it
 # What the harness shows first and what to do about it (a trust or login question). Shown just
-# before the harness opens. At most 200 characters, one plain line. Delete if it asks nothing.
+# before the harness opens. At most 200 printable ASCII characters, one line. Delete if it asks nothing.
 # first_screen = "<HARNESS NAME> may ask <QUESTION>. Choose <ANSWER>."
 
 [capture]

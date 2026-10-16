@@ -420,14 +420,14 @@ Both strings are printed to a terminal, so they are held to plain text.
 
 | Field | Required/default | Contract |
 |---|---|---|
-| `participant.display_name` | required when the table is present | The name as a person says it ("Claude Code"). 1–40 characters, not blank, no leading or trailing space. |
-| `participant.first_screen` | optional, default absent | What the harness shows first and what to do about it, shown just before the harness opens. Plain text on one line, 1–200 characters, not blank, no leading or trailing space. Leave it out when the harness asks nothing. |
+| `participant.display_name` | required when the table is present | The name as a person says it ("Claude Code"). 1–40 characters. |
+| `participant.first_screen` | optional, default absent | What the harness shows first and what to do about it, shown just before the harness opens. 1–200 characters. Leave it out when the harness asks nothing. |
 
-Both fields refuse: any control character (ESC and so any ANSI sequence, CR, LF, tab, DEL, the C1
-range), and the invisible formatting characters that change how a line reads (zero-width
-characters, bidirectional overrides and isolates, line and paragraph separators, the soft hyphen,
-the byte-order mark). `harness_conformance.rs` also requires every shipped connector to declare a
-`display_name`.
+Both fields are an allow-list: printable ASCII only (0x20 to 0x7E), no leading or trailing space,
+and no two spaces in a row. That refuses every control character (ESC and so any ANSI sequence,
+CR, LF, tab, DEL, the C1 range) and every non-ASCII character, so no invisible, bidirectional,
+tag or odd-space character gets through. `harness_conformance.rs` also requires every shipped
+connector to declare a `display_name`.
 
 ```toml
 [participant]

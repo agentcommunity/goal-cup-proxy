@@ -301,39 +301,32 @@ pub struct ParticipantSpec {
     pub first_screen: Option<String>,
 }
 
-/// Characters that are not control characters but still change how a terminal line reads:
-/// zero-width and bidirectional-formatting characters, and the line and paragraph separators.
-fn is_invisible_format(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{2028}'..='\u{202E}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{2069}'
-            | '\u{FEFF}'
-    )
-}
-
 /// Why `s` is not fit to print to a terminal as one line of plain text, or `None` when it is.
-/// No control character (ESC, CR, LF, the C1 range, DEL), no invisible formatting character, no
-/// leading or trailing space, and 1 to `max` characters.
+///
+/// An allow-list, not a deny-list: only printable ASCII (0x20 to 0x7E) is accepted. That closes
+/// every control, escape, invisible, bidirectional, tag and odd-space character at once, with no
+/// Unicode table to keep complete. The text also has 1 to `max` characters, no leading or
+/// trailing space, and never two spaces in a row.
 fn plain_line_problem(s: &str, max: usize) -> Option<String> {
     let n = s.chars().count();
-    if n == 0 || s.trim().is_empty() {
+    if s.trim_matches(' ').is_empty() {
         return Some("must not be empty".to_string());
     }
     if n > max {
         return Some(format!("must be 1 to {max} characters; this has {n}"));
     }
-    if s.chars().any(|c| c.is_control() || is_invisible_format(c)) {
+    if !s.chars().all(|c| matches!(c, ' '..='~')) {
         return Some(
-            "must be plain text on one line: no control, escape or invisible formatting characters"
+            "must be plain printable ASCII on one line (letters, digits, punctuation and single \
+             spaces)"
                 .to_string(),
         );
     }
-    if s.trim() != s {
+    if s.starts_with(' ') || s.ends_with(' ') {
         return Some("must not start or end with a space".to_string());
+    }
+    if s.contains("  ") {
+        return Some("must not hold two spaces in a row".to_string());
     }
     None
 }

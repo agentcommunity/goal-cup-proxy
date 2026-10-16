@@ -2758,65 +2758,159 @@ fn a_participant_table_names_the_harness_and_its_first_screen() {
         &with_participant(codex(), &"n".repeat(40), Some(&"h".repeat(200))),
         PINNED,
     );
-    // Ordinary non-ASCII text is plain text.
+    // Punctuation and single inner spaces are plain text.
     admitted(
-        &with_participant(codex(), "Kodex \u{00e9}\u{4e2d}", None),
+        &with_participant(
+            codex(),
+            "Open-Code (v2), the 1st!",
+            Some("Press `y`; then Enter."),
+        ),
         PINNED,
     );
 }
 
+/// One input from each class the allow-list closes, with a label for the failure message. Each
+/// is spliced into a string of plain letters, so the class is the only thing wrong with it.
+const NOT_PRINTABLE_ASCII: &[(&str, &str)] = &[
+    ("\x1b", "ESC (starts an ANSI sequence)"),
+    ("\x1b[31m", "an SGR sequence"),
+    ("\x1b]0;title\x07", "an OSC title and BEL"),
+    ("\x00", "NUL"),
+    ("\x1f", "last C0 control"),
+    ("\n", "newline"),
+    ("\r", "carriage return"),
+    ("\t", "tab"),
+    ("\x7f", "DEL"),
+    ("\u{80}", "first C1 control"),
+    ("\u{9b}", "C1 CSI"),
+    ("\u{9f}", "last C1 control"),
+    ("\u{a0}", "no-break space"),
+    ("\u{ad}", "soft hyphen"),
+    ("\u{34f}", "combining grapheme joiner"),
+    ("\u{61c}", "Arabic letter mark (bidi)"),
+    ("\u{115f}", "Hangul filler"),
+    ("\u{180e}", "Mongolian vowel separator"),
+    ("\u{1680}", "Ogham space"),
+    ("\u{2000}", "en quad"),
+    ("\u{200a}", "hair space"),
+    ("\u{200b}", "zero-width space"),
+    ("\u{200c}", "zero-width non-joiner"),
+    ("\u{200d}", "zero-width joiner"),
+    ("\u{200e}", "left-to-right mark"),
+    ("\u{200f}", "right-to-left mark"),
+    ("\u{2028}", "line separator"),
+    ("\u{2029}", "paragraph separator"),
+    ("\u{202a}", "left-to-right embedding"),
+    ("\u{202d}", "left-to-right override"),
+    ("\u{202e}", "right-to-left override"),
+    ("\u{202f}", "narrow no-break space"),
+    ("\u{205f}", "medium mathematical space"),
+    ("\u{2060}", "word joiner"),
+    ("\u{2064}", "invisible plus"),
+    ("\u{2066}", "left-to-right isolate"),
+    ("\u{2069}", "pop directional isolate"),
+    ("\u{206a}", "deprecated format character"),
+    ("\u{206f}", "last deprecated format character"),
+    ("\u{2800}", "blank braille"),
+    ("\u{3000}", "ideographic space"),
+    ("\u{3164}", "Hangul filler"),
+    ("\u{fe00}", "variation selector"),
+    ("\u{fe0f}", "variation selector 16"),
+    ("\u{feff}", "byte-order mark"),
+    ("\u{ffa0}", "halfwidth Hangul filler"),
+    ("\u{fff9}", "interlinear annotation anchor"),
+    ("\u{fffc}", "object replacement character"),
+    ("\u{e0001}", "language tag"),
+    ("\u{e0041}", "tag letter A"),
+    ("\u{e007f}", "cancel tag"),
+    ("\u{e9}", "an ordinary accented letter"),
+    ("\u{4e2d}", "an ordinary CJK letter"),
+    ("\u{1f600}", "an emoji"),
+];
+
 #[test]
-fn a_display_name_that_is_not_plain_text_is_refused() {
-    let bad = [
+fn a_display_name_that_is_not_printable_ascii_is_refused() {
+    for (bad, why) in NOT_PRINTABLE_ASCII {
+        for text in [
+            format!("Co{bad}dex"),
+            format!("{bad}Codex"),
+            format!("Codex{bad}"),
+        ] {
+            let t = with_participant(codex(), &text, None);
+            let Some(msg) = outcome(&t, PINNED) else {
+                panic!("admitted {text:?}: {why}");
+            };
+            assert!(msg.contains("participant.display_name"), "{why}: {msg}");
+        }
+    }
+    let t = with_participant(codex(), "Codex", None);
+    admitted(&t, PINNED);
+}
+
+#[test]
+fn a_display_name_has_no_stray_spaces_and_a_bounded_length() {
+    for (text, why) in [
         ("", "empty"),
-        ("   ", "blank"),
+        (" ", "one space"),
+        ("   ", "only spaces"),
         (" Codex", "leading space"),
         ("Codex ", "trailing space"),
-        (&"n".repeat(41)[..], "41 characters"),
-        ("Co\x1b[31mdex", "ESC starts an ANSI sequence"),
-        ("Co\x1b]0;title\x07dex", "ESC and BEL, an OSC title"),
-        ("Co\u{9b}31mdex", "the C1 CSI"),
-        ("Co\ndex", "a newline"),
-        ("Co\rdex", "a carriage return"),
-        ("Co\tdex", "a tab"),
-        ("Co\x7fdex", "DEL"),
-        ("Co\u{202e}xedoc", "a right-to-left override"),
-        ("Co\u{200b}dex", "a zero-width space"),
-        ("Co\u{2028}dex", "a line separator"),
-        ("Co\u{feff}dex", "a byte-order mark"),
-    ];
-    for (name, why) in bad {
-        refused(
-            &with_participant(codex(), name, None),
-            PINNED,
-            &["participant.display_name"],
-        );
-        let _ = why;
+        ("Claude  Code", "two spaces in a row"),
+    ] {
+        let t = with_participant(codex(), text, None);
+        assert!(outcome(&t, PINNED).is_some(), "admitted {text:?}: {why}");
     }
+    let long = "n".repeat(41);
+    refused(
+        &with_participant(codex(), &long, None),
+        PINNED,
+        &["participant.display_name", "41"],
+    );
+    admitted(&with_participant(codex(), "Claude Code", None), PINNED);
+    admitted(&with_participant(codex(), &"n".repeat(40), None), PINNED);
 }
 
 #[test]
 fn a_first_screen_that_is_not_one_plain_line_is_refused() {
-    let long = "h".repeat(201);
-    let bad = [
-        "",
-        "  ",
-        " leading",
-        "trailing ",
-        long.as_str(),
-        "Choose \x1b[2Jyes",
-        "Choose \u{9b}2Jyes",
-        "Line one.\nLine two.",
-        "Choose \u{202e}yes",
-    ];
-    for hint in bad {
-        refused(
-            &with_participant(codex(), "Codex", Some(hint)),
-            PINNED,
-            &["participant.first_screen"],
-        );
+    for (bad, why) in NOT_PRINTABLE_ASCII {
+        for text in [
+            format!("Choose {bad}Yes."),
+            format!("{bad}Choose Yes."),
+            format!("Choose Yes.{bad}"),
+        ] {
+            let t = with_participant(codex(), "Codex", Some(&text));
+            let Some(msg) = outcome(&t, PINNED) else {
+                panic!("admitted {text:?}: {why}");
+            };
+            assert!(msg.contains("participant.first_screen"), "{why}: {msg}");
+        }
     }
-    // The same text is refused under Dev: this rule has no exemption.
+    for (text, why) in [
+        ("", "empty"),
+        ("  ", "only spaces"),
+        (" Choose Yes.", "leading space"),
+        ("Choose Yes. ", "trailing space"),
+        ("Choose  Yes.", "two spaces in a row"),
+        ("Line one.\nLine two.", "a newline"),
+    ] {
+        let t = with_participant(codex(), "Codex", Some(text));
+        assert!(outcome(&t, PINNED).is_some(), "admitted {text:?}: {why}");
+    }
+    let long = "h".repeat(201);
+    refused(
+        &with_participant(codex(), "Codex", Some(&long)),
+        PINNED,
+        &["participant.first_screen", "201"],
+    );
+    admitted(
+        &with_participant(
+            claude(),
+            "Claude Code",
+            Some("Claude Code may ask whether you trust this folder. Choose Yes."),
+        ),
+        PINNED,
+    );
+    // No exemption for Dev.
     refused(
         &with_participant(codex(), "Co\x1b[0mdex", None),
         DEV,
