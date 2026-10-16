@@ -93,14 +93,26 @@ consistent, not that the participant followed the rules.
   holds 16 KiB and fails closed. This happens only when a rule prefix inside the run (`sk-`, `eyJ`,
   `AIza`, `glpat-`) lies more than 16 KiB before the run's end. Codex rollouts persist
   `encrypted_content` on reasoning items, so such runs are common. Re-measure on a long chain.
-- **Redaction residuals (H-20).** A PEM block is at most 15 360 bytes after its `BEGIN`: an `END`
-  must start within them. Without one, a lone `BEGIN` takes its bytes up to the first `"`, at most
-  15 360, so in JSON it ends with its own string and the record still parses. Three edges remain.
-  A key body longer than the bound (an RSA-16384 key printed by a tool is about 14.5 KB) leaks its
-  tail. A key cut off before its `END` whose body goes on past a quote (SSE deltas that stop early)
-  has only its first piece redacted. A lone `BEGIN` followed within the bound by another key's `END`
-  is one block, across records. An invalid UTF-8 byte reads as `0` when the rules match, so it no
-  longer ends a key.
+- **Redaction residuals (H-20).** A PEM block runs from its `BEGIN` line to the first `END` line
+  that starts within 15 872 bytes, else it is those bytes. Only the parts inside JSON strings are
+  redacted, so a key streamed as many SSE text deltas loses every delta's text, the JSON between
+  the deltas stays, and every record parses. What still leaks:
+  - **A `BEGIN` line split across two strings (H-29).** It is no `BEGIN` to the rule, and nothing
+    of the key is redacted. Model output arrives token by token, so this is the common case for a
+    key the model prints. Measured on 216 synthetic SSE streams (Anthropic, chat-completions and
+    Responses shapes; RSA-2048 and EC sizes; complete and cut off; 24 cuts, or 2-6 byte tokens):
+    the 108 whose `BEGIN` line was split all leak 16-character runs of the body; the 108 with the
+    `BEGIN` line whole, `END` split or not, leak none. A key the agent reads reaches the
+    next request as one whole string, which is redacted; the hole is the model's own echo.
+  - **A body longer than the bound** leaks its tail. Every printed form of an RSA-16384 key
+    measured fits (15 504 bytes at most, escaped twice with `\u2192`); escaped three times that
+    way (16 284 bytes) it does not.
+  - **Over-redaction, not a leak.** A lone `BEGIN` (code that parses PEM, `grep` output) empties
+    every string, keys included, for the next 15 872 bytes; the records still parse. A lone
+    `BEGIN` followed within the bound by another key's `END` is one block across records, cut
+    the same way.
+
+  An invalid UTF-8 byte reads as `0` when the rules match, so it no longer ends a key.
 - **The proxy credential reaches the provider, not the trace (H8).** The harness's
   `HTTPS_PROXY=http://goalcup:<32 hex>@127.0.0.1:<port>` holds a per-run secret. It is the only
   place the tracer hands that secret to the harness. An agent that runs `env`, or a harness that

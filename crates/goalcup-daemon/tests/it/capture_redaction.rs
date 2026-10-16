@@ -3379,11 +3379,11 @@ fn a_long_codex_reasoning_item_streams_through_intact() {
 /// I-1, then H-20: a lone PEM `BEGIN` (an agent writing a PEM parser, `grep` output, a key cut
 /// off by an output limit) with no END used to redact the rest of the stream, a whole native
 /// session, because a capture stream is one text and the block ran to its end; then the next
-/// 12,288 bytes, across every record they reached. The measured shape: one JSONL record
-/// mentioning `BEGIN`, then 2,000 ordinary records. The BEGIN is now its line and the window
-/// after it, which ends at the first quote: here the escaped quote right after it, which stays.
-/// So the stream equals the whole-record policy, and every byte after the BEGIN line, the
-/// rest of its own record included, leaves intact and parses.
+/// 12,288 bytes as one span, which broke the JSON of every record it reached. The measured
+/// shape: one JSONL record mentioning `BEGIN`, then 2,000 ordinary records. The block is now at
+/// most `PEM_BODY_MAX` bytes, and only the string interiors inside it go: every record parses,
+/// the JSON between the strings stays, and every byte past the bound is kept. The stream equals
+/// the whole-record policy.
 #[test]
 fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
     let mut input =
@@ -3401,16 +3401,20 @@ fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
     }
     input.extend_from_slice(&later);
     let begin_at = 44;
-    let block_end = begin_at + "-----BEGIN PRIVATE KEY-----".len();
+    let block_end = begin_at + "-----BEGIN PRIVATE KEY-----".len() + PEM_BODY_MAX;
     let want = legacy(&input);
-    assert_eq!(
-        want.1,
-        vec![RedactionAuditSpan {
-            kind: "private_key".into(),
-            start: begin_at as u64,
-            end: block_end as u64
-        }]
+    assert_eq!(want.1[0].start, begin_at as u64);
+    assert!(want.1.len() > 100, "one claim per string interior");
+    assert!(
+        want.1
+            .iter()
+            .all(|s| s.kind == "private_key" && s.end as usize <= block_end),
+        "every claim is a piece of the block"
     );
+    for span in &want.1 {
+        let piece = &input[span.start as usize..span.end as usize];
+        assert!(!piece.contains(&b'"') || piece.windows(2).any(|w| w == b"\\\""));
+    }
     let mut rng = Rng(0x0B_E61A);
     for chunks in [
         vec![MAX_SEGMENT_BYTES],
@@ -3422,10 +3426,13 @@ fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
             1,
         );
         assert_eq!(got, want, "chunks {:?}", &chunks[..1]);
-        // Everything after the BEGIN line is kept as it was, and every record parses.
+        // Everything from the first record boundary after the block is kept as it was, and
+        // every record parses.
+        let kept_from =
+            block_end + input[block_end..].iter().position(|&b| b == b'\n').unwrap() + 1;
         assert!(
-            got.0.ends_with(&input[block_end..]),
-            "chunks {:?}: bytes after the BEGIN line were lost ({} of {} bytes kept)",
+            got.0.ends_with(&input[kept_from..]),
+            "chunks {:?}: the records after the bound were lost ({} of {} bytes kept)",
             &chunks[..1],
             got.0.len(),
             input.len()
@@ -3433,7 +3440,7 @@ fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
         for record in got.0.split(|&b| b == b'\n').filter(|r| !r.is_empty()) {
             serde_json::from_slice::<serde_json::Value>(record).expect("each record is JSON");
         }
-        assert!(input.len() - block_end > 120_000);
+        assert!(input.len() - kept_from > 100_000);
     }
 }
 
@@ -3779,11 +3786,12 @@ fn a_key_with_invalid_utf8_in_its_body_is_still_redacted() {
     assert_eq!(out, b"plain \xff\xfe bytes \xc3( kept\n");
 }
 
-/// H-20: a lone `-----BEGIN PRIVATE KEY-----` with no END redacted the next 12,288 bytes,
-/// across every record they reached, and broke their JSON. Its window now ends at the first
-/// quote, at most [`PEM_BODY_MAX`] bytes on: in JSON, the end of the string the BEGIN is in, so
-/// a key cut off by an output limit is still taken whole and the 4 KiB of ordinary JSON after
-/// it, in the same record, is kept and parses. Raw text with no quote is the bound itself.
+/// H-20: a lone `-----BEGIN PRIVATE KEY-----` with no END redacted the next 12,288 bytes as
+/// one span, across every record they reached, and broke their JSON. Now only the string
+/// interiors in the block's `PEM_BODY_MAX` bytes go: a key cut off by an output limit is still
+/// taken whole, the JSON between strings (numbers, `false`, the braces) stays, every record
+/// parses, and the 4 KiB of ordinary JSON past the bound is kept byte for byte. Raw text with no
+/// quote loses exactly `PEM_BODY_MAX` bytes after its BEGIN line. All three redactors agree.
 #[test]
 fn a_lone_begin_does_not_redact_to_the_end_of_the_record() {
     let body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj\\n\
@@ -3793,7 +3801,7 @@ fn a_lone_begin_does_not_redact_to_the_end_of_the_record() {
     let begin = "-----BEGIN PRIVATE KEY-----\\n";
     let mut rest = String::from(r#"","is_error":false,"files":["#);
     let mut i = 0;
-    while rest.len() < 4096 {
+    while rest.len() < PEM_BODY_MAX + 4096 {
         rest.push_str(&format!(
             r#"{{"path":"src/module_{i}.rs","lines":{},"note":"an ordinary entry"}},"#,
             40 + i
@@ -3804,29 +3812,34 @@ fn a_lone_begin_does_not_redact_to_the_end_of_the_record() {
     let record = format!("{lead}{begin}{body}{rest}\n");
     let input = format!("{record}{{\"type\":\"next\",\"n\":1}}\n");
     let (out, spans) = all_three_agree("lone begin in JSON", input.as_bytes());
-    let start = lead.len() as u64;
+    let start = lead.len();
+    let bound = start + "-----BEGIN PRIVATE KEY-----".len() + PEM_BODY_MAX;
     assert_eq!(
-        spans,
-        vec![RedactionAuditSpan {
-            kind: "private_key".into(),
-            start,
-            end: start + (begin.len() + body.len()) as u64,
-        }],
+        (spans[0].start as usize, spans[0].end as usize),
+        (start, start + begin.len() + body.len()),
         "the BEGIN and the cut-off body to its closing quote"
+    );
+    assert!(
+        spans
+            .iter()
+            .all(|s| s.kind == "private_key" && s.end as usize <= bound)
     );
     let text = String::from_utf8(out).unwrap();
     assert!(!text.contains("MIIEvQIBADAN") && !text.contains("truncated"));
+    assert!(text.contains(r#"<redacted:private_key>","<redacted:private_key>":false,"#));
+    // From the first entry wholly past the bound, the record is kept as it was.
+    let tail_from = bound + input[bound..].find("{\"path\"").unwrap();
+    assert!(input.len() - tail_from > 4096);
     assert!(
-        text.ends_with(&input[lead.len() + begin.len() + body.len()..]),
-        "the 4 KiB after the key's string are kept"
+        text.ends_with(&input[tail_from..]),
+        "the JSON past the bound is kept"
     );
-    assert!(input.len() - (lead.len() + begin.len() + body.len()) > 4096);
     for line in text.lines() {
         serde_json::from_str::<serde_json::Value>(line).expect("each record still parses");
     }
 
-    // The window is bounded: raw text with no quote and no END loses exactly `PEM_BODY_MAX`
-    // bytes after its BEGIN line, and keeps the rest.
+    // Raw text with no quote and no END loses exactly `PEM_BODY_MAX` bytes after its BEGIN
+    // line, and keeps the rest.
     let begin = "-----BEGIN PRIVATE KEY-----";
     let after: String = (0..PEM_BODY_MAX + 4096)
         .map(|i| char::from(b"abcdefghij \n"[i % 12]))
@@ -3837,42 +3850,197 @@ fn a_lone_begin_does_not_redact_to_the_end_of_the_record() {
     assert_eq!(
         (spans.len(), spans[0].start, spans[0].end),
         (1, 4, end as u64),
-        "the BEGIN line and the bounded window"
+        "the BEGIN line and the bounded block"
     );
     assert!(out.ends_with(&input.as_bytes()[end..]));
 }
 
-/// The bound both regex literals spell is [`PEM_BODY_MAX`], and the lone BEGIN's window never
-/// ends on the backslash of an escaped quote, so JSON inside a JSON string still parses.
+/// The bound both arms of the regex literal spell is [`PEM_BODY_MAX`], and a block whose bound
+/// falls on the backslash of an escaped quote leaves the escape whole, so the record parses.
 #[test]
-fn the_pem_window_keeps_an_escaped_quote_and_spells_the_bound() {
+fn the_pem_block_keeps_an_escaped_quote_and_spells_the_bound() {
     let source = goalcup_daemon::redact::patterns()
         .iter()
         .find(|p| p.kind == "private_key")
         .expect("the private_key rule")
         .re
         .as_str();
-    assert!(source.contains(&format!("{{0,{PEM_BODY_MAX}}}?-----END")));
-    assert!(source.contains(&format!("{{0,{}}}(?-u:[^\"\\\\]))?)", PEM_BODY_MAX - 1)));
+    let body = format!("(?-u:[\\x00-\\xFF]){{0,{PEM_BODY_MAX}}}");
+    assert_eq!(source.matches(&body).count(), 2, "{source}");
 
-    let input = concat!(
-        r#"{"output":"{\"text\":\"-----BEGIN PRIVATE KEY-----\\nMIIBshort\"}"}"#,
-        "\n"
-    );
-    let inner: serde_json::Value = serde_json::from_str(input).expect("the input is JSON");
-    serde_json::from_str::<serde_json::Value>(inner["output"].as_str().unwrap())
-        .expect("so is the JSON inside it");
-    let (out, spans) = all_three_agree("escaped twice", input.as_bytes());
-    assert_eq!(spans.len(), 1);
-    let text = String::from_utf8(out).unwrap();
-    assert_eq!(
-        text,
-        concat!(
-            r#"{"output":"{\"text\":\"<redacted:private_key>\"}"}"#,
-            "\n"
-        )
-    );
-    let inner: serde_json::Value = serde_json::from_str(&text).expect("the record parses");
-    serde_json::from_str::<serde_json::Value>(inner["output"].as_str().unwrap())
-        .expect("the JSON inside it parses");
+    let begin = "-----BEGIN PRIVATE KEY-----";
+    for before in [PEM_BODY_MAX - 1, PEM_BODY_MAX - 2, PEM_BODY_MAX] {
+        let input = format!(
+            "{{\"t\":\"{begin}{}\\\"quoted\\\" and on\"}}\n",
+            "a".repeat(before)
+        );
+        serde_json::from_str::<serde_json::Value>(&input).expect("the input is JSON");
+        let (out, spans) = all_three_agree("escaped quote at the bound", input.as_bytes());
+        assert_eq!(spans.len(), 1);
+        let text = String::from_utf8(out).unwrap();
+        serde_json::from_str::<serde_json::Value>(&text).expect("the record parses");
+        assert!(!text.contains("aaaaaaaa"), "{before}");
+    }
+}
+
+/// One SSE shape a model's text deltas arrive in: the event a delta is framed in.
+fn sse_event(shape: &str, delta: &str) -> String {
+    let d = serde_json::to_string(delta).unwrap();
+    match shape {
+        "anthropic" => format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":{d}}}}}\n\n"
+        ),
+        "chat" => format!(
+            "data: {{\"id\":\"chatcmpl-9xYz\",\"object\":\"chat.completion.chunk\",\"created\":1760000000,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{d}}},\"finish_reason\":null}}]}}\n\n"
+        ),
+        "responses" => format!(
+            "event: response.output_text.delta\ndata: {{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_0a1b2c\",\"output_index\":0,\"content_index\":0,\"delta\":{d}}}\n\n"
+        ),
+        _ => unreachable!(),
+    }
+}
+
+/// The text deltas of an SSE stream, parsed back and joined: what a reader of the trace sees.
+fn sse_text(shape: &str, stream: &[u8]) -> String {
+    let mut text = String::new();
+    for line in String::from_utf8_lossy(stream).lines() {
+        let Some(json) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        let v: serde_json::Value = serde_json::from_str(json).expect("each data line parses");
+        let delta = match shape {
+            "anthropic" => &v["delta"]["text"],
+            "chat" => &v["choices"][0]["delta"]["content"],
+            "responses" => match v["type"].as_str() {
+                Some("response.output_text.delta") => &v["delta"],
+                _ => continue,
+            },
+            _ => unreachable!(),
+        };
+        // A delta whose keys were redacted (inside a block) has no path; `sse_strings` reads it.
+        if let Some(delta) = delta.as_str() {
+            text.push_str(delta);
+        }
+    }
+    text
+}
+
+/// Every string of every data line of an SSE stream, keys included, decoded and joined.
+fn sse_strings(stream: &[u8]) -> String {
+    fn walk(v: &serde_json::Value, out: &mut String) {
+        match v {
+            serde_json::Value::String(s) => out.push_str(s),
+            serde_json::Value::Array(a) => a.iter().for_each(|v| walk(v, out)),
+            serde_json::Value::Object(o) => o.iter().for_each(|(k, v)| {
+                out.push_str(k);
+                walk(v, out);
+            }),
+            _ => {}
+        }
+    }
+    let mut out = String::new();
+    for line in String::from_utf8_lossy(stream).lines() {
+        if let Some(json) = line.strip_prefix("data: ") {
+            let v: serde_json::Value = serde_json::from_str(json).expect("each data line parses");
+            walk(&v, &mut out);
+        }
+    }
+    out
+}
+
+/// H-20 review: a key the model prints arrives as many SSE text deltas. Spread over 20 or more
+/// deltas in the Anthropic, chat-completions and Responses shapes, complete, cut off before its
+/// END, and with its END line split across two deltas (the BEGIN line whole in one delta), no
+/// 16-character run of the body survives, in the raw bytes or in the text rebuilt from the
+/// deltas (every string of every data line, decoded). Every data line still parses, the text past the bound is kept, and the stream at
+/// three chunkings, the whole-record policy and `spikes/redact.py` agree.
+#[test]
+fn a_key_streamed_as_sse_deltas_is_redacted_in_every_delta() {
+    const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
+    const END: &str = "-----END PRIVATE KEY-----";
+    let b64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut checked = 0;
+    for seed in 1..=3u64 {
+        let mut rng = Rng(0x55E_0000 + seed);
+        let lines: Vec<String> = (0..26)
+            .map(|_| (0..64).map(|_| char::from(b64[rng.below(64)])).collect())
+            .collect();
+        let after: String = (0..3000)
+            .map(|i| ["keep ", "it ", "safe ", "and ", "rotate ", "it. "][i % 6])
+            .collect();
+        for variant in ["complete", "truncated", "split end"] {
+            let body = match variant {
+                "truncated" => lines.join("\n")[..1200].to_string(),
+                _ => lines.join("\n"),
+            };
+            let key = match variant {
+                "truncated" => format!("{BEGIN}\n{body}"),
+                _ => format!("{BEGIN}\n{body}\n{END}"),
+            };
+            let lead = "Here is the key you asked for:\n";
+            let text = format!("{lead}{key}\n{after}");
+            let begin_at = lead.len();
+            let key_end = begin_at + key.len();
+            let end_at = key_end - END.len();
+            // 24 cuts in the key after its BEGIN line. A whole END line, or one cut inside it.
+            let mut cuts: Vec<usize> = (0..24)
+                .map(|_| begin_at + BEGIN.len() + rng.below(key.len() - BEGIN.len()))
+                .collect();
+            if variant == "split end" {
+                cuts.retain(|&c| c <= end_at || c >= key_end);
+                cuts.push(end_at + 7);
+            } else if variant == "complete" {
+                cuts.retain(|&c| c <= end_at || c >= key_end);
+            }
+            cuts.push(begin_at);
+            cuts.sort_unstable();
+            cuts.dedup();
+            let key_deltas = cuts.len();
+            // The text after the key in 80-byte deltas.
+            cuts.extend((key_end..text.len()).step_by(80));
+            let mut deltas = Vec::new();
+            let mut at = 0;
+            for c in cuts.into_iter().chain([text.len()]) {
+                if c > at {
+                    deltas.push(&text[at..c]);
+                    at = c;
+                }
+            }
+            assert!(
+                key_deltas >= 20,
+                "{variant} seed {seed}: {key_deltas} deltas"
+            );
+            for shape in ["anthropic", "chat", "responses"] {
+                let name = format!("{shape} {variant} seed {seed}");
+                let stream: String = deltas.iter().map(|d| sse_event(shape, d)).collect();
+                assert_eq!(
+                    sse_text(shape, stream.as_bytes()),
+                    text,
+                    "{name}: the generator"
+                );
+                let (out, _) = all_three_agree(&name, stream.as_bytes());
+                let rebuilt = sse_strings(&out);
+                for line in &lines {
+                    for run in line.as_bytes().windows(16) {
+                        assert!(
+                            !contains(&out, run)
+                                && !rebuilt.contains(std::str::from_utf8(run).unwrap()),
+                            "{name}: {:?} of the body survives",
+                            std::str::from_utf8(run).unwrap()
+                        );
+                        checked += 1;
+                    }
+                }
+                assert!(
+                    !rebuilt.contains("BEGIN") && !rebuilt.contains(" KEY-"),
+                    "{name}"
+                );
+                assert!(
+                    sse_text(shape, &out).ends_with(&after[after.len() - 2000..]),
+                    "{name}: the text past the bound is kept"
+                );
+            }
+        }
+    }
+    assert!(checked > 10_000);
 }

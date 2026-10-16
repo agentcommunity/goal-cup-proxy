@@ -307,6 +307,11 @@ These look odd but are right. Do not "fix" them.
   it (start-anchored match) before an eight-hour result is scored.
 - **F-07:** a base64url run of 16 KiB or more redacts the rest of a one-line JSON body. Measured
   false on the pilot path. Re-measure on the eight-hour chain.
+- **H-29:** a PEM `BEGIN` line split across two SSE text deltas is not matched, so a key the model
+  streams token by token is recorded raw (108 of 108 synthetic split-BEGIN streams leak; 0 of 108
+  with the `BEGIN` line whole). Pre-dates H-20. Fixing it needs a `BEGIN` matcher that skips the
+  JSON between deltas, in the regex, the stream recognizer and `spikes/redact.py`; see
+  [CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md) "Redaction residuals".
 - **H-28 (before any research access; clean-up 14):** Anthropic usage objects pass through the private research
   observations. Allowlist token fields and strip plan, credit and billing data (D26) before anything
   is published or read from R2.

@@ -1410,8 +1410,8 @@ const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     ),
     (
         "private_key",
-        r#"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]{0,15360}?-----END [A-Z ]*PRIVATE KEY-----|(?:[^"]{0,15359}[^"\\])?)"#,
-        r#"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,15360}?-----END [A-Z ]*PRIVATE KEY-----|(?:(?-u:[^"]){0,15359}(?-u:[^"\\]))?)"#,
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]{0,15872}?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]{0,15872})",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,15872}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,15872})",
     ),
 ];
 
@@ -2289,7 +2289,8 @@ const PEM_PIECES: &[&str] = &[
 
 /// The differential: for every input of a PEM-heavy corpus, what a block leaves redacted is a
 /// superset of what first-wins alone redacts (`apply_first_wins_only`, the real selection with
-/// the blocks not merged), every byte of every block match is redacted, and the spans are
+/// the blocks not merged), every byte of every block match's string pieces is redacted (all of
+/// it when it holds no quote; `string_pieces`), and the spans are
 /// sorted and never overlap. Includes the reviewer's two examples, a key with no END, and
 /// blocks meeting a token on either side.
 #[test]
@@ -2334,10 +2335,12 @@ fn a_block_only_ever_adds_redaction_to_first_wins() {
         let mut has_block = false;
         for m in block_re.find_iter(input) {
             has_block = true;
-            assert!(
-                now[m.start()..m.end()].iter().all(|c| *c),
-                "{text:?}: a block match is not wholly redacted"
-            );
+            for (a, b) in goalcup_daemon::redact::string_pieces(input, m.start(), m.end()) {
+                assert!(
+                    now[a..b].iter().all(|c| *c),
+                    "{text:?}: a piece of a block match is not wholly redacted"
+                );
+            }
         }
         with_block += usize::from(has_block);
         strictly_more += usize::from(now != was);

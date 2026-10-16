@@ -12,11 +12,12 @@ exceptions. private_key is the block rule: it runs first, on the original text, 
 grows to take in every other rule's match that overlaps it (and every match that overlaps
 those), so a PEM block is one redaction whatever an earlier rule would have matched inside it
 or across its edge, and no raw remainder of such a match is left behind (the daemon's block
-rule merges the same claims into the block). An END line must start within 15,360 characters of
-the BEGIN line; without one, a lone BEGIN takes its characters up to the first `"` (at most
-15,360, not ending on a backslash), so in JSON it ends with its string and a cut-off key is
-still taken whole. (The daemon counts the bound in bytes; for a body with non-ASCII text this
-script's window is longer, never shorter.) And the last rule, masked_key, is soft: after that pass, any byte of a masked-key shape (matched on the
+rule merges the same claims into the block). An END line must start within 15,872 characters of
+the BEGIN line; without one, the block is those characters. (The daemon counts the bound in
+bytes; for a body with non-ASCII text this script's block is longer, never shorter.) A block is
+then cut at every unescaped `"` and only the parts inside JSON strings are redacted, starting
+inside: a key streamed as many JSON string deltas loses every delta's text, and the JSON
+between the strings stays. And the last rule, masked_key, is soft: after that pass, any byte of a masked-key shape (matched on the
 ORIGINAL text) that is still raw is replaced too, as its own "residual" marker. The daemon
 (crates/goalcup-daemon/src/redact.rs) reaches the same result by a different route; the shared
 rules, and the few places the two differ, are pinned by crates/goalcup-daemon/tests/it/redaction.rs.
@@ -44,7 +45,7 @@ PATTERNS = [
     ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("bearer", re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]{16,}")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")),
-    ("private_key", re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]{0,15360}?-----END [A-Z ]*PRIVATE KEY-----|(?:[^"]{0,15359}[^"\\])?)')),
+    ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]{0,15872}?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]{0,15872})")),
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}")),
     ("generic_secret_assignment", re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})")),
     ("email", re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")),
@@ -106,11 +107,43 @@ def union(spans):
     return out
 
 
+def string_pieces(text, start, end):
+    """The parts of text[start:end] inside JSON strings: cut at every unescaped quote (one after
+    an even run of backslashes), starting inside. A piece loses the backslashes it ends on, and
+    an empty piece is dropped. The daemon's `string_pieces` in redact.rs."""
+    pieces, inside, frm, slashes = [], True, start, 0
+
+    def push(a, b):
+        while b > a and text[b - 1] == "\\":
+            b -= 1
+        if b > a:
+            pieces.append([a, b])
+
+    for at in range(start, end):
+        c = text[at]
+        if c == '"' and slashes % 2 == 0:
+            if inside:
+                push(frm, at)
+            else:
+                frm = at + 1
+            inside = not inside
+        slashes = slashes + 1 if c == "\\" else 0
+    if inside:
+        push(frm, end)
+    return pieces
+
+
 def block_spans(text):
-    """The block rule's spans: each private_key match, grown over every other (non-soft)
-    rule's match that overlaps it, and over every match overlapping those, until nothing more
-    joins. Spans that then overlap are one."""
-    blocks = [list(m.span()) for kind, rx in PATTERNS if kind == BLOCK_KIND for m in rx.finditer(text)]
+    """The block rule's spans: the string pieces of each private_key match, each grown over
+    every other (non-soft) rule's match that overlaps it, and over every match overlapping
+    those, until nothing more joins. Spans that then overlap are one."""
+    blocks = [
+        piece
+        for kind, rx in PATTERNS
+        if kind == BLOCK_KIND
+        for m in rx.finditer(text)
+        for piece in string_pieces(text, m.start(), m.end())
+    ]
     if not blocks:
         return []
     others = sorted(
