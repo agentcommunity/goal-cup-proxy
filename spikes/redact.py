@@ -41,6 +41,12 @@ PATTERNS = [
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}")),
     ("generic_secret_assignment", re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})")),
     ("email", re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")),
+    # The tracer's own proxy credential (H8), as the daemon spells it: the userinfo of the
+    # capture launch's HTTPS_PROXY=http://goalcup:<32 hex>@127.0.0.1:<port>, the same
+    # percent-encoded once, and base64("goalcup:<secret>"), the Basic token (its "==" stays).
+    ("proxy_credential", re.compile(r"goalcup:[a-f0-9]{32}")),
+    ("proxy_credential", re.compile(r"goalcup%3[Aa][a-f0-9]{32}")),
+    ("proxy_credential", re.compile(r"Z29hbGN1cD[op][A-Za-z0-9+/]{43}")),
     # A provider key echoed back masked (D41): OpenAI's `sk-R7aMV` + 39 stars + `oKYo`, Hermes'
     # `sk-0...cdef` and `key[:8]...key[-4:]`. The daemon treats this rule as SOFT: it never
     # shadows another rule, and it keeps the part of a mask no other rule covered. This script

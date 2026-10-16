@@ -133,6 +133,98 @@ fn token_split_across_pushes_is_never_persisted() {
     }
 }
 
+/// The run's proxy credential (H8) is a shared rule, so every connector's streams drop it. An
+/// `env` dump in a tool result, a JSON environment snapshot, the URL percent-encoded and the
+/// Basic token the harness derives from it: split at every byte, with a flush between the two
+/// pushes, the secret never reaches a segment, the stream equals the whole-record oracle, and
+/// the URL keeps its `@host`. A cut while the secret is held releases none of it.
+#[test]
+fn a_proxy_credential_split_at_any_byte_is_never_persisted() {
+    const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
+    // `base64("goalcup:" + SECRET)` without its `==`, and its secret-bearing tail.
+    const BASIC: &[u8] = b"Z29hbGN1cDowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg";
+    let forms: [(&[u8], &[u8]); 4] = [
+        (
+            b"$ env\nHOME=/tmp/run\nHTTPS_PROXY=http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123\nPATH=/usr/bin\n",
+            b"@127.0.0.1:47123",
+        ),
+        (
+            b"{\"type\":\"executor_environment_snapshot\",\"env\":{\"https_proxy\":\"http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123\"}}\n",
+            b"@127.0.0.1:47123\"}}",
+        ),
+        (
+            b"GET /x?proxy=http%3A%2F%2Fgoalcup%3A0123456789abcdef0123456789abcdef%40127.0.0.1%3A47123 HTTP/1.1\n",
+            b"%40127.0.0.1",
+        ),
+        (
+            b"proxy-authorization: Basic Z29hbGN1cDowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg==\n",
+            b"Basic <redacted:proxy_credential>==",
+        ),
+    ];
+    for (input, kept) in forms {
+        let (want_bytes, want_spans) = legacy(input);
+        assert!(
+            want_spans.iter().any(|s| s.kind == "proxy_credential"),
+            "the oracle names the rule on {:?}",
+            String::from_utf8_lossy(input)
+        );
+        for split in 0..=input.len() {
+            let mut p = Producer::new(P1);
+            let mut records = p.open(1, CaptureSource::WireRequest);
+            records.extend(p.bytes(1, &input[..split]));
+            records.extend(p.redactor.flush(daemon_time(1)).unwrap());
+            records.extend(p.bytes(1, &input[split..]));
+            records.extend(p.end(1, EndReason::Complete));
+            let (bytes, spans) = retained_of(&records, 1);
+            assert_eq!(
+                (&bytes, &spans),
+                (&want_bytes, &want_spans),
+                "split at {split} of {:?}",
+                String::from_utf8_lossy(input)
+            );
+            for needle in [SECRET, &SECRET[..16], &SECRET[16..], BASIC, &BASIC[24..]] {
+                assert!(
+                    !contains(&bytes, needle),
+                    "split at {split}: secret persisted"
+                );
+            }
+            assert!(
+                contains(&bytes, kept),
+                "split at {split}: the rest of the URL stays"
+            );
+        }
+    }
+
+    // A cut while the credential is held: the owner interrupts, the producer ends the stream
+    // interrupted, or a gap. The held prefix is past `goalcup:`, so none of it is released.
+    for ending in ["owner-interrupt", "end-interrupted", "gap"] {
+        let mut p = Producer::new(P1);
+        let mut records = p.open(1, CaptureSource::WireResponse);
+        records.extend(p.bytes(1, b"HTTPS_PROXY=http://goalcup:0123456789"));
+        records.extend(p.bytes(1, b"abcdef0123"));
+        records.extend(p.redactor.flush(daemon_time(5)).unwrap());
+        assert_eq!(
+            retained_of(&records, 1).0,
+            b"HTTPS_PROXY=http://",
+            "{ending}: only the safe prefix is released"
+        );
+        match ending {
+            "owner-interrupt" => records.extend(
+                p.redactor
+                    .interrupt(daemon_time(6), GapReason::ProducerLost),
+            ),
+            "end-interrupted" => records.extend(p.end(1, EndReason::Interrupted)),
+            _ => records.extend(p.gap(1, GapReason::QueueFull, None)),
+        }
+        records.extend(p.redactor.flush(daemon_time(7)).unwrap());
+        let all = all_segment_bytes(&records);
+        assert!(
+            !contains(&all, b"0123456789abcdef0123"),
+            "{ending}: the held secret was persisted"
+        );
+    }
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────────────
 
 const P2: &str = "c0ffee00d15ea5e0badc0de5a1b2c3d4";
@@ -265,6 +357,14 @@ const FRAGMENTS: &[&[u8]] = &[
     b"xai-",
     b"glpat-",
     b"dop_v1_",
+    // The proxy credential (H8): each form's fixed prefix, a near miss, and a URL's host.
+    b"goalcup:",
+    b"goalcup%3A",
+    b"goalcup%3a",
+    b"goalcup",
+    b"Z29hbGN1cDo",
+    b"Z29hbGN1cDp",
+    b"@127.0.0.1:47123",
     // Masked provider keys (S9): the mask, its separators and their near misses.
     b"***",
     b"...",
@@ -333,7 +433,7 @@ const SPACES: &[&[u8]] = &[
 /// An instance of one shared rule's shape, near its thresholds, sometimes broken or cut.
 fn template(rng: &mut Rng) -> Vec<u8> {
     let mut t = Vec::new();
-    match rng.below(19) {
+    match rng.below(20) {
         0 => {
             t.extend_from_slice(b"sk-ant-");
             run(rng, &mut t, C1, 15, 25);
@@ -481,6 +581,32 @@ fn template(rng: &mut Rng) -> Vec<u8> {
             t.extend_from_slice(b"glpat-");
             run(rng, &mut t, C1, 16, 24);
         }
+        // The proxy credential (H8): each form at and either side of its fixed length.
+        17 => {
+            if rng.below(3) == 0 {
+                t.extend_from_slice(pick(rng, &[b"Z29hbGN1cD", b"Z29hbGN1cE"]));
+                t.push(b"opq"[rng.below(3)]);
+                run(rng, &mut t, b"ABCMYZabcz0189+/", 40, 46);
+                t.extend_from_slice(pick(rng, &[b"", b"==", b"\\/", b"="]));
+            } else {
+                t.extend_from_slice(pick(rng, &[b"http://", b"", b"\"", b"%2F%2F"]));
+                t.extend_from_slice(pick(
+                    rng,
+                    &[
+                        b"goalcup:",
+                        b"goalcup%3A",
+                        b"goalcup%3a",
+                        b"goalcup%3",
+                        b"Goalcup:",
+                    ],
+                ));
+                run(rng, &mut t, b"0123456789abcdef", 29, 35);
+                if rng.below(4) == 0 {
+                    t.push(b"AFx-"[rng.below(4)]);
+                }
+                t.extend_from_slice(pick(rng, &[b"@127.0.0.1:47123", b"%40", b"@", b""]));
+            }
+        }
         // A masked key: widths and separators on both sides of every threshold.
         18 => {
             // What may sit before the key: nothing, a boundary, a letter or a mark. None of
@@ -600,6 +726,22 @@ fn corpus() -> Vec<u8> {
     c.extend_from_slice(
         b"Incorrect API key provided: sk-R7aMV***************************************oKYo. \
           sk-0...cdef Bearer sk-or-v1...cdef task-ab***wxyz api_key=SECRETSECRETSECRETsk-ab***wxyz\n",
+    );
+    // The proxy credential (H8): an `env` dump, a JSON environment snapshot, the URL
+    // percent-encoded, the Basic token, and near misses (31 hex, upper case, another user).
+    c.extend_from_slice(
+        b"HTTPS_PROXY=http://goalcup:0123456789abcdef0123456789abcdef@127.0.0.1:47123\n",
+    );
+    c.extend_from_slice(
+        b"{\"env\":{\"https_proxy\":\"http://goalcup:fedcba9876543210fedcba9876543210@[::1]:9\"}}\n",
+    );
+    c.extend_from_slice(
+        b"proxy=http%3A%2F%2Fgoalcup%3a00112233445566778899aabbccddeeff%40localhost%3A1 \
+          Proxy-Authorization: Basic Z29hbGN1cDowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg==\n",
+    );
+    c.extend_from_slice(
+        b"goalcup:0123456789abcdef0123456789abcde@x goalcup:0123456789ABCDEF0123456789ABCDEF \
+          other:0123456789abcdef0123456789abcdef@127.0.0.1\n",
     );
     c.extend_from_slice(
         b"binary \xff\xfe\x00\x01 sk-ant-\xffABCDEFGHIJKLMNOPQRSTUVWXYZ \xe2\x82\xac end",

@@ -446,6 +446,14 @@ holds both an escape and a space is cut at the space; and no form matches a fiel
 JSON-encoded string (`\"plan_type\"`). Pick the form with these limits in view, and check the
 harness's real bytes against it.
 
+A header the harness puts inside a JSON body (`"headers": {"x-codex-turn-state": "…"}`) is a
+JSON field, not a header: use `json_field` with the header name, which the field grammar admits.
+`header_prefix` only matches `name: value` text.
+
+The shared set already covers what every harness holds: provider keys, tokens, e-mail addresses,
+and the tracer's own proxy credential (`proxy_credential`, the secret in the launch's
+`HTTPS_PROXY`). A connector never names those.
+
 A JSON-field marker keeps the record JSON: the key and colon stay, and a value that was not a
 string gets a quoted marker. A new form is a core PR: it needs a recognizer in the daemon's
 streaming redactor, reviewed at the hold bound, and a variant of `harness::RedactionRule`.

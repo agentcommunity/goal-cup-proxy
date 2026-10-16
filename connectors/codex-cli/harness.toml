@@ -69,11 +69,20 @@ grace_seconds = 10
 
 # Codex writes its plan, quota and credit balance into events and responses; strip them at
 # capture (D26, D39). Each row names a JSON field and its value form, never a regex.
+# 0.153.0 sends `credits` (`has_credits`, `balance`) beside `rate_limits` in its
+# `codex.rate_limits` event, two stable ids (`client_metadata.x-codex-installation-id` in the
+# request, `safety_identifier` in the response) and an opaque server token
+# (`headers.x-codex-turn-state` in `codex.response.metadata`). Each is a JSON field there, not
+# an HTTP header: no header is ever recorded. `scalar` also takes a string with an escape.
 [redaction]
 extra_patterns = [
   { kind = "codex_rate_limits", json_field = "rate_limits", value = "object" },
   { kind = "codex_plan_type", json_field = "plan_type", value = "string" },
   { kind = "codex_credits_remaining", json_field = "credits_remaining", value = "scalar" },
+  { kind = "codex_credits", json_field = "credits", value = "object" },
+  { kind = "codex_installation_id", json_field = "x-codex-installation-id", value = "scalar" },
+  { kind = "codex_safety_identifier", json_field = "safety_identifier", value = "scalar" },
+  { kind = "codex_turn_state", json_field = "x-codex-turn-state", value = "scalar" },
 ]
 
 [[capture.hosts]]
