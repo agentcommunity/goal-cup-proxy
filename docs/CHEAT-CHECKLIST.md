@@ -93,6 +93,22 @@ consistent, not that the participant followed the rules.
   must start within them, and without one the block is those bytes. A lone `BEGIN` mention redacts
   the next 12 288 bytes across record boundaries and can break the JSON of every record it reaches.
   A key body longer than the bound leaks its tail. Invalid UTF-8 inside a key body leaves the key raw.
+- **The proxy credential reaches the provider, not the trace (H8).** The harness's
+  `HTTPS_PROXY=http://goalcup:<32 hex>@127.0.0.1:<port>` holds a per-run secret. It is the only
+  place the tracer hands that secret to the harness. An agent that runs `env`, or a harness that
+  uploads its environment, sends it to the provider: the tracer records traffic and never
+  rewrites it. The shared rule `proxy_credential` removes it from every recorded body, for every
+  connector, as `goalcup:<secret>`, percent-encoded once, or as the Basic token
+  `base64("goalcup:<secret>")`. **Not caught:** a double encoding, a JSON `\u`-escaped form, a
+  Basic token with an escaped `\/` or a line break in it, and the secret glued to an earlier
+  rule's match (`sk-…goalcup:<secret>`, where the earlier rule wins the overlap). Bounded by: the
+  proxy listens on loopback only, and the secret ends with the run.
+- **Codex identifiers left in the trace (TR1 #15).** The Codex connector removes `credits`, the
+  installation id, `safety_identifier` and the `x-codex-turn-state` token, as measured on 0.153.0
+  WebSocket traffic. It keeps `client_metadata.session_id`, `thread_id` and
+  `x-codex-turn-metadata` (a JSON string of turn ids). The rows match a field name anywhere in a
+  Codex trace, so the participant's own JSON with a `credits` object or a `safety_identifier`
+  field in a tool result is redacted too.
 - **Open assumptions (H-04).** One proxy per entry. The 8 MiB capture queue holds about 2 MiB of
   payload, so one stall can lose up to about 2.1 MiB. `seal.json` sits outside the reservation, so
   a failed seal write reads `incomplete` with no further policy.

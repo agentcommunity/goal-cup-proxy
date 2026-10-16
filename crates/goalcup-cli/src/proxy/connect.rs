@@ -29,9 +29,12 @@
 //! The proxy credential authorizes this local listener only. It arrives as
 //! `Proxy-Authorization: Basic base64("goalcup:<secret>")` on the CONNECT request — what a
 //! client sends for the proxy URL [`ProxyCredential::proxy_url`] returns — and is compared in
-//! constant time. The CONNECT head is never forwarded upstream, so the credential never
-//! reaches a provider. It is never logged, hashed or retained: `Debug` impls redact it, and no
-//! outcome or error formats the request line, the target text, a header or the credential.
+//! constant time. The CONNECT head is never forwarded upstream, so the proxy never sends the
+//! credential to a provider. The harness can: an agent that runs `env` puts `HTTPS_PROXY` in a
+//! request body. The daemon's shared `proxy_credential` redaction rule removes it from the
+//! trace, not from the traffic. It is never logged, hashed or retained: `Debug` impls redact it,
+//! and no outcome or error formats the request line, the target text, a header or the
+//! credential.
 //!
 //! # Bounds
 //!

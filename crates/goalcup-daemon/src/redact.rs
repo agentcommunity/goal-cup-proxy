@@ -96,9 +96,10 @@ pub(crate) const BLOCK_KIND: &str = "private_key";
 /// The shared set: `spikes/redact.py`'s ten original rules in its order, plus `masked_key`
 /// (listed right after `openai_key` here and last in the script; a soft rule never wins an
 /// overlap, so its position does not matter, see [`select`]), then seven fixed vendor
-/// prefixes. The committed fixtures were redacted with that script and the verifier's
-/// parsers read those bytes, so the ten keep the script's spelling and their place in its
-/// list.
+/// prefixes, then the three forms of the tracer's own `proxy_credential`. The committed
+/// fixtures were redacted with that script and the verifier's parsers read those bytes, so
+/// the ten keep the script's spelling and their place in its list. The script carries the
+/// three `proxy_credential` literals too, after its ten and before its last rule.
 ///
 /// Two deliberate deltas from the script. `generic_secret_assignment` is one kind spelled as
 /// two literals, and the seven vendor prefixes are new: shapes the script predates.
@@ -209,11 +210,27 @@ const SHARED: &[(&str, &str)] = &[
     ("stripe_key", r"[sr]k_live_[A-Za-z0-9]{16,}"),
     ("gitlab_token", r"glpat-[A-Za-z0-9_\-]{20,}"),
     ("digitalocean_token", r"dop_v1_[a-f0-9]{32,}"),
+    // ── then the tracer's own proxy credential, in the three forms a harness holds it ──
+    // The capture launch hands the harness `HTTPS_PROXY=http://goalcup:<32 lowercase
+    // hex>@127.0.0.1:<port>` (`goalcup-cli` `ProxyCredential::proxy_url`). An agent that runs
+    // `env`, or a harness that uploads its environment, puts that per-run secret in a
+    // recorded body. Narrow on purpose: the fixed user `goalcup` and the exact secret shape,
+    // so nothing else is touched. The span is `goalcup:<secret>`, so a URL keeps its `@host`.
+    // (i) the userinfo, or the decoded Basic credential, in plain or JSON text;
+    ("proxy_credential", r"goalcup:[a-f0-9]{32}"),
+    // (ii) the same, percent-encoded once (`http%3A%2F%2Fgoalcup%3A<secret>%40…`);
+    ("proxy_credential", r"goalcup%3[Aa][a-f0-9]{32}"),
+    // (iii) `base64("goalcup:<secret>")`, the `Proxy-Authorization: Basic` token the harness
+    // computes from the URL: `Z29hbGN1cD` encodes `goalcu` and the `p:`, `o` or `p` the top
+    // bits of the first hex digit, and the 43 characters after it end the last secret byte.
+    // The `==` pad carries nothing and stays.
+    ("proxy_credential", r"Z29hbGN1cD[op][A-Za-z0-9+/]{43}"),
 ];
 
 static COMPILED: OnceLock<Vec<Pattern>> = OnceLock::new();
 
-/// The twenty shared literals — eighteen kinds, `generic_secret_assignment` and `github_token` twice —
+/// The twenty-three shared literals — nineteen kinds, `generic_secret_assignment` and
+/// `github_token` twice, `proxy_credential` three times —
 /// compiled once for the process.
 ///
 /// A literal in [`SHARED`] that will not compile is skipped rather than unwrapped: this

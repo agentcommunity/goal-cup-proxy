@@ -30,7 +30,7 @@ fn harness_patterns(connector: &str) -> Vec<ExtraPattern> {
     extra_patterns_of(&harness)
 }
 
-/// Codex's three rules, then Claude's billing header: one list, one order, used by both
+/// Codex's seven rules, then Claude's billing header: one list, one order, used by both
 /// the stream and the oracle.
 fn shipped() -> Vec<ExtraPattern> {
     let mut all = harness_patterns("codex-cli");
@@ -38,12 +38,24 @@ fn shipped() -> Vec<ExtraPattern> {
     all
 }
 
-const EXTRA_KINDS: [&str; 4] = [
+const EXTRA_KINDS: [&str; 8] = [
     "codex_rate_limits",
     "codex_plan_type",
     "codex_credits_remaining",
+    "codex_credits",
+    "codex_installation_id",
+    "codex_safety_identifier",
+    "codex_turn_state",
     "anthropic_billing_header",
 ];
+
+/// The kinds of the shipped rules are exactly [`EXTRA_KINDS`]: a rule added to a
+/// `harness.toml` without a shape below fails here, not silently in the generators.
+#[test]
+fn the_shipped_rules_are_the_ones_these_tests_exercise() {
+    let kinds: Vec<String> = shipped().iter().map(|p| p.kind().to_string()).collect();
+    assert_eq!(kinds, EXTRA_KINDS);
+}
 
 /// The whole-record redactor over exactly [`shipped`]: the independent oracle.
 fn oracle() -> Redactor {
@@ -164,6 +176,10 @@ const SSE_EVENT: &[u8] = b"event: codex.rate_limits\ndata: {\"type\":\"codex.rat
 const CREDITS_QUOTED: &[u8] = b"{\"credits_remaining\": \"412.00\", \"plan_type\": \"team\"}\n";
 const HTTP_HEADERS: &[u8] = b"POST /v1/messages HTTP/1.1\r\nhost: api.example.test\r\nx-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli\r\ncontent-type: application/json\r\n\r\n";
 const CLAUDE_BODY: &[u8] = b"{\"model\":\"claude-haiku\",\"system\":[{\"type\":\"text\",\"text\":\"x-anthropic-billing-header: cc_version=2.1.283.4f2; cc_entrypoint=cli; cch=00000; cc_prompt_id=58740b59-3dfe-46fb-8704-7d049d21a7ed;\"},{\"type\":\"text\",\"text\":\"You are a coding agent.\"}],\"messages\":[]}\n";
+// Codex 0.153.0 over its WebSocket, in the shapes TR1 measured: the request's
+// `client_metadata`, the response's `safety_identifier`, the `codex.rate_limits` event with
+// `credits` beside `rate_limits`, and `codex.response.metadata` with the turn-state token.
+const CODEX_WS: &[u8] = b"{\"type\":\"response.create\",\"model\":\"gpt-5.6-luna\",\"client_metadata\":{\"x-codex-installation-id\":\"0f1e2d3c-4b5a-6978-8a9b-acbdcedf0011\",\"session_id\":\"s-1\"}}\n{\"type\":\"response.created\",\"response\":{\"safety_identifier\":\"user-abcdefghijklmnopqrstuvwx\",\"store\":false}}\n{\"type\":\"codex.rate_limits\",\"plan_type\":\"plus\",\"rate_limits\":{\"primary\":{\"used_percent\":1.0}},\"credits\":{\"has_credits\":true,\"unlimited\":false,\"balance\":\"12.3456789012\"},\"promo\":null}\n{\"type\":\"codex.response.metadata\",\"headers\":{\"x-models-etag\":\"W/\\\"abc\\\"\",\"x-codex-turn-state\":\"gAAAAABo-k_abcdefghijklmnopqrstuvwxyz0123456789-_ABCDEFGH\"}}\n";
 const PRETTY: &[u8] = b"{\n  \"rate_limits\": {\n    \"primary\": {\n      \"used_percent\": 12.5\n    },\n    \"note\": \"line one\nline two\"\n  },\n  \"plan_type\" :\n    \"enterprise\nplan\",\n  \"credits_remaining\":\n    0\n}\nx-anthropic-billing-header:\r\n  cc_version=2.1.283.4f2\r\n";
 
 /// Every shipped extra rule in the shapes it was written for, their near misses, and the
@@ -177,6 +193,7 @@ fn corpus() -> Vec<u8> {
         HTTP_HEADERS,
         CLAUDE_BODY,
         PRETTY,
+        CODEX_WS,
     ] {
         c.extend_from_slice(part);
     }
@@ -189,6 +206,10 @@ fn corpus() -> Vec<u8> {
     c.extend_from_slice(b"{\"rate_limits\":{\"a\":{\"b\":{\"c\":1},\"e\":{}}},\"f\":2}\n");
     c.extend_from_slice(b"x-anthropic-billing-: none X-Anthropic-Billing-Header: caps\n");
     c.extend_from_slice(b"x-anthropic-billing-header:\"quoted\" x-anthropic-billing-a:  \n\"\n");
+    c.extend_from_slice(
+        b"{\"credits\": null, \"safety_identifier\": , \"x-codex-turn-state\" \"t\"}\n",
+    );
+    c.extend_from_slice(b"{\"safety_identifier\": \"a\\\"b\", \"x-codex-installation-id\": 7}\n");
     // Overlaps with the shared rules.
     c.extend_from_slice(b"{\"rate_limits\":{\"note\":\"ops@example.com\"},\"plan_type\":\"sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX\"}\n");
     c.extend_from_slice(b"x-anthropic-billing-header: token=ABCDEFGHIJKLMNOPQRST\n");
@@ -241,7 +262,7 @@ fn every_split_point_matches_the_oracle_with_extra_patterns() {
 fn extra_template(rng: &mut Rng) -> Vec<u8> {
     let spaces: &[&[u8]] = &[b"", b" ", b"\n", b"\t ", b"\r\n", "\u{a0}".as_bytes()];
     let mut t = Vec::new();
-    match rng.below(4) {
+    match rng.below(8) {
         0 => {
             t.extend_from_slice(b"\"rate_limits\"");
             t.extend_from_slice(pick(rng, spaces));
@@ -293,6 +314,46 @@ fn extra_template(rng: &mut Rng) -> Vec<u8> {
             t.extend_from_slice(pick(rng, &[b"", b"\"", b"-"]));
             let n = rng.below(8);
             run(rng, &mut t, b"0123456789. \"\\{,}", n);
+            t.extend_from_slice(pick(rng, &[b"", b"\"", b",", b"}", b" "]));
+        }
+        4 => {
+            t.extend_from_slice(b"\"credits\"");
+            t.extend_from_slice(pick(rng, spaces));
+            t.extend_from_slice(pick(rng, &[b":", b"=", b": "]));
+            t.extend_from_slice(pick(rng, spaces));
+            t.push(b'{');
+            for _ in 0..rng.below(4) {
+                t.extend_from_slice(pick(
+                    rng,
+                    &[
+                        b"\"has_credits\":true,",
+                        b"\"balance\":\"12.5\"",
+                        b"{\"x\":1}",
+                        b"{",
+                        b"\n",
+                    ],
+                ));
+            }
+            if rng.below(4) != 0 {
+                t.push(b'}');
+            }
+        }
+        5..=6 => {
+            t.extend_from_slice(pick(
+                rng,
+                &[
+                    b"\"x-codex-installation-id\"",
+                    b"\"safety_identifier\"",
+                    b"\"x-codex-turn-state\"",
+                    b"\"x-codex-turn-stat\"",
+                ],
+            ));
+            t.extend_from_slice(pick(rng, spaces));
+            t.push(b':');
+            t.extend_from_slice(pick(rng, spaces));
+            t.extend_from_slice(pick(rng, &[b"", b"\"", b"\"", b"-"]));
+            let n = rng.below(12);
+            run(rng, &mut t, b"user-0f1e_ABgk \"\\,}", n);
             t.extend_from_slice(pick(rng, &[b"", b"\"", b",", b"}", b" "]));
         }
         _ => {
@@ -353,6 +414,7 @@ fn random_input(rng: &mut Rng, parts: usize) -> Vec<u8> {
                     HTTP_HEADERS,
                     CLAUDE_BODY,
                     PRETTY,
+                    CODEX_WS,
                 ],
             )),
             _ => out.extend_from_slice(FRAGMENTS[rng.below(FRAGMENTS.len())]),
@@ -700,12 +762,12 @@ fn adversarial_long_inputs_never_expose_an_oracle_span() {
 /// Each shipped rule in context, with the byte range of the value it redacts.
 fn cut_cases() -> Vec<(&'static str, Vec<u8>, std::ops::Range<usize>)> {
     // The value is the part a cut must never release once any of it is delivered: the
-    // rule's span for the three Codex rules. The billing rule's span is its whole match,
+    // rule's span for the Codex rules. The billing rule's span is its whole match,
     // but its header name is not the secret, and a cut inside the name (before the colon)
     // is released raw by V1 on the same prefix too, so here its value is what follows the
     // colon. A bare credits value may begin with a multi-byte character, so a cut can fall
     // inside the first character's encoding.
-    let table: [(&str, &[u8], &[u8]); 9] = [
+    let table: [(&str, &[u8], &[u8]); 13] = [
         (
             "rate_limits",
             b"{\"payload\":{\"rate_limits\":{\"primary\":{\"used_percent\":12.5}},\"x\":1}}\n",
@@ -740,6 +802,26 @@ fn cut_cases() -> Vec<(&'static str, Vec<u8>, std::ops::Range<usize>)> {
             "credits bare, 4-byte start",
             "{\"credits_remaining\":\u{1f600}5}\n".as_bytes(),
             "\u{1f600}5".as_bytes(),
+        ),
+        (
+            "credits object",
+            b"{\"type\":\"codex.rate_limits\",\"credits\":{\"has_credits\":true,\"balance\":\"12.5\"},\"x\":1}\n",
+            b"{\"has_credits\":true,\"balance\":\"12.5\"}",
+        ),
+        (
+            "installation id",
+            b"{\"client_metadata\":{\"x-codex-installation-id\":\"0f1e2d3c-4b5a\"}}\n",
+            b"\"0f1e2d3c-4b5a\"",
+        ),
+        (
+            "safety identifier",
+            b"{\"safety_identifier\": \"user-abcdefgh\", \"store\": false}\n",
+            b"\"user-abcdefgh\"",
+        ),
+        (
+            "turn state",
+            b"{\"headers\":{\"x-codex-turn-state\":\"gAAAAABo-k_abc\"}}\n",
+            b"\"gAAAAABo-k_abc\"",
         ),
         (
             "billing header",

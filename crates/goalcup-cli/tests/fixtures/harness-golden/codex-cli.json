@@ -156,6 +156,22 @@
       {
         "kind": "codex_credits_remaining",
         "regex": "\"credits_remaining\"\\s*:\\s*(\"[^\"\\\\]*\"|[^,}\\s]+)"
+      },
+      {
+        "kind": "codex_credits",
+        "regex": "\"credits\"\\s*:\\s*(\\{(?:[^{}]|\\{(?:[^{}]|\\{[^{}]*\\})*\\})*\\})"
+      },
+      {
+        "kind": "codex_installation_id",
+        "regex": "\"x-codex-installation-id\"\\s*:\\s*(\"[^\"\\\\]*\"|[^,}\\s]+)"
+      },
+      {
+        "kind": "codex_safety_identifier",
+        "regex": "\"safety_identifier\"\\s*:\\s*(\"[^\"\\\\]*\"|[^,}\\s]+)"
+      },
+      {
+        "kind": "codex_turn_state",
+        "regex": "\"x-codex-turn-state\"\\s*:\\s*(\"[^\"\\\\]*\"|[^,}\\s]+)"
       }
     ]
   },

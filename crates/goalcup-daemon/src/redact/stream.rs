@@ -259,6 +259,10 @@ fn aws_value(u: Unit) -> bool {
 fn hex_lower(u: Unit) -> bool {
     ascii_where(u, |b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
+/// `[A-Za-z0-9+/]`, the standard base64 alphabet without its pad.
+fn base64_char(u: Unit) -> bool {
+    ascii_where(u, |b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
+}
 /// `[A-Za-z0-9._%+\-]`
 fn local_part(u: Unit) -> bool {
     ascii_where(u, |b| {
@@ -378,7 +382,7 @@ const fn prefixed(
 /// recognizer never decides a span below the bound — the regex does — it says how long a
 /// candidate must be held, and how long a fail-closed redaction must run. `policy_ready`
 /// refuses to run if this list and the compiled shared list ever disagree.
-static SHAPES: [Shape; 20] = [
+static SHAPES: [Shape; 23] = [
     prefixed(
         "anthropic_key",
         r"sk-ant-[A-Za-z0-9_\-]{20,}",
@@ -528,6 +532,34 @@ static SHAPES: [Shape; 20] = [
         hex_lower,
         32,
         None,
+    ),
+    // The tracer's proxy credential: fixed-length forms, like `aws_access_key`, so a
+    // candidate is held for at most 54 units and ends the unit after its last.
+    prefixed(
+        "proxy_credential",
+        r"goalcup:[a-f0-9]{32}",
+        &[b"g", b"o", b"a", b"l", b"c", b"u", b"p", b":"],
+        hex_lower,
+        32,
+        Some(32),
+    ),
+    prefixed(
+        "proxy_credential",
+        r"goalcup%3[Aa][a-f0-9]{32}",
+        &[b"g", b"o", b"a", b"l", b"c", b"u", b"p", b"%", b"3", b"Aa"],
+        hex_lower,
+        32,
+        Some(32),
+    ),
+    prefixed(
+        "proxy_credential",
+        r"Z29hbGN1cD[op][A-Za-z0-9+/]{43}",
+        &[
+            b"Z", b"2", b"9", b"h", b"b", b"G", b"N", b"1", b"c", b"D", b"op",
+        ],
+        base64_char,
+        43,
+        Some(43),
     ),
 ];
 
@@ -2724,6 +2756,19 @@ mod tests {
         "\u{300}".as_bytes(),
         b"\xff",
         b"****************************************",
+        // The proxy credential (H8): all three forms whole, cut short, and their prefixes.
+        b"goalcup:",
+        b"goalcup%3A",
+        b"goalcup%3a",
+        b"goalcup:0123456789abcdef0123456789abcdef",
+        b"http://goalcup:0123456789abcdef0123456789abcde@127.0.0.1:4",
+        b"goalcup%3Afedcba9876543210fedcba9876543210%40",
+        b"0123456789abcdef",
+        b"Z29hbGN1cDo",
+        b"Z29hbGN1cDp",
+        b"Z29hbGN1cDowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg==",
+        b"MDEyMzQ1Njc4OWFi",
+        b"+/",
     ];
 
     fn random_text(rng: &mut Rng) -> Vec<u8> {
@@ -3194,6 +3239,9 @@ mod tests {
         b"\"plan_type\":\"",
         b"\"credits_remaining\": ",
         b"\"credits_remaining\":\"",
+        b"\"credits\": {",
+        b"\"credits\":{\"balance\":",
+        b"\"safety_identifier\": ",
         b"x-anthropic-billing-header: ",
         b"x-anthropic-billing-cc:",
         b"\"rate_",
@@ -3241,10 +3289,27 @@ mod tests {
         b"ops@example.com",
     ];
 
-    fn random_extra_text(rng: &mut Rng) -> Vec<u8> {
+    /// Each JSON-field rule's quoted name followed by the start of a value, read from the
+    /// rules themselves, so a shipped field reaches the generator without its name (which may
+    /// carry a harness name) being written in core code.
+    fn field_pieces(rules: &[ExtraPattern]) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        for p in rules {
+            if let RedactionRule::JsonField { field, .. } = p.rule() {
+                for tail in [": ", ":", ":\"", ": {"] {
+                    out.push(format!("\"{field}\"{tail}").into_bytes());
+                }
+            }
+        }
+        out
+    }
+
+    fn random_extra_text(rng: &mut Rng, fields: &[Vec<u8>]) -> Vec<u8> {
         let mut out = Vec::new();
         for _ in 0..1 + rng.below(40) {
-            if rng.below(5) == 0 {
+            if !fields.is_empty() && rng.below(12) == 0 {
+                out.extend_from_slice(&fields[rng.below(fields.len())]);
+            } else if rng.below(5) == 0 {
                 let class = b"az09_-.";
                 for _ in 0..rng.below(12) {
                     out.push(class[rng.below(class.len())]);
@@ -3293,6 +3358,35 @@ mod tests {
             for b in 0x80..=0xFF_u8 {
                 assert!(!re.is_match(&[b]), "{class} matches the lone byte {b:#x}");
             }
+        }
+    }
+
+    /// The two class predicates the `proxy_credential` recognizers step on are exactly the
+    /// classes of their literals, over every Unicode scalar value and an invalid byte.
+    #[test]
+    fn proxy_credential_predicates_equal_their_regex_classes() {
+        type Predicate = fn(Unit) -> bool;
+        let classes: [(&str, Predicate); 2] =
+            [("[a-f0-9]", hex_lower), ("[A-Za-z0-9+/]", base64_char)];
+        let mut buf = [0u8; 4];
+        for (class, predicate) in classes {
+            assert!(
+                SHAPES
+                    .iter()
+                    .any(|s| s.kind == "proxy_credential" && s.source.contains(class)),
+                "{class} is a class of a proxy_credential literal"
+            );
+            let re = regex::bytes::Regex::new(&format!("^{class}$")).expect("class compiles");
+            for c in (0..=0x10_FFFF_u32).filter_map(char::from_u32) {
+                let bytes = c.encode_utf8(&mut buf).as_bytes();
+                assert_eq!(
+                    predicate(Unit::Char(c)),
+                    re.is_match(bytes),
+                    "{class} disagrees with its predicate at U+{:04X}",
+                    u32::from(c)
+                );
+            }
+            assert!(!predicate(Unit::Invalid));
         }
     }
 
@@ -3352,11 +3446,12 @@ mod tests {
             clock_id: "t".into(),
         };
         let policy = Arc::new(Policy::with_extra(&every_extra_pattern()).expect("policy"));
+        let fields = field_pieces(&every_extra_pattern());
         let mut checked = 0usize;
         let mut per_rule = vec![0usize; policy.len()];
         for seed in 1..=6000u64 {
             let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-            let text = random_extra_text(&mut rng);
+            let text = random_extra_text(&mut rng, &fields);
             let mut matches = Vec::new();
             for (lit, p) in policy.rules().enumerate().skip(SHAPES.len()) {
                 for c in p.re.captures_iter(&text) {

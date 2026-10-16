@@ -110,7 +110,8 @@ fn the_widened_set_and_the_connectors_own_patterns_both_fire() {
 
 /// Acceptance line 1: the kinds of the shared set, in order. The script's ten, `masked_key`
 /// (listed after `openai_key` here, last in the script), the JSON form of
-/// `generic_secret_assignment` ahead of the script's own form, then seven vendor prefixes.
+/// `generic_secret_assignment` ahead of the script's own form, then seven vendor prefixes,
+/// then the three forms of the proxy credential (the script carries those too).
 /// The script's rules themselves are compared in `spikes_redact_py_patterns_match_the_shared_set`.
 #[test]
 fn the_shared_set_kinds_are_in_the_documented_order() {
@@ -149,9 +150,13 @@ fn the_shared_set_kinds_are_in_the_documented_order() {
             "stripe_key",
             "gitlab_token",
             "digitalocean_token",
+            // then the tracer's own proxy credential: userinfo, percent-encoded, Basic token.
+            "proxy_credential",
+            "proxy_credential",
+            "proxy_credential",
         ]
     );
-    assert_eq!(goalcup_daemon::redact::patterns().len(), 20);
+    assert_eq!(goalcup_daemon::redact::patterns().len(), 23);
 }
 
 /// Every one of the script's ten still fires, on the shapes it was written for. The spike
@@ -191,6 +196,19 @@ fn every_pattern_the_script_carries_still_fires() {
             "dop_v1_abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
             "digitalocean_token",
         ),
+        // and the three forms of the proxy credential.
+        (
+            "goalcup:0123456789abcdef0123456789abcdef",
+            "proxy_credential",
+        ),
+        (
+            "goalcup%3A0123456789abcdef0123456789abcdef",
+            "proxy_credential",
+        ),
+        (
+            "Z29hbGN1cDowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg",
+            "proxy_credential",
+        ),
     ] {
         let out = r.apply(probe.as_bytes());
         assert!(!out.spans.is_empty(), "{probe} was not caught at all");
@@ -202,6 +220,57 @@ fn every_pattern_the_script_carries_still_fires() {
             !String::from_utf8_lossy(&out.bytes).contains(probe),
             "{probe} survived into the redacted bytes"
         );
+    }
+}
+
+/// H8: the capture launch's `HTTPS_PROXY=http://goalcup:<32 hex>@127.0.0.1:<port>` carries a
+/// per-run secret, and an agent that runs `env` (or a harness that uploads its environment)
+/// puts it in a recorded body. The shared set removes it in every form a harness holds it,
+/// with no connector row: the userinfo in plain text and in a JSON string (the record stays
+/// JSON), percent-encoded once, and the Basic token derived from it. The `@host` stays, and
+/// the near misses (another user, 31 digits, upper case) are left alone.
+#[test]
+fn the_proxy_credential_is_removed_in_every_form_a_harness_holds() {
+    let secret = "0123456789abcdef0123456789abcdef";
+    let basic = "Z29hbGN1cDowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg";
+    let mut r = Redactor::new();
+    for (input, want) in [
+        (
+            format!("HTTPS_PROXY=http://goalcup:{secret}@127.0.0.1:47123\n"),
+            "HTTPS_PROXY=http://<redacted:proxy_credential>@127.0.0.1:47123\n".to_string(),
+        ),
+        (
+            format!(r#"{{"env":{{"HTTPS_PROXY":"http://goalcup:{secret}@127.0.0.1:47123"}}}}"#),
+            r#"{"env":{"HTTPS_PROXY":"http://<redacted:proxy_credential>@127.0.0.1:47123"}}"#
+                .to_string(),
+        ),
+        (
+            format!("u=http%3A%2F%2Fgoalcup%3A{secret}%40127.0.0.1%3A47123"),
+            "u=http%3A%2F%2F<redacted:proxy_credential>%40127.0.0.1%3A47123".to_string(),
+        ),
+        (
+            format!("Proxy-Authorization: Basic {basic}=="),
+            "Proxy-Authorization: Basic <redacted:proxy_credential>==".to_string(),
+        ),
+    ] {
+        let out = r.apply(input.as_bytes());
+        let text = String::from_utf8(out.bytes).unwrap();
+        assert_eq!(text, want);
+        assert!(out.spans.iter().all(|s| s.kind == "proxy_credential"));
+        assert!(!text.contains(&secret[..8]) && !text.contains(&basic[12..]));
+        if input.starts_with('{') {
+            serde_json::from_str::<serde_json::Value>(&text).expect("the record is still JSON");
+        }
+    }
+    // Near misses: another user, 31 hex digits, upper-case hex, a short Basic token.
+    for input in [
+        format!("http://other:{secret}@127.0.0.1:1"),
+        format!("goalcup:{}@127.0.0.1", &secret[1..]),
+        format!("goalcup:{}", secret.to_ascii_uppercase()),
+        format!("Basic {}", &basic[..53]),
+    ] {
+        let out = r.apply(input.as_bytes());
+        assert!(out.spans.is_empty(), "{input}: {:?}", out.spans);
     }
 }
 
@@ -685,6 +754,36 @@ fn a_connector_pattern_leaves_the_record_valid_json_with_its_key_intact() {
             record: r#"{"plan_type":"pro","credits_remaining":17.5}"#,
             key: "/credits_remaining",
             gone: &["17.5"],
+        },
+        // Codex 0.153.0's WebSocket messages (TR1 #15): the credit balance beside
+        // `rate_limits`, two stable ids and an opaque server token. Each is a JSON field.
+        Case {
+            connector: "codex-cli",
+            kind: "codex_credits",
+            record: r#"{"type":"codex.rate_limits","plan_type":"plus","rate_limits":{"primary":{"used_percent":1.0}},"credits":{"has_credits":true,"unlimited":false,"balance":"12.3456789012"},"promo":null}"#,
+            key: "/credits",
+            gone: &["12.3456789012", "has_credits"],
+        },
+        Case {
+            connector: "codex-cli",
+            kind: "codex_installation_id",
+            record: r#"{"type":"response.create","client_metadata":{"x-codex-installation-id":"0f1e2d3c-4b5a-6978-8a9b-acbdcedf0011","session_id":"s-1"}}"#,
+            key: "/client_metadata/x-codex-installation-id",
+            gone: &["0f1e2d3c"],
+        },
+        Case {
+            connector: "codex-cli",
+            kind: "codex_safety_identifier",
+            record: r#"{"type":"response.created","response":{"safety_identifier":"user-abcdefghijklmnopqrstuvwx","store":false}}"#,
+            key: "/response/safety_identifier",
+            gone: &["user-abcdefgh"],
+        },
+        Case {
+            connector: "codex-cli",
+            kind: "codex_turn_state",
+            record: r#"{"type":"codex.response.metadata","headers":{"x-models-etag":"W/\"abc\"","x-codex-turn-state":"gAAAAABo-k_abcdefghijklmnopqrstuvwxyz0123456789-_ABCDEFGH"}}"#,
+            key: "/headers/x-codex-turn-state",
+            gone: &["gAAAAABo"],
         },
         // OpenCode's `hooks.jsonl` shape, a 24-byte key in a provider block: the
         // shared literal claims it whatever the connector, so it is asserted on one still
@@ -1355,8 +1454,9 @@ fn spikes_redact_py_patterns_match_the_shared_set() {
         .collect();
     assert_eq!(
         script.len(),
-        12,
-        "the script's ten rules, the fine-grained github_token and masked_key"
+        15,
+        "the script's ten rules, the fine-grained github_token, the three proxy_credential \
+         forms and masked_key"
     );
     let shared = goalcup_daemon::redact::patterns();
 
@@ -1433,6 +1533,7 @@ const SCRIPT_KINDS: &[&str] = &[
     "slack_token",
     "generic_secret_assignment",
     "email",
+    "proxy_credential",
     "masked_key",
 ];
 
@@ -1550,6 +1651,23 @@ fn shared_rule_probes() -> Vec<String> {
     add("a@b".into());
     add("@example.com".into());
     add("a@b.c".into());
+    // proxy_credential: each form, a URL around it, an escaped JSON string, and near misses
+    // (31 hex digits, upper case, another user, a broken encoding, a short Basic token)
+    let hex = "0123456789abcdef0123456789abcdef";
+    add(format!("HTTPS_PROXY=http://goalcup:{hex}@127.0.0.1:47123"));
+    add(format!(
+        "{{\\\"https_proxy\\\":\\\"http://goalcup:{hex}@[::1]:9\\\"}}"
+    ));
+    add(format!(
+        "http%3A%2F%2Fgoalcup%3A{hex}%40localhost and goalcup%3a{hex}"
+    ));
+    add("Basic Z29hbGN1cDowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg==".into());
+    add("Basic Z29hbGN1cDpmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZg==".into());
+    add(format!("goalcup:{}@x", &hex[1..]));
+    add(format!("goalcup:{}", hex.to_ascii_uppercase()));
+    add(format!("other:{hex}@127.0.0.1 goalcup%3{hex}"));
+    add("Basic Z29hbGN1cDowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2Rl".into());
+    add("Basic Z29hbGN1cDqwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg==".into());
     // masked_key, alone
     add("sk-ab***wxyz and sk-abcde...wxyz and sk-0...cdef".into());
     add("sk-R7aMV*****************oKYo".into());
