@@ -2304,3 +2304,47 @@ UPDATE goal_cup_tracer.events
    SET start_window_opens  = '2026-10-23T00:00:00Z',
        start_window_closes = '2026-11-06T00:00:00Z'
  WHERE id = 'goalcup-dryrun-2026' AND mode = 'dry_run' AND staging = false;
+
+-- ======================== 20261016130000_goal_cup_tracer_device_request_replaces.sql ========================
+-- Goal Cup tracer: the approval page says when the run it replaces started (owner, 2026-10-16:
+-- "on replace, 'This replaces your current run, started <time>'").
+--
+-- goal_cup_device_request answered replaces_open_run as a boolean only. It now also answers
+-- replaces_run_started_at: the official start (fmt_time) of the open run that the approval would
+-- replace, or null when it replaces nothing. The rule for "replaces" is unchanged (20261015170000):
+-- a run request in competition or test mode, and an open, unreplaced run of the same member, mode
+-- and deployment whose deadline has not passed. replaces_open_run keeps its meaning; it is true
+-- exactly when replaces_run_started_at is not null.
+--
+-- Additive: one function replaced (CREATE OR REPLACE keeps its grants), one new key in its answer.
+-- No table, column, row or grant changes. A website build without the new key ignores it.
+
+CREATE OR REPLACE FUNCTION public.goal_cup_device_request(p_actor_id uuid, p_user_code text) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_dev      device_requests;
+  v_replaces timestamptz;
+BEGIN
+  SELECT * INTO v_dev FROM device_requests
+   WHERE user_hash = encode(sha256(convert_to(upper(replace(coalesce(p_user_code, ''), '-', '')), 'UTF8')), 'hex');
+  IF NOT FOUND THEN RETURN jsonb_build_object('result', 'not_found'); END IF;
+  IF v_dev.purpose = 'run' AND v_dev.mode IN ('competition', 'test') THEN
+    SELECT max(r.official_start) INTO v_replaces FROM runs r
+     WHERE r.member_id = p_actor_id AND r.mode = v_dev.mode AND r.status = 'open'
+       AND r.replaced_at IS NULL AND r.staging = v_dev.staging AND now() < r.deadline_at;
+  END IF;
+  RETURN jsonb_build_object(
+    'result', 'ok',
+    'status', CASE WHEN v_dev.status = 'pending' AND now() >= v_dev.expires_at THEN 'expired' ELSE v_dev.status END,
+    'purpose', v_dev.purpose,
+    'mode', v_dev.mode,
+    'connector_id', v_dev.connector_id,
+    'tracer_version', v_dev.tracer_version,
+    'expires_at', fmt_time(v_dev.expires_at),
+    'replaces_open_run', v_replaces IS NOT NULL,
+    'replaces_run_started_at', fmt_time(v_replaces),
+    'terms_ok', has_current_terms(p_actor_id),
+    'terms_version', current_terms_version(),
+    'decided_by_you', v_dev.member_id IS NOT DISTINCT FROM p_actor_id AND v_dev.status <> 'pending');
+END $$;
