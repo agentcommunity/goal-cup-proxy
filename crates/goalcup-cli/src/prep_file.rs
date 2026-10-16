@@ -17,9 +17,9 @@ pub const PREP_FILE_NAME: &str = "prep.json";
 /// The most of the file [`read_prep`] reads. The document is three short strings.
 const PREP_FILE_MAX_BYTES: u64 = 16 * 1024;
 
-/// The sentence for a machine that has not been prepared. One sentence, so a script and a
-/// participant read the same words.
-pub const PREP_FIRST: &str = "run `goalcup prep` first";
+/// The refusal for a machine that has not been prepared: what is wrong, then the command that
+/// fixes it. One text, so a script and a participant read the same words.
+pub const PREP_FIRST: &str = "This computer is not ready yet. Next: goalcup prep";
 
 /// What `goalcup prep` settled. A field a hand-edited file leaves out reads as empty, and
 /// [`read_prep`] refuses an empty `repo_url` or `work_root`.

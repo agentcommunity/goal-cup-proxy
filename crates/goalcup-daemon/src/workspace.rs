@@ -74,7 +74,7 @@ pub fn check_artifact_placement(artifact_root: &Path, workspace: &Path) -> Resul
     if artifact_root.parent() == workspace.parent() {
         return Err(DaemonError::Guard(format!(
             "artifact root {} is a sibling of workspace {}; the agent enumerates the \
-             parent directory on its first tool call (M0 §2.4)",
+             parent folder on its first tool call",
             artifact_root.display(),
             workspace.display()
         )));
@@ -363,10 +363,21 @@ pub fn check_workspace_available(roots: &Roots) -> Result<(), DaemonError> {
     if is_clone_root(&roots.workspace) {
         return Ok(());
     }
+    // A folder that already holds its own `.git` is a clone `goalcup start` made in the
+    // participant's work folder. It always finds its own `.git`, so the repository to name is
+    // the one above it.
+    let own_git = roots.workspace.join(".git").symlink_metadata().is_ok();
+    if own_git && let Some(outer) = roots.workspace.parent().and_then(git_worktree_of) {
+        return Err(DaemonError::Guard(format!(
+            "Your work folder is inside the Git repository {}. Choose a folder outside any \
+             repository: goalcup prep --work-root ~/goalcup-work",
+            outer.display()
+        )));
+    }
     if let Some(repo) = git_worktree_of(&roots.workspace) {
         return Err(DaemonError::Guard(format!(
-            "workspace {} is inside the Git worktree {} (R3: a new directory outside any \
-             Git worktree)",
+            "the run's folder {} is inside the Git repository {}; it must be outside any \
+             repository",
             roots.workspace.display(),
             repo.display()
         )));
@@ -383,7 +394,7 @@ pub fn check_workspace_available(roots: &Roots) -> Result<(), DaemonError> {
     };
     if existing > 0 {
         return Err(DaemonError::Guard(format!(
-            "workspace {} is not empty ({existing} entries); R3 asks for zero",
+            "the run's folder {} is not empty ({existing} entries); it must be new and empty",
             roots.workspace.display()
         )));
     }

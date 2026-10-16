@@ -46,22 +46,23 @@ struct Args {
     command: Command,
 }
 
-/// Every `goalcup --help` footer: where verification lives, and the rungs a capture run can
-/// leave under.
+/// Every `goalcup --help` footer: the steps in the order a participant takes them, where the
+/// guide is, and the exit codes.
 const AFTER_HELP: &str = "\
-Start a run with `goalcup start --harness <id>`, which opens the harness in your terminal for you \
-to type the prompt. A headless harness needs `--goal-file <file>` instead. It starts the recording daemon \
-(`goalcup-daemon`, beside this binary) for the run, and the daemon exits once every run \
-is sealed. `status` and `entries` start it again to answer, sealed runs included; it stays up \
-while a run whose daemon died is unsealed, until `goalcup seal`.
+Steps:
+  1. goalcup login                               connect this computer (once)
+  2. goalcup prep                                run it until every step is ok
+  3. goalcup start --harness <id> --practice     a 10-minute practice run
+  4. goalcup start --harness <id>                your run, inside the start window
+While it runs: goalcup status (in another terminal). If the agent stopped early: goalcup continue.
+A headless harness takes `--goal-file <file>` instead of a typed prompt.
+To check a finished run: goalcup-verify --capture-integrity <trace-dir>
 
-To check a finished run, use the separate `goalcup-verify --capture-integrity <trace-dir>`; \
-`goalcup start` prints that line for you. There is no `goalcup verify`.
+Guide: https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/PARTICIPANT-GUIDE.md
+Help: goalcup@agentcommunity.org
 
-Exit codes: 0 done; 1 refused, and you can fix it (no daemon to ask, the tracker still busy, \
-the run already sealed, a mistyped command, or on Linux a sealed run that left a process \
-running); 3 this command could not do its job (a file it \
-could not read, an answer it could not parse). This command never exits with 2 or 4.";
+Exit codes: 0 done; 1 refused, and you can fix it; 3 the command could not do its job. This \
+command never exits with 2 or 4.";
 
 /// What `goalcup doctor --help` says under its flags. There is no verify
 /// mode here: a sealed capture is checked by `goalcup-verify --capture-integrity`.
@@ -81,11 +82,55 @@ installed then makes this command exit 1).";
 /// is deliberately absent: see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
-    /// Run the harness, record the run, and seal it when the harness exits.
+    /// Step 1. Connect this computer to your Goal Cup account.
     ///
-    /// A harness in chat mode opens in this terminal: type your prompt there, and after it only
-    /// "keep going". Until the harness exits, goalcup prints nothing here. A headless harness
-    /// takes `--goal-file` instead.
+    /// Your browser opens on a page with a short code. Check that the code is the same as in
+    /// your terminal, then approve. You do this once per computer. No password is typed or
+    /// stored: only the server's address and your account's name are saved. Without a login,
+    /// runs stay on this computer.
+    Login {
+        /// The server's address, for example `https://ingest.agentcommunity.org`. Without
+        /// it, the server of your last login, else the Goal Cup server.
+        #[arg(long, value_name = "URL")]
+        server: Option<String>,
+    },
+    /// Step 2. Get this computer ready for your run.
+    ///
+    /// Six steps: you are logged in; you choose your agent (the harness) and it is installed;
+    /// you open it once here, sign in, and add your settings, MCP servers and skills; your new,
+    /// empty, public GitHub repository is checked, with a token for it; this computer has the
+    /// power, the disk, the network and a work folder outside any Git repository that a
+    /// week-long run needs; and a practice run is recorded and uploaded. Each step prints
+    /// `[ok]`, `[todo]` or `[fail]`, and the last line says what to do next. Run it again as
+    /// often as you like: what passed is not repeated. It never starts a run.
+    Prep {
+        /// Your agent, for example `codex-cli` or `claude-code-cli`. Without it, the one you
+        /// chose before, or the only one this build offers.
+        #[arg(long, value_name = "ID")]
+        harness: Option<String>,
+        /// The address of your new, empty, public GitHub repository,
+        /// `https://github.com/<owner>/<repo>`. You are asked for a token for it, and what you
+        /// type is not shown.
+        #[arg(long, value_name = "URL")]
+        repo: Option<String>,
+        /// The folder each run's clone is made in, as a full path. It must be outside any Git
+        /// repository. Default: `goalcup-work` in your home folder. Under WSL2 it must not be
+        /// on a Windows drive.
+        #[arg(long, value_name = "PATH")]
+        work_root: Option<std::path::PathBuf>,
+        /// Print the six steps as one JSON array (`step`, `state`, `human`, `say`), and nothing
+        /// else. It asks nothing and opens nothing.
+        #[arg(long)]
+        json: bool,
+        /// For connector developers: accept a connector directory this build does not pin.
+        #[arg(long)]
+        dev: bool,
+    },
+    /// Steps 3 and 4. Start a run: open your agent here and record what it does.
+    ///
+    /// Your agent opens in this terminal. Type your prompt there, and after it only
+    /// "keep going". Until the agent exits, goalcup prints nothing here; open a second terminal
+    /// and run `goalcup status` to see the run. A headless harness takes `--goal-file` instead.
     Start {
         /// Which harness to run, for example `claude-code-cli` or `codex-cli` (`goalcup doctor`
         /// lists every one this build ships).
@@ -112,20 +157,8 @@ enum Command {
         #[arg(long)]
         test: bool,
     },
-    /// Restart the agent of a run whose agent ended before the run's time was up.
-    ///
-    /// An agent that exits, a closed window or a reboot ends one segment of your run; the run
-    /// stays open until its deadline. This opens the next segment on this machine, with the
-    /// run's saved credential (nothing is approved again), in the run's clone, and the harness
-    /// picks up its last session. A run can be continued only on the machine that started it,
-    /// and only while another run is not recording there.
-    Continue {
-        /// The run to continue. Defaults to the newest run started on this machine.
-        #[arg(value_name = "RUN_ID")]
-        run: Option<String>,
-    },
-    /// Show how a run is doing: recording state, health, storage and any gaps. Starts the
-    /// daemon if none is running, so a sealed run is shown too.
+    /// Show how your run is doing: recording state, health, storage and any gaps. Run it in a
+    /// second terminal while the agent works.
     Status {
         /// The entry id (`goalcup entries` lists them). Defaults to the newest run started on
         /// this machine.
@@ -135,23 +168,45 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// List every run the daemon's registry holds, sealed ones included. Starts the daemon if
-    /// none is running.
+    /// Start your agent again, when it stopped before the run's time was up.
+    ///
+    /// An agent that exits, a closed window or a restart ends one part of your run. The run
+    /// stays open until its end time. This starts the next part on this computer, in the run's
+    /// folder, and the agent picks up its last session. Nothing is approved again: this computer
+    /// kept the run's key. You can continue a run only on the computer that started it.
+    Continue {
+        /// The run to continue. Defaults to the newest run started on this machine.
+        #[arg(value_name = "RUN_ID")]
+        run: Option<String>,
+    },
+    /// Send the rest of a run to the Goal Cup server, when `goalcup start` could not: the
+    /// network was down, the laptop slept, or the process was stopped. Safe to run again.
+    Upload {
+        /// The entry id (`goalcup entries` lists them). Defaults to every entry of the newest run
+        /// started on this machine that is not yet sent.
+        #[arg(value_name = "ENTRY")]
+        entry: Option<String>,
+    },
+    /// List the recorded parts (entries) of your runs on this computer, sealed ones included.
     Entries {
         /// Print the list as one JSON array.
         #[arg(long)]
         json: bool,
     },
-    /// End a run early: stop the harness, seal the record, and print where the trace is.
+    /// End a run early: stop the agent, seal the record, and print where the trace is.
     ///
-    /// `goalcup start` seals on its own when the harness exits, so this is only for stopping a
-    /// run before then.
+    /// `goalcup start` seals on its own when the agent exits, so this is only for stopping a
+    /// run before then. goalcup records through a small background program, `goalcup-daemon`
+    /// (beside this binary). It exits once every run is sealed. `status` and `entries` start
+    /// it again to answer; it stays up while a run whose daemon died is unsealed, until you run
+    /// `goalcup seal`.
     Seal {
         /// The entry id. Defaults to the newest run started on this machine.
         #[arg(value_name = "ENTRY")]
         entry: Option<String>,
     },
-    /// Check this machine: can a daemon run, and is each harness installed.
+    /// Check that goalcup can record on this computer and that each agent is installed. Not one
+    /// of the steps above: use it when something does not work.
     #[command(after_help = DOCTOR_AFTER_HELP)]
     Doctor {
         /// Print the report as one JSON document instead of text.
@@ -162,56 +217,6 @@ enum Command {
         /// and any failure makes the exit code 1.
         #[arg(long, value_name = "ID")]
         harness: Option<String>,
-    },
-    /// Connect this tracker to the Goal Cup server: approve it in your browser.
-    ///
-    /// The address and a short code are shown and your browser is opened; check the code on
-    /// the page and approve. Nothing secret is typed or stored: the server's address and your
-    /// account's name go in the tracker's configuration directory. Without a login, runs stay
-    /// on this machine only.
-    Login {
-        /// The server's address, for example `https://ingest.agentcommunity.org`. Without
-        /// it, the server of your last login, else the Goal Cup server.
-        #[arg(long, value_name = "URL")]
-        server: Option<String>,
-    },
-    /// Get this machine ready for your run, step by step, from install to a practice run.
-    ///
-    /// Six steps: you are logged in; a harness that runs in chat mode is chosen and installed;
-    /// you have opened it once here, signed in, and added your settings, MCP servers and skills;
-    /// your GitHub repository (new, empty, public) and a token for it are checked; this machine
-    /// has the power, the disk and the network a week-long run needs; and a practice run has
-    /// been recorded and uploaded. Each step prints `[ok]`, `[todo]` or `[fail]` and what to do.
-    /// Run it again as often as you like: what passed is not repeated. It never starts a run.
-    Prep {
-        /// The harness you will run, for example the one `goalcup doctor` shows installed.
-        /// Without it, the one you chose before, or the only one this build offers.
-        #[arg(long, value_name = "ID")]
-        harness: Option<String>,
-        /// The address of your new, empty, public GitHub repository,
-        /// `https://github.com/<owner>/<repo>`. You are asked for a token for it, and what you
-        /// type is not shown.
-        #[arg(long, value_name = "URL")]
-        repo: Option<String>,
-        /// The folder each run's clone is made in, as a full path. Default: `goalcup-work` in
-        /// your home folder. Under WSL2 it must not be on a Windows drive.
-        #[arg(long, value_name = "PATH")]
-        work_root: Option<std::path::PathBuf>,
-        /// Print the six steps as one JSON array (`step`, `state`, `human`, `say`), and nothing
-        /// else. It asks nothing and opens nothing.
-        #[arg(long)]
-        json: bool,
-        /// For connector developers: accept a connector directory this build does not pin.
-        #[arg(long)]
-        dev: bool,
-    },
-    /// Finish uploading a run to the Goal Cup server, after `goalcup start` could not: the
-    /// server was away, the laptop slept, or the process was killed. Safe to run again.
-    Upload {
-        /// The entry id (`goalcup entries` lists them). Defaults to every entry of the newest run
-        /// started on this machine that is not yet sent.
-        #[arg(value_name = "ENTRY")]
-        entry: Option<String>,
     },
     /// The command git runs to ask for the GitHub token of your run's repository. It is set
     /// in each run's clone by `goalcup start`; you never run it yourself.

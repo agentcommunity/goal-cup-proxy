@@ -85,7 +85,7 @@ fn a_workspace_inside_a_git_worktree_or_holding_files_is_refused() {
         artifact_root: t.path().join("tracker/art"),
     };
     let err = check_workspace_available(&roots).expect_err("R3: outside any Git worktree");
-    assert!(format!("{err}").contains("Git worktree"), "got {err}");
+    assert!(format!("{err}").contains("Git repository"), "got {err}");
 
     let ws = t.path().join("fresh");
     std::fs::create_dir_all(&ws).unwrap();
@@ -441,7 +441,18 @@ fn a_workspace_inside_another_work_tree_is_refused() {
         artifact_root: art.clone(),
     })
     .expect_err("R3: a work tree inside another is refused");
-    assert!(format!("{err}").contains("Git worktree"), "got {err}");
+    // The message names the repository above the clone, not the clone's own `.git`, and the
+    // clone's path is not repeated.
+    let said = format!("{err}");
+    let outer = t.path().join("outer").display().to_string();
+    let inner = t.path().join("outer/ws").display().to_string();
+    assert!(said.contains("Git repository"), "got {said}");
+    assert!(said.contains(&format!("repository {outer}.")), "got {said}");
+    assert!(
+        !said.contains(&inner),
+        "the clone's own path is named: {said}"
+    );
+    assert!(said.contains("goalcup prep --work-root"), "got {said}");
 
     // A linked worktree (`.git` is a file) is not the root of its own clone.
     let linked = t.path().join("linked");
@@ -452,7 +463,7 @@ fn a_workspace_inside_another_work_tree_is_refused() {
         artifact_root: art.clone(),
     })
     .expect_err("only a `.git` directory makes a clone root");
-    assert!(format!("{err}").contains("Git worktree"), "got {err}");
+    assert!(format!("{err}").contains("Git repository"), "got {err}");
 
     // The root of its own clone is admitted with its files.
     let clone = t.path().join("clone");

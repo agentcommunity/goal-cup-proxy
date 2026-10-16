@@ -112,7 +112,7 @@ impl DaemonConfig {
             return Err(DaemonError::Config(format!(
                 "workspace_parent {} and artifact_root {} are nested: an agent enumerates its \
                  workspace's parent on its first tool call, so the run's own evidence would be \
-                 in its field of view (R3)",
+                 in its field of view",
                 self.workspace_parent.display(),
                 self.artifact_root.display()
             )));

@@ -176,7 +176,12 @@ main() {
         mv -f "$prefix/bin/.$binary.new.$$" "$prefix/bin/$binary"
     done
 
-    say "Installed $("$prefix/bin/goalcup" --version) into $prefix"
+    # Show the folder the way a person types it: ~ for the home folder.
+    where="$prefix/bin"
+    case $where in
+    "${HOME:-/nonexistent}"/*) where="~${where#"$HOME"}" ;;
+    esac
+    say "Installed $("$prefix/bin/goalcup" --version) in $where."
     found=$(command -v goalcup 2>/dev/null || true)
     if [ -n "$found" ] && [ "$found" != "$prefix/bin/goalcup" ]; then
         say ""
@@ -193,7 +198,7 @@ main() {
         ;;
     esac
     say ""
-    say "Next: goalcup doctor"
+    say "Next: goalcup login"
 }
 
 main "$@"
