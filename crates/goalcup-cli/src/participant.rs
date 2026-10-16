@@ -622,15 +622,32 @@ pub struct StatusHeader<'a> {
     pub upload: UploadNow,
     /// How many problem lines follow.
     pub problems: usize,
+    /// Nothing has written the run's state for a while: the state below may be old.
+    pub stale: bool,
+    /// The run ended before its time (a newer run replaced it, or the server closed it).
+    pub early: bool,
+    /// With no state: the run started a moment ago, so its state is still to come.
+    pub young: bool,
+}
+
+/// How a run's end is said.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum End {
+    /// The run is open; the time left is said.
+    Open,
+    /// Its time is up.
+    Over,
+    /// It was closed before its time.
+    Early,
 }
 
 /// The line that says when the run ends (`Ends: Sat 14 Nov, 10:12 CET (09:12 UTC), 95 h 10 min
-/// left.`), or when it ended. `left` is what is left, for a run that is not over.
-pub fn ends_line(deadline_at: &str, left: Option<u64>, over: bool) -> String {
-    if over {
-        format!("Ended: {}.", end_words(deadline_at, None))
-    } else {
-        format!("Ends: {}.", end_words(deadline_at, left))
+/// left.`), or when it ended. `left` is what is left, for a run that is open.
+pub fn ends_line(deadline_at: &str, left: Option<u64>, end: End) -> String {
+    match end {
+        End::Open => format!("Ends: {}.", end_words(deadline_at, left)),
+        End::Over => format!("Ended: {}.", end_words(deadline_at, None)),
+        End::Early => "Ended early: a newer run replaced it, or the server closed it.".to_string(),
     }
 }
 
@@ -648,9 +665,20 @@ fn run_kind(mode: Option<RunMode>) -> &'static str {
 pub fn status_header(h: &StatusHeader<'_>) -> Vec<String> {
     let name = h.harness;
     let state = match (h.phase, h.mode) {
-        (None, _) => "no run state yet".to_string(),
+        (None, _) if h.young => "no run state yet".to_string(),
+        (None, _) => "no run state, so it did not start".to_string(),
+        (Some(Phase::Recording), _) if h.stale => "state not updated lately".to_string(),
         (Some(Phase::Recording), _) => "recording".to_string(),
         (Some(Phase::AgentExited), _) => format!("{name} has exited, the run is still open"),
+        (Some(Phase::Finishing), _) if h.stale && h.early => {
+            "the run has ended, goalcup stopped before it finished the run".to_string()
+        }
+        (Some(Phase::Finishing), _) if h.stale => {
+            "time is up, goalcup stopped before it finished the run".to_string()
+        }
+        (Some(Phase::Finishing), _) if h.early => {
+            "the run has ended, goalcup is finishing the run".to_string()
+        }
         (Some(Phase::Finishing), _) => "time is up, goalcup is finishing the run".to_string(),
         (Some(Phase::Sealed), None) => "sealed on this computer".to_string(),
         (Some(Phase::Sealed), Some(_)) => "sealed, not all of it is uploaded yet".to_string(),
@@ -661,11 +689,16 @@ pub fn status_header(h: &StatusHeader<'_>) -> Vec<String> {
         lines.push(format!("  {ends}"));
     }
     if h.phase.is_none() {
-        lines
-            .push("  goalcup writes the run state a few seconds after the run starts.".to_string());
+        lines.push(if h.young {
+            "  goalcup writes the run state a few seconds after the run starts.".to_string()
+        } else {
+            "  goalcup wrote no state for this run, so the start did not finish.".to_string()
+        });
         return lines;
     }
+    let state_old = h.stale && matches!(h.phase, Some(Phase::Recording | Phase::Finishing));
     lines.push(match &h.agent {
+        _ if state_old => format!("  {name}: not known, the state is not being updated."),
         Agent::Running => format!("  {name}: running."),
         Agent::Exited { how } => format!("  {name}: exited ({how})."),
         Agent::Stopped => format!("  {name}: stopped."),
@@ -713,6 +746,14 @@ pub enum Next<'a> {
     Problems,
     /// goalcup is still at work.
     Wait,
+    /// goalcup stopped before it ended the run: seal it, then send it (`upload`: a run on a
+    /// server).
+    Seal { upload: bool },
+    /// The run never started; start a new one.
+    Restart {
+        connector_id: &'a str,
+        mode: Option<RunMode>,
+    },
 }
 
 /// The last line of the participant block of `goalcup status`.
@@ -720,8 +761,21 @@ pub fn status_next(next: &Next<'_>) -> String {
     match next {
         Next::NothingEnds => "Next: nothing to do. The run ends by itself.".to_string(),
         Next::Nothing => "Next: nothing to do.".to_string(),
-        Next::Continue { run_id } => format!("Next: run {CONTINUE_HINT} {run_id}."),
-        Next::Upload => "Next: run goalcup upload.".to_string(),
+        // A command ends its line with no full stop: it is copied as it stands.
+        Next::Continue { run_id } => format!("Next: run {CONTINUE_HINT} {run_id}"),
+        Next::Upload => "Next: run goalcup upload".to_string(),
+        Next::Seal { upload: true } => "Next: run goalcup seal, then goalcup upload".to_string(),
+        Next::Seal { upload: false } => "Next: run goalcup seal".to_string(),
+        Next::Restart { connector_id, mode } => {
+            let flag = match mode {
+                Some(RunMode::Practice) => " --practice",
+                Some(RunMode::Test) => " --test",
+                Some(RunMode::Competition) | None => "",
+            };
+            format!(
+                "Next: this run did not start. Run goalcup start --harness {connector_id}{flag}"
+            )
+        }
         Next::Problems => {
             "Next: do what the problem lines above say. The run goes on meanwhile.".to_string()
         }
@@ -761,7 +815,8 @@ pub struct Who<'a> {
 pub fn problem_state_stale(silent: &str, restart: Restart<'_>) -> String {
     let fix = match restart {
         Restart::Continue { run_id } => format!("To go on, run: {CONTINUE_HINT} {run_id}"),
-        Restart::Over => "The run is over, so it cannot be continued.".to_string(),
+        Restart::Over => "The run is over, so it cannot be continued. To finish it, run: goalcup seal, then goalcup upload"
+            .to_string(),
         Restart::Cannot => "This run cannot be continued.".to_string(),
     };
     format!(
@@ -797,11 +852,14 @@ pub fn problem_upload(ago: &str, why: &str, over: bool) -> String {
     }
 }
 
-/// `failures` heartbeats in a row failed. The cadence is five minutes.
+/// `failures` heartbeats in a row failed; one is sent every [`Policy::heartbeat`] (five minutes).
+///
+/// [`Policy::heartbeat`]: crate::upload::policy::Policy
 pub fn problem_heartbeats(failures: u32, why: &str) -> String {
+    let cadence_min = crate::upload::policy::Policy::default().heartbeat.as_secs() / 60;
     format!(
         "the server has not heard from this run for about {} min ({why}). Check the network.",
-        u64::from(failures) * 5
+        u64::from(failures) * cadence_min
     )
 }
 
@@ -1326,11 +1384,14 @@ mod tests {
             ends: Some(ends_line(
                 "2026-11-14T09:12:00Z",
                 Some(95 * 3600 + 600),
-                false,
+                End::Open,
             )),
             agent: Agent::Running,
             upload: UploadNow::UpToDate { ago: Some(120) },
             problems: 0,
+            stale: false,
+            early: false,
+            young: true,
         }
     }
 
@@ -1367,23 +1428,45 @@ mod tests {
             assert!(first.contains(word), "{word}: {first}");
         }
         // A run over says when it ended and has no time left.
-        let over = ends_line("2026-11-14T09:12:00Z", Some(5), true);
+        let over = ends_line("2026-11-14T09:12:00Z", Some(5), End::Over);
         assert!(over.starts_with("Ended: "), "{over}");
         assert!(!over.contains("left"), "{over}");
+        // A run closed before its time names no deadline as its end.
+        let early = ends_line("2026-11-14T09:12:00Z", Some(5), End::Early);
+        assert!(early.starts_with("Ended early"), "{early}");
+        assert!(!early.contains("09:12"), "{early}");
         // No state yet: said in plain words, and nothing about the agent or the upload.
         let text = status_header(&header(None, Some(RunMode::Practice))).join("\n");
         assert!(text.contains("no run state yet"), "{text}");
         assert!(!text.contains("Upload:"), "{text}");
+        // An old run with no state did not start.
+        let mut old = header(None, Some(RunMode::Practice));
+        old.young = false;
+        let text = status_header(&old).join("\n");
+        assert!(text.contains("did not start"), "{text}");
+        // A state nothing updates is not called recording, and the agent is not called running.
+        let mut stale = header(Some(Phase::Recording), Some(RunMode::Competition));
+        stale.stale = true;
+        let text = status_header(&stale).join("\n");
+        assert!(
+            !text.contains("recording") && !text.contains("running"),
+            "{text}"
+        );
+        // Time up and nothing finishing the run: say so, not "finishing".
+        let mut dead = header(Some(Phase::Finishing), Some(RunMode::Competition));
+        dead.stale = true;
+        let first = status_header(&dead).remove(0);
+        assert!(first.contains("stopped before it finished"), "{first}");
         // Problems are counted.
         let mut some = header(Some(Phase::Recording), Some(RunMode::Competition));
         some.problems = 2;
-        assert!(status_header(&some).join("\n").contains("Problems: 2"));
+        assert!(status_header(&some).join("\n").contains(" 2"));
         // The agent and the upload in trouble.
         some.agent = Agent::Exited { how: "exit code 1" };
         some.upload = UploadNow::GaveUp;
         let text = status_header(&some).join("\n");
         assert!(text.contains("exited (exit code 1)"), "{text}");
-        assert!(text.contains("Upload: stopped"), "{text}");
+        assert!(text.contains("stopped"), "{text}");
         for word in ["entry", "segment", "chain", "daemon", "tracer"] {
             assert!(!text.contains(word), "{word}: {text}");
         }
@@ -1393,11 +1476,24 @@ mod tests {
     fn the_status_next_line_is_the_one_thing_to_do() {
         assert!(status_next(&Next::NothingEnds).starts_with("Next: nothing to do."));
         assert!(status_next(&Next::Nothing).starts_with("Next: nothing to do."));
-        assert_eq!(
-            status_next(&Next::Continue { run_id: "r1" }),
-            "Next: run goalcup continue r1."
+        // A command ends its line: nothing after it to be copied with it.
+        let go_on = status_next(&Next::Continue { run_id: "r1" });
+        assert!(go_on.ends_with("goalcup continue r1"), "{go_on}");
+        assert!(status_next(&Next::Upload).ends_with("goalcup upload"));
+        let seal = status_next(&Next::Seal { upload: true });
+        assert!(
+            seal.contains("goalcup seal") && seal.ends_with("goalcup upload"),
+            "{seal}"
         );
-        assert_eq!(status_next(&Next::Upload), "Next: run goalcup upload.");
+        assert!(!status_next(&Next::Seal { upload: false }).contains("upload"));
+        let restart = status_next(&Next::Restart {
+            connector_id: "some-cli",
+            mode: Some(RunMode::Practice),
+        });
+        assert!(
+            restart.contains("goalcup start --harness some-cli --practice"),
+            "{restart}"
+        );
         assert!(status_next(&Next::Problems).contains("problem"));
         assert!(status_next(&Next::Wait).contains("goalcup status"));
         // The refusal with no run starts with the command and keeps the phrase tests read.

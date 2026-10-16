@@ -332,6 +332,14 @@ impl RunState {
             .then(|| participant::agent_finished(who.harness, advice == Advice::Over))
     }
 
+    /// Whether no tracker writes this state any more: the host has not finished, and the tick has
+    /// not written it for a few watch periods.
+    pub fn is_stale(&self, now: u64) -> bool {
+        !self.ended
+            && now.saturating_sub(self.updated_at)
+                > STATE_STALE_AFTER_TICKS * reserve::WATCH_PERIOD.as_secs()
+    }
+
     /// Everything wrong with the run at `now` (unix seconds), one sentence each, worst first, each
     /// ending with what to do about it. Nothing wrong is an empty list. `advice` says whether
     /// `goalcup continue` can restart the run: the lines say to run it only when it can. `who`
@@ -340,8 +348,8 @@ impl RunState {
         let mut lines = Vec::new();
         // The tick writes the state every watch period; a run not over whose state has not
         // moved for a few of them has no tracker writing it.
-        let silent = now.saturating_sub(self.updated_at);
-        if !self.ended && silent > STATE_STALE_AFTER_TICKS * reserve::WATCH_PERIOD.as_secs() {
+        if self.is_stale(now) {
+            let silent = now.saturating_sub(self.updated_at);
             lines.push(participant::problem_state_stale(
                 &age_words(silent),
                 advice.restart(who),

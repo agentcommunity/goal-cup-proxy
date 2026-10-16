@@ -199,13 +199,28 @@ fn run_report(
         run.deadline_at.as_deref(),
         now,
     );
+    // Over by a stop (a newer run, the server's close) is not over by the deadline.
+    let early = state.as_ref().is_some_and(|state| {
+        state.stopped_for_its_end()
+            && !crate::run::time_left::time_up(
+                state.time_left.as_ref(),
+                run.deadline_at.as_deref(),
+                now,
+            )
+    });
+    let end = match (over, early) {
+        (false, _) => participant::End::Open,
+        (true, false) => participant::End::Over,
+        (true, true) => participant::End::Early,
+    };
     let ends = run
         .deadline_at
         .as_deref()
-        .map(|deadline| participant::ends_line(deadline, left, over));
+        .map(|deadline| participant::ends_line(deadline, left, end));
     let on_server = run.server_url.is_some();
     let mode = on_server.then(|| run.mode());
     let Some(state) = state else {
+        let young = now.saturating_sub(run.started_at_unix) < NEW_RUN_SECS;
         let header = participant::status_header(&participant::StatusHeader {
             harness: &name,
             mode,
@@ -214,11 +229,24 @@ fn run_report(
             agent: participant::Agent::Running,
             upload: participant::UploadNow::NotYet,
             problems: 0,
+            stale: false,
+            early: false,
+            young,
         });
+        // A run that is a few minutes old is still starting; an older one with no state did not
+        // start (a start that failed before the launch leaves a record and no state).
+        let next = if young {
+            participant::Next::Wait
+        } else {
+            participant::Next::Restart {
+                connector_id: &run.connector_id,
+                mode,
+            }
+        };
         let text = format!(
             "{banner}{}\n{}\n",
             header.join("\n"),
-            participant::status_next(&participant::Next::Wait)
+            participant::status_next(&next)
         );
         return (plain_lines(&text), Some(run.run_id));
     };
@@ -276,14 +304,17 @@ fn run_report(
         .upload
         .last_ok_at
         .map(|last_ok| now.saturating_sub(last_ok));
+    let stale = state.is_stale(now);
     let upload = if !on_server {
         participant::UploadNow::NotUsed
     } else if phase == participant::Phase::Uploaded {
         participant::UploadNow::Done
+    } else if state.ended && !all_sent {
+        // Nothing is sending now: the host is done, and what is left waits for `goalcup upload`
+        // (or, for an open run, for `goalcup continue`).
+        participant::UploadNow::Unfinished
     } else if state.upload.stopped {
         participant::UploadNow::GaveUp
-    } else if phase == participant::Phase::Sealed {
-        participant::UploadNow::Unfinished
     } else if state.upload.problem.is_some() {
         participant::UploadNow::Retrying { ago }
     } else if ago.is_some() {
@@ -293,6 +324,13 @@ fn run_report(
     };
     let next = match phase {
         participant::Phase::Recording if problems.is_empty() => participant::Next::NothingEnds,
+        participant::Phase::Recording | participant::Phase::AgentExited
+            if stale && advice == crate::run::Advice::Continue =>
+        {
+            participant::Next::Continue {
+                run_id: &run.run_id,
+            }
+        }
         participant::Phase::Recording => participant::Next::Problems,
         participant::Phase::AgentExited if advice == crate::run::Advice::Continue => {
             participant::Next::Continue {
@@ -302,6 +340,9 @@ fn run_report(
         participant::Phase::AgentExited | participant::Phase::Uploaded => {
             participant::Next::Nothing
         }
+        // Time is up and the state is moving: goalcup is finishing the run. If nothing writes it
+        // any more (the computer restarted, the process was killed), nobody will: seal it here.
+        participant::Phase::Finishing if stale => participant::Next::Seal { upload: on_server },
         participant::Phase::Finishing => participant::Next::Wait,
         participant::Phase::Sealed if on_server => participant::Next::Upload,
         participant::Phase::Sealed => participant::Next::Nothing,
@@ -314,6 +355,9 @@ fn run_report(
         agent,
         upload,
         problems: problems.len(),
+        stale,
+        early,
+        young: false,
     });
     let problems: String = problems
         .iter()
@@ -327,6 +371,9 @@ fn run_report(
     );
     (plain_lines(&text), Some(run.run_id))
 }
+
+/// How long after its start a run may be without a state before it is called not started.
+const NEW_RUN_SECS: u64 = 5 * 60;
 
 /// The harness's display name from its connector, or the connector id when the connector cannot
 /// be loaded here.

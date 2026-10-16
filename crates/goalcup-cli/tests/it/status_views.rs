@@ -6,6 +6,7 @@
 //! nothing at all.
 
 use crate::common::support;
+use goalcup_cli::participant;
 
 use goalcup_cli::commands::{
     entries::entries_with,
@@ -727,6 +728,16 @@ fn run_with_state_on(
     StateKeeper::begin(&run_dir(cfg, entry_id), state);
 }
 
+/// Write the run's state as a tracer that stopped at `updated_at` left it: the keeper stamps
+/// the time of every write, so the file is edited after.
+fn leave_state_at(cfg: &std::path::Path, entry_id: &str, updated_at: u64) {
+    let file = goalcup_cli::run::run_dir(cfg, entry_id).join(goalcup_cli::run::STATE_FILE_NAME);
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    json["updated_at"] = updated_at.into();
+    std::fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
+}
+
 fn status_text(
     m: &goalcup_cli::daemon::MockDaemonClient,
     cfg: &std::path::Path,
@@ -740,12 +751,16 @@ fn status_text(
 
 /// The `PROBLEM:` lines of a status text, in order.
 fn problem_lines(text: &str) -> Vec<&str> {
-    text.lines().filter(|l| l.starts_with("PROBLEM:")).collect()
+    text.lines()
+        .filter(|l| l.starts_with(participant::PROBLEM))
+        .collect()
 }
 
 /// The participant block of a status text: everything before the technical block.
 fn participant_block(text: &str) -> &str {
-    text.split("\nDetails:\n").next().unwrap()
+    text.split(&format!("\n{}\n", participant::STATUS_DETAILS))
+        .next()
+        .unwrap()
 }
 
 #[test]
@@ -794,7 +809,10 @@ fn status_puts_every_problem_first() {
     let lines: Vec<&str> = text.lines().collect();
     assert!(lines[0].starts_with("Your "), "{text}");
     assert!(lines[0].contains("claude-code-cli"), "{text}");
-    assert!(text.contains("Problems: 5"), "{text}");
+    assert!(
+        text.contains("Problems: 5") || text.contains(" 5, "),
+        "{text}"
+    );
     let problems = problem_lines(&text);
     assert_eq!(problems.len(), 5, "{text}");
     for (line, words) in problems.iter().zip([
@@ -810,7 +828,9 @@ fn status_puts_every_problem_first() {
     }
     let first_problem = text.find("PROBLEM:").unwrap();
     let next = text.find("Next: ").unwrap();
-    let details = text.find("\nDetails:\n").unwrap();
+    let details = text
+        .find(&format!("\n{}\n", participant::STATUS_DETAILS))
+        .unwrap();
     assert!(text.find("Problems:").unwrap() < first_problem, "{text}");
     assert!(first_problem < next && next < details, "{text}");
     assert!(
@@ -911,8 +931,7 @@ fn status_advises_continue_only_when_continue_can_restart_the_run() {
     assert_eq!(problem.len(), 1, "{text}");
     assert!(problem[0].contains("exit code 0"), "{text}");
     assert!(
-        participant_block(&text)
-            .contains(&format!("Next: run goalcup continue {}.", info.entry_id)),
+        participant_block(&text).contains(&format!("Next: run goalcup continue {}", info.entry_id)),
         "{text}"
     );
 
@@ -1109,8 +1128,21 @@ fn status_with_no_problem_prints_no_problem_line() {
     }
     let text = status_text(&m, &cfg, &info.entry_id, false);
     assert!(!text.contains("PROBLEM"), "{text}");
+    // The record says it started long ago and has no state: it did not start, so waiting is
+    // no help and the next step is a new start.
+    assert!(text.contains("did not start"), "{text}");
+    assert!(
+        participant_block(&text).contains("goalcup start --harness claude-code-cli"),
+        "{text}"
+    );
+    // A run a moment old is still starting: wait.
+    let mut record = goalcup_cli::run::read(&cfg, &info.entry_id).unwrap();
+    record.started_at_unix = control::parse_z(support::NOW).unwrap() - 30;
+    goalcup_cli::run::write(&cfg, &record).unwrap();
+    let text = status_text(&m, &cfg, &info.entry_id, false);
     assert!(text.contains("no run state yet"), "{text}");
     assert!(text.contains("Next: wait a minute"), "{text}");
+    assert!(!text.contains("did not start"), "{text}");
 
     // A healthy run, an unknown recording (the daemon was slow to answer) and an upload that
     // is failing for less than half an hour, an agent the host ended on purpose: no problem.
@@ -1187,6 +1219,178 @@ fn status_header_names_the_harness_the_mode_and_the_end() {
         text.starts_with("Your practice run with claude-code-cli: recording."),
         "{text}"
     );
+}
+
+/// What `goalcup status` says once a run is over: sealed, uploaded, being finished, or left
+/// unfinished by a tracer that stopped. The Next line is the action each state needs.
+#[test]
+fn status_names_the_next_action_for_every_state_of_a_run_that_is_over() {
+    use goalcup_cli::run::{HarnessState, RunState};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let server = Some("https://server.example");
+    let over = Some("2020-01-01T00:00:00Z");
+    // The run's time is up and its tracer ended the agent for it.
+    let state = |ended: bool, updated_at: u64| {
+        let mut state = RunState::launched(&info.entry_id, Ok(()));
+        state.harness = HarnessState::Exited {
+            status: "signal 15".to_string(),
+        };
+        state.stopped = Some(
+            "the server says the run is over (its deadline was 2020-01-01T00:00:00Z)".to_string(),
+        );
+        state.ended = ended;
+        state.updated_at = updated_at;
+        state
+    };
+    let fresh = goalcup_cli::run::now_unix();
+    let said = |cfg: &std::path::Path| status_text(&m, cfg, &info.entry_id, false);
+    let next_of = |text: &str| {
+        participant_block(text)
+            .lines()
+            .find(|l| l.starts_with("Next:"))
+            .unwrap_or_else(|| panic!("{text}"))
+            .to_string()
+    };
+
+    // Sealed, part of it not on the server: send it.
+    run_with_state_on(&cfg, &info.entry_id, state(true, fresh), server, over);
+    let text = said(&cfg);
+    assert!(participant_block(&text).contains("sealed"), "{text}");
+    assert!(text.contains("Ended: "), "{text}");
+    assert!(text.contains("Upload: not finished"), "{text}");
+    assert!(next_of(&text).ends_with("goalcup upload"), "{text}");
+    assert!(!text.contains("goalcup continue"), "{text}");
+
+    // The same, and the upload failed: the problem line and the next line both say to run it.
+    let mut failed = state(true, fresh);
+    failed.upload.problem = Some("the server answered 503".to_string());
+    failed.upload.last_ok_at = Some(fresh - 60);
+    run_with_state_on(&cfg, &info.entry_id, failed, server, over);
+    let text = said(&cfg);
+    let problems = problem_lines(&text);
+    assert_eq!(problems.len(), 1, "{text}");
+    assert!(problems[0].contains("503"), "{text}");
+    assert!(problems[0].contains("goalcup upload"), "{text}");
+    assert!(next_of(&text).ends_with("goalcup upload"), "{text}");
+
+    // All of it sent: done.
+    let spool = cfg.join(goalcup_cli::upload::UPLOADS_DIR_NAME);
+    std::fs::create_dir_all(&spool).unwrap();
+    std::fs::write(spool.join(format!("{}.sent", info.entry_id)), b"sent\n").unwrap();
+    run_with_state_on(&cfg, &info.entry_id, state(true, fresh), server, over);
+    let text = said(&cfg);
+    assert!(
+        participant_block(&text).contains("sealed and uploaded"),
+        "{text}"
+    );
+    assert!(text.contains("Upload: done"), "{text}");
+    assert!(next_of(&text).contains("nothing to do"), "{text}");
+    std::fs::remove_file(spool.join(format!("{}.sent", info.entry_id))).unwrap();
+
+    // Time is up and the tracer is still finishing the run: wait.
+    run_with_state_on(&cfg, &info.entry_id, state(false, fresh), server, over);
+    let text = said(&cfg);
+    assert!(participant_block(&text).contains("finishing"), "{text}");
+    assert!(next_of(&text).contains("wait"), "{text}");
+    assert!(problem_lines(&text).is_empty(), "{text}");
+
+    // Time is up and nothing writes the state any more (the computer restarted): waiting never
+    // helps. The run is sealed by hand, then sent.
+    run_with_state_on(&cfg, &info.entry_id, state(false, 1), server, over);
+    leave_state_at(&cfg, &info.entry_id, 1);
+    let text = said(&cfg);
+    assert!(
+        participant_block(&text).contains("stopped before it finished"),
+        "{text}"
+    );
+    assert!(!text.contains("is finishing the run"), "{text}");
+    let next = next_of(&text);
+    assert!(
+        next.contains("goalcup seal") && next.ends_with("goalcup upload"),
+        "{text}"
+    );
+    assert!(!next.contains("wait"), "{text}");
+    assert_eq!(problem_lines(&text).len(), 1, "{text}");
+
+    // A run on this computer only: sealed here, nothing to send.
+    run_with_state_on(&cfg, &info.entry_id, state(true, fresh), None, None);
+    let text = said(&cfg);
+    assert!(
+        participant_block(&text).contains("sealed on this computer"),
+        "{text}"
+    );
+    assert!(next_of(&text).contains("nothing to do"), "{text}");
+}
+
+/// A run a newer run replaced did not end at its deadline, and the header does not say it did.
+#[test]
+fn status_of_a_run_closed_early_names_no_deadline_as_its_end() {
+    use goalcup_cli::run::{HarnessState, RunState};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.harness = HarnessState::Exited {
+        status: "signal 15".to_string(),
+    };
+    state.stopped = Some("a newer run on your account replaced this one".to_string());
+    run_with_state_on(
+        &cfg,
+        &info.entry_id,
+        state,
+        Some("https://server.example"),
+        Some("2099-01-01T00:00:00Z"),
+    );
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    let block = participant_block(&text);
+    assert!(block.contains("Ended early"), "{text}");
+    assert!(
+        !block.contains("2099") && !block.contains("time is up"),
+        "{text}"
+    );
+}
+
+/// A state nobody updates is not called recording, and `goalcup continue` is the next action;
+/// an upload nobody retries is not "kept trying".
+#[test]
+fn status_does_not_call_an_old_state_recording_or_an_ended_upload_retrying() {
+    use goalcup_cli::run::{HarnessState, RunState};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let server = Some("https://server.example");
+    let ahead = Some("2099-01-01T00:00:00Z");
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.continuable = true;
+    run_with_state_on(&cfg, &info.entry_id, state.clone(), server, ahead);
+    leave_state_at(&cfg, &info.entry_id, 1);
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    let block = participant_block(&text);
+    assert!(
+        !block.contains("recording") && !block.contains("running"),
+        "{text}"
+    );
+    assert!(
+        block.contains(&format!("Next: run goalcup continue {}", info.entry_id)),
+        "{text}"
+    );
+
+    // The agent left, the host ended its part, and the upload failed: nothing retries it.
+    state.updated_at = goalcup_cli::run::now_unix();
+    state.ended = true;
+    state.harness = HarnessState::Exited {
+        status: "exit code 1".to_string(),
+    };
+    state.upload.problem = Some("the server answered 503".to_string());
+    run_with_state_on(&cfg, &info.entry_id, state, server, ahead);
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(text.contains("Upload: not finished"), "{text}");
+    assert!(!text.contains("keeps trying"), "{text}");
 }
 
 /// An organizer test run says so first, before the daemon is asked and before any problem line.
