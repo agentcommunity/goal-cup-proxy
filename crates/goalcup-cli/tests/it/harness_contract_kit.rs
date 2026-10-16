@@ -40,6 +40,10 @@ struct Expect {
     native_path: String,
     native_form: String,
     native_g1: String,
+    /// What the first native stream holds once the stand-in's first write is recorded and its
+    /// second is not yet made. Left out, it is `native_g1`. An append-only case names it,
+    /// because there `native_g1` is everything appended.
+    native_gate: Option<String>,
     native_g2: Option<String>,
     native_decoy_path: Option<String>,
     native_decoy_text: Option<String>,
@@ -154,6 +158,7 @@ fn parse_expect(text: &str) -> Expect {
         native_path: get("native_path"),
         native_form: get("native_form"),
         native_g1: get("native_g1"),
+        native_gate: optional("native_gate"),
         native_g2: optional("native_g2"),
         native_decoy_path: optional("native_decoy_path"),
         native_decoy_text: optional("native_decoy_text"),
@@ -248,11 +253,17 @@ impl Staged {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let first = format!(
-            "{}:{}#g1",
-            self.case.expect.native_source, self.case.expect.native_path
-        );
-        let first_bytes = self.case.expect.native_g1.as_bytes();
+        // The label carries the identity for a `{id}` pattern, which a preassigned run only
+        // learns from the entry, so match the source prefix and the first generation. The
+        // wrong-id file is never captured, so exactly one native stream can match.
+        let source_prefix = format!("{}:", self.case.expect.native_source);
+        let first_bytes = self
+            .case
+            .expect
+            .native_gate
+            .as_deref()
+            .unwrap_or(&self.case.expect.native_g1)
+            .as_bytes();
         // The releaser stops when the child is gone; the stand-in's own wait is bounded too.
         let finished = std::sync::atomic::AtomicBool::new(false);
         std::thread::scope(|scope| {
@@ -272,7 +283,8 @@ impl Staged {
                         let chain = self.world.chain(&entry.entry_id);
                         let held = chain.streams().values().any(|stream| {
                             stream.source == CaptureSource::Native
-                                && stream.meta.label == first
+                                && stream.meta.label.starts_with(&source_prefix)
+                                && stream.meta.label.ends_with("#g1")
                                 && stream.data == first_bytes
                         });
                         if held {

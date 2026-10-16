@@ -3,7 +3,9 @@
 
 Copy to crates/goalcup-cli/tests/fixtures/harness-kit/<HARNESS_ID>/stand-in.py and edit only
 the EDIT block. Every value there must agree with this case's harness.toml and expect.toml.
-The kit runs it as `python3 -I -S stand-in.py <port> <test-id> <marker> [<session-id>]`.
+The kit runs it as `python3 -I -S stand-in.py <port> <test-id> <marker> <go-file> [<session-id>]`.
+The runner creates <go-file> once the recorded chain holds the first native write, so the second
+write is always a later one. Do not put a sleep between the two writes.
 """
 
 import base64
@@ -101,6 +103,21 @@ def merge(left, right):
     return left
 
 
+def wait_for_go(path, patience=60.0):
+    """Wait for the runner to say it holds the first write, so the second is a later one.
+
+    The runner creates `path` once the recorded chain holds FIRST. A fixed sleep here races the
+    recorder on a loaded host; this wait depends on the recorder, not the clock.
+    """
+    deadline = time.monotonic() + patience
+    while not os.path.exists(path):
+        if time.monotonic() > deadline:
+            print("kit stand-in: the runner never released the second write", file=sys.stderr,
+                  flush=True)
+            sys.exit(4)
+        time.sleep(0.02)
+
+
 def write_snapshot(path, text):
     pending = path + ".pending"
     with open(pending, "w") as stream:
@@ -110,10 +127,10 @@ def write_snapshot(path, text):
     os.replace(pending, path)
 
 
-port, test_id, marker = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+port, test_id, marker, go = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 open(marker, "w").close()
 if IDENTITY == "preassigned":
-    session = sys.argv[4]
+    session = sys.argv[5]
 elif IDENTITY == "stdout_json":
     session = SESSION_ID
     event = merge(nested(MATCH_FIELD, MATCH_VALUE), nested(ID_FIELD, SESSION_ID))
@@ -130,14 +147,14 @@ own = os.path.join(root, NATIVE_NAME.replace("{id}", session or ""))
 os.makedirs(os.path.dirname(own), mode=0o700, exist_ok=True)
 if NATIVE_FORM == "snapshot":
     write_snapshot(own, FIRST)
-    time.sleep(0.75)
+    wait_for_go(go)
     write_snapshot(own, SECOND)
 else:
     with open(own, "w") as stream:
         stream.write(FIRST)
         stream.flush()
         os.fsync(stream.fileno())
-    time.sleep(0.75)
+    wait_for_go(go)
     with open(own, "a") as stream:
         stream.write(SECOND)
 if session is not None and "{id}" in NATIVE_NAME:

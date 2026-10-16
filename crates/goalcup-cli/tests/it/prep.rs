@@ -487,13 +487,19 @@ fn prep_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
 
     let mut on_pty = OnPty::spawn(prep_command(&rig, &["--repo", REPO], &facts), None);
     on_pty.wait_shown("Press Enter to open");
-    // Ctrl-D at the start of a line: the input ends with no Enter.
-    on_pty.type_line("\u{4}");
+    // Ctrl-D at the start of a line: the input ends with no Enter. Only that one byte is
+    // written. An Enter after it would sit in the terminal's queue, and the token prompt that
+    // follows would read it as an empty token whenever it arrived after the prompt cleared the
+    // queue.
+    on_pty.type_bytes("\u{4}");
     on_pty.wait_shown("GitHub token for");
     on_pty.type_line(&token());
     on_pty.wait();
     let shown = on_pty.shown();
+    // The terminal echoes the typed Ctrl-D (`^D`, then backspaces on macOS) and no newline, so
+    // the report line begins after that echo, not at the start of its terminal line.
     let step = line(&shown, "harness_home");
+    let step = &step[step.find('[').expect("the report line's state")..];
     assert!(step.starts_with("[todo] harness_home:"), "{shown}");
     assert!(
         !rig.out.join("tui.pid").exists(),

@@ -577,21 +577,30 @@ mod chat {
         if cfg!(target_os = "macos") {
             assert!(inhibitor.is_some(), "macOS ships caffeinate");
         }
-        for (waited, (signal, said)) in [
+        for (signal, said) in [
             (libc::SIGINT, "tui: endured int"),
             (libc::SIGQUIT, "tui: endured quit"),
             (libc::SIGHUP, "tui: endured hup"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            // The harness is back at its read (it says so before each one) before the next
-            // signal: one that lands while the last is still being handled can be lost.
-            wait_until("the harness waiting at its read", || {
-                run.shown().matches("tui: waiting").count() > waited
+        ] {
+            // The fake harness is a shell script, and a signal that lands between its last
+            // output and its next blocking read is held until that read returns: it is not
+            // lost, but nothing happens until the next input. Its own "waiting" line cannot
+            // close that gap (it is printed before the read starts). So send the signal, and
+            // send it again when the harness has not answered within a second. A signal that
+            // was only slow is handled twice, which the harness reports twice and this test
+            // does not mind: each stage looks for its own line.
+            let before = run.shown().matches(said).count();
+            let mut sent = None::<std::time::Instant>;
+            wait_until(said, || {
+                if run.shown().matches(said).count() > before {
+                    return true;
+                }
+                if sent.is_none_or(|at| at.elapsed() > std::time::Duration::from_secs(1)) {
+                    run.signal_foreground(signal);
+                    sent = Some(std::time::Instant::now());
+                }
+                false
             });
-            run.signal_foreground(signal);
-            run.wait_shown(said);
             assert!(matches!(run.child.try_wait(), Ok(None)), "the host lives");
             if let Some(inhibitor) = inhibitor {
                 assert!(
@@ -600,7 +609,19 @@ mod chat {
                 );
             }
         }
-        run.type_line("/exit");
+        // A signal sent twice can reach the harness while it is part way through reading this
+        // line, and the half it had read is gone. Type the line again until the run ends.
+        let mut typed = None::<std::time::Instant>;
+        wait_until("the run to end on /exit", || {
+            if matches!(run.child.try_wait(), Ok(Some(_))) {
+                return true;
+            }
+            if typed.is_none_or(|at| at.elapsed() > std::time::Duration::from_secs(2)) {
+                run.type_line("/exit");
+                typed = Some(std::time::Instant::now());
+            }
+            false
+        });
         let status = run.wait();
         assert!(status.success(), "{status:?}\n{}", run.shown());
         let (report, _) = rig.read_trace(&newest_entry(&rig));

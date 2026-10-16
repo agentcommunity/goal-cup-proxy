@@ -251,6 +251,16 @@ impl UploadServer {
             .store(seconds.unwrap_or(u64::MAX), Ordering::SeqCst);
     }
 
+    /// The run's time is up from this moment: its `deadline_at` is now. A test that needs a run
+    /// to be over reaches that when it chooses, instead of racing a short `run_seconds` against
+    /// the speed of its own setup.
+    pub fn end_run_now(&self, run_id: &str) {
+        let mut runs = self.shared.lock_runs();
+        let run = runs.get_mut(run_id).expect("a run the server holds");
+        run.deadline_at = goalcup_protocol::control::format_z(state::now_secs());
+        self.shared.persist(run);
+    }
+
     /// While `on`, every heartbeat that is not a final one answers `503` and stores nothing:
     /// a run's count then has no answer to set it but its open's or continue's.
     pub fn fail_heartbeats(&self, on: bool) {
