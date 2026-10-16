@@ -334,9 +334,9 @@ fn doctor_with_no_daemon_names_control_json_through_the_binary() {
         ),
         "it names where the daemon's file would have been: {said:?}"
     );
-    for id in ["claude-code-cli", "codex-cli"] {
+    for id in goalcup_protocol::pins::shipped_connector_ids() {
         assert!(
-            said.contains(id),
+            said.contains(&id),
             "the report covers every shipped connector: {said:?}"
         );
     }
@@ -364,7 +364,8 @@ fn start_and_doctor_skip_a_non_utf8_environment_pair_through_the_real_binary() {
             .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
             .env(&invalid_key, &invalid_value);
         if command == "start" {
-            child.args(["--harness", "claude-code-cli", "--attach"]);
+            let id = goalcup_protocol::pins::shipped_connector_ids()[0].clone();
+            child.args(["--harness", &id, "--attach"]);
         }
         let out = child.output().unwrap();
         assert_ne!(
@@ -528,12 +529,11 @@ fn goalcup_start_requires_a_goal_file_for_a_headless_harness_and_offers_no_v1_fl
     // before a daemon is started or anything is made (a configuration directory of the test's
     // own all the same).
     let cfg = tempfile::tempdir().unwrap();
+    // The two shapes are the fixture connectors (`tests/fixtures/connectors`), through `--dev`.
     let out = goalcup()
-        .args(["start", "--harness", "hermes-cli"])
+        .args(["start", "--harness", "keyed-per-run", "--dev"])
         .env("GOALCUP_CONFIG_DIR", cfg.path())
-        // The connectors are found beside the binary only in a target directory inside the
-        // checkout; say where they are, as the Linux check's relocated target needs.
-        .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
+        .env("GOALCUP_CONNECTORS_DIR", support::fixture_connectors_dir())
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1), "a refusal is rung 1");
@@ -543,11 +543,16 @@ fn goalcup_start_requires_a_goal_file_for_a_headless_harness_and_offers_no_v1_fl
         "and names the missing flag: {said}"
     );
     let out = goalcup()
-        .args(["start", "--harness", "codex-cli", "--goal-file", "g.txt"])
+        .args([
+            "start",
+            "--harness",
+            "chat-shared-home",
+            "--dev",
+            "--goal-file",
+            "g.txt",
+        ])
         .env("GOALCUP_CONFIG_DIR", cfg.path())
-        // The connectors are found beside the binary only in a target directory inside the
-        // checkout; say where they are, as the Linux check's relocated target needs.
-        .env("GOALCUP_CONNECTORS_DIR", support::connectors_dir())
+        .env("GOALCUP_CONNECTORS_DIR", support::fixture_connectors_dir())
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1), "a refusal is rung 1");
@@ -562,7 +567,7 @@ fn goalcup_start_requires_a_goal_file_for_a_headless_harness_and_offers_no_v1_fl
         .args([
             "start",
             "--harness",
-            "codex-cli",
+            "any-harness",
             "--goal-file",
             "g.txt",
             "--attach",

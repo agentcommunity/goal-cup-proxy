@@ -702,10 +702,6 @@
       "name": "LD_LIBRARY_PATH"
     },
     {
-      "denied": null,
-      "name": "HERMES_X"
-    },
-    {
       "denied": "relocates the configuration and state of every tool child (XDG_* is not part of schema 1)",
       "name": "XDG_CONFIG_HOME"
     },

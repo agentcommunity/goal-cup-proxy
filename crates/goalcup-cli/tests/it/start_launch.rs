@@ -83,7 +83,7 @@ fn capture_reserve_bytes_is_no_longer_a_flag() {
         .args([
             "start",
             "--harness",
-            "codex-cli",
+            "any-harness",
             "--goal-file",
             "/nonexistent/goal.txt",
             "--capture-reserve-bytes",
@@ -116,15 +116,16 @@ fn a_run_that_cannot_take_its_reserve_is_refused_before_anything_is_created() {
     std::fs::create_dir(&cfg).unwrap();
     let beside = tmp.path().join("run-folder");
     std::fs::create_dir(&beside).unwrap();
-    let m = support::mock_armed(&tmp, "codex-cli");
-    let mut o = support::start_options("codex-cli");
+    let m = support::mock_armed(&tmp, "chat-shared-home");
+    let mut o = support::start_options("chat-shared-home");
+    o.dev = true;
     o.run_folder = Some(beside.clone());
     // More than any volume has, and a margin on top.
     o.disk.reserve_bytes = 1 << 60;
     o.disk.start_margin = 1 << 30;
     let err = goalcup_cli::commands::start::start_with(
         &m,
-        &support::connectors_dir(),
+        &support::fixture_connectors_dir(),
         &cfg,
         &support::clean_env(),
         &o,
@@ -268,7 +269,7 @@ fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
     assert!(!start.contains("--repo"), "{start}");
     // `--test` and `--practice` are two different kinds of run: clap refuses both together.
     let both = std::process::Command::new(goalcup)
-        .args(["start", "--harness", "codex-cli", "--test", "--practice"])
+        .args(["start", "--harness", "any-harness", "--test", "--practice"])
         .output()
         .unwrap();
     assert!(!both.status.success(), "{both:?}");

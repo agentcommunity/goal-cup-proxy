@@ -10,7 +10,7 @@
 #      crates/goalcup-cli/tests/fixtures/harness-kit/<id>/ (named after the connector id), with
 #      harness.toml, stand-in.py and expect.toml, the same rule on its two TOML files and no `<`
 #      in the stand-in's EDIT block. A chat-mode connector (`interactive = true`) needs no kit
-#      case: the kit runs every pinned chat-mode connector through one stand-in.
+#      case: the connector contract runs every connector through one stand-in.
 #      A missing connectors/<id>/harness.toml is a usage error (exit 2) before anything runs.
 #      Also: when the connector's `program` is on PATH and is a `node` script, the manifest must
 #      set NODE_USE_ENV_PROXY = "1" (D59), or the run records no model traffic. The kit's
@@ -27,8 +27,11 @@
 #      the daemon's live golden (<id>.daemon.json) compiles to nothing, so it is SKIPPED (not a
 #      failure); a maintainer checks it on a Mac.
 #   5. kit (macOS and Linux): `cargo build`, then `cargo test -p goalcup-cli --test it
-#      harness_contract_kit::`. On any other system the kit compiles to zero tests, so the step
-#      is SKIPPED and the script exits non-zero unless --allow-no-kit is given.
+#      harness_contract_kit::`, then the connector contract: its static half
+#      (`--test it connector_contract::`) and its dynamic half (`--test full connector_contract::`,
+#      one participant-shaped run of every connector folder). On any other system the kit
+#      compiles to zero tests, so the step is SKIPPED and the script exits non-zero unless
+#      --allow-no-kit is given.
 #
 # It checks a new connector. The shipped headless connector (hermes-cli) predates the kit and
 # has no case of its own, so step 1 fails for it; its regression checks are the schema and
@@ -278,8 +281,11 @@ fi
 # 5. The harness kit, on macOS and Linux.
 case $os in
   Darwin | Linux)
-    step "kit: cargo build && cargo test -p goalcup-cli --test it harness_contract_kit::"
-    if cargo build && cargo test -p goalcup-cli --test it harness_contract_kit::; then
+    step "kit: cargo build && cargo test -p goalcup-cli --test it harness_contract_kit::," \
+      "then --test it connector_contract:: and --test full connector_contract::"
+    if cargo build && cargo test -p goalcup-cli --test it harness_contract_kit:: &&
+      cargo test -p goalcup-cli --test it connector_contract:: &&
+      cargo test -p goalcup-cli --test full connector_contract::; then
       pass "kit"
     else
       fail "kit"

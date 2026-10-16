@@ -1,17 +1,17 @@
-//! The per-run private harness home of a Hermes capture (D39, D41).
+//! The per-run private harness home of a keyed capture (D39, D41).
 //!
 //! A profile whose `config_home` is `per_run` gets a harness home made fresh inside the run
-//! directory, holding only the connector's own seed files. Hermes reads and writes there and
-//! nowhere else: its configuration, its credential store, its session snapshots, its logs and
-//! its tool processes' home all live under `<run>/hermes`, so nothing of the participant's
-//! `~/.hermes` is read and nothing is written to it.
+//! directory, holding only the connector's own seed files. The harness reads and writes there
+//! and nowhere else: its configuration, its credential store, its session snapshots, its logs
+//! and its tool processes' home all live under `<run>/<per_run_dir>`, so nothing of the
+//! participant's own app-wide home (`home.real_dirs`) is read and nothing is written to it.
+//! For example, Hermes's connector makes:
 //!
 //! ```text
-//! <run>/hermes          0700   HERMES_HOME
-//! <run>/hermes/home     0700   the tool processes' home (`TERMINAL_HOME_MODE=profile`)
+//! <run>/hermes          0700   HERMES_HOME (`home.env`, `home.per_run_dir`)
+//! <run>/hermes/home     0700   a `home.dirs` entry: the tool processes' home
 //! <run>/hermes/config.yaml  0600   from connectors/<id>/files/config.yaml, byte for byte
 //! <run>/hermes/auth.json    0600   from connectors/<id>/files/auth.json, byte for byte
-//! <run>/hermes/.update_check 0600  a static, always-fresh update-check cache (no PyPI request)
 //! ```
 //!
 //! `sessions/` is not made here: the daemon creates the one directory it reads
@@ -23,10 +23,10 @@
 //!
 //! # A run directory beside a goal file must not be in a repository
 //!
-//! The run directory holds what a harness wrote while it ran, and Hermes writes request dumps
-//! that can carry a masked fragment of the provider key (D41). [`refuse_inside_git_work_tree`]
-//! stops a launch whose goal file sits inside a Git work tree, before anything is created, so
-//! those files are never one `git add .` away from a commit.
+//! The run directory holds what a harness wrote while it ran, and a keyed harness can write
+//! request dumps that carry a masked fragment of the provider key (Hermes does, D41).
+//! [`refuse_inside_git_work_tree`] stops a launch whose goal file sits inside a Git work tree,
+//! before anything is created, so those files are never one `git add .` away from a commit.
 
 use crate::CliError;
 use goalcup_protocol::harness::{ConfigHome, HomeSpec, LoadedSeed, SeedMode};

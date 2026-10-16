@@ -1,7 +1,8 @@
-//! `goalcup start --goal-file` of a Hermes-shaped connector, through
-//! the real daemon in process, the real proxy and sender inside `start_with`, and a fake Hermes
-//! (`fixtures/m2-fake-hermes.sh`) that writes its own session snapshot and prints its identity on
-//! stderr the way the real one does.
+//! `goalcup start --goal-file` of a keyed connector (a child-only provider key, a per-run home,
+//! a goal flag, a session id on stderr bound at the finish), through the real daemon in process,
+//! the real proxy and sender inside `start_with`, and a fake harness (`fixtures/m2-fake-keyed.sh`)
+//! that writes its own session snapshot and prints its identity on stderr. The connector is the
+//! fixture `tests/fixtures/connectors/keyed-per-run`, never a shipped one.
 //!
 //! Every key here is the synthetic one in `secret_support`. Nothing reads a credential file or
 //! resolves a real `HOME`; every directory is a temporary one.
@@ -35,7 +36,7 @@ fn matcher() -> FragmentMatcher {
     FragmentMatcher::new(KEY.as_bytes()).unwrap()
 }
 
-/// Run `goalcup start` of the Hermes-shaped connector to its end.
+/// Run `goalcup start` of the keyed connector to its end.
 fn run(
     rig: &Rig,
     client: &Hooked<'_>,
@@ -44,7 +45,7 @@ fn run(
     String,
 ) {
     let goal = rig.goal(GOAL);
-    std::thread::scope(|s| joined(rig.start(s, client, rig.hermes_options(&goal, RESERVE), None)))
+    std::thread::scope(|s| joined(rig.start(s, client, rig.keyed_options(&goal, RESERVE), None)))
 }
 
 fn run_dir(rig: &Rig) -> PathBuf {
@@ -90,9 +91,9 @@ fn session_id(rig: &Rig) -> String {
 /// session snapshot captured, no gap, and a `clean` verdict. The child saw the key,
 /// the private homes and the loopback proxy, and the key is in nothing this machine kept.
 #[test]
-fn a_hermes_run_ends_with_its_snapshot_captured_and_a_clean_verdict() {
+fn a_keyed_run_ends_with_its_snapshot_captured_and_a_clean_verdict() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes();
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -132,42 +133,46 @@ fn a_hermes_run_ends_with_its_snapshot_captured_and_a_clean_verdict() {
     assert!(current.is_clean(), "{current}\n{text}");
     let run = run_dir(&rig);
     assert!(
-        run.join(format!("hermes/sessions/session_{id}.json"))
+        run.join(format!("keyed/sessions/session_{id}.json"))
             .is_file()
     );
-    let shipped = support::connectors_dir().join("hermes-cli/files");
+    let seeds = support::fixture_connectors_dir().join("keyed-per-run/files");
     for name in ["config.yaml", "auth.json"] {
         assert_eq!(
-            std::fs::read(run.join("hermes").join(name)).unwrap(),
-            std::fs::read(shipped.join(name)).unwrap(),
+            std::fs::read(run.join("keyed").join(name)).unwrap(),
+            std::fs::read(seeds.join(name)).unwrap(),
             "{name}"
         );
     }
 
     // What the child was started with.
     let argv = rig.harness_file("argv").unwrap();
-    assert_eq!(
-        argv,
-        format!("chat\n-Q\n--provider\ndeepseek\n--query={GOAL}\n")
-    );
+    assert_eq!(argv, format!("chat\n-Q\n--query={GOAL}\n"));
     let env = rig.harness_file("env").unwrap();
     let has = |line: &str| env.lines().any(|l| l == line);
     assert!(
         has(&format!("DEEPSEEK_API_KEY={KEY}")),
         "the child has the key"
     );
-    assert!(has(&format!(
-        "HERMES_HOME={}",
-        run.join("hermes").display()
-    )));
+    assert!(has(&format!("KEYED_HOME={}", run.join("keyed").display())));
     assert!(has(&format!("HOME={}", run.join("home").display())));
-    assert!(has("TERMINAL_HOME_MODE=profile"));
+    assert!(has("TOOL_HOME_MODE=profile"));
     assert!(
         env.lines()
             .any(|l| l.starts_with("HTTPS_PROXY=http://goalcup:") && l.contains("@127.0.0.1:")),
         "{env}"
     );
-    assert!(env.lines().any(|l| l.starts_with("HERMES_CA_BUNDLE=")));
+    // `goalcup start` hands the harness's own CA variable the proxy's CA alone (D41), in
+    // replace mode too: one certificate, never the roots file a shared row gets.
+    assert!(env.lines().any(|l| l.starts_with("KEYED_CA_BUNDLE=")));
+    let handed = rig
+        .harness_file("ca.pem")
+        .expect("the fake copied its CA file");
+    assert_eq!(
+        goalcup_cli::ca_bundle::certificates(handed.as_bytes()).len(),
+        1,
+        "the own CA variable names a file of exactly one certificate"
+    );
     assert!(
         !env.lines()
             .any(|l| l.starts_with("OPENAI") || l.contains("BASE_URL")),
@@ -215,7 +220,7 @@ fn a_missing_or_unusable_key_refuses_before_the_daemon_is_asked() {
         ("short", Some("sk-short".to_string())),
     ] {
         let _lock = table_lock::TableLock::acquire();
-        let rig = Rig::hermes();
+        let rig = Rig::keyed();
         if let Some(key) = &key {
             rig.with_env("DEEPSEEK_API_KEY", key);
         }
@@ -247,14 +252,14 @@ fn a_missing_or_unusable_key_refuses_before_the_daemon_is_asked() {
 #[test]
 fn a_goal_file_inside_a_git_work_tree_refuses_before_anything_is_created() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes();
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     let goal = rig.goal(GOAL);
     std::fs::create_dir(goal.parent().unwrap().join(".git")).unwrap();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, _out) = std::thread::scope(|s| {
-        joined(rig.start(s, &client, rig.hermes_options(&goal, RESERVE), None))
+        joined(rig.start(s, &client, rig.keyed_options(&goal, RESERVE), None))
     });
     let error = result.expect_err("a work tree is refused");
     assert!(matches!(error, CliError::Refused(_)), "{error:?}");
@@ -276,13 +281,13 @@ fn a_goal_file_inside_a_git_work_tree_refuses_before_anything_is_created() {
 #[test]
 fn a_planted_request_dump_fails_the_row_and_the_verdict_holds_no_fragment() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes();
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     rig.tell(
         "steps.sh",
         "tail4=$(printf %s \"$DEEPSEEK_API_KEY\" | tail -c 4)\n\
          printf '{\"headers\":{\"Authorization\":\"Bearer %.8s...%s\"}}' \"$DEEPSEEK_API_KEY\" \"$tail4\" \
-         > \"$HERMES_HOME/sessions/request_dump_x.json\"\n",
+         > \"$KEYED_HOME/sessions/request_dump_x.json\"\n",
     );
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -304,7 +309,7 @@ fn a_planted_request_dump_fails_the_row_and_the_verdict_holds_no_fragment() {
     assert!(
         paths
             .iter()
-            .any(|p| p.ends_with("hermes/sessions/request_dump_x.json")),
+            .any(|p| p.ends_with("keyed/sessions/request_dump_x.json")),
         "{text}"
     );
     assert!(
@@ -313,7 +318,7 @@ fn a_planted_request_dump_fails_the_row_and_the_verdict_holds_no_fragment() {
     );
     assert!(
         run_dir(&rig)
-            .join("hermes/sessions/request_dump_x.json")
+            .join("keyed/sessions/request_dump_x.json")
             .is_file()
     );
 }
@@ -324,7 +329,7 @@ fn a_planted_request_dump_fails_the_row_and_the_verdict_holds_no_fragment() {
 #[test]
 fn a_fragment_split_across_two_trace_segments_fails_the_row() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes();
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     // A session snapshot of one segment (64 KiB) and a bit: the key's first eight bytes start
     // four bytes before the first segment ends.
@@ -363,7 +368,7 @@ fn a_fragment_split_across_two_trace_segments_fails_the_row() {
 #[test]
 fn no_marker_means_one_gap_and_a_finish_with_no_scope() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes();
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     rig.tell("no-marker", "");
     let http = rig.client();
@@ -382,7 +387,7 @@ fn no_marker_means_one_gap_and_a_finish_with_no_scope() {
 #[test]
 fn two_conflicting_markers_send_no_scope() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes();
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     rig.tell(
         "steps.sh",
@@ -404,7 +409,7 @@ fn two_conflicting_markers_send_no_scope() {
 #[test]
 fn a_finish_the_daemon_refuses_leaves_an_incomplete_verdict_and_a_standalone_seal_finishes() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes();
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -443,12 +448,12 @@ fn a_finish_the_daemon_refuses_leaves_an_incomplete_verdict_and_a_standalone_sea
     assert_eq!(gaps(&records, GapReason::SourceChanged), 1, "{records:#?}");
 }
 
-/// The CLI's half: a finish of any other family never carries a scope, and writes no key
+/// The CLI's half: a keyless `stdout_json` finish never carries a scope, and writes no key
 /// verdict (it holds no provider key to scan for).
 #[test]
-fn a_codex_family_finish_never_carries_a_scope_or_a_verdict() {
+fn a_keyless_stdout_identity_finish_never_carries_a_scope_or_a_verdict() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::codex_family();
+    let rig = Rig::stdout_identity();
     rig.tell("stop", "");
     let goal = rig.goal(GOAL);
     let http = rig.client();
@@ -483,7 +488,7 @@ fn copy_trace(from: &std::path::Path) -> (tempfile::TempDir, PathBuf) {
 fn a_trace_the_verifier_stops_reading_partway_scans_incomplete_never_clean() {
     use goalcup_cli::key_scan::scan_trace;
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes();
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -545,7 +550,7 @@ fn a_trace_the_verifier_stops_reading_partway_scans_incomplete_never_clean() {
 fn a_run_that_ends_before_its_finish_leaves_an_incomplete_verdict() {
     use m2_cli_support::RegistrationFault;
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes();
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -562,10 +567,10 @@ fn a_run_that_ends_before_its_finish_leaves_an_incomplete_verdict() {
 #[test]
 fn a_verdict_that_cannot_be_written_fails_the_row() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes();
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     // A directory where the verdict file goes: the write is refused.
-    rig.tell("steps.sh", "mkdir \"$HERMES_HOME/../key-scan.txt\"\n");
+    rig.tell("steps.sh", "mkdir \"$KEYED_HOME/../key-scan.txt\"\n");
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, out) = run(&rig, &client);
@@ -603,7 +608,7 @@ impl std::io::Write for StdoutGoneAtTheSealReport {
 #[test]
 fn a_committed_seal_stays_committed_when_stdout_fails() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes();
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -613,7 +618,7 @@ fn a_committed_seal_stays_committed_when_stdout_fails() {
         joined(rig.start_writing(
             s,
             &client,
-            rig.hermes_options(&goal, RESERVE),
+            rig.keyed_options(&goal, RESERVE),
             StdoutGoneAtTheSealReport(seen.clone()),
         ))
     });
@@ -637,12 +642,12 @@ fn a_committed_seal_stays_committed_when_stdout_fails() {
     );
 }
 
-/// A connector that names a provider key but is not Hermes gets the same
-/// protection: its output is tee'd and scanned, and its run directory is judged.
+/// A keyed harness that prints a masked form of its key on stderr: its output is tee'd and
+/// scanned live, and the fragment fails the row.
 #[test]
-fn a_provider_key_profile_of_another_family_is_tee_d_and_scanned_too() {
+fn a_masked_key_on_the_harness_stderr_is_a_live_hit() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes_in_family("controlled-workload");
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     // The harness prints a masked form of its key on stderr: the live scan must see it.
     rig.tell(
@@ -664,7 +669,7 @@ fn a_provider_key_profile_of_another_family_is_tee_d_and_scanned_too() {
 #[test]
 fn a_goal_file_in_a_synced_folder_refuses_before_anything_is_created() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::hermes();
+    let rig = Rig::keyed();
     rig.with_env("DEEPSEEK_API_KEY", KEY);
     let dir = rig.root.join("Dropbox/goals");
     std::fs::create_dir_all(&dir).unwrap();
@@ -673,7 +678,7 @@ fn a_goal_file_in_a_synced_folder_refuses_before_anything_is_created() {
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, _out) = std::thread::scope(|s| {
-        joined(rig.start(s, &client, rig.hermes_options(&goal, RESERVE), None))
+        joined(rig.start(s, &client, rig.keyed_options(&goal, RESERVE), None))
     });
     let error = result.expect_err("a synced folder is refused");
     assert!(matches!(error, CliError::Refused(_)), "{error:?}");

@@ -1,0 +1,59 @@
+# NON-SHIPPING fixture connector: the chat-mode, shared-home shape (D57, D39). Engine tests load
+# it so that no test of a launch rule depends on one shipped connector's values. The participant
+# types the prompt; the config home is shared and isolated; its own CA variable extends the
+# harness's roots; the sessions are the files written since the run started. No build pins it,
+# so it loads only through `--dev`.
+schema_version = 1
+id = "chat-shared-home"
+
+[capture]
+auth_hosts = ["auth.chat.example"]
+interactive = true
+continuation = "chat: the participant types the prompt and may type keep going"
+args = ["-C", "{workspace}"]
+resume_args = ["--continue"]
+
+[capture.executable]
+program = "example-cli"
+version_args = ["--version"]
+
+[capture.env]
+SHELL = "/bin/zsh"
+NODE_USE_ENV_PROXY = "1"
+
+[capture.platform.linux-x86_64.env]
+SHELL = "/bin/bash"
+
+[capture.platform.linux-aarch64.env]
+SHELL = "/bin/bash"
+
+[capture.home]
+run_home = "empty"
+config_home = "shared"
+env = "CHAT_CONFIG_DIR"
+real_dirs = ["{user_home}/.chat"]
+skills_dir = "skills"
+
+[capture.ca]
+env = ["NODE_EXTRA_CA_CERTS"]
+mode = "extend"
+
+[capture.identity]
+source = "none"
+
+[[capture.native]]
+name = "main"
+root = "{config_home}/projects"
+pattern = "*/*.jsonl"
+form = "append_only"
+protocol_hint = "claude-code-jsonl"
+since_run_start = true
+
+[capture.termination]
+strategy = "process_group"
+grace_seconds = 10
+
+[[capture.hosts]]
+host = "api.chat.example"
+evidence_paths = ["/v1/messages"]
+protocol_hint = "anthropic-messages"

@@ -127,15 +127,19 @@ mod harness_load_tests {
         let tmp = tempfile::tempdir().unwrap();
         let candidate = tmp.path().join("candidate");
         std::fs::create_dir(&candidate).unwrap();
+        // Any shipped (so pinned) connector: the first of them.
+        let id = goalcup_protocol::pins::shipped_connector_ids()[0].clone();
         let shipped = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../connectors/claude-code-cli/harness.toml");
+            .join("../../connectors")
+            .join(&id)
+            .join("harness.toml");
         let original = std::fs::read_to_string(shipped).unwrap();
         std::fs::write(candidate.join("harness.toml"), &original).unwrap();
 
-        let error = load_harness_with_hook(tmp.path(), "claude-code-cli", true, |dir| {
+        let error = load_harness_with_hook(tmp.path(), &id, true, |dir| {
             let path = dir.join("harness.toml");
             let changed = std::fs::read_to_string(&path).unwrap().replacen(
-                "id = \"claude-code-cli\"",
+                &format!("id = \"{id}\""),
                 "id = \"untrusted-dev-cli\"",
                 1,
             );
@@ -144,7 +148,7 @@ mod harness_load_tests {
         .expect_err("the identity selected for a pinned request changed before its one load");
 
         assert_eq!(error.exit_code(), 1);
-        assert!(error.to_string().contains("claude-code-cli"), "{error}");
+        assert!(error.to_string().contains(&id), "{error}");
         assert!(error.to_string().contains("untrusted-dev-cli"), "{error}");
     }
 }

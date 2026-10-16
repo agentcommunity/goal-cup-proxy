@@ -43,7 +43,8 @@ use crate::common::m2_common;
 use goalcup_cli::key_scan::{FragmentMatcher, ScanOutcome, scan_tree};
 use goalcup_cli::launch::{
     CAPTURE_PATH, CaptureLaunch, Pipes, ScopeMarker, build_capture_launch,
-    child_secret_for_harness, resolve_harness_executable, spawn_gated, tee_marked_capture,
+    child_secret_for_harness, resolve_harness_executable, spawn_gated,
+    tee_marked_capture_with_rule,
 };
 use goalcup_protocol::template::TemplateVars;
 use m2_common::{TestPki, provider, read_head};
@@ -421,7 +422,12 @@ fn run_hermes(reply: Reply, auth_seed: Option<&[u8]>) -> Run {
     )
     .expect("the gate");
     let mut spawned = gated.release().expect("released");
-    let tee = tee_marked_capture(&mut spawned, Some(&secret)).unwrap();
+    let tee = tee_marked_capture_with_rule(
+        &mut spawned,
+        Some(&secret),
+        Some(crate::common::support::stderr_marker_rule()),
+    )
+    .unwrap();
     drop(secret);
     let until = Instant::now() + RUN_BOUND;
     let status = loop {

@@ -288,7 +288,7 @@ pub fn extra_patterns_of(manifest: &HarnessManifest) -> Vec<ExtraPattern> {
 pub(crate) fn compile_extra(p: &ExtraPattern) -> Result<Pattern, String> {
     let re = regex::bytes::Regex::new(&p.regex()).map_err(|source| source.to_string())?;
     Ok(Pattern {
-        kind: p.kind.clone(),
+        kind: p.kind().to_string(),
         span_group: span_group_of(&re),
         soft: false,
         block: false,
@@ -348,7 +348,7 @@ impl Redactor {
             extra.push(compile_extra(p).map_err(|reason| {
                 DaemonError::Config(format!(
                     "connector {id} redaction pattern {}: {reason}",
-                    p.kind
+                    p.kind()
                 ))
             })?);
         }

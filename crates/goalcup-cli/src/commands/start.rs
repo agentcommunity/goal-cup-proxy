@@ -100,7 +100,7 @@ use std::time::Duration;
 
 /// What one `goalcup start` was asked to do.
 pub struct StartOptions {
-    /// The connector id — `claude-code-cli` or `codex-cli`.
+    /// The connector id, for example `codex-cli`: a folder under the connectors directory.
     pub harness: String,
     /// `--dev`: admit a rulebook this build does not pin, and say so on stdout. The one
     /// door ([`crate::preflight::DEV_DOOR`]), typed by a human and never set by a shipped
@@ -1099,12 +1099,12 @@ struct Gate {
 
 /// The tees on a released child's streams.
 struct Tees {
-    /// Codex's stdout tee, which also reads the thread id.
+    /// A keyless `stdout_json` child's stdout tee, which also reads the thread id.
     stdout: Option<crate::launch::CaptureStdout>,
     /// A keyed `stdout_json` child's thread id, read by the marked tee, which reads stdout
     /// once for both jobs and reports its end through `marked`.
     keyed_scope: Option<crate::launch::ScopeReceiver>,
-    /// Hermes' two tees, which also scan and read the session marker.
+    /// A keyed child's two tees, which also scan and read the session marker.
     marked: Option<CaptureStderr>,
     /// Only a stderr-line identity is sent with the finish. A credential may require the same
     /// two tees while the identity itself was preassigned.
@@ -2059,8 +2059,8 @@ fn register_and_release<'a>(
         StdoutUse::IdentityJson(rule) => Some(rule),
         StdoutUse::Inherit | StdoutUse::Forward => None,
     };
-    // Hermes: both streams forwarded verbatim and scanned for key fragments, stderr read for
-    // the session marker (the late scope of the finish).
+    // A keyed child: both streams forwarded verbatim and scanned for key fragments, stderr read
+    // for a `stderr_line` session marker (the late scope of the finish).
     let marker_rule = match prep.streams.stderr.clone() {
         StderrUse::IdentityLine(rule) => Some(rule),
         StderrUse::Inherit | StderrUse::Forward => None,
@@ -2144,7 +2144,7 @@ fn run_harness<'a>(
     } = released;
     // Linux: what the harness leaves behind is this process's own child (a subreaper, `main.rs`),
     // and is swept between the root's exit and the seal. Armed first, while the root is certainly
-    // unreaped: Codex's scope wait below reaps a root that exits before its scope line.
+    // unreaped: the `stdout_json` scope wait below reaps a root that exits before its scope line.
     let sweep = crate::subreaper::Sweep::for_root(handed.pid);
     let (client, entry_id) = (forked.client, forked.info.entry_id.clone());
     // A seal that raced in between the registration and the release cannot have ended a
@@ -2168,7 +2168,7 @@ fn run_harness<'a>(
         LaunchScope::FromStdout => tees.scope().and_then(|receiver| {
             crate::launch::wait_native_scope(&mut child, receiver, scope_deadline)
         }),
-        // Hermes' scope is read from its stderr after the proxy stops, and sent with the seal.
+        // A `stderr_line` scope is read after the proxy stops, and sent with the seal.
         LaunchScope::AtFinish | LaunchScope::None => None,
     };
     let launch = CaptureLaunchRequest {
@@ -2736,7 +2736,7 @@ fn note_unscanned(scanning: bool, run_dir: &Path, out: &mut dyn std::io::Write) 
 /// The most bytes the key scan reads of one run: its directory and its trace together.
 const KEY_SCAN_BOUND: u64 = 512 * 1024 * 1024;
 
-/// The scan of one Hermes run, as one outcome: the run directory and the trace (text and decoded
+/// The key scan of one keyed run, as one outcome: the run directory and the trace (text and decoded
 /// streams) when the finish returned a report, the run directory alone and an incomplete verdict
 /// when it did not, and a live hit on the harness's own output counted as a hit. Only `Clean`
 /// is clean.
@@ -3279,7 +3279,7 @@ fn proxy_admission_line(
 /// its own request's remainder, and the sender's drain and the scoped stdout what is left of the
 /// same deadline (CONTRACTS.md, "C6 local finish budget (H-10 4a)").
 ///
-/// A Hermes child's session identity is read between the two: after the proxy has stopped and
+/// A `stderr_line` child's session identity is read between the two: after the proxy has stopped and
 /// before the seal is sent, by [`crate::capture_tee::marker_wait_end`]'s deadline, which leaves
 /// the daemon's native read its share of the drain. The identity, if exactly one distinct one was
 /// printed, rides on the seal request; any other answer sends none.
@@ -4146,15 +4146,15 @@ mod tests {
     #[test]
     fn a_second_run_on_a_shared_home_is_refused_until_the_first_ends() {
         let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("codex-cli");
-        let first = lock_shared_home(&home, "codex-cli").expect("the first run takes the home");
+        let home = tmp.path().join("some-cli");
+        let first = lock_shared_home(&home, "some-cli").expect("the first run takes the home");
 
-        let refused = lock_shared_home(&home, "codex-cli").expect_err("a second run is refused");
+        let refused = lock_shared_home(&home, "some-cli").expect_err("a second run is refused");
         let said = refused.to_string();
         assert!(matches!(refused, CliError::Refused(_)), "{said}");
         assert!(said.contains("already recording"), "{said}");
 
         drop(first);
-        lock_shared_home(&home, "codex-cli").expect("free again once the first run ends");
+        lock_shared_home(&home, "some-cli").expect("free again once the first run ends");
     }
 }

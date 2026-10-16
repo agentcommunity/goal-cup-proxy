@@ -715,25 +715,34 @@ pub const MAX_REDACTION_NAME_BYTES: usize = 64;
 ///
 /// * `{ kind, json_field = "plan_type", value = "string" }`: the value of one JSON field,
 ///   [`RedactionRule::JsonField`];
-/// * `{ kind, header_prefix = "x-anthropic-billing-" }`: a header line whose name starts with
-///   the prefix, [`RedactionRule::HeaderPrefix`].
+/// * `{ kind, header_prefix = "x-anthropic-billing-" }`: lowercase `name: value` text whose name
+///   starts with the prefix, wherever it is recorded, [`RedactionRule::HeaderPrefix`].
 ///
 /// A rule is checked when it is built (parse or [`Self::new`]), so an `ExtraPattern` that
-/// exists is valid: its kind, field and prefix keep the grammar the recognizers rely on. The
-/// schema types are `#[non_exhaustive]` (design 4.1: a new optional field stays schema 1), so a
-/// downstream crate parses them or calls [`Self::new`], and never builds one from a literal:
+/// exists is valid: its kind, field and prefix keep the grammar the recognizers rely on. Its
+/// fields are private and read through [`Self::kind`] and [`Self::rule`], so nothing changes a
+/// rule after the check either. A downstream crate parses rules or calls [`Self::new`], and
+/// never builds one from a literal:
 ///
 /// ```compile_fail
 /// use goalcup_protocol::harness::{ExtraPattern, RedactionRule};
 /// let _ = ExtraPattern { kind: "k".into(), rule: RedactionRule::HeaderPrefix("x-".into()) };
+/// ```
+///
+/// and never changes one after the check:
+///
+/// ```compile_fail
+/// use goalcup_protocol::harness::{ExtraPattern, RedactionRule};
+/// let mut p = ExtraPattern::new("k", RedactionRule::HeaderPrefix("x-a".into())).unwrap();
+/// p.rule = RedactionRule::HeaderPrefix("x.".into());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "ExtraPatternRow")]
 #[non_exhaustive]
 pub struct ExtraPattern {
     /// The audit kind: what every marker and audit span of this rule names.
-    pub kind: String,
-    pub rule: RedactionRule,
+    kind: String,
+    rule: RedactionRule,
 }
 
 /// The form of one [`ExtraPattern`].
@@ -742,8 +751,10 @@ pub struct ExtraPattern {
 pub enum RedactionRule {
     /// `"FIELD"\s*:\s*VALUE`. The span is the value alone, so the record stays JSON.
     JsonField { field: String, value: FieldValue },
-    /// `PREFIX[a-z0-9-]+:\s*[^\r\n"]+`. The span is the whole header line, CR and LF
-    /// excluded.
+    /// `PREFIX[a-z0-9-]+:\s*[^\r\n"]+`. The span is the whole `name: value` text, CR and LF
+    /// excluded. No header is recorded, so this is not a header filter: it matches lowercase
+    /// text anywhere in recorded bytes, not anchored to a line or word start, and it ends at a
+    /// CR, an LF or a `"` (docs/CONNECTOR-SCHEMA.md#redaction).
     HeaderPrefix(String),
 }
 
@@ -816,6 +827,17 @@ impl ExtraPattern {
             ));
         }
         Ok(ExtraPattern { kind, rule })
+    }
+
+    /// The audit kind: what every marker and audit span of this rule names.
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    /// The rule's form and the name it carries. Read-only: the fields are private, so a rule
+    /// keeps the grammar [`Self::new`] checked for as long as it exists.
+    pub fn rule(&self) -> &RedactionRule {
+        &self.rule
     }
 
     /// The regex the form stands for, in `regex` crate syntax (Unicode mode). Both of the

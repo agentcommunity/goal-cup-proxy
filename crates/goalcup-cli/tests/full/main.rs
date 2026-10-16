@@ -9,9 +9,11 @@ mod capture_crash_campaign;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod capture_failure_campaign;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-mod launcher_sweep;
+mod connector_contract;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-mod m2_hermes_lifecycle;
+mod keyed_lifecycle;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod launcher_sweep;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod m2_synthetic_vertical;
 #[cfg(any(target_os = "macos", target_os = "linux"))]

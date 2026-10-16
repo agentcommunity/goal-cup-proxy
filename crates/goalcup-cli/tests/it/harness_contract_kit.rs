@@ -13,6 +13,7 @@
 //! run directory or the launcher's forwarded stdout and stderr.
 
 use crate::common::m2_vertical_support;
+use crate::common::real_home_guard::{self, home_listing, with_real_home_guard};
 use crate::common::support;
 
 use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
@@ -23,7 +24,6 @@ use goalcup_verifier::capture_analysis::session::decode_records;
 use m2_vertical_support::{RESERVE, Vertical, files_under};
 use std::collections::BTreeMap;
 #[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, UNIX_EPOCH};
@@ -183,140 +183,6 @@ fn copy_tree(from: &Path, to: &Path) {
         } else {
             std::fs::copy(entry.path(), target).unwrap();
         }
-    }
-}
-
-fn modified_stamp(metadata: &std::fs::Metadata) -> String {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| format!("{}.{:09}", duration.as_secs(), duration.subsec_nanos()))
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-/// The app-wide files an escaped harness would write: its config and its credentials. These
-/// are what the rule "never write into ~/.claude or ~/.codex" protects, so these are what the
-/// guard watches. Session files, caches, backups and the desktop apps' own state churn
-/// continuously while the owner's Claude and Codex apps run, and they are not watched.
-/// `~/.claude.json` is left out too: Claude Code rewrites it every few minutes, so watching it
-/// would fail the kit at random.
-const WATCHED_APP_WIDE_FILES: [&str; 3] = [
-    ".codex/config.toml",
-    ".codex/auth.json",
-    ".claude/settings.json",
-];
-
-/// Hermes is not an app the owner runs, so anything created under `~/.hermes` is a harness
-/// write. Names are walked this many levels down.
-const HERMES_WALK_DEPTH: usize = 4;
-
-/// One line per watched path: absent, or its type, mode, size, mtime and symlink target. File
-/// contents are never read.
-fn append_real_home_node(path: &Path, relative: &Path, listing: &mut Vec<String>) -> bool {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            listing.push(format!("{relative:?}\tabsent"));
-            return false;
-        }
-        Err(error) => {
-            listing.push(format!("{relative:?}\terror={:?}", error.kind()));
-            return false;
-        }
-    };
-    let file_type = metadata.file_type();
-    let kind = if file_type.is_symlink() {
-        "symlink"
-    } else if file_type.is_dir() {
-        "directory"
-    } else if file_type.is_file() {
-        "file"
-    } else {
-        "other"
-    };
-    // A directory's own size and mtime move with its entries, which are listed one by one.
-    let identity = if file_type.is_dir() {
-        format!("mode={:o}", metadata.mode() & 0o7777)
-    } else {
-        format!(
-            "mode={:o};size={};mtime={}",
-            metadata.mode() & 0o7777,
-            metadata.len(),
-            modified_stamp(&metadata),
-        )
-    };
-    let symlink_target = if file_type.is_symlink() {
-        std::fs::read_link(path)
-            .map(|target| format!(";target={target:?}"))
-            .unwrap_or_else(|error| format!(";target-error={:?}", error.kind()))
-    } else {
-        String::new()
-    };
-    listing.push(format!(
-        "{relative:?}\ttype={kind};{identity}{symlink_target}"
-    ));
-    file_type.is_dir()
-}
-
-/// Every name under `~/.hermes`, so any creation there shows.
-fn append_hermes_tree(path: &Path, relative: &Path, listing: &mut Vec<String>, depth: usize) {
-    if !append_real_home_node(path, relative, listing) || depth == 0 {
-        return;
-    }
-    let mut children = match std::fs::read_dir(path) {
-        Ok(entries) => entries
-            .flatten()
-            .map(|entry| entry.file_name())
-            .collect::<Vec<_>>(),
-        Err(error) => {
-            listing.push(format!("{relative:?}\tread-dir-error={:?}", error.kind()));
-            return;
-        }
-    };
-    children.sort();
-    for name in children {
-        append_hermes_tree(&path.join(&name), &relative.join(&name), listing, depth - 1);
-    }
-}
-
-/// The contract kit launches stand-ins, so bracket every launching test with the same
-/// real-HOME boundary that guards the H-17 refusal regression. The snapshot records the
-/// app-wide config and credential files and every name under `~/.hermes`, by file type,
-/// symlink target and metadata only; it never reads file contents. The test body is caught so
-/// this comparison runs before any unrelated failure is resumed.
-fn home_listing(home: &Path) -> String {
-    let mut listing = Vec::new();
-    for relative in WATCHED_APP_WIDE_FILES {
-        append_real_home_node(&home.join(relative), Path::new(relative), &mut listing);
-    }
-    append_hermes_tree(
-        &home.join(".hermes"),
-        Path::new(".hermes"),
-        &mut listing,
-        HERMES_WALK_DEPTH,
-    );
-    listing.join("\n")
-}
-
-fn real_home_listing() -> String {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return "no HOME".to_string();
-    };
-    home_listing(&home)
-}
-
-fn with_real_home_guard(test: impl FnOnce()) {
-    let before = real_home_listing();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(test));
-
-    assert_eq!(
-        real_home_listing(),
-        before,
-        "the real HOME's app-wide harness directories changed while the contract kit ran"
-    );
-    if let Err(payload) = result {
-        std::panic::resume_unwind(payload);
     }
 }
 
@@ -727,22 +593,32 @@ fn home_listing_watches_app_wide_config_and_credentials_not_session_churn() {
         "session and app-state churn must not trip the guard"
     );
 
-    // What an escaped harness would do: each one trips it.
-    let trips: [(&str, &dyn Fn()); 4] = [
-        ("~/.codex/config.toml changed", &|| {
-            std::fs::write(codex.join("config.toml"), b"after!").unwrap()
-        }),
-        ("~/.codex/auth.json created", &|| {
-            std::fs::write(codex.join("auth.json"), b"{}").unwrap()
-        }),
-        ("~/.claude/settings.json created", &|| {
-            std::fs::write(claude.join("settings.json"), b"{}").unwrap()
-        }),
-        ("a file created under ~/.hermes", &|| {
-            std::fs::create_dir_all(home.path().join(".hermes").join("sessions")).unwrap();
-            std::fs::write(home.path().join(".hermes/sessions/s.json"), b"{}").unwrap();
-        }),
+    // What an escaped harness would do: each one trips it, in every app-wide home a shipped
+    // connector names that the owner's apps do not churn.
+    let mut trips: Vec<(String, Box<dyn Fn()>)> = vec![
+        (
+            "~/.codex/config.toml changed".into(),
+            Box::new(|| std::fs::write(codex.join("config.toml"), b"after!").unwrap()),
+        ),
+        (
+            "~/.codex/auth.json created".into(),
+            Box::new(|| std::fs::write(codex.join("auth.json"), b"{}").unwrap()),
+        ),
+        (
+            "~/.claude/settings.json created".into(),
+            Box::new(|| std::fs::write(claude.join("settings.json"), b"{}").unwrap()),
+        ),
     ];
+    for walked in real_home_guard::walked_homes() {
+        let root = home.path().join(&walked);
+        trips.push((
+            format!("a file created under ~/{walked}"),
+            Box::new(move || {
+                std::fs::create_dir_all(root.join("sessions")).unwrap();
+                std::fs::write(root.join("sessions/s.json"), b"{}").unwrap();
+            }),
+        ));
+    }
     for (what, write) in trips {
         let before = home_listing(home.path());
         write();
@@ -882,229 +758,6 @@ fn nested_duplicate_and_implicit_home_paths_are_created_with_private_modes() {
                     "{dir}"
                 );
             }
-        }
-    });
-}
-
-// ---------------------------------------------------------------------------------------
-// The shipped connectors in chat mode (D57)
-// ---------------------------------------------------------------------------------------
-
-/// One shipped connector, its directory copied byte for byte (so it loads as the pinned one,
-/// without `--dev`), run in chat mode on a terminal of its own with the kit's chat stand-in
-/// (`fixtures/m2-fake-chat-harness.sh`) installed as its program: a `#!/usr/bin/env node`
-/// script whose `node` is only on the participant's PATH. The provider-host probe is skipped
-/// (`GOALCUP_TEST_OFFLINE_UPSTREAMS`), so no provider is reached; nothing goes over the wire.
-fn chat_case(id: &str) {
-    use crate::common::m2_cli_support::OnPty;
-    use std::os::unix::fs::PermissionsExt;
-
-    let world = Vertical::new("plain", serde_json::json!({}));
-    // The world's development workload goes: without `--dev` every connector in the directory
-    // is held to the pinned rules, and this one is a development connector.
-    std::fs::remove_dir_all(world.connectors.join(m2_vertical_support::CONNECTOR)).unwrap();
-    let connector_dir = world.connectors.join(id);
-    copy_tree(&support::connectors_dir().join(id), &connector_dir);
-    let pinned = goalcup_protocol::pins::pinned_connector_dir_sha256(id)
-        .expect("a shipped connector is pinned");
-    assert_eq!(
-        goalcup_protocol::connector_dir::connector_dir_sha256(&connector_dir).unwrap(),
-        pinned,
-        "{id}: the copy is the pinned directory"
-    );
-    let manifest = goalcup_protocol::harness::load_dir(&connector_dir, Origin::Pinned)
-        .expect("the shipped connector loads")
-        .manifest;
-    assert!(manifest.capture.interactive, "{id} runs in chat mode");
-
-    // The stand-in, under the shipped program's name, and the `node` it needs.
-    let out = world.root.join("kit-out");
-    let bin = world.root.join("participant-bin");
-    std::fs::create_dir_all(&out).unwrap();
-    std::fs::create_dir_all(&bin).unwrap();
-    let body = std::fs::read_to_string(support::fixture("m2-fake-chat-harness.sh")).unwrap();
-    let (_, body) = body.split_once('\n').unwrap();
-    let (native_file, skills_dir) = chat_stand_in_paths(&manifest.capture);
-    let program = bin.join(&manifest.capture.executable.program);
-    std::fs::write(
-        &program,
-        format!(
-            "#!/usr/bin/env node\nKIT_OUT='{}'\nKIT_NATIVE_FILE=\"{native_file}\"\n\
-             KIT_SKILLS_DIR=\"{}\"\nexport KIT_OUT KIT_NATIVE_FILE KIT_SKILLS_DIR\n{body}",
-            out.display(),
-            skills_dir.as_deref().unwrap_or("")
-        ),
-    )
-    .unwrap();
-    std::fs::write(bin.join("node"), "#!/bin/sh\nexec /bin/sh \"$@\"\n").unwrap();
-    for file in [program.clone(), bin.join("node")] {
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-
-    let runs = world.root.join("runs");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_goalcup"));
-    command
-        .args(["start", "--harness", id])
-        .current_dir(&runs)
-        .env_clear()
-        .env(
-            "PATH",
-            format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display()),
-        )
-        .env("HOME", world.root.join("home"))
-        .env(goalcup_cli::config::CONFIG_DIR_ENV, &world.cfg)
-        .env(goalcup_cli::config::CONNECTORS_DIR_ENV, &world.connectors)
-        .env(goalcup_cli::commands::start::TEST_OFFLINE_UPSTREAMS, "1")
-        .env("GOALCUP_TEST_FINISH_BUDGET_MS", "10000")
-        .env("GOALCUP_TEST_LOCAL_WRAP_UP", "2000,100")
-        .env("GOALCUP_TEST_DISK", format!("{RESERVE},0,50"))
-        .env("TERM", "xterm-256color")
-        .env("LANG", "en_US.UTF-8");
-    for key in ["USER", "LOGNAME", "TMPDIR"] {
-        if let Ok(value) = std::env::var(key) {
-            command.env(key, value);
-        }
-    }
-    let mut run = OnPty::spawn(command, None);
-    run.wait_shown("kit: ready");
-    run.type_line("hello");
-    run.wait_shown("kit: noted hello");
-    run.type_line("/exit");
-    let status = run.wait();
-    assert!(status.success(), "{id}: {status:?}\n{}", run.shown());
-
-    let report = |name: &str| std::fs::read_to_string(out.join(name)).unwrap_or_default();
-    assert_eq!(report("stdin").trim(), "tty", "{id}");
-    assert_eq!(
-        report("skills").trim(),
-        if skills_dir.is_some() {
-            "SKILL.md"
-        } else {
-            "absent"
-        },
-        "{id}: the goal-cup skill"
-    );
-    let env: BTreeMap<String, String> = report("env")
-        .lines()
-        .filter_map(|l| l.split_once('='))
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-    assert_eq!(
-        env.get("TERM").map(String::as_str),
-        Some("xterm-256color"),
-        "{id}"
-    );
-    assert_eq!(
-        env.get("LANG").map(String::as_str),
-        Some("en_US.UTF-8"),
-        "{id}"
-    );
-    let entry = world.entry_id();
-    let workspace = goalcup_cli::entries::read_entry(&world.cfg, &entry)
-        .expect("the run's entry record")
-        .workspace;
-    // The argv is the manifest's `args`, rendered for this run's workspace, and nothing else.
-    let mut vars = goalcup_protocol::template::TemplateVars::new();
-    vars.set("workspace", workspace.clone());
-    let want: Vec<String> = manifest
-        .capture
-        .args
-        .iter()
-        .map(|a| goalcup_protocol::template::render(a, &vars).unwrap())
-        .collect();
-    let argv = report("argv");
-    let got: Vec<&str> = argv.lines().collect();
-    assert_eq!(got, want, "{id}: the argv is the manifest's args");
-
-    let chain = world.chain(&entry);
-    let launch = chain.records().find_map(|record| match record {
-        CaptureRecord::Launch {
-            profile_id,
-            connector_dir_sha256,
-            ..
-        } => Some((profile_id.clone(), connector_dir_sha256.clone())),
-        _ => None,
-    });
-    assert_eq!(
-        launch,
-        Some((id.to_string(), Some(pinned.to_string()))),
-        "{id}: Launch binds the pinned connector"
-    );
-    let streams = chain.streams();
-    let goal: Vec<_> = streams
-        .values()
-        .filter(|s| s.source == CaptureSource::Goal)
-        .collect();
-    assert_eq!(goal.len(), 1, "{id}");
-    assert_eq!(
-        goal[0].data,
-        goalcup_cli::commands::start::CHAT_MODE_GOAL.as_bytes(),
-        "{id}: the chat-mode goal"
-    );
-    let native: Vec<u8> = streams
-        .values()
-        .filter(|s| s.source == CaptureSource::Native)
-        .flat_map(|s| s.data.clone())
-        .collect();
-    assert!(
-        String::from_utf8_lossy(&native).contains("hello"),
-        "{id}: the typed prompt is in the recorded session file"
-    );
-    let (code, integrity) = world.verify(&entry);
-    assert_eq!(integrity["sealed"], true, "{id}: {integrity}");
-    assert_eq!(integrity["integrity"], "valid", "{id}: {integrity}");
-    assert_eq!(code, 0, "{id}: {integrity}");
-}
-
-/// Where the chat stand-in writes, as shell words it expands at run time, derived from the
-/// connector alone: the session file its first `[[capture.native]]` source finds (the root,
-/// then the pattern with each `*` and `{id}` as `kit` and each `?` as `k`), and the goal-cup
-/// skill folder below
-/// `skills_dir`. `{config_home}` is the harness's own home variable, `{run_home}` is `HOME`.
-fn chat_stand_in_paths(c: &goalcup_protocol::harness::CaptureSpec) -> (String, Option<String>) {
-    let config_home = format!("${{{}}}", c.home.env.as_deref().unwrap_or("HOME"));
-    let native = c
-        .native
-        .first()
-        .expect("a chat-mode connector reads a native source");
-    let root = native
-        .root
-        .replace("{config_home}", &config_home)
-        .replace("{run_home}", "${HOME}");
-    let pattern = native
-        .pattern
-        .replace('*', "kit")
-        .replace('?', "k")
-        .replace("{id}", "kit");
-    let skills = c
-        .home
-        .skills_dir
-        .as_ref()
-        .map(|dir| format!("{config_home}/{dir}/goal-cup"));
-    (format!("{root}/{pattern}"), skills)
-}
-
-/// Every pinned chat-mode connector passes the kit, with no case of its own: each loads as the
-/// pinned directory, runs the one manifest-driven stand-in on a terminal with the participant's
-/// PATH, TERM and LANG, gets exactly its manifest's argv, records the typed prompt from the
-/// session file its native source reads, binds the pinned digest in `Launch`, and seals a trace
-/// the verifier reads as valid.
-#[test]
-fn every_pinned_chat_mode_connector_runs_in_chat_mode() {
-    let chat: Vec<String> = goalcup_protocol::pins::shipped_connector_ids()
-        .into_iter()
-        .filter(|id| {
-            goalcup_protocol::harness::load_dir(&support::connectors_dir().join(id), Origin::Pinned)
-                .unwrap_or_else(|e| panic!("{id}: {e}"))
-                .manifest
-                .capture
-                .interactive
-        })
-        .collect();
-    assert!(!chat.is_empty(), "the product is chat mode (D57)");
-    with_real_home_guard(|| {
-        for id in &chat {
-            chat_case(id);
         }
     });
 }

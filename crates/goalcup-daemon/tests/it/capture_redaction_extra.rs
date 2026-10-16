@@ -935,7 +935,7 @@ POST /v1 HTTP/1.1\r\nx-acme-quota: 900; window=1h\r\n\r\n\
     let renamed: Vec<ExtraPattern> = shipped()
         .into_iter()
         .enumerate()
-        .map(|(i, p)| ExtraPattern::new(format!("my_plan_{i}"), p.rule).unwrap())
+        .map(|(i, p)| ExtraPattern::new(format!("my_plan_{i}"), p.rule().clone()).unwrap())
         .collect();
     StreamRedactor::with_extra_patterns(&renamed).unwrap();
     StreamRedactor::with_extra_patterns(&[]).unwrap();

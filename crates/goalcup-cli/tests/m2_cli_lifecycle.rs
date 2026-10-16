@@ -738,26 +738,30 @@ fn an_unpinned_connector_without_dev_is_refused_before_anything_is_created() {
     assert!(!rig.harness_started());
 }
 
-fn replace_fake_with_aliased_shipped_connector(rig: &Rig, alter_bytes: bool) {
+/// Every shipped connector in place of the fake, the first of them in a folder named `alias`;
+/// returns that connector's id.
+fn replace_fake_with_aliased_shipped_connector(rig: &Rig, alter_bytes: bool) -> String {
     std::fs::remove_dir_all(rig.connectors.join(FAKE_ID)).unwrap();
     support::copy_connectors_into(&rig.connectors);
+    let id = goalcup_protocol::pins::shipped_connector_ids()[0].clone();
     let alias = rig.connectors.join("alias");
-    std::fs::rename(rig.connectors.join("claude-code-cli"), &alias).unwrap();
+    std::fs::rename(rig.connectors.join(&id), &alias).unwrap();
     if alter_bytes {
         let manifest = alias.join("harness.toml");
         let source = std::fs::read_to_string(&manifest).unwrap();
         std::fs::write(manifest, format!("{source}\n# altered pinned connector\n")).unwrap();
     }
+    id
 }
 
 fn assert_aliased_shipped_connector_refuses_before_start_writes(alter_bytes: bool) {
     let rig = Rig::new();
-    replace_fake_with_aliased_shipped_connector(&rig, alter_bytes);
+    let id = replace_fake_with_aliased_shipped_connector(&rig, alter_bytes);
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = rig.options(&goal, RESERVE);
-    opts.harness = "claude-code-cli".into();
+    opts.harness = id;
     opts.dev = alter_bytes;
 
     let (result, out) = std::thread::scope(|s| joined(rig.start(s, &client, opts, None)));
@@ -1136,16 +1140,16 @@ fn transient_launch_failure_on_open_entry_never_ends_child() {
     assert!(report.findings.contains(&"launch_missing".to_string()));
 }
 
-/// Residual 1 of the gate design (v2 section 4, kept by v3): a Codex-family harness whose root
+/// Residual 1 of the gate design (v2 section 4, kept by v3): a `stdout_json` harness whose root
 /// exits while a descendant it forked still holds its stdout. The launcher's tee cannot see EOF,
 /// so its drain expires at the one finish deadline and says the tail may be missing; the seal
 /// finds the root already gone and signals nothing, and the descendant is never touched.
 #[test]
 fn descendant_holds_stdout_launcher_path() {
     let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::codex_family();
+    let rig = Rig::stdout_identity();
     rig.tell("stop", "");
-    // The scope identity Codex prints first, then a descendant that inherits stdout.
+    // The scope identity the harness prints first, then a descendant that inherits stdout.
     rig.tell(
         "steps.sh",
         "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"scope-1\"}'\n\
@@ -1623,7 +1627,13 @@ fn stdout_tee_forwards_every_byte_unchanged() {
     bytes.extend(b"{\"type\":\"thread.started\",\"thread_id\":\"second-id\"}\npartial");
     let (sender, receiver) = std::sync::mpsc::channel();
     let mut out = Vec::new();
-    goalcup_cli::launch::stdout_tee(Chunked(Cursor::new(bytes.clone())), &mut out, sender).unwrap();
+    goalcup_cli::launch::stdout_tee_with_rule(
+        Chunked(Cursor::new(bytes.clone())),
+        &mut out,
+        sender,
+        &support::stdout_event_rule(),
+    )
+    .unwrap();
     assert_eq!(out, bytes);
     assert_eq!(receiver.recv().unwrap(), Some("first-id".into()));
     assert!(receiver.try_recv().is_err());
@@ -1639,7 +1649,13 @@ fn stdout_tee_forwards_every_byte_unchanged() {
     }
     let (sender, receiver) = std::sync::mpsc::channel();
     let mut input = Cursor::new(bytes.clone());
-    goalcup_cli::launch::stdout_tee(&mut input, Closed, sender).unwrap();
+    goalcup_cli::launch::stdout_tee_with_rule(
+        &mut input,
+        Closed,
+        sender,
+        &support::stdout_event_rule(),
+    )
+    .unwrap();
     assert_eq!(
         input.position(),
         bytes.len() as u64,
@@ -1650,7 +1666,13 @@ fn stdout_tee_forwards_every_byte_unchanged() {
     let (sender, receiver) = std::sync::mpsc::channel();
     let partial = b"{\"type\":\"thread.started\",\"thread_id\":\"partial\"}";
     let mut out = Vec::new();
-    goalcup_cli::launch::stdout_tee(&partial[..], &mut out, sender).unwrap();
+    goalcup_cli::launch::stdout_tee_with_rule(
+        &partial[..],
+        &mut out,
+        sender,
+        &support::stdout_event_rule(),
+    )
+    .unwrap();
     assert_eq!(out, partial);
     assert_eq!(receiver.recv().unwrap(), None, "partial line cannot bind");
 }
@@ -1704,7 +1726,7 @@ fn native_scope_wait_ends_on_identity_eof_exit_or_deadline() {
 
 #[test]
 fn stdout_tee_completion_preserves_tail_after_child_exit_and_has_a_bound() {
-    use goalcup_cli::launch::tee_capture_stdout;
+    use goalcup_cli::launch::tee_capture_stdout_with_rule;
     use std::io::Write;
     use std::sync::{Arc, Condvar, Mutex};
     let _lock = table_lock::TableLock::acquire();
@@ -1740,12 +1762,13 @@ fn stdout_tee_completion_preserves_tail_after_child_exit_and_has_a_bound() {
         .unwrap();
     let released = Arc::new((Mutex::new(false), Condvar::new()));
     let bytes = Arc::new(Mutex::new(Vec::new()));
-    let stdout = tee_capture_stdout(
+    let stdout = tee_capture_stdout_with_rule(
         child.stdout.take().unwrap(),
         SlowDestination {
             released: released.clone(),
             bytes: bytes.clone(),
         },
+        support::stdout_event_rule(),
     )
     .unwrap();
     assert_eq!(
@@ -1769,7 +1792,9 @@ fn stdout_tee_completion_preserves_tail_after_child_exit_and_has_a_bound() {
 
     // An otherwise idle pipe whose writer stays open must not cause an unbounded join.
     let (reader, held_writer) = std::os::unix::net::UnixStream::pair().unwrap();
-    let stdout = tee_capture_stdout(reader, std::io::sink()).unwrap();
+    let stdout =
+        tee_capture_stdout_with_rule(reader, std::io::sink(), support::stdout_event_rule())
+            .unwrap();
     let before = Instant::now();
     let incomplete = stdout.finish(before + Duration::from_millis(40)).unwrap();
     drop(held_writer);
@@ -1797,15 +1822,15 @@ fn an_existing_isolated_home_preserves_its_exact_leaf_alias() {
     std::fs::create_dir_all(&homes).unwrap();
     let alias = homes.join(FAKE_ID);
     std::os::unix::fs::symlink(&physical, &alias).unwrap();
-    // The controlled fixture reports the same configurable home_env used by real Claude;
-    // its fake executable invokes no auth API, copies no credentials and runs no model.
+    // The controlled fixture reports whatever home variable its manifest names; its fake
+    // executable invokes no auth API, copies no credentials and runs no model.
     let manifest_path = rig.capture_connectors.join(FAKE_ID).join("harness.toml");
     let manifest = std::fs::read_to_string(&manifest_path).unwrap();
     let home_env = "env = \"CODEX_HOME\"";
     assert_eq!(manifest.matches(home_env).count(), 1);
     std::fs::write(
         &manifest_path,
-        manifest.replace(home_env, "env = \"CLAUDE_CONFIG_DIR\""),
+        manifest.replace(home_env, "env = \"EXAMPLE_CONFIG_DIR\""),
     )
     .unwrap();
     rig.tell("stop", "");
@@ -1822,7 +1847,7 @@ fn an_existing_isolated_home_preserves_its_exact_leaf_alias() {
     let env = rig.harness_file("env").unwrap();
     assert_eq!(
         env.lines()
-            .find_map(|line| line.strip_prefix("CLAUDE_CONFIG_DIR=")),
+            .find_map(|line| line.strip_prefix("EXAMPLE_CONFIG_DIR=")),
         Some(expected)
     );
     let record = goalcup_cli::entries::read_entry(&rig.cfg, &outcome.entry_id).unwrap();

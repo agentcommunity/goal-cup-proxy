@@ -437,8 +437,8 @@ mod tests {
         let keg = root.path().join("Cellar/goalcup/1.0.0");
         let keg_connectors = keg.join("share/goalcup/connectors");
         std::fs::create_dir_all(keg.join("bin")).unwrap();
-        std::fs::create_dir_all(keg_connectors.join("codex-cli")).unwrap();
-        std::fs::write(keg_connectors.join("codex-cli/harness.toml"), "").unwrap();
+        std::fs::create_dir_all(keg_connectors.join("some-cli")).unwrap();
+        std::fs::write(keg_connectors.join("some-cli/harness.toml"), "").unwrap();
         std::fs::write(keg.join("bin/goalcup"), "").unwrap();
         let prefix = root.path().join("prefix");
         let linked_bin = prefix.join("bin/goalcup");
@@ -461,10 +461,10 @@ mod tests {
 
         // The connector files linked one by one: the keg's ordinary files instead.
         std::fs::remove_file(prefix.join("share/goalcup")).unwrap();
-        let file_linked = prefix.join("share/goalcup/connectors/codex-cli");
+        let file_linked = prefix.join("share/goalcup/connectors/some-cli");
         std::fs::create_dir_all(&file_linked).unwrap();
         symlink(
-            keg_connectors.join("codex-cli/harness.toml"),
+            keg_connectors.join("some-cli/harness.toml"),
             file_linked.join("harness.toml"),
         )
         .unwrap();

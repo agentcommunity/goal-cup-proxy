@@ -109,6 +109,16 @@
       "arg": "--tui=x",
       "argv_guard": "is, or abbreviates, an option the harness acts on before its parser (a profile, a mode or help)",
       "in_capture_args": "refused:capture.args"
+    },
+    {
+      "arg": "--cli=x",
+      "argv_guard": "is, or abbreviates, an option the harness acts on before its parser (a profile, a mode or help)",
+      "in_capture_args": "refused:capture.args"
+    },
+    {
+      "arg": "-px",
+      "argv_guard": "names a short option the harness acts on before its parser (a profile or help)",
+      "in_capture_args": "refused:capture.args"
     }
   ],
   "ca": [

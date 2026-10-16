@@ -5,6 +5,7 @@ use crate::common::support;
 
 use goalcup_cli::commands::doctor::{DoctorOptions, run_with};
 use goalcup_cli::commands::start::start_with;
+use goalcup_protocol::pins::shipped_connector_ids;
 
 fn opts(harness: Option<&str>) -> DoctorOptions {
     DoctorOptions {
@@ -13,21 +14,22 @@ fn opts(harness: Option<&str>) -> DoctorOptions {
     }
 }
 
-/// `start` of a Hermes-shaped connector: with no family refusal left, a `--goal-file` start of
-/// the shipped Hermes connector reaches the launch's own checks. With no provider key in the
-/// environment it refuses, naming the variable and never a value, before the daemon is asked for
-/// anything, so no capture workspace or reserved chain is left behind.
+/// `start` of a keyed connector (the `keyed-per-run` fixture): a `--goal-file` start reaches the
+/// launch's own checks. With no provider key in the environment it refuses, naming the variable
+/// and never a value, before the daemon is asked for anything, so no capture workspace or
+/// reserved chain is left behind.
 #[test]
-fn a_goal_file_start_of_the_shipped_hermes_connector_refuses_without_a_key_before_the_daemon() {
+fn a_goal_file_start_of_a_keyed_connector_refuses_without_a_key_before_the_daemon() {
     let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "codex-cli");
+    let m = support::mock_armed(&tmp, "keyed-per-run");
     let goal = tmp.path().join("goal.txt");
     std::fs::write(&goal, "write result.txt").unwrap();
-    let mut o = support::start_options("hermes-cli");
+    let mut o = support::start_options("keyed-per-run");
     o.goal_file = Some(goal);
+    o.dev = true;
     let err = start_with(
         &m,
-        &support::connectors_dir(),
+        &support::fixture_connectors_dir(),
         tmp.path(),
         &support::clean_env_with_no_harness_installed(),
         &o,
@@ -52,17 +54,21 @@ fn a_goal_file_start_of_the_shipped_hermes_connector_refuses_without_a_key_befor
 #[test]
 fn doctor_lists_a_harness_only_unknown_hint_as_capture_only() {
     let tmp = tempfile::tempdir().unwrap();
-    let only = tmp.path().join("harness-only");
-    std::fs::create_dir_all(&only).unwrap();
-    let source =
-        std::fs::read_to_string(support::connectors_dir().join("claude-code-cli/harness.toml"))
-            .unwrap()
-            .replacen("id = \"claude-code-cli\"", "id = \"example-unknown\"", 1)
-            .replacen("providers = [\"anthropic\"]\n", "", 1)
-            + "\n[[capture.hosts]]\nhost = \"api.anthropic.com\"\n\
-               evidence_paths = [\"/v1/messages\"]\nprotocol_hint = \"example-unknown\"\n";
-    assert!(!source.contains("providers = "));
-    std::fs::write(only.join("harness.toml"), source).unwrap();
+    let only = support::copy_fixture_connector(
+        "chat-shared-home",
+        tmp.path(),
+        "harness-only",
+        "example-unknown",
+    );
+    let path = only.join("harness.toml");
+    let hint = "protocol_hint = \"anthropic-messages\"";
+    let source = std::fs::read_to_string(&path).unwrap();
+    assert!(source.contains(hint));
+    std::fs::write(
+        &path,
+        source.replacen(hint, "protocol_hint = \"example-unknown\"", 1),
+    )
+    .unwrap();
 
     let cfg = tempfile::tempdir().unwrap();
     let mut out = Vec::new();
@@ -81,37 +87,18 @@ fn doctor_lists_a_harness_only_unknown_hint_as_capture_only() {
     assert!(said.contains("capture-only"), "{said}");
 }
 
-#[test]
-fn doctor_treats_the_hermes_wire_hint_as_decoded() {
-    let cfg = tempfile::tempdir().unwrap();
-    let mut out = Vec::new();
-    run_with(
-        None,
-        &support::connectors_dir(),
-        cfg.path(),
-        &std::collections::BTreeMap::new(),
-        &opts(Some("hermes-cli")),
-        &mut out,
-    )
-    .expect("the harness report is available without a probe");
-    let said = String::from_utf8(out).unwrap();
-    assert!(said.contains("openai-chat-completions"), "{said}");
-    assert!(said.contains("accepted"), "{said}");
-    assert!(
-        !said.contains("no decoder accepts `openai-chat-completions`"),
-        "{said}"
-    );
-}
-
 /// With no `--harness`, doctor checks the harness `goalcup prep` settled, so a harness the
 /// participant never installed cannot fail the report; `--harness all` still checks them all.
 #[test]
 fn doctor_defaults_to_the_harness_in_prep_json_and_all_checks_every_one() {
+    let ids = shipped_connector_ids();
+    assert!(ids.len() >= 2, "two connectors to tell apart: {ids:?}");
+    let (prepped, explicit) = (ids[ids.len() - 1].as_str(), ids[0].as_str());
     let cfg = tempfile::tempdir().unwrap();
     goalcup_cli::prep_file::write_prep(
         cfg.path(),
         &goalcup_cli::prep_file::PrepFile {
-            harness: "hermes-cli".to_string(),
+            harness: prepped.to_string(),
             ..Default::default()
         },
     )
@@ -132,24 +119,28 @@ fn doctor_defaults_to_the_harness_in_prep_json_and_all_checks_every_one() {
 
     let said = report(None);
     assert!(
-        said.contains("goalcup doctor — hermes-cli (from goalcup prep)"),
+        said.contains(&format!("goalcup doctor — {prepped} (from goalcup prep)")),
         "{said}"
     );
-    assert!(!said.contains("claude-code-cli"), "{said}");
-    assert!(!said.contains("codex-cli"), "{said}");
+    for id in ids.iter().filter(|id| *id != prepped) {
+        assert!(!said.contains(id.as_str()), "{id}: {said}");
+    }
 
     let said = report(Some("all"));
-    for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
-        assert!(said.contains(id), "`--harness all` reports {id}: {said}");
+    for id in &ids {
+        assert!(
+            said.contains(id.as_str()),
+            "`--harness all` reports {id}: {said}"
+        );
     }
     assert!(!said.contains("(from goalcup prep)"), "{said}");
 
-    let said = report(Some("codex-cli"));
+    let said = report(Some(explicit));
     assert!(
-        said.contains("codex-cli only"),
+        said.contains(&format!("{explicit} only")),
         "an explicit id wins: {said}"
     );
-    assert!(!said.contains("hermes-cli"), "{said}");
+    assert!(!said.contains(prepped), "{said}");
 }
 
 /// A `prep.json` that names a harness no connector here declares (stale after an upgrade) does
@@ -181,8 +172,8 @@ fn doctor_falls_back_to_every_connector_when_prep_names_an_unknown_harness() {
     let said = String::from_utf8(out).unwrap();
     assert!(said.starts_with("goalcup doctor\n"), "{said}");
     assert!(!said.contains("from goalcup prep"), "{said}");
-    for id in ["claude-code-cli", "codex-cli", "hermes-cli"] {
-        assert!(said.contains(id), "every connector is reported: {said}");
+    for id in shipped_connector_ids() {
+        assert!(said.contains(&id), "every connector is reported: {said}");
     }
     let refused = run(Some("no-such-harness"), &mut Vec::new());
     assert!(refused.is_err(), "an explicit unknown id is refused");

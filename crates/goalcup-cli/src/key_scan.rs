@@ -1,9 +1,9 @@
 //! The key-fragment scan (D41).
 //!
-//! A provider key that was handed to a harness can come back out of it in pieces: Hermes
-//! writes `sessions/request_dump_*.json` with `key[:8]…key[-4:]` in an `Authorization`
+//! A provider key that was handed to a harness can come back out of it in pieces. Hermes, for
+//! example, writes `sessions/request_dump_*.json` with `key[:8]…key[-4:]` in an `Authorization`
 //! header on a 4xx, a 401 body may echo a masked key, and its credential pool records the
-//! first sixteen hex digits of the key's SHA-256. Before any Hermes run artifact is retained,
+//! first sixteen hex digits of the key's SHA-256. Before any keyed run artifact is retained,
 //! this module looks for those fragments, with the key held in memory only, in a directory
 //! tree and in the captured trace. A hit fails the row, and the run directory stays local.
 //!

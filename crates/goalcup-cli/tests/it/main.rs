@@ -5,13 +5,15 @@
 mod common;
 
 mod account;
-mod amp_child_secret;
 mod ca_bundle;
 #[cfg(unix)]
 mod capture_gate;
 mod capture_only_refusal;
 #[cfg(unix)]
 mod capture_stderr_tee;
+mod child_secret;
+#[cfg(unix)]
+mod connector_contract;
 #[cfg(unix)]
 mod credential_stdout_identity;
 mod daemon_client;
@@ -24,11 +26,8 @@ mod harness_kit_credential;
 mod harness_launch_plan;
 #[cfg(unix)]
 mod harness_version_probe;
-mod hermes_child_secret;
 #[cfg(unix)]
 mod hermes_offline_key;
-#[cfg(unix)]
-mod hermes_per_run_home;
 mod key_scan;
 mod key_scan_run;
 #[cfg(unix)]
@@ -41,6 +40,8 @@ mod m2_ipc_compose;
 mod m2_proxy_integration;
 mod m2_tls_connect;
 mod m2_websocket_relay;
+#[cfg(unix)]
+mod per_run_home;
 mod preflight_doctor;
 mod prep;
 mod process_handoff;

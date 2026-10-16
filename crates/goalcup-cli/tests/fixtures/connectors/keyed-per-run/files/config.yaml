@@ -1,0 +1,2 @@
+sessions:
+  write_json_snapshots: true

@@ -162,7 +162,7 @@ impl NativeTarget {
 /// End this process's own just-released capture child within `termination_bound(grace)`.
 ///
 /// The CLI cannot link the daemon, so this uses protocol functions only. The root is this
-/// process's own unreaped `Child`, so its pid cannot have been recycled. A Codex-family
+/// process's own unreaped `Child`, so its pid cannot have been recycled. A `native_pid`
 /// connector's native child is re-resolved on **every** poll while the root lives, because the
 /// wrapper usually has not forked it when the child is released; it is adopted, bound by
 /// `process_start`, the first time it appears, and signalled first. If the connector names a

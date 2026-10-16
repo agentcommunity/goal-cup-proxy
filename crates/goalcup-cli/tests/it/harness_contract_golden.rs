@@ -31,12 +31,13 @@
 //! unless set to exactly `1`.
 
 use crate::common::m2_profile_support;
+use crate::common::support;
 
 use goalcup_cli::ca_bundle::{HandedFile, handed_file};
 use goalcup_cli::connector::HarnessConnector;
 use goalcup_cli::launch::{
     LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan, build_capture_launch,
-    child_secret_for_harness, handle, spawn, stdout_tee, tee_marked,
+    child_secret_for_harness, handle, spawn, stdout_tee_with_rule, tee_marked_with_rule,
 };
 use goalcup_cli::per_run_home::create_per_run_home;
 use goalcup_protocol::ProtocolError;
@@ -417,7 +418,6 @@ const ENV_PROBES: &[&str] = &[
     "DYLD_X",
     "LD_X",
     "LD_LIBRARY_PATH",
-    "HERMES_X",
     "XDG_CONFIG_HOME",
     "XDG_DATA_HOME",
     "GIT_CONFIG_GLOBAL",
@@ -657,11 +657,53 @@ fn policy_verdict(field: &str, denied: Option<&str>) -> String {
     }
 }
 
+/// The fixed probes, then the probes this connector's own manifest calls for, each once.
+fn probes(fixed: &[&str], own: Vec<String>) -> Vec<String> {
+    let mut all: Vec<String> = fixed.iter().map(|p| p.to_string()).collect();
+    for probe in own {
+        if !all.contains(&probe) {
+            all.push(probe);
+        }
+    }
+    all
+}
+
+/// The arguments this connector's own `argv_guard` names, as a harness's parser reads them, so
+/// a new connector's guard is probed with no edit to [`ARGV_PROBES`].
+fn own_argv_probes(m: &HarnessManifest) -> Vec<String> {
+    let Some(g) = m.capture.argv_guard.as_ref() else {
+        return Vec::new();
+    };
+    let mut own = Vec::new();
+    for long in &g.long {
+        own.push(format!("--{long}"));
+        own.push(format!("--{long}=x"));
+        if g.long_abbreviations && long.len() > 1 {
+            own.push(format!("--{}", &long[..long.len() - 1]));
+        }
+    }
+    own.extend(g.short.iter().map(|s| format!("-{s}")));
+    own.extend(g.short_with_value.iter().map(|s| format!("-{s}x")));
+    own
+}
+
+/// The names this connector's own manifest calls for: its home variable, one name under each
+/// reserved prefix, and its CA variables, so a new connector's own names are probed with no
+/// edit to [`ENV_PROBES`].
+fn own_env_probes(m: &HarnessManifest) -> Vec<String> {
+    let c = &m.capture;
+    let mut own: Vec<String> = c.home.env.iter().cloned().collect();
+    own.extend(c.reserved_env_prefixes.iter().map(|p| format!("{p}X")));
+    own.extend(c.ca.env.iter().cloned());
+    own
+}
+
 /// The argv probes whose verdict, as the first element of this connector's `capture.args`,
 /// differs from the shared policy's (`policy.json`): what this connector's own rules add.
 fn argv_differences(m: &HarnessManifest, origin: Origin) -> Vec<Value> {
-    ARGV_PROBES
+    probes(ARGV_PROBES, own_argv_probes(m))
         .iter()
+        .map(String::as_str)
         .filter_map(|arg| {
             let got = validated_with(m, origin, |p| p.args.insert(0, arg.to_string()));
             (got != policy_verdict("capture.args", capture_arg_denied(arg))).then(|| {
@@ -678,8 +720,9 @@ fn argv_differences(m: &HarnessManifest, origin: Origin) -> Vec<Value> {
 /// The environment probes whose verdict, as one more `capture.env` key of this connector,
 /// differs from the shared policy's (`policy.json`).
 fn env_differences(m: &HarnessManifest, origin: Origin) -> Vec<Value> {
-    ENV_PROBES
+    probes(ENV_PROBES, own_env_probes(m))
         .iter()
+        .map(String::as_str)
         .filter_map(|name| {
             // A value every value rule admits, so the verdict is about the name.
             let value = if name.eq_ignore_ascii_case("SHELL") {
@@ -829,7 +872,7 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         "env_differs_from_policy": env_differences(m, origin),
         "redaction": {
             "extra_patterns": m.redaction.as_ref()
-                .map(|r| r.extra_patterns.iter().map(|p| json!({"kind": p.kind, "regex": p.regex()})).collect::<Vec<_>>())
+                .map(|r| r.extra_patterns.iter().map(|p| json!({"kind": p.kind(), "regex": p.regex()})).collect::<Vec<_>>())
                 .unwrap_or_default(),
         },
     })
@@ -958,9 +1001,19 @@ fn stdout_json_tee(chunks: Vec<Vec<u8>>, closed: bool) -> Value {
     let (tx, rx) = std::sync::mpsc::channel();
     let sink = Sink::default();
     let result = if closed {
-        stdout_tee(Chunks::new(chunks), Closed, tx)
+        stdout_tee_with_rule(
+            Chunks::new(chunks),
+            Closed,
+            tx,
+            &support::stdout_event_rule(),
+        )
     } else {
-        stdout_tee(Chunks::new(chunks), sink.clone(), tx)
+        stdout_tee_with_rule(
+            Chunks::new(chunks),
+            sink.clone(),
+            tx,
+            &support::stdout_event_rule(),
+        )
     };
     let announced: Vec<Value> = rx.try_iter().map(|m| json!(m)).collect();
     let forwarded = sink.0.lock().unwrap().clone();
@@ -974,7 +1027,13 @@ fn stdout_json_tee(chunks: Vec<Vec<u8>>, closed: bool) -> Value {
 
 /// What the stderr tee (`identity.source = "stderr_line"`) read as the session marker.
 fn stderr_marker(chunks: Vec<Vec<u8>>) -> Value {
-    let tee = tee_marked(Chunks::new(chunks), Sink::default(), None).unwrap();
+    let tee = tee_marked_with_rule(
+        Chunks::new(chunks),
+        Sink::default(),
+        None,
+        support::stderr_marker_rule(),
+    )
+    .unwrap();
     let marker = tee.marker_until(Instant::now() + Duration::from_secs(20));
     match marker {
         ScopeMarker::One(id) => json!({"marker": "one", "id": id}),

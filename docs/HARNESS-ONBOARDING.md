@@ -34,6 +34,16 @@ A harness is data. A contribution has no `.rs` file:
   connector needs none);
 - the facts sheet `docs/harnesses/<id>.md`.
 
+No test is written for a new connector. The connector contract runs for every folder under
+`connectors/` and reads the connector's own facts from its `harness.toml`. Its static half
+(`crates/goalcup-cli/tests/it/connector_contract.rs`) checks the pin, the hosts, the argv
+against the connector's own `argv_guard`, the launch environment, the CA files, the goal
+placement and the per-run home, and checks that the connector's own home variable, reserved
+prefixes and guarded options are refused. Its dynamic half
+(`crates/goalcup-cli/tests/full/connector_contract.rs`) runs the connector once through the real
+binaries with one stand-in, in chat mode or headless, and checks the argv, the environment, the
+recorded session file and the sealed trace.
+
 Arguments, the goal flag, the model name and `capture.env` are data. Generic rules shared by all
 connectors check them. Four lists stay in core code, because each is a security boundary: the
 credential variable names, the CA modes and CA-name shape, the redaction forms, and the identity
@@ -196,9 +206,10 @@ is the harness executable. Run every command from the repository root.
    change: the shared goldens name no connector. On Linux the daemon command writes no
    `<id>.daemon.json`: it is macOS-only, so say so in the PR. Any other changed golden did not
    change because of your connector: run `git checkout -- <file>` and name it in the PR. Set the variable per command, never `export` it.
-8. **Add the kit case (headless only).** A chat-mode connector needs no case of its own: the kit
-   runs every pinned `interactive = true` connector through one stand-in that reads its
-   `harness.toml` (the program, `args`, the native root and pattern, `skills_dir`). Skip to step 9.
+8. **Add the kit case (headless only).** A chat-mode connector needs no case of its own: the
+   connector contract runs every connector through one stand-in that reads its `harness.toml`
+   (the program, `args`, the native root and pattern, `skills_dir`, the CA variables, the
+   identity). Skip to step 9.
    For a headless connector:
    ```sh
    k=crates/goalcup-cli/tests/fixtures/harness-kit/<id>
@@ -220,12 +231,12 @@ is the harness executable. Run every command from the repository root.
    Expect no output from the first. Expect one line from the second: `2`, then the body. In
    `stand-in.py` only the EDIT block must be free of `<`.
 9. **Run the connector check.** `sh scripts/check-connector.sh <id>`. It runs files, pins, schema,
-   both goldens and the kit, on macOS and on Linux. Expect the last line `check-connector: <id>: 6
+   both goldens, and the kit with the connector contract (both halves), on macOS and on Linux. Expect the last line `check-connector: <id>: 6
    passed, 0 failed, 0 skipped` on macOS, and `6 passed, 0 failed, 1 skipped` on Linux (the
-   daemon's live goldens). A kit failure prints only `FAIL kit` in the summary. Read the Rust
-   assertion above it: `left` is what the kit captured and `right` is what `expect.toml` (or, in
-   chat mode, the connector's `harness.toml`) predicts. Fix the field that the `right` side came
-   from.
+   daemon's live goldens). A kit or contract failure prints only `FAIL kit` in the summary. Read
+   the Rust assertion above it: it names the connector, `left` is what the run captured and
+   `right` is what `expect.toml` (or, for the contract, the connector's `harness.toml`) predicts.
+   Fix the field that the `right` side came from.
 10. **Run the gate.** `sh scripts/gate.sh fast`. Expect the last line `gate fast: PASS in <N>s`.
 11. **Review your own diff** against the [reviewer checklist](#reviewing-a-connector-pr).
     Optional, on your own account (a trial, not a judged entry): run `cargo build` (the pins are
@@ -401,7 +412,8 @@ It does not make a careless seed safe. A code owner reads every field and every 
 9. **Identity.** The source matches the measured carrier. The `stderr_line` grammar is exact.
    `stdout_json` start fields come before model text, and model text inside events is escaped.
 10. **Pin, goldens, kit.** Re-run `sh scripts/pin-manifests.sh` and confirm one pin-line diff.
-    Confirm the golden diff only adds the new connector. Run the kit after a workspace build. A
+    Confirm the golden diff only adds the new connector. Run the kit and the connector contract
+    after a workspace build. A
     policy row or a decoder belongs in its own PR.
 
 What each manifest field must establish:

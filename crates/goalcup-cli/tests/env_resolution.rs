@@ -73,8 +73,8 @@ fn the_override_is_honoured_exactly_as_given() {
 /// repository — so it is unset, and the platform default answers instead.
 ///
 /// And whatever that default is on this machine, it is the tracker's own directory and
-/// never a harness's: not `~/.claude`, not `~/.codex`, not `~/.opencode`. That promise is
-/// the whole reason this module exists.
+/// never a harness's: not the app-wide home any shipped connector names in `home.real_dirs`
+/// (`~/.codex`, say), and not `~/.opencode`. That promise is the whole reason this module exists.
 fn an_empty_override_is_unset_and_the_default_is_never_a_harness_home() {
     let roots = tempfile::tempdir().unwrap();
     let home = roots.path().join("home");
@@ -111,9 +111,21 @@ fn an_empty_override_is_unset_and_the_default_is_never_a_harness_home() {
         config::DEFAULT_CONFIG_DIR_NAME,
         cfg.display()
     );
-    for harness_dir in [".claude", ".codex", ".opencode"] {
+    let mut harness_dirs = vec![".opencode".to_string()];
+    for id in goalcup_protocol::pins::shipped_connector_ids() {
+        for dir in &m2_profile_support::shipped(&id)
+            .loaded
+            .manifest
+            .capture
+            .home
+            .real_dirs
+        {
+            harness_dirs.extend(dir.strip_prefix("{user_home}/").map(str::to_string));
+        }
+    }
+    for harness_dir in &harness_dirs {
         assert!(
-            !cfg.iter().any(|part| part == harness_dir),
+            !cfg.iter().any(|part| part == harness_dir.as_str()),
             "the tracker borrows no harness home, and it resolved to {}",
             cfg.display()
         );
@@ -137,12 +149,12 @@ fn a_capture_launch_takes_nothing_hostile_from_the_real_environment() {
     use m2_profile_support as s;
     let l = s::Layout::new();
     let exe = s::fake_harness(&l.bin);
-    let c = s::shipped("codex-cli");
+    let c = s::fixture("chat-shared-home");
     let resolved = s::resolved(&exe);
     let hostile = [
         ("HTTPS_PROXY", "http://evil.example:3128"),
         ("NO_PROXY", "*"),
-        ("CODEX_CA_CERTIFICATE", "/evil/ca.pem"),
+        ("NODE_EXTRA_CA_CERTS", "/evil/ca.pem"),
         ("SSL_CERT_FILE", "/evil/roots.pem"),
         ("OPENAI_BASE_URL", "http://evil.example"),
         ("GOALCUP_T14_UNRELATED", "kept out"),
@@ -174,7 +186,7 @@ fn a_capture_launch_takes_nothing_hostile_from_the_real_environment() {
     assert_eq!(p.env_set["HTTPS_PROXY"], proxy);
     assert_eq!(p.env_set["NO_PROXY"], CAPTURE_NO_PROXY);
     assert_eq!(
-        p.env_set["CODEX_CA_CERTIFICATE"],
+        p.env_set["NODE_EXTRA_CA_CERTS"],
         l.ca.to_str().unwrap(),
         "the launch's CA pin, not the exported one"
     );

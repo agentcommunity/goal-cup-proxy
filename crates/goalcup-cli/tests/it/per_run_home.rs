@@ -1,9 +1,12 @@
-//! The per-run private Hermes home.
+//! The per-run private harness home (`config_home = "per_run"`).
 //!
 //! The home is made inside the run directory, from the connector's own seed files, and nothing
-//! outside the run is read or written through it. Every directory here is a private temporary
-//! one: nothing resolves a real `HOME`, and no test reads or writes any `.hermes`.
+//! outside the run is read or written through it. The subject is the keyed fixture connector
+//! (`tests/fixtures/connectors/keyed-per-run`); every shipped per-run connector is held to the
+//! same tree by `connector_contract`. Every directory here is a private temporary one: nothing
+//! resolves a real `HOME`.
 
+use crate::common::support;
 use goalcup_cli::CliError;
 use goalcup_cli::per_run_home::{
     create_per_run_home, icloud_folder_synced, refuse_inside_git_work_tree, refuse_synced_folder,
@@ -15,21 +18,17 @@ use goalcup_cli::per_run_home::{
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-/// The corrected D41 seed, spelled out here so a change to the shipped file is a change to
-/// this test as well.
-const AUTH_SEED: &str = r#"{"version": 1, "providers": {}, "suppressed_sources": {"deepseek": ["env:DEEPSEEK_API_KEY"]}}"#;
-
 fn connector_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors/hermes-cli")
+    support::fixture_connectors_dir().join("keyed-per-run")
 }
 
-fn loaded_hermes() -> goalcup_protocol::harness::LoadedConnector {
+fn loaded_keyed() -> goalcup_protocol::harness::LoadedConnector {
     goalcup_protocol::harness::load_dir(&connector_dir(), goalcup_protocol::harness::Origin::Pinned)
         .unwrap()
 }
 
 fn create_home(run: &Path) -> Result<PathBuf, CliError> {
-    let loaded = loaded_hermes();
+    let loaded = loaded_keyed();
     create_per_run_home(run, &loaded.manifest.capture.home, &loaded.seeds)
 }
 
@@ -63,16 +62,14 @@ fn loaded_temp_home_connector(
     std::fs::create_dir_all(connector.join("files")).unwrap();
     let original = std::fs::read_to_string(connector_dir().join("harness.toml")).unwrap();
     let old_home = r#"dirs = ["home"]
-real_dirs = ["{user_home}/.hermes"]
+real_dirs = ["{user_home}/.keyed"]
 seed = [
   { file = "config.yaml" },
   { file = "auth.json" },
-  { file = ".update_check" },
 ]"#;
-    let new_home =
-        format!("dirs = {dirs}\nreal_dirs = [\"{{user_home}}/.hermes\"]\nseed = {seeds}");
+    let new_home = format!("dirs = {dirs}\nreal_dirs = [\"{{user_home}}/.keyed\"]\nseed = {seeds}");
     let manifest = original
-        .replace("id = \"hermes-cli\"", "id = \"per-run-home-test\"")
+        .replace("id = \"keyed-per-run\"", "id = \"per-run-home-test\"")
         .replace(old_home, &new_home);
     assert_ne!(manifest, original, "the schema-1 fixture was not rewritten");
     std::fs::write(connector.join("harness.toml"), manifest).unwrap();
@@ -172,15 +169,11 @@ fn nested_seed_parents_are_synthesized_once_with_exact_modes_and_bytes() {
 fn the_home_is_a_private_tree_of_exactly_the_connectors_seed_files() {
     let (_tmp, run) = run_dir();
     let home = create_home(&run).expect("a per-run home");
-    assert_eq!(home, run.join("hermes"));
+    assert_eq!(home, run.join("keyed"));
     assert_eq!(mode(&home), 0o700);
-    assert_eq!(
-        mode(&home.join("home")),
-        0o700,
-        "TERMINAL_HOME_MODE=profile's home"
-    );
+    assert_eq!(mode(&home.join("home")), 0o700, "the declared `dirs` entry");
     assert!(home.join("home").is_dir());
-    for name in ["config.yaml", "auth.json", ".update_check"] {
+    for name in ["config.yaml", "auth.json"] {
         let written = home.join(name);
         assert_eq!(mode(&written), 0o600, "{name}");
         assert_eq!(
@@ -189,11 +182,6 @@ fn the_home_is_a_private_tree_of_exactly_the_connectors_seed_files() {
             "{name}: byte for byte the connector's file"
         );
     }
-    assert_eq!(
-        std::fs::read_to_string(home.join("auth.json")).unwrap(),
-        format!("{AUTH_SEED}\n"),
-        "the corrected D41 seed: only `suppressed_sources` stops the pool seeding from the env"
-    );
     // Exactly these entries, and nothing else: no sessions directory (the daemon makes that one),
     // no .env, no state.
     let mut names: Vec<String> = std::fs::read_dir(&home)
@@ -201,34 +189,16 @@ fn the_home_is_a_private_tree_of_exactly_the_connectors_seed_files() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     names.sort();
-    assert_eq!(names, [".update_check", "auth.json", "config.yaml", "home"]);
+    assert_eq!(names, ["auth.json", "config.yaml", "home"]);
     assert_eq!(std::fs::read_dir(home.join("home")).unwrap().count(), 0);
 }
 
-/// The two shared-home launch profiles carry none of the per-run layout that Hermes declares.
-/// This keeps the legacy CLI anchor's cross-connector assertion beside the behavior it protects.
-#[test]
-fn shared_homes_declare_no_per_run_layout_or_seeds() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
-    for id in ["codex-cli", "claude-code-cli"] {
-        let loaded = goalcup_protocol::harness::load_dir(
-            &root.join(id),
-            goalcup_protocol::harness::Origin::Pinned,
-        )
-        .unwrap_or_else(|error| panic!("{id}: {error}"));
-        let home = &loaded.manifest.capture.home;
-        assert!(home.per_run_dir.is_none(), "{id}");
-        assert!(home.dirs.is_empty(), "{id}");
-        assert!(home.seed.is_empty(), "{id}");
-    }
-}
-
-/// An existing `hermes` entry of any kind is refused and left exactly as it was: the home must
+/// An existing entry of any kind where the home goes is refused and left exactly as it was: the home must
 /// be new, so nothing already in it can be read as this run's.
 #[test]
 fn an_existing_home_is_refused_and_left_alone() {
     let (_tmp, run) = run_dir();
-    let existing = run.join("hermes");
+    let existing = run.join("keyed");
     std::fs::create_dir(&existing).unwrap();
     std::fs::write(existing.join("sentinel"), b"mine").unwrap();
     let err = create_home(&run).expect_err("it already exists");
@@ -243,7 +213,7 @@ fn an_existing_home_is_refused_and_left_alone() {
     // A symlink there is refused too, and what it names is not written through.
     let (_tmp2, run2) = run_dir();
     let elsewhere = tempfile::tempdir().unwrap();
-    std::os::unix::fs::symlink(elsewhere.path(), run2.join("hermes")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), run2.join("keyed")).unwrap();
     assert!(create_home(&run2).is_err());
     assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
 }
@@ -252,14 +222,14 @@ fn an_existing_home_is_refused_and_left_alone() {
 #[test]
 fn connector_mutation_after_load_cannot_change_written_seed_bytes() {
     let connector = tempfile::tempdir().unwrap();
-    let copied = connector.path().join("hermes-copy");
+    let copied = connector.path().join("keyed-copy");
     std::fs::create_dir_all(copied.join("files")).unwrap();
     std::fs::copy(
         connector_dir().join("harness.toml"),
         copied.join("harness.toml"),
     )
     .unwrap();
-    for name in ["config.yaml", "auth.json", ".update_check"] {
+    for name in ["config.yaml", "auth.json"] {
         std::fs::copy(
             connector_dir().join("files").join(name),
             copied.join("files").join(name),
@@ -268,8 +238,8 @@ fn connector_mutation_after_load_cannot_change_written_seed_bytes() {
     }
     let mut text = std::fs::read_to_string(copied.join("harness.toml")).unwrap();
     text = text.replace(
-        "{ file = \".update_check\" }",
-        "{ file = \".update_check\", mode = \"0400\" }",
+        "{ file = \"auth.json\" }",
+        "{ file = \"auth.json\", mode = \"0400\" }",
     );
     std::fs::write(copied.join("harness.toml"), text).unwrap();
     let loaded =
@@ -288,60 +258,7 @@ fn connector_mutation_after_load_cannot_change_written_seed_bytes() {
     let home = create_per_run_home(&run, &loaded.manifest.capture.home, &loaded.seeds).unwrap();
     assert_eq!(std::fs::read(home.join("config.yaml")).unwrap(), captured);
     assert_eq!(mode(&home.join("config.yaml")), 0o600);
-    assert_eq!(mode(&home.join(".update_check")), 0o400);
-}
-
-/// The written configuration holds the settings the recipe depends on, and none that
-/// names a provider, host, key or base URL.
-#[test]
-fn the_written_config_has_snapshots_and_no_compression() {
-    let (_tmp, run) = run_dir();
-    let home = create_home(&run).unwrap();
-    let config = std::fs::read_to_string(home.join("config.yaml")).unwrap();
-    let lines: Vec<&str> = config
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.starts_with('#') && !l.is_empty())
-        .collect();
-    for wanted in [
-        "write_json_snapshots: true",
-        "compression:",
-        "title_generation:",
-        // No scanner binary is fetched from GitHub and run with the key in
-        // its environment, and no remote model catalog is read.
-        "tirith_enabled: false",
-        "model_catalog:",
-    ] {
-        assert!(lines.contains(&wanted), "missing `{wanted}`:\n{config}");
-    }
-    // The `enabled: false` lines: title generation, compression and the model catalog.
-    assert_eq!(
-        lines.iter().filter(|l| **l == "enabled: false").count(),
-        3,
-        "{config}"
-    );
-    for forbidden in ["base_url", "provider", "api_key", "fallback", "http"] {
-        assert!(
-            !lines.iter().any(|l| l.contains(forbidden)),
-            "the config names `{forbidden}`:\n{config}"
-        );
-    }
-}
-
-/// The update check is answered from a seed that is always fresh, so Hermes
-/// never asks PyPI. The seed is a static, pinnable file: a timestamp far in the future, the pinned
-/// version, and no revision.
-#[test]
-fn the_update_check_seed_is_a_static_always_fresh_cache_of_the_pinned_version() {
-    let (_tmp, run) = run_dir();
-    let home = create_home(&run).unwrap();
-    let seed: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(home.join(".update_check")).unwrap()).unwrap();
-    assert_eq!(seed["ver"], "0.19.0");
-    assert_eq!(seed["behind"], 0);
-    assert!(seed["rev"].is_null());
-    // Fresh for as long as `now - ts < 6 h` can hold: far past any clock this tree will see.
-    assert!(seed["ts"].as_u64().unwrap() > 4_000_000_000);
+    assert_eq!(mode(&home.join("auth.json")), 0o400);
 }
 
 /// A goal directory inside a Git work tree is refused: a run directory made beside the

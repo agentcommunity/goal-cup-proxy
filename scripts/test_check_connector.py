@@ -211,6 +211,11 @@ class CheckConnectorTest(unittest.TestCase):
         kit = "test -p goalcup-cli --test it harness_contract_kit::"
         self.assertIn(kit, calls)
         self.assertLess(calls.index("build"), calls.index(kit))
+        # The connector contract, both halves, after the kit and in the same step.
+        static = "test -p goalcup-cli --test it connector_contract::"
+        dynamic = "test -p goalcup-cli --test full connector_contract::"
+        self.assertLess(calls.index(kit), calls.index(static))
+        self.assertLess(calls.index(static), calls.index(dynamic))
 
     # Failures are reported and do not stop later steps.
 

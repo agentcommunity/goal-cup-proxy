@@ -149,11 +149,11 @@ use std::process::{Child, Command};
 pub(crate) use crate::capture_tee::{
     CaptureStderr, ScopeReceiver, tee_marked_capture_with_identity, tee_stderr_capture_with_rule,
 };
-/// The tees of a Hermes capture child's streams live in their own file; they are part of this
-/// module's interface (D40, D41).
+/// The tees of a keyed or `stderr_line` capture child's streams live in their own file; they
+/// are part of this module's interface (D40, D41).
 pub use crate::capture_tee::{
-    ScopeMarker, tee_marked, tee_marked_capture, tee_marked_capture_to,
-    tee_marked_capture_with_identity_to, tee_marked_with_rule,
+    ScopeMarker, tee_marked_capture_with_identity_to, tee_marked_capture_with_rule,
+    tee_marked_with_rule,
 };
 /// The ending of a child this process just released lives in its own file, which the
 /// "this crate never terminates anything" sweep exempts by name; it is part of this module's
@@ -1297,8 +1297,9 @@ pub fn spawn(p: &LaunchPlan) -> Result<Spawned, CliError> {
 }
 
 /// Which of a capture child's output streams are piped to this process; the rest are
-/// inherited. Codex pipes stdout (its scope tee); Hermes pipes both (stdout and stderr are
-/// forwarded verbatim and scanned for key fragments, and stderr carries its session marker).
+/// inherited. A `stdout_json` launch pipes stdout (its scope tee); a keyed launch pipes both
+/// (stdout and stderr are forwarded verbatim and scanned for key fragments, and a `stderr_line`
+/// identity rides on stderr).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Pipes {
     pub stdout: bool,
@@ -1521,25 +1522,10 @@ impl CaptureStdout {
     }
 }
 
-/// Start the same tee used by the capture child. The completion message is sent only after
-/// the last read has been forwarded (or discarded for a closed destination) and EOF observed.
-pub fn tee_capture_stdout(
-    reader: impl std::io::Read + Send + 'static,
-    writer: impl std::io::Write + Send + 'static,
-) -> std::io::Result<CaptureStdout> {
-    tee_capture_stdout_with_rule(
-        reader,
-        writer,
-        StdoutJsonRule {
-            match_field: "type".into(),
-            match_value: "thread.started".into(),
-            id_field: "thread_id".into(),
-        },
-    )
-}
-
-/// Start the stdout tee with the identity paths declared by the harness manifest.
-pub(crate) fn tee_capture_stdout_with_rule(
+/// Start the stdout tee with the identity paths declared by the harness manifest. The
+/// completion message is sent only after the last read has been forwarded (or discarded for a
+/// closed destination) and EOF observed.
+pub fn tee_capture_stdout_with_rule(
     reader: impl std::io::Read + Send + 'static,
     writer: impl std::io::Write + Send + 'static,
     rule: StdoutJsonRule,
@@ -1555,22 +1541,11 @@ pub(crate) fn tee_capture_stdout_with_rule(
     Ok(CaptureStdout { scope, completed })
 }
 
-/// Codex's scope binding uses stdout without changing a byte of participant output.
-/// Started on a child the gate has already released (D40), never a spawner: the tee remains
-/// detached, but its completion is observed within the finish deadline.
-pub fn tee_scoped_capture(spawned: &mut Spawned) -> Result<CaptureStdout, CliError> {
-    tee_scoped_capture_with_rule(
-        spawned,
-        StdoutJsonRule {
-            match_field: "type".into(),
-            match_value: "thread.started".into(),
-            id_field: "thread_id".into(),
-        },
-    )
-}
-
-/// Scope tee using the manifest's stdout JSON identity rule.
-pub(crate) fn tee_scoped_capture_with_rule(
+/// The scope tee of a `stdout_json` launch, with the manifest's identity rule: stdout is read
+/// without changing a byte of participant output. Started on a child the gate has already
+/// released (D40), never a spawner: the tee remains detached, but its completion is observed
+/// within the finish deadline.
+pub fn tee_scoped_capture_with_rule(
     spawned: &mut Spawned,
     rule: StdoutJsonRule,
 ) -> Result<CaptureStdout, CliError> {
@@ -1595,27 +1570,9 @@ pub(crate) fn tee_scoped_capture_with_rule(
     }
 }
 
-/// Forward every byte, scanning complete lines of at most 1 MiB until the first
-/// `thread.started`. A closed destination turns forwarding into draining, not a child error.
-pub fn stdout_tee(
-    reader: impl std::io::Read,
-    writer: impl std::io::Write,
-    sender: std::sync::mpsc::Sender<Option<String>>,
-) -> std::io::Result<()> {
-    stdout_tee_with_rule(
-        reader,
-        writer,
-        sender,
-        &StdoutJsonRule {
-            match_field: "type".into(),
-            match_value: "thread.started".into(),
-            id_field: "thread_id".into(),
-        },
-    )
-}
-
-/// Forward stdout unchanged while scanning no more than 64 complete lines for the manifest's
-/// first matching identity event. A matching event ends the scan even when its id is unusable.
+/// Forward stdout unchanged while scanning no more than 64 complete lines of at most 1 MiB for
+/// the manifest's first matching identity event. A matching event ends the scan even when its
+/// id is unusable. A closed destination turns forwarding into draining, not a child error.
 pub fn stdout_tee_with_rule(
     mut reader: impl std::io::Read,
     mut writer: impl std::io::Write,
@@ -1808,7 +1765,8 @@ fn json_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_j
     Some(at)
 }
 
-/// Bound Codex's Launch delay by identity, stdout EOF, process exit or the spawn deadline.
+/// Bound a `stdout_json` launch's Launch delay by identity, stdout EOF, process exit or the
+/// spawn deadline.
 /// The deadline is a parameter, not read here, so bounded tests can exercise the same wait.
 pub fn wait_native_scope(
     child: &mut Child,
@@ -2070,7 +2028,7 @@ fn above_stdio(
 
 /// The only way a capture child is spawned (D40). It returns once the child is parked and its
 /// pid is known; the harness has not run. A `secret` is the provider credential the child alone
-/// receives, set on the command before the fork and nowhere else (Hermes, D40).
+/// receives, set on the command before the fork and nowhere else (a keyed connector, D40).
 ///
 /// `ready_within` bounds the wait for the pid and, later, for the child's acknowledgement.
 #[cfg(unix)]

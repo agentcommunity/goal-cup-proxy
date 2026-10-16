@@ -1,10 +1,12 @@
-//! The shipped connectors, as this CLI depends on them: each loads from its `harness.toml`
-//! alone, is the directory this build pins, and is found by the id it declares.
+//! The shipped connectors as a set, as this CLI depends on them: discovery finds each by the id
+//! it declares, an unpinned or twice-declared id is refused, the pinner agrees, and the
+//! installed layouts find the folder. What each connector is held to on its own (it loads as
+//! its pin, its hosts, its argv, its launch environment) is the connector contract,
+//! `it/connector_contract.rs`.
 //!
 //! Every rule here runs over [`shipped_connector_ids`], the folders under `connectors/` checked
-//! against the pins file, so a new connector is held to them with no edit to this file. No test
-//! here restates one connector's recipe values: those are its `harness.toml`, pinned by digest,
-//! and its goldens.
+//! against the pins file, or over a copy of the first of them, so a new connector needs no edit
+//! to this file. No test here restates one connector's recipe values.
 //!
 //! The V1 `manifest.toml` recipe, version-range and hook-template tests went with the V1 files
 //! (OS-29); the pin, discovery and duplicate-id promises they carried are asserted here over
@@ -15,7 +17,6 @@ mod support;
 
 use goalcup_cli::connector;
 use goalcup_cli::preflight::{Level, harness_pin_gate};
-use goalcup_protocol::harness::Strategy;
 use goalcup_protocol::pins::shipped_connector_ids;
 use std::path::PathBuf;
 
@@ -24,43 +25,13 @@ fn load_harness(id: &str) -> goalcup_cli::connector::HarnessConnector {
         .expect("the shipped schema-1 harness loads")
 }
 
-/// The rules the CLI depends on, over every shipped connector, so a new folder is held to
-/// them with no edit here. Each connector's own values are its `harness.toml`'s business and
-/// its goldens' (`it/harness_contract_golden.rs`), not restated here.
+/// The protocol's host rule, which validates a manifest at load, agrees with the proxy's on
+/// every shape either one refuses. (That every host a connector names passes both is the
+/// connector contract, `it/connector_contract.rs`.)
 #[test]
-fn every_shipped_connector_loads_with_no_model_base_url_and_its_kill_target_named() {
-    for id in shipped_connector_ids() {
-        let m = load_harness(&id).loaded.manifest;
-        let c = &m.capture;
-        assert!(
-            !c.env.keys().any(|k| k.ends_with("_BASE_URL")),
-            "{id}: D1, the tracker never sets a model base URL"
-        );
-        let t = m.termination();
-        if t.strategy() == Strategy::NativePid {
-            assert!(
-                t.native_binary.is_some(),
-                "{id}: D22, a native_pid kill names the binary that is the session"
-            );
-        }
-    }
-}
-
-/// Every host a shipped schema-1 harness names is one the recording proxy accepts — its
-/// own host rule and the per-launch CA it mints — and the protocol's rule, which validates
-/// the manifest at load, agrees with the proxy's on every shape either one refuses.
-#[test]
-fn every_capture_host_is_one_the_proxy_accepts_and_the_two_host_rules_agree() {
-    use goalcup_cli::proxy::tls::{ProxyCa, is_config_host};
+fn the_load_time_host_rule_and_the_proxys_agree() {
+    use goalcup_cli::proxy::tls::is_config_host;
     use goalcup_protocol::capture_policy::is_capture_host;
-    for id in shipped_connector_ids() {
-        let c = load_harness(&id).loaded.manifest.capture;
-        let approved: Vec<String> = c.hosts.iter().map(|h| h.host.clone()).collect();
-        for h in approved.iter().chain(c.auth_hosts.iter()) {
-            assert!(is_config_host(h), "{id}: `{h}`");
-        }
-        ProxyCa::generate(&approved).unwrap_or_else(|e| panic!("{id}: {e}"));
-    }
     let long_label = "a".repeat(64);
     let long_name = format!("{}.com", "a.".repeat(126));
     for sample in [
@@ -96,83 +67,6 @@ fn every_capture_host_is_one_the_proxy_accepts_and_the_two_host_rules_agree() {
     }
 }
 
-#[test]
-fn a_shipped_connector_is_pinned_by_the_verifier_this_build_links() {
-    // PRD 5.4: the digest the release-hash allowlist compares against is the one this build
-    // pins. Over the whole DIRECTORY, so a seed under `files/` is covered as well as the
-    // `harness.toml` beside it.
-    for id in shipped_connector_ids() {
-        let c = load_harness(&id);
-        let digest = &c.loaded.connector_dir_sha256;
-        // Lowercase hex, and the length alone does not say that: the pins are compared
-        // case-insensitively, so a digest that started arriving uppercase from here would
-        // keep passing while every printed digest changed shape.
-        assert_eq!(digest.len(), 64);
-        assert!(
-            digest
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
-            "{id}'s digest is lowercase hex: {digest}"
-        );
-        assert_eq!(
-            Some(digest.as_str()),
-            goalcup_protocol::pins::pinned_connector_dir_sha256(&id),
-            "{id} must match goalcup_protocol::pins::pinned_connector_dir_sha256"
-        );
-        let gate = harness_pin_gate(&c, false);
-        assert_eq!(gate.level, Level::Pass, "{id}: {}", gate.detail);
-    }
-    // An edited harness.toml under a pinned id is refused at load, with or without --dev, and
-    // the refusal names the digest it found.
-    for id in shipped_connector_ids() {
-        let dir = support::connectors_dir_with_edited_harness(&id);
-        assert_altered_is_refused(&dir, &id);
-    }
-}
-
-/// `dir/<id>` is a pinned id holding bytes that are not its pin: `load_harness` refuses it as
-/// rung 1 under both doors, naming the digest the directory actually has.
-fn assert_altered_is_refused(dir: &std::path::Path, id: &str) {
-    let found = goalcup_protocol::connector_dir::connector_dir_sha256(&dir.join(id)).unwrap();
-    assert_ne!(
-        Some(found.as_str()),
-        goalcup_protocol::pins::pinned_connector_dir_sha256(id)
-    );
-    for dev in [false, true] {
-        let error = match connector::load_harness(dir, id, dev) {
-            Ok(_) => panic!("{id}: an altered pinned connector must not load (dev {dev})"),
-            Err(error) => error,
-        };
-        assert_eq!(error.exit_code(), 1, "{error}");
-        let said = error.to_string();
-        assert!(
-            said.contains("exact pinned bytes") && said.contains(&found),
-            "dev {dev}: {said}"
-        );
-    }
-}
-
-/// The gap the directory pin exists to close: `harness.toml` is the shipped one, byte for
-/// byte, and a seed beside it is not. The seed is copied into the run's home, so an edit there
-/// is an edit to what the run does, made under a manifest that still passes every check taken
-/// over the file.
-#[test]
-fn an_edited_seed_is_altered_even_though_the_harness_toml_is_untouched() {
-    let tmp = tempfile::tempdir().unwrap();
-    support::copy_connector(&tmp, "hermes-cli");
-    let seed = tmp.path().join("hermes-cli/files/config.yaml");
-    let mut body = std::fs::read(&seed).unwrap();
-    body.push(b'\n');
-    std::fs::write(&seed, &body).unwrap();
-
-    assert_eq!(
-        std::fs::read(tmp.path().join("hermes-cli/harness.toml")).unwrap(),
-        support::connector("hermes-cli").loaded.harness_toml,
-        "harness.toml is untouched, and a digest over it alone sees nothing"
-    );
-    assert_altered_is_refused(tmp.path(), "hermes-cli");
-}
-
 /// A connector no build pins is refused without `--dev` and admitted with it, and the report
 /// says which door it came through. The fixture is a copy of a shipped connector under a new
 /// id and a new folder, which is exactly how a participant would produce one: discovery uses
@@ -181,21 +75,18 @@ fn an_edited_seed_is_altered_even_though_the_harness_toml_is_untouched() {
 fn a_connector_this_build_does_not_pin_is_refused_without_dev_and_warned_with_it() {
     let tmp = tempfile::tempdir().unwrap();
     support::copy_connectors_into(tmp.path());
-    let forked = tmp.path().join("claude-code-synthetic");
+    let id = &shipped_connector_ids()[0];
+    let forked = tmp.path().join("forked-synthetic");
     std::fs::create_dir(&forked).unwrap();
-    let text = std::fs::read_to_string(tmp.path().join("claude-code-cli/harness.toml"))
+    let text = std::fs::read_to_string(tmp.path().join(id).join("harness.toml"))
         .unwrap()
-        .replacen(
-            "id = \"claude-code-cli\"",
-            "id = \"claude-code-synthetic\"",
-            1,
-        );
+        .replacen(&format!("id = \"{id}\""), "id = \"forked-synthetic\"", 1);
     std::fs::write(forked.join("harness.toml"), text).unwrap();
 
-    let c = connector::load_harness(tmp.path(), "claude-code-synthetic", true)
+    let c = connector::load_harness(tmp.path(), "forked-synthetic", true)
         .expect("an unpinned connector loads through --dev");
     assert_eq!(
-        goalcup_protocol::pins::pinned_connector_dir_sha256("claude-code-synthetic"),
+        goalcup_protocol::pins::pinned_connector_dir_sha256("forked-synthetic"),
         None,
         "no build pins a connector it does not ship"
     );
@@ -250,7 +141,8 @@ fn discovery_lists_what_ships_and_refuses_a_connector_that_does_not() {
         assert!(said.contains(id.as_str()), "and what ships, {id}: {said}");
     }
     // A traversal is not a connector id: nothing joins the caller's string onto the path.
-    let traversal = "../connectors/codex-cli";
+    let traversal = format!("../connectors/{}", ids[0]);
+    let traversal = traversal.as_str();
     let (code, said) = match connector::load_harness(&dir, traversal, false) {
         Ok(c) => (0, c.loaded.manifest.id),
         Err(e) => (e.exit_code(), e.to_string()),
@@ -278,17 +170,18 @@ fn discovery_lists_what_ships_and_refuses_a_connector_that_does_not() {
 #[test]
 fn an_id_two_directories_declare_is_refused_by_name_and_by_both_paths() {
     let tmp = tempfile::tempdir().unwrap();
-    let text = std::fs::read_to_string(support::connectors_dir().join("codex-cli/harness.toml"))
+    let id = &shipped_connector_ids()[0];
+    let text = std::fs::read_to_string(support::connectors_dir().join(id).join("harness.toml"))
         .unwrap()
-        .replacen("id = \"codex-cli\"", "id = \"codex-dup\"", 1);
+        .replacen(&format!("id = \"{id}\""), "id = \"forked-dup\"", 1);
     // Two directories whose manifests declare the same id, which is exactly what a
     // participant produces by copying a connector directory and editing nothing.
-    for folder in ["codex-dup", "codex-copy"] {
+    for folder in ["forked-dup", "forked-copy"] {
         std::fs::create_dir(tmp.path().join(folder)).unwrap();
         std::fs::write(tmp.path().join(folder).join("harness.toml"), &text).unwrap();
     }
 
-    let (code, said) = match connector::load_harness(tmp.path(), "codex-dup", true) {
+    let (code, said) = match connector::load_harness(tmp.path(), "forked-dup", true) {
         Ok(c) => (0, format!("loaded {}", c.dir.display())),
         Err(e) => (e.exit_code(), e.to_string()),
     };
@@ -296,7 +189,7 @@ fn an_id_two_directories_declare_is_refused_by_name_and_by_both_paths() {
         code, 1,
         "an ambiguous id is a refusal and not a silent choice: {said}"
     );
-    for named in ["codex-dup", "codex-copy"] {
+    for named in ["forked-dup", "forked-copy"] {
         assert!(
             said.contains(&tmp.path().join(named).display().to_string()),
             "the refusal names {named}'s path so the twin can be found: {said}"
@@ -331,18 +224,19 @@ fn the_pinner_refuses_duplicate_declared_ids() {
     let connectors = tmp.path().join("connectors");
     support::copy_connectors_into(&connectors);
     let hyphen_id = "-n";
-    let harness = connectors.join("claude-code-cli/harness.toml");
+    let id = &shipped_connector_ids()[0];
+    let harness = connectors.join(id).join("harness.toml");
     let harness_text = std::fs::read_to_string(&harness).unwrap();
     std::fs::write(
         &harness,
         harness_text.replacen(
-            "id = \"claude-code-cli\"",
+            &format!("id = \"{id}\""),
             &format!("id = \"{hyphen_id}\""),
             1,
         ),
     )
     .unwrap();
-    let twin = connectors.join("claude-code-cli-copy");
+    let twin = connectors.join(format!("{id}-copy"));
     std::fs::create_dir(&twin).unwrap();
     std::fs::copy(&harness, twin.join("harness.toml")).unwrap();
 

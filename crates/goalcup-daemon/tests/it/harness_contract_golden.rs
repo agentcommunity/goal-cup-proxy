@@ -197,7 +197,7 @@ fn the_extra_redaction_recognizers_are_pinned() {
         .iter()
         .map(|p| {
             json!({
-                "kind": p.kind,
+                "kind": p.kind(),
                 "regex": p.regex(),
                 "alone": verdict(std::slice::from_ref(p)),
                 "over_the_corpus": StreamRedactor::with_extra_patterns(std::slice::from_ref(p))
@@ -260,6 +260,28 @@ mod live {
         dir
     }
 
+    /// What the Launch record's directory digest says, in three states: `absent` (no digest
+    /// was recorded), `matches_pin` (the digest this build pins for `id`) and `unpinned` (a
+    /// digest no pin of `id` matches). A digest literal would change with every connector edit;
+    /// one bool would let a daemon that stopped recording the digest pass as an unpinned one.
+    fn pin_state(id: &str, digest: Option<&str>) -> &'static str {
+        match digest {
+            None => "absent",
+            Some(d) if goalcup_protocol::pins::connector_dir_is_pinned(id, d) => "matches_pin",
+            Some(_) => "unpinned",
+        }
+    }
+
+    /// The three states are told apart: no digest, the pin, and a digest that is not the pin.
+    #[test]
+    fn the_launch_digest_state_tells_absent_from_unpinned() {
+        let id = &goalcup_protocol::pins::shipped_connector_ids()[0];
+        let pin = goalcup_protocol::pins::pinned_connector_dir_sha256(id).unwrap();
+        assert_eq!(pin_state(id, None), "absent");
+        assert_eq!(pin_state(id, Some(pin)), "matches_pin");
+        assert_eq!(pin_state(id, Some(&"0".repeat(64))), "unpinned");
+    }
+
     /// What one created, goal-recorded and launched entry shows.
     async fn entry(rig: &Rig, id: &str, scope: Option<&str>) -> Value {
         // The controlled workload's native store lives under the run's own HOME.
@@ -319,7 +341,7 @@ mod live {
                 launch.1 == hex::encode(Sha256::digest(&harness)),
             "launch_allowed_tool_rule": launch.2,
             "launch_process_handoff_digest": launch.3,
-            "launch_connector_dir_sha256_matches_pin": launch.4.is_some_and(|d| goalcup_protocol::pins::connector_dir_is_pinned(id, &d)),
+            "launch_connector_dir_sha256": pin_state(id, launch.4.as_deref()),
             "gaps_after_launch": gaps,
         })
     }

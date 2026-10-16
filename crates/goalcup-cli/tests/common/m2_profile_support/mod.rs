@@ -1,5 +1,6 @@
 //! Fixtures for the capture-launch tests: a fake harness that records what it was
-//! launched with, the shipped connectors launching it, and readers for what it recorded.
+//! launched with, the shipped and fixture connectors launching it, and readers for what it
+//! recorded.
 //!
 //! Everything is test-owned: the workspace, the per-run home, the harness home and the CA
 //! path live in a temporary directory, and the fake writes only into its working directory.
@@ -64,6 +65,13 @@ pub fn connectors_dir() -> PathBuf {
 pub fn shipped(id: &str) -> HarnessConnector {
     goalcup_cli::connector::load_harness(&connectors_dir(), id, false)
         .expect("the shipped connector loads")
+}
+
+/// A fixture connector (`tests/fixtures/connectors/<id>`), loaded the way `goalcup start --dev`
+/// loads it: the subject of an engine test, so no engine test depends on a shipped manifest.
+pub fn fixture(id: &str) -> HarnessConnector {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/connectors");
+    goalcup_cli::connector::load_harness(&dir, id, true).expect("the fixture connector loads")
 }
 
 /// One test's directories, all under one temporary root.
