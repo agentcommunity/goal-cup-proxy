@@ -35,7 +35,9 @@ pub fn render_entries(
     if json {
         return put(out, &format!("{}\n", serde_json::to_string_pretty(&live)?));
     }
-    put(out, "the runs the tracker holds:\n\n")?;
+    for line in crate::participant::entries_intro(live.is_empty()) {
+        put(out, &format!("{line}\n"))?;
+    }
     if live.is_empty() {
         put(out, "  (none)\n")?;
     }
@@ -44,17 +46,27 @@ pub fn render_entries(
         put(
             out,
             &format!(
-                "  {}  {}  {}  {}  {}\n",
+                "  {}  {}  {}  {}\n",
                 e.entry_id,
                 e.connector_id,
-                wire_word(&e.arming),
-                wire_word(&e.health),
+                state_words(e),
                 e.workspace
             ),
         )?;
     }
-    put(
-        out,
-        "\nShow one run, sealed or not, by id: `goalcup status <id>`.\n",
-    )
+    Ok(())
+}
+
+/// What a run is doing, in the participant's words.
+fn state_words(e: &goalcup_protocol::control::EntrySummary) -> String {
+    use goalcup_protocol::control::ArmingState;
+    use goalcup_protocol::events::HealthState;
+    match (&e.health, &e.arming) {
+        (HealthState::Sealed, _) => "sealed".to_string(),
+        (HealthState::SealingRecoveryNeeded, _) => "needs attention".to_string(),
+        (HealthState::Online, ArmingState::Armed) => "not started".to_string(),
+        (HealthState::Online, ArmingState::Started) => "recording".to_string(),
+        // A word this build does not know: the wire's own, never a guess.
+        (HealthState::Unknown, _) => wire_word(&e.health),
+    }
 }

@@ -446,12 +446,22 @@ fn a_sleep_lock_that_cannot_be_taken_is_a_problem_line_and_the_run_goes_on() {
         running.sleep_lock,
         Err("no sleep inhibitor on this machine".to_string())
     );
-    assert_eq!(
-        status.lines().next(),
-        Some("PROBLEM: the machine may sleep: no sleep inhibitor on this machine"),
+    // The participant block comes first; the one problem line names the cause and the fix.
+    let problem = status
+        .lines()
+        .find(|line| line.starts_with("PROBLEM:"))
+        .unwrap_or_else(|| panic!("{status}"));
+    assert!(problem.contains("may go to sleep"), "{status}");
+    assert!(
+        problem.contains("no sleep inhibitor on this machine"),
         "{status}"
     );
+    assert!(problem.contains("power"), "{status}");
     assert_eq!(status.matches("PROBLEM:").count(), 1, "{status}");
+    assert!(
+        status.find("PROBLEM:").unwrap() > status.find("Problems: 1").unwrap(),
+        "{status}"
+    );
     // The host's last word: the agent's process is gone, the run is over.
     let entry_id = client.created().entry_id;
     let last = read_state(&run_dir(&rig.cfg, &entry_id)).expect("the final state");

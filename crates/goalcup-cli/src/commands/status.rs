@@ -42,13 +42,19 @@
 //!
 //! # What it prints
 //!
-//! Every document the daemon signs is a v5 local capture's, so the render is the capture
-//! block: its states, the daemon's sentence, storage, gaps and admissions. Staleness is
-//! [`goalcup_protocol::control::STALE_AFTER_SECONDS`], the one threshold every reader of the
-//! status document uses, and `now` is a parameter so the rendering is deterministic.
+//! First the participant block ([`crate::participant`] has its words): the run (practice or
+//! competition) with the harness's display name and its state, when it ends and how long is
+//! left, whether the agent runs, how the upload stands, and one `PROBLEM:` line for each thing
+//! wrong, every one ending with its fix. The block ends with the one thing to do next. Then, under
+//! `Details:`, the technical status of the entry: every document the daemon signs is a v5 local
+//! capture's, so that is the capture block with its states, the daemon's sentence, storage, gaps
+//! and admissions. Staleness is [`goalcup_protocol::control::STALE_AFTER_SECONDS`], the one
+//! threshold every reader of the status document uses, and `now` is a parameter so the rendering
+//! is deterministic. `--json` prints the signed document alone.
 
 use crate::CliError;
 use crate::entries::{self, EntryRecord};
+use crate::participant;
 use crate::retry::retry_busy;
 use goalcup_protocol::capture::M2Status;
 use goalcup_protocol::control::{
@@ -71,6 +77,21 @@ pub fn status_with(
     now: &str,
     out: &mut dyn Write,
 ) -> Result<(), CliError> {
+    status_in(client, cfg, None, entry, json, now, out)
+}
+
+/// [`status_with`] with the directory the connectors are in, so the participant block names the
+/// harness by its display name. Without it, or when the connector cannot be loaded, the
+/// connector id is named instead.
+pub fn status_in(
+    client: &dyn DaemonClient,
+    cfg: &Path,
+    connectors: Option<&Path>,
+    entry: Option<&str>,
+    json: bool,
+    now: &str,
+    out: &mut dyn Write,
+) -> Result<(), CliError> {
     let record = pinned(cfg, entry)?;
     // A reserve nothing will use again goes back to the disk, whatever the daemon answers below.
     crate::run::reserve::release_stale(
@@ -78,10 +99,13 @@ pub fn status_with(
         &crate::run::reserve::artifact_root(cfg),
         crate::run::now_unix(),
     );
-    // First of everything, before the daemon is even asked: what is wrong with the run. A
-    // `--json` caller gets the document alone.
+    // First of everything, before the daemon is even asked: where the run is and what to do
+    // about anything wrong with it. A `--json` caller gets the document alone.
+    let mut run_id = None;
     if !json {
-        put(out, &run_report(cfg, &record, now))?;
+        let (report, run) = run_report(cfg, connectors, &record, now);
+        put(out, &report)?;
+        run_id = run;
     }
     let document = retry_busy(|| client.status(&record.entry_id)).map_err(CliError::Control)?;
     if document.verify_with(&record.run_public_key).is_err() {
@@ -132,6 +156,13 @@ pub fn status_with(
             &format!("{}\n", serde_json::to_string_pretty(&document)?),
         )?;
     } else {
+        // The technical block follows the participant block, under its own heading.
+        if let Some(run_id) = &run_id {
+            put(
+                out,
+                &format!("\n{}\nrun {run_id}\n", participant::STATUS_DETAILS),
+            )?;
+        }
         put(out, &render_status(&document, now))?;
     }
     Ok(())
@@ -140,36 +171,183 @@ pub fn status_with(
 /// The first line of the run section of an organizer test run (`goalcup start --test`).
 const TEST_RUN_BANNER: &str = "TEST RUN: an organizer test run, not a competition entry\n";
 
-/// What this machine knows of the run the entry belongs to (its `state.json`): one `PROBLEM:`
-/// line for each thing that is wrong, first of all, and nothing when nothing is. A run with no
-/// state yet is not a problem, and is said in plain words; a machine with no run record for
-/// the entry says nothing.
-fn run_report(cfg: &Path, record: &EntryRecord, now: &str) -> String {
+/// What this machine knows of the run the entry belongs to (its `state.json`), in the
+/// participant's words: where the run is, one `PROBLEM:` line for each thing that is wrong with
+/// the fix after it, and the one thing to do next. A run with no state yet is not a problem, and
+/// is said in plain words; a machine with no run record for the entry says nothing. The second
+/// value is the run's id, when the machine has the run.
+fn run_report(
+    cfg: &Path,
+    connectors: Option<&Path>,
+    record: &EntryRecord,
+    now: &str,
+) -> (String, Option<String>) {
     // The run of the entry that was pinned, never the newest run: the newest entry and the
     // newest run can belong to different runs (a practice run continued after a competition
     // run was started).
     let Ok(Some(run)) = crate::run::of_entry(cfg, &record.entry_id) else {
-        return String::new();
+        return (String::new(), None);
     };
     // An organizer test run says so first, before anything else in the run section.
     let banner = if run.test { TEST_RUN_BANNER } else { "" };
-    let Some(state) = crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id)) else {
-        return format!("{banner}run state: no run state yet\n");
-    };
+    let name = harness_name(connectors, &run.connector_id, record.dev);
     let now = parse_z(now).unwrap_or_else(crate::run::now_unix);
+    let state = crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id));
+    let over = crate::run::is_over(&run, state.as_ref(), now);
+    let left = participant::seconds_left(
+        state.as_ref().and_then(|state| state.time_left.as_ref()),
+        run.deadline_at.as_deref(),
+        now,
+    );
+    let ends = run
+        .deadline_at
+        .as_deref()
+        .map(|deadline| participant::ends_line(deadline, left, over));
+    let on_server = run.server_url.is_some();
+    let mode = on_server.then(|| run.mode());
+    let Some(state) = state else {
+        let header = participant::status_header(&participant::StatusHeader {
+            harness: &name,
+            mode,
+            phase: None,
+            ends,
+            agent: participant::Agent::Running,
+            upload: participant::UploadNow::NotYet,
+            problems: 0,
+        });
+        let text = format!(
+            "{banner}{}\n{}\n",
+            header.join("\n"),
+            participant::status_next(&participant::Next::Wait)
+        );
+        return (plain_lines(&text), Some(run.run_id));
+    };
+
     // `goalcup continue` is advised only for a run it can restart.
     let advice = crate::run::advice(cfg, &run, &state, now);
-    let problems: String = state
-        .problems(now, advice)
-        .iter()
-        .map(|problem| format!("PROBLEM: {}\n", plain(problem)))
-        .collect();
+    let until = run
+        .deadline_at
+        .as_deref()
+        .map(|deadline| participant::end_words(deadline, None));
+    let who = participant::Who {
+        harness: &name,
+        run_id: &run.run_id,
+        until: until.as_deref(),
+    };
+    let problems = state.problems(now, advice, &who);
     // A normal end of a run that cannot be continued is said plainly, after any problem.
-    let finished = state
-        .finished(advice)
-        .map(|line| format!("{}\n", plain(&line)))
-        .unwrap_or_default();
-    format!("{banner}{problems}{finished}")
+    let finished = state.finished(advice, &who);
+
+    let spool = cfg.join(crate::upload::UPLOADS_DIR_NAME);
+    let all_sent = on_server
+        && run
+            .entries
+            .iter()
+            .all(|e| crate::upload::uploader::is_sent(&spool, &e.entry_id));
+    let exited = matches!(state.harness, crate::run::HarnessState::Exited { .. });
+    // Done: its time is up, or the agent left a run nothing can restart.
+    let done = over || (state.ended && exited && advice == crate::run::Advice::Cannot);
+    let phase = if done {
+        if !state.ended {
+            participant::Phase::Finishing
+        } else if all_sent {
+            participant::Phase::Uploaded
+        } else {
+            participant::Phase::Sealed
+        }
+    } else if exited {
+        participant::Phase::AgentExited
+    } else {
+        participant::Phase::Recording
+    };
+    let agent = match &state.harness {
+        crate::run::HarnessState::Running => participant::Agent::Running,
+        crate::run::HarnessState::Exited { .. } if state.stopped_for_its_end() => {
+            participant::Agent::Stopped
+        }
+        crate::run::HarnessState::Exited { .. }
+            if state.stopped.as_deref() == Some(crate::run::watch::DISK_STOP_REASON) =>
+        {
+            participant::Agent::StoppedForDisk
+        }
+        crate::run::HarnessState::Exited { status } => participant::Agent::Exited { how: status },
+    };
+    let ago = state
+        .upload
+        .last_ok_at
+        .map(|last_ok| now.saturating_sub(last_ok));
+    let upload = if !on_server {
+        participant::UploadNow::NotUsed
+    } else if phase == participant::Phase::Uploaded {
+        participant::UploadNow::Done
+    } else if state.upload.stopped {
+        participant::UploadNow::GaveUp
+    } else if phase == participant::Phase::Sealed {
+        participant::UploadNow::Unfinished
+    } else if state.upload.problem.is_some() {
+        participant::UploadNow::Retrying { ago }
+    } else if ago.is_some() {
+        participant::UploadNow::UpToDate { ago }
+    } else {
+        participant::UploadNow::NotYet
+    };
+    let next = match phase {
+        participant::Phase::Recording if problems.is_empty() => participant::Next::NothingEnds,
+        participant::Phase::Recording => participant::Next::Problems,
+        participant::Phase::AgentExited if advice == crate::run::Advice::Continue => {
+            participant::Next::Continue {
+                run_id: &run.run_id,
+            }
+        }
+        participant::Phase::AgentExited | participant::Phase::Uploaded => {
+            participant::Next::Nothing
+        }
+        participant::Phase::Finishing => participant::Next::Wait,
+        participant::Phase::Sealed if on_server => participant::Next::Upload,
+        participant::Phase::Sealed => participant::Next::Nothing,
+    };
+    let header = participant::status_header(&participant::StatusHeader {
+        harness: &name,
+        mode,
+        phase: Some(phase),
+        ends,
+        agent,
+        upload,
+        problems: problems.len(),
+    });
+    let problems: String = problems
+        .iter()
+        .map(|problem| format!("{} {problem}\n", participant::PROBLEM))
+        .collect();
+    let finished = finished.map(|line| format!("{line}\n")).unwrap_or_default();
+    let text = format!(
+        "{banner}{}\n{problems}{finished}{}\n",
+        header.join("\n"),
+        participant::status_next(&next)
+    );
+    (plain_lines(&text), Some(run.run_id))
+}
+
+/// The harness's display name from its connector, or the connector id when the connector cannot
+/// be loaded here.
+fn harness_name(connectors: Option<&Path>, connector_id: &str, dev: bool) -> String {
+    connectors
+        .and_then(|dir| crate::connector::load_harness(dir, connector_id, dev).ok())
+        .map_or_else(
+            || connector_id.to_string(),
+            |connector| connector.display_name().to_string(),
+        )
+}
+
+/// A block of lines, with anything a terminal would obey taken out of each ([`plain`]) but the
+/// line ends.
+fn plain_lines(text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(|line| match line.strip_suffix('\n') {
+            Some(line) => format!("{}\n", plain(line)),
+            None => plain(line),
+        })
+        .collect()
 }
 
 /// One headline on stdout, and the reason on rung 1.
@@ -213,14 +391,9 @@ fn refuse(
 pub fn pinned(cfg: &Path, entry: Option<&str>) -> Result<EntryRecord, CliError> {
     match entry {
         Some(entry_id) => entries::read_entry(cfg, entry_id),
-        None => entries::latest_entry(cfg)?.ok_or_else(|| {
-            CliError::Refused(format!(
-                "no run has been started from this machine: there is no record under {}. \
-                 Run `goalcup prep`, then `goalcup start --harness <id>`, or name an entry \
-                 that was started here.",
-                entries::entries_dir(cfg).display()
-            ))
-        }),
+        None => {
+            entries::latest_entry(cfg)?.ok_or_else(|| CliError::Refused(participant::no_run_yet()))
+        }
     }
 }
 

@@ -583,9 +583,12 @@ fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
         // A record but no configuration: say there is no daemon, naming `control.json`.
         None => goalcup_cli::daemon::HttpDaemonClient::from_config_dir(&cfg)?,
     };
-    commands::status::status_with(
+    // The connectors give the harness its display name; without them the status names its id.
+    let connectors = goalcup_cli::config::connectors_dir().ok();
+    commands::status::status_in(
         &client,
         &cfg,
+        connectors.as_deref(),
         entry.as_deref(),
         json,
         &now_z(),

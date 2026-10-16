@@ -463,6 +463,13 @@ mod server_runs {
             .unwrap_or_else(|e| panic!("{e}\n{}", String::from_utf8_lossy(&said)));
         let said = String::from_utf8(said).unwrap();
         assert!(said.contains("uploaded:"), "{said}");
+        // The technical line stays, and the last line is the plain word on how it went.
+        let last = said.lines().last().unwrap();
+        assert!(
+            last == goalcup_cli::participant::upload_finished()
+                || last == goalcup_cli::participant::upload_not_sealed(),
+            "{said}"
+        );
 
         // A credential that others can read is refused, naming the fix.
         let file = goalcup_cli::account::credential::credential_path(&goalcup_cli::run::run_dir(

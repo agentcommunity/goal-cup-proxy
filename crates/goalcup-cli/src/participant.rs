@@ -521,13 +521,20 @@ pub fn after_upload(ending: &Ending<'_>, all_sent: bool, server_closed: bool) ->
         }),
         Ending::TimeUp { practice } => {
             if all_sent {
-                lines.push(format!("Your run is sealed and uploaded. {NOTHING_MORE}"));
+                // The prep pointer is a next step, so it replaces "Nothing more to do": the two
+                // would contradict each other. It is given only when the upload is complete,
+                // because prep's practice step needs every part uploaded.
+                if *practice {
+                    lines.push("Your practice run is sealed and uploaded.".to_string());
+                    lines.push(
+                        "Next: goalcup prep (its practice step should now be ok).".to_string(),
+                    );
+                } else {
+                    lines.push(format!("Your run is sealed and uploaded. {NOTHING_MORE}"));
+                }
             } else {
                 lines.push("Your run is sealed on this computer.".to_string());
                 lines.push(unsent.to_string());
-            }
-            if *practice {
-                lines.push("Next: goalcup prep (its practice step should now be ok).".to_string());
             }
         }
         Ending::Closed => lines.push(format!(
@@ -544,18 +551,422 @@ pub fn after_upload(ending: &Ending<'_>, all_sent: bool, server_closed: bool) ->
     lines
 }
 
+// ---------------------------------------------------------------------------------- status
+
+/// The heading above the technical block `goalcup status` keeps below its participant block.
+pub const STATUS_DETAILS: &str = "Details:";
+
+/// The prefix of every problem line. Scripts and the guide read it.
+pub const PROBLEM: &str = "PROBLEM:";
+
+/// How far a run has come.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// The agent runs and the run records.
+    Recording,
+    /// The agent has exited; the run is still open.
+    AgentExited,
+    /// The run's time is up and goalcup is finishing it.
+    Finishing,
+    /// The run is sealed; part of it is not uploaded.
+    Sealed,
+    /// The run is sealed and all of it is uploaded.
+    Uploaded,
+}
+
+/// What the agent's process is doing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Agent<'a> {
+    Running,
+    /// It ended by itself; `how` is `exit code 1`.
+    Exited {
+        how: &'a str,
+    },
+    /// goalcup ended it because the run is over.
+    Stopped,
+    /// goalcup ended it because the disk is almost full.
+    StoppedForDisk,
+}
+
+/// How the upload stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadNow {
+    /// The run is recorded on this computer only.
+    NotUsed,
+    /// Nothing has been sent yet.
+    NotYet,
+    /// It works; `ago` is the seconds since the last send.
+    UpToDate { ago: Option<u64> },
+    /// It fails now; goalcup keeps trying.
+    Retrying { ago: Option<u64> },
+    /// goalcup gave up on it.
+    GaveUp,
+    /// The run is sealed and not all of it is sent.
+    Unfinished,
+    /// All of it is sent.
+    Done,
+}
+
+/// The facts of the first lines of `goalcup status`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusHeader<'a> {
+    /// The harness's display name.
+    pub harness: &'a str,
+    /// The run's mode; `None` for a run recorded on this computer only.
+    pub mode: Option<RunMode>,
+    /// `None`: this computer has no state for the run yet.
+    pub phase: Option<Phase>,
+    /// The run's end ([`ends_line`]), for a run on a server.
+    pub ends: Option<String>,
+    pub agent: Agent<'a>,
+    pub upload: UploadNow,
+    /// How many problem lines follow.
+    pub problems: usize,
+}
+
+/// The line that says when the run ends (`Ends: Sat 14 Nov, 10:12 CET (09:12 UTC), 95 h 10 min
+/// left.`), or when it ended. `left` is what is left, for a run that is not over.
+pub fn ends_line(deadline_at: &str, left: Option<u64>, over: bool) -> String {
+    if over {
+        format!("Ended: {}.", end_words(deadline_at, None))
+    } else {
+        format!("Ends: {}.", end_words(deadline_at, left))
+    }
+}
+
+fn run_kind(mode: Option<RunMode>) -> &'static str {
+    match mode {
+        Some(RunMode::Practice) => "practice run",
+        Some(RunMode::Competition) => "competition run",
+        Some(RunMode::Test) => "organizer test run",
+        None => "run (recorded on this computer only)",
+    }
+}
+
+/// The first lines of `goalcup status`: the run, its state, its end, the agent, the upload and the
+/// number of problems.
+pub fn status_header(h: &StatusHeader<'_>) -> Vec<String> {
+    let name = h.harness;
+    let state = match (h.phase, h.mode) {
+        (None, _) => "no run state yet".to_string(),
+        (Some(Phase::Recording), _) => "recording".to_string(),
+        (Some(Phase::AgentExited), _) => format!("{name} has exited, the run is still open"),
+        (Some(Phase::Finishing), _) => "time is up, goalcup is finishing the run".to_string(),
+        (Some(Phase::Sealed), None) => "sealed on this computer".to_string(),
+        (Some(Phase::Sealed), Some(_)) => "sealed, not all of it is uploaded yet".to_string(),
+        (Some(Phase::Uploaded), _) => "sealed and uploaded".to_string(),
+    };
+    let mut lines = vec![format!("Your {} with {name}: {state}.", run_kind(h.mode))];
+    if let Some(ends) = &h.ends {
+        lines.push(format!("  {ends}"));
+    }
+    if h.phase.is_none() {
+        lines
+            .push("  goalcup writes the run state a few seconds after the run starts.".to_string());
+        return lines;
+    }
+    lines.push(match &h.agent {
+        Agent::Running => format!("  {name}: running."),
+        Agent::Exited { how } => format!("  {name}: exited ({how})."),
+        Agent::Stopped => format!("  {name}: stopped."),
+        Agent::StoppedForDisk => format!("  {name}: stopped (the disk is almost full)."),
+    });
+    lines.push(format!(
+        "  Upload: {}.",
+        match h.upload {
+            UploadNow::NotUsed => "not used, this run stays on this computer".to_string(),
+            UploadNow::NotYet => "nothing sent yet".to_string(),
+            UploadNow::UpToDate { ago: Some(ago) } =>
+                format!("up to date (last sent {} ago)", crate::run::age_words(ago)),
+            UploadNow::UpToDate { ago: None } => "up to date".to_string(),
+            UploadNow::Retrying { ago: Some(ago) } => format!(
+                "not up to date, goalcup keeps trying (last sent {} ago)",
+                crate::run::age_words(ago)
+            ),
+            UploadNow::Retrying { ago: None } => "not up to date, goalcup keeps trying".to_string(),
+            UploadNow::GaveUp => "stopped, see the problem below".to_string(),
+            UploadNow::Unfinished =>
+                "not finished, part of the run is only on this computer".to_string(),
+            UploadNow::Done => "done".to_string(),
+        }
+    ));
+    lines.push(match h.problems {
+        0 => "  Problems: none.".to_string(),
+        1 => "  Problems: 1, below.".to_string(),
+        n => format!("  Problems: {n}, below."),
+    });
+    lines
+}
+
+/// What `goalcup status` tells the participant to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Next<'a> {
+    /// The run records and nothing is wrong.
+    NothingEnds,
+    /// The run is done, or nothing can be done for it.
+    Nothing,
+    /// The agent can be started again.
+    Continue { run_id: &'a str },
+    /// Part of the run is not uploaded.
+    Upload,
+    /// The problem lines say what to do; the run goes on meanwhile.
+    Problems,
+    /// goalcup is still at work.
+    Wait,
+}
+
+/// The last line of the participant block of `goalcup status`.
+pub fn status_next(next: &Next<'_>) -> String {
+    match next {
+        Next::NothingEnds => "Next: nothing to do. The run ends by itself.".to_string(),
+        Next::Nothing => "Next: nothing to do.".to_string(),
+        Next::Continue { run_id } => format!("Next: run {CONTINUE_HINT} {run_id}."),
+        Next::Upload => "Next: run goalcup upload.".to_string(),
+        Next::Problems => {
+            "Next: do what the problem lines above say. The run goes on meanwhile.".to_string()
+        }
+        Next::Wait => "Next: wait a minute, then run goalcup status again.".to_string(),
+    }
+}
+
+/// `goalcup status` on a computer that has not started a run. The command comes first; the phrase
+/// "no run has been started from this machine" is read by tests.
+pub fn no_run_yet() -> String {
+    "Run goalcup prep, then goalcup start --harness <id> --practice: no run has been started from \
+     this machine yet. Nothing to show."
+        .to_string()
+}
+
+/// What a problem line says about restarting the agent: the fix, or the fact that there is none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Restart<'a> {
+    /// `goalcup continue` can restart it.
+    Continue { run_id: &'a str },
+    /// The run is over.
+    Over,
+    /// The run is open but cannot be continued.
+    Cannot,
+}
+
+/// The run's facts that a problem line names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Who<'a> {
+    pub harness: &'a str,
+    pub run_id: &'a str,
+    /// The run's end ([`end_words`]), when it has one.
+    pub until: Option<&'a str>,
+}
+
+/// goalcup has not written the run's state for `silent` (words).
+pub fn problem_state_stale(silent: &str, restart: Restart<'_>) -> String {
+    let fix = match restart {
+        Restart::Continue { run_id } => format!("To go on, run: {CONTINUE_HINT} {run_id}"),
+        Restart::Over => "The run is over, so it cannot be continued.".to_string(),
+        Restart::Cannot => "This run cannot be continued.".to_string(),
+    };
+    format!(
+        "goalcup has not updated this run for {silent}. The computer may have slept or restarted. \
+         {fix}"
+    )
+}
+
+pub fn problem_recording_gaps() -> String {
+    format!(
+        "the recording has gaps: part of what happened was not recorded. Keep the run going. If \
+         this keeps happening, write to {SUPPORT_ADDRESS}."
+    )
+}
+
+pub fn problem_recording_failed(run_id: &str) -> String {
+    format!("the recording failed. Write to {SUPPORT_ADDRESS} and name run {run_id}.")
+}
+
+/// The upload is behind. `over`: the run is sealed or the upload gave up, so the fix is the
+/// command; otherwise goalcup is still trying.
+pub fn problem_upload(ago: &str, why: &str, over: bool) -> String {
+    if over {
+        format!(
+            "part of the run is not uploaded (last upload {ago} ago: {why}). Nothing is lost; it \
+             waits on this computer. Check the network, then run: goalcup upload"
+        )
+    } else {
+        format!(
+            "nothing was uploaded for {ago} ({why}). Nothing is lost; it waits on this computer. \
+             Check the network."
+        )
+    }
+}
+
+/// `failures` heartbeats in a row failed. The cadence is five minutes.
+pub fn problem_heartbeats(failures: u32, why: &str) -> String {
+    format!(
+        "the server has not heard from this run for about {} min ({why}). Check the network.",
+        u64::from(failures) * 5
+    )
+}
+
+pub fn problem_disk(free: &str) -> String {
+    format!("only {free} of disk is free. Free some space.")
+}
+
+pub fn problem_sleep(why: &str) -> String {
+    format!("this computer may go to sleep ({why}). Keep it on mains power with the lid open.")
+}
+
+/// The agent ended by itself, or the disk stopped it, and the run is not over.
+pub fn problem_agent_exited(
+    who: &Who<'_>,
+    how: &str,
+    disk_stop: bool,
+    restart: Restart<'_>,
+) -> String {
+    let h = who.harness;
+    let until = who
+        .until
+        .map(|until| format!(" {STILL_OPEN} {until}."))
+        .unwrap_or_default();
+    match restart {
+        Restart::Continue { run_id } if disk_stop => format!(
+            "{h} was stopped: the disk is almost full and uploads are failing.{until} Free some \
+             disk space, then run: {CONTINUE_HINT} {run_id}"
+        ),
+        Restart::Continue { run_id } => {
+            format!("{h} has exited ({how}).{until} To go on, run: {CONTINUE_HINT} {run_id}")
+        }
+        Restart::Over => {
+            format!("{h} has exited ({how}) and the run is over. Nothing to continue.")
+        }
+        Restart::Cannot => format!(
+            "{h} has exited ({how}) and this run cannot be continued. If you did not expect \
+             this, write to {SUPPORT_ADDRESS}."
+        ),
+    }
+}
+
+/// The agent finished normally and the run cannot be continued: a normal end, not a problem.
+pub fn agent_finished(harness: &str, over: bool) -> String {
+    if over {
+        format!("{harness} finished, and the run is over.")
+    } else {
+        format!("{harness} finished, and this run cannot be continued.")
+    }
+}
+
+// ------------------------------------------------------------------------ upload and entries
+
+/// `goalcup upload` when there is no run on this computer.
+pub fn upload_no_run() -> String {
+    "Run goalcup start first: no run has been started from this machine, so there is nothing to \
+     upload. To send a run by name: goalcup upload <entry>."
+        .to_string()
+}
+
+/// `goalcup upload` when the newest run was never opened on the server.
+pub fn upload_local_run(run_id: &str) -> String {
+    format!(
+        "Name another run: goalcup upload <entry>. Nothing to upload: the newest run ({run_id}) \
+         is local, so it was recorded on this computer only and never opened on the server."
+    )
+}
+
+/// `goalcup upload` when the newest run is all on the server.
+pub fn upload_nothing_left(run_id: &str) -> String {
+    format!("Nothing left to send: run {run_id} is fully uploaded. {NOTHING_MORE}")
+}
+
+/// An entry id that this computer did not open on a server.
+pub fn upload_not_opened(entry_id: &str) -> String {
+    format!(
+        "Name a run that was started on this computer: goalcup upload <entry>. Part {entry_id} \
+         was never opened on the server from here, so there is nothing to upload."
+    )
+}
+
+/// The run's credential is not on this computer.
+pub fn upload_not_here(entry_id: &str) -> String {
+    format!(
+        "Run goalcup upload on the computer that started the run: this run was not started on \
+         this machine (part {entry_id} has no saved credential here), and only the machine that \
+         started a run can upload it."
+    )
+}
+
+/// The server is away; goalcup waits `wait_secs` and asks again.
+pub fn upload_waiting(why: &str, wait_secs: u64) -> String {
+    format!(
+        "Waiting for the server ({why}). Trying again in {wait_secs}s. Keep this terminal open, \
+         or press Ctrl-C and run goalcup upload later: it carries on from where it stopped."
+    )
+}
+
+/// The server refused the upload for good.
+pub fn upload_refused(server: &str, entry_id: &str, why: &str) -> String {
+    format!(
+        "Run goalcup upload again. If it is refused again, write to {SUPPORT_ADDRESS}. The server \
+         at {server} refused part {entry_id} of your run: {why}"
+    )
+}
+
+/// Part of the run did not get through.
+pub fn upload_incomplete(entry_id: &str, bytes: u64, why: &str) -> String {
+    format!(
+        "Check the network, then run goalcup upload again. Part {entry_id} of your run is not \
+         fully uploaded ({bytes} bytes are): {why}. Nothing is lost; it waits on this computer."
+    )
+}
+
+/// The upload finished, and the run is sealed.
+pub fn upload_finished() -> String {
+    format!("Uploaded the rest of your run. {NOTHING_MORE}")
+}
+
+/// The upload finished, and the run is not sealed yet.
+pub fn upload_not_sealed() -> String {
+    "Run goalcup upload again once the run has ended. What exists so far is uploaded; the run is \
+     not sealed yet."
+        .to_string()
+}
+
+/// The first lines of `goalcup entries`.
+pub fn entries_intro(none: bool) -> Vec<String> {
+    if none {
+        vec![
+            "To start a run: goalcup prep, then goalcup start --harness <id> --practice."
+                .to_string(),
+            "To show the newest run you started here, even a finished one: goalcup status"
+                .to_string(),
+            String::new(),
+            "Runs on this computer:".to_string(),
+        ]
+    } else {
+        vec![
+            "To show one run in full, run: goalcup status <id>".to_string(),
+            String::new(),
+            "Runs on this computer (id, harness, state, folder):".to_string(),
+        ]
+    }
+}
+
 // --------------------------------------------------------------------------------- refusals
 
 /// `goalcup start` while a run of the same harness records on this computer: they share one home.
 ///
 /// Most often this is a second start by mistake, so the first words say that nothing is needed;
 /// replacing the run is a choice, said last, never the first thing to do.
-pub fn home_busy(harness: &str) -> String {
+///
+/// `replaces_competition_run`: this start is a competition start and a competition run of this
+/// account is open on this computer, so a new start would replace it. A practice or test start
+/// never replaces a competition run, and does not say so.
+pub fn home_busy(harness: &str, replaces_competition_run: bool) -> String {
+    let replaces = if replaces_competition_run {
+        " (this replaces your current competition run)"
+    } else {
+        ""
+    };
     format!(
         "Your run is already going in another terminal. Nothing to do here: {harness} is already \
-         recording on this computer. To see it: goalcup status. To replace that run with a new \
-         one: exit {harness} there first, then run goalcup start again (this replaces your \
-         current run). Nothing was created."
+         recording on this computer. To see it: goalcup status. To start a new run instead: exit \
+         {harness} there first, then run goalcup start again{replaces}. Nothing was created."
     )
 }
 
@@ -891,18 +1302,179 @@ mod tests {
         assert!(up.contains(TIME_IS_UP), "{up}");
         let sent = after_upload(&Ending::TimeUp { practice: false }, true, false).join("\n");
         assert!(sent.contains("sealed and uploaded"), "{sent}");
+        // A practice run that is all uploaded points to prep, and does not also say there is
+        // nothing more to do.
         let practice = after_upload(&Ending::TimeUp { practice: true }, true, false);
         assert!(
             last(&practice).starts_with("Next: goalcup prep"),
             "{practice:?}"
         );
+        assert!(!practice.join(" ").contains(NOTHING_MORE), "{practice:?}");
+        // With part of it unsent the prep step is not ok yet: no pointer to it, the upload
+        // command instead.
+        let unsent = after_upload(&Ending::TimeUp { practice: true }, false, false);
+        let text = unsent.join(" ");
+        assert!(!text.contains("goalcup prep"), "{text}");
+        assert!(text.contains("goalcup upload"), "{text}");
+    }
+
+    fn header(phase: Option<Phase>, mode: Option<RunMode>) -> StatusHeader<'static> {
+        StatusHeader {
+            harness: "Some Agent",
+            mode,
+            phase,
+            ends: Some(ends_line(
+                "2026-11-14T09:12:00Z",
+                Some(95 * 3600 + 600),
+                false,
+            )),
+            agent: Agent::Running,
+            upload: UploadNow::UpToDate { ago: Some(120) },
+            problems: 0,
+        }
+    }
+
+    #[test]
+    fn the_status_header_names_the_run_the_state_the_end_the_agent_and_the_upload() {
+        let text =
+            status_header(&header(Some(Phase::Recording), Some(RunMode::Competition))).join("\n");
+        assert!(
+            text.starts_with("Your competition run with Some Agent: recording."),
+            "{text}"
+        );
+        assert!(text.contains("95 h 10 min left"), "{text}");
+        assert!(text.contains("09:12 UTC"), "{text}");
+        assert!(text.contains("Some Agent: running."), "{text}");
+        assert!(text.contains("up to date (last sent 2 min ago)"), "{text}");
+        assert!(text.contains("Problems: none."), "{text}");
+
+        for (mode, word) in [
+            (Some(RunMode::Practice), "practice run"),
+            (Some(RunMode::Test), "organizer test run"),
+            (None, "this computer only"),
+        ] {
+            let text = status_header(&header(Some(Phase::Recording), mode)).join("\n");
+            assert!(text.contains(word), "{word}: {text}");
+        }
+        // Each state is in the first line.
+        for (phase, word) in [
+            (Phase::AgentExited, "has exited, the run is still open"),
+            (Phase::Finishing, "time is up"),
+            (Phase::Sealed, "sealed"),
+            (Phase::Uploaded, "sealed and uploaded"),
+        ] {
+            let first = status_header(&header(Some(phase), Some(RunMode::Competition))).remove(0);
+            assert!(first.contains(word), "{word}: {first}");
+        }
+        // A run over says when it ended and has no time left.
+        let over = ends_line("2026-11-14T09:12:00Z", Some(5), true);
+        assert!(over.starts_with("Ended: "), "{over}");
+        assert!(!over.contains("left"), "{over}");
+        // No state yet: said in plain words, and nothing about the agent or the upload.
+        let text = status_header(&header(None, Some(RunMode::Practice))).join("\n");
+        assert!(text.contains("no run state yet"), "{text}");
+        assert!(!text.contains("Upload:"), "{text}");
+        // Problems are counted.
+        let mut some = header(Some(Phase::Recording), Some(RunMode::Competition));
+        some.problems = 2;
+        assert!(status_header(&some).join("\n").contains("Problems: 2"));
+        // The agent and the upload in trouble.
+        some.agent = Agent::Exited { how: "exit code 1" };
+        some.upload = UploadNow::GaveUp;
+        let text = status_header(&some).join("\n");
+        assert!(text.contains("exited (exit code 1)"), "{text}");
+        assert!(text.contains("Upload: stopped"), "{text}");
+        for word in ["entry", "segment", "chain", "daemon", "tracer"] {
+            assert!(!text.contains(word), "{word}: {text}");
+        }
+    }
+
+    #[test]
+    fn the_status_next_line_is_the_one_thing_to_do() {
+        assert!(status_next(&Next::NothingEnds).starts_with("Next: nothing to do."));
+        assert!(status_next(&Next::Nothing).starts_with("Next: nothing to do."));
+        assert_eq!(
+            status_next(&Next::Continue { run_id: "r1" }),
+            "Next: run goalcup continue r1."
+        );
+        assert_eq!(status_next(&Next::Upload), "Next: run goalcup upload.");
+        assert!(status_next(&Next::Problems).contains("problem"));
+        assert!(status_next(&Next::Wait).contains("goalcup status"));
+        // The refusal with no run starts with the command and keeps the phrase tests read.
+        let none = no_run_yet();
+        assert!(none.starts_with("Run goalcup prep"), "{none}");
+        assert!(
+            none.contains("no run has been started from this machine"),
+            "{none}"
+        );
+    }
+
+    #[test]
+    fn upload_messages_start_with_the_next_action_and_name_it() {
+        // A refusal says what to do first.
+        let refusals = [
+            upload_no_run(),
+            upload_local_run("r1"),
+            upload_not_opened("e1"),
+            upload_not_here("e1"),
+            upload_refused("https://s.example", "e1", "401"),
+            upload_incomplete("e1", 10, "the server answered 503"),
+            upload_not_sealed(),
+        ];
+        for said in &refusals {
+            let first = said.split(' ').next().unwrap();
+            assert!(
+                ["Run", "Name", "Check"].contains(&first),
+                "next action first: {said}"
+            );
+        }
+        assert!(upload_no_run().contains("nothing to upload"));
+        assert!(upload_local_run("r1").contains("is local"));
+        assert!(upload_incomplete("e1", 10, "503").contains("goalcup upload"));
+        assert!(upload_refused("https://s.example", "e1", "401").contains("https://s.example"));
+        assert!(upload_waiting("busy", 5).contains("5s"));
+        assert!(upload_finished().contains(NOTHING_MORE));
+        assert!(upload_nothing_left("r1").contains("r1"));
+        // Entries: the way to reach one run comes first.
+        assert!(entries_intro(false)[0].contains("goalcup status <id>"));
+        assert!(entries_intro(true)[0].contains("goalcup start"));
+    }
+
+    #[test]
+    fn a_problem_line_ends_with_its_fix() {
+        let who = Who {
+            harness: "Some Agent",
+            run_id: "r1",
+            until: Some("Sat 14 Nov, 10:12 UTC"),
+        };
+        assert!(
+            problem_agent_exited(
+                &who,
+                "exit code 1",
+                false,
+                Restart::Continue { run_id: "r1" }
+            )
+            .ends_with("goalcup continue r1")
+        );
+        assert!(
+            problem_state_stale("12 min", Restart::Continue { run_id: "r1" })
+                .ends_with("goalcup continue r1")
+        );
+        assert!(problem_upload("40 min", "503", true).ends_with("goalcup upload"));
+        assert!(problem_upload("40 min", "503", false).contains("Check the network"));
+        assert!(problem_heartbeats(3, "503").contains("15 min"));
+        assert!(problem_disk("3.2 GiB").contains("Free some space"));
+        assert!(problem_sleep("no inhibitor").contains("power"));
+        assert!(problem_recording_failed("r1").contains(SUPPORT_ADDRESS));
+        assert!(agent_finished("Some Agent", true).contains("run is over"));
     }
 
     #[test]
     fn every_refusal_says_what_to_do_first_and_has_no_rule_code() {
         let tmp = Path::new("/w");
         let refusals = [
-            home_busy("Some Agent"),
+            home_busy("Some Agent", true),
+            home_busy("Some Agent", false),
             still_recording("Some Agent", "r1"),
             needs_terminal("Some Agent", "Nothing was created."),
             inside_work_folder(tmp, &tmp.join("x")),
@@ -937,11 +1509,16 @@ mod tests {
             assert!(refusal.ends_with('.'), "{refusal}");
         }
         assert!(still_recording("A", "r1").contains("run r1 is still recording"));
-        assert!(home_busy("A").contains("already recording"));
-        // A second start by mistake is told nothing is needed first; replacing comes last.
-        let busy = home_busy("A");
+        assert!(home_busy("A", false).contains("already recording"));
+        // A second start by mistake is told nothing is needed first; exiting the agent to start
+        // again comes last.
+        let busy = home_busy("A", false);
         assert!(busy.starts_with("Your run is already going"), "{busy}");
-        assert!(busy.find("Nothing to do").unwrap() < busy.find("replace").unwrap());
+        assert!(busy.find("Nothing to do").unwrap() < busy.find("exit A").unwrap());
+        // "This replaces your run" is true only for a competition start that would replace an
+        // open competition run.
+        assert!(!busy.contains("replaces"), "{busy}");
+        assert!(home_busy("A", true).contains("replaces your current competition run"));
         assert!(needs_terminal("A", "").contains("foreground of a terminal"));
         assert!(not_started_here(None).contains(NOT_STARTED_HERE));
     }

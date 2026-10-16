@@ -7,7 +7,10 @@
 
 use crate::common::support;
 
-use goalcup_cli::commands::{entries::entries_with, status::status_with};
+use goalcup_cli::commands::{
+    entries::entries_with,
+    status::{status_in, status_with},
+};
 #[cfg(target_os = "macos")]
 use goalcup_protocol::capture_status::AnchorState;
 use goalcup_protocol::control::{self, DaemonClient, STALE_AFTER_SECONDS};
@@ -234,6 +237,12 @@ fn entries_lists_one_line_per_entry_json_is_an_array_and_a_sealed_entry_leaves_t
         text.lines().filter(|l| l.contains("entry-")).count(),
         m.entry_count()
     );
+    // The way to a run comes first, and the states are in words, not wire names.
+    assert!(
+        text.lines().next().unwrap().contains("goalcup status <id>"),
+        "{text}"
+    );
+    assert!(!text.contains("online"), "{text}");
     let mut out = Vec::new();
     entries_with(&m, true, &mut out).unwrap();
     let v: Vec<goalcup_protocol::control::EntrySummary> = serde_json::from_slice(&out).unwrap();
@@ -729,6 +738,16 @@ fn status_text(
     String::from_utf8(out).unwrap()
 }
 
+/// The `PROBLEM:` lines of a status text, in order.
+fn problem_lines(text: &str) -> Vec<&str> {
+    text.lines().filter(|l| l.starts_with("PROBLEM:")).collect()
+}
+
+/// The participant block of a status text: everything before the technical block.
+fn participant_block(text: &str) -> &str {
+    text.split("\nDetails:\n").next().unwrap()
+}
+
 #[test]
 fn status_puts_every_problem_first() {
     use goalcup_cli::run::{DiskState, HarnessState, Recording, RunState, UploadState, now_unix};
@@ -770,26 +789,35 @@ fn status_puts_every_problem_first() {
     run_with_state(&cfg, &info.entry_id, state.clone());
 
     let text = status_text(&m, &cfg, &info.entry_id, false);
+    // The participant block comes first: the run, then the problems, each with its fix, then the
+    // one thing to do next, then the technical block under its heading.
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(
-        &lines[..5],
-        [
-            "PROBLEM: recording has gaps",
-            "PROBLEM: last upload 40 min ago: the server answered 503",
-            "PROBLEM: disk: 3 GiB free beyond the reservation",
-            "PROBLEM: the machine may sleep: no sleep inhibitor on this machine",
-            "PROBLEM: the agent's process exited (exit code 1): run goalcup continue",
-        ]
-    );
-    assert_eq!(
-        lines.iter().filter(|l| l.starts_with("PROBLEM:")).count(),
-        5,
-        "{text}"
-    );
+    assert!(lines[0].starts_with("Your "), "{text}");
+    assert!(lines[0].contains("claude-code-cli"), "{text}");
+    assert!(text.contains("Problems: 5"), "{text}");
+    let problems = problem_lines(&text);
+    assert_eq!(problems.len(), 5, "{text}");
+    for (line, words) in problems.iter().zip([
+        &["gaps"][..],
+        &["40 min", "the server answered 503", "Check the network"],
+        &["3 GiB", "Free some space"],
+        &["sleep", "no sleep inhibitor on this machine"],
+        &["has exited (exit code 1)", "goalcup continue"],
+    ]) {
+        for word in words {
+            assert!(line.contains(word), "{word}: {line}");
+        }
+    }
+    let first_problem = text.find("PROBLEM:").unwrap();
+    let next = text.find("Next: ").unwrap();
+    let details = text.find("\nDetails:\n").unwrap();
+    assert!(text.find("Problems:").unwrap() < first_problem, "{text}");
+    assert!(first_problem < next && next < details, "{text}");
     assert!(
         text.contains(&m.status_detail()),
-        "the status itself follows the problems: {text}"
+        "the status itself follows the problems, under Details: {text}"
     );
+    assert!(text[details..].contains(&m.status_detail()), "{text}");
 
     // A failed recording; and an upload that has not lasted half an hour is not yet a problem,
     // unless it gave up.
@@ -800,15 +828,24 @@ fn status_puts_every_problem_first() {
     state.harness = HarnessState::Running;
     run_with_state(&cfg, &info.entry_id, state.clone());
     let text = status_text(&m, &cfg, &info.entry_id, false);
-    assert!(text.starts_with("PROBLEM: recording failed\n"), "{text}");
-    assert_eq!(text.matches("PROBLEM:").count(), 1, "{text}");
+    let problems = problem_lines(&text);
+    assert_eq!(problems.len(), 1, "{text}");
+    assert!(problems[0].contains("recording failed"), "{text}");
+    assert!(
+        problems[0].contains(&info.entry_id),
+        "the run it is about: {text}"
+    );
     state.upload.stopped = true;
     run_with_state(&cfg, &info.entry_id, state);
     let text = status_text(&m, &cfg, &info.entry_id, false);
-    assert!(
-        text.contains("PROBLEM: last upload 1 min ago: the server answered 503\n"),
-        "{text}"
-    );
+    let upload = problem_lines(&text)
+        .into_iter()
+        .find(|l| l.contains("not uploaded"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(upload.contains("1 min"), "{upload}");
+    assert!(upload.contains("the server answered 503"), "{upload}");
+    assert!(upload.contains("goalcup upload"), "{upload}");
+    assert!(text.contains("Upload: stopped"), "{text}");
 
     // `--json` stays one document.
     let json = status_text(&m, &cfg, &info.entry_id, true);
@@ -830,10 +867,17 @@ fn status_advises_continue_only_when_continue_can_restart_the_run() {
     };
     let server = Some("https://server.example");
     let ahead = Some("2099-01-01T00:00:00Z");
-    let exited = |why: &str| format!("PROBLEM: the agent's process exited (exit code 1){why}\n");
     let said = |cfg: &std::path::Path| status_text(&m, cfg, &info.entry_id, false);
+    // The one problem line of a status text (the agent that left), with the participant block.
+    let left = |text: &str| {
+        let problems = problem_lines(text);
+        assert_eq!(problems.len(), 1, "{text}");
+        assert!(problems[0].contains("has exited (exit code 1)"), "{text}");
+        problems[0].to_string()
+    };
 
-    // A headless connector whose agent finished normally (status 0): a plain line, no PROBLEM.
+    // A headless connector whose agent finished normally (status 0): a plain line, no PROBLEM,
+    // and nothing to do.
     let mut finished = state.clone();
     finished.harness = HarnessState::Exited {
         status: "exit code 0".to_string(),
@@ -841,26 +885,34 @@ fn status_advises_continue_only_when_continue_can_restart_the_run() {
     run_with_state_on(&cfg, &info.entry_id, finished.clone(), server, ahead);
     let text = said(&cfg);
     assert!(
-        text.starts_with("the agent finished; this run cannot be continued\n"),
+        text.contains("finished, and this run cannot be continued"),
         "{text}"
     );
     assert!(!text.contains("PROBLEM"), "{text}");
+    assert!(
+        participant_block(&text).contains("Next: nothing to do."),
+        "{text}"
+    );
+    assert!(!text.contains("goalcup continue"), "{text}");
     // The same normal end of a local run.
     run_with_state_on(&cfg, &info.entry_id, finished.clone(), None, None);
     let text = said(&cfg);
     assert!(
-        text.starts_with("the agent finished; this run cannot be continued\n"),
+        text.contains("finished, and this run cannot be continued"),
         "{text}"
     );
     assert!(!text.contains("PROBLEM"), "{text}");
-    // A chat-mode run `continue` can restart is still told so, as a problem.
+    // A chat-mode run `continue` can restart is still told so, as a problem, and the next action
+    // is the command with the run's id.
     finished.continuable = true;
     run_with_state_on(&cfg, &info.entry_id, finished, server, ahead);
     let text = said(&cfg);
+    let problem = problem_lines(&text);
+    assert_eq!(problem.len(), 1, "{text}");
+    assert!(problem[0].contains("exit code 0"), "{text}");
     assert!(
-        text.starts_with(
-            "PROBLEM: the agent's process exited (exit code 0): run goalcup continue\n"
-        ),
+        participant_block(&text)
+            .contains(&format!("Next: run goalcup continue {}.", info.entry_id)),
         "{text}"
     );
 
@@ -868,11 +920,8 @@ fn status_advises_continue_only_when_continue_can_restart_the_run() {
     state.continuable = false;
     run_with_state_on(&cfg, &info.entry_id, state.clone(), server, ahead);
     let text = said(&cfg);
-    assert!(
-        text.starts_with(&exited("; this run cannot be continued")),
-        "{text}"
-    );
-    assert!(!text.contains("run goalcup continue"), "{text}");
+    assert!(left(&text).contains("cannot be continued"), "{text}");
+    assert!(!text.contains("goalcup continue"), "{text}");
 
     // A chat-mode run on the server whose deadline has passed: the run is over.
     state.continuable = true;
@@ -884,23 +933,24 @@ fn status_advises_continue_only_when_continue_can_restart_the_run() {
         Some("2020-01-01T00:00:00Z"),
     );
     let text = said(&cfg);
-    assert!(text.starts_with(&exited("; the run is over")), "{text}");
+    assert!(left(&text).contains("the run is over"), "{text}");
+    assert!(!text.contains("goalcup continue"), "{text}");
+    assert!(text.contains("Ended: "), "{text}");
 
     // A local run (no server) is not continuable either.
     run_with_state_on(&cfg, &info.entry_id, state.clone(), None, None);
     let text = said(&cfg);
-    assert!(
-        text.starts_with(&exited("; this run cannot be continued")),
-        "{text}"
-    );
+    assert!(left(&text).contains("cannot be continued"), "{text}");
+    assert!(!text.contains("goalcup continue"), "{text}");
 
     // And one `continue` can restart still says to run it.
     run_with_state_on(&cfg, &info.entry_id, state, server, ahead);
     let text = said(&cfg);
     assert!(
-        text.starts_with(&exited(": run goalcup continue")),
+        left(&text).contains(&format!("goalcup continue {}", info.entry_id)),
         "{text}"
     );
+    assert!(text.contains("Ends: "), "{text}");
 }
 
 #[test]
@@ -928,18 +978,20 @@ fn status_names_heartbeats_that_keep_failing() {
     state.heartbeat.failures = HEARTBEATS_FAILING_AFTER;
     run_with_state(&cfg, &info.entry_id, state.clone());
     let text = status_text(&m, &cfg, &info.entry_id, false);
+    let problems = problem_lines(&text);
+    assert_eq!(problems.len(), 1, "{text}");
+    assert!(problems[0].contains("15 min"), "{text}");
     assert!(
-        text.starts_with(
-            "PROBLEM: the last 3 heartbeats to the server failed: the server answered HTTP 503\n"
-        ),
+        problems[0].contains("the server answered HTTP 503"),
         "{text}"
     );
+    assert!(problems[0].contains("Check the network"), "{text}");
 
     // A run that is over has no heartbeats to worry about.
     state.ended = true;
     run_with_state(&cfg, &info.entry_id, state);
     let text = status_text(&m, &cfg, &info.entry_id, false);
-    assert!(!text.contains("heartbeats"), "{text}");
+    assert!(problem_lines(&text).is_empty(), "{text}");
 }
 
 /// Start a practice run P, then a competition run C, then continue P: P's new segment is the
@@ -1020,7 +1072,9 @@ fn status_with_no_id_never_mixes_the_newest_entry_with_the_newest_run() {
     StateKeeper::begin(&run_dir(&cfg, "run-p"), state(Recording::Failed));
     StateKeeper::begin(&run_dir(&cfg, "run-c"), state(Recording::Ok));
     let text = text_of(&cfg);
-    assert!(text.starts_with("PROBLEM: recording failed\n"), "{text}");
+    let problems = problem_lines(&text);
+    assert_eq!(problems.len(), 1, "{text}");
+    assert!(problems[0].contains("recording failed"), "{text}");
 }
 
 #[test]
@@ -1056,6 +1110,7 @@ fn status_with_no_problem_prints_no_problem_line() {
     let text = status_text(&m, &cfg, &info.entry_id, false);
     assert!(!text.contains("PROBLEM"), "{text}");
     assert!(text.contains("no run state yet"), "{text}");
+    assert!(text.contains("Next: wait a minute"), "{text}");
 
     // A healthy run, an unknown recording (the daemon was slow to answer) and an upload that
     // is failing for less than half an hour, an agent the host ended on purpose: no problem.
@@ -1072,6 +1127,66 @@ fn status_with_no_problem_prints_no_problem_line() {
     assert!(!text.contains("PROBLEM"), "{text}");
     assert!(!text.contains("no run state yet"), "{text}");
     assert!(text.contains(&m.status_detail()), "{text}");
+}
+
+/// The header names the harness by its manifest's display name, the run's mode, and when it
+/// ends; a connector that cannot be loaded falls back to its id.
+#[test]
+fn status_header_names_the_harness_the_mode_and_the_end() {
+    use goalcup_cli::run::{HarnessState, RunState};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.harness = HarnessState::Running;
+    state.updated_at = goalcup_cli::run::now_unix();
+    run_with_state_on(
+        &cfg,
+        &info.entry_id,
+        state,
+        Some("https://server.example"),
+        Some("2099-01-01T00:00:00Z"),
+    );
+    let mut record = goalcup_cli::run::read(&cfg, &info.entry_id).unwrap();
+    record.practice = true;
+    goalcup_cli::run::write(&cfg, &record).unwrap();
+
+    let mut out = Vec::new();
+    status_in(
+        &m,
+        &cfg,
+        Some(&support::connectors_dir()),
+        Some(&info.entry_id),
+        false,
+        support::NOW,
+        &mut out,
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    let block = participant_block(&text);
+    assert!(
+        block.starts_with("Your practice run with Claude Code: recording."),
+        "{text}"
+    );
+    assert!(block.contains("Ends: "), "{text}");
+    assert!(block.contains("UTC"), "{text}");
+    assert!(block.contains("left"), "{text}");
+    assert!(block.contains("Claude Code: running."), "{text}");
+    assert!(block.contains("Problems: none."), "{text}");
+    assert!(block.contains("Next: nothing to do."), "{text}");
+    // The ids are in the details, not in the participant block.
+    assert!(!block.contains(&info.entry_id), "{text}");
+    assert!(
+        text.contains(&format!("\nrun {}\n", info.entry_id)),
+        "{text}"
+    );
+    // The contents of the connector directory decide the name; no directory, the id.
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(
+        text.starts_with("Your practice run with claude-code-cli: recording."),
+        "{text}"
+    );
 }
 
 /// An organizer test run says so first, before the daemon is asked and before any problem line.
@@ -1181,7 +1296,7 @@ fn the_binary_leads_with_chat_mode_start() {
     let said = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{said}");
     assert!(
-        said.contains("`goalcup prep`, then `goalcup start --harness <id>`"),
+        said.contains("goalcup prep, then goalcup start --harness <id>"),
         "{said}"
     );
     assert!(!said.contains("--goal-file"), "{said}");
@@ -1207,6 +1322,10 @@ fn upload_with_no_id_picks_the_newest_runs_unsent_entries() {
     // Nothing started yet.
     let error = unsent_of_newest_run(cfg).unwrap_err();
     assert!(error.to_string().contains("nothing to upload"), "{error}");
+    assert!(
+        error.to_string().starts_with("Run goalcup start"),
+        "{error}"
+    );
 
     let run = |run_id: &str, server: Option<&str>, started: u64, entries: &[&str]| RunRecord {
         run_id: run_id.to_string(),
@@ -1255,7 +1374,7 @@ fn upload_with_no_id_picks_the_newest_runs_unsent_entries() {
     upload_newest_with(cfg, Default::default(), &mut out).unwrap();
     let said = String::from_utf8(out).unwrap();
     assert!(
-        said.contains("everything of run new is already sent"),
+        said.contains("Nothing left to send") && said.contains("run new"),
         "{said}"
     );
 
@@ -1263,4 +1382,8 @@ fn upload_with_no_id_picks_the_newest_runs_unsent_entries() {
     write(cfg, &run("local", None, 300, &["l-1"])).unwrap();
     let error = unsent_of_newest_run(cfg).unwrap_err();
     assert!(error.to_string().contains("is local"), "{error}");
+    assert!(
+        error.to_string().contains("goalcup upload <entry>"),
+        "{error}"
+    );
 }
