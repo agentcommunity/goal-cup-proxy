@@ -1,23 +1,28 @@
 # Amp harness facts
 
-Connector id: `amp-cli` (proposed; no connector exists) · Facts for version: `0.0.1791676897-g77c125` · Written by: Goal Cup team, draft for the Amp team · Last checked: 2026-10-15
-Public disclosure: yes. The facts come from Amp's public documentation, string literals and help text in the shipped npm package, a key-free, network-less probe on one Linux host (2026-10-12), and one live, logged-in probe on macOS arm64 (2026-10-15). The live probe used the Goal Cup maintainer's own Amp account, a private `HOME` and `TMPDIR`, a workspace outside any Git tree, and a capturing loopback proxy. No Amp source code was read. Raw probe output is not published, because it holds tokens.
-Status: facts only (draft for the Amp team to confirm)
+Connector id: `amp-cli` · Facts for version: `0.0.1791676897-g77c125` · Written by: Goal Cup team, draft for the Amp team · Last checked: 2026-10-16
+Public disclosure: yes. The facts come from Amp's public documentation, string literals and help text in the shipped npm package, a key-free, network-less probe on one Linux host (2026-10-12), one live, logged-in probe on macOS arm64 (2026-10-15), and a no-login probe of chat mode on macOS arm64 (2026-10-16). The live probe used the Goal Cup maintainer's own Amp account, a private `HOME` and `TMPDIR`, a workspace outside any Git tree, and a capturing loopback proxy. No Amp source code was read. Raw probe output is not published, because it holds tokens.
+Status: shipped connector (`connectors/amp-cli`). Its native leg is Amp's per-thread **metadata log, not a transcript** (owner ruling, 16 Oct 2026). See section 10.
 
-How to read this sheet. "(live)" marks a fact measured in the logged-in macOS probe: two execute-mode runs, a one-word decoy goal on the default mode and a file-plus-shell goal on `--mode low`, both through the proxy with `AMP_SKIP_UPDATE_CHECK=1`. A fact with no marker was measured by the key-free Linux probe (x86_64, glibc, no route out). Every other fact is marked "(please confirm)" and is one of: Amp public docs fetched 2026-10-11, a string or help text read from the package without running that path, or "unknown". We would rather be told we are wrong than guess.
-
+How to read this sheet. "(live)" marks a fact measured in the logged-in macOS probe: two execute-mode runs, a one-word decoy goal on the default mode and a file-plus-shell goal on `--mode low`, both through the proxy with `AMP_SKIP_UPDATE_CHECK=1`. "(measured, no login)" marks a fact from the 2026-10-16 macOS probe: Amp installed with `npm install --prefix <dir> @ampcode/cli@0.0.1791676897-g77c125`, run on a pseudo-terminal (120x40) with `env -i`, a private `HOME` and `TMPDIR`, `AMP_SKIP_UPDATE_CHECK=1` and `HTTPS_PROXY` naming a closed loopback port, so nothing reached Amp's servers; some runs added an invented `AMP_API_KEY`. A fact with no marker was measured by the key-free Linux probe (x86_64, glibc, no route out). Every other fact is marked "(please confirm)" and is one of: Amp public docs fetched 2026-10-11, a string or help text read from the package without running that path, or "unknown". We would rather be told we are wrong than guess.
 ## Summary of the live probe
 
 - **Where the agent runs.** The local CLI is an *executor*: it runs tools on the machine. The agent loop and inference run on Amp's server, behind a per-thread "thread actor" (live).
 - **Local record.** There is no local transcript. Amp writes a per-thread metadata log and a pointer to the last thread id (live). See section 4.
 - **Wire.** All traffic went to `ampcode.com` and `authapi.ampcode.com` over HTTP/1.1, through the proxy, trusting the proxy CA. The thread travels over one WebSocket as plain-text JSON-RPC: the user message goes up; text, thinking, tool calls and deltas come down; tool results go up (live). See section 6.
 - **System prompt.** Amp's base system prompt did not appear on the wire. The client sends its tool descriptions up. Per-model mode prompts are downloaded to the client cache (live). See section 6.
-- **Fit for Goal Cup.** A wire-only capture of the local CLI is possible with Goal Cup's existing proxy design plus an Amp protocol decoder. A native leg in the Claude Code sense does not exist.
+- **Fit for Goal Cup.** The connector records the wire leg (the thread WebSocket and the thread create, through the existing proxy) and, as its native leg, the per-thread metadata log. A native leg in the Claude Code sense (a local transcript) does not exist. No decoder reads either leg yet, so both are capture-only (section 10).
 - **Orbs.** A CLI on the participant's machine that starts an orb thread joins it as an observer and receives the same thread stream, so an orb thread can be recorded the same way (live, one run). See "Orbs" in section 7.
 
 ## 1. Run one prompt, in chat mode first
 
-Chat mode: not measured. The command that opens Amp's chat, how the participant types the prompt, how to quit and the flag that reopens the last thread are unknown (please confirm). All measurements below are of the execute form.
+Chat mode (measured, no login): `amp` with no argument opens Amp's interactive TUI in the terminal; the participant types the prompt. The help text names it: "Start an interactive session: `$ amp`". The log line `Execution mode resolved` reports `executeMode: false`, `stdoutTTY: true`, `noTUI: false`. Execute mode turns on when stdout is not a terminal, so chat mode needs the participant's terminal on stdout.
+
+- With no stored login and no `AMP_API_KEY`, `amp` first prints `No API key found. Starting login flow...` and asks `Would you like to log in to Amp? [(y)es, (n)o]:`, before any TUI. `n` prints `Login cancelled. Run the command again to retry.`. `y` is section 5.
+- With an invented `AMP_API_KEY`, the TUI starts (an animated splash screen), then shows `Error: Couldn't connect to the Amp server at https://ampcode.com/.` because the proxy port was closed. It did not exit on its own within 20 s.
+- Reopen the last thread: `amp last` (alias `amp l`), "Continue the last thread for this terminal and mode in this checkout, falling back to the last thread in this checkout" (help text). `amp threads continue` also exists. Not measured against a logged-in home.
+- How to quit the TUI, and its exit code: unknown (please confirm). Not measured: a logged-in chat, a typed prompt, and whether chat mode writes the per-thread log (section 4) as execute mode does.
+- `amp --help`, `amp last --help` and `amp login --help` on a terminal print their help and then did not exit within 6 to 10 s (measured, no login).
 
 Headless recipe (execute mode):
 
@@ -41,6 +46,7 @@ amp --stream-json --execute=<goal>
 - Print the version: `amp --version` prints `0.0.1791676897-g77c125 (released 2026-10-11T00:01:37.000Z, ...)`; `amp version` adds `npm package: @ampcode/cli`.
 - Linux x64 payload: 134,157,792 bytes, SHA-256 `6c1b791d8e2c4661460b96276860c289d50ff0cacadaf1061ccb401295792036`, identical in the tarball, the platform package and `bin/amp` (measured).
 - macOS arm64: the installed `bin/amp` is a Mach-O arm64 executable with SHA-256 `107c8b2c312e97447bd20d9f7d678d477195bd330753de81749b547bc7477f44`, the same as the bytes extracted from the tarball, and it was unchanged after both runs (live). macOS x64 and Windows installed bytes: unknown (please confirm).
+- macOS arm64, again (measured, no login): `npm install --prefix <dir> @ampcode/cli@0.0.1791676897-g77c125` (the package itself, not the `@sourcegraph/amp` alias) gives `<dir>/node_modules/.bin/amp` -> `../@ampcode/cli/bin/amp.exe` -> `amp`, a Mach-O arm64 file of 109,666,576 bytes with link count 2 and SHA-256 `107c8b2c...7f44`, the same as the live probe. `program = "amp"` resolves through both links to that file, so the daemon hashes the native executable, not a script. `amp --version` exits 0 and prints the version line with no login and no network.
 - Other install paths seen in help or strings: `amp update [--target-version]` and `brew upgrade ampcode/tap/ampcode` (please confirm which applies to an npm install).
 
 ## 3. Where it keeps things, per OS
@@ -54,6 +60,8 @@ amp --stream-json --execute=<goal>
 | Env vars that move these | `HOME` (live: every file above stayed under the private `HOME` and `TMPDIR`). `XDG_*` presumably as on Linux (please confirm). `AMP_SETTINGS_FILE` and `--settings-file` name a settings file | `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME` (settings and log measured to follow XDG when set); `AMP_HOME` did not move settings or log (its other effect: unknown, please confirm); `TMPDIR` for the Bun addon | unknown (please confirm which profile variables apply) |
 
 On macOS, Amp uses the same XDG-style paths under `$HOME` as on Linux, not `~/Library/Application Support` (live).
+
+XDG on macOS (measured, no login): with `XDG_CACHE_HOME` and `XDG_DATA_HOME` set, `logs/cli.log` moved to `$XDG_CACHE_HOME/amp/logs/` and `device-id.json` to `$XDG_DATA_HOME/amp/`, but `.legacy-state-owner.json` stayed at `$HOME/.local/share/amp/`. With neither set, everything was under `$HOME`. The tracer builds the child environment from nothing and refuses every `XDG_*` name, so in a run the per-thread log lands at `$HOME/.cache/amp/logs/threads/`, which is the connector's native root. A first start with no login writes `$HOME/.local/share/amp/device-id.json` (mode 0600) and `$HOME/.cache/amp/logs/cli.log`; an `AMP_API_KEY` also writes `.legacy-state-owner.json`.
 
 Skills are scanned from the cwd and every ancestor up to `/`; Amp also loads skills from Claude Code directories unless `amp.skills.disableClaudeCodeSkills` is set (measured for the scan; docs for the setting). Official skills and mode definitions are fetched from `ampcode.com` (`/api/internal?loadSkills`, `?loadPlugins`) and cached under `$HOME/.cache/amp/` (live). Whether `AGENTS.md` guidance files are searched in ancestors: unknown (`AMP_IGNORE_GUIDANCE_FILES` exists; please confirm).
 
@@ -69,6 +77,7 @@ Skills are scanned from the cwd and every ancestor up to `/`; Amp also loads ski
 
 - `amp login` uses a device-code flow (live): it prints `https://ampcode.com/auth/cli/device?user_code=XXXX-XXXX` and a matching code, then polls `authapi.ampcode.com/user_management/authenticate` (HTTP 400 until the browser confirms, then 200) and prints `Logged in as <email>.` Exit 0.
 - Credential storage on macOS (live): `$HOME/.local/share/amp/accounts.json` and `secrets.json`, mode 0600. The macOS Keychain was not changed: a listing of Keychain item names before the login and after both runs was identical.
+- **Chat-mode login** (measured, no login): with no stored login, `amp` asks `Would you like to log in to Amp? [(y)es, (n)o]:`. `y` prints `If your browser does not open automatically, visit:` and a URL `https://ampcode.com/auth/cli-login?authToken=<64 hex>`, then `When prompted, paste your code here:`. It tries to open the browser. This is a different flow from `amp login`'s device code. Which host and path the pasted code goes to, and what the reply holds: unknown (please confirm). The connector expects the sign-in in `goalcup prep`, which opens Amp in the kept run `HOME` with no proxy and no capture, so the sign-in is never recorded.
 - `AMP_API_KEY` is an access token that "takes precedence over stored credentials" (help text; please confirm). The live probe used `amp login`, not a key. Token grammar and length: unknown (please confirm). Goal Cup currently assumes 20 to 256 bytes of `[A-Za-z0-9_-]` and fails closed on anything else.
 - **The WebSocket carries a credential in a header** (live): each thread WebSocket sends a short-lived JWT (`wsToken`, about 5 minutes, claims include `tid` and `sub`) inside the `Sec-WebSocket-Protocol` header (`rivet_conn_params`). Any capture must strip this header before hashing, storing or uploading.
 - Claude Code mode (docs, please confirm): a Claude subscription is used through the local `claude` binary and its login; Amp removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and the Bedrock, Vertex and Foundry settings from Claude's environment, and needs Claude Code 2.1.276 or later. Not exercised in the live probe.
@@ -83,6 +92,8 @@ Skills are scanned from the cwd and every ancestor up to `/`; Amp also loads ski
 - **Model identity on the wire** (live): the default mode showed `claude-opus-5-5`; `--mode low` showed `accounts/fireworks/models/glm-5p3-flash`.
 - **System prompt** (live): Amp's base system prompt did not appear in any captured request or frame. The tool descriptions the client registers do appear. Per-model mode prompts ("You are an autonomous coding agent ...") are part of the mode definitions that `loadPlugins` downloads to every logged-in client and caches under `$HOME/.cache/amp/global-plugins/` (13 of the 15 mode files contain such text).
 - **Proxy and CA** (live): with process-scoped `HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS` naming the proxy's CA, every request, including the login, REST and WebSocket traffic, went through the proxy and trusted that CA. Whether Amp fails closed without the CA: not tested.
+- **Proxy in chat mode** (measured, no login): with `HTTPS_PROXY` naming a closed loopback port and no `NODE_USE_ENV_PROXY`, the TUI's requests to `https://ampcode.com/api/user-actor-credentials`, `/api/internal?loadPlugins` and `/api/internal?loadSkills` all failed with `ConnectionRefused`, and the TUI reported that it could not reach `ampcode.com`. So the Bun binary sends chat-mode traffic to `HTTPS_PROXY` on its own. The REST call `/api/user-actor-credentials` was not seen in the live execute-mode probe.
+- **Ripgrep** (measured, no login): with no `rg` on `PATH`, the TUI tried to download ripgrep at start (three attempts, then `Neither system ripgrep nor downloaded binary available`). Which host it tried was not seen, because the proxy refused the connection; the only ripgrep URL in the package strings is the `storage.googleapis.com` one above. That is not a capture host, so in a run such a download is tunnelled and not recorded.
 - Update check: `https://static.ampcode.com/cli/cli-version.txt` (string). With `AMP_SKIP_UPDATE_CHECK=1`, no request to `static.ampcode.com` was seen (live). Behaviour without that variable: not tested.
 - Telemetry: no request to `/api/telemetry` was seen in the live runs. Its contents and opt-out: unknown (please confirm).
 - Ripgrep download: `https://storage.googleapis.com/amp-public-assets-prod-0/ripgrep` (string); not seen in the live runs.
@@ -133,3 +144,26 @@ Skills are scanned from the cwd and every ancestor up to `/`; Amp also loads ski
 11. Are `AGENTS.md` guidance files searched in ancestors of the workspace?
 12. Are the macOS x64 and Windows installed executable bytes the same as the extracted tarball bytes?
 13. Orbs: does an observer that connects late, or reconnects after a drop, receive the full thread history? Is there a supported read-only way to follow a thread (and the threads it spawns) for many hours?
+14. Does chat mode (the TUI) write the same per-thread log, `$HOME/.cache/amp/logs/threads/T-<uuid>.log`, as execute mode? Is that log only appended to, never truncated, rotated or rewritten?
+15. The chat-mode login (`/auth/cli-login?authToken=...`, then a pasted code): which host and path receive the code, and does the reply carry the access token?
+16. How does a participant quit the TUI, and with which exit code?
+
+## 10. Connector (written 16 Oct 2026)
+
+[connectors/amp-cli/harness.toml](../../connectors/amp-cli/harness.toml), owner ruling 16 Oct 2026: accept Amp's local per-thread metadata log as the native leg, honestly labelled, instead of building a wire-only claim level in core.
+
+- **Mode.** Chat (`interactive = true`, D57): argv is `amp` with no argument; `resume_args = ["last"]`, so `goalcup continue` runs `amp last` (help text; not measured logged in).
+- **Home.** Shape C2 of the template (D59): Amp has no home variable (`AMP_HOME` moved nothing measured), so `run_home = "shared"`, `config_home = "per_run"`. The kept `HOME` is `<config_dir>/capture-homes/amp-cli.run-home`. `goalcup prep` opens Amp there once, with no proxy, so the participant's sign-in lands in that `HOME` and lasts across serialized runs. `real_dirs` names `$HOME/.cache/amp`, `$HOME/.local/share/amp` and `$HOME/.config/amp` of the participant, which are never written.
+- **Native leg: metadata only, no transcript.** Root `{run_home}/.cache/amp/logs/threads`, pattern `T-*.log`, `append_only`, `since_run_start = true`, row name `thread-metadata`, hint `amp-thread-log` (no decoder, so capture-only). The thread id `T-<uuid>` is in each file name; chat mode admits only identity `none`, so every thread log new or written since the run started is recorded. The log holds tool executions and frame counts, not prompts or replies.
+- **Wire leg.** One host, `ampcode.com`: exact path `/api/thread-actors` (the thread create) and the prefix `/actors/gateway/threadActor/` (the thread WebSocket). Hint `amp-thread-jsonrpc`, no decoder yet, so capture-only (D36, D45). `/api/internal` is not selected: it carries `getUserInfo` (e-mail) and `getSecretFingerprints`, and its methods are in the query, which a path cannot select. `authapi.ampcode.com` is an auth host: tunnelled, never recorded.
+- **CA.** `NODE_EXTRA_CA_CERTS`, `mode = "extend"`: Bun adds the proxy CA to the system roots. Not fail-closed; see [CHEAT-CHECKLIST](../CHEAT-CHECKLIST.md) "Amp's native leg is a metadata log".
+- **Env.** `AMP_SKIP_UPDATE_CHECK = "1"` (no version check against `static.ampcode.com`, live); `SHELL` per platform. No `NODE_USE_ENV_PROXY`: Amp honours `HTTPS_PROXY` on its own (section 6).
+- **Redaction.** One extra row, `wsToken` (`string`), the WebSocket JWT if it appears in a body; the shared `jwt` rule matches it too. The shared `proxy_credential` rule covers `HTTPS_PROXY` in `executor_environment_snapshot`. No plan or credit field has been read from live chat-mode bytes yet.
+- **Termination.** `process_group`: the launched file is the native executable.
+
+PENDING (needs the owner's Amp login; nobody else logs in for a test):
+
+- A logged-in chat-mode run through `goalcup start --harness amp-cli`: that the thread log appears under the kept `HOME`, that the native stream and the WebSocket streams are in the trace, and that the key scan is clean.
+- `amp last` through `goalcup continue`: the same thread, and the same log file appended to.
+- The live bytes of `executor_environment_snapshot`, `executor_tool_result` and the thread create, to write any further `extra_patterns` to their real shapes.
+- The owner's ruling on `.legacy-state-owner.json` (section 4): the baseline lists the kept `HOME` with a SHA-256 per file, so it, `accounts.json` and `secrets.json` get a digest, as Codex's `auth.json` does.

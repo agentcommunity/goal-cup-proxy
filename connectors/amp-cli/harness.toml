@@ -1,0 +1,101 @@
+# Amp 0.0.1791676897-g77c125, capture profile (D57, D59). Facts: docs/harnesses/amp-cli.md.
+# The native leg is Amp's per-thread METADATA log, not a transcript (owner ruling, 16 Oct 2026).
+schema_version = 1
+id = "amp-cli"
+
+[participant]
+display_name = "Amp"
+# Measured with no login: a home with no sign-in opens with this question, before the chat.
+first_screen = "Amp may ask whether you want to log in. Choose yes and finish the sign-in in your browser."
+
+[capture]
+# `amp login` polls this host for the device code; tunnelled, never recorded.
+auth_hosts = ["authapi.ampcode.com"]
+# Chat mode (D57): `amp` with no argument opens Amp's TUI in the participant's terminal, and the
+# participant types the prompt (measured with no login, docs/harnesses/amp-cli.md, section 1).
+# No mode, model, visibility or permission option: the participant's own choice (D57).
+interactive = true
+continuation = "chat: the participant types the prompt and may type keep going"
+args = []
+# `goalcup continue`: `amp last` continues the last thread of this checkout (help text; not yet
+# measured against a logged-in home).
+resume_args = ["last"]
+
+[capture.executable]
+# The npm `.bin/amp` links to the native Bun executable; the CLI records the linked file.
+program = "amp"
+version_args = ["--version"]
+
+[capture.env]
+SHELL = "/bin/zsh"
+# No `static.ampcode.com` version check, so the build the daemon hashed at launch stays the one
+# that runs (live probe, 15 Oct 2026). No NODE_USE_ENV_PROXY: Amp is a Bun binary that honours
+# HTTPS_PROXY on its own (live probe; measured again with no login, section 6).
+AMP_SKIP_UPDATE_CHECK = "1"
+
+[capture.platform.linux-x86_64.env]
+SHELL = "/bin/bash"
+
+[capture.platform.linux-aarch64.env]
+SHELL = "/bin/bash"
+
+# D59, shape C2: Amp has no home variable (AMP_HOME moves nothing measured). It keeps its login
+# (`accounts.json`, `secrets.json`), cache and logs under HOME, so one isolated HOME is kept across
+# serialized runs and the sign-in made in `goalcup prep` lasts.
+[capture.home]
+run_home = "shared"
+config_home = "per_run"
+real_dirs = [
+  "{user_home}/.cache/amp",
+  "{user_home}/.local/share/amp",
+  "{user_home}/.config/amp",
+]
+
+# Bun reads NODE_EXTRA_CA_CERTS. It ADDS the proxy CA to the system roots, so this is not
+# fail-closed (D41): a connection Amp made past the proxy would still verify, unrecorded
+# (docs/CHEAT-CHECKLIST.md, "Amp's native leg is a metadata log").
+[capture.ca]
+env = ["NODE_EXTRA_CA_CERTS"]
+mode = "extend"
+
+# D57: no session id is known at launch, and chat mode takes `none`. Each thread id `T-<uuid>`
+# names its own log file, so the run's threads are every `T-*.log` new or written since the run
+# started, which is safe because runs on the shared home are serialized (D39).
+[capture.identity]
+source = "none"
+
+# METADATA ONLY, NO TRANSCRIPT. Amp keeps the conversation on ampcode.com. Locally it writes one
+# JSON-lines log per thread: transport states, JSON-RPC requests, server message types with frame
+# lengths and each tool execution, and almost no conversation text (live probe, execute mode;
+# chat mode not yet measured). It can cross-check the wire leg; it cannot replace it. The hint has
+# no decoder, so this source is capture-only.
+[[capture.native]]
+name = "thread-metadata"
+root = "{run_home}/.cache/amp/logs/threads"
+pattern = "T-*.log"
+form = "append_only"
+protocol_hint = "amp-thread-log"
+since_run_start = true
+
+# The npm `.bin/amp` is a link to the native executable, which is the process the tracer starts.
+[capture.termination]
+strategy = "process_group"
+grace_seconds = 10
+
+# The thread WebSocket's short-lived JWT can appear in a body as `wsToken`; the shared `jwt` rule
+# matches it too, and this row is the second rule (docs/harnesses/amp-cli.md, section 5). Plan,
+# usage and credit fields are not yet read from live chat-mode bytes.
+[redaction]
+extra_patterns = [
+  { kind = "amp_ws_token", json_field = "wsToken", value = "string" },
+]
+
+# Amp's only model host (live probe): the thread is created by POST /api/thread-actors, then runs
+# over one WebSocket of JSON-RPC text frames. `/api/internal` is NOT selected: it carries
+# `getUserInfo` (e-mail) and `getSecretFingerprints`, and one path would select every method.
+# The hint has no decoder yet, so the wire leg is capture-only.
+[[capture.hosts]]
+host = "ampcode.com"
+evidence_paths = ["/api/thread-actors"]
+prefix_paths = ["/actors/gateway/threadActor/"]
+protocol_hint = "amp-thread-jsonrpc"

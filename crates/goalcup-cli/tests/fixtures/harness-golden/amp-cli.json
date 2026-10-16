@@ -1,0 +1,183 @@
+{
+  "argv_differs_from_policy": [],
+  "ca": [
+    {
+      "file": "proxy_ca",
+      "mode": "extend",
+      "name": "NODE_EXTRA_CA_CERTS",
+      "value_in_plan": "<TMP>/proxy-ca.pem"
+    }
+  ],
+  "capture_profile": {
+    "args": [],
+    "auth_hosts": [
+      "authapi.ampcode.com"
+    ],
+    "ca_env": [
+      "NODE_EXTRA_CA_CERTS"
+    ],
+    "config_home": "per_run",
+    "continuation": "chat: the participant types the prompt and may type keep going",
+    "env": {
+      "AMP_SKIP_UPDATE_CHECK": "1",
+      "SHELL": "/bin/zsh"
+    },
+    "executable": {
+      "version_args": [
+        "--version"
+      ]
+    },
+    "home": "shared",
+    "hosts": [
+      {
+        "evidence_paths": [
+          "/api/thread-actors"
+        ],
+        "host": "ampcode.com",
+        "prefix_paths": [
+          "/actors/gateway/threadActor/"
+        ],
+        "protocol_hint": "amp-thread-jsonrpc"
+      }
+    ],
+    "identity": {
+      "binding": null,
+      "grammar": null,
+      "id_field": null,
+      "match_field": null,
+      "match_value": null,
+      "prefix": null,
+      "source": "none"
+    },
+    "interactive": true,
+    "platform": {
+      "linux-aarch64": {
+        "env": {
+          "SHELL": "/bin/bash"
+        }
+      },
+      "linux-x86_64": {
+        "env": {
+          "SHELL": "/bin/bash"
+        }
+      }
+    },
+    "providers": [],
+    "resume_args": [
+      "last"
+    ],
+    "skills_dir": null
+  },
+  "connector": {
+    "dir_digest_matches_its_pin": true,
+    "files_dir": [],
+    "id": "amp-cli",
+    "launch_home_env": null,
+    "launch_program": "amp",
+    "validates": "ok"
+  },
+  "credential": {
+    "child_secret_from_env": {
+      "bad_characters": "none",
+      "empty": "none",
+      "quote": "none",
+      "too_short": "none",
+      "unset": "none",
+      "well_formed": "none"
+    },
+    "credential_env": null
+  },
+  "env_differs_from_policy": [],
+  "goal_placement_for_an_option_shaped_goal": {
+    "argv_len": 0,
+    "goal_index": null,
+    "goal_prefix": null,
+    "tail": []
+  },
+  "home": {
+    "dir_name": "harness-home",
+    "kind": "per_run",
+    "returned_under_run_dir": true,
+    "tree": [
+      {
+        "mode": "0700",
+        "path": ".",
+        "type": "dir"
+      }
+    ]
+  },
+  "plan": {
+    "argv": [],
+    "capture": null,
+    "cwd": "<TMP>/workspace",
+    "env_base_keys": [],
+    "env_remove": [],
+    "env_set": {
+      "AMP_SKIP_UPDATE_CHECK": "1",
+      "HOME": "<TMP>/run-home",
+      "HTTPS_PROXY": "<PROXY_URL>",
+      "LOGNAME": "participant",
+      "NODE_EXTRA_CA_CERTS": "<TMP>/proxy-ca.pem",
+      "NO_PROXY": "127.0.0.1,localhost",
+      "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+      "SHELL": "/bin/zsh",
+      "TMPDIR": "/private/tmp/participant-tmp/",
+      "USER": "participant",
+      "https_proxy": "<PROXY_URL>",
+      "no_proxy": "127.0.0.1,localhost"
+    },
+    "kill": {
+      "grace_seconds": 10,
+      "native_binary": null,
+      "strategy": "process_group"
+    },
+    "mode": "Tui",
+    "program": "<TMP>/bin/fake-harness"
+  },
+  "redaction": {
+    "extra_patterns": [
+      {
+        "kind": "amp_ws_token",
+        "regex": "\"wsToken\"\\s*:\\s*\"([^\"\\\\]+)\""
+      }
+    ]
+  },
+  "streams": {
+    "decision": "Inherit",
+    "pipes": {
+      "stderr": false,
+      "stdout": false
+    }
+  },
+  "termination": {
+    "kill": {
+      "grace_seconds": 10,
+      "native_binary": null,
+      "strategy": "process_group"
+    },
+    "registered_handle": {
+      "argv": [],
+      "env_keys": [
+        "AMP_SKIP_UPDATE_CHECK",
+        "HOME",
+        "HTTPS_PROXY",
+        "LOGNAME",
+        "NODE_EXTRA_CA_CERTS",
+        "NO_PROXY",
+        "PATH",
+        "SHELL",
+        "TMPDIR",
+        "USER",
+        "https_proxy",
+        "no_proxy"
+      ],
+      "grace_seconds": 10,
+      "has_process_start": true,
+      "native_binary": null,
+      "native_pid_found": false,
+      "pgid_is_pid": false,
+      "program": "<TMP>/bin/fake-harness",
+      "strategy": "process_group"
+    }
+  }
+}

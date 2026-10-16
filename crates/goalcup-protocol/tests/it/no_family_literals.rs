@@ -46,6 +46,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "a refused launch prefix: it switches the harness to another model provider",
     ),
     (
+        "crates/goalcup-protocol/src/capture_policy.rs",
+        "AMP_API_KEY",
+        "a row of the closed credential list (D49): which secret the tracer may copy is core",
+    ),
+    (
         "crates/goalcup-verifier/src/capture_analysis/native/codex.rs",
         "codex-jsonl",
         "the protocol_hint a connector declares for this native decoder",

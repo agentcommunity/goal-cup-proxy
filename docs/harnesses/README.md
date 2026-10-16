@@ -9,8 +9,8 @@ A sheet is also a complete contribution on its own. A harness that does not fit 
 sends its sheet with status `facts only`, and the sheet shows what to build.
 
 The sheets so far: [codex-cli](codex-cli.md) (the worked example), [claude-code-cli](claude-code-cli.md),
-[hermes-cli](hermes-cli.md) and [amp](amp.md). The Amp sheet is a draft that Goal Cup wrote for the
-Amp team to correct. It is named after the harness because no connector exists.
+[hermes-cli](hermes-cli.md) and [amp-cli](amp-cli.md). The Amp sheet is a draft that Goal Cup wrote for the
+Amp team to correct; its connector records a metadata log, not a transcript, as the native leg.
 
 ## What is public
 
