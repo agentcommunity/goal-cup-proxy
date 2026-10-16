@@ -87,6 +87,7 @@ fn capture_request(
         config_home: h.root.join("config-home").display().to_string(),
         entry_id: None,
         native_since: None,
+        run_secrets: Vec::new(),
     }
 }
 
@@ -1007,6 +1008,7 @@ fn capture_create_request(
             .to_string(),
         entry_id: None,
         native_since: None,
+        run_secrets: Vec::new(),
     }
 }
 
@@ -1083,6 +1085,55 @@ async fn a_capture_create_refuses_a_run_start_in_the_future() {
     }
     let mut request = capture_create_request(&h, "now");
     request.native_since = Some(now);
+    let info: protocol::CaptureWorkspaceInfo = h
+        .post_json(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
+        .await;
+    assert!(!info.entry_id.is_empty());
+}
+
+/// The run's exact secret values on a capture create (D60): more than two, or one that is not
+/// a usable value, is refused as malformed before anything is created, and the refusal never
+/// repeats a value. Two good ones are taken.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_capture_create_refuses_unusable_run_secrets_without_echoing_them() {
+    use goalcup_protocol::run_secret::RunSecret;
+    let h = support::empty_control_harness().await;
+    let good =
+        |tag: &str| RunSecret::new(format!("SYNTHETIC-{tag}-0123456789abcdef").as_bytes()).unwrap();
+    // A value `RunSecret::new` would refuse, as a client that skipped it would send it.
+    let short: RunSecret = serde_json::from_str("\"SYNTHETIC-short\"").unwrap();
+    for (name, secrets) in [("two", vec![good("a"), good("b")]), ("short", vec![short])] {
+        let mut request = capture_create_request(&h, name);
+        request.run_secrets = secrets;
+        let response = h
+            .post_body(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
+            .await;
+        assert_eq!(response.status(), 400, "{name}: {}", response.body());
+        assert!(
+            response.body().contains("run_secrets"),
+            "{}",
+            response.body()
+        );
+        assert!(
+            !response.body().contains("SYNTHETIC"),
+            "{}",
+            response.body()
+        );
+        assert!(!h.root.join("workspaces").join(name).exists());
+    }
+    // A body of the wrong shape: serde would quote the value it could not read.
+    let mut odd = serde_json::to_value(capture_create_request(&h, "string")).unwrap();
+    odd["run_secrets"] = serde_json::Value::String("SYNTHETIC-string-0123456789abcdef".into());
+    let response = h.post_body(protocol::ROUTE_CAPTURE_WORKSPACES, &odd).await;
+    assert_eq!(response.status(), 400, "{}", response.body());
+    assert!(
+        !response.body().contains("SYNTHETIC"),
+        "{}",
+        response.body()
+    );
+    let mut request = capture_create_request(&h, "one");
+    request.run_secrets = vec![good("a")];
     let info: protocol::CaptureWorkspaceInfo = h
         .post_json(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
         .await;

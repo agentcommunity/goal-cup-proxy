@@ -33,6 +33,7 @@ pub mod process;
 pub mod provenance;
 pub mod receipt;
 pub mod redaction;
+pub mod run_secret;
 pub mod seal;
 pub mod submission;
 pub mod template;

@@ -92,6 +92,7 @@ use goalcup_protocol::control::{
 };
 use goalcup_protocol::harness::{CAPTURE_HOMES_DIR, CaptureSpec, ConfigHome, RunHome};
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration, termination_bound};
+use goalcup_protocol::run_secret::RunSecret;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus};
@@ -1748,6 +1749,20 @@ fn create_and_gate<'a>(
             give_back.give();
         }
     };
+    // The proxy's credential is made now, before the entry, so that the daemon is told it: the
+    // harness holds it in `HTTPS_PROXY`, and the daemon redacts it by exact value from everything
+    // it records (D60). It goes to the daemon in memory only.
+    let credential = ProxyCredential::generate();
+    let run_secrets = match RunSecret::new(credential.expose_secret().as_bytes()) {
+        Some(secret) => vec![secret],
+        None => {
+            let error =
+                CliError::Internal("the proxy credential is not one the daemon takes".to_string());
+            let _ = run.remove();
+            give_back(&error);
+            return Err(error);
+        }
+    };
     let request = CaptureWorkspaceRequest {
         workspace: run.workspace.display().to_string(),
         profile_id: c.loaded.manifest.id.clone(),
@@ -1757,6 +1772,7 @@ fn create_and_gate<'a>(
         config_home: config_home.display().to_string(),
         entry_id: opened.as_ref().map(|o| o.run.entry_id.clone()),
         native_since: Some(started_at_unix),
+        run_secrets,
     };
     let info = match retry_busy(|| client.create_capture_workspace(&request)) {
         Ok(info) => info,
@@ -1842,7 +1858,7 @@ fn create_and_gate<'a>(
             }
         }
         raise_open_file_limit(out)?;
-        let proxied = Proxied::start(&info, profile, &run, roots)?;
+        let proxied = Proxied::start(&info, profile, &run, roots, credential)?;
         // A shared CA variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) gets the system's roots
         // plus the proxy's CA, so tool children keep their real trust; a harness's own variable
         // gets the proxy's CA alone (the launch picks per name).
@@ -3186,6 +3202,7 @@ impl Proxied {
         profile: &CaptureSpec,
         run: &RunDir,
         roots: UpstreamRoots,
+        credential: ProxyCredential,
     ) -> Result<Proxied, CliError> {
         let refused = |what: &str, e: &dyn std::fmt::Display| {
             CliError::Refused(format!(
@@ -3201,7 +3218,6 @@ impl Proxied {
         let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .map_err(|e| refused("listener", &e))?;
         let address = listener.local_addr().map_err(|e| refused("listener", &e))?;
-        let credential = ProxyCredential::generate();
         let proxy_url = credential.proxy_url(address);
         let sink = {
             let _inside = runtime.enter();

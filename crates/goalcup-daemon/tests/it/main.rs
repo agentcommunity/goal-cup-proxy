@@ -19,6 +19,7 @@ mod capture_lifecycle;
 mod capture_native;
 mod capture_redaction;
 mod capture_redaction_extra;
+mod capture_redaction_run_secrets;
 mod config_load;
 mod control_api;
 mod harness_contract_golden;

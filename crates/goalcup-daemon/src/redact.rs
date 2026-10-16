@@ -47,7 +47,6 @@ pub mod stream;
 /// non-UTF-8 records to pass through unredacted — a privacy hole in the one place the
 /// bytes are least inspectable. Under the crate's default Unicode mode every match is
 /// still guaranteed to be valid UTF-8.
-#[derive(Debug)]
 pub struct Pattern {
     pub kind: String,
     pub re: regex::bytes::Regex,
@@ -75,8 +74,8 @@ pub struct Pattern {
     /// own pattern that reuses the name `masked_key` is an ordinary hard rule.
     pub soft: bool,
     /// Block: a match is one whole block that no claim inside it or across its edge may
-    /// shadow (see [`select`] and [`BLOCK_KIND`]). Set only by [`compile`], like `soft`;
-    /// [`compile_extra`] always sets it `false`.
+    /// shadow (see [`select`] and [`BLOCK_KIND`]). Set by [`compile`] for the PEM rule and by
+    /// [`RunSecrets`] for each exact value; [`compile_extra`] always sets it `false`.
     pub block: bool,
 }
 
@@ -86,7 +85,20 @@ pub struct Pattern {
 /// [`compile`] reads this name; see [`Pattern::soft`] and [`select`].
 pub(crate) const SOFT_KIND: &str = "masked_key";
 
-/// The kind of the one block rule in the shared set: a PEM private key, from its `BEGIN` line
+/// Never the regex: its source spells a run's exact secret value for a [`RunSecrets`] rule.
+impl std::fmt::Debug for Pattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Pattern")
+            .field("kind", &self.kind)
+            .field("span_group", &self.span_group)
+            .field("soft", &self.soft)
+            .field("block", &self.block)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The kind of the one block rule in the shared set (the run's exact values, [`RunSecrets`],
+/// are blocks too, but are not in the shared set): a PEM private key, from its `BEGIN` line
 /// to the first `END` line that starts within 12,288 bytes, else those bytes, extended to the
 /// end of a character they cut (a key cut off before its `END`). Only [`compile`] reads this name. A block claim absorbs every hard
 /// claim it contains or that crosses its edge, so a key is never left raw because something
@@ -288,6 +300,111 @@ fn compile(kind: &str, re: &str) -> Option<Pattern> {
     }
 }
 
+/// The kind of every exact-value rule ([`RunSecrets`]): the run's own secret (the proxy
+/// credential), named apart from the shared `proxy_credential` pattern rule.
+pub const RUN_SECRET_KIND: &str = "run_secret";
+
+/// This run's own exact secret values as literal rules (D60): every form
+/// `goalcup_protocol::run_secret::encoded_forms` derives of the proxy credential the launch puts
+/// in the harness's `HTTPS_PROXY`. Both redactors apply them
+/// after the shared and the connector rules, each as a block: a literal match absorbs every
+/// claim that it contains or that crosses its edge ([`select`]), so no other rule's earlier
+/// claim can leave part of a value raw.
+///
+/// Held in memory for one entry and never written anywhere. `Debug` prints a count. Each form is
+/// compiled once, when the run's values arrive (`goalcup_protocol::run_secret::wrapped_regex`:
+/// a line break may come between any two of its characters), and every redactor of the entry
+/// shares the compiled rules. The forms are overwritten when the last clone drops; the compiled
+/// regexes keep copies of their own bytes, which is hygiene and not a boundary (D37).
+#[derive(Clone, Default)]
+pub struct RunSecrets {
+    forms: std::sync::Arc<Forms>,
+}
+
+/// Each form's bytes and its compiled rule, in the order the rules take after the connector's.
+#[derive(Default)]
+struct Forms(Vec<(Vec<u8>, regex::bytes::Regex)>);
+
+impl Drop for Forms {
+    fn drop(&mut self) {
+        for (form, _) in &mut self.0 {
+            goalcup_protocol::run_secret::wipe(form);
+        }
+    }
+}
+
+impl std::fmt::Debug for RunSecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RunSecrets({} forms)", self.forms.0.len())
+    }
+}
+
+impl RunSecrets {
+    /// The forms of `values`, compiled. Refused, without echoing a value, when there are more
+    /// than [`goalcup_protocol::run_secret::MAX_RUN_SECRETS`] or one is not a usable run secret.
+    pub fn new(
+        values: &[goalcup_protocol::run_secret::RunSecret],
+    ) -> Result<RunSecrets, DaemonError> {
+        use goalcup_protocol::run_secret::{
+            MAX_RUN_SECRET_BYTES, MAX_RUN_SECRETS, MIN_RUN_SECRET_BYTES, wipe, wrapped_regex,
+        };
+        if values.len() > MAX_RUN_SECRETS || !values.iter().all(|v| v.is_usable()) {
+            return Err(DaemonError::Refused(format!(
+                "run_secrets: at most {MAX_RUN_SECRETS} values, each {MIN_RUN_SECRET_BYTES} to \
+                 {MAX_RUN_SECRET_BYTES} bytes of printable ASCII without a space"
+            )));
+        }
+        let mut forms: Vec<(Vec<u8>, regex::bytes::Regex)> = Vec::new();
+        for value in values {
+            for mut form in goalcup_protocol::run_secret::encoded_forms(value.expose()) {
+                if forms.iter().any(|(known, _)| *known == form) {
+                    wipe(&mut form);
+                    continue;
+                }
+                let source = wrapped_regex(&form);
+                let compiled = regex::bytes::Regex::new(&source);
+                // The source spells the value: wiped once compiled (the regex keeps its own).
+                wipe(&mut source.into_bytes());
+                let Ok(re) = compiled else {
+                    wipe(&mut form);
+                    return Err(DaemonError::Refused(
+                        "run_secrets: a form does not compile".to_string(),
+                    ));
+                };
+                forms.push((form, re));
+            }
+        }
+        Ok(RunSecrets {
+            forms: std::sync::Arc::new(Forms(forms)),
+        })
+    }
+
+    /// Whether this run named no secret.
+    pub fn is_empty(&self) -> bool {
+        self.forms.0.is_empty()
+    }
+
+    /// Each form's bytes, in a fixed order: the order its rules take after the connector's.
+    pub(crate) fn forms(&self) -> impl Iterator<Item = &[u8]> {
+        self.forms.0.iter().map(|(form, _)| form.as_slice())
+    }
+
+    /// Each form as a rule, in [`Self::forms`] order, sharing the regex compiled once.
+    pub(crate) fn patterns(&self) -> Vec<Pattern> {
+        self.forms
+            .0
+            .iter()
+            .map(|(_, re)| Pattern {
+                kind: RUN_SECRET_KIND.to_string(),
+                span_group: 0,
+                soft: false,
+                block: true,
+                re: re.clone(),
+            })
+            .collect()
+    }
+}
+
 /// A connector's `[redaction].extra_patterns`, in declaration order, as the rules both
 /// redactors compile. Empty when `harness.toml` has no `[redaction]` table.
 pub fn extra_patterns_of(manifest: &HarnessManifest) -> Vec<ExtraPattern> {
@@ -330,7 +447,8 @@ pub struct Redacted {
 /// The shared set, plus whatever the connector's `harness.toml` adds.
 #[derive(Debug)]
 pub struct Redactor {
-    /// The connector's own `redaction.extra_patterns[]`, applied after the shared set.
+    /// The connector's own `redaction.extra_patterns[]`, applied after the shared set, then
+    /// the run's exact values ([`RunSecrets`]), applied last.
     /// The shared literals are not copied in: they live in [`patterns`], compiled once.
     extra: Vec<Pattern>,
 }
@@ -370,6 +488,18 @@ impl Redactor {
             })?);
         }
         Ok(Redactor { extra })
+    }
+
+    /// [`Self::for_patterns`] plus the run's exact values, applied after the connector's rules
+    /// (D60): the oracle of [`stream::StreamRedactor::for_run`].
+    pub fn for_run(
+        id: &str,
+        patterns: &[ExtraPattern],
+        secrets: &RunSecrets,
+    ) -> Result<Redactor, DaemonError> {
+        let mut redactor = Redactor::for_patterns(id, patterns)?;
+        redactor.extra.extend(secrets.patterns());
+        Ok(redactor)
     }
 
     /// Every kind this redactor can attribute a span to: the shared set, then the

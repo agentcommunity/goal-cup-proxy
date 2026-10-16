@@ -282,7 +282,11 @@ leaves its mark.
 
 - `POST /v0/capture-workspaces` (`CaptureWorkspaceRequest`): creates the entry. It carries the
   workspace, `profile_id`, the 64-character `connector_dir_sha256`, `reserve_bytes`, `run_home`,
-  `config_home`, an optional upload-issued `entry_id` and an optional `native_since`. The daemon
+  `config_home`, an optional upload-issued `entry_id`, an optional `native_since`, and
+  `run_secrets` (omitted when empty): at most one value, 20 to 256 bytes of printable ASCII, the
+  run's proxy credential (D60). The daemon keeps it in memory for the entry, redacts every form
+  of it, and answers a bad value or a body of the wrong shape with a fixed `400 malformed` that
+  quotes no value. The daemon
   rejects a config home at or below any loaded connector's `real_dirs`, and the participant's
   `HOME`, including symlink aliases, before it creates artifacts or reads a source. The answer
   carries `entry_id`, `process_generation`, `reserved_bytes`, `ingest_addr`, `ingest_secret`,
@@ -568,7 +572,7 @@ wins over this text.
   `Host` is refused `401` with code `unauthorized` and a fixed body that quotes nothing it was sent,
   on a public route and on a bearer route alike. This closes DNS rebinding. A client that builds its
   URL from `control.json` sends a matching `Host`.
-- **Control API version.** `CONTROL_API_VERSION` is 8. `goalcup` and `goalcup-daemon` ship
+- **Control API version.** `CONTROL_API_VERSION` is 9. `goalcup` and `goalcup-daemon` ship
   together in one release, so a pair from two releases is refused, never bridged: the CLI refuses a
   `control.json` of another version and an answer whose `x-goalcup-control-version` header differs,
   and the daemon answers a request that names another version `426 unsupported`. Version 5 added the
@@ -580,4 +584,5 @@ wins over this text.
   its answer. Version 8 removed the V1 vocabulary nothing produced: the
   `WorkspaceInfo` shape, `GET /v0/entries/current`, the status document's `event` and
   `event_status_source`, the `arming` values `start_signal_seen` and `refused`, and every `health`
-  value but the three above. None of these changes the frozen v5 chain.
+  value but the three above. Version 9 added `run_secrets` to workspace creation (D60). None of
+  these changes the frozen v5 chain.

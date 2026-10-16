@@ -28,6 +28,8 @@ pub(super) struct Owner {
     writer: Arc<Mutex<ChainWriter>>,
     clock: IngestClock,
     extra_patterns: Vec<ExtraPattern>,
+    /// The run's exact secret values, redacted last by every producer's redactor (D60).
+    secrets: crate::redact::RunSecrets,
     ingest: Option<Arc<IngestEntry>>,
     native: Option<NativeCapture>,
     required_native: bool,
@@ -52,6 +54,7 @@ impl Owner {
         writer: Arc<Mutex<ChainWriter>>,
         clock: IngestClock,
         extra_patterns: &[ExtraPattern],
+        secrets: crate::redact::RunSecrets,
         ingest: Option<Arc<IngestEntry>>,
         native: Option<NativeCapture>,
     ) -> Owner {
@@ -60,6 +63,7 @@ impl Owner {
             writer,
             clock,
             extra_patterns: extra_patterns.to_vec(),
+            secrets,
             ingest,
             native,
             required_native: false,
@@ -272,7 +276,7 @@ impl Owner {
             self.lose(&previous_producer.clone(), *reason);
         }
         if !self.redactors.contains_key(&producer) {
-            match StreamRedactor::with_extra_patterns(&self.extra_patterns) {
+            match StreamRedactor::for_run(&self.extra_patterns, &self.secrets) {
                 Ok(redactor) => {
                     self.redactors.insert(producer.clone(), redactor);
                 }

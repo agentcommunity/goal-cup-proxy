@@ -488,7 +488,15 @@ fn connection_loss_and_recovery_release_only_superseded_contexts() {
     let dir = tempfile::tempdir().unwrap();
     let writer = writer(dir.path(), 64 << 20);
     let sink = Arc::new(OwnerSink::default());
-    let mut owner = Owner::new(sink.clone(), writer.clone(), clock(), &[], None, None);
+    let mut owner = Owner::new(
+        sink.clone(),
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        None,
+    );
     let p = id(1);
     let q = id(2);
     let recovered = id(3);
@@ -567,7 +575,15 @@ fn recovery_refuses_a_recorded_non_wire_predecessor() {
     let dir = tempfile::tempdir().unwrap();
     let writer = writer(dir.path(), 64 << 20);
     let sink = Arc::new(OwnerSink::default());
-    let mut owner = Owner::new(sink.clone(), writer.clone(), clock(), &[], None, None);
+    let mut owner = Owner::new(
+        sink.clone(),
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        None,
+    );
     let native = id(30);
     let refused = id(31);
     let writer_only = id(32);
@@ -626,7 +642,15 @@ fn a_loss_is_chained_as_a_producer_clocked_streamless_gap_before_the_close() {
     let dir = tempfile::tempdir().unwrap();
     let writer = writer(dir.path(), 64 << 20);
     let sink = Arc::new(OwnerSink::default());
-    let mut owner = Owner::new(sink.clone(), writer.clone(), clock(), &[], None, None);
+    let mut owner = Owner::new(
+        sink.clone(),
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        None,
+    );
     let p = id(1);
     assert_eq!(sink.try_begin_epoch(&p), EpochAdmission::Ready);
     assert_eq!(
@@ -674,7 +698,15 @@ fn a_loss_only_epoch_is_recoverable() {
     let dir = tempfile::tempdir().unwrap();
     let writer = writer(dir.path(), 64 << 20);
     let sink = Arc::new(OwnerSink::default());
-    let mut owner = Owner::new(sink.clone(), writer.clone(), clock(), &[], None, None);
+    let mut owner = Owner::new(
+        sink.clone(),
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        None,
+    );
     let p = id(1);
     let q = id(2);
     assert_eq!(sink.try_begin_epoch(&p), EpochAdmission::Ready);
@@ -721,7 +753,15 @@ fn a_recovery_of_a_loss_only_epoch_is_an_orphan_recovery_in_sink_and_writer() {
     let dir = tempfile::tempdir().unwrap();
     let writer = writer(dir.path(), 64 << 20);
     let sink = Arc::new(OwnerSink::default());
-    let mut owner = Owner::new(sink.clone(), writer.clone(), clock(), &[], None, None);
+    let mut owner = Owner::new(
+        sink.clone(),
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        None,
+    );
     let loss_only = id(1);
     let live = id(2);
     let fresh = id(3);
@@ -912,7 +952,15 @@ fn a_refused_loss_leaves_the_producer_unclosable() {
     let dir = tempfile::tempdir().unwrap();
     let writer = writer(dir.path(), 64 << 20);
     let sink = Arc::new(OwnerSink::default());
-    let mut owner = Owner::new(sink.clone(), writer.clone(), clock(), &[], None, None);
+    let mut owner = Owner::new(
+        sink.clone(),
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        None,
+    );
     let p = id(1);
     assert_eq!(sink.try_begin_epoch(&p), EpochAdmission::Ready);
     // The payload lane is full: the next frame, a loss included, does not fit.
@@ -1014,7 +1062,15 @@ fn full_queue_gap_is_sticky() {
     let dir = tempfile::tempdir().unwrap();
     let writer = writer(dir.path(), 64 << 20);
     let sink = Arc::new(OwnerSink::default());
-    let mut owner = Owner::new(sink.clone(), writer.clone(), clock(), &[], None, None);
+    let mut owner = Owner::new(
+        sink.clone(),
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        None,
+    );
     let p = id(1);
     assert_eq!(sink.try_begin_epoch(&p), EpochAdmission::Ready);
     assert_eq!(sink.try_submit(open(&p, 0, 1)), SubmitResult::Queued);
@@ -1071,7 +1127,15 @@ fn five_hundred_recovered_epochs_are_admitted_and_chained() {
     let dir = tempfile::tempdir().unwrap();
     let writer = writer(dir.path(), 64 << 20);
     let sink = Arc::new(OwnerSink::default());
-    let mut owner = Owner::new(sink.clone(), writer.clone(), clock(), &[], None, None);
+    let mut owner = Owner::new(
+        sink.clone(),
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        None,
+    );
     let socket = id(200);
     assert_eq!(sink.try_begin_epoch(&wide(1)), EpochAdmission::Ready);
     assert_eq!(
@@ -1132,7 +1196,15 @@ fn capacity_exhaustion_uses_bounded_terminal_records() {
     let quota = TERMINAL_RESERVE_BYTES + 200_000;
     let writer = writer(dir.path(), quota);
     let sink = Arc::new(OwnerSink::default());
-    let mut owner = Owner::new(sink.clone(), writer.clone(), clock(), &[], None, None);
+    let mut owner = Owner::new(
+        sink.clone(),
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        None,
+    );
     let p = id(1);
     sink.try_begin_epoch(&p);
     sink.try_submit(open(&p, 0, 1));
@@ -1181,7 +1253,15 @@ fn flush_precedes_sync_in_one_tick() {
     let dir = tempfile::tempdir().unwrap();
     let writer = writer(dir.path(), 64 << 20);
     let sink = Arc::new(OwnerSink::default());
-    let mut owner = Owner::new(sink.clone(), writer.clone(), clock(), &[], None, None);
+    let mut owner = Owner::new(
+        sink.clone(),
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        None,
+    );
     let p = id(1);
     sink.try_begin_epoch(&p);
     sink.try_submit(open(&p, 0, 1));
@@ -1221,7 +1301,7 @@ fn owner_exit_is_failure_only_when_undrained() {
         sink.try_begin_epoch(&p);
         sink.try_submit(open(&p, 0, 1));
         control.stop.store(!fault, Ordering::Release);
-        let thread = Owner::new(sink, writer, clock(), &[], None, None)
+        let thread = Owner::new(sink, writer, clock(), &[], Default::default(), None, None)
             .spawn(control.clone())
             .unwrap();
         assert_eq!(thread.join().is_err(), fault);
@@ -1486,7 +1566,7 @@ fn owner_post_stop_drain_fits_commit_reserve() {
     }
     control.stop.store(true, Ordering::Release);
     let began = Instant::now();
-    let thread = Owner::new(sink, writer, clock(), &[], None, None)
+    let thread = Owner::new(sink, writer, clock(), &[], Default::default(), None, None)
         .spawn(control.clone())
         .unwrap();
     thread.join().unwrap();
@@ -1862,7 +1942,15 @@ fn a_native_file_past_max_files_is_one_streamless_gap_until_the_count_grows() {
         Box::new(SystemNativeClock::new()),
     )
     .unwrap();
-    let mut owner = Owner::new(sink, writer.clone(), clock(), &[], None, Some(native));
+    let mut owner = Owner::new(
+        sink,
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        Some(native),
+    );
     for _ in 0..5 {
         owner.poll_native();
     }
@@ -1912,6 +2000,7 @@ fn a_producer_lost_to_a_failed_flush_notes_its_cause() {
             now
         }),
         &[],
+        Default::default(),
         None,
         None,
     )

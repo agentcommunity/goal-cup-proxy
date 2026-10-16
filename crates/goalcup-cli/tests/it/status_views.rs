@@ -517,6 +517,7 @@ fn launched_capture(
             config_home: root.join("config-home").display().to_string(),
             entry_id: None,
             native_since: None,
+            run_secrets: Vec::new(),
         })
         .unwrap();
     let goal = client

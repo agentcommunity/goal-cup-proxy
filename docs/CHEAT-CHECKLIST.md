@@ -101,12 +101,17 @@ consistent, not that the participant followed the rules.
   `HTTPS_PROXY=http://goalcup:<32 hex>@127.0.0.1:<port>` holds a per-run secret. It is the only
   place the tracer hands that secret to the harness. An agent that runs `env`, or a harness that
   uploads its environment, sends it to the provider: the tracer records traffic and never
-  rewrites it. The shared rule `proxy_credential` removes it from every recorded body, for every
-  connector, as `goalcup:<secret>`, percent-encoded once, or as the Basic token
-  `base64("goalcup:<secret>")`. **Not caught:** a double encoding, a JSON `\u`-escaped form, a
-  Basic token with an escaped `\/` or a line break in it, and the secret glued to an earlier
-  rule's match (`sk-…goalcup:<secret>`, where the earlier rule wins the overlap). Bounded by: the
-  proxy listens on loopback only, and the secret ends with the run.
+  rewrites it. The daemon knows the secret's exact value (D60) and removes it from every recorded
+  body and metadata string: raw, every byte percent-encoded or `\u`-escaped, and inside base64 at
+  any alignment in both alphabets, each with one line break allowed between any two characters
+  (LF or CR LF, raw, or escaped with one or two backslashes, as a JSON string or JSON inside a
+  JSON string carries it). So an escaped colon, a glued earlier match, `env | base64` wrapped at
+  76 columns, and the same inside a Hermes tool result are caught. The shared rule
+  `proxy_credential` (`goalcup:<secret>`, percent-encoded once, the Basic token) stays for a
+  reader without the secret. **Not caught:** a double percent-encoding or any other transform of
+  the value; base64 with `/` written as `\/`; three levels of escaping; two breaks in one gap; a
+  fragment of the secret. Bounded by: the proxy listens on loopback only, and the secret ends
+  with the run.
 - **Codex identifiers left in the trace (TR1 #15).** The Codex connector removes `credits`, the
   installation id, `safety_identifier` and the `x-codex-turn-state` token, as measured on 0.153.0
   WebSocket traffic. It keeps `client_metadata.session_id`, `thread_id` and

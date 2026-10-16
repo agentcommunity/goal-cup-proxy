@@ -476,7 +476,9 @@ JSON field, not a header: use `json_field` with the header name, which the field
 
 The shared set already covers what every harness holds: provider keys, tokens, e-mail addresses,
 and the tracer's own proxy credential (`proxy_credential`, the secret in the launch's
-`HTTPS_PROXY`). A connector never names those.
+`HTTPS_PROXY`). A connector never names those. On top of the patterns, the daemon redacts the
+exact value of the run's proxy credential in every form `goalcup_protocol::run_secret::encoded_forms`
+derives, as `<redacted:run_secret>` (D60).
 
 A JSON-field marker keeps the record JSON: the key and colon stay, and a value that was not a
 string gets a quoted marker. A new form is a core PR: it needs a recognizer in the daemon's

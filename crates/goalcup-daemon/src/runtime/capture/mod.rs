@@ -170,6 +170,9 @@ pub(crate) struct CaptureEntry {
     authority: CaptureAuthority,
     /// The profile's carried patterns, compiled into each producer's own redactor.
     extra_patterns: Vec<ExtraPattern>,
+    /// The run's exact secret values, redacted after those patterns (D60). Empty for a reopened
+    /// entry, which admits no producer and records no goal.
+    secrets: crate::redact::RunSecrets,
     /// The schema-1 termination binary a registered harness handle may name.
     pub(super) native_binary: Option<String>,
     /// Schema-declared scoped source, enabled once its session identity is bound: at launch or
@@ -315,6 +318,7 @@ impl Daemon {
         every_loaded_real_dir: &[String],
         reserve_bytes: u64,
         native_since: Option<u64>,
+        secrets: crate::redact::RunSecrets,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
         let config_home = isolated_config_home(config_home, every_loaded_real_dir)?;
         let run_home = &isolated_run_home(
@@ -331,7 +335,7 @@ impl Daemon {
         };
         let plan = native_plan(&manifest.capture, run_home, &config_home, since)?;
         let extra_patterns = crate::redact::extra_patterns_of(manifest);
-        StreamRedactor::with_extra_patterns(&extra_patterns)?;
+        StreamRedactor::for_run(&extra_patterns, &secrets)?;
         let artifact_dir = self
             .config()
             .artifact_root
@@ -369,6 +373,7 @@ impl Daemon {
             digests,
             reserve_bytes,
             extra_patterns,
+            secrets,
             &artifact,
             &artifact_dir,
             plan,
@@ -396,6 +401,7 @@ impl Daemon {
         digests: &ProfileDigests,
         reserve_bytes: u64,
         extra_patterns: Vec<ExtraPattern>,
+        secrets: crate::redact::RunSecrets,
         artifact: &EntryArtifactRoot,
         artifact_dir: &Path,
         plan: NativePlan,
@@ -523,6 +529,7 @@ impl Daemon {
             capture.writer.clone(),
             clock,
             &extra_patterns,
+            secrets.clone(),
             Some(ingest.clone()),
             native,
         )
@@ -535,6 +542,7 @@ impl Daemon {
             })?;
         capture.thread = Mutex::new(Some(thread));
         capture.extra_patterns = extra_patterns;
+        capture.secrets = secrets;
         capture.native_binary = manifest.termination().native_binary;
         capture.ingest = Some(ingest);
         self.captures()
@@ -1094,6 +1102,7 @@ impl CaptureEntry {
         CaptureEntry {
             authority,
             extra_patterns: Vec::new(),
+            secrets: crate::redact::RunSecrets::default(),
             native_binary: None,
             scoped_native: None,
             native_binding: Mutex::new(NativeBinding::NotRequired),
@@ -1185,7 +1194,7 @@ impl CaptureEntry {
                 reason: EndReason::Complete,
             },
         ];
-        let mut redactor = StreamRedactor::with_extra_patterns(&self.extra_patterns)?;
+        let mut redactor = StreamRedactor::for_run(&self.extra_patterns, &self.secrets)?;
         let mut writer = lock(&self.writer);
         let mut final_seq = None;
         for (seq, event) in (0u64..).zip(events) {

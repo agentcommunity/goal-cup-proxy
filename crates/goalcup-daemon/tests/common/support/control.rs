@@ -346,6 +346,7 @@ pub async fn capture_control_harness() -> CaptureControlHarness {
         config_home: inner.root.join("config-home").display().to_string(),
         entry_id: None,
         native_since: None,
+        run_secrets: Vec::new(),
     };
     let response = inner
         .client
