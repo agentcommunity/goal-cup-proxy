@@ -810,7 +810,9 @@ fn the_server_stops_the_run_at_its_deadline() {
 /// the deadline, not after the proxy's whole drain share (a Codex chat run was asked 176 s late).
 #[test]
 fn a_connection_held_open_at_the_deadline_does_not_delay_the_stop() {
-    use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
+    use goalcup_protocol::capture::{
+        CaptureRecord, CaptureSource, ConnectionEvent, ConnectionOutcome,
+    };
     let rig = Rig::new();
     let upstream = crate::common::m2_cli_support::Upstream::start_holding(&rig.runtime);
     rig.tell("steps.sh", &upstream.curl_waiting(r#"{"n":1}"#));
@@ -843,6 +845,19 @@ fn a_connection_held_open_at_the_deadline_does_not_delay_the_stop() {
         !opened(CaptureSource::WireResponse),
         "the request was answered\n{out}"
     );
+    // The cut is honest: the held connection is recorded closed `Interrupted`, not complete.
+    assert!(
+        records.iter().any(|r| matches!(
+            r,
+            CaptureRecord::Connection {
+                event: ConnectionEvent::Close {
+                    outcome: ConnectionOutcome::Interrupted
+                },
+                ..
+            }
+        )),
+        "the held connection was not recorded cut\n{out}"
+    );
     // Both whole seconds of UTC: the run's deadline, and when the daemon asked the harness to stop.
     let at = |after: &str| {
         let from = out
@@ -855,9 +870,9 @@ fn a_connection_held_open_at_the_deadline_does_not_delay_the_stop() {
     let deadline = at(", deadline ");
     let asked = at("the harness was asked to stop at ");
     // The test's finish budget is 10 s: a stop that waited for the connection would be asked
-    // its drain share (8 s) after the deadline.
+    // its drain share (8 s) after the deadline; a prompt one about 3 s after it.
     assert!(
-        asked <= deadline + 4,
+        asked <= deadline + 6,
         "the harness was asked to stop {} s after the deadline\n{out}",
         asked.saturating_sub(deadline)
     );

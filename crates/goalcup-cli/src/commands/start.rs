@@ -3278,12 +3278,19 @@ fn proxy_admission_line(
     line
 }
 
-/// How long the proxy's stop waits for connections to end on their own when the harness still
-/// runs (the run stopped at its deadline). They do not end then: a model's streaming answer or a
-/// kept-alive WebSocket stays open as long as the harness does. So the stop cuts them almost at
-/// once (each open stream recorded `Interrupted`), and the seal, which ends the harness, follows
-/// within seconds of the deadline instead of after the whole drain share (three minutes).
+/// How long the proxy's stop waits for connections to end on their own when the run is stopped
+/// while the harness still runs (its deadline, the server's stop, a full disk, a replacement).
+/// They do not end then: a model's streaming answer or a kept-alive WebSocket stays open as long
+/// as the harness does. So the stop cuts them almost at once (each open stream recorded
+/// `Interrupted`), and the seal, which ends the harness, follows within seconds instead of after
+/// the whole drain share.
 const RUNNING_HARNESS_PROXY_DRAIN: Duration = Duration::from_secs(2);
+
+/// How long the sender may take to end its connection, before the seal, when the harness still
+/// runs and the proxy could not queue its producer's close. Without it the daemon's ingest drain
+/// would wait for a producer still live until its drain share ends; a closed connection is a
+/// settled (lost) producer, an honest tail-loss gap, and the drain returns.
+const RUNNING_HARNESS_SINK_SHUTDOWN: Duration = Duration::from_secs(1);
 
 /// Stop the proxy, seal with its counters, then let the sender drain, and say how the run
 /// ended, all within `deadline` (the one local-finish budget, taken by the caller immediately
@@ -3305,9 +3312,11 @@ const RUNNING_HARNESS_PROXY_DRAIN: Duration = Duration::from_secs(2);
 /// the daemon's native read its share of the drain. The identity, if exactly one distinct one was
 /// printed, rides on the seal request; any other answer sends none.
 ///
-/// `harness_running` is true only at the run's deadline, when the harness has not exited: the
-/// proxy's stop then waits [`RUNNING_HARNESS_PROXY_DRAIN`] at most, because the harness's open
-/// connections would not end before the seal ends the harness.
+/// `harness_running` is true when the run is stopped while the harness still runs (its
+/// deadline, the server's stop, a full disk, a replacement): the proxy's stop then waits
+/// [`RUNNING_HARNESS_PROXY_DRAIN`] at most, because the harness's open connections would not end
+/// before the seal ends the harness. If the proxy could not queue its producer's close, the
+/// sender is ended too before the seal ([`RUNNING_HARNESS_SINK_SHUTDOWN`]).
 #[allow(clippy::too_many_arguments)]
 fn finish(
     client: &(dyn DaemonClient + Sync),
@@ -3327,14 +3336,23 @@ fn finish(
         runtime,
         ..
     } = proxied;
-    // A harness that still runs (the run's deadline) keeps its connections open: they would hold
-    // the stop, and the seal that ends the harness, for the whole drain share. They are cut.
+    // A harness that still runs keeps its connections open: they would hold the stop, and the
+    // seal that ends the harness, for the whole drain share. They are cut.
     let stopped = if harness_running {
         runtime.block_on(proxy.stop_within(RUNNING_HARNESS_PROXY_DRAIN))
     } else {
         runtime.block_on(proxy.stop())
     };
     pause_at("capture-finish-proxy-stopped");
+    // A producer the proxy did not close stays live in the daemon's ingest drain until its share
+    // ends. With the harness still running, the sender's connection is ended now instead (the
+    // shutdown cut by the bound aborts it), so the seal is not held. The later shutdown below
+    // then reports from what it finds.
+    if harness_running && stopped.producer_close != crate::proxy::ProducerClose::Queued {
+        runtime.block_on(async {
+            let _ = tokio::time::timeout(RUNNING_HARNESS_SINK_SHUTDOWN, sink.shutdown()).await;
+        });
+    }
     let h = &stopped.health;
     let a = &h.admission_failures;
     // Diagnostics are fixed counters only. A failed stdout write must not prevent sealing.
