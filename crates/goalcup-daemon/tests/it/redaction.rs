@@ -1393,10 +1393,10 @@ fn with_script(body: &str) -> String {
 /// Two differ in a bound, because the daemon's stream holds an undecided run and the script
 /// holds nothing. The daemon's `email` local part is at most 1,024 units, so a bare token run does
 /// not hold to the hold bound (I-2); the script keeps `+` and redacts a longer local part whole.
-/// The daemon's PEM block ends at an END line that starts within 12,288 bytes, or is those
-/// bytes, so a lone BEGIN no longer redacts the rest of the stream (I-1); the script
-/// runs the block to its END line or the end of the text. In both the script redacts more,
-/// never less.
+/// The PEM block has the same bound and the same lone-BEGIN window in both (H-20), but the
+/// daemon counts the bound in bytes and the script in characters, so the daemon spells its body
+/// as byte classes; for a body with non-ASCII text the script's window is the longer one. In
+/// both the script redacts more, never less.
 const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     (
         "generic_secret_assignment",
@@ -1410,8 +1410,8 @@ const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     ),
     (
         "private_key",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,12288})",
+        r#"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]{0,15360}?-----END [A-Z ]*PRIVATE KEY-----|(?:[^"]{0,15359}[^"\\])?)"#,
+        r#"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,15360}?-----END [A-Z ]*PRIVATE KEY-----|(?:(?-u:[^"]){0,15359}(?-u:[^"\\]))?)"#,
     ),
 ];
 
@@ -1707,8 +1707,9 @@ fn shared_rule_probes() -> Vec<String> {
     add(format!("secret=ABCDEFGHIJ{block}\nz"));
     add(format!("{block}x@y.com tail"));
     add(format!("{block}x@y.com{block}"));
-    // A BEGIN with no END runs to the end of the text. It is last because the script runs over
-    // every probe as one text, where its end is the end of the last probe.
+    // A BEGIN with no END and no quote after it runs to the end of the text (inside the bound).
+    // It is last because the script runs over every probe as one text, where its end is the
+    // end of the last probe.
     add("-----BEGIN PRIVATE KEY-----\nMIIB\nno end line".into());
     p
 }

@@ -307,8 +307,6 @@ These look odd but are right. Do not "fix" them.
   it (start-anchored match) before an eight-hour result is scored.
 - **F-07:** a base64url run of 16 KiB or more redacts the rest of a one-line JSON body. Measured
   false on the pilot path. Re-measure on the eight-hour chain.
-- **H-20:** invalid UTF-8 inside a key body leaves the key raw, and a lone `BEGIN` redacts to the
-  end of the record. Fix before any upload surface sees raw bytes.
 - **H-28 (before any research access; clean-up 14):** Anthropic usage objects pass through the private research
   observations. Allowlist token fields and strip plan, credit and billing data (D26) before anything
   is published or read from R2.

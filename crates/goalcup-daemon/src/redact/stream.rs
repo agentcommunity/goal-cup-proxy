@@ -23,9 +23,10 @@
 //! covers that. A block's `BEGIN` is a live candidate from its first byte until its `END`
 //! completes it, so nothing inside it is released, and a complete match of any rule that
 //! straddles a cut moves the cut back to its start, so a claim across an edge of the block
-//! is held with it. A block whose `END` does not start within 12,288 bytes of its `BEGIN` line
-//! is those bytes (to the end of a character they cut, and fewer at the stream's end): its
-//! candidate ends there, below the hold, and the shared regexes take the same span.
+//! is held with it. A block whose `END` does not start within `super::PEM_BODY_MAX` bytes of its
+//! `BEGIN` line is the lone `BEGIN`'s window, a part of those bytes (see the `private_key`
+//! literal): its candidate ends at the bound, below the hold, and the shared regexes then take
+//! the same span the whole-record policy takes.
 //!
 //! # Connector `extra_patterns` (D39)
 //!
@@ -154,15 +155,17 @@ const SHELL_LITERAL: usize = 11;
 
 // ── units ──────────────────────────────────────────────────────────────────────────────
 
-/// One decoding step: a Unicode scalar value, or one byte that is not valid UTF-8. The
-/// shared regexes run in Unicode mode over bytes, so no class (not even `[\s\S]`) matches
-/// an invalid byte, and case-insensitive rules also match `ſ` (U+017F) for `s` and the
-/// Kelvin sign (U+212A) for `k`.
+/// One decoding step: a Unicode scalar value. A byte that is not valid UTF-8 is one unit, read
+/// as `super::INVALID_BYTE_AS`, because the shared regexes match on `super::match_view`, which
+/// reads it so. The regexes run in Unicode mode, so case-insensitive rules also match `ſ`
+/// (U+017F) for `s` and the Kelvin sign (U+212A) for `k`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Unit {
     Char(char),
-    Invalid,
 }
+
+/// The unit an invalid byte decodes to: what `super::match_view` reads it as.
+const INVALID: Unit = Unit::Char(super::INVALID_BYTE_AS as char);
 
 enum Decoded {
     Unit(Unit, usize),
@@ -183,7 +186,7 @@ fn decode(bytes: &[u8]) -> Decoded {
         0xF0 => (3, 0x90, 0xBF),
         0xF1..=0xF3 => (3, 0x80, 0xBF),
         0xF4 => (3, 0x80, 0x8F),
-        _ => return Decoded::Unit(Unit::Invalid, 1),
+        _ => return Decoded::Unit(INVALID, 1),
     };
     for i in 1..=need {
         let Some(&b) = bytes.get(i) else {
@@ -191,7 +194,7 @@ fn decode(bytes: &[u8]) -> Decoded {
         };
         let (l, h) = if i == 1 { (lo, hi) } else { (0x80, 0xBF) };
         if b < l || b > h {
-            return Decoded::Unit(Unit::Invalid, 1);
+            return Decoded::Unit(INVALID, 1);
         }
     }
     match bytes
@@ -200,7 +203,7 @@ fn decode(bytes: &[u8]) -> Decoded {
         .and_then(|s| s.chars().next())
     {
         Some(c) => Decoded::Unit(Unit::Char(c), need + 1),
-        None => Decoded::Unit(Unit::Invalid, 1),
+        None => Decoded::Unit(INVALID, 1),
     }
 }
 
@@ -471,7 +474,7 @@ static SHAPES: [Shape; 23] = [
     },
     Shape {
         kind: "private_key",
-        source: r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,12288})",
+        source: r#"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,15360}?-----END [A-Z ]*PRIVATE KEY-----|(?:(?-u:[^"]){0,15359}(?-u:[^"\\]))?)"#,
         form: Form::PrivateKey,
     },
     prefixed(
@@ -846,10 +849,12 @@ enum Pem {
     },
 }
 
-/// The most bytes the shared `private_key` literal takes after its BEGIN line: an END line
-/// must start within them, and without one the block is them. An RSA-8192 key is about
-/// 6.4 KiB, and a block this long fits the hold, so a lone BEGIN is decided below it.
-const PEM_BODY_MAX: u32 = 12288;
+/// The most bytes the shared `private_key` literal takes after its BEGIN line
+/// (`super::PEM_BODY_MAX`, which says why 15 KiB): an END line must start within them, and a
+/// lone BEGIN's window is at most them. A block this long fits the hold, so a lone BEGIN is
+/// decided below it.
+const PEM_BODY_MAX: u32 = super::PEM_BODY_MAX as u32;
+const _: () = assert!(super::PEM_BODY_MAX + 1024 <= MAX_HELD_BYTES);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum JsonPhase {
@@ -1226,11 +1231,12 @@ fn step_bearer(pos: &mut u8, spaced: &mut bool, count: &mut u8, u: Unit) -> bool
 }
 
 impl Pem {
-    /// `-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE
-    /// KEY-----|(?-u:[\x00-\xFF]){0,12288})`: to an END line that starts within
-    /// [`PEM_BODY_MAX`] bytes, else those bytes and the rest of a character they cut (fewer at
-    /// the end of the stream, which is decided there with every other held byte by the shared
-    /// regexes). `len` is this unit's length in bytes.
+    /// `-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,15360}?-----END [A-Z ]*PRIVATE
+    /// KEY-----|(?:(?-u:[^"]){0,15359}(?-u:[^"\\]))?)`: to an END line that starts within
+    /// [`PEM_BODY_MAX`] bytes, else the lone BEGIN's window, which lies inside those bytes and the
+    /// rest of a character they cut. So the walk holds the bytes the lazy arm could still reach,
+    /// and the shared regexes decide the span when it ends (fewer bytes at the end of the
+    /// stream, decided there with every other held byte). `len` is this unit's length in bytes.
     fn step(&mut self, u: Unit, len: usize) -> Step {
         let next = match self {
             Pem::Begin(p) => {
@@ -1318,11 +1324,10 @@ impl Json {
                 if self.key_units == JSON_KEY_MAX_UNITS {
                     return false;
                 }
-                if let Unit::Char(c) = u {
-                    let mut buf = [0u8; 4];
-                    self.key
-                        .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
-                }
+                let Unit::Char(c) = u;
+                let mut buf = [0u8; 4];
+                self.key
+                    .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
                 self.key_units += 1;
                 true
             }
@@ -1369,7 +1374,7 @@ impl Json {
                     self.phase = JsonPhase::ValueEnd(1);
                     true
                 }
-                Unit::Char('"') | Unit::Invalid => false,
+                Unit::Char('"') => false,
                 Unit::Char(_) => {
                     self.n = (self.n + 1).min(16);
                     true
@@ -2889,7 +2894,8 @@ mod tests {
     /// match of every literal, every proper prefix of the match must keep a candidate of
     /// that literal starting at or before the match (or still be undecoded). Precision,
     /// for every literal but `email` (whose recognizer deliberately over-holds a domain
-    /// run): once the unit after a match is decoded, its candidate is gone.
+    /// run) and a lone PEM BEGIN's window (held to the bound, where an END line could still
+    /// start): once the unit after a match is decoded, its candidate is gone.
     #[test]
     fn recognizers_hold_every_prefix_of_a_match() {
         let now = CaptureTime {
@@ -2898,13 +2904,22 @@ mod tests {
             clock_id: "t".into(),
         };
         let mut checked = 0usize;
+        // A block that ends on its END line; any other `private_key` match is a lone BEGIN's
+        // window (an END line inside the bound would have ended the lazy arm first).
+        let end_line =
+            regex::bytes::Regex::new(r"-----END [A-Z ]*PRIVATE KEY-----\z").expect("END line");
         for seed in 1..=4000u64 {
             let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
             let text = random_text(&mut rng);
             let mut matches = Vec::new();
+            let mut windows = Vec::new();
+            let view = super::super::match_view(&text);
             for (lit, p) in patterns().iter().enumerate() {
-                for m in p.re.find_iter(&text) {
+                for m in p.re.find_iter(&view) {
                     matches.push((lit, m.start() as u64, m.end() as u64));
+                    if p.kind == "private_key" && !end_line.is_match(m.as_bytes()) {
+                        windows.push((lit, m.start() as u64));
+                    }
                 }
             }
             let mut scanner = Scanner::new(0, Arc::new(Policy::default()));
@@ -2932,8 +2947,8 @@ mod tests {
                             "seed {seed}: bytes of a live match were released"
                         );
                     }
-                    let email = SHAPES[lit].kind == "email";
-                    if !email && k >= t + 4 && k < t + 5 {
+                    let over_held = SHAPES[lit].kind == "email" || windows.contains(&(lit, s));
+                    if !over_held && k >= t + 4 && k < t + 5 {
                         checked += 1;
                         assert!(
                             !scanner
@@ -2964,14 +2979,17 @@ mod tests {
             .expect("private_key literal")
             .re
             .as_str();
-        // The END line of the lazy arm, without the bounded arm: a block with no END line is
-        // the walk's unit count, not a line this detector completes.
+        // The END line of the lazy arm, without the lone BEGIN's window: a block with no END
+        // line is the walk's unit count, not a line this detector completes.
         let body = format!("(?-u:[\\x00-\\xFF]){{0,{PEM_BODY_MAX}}}");
+        let window = format!("(?:(?-u:[^\"]){{0,{}}}(?-u:[^\"\\\\]))?", PEM_BODY_MAX - 1);
         let end_half = shared
             .split(&format!("(?:{body}?"))
             .nth(1)
-            .and_then(|h| h.strip_suffix(&format!("|{body})")))
-            .expect("a bounded lazy body to an END line, or the bounded body, in the literal");
+            .and_then(|h| h.strip_suffix(&format!("|{window})")))
+            .expect(
+                "a bounded lazy body to an END line, or the lone BEGIN's window, in the literal",
+            );
         let end_re = regex::bytes::Regex::new(end_half).expect("END half compiles");
         let pieces: &[&[u8]] = &[
             b"-",
@@ -3439,9 +3457,13 @@ mod tests {
                     u32::from(c)
                 );
             }
-            assert!(!predicate(Unit::Invalid), "{class} takes an invalid byte");
+            // An invalid byte is the unit the rules match it as (H-20), for the stream too.
             for b in 0x80..=0xFF_u8 {
-                assert!(!re.is_match(&[b]), "{class} matches the lone byte {b:#x}");
+                assert_eq!(
+                    predicate(INVALID),
+                    re.is_match(&super::super::match_view(&[b])),
+                    "{class} disagrees with its predicate at the lone byte {b:#x}"
+                );
             }
         }
     }
@@ -3471,7 +3493,11 @@ mod tests {
                     u32::from(c)
                 );
             }
-            assert!(!predicate(Unit::Invalid));
+            assert_eq!(
+                predicate(INVALID),
+                re.is_match(&super::super::match_view(b"\xff")),
+                "{class} disagrees with its predicate at an invalid byte"
+            );
         }
     }
 
@@ -3496,7 +3522,11 @@ mod tests {
                     u32::from(c)
                 );
             }
-            assert!(!predicate(Unit::Invalid));
+            assert_eq!(
+                predicate(INVALID),
+                re.is_match(&super::super::match_view(b"\xff")),
+                "{class} disagrees with its predicate at an invalid byte"
+            );
         }
         for (class, letter) in letters {
             let re = regex::bytes::Regex::new(&format!("^{class}$")).expect("class compiles");
@@ -3510,7 +3540,11 @@ mod tests {
                     u32::from(c)
                 );
             }
-            assert!(!predicate(Unit::Invalid));
+            assert_eq!(
+                predicate(INVALID),
+                re.is_match(&super::super::match_view(b"\xff")),
+                "{class} disagrees with its predicate at an invalid byte"
+            );
         }
     }
 
@@ -3536,7 +3570,9 @@ mod tests {
         let mut per_rule = vec![0usize; policy.len()];
         for seed in 1..=6000u64 {
             let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-            let text = random_extra_text(&mut rng, &fields);
+            let raw = random_extra_text(&mut rng, &fields);
+            // The rules match on the view; the scanner is fed the raw bytes.
+            let text = super::super::match_view(&raw).into_owned();
             let mut matches = Vec::new();
             for (lit, p) in policy.rules().enumerate().skip(SHAPES.len()) {
                 for c in p.re.captures_iter(&text) {
@@ -3572,7 +3608,7 @@ mod tests {
             scanner.mark(0, &now);
             let mut sink = Vec::new();
             for k in 1..=text.len() {
-                scanner.feed(&text[k - 1..k], &now, &mut sink);
+                scanner.feed(&raw[k - 1..k], &now, &mut sink);
                 let k = k as u64;
                 for &(lit, s, t) in &matches {
                     if s < k && k < t {

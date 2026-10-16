@@ -12,11 +12,18 @@ exceptions. private_key is the block rule: it runs first, on the original text, 
 grows to take in every other rule's match that overlaps it (and every match that overlaps
 those), so a PEM block is one redaction whatever an earlier rule would have matched inside it
 or across its edge, and no raw remainder of such a match is left behind (the daemon's block
-rule merges the same claims into the block). A block with no END line runs to the end of the
-text. And the last rule, masked_key, is soft: after that pass, any byte of a masked-key shape (matched on the
+rule merges the same claims into the block). An END line must start within 15,360 characters of
+the BEGIN line; without one, a lone BEGIN takes its characters up to the first `"` (at most
+15,360, not ending on a backslash), so in JSON it ends with its string and a cut-off key is
+still taken whole. (The daemon counts the bound in bytes; for a body with non-ASCII text this
+script's window is longer, never shorter.) And the last rule, masked_key, is soft: after that pass, any byte of a masked-key shape (matched on the
 ORIGINAL text) that is still raw is replaced too, as its own "residual" marker. The daemon
 (crates/goalcup-daemon/src/redact.rs) reaches the same result by a different route; the shared
 rules, and the few places the two differ, are pinned by crates/goalcup-daemon/tests/it/redaction.rs.
+
+Bytes that are not valid UTF-8 match as the character "0", one per byte, as in the daemon: so an
+invalid byte inside a key body does not end the key. They are written back unchanged where no
+rule fires.
 
 Two offset frames in OUT.redactions.jsonl, both counted in characters, not bytes:
   - an entry from the sequential pass (no "residual" key) has start/end in the text as the
@@ -37,7 +44,7 @@ PATTERNS = [
     ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("bearer", re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]{16,}")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")),
-    ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)")),
+    ("private_key", re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]{0,15360}?-----END [A-Z ]*PRIVATE KEY-----|(?:[^"]{0,15359}[^"\\])?)')),
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}")),
     ("generic_secret_assignment", re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})")),
     ("email", re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")),
@@ -136,7 +143,9 @@ def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__)
     src, dst = sys.argv[1], sys.argv[2]
-    original = open(src, encoding="utf-8", errors="replace").read()
+    # An invalid byte is one lone surrogate here, and "0" in the text the rules match on.
+    source = open(src, encoding="utf-8", errors="surrogateescape").read()
+    original = re.sub("[\udc80-\udcff]", "0", source)
     log = open(dst + ".redactions.jsonl", "w")
     count = 0
     segments = Segments(original)
@@ -210,9 +219,12 @@ def main():
             log.write(json.dumps({"kind": SOFT_KIND, "start": oa, "end": ob, "sha256_8": h, "residual": True}) + "\n")
             count += 1
             final.append(replacement)
+        elif raw:
+            # The original text, invalid bytes and all.
+            final.append(source[oa:ob])
         else:
             final.append(text)
-    open(dst, "w", encoding="utf-8").write("".join(final))
+    open(dst, "w", encoding="utf-8", errors="surrogateescape").write("".join(final))
     print(f"{count} redactions -> {dst}", file=sys.stderr)
 
 

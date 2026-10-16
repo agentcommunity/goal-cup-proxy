@@ -99,11 +99,60 @@ impl std::fmt::Debug for Pattern {
 
 /// The kind of the one block rule in the shared set (the run's exact values, [`RunSecrets`],
 /// are blocks too, but are not in the shared set): a PEM private key, from its `BEGIN` line
-/// to the first `END` line that starts within 12,288 bytes, else those bytes, extended to the
-/// end of a character they cut (a key cut off before its `END`). Only [`compile`] reads this name. A block claim absorbs every hard
+/// to the first `END` line that starts within [`PEM_BODY_MAX`] bytes, else the window after
+/// a lone `BEGIN` (its bytes up to the first `"`, at most [`PEM_BODY_MAX`], ending on no
+/// backslash; a key cut off before its `END`), extended to the end of a character the bound
+/// cuts. Only [`compile`] reads this name. A block claim absorbs every hard
 /// claim it contains or that crosses its edge, so a key is never left raw because something
 /// inside it, or touching it, was claimed first; see [`select`] and [`Pattern::block`].
 pub(crate) const BLOCK_KIND: &str = "private_key";
+
+/// The most bytes the `private_key` rule takes after its `BEGIN` line: an `END` line must start
+/// within them, and a lone `BEGIN`'s window is at most them. Both regex literals spell it
+/// (`{0,15360}`, and `{0,15359}` plus one byte), and a test in `capture_redaction.rs` pins that.
+///
+/// Why 15 KiB: the longest key body to expect is RSA-16384, the largest RSA key OpenSSH
+/// generates. Measured on a PKCS#8 file from `openssl genpkey` (12,632 bytes): its body is
+/// 12,579 bytes, 14,529 as Claude Code's Read tool prints it (`N→` on each of its 196 lines)
+/// JSON-escaped, 14,724 escaped twice, and 15,114 with the arrow escaped as `\u2192`. Every
+/// form fits. The bound stays 1 KiB under the stream's 16 KiB hold
+/// ([`stream::MAX_HELD_BYTES`]), so a block, its `BEGIN` and `END` lines and a short
+/// candidate before it are decided below the hold, as this regex decides them.
+pub const PEM_BODY_MAX: usize = 15 * 1024;
+
+/// What an invalid byte reads as when the rules match: one ASCII `0`. Every key body class in
+/// the set takes it (it is the one character `[A-Za-z0-9]`, `[0-9A-Z]` and `[a-f0-9]` share)
+/// and no shared rule's fixed prefix starts or completes with it. So a key with an invalid byte
+/// inside its body is still one match, where the Unicode classes would end it at that byte and
+/// leave the rest raw (H-20).
+pub(crate) const INVALID_BYTE_AS: u8 = b'0';
+
+/// The bytes the rules match on: `bytes`, with every byte that is not part of a valid UTF-8
+/// sequence read as [`INVALID_BYTE_AS`]. One byte stands for one byte, so every offset is an
+/// offset in `bytes`, and the replacement still copies the original bytes. Borrowed (no copy)
+/// when `bytes` is valid UTF-8, which is nearly every record.
+///
+/// "Not valid" is per byte, the stream's `decode` rule: a lead byte whose sequence breaks is
+/// one invalid byte, each continuation byte after it is another, and a sequence cut off at
+/// the end of `bytes` is invalid bytes too. Called on a stream's held bytes, which start and
+/// end on a decoded unit, it reads each byte as the whole stream would.
+pub(crate) fn match_view(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let Err(mut error) = std::str::from_utf8(bytes) else {
+        return std::borrow::Cow::Borrowed(bytes);
+    };
+    let mut view = bytes.to_vec();
+    let mut at = 0;
+    loop {
+        let from = at + error.valid_up_to();
+        let bad = error.error_len().unwrap_or(bytes.len() - from);
+        view[from..from + bad].fill(INVALID_BYTE_AS);
+        at = from + bad;
+        match std::str::from_utf8(&bytes[at..]) {
+            Ok(_) => return std::borrow::Cow::Owned(view),
+            Err(next) => error = next,
+        }
+    }
+}
 
 /// The shared set: `spikes/redact.py`'s ten original rules in its order, plus `masked_key`
 /// (listed right after `openai_key` here and last in the script; a soft rule never wins an
@@ -173,17 +222,22 @@ const SHARED: &[(&str, &str)] = &[
         r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}",
     ),
     // Bounded, because a capture stream is one text: an unbounded block with no END ran to the
-    // end of the stream, a whole session. A real key ends within the bound: an RSA-8192 PKCS#8
-    // file is 6,388 bytes, and as Claude Code's Read tool prints it (`N→` on each of its 100
-    // lines), JSON-escaped, its body is 7,325. A key cut off before its END takes the next
-    // 12,288 bytes, not the rest. The bound counts bytes, any byte: a body may carry `→` or an
-    // invalid byte, and a bounded Unicode `[\s\S]` compiles past the regex crate's 10 MiB limit.
-    // `candidates` extends a match that ends inside a character to that character's end, so
-    // the marker never leaves half of one behind. 12 KiB keeps a lone BEGIN below the 16 KiB
-    // hold, so the stream decides it as this regex does.
+    // end of the stream, a whole session. The bound is [`PEM_BODY_MAX`] bytes, any byte: a body
+    // may carry `→` or an invalid byte, and a bounded Unicode `[\s\S]` compiles past the regex
+    // crate's 10 MiB limit. `candidates` extends a match that ends inside a character to that
+    // character's end, so the marker never leaves half of one behind.
+    //
+    // (i) To the first END line that starts within the bound: any bytes, so a key printed with
+    // line numbers, escaped, or streamed in pieces across records is still one block.
+    // (ii) Else a lone BEGIN (an agent writing a PEM parser, `grep` output, a key cut off by an
+    // output limit) is a window: its bytes up to the first `"`, at most the bound, and not
+    // ending on a backslash. A key body never holds a quote, so a cut-off key is still taken
+    // whole; but in JSON the window ends with the string the BEGIN is in, so the record keeps
+    // the rest of its fields and still parses. Not ending on a backslash keeps an escaped
+    // closing quote (`\"`) intact. Raw text with no quote is the bound (H-20).
     (
         "private_key",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,12288})",
+        r#"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,15360}?-----END [A-Z ]*PRIVATE KEY-----|(?:(?-u:[^"]){0,15359}(?-u:[^"\\]))?)"#,
     ),
     ("slack_token", r"xox[baprs]-[A-Za-z0-9\-]{10,}"),
     // (i) the JSON form: a quoted key, a quoted value. The key word may sit inside an
@@ -621,10 +675,15 @@ pub(crate) struct Claim<'a> {
 
 /// Every match of every rule in `set`, in the rule's span form ([`Pattern::span_group`]).
 /// Rules are independent here; overlaps are resolved by [`select`].
+///
+/// The rules match on [`match_view`]`(bytes)`, so an invalid byte inside a key body does not
+/// end the key. The offsets are offsets in `bytes` either way.
 pub(crate) fn candidates<'a>(
     set: impl Iterator<Item = &'a Pattern>,
     bytes: &[u8],
 ) -> Vec<Claim<'a>> {
+    let view = match_view(bytes);
+    let bytes: &[u8] = &view;
     let mut found_all = Vec::new();
     for (priority, p) in set.enumerate() {
         // `find_iter` on the common path: a pattern that declares no capture group has
@@ -705,8 +764,9 @@ fn char_end(bytes: &[u8], end: usize) -> usize {
 /// claims inside a block vanish into it, and a claim across its edge extends it, so a block
 /// is never shadowed and never leaves the outside part of a claim raw. The group becomes one
 /// span from its earliest start to its latest end, named for the block. A block's match runs
-/// from its `BEGIN` line to the first `END` line, or to the end of the record when no `END`
-/// follows (a key cut off by an output limit is still a key). No rule is reordered, and
+/// from its `BEGIN` line to the first `END` line within [`PEM_BODY_MAX`] bytes, or, when no
+/// `END` follows, over the lone `BEGIN`'s window (a key cut off by an output limit is still a
+/// key; see the `private_key` literal in [`SHARED`]). No rule is reordered, and
 /// containment wins nowhere else. Because the merge starts from the first-wins result and
 /// only joins what overlaps a block, what a block adds is redaction: the coverage is a
 /// superset of first-wins alone (`apply_first_wins_only`, the test oracle).
