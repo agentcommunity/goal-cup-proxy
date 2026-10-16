@@ -342,7 +342,8 @@ reports `seal_write_failed`, and the status is `Failed`, never `Sealed`.
 - ¶1 *One budget.* `LOCAL_CAPTURE_FINISH_BUDGET` is 180 s. `FINISH_COMMIT_RESERVE` is 2 s; the
   drain share ends at `drain_end = D - FINISH_COMMIT_RESERVE`. The daemon's `FINISH_RESPONSE_MARGIN`
   (1 s) is the part of the reserve no refusable stage may begin inside. `GIT_READ_FLOOR` (30 s)
-  keeps the seal of a clone's Git state from being starved by a producer that never settles.
+  keeps the seal of a clone's Git state from being starved by a producer that never settles or a
+  connection the harness holds open.
   Termination (SIGTERM, grace, SIGKILL, kill sweep, reconfirm) is outside the budget and keeps
   [TERMINATION](TERMINATION.md)'s bound.
 - ¶2 *Request.* `CaptureSealRequest.remaining_finish_ms` is the whole milliseconds left of the
@@ -350,7 +351,9 @@ reports `seal_write_failed`, and the status is `Failed`, never `Sealed`.
   `finish_deadline` at stage `not_started`.
 - ¶3 *CLI order.* The launcher takes `D = now + budget` when the harness has exited and calls
   `proxy.stop()` at once; nothing runs between them. The proxy's `shutdown_deadline` is
-  `budget - FINISH_COMMIT_RESERVE`. A pre-seal step (the Hermes marker wait) runs after
+  `proxy_drain_share(budget)`: the budget less `FINISH_COMMIT_RESERVE` and `GIT_READ_FLOOR`, so
+  that a connection held open at a deadline cannot spend the Git read's time (a budget too short
+  for both, which only a test build names, keeps the reserve alone). A pre-seal step (the Hermes marker wait) runs after
   `proxy.stop()` and ends at `drain_end - NATIVE_FINISH_MIN` (1 s more than the reserve before
   `D`). With less time left it is skipped. The native scope it reads rides on the seal request
   (¶9). Standalone `goalcup seal` takes `D` after its status read and sends no scope.

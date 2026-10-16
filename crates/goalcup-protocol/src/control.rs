@@ -736,6 +736,26 @@ pub const LOCAL_CAPTURE_FINISH_BUDGET: Duration = Duration::from_secs(180);
 /// is cut with a recorded gap and still leaves time to seal.
 pub const FINISH_COMMIT_RESERVE: Duration = Duration::from_secs(2);
 
+/// What the drain stages of a clone's finish leave the seal's Git read inside
+/// [`LOCAL_CAPTURE_FINISH_BUDGET`] (D56): a producer or a connection that never settles cannot
+/// starve it. The daemon's ingest drain and the launcher's proxy stop both end this long before
+/// the commit reserve does.
+pub const GIT_READ_FLOOR: Duration = Duration::from_secs(30);
+
+/// How long the launcher's proxy stop may wait for connections to end on their own: the budget
+/// less [`FINISH_COMMIT_RESERVE`] and [`GIT_READ_FLOOR`]. At a deadline the harness is still
+/// running and may hold a connection open (a kept-alive WebSocket), so this wait can run to its
+/// end; the Git read of the seal that follows must still find its floor. A budget too short to
+/// hold both (only a test build names one) keeps the drain share to the reserve alone, as the
+/// daemon's ingest drain does for a budget it cannot split.
+pub fn proxy_drain_share(budget: Duration) -> Duration {
+    let share = budget.saturating_sub(FINISH_COMMIT_RESERVE);
+    match share.checked_sub(GIT_READ_FLOOR) {
+        Some(left) if !left.is_zero() => left,
+        _ => share,
+    }
+}
+
 /// `POST /v0/entries/{id}/seal` for a v5 entry. `proxy` is `None` when no proxy report
 /// exists, because the launcher that ran the proxy is gone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

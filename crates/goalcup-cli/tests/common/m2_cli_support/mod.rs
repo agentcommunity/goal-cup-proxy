@@ -1459,6 +1459,17 @@ pub struct Upstream {
 
 impl Upstream {
     pub fn start(runtime: &tokio::runtime::Runtime) -> Upstream {
+        Upstream::serve(runtime, false)
+    }
+
+    /// An upstream that reads each request and never answers it: it holds the connection open
+    /// until the other side closes it, as a model's long streaming answer (or a kept-alive
+    /// WebSocket) holds a harness's connection open while the harness runs.
+    pub fn start_holding(runtime: &tokio::runtime::Runtime) -> Upstream {
+        Upstream::serve(runtime, true)
+    }
+
+    fn serve(runtime: &tokio::runtime::Runtime, hold: bool) -> Upstream {
         let pki = TestPki::new("m2 cli upstream");
         let (chain, key) = pki.leaf(&["localhost"]);
         let config = rustls::ServerConfig::builder_with_provider(super::m2_common::provider())
@@ -1480,6 +1491,12 @@ impl Upstream {
                         return;
                     };
                     let (head, mut body) = read_head(&mut tls).await;
+                    if hold {
+                        use tokio::io::AsyncReadExt;
+                        let mut rest = [0u8; 4096];
+                        while matches!(tls.read(&mut rest).await, Ok(n) if n > 0) {}
+                        return;
+                    }
                     let text = String::from_utf8_lossy(&head).to_lowercase();
                     let length: usize = text
                         .lines()
@@ -1518,21 +1535,27 @@ impl Upstream {
     pub fn curl_bytes(&self, bytes: usize) -> String {
         format!(
             "head -c {bytes} /dev/zero | tr '\\0' a > \"$M2_FAKE_OUT/body\"\n{}",
-            self.post("--data-binary \"@$M2_FAKE_OUT/body\"")
+            self.post("--data-binary \"@$M2_FAKE_OUT/body\"", 10, "")
         )
     }
 
     /// One shell line that posts `body` through the proxy the harness was given.
     pub fn curl(&self, body: &str) -> String {
-        self.post(&format!("--data '{body}'"))
+        self.post(&format!("--data '{body}'"), 10, "")
     }
 
-    fn post(&self, data: &str) -> String {
+    /// One shell line that posts `body` through the proxy in the background and waits up to
+    /// five minutes for the answer, so the connection stays open while the harness runs.
+    pub fn curl_waiting(&self, body: &str) -> String {
+        self.post(&format!("--data '{body}'"), 300, " &")
+    }
+
+    fn post(&self, data: &str, max_time: u32, then: &str) -> String {
         format!(
-            "curl -sS --http1.1 --max-time 10 --noproxy '' --proxy \"$HTTPS_PROXY\" \
+            "curl -sS --http1.1 --max-time {max_time} --noproxy '' --proxy \"$HTTPS_PROXY\" \
              --cacert \"$CODEX_CA_CERTIFICATE\" -H 'content-type: application/json' \
              {data} -o /dev/null https://localhost:{port}{EVIDENCE_PATH} \
-             2>>\"$M2_FAKE_OUT/curl.err\"\n",
+             2>>\"$M2_FAKE_OUT/curl.err\"{then}\n",
             port = self.port
         )
     }
