@@ -45,7 +45,16 @@ Owner decisions of 16 Oct 2026:
 - Research data is stripped of personal and entity information (people, organisations, emails,
   accounts, repo and host identifiers) before any research group gets it. Researchers never get
   access to our database or R2; each group gets a cleaned export through custom, narrow access
-  (clean-up 14).
+  (clean-up 14). The design doc is kept privately; it is built after the event.
+- Keyed runs (a harness given an API key, such as Hermes) are uploaded. #208 is in progress: it
+  redacts the exact key values and adds a check before upload.
+- Amp ships. Its metadata log is a native source, labelled as such. #206 waits for the owner's live
+  run (the thread log is not yet measured in chat mode).
+- Claude Code's folder-trust dialog: the participant answers it. The RULES exemption for that one
+  answer is still to be written (UX-F).
+- Every start needs a human click in the browser, also when it replaces a run. The test approval key
+  exists on staging only.
+- Wire-only core (a connector with no native leg) is deferred: not before 4 Nov.
 
 ## Work to the feature stop (4 Nov), in order
 
@@ -55,10 +64,48 @@ its source report, e.g. [C4-F4]; the reports are kept outside the repo (maintain
 `crates/goalcup-cli/`, and the same for the other crates. One PR per package; `sh scripts/gate.sh
 fast` before every commit.
 
-### WP0: Measure (needs the owner's harness logins and Little Snitch rule first)
-- The 10-minute matrix (`scripts/matrix.sh`) per connector against staging, then the 8-hour runs on
-  macOS and Linux, then Intel Mac, x86_64 Linux and WSL2, then the edge cases in
-  [OPERATING](docs/OPERATING.md).
+### WP0: Measure
+Status (16 Oct): first real runs on macOS against staging (0.6.0). Codex (luna) recorded, stopped,
+sealed and uploaded. Claude (haiku) stopped at the folder-trust dialog. Left:
+- Mac Codex and Claude matrix rows still have to pass. They are blocked on a Little Snitch rule for
+  the new build.
+- Linux Codex sign-in needs the owner (Chrome must be signed in to OpenAI, or the owner enters the
+  device code). Linux Claude and Amp need owner logins.
+- Then: the 8-hour runs on macOS and Linux, Intel Mac, x86_64 Linux and WSL2, and the edge cases in
+  [OPERATING](docs/OPERATING.md). The matrix is `scripts/matrix.sh` (Linux: `scripts/linux-matrix.sh`, #198).
+
+WP0 findings (16 Oct, first real runs). The owner calls these real mini bugs to clean up. Numbers
+are the order found.
+1. Login approval page said "harness: none". Fixed: website #307.
+2. Work folder inside Git refused late, path named twice, rule code in the text. Fixed: #204.
+3. Two browser approvals look odd. Kept by design (login stores no credential; each run mints its own).
+   Pages and terminal say why: #307, #205. The guide section is open (UX-F).
+4. Terminal text not readable. Fixed: #205 (run), #209 (status, upload, entries).
+5. The guide must say two approvals are normal. Open (UX-F).
+6. "By this machine's clock" was stale. Fixed: #201, #205.
+7. Codex prompt typed, not sent. Matrix fixed: #200. The launch text now says "press Enter": #205.
+8. Test key still opened the browser. Fixed: #200 (`GOALCUP_NO_BROWSER`).
+9. Already-approved code showed "Unable to load this request". Fixed: website #307 (one retry, plain states).
+10. Codex stopped about 3 minutes after the deadline. Fixed: #201.
+11. Claude folder-trust dialog on every run. Participant answers it. Hint in the manifest (#203) and
+    launch text (#205); the matrix answers it (#200). The RULES exemption is open (UX-F).
+12. Matrix expected `deadline:` on the terminal. Fixed: #200.
+13. `seal_git_unreadable` after a long proxy wait. Fixed: #199.
+14. Connections without host or bytes. By design (tunnels); the admission line now says so: #199.
+15. Codex ids, credit balance and turn state kept clear. Fixed: #202 (plus the proxy credential rule).
+16. `install.sh` ended "Next: goalcup doctor". Fixed: #204.
+17. Silence during the clone and the wrap-up upload. Fixed: #205.
+18. Launch line full of ids and paths. Fixed: #205 (details go to host.log).
+19. Claude "No, exit" then `goalcup continue` may fail with no session. Open: measure in the matrix.
+20. RULES forbids clicking after the start; the trust answer is one. Open (UX-F).
+21. Status had no end time, time left or mode. Fixed: #209.
+22. Second start of the same harness advised `goalcup seal`. Fixed: #205.
+23. Help was developer-facing. Fixed: #204.
+24. Page buttons "Approve/Deny" for every purpose. Fixed: website #307.
+25. Replace warning had no start time. Fixed: website #307 (migration applied to prod), SQL mirror #207.
+26. Prep opened the harness with no pause. Fixed: #204.
+Also open: keyed runs not uploaded (#208, in progress); Amp (#206, waits for the owner's run).
+Participant-guide text is one pass at the end (UX-F): approvals, trust dialog, Little Snitch.
 
 ### WP1: Event window and event switch (server). Land first.
 Status (16 Oct): done. #165 and website #305 merged; production migration applied (cup 7-8 Nov 00:00 UTC, dry run 23 Oct to 6 Nov 00:00); Workers Logs on with invocation logs off (#169); deployed to prod and staging. Left: the 6 Nov `EVENT_ID` switch (runbook in `server/worker/README.md`).
@@ -243,7 +290,8 @@ These look odd but are right. Do not "fix" them.
 
 ## Open owner questions
 
-- WP0 needs your harness logins and the Little Snitch rule.
+- WP0 needs: a Little Snitch rule for the new build (Mac), a ChatGPT sign-in in Chrome or the device
+  code (Linux Codex), and logins for Linux Claude and Amp. A live Amp run before #206 merges.
 
 ## Known issues
 
@@ -265,8 +313,9 @@ These look odd but are right. Do not "fix" them.
 - **T24:** the release tarballs are unsigned. They carry every connector since #164.
 - **H-26:** when a stop cannot be confirmed (`Unresolved`), record the final pushed Git commit as a
   "last known state" marker. Open question: which branch counts when the work is not on main.
-- **Linux finish:** about 3% of `m2_synthetic_vertical::finish_drains_once…` runs end with
-  ProcessAuthorityUnavailable while the run is Running; under investigation (D7).
+- **Little Snitch and updates:** each rebuilt `goalcup` binary has a new ad-hoc signature identifier
+  (`goalcup-<hash>`), so Little Snitch blocks it again and the connection times out. The participant
+  guide must say so (allow `goalcup` again after each update). Open (UX-F).
 - **Linux:** the fast gate passes in Docker (arm64). The reservation works on ext4 and XFS. A run
   with no login launches both measured builds (arm64 and x86_64), fails on auth and seals. The
   x86_64 timing failures are fixed (39ba14f): the x86_64 fast gate passed 1933 tests on 16 Oct
