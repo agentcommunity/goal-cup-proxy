@@ -1274,8 +1274,9 @@ fn is_dot_path(s: &str) -> bool {
             .all(|g| !g.is_empty() && g.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
 }
 
-/// A single-component glob matcher: `*` any run (including none), `?` one character.
-fn glob_matches(name: &str, pattern: &str) -> bool {
+/// A single-component glob matcher: `*` any run (including none), `?` one character. The
+/// matcher of a `[[capture.native]]` pattern's components.
+pub fn glob_matches(name: &str, pattern: &str) -> bool {
     let name: Vec<char> = name.chars().collect();
     let pattern: Vec<char> = pattern.chars().collect();
     let (mut i, mut j) = (0usize, 0usize);

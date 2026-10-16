@@ -333,24 +333,38 @@ pub struct Launch<'a> {
     pub harness: &'a str,
     /// The run's mode, for a run on a server; `None` for a run on this machine only.
     pub mode: Option<RunMode>,
-    /// A `goalcup continue`: the harness picks up its last session.
-    pub continued: bool,
+    /// A first launch, or a `goalcup continue` and whether it picks up a session.
+    pub opens: Opens,
     /// The run's end ([`end_words`]), for a run on a server.
     pub ends: Option<String>,
     /// The manifest's `participant.first_screen`.
     pub first_screen: Option<&'a str>,
 }
 
+/// How the harness opens for one part of a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opens {
+    /// The run's first launch.
+    First,
+    /// A `goalcup continue`: the harness picks up its last session.
+    LastSession,
+    /// A `goalcup continue` of a run with no session yet (the harness closed before the first
+    /// message): the harness opens the normal way, with a new session.
+    NewSession,
+}
+
+/// The first line of a continued run's launch block.
+pub const RUN_GOES_ON: &str =
+    "Your run goes on. No approval is needed: this computer kept the approval for this run.";
+
 /// The block printed just before a chat-mode harness takes the terminal. Its last line starts
 /// with [`READY_MARK`].
 pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
     let h = l.harness;
+    let continued = l.opens != Opens::First;
     let mut lines = vec![String::new()];
-    match (l.continued, l.mode) {
-        (true, _) => lines.push(
-            "Your run goes on. No approval is needed: this computer kept the run's key."
-                .to_string(),
-        ),
+    match (continued, l.mode) {
+        (true, _) => lines.push(RUN_GOES_ON.to_string()),
         (false, Some(RunMode::Practice)) => lines
             .push("Your practice run is open. It does not count, and it never pushes.".to_string()),
         (false, Some(RunMode::Competition)) => {
@@ -361,18 +375,21 @@ pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
         }
         (false, None) => lines.push("This run is recorded on this computer only.".to_string()),
     }
-    if l.continued {
-        lines.push(format!(
-            "{h} opens now in this terminal and picks up its last session."
-        ));
-    } else {
-        lines.push(format!("{h} opens now in this terminal."));
-    }
+    lines.push(match l.opens {
+        Opens::First => format!("{h} opens now in this terminal."),
+        Opens::LastSession => {
+            format!("{h} opens now in this terminal and picks up its last session.")
+        }
+        Opens::NewSession => format!(
+            "{h} opens now in this terminal with a new session: this run has no earlier \
+             session to pick up."
+        ),
+    });
     // What the harness shows first comes before what to type: the participant meets it first.
     if let Some(first) = l.first_screen {
         lines.push(first.to_string());
     }
-    if l.continued {
+    if l.opens == Opens::LastSession {
         lines.push(format!(
             "If the agent has stopped, type \"{KEEP_GOING}\" and press Enter. If you never sent \
              your prompt, send it now: it is still your one prompt."
@@ -1228,7 +1245,7 @@ mod tests {
         let block = launch_block(&Launch {
             harness: "Some Agent",
             mode: Some(RunMode::Competition),
-            continued: false,
+            opens: Opens::First,
             ends: Some(ends.clone()),
             first_screen: Some("It asks whether you trust this folder. Choose Yes."),
         });
@@ -1254,19 +1271,54 @@ mod tests {
         let continued = launch_block(&Launch {
             harness: "Some Agent",
             mode: Some(RunMode::Competition),
-            continued: true,
-            ends: Some(ends),
+            opens: Opens::LastSession,
+            ends: Some(ends.clone()),
             first_screen: None,
         })
         .join("\n");
-        assert!(continued.contains("No approval is needed"), "{continued}");
+        assert!(continued.contains(RUN_GOES_ON), "{continued}");
+        assert!(
+            continued.contains("picks up its last session"),
+            "{continued}"
+        );
         assert!(continued.contains(KEEP_GOING), "{continued}");
         assert!(continued.contains("never sent your prompt"), "{continued}");
+        // What this computer kept is the approval, never a "key" a reader takes for an API key.
+        assert!(!continued.contains("key"), "{continued}");
+
+        // A continue of a run with no session promises none: it says the session is new, in
+        // one line, and asks for the one prompt as a first launch does.
+        let fresh = launch_block(&Launch {
+            harness: "Some Agent",
+            mode: Some(RunMode::Competition),
+            opens: Opens::NewSession,
+            ends: Some(ends),
+            first_screen: None,
+        });
+        let text = fresh.join("\n");
+        assert!(text.contains(RUN_GOES_ON), "{text}");
+        assert!(!text.contains("picks up"), "{text}");
+        assert_eq!(
+            fresh.iter().filter(|l| l.contains("new session")).count(),
+            1,
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "Some Agent opens now in this terminal with a new session: this run has no \
+                 earlier session to pick up."
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("Type your one prompt and press Enter"),
+            "{text}"
+        );
 
         let practice = launch_block(&Launch {
             harness: "A",
             mode: Some(RunMode::Practice),
-            continued: false,
+            opens: Opens::First,
             ends: None,
             first_screen: None,
         })

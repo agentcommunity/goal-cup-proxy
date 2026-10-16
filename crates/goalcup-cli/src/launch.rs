@@ -700,6 +700,65 @@ pub fn build_resumed_launch(
     build_launch(c, v, workspace, &Inputs::recording(launch), true)
 }
 
+/// Whether a continued run has a session its harness can pick up: a file of one of the
+/// connector's `[[capture.native]]` stores (the harness's own record of the conversation),
+/// written at or after `since_unix`, the run's start, when the store reads from the run's start
+/// (D57), else any file it holds. A harness that closed before the first message (a setup that
+/// ends the program, a trust question answered "no") wrote none, so `goalcup continue` opens it
+/// the normal way instead of asking it to resume a session that does not exist. A connector
+/// with no native store, or a store whose root this cannot place, cannot tell: it is said to
+/// have one, and is resumed as before.
+pub fn has_native_session(
+    profile: &CaptureSpec,
+    run_home: &Path,
+    config_home: &Path,
+    since_unix: u64,
+) -> bool {
+    if profile.native.is_empty() {
+        return true;
+    }
+    let since = std::time::UNIX_EPOCH + std::time::Duration::from_secs(since_unix);
+    profile.native.iter().any(|native| {
+        let root = if let Some(rest) = native.root.strip_prefix("{config_home}") {
+            config_home.join(rest.trim_start_matches('/'))
+        } else if let Some(rest) = native.root.strip_prefix("{run_home}") {
+            run_home.join(rest.trim_start_matches('/'))
+        } else {
+            return true;
+        };
+        // A `{id}` in the pattern is the session's own id: any session counts.
+        let pattern = native.pattern.replace("{id}", "*");
+        let parts: Vec<&str> = pattern.split('/').collect();
+        let floor = native.since_run_start.then_some(since);
+        holds_session_file(&root, &parts, floor)
+    })
+}
+
+/// A file under `dir` whose path matches `parts` one component each, never through a link,
+/// written at or after `floor` when there is one.
+fn holds_session_file(dir: &Path, parts: &[&str], floor: Option<std::time::SystemTime>) -> bool {
+    let Some((first, rest)) = parts.split_first() else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        if !goalcup_protocol::harness::glob_matches(&entry.file_name().to_string_lossy(), first) {
+            return false;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
+            return false;
+        };
+        if rest.is_empty() {
+            meta.is_file()
+                && floor.is_none_or(|floor| meta.modified().is_ok_and(|written| written >= floor))
+        } else {
+            meta.is_dir() && holds_session_file(&entry.path(), rest, floor)
+        }
+    })
+}
+
 /// What [`build_launch`] needs from the caller: a [`CaptureLaunch`], or the same without the
 /// recording proxy (`goalcup prep`'s launch, [`build_prep_launch`]).
 struct Inputs<'a> {
@@ -2175,5 +2234,51 @@ unsafe fn gate_read(fd: i32, buffer: &mut [u8]) -> bool {
         if !(n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)) {
             return false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_native_session;
+    use goalcup_protocol::harness::HarnessManifest;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    /// A session is a native-store file written since the run started, found without following
+    /// a link; a connector with no native store cannot tell, so it is said to have one.
+    #[test]
+    fn a_session_is_a_native_file_written_since_the_run_started() {
+        let manifest = HarnessManifest::from_toml_str(include_str!(
+            "../tests/fixtures/connectors/chat-shared-home/harness.toml"
+        ))
+        .unwrap();
+        let profile = &manifest.capture;
+        let t = tempfile::tempdir().unwrap();
+        let (run_home, config_home) = (t.path().join("run"), t.path().join("config"));
+        let since = 2_000_000_000;
+        let has = || has_native_session(profile, &run_home, &config_home, since);
+        assert!(!has(), "no store folder yet");
+
+        let project = config_home.join("projects/a");
+        std::fs::create_dir_all(&project).unwrap();
+        let file = std::fs::File::create(project.join("s.jsonl")).unwrap();
+        file.set_modified(UNIX_EPOCH + Duration::from_secs(since - 100))
+            .unwrap();
+        assert!(!has(), "a session from before the run is not this run's");
+        file.set_modified(UNIX_EPOCH + Duration::from_secs(since))
+            .unwrap();
+        assert!(has(), "written at the run's start");
+
+        // A file the pattern does not name, or one behind a link, is not a session.
+        std::fs::remove_file(project.join("s.jsonl")).unwrap();
+        std::fs::write(project.join("s.txt"), b"x").unwrap();
+        let elsewhere = t.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("s.jsonl"), b"x").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, config_home.join("projects/b")).unwrap();
+        assert!(!has());
+
+        let mut none = profile.clone();
+        none.native.clear();
+        assert!(has_native_session(&none, &run_home, &config_home, since));
     }
 }

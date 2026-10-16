@@ -172,8 +172,9 @@ enum Command {
     ///
     /// An agent that exits, a closed window or a restart ends one part of your run. The run
     /// stays open until its end time. This starts the next part on this computer, in the run's
-    /// folder, and the agent picks up its last session. Nothing is approved again: this computer
-    /// kept the run's key. You can continue a run only on the computer that started it.
+    /// folder, and the agent picks up its last session (a run with no session yet starts a new
+    /// one). Nothing is approved again: this computer kept the approval for this run. You can
+    /// continue a run only on the computer that started it.
     Continue {
         /// The run to continue. Defaults to the newest run started on this machine.
         #[arg(value_name = "RUN_ID")]

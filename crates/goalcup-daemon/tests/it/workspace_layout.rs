@@ -447,12 +447,40 @@ fn a_workspace_inside_another_work_tree_is_refused() {
     let outer = t.path().join("outer").display().to_string();
     let inner = t.path().join("outer/ws").display().to_string();
     assert!(said.contains("Git repository"), "got {said}");
-    assert!(said.contains(&format!("repository {outer}.")), "got {said}");
+    assert!(
+        said.contains(&format!("repository ({outer}).")),
+        "got {said}"
+    );
+    // The work folder is the one configured (the clone's parent), never a fixed default.
+    assert!(
+        said.contains(&format!("Your work folder {outer} is inside")),
+        "got {said}"
+    );
     assert!(
         !said.contains(&inner),
         "the clone's own path is named: {said}"
     );
-    assert!(said.contains("goalcup prep --work-root"), "got {said}");
+    assert!(said.contains("goalcup prep --work-root <"), "got {said}");
+    assert!(
+        !said.contains("~/goalcup-work"),
+        "a fixed default is named: {said}"
+    );
+    // A work folder below the repository's root is named as it is configured.
+    let deeper = t.path().join("outer/work/goalcup-0123");
+    std::fs::create_dir_all(deeper.join(".git")).unwrap();
+    let said = check_workspace_available(&Roots {
+        workspace: deeper,
+        artifact_root: art.clone(),
+    })
+    .expect_err("R3: a clone in a work folder inside a repository is refused")
+    .to_string();
+    let work = t.path().join("outer/work").display().to_string();
+    assert!(
+        said.contains(&format!(
+            "Your work folder {work} is inside a Git repository ({outer})."
+        )),
+        "got {said}"
+    );
 
     // A linked worktree (`.git` is a file) is not the root of its own clone.
     let linked = t.path().join("linked");

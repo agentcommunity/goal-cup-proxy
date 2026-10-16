@@ -833,6 +833,53 @@ mod chat {
         assert!(home.is_dir(), "the shared run home is never removed");
     }
 
+    /// A harness that closed before the first message (a trust question answered "no", a setup
+    /// that ends the program) left no session. `goalcup continue` opens it the normal way, with
+    /// no resume arguments, and says so in one line instead of promising the last session. Once
+    /// the run has a session, the next continue picks it up.
+    #[test]
+    fn a_continue_of_a_run_with_no_session_opens_the_harness_the_normal_way() {
+        let rig = Rig::chat();
+        let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+        rig.prepare_for(&server.url());
+        let new_session = "with a new session: this run has no earlier session to pick up.";
+
+        // The first part: the harness opens and closes, and no message is sent.
+        let mut first = rig.start_on_pty(&[DISK, BEATING]);
+        first.wait_shown("tui: ready");
+        first.type_line("/exit");
+        let status = first.wait();
+        assert!(status.success(), "{status:?}\n{}", first.shown());
+
+        let mut second = rig.continue_on_pty(&[DISK, BEATING], None);
+        second.wait_shown("tui: ready");
+        let argv = harness(&rig, "tui.argv");
+        assert!(!argv.contains("resume"), "no resume arguments: {argv}");
+        let shown = second.shown();
+        assert_eq!(shown.matches(new_session).count(), 1, "{shown}");
+        assert!(!shown.contains("picks up its last session"), "{shown}");
+        assert!(shown.contains("Type your one prompt"), "{shown}");
+        second.type_line("hello");
+        second.wait_shown("tui: noted hello");
+        second.type_line("/exit");
+        let status = second.wait();
+        assert!(status.success(), "{status:?}\n{}", second.shown());
+
+        // Now the run has a session: the next part resumes it.
+        let mut third = rig.continue_on_pty(&[DISK, BEATING], None);
+        third.wait_shown("tui: ready");
+        let argv = harness(&rig, "tui.argv");
+        assert!(argv.ends_with("resume\n--last"), "{argv}");
+        let shown = third.shown();
+        assert!(shown.contains("picks up its last session"), "{shown}");
+        assert!(!shown.contains(new_session), "{shown}");
+        third.type_line("/exit");
+        let status = third.wait();
+        assert!(status.success(), "{status:?}\n{}", third.shown());
+        let run_id = &server.run_ids()[0];
+        assert_eq!(server.entry_ids(run_id).len(), 3, "three segments");
+    }
+
     /// A chat-mode run needs its terminal for input and for output: from a pipe, or with its
     /// output in a file, it is refused before anything is created.
     #[test]

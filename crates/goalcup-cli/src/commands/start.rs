@@ -904,6 +904,8 @@ struct Forked<'a> {
     harness_name: String,
     /// The manifest's first-screen hint, shown just before a chat-mode harness opens.
     first_screen: Option<String>,
+    /// A first launch, or a continue that picks up the last session or starts a new one.
+    opens: crate::participant::Opens,
     /// A chat-mode run's ids and folders, held back from the launch block and written to its
     /// `host.log` once it is open.
     details: Vec<String>,
@@ -1684,6 +1686,22 @@ fn create_and_gate<'a>(
         Some(continuing) => continuing.record.started_at_unix,
         None => crate::run::now_unix(),
     };
+    // A continued run picks up the harness's last session only when the run has one; one whose
+    // harness closed before the first message opens the normal way, and the launch block says so.
+    let opens = match cx.continuing {
+        None => crate::participant::Opens::First,
+        Some(_)
+            if crate::launch::has_native_session(
+                profile,
+                &run.home,
+                &config_home,
+                started_at_unix,
+            ) =>
+        {
+            crate::participant::Opens::LastSession
+        }
+        Some(_) => crate::participant::Opens::NewSession,
+    };
     // With a server, the run is opened there before the daemon creates anything: the
     // server issues the entry id every record carries.
     let opened = match upload {
@@ -1860,7 +1878,7 @@ fn create_and_gate<'a>(
         let mut vars = goalcup_protocol::template::TemplateVars::new();
         vars.set("workspace", run.workspace.display().to_string());
         vars.set("session_id", session_id.clone());
-        let build_launch = if cx.continuing.is_some() {
+        let build_launch = if opens == crate::participant::Opens::LastSession {
             crate::launch::build_resumed_launch
         } else {
             crate::launch::build_capture_launch
@@ -1975,6 +1993,7 @@ fn create_and_gate<'a>(
         drained: Vec::new(),
         harness_name: c.display_name().to_string(),
         first_screen: c.first_screen().map(str::to_string),
+        opens,
         details,
     };
     let gate = Gate {
@@ -2071,7 +2090,7 @@ fn register_and_release<'a>(
                 .server_url
                 .is_some()
                 .then(|| forked.record.mode()),
-            continued: forked.record.entries.len() > 1,
+            opens: forked.opens,
             ends,
             first_screen: forked.first_screen.as_deref(),
         });
