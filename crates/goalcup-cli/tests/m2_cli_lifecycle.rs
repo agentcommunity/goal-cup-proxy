@@ -1564,6 +1564,8 @@ fn a_blocked_evidence_queue_does_not_outlast_the_one_finish_deadline() {
 /// for it only until the drain share, which ends `GIT_READ_FLOOR` and the commit reserve before
 /// the deadline, so the seal is asked with at least that much left. With the old bound (the
 /// budget less the reserve) the stop ran to the end and the request stated about 2 s.
+/// The harness ends only once the upstream holds the request: a harness that ended at once
+/// could finish before its background `curl` reached the proxy (seen on a loaded Linux host).
 #[test]
 fn a_connection_held_open_at_the_finish_leaves_the_seal_the_git_floor() {
     use goalcup_protocol::control::{FINISH_COMMIT_RESERVE, GIT_READ_FLOOR};
@@ -1571,9 +1573,16 @@ fn a_connection_held_open_at_the_finish_leaves_the_seal_the_git_floor() {
     let rig = Rig::new();
     // 34 s: the drain share is 34 - 2 - 30 = 2 s. (`Rig::new` names 10 s; the next rig resets it.)
     goalcup_cli::set_finish_budget(Duration::from_secs(34));
-    let upstream = Upstream::start_holding(&rig.runtime);
+    let upstream = Upstream::start_holding_marked(&rig.runtime, &rig.out.join("held"));
     rig.tell("stop", "");
-    rig.tell("steps.sh", &upstream.curl_waiting(r#"{"n":1}"#));
+    rig.tell(
+        "steps.sh",
+        &format!(
+            "{}{}",
+            upstream.curl_waiting(r#"{"n":1}"#),
+            upstream.wait_held()
+        ),
+    );
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -1589,6 +1598,11 @@ fn a_connection_held_open_at_the_finish_leaves_the_seal_the_git_floor() {
     let took = began.elapsed();
     goalcup_cli::set_finish_budget(Duration::from_secs(10));
     result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(
+        rig.harness_file("held").is_some(),
+        "the upstream never held the request (curl: {:?})\n{out}",
+        rig.harness_file("curl.err")
+    );
 
     // The request went out through the proxy and was never answered: it was open at the stop.
     let (_, records) = rig.read_trace(&client.created().entry_id);
