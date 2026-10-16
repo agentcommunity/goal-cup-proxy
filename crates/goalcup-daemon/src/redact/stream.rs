@@ -2063,8 +2063,13 @@ impl Scanner {
             return;
         }
         // A complete match that straddles the cut may still lose its claim to a
-        // higher-priority candidate that completes later: hold it too.
-        let (found, open_from) = self.found(&policy, self.held.len());
+        // higher-priority candidate that completes later: hold it too. With no live candidate
+        // and no open block, no match can straddle the end of the hold: skip the search.
+        let (found, open_from) = if cut < end || self.open_block.is_some() {
+            self.found(&policy, self.held.len())
+        } else {
+            (Vec::new(), 0)
+        };
         let pem = pem_literal();
         let decided = |i: usize, m: &Claim<'_>| {
             m.block
