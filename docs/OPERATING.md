@@ -214,8 +214,8 @@ real-harness mode a PASS does not prove the prompt was typed; check the session 
 `https://github.com/agentcommunity/goalcup-matrix-empty`), `MATRIX_BIN_DIR`, `--keep`, `--timeout`
 (1800 s). It needs `curl` 7.55 or later, `python3` and `script(1)`.
 
-**Linux, real harness, in Docker.** `scripts/linux-matrix.sh` runs the matrix for `codex-cli` (and
-`hermes-cli`) in a container on a Mac. It builds the Linux binaries from the checkout, installs the harness
+**Linux, real harness, in Docker.** `scripts/linux-matrix.sh` runs the matrix for `codex-cli` in a
+container on a Mac. It builds the Linux binaries from the checkout, installs the harness
 at the version the connector's first line names, and keeps the configuration directory, the harness's
 tracker home and the work folder on a Docker volume of the connector's own (`goalcup-linux-matrix-<id>`),
 so one sign-in serves every later run. Once per volume, in a terminal:
@@ -223,11 +223,13 @@ so one sign-in serves every later run. Once per volume, in a terminal:
 approved with the key; then `goalcup prep` opens Codex in the container, and you choose "Sign in with
 Device Code", finish it in the Mac's browser, and type `/exit`. After that, unattended:
 `GOALCUP_TEST_APPROVAL_KEY_FILE=<key file> sh scripts/linux-matrix.sh run codex-cli` prints the row last.
-Key files are mounted read-only and only their container path is passed; a headless harness's key file
-goes in `MATRIX_KEY_ENV_FILE`. The member is the synthetic test member unless `GOALCUP_TEST_MEMBER_ID`
-says otherwise, the server is staging, and the script takes the heavy-run lock itself, with `--cpus=6`.
-Codex's tracker home is set to `gpt-5.6-luna` at low reasoning effort before each run, and a run whose
-sessions name `gpt-6-astra` fails. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
+Key files are mounted read-only and only their container path is passed. The member is the synthetic
+test member unless `GOALCUP_TEST_MEMBER_ID` says otherwise, and the server is staging. The script takes
+the heavy-run lock itself (never run it inside the lock: it refuses when `GOALCUP_HEAVY_LOCK_HELD=1` and
+gives up after 30 minutes), with `--cpus=6`. Codex's tracker home is set to `gpt-5.6-luna` at low
+reasoning effort before each run; the run fails unless every Codex turn it recorded says exactly that.
+The harness can read the checkout and the key files, so run it from a clean checkout. `hermes-cli` is
+refused as blocked: a harness given a provider key is never uploaded, so it cannot make a practice run. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
 
 **`--check-copy`.** For a run you made by hand, verifies every entry of the run locally and compares each
 with the server's position, using the run's credential from the configuration directory. It starts and

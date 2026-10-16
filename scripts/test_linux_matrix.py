@@ -8,10 +8,13 @@ running the container half on a temporary configuration directory.
 
 from __future__ import annotations
 
+import json
 import os
+import signal
 import stat
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -20,6 +23,9 @@ SENTINEL = "SENTINEL-KEY-VALUE-never-printed-0123456789"
 STUB = """#!/bin/sh
 echo "$*" >> "$STUB_LOG"
 case "$*" in *inner-home-ready*) echo "${STUB_HOME_READY:-no}" ;; esac
+case "$*" in "ps -q "*) [ -z "${STUB_BUSY:-}" ] || echo "$STUB_BUSY" ;; esac
+if [ -n "${STUB_SLEEP:-}" ]; then case "$*" in *"$STUB_SLEEP"*) sleep 15 ;; esac; fi
+if [ -n "${STUB_FAIL:-}" ]; then case "$*" in *"$STUB_FAIL"*) exit 1 ;; esac; fi
 exit 0
 """
 
@@ -51,7 +57,8 @@ class LinuxMatrixTests(unittest.TestCase):
             "GOALCUP_TEST_APPROVAL_KEY_FILE": str(self.key),
         }
         for name in ("GOALCUP_TEST_APPROVAL_KEY", "MATRIX_KEY_ENV_FILE", "LINUX_MATRIX_SERVER",
-                     "GOALCUP_TEST_MEMBER_ID"):
+                     "GOALCUP_TEST_MEMBER_ID", "GOALCUP_HEAVY_LOCK_HELD", "LINUX_MATRIX_LOCK_WAIT",
+                     "LINUX_MATRIX_ALLOW_KEYED"):
             self.env.pop(name, None)
 
     def run_script(self, *args: str, **env: str) -> subprocess.CompletedProcess:
@@ -65,6 +72,18 @@ class LinuxMatrixTests(unittest.TestCase):
 
     def docker_lines(self, verb: str) -> list[str]:
         return [x for x in self.log.read_text().splitlines() if x.startswith(verb + " ")]
+
+    def assert_container_removed_last(self, pid: int) -> None:
+        name = f"goalcup-linux-matrix-codex-cli-{pid}"
+        [docker_run] = self.docker_lines("run")
+        self.assertIn(f"--name {name} ", docker_run)
+        self.assertEqual(self.log.read_text().splitlines()[-1], f"rm -f {name}")
+        self.assertFalse(self.lock.exists(), "the heavy lock was left held")
+
+    def popen(self, *args: str, **env: str) -> subprocess.Popen:
+        return subprocess.Popen(["sh", str(SCRIPT), *args], env={**self.env, **env},
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                stdin=subprocess.DEVNULL)
 
     def test_run_mounts_the_key_file_read_only_and_never_passes_its_value(self) -> None:
         run = self.run_script("run", "codex-cli")
@@ -98,7 +117,8 @@ class LinuxMatrixTests(unittest.TestCase):
         keyenv = self.base / "key.env"
         keyenv.write_text("DEEPSEEK_API_KEY=" + SENTINEL + "\n")
         keyenv.chmod(0o600)
-        run = self.run_script("run", "hermes-cli", MATRIX_KEY_ENV_FILE=str(keyenv))
+        run = self.run_script("run", "hermes-cli", MATRIX_KEY_ENV_FILE=str(keyenv),
+                              LINUX_MATRIX_ALLOW_KEYED="1")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         [docker_run] = self.docker_lines("run")
         self.assertIn(f"-v {keyenv}:/run/goalcup/key.env:ro", docker_run)
@@ -134,11 +154,77 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertTrue(run.stdout.rstrip().splitlines()[-1].startswith("linux-matrix: signed in"))
         self.assertFalse(any("goalcup prep" in x for x in self.docker_lines("exec")))
 
+    def test_a_keyed_connector_is_refused_as_blocked_in_one_line(self) -> None:
+        for action in ("run", "login"):
+            run = self.run_script(action, "hermes-cli")
+            self.assertEqual(run.returncode, 1, action)
+            lines = run.stdout.splitlines()
+            self.assertEqual(len(lines), 1, run.stdout)
+            self.assertTrue(lines[0].startswith("linux-matrix: FAIL blocked: hermes-cli"), lines[0])
+        self.assertEqual(self.log.read_text(), "")
+
     def test_login_of_a_headless_connector_is_refused(self) -> None:
-        run = self.run_script("login", "hermes-cli")
+        run = self.run_script("login", "hermes-cli", LINUX_MATRIX_ALLOW_KEYED="1")
         self.assertEqual(run.returncode, 1)
         self.assertIn("headless", run.stdout)
         self.assertEqual(self.log.read_text(), "")
+
+    def test_a_caller_holding_the_lock_is_refused_at_once(self) -> None:
+        self.lock.mkdir()
+        start = time.monotonic()
+        run = self.run_script("run", "codex-cli", GOALCUP_HEAVY_LOCK_HELD="1")
+        self.assertLess(time.monotonic() - start, 10)
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("you hold the heavy-run lock", run.stdout)
+        self.assertTrue(self.lock.is_dir(), "the script removed a lock it did not take")
+        self.assertEqual(self.docker_lines("run"), [])
+
+    def test_a_lock_held_too_long_fails_instead_of_waiting_for_ever(self) -> None:
+        self.lock.mkdir()
+        run = self.run_script("run", "codex-cli", LINUX_MATRIX_LOCK_WAIT="0")
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("is still held after 0s", run.stdout)
+        self.assertTrue(self.lock.is_dir(), "the script removed a lock it did not take")
+        self.assertEqual(self.docker_lines("run"), [])
+
+    def test_a_running_container_of_the_connector_is_refused_not_removed(self) -> None:
+        run = self.run_script("run", "codex-cli", STUB_BUSY="abc123")
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("another linux-matrix container of codex-cli is running", run.stdout)
+        self.assertNotIn("rm -f abc123", self.log.read_text())
+        self.assertEqual(self.docker_lines("run"), [])
+        self.assertFalse(self.lock.exists())
+
+    def test_the_container_is_removed_after_a_run(self) -> None:
+        proc = self.popen("run", "codex-cli")
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assert_container_removed_last(proc.pid)
+
+    def test_the_container_is_removed_after_a_failed_step(self) -> None:
+        proc = self.popen("run", "codex-cli", STUB_FAIL="cargo build")
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 1, out + err)
+        self.assertIn("linux-matrix: FAIL build", out)
+        self.assert_container_removed_last(proc.pid)
+
+    def test_the_container_is_removed_at_the_owner_step(self) -> None:
+        proc = self.popen("login", "codex-cli")
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 3, out + err)
+        self.assert_container_removed_last(proc.pid)
+
+    def test_the_container_is_removed_on_a_signal(self) -> None:
+        proc = self.popen("run", "codex-cli", STUB_SLEEP="cargo build")
+        deadline = time.monotonic() + 30
+        while "cargo build" not in self.log.read_text() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        proc.send_signal(signal.SIGTERM)
+        # Only the exit is waited for: the stub's sleep, orphaned, still holds the output pipes.
+        self.assertEqual(proc.wait(timeout=20), 130)
+        proc.stdout.close()
+        proc.stderr.close()
+        self.assert_container_removed_last(proc.pid)
 
     def test_codex_home_config_sets_luna_low_and_drops_another_model(self) -> None:
         cfg = self.base / "vol/cfg"
@@ -160,6 +246,62 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertNotIn("gpt-6-astra", text)
         self.assertIn('[projects."/w"]\ntrust_level = "trusted"\nmodel = "kept-in-table"', text)
         self.assertEqual(stat.S_IMODE((home / "config.toml").stat().st_mode), 0o600)
+
+
+class CodexModelCheckTests(unittest.TestCase):
+    """The container half's check of the run's Codex turns, on a temporary volume."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name).resolve()
+        self.sessions = self.base / "vol/cfg/capture-homes/codex-cli/sessions/2026/10/16"
+        self.sessions.mkdir(parents=True)
+        self.script = self.base / "linux-matrix.sh"
+        self.script.write_text(SCRIPT.read_text().replace("VOL=/vol\n", f"VOL={self.base / 'vol'}\n", 1))
+        self.marker = self.base / "marker"
+        self.marker.touch()
+        past = time.time() - 3600
+        os.utime(self.marker, (past, past))
+
+    def rollout(self, name: str, *turns: tuple[str, str], old: bool = False) -> None:
+        lines = [json.dumps({"type": "session_meta", "payload": {"id": name}})]
+        lines += [json.dumps({"type": "turn_context", "payload": {"model": m, "effort": e}})
+                  for m, e in turns]
+        path = self.sessions / f"rollout-{name}.jsonl"
+        path.write_text("\n".join(lines) + "\n")
+        if old:
+            past = time.time() - 7200
+            os.utime(path, (past, past))
+
+    def check(self) -> subprocess.CompletedProcess:
+        return subprocess.run(["sh", str(self.script), "inner-model-check", "codex-cli",
+                               str(self.marker)], capture_output=True, text=True)
+
+    def test_luna_at_low_passes(self) -> None:
+        self.rollout("a", ("gpt-5.6-luna", "low"), ("gpt-5.6-luna", "low"))
+        run = self.check()
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("gpt-5.6-luna at effort low", run.stdout)
+
+    def test_astra_fails(self) -> None:
+        self.rollout("a", ("gpt-5.6-luna", "low"), ("gpt-6-astra", "low"))
+        self.assertEqual(self.check().returncode, 1)
+
+    def test_another_effort_fails(self) -> None:
+        self.rollout("a", ("gpt-5.6-luna", "medium"))
+        self.assertEqual(self.check().returncode, 1)
+
+    def test_no_turn_found_fails(self) -> None:
+        self.rollout("a")
+        run = self.check()
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("could not be confirmed", run.stdout)
+
+    def test_sessions_from_before_the_run_are_not_counted(self) -> None:
+        self.rollout("old", ("gpt-6-astra", "high"), old=True)
+        self.rollout("new", ("gpt-5.6-luna", "low"))
+        self.assertEqual(self.check().returncode, 0)
 
 
 if __name__ == "__main__":

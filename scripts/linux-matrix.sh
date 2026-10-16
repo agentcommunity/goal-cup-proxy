@@ -17,30 +17,46 @@
 #         opens in its tracker home and the owner signs in there. Without a terminal, everything
 #         up to that point is done and the command to run in one is printed (exit 3). Once prep
 #         has recorded the sign-in (`home_ready`), login does not open the harness again.
-#         Only for a chat-mode connector; a headless one gets its key from MATRIX_KEY_ENV_FILE.
+#         Only for a chat-mode connector.
 # run     scripts/matrix.sh <connector> <server> in the container, with MATRIX_CONFIG_DIR on the
 #         volume (chat-mode connectors). Prints the matrix row last, and exits with matrix.sh's
 #         status.
 #
 # Owner rules kept here: Codex's tracker home gets `model = "gpt-5.6-luna"` and
-# `model_reasoning_effort = "low"` before every login and run (never gpt-6-astra), and a run whose
-# new Codex sessions name gpt-6-astra fails. Hermes keeps its own default model.
+# `model_reasoning_effort = "low"` before every login and run (never gpt-6-astra). After the run,
+# every turn of the run's new Codex sessions must say gpt-5.6-luna at effort low; a turn with any
+# other model, or no turn found at all, fails the run.
+#
+# Blocked: a connector given a provider key ([capture.credential], hermes-cli) is refused. A
+# keyed harness is never uploaded today, so `goalcup start --practice` refuses it (start.rs,
+# docs/RULES.md), and no matrix row can pass. The owner decides whether that changes. The code
+# path for it (install recipe, MATRIX_KEY_ENV_FILE) is kept; LINUX_MATRIX_ALLOW_KEYED=1 lets it
+# through for that work.
 #
 # Environment. A secret is only ever a FILE, mounted read-only; its path goes to the one command
 # that reads it, and its value is never in an argument, a `-e`, a log or this script's output.
 #   GOALCUP_TEST_APPROVAL_KEY_FILE  the server's test approval key (needed by both modes).
 #   GOALCUP_TEST_MEMBER_ID          the member approved as
 #                                   (default 00000000-0000-4000-8000-0000000c0de1).
-#   MATRIX_KEY_ENV_FILE             a headless harness's provider key file (hermes-cli: a
+#   MATRIX_KEY_ENV_FILE             a keyed harness's provider key file (hermes-cli: a
 #                                   DEEPSEEK_API_KEY= line, mode 0600), passed to matrix.sh as
-#                                   MATRIX_KEY_ENV_FILE.
+#                                   MATRIX_KEY_ENV_FILE. Blocked, see above.
 #   LINUX_MATRIX_SERVER             default https://goalcup-ingest-staging.b-9a5.workers.dev;
 #                                   production is refused.
 #   LINUX_MATRIX_LOG_DIR            where matrix.sh's log lands on this machine
 #                                   (default $TMPDIR/goalcup-linux-matrix).
 #   GOALCUP_HEAVY_LOCK              the shared heavy-run lock (default /tmp/goalcup-heavy.lock).
 #                                   The script takes it for the build and the run and drops it
-#                                   before the interactive sign-in; do not run it inside the lock.
+#                                   before the interactive sign-in. Never run it inside the lock:
+#                                   it would wait for its own caller. A wrapper that holds the
+#                                   lock sets GOALCUP_HEAVY_LOCK_HELD=1, and the script refuses at
+#                                   once; otherwise it waits at most LINUX_MATRIX_LOCK_WAIT
+#                                   seconds (default 1800), then fails.
+#
+# What the harness can read. It runs as the same user as the script's own steps, so it can read
+# the mounted key files (/run/goalcup/*, read-only; staging's test key) and the whole checkout at
+# /src, untracked files included. Run it from a clean checkout, never one holding secrets (a
+# Worker .dev.vars, for example).
 #
 # Needs: Docker (no privileged container), `cargo fetch --locked` run on this machine first (the
 # container builds --offline from its registry), and network.
@@ -51,7 +67,6 @@ set -u
 STAGING=https://goalcup-ingest-staging.b-9a5.workers.dev
 SYNTHETIC_MEMBER=00000000-0000-4000-8000-0000000c0de1
 LUNA=gpt-5.6-luna
-ASTRA=gpt-6-astra
 # Paths inside the container.
 VOL=/vol
 CFG=$VOL/cfg
@@ -195,15 +210,37 @@ if not same:
 PY
 }
 
-# Codex writes the model of every turn into its rollouts: list the models the run's new sessions
-# name, and fail on the one the owner forbids.
+# Codex writes each turn's model and reasoning effort into its rollout, as a `turn_context` line
+# (spikes/codex-app/fixtures). Every turn of the run's new sessions must say gpt-5.6-luna at effort
+# low; any other model fails, and so does finding no turn at all: the rule cannot be confirmed.
 inner_model_check() { # connector marker
     [ "$1" = codex-cli ] || return 0
-    sessions=$CFG/capture-homes/codex-cli/sessions
-    models=$(find "$sessions" -name 'rollout-*.jsonl' -newer "$2" -exec grep -ho '"model":"[^"]*"' {} + 2>/dev/null | sort -u | tr '\n' ' ')
-    echo "linux-matrix: models in the run's Codex sessions: ${models:-none found}"
-    case $models in *"\"$ASTRA\""*) return 1 ;; esac
-    return 0
+    python3 - "$CFG/capture-homes/codex-cli/sessions" "$2" "$LUNA" <<'PY'
+import json, os, sys
+
+root, marker, want = sys.argv[1], sys.argv[2], sys.argv[3]
+since = os.stat(marker).st_mtime
+turns = []
+for d, _, files in os.walk(root):
+    for f in files:
+        path = os.path.join(d, f)
+        if not (f.startswith("rollout-") and f.endswith(".jsonl")) or os.stat(path).st_mtime < since:
+            continue
+        for line in open(path, errors="replace"):
+            try:
+                o = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(o, dict) and o.get("type") == "turn_context":
+                ctx = o.get("payload") or {}
+                turns.append((ctx.get("model"), ctx.get("effort")))
+seen = sorted({f"{m} at effort {e}" for m, e in turns})
+print("linux-matrix: Codex turns of this run: " + (", ".join(seen) if seen else "none found"))
+if not turns:
+    print("linux-matrix: the model could not be confirmed (no Codex turn in the run's sessions)")
+    sys.exit(1)
+sys.exit(0 if all(m == want and e == "low" for m, e in turns) else 1)
+PY
 }
 
 inner_run() { # connector
@@ -224,7 +261,7 @@ inner_run() { # connector
     cat "$TMPDIR/matrix.$$.out"
     row=$(grep "^$h " "$TMPDIR/matrix.$$.out" | tail -n 1)
     if ! inner_model_check "$h" "$marker"; then
-        echo "linux-matrix: FAIL owner rule: a session of this run used $ASTRA"
+        echo "linux-matrix: FAIL owner rule: every Codex turn must be $LUNA at effort low"
         exit 1
     fi
     echo "linux-matrix: log on the host: ${LINUX_MATRIX_HOST_LOG_DIR:-/logs}/$(basename "$log")"
@@ -236,6 +273,7 @@ case ${1:-} in
 inner-home-config) inner_home_config "$2"; exit 0 ;;
 inner-login) inner_home_config "$2"; inner_login; exit 0 ;;
 inner-home-ready) inner_home_ready "$2"; exit 0 ;;
+inner-model-check) inner_model_check "$2" "$3"; exit $? ;;
 inner-settle) inner_settle; exit 0 ;;
 inner-run) inner_run "$2" ;;
 esac
@@ -263,6 +301,10 @@ codex-cli) install="npm install -g @openai/codex@$version && codex --version" ;;
 hermes-cli) install="python3 -m venv /opt/hermes && /opt/hermes/bin/pip install --no-cache-dir hermes-agent==$version && ln -s /opt/hermes/bin/hermes /usr/local/bin/hermes" ;;
 *) fail "no install recipe for $h in this script" ;;
 esac
+# A harness given a provider key is never uploaded, so it cannot make the practice run a row is.
+if grep -q '^\[capture\.credential\]' "$manifest" && [ "${LINUX_MATRIX_ALLOW_KEYED:-0}" != 1 ]; then
+    fail "blocked: $h is given a provider key, and a keyed harness is never uploaded, so goalcup start refuses --practice (docs/RULES.md); the owner decides"
+fi
 [ "$action" = run ] || [ "$mode" = chat ] ||
     fail "login: $h is headless (no sign-in to keep); give its key with MATRIX_KEY_ENV_FILE to run"
 
@@ -301,7 +343,8 @@ logdir=$(cd "$logdir" && pwd -P)
 checkout=$(printf %s "$PWD" | cksum | cut -d' ' -f1)
 img=goalcup-linux-matrix-$h:$version
 name=goalcup-linux-matrix-$h-$$
-label=goalcup-linux-matrix=$checkout-$h
+# One label per connector, as the volume is one per connector: every checkout's run of it uses it.
+label=goalcup-linux-matrix=$h
 volume=goalcup-linux-matrix-$h
 target=goalcup-linux-matrix-target-$checkout
 lock=${GOALCUP_HEAVY_LOCK:-/tmp/goalcup-heavy.lock}
@@ -312,9 +355,21 @@ unlock() {
 }
 trap 'docker rm -f "$name" >/dev/null 2>&1; unlock' EXIT
 trap 'exit 130' INT HUP TERM
+# The lock directory names no owner, so a caller that holds it says so (GOALCUP_HEAVY_LOCK_HELD=1)
+# and is refused at once; anyone else waits a bounded time, never for ever.
 if ! mkdir "$lock" 2>/dev/null; then
-    echo "linux-matrix: waiting for the heavy-run lock $lock"
-    until mkdir "$lock" 2>/dev/null; do sleep 20; done
+    [ "${GOALCUP_HEAVY_LOCK_HELD:-0}" != 1 ] ||
+        fail "lock: you hold the heavy-run lock $lock yourself; this script takes it itself, so run it outside the lock"
+    wait_max=${LINUX_MATRIX_LOCK_WAIT:-1800}
+    case $wait_max in '' | *[!0-9]*) fail "LINUX_MATRIX_LOCK_WAIT is a number of seconds" ;; esac
+    echo "linux-matrix: waiting for the heavy-run lock $lock (at most ${wait_max}s)"
+    waited=0
+    until mkdir "$lock" 2>/dev/null; do
+        [ "$waited" -lt "$wait_max" ] ||
+            fail "lock: the heavy-run lock $lock is still held after ${wait_max}s. If you hold it yourself, do not wrap this script in it"
+        sleep 5
+        waited=$((waited + 5))
+    done
 fi
 locked=1
 
@@ -330,6 +385,10 @@ RUN $install
 ENV RUSTUP_TOOLCHAIN=1.99.0 CARGO_TARGET_DIR=/target CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0
 DOCKERFILE
 
+# A running container of this connector is another run's (maybe the owner's sign-in, which runs
+# without the lock): refuse, never remove it. A stopped one is left over: remove it.
+busy=$(docker ps -q --filter "label=$label")
+[ -z "$busy" ] || fail "another linux-matrix container of $h is running ($(docker ps --filter "label=$label" --format '{{.Names}}' | tr '\n' ' ')). Wait for it; if it is stale, docker rm -f it"
 old=$(docker ps -aq --filter "label=$label")
 [ -z "$old" ] || docker rm -f $old >/dev/null 2>&1
 cpus=$(docker info --format '{{.NCPU}}' 2>/dev/null)
