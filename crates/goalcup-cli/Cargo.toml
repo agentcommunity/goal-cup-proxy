@@ -30,6 +30,9 @@ goalcup-protocol = { path = "../goalcup-protocol" }
 goalcup-verifier = { path = "../goalcup-verifier" }
 serde.workspace = true
 serde_json.workspace = true
+# `capture.model_host_from` reads a TOML config with the parser `goalcup-protocol` already
+# links (D62), so no new crate.
+toml.workspace = true
 thiserror.workspace = true
 # The seal's mirror walk (`src/seal.rs`) streams each file in 64 KiB chunks, the way the
 # daemon's `workspace::measure` does, so two walks over one tree agree and a large file is

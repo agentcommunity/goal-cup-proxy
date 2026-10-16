@@ -883,6 +883,31 @@ async fn connect_upstream(
     .await
 }
 
+/// A test build's stand-in addresses: a host name connected to a fixed local address instead
+/// of being resolved, so a test can serve a non-loopback model host (D62) on this machine. A
+/// shipped build compiles none of this.
+#[cfg(any(test, feature = "test-support"))]
+static TEST_ADDRESSES: std::sync::Mutex<BTreeMap<String, std::net::SocketAddr>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// Connect `host`, whatever port is asked for, to `address` in this process (a test build only).
+#[cfg(any(test, feature = "test-support"))]
+pub fn resolve_for_test(host: &str, address: std::net::SocketAddr) {
+    let mut table = TEST_ADDRESSES.lock().unwrap_or_else(|e| e.into_inner());
+    table.insert(host.to_string(), address);
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn test_address(host: &str) -> Option<std::net::SocketAddr> {
+    let table = TEST_ADDRESSES.lock().unwrap_or_else(|e| e.into_inner());
+    table.get(host).copied()
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+fn test_address(_host: &str) -> Option<std::net::SocketAddr> {
+    None
+}
+
 /// Connects to `host:port`. Each round resolves the name afresh and tries every address in
 /// turn, IPv4 first, each attempt bounded by `attempt` so one dead route cannot stall
 /// admission.
@@ -915,13 +940,16 @@ pub(crate) async fn connect_host(
     };
     loop {
         let lookup = tokio::net::lookup_host((host, port));
-        let round = match tokio::time::timeout_at(round_until, lookup).await {
-            Ok(Ok(resolved)) => {
-                let mut addresses: Vec<std::net::SocketAddr> = resolved.collect();
-                addresses.sort_by_key(|address| address.is_ipv6());
-                connect_addresses(addresses, attempt, round_until).await
-            }
-            Ok(Err(_)) | Err(_) => Err(ConnectFailureKind::Dns),
+        let round = match test_address(host) {
+            Some(address) => connect_addresses(vec![address], attempt, round_until).await,
+            None => match tokio::time::timeout_at(round_until, lookup).await {
+                Ok(Ok(resolved)) => {
+                    let mut addresses: Vec<std::net::SocketAddr> = resolved.collect();
+                    addresses.sort_by_key(|address| address.is_ipv6());
+                    connect_addresses(addresses, attempt, round_until).await
+                }
+                Ok(Err(_)) | Err(_) => Err(ConnectFailureKind::Dns),
+            },
         };
         let last = match round {
             Ok(stream) => return Ok(stream),

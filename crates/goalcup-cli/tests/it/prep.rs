@@ -1494,3 +1494,80 @@ fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
         assert!(!rig.cfg.join("capture-homes").join(leaf).exists(), "{what}");
     }
 }
+
+// ------------------------------------------------------------------ the model service (D62)
+
+/// A connector that reads its model service from the harness's config: a home whose harness
+/// names one Goal Cup cannot record (here a local `http://localhost` server) is not ready. Prep
+/// says why, clears the mark and opens the harness again, so the participant can choose another
+/// service there; once the config names an https service on the network, the home is ready.
+#[test]
+fn prep_keeps_the_home_not_ready_while_the_model_service_cannot_be_recorded() {
+    let rig = Rig::chat();
+    let from = crate::model_host_from::reads_model_host(&rig, CHAT_ID);
+    let home = rig.cfg.join("capture-homes").join(CHAT_ID);
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    all_but_the_harness(&rig);
+    let set = |url: &str| crate::common::support::write_model_host_config(&home, &from, url);
+    let open_and_exit = |fix: Option<&str>| {
+        let mut on_pty = OnPty::spawn(prep_command(&rig, &["--repo", REPO], &facts), None);
+        press_enter(&on_pty);
+        on_pty.wait_shown("tui: ready");
+        if let Some(url) = fix {
+            set(url);
+        }
+        on_pty.type_line("/exit");
+        on_pty.wait();
+        on_pty.shown()
+    };
+    const LOCAL: &str = "is set to use http://localhost:11434, which Goal Cup cannot record: \
+                         it is plain http";
+
+    // The first set-up picks a local server: the harness exits normally, the home is not ready.
+    set("http://localhost:11434/v1");
+    let shown = open_and_exit(None);
+    let step = line(&shown, "harness_home");
+    assert!(step.starts_with("[todo] harness_home:"), "{shown}");
+    assert!(
+        step.contains(LOCAL) && step.contains("goalcup prep"),
+        "{shown}"
+    );
+    assert!(!prep_file(&rig.cfg).home_ready, "{shown}");
+    // Its machine line says only what it probed: no model service was read.
+    assert!(
+        line(&shown, "machine").contains("the server is reachable"),
+        "{shown}"
+    );
+
+    // Chosen again in the harness: ready.
+    let shown = open_and_exit(Some("https://models.example.test/v1"));
+    assert!(shown.contains("[ok] harness_home:"), "{shown}");
+    assert!(prep_file(&rig.cfg).home_ready, "{shown}");
+
+    // Changed back to the local server later: a prep with no terminal says why and clears the
+    // mark; one on a terminal says why and opens the harness again.
+    set("http://localhost:11434/v1");
+    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness_home");
+    assert!(
+        step.starts_with("[todo] harness_home:") && step.contains(LOCAL),
+        "{out}"
+    );
+    assert!(!prep_file(&rig.cfg).home_ready, "{out}");
+    let shown = open_and_exit(Some("https://models.example.test/v1"));
+    assert!(
+        shown.contains(LOCAL),
+        "the reason is said before the harness opens:\n{shown}"
+    );
+    assert!(shown.contains("[ok] harness_home:"), "{shown}");
+    assert!(prep_file(&rig.cfg).home_ready, "{shown}");
+
+    // With a service it can read, the machine step probes it too, and says so.
+    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    assert!(
+        line(&out, "machine").contains("the server and the model service are reachable"),
+        "{out}"
+    );
+    assert!(line(&out, "harness_home").starts_with("[ok]"), "{out}");
+}

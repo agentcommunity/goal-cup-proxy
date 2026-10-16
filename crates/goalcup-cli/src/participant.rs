@@ -1075,6 +1075,15 @@ pub fn inside_work_folder(work_root: &Path, here: &Path) -> String {
     )
 }
 
+/// The model service the harness's own config names is one Goal Cup cannot record (D62).
+/// `why` is [`crate::model_host::Unrecordable::sentence`]; `id` is the connector's.
+pub fn cannot_record_model_service(why: &str, id: &str) -> String {
+    format!(
+        "{why} Goal Cup records only an https model service that is not on this computer. Run \
+         goalcup prep --harness {id}, choose such a service there, then run the command again."
+    )
+}
+
 /// A chat-mode connector given a `--goal-file`.
 pub fn takes_no_goal_file(harness: &str, id: &str) -> String {
     format!(

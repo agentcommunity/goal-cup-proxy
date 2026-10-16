@@ -632,6 +632,13 @@ fn home_step(
             format!("{id} needs no set-up here: each run gets a fresh home"),
         ));
     };
+    // D62: a home whose harness names no model service Goal Cup can record is not ready, so the
+    // harness opens again for the participant to choose one.
+    let unrecordable = model_host_problem(cfg, connector);
+    let stale = unrecordable.as_ref().filter(|_| home.is_dir());
+    if stale.is_some() {
+        file.home_ready = false;
+    }
     // The person's word counts only while the home they set up is still there.
     if file.home_ready && home.is_dir() {
         return Ok(step(
@@ -640,6 +647,15 @@ fn home_step(
             false,
             format!("{id} is set up in its Goal Cup home. Your runs use it."),
         ));
+    }
+    if let (Some(why), false) = (stale, acting) {
+        return Ok(human(
+            State::Todo,
+            format!("{why} Run `goalcup prep` in a terminal"),
+        ));
+    }
+    if let Some(why) = stale {
+        report.tell(why)?;
     }
     if !acting {
         return Ok(human(
@@ -673,15 +689,21 @@ fn home_step(
             State::Todo,
             format!("{id} was not opened. Run `goalcup prep` again, then press Enter"),
         )),
-        Ok(Some(true)) => {
-            file.home_ready = true;
-            Ok(step(
-                STEP_HARNESS_HOME,
-                State::Ok,
-                false,
-                format!("{id} is set up in its Goal Cup home. Your runs use it."),
-            ))
-        }
+        Ok(Some(true)) => match model_host_problem(cfg, connector) {
+            Some(why) => Ok(human(
+                State::Todo,
+                format!("{why} Run `goalcup prep` again"),
+            )),
+            None => {
+                file.home_ready = true;
+                Ok(step(
+                    STEP_HARNESS_HOME,
+                    State::Ok,
+                    false,
+                    format!("{id} is set up in its Goal Cup home. Your runs use it."),
+                ))
+            }
+        },
         Ok(Some(false)) => Ok(human(
             State::Todo,
             format!(
@@ -691,6 +713,18 @@ fn home_step(
         )),
         Err(error) => Ok(human(State::Fail, error.to_string())),
     }
+}
+
+/// Why the model service the harness's config names cannot be recorded (D62), with what to do in
+/// the harness, or `None` when it can be or the connector reads none.
+fn model_host_problem(cfg: &Path, connector: &HarnessConnector) -> Option<String> {
+    let why = crate::model_host::check(cfg, connector).err()?;
+    let name = connector.display_name();
+    Some(format!(
+        "{} In {name}, choose an https model service that is not on this computer, then exit \
+         {name}.",
+        why.sentence(name)
+    ))
 }
 
 // ------------------------------------------------------------------ 4. GitHub
@@ -870,10 +904,18 @@ fn machine_step(
     if let Ok(Some(server)) = crate::server::read_server_config(cfg) {
         hosts.push(endpoint_of(&server.url));
     }
+    // Whether a model host is probed too, so the line says only what was probed.
+    let mut provider = false;
     if let Some(c) = connector {
         let profile = &c.loaded.manifest.capture;
         hosts.extend(profile.hosts.iter().map(|h| (h.host.clone(), 443)));
         hosts.extend(profile.auth_hosts.iter().map(|h| (h.clone(), 443)));
+        provider = !profile.hosts.is_empty();
+        // The model service the harness's config names (D62), once it names one.
+        if let Ok(Some(m)) = crate::model_host::check(cfg, c) {
+            hosts.push((m.host, m.port));
+            provider = true;
+        }
     }
     hosts.retain(|(host, _)| !host.is_empty());
     hosts.sort();
@@ -881,7 +923,12 @@ fn machine_step(
     match doors.hosts_reachable(&hosts) {
         Ok(()) => note(
             State::Ok,
-            "the server and the provider are reachable".to_string(),
+            if provider {
+                "the server and the model service are reachable"
+            } else {
+                "the server is reachable"
+            }
+            .to_string(),
         ),
         Err(why) => note(
             State::Fail,

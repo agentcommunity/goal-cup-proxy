@@ -1502,14 +1502,21 @@ pub struct Upstream {
 
 impl Upstream {
     pub fn start(runtime: &tokio::runtime::Runtime) -> Upstream {
-        Upstream::serve(runtime, false, None)
+        Upstream::serve(runtime, false, None, &["localhost"])
+    }
+
+    /// An upstream whose certificate names `names` instead of `localhost`: a stand-in for a
+    /// real provider host, reached through the proxy's test address table
+    /// (`proxy::connect::resolve_for_test`).
+    pub fn start_named(runtime: &tokio::runtime::Runtime, names: &[&str]) -> Upstream {
+        Upstream::serve(runtime, false, None, names)
     }
 
     /// An upstream that reads each request and never answers it: it holds the connection open
     /// until the other side closes it, as a model's long streaming answer (or a kept-alive
     /// WebSocket) holds a harness's connection open while the harness runs.
     pub fn start_holding(runtime: &tokio::runtime::Runtime) -> Upstream {
-        Upstream::serve(runtime, true, None)
+        Upstream::serve(runtime, true, None, &["localhost"])
     }
 
     /// [`Upstream::start_holding`] that also writes `held` once it has read a request's head.
@@ -1517,12 +1524,17 @@ impl Upstream {
     /// request is in flight and recorded. A harness that waits for the file
     /// ([`Upstream::wait_held`]) ends with its request held open, not still being sent.
     pub fn start_holding_marked(runtime: &tokio::runtime::Runtime, held: &Path) -> Upstream {
-        Upstream::serve(runtime, true, Some(held.to_path_buf()))
+        Upstream::serve(runtime, true, Some(held.to_path_buf()), &["localhost"])
     }
 
-    fn serve(runtime: &tokio::runtime::Runtime, hold: bool, held: Option<PathBuf>) -> Upstream {
+    fn serve(
+        runtime: &tokio::runtime::Runtime,
+        hold: bool,
+        held: Option<PathBuf>,
+        names: &[&str],
+    ) -> Upstream {
         let pki = TestPki::new("m2 cli upstream");
-        let (chain, key) = pki.leaf(&["localhost"]);
+        let (chain, key) = pki.leaf(names);
         let config = rustls::ServerConfig::builder_with_provider(super::m2_common::provider())
             .with_safe_default_protocol_versions()
             .unwrap()

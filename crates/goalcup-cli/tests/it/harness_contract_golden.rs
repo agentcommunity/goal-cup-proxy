@@ -550,6 +550,12 @@ fn profile_json(p: &CaptureSpec) -> Value {
     out.insert("configure".into(), json!(p.configure));
     out.insert("skills_dir".into(), json!(p.home.skills_dir));
     out.insert("providers".into(), json!(p.providers));
+    if let Some(from) = &p.model_host_from {
+        out.insert(
+            "model_host_from".into(),
+            json!({"file": from.file, "key": from.key}),
+        );
+    }
     out.insert(
         "hosts".into(),
         json!(

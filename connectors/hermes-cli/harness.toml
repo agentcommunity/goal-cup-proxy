@@ -38,8 +38,14 @@ configure = [
 # Hermes's own switches (HERMES_SAFE_MODE, HERMES_IGNORE_USER_CONFIG) would silently stop the
 # session snapshot; `capture.env` may set none of them.
 reserved_env_prefixes = ["HERMES_"]
-# The model host, from the shared provider table (crates/goalcup-protocol/providers.toml).
-providers = ["deepseek"]
+# The model service is the participant's choice (D62). Hermes's own setup, and `/model`, save
+# its address as `model.base_url` in `config.yaml` (`hermes_cli/model_setup_flows.py:2890-2905`,
+# `hermes_cli/auth.py:6639-6700`, Hermes 0.19.0). A `<PROVIDER>_BASE_URL` in `.env` overrides it
+# at run time and is not read (a known gap, docs/harnesses/hermes-cli.md section 9). The tracer reads that one key at each start
+# and continue and records that host only; every other host stays an opaque tunnel. There is
+# no provider list: `HERMES_CA_BUNDLE` (below) trusts the proxy alone, so a listed host the
+# participant does not use would only be probed, and an unlisted one they do use would fail.
+model_host_from = { file = "config.yaml", key = "model.base_url" }
 
 [capture.executable]
 program = "hermes"

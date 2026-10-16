@@ -295,6 +295,10 @@ The harness may show its folder-trust dialog again (section 5). If the agent has
 `goalcup continue` from the same kind of folder as `goalcup start` (section 5), in a terminal you
 will leave open.
 
+After you switch the harness to another model service (for example with `/model`), exit the
+harness and run `goalcup continue`: the tracer records the service the harness's settings name
+when it starts.
+
 A run can be continued only on the machine that started it. The tracer never restarts the agent
 on its own.
 

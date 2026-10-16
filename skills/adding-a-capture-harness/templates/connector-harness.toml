@@ -53,9 +53,16 @@ resume_args = ["<RESUME-FLAG>"]
 # {session_id} is allowed in values only with identity "preassigned".
 # Sign-in/token-refresh hosts, tunnelled opaquely and never recorded. Delete if none.
 # auth_hosts = ["<AUTH_HOST>"]
-# Model hosts from the shared provider table (crates/goalcup-protocol/providers.toml), in place
-# of writing their [[capture.hosts]] rows below. Delete if none.
-# providers = ["anthropic", "deepseek"]
+# Where the harness saves the model service the participant picks (D62): a file in its config
+# home (.yaml, .yml, .json or .toml) and the dotted key of the service's URL. Facts sheet
+# section 6 says where. The tracer reads that one value at each start and continue and records
+# that host only; every other host stays an opaque tunnel. The default for any harness whose
+# model service is the participant's choice. Needs config_home = "shared"; the file and key may
+# not name a key file or a key (auth, credential, secret, token, key, env).
+model_host_from = { file = "<config.yaml>", key = "<model.base_url>" }
+# A harness that can reach one fixed service only: its row from the shared provider table
+# (crates/goalcup-protocol/providers.toml), or a [[capture.hosts]] row below. Delete if none.
+# providers = ["anthropic"]
 # Your harness's own variable namespace, if it has switches that would silently stop capture
 # (a safe mode, "ignore config"): capture.env may then set no name under it. Delete if none.
 # reserved_env_prefixes = ["<HARNESS>_"]
@@ -178,12 +185,12 @@ grace_seconds = 10                      # 1-60
 #   { kind = "<harness>_billing_header", header_prefix = "x-<vendor>-billing-" },
 # ]
 
-# One to 16 intercepted model hosts, counting the `providers` rows. Each needs at least one
-# recorded path. A harness that lets the participant pick the provider lists every provider host
-# it can reach (a `providers` name, or a row here): traffic to an unlisted host passes through
-# unrecorded. Delete this row if `providers` covers every host.
-[[capture.hosts]]
-host = "<api.provider.example>"         # public DNS name; no scheme, port, wildcard or localhost
-evidence_paths = ["</v1/chat/completions>"]
+# A fixed intercepted model host, for a harness that can reach one service only (with
+# model_host_from, none is needed). Up to 16, counting the `providers` rows; each needs at least
+# one recorded path. Traffic to a host neither listed nor named by model_host_from passes
+# through unrecorded. Delete the row if model_host_from or `providers` covers the service.
+# [[capture.hosts]]
+# host = "<api.provider.example>"       # public DNS name; no scheme, port, wildcard or localhost
+# evidence_paths = ["</v1/chat/completions>"]
 # prefix_paths = ["/v1/"]               # path prefixes; "/" alone is refused
-protocol_hint = "<openai-chat-completions>"
+# protocol_hint = "<openai-chat-completions>"

@@ -437,6 +437,8 @@ struct CaptureRun<'a> {
     beside: &'a Path,
     connector: &'a HarnessConnector,
     profile: &'a CaptureSpec,
+    /// The model service the harness's own config names, read for this segment (D62).
+    model_host: Option<&'a crate::model_host::ModelHost>,
     /// Set when an abandon was refused, so some of what the start made is still there: the
     /// cleanup sentence ([`CLEANED_UP`]) is not true then, and is not said.
     uncleaned: &'a std::cell::Cell<bool>,
@@ -1267,6 +1269,9 @@ fn capture(
         None => goal_file_fits(&c, profile.interactive, goal_file.is_some())?,
         Some(_) => continue_fits(c.display_name(), profile.interactive)?,
     }
+    // The model service the harness's own config names (D62): read once for this segment,
+    // so a continue after the participant switched service records the new one.
+    let model_host = crate::model_host::for_run(cfg, &c)?;
     // With a server: the prep checks, before any other work and before the participant is asked
     // for anything. A continued run was prepared when it started.
     let serving = match &continuing {
@@ -1284,6 +1289,7 @@ fn capture(
         beside: &beside,
         connector: &c,
         profile,
+        model_host: model_host.as_ref(),
         uncleaned: &uncleaned,
         over: &over,
         continuing: continuing.as_deref(),
@@ -1395,6 +1401,7 @@ impl Drop for DrainsOnDrop<'_> {
 /// must be a chat-mode one, this must be the foreground of a terminal, and the harness, its pin
 /// and its executable must be usable. [`prepare`] asks them again of the segment it launches.
 pub(crate) fn continue_preflight(
+    cfg: &Path,
     connector: &HarnessConnector,
     dev: bool,
     env: &BTreeMap<String, String>,
@@ -1410,6 +1417,8 @@ pub(crate) fn continue_preflight(
         )));
     }
     crate::launch::capture_executable(connector, profile, env)?;
+    // Checked here, before anything is closed; the segment reads it again at its launch.
+    crate::model_host::for_run(cfg, connector)?;
     Ok(())
 }
 
@@ -1500,6 +1509,7 @@ fn prepare(
         beside,
         connector: c,
         profile,
+        model_host,
         ..
     } = *cx;
     // The rulebook the proxy's host rules and the launch come from, through the one door.
@@ -1522,10 +1532,16 @@ fn prepare(
         holds_the_terminal(c.display_name(), "Nothing was created.")?;
     }
     let executable = crate::launch::capture_executable(c, profile, env)?;
-    // The provider hosts answer a TCP connect before anything is created (the proxy module's
-    // preflight; it names a firewall holding this binary when they do not).
+    // The provider hosts, and the model service's own port, answer a TCP connect before
+    // anything is created (the proxy module's preflight; it names a firewall holding this binary
+    // when they do not).
     if !offline_upstreams_for_test(env) {
         crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
+            .and_then(|()| {
+                crate::proxy::preflight::endpoints_reachable(
+                    model_host.map(|m| (m.host.as_str(), m.port)),
+                )
+            })
             .map_err(|unreachable| CliError::Refused(unreachable.to_string()))?;
     }
     // A per-run home is made inside the run directory below. A run directory beside a goal file
@@ -1834,6 +1850,9 @@ fn create_and_gate<'a>(
             _ => None,
         };
         details.push(format!("entry {}", info.entry_id));
+        if let Some(model_host) = cx.model_host {
+            details.push(model_host.detail());
+        }
         details.push(format!("run directory: {}", run.dir.display()));
         if !profile.interactive {
             for line in details.drain(..) {
@@ -1841,7 +1860,7 @@ fn create_and_gate<'a>(
             }
         }
         raise_open_file_limit(out)?;
-        let proxied = Proxied::start(&info, profile, &run, roots, credential)?;
+        let proxied = Proxied::start(&info, profile, cx.model_host, &run, roots, credential)?;
         // A shared CA variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) gets the system's roots
         // plus the proxy's CA, so tool children keep their real trust; a harness's own variable
         // gets the proxy's CA alone (the launch picks per name).
@@ -3072,6 +3091,7 @@ impl Proxied {
     fn start(
         info: &CaptureWorkspaceInfo,
         profile: &CaptureSpec,
+        model_host: Option<&crate::model_host::ModelHost>,
         run: &RunDir,
         roots: UpstreamRoots,
         credential: ProxyCredential,
@@ -3105,7 +3125,7 @@ impl Proxied {
         let config = ProxyConfig {
             listener,
             ca_dir: run.ca.clone(),
-            approved: approved_hosts(profile),
+            approved: approved_hosts(profile, model_host),
             auth_hosts: profile.auth_hosts.clone(),
             credential,
             upstream_roots: roots,
@@ -3136,7 +3156,15 @@ impl Proxied {
 
 /// The profile's hosts as the proxy's host rules: exact paths, then prefixes, each with the
 /// host's protocol hint.
-fn approved_hosts(profile: &CaptureSpec) -> Vec<ApprovedHost> {
+fn approved_hosts(
+    profile: &CaptureSpec,
+    model_host: Option<&crate::model_host::ModelHost>,
+) -> Vec<ApprovedHost> {
+    // The model service the harness's config names (D62) joins them; a host the profile lists
+    // keeps the profile's reviewed rule.
+    let model = model_host
+        .filter(|m| !profile.hosts.iter().any(|h| h.host == m.host))
+        .map(|m| m.approved());
     profile
         .hosts
         .iter()
@@ -3156,6 +3184,7 @@ fn approved_hosts(profile: &CaptureSpec) -> Vec<ApprovedHost> {
                 policy: CapturePolicy { paths },
             }
         })
+        .chain(model)
         .collect()
 }
 

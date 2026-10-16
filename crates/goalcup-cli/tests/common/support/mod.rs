@@ -172,6 +172,45 @@ pub fn connectors_dir_with_edited_harness(id: &str) -> PathBuf {
     root
 }
 
+/// The harness config a connector's `capture.model_host_from` names, written into its shared
+/// config home `home` (made 0700) with `url` at the key, in the format the file's extension
+/// says (D62): what a participant's own setup of the harness leaves there.
+#[cfg(unix)]
+pub fn write_model_host_config(
+    home: &Path,
+    from: &goalcup_protocol::harness::ModelHostFrom,
+    url: &str,
+) {
+    use std::os::unix::fs::PermissionsExt;
+    let parts: Vec<&str> = from.key.split('.').collect();
+    let (last, tables) = parts.split_last().unwrap();
+    let text = match from.file.rsplit_once('.').map(|(_, e)| e) {
+        Some("json") => {
+            let mut value = serde_json::json!(url);
+            for part in parts.iter().rev() {
+                value = serde_json::json!({ *part: value });
+            }
+            value.to_string()
+        }
+        Some("toml") if tables.is_empty() => format!("{last} = \"{url}\"\n"),
+        Some("toml") => format!("[{}]\n{last} = \"{url}\"\n", tables.join(".")),
+        _ => {
+            let mut text = String::new();
+            for (depth, part) in tables.iter().enumerate() {
+                text.push_str(&format!("{}{part}:\n", "  ".repeat(depth)));
+            }
+            text.push_str(&format!("{}{last}: {url}\n", "  ".repeat(tables.len())));
+            text
+        }
+    };
+    let path = home.join(&from.file);
+    for dir in [home.parent().unwrap(), home, path.parent().unwrap()] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    std::fs::write(&path, text).unwrap();
+}
+
 /// `from` copied to `to`, recursively, creating what it needs. File modes come along, which
 /// is what keeps an executable shim executable.
 pub fn copy_tree(from: &Path, to: &Path) {
