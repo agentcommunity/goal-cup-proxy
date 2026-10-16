@@ -180,11 +180,14 @@ is the harness executable. Run every command from the repository root.
      HTTP client ignores `HTTPS_PROXY` and the run records no model traffic. The kit cannot see
      that, and step 9 catches it only for a `node` script on `PATH`.
    - **Headless** (option B in the template): the goal is the last argument after `--`, or
-     `goal_flag` carries it as `--flag=<goal>`. Hermes uses it.
+     `goal_flag` carries it as `--flag=<goal>`. No shipped connector uses it now; Hermes did
+     until D61.
 
    The closest complete example is [connectors/codex-cli](../connectors/codex-cli/harness.toml)
-   (chat mode), or [connectors/hermes-cli](../connectors/hermes-cli/harness.toml) for headless
-   with a credential. Seeds go in
+   (chat mode). [connectors/hermes-cli](../connectors/hermes-cli/harness.toml) is chat mode too,
+   with a `configure` command: a harness whose session file needs a setting that has no
+   environment variable names its own command for it, and prep and start run it in the harness
+   home (D61). Seeds go in
    `connectors/<id>/files/` and `capture.home.seed` must name each one; the loader refuses any other
    file in the folder. Field rules: [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md). Check that no
    placeholder is left outside comments:

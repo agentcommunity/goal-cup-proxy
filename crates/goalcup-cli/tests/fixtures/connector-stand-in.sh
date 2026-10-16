@@ -13,7 +13,13 @@
 #   KIT_SKILLS_DIR    where the goal-cup skill should be, or empty when the connector has none;
 #   KIT_CA_VARS       the connector's `capture.ca.env` names, space-separated;
 #   KIT_ID_STREAM     `stdout`, `stderr` or empty: where the identity line goes;
-#   KIT_ID_LINE       the identity line in the connector's own grammar, or empty.
+#   KIT_ID_LINE       the identity line in the connector's own grammar, or empty;
+#   KIT_CONFIGURE     the connector's `capture.configure` commands, one per line, each argument
+#                     list joined by spaces (empty: none).
+#
+# Called with the arguments of one of KIT_CONFIGURE's commands, it appends that line and its
+# stdin kind to `configure`, writes its environment to `configure.env`, prints one
+# `kit: configured` line and exits 0, writing none of the reports below.
 #
 # It reports its argv (one per line), environment, stdin kind, what the goal-cup skill folder
 # held at its start, and a copy of the file each CA variable names; every byte it prints starts
@@ -24,6 +30,13 @@
 out="$KIT_OUT"
 if [ -n "$KIT_VERSION_ARGV" ] && [ "$*" = "$KIT_VERSION_ARGV" ]; then
   echo "kit 1.0.0"
+  exit 0
+fi
+if [ -n "$KIT_CONFIGURE" ] && printf '%s\n' "$KIT_CONFIGURE" | grep -Fxq -- "$*"; then
+  if [ -t 0 ]; then stdin=tty; else stdin=not-a-tty; fi
+  echo "$* $stdin" >> "$out/configure"
+  env > "$out/configure.env"
+  echo "kit: configured"
   exit 0
 fi
 # One argument per line; no arguments is an empty file (printf would print one empty line).

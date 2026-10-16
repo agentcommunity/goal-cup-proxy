@@ -18,7 +18,7 @@ those sources disagree, the sources refuse the manifest.
 `harness.toml` is UTF-8 TOML. The loader first reads `schema_version` from a generic table, then
 deserializes every table with unknown fields denied, appends the `capture.providers` rows to
 `capture.hosts`, then validates in this fixed order:
-executable; arguments and goal; environment; home; credential; CA; identity; native source;
+executable; arguments and goal; configure commands; environment; home; credential; CA; identity; native source;
 argument guard; termination; hosts; redaction; delivery independence; cross-field rules; then each
 `capture.platform` entry, in the fixed order `linux-x86_64`, `linux-aarch64`, `macos-aarch64`,
 `macos-x86_64`, whatever order the file uses. The first refusal is deterministic. Unknown keys and
@@ -56,6 +56,7 @@ optional field or table is absent.
 | `capture.goal_flag` | optional, default absent | One long option, at most 32 bytes, matching `--[a-z][a-z0-9-]*`; no `=` or value. Refused with `interactive`. |
 | `capture.interactive` | optional, default `false` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57); see below. |
 | `capture.resume_args` | optional, default `[]` | Strings appended after `capture.args` when a run is continued; each held to every `args` rule, and `args` and `resume_args` together hold at most 64. |
+| `capture.configure` | optional, default `[]` | At most 4 commands, each 1–16 arguments of 1–256 bytes. Each argument is held to every `args` rule and takes no template (`{` and `}` are refused). See [Configure commands](#configure-commands). |
 | `capture.continuation` | required | Non-blank, one line, 1–512 bytes; declarative provenance for unattended continuation. |
 | `capture.auth_hosts` | optional, default `[]` | At most 16 unique lowercase DNS hosts; always opaque tunnels. |
 | `capture.env` | optional, default `{}` | At most 32 string-to-string entries; the child-only process environment additions. |
@@ -82,6 +83,35 @@ harness. The profile then takes no `goal_flag`, its `args` need not end in `--` 
 empty, it takes no `[capture.credential]` and its `identity.source` must be `none`. With `false`, the default, every
 rule above holds unchanged. `resume_args` may be set either way; `goalcup continue` appends it
 after `args`.
+
+### Configure commands
+
+`capture.configure` (D61) is for a harness whose native source needs a setting that has no
+environment variable (Hermes writes `sessions/session_<id>.json` only with
+`sessions.write_json_snapshots` on). Each entry is an argument list for the harness's own
+`capture.executable.program`:
+
+```toml
+configure = [["config", "set", "sessions.write_json_snapshots", "true"]]
+```
+
+- **When.** `goalcup prep` runs them in the harness home after the participant's own setup, once
+  the harness it opened has exited 0. `goalcup start` and `goalcup continue` run them again before
+  each launch, after the goal-cup skill is put in place, because the participant may have changed
+  the setting since. So each command must be safe to run again.
+- **How.** In order, with exactly the environment the harness gets from prep (the run's private
+  `HOME`, the harness home variable, the connector's `capture.env`, the chat-mode pass-through) and
+  no proxy and no CA variable: a configure command records nothing. Stdin is `/dev/null`, each
+  leads a process group of its own, and each has 60 seconds. Stdout and stderr are appended to
+  `<cfg>/prep.log` (prep) or the run's `host.log` (start); nothing reaches the terminal or the
+  trace.
+- **Failure.** A command that exits non-zero, is ended by a signal or outlives its 60 seconds
+  stops at once. Prep marks the home not ready (`[fail] harness_home`, naming the command and how
+  it ended); start launches nothing and says to run `goalcup prep --harness <id>` again.
+- **What it may write.** Only what the capture needs, into the harness home. The argument rules
+  refuse the endpoint, provider, credential, proxy and trust spellings, a profile switch and the
+  connector's own guarded options; review is the control for the rest. A command never names a
+  provider, model, key or base URL.
 
 Argument templates (`args` and `resume_args`) admit only `{workspace}` and `{session_id}`.
 `capture.env` value templates also admit `{config_home}` (the isolated harness home) and
@@ -581,9 +611,11 @@ would reject in the same PR.
 Read the shipped connectors. Conformance tests load each as `Origin::Pinned` and compare its
 directory with its pin.
 
-- [`connectors/hermes-cli/harness.toml`](../connectors/hermes-cli/harness.toml): headless, with a
-  credential, `stderr_line` identity, a `snapshot` native source, an argv guard and a reserved
-  prefix.
+- [`connectors/hermes-cli/harness.toml`](../connectors/hermes-cli/harness.toml): chat mode with a
+  `configure` command, a `snapshot` native source read from the run's start, an argv guard and a
+  reserved prefix. Its headless form, with a credential and `stderr_line` identity, is frozen at
+  [`headless-connectors/hermes-cli`](../crates/goalcup-protocol/tests/fixtures/headless-connectors/hermes-cli/harness.toml)
+  for the tests of that recipe.
 - [`connectors/codex-cli/harness.toml`](../connectors/codex-cli/harness.toml): chat mode
   (`interactive`), shared config home, `since_run_start`, `native_pid` termination, extra
   redaction patterns and per-platform env.

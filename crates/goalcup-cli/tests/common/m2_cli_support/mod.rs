@@ -45,6 +45,10 @@ pub const CHAT_ID: &str = "m2-fake-tui";
 /// `run_home = "shared"`, no home variable, its sessions under `{run_home}/sessions`).
 pub const CHAT_HOME_ID: &str = "m2-fake-tui-home";
 
+/// [`CHAT_ID`]'s harness under a connector that also declares a `capture.configure` command
+/// (D61): `configure snapshots on`, which the fake writes into `<home>/settings.txt`.
+pub const CHAT_CONFIGURE_ID: &str = "m2-fake-tui-configure";
+
 /// The repository `prepare_for` says the participant made, and the made-up token for it.
 pub const PREP_REPO: &str = "https://github.com/goal-cup/demo";
 pub const FAKE_GITHUB_TOKEN: &str = "github_pat_FAKE0123456789abcdefghijkl";
@@ -112,6 +116,13 @@ impl Rig {
     pub fn chat_with_shared_run_home() -> Rig {
         let rig = Rig::chat();
         write_shared_run_home_connector(&rig.connectors);
+        rig
+    }
+
+    /// [`Rig::chat`] with the connector [`CHAT_CONFIGURE_ID`] beside [`CHAT_ID`].
+    pub fn chat_with_configure() -> Rig {
+        let rig = Rig::chat();
+        write_configure_connector(&rig.connectors);
         rig
     }
 
@@ -809,6 +820,25 @@ fn write_shared_run_home_connector(connectors: &Path) {
         shared = shared.replacen(from, to, 1);
     }
     std::fs::write(dir.join("harness.toml"), shared).unwrap();
+}
+
+fn write_configure_connector(connectors: &Path) {
+    let harness = std::fs::read_to_string(connectors.join(CHAT_ID).join("harness.toml")).unwrap();
+    let dir = connectors.join(CHAT_CONFIGURE_ID);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut configured = harness.replacen(
+        &format!("id = \"{CHAT_ID}\""),
+        &format!("id = \"{CHAT_CONFIGURE_ID}\""),
+        1,
+    );
+    let from = "resume_args = [\"resume\", \"--last\"]\n";
+    assert!(configured.contains(from), "{from}");
+    configured = configured.replacen(
+        from,
+        &format!("{from}configure = [[\"configure\", \"snapshots\", \"on\"]]\n"),
+        1,
+    );
+    std::fs::write(dir.join("harness.toml"), configured).unwrap();
 }
 
 /// How [`Rig::chat_command`] starts `goalcup start`.

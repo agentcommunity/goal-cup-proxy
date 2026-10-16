@@ -40,6 +40,16 @@ fn session_id(c: &CaptureSpec) -> &'static str {
     }
 }
 
+/// The connector's `capture.configure` commands, one per line, each argument list joined by
+/// spaces: how the stand-in recognises one.
+fn configure_lines(c: &CaptureSpec) -> String {
+    c.configure
+        .iter()
+        .map(|command| command.join(" "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The stand-in's variables, as shell assignments, derived from the connector alone.
 fn stand_in_header(c: &CaptureSpec, out: &Path) -> String {
     let config_home = format!("${{{}}}", c.home.env.as_deref().unwrap_or("HOME"));
@@ -106,13 +116,14 @@ fn stand_in_header(c: &CaptureSpec, out: &Path) -> String {
     format!(
         "KIT_OUT={out}\nKIT_MODE={mode}\nKIT_VERSION_ARGV={version}\n\
          KIT_NATIVE_FILE=\"{root}/{pattern}\"\nKIT_SKILLS_DIR=\"{skills}\"\nKIT_CA_VARS={ca}\n\
-         KIT_ID_STREAM={stream}\nKIT_ID_LINE={line}\n\
+         KIT_ID_STREAM={stream}\nKIT_ID_LINE={line}\nKIT_CONFIGURE={configure}\n\
          export KIT_OUT KIT_MODE KIT_VERSION_ARGV KIT_NATIVE_FILE KIT_SKILLS_DIR KIT_CA_VARS \
-         KIT_ID_STREAM KIT_ID_LINE\n",
+         KIT_ID_STREAM KIT_ID_LINE KIT_CONFIGURE\n",
         out = sh_quote(&out.display().to_string()),
         version = sh_quote(&c.executable.version_args.join(" ")),
         ca = sh_quote(&c.ca.env.join(" ")),
         line = sh_quote(&line),
+        configure = sh_quote(&configure_lines(c)),
     )
 }
 
@@ -197,6 +208,11 @@ fn run_connector(id: &str) {
         run.type_line("/exit");
         let status = run.wait();
         assert!(status.success(), "{id}: {status:?}\n{}", run.shown());
+        assert!(
+            !run.shown().contains("kit: configured"),
+            "{id}: a configure command printed on the participant's terminal\n{}",
+            run.shown()
+        );
     } else {
         use std::os::unix::process::CommandExt;
         let output = command
@@ -216,6 +232,37 @@ fn run_connector(id: &str) {
 
     // What the harness was started with.
     let report = |name: &str| std::fs::read_to_string(out.join(name)).unwrap_or_default();
+    // Each `capture.configure` command ran once, before the launch (D61): no terminal for its
+    // input, the harness's own home, no proxy, and nothing it printed on the screen.
+    let configured: Vec<String> = report("configure").lines().map(str::to_string).collect();
+    let want_configured: Vec<String> = configure_lines(c)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| format!("{l} not-a-tty"))
+        .collect();
+    assert_eq!(configured, want_configured, "{id}: the configure commands");
+    if !c.configure.is_empty() {
+        let configure_env = report("configure.env");
+        assert!(
+            !configure_env
+                .lines()
+                .any(|l| l.to_ascii_uppercase().starts_with("HTTPS_PROXY=")),
+            "{id}: a configure command records nothing, so it has no proxy"
+        );
+        if let Some(home) = &c.home.env {
+            let launched = report("env");
+            let line = |text: &str| {
+                text.lines()
+                    .find(|l| l.starts_with(&format!("{home}=")))
+                    .map(str::to_string)
+            };
+            assert_eq!(
+                line(&configure_env),
+                line(&launched),
+                "{id}: a configure command runs in the harness's own home"
+            );
+        }
+    }
     let tty = if c.interactive { "tty" } else { "not-a-tty" };
     assert_eq!(report("stdin").trim(), tty, "{id}");
     assert_eq!(

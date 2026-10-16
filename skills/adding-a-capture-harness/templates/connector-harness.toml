@@ -4,7 +4,8 @@
 # (they are pinned bytes too); keep one first-line provenance comment like the shipped ones:
 # <Harness name> <VERSION>, capture only. Facts: docs/harnesses/<HARNESS_ID>.md.
 # This template is chat mode (D57), the product's mode: the closest complete example is
-# connectors/codex-cli/harness.toml. Headless is option B below (example: connectors/hermes-cli).
+# connectors/codex-cli/harness.toml (connectors/hermes-cli adds a `configure` command). Headless is
+# option B below (example: crates/goalcup-protocol/tests/fixtures/headless-connectors/hermes-cli).
 # Field limits: docs/CONNECTOR-SCHEMA.md. Allowed values: docs/HARNESS-ONBOARDING.md, "Do I need a core change?".
 # No argument, goal flag, env key or value, host or auth host may name the tracker
 # (docs/CONNECTOR-SCHEMA.md, "Cross-field rules", rule 10).
@@ -32,6 +33,12 @@ args = []
 # How `goalcup continue` reopens the most recent session, appended after args (for example
 # ["--continue"] or ["resume", "--last"]). Delete if the harness cannot reopen one.
 resume_args = ["<RESUME-FLAG>"]
+# Commands of the harness's own program that switch on what the native source needs, when the
+# harness has a setting for it but no environment variable (D61). Run in the harness home after
+# the participant's setup in `goalcup prep`, and again before each launch, so each must be safe to
+# run twice. At most 4 commands of 1 to 16 arguments; the args rules apply; no {template}. Their
+# output goes to a log, never the terminal. Delete if the harness needs none.
+# configure = [["config", "set", "<sessions.save_transcripts>", "true"]]
 #
 # B) Headless instead (one goal, no terminal): delete the four values above and use
 #   args = ["<SUBCOMMAND>", "<FLAG>", "--"]   # argv WITHOUT the program and WITHOUT the goal

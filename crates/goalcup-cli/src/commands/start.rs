@@ -1550,8 +1550,8 @@ fn prepare(
     // key is a refusal with no daemon request behind it.
     let secret = child_secret_for_harness(profile, env)?;
     // What is done with the child's output, and where its native scope comes from, is decided
-    // here once: a child handed a provider key (Hermes, or any profile naming a credential) has
-    // both streams tee'd, scanned and withheld when they hold a fragment.
+    // here once: a child handed a provider key (a profile naming a credential; none ships,
+    // D61) has both streams tee'd, scanned and withheld when they hold a fragment.
     let streams = StreamPlan::for_spec(profile)?;
     let scope = LaunchScope::for_spec(profile)?;
     let matcher = match secret.as_ref() {
@@ -1868,6 +1868,38 @@ fn create_and_gate<'a>(
         // The goal-cup skill, in the harness's own skills folder (D57), replacing only its own.
         if let Some(skills_dir) = &profile.home.skills_dir {
             crate::skill::install(&config_home, skills_dir)?;
+        }
+        // The settings the capture needs, put into the harness home again before each launch
+        // (D61): the participant's own setup may have turned one off. Their output goes to the
+        // run's `host.log`, never to the terminal or the trace. A run that fails here is
+        // unmade, its log with it, so the refusal points at prep, which logs to its own file.
+        if !profile.configure.is_empty() {
+            let run_dir = crate::run::run_dir(cfg, &record.run_id);
+            let (log, _) =
+                crate::host_log::open_for_child(&run_dir).map_err(|source| CliError::Io {
+                    path: run_dir
+                        .join(crate::host_log::HOST_LOG_NAME)
+                        .display()
+                        .to_string(),
+                    source,
+                })?;
+            crate::launch::configure_harness(
+                c,
+                &crate::launch::PrepLaunch {
+                    executable: &prep.executable,
+                    run_home: &run.home,
+                    config_home: &config_home,
+                    parent_env: env,
+                },
+                &run.workspace,
+                &log,
+                &format!(
+                    "Nothing was launched. Run `goalcup prep --harness {}` again; it runs the same \
+                     command and keeps what it prints in {}.",
+                    c.loaded.manifest.id,
+                    cfg.join(crate::commands::prep::PREP_LOG_NAME).display()
+                ),
+            )?;
         }
         let mut vars = goalcup_protocol::template::TemplateVars::new();
         vars.set("workspace", run.workspace.display().to_string());

@@ -334,7 +334,8 @@ fn dev_refuses_a_pinned_directory_and_the_same_copy_loads_as_pinned() {
 #[test]
 fn dev_refuses_a_pinned_id_even_when_the_bytes_differ() {
     let (_keep, dir) = shipped_copy("hermes-cli");
-    std::fs::write(dir.join("files/config.yaml"), b"edited\n").unwrap();
+    let edited = std::fs::read_to_string(dir.join("harness.toml")).unwrap() + "# edited\n";
+    std::fs::write(dir.join("harness.toml"), edited).unwrap();
     assert_ne!(
         connector_dir_sha256(&dir).unwrap(),
         pinned_connector_dir_sha256("hermes-cli").unwrap()
@@ -540,7 +541,7 @@ fn a_pinned_connector_passes_no_args_the_rules_refuse() {
         let msg = refusal(tmp.path(), Origin::Pinned);
         assert!(msg.contains("capture.args"), "{extra}: {msg}");
     }
-    let tmp = shipped_dir("hermes-cli", |toml| {
+    let tmp = headless_dir("hermes-cli", |toml| {
         toml.replace("goal_flag = \"--query\"", "goal_flag = \"--exec\"")
     });
     let msg = refusal(tmp.path(), Origin::Pinned);
@@ -553,7 +554,8 @@ fn a_pinned_connector_passes_no_args_the_rules_refuse() {
 }
 
 /// Review R7 I-1: a seed's bytes are the harness's own configuration, so they are checked: no
-/// URL, no endpoint or provider switch, no key-shaped run. The shipped seeds pass.
+/// URL, no endpoint or provider switch, no key-shaped run. The seeds Hermes shipped with while it
+/// ran headless (its frozen copy) pass.
 #[test]
 fn a_seed_carrying_an_endpoint_or_a_key_is_refused() {
     for (file, line) in [
@@ -577,7 +579,7 @@ fn a_seed_carrying_an_endpoint_or_a_key_is_refused() {
             "providers:\n  deepseek:\n    host: api.evil.example\n",
         ),
     ] {
-        let tmp = shipped_dir("hermes-cli", |toml| toml);
+        let tmp = headless_dir("hermes-cli", |toml| toml);
         let path = tmp.path().join("files").join(file);
         let mut bytes = std::fs::read(&path).unwrap();
         bytes.extend_from_slice(line.as_bytes());
@@ -586,16 +588,16 @@ fn a_seed_carrying_an_endpoint_or_a_key_is_refused() {
         assert!(msg.contains("capture.home.seed"), "{line}: {msg}");
     }
     load_dir(
-        shipped_dir("hermes-cli", |toml| toml).path(),
+        headless_dir("hermes-cli", |toml| toml).path(),
         Origin::Pinned,
     )
-    .expect("the shipped seeds pass");
+    .expect("the seeds Hermes shipped with pass");
 }
 
 /// The seed check holds under `--dev` too: it is a D1 rule, not a pin rule.
 #[test]
 fn a_dev_seed_carrying_an_endpoint_is_refused() {
-    let tmp = shipped_dir("hermes-cli", |toml| {
+    let tmp = headless_dir("hermes-cli", |toml| {
         toml.replace("id = \"hermes-cli\"", "id = \"hermes-dev-case\"")
     });
     let path = tmp.path().join("files/config.yaml");

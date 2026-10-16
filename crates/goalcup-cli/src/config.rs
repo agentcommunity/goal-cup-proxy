@@ -16,6 +16,7 @@
 //! |---|---|---|
 //! | `server.json` | `goalcup login` | the upload server's URL and the account's handle, mode 0600; no secret (`crate::server`) |
 //! | `prep.json` | `goalcup prep` | the harness, the repository and the work folder it settled (`crate::prep_file`) |
+//! | `prep.log` | `goalcup prep` | what the connector's `capture.configure` commands printed (D61), appended, mode 0600 |
 //! | `github.json` | `goalcup prep` | the run's repository URL and the GitHub token for it, mode 0600 (`crate::account::github`) |
 //! | `entries/<id>.json` | `goalcup start` | one record per entry, the pin a status is checked against (`crate::entries`) |
 //! | `runs/<run_id>/` | `goalcup start` | `run.json` (the run and its entries), `state.json` (what `goalcup status` reports first), `credential` (the run's server credential, mode 0600) and `host.log` (`crate::run`, `crate::host_log`) |

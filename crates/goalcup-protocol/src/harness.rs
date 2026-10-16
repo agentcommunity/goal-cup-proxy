@@ -280,6 +280,13 @@ pub struct HarnessManifest {
     pub participant: Option<ParticipantSpec>,
 }
 
+/// The most commands `capture.configure` may hold.
+pub const MAX_CONFIGURE_COMMANDS: usize = 4;
+/// The most arguments one `capture.configure` command may hold.
+pub const MAX_CONFIGURE_ARGS: usize = 16;
+/// The longest argument of a `capture.configure` command.
+pub const MAX_CONFIGURE_ARG_BYTES: usize = 256;
+
 /// The most characters a `participant.display_name` may hold.
 pub const MAX_DISPLAY_NAME_CHARS: usize = 40;
 
@@ -357,6 +364,13 @@ pub struct CaptureSpec {
     /// Appended after [`Self::args`] when a run is continued, under the same rules (D51).
     #[serde(default)]
     pub resume_args: Vec<String>,
+    /// Commands of the harness's own program that put a setting the capture needs into its
+    /// home (D61): each an argument list, run with the harness's environment and no proxy, by
+    /// `goalcup prep` after the participant's own setup and by `goalcup start` before each
+    /// launch, so each must be safe to run again. At most [`MAX_CONFIGURE_COMMANDS`], each held
+    /// to the `args` rules, with no template token. Their output goes to the run's log only.
+    #[serde(default)]
+    pub configure: Vec<Vec<String>>,
     /// The long option that carries the goal as one `--flag=<goal>` argument.
     #[serde(default)]
     pub goal_flag: Option<String>,
@@ -961,13 +975,20 @@ impl TryFrom<ExtraPatternRow> for ExtraPattern {
 }
 
 impl HarnessManifest {
-    /// Every argument the launch may pass, `args` then `resume_args`, each with its field.
+    /// Every argument the launch may pass, `args`, `resume_args`, then each `configure`
+    /// command's, each with its field.
     fn every_arg(&self) -> impl Iterator<Item = (&'static str, &String)> {
         let c = &self.capture;
         c.args
             .iter()
             .map(|a| ("capture.args", a))
             .chain(c.resume_args.iter().map(|a| ("capture.resume_args", a)))
+            .chain(
+                c.configure
+                    .iter()
+                    .flatten()
+                    .map(|a| ("capture.configure", a)),
+            )
     }
 
     /// The termination spec with its defaults applied.
@@ -1436,6 +1457,7 @@ impl HarnessManifest {
         }
         self.check_executable(origin)?;
         self.check_args_and_goal(origin)?;
+        self.check_configure(origin)?;
         self.check_env()?;
         self.check_home()?;
         self.check_credential()?;
@@ -1573,6 +1595,49 @@ impl HarnessManifest {
                     "must be one line of declarative provenance, 1 to {MAX_CONTINUATION_BYTES} bytes"
                 ),
             ));
+        }
+        Ok(())
+    }
+
+    /// `capture.configure` (D61): a few short commands of the harness's own program, each held
+    /// to the `args` rules (the core deny policy and the pinned path rule here, the argument
+    /// guard and the delivery rule with every other argument), with no template at all: a
+    /// command runs before any run value exists, so it cannot name the goal, the workspace or a
+    /// session.
+    fn check_configure(&self, origin: Origin) -> Result<(), ProtocolError> {
+        const FIELD: &str = "capture.configure";
+        let commands = &self.capture.configure;
+        if commands.len() > MAX_CONFIGURE_COMMANDS {
+            return Err(refuse(
+                FIELD,
+                format!("holds more than {MAX_CONFIGURE_COMMANDS} commands"),
+            ));
+        }
+        for command in commands {
+            if command.is_empty() || command.len() > MAX_CONFIGURE_ARGS {
+                return Err(refuse(
+                    FIELD,
+                    format!("a command must hold 1 to {MAX_CONFIGURE_ARGS} arguments"),
+                ));
+            }
+            for a in command {
+                if a.is_empty() || a.len() > MAX_CONFIGURE_ARG_BYTES {
+                    return Err(refuse(
+                        FIELD,
+                        format!("an argument must be 1 to {MAX_CONFIGURE_ARG_BYTES} bytes"),
+                    ));
+                }
+                if a.contains(['{', '}']) {
+                    return Err(refuse(
+                        FIELD,
+                        format!(
+                            "`{a}` holds a brace: a configure command takes no template (no goal, \
+                             workspace or session), because it runs before any run exists"
+                        ),
+                    ));
+                }
+                check_arg(FIELD, origin, a)?;
+            }
         }
         Ok(())
     }

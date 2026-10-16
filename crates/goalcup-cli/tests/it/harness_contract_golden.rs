@@ -564,6 +564,7 @@ fn profile_json(p: &CaptureSpec) -> Value {
     );
     out.insert("interactive".into(), json!(p.interactive));
     out.insert("resume_args".into(), json!(p.resume_args));
+    out.insert("configure".into(), json!(p.configure));
     out.insert("skills_dir".into(), json!(p.home.skills_dir));
     out.insert("providers".into(), json!(p.providers));
     out.insert(

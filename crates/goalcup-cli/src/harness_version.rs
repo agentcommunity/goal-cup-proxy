@@ -130,22 +130,7 @@ fn probe(
         let _ = sender.send(bytes);
     });
     let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
-            _ => break None,
-        }
-    };
-    let Some(status) = status else {
-        // Not yet reaped, so its pid still names its group: end the group, then the child.
-        #[cfg(unix)]
-        if let Ok(pgid) = libc::pid_t::try_from(child.id()) {
-            // SAFETY: `killpg` takes plain integers and has no memory effects.
-            unsafe { libc::killpg(pgid, libc::SIGKILL) };
-        }
-        let _ = child.kill();
-        let _ = child.wait();
+    let Some(status) = wait_or_end_group(&mut child, timeout) else {
         return UNREPORTED.to_string();
     };
     if !status.success() {
@@ -159,6 +144,34 @@ fn probe(
         Ok(bytes) => reported_line(&bytes),
         Err(_) => UNREPORTED.to_string(),
     }
+}
+
+/// Wait up to `timeout` for `child`, which leads a process group of its own, to exit. When it
+/// has not, its group is sent SIGKILL while its unreaped leader still holds the group id, and the
+/// leader is reaped, so nothing can reach a recycled pid; `None` then. Shared by the version
+/// probe and the connector's `capture.configure` commands (D61): both run the harness's own
+/// program once before the launch, unregistered, with no goal and no key.
+pub(crate) fn wait_or_end_group(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Option<std::process::ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
+            _ => break,
+        }
+    }
+    // Not yet reaped, so its pid still names its group: end the group, then the child.
+    #[cfg(unix)]
+    if let Ok(pgid) = libc::pid_t::try_from(child.id()) {
+        // SAFETY: `killpg` takes plain integers and has no memory effects.
+        unsafe { libc::killpg(pgid, libc::SIGKILL) };
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    None
 }
 
 /// The first line of `stdout`, trimmed, if it is printable ASCII and not empty; [`UNREPORTED`]

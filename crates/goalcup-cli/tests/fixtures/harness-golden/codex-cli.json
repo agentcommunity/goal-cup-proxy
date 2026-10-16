@@ -24,6 +24,7 @@
       "CODEX_CA_CERTIFICATE"
     ],
     "config_home": "shared",
+    "configure": [],
     "continuation": "chat: the participant types the prompt and may type keep going",
     "env": {
       "NODE_USE_ENV_PROXY": "1",

@@ -73,6 +73,22 @@ fn every_connector_declares_a_display_name_that_passes_validation() {
     }
 }
 
+/// D61: the tracer never sees, passes or stores a participant's provider key. No connector
+/// declares `[capture.credential]`: each harness keeps the login the participant gave it in its
+/// own home, and the launch hands it none.
+#[test]
+fn no_connector_passes_a_provider_key() {
+    let ids = shipped_connector_ids();
+    assert!(!ids.is_empty(), "connectors/ holds the shipped connectors");
+    for id in ids {
+        let capture = load(&id).loaded.manifest.capture;
+        assert!(
+            capture.credential.is_none(),
+            "{id}: declares `[capture.credential]`, a provider key the launch would pass"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // The folder and its pin.
 // ---------------------------------------------------------------------------------------

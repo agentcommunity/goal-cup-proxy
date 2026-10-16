@@ -39,6 +39,26 @@ impl std::ops::Deref for Rig {
     }
 }
 
+/// Copy the frozen headless connector `id` (with its seed files) into `connectors` as
+/// `headless-<id>`, its declared id renamed to match. The frozen texts differ from the
+/// build-pinned bytes, so they load as development connectors under ids of their own, as
+/// `capture-dev` does.
+pub fn copy_headless(id: &str, connectors: &Path) -> PathBuf {
+    let dir = connectors.join(format!("headless-{id}"));
+    super::support::copy_tree(&super::support::headless_connector_dir(id), &dir);
+    let text = std::fs::read_to_string(dir.join("harness.toml")).unwrap();
+    std::fs::write(
+        dir.join("harness.toml"),
+        text.replacen(
+            &format!("id = \"{id}\""),
+            &format!("id = \"headless-{id}\""),
+            1,
+        ),
+    )
+    .unwrap();
+    dir
+}
+
 impl Rig {
     pub async fn start() -> Rig {
         Rig::start_with(|_| {}).await
@@ -50,35 +70,15 @@ impl Rig {
         Rig { h, _headless: None }
     }
 
-    /// [`Rig::start`] over the frozen headless Codex and Claude connectors (ids
-    /// `headless-codex-cli` and `headless-claude-code-cli`) plus the shipped Hermes one, so a
-    /// test of the `{id}`-scoped, one-turn behaviour does not follow the shipped manifests
-    /// when they change mode.
+    /// [`Rig::start`] over the frozen headless Codex, Claude and Hermes connectors (ids
+    /// `headless-codex-cli`, `headless-claude-code-cli` and `headless-hermes-cli`), so a test of
+    /// the `{id}`-scoped, one-turn behaviour, or of Hermes's deferred `stderr_line` identity,
+    /// does not follow the shipped manifests when they change mode.
     pub async fn start_headless() -> Rig {
         let connectors = tempfile::tempdir().unwrap();
-        // The frozen texts differ from the build-pinned bytes, so they load as development
-        // connectors under ids of their own, as `capture-dev` does.
-        for id in ["codex-cli", "claude-code-cli"] {
-            let text = std::fs::read_to_string(
-                super::support::headless_connector_dir(id).join("harness.toml"),
-            )
-            .unwrap();
-            let dir = connectors.path().join(format!("headless-{id}"));
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(
-                dir.join("harness.toml"),
-                text.replacen(
-                    &format!("id = \"{id}\""),
-                    &format!("id = \"headless-{id}\""),
-                    1,
-                ),
-            )
-            .unwrap();
+        for id in ["codex-cli", "claude-code-cli", "hermes-cli"] {
+            copy_headless(id, connectors.path());
         }
-        super::support::copy_tree(
-            &super::support::shipped_connector_dir("hermes-cli"),
-            &connectors.path().join("hermes-cli"),
-        );
         let dir = connectors.path().to_path_buf();
         let mut rig = Rig::start_with(move |config| config.connectors_dir = dir).await;
         rig._headless = Some(connectors);

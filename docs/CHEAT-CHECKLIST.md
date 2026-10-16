@@ -127,6 +127,16 @@ consistent, not that the participant followed the rules.
 The key-fragment scan (`crates/goalcup-cli/src/key_scan.rs`) and the `masked_key` redaction rule
 fail closed where they can. These shapes they do not see.
 
+- **Since D61 no shipped connector passes a key, so the scan runs for none.** Hermes reads the
+  participant's key from its own `$HERMES_HOME/.env`, which the tracer never reads. What is left
+  is the daemon's shape redaction: a key printed raw or JSON-escaped is removed when a shared rule
+  names its shape (`openai_key` for `sk-…`, `generic_secret_assignment` for `NAME_KEY=…`;
+  `hermes_offline_key.rs` pins it through the trace, the upload chunks and the baseline).
+  **Not caught:** a key the agent encodes before printing it (`base64`, hex, any transform), and a
+  key of a shape no shared rule names, because the tracer never knows the value to derive the
+  forms from. The base64 of a `.env` printed into the session reaches the trace and the upload as
+  base64 text.
+
 - **Encodings read:** the key; its first and last eight bytes; masks of 4, 6 and 8 key bytes with
   `...`, `…` or `***`; any mask with a gap of at most 16 bytes between the first and last four; the
   first 16 hex digits of its SHA-256; each of these inside base64 (both alphabets, three

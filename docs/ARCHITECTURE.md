@@ -97,7 +97,8 @@ decoder is added.
 - **Homes.** Every run gets a fresh `HOME`. Codex and Claude Code use a shared isolated config
   home (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) under `<config>/capture-homes/<id>`; runs on one are
   serialized by a lock (D39). Claude Code's run home links the macOS Keychains directory. Hermes
-  uses a seeded per-run `HERMES_HOME` and a child-only `DEEPSEEK_API_KEY`.
+  shares one `HERMES_HOME` the same way; the participant's own Hermes setup keeps its provider and
+  key there, and the tracer passes it none (D61).
 - **Contract kit.** Six synthetic cases (`controlled-workload`, `synthetic-preassigned`,
   `synthetic-stderr-token`, `synthetic-stdout-json`, and keyed `synthetic-keyed-stderr` and
   `synthetic-keyed-stdout-json`) under `crates/goalcup-cli/tests/fixtures/harness-kit/` test the
