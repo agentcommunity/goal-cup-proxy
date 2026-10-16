@@ -24,6 +24,10 @@ priority = 100
 # one-at-a-time for exactly those modules.
 [test-groups]
 serial = { max-threads = 1 }
+# The two suites that run connectors through the real binaries, one at a time: the kit's timed
+# snapshot case (a rewrite 0.75 s after the first write) lost its first generation on Linux while
+# the connector contract's runs shared the CPU.
+connector-runs = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = '''
@@ -43,3 +47,12 @@ package(goalcup-cli) & (
 )
 '''
 test-group = 'serial'
+
+[[profile.default.overrides]]
+filter = '''
+package(goalcup-cli) & (
+    (binary(it) & test(/^harness_contract_kit::every_kit_case/))
+    | (binary(full) & test(/^connector_contract::/))
+)
+'''
+test-group = 'connector-runs'
