@@ -368,7 +368,13 @@ fn browser_opener() -> fn(&str) -> bool {
     if std::env::var_os(TEST_NO_BROWSER).is_some() {
         return |_| false;
     }
-    browser_opener_unless(std::env::var_os(NO_BROWSER).is_some_and(|v| !v.is_empty()))
+    browser_opener_unless(no_browser_set(std::env::var_os(NO_BROWSER).as_deref()))
+}
+
+/// Whether `GOALCUP_NO_BROWSER` asks for no browser: set to something. An empty value is not a
+/// request (`GOALCUP_NO_BROWSER= goalcup ...` is how a shell clears it).
+fn no_browser_set(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|v| !v.is_empty())
 }
 
 fn browser_opener_unless(no_browser: bool) -> fn(&str) -> bool {
@@ -723,5 +729,13 @@ mod tests {
         let off = super::browser_opener_unless(true);
         assert_ne!(off as usize, real as usize);
         assert!(!off("https://example.invalid/approve"));
+    }
+
+    #[test]
+    fn only_a_non_empty_value_turns_the_browser_off() {
+        use std::ffi::OsStr;
+        assert!(!super::no_browser_set(None));
+        assert!(!super::no_browser_set(Some(OsStr::new(""))));
+        assert!(super::no_browser_set(Some(OsStr::new("1"))));
     }
 }

@@ -285,7 +285,7 @@ fn only_the_fixed_hermes_start_is_ever_executed() {
     );
     assert!(out.status.success(), "{}", printed(&out));
     assert!(w.ran());
-    // `--practice` is the one other option, in either order with the goal file.
+    // `--practice` is the one other option, before or after the goal file.
     let out = w.run(
         &[],
         &[
@@ -303,6 +303,24 @@ fn only_the_fixed_hermes_start_is_ever_executed() {
     assert_eq!(
         std::fs::read_to_string(w.path("argv")).unwrap(),
         "start\n--harness\nhermes-cli\n--practice\n--goal-file\n/tmp/g\n"
+    );
+    let out = w.run(
+        &[],
+        &[
+            f,
+            "start",
+            "--harness",
+            "hermes-cli",
+            "--goal-file",
+            "/tmp/g",
+            "--practice",
+        ],
+        &[],
+    );
+    assert!(out.status.success(), "{}", printed(&out));
+    assert_eq!(
+        std::fs::read_to_string(w.path("argv")).unwrap(),
+        "start\n--harness\nhermes-cli\n--goal-file\n/tmp/g\n--practice\n"
     );
 }
 

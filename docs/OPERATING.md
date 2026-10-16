@@ -147,7 +147,8 @@ the connector's `harness.toml` to tell the two kinds apart. A chat-mode connecto
 under a pseudo-terminal into which the script types one prompt; the tracer stops it at the practice deadline
 (10 minutes). A headless connector (like `hermes-cli`) runs with `--goal-file` holding `MATRIX_PROMPT`, with
 nothing typed; it ends when the harness does, and the script then waits for the server's deadline before it
-asks for the server's copy.
+asks for the server's copy. `--timeout` is one budget for both waits together. A connector id that is not one of
+the two fakes needs its `harness.toml` to be found (see Connectors below), or the row FAILs and says so.
 It prints the log path and one row:
 
 ```
@@ -169,7 +170,7 @@ download it. It asks `GET /v1/runs/{id}?entry_id=…` with the run's own credent
 to equal the local chain the verifier just checked: `offset` equal to the bytes of `chain.jsonl`,
 `next_seq` to the record count, `head` and the last acknowledgement's `hash` to the verifier's
 `validated_head`, `final` to the last record, `status: sealed` and `stop: true` (for a headless run, once the server's deadline
-has passed: the script polls until then, up to `--timeout`). The server stores a chunk
+has passed: the script polls until then, within what is left of `--timeout`). The server stores a chunk
 only if its SHA-256 matches, at the offset, previous hash and sequence it holds, and signs an
 acknowledgement the verifier checks. Equal positions therefore mean the server holds the chain the tracer
 sent, in order. It does not prove the stored bytes; only the verify job (not built) would.
@@ -191,8 +192,12 @@ invocation (`key_source: "supplied"`).
 - A provider key comes from a file too: `MATRIX_KEY_ENV_FILE=<path>`, a mode 0600 file with one
   `DEEPSEEK_API_KEY=` line. When the connector's `harness.toml` declares that credential (`hermes-cli`), the
   start goes through `scripts/with-deepseek-key.sh`, which reads the key itself. The key is never in this
-  script's environment, arguments, log or files; the path is in the start wrapper's environment alone, and
-  neither is printed. It is ignored for a connector with no such credential.
+  script's environment, arguments, log or files. The path is not printed or written to a file: it is in the
+  start wrapper's environment and in the loader's argument list (a same-user `ps` can see the path, never the
+  key). **Today a keyed connector is refused up front:** a harness given a provider key is never uploaded (RULES),
+  so the real `goalcup start --practice` refuses it, and `matrix.sh` says "keyed harnesses are not uploaded today
+  (RULES); matrix cannot test them" before it starts anything. The plumbing stays behind `MATRIX_KEYED_UPLOADED=1`
+  for when that rule changes. The key file is ignored for a connector with no such credential.
 - With no key file, it prints the approval address and code and waits while you approve in a browser.
 - It approves at most one device code per phase and stops looking for codes once the harness is up.
 - It never reads or writes the real goalcup configuration directory, `~/.codex`, `~/.claude` or `~/.hermes`.
@@ -231,9 +236,6 @@ created or one you trust?" in every new workspace and selects "No, exit" first, 
 PASS does not prove the prompt was submitted; check the session in the kept directory (`--keep`) or the
 trace. `m2-fake-tui` (chat) and `m2-fake-headless` (headless, a fake that exits at once with code 0) are the
 two that need no harness.
-
-Hermes, headless, with its key (staging, `--practice` is always used):
-`MATRIX_CONFIG_DIR=<prepared dir> MATRIX_KEY_ENV_FILE=<key env file> GOALCUP_TEST_APPROVAL_KEY_FILE=<key file> sh scripts/matrix.sh hermes-cli <url>`.
 
 **Other environment.** `MATRIX_REPO_URL` (default: the public empty repository
 `https://github.com/agentcommunity/goalcup-matrix-empty`), `MATRIX_BIN_DIR`, `--keep`, `--timeout`
@@ -383,6 +385,10 @@ declared id.
 how a second, isolated tracker runs on one machine (a test, a development build beside an installed one).
 The default is `~/Library/Application Support/goalcup` on macOS and `$XDG_CONFIG_HOME/goalcup` (else
 `~/.config/goalcup`) elsewhere.
+
+`$GOALCUP_NO_BROWSER` set to any non-empty value makes `goalcup login` and `goalcup start` open no browser. The
+approval address and code are printed as always, with a line saying a browser did not open. It is for a headless
+or remote machine and for scripts that approve another way (`scripts/matrix.sh` sets it).
 
 ## Running the daemon
 

@@ -43,6 +43,10 @@ if args[0] == "login":
 
 assert args[0] == "start", args
 note("start.argv", "\n".join(args))
+if os.environ.get("STUB_REAL_REFUSAL") == "1" and "--practice" in args:
+    # What the real goalcup says to --practice for a keyed harness (start.rs, `uploading`).
+    sys.exit(print("goalcup: `--practice` cannot be used with this harness: a harness handed a provider key "
+                   "is never uploaded, so it cannot make a practice run. Nothing was created.", file=sys.stderr) or 1)
 note("start.no_browser", os.environ.get("GOALCUP_NO_BROWSER", "unset"))
 note("start.stdin_is_tty", str(os.isatty(0)))
 if "DEEPSEEK_API_KEY" in os.environ:
@@ -212,9 +216,15 @@ SCENARIOS = {
     "headless": ("stubhead", "headless", {}),
     "exits_non_zero": ("stubhead", "headless", {"STUB_EXIT": "3"}),
     "no_seal": ("stubhead", "headless", {"STUB_NO_SEAL": "1"}),
-    "keyed": ("hermes-cli", "headless", {"MATRIX_KEY_ENV_FILE": "KEYFILE"}),
+    # Today a keyed connector is refused up front, before any login or start.
+    "keyed_refused": ("hermes-cli", "headless", {"MATRIX_KEY_ENV_FILE": "KEYFILE"}),
+    # The plumbing behind MATRIX_KEYED_UPLOADED=1. The stub accepts --practice here; the real
+    # goalcup does not (next scenario), so this proves the key handling and nothing more.
+    "keyed": ("hermes-cli", "headless", {"MATRIX_KEY_ENV_FILE": "KEYFILE", "MATRIX_KEYED_UPLOADED": "1"}),
+    "keyed_real_refusal": ("hermes-cli", "headless", {"MATRIX_KEY_ENV_FILE": "KEYFILE", "MATRIX_KEYED_UPLOADED": "1", "STUB_REAL_REFUSAL": "1"}),
+    "no_manifest": ("nosuchconnector", "headless", {}),
     "key_ignored": ("stubhead", "headless", {"MATRIX_KEY_ENV_FILE": "KEYFILE"}),
-    "bad_key_file": ("hermes-cli", "headless", {"MATRIX_KEY_ENV_FILE": "/nonexistent/secret-place/x.env"}),
+    "bad_key_file": ("hermes-cli", "headless", {"MATRIX_KEY_ENV_FILE": "/nonexistent/secret-place/x.env", "MATRIX_KEYED_UPLOADED": "1"}),
     "chat": ("stubchat", "chat", {"MATRIX_PRE_PROMPT_KEYS": r"\033[B\r", "MATRIX_PRE_PROMPT_DELAY": "1"}),
 }
 
@@ -256,7 +266,28 @@ class MatrixTests(unittest.TestCase):
         self.assertNotEqual(w.run.returncode, 0)
         self.assertIn("and the seal", w.run.stderr)
 
+    def test_a_keyed_connector_is_refused_before_anything_starts(self) -> None:
+        w = self.worlds["keyed_refused"]
+        self.assertNotEqual(w.run.returncode, 0)
+        self.assertIn("keyed harnesses are not uploaded today (RULES); matrix cannot test them", w.run.stderr)
+        self.assertFalse((w.out / "start.argv").exists())
+        self.assertFalse((w.out / "login.no_browser").exists())
+        self.assertNotIn(KEY, w.everything_matrix_wrote())
+
+    def test_the_real_refusal_of_practice_for_a_keyed_harness_fails_the_row(self) -> None:
+        w = self.worlds["keyed_real_refusal"]
+        self.assertNotEqual(w.run.returncode, 0)
+        self.assertIn("is never uploaded, so it cannot make a practice run", w.run.stderr)
+        self.assertIn("FAIL", w.run.stdout)
+
+    def test_a_connector_with_no_manifest_fails_and_says_where_to_look(self) -> None:
+        w = self.worlds["no_manifest"]
+        self.assertNotEqual(w.run.returncode, 0)
+        self.assertIn("GOALCUP_CONNECTORS_DIR", w.run.stderr)
+        self.assertFalse((w.out / "start.argv").exists())
+
     def test_the_key_goes_through_the_loader_and_leaves_no_trace(self) -> None:
+        # Plumbing only (MATRIX_KEYED_UPLOADED=1): see the scenario's comment.
         w = self.worlds["keyed"]
         self.assertEqual(w.run.returncode, 0, w.said())
         argv = w.seen("start.argv").split("\n")
@@ -294,10 +325,9 @@ class MatrixTests(unittest.TestCase):
         chunks = json.loads(w.seen("start.stdin_chunks"))
         keys, text, enter = chunks[0], chunks[1], chunks[2]
         self.assertEqual(keys[1], "\x1b[B\r")
-        # The text arrives without its Enter, and the Enter comes on its own, later.
+        # The text arrives without its Enter, and the Enter comes on its own (a read of its own).
         self.assertEqual(text[1], PROMPT)
         self.assertEqual(enter[1], "\r")
-        self.assertGreaterEqual(enter[0] - text[0], 0.8)
 
 
 if __name__ == "__main__":

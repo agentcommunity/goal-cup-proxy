@@ -52,10 +52,15 @@
 #                              DEEPSEEK_API_KEY (hermes-cli): a mode 0600 file with one
 #                              DEEPSEEK_API_KEY=... line. The start then goes through
 #                              scripts/with-deepseek-key.sh, which reads the key itself. The key
-#                              never enters this script's environment, arguments, log or files,
-#                              and the path is not printed or written to a file either: it is
-#                              handed to the start's wrapper in that process's environment alone.
-#                              Ignored (and logged so) for a connector with no such credential.
+#                              never enters this script's environment, arguments, log or files.
+#                              The path is not printed or written to a file; it is in the start
+#                              wrapper's environment and in the loader's argument list (a
+#                              same-user `ps` sees the path, never the key). Ignored (and logged
+#                              so) for a connector with no such credential.
+#                              TODAY a connector with that credential is refused up front: a
+#                              harness given a provider key is never uploaded (RULES), and the
+#                              real `goalcup start --practice` refuses it. The plumbing waits
+#                              behind MATRIX_KEYED_UPLOADED=1, for when that rule changes.
 #   MATRIX_PROMPT_DELAY        seconds between "the harness is up" and the prompt (fake: 1,
 #                              any other connector: 30). Chat mode only.
 #   MATRIX_SUBMIT_DELAY        seconds between the typed prompt and the Enter that submits it
@@ -81,7 +86,9 @@
 #   --allow-production   permit https://ingest.agentcommunity.org. Tests never use it.
 #   --keep               do not delete the temporary directory (it holds the run's trace).
 #   --log FILE           where the details go (default: a new file in $TMPDIR).
-#   --timeout SECONDS    give up on the run after this long (default 1800).
+#   --timeout SECONDS    give up on the run after this long (default 1800). One budget: for a
+#                        headless run the wait for the server's deadline takes what the start
+#                        left of it.
 #   --check-copy DIR [RUN]
 #                        only the server-copy check, for a run you made by hand (the edge cases
 #                        in docs/OPERATING.md): every entry of RUN (default: the newest) in the
@@ -203,6 +210,9 @@ if [ -n "$KEYENV" ]; then
       ;;
   esac
 fi
+# Whether a keyed harness's run is uploaded. Today it is not (RULES), so a keyed connector is
+# refused before anything starts; this is the switch for the day the rule changes.
+KEYED_UPLOADED=${MATRIX_KEYED_UPLOADED:-0}
 PRE_KEYS=${MATRIX_PRE_PROMPT_KEYS:-}
 case $PRE_KEYS in
   *\'* | *%* | *\$* | *\`*)
@@ -580,6 +590,9 @@ run_matrix() {
   fi
   MATRIX_TERM=${MATRIX_TERM:-$([ "$CONNECTOR" = "$FAKE_ID" ] && echo dumb || echo xterm-256color)}
   read_manifest || return 1
+  if [ -n "$CRED_ENV" ] && [ "$KEYED_UPLOADED" != 1 ]; then
+    fail "keyed harnesses are not uploaded today (RULES); matrix cannot test them" || return 1
+  fi
   PROMPT=${MATRIX_PROMPT:-"Goal Cup matrix check: reply with the single word ok."}
 
   if [ "$OWN_CONFIG" = 1 ]; then
@@ -683,6 +696,7 @@ run_matrix() {
       fi
     }
   fi
+  START_AT=$(date +%s)
   wait_job "$ROOT/start.rc" "$ROOT/start.out" "$TIMEOUT"
   w=$?
   : >"$ROOT/done"
@@ -759,7 +773,10 @@ PY
         fail "the headless harness did not finish its goal: $exited" || return 1
       # Over on the harness's side, open on the server's until its deadline (the practice length).
       COPY_SLEEP=10
-      COPY_TRIES=$((TIMEOUT / COPY_SLEEP + 1))
+      # What is left of --timeout after the start, not a second budget.
+      left=$((TIMEOUT - ($(date +%s) - START_AT)))
+      [ "$left" -gt 0 ] || left=0
+      COPY_TRIES=$((left / COPY_SLEEP + 1))
       say "the harness finished its goal; the server's copy is checked after the server's deadline"
     fi
   else
@@ -937,9 +954,8 @@ print(v if not isinstance(v, bool) else str(v).lower())' "$1" "$2"
 # What the connector's harness.toml says about how it runs: MODE (chat when `interactive = true`,
 # headless otherwise: it takes its goal as an argument) and CRED_ENV (the `capture.credential`
 # variable, or empty). Read the way goalcup finds its connectors: GOALCUP_CONNECTORS_DIR, else the
-# directory beside the binary, else this checkout's. A manifest nowhere is taken to be chat mode,
-# the only mode this script drove before it read manifests. One key per line, as the shipped
-# manifests have them.
+# directory beside the binary, else this checkout's. A manifest nowhere is a failure. One key
+# per line, as the shipped manifests have them.
 read_manifest() {
   MODE=chat
   CRED_ENV=""
@@ -956,8 +972,9 @@ read_manifest() {
     done
   fi
   if [ ! -f "$manifest" ]; then
-    log "note: no harness.toml found for $CONNECTOR; taking it to be chat mode (set GOALCUP_CONNECTORS_DIR)"
-    return 0
+    # Chat mode is the safe guess for the old fake only: a headless connector taken for chat mode
+    # would get a terminal and a typed prompt, and fail half a minute later for no clear reason.
+    fail "no harness.toml found for $CONNECTOR (set GOALCUP_CONNECTORS_DIR to the connectors directory)" || return 1
   fi
   cat >"$ROOT/manifest.py" <<'PY'
 import re, sys
