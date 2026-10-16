@@ -1111,13 +1111,29 @@ mod segments {
             shown.contains(&format!("{} {until}", goalcup_cli::participant::STILL_OPEN)),
             "{shown}"
         );
-        assert!(
-            shown.contains(&format!(
+        let hint = shown
+            .find(&format!(
                 "{} {run_id}",
                 goalcup_cli::participant::CONTINUE_HINT
-            )),
+            ))
+            .unwrap_or_else(|| panic!("{shown}"));
+        // Said at the seal, before the wait for the upload: continue works from then on.
+        let waiting = shown
+            .find(goalcup_cli::participant::UPLOADING_REST)
+            .unwrap_or_else(|| panic!("{shown}"));
+        assert!(hint < waiting, "{shown}");
+        assert!(
+            shown.find(goalcup_cli::participant::STILL_OPEN).unwrap() < waiting,
             "{shown}"
         );
+        // A chat-mode run's ids and folders are not on the terminal before the harness: they
+        // are in its host.log.
+        assert!(!before.contains("run directory:"), "{shown}");
+        let log =
+            std::fs::read_to_string(goalcup_cli::run::run_dir(&rig.cfg, &run_id).join("host.log"))
+                .unwrap();
+        assert!(log.contains("run directory:"), "{log}");
+        assert!(log.contains(&format!("run {run_id} opened on")), "{log}");
         // The run is open on the server; its one segment is sealed and sent.
         assert_eq!(api_run(&rig, &server, &run_id)["status"], "open");
         let entries = server.entry_ids(&run_id);

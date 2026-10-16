@@ -210,22 +210,20 @@ pub fn approve(
         Purpose::Login => crate::participant::Approving::Login,
         Purpose::Run { mode, harness } => crate::participant::Approving::Run { mode, harness },
     };
-    let mut code = crate::participant::approval_code(
-        &created.user_code,
-        &created.verification_uri_complete,
-        wait,
-    );
-    let waiting = code.pop().unwrap_or_default();
-    for line in crate::participant::approval_intro(approving)
-        .into_iter()
-        .chain(code)
-    {
+    // Which approval this is comes first; the browser is asked to open before the code lines,
+    // so they say what really happened.
+    for line in crate::participant::approval_intro(approving) {
         say(out, line)?;
     }
-    if !open(&created.verification_uri_complete) {
-        say(out, crate::participant::no_browser())?;
+    let opened = open(&created.verification_uri_complete);
+    for line in crate::participant::approval_code(
+        &created.user_code,
+        &created.verification_uri_complete,
+        opened,
+        wait,
+    ) {
+        say(out, line)?;
     }
-    say(out, waiting)?;
 
     let mut interval = Duration::from_secs(
         created

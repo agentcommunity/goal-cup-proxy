@@ -975,7 +975,15 @@ impl Forked<'_> {
 
     /// End a run whose harness never ran or was never told about: the entry is sealed within
     /// the one budget, and the run is marked unscanned. Returns the error that ended it.
-    fn unlaunched(self, error: CliError, out: &mut dyn std::io::Write) -> CliError {
+    fn unlaunched(mut self, error: CliError, out: &mut dyn std::io::Write) -> CliError {
+        // A chat-mode launch that failed before its log opened still says its ids and folders,
+        // for support.
+        if !self.details.is_empty() {
+            let _ = say(out, &crate::participant::details_heading(None));
+            for line in self.details.drain(..) {
+                let _ = say(out, &line);
+            }
+        }
         let keeps_reserve = self.keeps_reserve();
         // Whatever ended the launch, including a Ctrl-C, the seal below runs its full retries.
         crate::arming::close_window();
@@ -2563,14 +2571,64 @@ fn finish_and_scan(
     if let Ok(status) = &status {
         let _ = say(out, &format!("harness exited: {}.", describe_exit(status)));
     }
+    // What happened, and what to do now, said at the seal and before the wrap-up upload: from
+    // here `goalcup continue` works (the home and the run's reserve were let go above), so a
+    // participant need not wait up to the wrap-up's hour to read it. `goalcup continue` is advised
+    // only when it can restart the run; otherwise what is true is said.
+    let how = match &status {
+        Ok(status) => describe_exit(status),
+        Err(error) => error.to_string(),
+    };
+    let until = |deadline_at: &str| {
+        crate::participant::end_words(
+            deadline_at,
+            crate::participant::seconds_left(
+                snapshot.time_left.as_ref(),
+                Some(deadline_at),
+                crate::run::now_unix(),
+            ),
+        )
+    };
+    let stopped = snapshot.stopped.as_deref();
+    use crate::participant::Ending;
+    let ending = match (on_server, run_goes_on, over, record.deadline_at.as_deref()) {
+        (false, ..) => None,
+        (true, true, _, Some(deadline_at)) => Some(Ending::Open {
+            run_id: &record.run_id,
+            how: &how,
+            until: until(deadline_at),
+            disk_stop: stopped == Some(crate::run::watch::DISK_STOP_REASON),
+        }),
+        (true, false, true, _) if ended_by_stop => Some(match stopped {
+            Some(crate::upload::uploader::REPLACED_REASON) => Ending::Replaced,
+            Some(why) if crate::upload::uploader::refused_run(why) => Ending::Closed,
+            _ => Ending::TimeUp {
+                practice: record.practice,
+            },
+        }),
+        (true, false, true, _) => Some(Ending::Over { how: &how }),
+        (true, false, false, Some(deadline_at)) => Some(Ending::NoRestart {
+            how: &how,
+            until: until(deadline_at),
+        }),
+        _ => None,
+    };
+    if let Some(ending) = &ending {
+        for line in crate::participant::ending_block(&harness_name, ending) {
+            let _ = say(out, &line);
+        }
+    }
     // After the seal: the rest of the chain and the seal itself, within the finish budget.
     // A local run has nothing to upload, so there is nothing of it left to send.
     let mut sent_whole = !on_server;
     let mut server_ended = false;
     let mut upload_report = None;
-    if let Some(running) = uploading {
-        // The wrap-up can take minutes: the participant is told to wait for it.
+    // The wrap-up can take minutes: the participant is told to wait for it.
+    if uploading.is_some() || !draining.is_empty() {
+        let _ = say(out, "");
         let _ = say(out, crate::participant::UPLOADING_REST);
+    }
+    if let Some(running) = uploading {
         let report = running.finish(wrap_up);
         // Everything this entry has is on the server, and the seal; and the server may say the
         // run itself is sealed or incomplete.
@@ -2612,50 +2670,10 @@ fn finish_and_scan(
         };
         let _ = say(out, &line);
     }
-    // What happened, and what to do now: said last, below the details. `goalcup continue` is
-    // advised only when it can restart the run; otherwise what is true is said.
-    if on_server {
-        let how = match &status {
-            Ok(status) => describe_exit(status),
-            Err(error) => error.to_string(),
-        };
-        let until = |deadline_at: &str| {
-            crate::participant::end_words(
-                deadline_at,
-                crate::participant::seconds_left(
-                    snapshot.time_left.as_ref(),
-                    Some(deadline_at),
-                    crate::run::now_unix(),
-                ),
-            )
-        };
-        let stopped = snapshot.stopped.as_deref();
-        use crate::participant::Ending;
-        let ending = match (run_goes_on, over, record.deadline_at.as_deref()) {
-            (true, _, Some(deadline_at)) => Some(Ending::Open {
-                run_id: &record.run_id,
-                how: &how,
-                until: until(deadline_at),
-                disk_stop: stopped == Some(crate::run::watch::DISK_STOP_REASON),
-            }),
-            (false, true, _) if ended_by_stop => Some(match stopped {
-                Some(crate::upload::uploader::REPLACED_REASON) => Ending::Replaced,
-                Some(why) if crate::upload::uploader::refused_run(why) => Ending::Closed,
-                _ => Ending::TimeUp {
-                    practice: record.practice,
-                },
-            }),
-            (false, true, _) => Some(Ending::Over { how: &how }),
-            (false, false, Some(deadline_at)) => Some(Ending::NoRestart {
-                how: &how,
-                until: until(deadline_at),
-            }),
-            _ => None,
-        };
-        if let Some(ending) = ending {
-            for line in crate::participant::ending_block(&harness_name, &ending, sent_whole) {
-                let _ = say(out, &line);
-            }
+    // Last: whether the rest is on the server, and what that leaves to do.
+    if let Some(ending) = &ending {
+        for line in crate::participant::after_upload(ending, sent_whole, server_ended) {
+            let _ = say(out, &line);
         }
     }
     // The tick ends here, just before the reservation goes (or is left to the next start): it
@@ -3667,6 +3685,16 @@ impl Serving {
         connector: &HarnessConnector,
         out: &mut dyn std::io::Write,
     ) -> Result<Uploading, CliError> {
+        // Approving a competition run replaces the account's open one: said before the browser
+        // opens, when this computer has such a run on this server.
+        if opts.mode == crate::account::device::RunMode::Competition
+            && let Some(started) = open_competition_run(&self.cfg, &self.url)
+        {
+            say(
+                out,
+                &crate::participant::replaces_open_run(&crate::participant::local_clock(started)),
+            )?;
+        }
         let anonymous = crate::upload::http::ServerClient::anonymous(&self.url);
         let approved = crate::account::device::approve(
             &anonymous,
@@ -3703,6 +3731,28 @@ impl Serving {
             })),
         })
     }
+}
+
+/// When the newest competition run this computer has open on `server` started (unix seconds), if
+/// it has one: a run opened there, not practice or test, and not over by its state's count.
+fn open_competition_run(cfg: &Path, server: &str) -> Option<u64> {
+    let now = crate::run::now_unix();
+    let same = |url: &str| url.trim_end_matches('/') == server.trim_end_matches('/');
+    crate::run::all(cfg)
+        .into_iter()
+        .filter(|run| {
+            !run.practice
+                && !run.test
+                && run.deadline_at.is_some()
+                && run.server_url.as_deref().is_some_and(same)
+                && !crate::run::is_over(
+                    run,
+                    crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id)).as_ref(),
+                    now,
+                )
+        })
+        .map(|run| run.started_at_unix)
+        .max()
 }
 
 /// A run's upload server, for `goalcup start` and `goalcup continue`: the client that carries

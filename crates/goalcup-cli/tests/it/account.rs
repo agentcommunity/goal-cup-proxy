@@ -853,7 +853,13 @@ fn a_browser_that_will_not_open_is_asked_for_by_hand() {
     )
     .unwrap();
     let printed = String::from_utf8(out).unwrap();
-    assert!(printed.contains("yourself"), "{printed}");
+    // No browser opened: one line names the address and the code, and none says it opened.
+    let line = printed
+        .lines()
+        .find(|line| line.contains("shows the code"))
+        .unwrap_or_else(|| panic!("{printed}"));
+    assert!(line.contains("?code="), "{printed}");
+    assert!(!printed.contains("browser opened"), "{printed}");
     assert_eq!(server.device_requests()[0].mode, "competition");
 }
 
