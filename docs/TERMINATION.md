@@ -69,7 +69,9 @@ walked; the root's own exit no longer ends adoption. Ceiling `MAX_TARGETED` = 40
 ## The duration bound
 
 `2 × (grace_seconds + KILL_SWEEP_TIMEOUT_MS)` — one grace and one 2 s kill sweep per phase —
-plus 50 ms poll granularity and the `ps` spawns, plus the seal's 250 ms reconfirm. A tree that
+plus 50 ms poll granularity and the `ps` spawns, plus the seal's 250 ms reconfirm, plus at most
+200 ms for each guard read that finds a live root whose argv reads `[comm]` (an exit in progress,
+below). A tree that
 dies at once ends at the first clear poll; a member ignoring SIGTERM costs the full grace.
 
 ## The residual windows, per platform (stated, not solved)
@@ -93,9 +95,13 @@ cannot see, as ruled in "RULED: on Linux, `Confirmed` excludes fork-and-leave wr
 `W` is the daemon's and the launcher's sweep described there does not narrow it: the sweep ends
 such orphans in a `goalcup start` run before its seal, outside this contract.
 A root that `liveness` still reads as live while its argv already reads `[comm]` (exiting, not
-yet a zombie) at both of the guard's `liveness` reads is refused as renamed: the anchor is
-`Lost` and the seal `Unresolved`, fail-closed. The second read narrows that window to the
-time one `/bin/ps` takes; it does not close it.
+yet a zombie) is waited for: the guard asks `liveness` again every 5 ms for at most 200 ms, and
+no longer live is the exit. Nothing is signalled during the wait. A root still live at the end
+of it is refused as renamed: the anchor is `Lost` and the seal `Unresolved`, fail-closed.
+Measured (D7, Docker on Linux, a SIGTERMed one-thread `python3.13` root, state `R`, empty
+`/proc/<pid>/cmdline`): the window lasted 1 to 13 ms, and with one immediate second read 3 of 80
+seals ended `Unresolved(ProcessAuthorityUnavailable)`. The wait narrows the residual to an exit
+slower than 200 ms; it does not close it. Any other argv on a live root is refused at once.
 
 **macOS** (numeric `kill`, kqueue witness per member from the root down, attached before phase
 A; audit token for the singleton). Each witness is read twice a poll — before the snapshot and

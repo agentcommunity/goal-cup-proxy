@@ -7,7 +7,7 @@ use goalcup_protocol::process::{
 };
 use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The owned set below the registered root, ordered **deepest level first, native hoisted
 /// within its own depth**, with the root itself deliberately excluded.
@@ -410,17 +410,49 @@ pub(super) fn guard_registered(
     // while `ps` prints its argv as `[comm]`, which names no registered program. Measured:
     // a SIGTERMed Python root read `[python3.13]` here, and the seal reported a lost
     // authority instead of `Confirmed`. Ask the liveness question again, as above: no longer
-    // live is the exit, and a number still live running another program stays refused. So
-    // does one still mid-exit at this second read, which is fail-closed (docs/TERMINATION.md,
-    // the Linux residual).
+    // live is the exit, and a number still live running another program stays refused.
     if !argv_matches(handle, &args) {
-        return match os.liveness(handle.pid) {
-            Ok(false) => Ok(Presence::Absent),
-            Ok(true) => Err(Refused::ArgvRenamed),
-            Err(e) => Err(Refused::Unavailable(e)),
-        };
+        return exited_or_renamed(os, handle.pid, &args);
     }
     Ok(Presence::Live)
+}
+
+/// The longest [`exited_or_renamed`] waits for a root whose argv reads `[comm]` to finish
+/// exiting. Measured (D7, Linux in Docker, a SIGTERMed one-thread `python3.13` root, state
+/// `R`, empty `/proc/<pid>/cmdline`): gone 1 to 13 ms after the guard's argv read, and in 3 of
+/// 80 seals still live at a second `liveness` read taken at once. The bound is far above that
+/// and far below the termination bound.
+const EXITING_ARGV_WAIT: Duration = Duration::from_millis(200);
+
+/// The gap between the `liveness` reads of that wait.
+const EXITING_ARGV_POLL: Duration = Duration::from_millis(5);
+
+/// The live root's argv names no registered program: is it gone, or another program?
+///
+/// `liveness` is asked again: no longer live is the exit, the ordinary absent root. A live
+/// root is refused as renamed, at once for any argv but `[comm]`. `[comm]` is what `ps`
+/// prints for a process with no readable command line, which for a process whose creation
+/// identity matched a moment ago is one that is exiting, so the question is asked again every
+/// [`EXITING_ARGV_POLL`] for at most [`EXITING_ARGV_WAIT`]. The wait changes no refusal:
+/// nothing is signalled while it runs, and a root still live at its end is refused as renamed,
+/// as before. Fail-closed (docs/TERMINATION.md, the Linux residual).
+fn exited_or_renamed(os: &dyn ProcessOs, pid: u32, args: &str) -> Result<Presence, Refused> {
+    let exiting = no_readable_argv(args);
+    let until = os.now() + EXITING_ARGV_WAIT;
+    loop {
+        match os.liveness(pid) {
+            Ok(false) => return Ok(Presence::Absent),
+            Err(e) => return Err(Refused::Unavailable(e)),
+            Ok(true) if !exiting || os.now() >= until => return Err(Refused::ArgvRenamed),
+            Ok(true) => os.sleep(EXITING_ARGV_POLL),
+        }
+    }
+}
+
+/// Is `args` the `[comm]` line `ps` prints for a process with an empty command line?
+fn no_readable_argv(args: &str) -> bool {
+    let args = args.trim();
+    args.len() > 2 && args.starts_with('[') && args.ends_with(']')
 }
 
 /// What [`guard_registered`] found at the registered number: the launch's own process,
@@ -563,7 +595,9 @@ fn parse_etime(s: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_TARGETED, argv_matches, bounded_targets, parse_etime, split_identity};
+    use super::{
+        MAX_TARGETED, argv_matches, bounded_targets, no_readable_argv, parse_etime, split_identity,
+    };
     use goalcup_protocol::manifest::KillStrategy;
     use goalcup_protocol::process::ProcessHandle;
 
@@ -616,6 +650,19 @@ mod tests {
         // Nothing registered and nothing readable are both "no answer", not "mismatch".
         assert!(argv_matches(&handle(&[]), "/usr/bin/vim notes.md"));
         assert!(argv_matches(&h, ""));
+    }
+
+    /// Only the `[comm]` line of an empty command line opens the exit wait; a real argv, a
+    /// zombie's line and an empty read do not.
+    #[test]
+    fn only_the_line_of_an_empty_command_line_reads_as_no_argv() {
+        assert!(no_readable_argv("[python3.13]"));
+        assert!(no_readable_argv("  [sh]\n"));
+        assert!(!no_readable_argv("/usr/bin/vim notes.md"));
+        assert!(!no_readable_argv("[python3.13] <defunct>"));
+        assert!(!no_readable_argv("python3 [x]"));
+        assert!(!no_readable_argv("[]"));
+        assert!(!no_readable_argv(""));
     }
 
     /// The three widths `ps` prints, and the shapes it never does.
