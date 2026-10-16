@@ -168,7 +168,7 @@ disclosure and no-side-channel rules.
   Claude Remote Control and Channels. A message sent through them is a human message like any other.
   The tracker records it where it can see it, and the review treats one it cannot see as unexplained.
 - The human may not write code, answer questions, make product decisions, approve actions or edit the
-  product.
+  product (except the folder-trust dialog, below).
 - No side-channel prompting. You or a collaborator may not change anything the agent can read: files,
   Linear tasks, GitHub issues, messages, documents, email, databases, websites, forms, dashboards,
   webhooks, environment values or similar state.

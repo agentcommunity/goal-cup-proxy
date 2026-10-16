@@ -117,9 +117,9 @@ configure = [
 - **What it may change.** Only how the harness stores its session (capture and storage
   settings), in the harness home. Never how the agent behaves: not the model, the provider, the
   tools, the prompts, or whether compression is on. Core refuses an argument that has `model`,
-  `provider`, `base_url`, `api_key`, `key`, `token` or `secret` as a `.`-separated part (compared
-  in any case, leading dashes ignored: `model.provider`, `--model` and `auth.Token` are refused;
-  `max_tokens` is not). The `args` rules also refuse the endpoint, credential, proxy and trust
+  `provider`, `base_url`, `api_key`, `key`, `token` or `secret` as a `.`- or `=`-separated part
+  (compared in any case, leading dashes ignored: `model.provider`, `--model`, `--model=x`,
+  `provider=x` and `auth.Token` are refused; `max_tokens` is not). The `args` rules also refuse the endpoint, credential, proxy and trust
   spellings, a profile switch and the connector's own guarded options. Review is the control for
   the rest.
 

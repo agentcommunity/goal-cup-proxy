@@ -190,8 +190,8 @@ in [OPERATING](docs/OPERATING.md#running-the-daemon).
   the participant's GitHub repository instead.
 - **What the harness sees.** Its environment is built from nothing. Of your shell only these
   reach it: `USER`, `LOGNAME` and `TMPDIR` for every harness, and for a chat-mode harness also
-  `PATH`, `TERM`, `COLORTERM`, `LANG`, `SHELL` and every `LC_*` (a headless harness gets a fixed
-  `PATH`). Never a provider key (D61): a harness keeps its own login in its home. The tracer never
+  `PATH`, `TERM`, `COLORTERM`, `LANG`, `SHELL` and every `LC_*` locale variable (a headless
+  harness gets a fixed `PATH`). Never a provider key (D61): a harness keeps its own login in its home. The tracer never
   sets a model base URL. The only proxy the harness gets is the tracer's own loopback recorder.
 - <a id="the-daemon"></a>**The daemon.** `goalcup start` uses the daemon that answers on
   `$GOALCUP_CONFIG_DIR/control.json` and starts `goalcup-daemon --exit-when-idle` when none does. It
