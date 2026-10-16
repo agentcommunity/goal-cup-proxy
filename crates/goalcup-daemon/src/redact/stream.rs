@@ -1520,7 +1520,7 @@ fn jwt_step(seg: &mut u8, count: &mut u8, u: Unit) -> bool {
 /// the earlier BEGIN covers this byte whatever follows (the lazy arm ends at an END after it, or
 /// the bounded arm takes it), and `find_iter` resumes after that match. Holding a second BEGIN
 /// the regex never reports would keep the first block undecided past the hold and fail the
-/// stream closed (H-20 re-review).
+/// stream closed (H-20 re-review). Asked only on a `-`, the one unit a BEGIN starts on.
 fn in_a_pem_window(candidates: &[Candidate]) -> bool {
     candidates
         .iter()
@@ -1911,12 +1911,12 @@ impl Scanner {
             self.end_redaction(off, out);
             return false;
         }
-        let in_block = in_a_pem_window(&red.live);
+        let in_block = is(u, b'-') && in_a_pem_window(&red.live);
         for lit in 0..policy.len() {
-            if in_block && matches!(policy.form(lit), Some(Form::PrivateKey)) {
-                continue;
-            }
             if let Some(walk) = Candidate::spawn(policy, lit, u, self.prev_local) {
+                if in_block && matches!(walk, Walk::Pem(_)) {
+                    continue;
+                }
                 let mut c = Candidate {
                     lit,
                     start: off,
@@ -1940,12 +1940,12 @@ impl Scanner {
     fn step_unit(&mut self, policy: &Policy, u: Unit, off: u64, len: usize) {
         self.candidates
             .retain_mut(|c| c.step(policy, u, off, len) == Step::Live);
-        let in_block = in_a_pem_window(&self.candidates);
+        let in_block = is(u, b'-') && in_a_pem_window(&self.candidates);
         for lit in 0..policy.len() {
-            if in_block && matches!(policy.form(lit), Some(Form::PrivateKey)) {
-                continue;
-            }
             if let Some(walk) = Candidate::spawn(policy, lit, u, self.prev_local) {
+                if in_block && matches!(walk, Walk::Pem(_)) {
+                    continue;
+                }
                 let mut c = Candidate {
                     lit,
                     start: off,
