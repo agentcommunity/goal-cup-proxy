@@ -20,7 +20,7 @@ those sources disagree, the sources refuse the manifest.
 deserializes every table with unknown fields denied, appends the `capture.providers` rows to
 `capture.hosts`, then validates in this fixed order:
 executable; arguments and goal; configure commands; environment; home; CA; identity;
-native source; argument guard; termination; hosts; redaction; delivery independence; cross-field
+native source; argument guard; termination; model host; hosts; redaction; delivery independence; cross-field
 rules; then each `capture.platform` entry, in the fixed order `linux-x86_64`, `linux-aarch64`,
 `macos-aarch64`, `macos-x86_64`, whatever order the file uses. The first refusal is deterministic. Unknown keys and
 unknown closed values use the same message: a newer schema needs a newer `goalcup`, while a
@@ -71,8 +71,9 @@ optional field or table is absent.
 | `capture.native` | defaults to `[]`, validation requires exactly one | One `[[capture.native]]` table. |
 | `capture.argv_guard` | optional, default absent | Harness-specific pre-parser argument refusals. |
 | `capture.termination` | optional; effective defaults below | How the owned harness is stopped. |
-| `capture.hosts` | defaults to `[]`, validation requires 1–16 (with `providers`) | Intercepted model hosts and their recorded paths. |
+| `capture.hosts` | defaults to `[]`, validation requires 1–16 (with `providers`), or 0–16 with `model_host_from` | Intercepted model hosts and their recorded paths. |
 | `capture.providers` | optional, default `[]` | Unique names from the shared provider table; each adds that provider's host row. See below. |
+| `capture.model_host_from` | optional, default absent | `{ file = "<path>", key = "<dotted key>" }`: where the harness's own config names its model service. Requires `config_home = "shared"`. See [The model host from the harness's config](#the-model-host-from-the-harnesss-config). |
 
 The goal has exactly one slot: either `capture.args` ends in the literal `--` and the goal is the
 next single argument, or `capture.goal_flag` is present and carries the goal as
@@ -430,7 +431,9 @@ the grace is 10 seconds.
 
 ## `[[capture.hosts]]` and `capture.providers`
 
-One to 16 unique host rows are required, counting the rows `capture.providers` adds.
+One to 16 unique host rows are required, counting the rows `capture.providers` adds. A profile
+with `capture.model_host_from` may list none: its model host comes from the harness's config at
+each start.
 
 A model provider's host row is written once, in the shared provider table
 `crates/goalcup-protocol/providers.toml`, which is compiled into the tracer. A connector names
@@ -456,6 +459,42 @@ a capture launch sets `NO_PROXY=127.0.0.1,localhost`, so loopback traffic is nev
 (`capture_policy::local_host_problem`). Kit cases and the controlled workload (`Origin::Dev`)
 keep their `*.localhost` stand-ins. An authentication host and intercepted host cannot
 overlap; model hosts belong in `capture.hosts`, not `auth_hosts`.
+
+## The model host from the harness's config
+
+`capture.model_host_from = { file = "config.yaml", key = "model.base_url" }` is the default for a
+harness whose model service is the participant's choice (D62). The participant picks the service
+in the harness, and the harness saves its address in its own config. There is no provider list.
+
+- **What is read.** `goalcup start` and each `goalcup continue` open `file` in the shared config
+  home (`<cfg>/capture-homes/<id>/`), before anything is created, and read the one string at
+  `key`. The file is never read during the run. The format follows the extension: `.yaml` or
+  `.yml` (block mappings, read by a small lookup in core), `.json` or `.toml`. The file must be a
+  regular file, not a link, and at most 1 MiB. Nothing else in it is kept or logged.
+- **What is recorded.** The value must be an `https` URL. Its host joins the intercepted hosts
+  for that segment only, with the run's port; its path is the base under which requests are
+  recorded. `<base>/chat/completions`, `<base>/messages` and `<base>/responses` (and the same under
+  `<base>/v1`) carry the `openai-chat-completions`, `anthropic-messages` and `openai-responses`
+  hints; every other path under the base is recorded with no hint. A host the connector also lists
+  in `capture.hosts` keeps that row. Every other host stays an opaque tunnel, counted in
+  `proxy admission:` and never opened.
+- **What is logged.** Only `model service: <host>:<port> (<key> in <file>)`: in the start's output
+  for a headless run, in the run's `host.log` for a chat-mode one. A userinfo (`user:pass@`), the
+  path and the query are never logged or recorded.
+- **Refused at start.** A missing file or key, a value that is not an `http` or `https` URL, plain
+  `http` (only `HTTPS_PROXY` is set, so it would pass around the recorder), a loopback name, an
+  address literal, a single-label name, a host that names the tracker, and an authentication host.
+  The refusal is one sentence: "The harness is set to use `<scheme>://<host>:<port>`, which Goal
+  Cup cannot record. Set a model service in the harness and run the command again." Nothing is
+  created. `goalcup continue` checks it before it closes an earlier segment.
+- **Schema rules.** `file` is a relative path of at most 4 components with a `.yaml`, `.yml`,
+  `.json` or `.toml` extension. `key` is 1–8 names of `[A-Za-z0-9_-]` (1–64 bytes each) joined
+  with `.`. No `.`, `-` or `_` separated part of the file's name or of the key may be `auth`,
+  `credential(s)`, `secret(s)`, `token(s)`, `key(s)`, `api_key` or `env`, in any case: the tracer
+  reads a service address, never a key file or a key.
+- **A switch mid-run.** A service the participant switches to inside a running session is not
+  intercepted until the next segment. The participant guide says: exit the harness and run
+  `goalcup continue`.
 
 ## `[participant]`
 
@@ -625,8 +664,9 @@ Read the shipped connectors. Conformance tests load each as `Origin::Pinned` and
 directory with its pin.
 
 - [`connectors/hermes-cli/harness.toml`](../connectors/hermes-cli/harness.toml): chat mode with a
-  `configure` command, a `snapshot` native source read from the run's start, an argv guard and a
-  reserved prefix. Its headless form, with `stderr_line` identity, is frozen at
+  `configure` command, its model host read from its own `config.yaml` (`model_host_from`, no
+  `hosts`), a `snapshot` native source read from the run's start, an argv guard and a reserved
+  prefix. Its headless form, with `stderr_line` identity, is frozen at
   [`headless-connectors/hermes-cli`](../crates/goalcup-protocol/tests/fixtures/headless-connectors/hermes-cli/harness.toml)
   for the tests of that recipe.
 - [`connectors/codex-cli/harness.toml`](../connectors/codex-cli/harness.toml): chat mode

@@ -610,6 +610,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-rustls",
+ "toml",
  "ureq",
  "webpki-roots",
  "x509-parser",

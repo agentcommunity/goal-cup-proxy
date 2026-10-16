@@ -206,7 +206,11 @@ fn every_capture_host_is_one_the_proxy_accepts() {
     use goalcup_cli::proxy::tls::{ProxyCa, is_config_host};
     for id in shipped_connector_ids() {
         let c = load(&id).loaded.manifest.capture;
-        let approved: Vec<String> = c.hosts.iter().map(|h| h.host.clone()).collect();
+        let mut approved: Vec<String> = c.hosts.iter().map(|h| h.host.clone()).collect();
+        // A model host read from the harness's config (D62) joins them at each start.
+        if c.model_host_from.is_some() {
+            approved.push("models.example.test".into());
+        }
         for h in approved.iter().chain(c.auth_hosts.iter()) {
             assert!(is_config_host(h), "{id}: `{h}`");
         }

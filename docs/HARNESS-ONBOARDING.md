@@ -73,8 +73,9 @@ Known gaps. The connector works, but the record is partial. Write each one in th
   Separate subagent files are seen only as model traffic.
 - A binary that updates itself with no flag or variable to stop that. The daemon hashes the build
   at launch. An update during the run is not recorded.
-- More than 16 model hosts, or a wildcard host. Traffic to a host the connector does not list
-  passes through unrecorded.
+- A model service the participant switches to inside a running session. The host is read from
+  the harness's config at each start and continue (`model_host_from`, D62), so the new service is
+  recorded from the next `goalcup continue`.
 
 ## What you need
 
@@ -132,15 +133,18 @@ is the harness executable. Run every command from the repository root.
    | 3. Where it keeps things | `[capture.home]`, `[[capture.native]].root` |
    | 4. Session format and identity | `[[capture.native]]` `pattern` and `form`, `[capture.identity]` |
    | 5. Auth | `auth_hosts`, `[capture.home]` `run_home` and `config_home` (the harness's own login, in its home) |
-   | 6. Network | `[capture.ca]`, `[[capture.hosts]]` |
+   | 6. Network | `[capture.ca]`, `model_host_from` (or, for one fixed service, `[[capture.hosts]]`) |
    | 7. Process model | `[capture.termination]`, `[capture.argv_guard]` |
    | 8. Things Goal Cup cannot isolate | nothing; it stays in the sheet |
 
    Start in chat mode: section 1 describes the harness's own chat in a terminal, and headless only
    if chat mode cannot work. Ask early for the two facts that most often need a core change: the
    CA variable the harness honours (section 6, [row 7](#do-i-need-a-core-change)), and how a chat
-   sign-in is kept without an environment key (section 5, row 14). List every provider host the
-   harness can reach (section 6): traffic to an unlisted host is not recorded.
+   sign-in is kept without an environment key (section 5, row 14). Ask where the harness saves the
+   model service the participant picks (section 6): the config file and the key of its URL. That
+   is `capture.model_host_from`, the default for any harness whose model service is the
+   participant's choice (D62): the tracer records that one host and keeps no provider list. A
+   fixed `[[capture.hosts]]` row is only for a harness that can reach one service.
 
    Stop on an unknown in section 4, 5 or 6, or in the macOS column of section 3.
 3. **Do I need a core change?** Walk every row of [the table below](#do-i-need-a-core-change).
@@ -393,8 +397,10 @@ It does not make a careless seed safe. A code owner reads every field and every 
    loaders.
 4. **`capture.executable`.** `program` is the harness entry point, not an interpreter or a moving
    updater wrapper. `version_args` only asks for the version.
-5. **Hosts.** Only the provider, the narrowest evidence paths and a real protocol hint. No
-   registry or unrelated host. Auth hosts are sign-in and refresh tunnels and cannot supply model
+5. **Hosts.** With `model_host_from`: the file and key are where the harness saves the
+   participant's choice (a source or a measurement in the facts sheet), the file is its config and
+   not a key file, and `hosts` lists nothing the config already names. A fixed row: only the
+   provider, the narrowest evidence paths and a real protocol hint. No registry or unrelated host. Auth hosts are sign-in and refresh tunnels and cannot supply model
    evidence. The protocol hint is declared, never inferred.
 6. **Native capture.** The root is inside the run or config home. `{id}` scopes a shared store. The
    pattern cannot match request dumps, credential stores or seed files.
@@ -418,6 +424,7 @@ What each manifest field must establish:
 | `capture.args`, executable | headless argv or chat mode, goal placement, entry point, version |
 | `capture.home`, `env` | private HOME and config home, real state dirs, seed contents and modes |
 | `capture.ca` | variable names and process scope; no secret value; no app-wide trust; the CA variable and its mode cite a source or a measurement in the facts sheet, and an own-name variable is not one that tool children also read |
+| `capture.model_host_from` | the file and key the harness saves the participant's model service in; a config file, never a key file |
 | `capture.hosts`, `auth_hosts` | provider host, narrow evidence paths, protocol hint |
 | `capture.native` | one own-session store, its form, root, pattern and scope; no request dump or credential store |
 | `capture.identity` | the measured carrier, its grammar and fields, and its binding to that store |

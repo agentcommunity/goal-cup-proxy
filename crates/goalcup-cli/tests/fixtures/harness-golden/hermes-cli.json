@@ -160,16 +160,7 @@
       "version_args": []
     },
     "home": "empty",
-    "hosts": [
-      {
-        "evidence_paths": [
-          "/v1/chat/completions"
-        ],
-        "host": "api.deepseek.com",
-        "prefix_paths": [],
-        "protocol_hint": "openai-chat-completions"
-      }
-    ],
+    "hosts": [],
     "identity": {
       "binding": null,
       "grammar": null,
@@ -180,9 +171,11 @@
       "source": "none"
     },
     "interactive": true,
-    "providers": [
-      "deepseek"
-    ],
+    "model_host_from": {
+      "file": "config.yaml",
+      "key": "model.base_url"
+    },
+    "providers": [],
     "resume_args": [
       "--continue"
     ],

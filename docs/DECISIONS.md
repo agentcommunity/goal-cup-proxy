@@ -521,3 +521,44 @@ Hermes runs however the participant set it up, as Codex does (D39, D57).
   unchanged.
 
 This supersedes D40's Hermes clause, D41's seed and key-scan clauses, D43 ruling 2, D49 and D50.
+
+## D62. The tracer records the model service the harness's own config names.
+
+16 Oct 2026, owner ruling, for Hermes and every later harness: no provider list, and no tracking
+of what a harness offers. The participant picks the model service in the harness; the tracer
+records that service and nothing else.
+
+- **The field.** `capture.model_host_from = { file = "<path in config_home>", key = "<dotted
+  key>" }`, schema 1, additive. `goalcup start` and each `goalcup continue` read that one value,
+  before anything is created. It must be an `https` URL; its host joins the intercepted hosts for
+  that segment only (with its port for the start probe), and its path is the base the recorded
+  paths sit under (`<base>/chat/completions`, `/messages` and `/responses`, also under
+  `<base>/v1`, carry their wire hints; the rest of the base is recorded with none). A host the
+  connector lists in `capture.hosts` keeps its reviewed row. With the field, `capture.hosts` may be
+  empty. It needs `config_home = "shared"`, the home the participant's own setup writes.
+- **Everything else is a tunnel.** Git, package registries, web fetches and update checks pass as
+  opaque tunnels, counted in `proxy admission:` and never opened or recorded, as before.
+- **The reader.** One regular file (no link, at most 1 MiB), one key. YAML by a small
+  block-mapping lookup in `crates/goalcup-cli/src/model_host.rs` (no YAML crate); JSON and TOML by
+  `serde_json` and `toml`, which the binary already links. Only `host:port` is ever logged
+  (`model service: <host>:<port> (<key> in <file>)`); a userinfo, the path and the query are not.
+  The file's name and the key may not name `auth`, `credential(s)`, `secret(s)`, `token(s)`,
+  `key(s)`, `api_key` or `env`: the tracer reads an address, never a key file or a key.
+- **Refused at start.** A missing value, a non-URL, plain `http` (only `HTTPS_PROXY` is set, so it
+  would bypass the recorder), a loopback name, an address literal, a single-label name, a tracker
+  host or an authentication host: "The harness is set to use `<scheme>://<host>:<port>`, which
+  Goal Cup cannot record. Set a model service in the harness and run the command again." A run
+  never goes on with model calls that would tunnel unrecorded or fail against a replace-mode CA.
+- **A switch mid-run.** The file is not read during a run. A service switched to inside a session
+  (Hermes's `/model`) is a tunnel until the next segment: the participant exits the harness and
+  runs `goalcup continue`, which reads the config again (PARTICIPANT-GUIDE, section 8).
+- **Hermes.** `{ file = "config.yaml", key = "model.base_url" }`, which Hermes's setup and
+  `/model` write. `providers = ["deepseek"]` is removed: with `HERMES_CA_BUNDLE` in replace mode
+  any service the participant picks other than a listed one failed its TLS handshake, and a listed
+  one the participant does not use was only probed at start. `[capture.ca]` stays in replace
+  mode: the approved host is decrypted by the proxy, so Hermes trusts it through the proxy CA.
+- **The default.** The connector template and HARNESS-ONBOARDING make the field the default for
+  any harness whose model service is the participant's choice; the facts sheet asks where the
+  harness saves it. `providers.toml` stays for a harness that can reach one fixed service.
+
+This supersedes D61's "model traffic is recorded for the `providers` rows only" for Hermes.

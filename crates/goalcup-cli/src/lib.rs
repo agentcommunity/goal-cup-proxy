@@ -42,6 +42,8 @@ pub mod harness_version;
 /// Where `goalcup start` says things while a chat-mode harness owns the terminal (D57).
 pub mod host_log;
 pub mod launch;
+/// The model service a harness's own config names, read at start and at each continue (D62).
+pub mod model_host;
 /// Every sentence the participant reads during a run, worded in one place.
 pub mod participant;
 pub mod per_run_home;

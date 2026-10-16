@@ -209,6 +209,17 @@ fn run_with_key_in_home(key: &str, auth_json: &str, lines: &[&str]) -> Ran {
         std::fs::write(home.join(name), text).unwrap();
         std::fs::set_permissions(home.join(name), std::fs::Permissions::from_mode(0o600)).unwrap();
     }
+    // The model service Hermes's setup saved beside them (D62).
+    let from = goalcup_protocol::harness::load_dir(
+        &rig.connectors.join(ID),
+        goalcup_protocol::harness::Origin::Pinned,
+    )
+    .unwrap()
+    .manifest
+    .capture
+    .model_host_from
+    .expect("Hermes reads its model host");
+    support::write_model_host_config(&home, &from, "https://api.deepseek.com/v1");
 
     let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
     rig.prepare_for(&server.url());

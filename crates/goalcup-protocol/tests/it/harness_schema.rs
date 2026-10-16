@@ -3820,3 +3820,109 @@ fn a_configure_command_is_held_to_the_argument_rules() {
     set(&mut t, &["capture"], "configure", commands(&[ok]));
     refused(&t, PINNED, &["capture.configure", "chat-mode"]);
 }
+
+/// `capture.model_host_from` (D62): with it a profile may list no host; it needs the shared
+/// config home; its file is a YAML, JSON or TOML file inside it that names no key file, and its
+/// key is a dotted name that names no key.
+#[test]
+fn a_model_host_from_is_held_to_its_rules() {
+    fn with(file: &str, key: &str) -> Table {
+        let mut t = codex();
+        set(&mut t, &["capture"], "hosts", Value::Array(vec![]));
+        let mut from = Table::new();
+        from.insert("file".into(), Value::String(file.into()));
+        from.insert("key".into(), Value::String(key.into()));
+        set(&mut t, &["capture"], "model_host_from", Value::Table(from));
+        t
+    }
+    for (file, key) in [
+        ("config.yaml", "model.base_url"),
+        ("settings.json", "endpoint"),
+        ("sub/config.toml", "model_providers.custom.base_url"),
+        ("Config.YML", "model.base-url"),
+    ] {
+        admitted(&with(file, key), PINNED);
+    }
+    let m = parsed(&with("config.yaml", "model.base_url"));
+    let from = m.capture.model_host_from.expect("loaded");
+    assert_eq!(
+        (from.file.as_str(), from.key.as_str()),
+        ("config.yaml", "model.base_url")
+    );
+
+    let mut no_hosts = codex();
+    set(&mut no_hosts, &["capture"], "hosts", Value::Array(vec![]));
+    refused(
+        &no_hosts,
+        PINNED,
+        &["capture.hosts", "capture.model_host_from"],
+    );
+
+    for (file, key, needles) in [
+        (
+            ".env",
+            "model.base_url",
+            &["capture.model_host_from.file", ".yaml"][..],
+        ),
+        (
+            "config.ini",
+            "model.base_url",
+            &["capture.model_host_from.file", ".toml"],
+        ),
+        (
+            "auth.json",
+            "model.base_url",
+            &["capture.model_host_from.file", "`auth`"],
+        ),
+        (
+            "api-keys.yaml",
+            "base_url",
+            &["capture.model_host_from.file", "`keys`"],
+        ),
+        (
+            "../config.yaml",
+            "model.base_url",
+            &["capture.model_host_from.file"],
+        ),
+        (
+            "/etc/config.yaml",
+            "model.base_url",
+            &["capture.model_host_from.file"],
+        ),
+        (
+            "config.yaml",
+            "model.api_key",
+            &["capture.model_host_from.key", "`key`"],
+        ),
+        (
+            "config.yaml",
+            "providers.x.token",
+            &["capture.model_host_from.key", "`token`"],
+        ),
+        (
+            "config.yaml",
+            "model..base_url",
+            &["capture.model_host_from.key"],
+        ),
+        (
+            "config.yaml",
+            "model base_url",
+            &["capture.model_host_from.key"],
+        ),
+        (
+            "config.yaml",
+            "a.b.c.d.e.f.g.h.i",
+            &["capture.model_host_from.key"],
+        ),
+    ] {
+        refused(&with(file, key), PINNED, needles);
+    }
+
+    let mut per_run = with("config.yaml", "model.base_url");
+    set(&mut per_run, &["capture", "home"], "config_home", "per_run");
+    refused(
+        &per_run,
+        PINNED,
+        &["capture.model_host_from", "config_home"],
+    );
+}

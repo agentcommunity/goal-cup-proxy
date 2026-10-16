@@ -23,7 +23,7 @@
 //!    serde's own "unknown variant" text never reaches the user.
 //! 3. [`HarnessManifest::validate`] runs the checks in a fixed order, so the first refusal
 //!    is deterministic: executable, args and goal, env, home, CA, identity,
-//!    native, argv guard, termination, hosts, the delivery-agnostic rule (F7), the
+//!    native, argv guard, termination, model host, hosts, the delivery-agnostic rule (F7), the
 //!    cross-field rules, and then every rule again on the recipe each `[capture.platform.<key>]`
 //!    resolves to (an override may replace only env entries).
 //!
@@ -413,6 +413,11 @@ pub struct CaptureSpec {
     /// reviewed once in core, that the loader appends to [`Self::hosts`].
     #[serde(default)]
     pub providers: Vec<String>,
+    /// Where the harness's own config names its model service (D62). `goalcup start` and each
+    /// `goalcup continue` read that one value, and its host is intercepted for that run beside
+    /// [`Self::hosts`]. With it, `hosts` may be empty.
+    #[serde(default)]
+    pub model_host_from: Option<ModelHostFrom>,
     /// Per-platform replacements for env entries. Everything else is the same recipe on every
     /// platform.
     #[serde(default)]
@@ -709,6 +714,41 @@ pub struct HostSpec {
     #[serde(default)]
     pub protocol_hint: Option<String>,
 }
+
+/// `capture.model_host_from`: the one value in the harness's own config that names its model
+/// service, as a URL (D62). The tracer reads only this key, at start and at each continue.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ModelHostFrom {
+    /// The config file, relative to the shared config home. Its extension says how it is read:
+    /// [`MODEL_HOST_FILE_EXTENSIONS`].
+    pub file: String,
+    /// The value's key, its table names joined with `.` (`model.base_url`).
+    pub key: String,
+}
+
+/// The file extensions `capture.model_host_from.file` may have: YAML, JSON or TOML.
+pub const MODEL_HOST_FILE_EXTENSIONS: &[&str] = &["yaml", "yml", "json", "toml"];
+
+/// The most `.`-separated parts `capture.model_host_from.key` may have.
+pub const MAX_MODEL_HOST_KEY_PARTS: usize = 8;
+
+/// Words that no `.`, `-` or `_` separated part of the model-host file's name, and no part of
+/// its key, may be (any case): the tracer reads a service address, never a key file or a key.
+const MODEL_HOST_DENIED_WORDS: &[&str] = &[
+    "auth",
+    "credential",
+    "credentials",
+    "secret",
+    "secrets",
+    "token",
+    "tokens",
+    "key",
+    "keys",
+    "api_key",
+    "env",
+];
 
 /// The shared provider host table, `crates/goalcup-protocol/providers.toml`, compiled in.
 const PROVIDERS_TOML: &str = include_str!("../providers.toml");
@@ -1408,7 +1448,7 @@ fn platform_refusal(key: PlatformKey, e: ProtocolError) -> ProtocolError {
 impl HarnessManifest {
     /// Refuse every manifest the refusal table names. The order is fixed, so the first
     /// refusal is deterministic: executable, args and goal, env, home, CA,
-    /// identity, native, argv guard, termination, hosts, the delivery-agnostic
+    /// identity, native, argv guard, termination, model host, hosts, the delivery-agnostic
     /// rule, the cross-field rules, and then each `[capture.platform.<key>]` in [`PlatformKey`]'s
     /// declaration order (`linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `macos-x86_64`),
     /// whatever order the file uses.
@@ -1495,6 +1535,7 @@ impl HarnessManifest {
         self.check_native()?;
         self.check_argv_guard()?;
         self.check_termination()?;
+        self.check_model_host_from()?;
         self.check_hosts(origin)?;
         self.check_delivery_agnostic()?;
         self.check_cross_field()?;
@@ -2165,12 +2206,92 @@ impl HarnessManifest {
         Ok(())
     }
 
+    /// `capture.model_host_from` (D62): a YAML, JSON or TOML file in the shared config home, and a
+    /// dotted key. Neither may name a key file or a key: the tracer reads a service address only.
+    fn check_model_host_from(&self) -> Result<(), ProtocolError> {
+        let c = &self.capture;
+        let Some(from) = &c.model_host_from else {
+            return Ok(());
+        };
+        if c.home.config_home != ConfigHome::Shared {
+            return Err(refuse(
+                "capture.model_host_from",
+                "requires `capture.home.config_home = \"shared\"`: the model service is read \
+                 from the home the participant set the harness up in",
+            ));
+        }
+        if let Some(why) = relative_path_problem(&from.file, 4) {
+            return Err(refuse(
+                "capture.model_host_from.file",
+                format!("`{}` {why}", from.file),
+            ));
+        }
+        let name = from.file.rsplit('/').next().unwrap_or(&from.file);
+        let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+        if !extension.is_some_and(|e| MODEL_HOST_FILE_EXTENSIONS.contains(&e.as_str())) {
+            return Err(refuse(
+                "capture.model_host_from.file",
+                format!(
+                    "`{}` must end in one of .{}: the extension says how it is read",
+                    from.file,
+                    MODEL_HOST_FILE_EXTENSIONS.join(", .")
+                ),
+            ));
+        }
+        let parts: Vec<&str> = from.key.split('.').collect();
+        let part_ok = |p: &&str| {
+            (1..=64).contains(&p.len())
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        };
+        if parts.len() > MAX_MODEL_HOST_KEY_PARTS || !parts.iter().all(part_ok) {
+            return Err(refuse(
+                "capture.model_host_from.key",
+                format!(
+                    "`{}` must be 1 to {MAX_MODEL_HOST_KEY_PARTS} names of `[A-Za-z0-9_-]` \
+                     (1 to 64 bytes) joined with `.`",
+                    from.key
+                ),
+            ));
+        }
+        let denied = |text: &str| {
+            text.split(['.', '-', '_'])
+                .chain(text.split('.'))
+                .find(|w| {
+                    MODEL_HOST_DENIED_WORDS
+                        .iter()
+                        .any(|d| w.eq_ignore_ascii_case(d))
+                })
+                .map(str::to_string)
+        };
+        for (field, text) in [
+            ("capture.model_host_from.file", name),
+            ("capture.model_host_from.key", from.key.as_str()),
+        ] {
+            if let Some(word) = denied(text) {
+                return Err(refuse(
+                    field,
+                    format!(
+                        "`{text}` names `{word}`: the tracer reads the model service's address \
+                         from the harness's config, never a key file or a key"
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn check_hosts(&self, origin: Origin) -> Result<(), ProtocolError> {
         let c = &self.capture;
-        if c.hosts.is_empty() || c.hosts.len() > MAX_CAPTURE_HOSTS {
+        // A profile that reads its model host from the harness's config (D62) may list none.
+        let least = usize::from(c.model_host_from.is_none());
+        if c.hosts.len() < least || c.hosts.len() > MAX_CAPTURE_HOSTS {
             return Err(refuse(
                 "capture.hosts",
-                format!("must hold 1 to {MAX_CAPTURE_HOSTS} hosts"),
+                format!(
+                    "must hold 1 to {MAX_CAPTURE_HOSTS} hosts, or none with \
+                     `capture.model_host_from`"
+                ),
             ));
         }
         if let Some(d) = has_duplicate(c.hosts.iter().map(|h| h.host.as_str())) {

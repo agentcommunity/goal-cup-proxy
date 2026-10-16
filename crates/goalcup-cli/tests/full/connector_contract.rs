@@ -173,6 +173,15 @@ fn run_connector(id: &str) {
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    // The model service the participant's own setup saved, for a connector that reads it (D62).
+    if let Some(from) = &c.model_host_from {
+        let home = world
+            .cfg
+            .join(goalcup_protocol::harness::CAPTURE_HOMES_DIR)
+            .join(id);
+        support::write_model_host_config(&home, from, "https://models.example.test/v1");
+    }
+
     let runs = world.root.join("runs");
     let mut command = Command::new(env!("CARGO_BIN_EXE_goalcup"));
     command

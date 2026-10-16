@@ -1075,6 +1075,15 @@ pub fn inside_work_folder(work_root: &Path, here: &Path) -> String {
     )
 }
 
+/// The model service the harness's own config names is one Goal Cup cannot record (D62).
+/// `value` is `scheme://host:port` or a short description, never the rest of the value.
+pub fn cannot_record_model_service(value: &str) -> String {
+    format!(
+        "The harness is set to use {value}, which Goal Cup cannot record. Set a model service \
+         in the harness and run the command again."
+    )
+}
+
 /// A chat-mode connector given a `--goal-file`.
 pub fn takes_no_goal_file(harness: &str, id: &str) -> String {
     format!(

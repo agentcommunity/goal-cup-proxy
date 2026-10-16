@@ -151,7 +151,7 @@ pub fn continue_with(
 
     // 0. Every refusal that needs no server and changes nothing, before the home is locked and
     //    before any segment is sealed or sent.
-    continue_preflight(&connector, previous_entry.dev, env)?;
+    continue_preflight(cfg, &connector, previous_entry.dev, env)?;
 
     // 1. Another run recording on the shared harness home is refused, by name, before anything
     //    is closed or changed. Its host holds the lock until it has sealed.
