@@ -13,7 +13,7 @@ pub(super) const FINISH_RESPONSE_MARGIN: Duration = Duration::from_secs(1);
 /// What the drain share leaves the seal of a clone's Git state, inside the budget (D56): a
 /// producer that never settles cannot starve it. A smaller budget leaves it all of it. Only a
 /// finish that reads Git reserves it.
-pub(super) const GIT_READ_FLOOR: Duration = Duration::from_secs(30);
+pub(super) const GIT_READ_FLOOR: Duration = goalcup_protocol::control::GIT_READ_FLOOR;
 
 /// The finish reason a local capture finish records on its `LocalFinish` record. A local
 /// capture has no signed deadline, so a finish is always one the participant's seal asked for.

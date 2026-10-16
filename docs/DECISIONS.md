@@ -377,7 +377,9 @@ is not empty, is refused.
   `ls-tree`, `ls-files`, `hash-object --no-filters` and `cat-file --batch`. Output is capped at
   64 MiB and one deadline covers every call.
 - **Time.** `LOCAL_CAPTURE_FINISH_BUDGET` is 180 s; the commit reserve stays 2 s. For a clone the
-  drain share ends 30 s before the deadline, so Git always gets time.
+  drain share (the daemon's ingest drain and the launcher's proxy stop) ends 30 s before the
+  deadline, so Git always gets time. A real Codex run showed the proxy stop had not: it waited for
+  a connection the harness held open until the reserve, and the Git read ran out of time.
 
 ## D57. Connectors run the harness in chat mode and record every session file since the start.
 

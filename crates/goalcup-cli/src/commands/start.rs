@@ -88,7 +88,7 @@ use crate::upload::policy::{WrapUp, WrapUpSpec};
 use goalcup_protocol::capture::CaptureSink;
 use goalcup_protocol::control::{
     CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest, CaptureWorkspaceInfo,
-    CaptureWorkspaceRequest, DaemonClient, FINISH_COMMIT_RESERVE, ProxyCounters, SignedStatus,
+    CaptureWorkspaceRequest, DaemonClient, ProxyCounters, SignedStatus,
 };
 use goalcup_protocol::harness::{CAPTURE_HOMES_DIR, CaptureSpec, ConfigHome, RunHome};
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration, termination_bound};
@@ -3134,8 +3134,10 @@ impl Proxied {
             startup_deadline: CAPTURE_STARTUP,
             // The stop is the finish's first step and is measured from its own call, which is
             // the finish deadline's start, so its bound is the drain share: it ends by
-            // `drain_end`, leaving the commit reserve to the daemon's seal.
-            shutdown_deadline: crate::finish_budget() - FINISH_COMMIT_RESERVE,
+            // `drain_end`, leaving the Git read its floor and the commit reserve to the
+            // daemon's seal. A connection the harness holds open at a deadline would otherwise
+            // run the wait to the reserve and leave the Git read nothing (D56).
+            shutdown_deadline: goalcup_protocol::control::proxy_drain_share(crate::finish_budget()),
             admission_timeout: DEFAULT_ADMISSION_TIMEOUT,
             connect_attempt_timeout: DEFAULT_CONNECT_ATTEMPT_TIMEOUT,
             max_connections: MAX_CONNECTION_TASKS as usize,
@@ -3212,13 +3214,18 @@ fn admitted(
 
 /// The one `proxy admission:` line: `accepted` and `intercepted` always, every other counter only
 /// when it is not zero, as `name=count` words in a fixed order. A run in which nothing went wrong
-/// is two numbers; one in which something did names it.
+/// is two numbers; one in which something did names it. The tunnels (`tunneled_auth_host`, to a
+/// connector's authentication hosts, and `tunneled_not_approved`, to any host it does not list)
+/// are named too, so that `accepted` is accounted for: they are opaque by design and leave no
+/// record in the chain, so this line is the only place that says they happened.
 fn proxy_admission_line(
     h: &crate::proxy::ProxyHealth,
     a: &crate::proxy::AdmissionFailureCounts,
 ) -> String {
     let always = [("accepted", h.accepted), ("intercepted", h.intercepted)];
     let when_nonzero = [
+        ("tunneled_auth_host", h.tunneled_auth_host),
+        ("tunneled_not_approved", h.tunneled_not_approved),
         ("fail_open", h.tunneled_fail_open),
         ("auth_refused", h.admission_refused_auth),
         ("failed", h.admission_failed),
@@ -3275,7 +3282,7 @@ fn proxy_admission_line(
 ///
 /// The one deadline of a capture run's finish is `finish_budget()` (`LOCAL_CAPTURE_FINISH_BUDGET`), taken when the
 /// harness has exited and immediately before the proxy's stop: nothing runs between the two. The
-/// proxy's stop gets its drain share (the budget less `FINISH_COMMIT_RESERVE`), the daemon's seal
+/// proxy's stop gets its drain share (the budget less `FINISH_COMMIT_RESERVE` and `GIT_READ_FLOOR`), the daemon's seal
 /// its own request's remainder, and the sender's drain and the scoped stdout what is left of the
 /// same deadline (CONTRACTS.md, "C6 local finish budget (H-10 4a)").
 ///
@@ -4001,6 +4008,29 @@ fn unmake(
 mod tests {
     use super::*;
     use crate::daemon::MockDaemonClient;
+
+    /// A run's tunnels are opaque and chained nowhere, so the `proxy admission:` line is where a
+    /// reader reconciles `accepted` with `intercepted` (a real Codex run: 26 accepted, 23
+    /// intercepted, the other 3 tunnels). A run with none keeps its two numbers.
+    #[test]
+    fn the_admission_line_accounts_for_the_tunnels() {
+        let none = crate::proxy::AdmissionFailureCounts::default();
+        let mut health = crate::proxy::ProxyHealth {
+            accepted: 26,
+            intercepted: 23,
+            ..Default::default()
+        };
+        assert_eq!(
+            proxy_admission_line(&health, &none),
+            "proxy admission: accepted=26 intercepted=23"
+        );
+        health.tunneled_auth_host = 1;
+        health.tunneled_not_approved = 2;
+        assert_eq!(
+            proxy_admission_line(&health, &none),
+            "proxy admission: accepted=26 intercepted=23 tunneled_auth_host=1 tunneled_not_approved=2"
+        );
+    }
 
     /// The interrupt flag is process-global; the tests that move it take turns.
     static FLAG: std::sync::Mutex<()> = std::sync::Mutex::new(());

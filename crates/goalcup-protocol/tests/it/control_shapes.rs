@@ -659,6 +659,44 @@ fn a_finish_may_take_three_minutes() {
     assert_eq!(request.remaining_finish(), Duration::from_secs(170));
 }
 
+/// A real Codex run held a connection open at its deadline, and the launcher's proxy stop waited
+/// for it until the reserve, so the seal's Git read had a fraction of a second and the run read
+/// `seal_git_unreadable`. The proxy's wait ends the Git floor before the reserve does, as the
+/// daemon's ingest drain does (D56); a budget too short to hold both keeps the reserve alone.
+#[test]
+fn the_proxy_drain_share_leaves_the_git_floor() {
+    use goalcup_protocol::control::{
+        FINISH_COMMIT_RESERVE, GIT_READ_FLOOR, LOCAL_CAPTURE_FINISH_BUDGET, proxy_drain_share,
+    };
+    use std::time::Duration;
+
+    assert_eq!(GIT_READ_FLOOR, Duration::from_secs(30));
+    // The shipped budget: 180 s less the 2 s reserve and the 30 s floor.
+    assert_eq!(
+        proxy_drain_share(LOCAL_CAPTURE_FINISH_BUDGET),
+        Duration::from_secs(148)
+    );
+    assert_eq!(
+        LOCAL_CAPTURE_FINISH_BUDGET - proxy_drain_share(LOCAL_CAPTURE_FINISH_BUDGET),
+        FINISH_COMMIT_RESERVE + GIT_READ_FLOOR
+    );
+    // A budget that holds the reserve, the floor and some drain.
+    assert_eq!(
+        proxy_drain_share(Duration::from_secs(40)),
+        Duration::from_secs(8)
+    );
+    // A budget too short for the floor (a test build's) keeps the reserve alone, never zero.
+    assert_eq!(
+        proxy_drain_share(Duration::from_secs(10)),
+        Duration::from_secs(8)
+    );
+    assert_eq!(
+        proxy_drain_share(Duration::from_secs(32)),
+        Duration::from_secs(30)
+    );
+    assert_eq!(proxy_drain_share(Duration::ZERO), Duration::ZERO);
+}
+
 #[test]
 fn capture_seal_request_remaining_defaults_clamps_and_refuses_zero() {
     use goalcup_protocol::control::{
