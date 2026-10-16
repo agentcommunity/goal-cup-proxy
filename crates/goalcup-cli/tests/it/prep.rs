@@ -479,6 +479,30 @@ fn prep_waits_for_enter_before_it_opens_the_harness() {
 }
 
 #[test]
+fn prep_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
+    let rig = Rig::chat();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    log_in(&rig, "http://127.0.0.1:1");
+
+    let mut on_pty = OnPty::spawn(prep_command(&rig, &["--repo", REPO], &facts), None);
+    on_pty.wait_shown("Press Enter to open");
+    // Ctrl-D at the start of a line: the input ends with no Enter.
+    on_pty.type_line("\u{4}");
+    on_pty.wait_shown("GitHub token for");
+    on_pty.type_line(&token());
+    on_pty.wait();
+    let shown = on_pty.shown();
+    let step = line(&shown, "harness_home");
+    assert!(step.starts_with("[todo] harness_home:"), "{shown}");
+    assert!(
+        !rig.out.join("tui.pid").exists(),
+        "the harness opened:\n{shown}"
+    );
+    assert!(!prep_file(&rig.cfg).home_ready);
+}
+
+#[test]
 fn prep_refuses_a_work_folder_inside_a_git_repository_and_names_the_fix() {
     let rig = Rig::chat();
     let github = FakeGithub::good();

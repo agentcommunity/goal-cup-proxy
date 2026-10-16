@@ -363,6 +363,17 @@ pub fn check_workspace_available(roots: &Roots) -> Result<(), DaemonError> {
     if is_clone_root(&roots.workspace) {
         return Ok(());
     }
+    // A folder that already holds its own `.git` is a clone `goalcup start` made in the
+    // participant's work folder. It always finds its own `.git`, so the repository to name is
+    // the one above it.
+    let own_git = roots.workspace.join(".git").symlink_metadata().is_ok();
+    if own_git && let Some(outer) = roots.workspace.parent().and_then(git_worktree_of) {
+        return Err(DaemonError::Guard(format!(
+            "Your work folder is inside the Git repository {}. Choose a folder outside any \
+             repository: goalcup prep --work-root ~/goalcup-work",
+            outer.display()
+        )));
+    }
     if let Some(repo) = git_worktree_of(&roots.workspace) {
         return Err(DaemonError::Guard(format!(
             "the run's folder {} is inside the Git repository {}; it must be outside any \

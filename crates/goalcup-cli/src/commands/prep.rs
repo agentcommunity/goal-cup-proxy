@@ -911,11 +911,21 @@ fn machine_step(
 /// The nearest folder at or above `path` that holds a `.git` entry, file or directory (a linked
 /// worktree has a file): the same rule as the daemon's `git_worktree_of`, which the CLI cannot
 /// call (the CLI never links the daemon). A folder that does not exist yet is judged by its
-/// parents.
+/// parents. A link on the way is followed as a second look: a work folder that is a link into a
+/// repository puts every clone inside it, though its own spelling is clean.
 fn git_repository_of(path: &Path) -> Option<PathBuf> {
-    path.ancestors()
-        .find(|dir| dir.join(".git").symlink_metadata().is_ok())
-        .map(Path::to_path_buf)
+    let lexical = |path: &Path| {
+        path.ancestors()
+            .find(|dir| dir.join(".git").symlink_metadata().is_ok())
+            .map(Path::to_path_buf)
+    };
+    lexical(path).or_else(|| {
+        // The longest part of the path that exists, with its links resolved, and the rest as
+        // written.
+        let existing = path.ancestors().find(|dir| dir.exists())?;
+        let resolved = existing.canonicalize().ok()?;
+        lexical(&resolved.join(path.strip_prefix(existing).ok()?))
+    })
 }
 
 /// The refusal for a work folder inside a Git repository: what is wrong, then the command that
@@ -1014,7 +1024,7 @@ fn practice_step(cfg: &Path, harness: Option<&str>) -> Step {
         true,
         format!(
             "do a 10-minute practice run: {start}. It does not count, never pushes, and never \
-             replaces your competition run. Prep does not start it"
+             replaces your competition run"
         ),
     )
 }
@@ -1149,8 +1159,44 @@ impl Doors for Injected {
 
 #[cfg(test)]
 mod tests {
-    use super::{endpoint_of, work_in_git_message};
+    use super::{State, endpoint_of, git_repository_of, login_step, work_in_git_message};
+    use crate::server::{DEFAULT_SERVER_URL, ServerConfig, write_server_config};
     use std::path::Path;
+
+    #[test]
+    fn the_login_step_names_the_server_only_when_it_is_not_the_default() {
+        for (url, named) in [
+            (DEFAULT_SERVER_URL.to_string(), false),
+            (format!("{DEFAULT_SERVER_URL}/"), false),
+            ("https://ingest.example.org".to_string(), true),
+        ] {
+            let cfg = tempfile::tempdir().unwrap();
+            let config = ServerConfig {
+                url: url.clone(),
+                account: Some("member-1".to_string()),
+            };
+            write_server_config(cfg.path(), &config).unwrap();
+            let step = login_step(cfg.path());
+            assert_eq!(step.state, State::Ok, "{url}");
+            assert!(step.say.contains("member-1"), "{url}: {}", step.say);
+            assert_eq!(step.say.contains(&url), named, "{url}: {}", step.say);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_work_folder_that_is_a_link_into_a_repository_is_inside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        // A link to a folder below the repository: its own spelling shows no `.git`.
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(repo.join("sub"), &link).unwrap();
+        let found = git_repository_of(&link.join("not-yet/work")).expect("the repository");
+        assert_eq!(found, repo.canonicalize().unwrap());
+        assert!(git_repository_of(&dir.path().join("elsewhere/work")).is_none());
+    }
 
     #[test]
     fn the_work_folder_fix_is_not_the_default_folder_when_the_default_is_in_a_repository() {

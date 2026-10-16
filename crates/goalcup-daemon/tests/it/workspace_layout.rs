@@ -441,7 +441,18 @@ fn a_workspace_inside_another_work_tree_is_refused() {
         artifact_root: art.clone(),
     })
     .expect_err("R3: a work tree inside another is refused");
-    assert!(format!("{err}").contains("Git repository"), "got {err}");
+    // The message names the repository above the clone, not the clone's own `.git`, and the
+    // clone's path is not repeated.
+    let said = format!("{err}");
+    let outer = t.path().join("outer").display().to_string();
+    let inner = t.path().join("outer/ws").display().to_string();
+    assert!(said.contains("Git repository"), "got {said}");
+    assert!(said.contains(&format!("repository {outer}.")), "got {said}");
+    assert!(
+        !said.contains(&inner),
+        "the clone's own path is named: {said}"
+    );
+    assert!(said.contains("goalcup prep --work-root"), "got {said}");
 
     // A linked worktree (`.git` is a file) is not the root of its own clone.
     let linked = t.path().join("linked");
