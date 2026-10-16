@@ -470,23 +470,35 @@ Hermes runs however the participant set it up, as Codex does (D39, D57).
   snapshot new or written since the start is the run's. A `request_dump_*` file is never matched.
 - **`capture.configure` (schema 1, additive).** A chat-mode connector may list up to 4 commands
   of its own program (each 1 to 16 arguments of at most 256 bytes, held to the `args` rules, no
-  template). `goalcup prep` runs them in the harness home after the participant's setup exits 0; `goalcup
-  start` and `goalcup continue` run them again before each launch. They get the harness's
+  template). `goalcup prep` runs them in the harness home after the participant's setup exits 0;
+  `goalcup start` and `goalcup continue` run them again before each launch. They get the harness's
   environment without a proxy or CA variable, stdin `/dev/null`, a process group of their own and
   60 seconds each; their output goes to `<cfg>/prep.log` or the run's `host.log` only. A failure
   leaves the prep step `fail` (the home is not ready) and refuses the start before any launch.
-  Hermes's one command is `config set sessions.write_json_snapshots true`: the setting has no
-  environment variable and is off by default (measured, Hermes 0.19.0), and without it there is
-  no session file to record.
+- **What configure may change (carve-out from "Hermes runs as the participant set it up").** Only
+  how the harness stores its session: capture and storage settings. Never how the agent behaves:
+  not the model, the provider, the tools, the prompts, or whether compression is on. Core refuses a
+  configure argument that has `model`, `provider`, `base_url`, `api_key`, `key`, `token` or
+  `secret` as a `.`-separated part (`CONFIGURE_DENIED_KEYS`, any case); review is the control for
+  the rest.
+- **Hermes's two commands** (Hermes 0.19.0; neither setting has an environment variable):
+  - `config set sessions.write_json_snapshots true` (default off): without it there is no
+    session file to record.
+  - `config set compression.in_place false` (default on). An in-place compaction keeps the
+    session id with fewer messages, and Hermes never rewrites a snapshot that holds more
+    (`run_agent.py:2754`), so the file stops changing and the native leg loses the rest of the run
+    with no gap. With it off, a compaction starts a new session id
+    (`agent/conversation_compression.py:1247`) and so a new `session_<id>.json`
+    (`run_agent.py:2723`), which the native source reads from the run's start. Whether and when
+    Hermes compacts stays the participant's.
 - **What it gives up.** No key, so no key scan (D41) for Hermes. The daemon's shape rules still
   remove a key printed raw or JSON-escaped; a key the agent encodes (`base64`, hex) is not
   matched, because the tracer never knows its value (CHEAT-CHECKLIST). Hermes's own defaults now
   apply where the seed turned them off: title generation (an auxiliary model call), compression
-  (it rotates the session id; each new snapshot is read from the run's start), the `tirith`
-  scanner download and the remote model catalogue. Model traffic is recorded for the `providers`
-  rows only (DeepSeek) while `HERMES_CA_BUNDLE` replaces Hermes's roots, so another service the
-  participant picks fails its TLS handshake until the connector reads the model host from Hermes's
-  own config.
+  (each compaction now starts a new snapshot file, above), the `tirith` scanner download and the
+  remote model catalogue. Model traffic is recorded for the `providers` rows only (DeepSeek) while
+  `HERMES_CA_BUNDLE` replaces Hermes's roots, so another service the participant picks fails its
+  TLS handshake until the connector reads the model host from Hermes's own config.
 - **Baseline.** The home's `.env` and `auth.json` are listed in the uploaded baseline by name,
   size and SHA-256 only (D56), as Codex's `auth.json` is: their bytes are hashed, never copied.
 

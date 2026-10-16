@@ -3726,6 +3726,60 @@ fn a_configure_command_is_held_to_the_argument_rules() {
         set(&mut t, &["capture"], "configure", value);
         refused(&t, PINNED, needles);
     }
+    // D61: a configure command stores the session, and never sets the model, the provider, an
+    // address or a credential: a dotted key with one of those words as a part is refused.
+    for arg in [
+        "model.provider",
+        "MODEL.default",
+        "model",
+        "--model",
+        "providers.deepseek.provider",
+        "providers.x.api_key",
+        "auth.key",
+        "gateway.token",
+        "vault.Secret",
+    ] {
+        let mut t = chat();
+        set(
+            &mut t,
+            &["capture"],
+            "configure",
+            commands(&[&["config", "set", arg, "x"]]),
+        );
+        // A word the `args` rules already refuse (`api_key`) keeps their reason.
+        refused(&t, PINNED, &["capture.configure", arg]);
+    }
+    let mut t = chat();
+    set(
+        &mut t,
+        &["capture"],
+        "configure",
+        commands(&[&["config", "set", "model.provider", "x"]]),
+    );
+    refused(
+        &t,
+        PINNED,
+        &[
+            "`model.provider` names `model`",
+            "only how the harness stores its session",
+        ],
+    );
+    // A word that only holds one of them is not one of them.
+    for arg in [
+        "compression.in_place",
+        "max_tokens",
+        "keys_seen",
+        "tokenizer.cache",
+    ] {
+        let mut t = chat();
+        set(
+            &mut t,
+            &["capture"],
+            "configure",
+            commands(&[&["config", "set", arg, "false"]]),
+        );
+        admitted(&t, PINNED);
+    }
     // The pinned path rule is the one `Dev` relaxes, as for `args`.
     let mut t = chat();
     set(

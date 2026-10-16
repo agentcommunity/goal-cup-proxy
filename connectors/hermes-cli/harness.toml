@@ -5,8 +5,10 @@ id = "hermes-cli"
 [participant]
 display_name = "Hermes"
 # Shown just before Hermes opens. A home that `goalcup prep` set up asks nothing; one that was
-# not set up asks first (measured 16 Oct 2026).
-first_screen = "If Hermes asks to run setup, answer Y, then choose your provider and model."
+# not set up asks first, and Hermes closes when its setup ends (measured 16 Oct 2026). Then
+# `hermes chat --continue` finds no session and exits 1, so the way on is `goalcup prep`, not
+# `goalcup continue`. A field may not name the tracker (F7), so the hint says "prep".
+first_screen = "If Hermes asks to run setup, answer Y and pick your provider and model. It then closes: run prep again, then start your run."
 
 [capture]
 # Chat mode (D57): `hermes chat` opens Hermes's classic REPL in the participant's terminal and the
@@ -19,10 +21,19 @@ args = ["chat"]
 # `goalcup continue`: reopen the most recent session in the tracer's home (measured 16 Oct 2026:
 # `hermes chat --continue` resumes it, `Resumed session <id>`).
 resume_args = ["--continue"]
-# Hermes writes the session file the native source reads only with this setting, which has no
-# environment variable (default off). Run in the shared home after the participant's setup and
-# before each launch (D61); it writes that one key into `config.yaml`.
-configure = [["config", "set", "sessions.write_json_snapshots", "true"]]
+# How Hermes stores its session, and nothing about how the agent behaves (D61). Run in the shared
+# home after the participant's setup and before each launch; each writes one key into
+# `config.yaml`, and neither has an environment variable.
+# - `sessions.write_json_snapshots` (default off): without it there is no session file to read.
+# - `compression.in_place` (default on): an in-place compaction keeps the session id with fewer
+#   messages, and Hermes then never rewrites a snapshot that holds more (`run_agent.py:2754`), so
+#   the file stops changing. Off, a compaction starts a new id and so a new
+#   `session_<id>.json` (`agent/conversation_compression.py:1247`, `run_agent.py:2723`), which the
+#   native source reads. Compression itself stays as the participant has it.
+configure = [
+  ["config", "set", "sessions.write_json_snapshots", "true"],
+  ["config", "set", "compression.in_place", "false"],
+]
 # Hermes's own switches (HERMES_SAFE_MODE, HERMES_IGNORE_USER_CONFIG) would silently stop the
 # session snapshot; `capture.env` may set none of them.
 reserved_env_prefixes = ["HERMES_"]

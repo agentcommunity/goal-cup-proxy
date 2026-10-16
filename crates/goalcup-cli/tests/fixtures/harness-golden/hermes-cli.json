@@ -144,6 +144,12 @@
         "set",
         "sessions.write_json_snapshots",
         "true"
+      ],
+      [
+        "config",
+        "set",
+        "compression.in_place",
+        "false"
       ]
     ],
     "continuation": "chat: the participant types the prompt and may type keep going",

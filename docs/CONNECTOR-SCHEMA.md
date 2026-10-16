@@ -88,12 +88,16 @@ after `args`.
 
 `capture.configure` (D61) is for a harness whose native source needs a setting that has no
 environment variable (Hermes writes `sessions/session_<id>.json` only with
-`sessions.write_json_snapshots` on). Each entry is an argument list for the harness's own
+`sessions.write_json_snapshots` on, and keeps writing it after a compaction only with
+`compression.in_place` off). Each entry is an argument list for the harness's own
 `capture.executable.program`. Only a chat-mode profile (`interactive = true`) takes it: the
 commands run with the environment, and in the home, that `goalcup prep` opens the harness with.
 
 ```toml
-configure = [["config", "set", "sessions.write_json_snapshots", "true"]]
+configure = [
+  ["config", "set", "sessions.write_json_snapshots", "true"],
+  ["config", "set", "compression.in_place", "false"],
+]
 ```
 
 - **When.** `goalcup prep` runs them in the harness home after the participant's own setup, once
@@ -109,10 +113,14 @@ configure = [["config", "set", "sessions.write_json_snapshots", "true"]]
 - **Failure.** A command that exits non-zero, is ended by a signal or outlives its 60 seconds
   stops at once. Prep marks the home not ready (`[fail] harness_home`, naming the command and how
   it ended); start launches nothing and says to run `goalcup prep --harness <id>` again.
-- **What it may write.** Only what the capture needs, into the harness home. The argument rules
-  refuse the endpoint, provider, credential, proxy and trust spellings, a profile switch and the
-  connector's own guarded options; review is the control for the rest. A command never names a
-  provider, model, key or base URL.
+- **What it may change.** Only how the harness stores its session (capture and storage
+  settings), in the harness home. Never how the agent behaves: not the model, the provider, the
+  tools, the prompts, or whether compression is on. Core refuses an argument that has `model`,
+  `provider`, `base_url`, `api_key`, `key`, `token` or `secret` as a `.`-separated part (compared
+  in any case, leading dashes ignored: `model.provider`, `--model` and `auth.Token` are refused;
+  `max_tokens` is not). The `args` rules also refuse the endpoint, credential, proxy and trust
+  spellings, a profile switch and the connector's own guarded options. Review is the control for
+  the rest.
 
 Argument templates (`args` and `resume_args`) admit only `{workspace}` and `{session_id}`.
 `capture.env` value templates also admit `{config_home}` (the isolated harness home) and

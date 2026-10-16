@@ -286,6 +286,12 @@ pub const MAX_CONFIGURE_COMMANDS: usize = 4;
 pub const MAX_CONFIGURE_ARGS: usize = 16;
 /// The longest argument of a `capture.configure` command.
 pub const MAX_CONFIGURE_ARG_BYTES: usize = 256;
+/// The words no `.`-separated part of a `capture.configure` argument may be (compared ignoring
+/// case and leading dashes): a configure command changes how the harness stores its session,
+/// never its model, provider, endpoint or credentials (D61).
+pub const CONFIGURE_DENIED_KEYS: &[&str] = &[
+    "model", "provider", "base_url", "api_key", "key", "token", "secret",
+];
 
 /// The most characters a `participant.display_name` may hold.
 pub const MAX_DISPLAY_NAME_CHARS: usize = 40;
@@ -1647,6 +1653,27 @@ impl HarnessManifest {
                     ));
                 }
                 check_arg(FIELD, origin, a)?;
+                // D61: a configure command changes how the harness stores its session, never how
+                // the agent behaves or what it signs in with. Each `.`-separated part of an
+                // argument is compared whole, ignoring case and leading dashes.
+                if let Some(word) =
+                    a.split('.')
+                        .map(|part| part.trim_start_matches('-'))
+                        .find(|part| {
+                            CONFIGURE_DENIED_KEYS
+                                .iter()
+                                .any(|denied| part.eq_ignore_ascii_case(denied))
+                        })
+                {
+                    return Err(refuse(
+                        FIELD,
+                        format!(
+                            "`{a}` names `{word}`. A configure command may change only how the \
+                             harness stores its session. It may not set the model, the \
+                             provider, an address, or a key, token or secret."
+                        ),
+                    ));
+                }
             }
         }
         Ok(())

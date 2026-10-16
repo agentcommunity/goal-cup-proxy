@@ -54,33 +54,46 @@ const SESSION: &str = "20261016_120000_abcdef";
 /// What the participant types.
 const PROMPT: &str = "print the env file";
 
-/// A stand-in for Hermes's classic REPL, installed as `hermes`: its `config set` writes the one
-/// key into `config.yaml` as Hermes does; its chat prints a banner, and for each line typed, once
+/// The session id the stand-in moves to when a compaction rotates it.
+const ROTATED: &str = "20261016_120500_fedcba";
+
+/// A stand-in for Hermes's classic REPL, installed as `hermes`. Its `config set` appends the key
+/// to `config.yaml` as `key: value`. Its chat prints a banner, and for each line typed, once
 /// `sessions.write_json_snapshots` is on, rewrites `sessions/session_<id>.json` with that line
-/// and the home's `.env` printed raw, base64 wrapped at 76 columns and JSON inside JSON.
+/// and the home's `.env` printed raw, base64 wrapped at 76 columns and JSON inside JSON. A
+/// `/compress` line is a compaction: with `compression.in_place` off it starts a new session id,
+/// as Hermes does, so the next line goes to a second file; with it on the id stays.
 const STAND_IN: &str = r#"#!/bin/sh
 home="$HERMES_HOME"
 if [ "$1" = config ] && [ "$2" = set ]; then
-  printf 'sessions:\n  write_json_snapshots: %s\n' "$4" > "$home/config.yaml"
+  printf '%s: %s\n' "$3" "$4" >> "$home/config.yaml"
   echo "stand-in: set $3"
   exit 0
 fi
-echo "Session: @SESSION@"
+sid="@SESSION@"
+echo "Session: $sid"
 echo "stand-in: ready"
 while IFS= read -r line; do
   if [ "$line" = /exit ]; then
     echo "stand-in: bye"
     exit 0
   fi
-  if grep -q 'write_json_snapshots: true' "$home/config.yaml" 2>/dev/null; then
+  if [ "$line" = /compress ]; then
+    if grep -qx 'compression.in_place: false' "$home/config.yaml" 2>/dev/null; then
+      sid="@ROTATED@"
+    fi
+    echo "stand-in: compressed"
+    continue
+  fi
+  if grep -qx 'sessions.write_json_snapshots: true' "$home/config.yaml" 2>/dev/null; then
     mkdir -p "$home/sessions"
     raw=$(awk '{printf "%s\\n", $0}' "$home/.env")
     b64=$(base64 < "$home/.env" | tr -d '\n' | fold -w 76 | awk '{printf "%s\\n", $0}')
     nested=$(awk '{printf "%s\\\\n", $0}' "$home/.env")
-    snap="$home/sessions/session_@SESSION@.json"
-    printf '{"session_id":"@SESSION@","messages":[{"role":"user","content":"%s"},{"role":"tool","content":"%s"},{"role":"tool","content":"%s"},{"role":"tool","content":"{\\"output\\": \\"%s\\"}"}]}' "$line" "$raw" "$b64" "$nested" > "$snap.tmp" && mv "$snap.tmp" "$snap"
+    snap="$home/sessions/session_$sid.json"
+    printf '{"session_id":"%s","messages":[{"role":"user","content":"%s"},{"role":"tool","content":"%s"},{"role":"tool","content":"%s"},{"role":"tool","content":"{\\"output\\": \\"%s\\"}"}]}' "$sid" "$line" "$raw" "$b64" "$nested" > "$snap.tmp" && mv "$snap.tmp" "$snap"
   fi
-  echo "stand-in: noted"
+  echo "stand-in: noted $line"
 done
 "#;
 
@@ -164,7 +177,7 @@ struct Ran {
 
 /// One participant-shaped run of the pinned connector on the stand-in, with the shared home
 /// holding `.env` (the key) and `auth.json` (a login) before it starts.
-fn run_with_key_in_home(key: &str, auth_json: &str) -> Ran {
+fn run_with_key_in_home(key: &str, auth_json: &str, lines: &[&str]) -> Ran {
     use std::os::unix::fs::PermissionsExt;
     let rig = Rig::chat();
     support::copy_tree(
@@ -172,7 +185,13 @@ fn run_with_key_in_home(key: &str, auth_json: &str) -> Ran {
         &rig.connectors.join(ID),
     );
     let program = rig.root.join("bin").join("hermes");
-    std::fs::write(&program, STAND_IN.replace("@SESSION@", SESSION)).unwrap();
+    std::fs::write(
+        &program,
+        STAND_IN
+            .replace("@SESSION@", SESSION)
+            .replace("@ROTATED@", ROTATED),
+    )
+    .unwrap();
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     // The home as a participant's own setup left it: a key in `.env` (mode 0600, as Hermes
@@ -210,8 +229,14 @@ fn run_with_key_in_home(key: &str, auth_json: &str) -> Ran {
         None,
     );
     start.wait_shown("stand-in: ready");
-    start.type_line(PROMPT);
-    start.wait_shown("stand-in: noted");
+    for line in lines {
+        start.type_line(line);
+        start.wait_shown(&if *line == "/compress" {
+            "stand-in: compressed".to_string()
+        } else {
+            format!("stand-in: noted {line}")
+        });
+    }
     start.type_line("/exit");
     let status = start.wait();
     let shown = start.shown();
@@ -237,7 +262,7 @@ fn run_with_key_in_home(key: &str, auth_json: &str) -> Ran {
 #[test]
 fn an_agent_that_prints_the_homes_env_leaves_no_key_fragment_in_the_trace_or_the_upload() {
     let key = synthetic_key();
-    let ran = run_with_key_in_home(&key, "{\"version\": 1, \"providers\": {}}\n");
+    let ran = run_with_key_in_home(&key, "{\"version\": 1, \"providers\": {}}\n", &[PROMPT]);
     let (report, records) = ran.rig.read_trace(&ran.entry_id);
     assert!(report.sealed, "{:?}", report.findings);
 
@@ -287,6 +312,56 @@ fn an_agent_that_prints_the_homes_env_leaves_no_key_fragment_in_the_trace_or_the
     assert_no_fragment("the uploaded baseline", baseline.as_bytes(), &key);
 }
 
+/// A compaction mid-run (D61): with the connector's `compression.in_place false`, Hermes moves
+/// to a new session id and so a second `session_<id>.json`. Both files are recorded, the text
+/// before the compaction from the first and the text after it from the second.
+#[test]
+fn a_compaction_mid_run_starts_a_second_session_file_and_both_are_recorded() {
+    const AFTER: &str = "the turn after the compaction";
+    let key = synthetic_key();
+    let ran = run_with_key_in_home(
+        &key,
+        "{\"version\": 1, \"providers\": {}}\n",
+        &[PROMPT, "/compress", AFTER],
+    );
+    assert!(
+        std::fs::read_to_string(ran.home.join("config.yaml"))
+            .unwrap()
+            .lines()
+            .any(|l| l == "compression.in_place: false"),
+        "the start set the compaction to start a new session"
+    );
+    for sid in [SESSION, ROTATED] {
+        assert!(
+            ran.home
+                .join("sessions")
+                .join(format!("session_{sid}.json"))
+                .is_file(),
+            "session_{sid}.json"
+        );
+    }
+    let (report, records) = ran.rig.read_trace(&ran.entry_id);
+    assert!(report.sealed, "{:?}", report.findings);
+    let opened: Vec<&str> = records
+        .iter()
+        .filter_map(|r| match r {
+            CaptureRecord::Open { metadata, .. } => Some(metadata.label.as_str()),
+            _ => None,
+        })
+        .collect();
+    for sid in [SESSION, ROTATED] {
+        assert!(
+            opened
+                .iter()
+                .any(|l| l.contains(&format!("session_{sid}.json"))),
+            "no stream for session_{sid}.json: {opened:?}"
+        );
+    }
+    let text = String::from_utf8_lossy(&decoded(&records)).into_owned();
+    assert!(text.contains(PROMPT) && text.contains(AFTER), "{text}");
+    assert_no_fragment("the decoded streams", text.as_bytes(), &key);
+}
+
 /// Review focus 4: a shared home holding `.env` (a key) and `auth.json` (a token) gives the
 /// uploaded baseline one row for each with its name, size and SHA-256 and nothing else, as
 /// Codex's `auth.json` has today (D56); neither file's content is in the baseline.
@@ -297,7 +372,7 @@ fn the_uploaded_baseline_holds_only_the_name_size_and_digest_of_a_key_file() {
     let auth = format!(
         "{{\"version\": 1, \"providers\": {{\"nous\": {{\"access_token\": \"{token}\"}}}}}}\n"
     );
-    let ran = run_with_key_in_home(&key, &auth);
+    let ran = run_with_key_in_home(&key, &auth, &[PROMPT]);
     let (_, baseline) = ran.server.seal(&ran.run_id).expect("the seal was sent");
     let manifest: serde_json::Value = serde_json::from_str(&baseline).unwrap();
     let home = manifest["home"]
@@ -441,11 +516,9 @@ fn the_real_hermes_writes_its_session_file_once_configured_and_keeps_its_key_out
         "(test)",
     )
     .expect("the connector's configure command");
-    assert!(
-        std::fs::read_to_string(hermes_home.join("config.yaml"))
-            .unwrap()
-            .contains("write_json_snapshots: true")
-    );
+    let config = std::fs::read_to_string(hermes_home.join("config.yaml")).unwrap();
+    assert!(config.contains("write_json_snapshots: true"), "{config}");
+    assert!(config.contains("in_place: false"), "{config}");
 
     // A loopback port nothing listens on: every call Hermes makes is refused at once.
     let closed = std::net::TcpListener::bind("127.0.0.1:0")
