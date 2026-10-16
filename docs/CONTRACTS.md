@@ -357,6 +357,10 @@ reports `seal_write_failed`, and the status is `Failed`, never `Sealed`.
   `proxy.stop()` and ends at `drain_end - NATIVE_FINISH_MIN` (1 s more than the reserve before
   `D`). With less time left it is skipped. The native scope it reads rides on the seal request
   (¶9). Standalone `goalcup seal` takes `D` after its status read and sends no scope.
+  At the run's deadline the harness has not exited, and its open connections (a streaming answer,
+  a kept-alive WebSocket) do not end while it runs: that finish's `proxy.stop_within` waits 2 s
+  (`RUNNING_HARNESS_PROXY_DRAIN`) at most, then cuts them, so the seal that ends the harness is
+  asked within seconds of the deadline.
 - ¶4 *Daemon stages.* `D` starts when the daemon decodes the request. In order: (1) close
   admission and drain ingest until `drain_end`; expiry cuts with `ShutdownDeadline` gaps and is never
   a refusal. (2) blocking permit. (3) the entry's run lock; a committed finish is answered as

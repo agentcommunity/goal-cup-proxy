@@ -1052,6 +1052,7 @@ impl Forked<'_> {
                 deadline,
                 WrapUp::one_attempt(),
                 termination_bound(0),
+                false,
                 None,
                 None,
                 out,
@@ -2358,6 +2359,7 @@ fn run_harness<'a>(
                 deadline,
                 wrap_up,
                 termination_bound(grace),
+                true,
                 None,
                 Some(cfg),
                 &mut said,
@@ -2472,6 +2474,7 @@ fn finish_and_scan(
             deadline,
             wrap_up,
             termination_bound(0),
+            false,
             if tees.late_scope {
                 tees.marked.as_ref()
             } else {
@@ -2799,6 +2802,7 @@ fn finish_unlaunched(
         deadline,
         WrapUp::one_attempt(),
         termination_bound(0),
+        false,
         None,
         None,
         out,
@@ -3274,6 +3278,13 @@ fn proxy_admission_line(
     line
 }
 
+/// How long the proxy's stop waits for connections to end on their own when the harness still
+/// runs (the run stopped at its deadline). They do not end then: a model's streaming answer or a
+/// kept-alive WebSocket stays open as long as the harness does. So the stop cuts them almost at
+/// once (each open stream recorded `Interrupted`), and the seal, which ends the harness, follows
+/// within seconds of the deadline instead of after the whole drain share (three minutes).
+const RUNNING_HARNESS_PROXY_DRAIN: Duration = Duration::from_secs(2);
+
 /// Stop the proxy, seal with its counters, then let the sender drain, and say how the run
 /// ended, all within `deadline` (the one local-finish budget, taken by the caller immediately
 /// before this call); nothing here waits on the harness.
@@ -3293,6 +3304,10 @@ fn proxy_admission_line(
 /// before the seal is sent, by [`crate::capture_tee::marker_wait_end`]'s deadline, which leaves
 /// the daemon's native read its share of the drain. The identity, if exactly one distinct one was
 /// printed, rides on the seal request; any other answer sends none.
+///
+/// `harness_running` is true only at the run's deadline, when the harness has not exited: the
+/// proxy's stop then waits [`RUNNING_HARNESS_PROXY_DRAIN`] at most, because the harness's open
+/// connections would not end before the seal ends the harness.
 #[allow(clippy::too_many_arguments)]
 fn finish(
     client: &(dyn DaemonClient + Sync),
@@ -3301,6 +3316,7 @@ fn finish(
     deadline: std::time::Instant,
     wrap_up: WrapUp,
     termination: Duration,
+    harness_running: bool,
     marked: Option<&CaptureStderr>,
     reconnect: Option<&Path>,
     out: &mut dyn std::io::Write,
@@ -3311,7 +3327,13 @@ fn finish(
         runtime,
         ..
     } = proxied;
-    let stopped = runtime.block_on(proxy.stop());
+    // A harness that still runs (the run's deadline) keeps its connections open: they would hold
+    // the stop, and the seal that ends the harness, for the whole drain share. They are cut.
+    let stopped = if harness_running {
+        runtime.block_on(proxy.stop_within(RUNNING_HARNESS_PROXY_DRAIN))
+    } else {
+        runtime.block_on(proxy.stop())
+    };
     pause_at("capture-finish-proxy-stopped");
     let h = &stopped.health;
     let a = &h.admission_failures;

@@ -804,6 +804,65 @@ fn the_server_stops_the_run_at_its_deadline() {
     assert_fully_uploaded(&rig, &server, &run_id, &outcome.entry_id);
 }
 
+/// At the deadline the harness can still hold a connection open through the proxy (a model's
+/// long streaming answer, a kept-alive WebSocket), and that connection does not end while the
+/// harness runs. The stop does not wait for it: the harness is asked to stop within seconds of
+/// the deadline, not after the proxy's whole drain share (a Codex chat run was asked 176 s late).
+#[test]
+fn a_connection_held_open_at_the_deadline_does_not_delay_the_stop() {
+    use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
+    let rig = Rig::new();
+    let upstream = crate::common::m2_cli_support::Upstream::start_holding(&rig.runtime);
+    rig.tell("steps.sh", &upstream.curl_waiting(r#"{"n":1}"#));
+    let server = short_server(&rig.root.join("server"), 8, None);
+    log_in(&rig, &server.url());
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let mut opts = logged_in_options(&rig, &goal);
+    opts.upload_policy = beating_policy();
+    let (result, out) = std::thread::scope(|s| {
+        rig.start(s, &client, opts, Some(upstream.roots()))
+            .join()
+            .unwrap()
+    });
+    let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(out.contains("deadline: "), "{out}");
+    // The request went out through the proxy and was never answered: it was open at the stop.
+    let (_, records) = rig.read_trace(&outcome.entry_id);
+    let opened = |wanted: CaptureSource| {
+        records
+            .iter()
+            .any(|r| matches!(r, CaptureRecord::Open { source, .. } if *source == wanted))
+    };
+    assert!(
+        opened(CaptureSource::WireRequest),
+        "no request was held open\n{out}"
+    );
+    assert!(
+        !opened(CaptureSource::WireResponse),
+        "the request was answered\n{out}"
+    );
+    // Both whole seconds of UTC: the run's deadline, and when the daemon asked the harness to stop.
+    let at = |after: &str| {
+        let from = out
+            .find(after)
+            .unwrap_or_else(|| panic!("no `{after}` in\n{out}"))
+            + after.len();
+        goalcup_protocol::control::parse_z(&out[from..from + 20])
+            .unwrap_or_else(|| panic!("no time after `{after}` in\n{out}"))
+    };
+    let deadline = at(", deadline ");
+    let asked = at("the harness was asked to stop at ");
+    // The test's finish budget is 10 s: a stop that waited for the connection would be asked
+    // its drain share (8 s) after the deadline.
+    assert!(
+        asked <= deadline + 4,
+        "the harness was asked to stop {} s after the deadline\n{out}",
+        asked.saturating_sub(deadline)
+    );
+}
+
 /// With the server out of reach, the tracer stops on its own count of the run's length; the
 /// final heartbeat and the rest go later with `goalcup upload`, and the server takes them up to
 /// the committed end although its deadline has passed.
@@ -832,7 +891,7 @@ fn without_a_server_the_run_stops_on_its_own_clock_and_is_finished_later() {
         running.join().unwrap()
     });
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
-    assert!(out.contains("by this machine's clock"), "{out}");
+    assert!(out.contains("by the server's count"), "{out}");
     assert!(out.contains("upload incomplete"), "{out}");
 
     let server = short_server(&store, 3, Some(port));
@@ -2155,7 +2214,7 @@ mod segments {
                 .is_some_and(|left| left.seconds <= 6)
         });
         first_server.stop();
-        second.wait_shown("by this machine's clock");
+        second.wait_shown("by the server's count");
         assert!(
             asked.elapsed() < std::time::Duration::from_secs(40),
             "the segment ran on past the server's count: {}",
@@ -2170,7 +2229,7 @@ mod segments {
             state
                 .stopped
                 .as_deref()
-                .is_some_and(|why| why.contains("by this machine's clock")),
+                .is_some_and(|why| why.contains("by the server's count")),
             "{state:?}"
         );
 

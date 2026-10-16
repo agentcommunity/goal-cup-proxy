@@ -1160,7 +1160,7 @@ mod retries {
         let reason = stopped
             .recv_timeout(Duration::from_secs(30))
             .expect("the segment was not stopped");
-        assert!(reason.contains("by this machine's clock"), "{reason}");
+        assert!(reason.contains("by the server's count"), "{reason}");
         assert!(
             started.elapsed() < Duration::from_secs(20),
             "it stopped {:?} after the continue, for a run with 8 seconds left",
