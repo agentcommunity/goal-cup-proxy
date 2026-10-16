@@ -51,14 +51,16 @@ it finds on `PATH` and records which build ran.
 
 ```sh
 export GOALCUP_CONFIG_DIR="$HOME/goalcup"         # where the tracer keeps its state
-goalcup prep --harness claude-code-cli            # sign in once in the tracer's own harness home
+goalcup prep --harness claude-code-cli            # sign in once in the tracer's own harness home (press Enter when it asks)
 # then, from an empty folder outside any git repository:
-goalcup doctor --harness claude-code-cli
-goalcup start --harness claude-code-cli           # the harness opens here: type your prompt, exit to end
+goalcup doctor --harness claude-code-cli          # optional: checks the connector files, the harness on PATH and the daemon
+goalcup start --harness claude-code-cli           # the harness opens here: answer its trust question, type your prompt, press Enter; exit the harness (Claude Code: /exit) to end the run
 goalcup-verify --capture-integrity <trace>        # copy the `verify:` line that start printed
 ```
 
-`prep` steps that need a login print `[todo]`. That is fine for a local run. There is no daemon to
+`prep` steps that need a login print `[todo]`. That is fine for a local run. A local run asks for no
+browser approval; a run on the server asks for one at each `goalcup start`, and `goalcup login`
+asks once ([why](docs/PARTICIPANT-GUIDE.md#2-log-in-goalcup-login)). There is no daemon to
 install: `goalcup start` starts `goalcup-daemon` for the run. Both shipped chat-mode harnesses (Codex
 CLI, Claude Code) refuse `--goal-file`; Hermes is headless and needs it. From another terminal with
 the same `GOALCUP_CONFIG_DIR`, `goalcup status` shows the run and `goalcup seal` ends it early.

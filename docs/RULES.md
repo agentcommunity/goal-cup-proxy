@@ -6,9 +6,10 @@ machine. The step-by-step path is the [participant's guide](PARTICIPANT-GUIDE.md
 
 **How the tracer runs.** `goalcup start` opens your harness in its normal chat mode, in your own
 terminal, in a clone of your new, empty, public GitHub repository. You approve each run in the
-browser with your Agent Community account. You type the prompt as the first message; after it, the
-only message you may type is "keep going". The tracer records the harness's model traffic through a
-recording proxy on your machine, set for the harness process only, and the harness's session files.
+browser with your Agent Community account. Two approvals are normal: `goalcup login` signs this
+computer in once and starts nothing, and each `goalcup start` approves that one run. You type the
+prompt as the first message; after it, the only message you may type is "keep going". The tracer
+records the harness's model traffic through a recording proxy on your machine, set for the harness process only, and the harness's session files.
 It uploads the record to the Goal Cup server while the run goes on. It never changes a model base URL
 or any app-wide trust or config, never sends the agent a message, and never restarts it on its own.
 Secrets are removed on your machine before anything is written or uploaded. Raw records stay private.
@@ -94,6 +95,10 @@ The latest possible run ends 192 hours after the window opens.
   messages. That is a detection, not a proof. An organizer reviews a message it cannot explain.
 - The tracker never sends anything to the agent, and never relays, edits or blocks your input: no
   reminders, no automatic "keep going", no automatic restart. `goalcup continue` is yours to run.
+- **The harness's folder-trust dialog is not a message, and answering it is allowed.** Claude Code
+  asks at the start of each run whether you trust the folder. You answer it yourself, before you
+  type your prompt, and again if the dialog comes back after `goalcup continue`. It covers only that
+  dialog. No other approval, login or question of the harness is covered: see "During the run".
 - An agent that stops early and stays idle until the deadline is permitted. Its idle time is in the
   record.
 
@@ -171,7 +176,9 @@ disclosure and no-side-channel rules.
   Humans must leave that state alone until the run seals.
 - Prepare accounts, keys, permissions, payment methods and spending limits before the start. Missing
   preparation is not itself a violation, but the human may not fix it after the start by typing a key,
-  completing a login, clicking an approval or changing the environment.
+  completing a login, clicking an approval or changing the environment. The one exception is
+  the harness's own folder-trust dialog (Claude Code asks whether you trust the folder): you may
+  answer it, because it only lets the harness open and gives the agent nothing.
 - The agent may authenticate, purchase, create, deploy or operate resources on its own, using
   authority it already has.
 - Power or internet may be restored and the agent restarted in the same run with `goalcup continue`.
