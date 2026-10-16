@@ -707,6 +707,15 @@ fn doctor_reports_every_connector_and_each_of_its_protocol_hints() {
         let said = String::from_utf8(out).unwrap();
         assert!(said.contains(&format!("{id} only")), "{id}: {said}");
         let capture = load(&id).loaded.manifest.capture;
+        // A model host read from the harness's config (D62) is recorded with the wire hints.
+        if capture.model_host_from.is_some() {
+            for hint in goalcup_cli::model_host::wire_hints() {
+                assert!(
+                    said.contains(hint),
+                    "{id}: `{hint}` is not reported: {said}"
+                );
+            }
+        }
         // Each hint is judged by the registry, the way doctor judges it: a wire hint as a
         // request stream, a native hint as a native stream.
         let registry = DecoderRegistry::builtin();

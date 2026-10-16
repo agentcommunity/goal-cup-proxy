@@ -481,12 +481,17 @@ in the harness, and the harness saves its address in its own config. There is no
 - **What is logged.** Only `model service: <host>:<port> (<key> in <file>)`: in the start's output
   for a headless run, in the run's `host.log` for a chat-mode one. A userinfo (`user:pass@`), the
   path and the query are never logged or recorded.
-- **Refused at start.** A missing file or key, a value that is not an `http` or `https` URL, plain
-  `http` (only `HTTPS_PROXY` is set, so it would pass around the recorder), a loopback name, an
-  address literal, a single-label name, a host that names the tracker, and an authentication host.
-  The refusal is one sentence: "The harness is set to use `<scheme>://<host>:<port>`, which Goal
-  Cup cannot record. Set a model service in the harness and run the command again." Nothing is
-  created. `goalcup continue` checks it before it closes an earlier segment.
+- **Refused at start, and not ready at prep.** A missing file or key, a value that is not an
+  `http` or `https` URL, plain `http` (only `HTTPS_PROXY` is set, so it would pass around the
+  recorder), a loopback name, an address literal, a single-label name, a host that names the
+  tracker, and an authentication host. The refusal names the value (`<scheme>://<host>:<port>`
+  only), the reason and the way to change it: "`<display name>` is set to use `<value>`, which Goal
+  Cup cannot record: `<reason>`. Goal Cup records only an https model service that is not on this
+  computer. Run goalcup prep --harness `<id>`, choose such a service there, then run the command
+  again." Nothing is created. `goalcup continue` checks it before it closes an earlier segment.
+  `goalcup prep` makes the same check: while the value cannot be recorded the home is not ready,
+  and prep says why and opens the harness again. Only the address the config names is checked; a
+  login the harness refreshes at another host is not (D62).
 - **Schema rules.** `file` is a relative path of at most 4 components with a `.yaml`, `.yml`,
   `.json` or `.toml` extension. `key` is 1–8 names of `[A-Za-z0-9_-]` (1–64 bytes each) joined
   with `.`. No `.`, `-` or `_` separated part of the file's name or of the key may be `auth`,

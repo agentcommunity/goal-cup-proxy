@@ -14,9 +14,11 @@
 //! TOML by the parsers this binary already links.
 //!
 //! A value the tracer cannot record (missing, not a URL, plain `http`, loopback, an address
-//! literal, an authentication host) is refused with one sentence
-//! ([`crate::participant::cannot_record_model_service`]): a run never goes on with model calls
-//! that would be tunnelled unrecorded, or fail against a replace-mode CA.
+//! literal, an authentication host) is refused with the reason and the way to change it
+//! ([`crate::participant::cannot_record_model_service`]); `goalcup prep` makes the same check
+//! and keeps the home not ready until the harness names a service that can be recorded. What is
+//! checked is the address the config names. A login the harness refreshes at another host (an
+//! OAuth provider's token endpoint) is not checked here (D62).
 
 use crate::CliError;
 use crate::connector::HarnessConnector;
@@ -37,6 +39,12 @@ const WIRE_PATHS: &[(&str, &str)] = &[
     ("/messages", "anthropic-messages"),
     ("/responses", "openai-responses"),
 ];
+
+/// The decoder hints a model host read from the harness's config is recorded with, for
+/// `goalcup doctor`.
+pub fn wire_hints() -> impl Iterator<Item = &'static str> {
+    WIRE_PATHS.iter().map(|(_, hint)| *hint)
+}
 
 /// The model service a run records: the host and port of the config's URL, and its path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,8 +84,15 @@ impl ModelHost {
                 });
             }
         }
+        // The rest of the base, with no hint. A URL with no path records the versioned API
+        // (`/v1/`), never every request on the host (a reviewed row may not use `/` either).
+        let rest = if base.is_empty() {
+            "/v1/".to_string()
+        } else {
+            format!("{base}/")
+        };
         paths.push(CapturePath {
-            path: format!("{base}/"),
+            path: rest,
             prefix: true,
             protocol_hint: None,
         });
@@ -88,9 +103,39 @@ impl ModelHost {
     }
 }
 
+/// Why the config's value cannot be recorded, in words a participant reads: what the harness
+/// is set to use (`scheme://host:port` or a short description, never the rest of the value) and
+/// the reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unrecordable {
+    pub shown: String,
+    pub reason: String,
+}
+
+impl Unrecordable {
+    /// "`<name>` is set to use `<shown>`, which Goal Cup cannot record: `<reason>`."
+    pub fn sentence(&self, name: &str) -> String {
+        format!(
+            "{name} is set to use {}, which Goal Cup cannot record: {}.",
+            self.shown, self.reason
+        )
+    }
+}
+
 /// The model service `connector`'s config names, for one segment, or `None` for a connector
-/// without `capture.model_host_from`. Reads the file once; refuses a value it cannot record.
+/// without `capture.model_host_from`. Reads the file once; refuses a value it cannot record with
+/// the reason and the way to change it ([`crate::participant::cannot_record_model_service`]).
 pub fn for_run(cfg: &Path, connector: &HarnessConnector) -> Result<Option<ModelHost>, CliError> {
+    check(cfg, connector).map_err(|why| {
+        CliError::Refused(crate::participant::cannot_record_model_service(
+            &why.sentence(connector.display_name()),
+            &connector.loaded.manifest.id,
+        ))
+    })
+}
+
+/// [`for_run`] without the refusal around it, for `goalcup prep`.
+pub fn check(cfg: &Path, connector: &HarnessConnector) -> Result<Option<ModelHost>, Unrecordable> {
     let manifest = &connector.loaded.manifest;
     let Some(from) = &manifest.capture.model_host_from else {
         return Ok(None);
@@ -99,31 +144,47 @@ pub fn for_run(cfg: &Path, connector: &HarnessConnector) -> Result<Option<ModelH
     read(&home, from, &manifest.capture.auth_hosts).map(Some)
 }
 
-/// [`for_run`] on a given config home.
+/// [`check`] on a given config home.
 pub fn read(
     home: &Path,
     from: &ModelHostFrom,
     auth_hosts: &[String],
-) -> Result<ModelHost, CliError> {
+) -> Result<ModelHost, Unrecordable> {
     let source = format!("`{}` in {}", from.key, from.file);
-    let refuse =
-        |value: String| CliError::Refused(crate::participant::cannot_record_model_service(&value));
+    let refuse = |shown: String, reason: String| Unrecordable { shown, reason };
     let Some(value) = read_value(&home.join(&from.file), &from.file, &from.key) else {
-        return Err(refuse(format!("no model service ({source} is not set)")));
+        return Err(refuse(
+            "no model service".into(),
+            format!("{source} is not set"),
+        ));
     };
     let Some(url) = parse_url(&value) else {
-        return Err(refuse(format!(
-            "an address that is not an http or https URL ({source})"
-        )));
+        return Err(refuse(
+            "an address Goal Cup cannot read".into(),
+            format!("{source} is not an http or https URL"),
+        ));
     };
     let shown = url.shown();
-    let recordable = url.https
-        && is_capture_host(&url.host)
-        && local_host_problem(&url.host).is_none()
-        && !mentions_goalcup(&url.host)
-        && !auth_hosts.contains(&url.host);
-    if !recordable {
-        return Err(refuse(shown));
+    let ip = url.host.parse::<std::net::IpAddr>().ok();
+    let reason = if !url.https {
+        Some("it is plain http, which goes around the recorder")
+    } else if ip.is_some_and(|ip| ip.is_loopback())
+        || (ip.is_none() && local_host_problem(&url.host).is_some())
+    {
+        Some("it is on this computer or the local network, which is never recorded")
+    } else if ip.is_some() {
+        Some("it is an IP address, and Goal Cup records a service by its DNS name")
+    } else if !is_capture_host(&url.host) {
+        Some("it is not a DNS name Goal Cup can record")
+    } else if mentions_goalcup(&url.host) {
+        Some("it is Goal Cup's own host")
+    } else if auth_hosts.contains(&url.host) {
+        Some("it is a sign-in host, which is never recorded")
+    } else {
+        None
+    };
+    if let Some(reason) = reason {
+        return Err(refuse(shown, reason.into()));
     }
     Ok(ModelHost {
         host: url.host,
@@ -387,11 +448,11 @@ mod tests {
     #[test]
     fn the_yaml_reader_finds_one_nested_scalar_and_nothing_else() {
         let doc = "\
-# Hermes config
+# a harness config
 model:
-  default: deepseek-chat
-  provider: deepseek
-  base_url: https://api.deepseek.com/v1   # set by setup
+  default: some-model
+  provider: some-provider
+  base_url: https://api.models.example.test/v1   # set by setup
   nested:
     base_url: https://wrong.example
 other:
@@ -401,7 +462,7 @@ sessions:
 ";
         assert_eq!(
             yaml_lookup(doc, &["model", "base_url"]).as_deref(),
-            Some("https://api.deepseek.com/v1")
+            Some("https://api.models.example.test/v1")
         );
         assert_eq!(
             yaml_lookup(doc, &["model", "nested", "base_url"]).as_deref(),
@@ -501,7 +562,7 @@ sessions:
             "http://[::1]:8080"
         );
         for bad in [
-            "api.deepseek.com",
+            "api.models.example.test",
             "ftp://x.example",
             "https://",
             "https://x:0",
@@ -535,6 +596,18 @@ sessions:
         );
         assert_eq!(hint("/v1/models"), Some(None));
         assert_eq!(hint("/v2/chat/completions"), None);
+        // A URL with no path records the versioned API, never every path on the host.
+        let bare = ModelHost {
+            base_path: String::new(),
+            ..host.clone()
+        }
+        .approved();
+        let bare_hint =
+            |path: &str| crate::proxy::metadata::select(&bare.policy, path).map(|p| p.prefix);
+        assert_eq!(bare_hint("/v1/messages"), Some(false));
+        assert_eq!(bare_hint("/v1/models"), Some(true));
+        assert_eq!(bare_hint("/healthz"), None);
+        assert!(!bare.policy.paths.iter().any(|p| p.path == "/"));
         assert_eq!(
             host.detail(),
             "model service: models.example.test:443 (model.base_url in config.yaml)"

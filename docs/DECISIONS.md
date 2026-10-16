@@ -546,14 +546,21 @@ records that service and nothing else.
   `key(s)`, `api_key` or `env`: the tracer reads an address, never a key file or a key.
 - **Refused at start.** A missing value, a non-URL, plain `http` (only `HTTPS_PROXY` is set, so it
   would bypass the recorder), a loopback name, an address literal, a single-label name, a tracker
-  host or an authentication host: "The harness is set to use `<scheme>://<host>:<port>`, which
-  Goal Cup cannot record. Set a model service in the harness and run the command again." A run
-  never goes on with model calls that would tunnel unrecorded or fail against a replace-mode CA.
+  host or an authentication host: "`<display name>` is set to use `<scheme>://<host>:<port>`,
+  which Goal Cup cannot record: `<reason>`. Goal Cup records only an https model service that is not on
+  this computer. Run goalcup prep --harness `<id>`, choose such a service there, then run the
+  command again." `goalcup prep` makes the same check: while the value cannot be recorded the
+  home is not ready, and prep says why and opens the harness again. What is checked is the
+  address the config names, so a run never starts with that address tunnelled unrecorded. It is
+  not a check of every host the harness reaches: a login the harness refreshes at another host
+  (an OAuth provider's token endpoint) tunnels, and under a replace-mode CA such as Hermes's that
+  refresh fails (`docs/harnesses/hermes-cli.md`, known gaps; TODO Known issues).
 - **A switch mid-run.** The file is not read during a run. A service switched to inside a session
   (Hermes's `/model`) is a tunnel until the next segment: the participant exits the harness and
   runs `goalcup continue`, which reads the config again (PARTICIPANT-GUIDE, section 8).
 - **Hermes.** `{ file = "config.yaml", key = "model.base_url" }`, which Hermes's setup and
-  `/model` write. `providers = ["deepseek"]` is removed: with `HERMES_CA_BUNDLE` in replace mode
+  `/model` write. API-key services are what this delivers; an OAuth-login service may fail its
+  token refresh (above), pending a test-round run. `providers = ["deepseek"]` is removed: with `HERMES_CA_BUNDLE` in replace mode
   any service the participant picks other than a listed one failed its TLS handshake, and a listed
   one the participant does not use was only probed at start. `[capture.ca]` stays in replace
   mode: the approved host is decrypted by the proxy, so Hermes trusts it through the proxy CA.

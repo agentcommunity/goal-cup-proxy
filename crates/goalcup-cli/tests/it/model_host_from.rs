@@ -17,13 +17,13 @@ const GOAL: &str = "write hello.txt, then stop";
 const RESERVE: u64 = 4 * 1024 * 1024;
 const MODEL_HOST: &str = "models.example.test";
 const OTHER_HOST: &str = "github.example.test";
-/// The plan's refusal, after the value.
-const CANNOT_RECORD: &str = "which Goal Cup cannot record. Set a model service in the harness \
-                             and run the command again.";
+/// The refusal's advice, after the reason.
+const CANNOT_RECORD: &str = "Goal Cup records only an https model service that is not on this \
+                             computer.";
 
 /// Make the rig connector `id` read its model host from `config.yaml` `model.base_url` and list
 /// no host of its own. Returns the field as loaded.
-fn reads_model_host(rig: &Rig, id: &str) -> ModelHostFrom {
+pub(crate) fn reads_model_host(rig: &Rig, id: &str) -> ModelHostFrom {
     let path = rig.connectors.join(id).join("harness.toml");
     let text = std::fs::read_to_string(&path).unwrap();
     let at = text
@@ -204,7 +204,7 @@ fn a_missing_or_loopback_model_host_is_refused_at_start() {
     let home = home(&rig, FAKE_ID);
     let goal = rig.goal(GOAL);
     let http = rig.client();
-    let refused = |shown: &str, hidden: Option<&str>| {
+    let refused = |shown: &str, reason: &str, hidden: Option<&str>| {
         let (result, out) = std::thread::scope(|s| {
             rig.start(s, &http, rig.options(&goal, RESERVE), None)
                 .join()
@@ -212,10 +212,16 @@ fn a_missing_or_loopback_model_host_is_refused_at_start() {
         });
         let error = result.expect_err(&out).to_string();
         assert!(
-            error.contains(&format!("The harness is set to use {shown}")),
+            error.contains(&format!(
+                "{FAKE_ID} is set to use {shown}, which Goal Cup cannot record: {reason}"
+            )),
             "{error}"
         );
         assert!(error.contains(CANNOT_RECORD), "{error}");
+        assert!(
+            error.contains(&format!("Run goalcup prep --harness {FAKE_ID}")),
+            "{error}"
+        );
         if let Some(hidden) = hidden {
             assert!(!error.contains(hidden), "{error}");
         }
@@ -223,40 +229,69 @@ fn a_missing_or_loopback_model_host_is_refused_at_start() {
         assert!(rig.harness_file("pid").is_none(), "no harness ran");
     };
 
-    let unset = "no model service (`model.base_url` in config.yaml is not set)";
-    refused(unset, None);
+    let unset = "`model.base_url` in config.yaml is not set";
+    refused("no model service", unset, None);
     support::write_model_host_config(&home, &from, "");
-    refused(unset, None);
+    refused("no model service", unset, None);
     std::fs::write(home.join("config.yaml"), "model:\n  provider: custom\n").unwrap();
-    refused(unset, None);
-    for (value, shown, hidden) in [
-        ("http://localhost:11434/v1", "http://localhost:11434", None),
-        ("https://localhost/v1", "https://localhost:443", None),
-        ("https://127.0.0.1:8443/v1", "https://127.0.0.1:8443", None),
-        ("http://[::1]:8080/v1", "http://[::1]:8080", None),
+    refused("no model service", unset, None);
+    const HTTP: &str = "it is plain http";
+    const LOCAL: &str = "it is on this computer or the local network";
+    const IP: &str = "it is an IP address";
+    for (value, shown, reason, hidden) in [
+        (
+            "http://localhost:11434/v1",
+            "http://localhost:11434",
+            HTTP,
+            None,
+        ),
+        ("https://localhost/v1", "https://localhost:443", LOCAL, None),
+        (
+            "https://ollama:11434/v1",
+            "https://ollama:11434",
+            LOCAL,
+            None,
+        ),
+        (
+            "https://127.0.0.1:8443/v1",
+            "https://127.0.0.1:8443",
+            LOCAL,
+            None,
+        ),
+        ("https://[::1]:8080/v1", "https://[::1]:8080", LOCAL, None),
+        (
+            "https://203.0.113.7/v1",
+            "https://203.0.113.7:443",
+            IP,
+            None,
+        ),
         (
             "https://user:hunter2@llm.localhost:8443/v1?key=abc",
             "https://llm.localhost:8443",
+            LOCAL,
             Some("hunter2"),
         ),
         (
             "http://models.example.test/v1",
             "http://models.example.test:80",
+            HTTP,
             None,
         ),
         (
             "https://auth.openai.com/v1",
             "https://auth.openai.com:443",
+            "it is a sign-in host",
             None,
         ),
         (
             "sk-not-a-url-0123456789",
-            "an address that is not an http or https URL (`model.base_url` in config.yaml)",
+            "an address Goal Cup cannot read",
+            "`model.base_url` in config.yaml is not an http or https URL",
             Some("sk-not"),
         ),
     ] {
         support::write_model_host_config(&home, &from, value);
-        refused(shown, hidden);
+        refused(shown, reason, hidden);
     }
 }
 
@@ -277,18 +312,38 @@ fn continue_rereads_the_model_host() {
     let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
     rig.prepare_for(&server.url());
 
-    let segment = |mut run: crate::common::m2_cli_support::OnPty| {
+    // Each segment's harness keeps the proxy CA it was handed. The CA is minted for the
+    // segment's approved hosts and names them in its name constraints, so its DER holds the
+    // approved host's name, and no other host is approved.
+    let segment = |mut run: crate::common::m2_cli_support::OnPty| -> Vec<u8> {
         run.wait_shown("tui: ready");
         run.type_line("/exit");
         let status = run.wait();
         assert!(status.success(), "{status:?}\n{}", run.shown());
+        let pem = rig
+            .harness_file("tui.ca.pem")
+            .expect("the harness was handed the proxy CA");
+        let body: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(body)
+            .unwrap()
     };
-    segment(crate::common::m2_cli_support::OnPty::spawn(
+    let names = |der: &[u8], host: &str| der.windows(host.len()).any(|w| w == host.as_bytes());
+    let ca = segment(crate::common::m2_cli_support::OnPty::spawn(
         rig.chat_command(&[OFFLINE, DISK, BEATING], Launcher::Direct),
         None,
     ));
+    assert!(
+        names(&ca, "first.example.test"),
+        "segment 0 approves the first host"
+    );
     support::write_model_host_config(&home, &from, "https://second.example.test/api");
-    segment(rig.continue_on_pty(&[OFFLINE, DISK, BEATING], None));
+    let ca = segment(rig.continue_on_pty(&[OFFLINE, DISK, BEATING], None));
+    assert!(
+        names(&ca, "second.example.test") && !names(&ca, "first.example.test"),
+        "segment 1 approves the new host, and not the old one"
+    );
 
     let run_id = &server.run_ids()[0];
     assert_eq!(server.entry_ids(run_id).len(), 2, "two segments");

@@ -318,6 +318,11 @@ These look odd but are right. Do not "fix" them.
 - **Little Snitch and updates:** each rebuilt `goalcup` binary has a new ad-hoc signature identifier
   (`goalcup-<hash>`), so Little Snitch blocks it again and the connection times out. The participant
   guide must say so (allow `goalcup` again after each update). Open (UX-F).
+- **D62 OAuth-login services (Hermes):** a token refresh to a login host fails under the
+  replace-mode `HERMES_CA_BUNDLE`, because the login host tunnels with its real certificate. So
+  API-key services work, and OAuth-login services (Nous Portal, Codex-OAuth, xAI-OAuth) may not.
+  Traced from source; measure with a Nous Portal or Codex-OAuth Hermes row in the test round
+  ([hermes-cli.md](docs/harnesses/hermes-cli.md), section 9).
 - **Linux:** the fast gate passes in Docker (arm64). The reservation works on ext4 and XFS. A run
   with no login launches both measured builds (arm64 and x86_64), fails on auth and seals. The
   x86_64 timing failures are fixed (39ba14f): the x86_64 fast gate passed 1933 tests on 16 Oct

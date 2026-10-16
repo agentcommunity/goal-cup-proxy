@@ -11,7 +11,7 @@
 # process group; each prints `tui: resumed` once it is continued.
 #
 # What it does is reported under $M2_FAKE_OUT: `tui.pid`, `tui.stdin` (`tty` or `not-a-tty`),
-# `tui.argv`, `tui.env` (its whole environment), `tui.home` (its HOME, where it also appends a
+# `tui.argv`, `tui.env` (its whole environment), `tui.ca.pem` (the proxy CA it was handed), `tui.home` (its HOME, where it also appends a
 # line to `tui-runs.txt` at each start), `tui.skills` (what the goal-cup skill folder held at its start), `tui.ready`, and
 # `tui.end` (`int`, `hup`, `exit` or `eof`: how it ended). Every byte it prints starts `tui:`, so
 # a test can tell its output from anything else on the terminal.
@@ -46,6 +46,8 @@ echo run >> "$HOME/tui-runs.txt"
 echo $$ > "$out/tui.pid.tmp" && mv "$out/tui.pid.tmp" "$out/tui.pid"
 printf '%s\n' "$@" > "$out/tui.argv"
 env > "$out/tui.env"
+# The proxy CA the run hands it (its name constraints are the run's approved hosts).
+if [ -n "$CODEX_CA_CERTIFICATE" ]; then cp "$CODEX_CA_CERTIFICATE" "$out/tui.ca.pem"; fi
 if [ -t 0 ]; then
   echo tty > "$out/tui.stdin"
 else

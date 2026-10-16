@@ -247,14 +247,24 @@ fn decoder_check(manifest: &goalcup_protocol::harness::HarnessManifest) -> Check
     };
     let mut accepted = BTreeSet::new();
     let mut undecoded = BTreeSet::new();
-    for host in &manifest.capture.hosts {
-        if let Some(hint) = host.protocol_hint.as_deref() {
-            let open = StreamOpen::new(&key, CaptureSource::WireRequest, Some(hint), None);
-            if registry.accepting(&open).is_empty() {
-                undecoded.insert(hint.to_string());
-            } else {
-                accepted.insert(hint.to_string());
-            }
+    let mut wire: Vec<&str> = manifest
+        .capture
+        .hosts
+        .iter()
+        .filter_map(|h| h.protocol_hint.as_deref())
+        .collect();
+    // A model host read from the harness's config (D62) is recorded with the wire hints.
+    if manifest.capture.model_host_from.is_some() {
+        for hint in crate::model_host::wire_hints() {
+            wire.push(hint);
+        }
+    }
+    for hint in wire {
+        let open = StreamOpen::new(&key, CaptureSource::WireRequest, Some(hint), None);
+        if registry.accepting(&open).is_empty() {
+            undecoded.insert(hint.to_string());
+        } else {
+            accepted.insert(hint.to_string());
         }
     }
     for native in &manifest.capture.native {
