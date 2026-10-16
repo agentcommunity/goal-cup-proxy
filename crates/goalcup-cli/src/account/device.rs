@@ -9,7 +9,9 @@
 //!
 //! # What is shown, and what is not
 //!
-//! The participant sees the user code (`BCDF-GHJK`) and the address. The device code, which is
+//! The participant is told first which approval this is (this computer, or this one run) and
+//! that a run asking again after the login is normal ([`crate::participant::approval_intro`]),
+//! then sees the user code (`BCDF-GHJK`) and the address. The device code, which is
 //! what the poll presents to collect the result, is held in memory and sent in a request body;
 //! it is never printed, logged, put in a URL or repeated in an error.
 //!
@@ -46,11 +48,12 @@ const MAX_WAIT_SECS: u64 = 15 * 60;
 
 /// What the participant is approving.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Purpose {
+pub enum Purpose<'a> {
     /// `goalcup login`: the account, nothing else.
     Login,
-    /// A run, in the competition, as practice, or as an organizer test.
-    Run { mode: RunMode },
+    /// A run, in the competition, as practice, or as an organizer test, of the harness the
+    /// participant knows as `harness` (its manifest's display name).
+    Run { mode: RunMode, harness: &'a str },
 }
 
 /// The wire value of a competition run.
@@ -160,14 +163,14 @@ struct Account {
 /// participant is asked to open the address themselves. Everything shown goes to `out`.
 pub fn approve(
     server: &ServerClient,
-    purpose: Purpose,
+    purpose: Purpose<'_>,
     connector_id: &str,
     open: &dyn Fn(&str) -> bool,
     out: &mut dyn Write,
 ) -> Result<Approved, CliError> {
     let (purpose_name, mode) = match purpose {
         Purpose::Login => ("login", MODE_PRACTICE),
-        Purpose::Run { mode } => ("run", mode.wire()),
+        Purpose::Run { mode, .. } => ("run", mode.wire()),
     };
     let created: Created = server
         .json(
@@ -181,13 +184,12 @@ pub fn approve(
             }),
         )
         .map_err(|e| match e {
-            ServerError::Transport(why) => CliError::Refused(format!(
-                "the Goal Cup server at {} could not be reached ({why}). Nothing was created; \
-                 check your connection and run the command again.",
-                server.base()
-            )),
+            ServerError::Transport(why) => {
+                CliError::Refused(crate::participant::server_unreachable(server.base(), &why))
+            }
             other => CliError::Refused(format!(
-                "{other}. Nothing was created; run the command again."
+                "{}. The server answered: {other}. Nothing was created.",
+                crate::participant::RUN_AGAIN
             )),
         })?;
     check_created(&created)?;
@@ -204,20 +206,24 @@ pub fn approve(
             source,
         })
     };
-    say(
-        out,
-        format!(
-            "Open {} and check that it shows the code {}.",
-            created.verification_uri_complete, created.user_code
-        ),
-    )?;
-    if !open(&created.verification_uri_complete) {
-        say(
-            out,
-            "A browser did not open on its own; open that address yourself.".into(),
-        )?;
+    let approving = match purpose {
+        Purpose::Login => crate::participant::Approving::Login,
+        Purpose::Run { mode, harness } => crate::participant::Approving::Run { mode, harness },
+    };
+    // Which approval this is comes first; the browser is asked to open before the code lines,
+    // so they say what really happened.
+    for line in crate::participant::approval_intro(approving) {
+        say(out, line)?;
     }
-    say(out, "Waiting for approval…".into())?;
+    let opened = open(&created.verification_uri_complete);
+    for line in crate::participant::approval_code(
+        &created.user_code,
+        &created.verification_uri_complete,
+        opened,
+        wait,
+    ) {
+        say(out, line)?;
+    }
 
     let mut interval = Duration::from_secs(
         created
@@ -251,11 +257,7 @@ pub fn approve(
                 }
             },
             Err(ServerError::Status { status: 403, .. }) => {
-                return Err(CliError::Refused(
-                    "the approval was denied in the browser. Nothing was created; run the \
-                     command again to start over."
-                        .into(),
-                ));
+                return Err(CliError::Refused(crate::participant::approval_denied()));
             }
             Err(ServerError::Status { status: 410, .. }) => return Err(expired()),
             Err(ServerError::Status { status: 429, .. }) => {
@@ -275,18 +277,11 @@ pub fn approve(
 }
 
 fn interrupted() -> CliError {
-    CliError::Refused(
-        "interrupted while waiting for approval. Nothing was created, and no run was opened."
-            .into(),
-    )
+    CliError::Refused(crate::participant::approval_interrupted())
 }
 
 fn expired() -> CliError {
-    CliError::Refused(
-        "the approval code expired before it was approved. Nothing was created; run the \
-         command again to start again."
-            .into(),
-    )
+    CliError::Refused(crate::participant::approval_expired())
 }
 
 /// Wait `d`, in short steps, ending early when a Ctrl-C was caught meanwhile. A function of its
@@ -348,7 +343,7 @@ fn check_created(created: &Created) -> Result<(), CliError> {
 }
 
 /// The `200 approved` answer, as the `purpose` asked for.
-fn finish(answer: Polled, asked: Purpose) -> Result<Approved, CliError> {
+fn finish(answer: Polled, asked: Purpose<'_>) -> Result<Approved, CliError> {
     match (asked, answer.purpose.as_deref()) {
         (Purpose::Login, Some("login")) => {
             let handle = answer

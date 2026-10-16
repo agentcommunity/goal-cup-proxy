@@ -71,10 +71,14 @@ pub fn run(
             account: Some(handle.clone()),
         },
     )?;
-    writeln!(out, "Logged in as {handle}. Runs are uploaded to {url}.").map_err(|source| {
-        CliError::Io {
+    // The server is named only when it is not the default one: organizers on staging need it,
+    // and a participant on the default server does not.
+    let named = (url.trim_end_matches('/') != DEFAULT_SERVER_URL).then_some(url.as_str());
+    for line in crate::participant::login_done(&handle, named) {
+        writeln!(out, "{line}").map_err(|source| CliError::Io {
             path: "stdout".to_string(),
             source,
-        }
-    })
+        })?;
+    }
+    Ok(())
 }

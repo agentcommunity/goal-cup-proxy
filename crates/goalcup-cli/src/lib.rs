@@ -11,6 +11,8 @@
 //! in [`harness_version`]; the pins one `goalcup start` leaves behind for the processes that
 //! come after it, the run public key among them, live in [`entries`], and the arming answer
 //! and the Ctrl-C handler that unmakes an entry nobody is going to use live in [`arming`];
+//! what the participant reads during a run (the approval, the launch, the harness's exit, the
+//! deadline and the refusals) is worded in [`participant`];
 //! the number every one of them leaves under lives here, in
 //! [`CliError::exit_code`], and nowhere else.
 //!
@@ -41,6 +43,8 @@ pub mod harness_version;
 pub mod host_log;
 pub mod key_scan;
 pub mod launch;
+/// Every sentence the participant reads during a run, worded in one place.
+pub mod participant;
 pub mod per_run_home;
 pub mod preflight;
 pub mod prep_file;

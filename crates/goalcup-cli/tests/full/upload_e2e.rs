@@ -1087,13 +1087,53 @@ mod segments {
         let run_id = the_run(&server);
         let record = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap();
         let deadline_at = record.deadline_at.clone().unwrap();
+        // The facts the participant needs: how the agent ended, that the run is open and until
+        // when (in their local time), and the command that goes on, with the run's id.
+        let until = goalcup_cli::participant::local_clock(
+            goalcup_protocol::control::parse_z(&deadline_at).unwrap(),
+        );
+        // Before the harness opened: the approval, then what to type and when the run ends.
+        let ready = shown
+            .find(goalcup_cli::participant::READY_MARK)
+            .unwrap_or_else(|| panic!("{shown}"));
+        let before = &shown[..ready];
         assert!(
-            shown.contains(&format!(
-                "The agent's process ended (ended by signal 9). Your run stays open until \
-                 {deadline_at}; run `goalcup continue` to restart it."
-            )),
+            before.contains(goalcup_cli::participant::APPROVED),
             "{shown}"
         );
+        assert!(
+            before.contains(goalcup_cli::participant::KEEP_GOING),
+            "{shown}"
+        );
+        assert!(before.contains(&until), "{shown}");
+        assert!(shown.contains("(ended by signal 9)"), "{shown}");
+        assert!(
+            shown.contains(&format!("{} {until}", goalcup_cli::participant::STILL_OPEN)),
+            "{shown}"
+        );
+        let hint = shown
+            .find(&format!(
+                "{} {run_id}",
+                goalcup_cli::participant::CONTINUE_HINT
+            ))
+            .unwrap_or_else(|| panic!("{shown}"));
+        // Said at the seal, before the wait for the upload: continue works from then on.
+        let waiting = shown
+            .find(goalcup_cli::participant::UPLOADING_REST)
+            .unwrap_or_else(|| panic!("{shown}"));
+        assert!(hint < waiting, "{shown}");
+        assert!(
+            shown.find(goalcup_cli::participant::STILL_OPEN).unwrap() < waiting,
+            "{shown}"
+        );
+        // A chat-mode run's ids and folders are not on the terminal before the harness: they
+        // are in its host.log.
+        assert!(!before.contains("run directory:"), "{shown}");
+        let log =
+            std::fs::read_to_string(goalcup_cli::run::run_dir(&rig.cfg, &run_id).join("host.log"))
+                .unwrap();
+        assert!(log.contains("run directory:"), "{log}");
+        assert!(log.contains(&format!("run {run_id} opened on")), "{log}");
         // The run is open on the server; its one segment is sealed and sent.
         assert_eq!(api_run(&rig, &server, &run_id)["status"], "open");
         let entries = server.entry_ids(&run_id);
@@ -1128,7 +1168,19 @@ mod segments {
         let status = second.wait();
         let shown = second.shown();
         assert!(status.success(), "{status:?}\n{shown}");
-        assert!(shown.contains("Your run stays open until"), "{shown}");
+        assert!(
+            shown.contains(goalcup_cli::participant::STILL_OPEN),
+            "{shown}"
+        );
+        // The continued launch said what to type, and when the run ends.
+        let before = &shown[..shown
+            .find(goalcup_cli::participant::READY_MARK)
+            .unwrap_or_else(|| panic!("{shown}"))];
+        assert!(
+            before.contains(goalcup_cli::participant::KEEP_GOING),
+            "{shown}"
+        );
+        assert!(before.contains(&until), "{shown}");
 
         // No second approval, no second clone; one run with two segments, both sent.
         assert_eq!(server.device_requests().len(), 1);
@@ -1178,7 +1230,8 @@ mod segments {
         );
         first_server.stop();
         kill_agent(&rig);
-        run.wait_shown("Your run stays open until");
+        // Said before the wrap-up's upload, which cannot finish with the server gone.
+        run.wait_shown(goalcup_cli::participant::UPLOADING_REST);
         assert!(
             matches!(run.child.try_wait(), Ok(None)),
             "the host is still sending its segment"
@@ -1296,14 +1349,14 @@ mod segments {
             .unwrap();
         assert_eq!(output.status.code(), Some(1), "{}", said(&output));
         assert!(
-            said(&output).contains("this run was not started on this machine"),
+            said(&output).contains(goalcup_cli::participant::NOT_STARTED_HERE),
             "{}",
             said(&output)
         );
         // No run at all.
         let output = rig.continue_command(&[], None).output().unwrap();
         assert_eq!(output.status.code(), Some(1), "{}", said(&output));
-        assert!(said(&output).contains("this run was not started on this machine"));
+        assert!(said(&output).contains(goalcup_cli::participant::NOT_STARTED_HERE));
         // A record without the run's credential (it was copied from another machine).
         let run_id = "r0123456789abcdef";
         goalcup_cli::run::write(
@@ -1325,7 +1378,7 @@ mod segments {
         .unwrap();
         let output = rig.continue_command(&[], Some(run_id)).output().unwrap();
         assert_eq!(output.status.code(), Some(1), "{}", said(&output));
-        assert!(said(&output).contains("this run was not started on this machine"));
+        assert!(said(&output).contains(goalcup_cli::participant::NOT_STARTED_HERE));
         assert!(server.calls().is_empty(), "{:?}", server.calls());
         assert!(!rig.harness_started());
         assert!(rig.run_dirs().is_empty());
@@ -1484,7 +1537,11 @@ mod segments {
         );
         assert!(state.ended);
         assert!(
-            !shown.contains("run `goalcup continue` to restart it"),
+            !shown.contains(goalcup_cli::participant::STILL_OPEN)
+                && !shown.contains(&format!(
+                    "{} {run_id}",
+                    goalcup_cli::participant::CONTINUE_HINT
+                )),
             "a replaced run is over, not open: {shown}"
         );
         assert!(
@@ -1574,7 +1631,7 @@ mod segments {
         first.type_line("more");
         first.wait_shown("tui: noted more");
         kill_agent(&rig);
-        first.wait_shown("Your run stays open until");
+        first.wait_shown(goalcup_cli::participant::UPLOADING_REST);
         assert!(
             matches!(first.child.try_wait(), Ok(None)),
             "the first host is still in its wrap-up"
@@ -1641,7 +1698,7 @@ mod segments {
             .unwrap();
         let said = String::from_utf8_lossy(&output.stderr).into_owned();
         assert_eq!(output.status.code(), Some(1), "{said}");
-        assert!(said.contains("chat mode in this terminal"), "{said}");
+        assert!(said.contains("foreground of a terminal"), "{said}");
         untouched(&rig);
 
         // A headless connector has no session to pick up.
@@ -1860,7 +1917,7 @@ mod segments {
         second.wait_shown("tui: ready");
         let shown = second.shown();
         assert!(
-            !shown.contains("is being sent in the background"),
+            !shown.contains(goalcup_cli::participant::EARLIER_PART_UPLOADING),
             "{shown}"
         );
         assert_eq!(server.heartbeats_of(&entry).len(), beats);
@@ -2127,6 +2184,16 @@ mod segments {
             "the host speaks once the agent is gone: {shown}"
         );
         assert!(!shown.contains("goalcup continue"), "{shown}");
+        // Below the details, the participant reads that time is up and that nothing is left to
+        // do; the `deadline:` line the scripts read is still there above it.
+        let up = shown
+            .rfind(goalcup_cli::participant::TIME_IS_UP)
+            .unwrap_or_else(|| panic!("{shown}"));
+        assert!(up > stop, "{shown}");
+        assert!(
+            shown[up..].contains(goalcup_cli::participant::NOTHING_MORE),
+            "{shown}"
+        );
 
         let run_id = the_run(&server);
         let entries = server.entry_ids(&run_id);

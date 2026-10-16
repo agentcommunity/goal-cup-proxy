@@ -296,8 +296,8 @@ fn started(
 /// branching on the number must not read a cancellation as an arming gate that closed.
 fn interrupted_refusal() -> CliError {
     CliError::Refused(
-        "`goalcup start` was interrupted before the run began, so the entry is being \
-         abandoned and nothing is left behind."
+        "Run the command again when you are ready. It was interrupted before the run began, so \
+         nothing is left behind."
             .to_string(),
     )
 }
@@ -306,8 +306,8 @@ fn interrupted_refusal() -> CliError {
 /// child is ended without running, and the entry is sealed with no launch.
 fn interrupted_before_launch() -> CliError {
     CliError::Refused(
-        "`goalcup start` was interrupted before the harness started, so nothing ran; the \
-         entry is being sealed without a launch."
+        "Run the command again when you are ready. It was interrupted before the harness \
+         started, so nothing ran; what was made is sealed without a launch."
             .to_string(),
     )
 }
@@ -547,15 +547,17 @@ fn file_identity(metadata: &std::fs::Metadata) -> FileIdentity {
 /// An exclusive `flock` on `<capture-homes>/<connector>.lock`, beside the home rather than in
 /// it, so the harness never sees it. The descriptor is close-on-exec (std's default), so the
 /// harness never inherits the lock either.
+///
+/// `name` is the harness's display name, for the refusal.
 #[cfg(unix)]
-fn lock_shared_home(config_home: &Path, connector: &str) -> Result<std::fs::File, CliError> {
+fn lock_shared_home(
+    config_home: &Path,
+    connector: &str,
+    name: &str,
+) -> Result<std::fs::File, CliError> {
     match try_lock_shared_home(config_home, connector)? {
         Ok(file) => Ok(file),
-        Err(_busy) => Err(CliError::Refused(format!(
-            "a {connector} run is already recording on this machine, and runs share one \
-             {connector} home, so they go one at a time. Wait for it to finish, or stop it \
-             and run `goalcup seal`. Nothing was created."
-        ))),
+        Err(_busy) => Err(CliError::Refused(crate::participant::home_busy(name))),
     }
 }
 
@@ -649,7 +651,10 @@ pub(crate) fn lock_home_for_continue(
         }
         Err(path) => {
             let holder = home_holder(&path).unwrap_or_else(|| run_id.to_string());
-            Err(CliError::Refused(still_recording(&holder, id)))
+            Err(CliError::Refused(crate::participant::still_recording(
+                connector.display_name(),
+                &holder,
+            )))
         }
     }
 }
@@ -757,15 +762,6 @@ fn ensure_shared_home(config_home: &Path) -> Result<SharedCaptureHome, CliError>
     // SAFETY: reading the effective uid has no preconditions or memory effects.
     let owner = unsafe { libc::geteuid() };
     SharedCaptureHome::load(config_home, owner)
-}
-
-/// The refusal of a `goalcup continue` that a run still recording stands in the way of.
-pub(crate) fn still_recording(holder: &str, connector: &str) -> String {
-    format!(
-        "run {holder} is still recording on this machine: its agent is running, and runs share \
-         one {connector} home, so they go one at a time. Wait for it to end, or close its \
-         terminal, and run `goalcup continue` again. Nothing was changed."
-    )
 }
 
 fn shared_home_refusal(alias: &Path, why: &str) -> CliError {
@@ -910,6 +906,13 @@ struct Forked<'a> {
     /// The counters of the earlier segments of a continued run, being closed and sent beside
     /// this one: the disk watch covers their entries too.
     drained: Vec<crate::upload::uploader::DrainHandles>,
+    /// The harness's display name, for what the participant reads.
+    harness_name: String,
+    /// The manifest's first-screen hint, shown just before a chat-mode harness opens.
+    first_screen: Option<String>,
+    /// A chat-mode run's ids and folders, held back from the launch block and written to its
+    /// `host.log` once it is open.
+    details: Vec<String>,
 }
 
 /// What a chat-mode run holds while the harness owns the terminal (D57): the terminal's signals
@@ -972,7 +975,15 @@ impl Forked<'_> {
 
     /// End a run whose harness never ran or was never told about: the entry is sealed within
     /// the one budget, and the run is marked unscanned. Returns the error that ended it.
-    fn unlaunched(self, error: CliError, out: &mut dyn std::io::Write) -> CliError {
+    fn unlaunched(mut self, error: CliError, out: &mut dyn std::io::Write) -> CliError {
+        // A chat-mode launch that failed before its log opened still says its ids and folders,
+        // for support.
+        if !self.details.is_empty() {
+            let _ = say(out, &crate::participant::details_heading(None));
+            for line in self.details.drain(..) {
+                let _ = say(out, &line);
+            }
+        }
         let keeps_reserve = self.keeps_reserve();
         // Whatever ended the launch, including a Ctrl-C, the seal below runs its full retries.
         crate::arming::close_window();
@@ -1266,12 +1277,8 @@ fn capture(
     // anything else is asked or made. A continued run has no goal file at all: only a chat-mode
     // harness can be continued.
     match &continuing {
-        None => goal_file_fits(
-            &c.loaded.manifest.id,
-            profile.interactive,
-            goal_file.is_some(),
-        )?,
-        Some(_) => continue_fits(&c.loaded.manifest.id, profile.interactive)?,
+        None => goal_file_fits(&c, profile.interactive, goal_file.is_some())?,
+        Some(_) => continue_fits(c.display_name(), profile.interactive)?,
     }
     // With a server: the prep checks, before any other work and before the participant is asked
     // for anything. A continued run was prepared when it started.
@@ -1307,7 +1314,7 @@ fn capture(
     // run in the browser. Nothing is created until they have. A continued run is approved
     // already: its credential is the one it was approved with.
     let upload = match (serving, &continuing) {
-        (Some(serving), _) => Some(serving.approved(opts, &c.loaded.manifest.id, out)?),
+        (Some(serving), _) => Some(serving.approved(opts, &c, out)?),
         (None, Some(continuing)) => Some(Uploading::continuing(continuing)?),
         (None, None) => None,
     };
@@ -1417,10 +1424,9 @@ pub(crate) fn continue_preflight(
     dev: bool,
     env: &BTreeMap<String, String>,
 ) -> Result<(), CliError> {
-    let id = &connector.loaded.manifest.id;
     let profile = &connector.loaded.manifest.capture;
-    continue_fits(id, profile.interactive)?;
-    holds_the_terminal(id, "Nothing was changed.")?;
+    continue_fits(connector.display_name(), profile.interactive)?;
+    holds_the_terminal(connector.display_name(), "Nothing was changed.")?;
     let pin = crate::preflight::harness_pin_gate(connector, dev);
     if pin.level == Level::Fail {
         return Err(CliError::Refused(format!(
@@ -1435,14 +1441,13 @@ pub(crate) fn continue_preflight(
 
 /// A continued run needs a chat-mode harness: a headless one was given its one goal and has no
 /// session to pick up.
-fn continue_fits(id: &str, interactive: bool) -> Result<(), CliError> {
+fn continue_fits(name: &str, interactive: bool) -> Result<(), CliError> {
     if interactive {
         return Ok(());
     }
-    Err(CliError::Refused(format!(
-        "`{id}` runs headless: it was given one goal and has no session to pick up, so its run \
-         cannot be continued. Nothing was changed."
-    )))
+    Err(CliError::Refused(
+        crate::participant::cannot_continue_headless(name),
+    ))
 }
 
 /// [`goal_file_fits`] for the connector `opts` names, loaded from `connectors`: what `main.rs`
@@ -1450,7 +1455,7 @@ fn continue_fits(id: &str, interactive: bool) -> Result<(), CliError> {
 pub fn goal_file_fits_connector(connectors: &Path, opts: &StartOptions) -> Result<(), CliError> {
     let c = crate::connector::load_harness(connectors, &opts.harness, opts.dev)?;
     goal_file_fits(
-        &c.loaded.manifest.id,
+        &c,
         c.loaded.manifest.capture.interactive,
         opts.goal_file.is_some(),
     )
@@ -1458,16 +1463,18 @@ pub fn goal_file_fits_connector(connectors: &Path, opts: &StartOptions) -> Resul
 
 /// A chat-mode connector (D57) with a goal file, or a headless one without, refused in one
 /// sentence that says what to type instead. Nothing is created before it.
-fn goal_file_fits(id: &str, interactive: bool, has_goal_file: bool) -> Result<(), CliError> {
+fn goal_file_fits(
+    c: &HarnessConnector,
+    interactive: bool,
+    has_goal_file: bool,
+) -> Result<(), CliError> {
+    let (name, id) = (c.display_name(), c.loaded.manifest.id.as_str());
     match (interactive, has_goal_file) {
-        (true, true) => Err(CliError::Refused(format!(
-            "`{id}` runs in chat mode: the harness opens in this terminal and you type the \
-             prompt there, so it takes no `--goal-file`. Run `goalcup start --harness {id}`. \
-             Nothing was created."
+        (true, true) => Err(CliError::Refused(crate::participant::takes_no_goal_file(
+            name, id,
         ))),
-        (false, false) => Err(CliError::Refused(format!(
-            "`{id}` runs headless and needs a goal file: `goalcup start --harness {id} \
-             --goal-file <file>`. Nothing was created."
+        (false, false) => Err(CliError::Refused(crate::participant::needs_goal_file(
+            name, id,
         ))),
         _ => Ok(()),
     }
@@ -1476,16 +1483,15 @@ fn goal_file_fits(id: &str, interactive: bool, has_goal_file: bool) -> Result<()
 /// A chat-mode harness reads and draws on this terminal: `goalcup start`'s input must be a
 /// terminal it holds in the foreground (or the harness's first read stops it with `SIGTTIN` and
 /// the run records a frozen harness), and its output must be a terminal too (a harness drawing
-/// into a file is not a chat). `then` says what was left behind.
-fn holds_the_terminal(id: &str, then: &str) -> Result<(), CliError> {
+/// into a file is not a chat). `name` is the harness's display name; `then` says what was left
+/// behind.
+fn holds_the_terminal(name: &str, then: &str) -> Result<(), CliError> {
     use goalcup_platform::terminal::{is_foreground, is_terminal};
     if is_foreground(libc::STDIN_FILENO) && is_terminal(libc::STDOUT_FILENO) {
         return Ok(());
     }
-    Err(CliError::Refused(format!(
-        "`{id}` runs in chat mode in this terminal, so `goalcup start` must run in the \
-         foreground of a terminal, with its input and its output that terminal: one of them is \
-         not, or the command was moved to the background. {then}"
+    Err(CliError::Refused(crate::participant::needs_terminal(
+        name, then,
     )))
 }
 
@@ -1496,17 +1502,6 @@ fn holds_the_terminal(id: &str, then: &str) -> Result<(), CliError> {
 pub const CHAT_MODE_GOAL: &str = "chat mode (D57): the harness was given no goal; the \
      participant typed the prompt in the harness's own terminal, and it is recorded in the \
      harness's session files.";
-
-/// The launch line of a chat-mode run: the last thing `goalcup start` prints before the harness
-/// owns the terminal.
-fn chat_launch_line(id: &str, log: &Path) -> String {
-    format!(
-        "Recording in chat mode: {id} starts now in this terminal. Type your prompt; after it, \
-         type only \"keep going\". Until {id} exits goalcup prints nothing here: its messages go \
-         to {}, and `goalcup status` shows the run.",
-        log.display()
-    )
-}
 
 /// Phase one: every refusal that comes before anything is created.
 fn prepare(
@@ -1559,7 +1554,7 @@ fn prepare(
         None => None,
     };
     if profile.interactive {
-        holds_the_terminal(&c.loaded.manifest.id, "Nothing was created.")?;
+        holds_the_terminal(c.display_name(), "Nothing was created.")?;
     }
     let executable = crate::launch::capture_executable(c, profile, env)?;
     // The provider hosts answer a TCP connect before anything is created (the proxy module's
@@ -1607,7 +1602,7 @@ fn claim_shared_home(cx: &CaptureRun<'_>, prep: &mut CapturePrep) -> Result<(), 
     // `goalcup continue` took the lock before it closed anything, and hands it over.
     let lock = match prep.shared_home_lock.take() {
         Some(held) => held,
-        None => lock_shared_home(&config_home, &c.loaded.manifest.id)?,
+        None => lock_shared_home(&config_home, &c.loaded.manifest.id, c.display_name())?,
     };
     let home = ensure_shared_home(&config_home)?;
     if is_run_home {
@@ -1662,12 +1657,16 @@ fn create_and_gate<'a>(
             _ => WorkspaceAt::InRunDir,
         },
     )?;
-    // The workspace of a run on a server is a fresh clone of the participant's repository.
-    if let Some(upload) = upload
-        && let Err(error) = upload.clone_workspace(&run.workspace)
-    {
-        let _ = run.remove();
-        return Err(error);
+    // The workspace of a run on a server is a fresh clone of the participant's repository. It
+    // can take a while, so it is said first.
+    if let Some(upload) = upload {
+        if matches!(upload.how, UploadHow::Fresh(_)) {
+            let _ = say(out, crate::participant::CLONING);
+        }
+        if let Err(error) = upload.clone_workspace(&run.workspace) {
+            let _ = run.remove();
+            return Err(error);
+        }
     }
     let config_home = match shared_home {
         Some(home) => home,
@@ -1795,6 +1794,9 @@ fn create_and_gate<'a>(
     };
     // The run's one reservation, taken here and released when the launch fails or the run ends.
     let mut reserve = None::<RunReserve>;
+    // The run's ids and folders: printed here for a headless run, and for a chat-mode run kept
+    // for its `host.log` and `goalcup status`, so the launch block holds only what to do.
+    let mut details = Vec::new();
     // Up to the spawn, a failure unmakes everything above.
     let launched = write_entry(cfg, &template).and_then(|()| {
         // The record first: a reservation always has a record to say whose it is.
@@ -1808,11 +1810,20 @@ fn create_and_gate<'a>(
             &opts.disk,
         )?);
         let bound = match (upload, opened.as_ref()) {
-            (Some(upload), Some(opened)) => Some(upload.bind(cfg, opened, &info, out)?),
+            (Some(upload), Some(opened)) => {
+                let (bound, line) = upload.bind(cfg, opened, &info)?;
+                details.push(line);
+                Some(bound)
+            }
             _ => None,
         };
-        say(out, &format!("entry {}", info.entry_id))?;
-        say(out, &format!("run directory: {}", run.dir.display()))?;
+        details.push(format!("entry {}", info.entry_id));
+        details.push(format!("run directory: {}", run.dir.display()));
+        if !profile.interactive {
+            for line in details.drain(..) {
+                say(out, &line)?;
+            }
+        }
         raise_open_file_limit(out)?;
         let proxied = Proxied::start(&info, profile, &run, roots)?;
         // A shared CA variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) gets the system's roots
@@ -1948,6 +1959,9 @@ fn create_and_gate<'a>(
         chat: None,
         home_lock: None,
         drained: Vec::new(),
+        harness_name: c.display_name().to_string(),
+        first_screen: c.first_screen().map(str::to_string),
+        details,
     };
     let gate = Gate {
         chat: profile.interactive,
@@ -2012,26 +2026,57 @@ fn register_and_release<'a>(
         // Moved to the background, or its terminal gone, while the run was approved and cloned:
         // the harness is never released onto a terminal it cannot read.
         if let Err(e) = holds_the_terminal(
-            &forked.template.connector_id,
-            "Nothing was launched, and the entry is sealed without a launch.",
+            &forked.harness_name,
+            "Nothing was launched, and what was made is sealed without a launch.",
         ) {
             gated.abort();
             return Err(forked.unlaunched(e, out));
         }
         let run_dir = crate::run::run_dir(forked.cfg, &forked.record.run_id);
-        let line = chat_launch_line(
-            &forked.template.connector_id,
-            &run_dir.join(crate::host_log::HOST_LOG_NAME),
-        );
-        let _ = say(out, &line).and_then(|()| {
-            out.flush().map_err(|source| CliError::Io {
-                path: "stdout".to_string(),
-                source,
-            })
+        // What the participant does now, and when the run ends: the last thing said here
+        // before the harness owns the terminal, ending with the ready mark.
+        let ends = forked.record.deadline_at.as_deref().map(|deadline_at| {
+            let count = forked
+                .upload
+                .as_ref()
+                .and_then(|start| start.local_deadline)
+                .map(|count| count.time_left());
+            crate::participant::end_words(
+                deadline_at,
+                crate::participant::seconds_left(
+                    count.as_ref(),
+                    Some(deadline_at),
+                    crate::run::now_unix(),
+                ),
+            )
         });
+        let block = crate::participant::launch_block(&crate::participant::Launch {
+            harness: &forked.harness_name,
+            mode: forked
+                .record
+                .server_url
+                .is_some()
+                .then(|| forked.record.mode()),
+            continued: forked.record.entries.len() > 1,
+            ends,
+            first_screen: forked.first_screen.as_deref(),
+        });
+        let _ = block
+            .iter()
+            .try_for_each(|line| say(out, line))
+            .and_then(|()| {
+                out.flush().map_err(|source| CliError::Io {
+                    path: "stdout".to_string(),
+                    source,
+                })
+            });
         match ChatTerminal::take(&run_dir) {
             Ok(terminal) => {
                 forked.chat = Some(terminal);
+                // The run's ids and folders, kept out of the launch block, go to its log.
+                for line in forked.details.drain(..) {
+                    crate::host_log::say_raw(&line);
+                }
                 panic_while_quiet_for_test();
             }
             Err(e) => {
@@ -2377,6 +2422,13 @@ fn run_harness<'a>(
     if let Some(chat) = forked.chat.as_mut() {
         chat.harness_exited();
     }
+    // The technical lines that follow (the stop, the seal, the upload) go under one heading; what
+    // the participant does next is said after them, last (`finish_and_scan`).
+    let _ = say(out, "");
+    let _ = say(
+        out,
+        &crate::participant::details_heading(forked.chat.as_ref().map(|chat| chat.quiet.path())),
+    );
     keeper.update(|state| {
         state.harness = crate::run::HarnessState::Exited {
             status: match &status {
@@ -2457,6 +2509,7 @@ fn finish_and_scan(
         record,
         home_lock,
         chat_mode,
+        harness_name,
         ..
     } = forked;
     // Only a chat-mode run says that it can be continued: only its harness can be.
@@ -2518,44 +2571,51 @@ fn finish_and_scan(
     if let Ok(status) = &status {
         let _ = say(out, &format!("harness exited: {}.", describe_exit(status)));
     }
-    if on_server {
-        let how = match &status {
-            Ok(status) => describe_exit(status),
-            Err(error) => error.to_string(),
-        };
-        // `goalcup continue` is advised only when it can restart the run; otherwise what is
-        // true is said.
-        match (run_goes_on, over, record.deadline_at.as_deref()) {
-            (true, _, Some(deadline_at)) => {
-                let _ = say(
-                    out,
-                    &format!(
-                        "The agent's process ended ({how}). Your run stays open until \
-                         {deadline_at}; run `goalcup continue` to restart it."
-                    ),
-                );
-            }
-            // Stopped for its end: the stop was said when it happened.
-            (false, true, _) if ended_by_stop => {}
-            (false, true, _) => {
-                let _ = say(
-                    out,
-                    &format!(
-                        "The agent's process ended ({how}). The run is over: its deadline has passed."
-                    ),
-                );
-            }
-            (false, false, Some(deadline_at)) => {
-                let _ = say(
-                    out,
-                    &format!(
-                        "The agent's process ended ({how}). This run cannot be continued: its \
-                         connector runs headless and was given one goal. It stays open on the \
-                         server until {deadline_at}, with nothing more recorded."
-                    ),
-                );
-            }
-            _ => {}
+    // What happened, and what to do now, said at the seal and before the wrap-up upload: from
+    // here `goalcup continue` works (the home and the run's reserve were let go above), so a
+    // participant need not wait up to the wrap-up's hour to read it. `goalcup continue` is advised
+    // only when it can restart the run; otherwise what is true is said.
+    let how = match &status {
+        Ok(status) => describe_exit(status),
+        Err(error) => error.to_string(),
+    };
+    let until = |deadline_at: &str| {
+        crate::participant::end_words(
+            deadline_at,
+            crate::participant::seconds_left(
+                snapshot.time_left.as_ref(),
+                Some(deadline_at),
+                crate::run::now_unix(),
+            ),
+        )
+    };
+    let stopped = snapshot.stopped.as_deref();
+    use crate::participant::Ending;
+    let ending = match (on_server, run_goes_on, over, record.deadline_at.as_deref()) {
+        (false, ..) => None,
+        (true, true, _, Some(deadline_at)) => Some(Ending::Open {
+            run_id: &record.run_id,
+            how: &how,
+            until: until(deadline_at),
+            disk_stop: stopped == Some(crate::run::watch::DISK_STOP_REASON),
+        }),
+        (true, false, true, _) if ended_by_stop => Some(match stopped {
+            Some(crate::upload::uploader::REPLACED_REASON) => Ending::Replaced,
+            Some(why) if crate::upload::uploader::refused_run(why) => Ending::Closed,
+            _ => Ending::TimeUp {
+                practice: record.practice,
+            },
+        }),
+        (true, false, true, _) => Some(Ending::Over { how: &how }),
+        (true, false, false, Some(deadline_at)) => Some(Ending::NoRestart {
+            how: &how,
+            until: until(deadline_at),
+        }),
+        _ => None,
+    };
+    if let Some(ending) = &ending {
+        for line in crate::participant::ending_block(&harness_name, ending) {
+            let _ = say(out, &line);
         }
     }
     // After the seal: the rest of the chain and the seal itself, within the finish budget.
@@ -2563,6 +2623,11 @@ fn finish_and_scan(
     let mut sent_whole = !on_server;
     let mut server_ended = false;
     let mut upload_report = None;
+    // The wrap-up can take minutes: the participant is told to wait for it.
+    if uploading.is_some() || !draining.is_empty() {
+        let _ = say(out, "");
+        let _ = say(out, crate::participant::UPLOADING_REST);
+    }
     if let Some(running) = uploading {
         let report = running.finish(wrap_up);
         // Everything this entry has is on the server, and the seal; and the server may say the
@@ -2604,6 +2669,12 @@ fn finish_and_scan(
             )
         };
         let _ = say(out, &line);
+    }
+    // Last: whether the rest is on the server, and what that leaves to do.
+    if let Some(ending) = &ending {
+        for line in crate::participant::after_upload(ending, sent_whole, server_ended) {
+            let _ = say(out, &line);
+        }
     }
     // The tick ends here, just before the reservation goes (or is left to the next start): it
     // hands the reservation back even if it died on the way.
@@ -3558,12 +3629,8 @@ fn refuse_goal_folder_inside_work_root(work_root: &Path, beside: &Path) -> Resul
         && beside != root
         && beside.starts_with(&root)
     {
-        return Err(CliError::Refused(format!(
-            "the run's folder would be made in {}, which is inside the work folder {}. Put the \
-             goal file in (or, in chat mode, run `goalcup start` from) the work folder itself or \
-             a folder outside it, so a run's folder is never inside a clone. Nothing was created.",
-            beside.display(),
-            work_root.display()
+        return Err(CliError::Refused(crate::participant::inside_work_folder(
+            work_root, &beside,
         )));
     }
     Ok(())
@@ -3615,19 +3682,35 @@ impl Serving {
     fn approved(
         self,
         opts: &StartOptions,
-        connector_id: &str,
+        connector: &HarnessConnector,
         out: &mut dyn std::io::Write,
     ) -> Result<Uploading, CliError> {
+        // Approving a competition run replaces the account's open one: said before the browser
+        // opens, when this computer has such a run on this server.
+        if opts.mode == crate::account::device::RunMode::Competition
+            && let Some(started) = open_competition_run(&self.cfg, &self.url)
+        {
+            say(
+                out,
+                &crate::participant::replaces_open_run(&crate::participant::local_clock(started)),
+            )?;
+        }
         let anonymous = crate::upload::http::ServerClient::anonymous(&self.url);
         let approved = crate::account::device::approve(
             &anonymous,
-            crate::account::device::Purpose::Run { mode: opts.mode },
-            connector_id,
+            crate::account::device::Purpose::Run {
+                mode: opts.mode,
+                harness: connector.display_name(),
+            },
+            &connector.loaded.manifest.id,
             &opts.open_url,
             out,
         )?;
         let credential = match approved {
-            crate::account::device::Approved::Run(credential) => credential,
+            crate::account::device::Approved::Run(credential) => {
+                say(out, crate::participant::APPROVED)?;
+                credential
+            }
             crate::account::device::Approved::Login { .. } => {
                 return Err(CliError::Internal(
                     "the server approved a login when a run was asked for. Nothing was \
@@ -3648,6 +3731,28 @@ impl Serving {
             })),
         })
     }
+}
+
+/// When the newest competition run this computer has open on `server` started (unix seconds), if
+/// it has one: a run opened there, not practice or test, and not over by its state's count.
+fn open_competition_run(cfg: &Path, server: &str) -> Option<u64> {
+    let now = crate::run::now_unix();
+    let same = |url: &str| url.trim_end_matches('/') == server.trim_end_matches('/');
+    crate::run::all(cfg)
+        .into_iter()
+        .filter(|run| {
+            !run.practice
+                && !run.test
+                && run.deadline_at.is_some()
+                && run.server_url.as_deref().is_some_and(same)
+                && !crate::run::is_over(
+                    run,
+                    crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id)).as_ref(),
+                    now,
+                )
+        })
+        .map(|run| run.started_at_unix)
+        .max()
 }
 
 /// A run's upload server, for `goalcup start` and `goalcup continue`: the client that carries
@@ -3874,10 +3979,7 @@ impl Uploading {
             run_over.set(true);
             // The server's word, kept: `goalcup status` and the reserve's release follow it now.
             crate::run::note_over(cfg, run_id);
-            CliError::Refused(format!(
-                "run {run_id} is over: its deadline has passed, or a newer run on your account \
-                 replaced it, so there is nothing left to continue. Nothing was started."
-            ))
+            CliError::Refused(crate::participant::run_over(run_id))
         };
         let opened_at = goalcup_protocol::clock::ContinuousOrigin::now();
         let mut previous = previous_entry_id.to_string();
@@ -3910,12 +4012,10 @@ impl Uploading {
                         return Err(over());
                     }
                     if followed || known_entries.contains(&latest.entry_id) {
-                        return Err(CliError::Refused(format!(
-                            "the server's latest entry of run {run_id} is {}, which is not the \
-                             entry this machine ended last ({previous}). The run was continued \
-                             from somewhere else, and a run stays on the machine that started \
-                             it. Nothing was started.",
-                            latest.entry_id
+                        return Err(CliError::Refused(crate::participant::continued_elsewhere(
+                            run_id,
+                            &latest.entry_id,
+                            &previous,
                         )));
                     }
                     followed = true;
@@ -3940,14 +4040,14 @@ impl Uploading {
     }
 
     /// The daemon made the entry under the server's id: fetch the start receipt over its
-    /// baseline, keep it, and say what the server stamped.
+    /// baseline and keep it. The line that says what the server stamped is returned, for the
+    /// caller to place: on the terminal for a headless run, in `host.log` for a chat-mode one.
     fn bind(
         &self,
         cfg: &Path,
         opened: &OpenedRun,
         info: &goalcup_protocol::control::CaptureWorkspaceInfo,
-        out: &mut dyn std::io::Write,
-    ) -> Result<(crate::upload::UploadRecord, String), CliError> {
+    ) -> Result<((crate::upload::UploadRecord, String), String), CliError> {
         if info.entry_id != opened.run.entry_id {
             return Err(CliError::Internal(format!(
                 "the daemon created entry {} for the server's entry {}",
@@ -3970,23 +4070,17 @@ impl Uploading {
             workspace: opened.request.workspace.clone(),
         };
         crate::upload::keep_run(cfg, &record, &receipt)?;
-        match opened.segment {
-            Some(segment) => say(
-                out,
-                &format!(
-                    "run {} continued on {}: segment {segment}, deadline {}",
-                    record.run_id, record.server_url, record.deadline_at
-                ),
-            )?,
-            None => say(
-                out,
-                &format!(
-                    "run {} opened on {}: official start {}, deadline {}",
-                    record.run_id, record.server_url, record.official_start, record.deadline_at
-                ),
-            )?,
-        }
-        Ok((record, receipt.public_key))
+        let line = match opened.segment {
+            Some(segment) => format!(
+                "run {} continued on {}: segment {segment}, deadline {}",
+                record.run_id, record.server_url, record.deadline_at
+            ),
+            None => format!(
+                "run {} opened on {}: official start {}, deadline {}",
+                record.run_id, record.server_url, record.official_start, record.deadline_at
+            ),
+        };
+        Ok(((record, receipt.public_key), line))
     }
 }
 
@@ -4222,14 +4316,16 @@ mod tests {
     fn a_second_run_on_a_shared_home_is_refused_until_the_first_ends() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("some-cli");
-        let first = lock_shared_home(&home, "some-cli").expect("the first run takes the home");
+        let first =
+            lock_shared_home(&home, "some-cli", "Some").expect("the first run takes the home");
 
-        let refused = lock_shared_home(&home, "some-cli").expect_err("a second run is refused");
+        let refused =
+            lock_shared_home(&home, "some-cli", "Some").expect_err("a second run is refused");
         let said = refused.to_string();
         assert!(matches!(refused, CliError::Refused(_)), "{said}");
         assert!(said.contains("already recording"), "{said}");
 
         drop(first);
-        lock_shared_home(&home, "some-cli").expect("free again once the first run ends");
+        lock_shared_home(&home, "some-cli", "Some").expect("free again once the first run ends");
     }
 }

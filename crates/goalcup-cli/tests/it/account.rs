@@ -767,7 +767,14 @@ fn login_stores_the_handle_and_no_secret() {
     assert_eq!(stored.account.as_deref(), Some("member-1"));
     assert_eq!(stored.url, server.url());
     let printed = String::from_utf8(out).unwrap();
-    assert!(printed.contains("Logged in as member-1"), "{printed}");
+    // The login says which approval it is, that it is once per computer, and what comes next.
+    assert!(printed.contains("member-1"), "{printed}");
+    assert!(printed.contains("once per computer"), "{printed}");
+    assert_eq!(
+        printed.lines().last(),
+        Some("Next: goalcup prep"),
+        "{printed}"
+    );
 
     let files = files_under(&cfg);
     assert_eq!(files.len(), 1, "{files:?}");
@@ -797,6 +804,7 @@ fn only_the_user_code_is_printed() {
         &ServerClient::anonymous(&server.url()),
         Purpose::Run {
             mode: RunMode::Practice,
+            harness: "Some Agent",
         },
         "codex-cli",
         &open,
@@ -816,6 +824,9 @@ fn only_the_user_code_is_printed() {
     assert!(opened[0].starts_with("https://"), "{opened:?}");
     assert!(opened[0].contains("?code="), "{opened:?}");
     assert!(printed.contains(&opened[0]), "{printed}");
+    // It says which run this approves, of which harness, and that a second approval is normal.
+    assert!(printed.contains("practice run of Some Agent"), "{printed}");
+    assert!(printed.contains("normal"), "{printed}");
 
     let asked = server.device_requests();
     assert_eq!(asked.len(), 1);
@@ -834,6 +845,7 @@ fn a_browser_that_will_not_open_is_asked_for_by_hand() {
         &ServerClient::anonymous(&server.url()),
         Purpose::Run {
             mode: RunMode::Competition,
+            harness: "Some Agent",
         },
         "codex-cli",
         &|_: &str| false,
@@ -841,7 +853,13 @@ fn a_browser_that_will_not_open_is_asked_for_by_hand() {
     )
     .unwrap();
     let printed = String::from_utf8(out).unwrap();
-    assert!(printed.contains("yourself"), "{printed}");
+    // No browser opened: one line names the address and the code, and none says it opened.
+    let line = printed
+        .lines()
+        .find(|line| line.contains("shows the code"))
+        .unwrap_or_else(|| panic!("{printed}"));
+    assert!(line.contains("?code="), "{printed}");
+    assert!(!printed.contains("browser opened"), "{printed}");
     assert_eq!(server.device_requests()[0].mode, "competition");
 }
 
@@ -861,7 +879,12 @@ fn an_expired_code_says_start_again_and_creates_nothing() {
     )
     .unwrap_err();
     assert!(matches!(refusal, CliError::Refused(_)), "{refusal:?}");
-    assert!(refusal.to_string().contains("start again"), "{refusal}");
+    assert!(
+        refusal
+            .to_string()
+            .starts_with(goalcup_cli::participant::RUN_AGAIN),
+        "{refusal}"
+    );
     assert!(files_under(&cfg).is_empty());
     assert!(!cfg.exists(), "a failed login created the config directory");
 }
@@ -945,6 +968,7 @@ fn a_run_approval_is_stored_and_loaded_back() {
         &anonymous,
         Purpose::Run {
             mode: RunMode::Practice,
+            harness: "Some Agent",
         },
         "codex-cli",
         &browser_opens,

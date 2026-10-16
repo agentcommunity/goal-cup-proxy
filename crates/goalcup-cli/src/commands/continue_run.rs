@@ -27,7 +27,7 @@
 use crate::CliError;
 use crate::commands::start::{
     Continuing, SleepLockFn, StartOptions, continue_preflight, continue_segment,
-    lock_home_for_continue, refuse_wsl, run_folder_for_continue, still_recording,
+    lock_home_for_continue, refuse_wsl, run_folder_for_continue,
 };
 use crate::connector::HarnessConnector;
 use crate::entries::{EntryRecord, read_entry};
@@ -67,24 +67,15 @@ pub fn resolve(
     cfg: &Path,
     run: Option<&str>,
 ) -> Result<(RunRecord, crate::account::credential::RunCredential), CliError> {
-    let not_here = || {
-        CliError::Refused(format!(
-            "this run was not started on this machine: there is no record of {} under {}, and a \
-             run can be continued only on the machine that started it. Nothing was changed.",
-            run.map_or_else(|| "any run".to_string(), |id| format!("run {id}")),
-            crate::run::runs_dir(cfg).display()
-        ))
-    };
+    let not_here = || CliError::Refused(crate::participant::not_started_here(run));
     let record = match run {
         Some(id) => crate::run::read_if_any(cfg, id)?,
         None => crate::run::newest(cfg)?,
     }
     .ok_or_else(not_here)?;
     if record.server_url.is_none() {
-        return Err(CliError::Refused(format!(
-            "run {} was recorded on this machine only (it was never opened on the Goal Cup \
-             server), so it has no segments to continue. Start a new run with `goalcup start`.",
-            record.run_id
+        return Err(CliError::Refused(crate::participant::local_only(
+            &record.run_id,
         )));
     }
     let run_dir = crate::run::run_dir(cfg, &record.run_id);
@@ -119,8 +110,8 @@ struct Earlier {
 /// The refusal for an earlier segment that cannot be closed: before anything is sent.
 fn unsealable(entry_id: &str, why: &str) -> CliError {
     CliError::Refused(format!(
-        "the earlier segment {entry_id} could not be sealed ({why}); run `goalcup seal \
-         {entry_id}`, then `goalcup continue`. Nothing was sent."
+        "Run goalcup seal {entry_id}, then goalcup continue. The earlier part of the run (entry \
+         {entry_id}) could not be sealed ({why}). Nothing was sent."
     ))
 }
 
@@ -138,7 +129,8 @@ pub fn continue_with(
     let server_url = record.server_url.clone().unwrap_or_default();
     let previous = record.entries.last().ok_or_else(|| {
         CliError::Refused(format!(
-            "run {run_id} has no entry on this machine to follow. Nothing was changed."
+            "Start a new run with goalcup start. Run {run_id} has nothing recorded on this \
+             computer to go on from. Nothing was changed."
         ))
     })?;
     let previous_entry = read_entry(cfg, &previous.entry_id)?;
@@ -167,9 +159,8 @@ pub fn continue_with(
     // has not got that far, or a run that is not what it looks like: refused here, because past
     // `POST continue` the server's new segment cannot be taken back.
     if held_by_another(&reserve_path(&artifact_root(cfg), &run_id)) {
-        return Err(CliError::Refused(format!(
-            "the earlier segment's host still holds the run's reservation; try again in a \
-             minute. Nothing was changed. (run {run_id})"
+        return Err(CliError::Refused(crate::participant::last_part_closing(
+            &run_id,
         )));
     }
 
@@ -183,8 +174,8 @@ pub fn continue_with(
         let Some(upload) = crate::upload::read_record(cfg, entry_id)? else {
             if last {
                 return Err(CliError::Refused(format!(
-                    "entry {entry_id} of run {run_id} has no upload record on this machine. \
-                     Nothing was changed."
+                    "Start a new run with goalcup start. The last part of run {run_id} (entry \
+                     {entry_id}) has no upload record on this computer. Nothing was changed."
                 )));
             }
             continue;
@@ -204,9 +195,9 @@ pub fn continue_with(
                         |state| state.harness == HarnessState::Running && !state.ended,
                     );
                 if running {
-                    return Err(CliError::Refused(still_recording(
+                    return Err(CliError::Refused(crate::participant::still_recording(
+                        connector.display_name(),
                         &run_id,
-                        &record.connector_id,
                     )));
                 }
                 continue;
@@ -254,13 +245,7 @@ pub fn continue_with(
         ) {
             Ok(started) => {
                 draining.push(started);
-                say(
-                    out,
-                    &format!(
-                        "run {run_id}: the earlier segment (entry {entry_id}) is being sent in \
-                         the background."
-                    ),
-                )?;
+                say(out, crate::participant::EARLIER_PART_UPLOADING)?;
             }
             // Another goalcup began to send it since it was looked at: it needs nothing here.
             Err(error) => say(out, &format!("entry {entry_id}: {error}"))?,
