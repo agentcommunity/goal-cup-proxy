@@ -727,7 +727,18 @@ fn finish_drains_once_and_never_appends_after_terminal() {
     // The seal while traffic flows: one drain deadline, then the harness is ended.
     let (sealed, said, took) = v.seal(&entry);
     assert!(sealed.success(), "{said}");
-    assert!(said.contains("Confirmed"), "{said}");
+    // The daemon's own line says which path chose the outcome (pids, counts, the refusal).
+    let daemon_log = std::fs::read_to_string(v.logs.join("daemon.err")).unwrap_or_default();
+    assert!(
+        said.contains("Confirmed"),
+        "{said}\ndaemon.err:\n{daemon_log}"
+    );
+    assert!(
+        daemon_log.contains(&format!(
+            "goalcup-daemon: termination of {entry}: Confirmed"
+        )),
+        "{daemon_log}"
+    );
     assert!(took < Duration::from_secs(25), "the seal took {took:?}");
     let at_finish = v.chain(&entry);
     // The launcher sees its harness gone and finishes too: the daemon answers the committed
