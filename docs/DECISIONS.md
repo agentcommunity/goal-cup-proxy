@@ -445,19 +445,20 @@ leg. A verifier built before this entry flags a trace with more than 128 produce
 
 16 Oct 2026. The tracer hands a harness one secret of its own: the per-run proxy credential in
 `HTTPS_PROXY` (H8). It never sees, forwards or stores a participant's provider key (D61); the
-harness keeps that in its own home. The launcher makes the credential before the capture create
-and passes it to the daemon in `run_secrets` (control API v9), in memory only: never a file, a
-log, argv, the registry or the chain. Both redactors add every form of it (`goalcup_protocol::run_secret::encoded_forms`: the
-value, every byte percent-encoded or `\u`-escaped in either case, base64 at all three alignments
-in both alphabets) as literal rules after the shared and connector rules, compiled once per run.
-A form matches with one line break between any two characters: LF or CR LF, raw or escaped with
-one or two backslashes, because `base64` wraps at 76 columns and a tool's output reaches a model
-inside a JSON string, or JSON inside a JSON string. Each literal is a block (it absorbs the claims
-it overlaps), and the stream holds it from its first byte, so a split across pushes is one value
-and a cut releases none of it; the longest wrapped form (10 746 bytes) fits `MAX_HELD_BYTES`. The
-marker is `<redacted:run_secret>`. The pattern rule `proxy_credential` stays for a reader without
-the secret (`spikes/redact.py`). There is no upload-side check: the daemon is the one place a body
-is redacted, and the secret is loopback-only and dead once the run ends.
+harness keeps that in its own home. The launcher makes the credential before the capture create and
+passes it to the daemon in `run_secrets` (control API v9), in memory only: never a file, a log,
+argv, the registry or the chain. Both redactors add every form of it
+(`goalcup_protocol::run_secret::encoded_forms`: the value, every byte percent-encoded or
+`\u`-escaped in either case, base64 at all three alignments in both alphabets) as literal rules
+after the shared and connector rules, compiled once per run. A form matches with one line break
+between any two characters: LF or CR LF, raw or escaped with one or two backslashes, because
+`base64` wraps at 76 columns and a tool's output reaches a model inside a JSON string, or JSON
+inside a JSON string. Each literal is a block (it absorbs the claims it overlaps), and the stream
+holds it from its first byte, so a split across pushes is one value and a cut releases none of it;
+the longest wrapped form (10 746 bytes) fits `MAX_HELD_BYTES`. The marker is
+`<redacted:run_secret>`. The pattern rule `proxy_credential` stays for a reader without the secret
+(`spikes/redact.py`). There is no upload-side check: the daemon is the one place a body is redacted,
+and the secret is loopback-only and dead once the run ends.
 
 ## D61. Hermes runs in chat mode from its own home; the tracer forwards no key.
 

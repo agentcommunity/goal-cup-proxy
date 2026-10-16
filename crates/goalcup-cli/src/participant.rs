@@ -348,8 +348,9 @@ pub enum Opens {
     First,
     /// A `goalcup continue`: the harness picks up its last session.
     LastSession,
-    /// A `goalcup continue` of a run with no session yet (the harness closed before the first
-    /// message): the harness opens the normal way, with a new session.
+    /// A `goalcup continue` of a run where no saved session was found (the harness closed before
+    /// the first message, or its home is made fresh for each part): the harness opens the normal
+    /// way, with a new session.
     NewSession,
 }
 
@@ -381,8 +382,8 @@ pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
             format!("{h} opens now in this terminal and picks up its last session.")
         }
         Opens::NewSession => format!(
-            "{h} opens now in this terminal with a new session: this run has no earlier \
-             session to pick up."
+            "{h} opens now in this terminal with a new session: no saved session was found \
+             for this run."
         ),
     });
     // What the harness shows first comes before what to type: the participant meets it first.
@@ -1305,8 +1306,8 @@ mod tests {
         );
         assert!(
             text.contains(
-                "Some Agent opens now in this terminal with a new session: this run has no \
-                 earlier session to pick up."
+                "Some Agent opens now in this terminal with a new session: no saved session \
+                 was found for this run."
             ),
             "{text}"
         );

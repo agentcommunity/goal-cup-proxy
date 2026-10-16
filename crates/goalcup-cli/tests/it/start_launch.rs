@@ -849,7 +849,7 @@ mod chat {
         let rig = Rig::chat();
         let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
         rig.prepare_for(&server.url());
-        let new_session = "with a new session: this run has no earlier session to pick up.";
+        let new_session = "with a new session: no saved session was found for this run.";
 
         // The first part: the harness opens and closes, and no message is sent.
         let mut first = rig.start_on_pty(&[DISK, BEATING]);

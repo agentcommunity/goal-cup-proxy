@@ -705,58 +705,86 @@ pub fn build_resumed_launch(
 /// written at or after `since_unix`, the run's start, when the store reads from the run's start
 /// (D57), else any file it holds. A harness that closed before the first message (a setup that
 /// ends the program, a trust question answered "no") wrote none, so `goalcup continue` opens it
-/// the normal way instead of asking it to resume a session that does not exist. A connector
-/// with no native store, or a store whose root this cannot place, cannot tell: it is said to
-/// have one, and is resumed as before.
+/// the normal way instead of asking it to resume a session that is not there.
+///
+/// `Ok(false)` only when every store's folder is missing or holds no matching file. A connector
+/// with no native store, or a store whose root this cannot place, cannot tell: `Ok(true)`, and
+/// it is resumed as before. A store that cannot be read (`Err`, with why) cannot tell either;
+/// the caller resumes and logs the reason.
 pub fn has_native_session(
     profile: &CaptureSpec,
     run_home: &Path,
     config_home: &Path,
     since_unix: u64,
-) -> bool {
+) -> Result<bool, String> {
     if profile.native.is_empty() {
-        return true;
+        return Ok(true);
     }
     let since = std::time::UNIX_EPOCH + std::time::Duration::from_secs(since_unix);
-    profile.native.iter().any(|native| {
+    let mut unreadable = None;
+    for native in &profile.native {
         let root = if let Some(rest) = native.root.strip_prefix("{config_home}") {
             config_home.join(rest.trim_start_matches('/'))
         } else if let Some(rest) = native.root.strip_prefix("{run_home}") {
             run_home.join(rest.trim_start_matches('/'))
         } else {
-            return true;
+            return Ok(true);
         };
         // A `{id}` in the pattern is the session's own id: any session counts.
         let pattern = native.pattern.replace("{id}", "*");
         let parts: Vec<&str> = pattern.split('/').collect();
         let floor = native.since_run_start.then_some(since);
-        holds_session_file(&root, &parts, floor)
-    })
+        match holds_session_file(&root, &parts, floor) {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(why) => unreadable = Some(why),
+        }
+    }
+    unreadable.map_or(Ok(false), Err)
 }
 
 /// A file under `dir` whose path matches `parts` one component each, never through a link,
-/// written at or after `floor` when there is one.
-fn holds_session_file(dir: &Path, parts: &[&str], floor: Option<std::time::SystemTime>) -> bool {
+/// written at or after `floor` when there is one. A missing folder, or a matching name that is
+/// gone before it is looked at, holds none; any other error is returned, naming the path.
+fn holds_session_file(
+    dir: &Path,
+    parts: &[&str],
+    floor: Option<std::time::SystemTime>,
+) -> Result<bool, String> {
     let Some((first, rest)) = parts.split_first() else {
-        return false;
+        return Ok(false);
     };
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
+    let unreadable = |path: &Path, e: std::io::Error| format!("{}: {e}", path.display());
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(unreadable(dir, e)),
     };
-    entries.flatten().any(|entry| {
+    for entry in entries {
+        let entry = entry.map_err(|e| unreadable(dir, e))?;
         if !goalcup_protocol::harness::glob_matches(&entry.file_name().to_string_lossy(), first) {
-            return false;
+            continue;
         }
-        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
-            return false;
+        let path = entry.path();
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(unreadable(&path, e)),
         };
-        if rest.is_empty() {
+        let found = if rest.is_empty() {
             meta.is_file()
-                && floor.is_none_or(|floor| meta.modified().is_ok_and(|written| written >= floor))
+                && match floor {
+                    None => true,
+                    Some(floor) => meta.modified().map_err(|e| unreadable(&path, e))? >= floor,
+                }
         } else {
-            meta.is_dir() && holds_session_file(&entry.path(), rest, floor)
+            meta.is_dir() && holds_session_file(&path, rest, floor)?
+        };
+        if found {
+            return Ok(true);
         }
-    })
+    }
+    Ok(false)
 }
 
 /// What [`build_launch`] needs from the caller: a [`CaptureLaunch`], or the same without the
@@ -2244,9 +2272,11 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     /// A session is a native-store file written since the run started, found without following
-    /// a link; a connector with no native store cannot tell, so it is said to have one.
+    /// a link. Only a missing folder or no matching file is "no session": a store that cannot be
+    /// read, or a connector with no native store, cannot tell, and is said to have one.
     #[test]
     fn a_session_is_a_native_file_written_since_the_run_started() {
+        use std::os::unix::fs::PermissionsExt;
         let manifest = HarnessManifest::from_toml_str(include_str!(
             "../tests/fixtures/connectors/chat-shared-home/harness.toml"
         ))
@@ -2256,17 +2286,21 @@ mod tests {
         let (run_home, config_home) = (t.path().join("run"), t.path().join("config"));
         let since = 2_000_000_000;
         let has = || has_native_session(profile, &run_home, &config_home, since);
-        assert!(!has(), "no store folder yet");
+        assert_eq!(has(), Ok(false), "no store folder yet");
 
         let project = config_home.join("projects/a");
         std::fs::create_dir_all(&project).unwrap();
         let file = std::fs::File::create(project.join("s.jsonl")).unwrap();
         file.set_modified(UNIX_EPOCH + Duration::from_secs(since - 100))
             .unwrap();
-        assert!(!has(), "a session from before the run is not this run's");
+        assert_eq!(
+            has(),
+            Ok(false),
+            "a session from before the run is not this run's"
+        );
         file.set_modified(UNIX_EPOCH + Duration::from_secs(since))
             .unwrap();
-        assert!(has(), "written at the run's start");
+        assert_eq!(has(), Ok(true), "written at the run's start");
 
         // A file the pattern does not name, or one behind a link, is not a session.
         std::fs::remove_file(project.join("s.jsonl")).unwrap();
@@ -2275,10 +2309,21 @@ mod tests {
         std::fs::create_dir_all(&elsewhere).unwrap();
         std::fs::write(elsewhere.join("s.jsonl"), b"x").unwrap();
         std::os::unix::fs::symlink(&elsewhere, config_home.join("projects/b")).unwrap();
-        assert!(!has());
+        assert_eq!(has(), Ok(false));
+
+        // A store folder that cannot be read is not "no session": it says why.
+        let store = config_home.join("projects");
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = has();
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let why = unreadable.expect_err("an unreadable store cannot tell");
+        assert!(why.contains(&store.display().to_string()), "{why}");
 
         let mut none = profile.clone();
         none.native.clear();
-        assert!(has_native_session(&none, &run_home, &config_home, since));
+        assert_eq!(
+            has_native_session(&none, &run_home, &config_home, since),
+            Ok(true)
+        );
     }
 }

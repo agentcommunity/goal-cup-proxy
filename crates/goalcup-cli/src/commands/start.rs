@@ -1688,19 +1688,28 @@ fn create_and_gate<'a>(
     };
     // A continued run picks up the harness's last session only when the run has one; one whose
     // harness closed before the first message opens the normal way, and the launch block says so.
+    // A store that cannot be read cannot tell: the harness is resumed, and the run's log says why.
+    let mut session_note = None;
     let opens = match cx.continuing {
         None => crate::participant::Opens::First,
-        Some(_)
-            if crate::launch::has_native_session(
+        Some(_) => {
+            match crate::launch::has_native_session(
                 profile,
                 &run.home,
                 &config_home,
                 started_at_unix,
-            ) =>
-        {
-            crate::participant::Opens::LastSession
+            ) {
+                Ok(true) => crate::participant::Opens::LastSession,
+                Ok(false) => crate::participant::Opens::NewSession,
+                Err(why) => {
+                    session_note = Some(format!(
+                        "the harness's session store could not be read ({why}), so it is \
+                         asked to pick up its last session"
+                    ));
+                    crate::participant::Opens::LastSession
+                }
+            }
         }
-        Some(_) => crate::participant::Opens::NewSession,
     };
     // With a server, the run is opened there before the daemon creates anything: the
     // server issues the entry id every record carries.
@@ -1803,7 +1812,7 @@ fn create_and_gate<'a>(
     let mut reserve = None::<RunReserve>;
     // The run's ids and folders: printed here for a headless run, and for a chat-mode run kept
     // for its `host.log` and `goalcup status`, so the launch block holds only what to do.
-    let mut details = Vec::new();
+    let mut details: Vec<String> = session_note.into_iter().collect();
     // Up to the spawn, a failure unmakes everything above.
     let launched = write_entry(cfg, &template).and_then(|()| {
         // The record first: a reservation always has a record to say whose it is.
