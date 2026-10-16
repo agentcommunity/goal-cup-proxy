@@ -2289,8 +2289,8 @@ const PEM_PIECES: &[&str] = &[
 
 /// The differential: for every input of a PEM-heavy corpus, what a block leaves redacted is a
 /// superset of what first-wins alone redacts (`apply_first_wins_only`, the real selection with
-/// the blocks not merged), every byte of every block match's string pieces is redacted (all of
-/// it when it holds no quote; `string_pieces`), and the spans are
+/// the blocks not merged), every byte of every block match's pieces is redacted (all of it when
+/// it holds no quote; `pem_matches`, `block_pieces`), and the spans are
 /// sorted and never overlap. Includes the reviewer's two examples, a key with no END, and
 /// blocks meeting a token on either side.
 #[test]
@@ -2333,9 +2333,16 @@ fn a_block_only_ever_adds_redaction_to_first_wins() {
             "{text:?}: spans are sorted and disjoint"
         );
         let mut has_block = false;
-        for m in block_re.find_iter(input) {
+        for (start, end, bounded) in goalcup_daemon::redact::pem_matches(&block_re, input) {
             has_block = true;
-            for (a, b) in goalcup_daemon::redact::string_pieces(input, m.start(), m.end()) {
+            let cut = bounded.then_some(start + goalcup_daemon::redact::PEM_SLICE);
+            for (a, b) in goalcup_daemon::redact::block_pieces(
+                input,
+                start,
+                end,
+                goalcup_daemon::redact::Quotes::START,
+                cut,
+            ) {
                 assert!(
                     now[a..b].iter().all(|c| *c),
                     "{text:?}: a piece of a block match is not wholly redacted"

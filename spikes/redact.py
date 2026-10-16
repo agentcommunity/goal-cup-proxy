@@ -17,7 +17,8 @@ the BEGIN line; without one, the block is those characters. (The daemon counts t
 bytes; for a body with non-ASCII text this script's block is longer, never shorter.) A block is
 then cut at every unescaped `"` and only the parts inside JSON strings are redacted, starting
 inside: a key streamed as many JSON string deltas loses every delta's text, and the JSON
-between the strings stays. And the last rule, masked_key, is soft: after that pass, any byte of a masked-key shape (matched on the
+between the strings stays. A block with no END ends at the first later BEGIN inside it, where
+the next block starts, and is cut once 8,192 characters after its BEGIN. And the last rule, masked_key, is soft: after that pass, any byte of a masked-key shape (matched on the
 ORIGINAL text) that is still raw is replaced too, as its own "residual" marker. The daemon
 (crates/goalcup-daemon/src/redact.rs) reaches the same result by a different route; the shared
 rules, and the few places the two differ, are pinned by crates/goalcup-daemon/tests/it/redaction.rs.
@@ -138,9 +139,47 @@ BASE64_RUN = re.compile(r"[A-Za-z0-9+/=]{16,}")
 
 
 def holds_a_base64_run(text):
-    """A run of sixteen or more base64 characters with a letter in it (the daemon's
-    `holds_a_base64_run`)."""
-    return any(re.search(r"[A-Za-z]", m.group(0)) for m in BASE64_RUN.finditer(text))
+    """A run of sixteen or more base64 characters with a letter in it other than e or E, so a
+    number-shaped run (an exponent float) does not count (the daemon's `holds_a_base64_run`)."""
+    return any(re.search(r"[A-DF-Za-df-z]", m.group(0)) for m in BASE64_RUN.finditer(text))
+
+
+BEGIN_LINE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+END_AT_END = re.compile(r"-----END [A-Z ]*PRIVATE KEY-----\Z")
+PEM_SLICE = 8192
+
+
+def pem_matches(rx, text):
+    """Each private_key match as (start, end, bounded). A match with no END line (bounded, a lone
+    BEGIN's window) ends at the first later BEGIN inside it, and the search goes on from there.
+    The daemon's `pem_matches` in redact.rs."""
+    out, at = [], 0
+    while True:
+        m = rx.search(text, at)
+        if not m:
+            return out
+        start, end = m.span()
+        bounded = not END_AT_END.search(m.group(0))
+        nxt = end
+        if bounded:
+            b = BEGIN_LINE.search(text, start + 1)
+            if b and b.start() < end:
+                end = nxt = b.start()
+        out.append((start, end, bounded))
+        at = max(nxt, start + 1)
+
+
+def block_pieces(text, start, end, bounded):
+    """string_pieces, and for a bounded block the piece that holds start + PEM_SLICE in two
+    there (the daemon's `block_pieces`)."""
+    pieces = string_pieces(text, start, end)
+    cut = start + PEM_SLICE
+    if bounded:
+        for i, (a, b) in enumerate(pieces):
+            if a < cut < b:
+                pieces[i:i + 1] = [[a, cut], [cut, b]]
+                break
+    return pieces
 
 
 def block_spans(text):
@@ -151,8 +190,8 @@ def block_spans(text):
         piece
         for kind, rx in PATTERNS
         if kind == BLOCK_KIND
-        for m in rx.finditer(text)
-        for piece in string_pieces(text, m.start(), m.end())
+        for start, end, bounded in pem_matches(rx, text)
+        for piece in block_pieces(text, start, end, bounded)
     ]
     if not blocks:
         return []

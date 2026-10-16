@@ -1514,19 +1514,6 @@ fn jwt_step(seg: &mut u8, count: &mut u8, u: Unit) -> bool {
     }
 }
 
-/// Whether a PEM walk, already stepped with this unit, is in its body with this unit inside
-/// its bounded window (body bytes `0..PEM_BODY_MAX`; a BEGIN starts on a one-byte `-`, so the
-/// unit's body offset is `n - 1`). Then no BEGIN starts here: the whole-record regex's match from
-/// the earlier BEGIN covers this byte whatever follows (the lazy arm ends at an END after it, or
-/// the bounded arm takes it), and `find_iter` resumes after that match. Holding a second BEGIN
-/// the regex never reports would keep the first block undecided past the hold and fail the
-/// stream closed (H-20 re-review). Asked only on a `-`, the one unit a BEGIN starts on.
-fn in_a_pem_window(candidates: &[Candidate]) -> bool {
-    candidates
-        .iter()
-        .any(|c| matches!(c.walk, Walk::Pem(Pem::Body { n, .. }) if n <= PEM_BODY_MAX))
-}
-
 /// One live candidate: a literal, where it started, and its recognizer.
 #[derive(Debug, Clone)]
 struct Candidate {
@@ -1774,7 +1761,28 @@ struct Redacting {
     live: Vec<Candidate>,
     /// Too many live candidates to follow: then only the end of the stream ends it.
     saturated: bool,
+    /// The end of a block released in part ([`OpenBlock`]): the redaction does not end before.
+    until: u64,
     first: CaptureTime,
+}
+
+/// A lone BEGIN's window the stream released in part (H-20 re-review 2). Its BEGIN has left
+/// the hold, so the regexes no longer find it; its rest, from `held_start` to `end`, is claimed
+/// from the quote state there, as the whole-record policy claims it (`super::block_pieces`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OpenBlock {
+    /// Where its `BEGIN` was: the cut point is `origin + super::PEM_SLICE`.
+    origin: u64,
+    end: u64,
+    /// The quote state at `held_start`.
+    quotes: super::Quotes,
+}
+
+/// The shared literal of the PEM block rule.
+fn pem_literal() -> Option<usize> {
+    SHAPES
+        .iter()
+        .position(|shape| matches!(shape.form, Form::PrivateKey))
 }
 
 /// The bounded redaction state of one stream: held raw bytes (`held_start ..
@@ -1790,6 +1798,7 @@ struct Scanner {
     prev_local: bool,
     candidates: Vec<Candidate>,
     redacting: Option<Redacting>,
+    open_block: Option<OpenBlock>,
     marks: VecDeque<(u64, CaptureTime)>,
 }
 
@@ -1804,6 +1813,7 @@ impl Scanner {
             prev_local: false,
             candidates: Vec::new(),
             redacting: None,
+            open_block: None,
             marks: VecDeque::new(),
         }
     }
@@ -1905,18 +1915,14 @@ impl Scanner {
             included |= step != Step::Dead;
             step == Step::Live
         });
-        if is(u, b'\n') && !included && !red.saturated {
+        if is(u, b'\n') && !included && !red.saturated && off >= red.until {
             // No rule's match that began inside the range can include this terminator,
             // and none can begin with it: what follows starts a fresh window.
             self.end_redaction(off, out);
             return false;
         }
-        let in_block = is(u, b'-') && in_a_pem_window(&red.live);
         for lit in 0..policy.len() {
             if let Some(walk) = Candidate::spawn(policy, lit, u, self.prev_local) {
-                if in_block && matches!(walk, Walk::Pem(_)) {
-                    continue;
-                }
                 let mut c = Candidate {
                     lit,
                     start: off,
@@ -1940,12 +1946,8 @@ impl Scanner {
     fn step_unit(&mut self, policy: &Policy, u: Unit, off: u64, len: usize) {
         self.candidates
             .retain_mut(|c| c.step(policy, u, off, len) == Step::Live);
-        let in_block = is(u, b'-') && in_a_pem_window(&self.candidates);
         for lit in 0..policy.len() {
             if let Some(walk) = Candidate::spawn(policy, lit, u, self.prev_local) {
-                if in_block && matches!(walk, Walk::Pem(_)) {
-                    continue;
-                }
                 let mut c = Candidate {
                     lit,
                     start: off,
@@ -1998,49 +2000,138 @@ impl Scanner {
         self.trim_marks(upto);
     }
 
+    /// Every match of every rule in `held[..n]`, and the pieces of a block released in part
+    /// ([`OpenBlock`]) there; the index where those pieces begin.
+    fn found<'p>(&self, policy: &'p Policy, n: usize) -> (Vec<Claim<'p>>, usize) {
+        let mut found = candidates(policy.rules(), &self.held[..n]);
+        let first = found.len();
+        let (Some(ob), Some(lit)) = (self.open_block, pem_literal()) else {
+            return (found, first);
+        };
+        let Some(kind) = policy.rules().nth(lit).map(|p| p.kind.as_str()) else {
+            return (found, first);
+        };
+        let base = self.held_start;
+        let view = super::match_view(&self.held[..n]);
+        let whole = (self.open_end(ob) - base) as usize;
+        let cut = (ob.origin + super::PEM_SLICE as u64)
+            .checked_sub(base)
+            .map(|c| c as usize);
+        for (start, end) in super::block_pieces(&view, 0, whole.min(n), ob.quotes, cut) {
+            found.push(Claim {
+                priority: lit,
+                start,
+                end,
+                whole_start: 0,
+                whole_end: whole,
+                kind,
+                quote: false,
+                soft: false,
+                block: true,
+                bounded: true,
+            });
+        }
+        (found, first)
+    }
+
+    /// Where a block released in part ends: its own end, or a `BEGIN` held inside it, where the
+    /// next block starts (`super::pem_matches`).
+    fn open_end(&self, ob: OpenBlock) -> u64 {
+        let base = self.held_start;
+        let to = ((ob.end - base) as usize).min(self.held.len());
+        super::first_begin(&super::match_view(&self.held), 0, to)
+            .map_or(ob.end, |at| base + at as u64)
+    }
+
     /// Release every byte before the earliest live candidate: a clean cut, where no match
     /// of any rule can cross whatever arrives next.
+    ///
+    /// A lone BEGIN's window that is decided (its walk has ended, or it is a block already
+    /// released in part) does not hold the cut back to its start. The cut moves only to the
+    /// start of the piece it falls in, so no claim is split, and the rest of the window is
+    /// carried as an [`OpenBlock`]. Otherwise a run that starts late in the window and crosses
+    /// its end would hold the whole window past the hold and fail the stream closed.
     fn release(&mut self, now: &CaptureTime, out: &mut Vec<Piece>) {
         if self.held.is_empty() {
             return;
         }
         let policy = Arc::clone(&self.policy);
         let end = self.decoded_end;
+        let base = self.held_start;
         let mut cut = self.candidates.iter().map(|c| c.start).min().unwrap_or(end);
-        if cut == self.held_start {
+        if cut == base {
             return;
         }
-        if cut < end {
-            // A complete match that straddles the cut may still lose its claim to a
-            // higher-priority candidate that completes later: hold it too.
-            let found = candidates(policy.rules(), &self.held);
-            loop {
-                let mut moved = false;
-                for m in &found {
-                    let (s, t) = (
-                        self.held_start + m.whole_start as u64,
-                        self.held_start + m.whole_end as u64,
-                    );
-                    if s < cut && cut < t {
-                        cut = s;
+        // A complete match that straddles the cut may still lose its claim to a
+        // higher-priority candidate that completes later: hold it too.
+        let (found, open_from) = self.found(&policy, self.held.len());
+        let pem = pem_literal();
+        let decided = |i: usize, m: &Claim<'_>| {
+            m.block
+                && m.bounded
+                && (i >= open_from
+                    || !self
+                        .candidates
+                        .iter()
+                        .any(|c| Some(c.lit) == pem && c.start == base + m.whole_start as u64))
+        };
+        let mut carried: Option<usize>;
+        loop {
+            let mut moved = false;
+            carried = None;
+            for (i, m) in found.iter().enumerate() {
+                let (s, t) = (base + m.whole_start as u64, base + m.whole_end as u64);
+                if !(s < cut && cut < t) {
+                    continue;
+                }
+                if decided(i, m) {
+                    carried = Some(i);
+                    let inside = found.iter().find(|p| {
+                        p.whole_start == m.whole_start
+                            && base + (p.start as u64) < cut
+                            && cut < base + (p.end as u64)
+                    });
+                    if let Some(piece) = inside {
+                        cut = base + piece.start as u64;
                         moved = true;
                     }
-                }
-                if !moved {
-                    break;
+                } else {
+                    cut = s;
+                    moved = true;
                 }
             }
-            if cut == self.held_start {
-                return;
+            if !moved {
+                break;
             }
         }
-        let n = (cut - self.held_start) as usize;
-        let base = self.held_start;
-        let spans = select(candidates(policy.rules(), &self.held[..n]))
+        if cut == base {
+            return;
+        }
+        let n = (cut - base) as usize;
+        // The decided window the cut falls in goes on as an open block.
+        // The decided window the cut falls in goes on as the open block, with the quote state
+        // at the cut. An open block the cut does not fall in has ended.
+        let carry = carried.map(|i| (i, &found[i])).map(|(i, m)| {
+            let view = super::match_view(&self.held[..n]);
+            let (origin, quotes) = match self.open_block.filter(|_| i >= open_from) {
+                Some(ob) => (ob.origin, ob.quotes.after(&view)),
+                None => (
+                    base + m.whole_start as u64,
+                    super::Quotes::START.after(&view[m.whole_start..]),
+                ),
+            };
+            OpenBlock {
+                origin,
+                end: base + m.whole_end as u64,
+                quotes,
+            }
+        });
+        let spans = select(self.found(&policy, n).0)
             .iter()
             .map(|m| Span::of(m, base))
             .collect();
         self.emit(n, spans, now, out);
+        self.open_block = carry;
     }
 
     /// The hold is full and some candidate is still undecided: fail closed. The bytes
@@ -2049,9 +2140,10 @@ impl Scanner {
     fn fail_closed(&mut self, now: &CaptureTime, out: &mut Vec<Piece>) {
         let base = self.held_start;
         let policy = Arc::clone(&self.policy);
+        let until = self.open_block.map_or(0, |ob| self.open_end(ob));
         let Some((mut start, lit)) = self.candidates.iter().map(|c| (c.start, c.lit)).min() else {
             let n = self.held.len();
-            let spans = select(candidates(policy.rules(), &self.held[..n]))
+            let spans = select(self.found(&policy, n).0)
                 .iter()
                 .map(|m| Span::of(m, base))
                 .collect();
@@ -2060,7 +2152,7 @@ impl Scanner {
         // Every match in the hold, not only this window's claims: a match the window
         // cannot see yet (a PEM block whose END is still to come) can change which ones the
         // whole-record policy keeps. A match crossing the start moves it back.
-        let raw = candidates(policy.rules(), &self.held);
+        let (raw, _) = self.found(&policy, self.held.len());
         loop {
             let mut moved = false;
             for m in &raw {
@@ -2080,11 +2172,13 @@ impl Scanner {
             .map(|m| Span::of(m, base))
             .collect();
         self.emit((start - base) as usize, before, now, out);
+        self.open_block = None;
         self.redacting = Some(Redacting {
             start,
             lit,
             live: std::mem::take(&mut self.candidates),
             saturated: false,
+            until,
             first: self.time_at(start, now),
         });
         self.held.clear();
@@ -2105,6 +2199,7 @@ impl Scanner {
         self.held_start = end;
         self.decoded_end = end;
         self.candidates.clear();
+        self.open_block = None;
         self.prev_local = false;
         self.trim_marks(end);
     }
@@ -2122,13 +2217,14 @@ impl Scanner {
         self.decoded_end = end;
         let base = self.held_start;
         let policy = Arc::clone(&self.policy);
-        let spans = select(candidates(policy.rules(), &self.held))
+        let n = self.held.len();
+        let spans = select(self.found(&policy, n).0)
             .iter()
             .map(|m| Span::of(m, base))
             .collect();
-        let n = self.held.len();
         self.emit(n, spans, now, out);
         self.candidates.clear();
+        self.open_block = None;
     }
 
     /// A discontinuity: nothing after it can complete a held candidate. Held bytes that
@@ -2143,7 +2239,8 @@ impl Scanner {
         self.decoded_end = end;
         let base = self.held_start;
         let policy = Arc::clone(&self.policy);
-        let found = select(candidates(policy.rules(), &self.held));
+        let found = select(self.found(&policy, self.held.len()).0);
+        self.open_block = None;
         let mut pick: Option<(u64, usize)> = None;
         for c in &self.candidates {
             if let Some(x) = c.secret_from(&policy, tail)
@@ -2171,6 +2268,7 @@ impl Scanner {
     /// Nothing is emitted.
     fn discard(&mut self) {
         self.redacting = None;
+        self.open_block = None;
         self.held.clear();
         self.tail.clear();
         self.candidates.clear();

@@ -236,7 +236,9 @@ const SHARED: &[(&str, &str)] = &[
     // line is split across two deltas (the second arm takes the bound). `candidates` then cuts
     // the range at each unescaped quote and keeps only the string interiors (H-20): every
     // fragment of the key goes, and the JSON between the strings stays, so a lone BEGIN (an
-    // agent writing a PEM parser, `grep` output) no longer breaks the records after it.
+    // agent writing a PEM parser, `grep` output) no longer breaks the records after it. A
+    // match of the second arm ends at the first later BEGIN inside it, where the next match
+    // starts (`pem_matches`), and is cut once at `PEM_SLICE`.
     (
         "private_key",
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,15872}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,15872})",
@@ -673,6 +675,10 @@ pub(crate) struct Claim<'a> {
     /// A block claim absorbs the hard claims it contains or touches; see [`select`] and
     /// [`BLOCK_KIND`].
     pub(crate) block: bool,
+    /// A piece of a PEM block that ended at its bound, or at a later BEGIN, with no END: a lone
+    /// BEGIN's window ([`pem_matches`]). Only such a block is cut at [`PEM_SLICE`], and only it
+    /// may be released by the stream in parts.
+    pub(crate) bounded: bool,
 }
 
 /// Every match of every rule in `set`, in the rule's span form ([`Pattern::span_group`]).
@@ -692,6 +698,26 @@ pub(crate) fn candidates<'a>(
     let bytes: &[u8] = &view;
     let mut found_all = Vec::new();
     for (priority, p) in set.enumerate() {
+        if p.block && p.kind == BLOCK_KIND {
+            for (start, end, bounded) in pem_matches(&p.re, bytes) {
+                let cut = bounded.then_some(start + PEM_SLICE);
+                for (from, to) in block_pieces(bytes, start, end, Quotes::START, cut) {
+                    found_all.push(Claim {
+                        priority,
+                        start: from,
+                        end: to,
+                        whole_start: start,
+                        whole_end: end,
+                        kind: p.kind.as_str(),
+                        quote: false,
+                        soft: false,
+                        block: true,
+                        bounded,
+                    });
+                }
+            }
+            continue;
+        }
         // `find_iter` on the common path: a pattern that declares no capture group has
         // nothing to ask `captures_iter` for, and that engine is the slower one.
         // `or_else(|| c.get(0))` covers an optional group that did not participate in
@@ -717,22 +743,6 @@ pub(crate) fn candidates<'a>(
                 end = char_end(bytes, end);
                 whole_end = whole_end.max(end);
             }
-            if p.block && p.kind == BLOCK_KIND {
-                for (start, end) in string_pieces(bytes, start, end) {
-                    found_all.push(Claim {
-                        priority,
-                        start,
-                        end,
-                        whole_start,
-                        whole_end,
-                        kind: p.kind.as_str(),
-                        quote: false,
-                        soft: false,
-                        block: true,
-                    });
-                }
-                continue;
-            }
             let quote = p.span_group != 0 && !span_is_a_json_string_interior(bytes, start, end);
             found_all.push(Claim {
                 priority,
@@ -744,10 +754,113 @@ pub(crate) fn candidates<'a>(
                 quote,
                 soft: p.soft,
                 block: p.block,
+                bounded: false,
             });
         }
     }
     found_all
+}
+
+/// Where a lone BEGIN's window is cut in two: [`PEM_SLICE`] bytes after the BEGIN. The stream
+/// may release the first part and hold the rest when a candidate starts in the second, so a run
+/// that crosses the window's end (a Codex `encrypted_content` value) no longer holds the whole
+/// window past the 16 KiB hold (H-20 re-review 2). Half the hold: after the cut the stream holds
+/// at most the second part and a candidate's own reach.
+pub const PEM_SLICE: usize = 8 * 1024;
+
+/// The `BEGIN` line of the `private_key` rule, alone, and its `END` line at the end of a match.
+/// `None` only if a fixed literal failed to compile, which a test rules out; this crate raises
+/// no panic in `src/`.
+fn pem_lines() -> Option<&'static (regex::bytes::Regex, regex::bytes::Regex)> {
+    static LINES: OnceLock<Option<(regex::bytes::Regex, regex::bytes::Regex)>> = OnceLock::new();
+    LINES
+        .get_or_init(|| {
+            let begin = regex::bytes::Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").ok()?;
+            let end = regex::bytes::Regex::new(r"-----END [A-Z ]*PRIVATE KEY-----\z").ok()?;
+            Some((begin, end))
+        })
+        .as_ref()
+}
+
+/// The first `BEGIN` line that starts in `from..to` of `bytes` (it may end after `to`).
+pub(crate) fn first_begin(bytes: &[u8], from: usize, to: usize) -> Option<usize> {
+    pem_lines()?
+        .0
+        .find_at(bytes, from)
+        .map(|m| m.start())
+        .filter(|&at| at < to)
+}
+
+/// Every `private_key` match in `bytes` as `(start, end, bounded)`, left to right. A match
+/// that ends on an `END` line is as the regex finds it. One that does not (`bounded`, a lone
+/// BEGIN's window) ends at the first later `BEGIN` that starts inside it, and the search goes on
+/// from that `BEGIN`: so a real key whose `BEGIN` falls late in a lone mention's window gets its
+/// own whole window, instead of losing its tail past the first window's bound (H-20 re-review
+/// 2). The end of a match the bound ends is taken to the end of a character it cuts.
+pub fn pem_matches(re: &regex::bytes::Regex, bytes: &[u8]) -> Vec<(usize, usize, bool)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Some(m) = re.find_at(bytes, at) {
+        let start = m.start();
+        let bounded = pem_lines().is_none_or(|lines| !lines.1.is_match(m.as_bytes()));
+        let (end, next) = match first_begin(bytes, start + 1, m.end()).filter(|_| bounded) {
+            Some(begin) => (begin, begin),
+            None => {
+                let end = char_end(bytes, m.end());
+                (end, end.max(start + 1))
+            }
+        };
+        out.push((start, end, bounded));
+        at = next;
+    }
+    out
+}
+
+/// The quote state at a point of a block: inside a string or not, and whether an odd run of
+/// backslashes ends just before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Quotes {
+    pub inside: bool,
+    pub escaped: bool,
+}
+
+impl Quotes {
+    /// At a block's `BEGIN`: text, so inside a string.
+    pub const START: Quotes = Quotes {
+        inside: true,
+        escaped: false,
+    };
+
+    /// This state after `bytes`.
+    pub fn after(mut self, bytes: &[u8]) -> Quotes {
+        for &b in bytes {
+            if b == b'"' && !self.escaped {
+                self.inside = !self.inside;
+            }
+            self.escaped = b == b'\\' && !self.escaped;
+        }
+        self
+    }
+}
+
+/// The claimed pieces of a PEM block's `from..end`, its quote state at `from` being `quotes`:
+/// [`string_pieces`], then, when `cut` (a bounded block's `BEGIN` plus [`PEM_SLICE`]) falls
+/// strictly inside a piece, that piece in two.
+pub fn block_pieces(
+    bytes: &[u8],
+    from: usize,
+    end: usize,
+    quotes: Quotes,
+    cut: Option<usize>,
+) -> Vec<(usize, usize)> {
+    let mut pieces = string_pieces_from(bytes, from, end, quotes);
+    if let Some(cut) = cut
+        && let Some(i) = pieces.iter().position(|&(a, b)| a < cut && cut < b)
+    {
+        let (a, b) = pieces[i];
+        pieces.splice(i..=i, [(a, cut), (cut, b)]);
+    }
+    pieces
 }
 
 /// The parts of a PEM block's range `start..end` that are redacted: the range is cut at every
@@ -760,10 +873,21 @@ pub(crate) fn candidates<'a>(
 ///
 /// A piece outside the strings is a claim too when it holds a key-shaped run
 /// ([`holds_a_base64_run`]). JSON and SSE framing never does: event names break at `_` and
-/// `.`, and a number has no letter. Raw text does, when the quotes do not pair as JSON (a note
+/// `.`, and a number has no letter but an exponent's `e`, which the run test leaves out. Raw text does, when the quotes do not pair as JSON (a note
 /// that mentions a BEGIN, then quotes once, then prints a whole key), so there the key's body is
 /// still redacted, as it was before the cut (H-20 re-review).
 pub fn string_pieces(bytes: &[u8], start: usize, end: usize) -> Vec<(usize, usize)> {
+    string_pieces_from(bytes, start, end, Quotes::START)
+}
+
+/// [`string_pieces`] from a point whose quote state is `quotes`: the stream's resume point in a
+/// block it released in part.
+pub fn string_pieces_from(
+    bytes: &[u8],
+    start: usize,
+    end: usize,
+    quotes: Quotes,
+) -> Vec<(usize, usize)> {
     let mut pieces = Vec::new();
     let mut push = |from: usize, mut to: usize| {
         while to > from && bytes[to - 1] == b'\\' {
@@ -773,7 +897,7 @@ pub fn string_pieces(bytes: &[u8], start: usize, end: usize) -> Vec<(usize, usiz
             pieces.push((from, to));
         }
     };
-    let (mut inside, mut from, mut slashes) = (true, start, 0usize);
+    let (mut inside, mut from, mut slashes) = (quotes.inside, start, usize::from(quotes.escaped));
     for (at, &b) in bytes.iter().enumerate().take(end).skip(start) {
         if b == b'"' && slashes % 2 == 0 {
             if inside || holds_a_base64_run(&bytes[from..at]) {
@@ -791,13 +915,15 @@ pub fn string_pieces(bytes: &[u8], start: usize, end: usize) -> Vec<(usize, usiz
 }
 
 /// Whether `bytes` holds a run of sixteen or more base64 characters (`[A-Za-z0-9+/=]`) with at
-/// least one letter in it: a line of a key's body, and nothing JSON framing holds.
+/// least one letter in it other than `e` or `E`: a line of a key's body. A run of digits, `e`,
+/// `E` and `+` is number-shaped (an exponent float such as `2.4691357802469136e-05` in logprobs
+/// holds the run `4691357802469136e`) and does not count.
 pub fn holds_a_base64_run(bytes: &[u8]) -> bool {
     let (mut run, mut letter) = (0usize, false);
     for &b in bytes {
         if b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=') {
             run += 1;
-            letter |= b.is_ascii_alphabetic();
+            letter |= b.is_ascii_alphabetic() && !matches!(b, b'e' | b'E');
             if run >= 16 && letter {
                 return true;
             }
@@ -1052,6 +1178,7 @@ mod tests {
             quote: false,
             soft: false,
             block,
+            bounded: false,
         }
     }
 

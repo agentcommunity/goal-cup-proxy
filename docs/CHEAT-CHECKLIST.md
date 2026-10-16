@@ -94,10 +94,13 @@ consistent, not that the participant followed the rules.
   `AIza`, `glpat-`) lies more than 16 KiB before the run's end. Codex rollouts persist
   `encrypted_content` on reasoning items, so such runs are common. Re-measure on a long chain.
 - **Redaction residuals (H-20).** A PEM block runs from its `BEGIN` line to the first `END` line
-  that starts within 15 872 bytes, else it is those bytes. In it, the parts inside JSON strings are
-  redacted, and so is a part outside them that holds a run of 16 or more base64 characters with a
-  letter (a key in raw text whose quotes do not pair). So a key streamed as many SSE text deltas
-  loses every delta's text and the JSON between the deltas stays. What still leaks:
+  that starts within 15 872 bytes. Without one, it is those bytes, but it ends at the first later
+  `BEGIN` inside it, and that `BEGIN` opens its own block: a real key read 12-16 KB after a
+  `grep` hit for `BEGIN PRIVATE KEY` is redacted whole. In a block, the parts inside JSON strings
+  are redacted, and so is a part outside them that holds a run of 16 or more base64 characters
+  with a letter other than `e`/`E` (a key in raw text whose quotes do not pair). So a key
+  streamed as many SSE text deltas loses every delta's text and the JSON between the deltas
+  stays. What still leaks:
   - **A `BEGIN` line split across two strings (H-29).** It is no `BEGIN` to the rule, and nothing
     of the key is redacted. Model output arrives token by token, so this is the common case for a
     key the model prints. Measured on 216 synthetic SSE streams (Anthropic, chat-completions and
@@ -108,15 +111,21 @@ consistent, not that the participant followed the rules.
   - **A body longer than the bound** leaks its tail. Every printed form of an RSA-16384 key
     measured fits (15 504 bytes at most, escaped twice with `\u2192`); escaped three times that
     way (16 284 bytes) it does not.
+  - **Non-PEM key dumps in raw text after an odd quote.** In raw text whose quotes do not pair,
+    only base64-shaped runs are redacted after a lone `BEGIN`: a colon-hex or decimal dump of
+    key material there (`openssl -text` output) is kept. Without an earlier `BEGIN`, no rule
+    redacts such a dump at all.
   - **Over-redaction, not a leak.** A lone `BEGIN` (code that parses PEM, `grep` output) empties
-    every string, keys included, for the next 15 872 bytes. A lone `BEGIN` followed within the
-    bound by another key's `END` is one block across records, cut the same way. A second `BEGIN`
-    inside a block is part of it, in the stream as in the whole-record policy. The records inside
-    a block still parse, with three exceptions, each of which redacts more: framing outside the
-    strings that holds a base64 run with a letter (an SSE `id:` line carrying a ULID, say) is
-    replaced whole; a connector rule's claim that spans quotes (a JSON object value) merges with
-    the block and takes the quotes between; and a `BEGIN` line longer than about 450 bytes (no real
-    label is) makes the stream fail closed to the end of that record, or of a one-line body.
+    every string, keys included, for the next 15 872 bytes, in two markers (the window is cut
+    once, 8 192 bytes after its `BEGIN`, so the stream can release its first part). A lone
+    `BEGIN` followed within the bound by another key's `END` is one block across records, cut
+    the same way. The records inside a block still parse, with three exceptions, each of which
+    redacts more: framing outside the strings that holds a base64 run with a letter (an SSE
+    `id:` line carrying a ULID; a number, exponent floats included, does not count) is replaced
+    whole; a connector rule's claim that spans quotes (a JSON object value) merges with
+    the block and takes the quotes between; and a `BEGIN` line longer than about 450 bytes (no
+    real label is) makes the stream fail closed to the end of that record, or of a one-line body.
+    A run that crosses the end of a block (a Codex `encrypted_content` value) no longer does.
 
   An invalid UTF-8 byte reads as `0` when the rules match, so it no longer ends a key.
 - **The proxy credential reaches the provider, not the trace (H8).** The harness's
