@@ -7,7 +7,9 @@
 //! `GOALCUP_TEST_PREP` rather than read from the machine the test runs on, GitHub is a local
 //! fake, and a run on a terminal is a pseudo-terminal of the test's own.
 
-use crate::common::m2_cli_support::{CHAT_HOME_ID, CHAT_ID, Launcher, OnPty, Rig};
+use crate::common::m2_cli_support::{
+    CHAT_CONFIGURE_ID, CHAT_HOME_ID, CHAT_ID, Launcher, OnPty, Rig,
+};
 use crate::common::upload_server::{ServerOptions, UploadServer};
 use goalcup_cli::account::github::GithubSetup;
 use goalcup_cli::prep_file::{PrepFile, prep_path, read_prep_lenient};
@@ -1245,6 +1247,150 @@ fn prep_logs_in_to_the_run_home_a_later_start_uses() {
     start.type_line("/exit");
     let status = start.wait();
     assert!(status.success(), "{status:?}\n{}", start.shown());
+}
+
+// ------------------------------------------------------------------ the connector's settings (D61)
+
+/// The test doors a chat start on the stand-in server needs: a disk it accepts, and an upload
+/// cadence a test can wait out.
+const CHAT_START_ENV: [(&str, &str); 2] = [
+    ("GOALCUP_TEST_DISK", "4194304,0,50"),
+    (
+        "GOALCUP_TEST_UPLOAD_POLICY",
+        "200,25,100,400,10000,268435456,3000,100",
+    ),
+];
+
+/// A connector's `capture.configure` command is run in its home after the participant's own
+/// setup, and again before each launch (D61): with the harness's environment and no proxy, no
+/// terminal for its input, and its output in `prep.log` and the run's `host.log`, never on the
+/// screen.
+#[test]
+fn prep_and_start_put_the_connectors_settings_into_its_home() {
+    let rig = Rig::chat_with_configure();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    all_but_the_harness(&rig);
+    let home = rig.cfg.join("capture-homes").join(CHAT_CONFIGURE_ID);
+
+    let mut on_pty = OnPty::spawn(
+        prep_command(
+            &rig,
+            &["--harness", CHAT_CONFIGURE_ID, "--repo", REPO],
+            &facts,
+        ),
+        None,
+    );
+    press_enter(&on_pty);
+    on_pty.wait_shown("tui: ready");
+    // Not yet: the setting follows the participant's own setup.
+    assert!(rig.harness_file("tui.configure").is_none());
+    on_pty.type_line("/exit");
+    on_pty.wait();
+    let shown = on_pty.shown();
+    assert!(shown.contains("[ok] harness_home:"), "{shown}");
+    assert!(prep_file(&rig.cfg).home_ready, "{shown}");
+    assert_eq!(
+        std::fs::read_to_string(home.join("settings.txt")).unwrap(),
+        "snapshots=on\n",
+        "{shown}"
+    );
+    assert_eq!(
+        rig.harness_file("tui.configure").unwrap(),
+        "configure snapshots on not-a-tty\n"
+    );
+    assert!(!shown.contains("tui: configured"), "{shown}");
+    let log = std::fs::read_to_string(rig.cfg.join("prep.log")).unwrap();
+    assert!(log.contains("tui: configured snapshots"), "{log}");
+    // The harness's own environment, and nothing of a recording launch.
+    let env = rig.harness_file("tui.configure.env").unwrap();
+    assert!(
+        env.lines()
+            .any(|l| l == format!("CODEX_HOME={}", home.display())),
+        "{env}"
+    );
+    for key in ["HTTPS_PROXY", "https_proxy", "CODEX_CA_CERTIFICATE"] {
+        assert!(
+            !env.lines().any(|l| l.starts_with(&format!("{key}="))),
+            "{key}:\n{env}"
+        );
+    }
+
+    // `goalcup start` runs it again before the harness opens, and logs it in the run's log.
+    let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+    rig.prepare_for(&server.url());
+    let mut start = OnPty::spawn(
+        rig.chat_command_for(CHAT_CONFIGURE_ID, &CHAT_START_ENV, Launcher::Direct),
+        None,
+    );
+    start.wait_shown("tui: ready");
+    assert_eq!(
+        std::fs::read_to_string(home.join("settings.txt")).unwrap(),
+        "snapshots=on\nsnapshots=on\n"
+    );
+    start.type_line("/exit");
+    let status = start.wait();
+    let shown = start.shown();
+    assert!(status.success(), "{status:?}\n{shown}");
+    assert!(!shown.contains("tui: configured"), "{shown}");
+    let record = goalcup_cli::run::newest(&rig.cfg).unwrap().unwrap();
+    let host_log = std::fs::read_to_string(
+        goalcup_cli::run::run_dir(&rig.cfg, &record.run_id).join("host.log"),
+    )
+    .unwrap();
+    assert!(host_log.contains("tui: configured snapshots"), "{host_log}");
+}
+
+/// A `capture.configure` command that fails leaves the home not ready, and `goalcup start`
+/// launches nothing: the harness would otherwise run without the setting its capture needs.
+#[test]
+fn a_failing_configure_command_keeps_the_home_not_ready_and_launches_nothing() {
+    let rig = Rig::chat_with_configure();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    all_but_the_harness(&rig);
+    std::fs::write(rig.out.join("tui.configure.fail"), "").unwrap();
+
+    let mut on_pty = OnPty::spawn(
+        prep_command(
+            &rig,
+            &["--harness", CHAT_CONFIGURE_ID, "--repo", REPO],
+            &facts,
+        ),
+        None,
+    );
+    press_enter(&on_pty);
+    on_pty.wait_shown("tui: ready");
+    on_pty.type_line("/exit");
+    on_pty.wait();
+    let shown = on_pty.shown();
+    let step = line(&shown, "harness_home");
+    assert!(
+        step.starts_with("[fail] harness_home:")
+            && step.contains("could not be set up for recording")
+            && step.contains("configure snapshots on")
+            && step.contains("exit code 3")
+            && step.contains("prep.log"),
+        "{shown}"
+    );
+    assert!(!prep_file(&rig.cfg).home_ready, "{shown}");
+
+    let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+    rig.prepare_for(&server.url());
+    let mut start = OnPty::spawn(
+        rig.chat_command_for(CHAT_CONFIGURE_ID, &CHAT_START_ENV, Launcher::Direct),
+        None,
+    );
+    let status = start.wait();
+    let shown = start.shown();
+    assert!(!status.success(), "{shown}");
+    assert!(
+        shown.contains("could not be set up for recording")
+            && shown.contains("Nothing was launched")
+            && shown.contains(&format!("goalcup prep --harness {CHAT_CONFIGURE_ID}")),
+        "{shown}"
+    );
+    assert!(!shown.contains("tui: ready"), "{shown}");
 }
 
 // ------------------------------------------------------------------ a home someone else holds

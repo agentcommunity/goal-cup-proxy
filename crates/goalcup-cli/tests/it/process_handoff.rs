@@ -87,6 +87,9 @@ fn this_crate_never_terminates_anything() {
     // no goal and no key, and leads a process group of its own. When it outlives its timeout
     // the launcher SIGKILLs that group while its own unreaped leader still holds the group id,
     // and reaps the leader, so it cannot reach a recycled pid or anything the daemon terminates.
+    // The connector's `capture.configure` commands (D61) are ended by the same helper
+    // (`wait_or_end_group`), for the same reasons: each runs the harness's own program once
+    // before the launch, unregistered, with no goal and no key, in a group of its own.
     //
     // The `start.rs` exemption stays ONE file: a second file that signals a launched harness
     // would have to be exempted here as well, by name.

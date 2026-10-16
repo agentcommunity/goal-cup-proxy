@@ -228,27 +228,70 @@ impl Doors for Here {
             env,
             WorkspaceAt::InRunDir,
         )?;
-        let opened = crate::config::create_private_dir(&run.workspace).and_then(|()| {
-            crate::launch::prep_launch(
+        let launch = crate::launch::PrepLaunch {
+            executable: &executable,
+            run_home: &run.home,
+            // With a kept run `HOME` the harness has no home variable: its state is under
+            // `HOME`, and the config home is the same folder.
+            config_home: if home.is_run_home {
+                &run.home
+            } else {
+                &home.dir
+            },
+            parent_env: env,
+        };
+        let opened = crate::config::create_private_dir(&run.workspace)
+            .and_then(|()| crate::launch::prep_launch(connector, &launch, &run.workspace));
+        // After the participant's own setup, the settings the capture needs (D61). A home they
+        // did not reach is not ready, so it is not configured either.
+        let configured = match &opened {
+            Ok(status) if status.success() => Some(configure_after_setup(
                 connector,
-                &crate::launch::PrepLaunch {
-                    executable: &executable,
-                    run_home: &run.home,
-                    // With a kept run `HOME` the harness has no home variable: its state is
-                    // under `HOME`, and the config home is the same folder.
-                    config_home: if home.is_run_home {
-                        &run.home
-                    } else {
-                        &home.dir
-                    },
-                    parent_env: env,
-                },
+                cfg,
+                &launch,
                 &run.workspace,
-            )
-        });
+            )),
+            _ => None,
+        };
         let _ = run.remove();
-        Ok(opened?.success())
+        let status = opened?;
+        if let Some(configured) = configured {
+            configured?;
+        }
+        Ok(status.success())
     }
+}
+
+/// Where `goalcup prep` appends the output of the connector's `capture.configure` commands, in
+/// the configuration folder: nothing they print reaches the terminal.
+pub const PREP_LOG_NAME: &str = "prep.log";
+
+/// The connector's `capture.configure` commands (D61), run in the home the participant has just
+/// set up, with their output appended to `<cfg>/prep.log`.
+fn configure_after_setup(
+    connector: &HarnessConnector,
+    cfg: &Path,
+    launch: &crate::launch::PrepLaunch<'_>,
+    workspace: &Path,
+) -> Result<(), CliError> {
+    if connector.loaded.manifest.capture.configure.is_empty() {
+        return Ok(());
+    }
+    let log_path = cfg.join(PREP_LOG_NAME);
+    let log = crate::host_log::open_append(&log_path).map_err(|source| CliError::Io {
+        path: log_path.display().to_string(),
+        source,
+    })?;
+    crate::launch::configure_harness(
+        connector,
+        launch,
+        workspace,
+        &log,
+        &format!(
+            "What it printed is in {}. Run `goalcup prep` again.",
+            log_path.display()
+        ),
+    )
 }
 
 /// `goalcup prep`, with everything it reads handed in. Returns the exit code: 0 when all six

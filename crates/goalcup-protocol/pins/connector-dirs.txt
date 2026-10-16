@@ -3,4 +3,4 @@
 # crates/goalcup-protocol/src/pins.rs, which refuses a malformed file (the crate does not build).
 claude-code-cli 7ccf46566c701b3f4c14a60a56526a77c6369d72b7646e452c06eae459608a67
 codex-cli fc1ed5dc8b2c46f61c397f93c8bd5e23bef58babced9fa272387bf1f8436dc7e
-hermes-cli a1d187c1c7062794e04b8fd2d7e893c5aedfbb7a3d6e08ad282e2283fc5723d2
+hermes-cli cd6f07f5e5cf6277e571e54a920c178bc07cd5d01b6d3ee326ae56dd483901bc

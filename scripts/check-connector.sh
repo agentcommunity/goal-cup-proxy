@@ -33,9 +33,8 @@
 #      compiles to zero tests, so the step is SKIPPED and the script exits non-zero unless
 #      --allow-no-kit is given.
 #
-# It checks a new connector. The shipped headless connector (hermes-cli) predates the kit and
-# has no case of its own, so step 1 fails for it; its regression checks are the schema and
-# golden steps (3 and 4), which the gate also runs.
+# It checks a new connector, and each shipped one: all three run in chat mode (hermes-cli since
+# D61), so none needs a kit case of its own.
 #
 # Exit status: 0 when every step passed (or only the kit was skipped with --allow-no-kit),
 # 1 when a step failed or the kit was skipped without --allow-no-kit, 2 on a usage error.

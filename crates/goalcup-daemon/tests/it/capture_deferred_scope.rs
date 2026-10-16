@@ -21,6 +21,10 @@ use support::control::Response;
 
 const ID: &str = "20260930_141500_a1b2c3";
 
+/// The deferred-identity connector: Hermes as it shipped while headless (`stderr_line`,
+/// `deferred`), frozen, since the shipped Hermes runs in chat mode (D61).
+const HERMES: &str = "headless-hermes-cli";
+
 /// A synthetic session snapshot. No key, no credential: only the shape of the file.
 fn snapshot() -> Vec<u8> {
     format!(
@@ -45,6 +49,7 @@ async fn copied_connector_rig() -> (Rig, tempfile::TempDir) {
             &connectors.path().join(id),
         );
     }
+    capture_lifecycle_support::copy_headless("hermes-cli", connectors.path());
     let root = connectors.path().to_path_buf();
     let rig = Rig::start_with(move |config| config.connectors_dir = root).await;
     (rig, connectors)
@@ -52,7 +57,7 @@ async fn copied_connector_rig() -> (Rig, tempfile::TempDir) {
 
 /// A Hermes entry whose Launch carried no scope: the harness has not printed its identity.
 async fn hermes_launched(rig: &Rig) -> CaptureWorkspaceInfo {
-    let info = rig.created("hermes-cli").await;
+    let info = rig.created(HERMES).await;
     let goal = rig.goal_accepted(&info.entry_id, b"say hi").await;
     let mut request = launch_request(&goal);
     request.native_scope = None;
@@ -143,7 +148,7 @@ async fn a_deferred_launch_appends_no_gap() {
 /// foreign `session_*` file and a request dump beside it are never read.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_finish_with_a_valid_scope_captures_the_snapshot() {
-    let rig = Rig::start().await;
+    let rig = Rig::start_headless().await;
     let info = hermes_launched(&rig).await;
     let own = write_snapshot(&rig, ID);
     let sessions = rig.root.join("config-home/sessions");
@@ -195,7 +200,7 @@ async fn a_finish_without_a_usable_scope_records_exactly_one_gap() {
         ("absent", Some("20260930_999999_000000")),
     ];
     for (what, scope) in cases {
-        let rig = Rig::start().await;
+        let rig = Rig::start_headless().await;
         let info = hermes_launched(&rig).await;
         // A file exists, for a different id: it must not be picked up.
         write_snapshot(&rig, ID);
@@ -241,7 +246,7 @@ async fn a_scope_on_another_profiles_finish_is_ignored() {
 /// Hermes that printed its identity after the seal was asked) is not read, and the gap says so.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_standalone_seal_leaves_a_late_snapshot_unread_and_says_so() {
-    let rig = Rig::start().await;
+    let rig = Rig::start_headless().await;
     let info = hermes_launched(&rig).await;
     write_snapshot(&rig, ID);
     let sealed = seal(&rig, &info.entry_id, None, None).await;
@@ -262,7 +267,7 @@ async fn a_standalone_seal_leaves_a_late_snapshot_unread_and_says_so() {
 /// deferred gap even when it carries a scope and the file exists.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_restart_before_the_finish_keeps_the_run_incomplete_with_the_deferred_gap() {
-    let rig = Rig::start().await;
+    let rig = Rig::start_headless().await;
     let info = hermes_launched(&rig).await;
     write_snapshot(&rig, ID);
     let rig = rig.restart().await;
@@ -286,7 +291,7 @@ async fn a_restart_does_not_trust_deferred_binding_after_the_recorded_connector_
     let (rig, connectors) = copied_connector_rig().await;
     let info = hermes_launched(&rig).await;
     write_snapshot(&rig, ID);
-    let harness = connectors.path().join("hermes-cli/harness.toml");
+    let harness = connectors.path().join(HERMES).join("harness.toml");
     let mut bytes = std::fs::read(&harness).unwrap();
     bytes.extend_from_slice(b"\n# changed after launch\n");
     std::fs::write(harness, bytes).unwrap();
@@ -333,7 +338,7 @@ async fn a_wrong_folder_digest_twin_does_not_hide_the_genuine_deferred_harness_o
     const PROFILE: &str = "restart-deferred-dev";
     let connectors = tempfile::tempdir().unwrap();
     let mut genuine = connectors.path().join("zz-genuine-deferred");
-    support::copy_tree(&support::shipped_connector_dir("hermes-cli"), &genuine);
+    support::copy_tree(&support::headless_connector_dir("hermes-cli"), &genuine);
     // Change the schema-1 identity and therefore the connector-directory digest. The exact
     // changed bytes are copied into the wrong pinned folder below, while this directory remains
     // the genuine unpinned connector recorded at launch.
@@ -420,7 +425,7 @@ async fn a_wrong_folder_digest_twin_does_not_hide_the_genuine_deferred_harness_o
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_expired_finish_retried_with_the_scope_installs_the_source_once() {
     // Refused at stage 2 (the blocking permit), before anything is installed.
-    let rig = Rig::start().await;
+    let rig = Rig::start_headless().await;
     let info = hermes_launched(&rig).await;
     let own = write_snapshot(&rig, ID);
     let hold = rig.daemon.hold_blocking_permits().await;
@@ -442,7 +447,7 @@ async fn an_expired_finish_retried_with_the_scope_installs_the_source_once() {
     // Refused at stage 4 (the owner), after the source was installed: the retry's scope is
     // not installed a second time, and the one source is finished by the owner that was
     // already given it.
-    let rig = Rig::start().await;
+    let rig = Rig::start_headless().await;
     let info = hermes_launched(&rig).await;
     let own = write_snapshot(&rig, ID);
     rig.daemon.hold_capture_owner_drain(&info.entry_id, true);
@@ -474,7 +479,7 @@ async fn an_expired_finish_retried_with_the_scope_installs_the_source_once() {
 /// before the drain share) reads the snapshot within the one second the daemon has left.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_finish_late_in_its_budget_still_reads_the_snapshot() {
-    let rig = Rig::start().await;
+    let rig = Rig::start_headless().await;
     let info = hermes_launched(&rig).await;
     let own = write_snapshot(&rig, ID);
     let sealed = seal(&rig, &info.entry_id, Some(ID), Some(3_000)).await;
@@ -497,7 +502,7 @@ async fn a_finish_late_in_its_budget_still_reads_the_snapshot() {
 /// carries the scope: the run ends with the one deferred gap and no native stream.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_scope_is_not_installed_once_the_owner_was_told_to_stop() {
-    let rig = Rig::start().await;
+    let rig = Rig::start_headless().await;
     let info = hermes_launched(&rig).await;
     write_snapshot(&rig, ID);
     rig.daemon.hold_capture_owner_drain(&info.entry_id, true);
@@ -527,7 +532,7 @@ async fn a_scope_is_not_installed_once_the_owner_was_told_to_stop() {
 /// chain already holds it, so the next finish does not append a second.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_restart_after_the_deferred_gap_was_chained_does_not_record_it_twice() {
-    let rig = Rig::start().await;
+    let rig = Rig::start_headless().await;
     let info = hermes_launched(&rig).await;
     write_snapshot(&rig, ID);
     rig.daemon.delay_capture_finish_stage(

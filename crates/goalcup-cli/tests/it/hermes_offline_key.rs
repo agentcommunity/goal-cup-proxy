@@ -1,63 +1,413 @@
-//! The real installed Hermes, offline, with a synthetic key.
+//! P1 for Hermes in chat mode from its own home (D61): no fragment of the participant's
+//! provider key reaches what the tracer records or uploads.
 //!
-//! These tests run the installed `hermes-agent` 0.19.0 against a **test-owned fake CONNECT
-//! proxy** and nothing else. They are `#[ignore]`d and run by name:
+//! The tracer never sees, passes or stores that key. The participant's own setup puts it in
+//! `$HERMES_HOME/.env` (Hermes's own file, in the one home every run of the connector shares),
+//! and Hermes reads it from there. The promise is about what can still go wrong: the agent prints
+//! that file into its session, and the session file is recorded and uploaded.
+//!
+//! The first two tests run the shipped `hermes-cli` connector, byte for byte as pinned, through
+//! the real `goalcup start` on a terminal of its own, against the rig's daemon and the stand-in
+//! upload server. The harness is a stand-in for Hermes's classic REPL ([`STAND_IN`]): it answers
+//! the connector's `config set` command as Hermes does, and only once that setting is on does it
+//! write a session file, so a captured session also shows that the start put the setting into a
+//! home that did not have it (review focus 2). That session holds the home's `.env` three ways,
+//! as an agent's tool output would: raw, `base64` wrapped at 76 columns, and as JSON inside a
+//! JSON tool result. The synthetic key is `sk-` and 32 random hex digits, made per test and held
+//! in memory; nothing reads a real key, and nothing is sent anywhere but loopback.
+//!
+//! What is searched is every 8-byte window of the key, in the chain's files, in every stream's
+//! decoded bytes, in every upload chunk the server stored (decompressed, and its segments
+//! decoded) and in the uploaded baseline. A failure names the window's offset, never its bytes.
+//!
+//! What this does not claim: the `base64` print stays in the session as base64 text. The daemon
+//! removes a key by its shape, and a key the tracer never sees cannot be matched once encoded
+//! (D61, docs/CHEAT-CHECKLIST.md). No 8-byte window of the key is in that text, which is all the
+//! search below can show of it.
+//!
+//! The last test is `#[ignore]`d and run by name: the real installed Hermes 0.19.0, offline, in
+//! a fresh home that holds only a synthetic key in `.env`:
 //!
 //! ```text
 //! GOALCUP_TEST_HERMES_EXE=/path/to/hermes \
 //!   cargo test --offline -p goalcup-cli --test it hermes_offline_key:: -- --ignored --test-threads=1
 //! ```
-//!
-//! `GOALCUP_TEST_HERMES_EXE` must name the installed `hermes-agent` executable. There is no
-//! default path; with the variable unset every test here fails and says so.
-//!
-//! What makes them safe to run:
-//!
-//! * The key is `sk-` and 32 random hex digits, generated per run and held in memory. No test
-//!   here reads any credential file or any real key, and none sets a variable from the
-//!   environment it runs in.
-//! * The child's environment is the production capture plan's (built from nothing): a private
-//!   `HOME` and `HERMES_HOME` inside a temporary run directory, `HTTPS_PROXY` pointing at the
-//!   fake proxy's loopback port, `HERMES_CA_BUNDLE` pointing at the test's own CA, and the
-//!   synthetic key handed through the production `ChildSecret` on the production gate. Before
-//!   the child starts, the test asserts all of that.
-//! * The fake proxy dials nothing. It answers `CONNECT api.deepseek.com:443` itself, terminates
-//!   TLS with a leaf the test CA signed, and refuses every other target with 403, so no byte
-//!   leaves the machine.
-//! * The proxy compares the `Authorization` header with the synthetic key in memory and keeps
-//!   only the boolean.
-//! * Nothing is created under the real `HOME`; the test checks that `~/.hermes` is exactly as
-//!   it was.
-//!
-//! What they prove (D41, readiness record "Native snapshot activation and collection"):
-//!
-//! * the corrected `auth.json` seed keeps the credential pool from copying the environment key,
-//!   so the file is byte-identical after a run in which the key reached the request;
-//! * a 4xx makes Hermes write `request_dump_*.json` holding a key fragment, and the key scan
-//!   finds it (the positive control for the scan);
-//! * D41's literal two-key seed does *not* hold: the pool seeds a fingerprinted entry (the
-//!   deliberate RED case that documents the correction).
 
-use crate::common::m2_common;
+use crate::common::m2_cli_support::{Launcher, OnPty, Rig};
+use crate::common::m2_common::TestPki;
+use crate::common::support;
+use crate::common::upload_server::{ServerOptions, UploadServer};
 
-use goalcup_cli::key_scan::{FragmentMatcher, ScanOutcome, scan_tree};
-use goalcup_cli::launch::{
-    CAPTURE_PATH, CaptureLaunch, Pipes, ScopeMarker, build_capture_launch,
-    child_secret_for_harness, resolve_harness_executable, spawn_gated,
-    tee_marked_capture_with_rule,
-};
-use goalcup_protocol::template::TemplateVars;
-use m2_common::{TestPki, provider, read_head};
+use goalcup_cli::launch::{CaptureLaunch, PrepLaunch, build_capture_launch, configure_harness};
+use goalcup_protocol::capture::CaptureRecord;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
 
-const RUN_BOUND: Duration = Duration::from_secs(120);
+/// The connector under test.
+const ID: &str = "hermes-cli";
+
+/// The session id the stand-in reports, in Hermes's grammar.
+const SESSION: &str = "20261016_120000_abcdef";
+
+/// What the participant types.
+const PROMPT: &str = "print the env file";
+
+/// The session id the stand-in moves to when a compaction rotates it.
+const ROTATED: &str = "20261016_120500_fedcba";
+
+/// A stand-in for Hermes's classic REPL, installed as `hermes`. Its `config set` appends the key
+/// to `config.yaml` as `key: value`. Its chat prints a banner, and for each line typed, once
+/// `sessions.write_json_snapshots` is on, rewrites `sessions/session_<id>.json` with that line
+/// and the home's `.env` printed raw, base64 wrapped at 76 columns and JSON inside JSON. A
+/// `/compress` line is a compaction: with `compression.in_place` off it starts a new session id,
+/// as Hermes does, so the next line goes to a second file; with it on the id stays.
+const STAND_IN: &str = r#"#!/bin/sh
+home="$HERMES_HOME"
+if [ "$1" = config ] && [ "$2" = set ]; then
+  printf '%s: %s\n' "$3" "$4" >> "$home/config.yaml"
+  echo "stand-in: set $3"
+  exit 0
+fi
+sid="@SESSION@"
+echo "Session: $sid"
+echo "stand-in: ready"
+while IFS= read -r line; do
+  if [ "$line" = /exit ]; then
+    echo "stand-in: bye"
+    exit 0
+  fi
+  if [ "$line" = /compress ]; then
+    if grep -qx 'compression.in_place: false' "$home/config.yaml" 2>/dev/null; then
+      sid="@ROTATED@"
+    fi
+    echo "stand-in: compressed"
+    continue
+  fi
+  if grep -qx 'sessions.write_json_snapshots: true' "$home/config.yaml" 2>/dev/null; then
+    mkdir -p "$home/sessions"
+    raw=$(awk '{printf "%s\\n", $0}' "$home/.env")
+    b64=$(base64 < "$home/.env" | tr -d '\n' | fold -w 76 | awk '{printf "%s\\n", $0}')
+    nested=$(awk '{printf "%s\\\\n", $0}' "$home/.env")
+    snap="$home/sessions/session_$sid.json"
+    printf '{"session_id":"%s","messages":[{"role":"user","content":"%s"},{"role":"tool","content":"%s"},{"role":"tool","content":"%s"},{"role":"tool","content":"{\\"output\\": \\"%s\\"}"}]}' "$sid" "$line" "$raw" "$b64" "$nested" > "$snap.tmp" && mv "$snap.tmp" "$snap"
+  fi
+  echo "stand-in: noted $line"
+done
+"#;
+
+/// `sk-` and 32 random hex digits, from this process's generator and nothing else.
+fn synthetic_key() -> String {
+    format!("sk-{:032x}", rand::random::<u128>())
+}
+
+/// The offset of the first 8-byte window of `key` that `haystack` holds, if any. Only the
+/// offset is ever shown.
+fn fragment_in(haystack: &[u8], key: &str) -> Option<usize> {
+    let key = key.as_bytes();
+    (0..=key.len() - 8).find(|&at| {
+        let window = &key[at..at + 8];
+        haystack.windows(8).any(|w| w == window)
+    })
+}
+
+#[track_caller]
+fn assert_no_fragment(what: &str, haystack: &[u8], key: &str) {
+    if let Some(at) = fragment_in(haystack, key) {
+        panic!("{what} holds the key's 8 bytes at offset {at}");
+    }
+}
+
+/// Every segment's bytes in `records`, decoded and joined.
+fn decoded(records: &[CaptureRecord]) -> Vec<u8> {
+    use base64::Engine as _;
+    let mut out = Vec::new();
+    for record in records {
+        if let CaptureRecord::Segment { data_b64, .. } = record {
+            out.extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(data_b64)
+                    .unwrap(),
+            );
+        }
+    }
+    out
+}
+
+/// Every `data_b64` value anywhere in the JSON lines of `body`, decoded and joined: the
+/// segments of a chain or an upload chunk, whatever envelope carries them.
+fn decoded_lines(body: &[u8]) -> Vec<u8> {
+    use base64::Engine as _;
+    fn walk(value: &serde_json::Value, out: &mut Vec<u8>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (k, v) in map {
+                    match (k.as_str(), v) {
+                        ("data_b64", serde_json::Value::String(text)) => out.extend(
+                            base64::engine::general_purpose::STANDARD
+                                .decode(text)
+                                .unwrap(),
+                        ),
+                        _ => walk(v, out),
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for line in body.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
+        let value: serde_json::Value = serde_json::from_slice(line).unwrap();
+        walk(&value, &mut out);
+    }
+    out
+}
+
+/// What one run left: the rig (its daemon and trace), the stand-in server, the server's run
+/// id, the entry id and the shared harness home.
+struct Ran {
+    rig: Rig,
+    server: UploadServer,
+    run_id: String,
+    entry_id: String,
+    home: PathBuf,
+}
+
+/// One participant-shaped run of the pinned connector on the stand-in, with the shared home
+/// holding `.env` (the key) and `auth.json` (a login) before it starts.
+fn run_with_key_in_home(key: &str, auth_json: &str, lines: &[&str]) -> Ran {
+    use std::os::unix::fs::PermissionsExt;
+    let rig = Rig::chat();
+    support::copy_tree(
+        &support::connectors_dir().join(ID),
+        &rig.connectors.join(ID),
+    );
+    let program = rig.root.join("bin").join("hermes");
+    std::fs::write(
+        &program,
+        STAND_IN
+            .replace("@SESSION@", SESSION)
+            .replace("@ROTATED@", ROTATED),
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // The home as a participant's own setup left it: a key in `.env` (mode 0600, as Hermes
+    // writes it), a login in `auth.json`, and no session setting.
+    let homes = rig.cfg.join("capture-homes");
+    let home = homes.join(ID);
+    for dir in [&homes, &home] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    for (name, text) in [
+        (".env", format!("DEEPSEEK_API_KEY={key}\nHERMES_LOG=info\n")),
+        ("auth.json", auth_json.to_string()),
+    ] {
+        std::fs::write(home.join(name), text).unwrap();
+        std::fs::set_permissions(home.join(name), std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+    rig.prepare_for(&server.url());
+    let mut start = OnPty::spawn(
+        rig.chat_command_for(
+            ID,
+            &[
+                // No provider is reached: the host probe is skipped, and the stand-in calls none.
+                (goalcup_cli::commands::start::TEST_OFFLINE_UPSTREAMS, "1"),
+                ("GOALCUP_TEST_DISK", "4194304,0,50"),
+                (
+                    "GOALCUP_TEST_UPLOAD_POLICY",
+                    "200,25,100,400,10000,268435456,3000,100",
+                ),
+            ],
+            Launcher::Direct,
+        ),
+        None,
+    );
+    start.wait_shown("stand-in: ready");
+    for line in lines {
+        start.type_line(line);
+        start.wait_shown(&if *line == "/compress" {
+            "stand-in: compressed".to_string()
+        } else {
+            format!("stand-in: noted {line}")
+        });
+    }
+    start.type_line("/exit");
+    let status = start.wait();
+    let shown = start.shown();
+    assert!(status.success(), "{status:?}\n{shown}");
+    let runs = server.run_ids();
+    assert_eq!(runs.len(), 1, "{shown}");
+    let entry_id = goalcup_cli::entries::latest_entry(&rig.cfg)
+        .unwrap()
+        .expect("an entry was recorded")
+        .entry_id;
+    Ran {
+        run_id: runs[0].clone(),
+        rig,
+        server,
+        entry_id,
+        home,
+    }
+}
+
+/// The agent prints the home's `.env` into its session raw, base64-wrapped and JSON-escaped.
+/// The session is recorded (so the start turned the setting on) and uploaded, and no 8-byte
+/// window of the key is in the chain, its decoded streams, the upload chunks or the baseline.
+#[test]
+fn an_agent_that_prints_the_homes_env_leaves_no_key_fragment_in_the_trace_or_the_upload() {
+    let key = synthetic_key();
+    let ran = run_with_key_in_home(&key, "{\"version\": 1, \"providers\": {}}\n", &[PROMPT]);
+    let (report, records) = ran.rig.read_trace(&ran.entry_id);
+    assert!(report.sealed, "{:?}", report.findings);
+
+    // The session was captured: the start ran the connector's `config set`, and the stand-in
+    // wrote its session only once the setting was on.
+    let streams = decoded(&records);
+    let text = String::from_utf8_lossy(&streams);
+    assert!(text.contains(PROMPT), "the session file was not recorded");
+    assert!(
+        std::fs::read_to_string(ran.home.join("config.yaml"))
+            .unwrap()
+            .contains("write_json_snapshots: true")
+    );
+    // The raw and the nested print were each removed by shape.
+    assert!(text.matches("<redacted:").count() >= 2, "{text}");
+    assert_no_fragment("the decoded streams", &streams, &key);
+
+    // Every file of the trace: the chain's parts, the seal and the baseline.
+    let trace = ran.rig.trace(&ran.entry_id);
+    let mut files = 0;
+    for entry in std::fs::read_dir(&trace).unwrap().flatten() {
+        if entry.file_type().unwrap().is_file() {
+            files += 1;
+            let bytes = std::fs::read(entry.path()).unwrap();
+            assert_no_fragment(&entry.file_name().to_string_lossy(), &bytes, &key);
+        }
+    }
+    assert!(files >= 2, "the trace holds {files} files");
+
+    // What the server was sent: each chunk, decompressed, and the segments it carries.
+    let chunks = ran.server.chunks(&ran.run_id);
+    assert!(!chunks.is_empty(), "nothing was uploaded");
+    let mut uploaded = Vec::new();
+    for (n, chunk) in chunks.iter().enumerate() {
+        let body = zstd::decode_all(std::fs::read(&chunk.body_path).unwrap().as_slice()).unwrap();
+        assert_no_fragment(&format!("upload chunk {n}"), &body, &key);
+        uploaded.extend(decoded_lines(&body));
+    }
+    // The chunks carry the session: the search covered what it is about.
+    assert!(
+        String::from_utf8_lossy(&uploaded).contains(PROMPT),
+        "the session file was not uploaded"
+    );
+    assert_no_fragment("the upload chunks' decoded segments", &uploaded, &key);
+    let (seal, baseline) = ran.server.seal(&ran.run_id).expect("the seal was sent");
+    assert_no_fragment("the uploaded seal", seal.as_bytes(), &key);
+    assert_no_fragment("the uploaded baseline", baseline.as_bytes(), &key);
+}
+
+/// A compaction mid-run (D61): with the connector's `compression.in_place false`, Hermes moves
+/// to a new session id and so a second `session_<id>.json`. Both files are recorded, the text
+/// before the compaction from the first and the text after it from the second.
+#[test]
+fn a_compaction_mid_run_starts_a_second_session_file_and_both_are_recorded() {
+    const AFTER: &str = "the turn after the compaction";
+    let key = synthetic_key();
+    let ran = run_with_key_in_home(
+        &key,
+        "{\"version\": 1, \"providers\": {}}\n",
+        &[PROMPT, "/compress", AFTER],
+    );
+    assert!(
+        std::fs::read_to_string(ran.home.join("config.yaml"))
+            .unwrap()
+            .lines()
+            .any(|l| l == "compression.in_place: false"),
+        "the start set the compaction to start a new session"
+    );
+    for sid in [SESSION, ROTATED] {
+        assert!(
+            ran.home
+                .join("sessions")
+                .join(format!("session_{sid}.json"))
+                .is_file(),
+            "session_{sid}.json"
+        );
+    }
+    let (report, records) = ran.rig.read_trace(&ran.entry_id);
+    assert!(report.sealed, "{:?}", report.findings);
+    let opened: Vec<&str> = records
+        .iter()
+        .filter_map(|r| match r {
+            CaptureRecord::Open { metadata, .. } => Some(metadata.label.as_str()),
+            _ => None,
+        })
+        .collect();
+    for sid in [SESSION, ROTATED] {
+        assert!(
+            opened
+                .iter()
+                .any(|l| l.contains(&format!("session_{sid}.json"))),
+            "no stream for session_{sid}.json: {opened:?}"
+        );
+    }
+    let text = String::from_utf8_lossy(&decoded(&records)).into_owned();
+    assert!(text.contains(PROMPT) && text.contains(AFTER), "{text}");
+    assert_no_fragment("the decoded streams", text.as_bytes(), &key);
+}
+
+/// Review focus 4: a shared home holding `.env` (a key) and `auth.json` (a token) gives the
+/// uploaded baseline one row for each with its name, size and SHA-256 and nothing else, as
+/// Codex's `auth.json` has today (D56); neither file's content is in the baseline.
+#[test]
+fn the_uploaded_baseline_holds_only_the_name_size_and_digest_of_a_key_file() {
+    let key = synthetic_key();
+    let token = format!("tok_{:032x}", rand::random::<u128>());
+    let auth = format!(
+        "{{\"version\": 1, \"providers\": {{\"nous\": {{\"access_token\": \"{token}\"}}}}}}\n"
+    );
+    let ran = run_with_key_in_home(&key, &auth, &[PROMPT]);
+    let (_, baseline) = ran.server.seal(&ran.run_id).expect("the seal was sent");
+    let manifest: serde_json::Value = serde_json::from_str(&baseline).unwrap();
+    let home = manifest["home"]
+        .as_array()
+        .expect("the baseline lists the harness home");
+    for name in [".env", "auth.json"] {
+        let content = std::fs::read(ran.home.join(name)).unwrap();
+        let row = home
+            .iter()
+            .find(|row| row["path"] == name)
+            .unwrap_or_else(|| panic!("no baseline row for {name}: {home:?}"));
+        let mut fields: Vec<&str> = row
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        fields.sort_unstable();
+        assert_eq!(fields, ["bytes", "path", "sha256"], "{name}");
+        assert_eq!(row["bytes"], content.len() as u64, "{name}");
+        assert_eq!(
+            row["sha256"],
+            hex::encode(Sha256::digest(&content)),
+            "{name}"
+        );
+    }
+    assert_no_fragment("the uploaded baseline", baseline.as_bytes(), &key);
+    assert_no_fragment("the uploaded baseline", baseline.as_bytes(), &token);
+    // The trace's own copy is the same document.
+    let local =
+        std::fs::read_to_string(ran.rig.trace(&ran.entry_id).join("baseline.json")).unwrap();
+    assert_eq!(local, baseline);
+}
+
+// ------------------------------------------------------------------ the real Hermes
 
 /// The Hermes executable under test, taken only from `GOALCUP_TEST_HERMES_EXE`. There is no
 /// default path: an unset variable fails the test with the way to set it.
@@ -71,204 +421,6 @@ fn hermes_exe() -> PathBuf {
         );
     };
     PathBuf::from(path)
-}
-
-fn connector_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors")
-}
-
-/// `sk-` and 32 random hex digits, from this process's generator and nothing else.
-fn synthetic_key() -> String {
-    format!("sk-{:032x}", rand::random::<u128>())
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Reply {
-    Ok200,
-    Unauthorized401,
-}
-
-/// What the fake proxy saw, as counts and target names. Never a header value.
-#[derive(Default)]
-struct Seen {
-    connects: Mutex<Vec<String>>,
-    /// The `model` value of each request body: what the run asked for (D41), and nothing else
-    /// of the body.
-    models: Mutex<Vec<String>>,
-    requests: AtomicUsize,
-    key_matched: AtomicUsize,
-    key_mismatched: AtomicUsize,
-}
-
-struct FakeProxy {
-    addr: std::net::SocketAddr,
-    seen: Arc<Seen>,
-    // Dropped last: it owns the runtime the listener runs on.
-    _runtime: tokio::runtime::Runtime,
-}
-
-impl FakeProxy {
-    fn start(pki: &TestPki, key: &str, reply: Reply) -> FakeProxy {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .unwrap();
-        let (chain, leaf_key) = pki.leaf(&["api.deepseek.com"]);
-        let mut tls = rustls::ServerConfig::builder_with_provider(provider())
-            .with_safe_default_protocol_versions()
-            .unwrap()
-            .with_no_client_auth()
-            .with_single_cert(chain, leaf_key)
-            .unwrap();
-        tls.alpn_protocols = vec![b"http/1.1".to_vec()];
-        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls));
-        let listener = runtime
-            .block_on(TcpListener::bind("127.0.0.1:0"))
-            .expect("a loopback listener");
-        let addr = listener.local_addr().unwrap();
-        let seen = Arc::new(Seen::default());
-        let expected = Arc::new(format!("Bearer {key}").into_bytes());
-        let masked = Arc::new(format!("{}***{}", &key[..8], &key[key.len() - 4..]));
-        let task_seen = Arc::clone(&seen);
-        runtime.spawn(async move {
-            while let Ok((tcp, _)) = listener.accept().await {
-                let (acceptor, seen, expected, masked) = (
-                    acceptor.clone(),
-                    Arc::clone(&task_seen),
-                    Arc::clone(&expected),
-                    Arc::clone(&masked),
-                );
-                tokio::spawn(async move {
-                    let _ = serve(tcp, acceptor, seen, expected, masked, reply).await;
-                });
-            }
-        });
-        FakeProxy {
-            addr,
-            seen,
-            _runtime: runtime,
-        }
-    }
-
-    fn connects(&self) -> Vec<String> {
-        self.seen.connects.lock().unwrap().clone()
-    }
-}
-
-async fn serve(
-    mut tcp: TcpStream,
-    acceptor: tokio_rustls::TlsAcceptor,
-    seen: Arc<Seen>,
-    expected: Arc<Vec<u8>>,
-    masked: Arc<String>,
-    reply: Reply,
-) -> std::io::Result<()> {
-    let (head, _) = read_head(&mut tcp).await;
-    let first = head
-        .split(|b| *b == b'\r')
-        .next()
-        .map(|l| String::from_utf8_lossy(l).into_owned())
-        .unwrap_or_default();
-    let target = first
-        .strip_prefix("CONNECT ")
-        .and_then(|rest| rest.split(' ').next())
-        .unwrap_or("")
-        .to_string();
-    seen.connects.lock().unwrap().push(target.clone());
-    if target != "api.deepseek.com:443" {
-        tcp.write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
-            .await?;
-        return tcp.shutdown().await;
-    }
-    tcp.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-        .await?;
-    let mut tls = acceptor.accept(tcp).await?;
-    let (head, mut body) = read_head(&mut tls).await;
-    seen.requests.fetch_add(1, Ordering::SeqCst);
-    // Compared in memory, as a boolean. The header's text is never kept.
-    let presented = header(&head, "authorization");
-    if presented.as_deref() == Some(expected.as_slice()) {
-        seen.key_matched.fetch_add(1, Ordering::SeqCst);
-    } else {
-        seen.key_mismatched.fetch_add(1, Ordering::SeqCst);
-    }
-    // The body, so the client is not left writing into a closed socket.
-    if let Some(length) = header(&head, "content-length")
-        .and_then(|v| String::from_utf8_lossy(&v).trim().parse::<usize>().ok())
-    {
-        let mut chunk = vec![0u8; 16 * 1024];
-        while body.len() < length {
-            let n = tls.read(&mut chunk).await?;
-            if n == 0 {
-                break;
-            }
-            body.extend_from_slice(&chunk[..n]);
-        }
-    } else if header(&head, "transfer-encoding").is_some() {
-        let mut chunk = vec![0u8; 16 * 1024];
-        while !body.ends_with(b"0\r\n\r\n") {
-            let n = tls.read(&mut chunk).await?;
-            if n == 0 {
-                break;
-            }
-            body.extend_from_slice(&chunk[..n]);
-        }
-    }
-    let text = String::from_utf8_lossy(&body);
-    if let Some(model) = request_model(&text) {
-        seen.models.lock().unwrap().push(model);
-    }
-    let streaming = text.contains("\"stream\":true") || text.contains("\"stream\": true");
-    let response = match reply {
-        Reply::Unauthorized401 => {
-            let body = format!(
-                r#"{{"error":{{"message":"Incorrect API key provided: {masked}. You can find your API key at https://platform.deepseek.com/api_keys.","type":"authentication_error","param":null,"code":"invalid_request_error"}}}}"#
-            );
-            format!(
-                "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            )
-        }
-        Reply::Ok200 if streaming => {
-            let first = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"hello from the fake proxy"},"finish_reason":null}]}"#;
-            let last = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
-            format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\ndata: {first}\n\ndata: {last}\n\ndata: [DONE]\n\n"
-            )
-        }
-        Reply::Ok200 => {
-            let body = r#"{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"message":{"role":"assistant","content":"hello from the fake proxy"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
-            format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            )
-        }
-    };
-    tls.write_all(response.as_bytes()).await?;
-    let _ = tls.shutdown().await;
-    Ok(())
-}
-
-/// The first `"model": "<value>"` in a JSON request body, with nothing else of it.
-fn request_model(body: &str) -> Option<String> {
-    let at = body.find("\"model\"")?;
-    let rest = body[at + "\"model\"".len()..]
-        .trim_start()
-        .strip_prefix(':')?;
-    let rest = rest.trim_start().strip_prefix('"')?;
-    Some(rest[..rest.find('"')?].to_string())
-}
-
-/// A header's value, matched case-insensitively.
-fn header(head: &[u8], name: &str) -> Option<Vec<u8>> {
-    head.split(|b| *b == b'\n').skip(1).find_map(|line| {
-        let line = line.strip_suffix(b"\r").unwrap_or(line);
-        let colon = line.iter().position(|b| *b == b':')?;
-        line[..colon]
-            .eq_ignore_ascii_case(name.as_bytes())
-            .then(|| line[colon + 1..].trim_ascii().to_vec())
-    })
 }
 
 /// What the real `~/.hermes` looks like: present or absent, and its entry names and mtimes.
@@ -295,19 +447,17 @@ fn real_hermes_listing() -> String {
     lines.join("\n")
 }
 
-struct Run {
-    status: std::process::ExitStatus,
-    marker: ScopeMarker,
-    key_hit: bool,
-    dir: PathBuf,
-    proxy: FakeProxy,
-    key: String,
-    _tmp: tempfile::TempDir,
-}
-
-/// One real Hermes run: the production plan, gate, secret and tee, against the fake proxy.
-/// `auth_seed` replaces the shipped seed when given.
-fn run_hermes(reply: Reply, auth_seed: Option<&[u8]>) -> Run {
+/// The real Hermes 0.19.0 in a fresh home that holds only a synthetic key in `.env`, as a
+/// participant's setup leaves one: the connector's `configure` command, run as `goalcup start`
+/// runs it, turns the session file on; Hermes then opens its chat on the production capture
+/// plan (its proxy a closed loopback port, so no request leaves the machine) and, after one
+/// message, writes `sessions/session_<id>.json`, which the connector's native pattern reads
+/// and which holds no 8-byte window of the key. The request dump the failed call leaves beside
+/// it does hold one, and the pattern does not read it. The real `~/.hermes` is not touched.
+#[test]
+#[ignore = "runs the real installed Hermes offline; run by name"]
+fn the_real_hermes_writes_its_session_file_once_configured_and_keeps_its_key_out_of_it() {
+    use std::os::unix::fs::PermissionsExt;
     let exe = hermes_exe();
     assert!(
         exe.is_file(),
@@ -317,61 +467,81 @@ fn run_hermes(reply: Reply, auth_seed: Option<&[u8]>) -> Run {
     let before = real_hermes_listing();
 
     let tmp = tempfile::tempdir().unwrap();
-    let dir = std::fs::canonicalize(tmp.path())
-        .unwrap()
-        .join("goalcup-run");
-    for sub in ["", "home", "ca", "workspace", "tmp"] {
-        std::fs::create_dir_all(dir.join(sub)).unwrap();
+    let dir = std::fs::canonicalize(tmp.path()).unwrap();
+    let (run_home, hermes_home, workspace) =
+        (dir.join("home"), dir.join("hermes"), dir.join("workspace"));
+    for d in [&run_home, &hermes_home, &workspace, &dir.join("ca")] {
+        std::fs::create_dir_all(d).unwrap();
+        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let connector =
-        goalcup_cli::connector::load_harness(&connector_dir(), "hermes-cli", false).unwrap();
-    let profile = connector.loaded.manifest.capture.clone();
-    let loaded = goalcup_protocol::harness::load_dir(
-        &connector.dir,
-        goalcup_protocol::harness::Origin::Pinned,
+    let key = synthetic_key();
+    std::fs::write(
+        hermes_home.join(".env"),
+        format!("DEEPSEEK_API_KEY={key}\n"),
     )
     .unwrap();
-    let hermes_home = goalcup_cli::per_run_home::create_per_run_home(
-        &dir,
-        &loaded.manifest.capture.home,
-        &loaded.seeds,
-    )
-    .expect("the per-run home");
-    if let Some(seed) = auth_seed {
-        std::fs::write(hermes_home.join("auth.json"), seed).unwrap();
-    }
 
-    let key = synthetic_key();
-    let pki = TestPki::new("goal cup test CA");
-    let ca = dir.join("ca/proxy-ca.pem");
-    std::fs::write(&ca, pki.root_pem()).unwrap();
-    let proxy = FakeProxy::start(&pki, &key, reply);
-    let proxy_url = format!(
-        "http://goalcup:{:032x}@127.0.0.1:{}",
-        rand::random::<u128>(),
-        proxy.addr.port()
+    let connector = support::connector(ID);
+    // The launcher runs the file a symlink points at (an installer's `bin` holds a link).
+    let resolved =
+        goalcup_cli::launch::resolve_harness_executable(&std::fs::canonicalize(&exe).unwrap())
+            .unwrap();
+    let path = format!(
+        "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+        exe.parent().unwrap().display()
     );
-
-    let resolved = resolve_harness_executable(&exe).expect("the installed Hermes");
     let parent: BTreeMap<String, String> = [
+        ("PATH", path.as_str()),
+        ("TERM", "xterm-256color"),
+        ("LANG", "en_US.UTF-8"),
         ("USER", "participant"),
         ("LOGNAME", "participant"),
-        ("TMPDIR", &*format!("{}/", dir.join("tmp").display())),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
     .collect();
-    let mut vars = TemplateVars::new();
-    vars.set("workspace", dir.join("workspace").to_str().unwrap());
-    vars.set("session_id", "00000000-0000-4000-8000-000000000000");
+
+    let log_path = dir.join("host.log");
+    let log = std::fs::File::create(&log_path).unwrap();
+    configure_harness(
+        &connector,
+        &PrepLaunch {
+            executable: &resolved,
+            run_home: &run_home,
+            config_home: &hermes_home,
+            parent_env: &parent,
+        },
+        &workspace,
+        &log,
+        "(test)",
+    )
+    .expect("the connector's configure command");
+    let config = std::fs::read_to_string(hermes_home.join("config.yaml")).unwrap();
+    assert!(config.contains("write_json_snapshots: true"), "{config}");
+    assert!(config.contains("in_place: false"), "{config}");
+
+    // A loopback port nothing listens on: every call Hermes makes is refused at once.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let proxy_url = format!(
+        "http://goalcup:{:032x}@127.0.0.1:{closed}",
+        rand::random::<u128>()
+    );
+    let ca = dir.join("ca/proxy-ca.pem");
+    std::fs::write(&ca, TestPki::new("goal cup test CA").root_pem()).unwrap();
+    let mut vars = goalcup_protocol::template::TemplateVars::new();
+    vars.set("workspace", workspace.to_str().unwrap());
     let plan = build_capture_launch(
         &connector,
         &vars,
-        &dir.join("workspace"),
+        &workspace,
         &CaptureLaunch {
-            goal: Some(b"hi"),
+            goal: None,
             executable: &resolved,
-            run_home: &dir.join("home"),
+            run_home: &run_home,
             config_home: &hermes_home,
             proxy_url: &proxy_url,
             ca_certificate: &ca,
@@ -380,255 +550,64 @@ fn run_hermes(reply: Reply, auth_seed: Option<&[u8]>) -> Run {
         },
     )
     .expect("the capture plan");
-
-    // Before anything starts: the child's environment is exactly the plan's, the proxy it is
-    // pointed at is the test's own loopback listener, and the real homes are not in it.
-    let proxy_port = format!("127.0.0.1:{}", proxy.addr.port());
-    for name in ["HTTPS_PROXY", "https_proxy"] {
-        assert!(
-            plan.env_set[name].ends_with(&format!("@{proxy_port}")),
-            "{name} does not point at the test proxy"
-        );
-    }
-    assert!(plan.env_base.is_empty(), "the child inherits nothing");
-    assert_eq!(plan.env_set["HERMES_CA_BUNDLE"], ca.to_str().unwrap());
-    assert_eq!(plan.env_set["PATH"], CAPTURE_PATH);
-    for (name, under) in [("HOME", "home"), ("HERMES_HOME", "hermes")] {
-        assert_eq!(
-            Path::new(&plan.env_set[name]),
-            dir.join(under),
-            "{name} is the run's private directory"
-        );
-    }
     assert!(plan.env_set.keys().all(|k| !k.contains("API_KEY")));
-    assert!(plan.env_set.keys().all(|k| !k.ends_with("_BASE_URL")));
-
-    let secret = child_secret_for_harness(
-        &profile,
-        &BTreeMap::from([("DEEPSEEK_API_KEY".to_string(), key.clone())]),
-    )
-    .unwrap()
-    .unwrap();
-    let matcher = FragmentMatcher::new(key.as_bytes()).unwrap();
-
-    let gated = spawn_gated(
-        &plan,
-        Pipes {
-            stdout: true,
-            stderr: true,
-        },
-        Duration::from_secs(10),
-        Some(&secret),
-    )
-    .expect("the gate");
-    let mut spawned = gated.release().expect("released");
-    let tee = tee_marked_capture_with_rule(
-        &mut spawned,
-        Some(&secret),
-        Some(crate::common::support::stderr_marker_rule()),
-    )
-    .unwrap();
-    drop(secret);
-    let until = Instant::now() + RUN_BOUND;
-    let status = loop {
-        if let Some(status) = spawned.child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= until {
-            let _ = spawned.child.kill();
-            let _ = spawned.child.wait();
-            panic!("Hermes did not exit within {RUN_BOUND:?}");
-        }
-        std::thread::sleep(Duration::from_millis(100));
+    let mut command = std::process::Command::new(&plan.program);
+    command
+        .args(&plan.argv)
+        .current_dir(&plan.cwd)
+        .env_clear()
+        .envs(&plan.env_set);
+    let mut hermes = OnPty::spawn(command, None);
+    hermes.wait_shown("Session:");
+    hermes.type_line("hello");
+    let sessions = hermes_home.join("sessions");
+    let names = || -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(&sessions)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
     };
-    assert!(
-        tee.finish(Instant::now() + Duration::from_secs(10))
-            .unwrap()
-    );
-    let marker = tee.marker_until(Instant::now() + Duration::from_secs(2));
-    let key_hit = tee.key_hit();
+    let until = Instant::now() + Duration::from_secs(120);
+    while !names().iter().any(|n| n.starts_with("session_")) {
+        assert!(Instant::now() < until, "no session file: {:?}", names());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    // Let the failed call finish before the chat is ended.
+    std::thread::sleep(Duration::from_secs(5));
+    hermes.type_line("/exit");
+    let status = hermes.wait();
+    assert!(status.success(), "{status:?}\n{}", hermes.shown());
 
+    let native = &connector.loaded.manifest.capture.native[0];
+    let (prefix, suffix) = native.pattern.split_once('*').expect("a one-star pattern");
+    let read = |n: &str| n.starts_with(prefix) && n.ends_with(suffix);
+    let all = names();
+    let snapshots: Vec<&String> = all.iter().filter(|n| read(n)).collect();
+    assert_eq!(snapshots.len(), 1, "{all:?}");
+    let snapshot = std::fs::read(sessions.join(snapshots[0])).unwrap();
+    assert!(String::from_utf8_lossy(&snapshot).contains("hello"));
+    assert_no_fragment("the session file", &snapshot, &key);
+    let dumps: Vec<&String> = all
+        .iter()
+        .filter(|n| n.starts_with("request_dump_"))
+        .collect();
+    assert!(!dumps.is_empty(), "no request dump: {all:?}");
+    for dump in dumps {
+        assert!(!read(dump), "the native pattern reads {dump}");
+        let bytes = std::fs::read(sessions.join(dump)).unwrap();
+        assert!(
+            fragment_in(&bytes, &key).is_some(),
+            "the positive control: the dump holds a fragment"
+        );
+    }
     assert_eq!(
         real_hermes_listing(),
         before,
         "the real ~/.hermes changed while Hermes ran"
     );
-    drop(matcher);
-    Run {
-        status,
-        marker,
-        key_hit,
-        dir,
-        proxy,
-        key,
-        _tmp: tmp,
-    }
-}
-
-fn scan(run: &Run) -> ScanOutcome {
-    let matcher = FragmentMatcher::new(run.key.as_bytes()).unwrap();
-    scan_tree(&matcher, &[&run.dir], 256 << 20)
-}
-
-fn sessions(run: &Run) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(run.dir.join("hermes/sessions"))
-        .map(|rd| {
-            rd.flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .collect()
-        })
-        .unwrap_or_default();
-    names.sort();
-    names
-}
-
-fn shipped_seed() -> Vec<u8> {
-    std::fs::read(connector_dir().join("hermes-cli/files/auth.json")).unwrap()
-}
-
-/// The 200 variant: the corrected seed leaves `auth.json` byte-identical although the key
-/// reached the request; the run is clean under the scan; one session snapshot carries the
-/// marker's id; nothing reached anything but the fake proxy.
-#[test]
-#[ignore = "runs the real installed Hermes against a fake CONNECT proxy; run by name"]
-fn the_corrected_seed_keeps_the_key_out_of_the_store_while_it_reaches_the_request() {
-    let run = run_hermes(Reply::Ok200, None);
-    let connects = run.proxy.connects();
-    eprintln!(
-        "offline 200: exit={:?} connects={connects:?} requests={} matched={} mismatched={} \
-         sessions={:?} marker={:?} models={:?}",
-        run.status.code(),
-        run.proxy.seen.requests.load(Ordering::SeqCst),
-        run.proxy.seen.key_matched.load(Ordering::SeqCst),
-        run.proxy.seen.key_mismatched.load(Ordering::SeqCst),
-        sessions(&run),
-        run.marker,
-        run.proxy.seen.models.lock().unwrap(),
-    );
-    assert!(
-        run.proxy.seen.key_matched.load(Ordering::SeqCst) >= 1,
-        "the synthetic key never reached an outgoing request"
-    );
-    assert_eq!(
-        run.proxy.seen.key_mismatched.load(Ordering::SeqCst),
-        0,
-        "a request carried some other credential"
-    );
-    assert!(
-        connects.iter().any(|c| c == "api.deepseek.com:443"),
-        "{connects:?}"
-    );
-    // The provider, and at most the model catalogue, which has no switch and
-    // is accepted and recorded. Not PyPI (the update check), and above all not GitHub (a scanner
-    // binary downloaded at run time and run with the key in its environment).
-    for host in &connects {
-        assert!(
-            host == "api.deepseek.com:443" || host == "models.dev:443",
-            "an unexpected host was contacted: {host} in {connects:?}"
-        );
-    }
-    // No scanner exists anywhere in the run: nothing was fetched, nothing was run.
-    let mut stack = vec![run.dir.clone()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
-            let name = entry.file_name().to_string_lossy().to_lowercase();
-            assert!(!name.contains("tirith"), "found {}", entry.path().display());
-            if entry.file_type().unwrap().is_dir() {
-                stack.push(entry.path());
-            }
-        }
-    }
-    assert!(
-        !run.dir.join("hermes/bin").exists(),
-        "a binary directory was made"
-    );
-    assert!(run.status.success(), "{:?}", run.status);
-    // Byte-identical, and no pool.
-    let auth = std::fs::read(run.dir.join("hermes/auth.json")).unwrap();
-    assert_eq!(auth, shipped_seed(), "auth.json changed");
-    assert!(!String::from_utf8_lossy(&auth).contains("credential_pool"));
-    // The run's own session, named by the marker.
-    let ScopeMarker::One(id) = &run.marker else {
-        panic!("no session marker: {:?}", run.marker);
-    };
-    assert!(
-        sessions(&run).contains(&format!("session_{id}.json")),
-        "{:?}",
-        sessions(&run)
-    );
-    assert!(!run.key_hit, "a key fragment passed on stdout or stderr");
-    let outcome = scan(&run);
-    assert!(
-        outcome.is_clean(),
-        "the scan of the run directory: {outcome}"
-    );
-}
-
-/// The 401 variant: a 4xx makes Hermes write a request dump with a key fragment, and the
-/// fragment scan finds it. The positive control for the scan, on the residue Hermes really
-/// leaves.
-#[test]
-#[ignore = "runs the real installed Hermes against a fake CONNECT proxy; run by name"]
-fn a_401_leaves_a_request_dump_and_the_fragment_scan_finds_it() {
-    let run = run_hermes(Reply::Unauthorized401, None);
-    eprintln!(
-        "offline 401: exit={:?} connects={:?} matched={} sessions={:?}",
-        run.status.code(),
-        run.proxy.connects(),
-        run.proxy.seen.key_matched.load(Ordering::SeqCst),
-        sessions(&run),
-    );
-    assert!(run.proxy.seen.key_matched.load(Ordering::SeqCst) >= 1);
-    assert!(
-        sessions(&run)
-            .iter()
-            .any(|n| n.starts_with("request_dump_")),
-        "no request dump: {:?}",
-        sessions(&run)
-    );
-    match scan(&run) {
-        ScanOutcome::Hit { relative_paths } => {
-            assert!(
-                relative_paths
-                    .iter()
-                    .any(|p| p.to_string_lossy().contains("request_dump_")),
-                "the hit is not in the request dump: {relative_paths:?}"
-            );
-        }
-        other => panic!("the scan did not find the request dump's fragment: {other}"),
-    }
-}
-
-/// The deliberate RED case: D41's literal seed
-/// (`{"version":1,"providers":{}}`) does not suppress the environment source, so the pool copies
-/// the key into a fingerprinted entry and the byte-identical oracle fails. This test passes by
-/// asserting the failure's shape, which is how the correction stays enforced.
-#[test]
-#[ignore = "runs the real installed Hermes against a fake CONNECT proxy; run by name"]
-fn d41s_literal_seed_fails_the_byte_identical_oracle() {
-    let literal = br#"{"version":1,"providers":{}}"#;
-    let run = run_hermes(Reply::Ok200, Some(literal));
-    let auth = std::fs::read(run.dir.join("hermes/auth.json")).unwrap();
-    assert_ne!(auth, literal.to_vec(), "the literal seed was left alone");
-    let text = String::from_utf8_lossy(&auth).into_owned();
-    assert!(text.contains("credential_pool"), "{text}");
-    assert!(text.contains("deepseek"), "{text}");
-    assert!(text.contains("secret_fingerprint"), "{text}");
-    // The fingerprint is the first 16 hex digits of the key's SHA-256.
-    let digest = Sha256::digest(run.key.as_bytes());
-    let fingerprint: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
-    assert!(
-        text.contains(&fingerprint),
-        "the stored fingerprint is not the key's"
-    );
-    // And the scan sees it in auth.json.
-    match scan(&run) {
-        ScanOutcome::Hit { relative_paths } => assert!(
-            relative_paths
-                .iter()
-                .any(|p| p.to_string_lossy().ends_with("auth.json")),
-            "{relative_paths:?}"
-        ),
-        other => panic!("the scan missed the fingerprint: {other}"),
-    }
 }

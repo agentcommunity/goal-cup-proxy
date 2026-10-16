@@ -180,7 +180,8 @@ cheapest-model clause is superseded by D52.
   and released after the last upload. A chain is quota-only (`CHAIN_QUOTA_BYTES`, 1 TiB logical).
   It preallocates nothing, so no grow-then-shrink release exists to fail.
 - **Hermes** uses its `deepseek` provider with `DEEPSEEK_API_KEY` passed to the child only. No
-  DeepSeek base URL is set.
+  DeepSeek base URL is set. *Superseded by D61: no key is passed, and Hermes uses the provider
+  the participant set up in its home.*
 
 ## D41. **(M2)** Hermes reference row: model, CA trust, key-fingerprint and key-fragment rules.
 
@@ -188,11 +189,13 @@ cheapest-model clause is superseded by D52.
   closed: Hermes trusts only the proxy, and the proxy verifies the real upstream. `SSL_CERT_FILE`
   stays refused. D43 generalises this to any connector.
 - **Key fingerprint.** The private `auth.json` is pre-seeded so that Hermes never seeds its
-  credential pool from the env key or writes `secret_fingerprint`.
+  credential pool from the env key or writes `secret_fingerprint`. *Superseded by D61: Hermes's
+  home is the participant's own and is not seeded.*
 - **Key fragments.** Before any Hermes run artifact is kept, a scan with the in-memory key (never
   stored) looks for its prefix (`key[:8]`), suffix (`key[-8:]`) and masked forms. A hit fails the
   row and the run folder stays local. Masked-key forms are also redacted on the wire (`masked_key`,
-  a soft rule that only adds redaction).
+  a soft rule that only adds redaction). *The scan is superseded by D61 for Hermes: the tracer
+  holds no key to scan with. The `masked_key` rule stays.*
 - **Isolation.** Every Hermes call, version probes included, uses a private `HOME` and
   `HERMES_HOME`. The model clause is superseded by D52.
 
@@ -276,6 +279,8 @@ the V1 cadence keys were deleted before release, and `DaemonConfig` refuses them
 `AMP_API_KEY` joins `CREDENTIAL_ENV`. It goes to the harness child only, through the child-secret
 seam, under the shared grammar (20 to 256 bytes of `[A-Za-z0-9_-]`). It is never a manifest value.
 D41's key-fragment scan applies. This admits a name only; it admits no Amp connector.
+*Superseded in intent by D61 (the tracer passes no provider key). The name stays in
+`CREDENTIAL_ENV` until the credential mechanism itself is removed.*
 
 ## D50. **(M2)** Amend D43 ruling 3 for `stdout_json` identity.
 
@@ -445,3 +450,57 @@ and a cut releases none of it; the longest wrapped form (10 746 bytes) fits `MAX
 marker is `<redacted:run_secret>`. The pattern rule `proxy_credential` stays for a reader without
 the secret (`spikes/redact.py`). There is no upload-side check: the daemon is the one place a body
 is redacted, and the secret is loopback-only and dead once the run ends.
+
+## D61. Hermes runs in chat mode from its own home; the tracer forwards no key.
+
+16 Oct 2026, owner ruling. The tracer never sees, forwards or stores a participant's provider key.
+Hermes runs however the participant set it up, as Codex does (D39, D57).
+
+- **Chat mode.** `hermes chat` opens Hermes's classic REPL (`--tui` is not passed; a
+  participant's own `display.interface: tui` writes the same session file). The connector has
+  `interactive = true` and `resume_args = ["--continue"]`, measured to resume the most recent
+  session. No `-Q`, `goal_flag`, `--provider` or `--model`.
+- **Its own home.** `config_home = "shared"` (`<cfg>/capture-homes/hermes-cli`), never seeded:
+  the seed files and `[capture.credential]` are gone. `goalcup prep` opens Hermes there. With no
+  provider it asks `Run setup now? [Y/n]` and runs its own wizard, which keeps the provider and
+  model in `config.yaml` and the key in `.env`. Hermes loads `.env` itself; no launch passes it.
+- **Identity.** `none`, with the native source `sessions/session_*.json` and `since_run_start`:
+  the only identity an interactive profile takes (D57). The banner prints `Session: <id>` on the
+  terminal, which the tracer does not read. Runs on the shared home are serialized, so every
+  snapshot new or written since the start is the run's. A `request_dump_*` file is never matched.
+- **`capture.configure` (schema 1, additive).** A chat-mode connector may list up to 4 commands
+  of its own program (each 1 to 16 arguments of at most 256 bytes, held to the `args` rules, no
+  template). `goalcup prep` runs them in the harness home after the participant's setup exits 0;
+  `goalcup start` and `goalcup continue` run them again before each launch. They get the harness's
+  environment without a proxy or CA variable, stdin `/dev/null`, a process group of their own and
+  60 seconds each; their output goes to `<cfg>/prep.log` or the run's `host.log` only. A failure
+  leaves the prep step `fail` (the home is not ready) and refuses the start before any launch.
+- **What configure may change (carve-out from "Hermes runs as the participant set it up").** Only
+  how the harness stores its session: capture and storage settings. Never how the agent behaves:
+  not the model, the provider, the tools, the prompts, or whether compression is on. Core refuses a
+  configure argument that has `model`, `provider`, `base_url`, `api_key`, `key`, `token` or
+  `secret` as a `.`-separated part (`CONFIGURE_DENIED_KEYS`, any case); review is the control for
+  the rest.
+- **Hermes's two commands** (Hermes 0.19.0; neither setting has an environment variable):
+  - `config set sessions.write_json_snapshots true` (default off): without it there is no
+    session file to record.
+  - `config set compression.in_place false` (default on). An in-place compaction keeps the
+    session id with fewer messages, and Hermes never rewrites a snapshot that holds more
+    (`run_agent.py:2754`), so the file stops changing and the native leg loses the rest of the run
+    with no gap. With it off, a compaction starts a new session id
+    (`agent/conversation_compression.py:1247`) and so a new `session_<id>.json`
+    (`run_agent.py:2723`), which the native source reads from the run's start. Whether and when
+    Hermes compacts stays the participant's.
+- **What it gives up.** No key, so no key scan (D41) for Hermes. The daemon's shape rules still
+  remove a key printed raw or JSON-escaped; a key the agent encodes (`base64`, hex) is not
+  matched, because the tracer never knows its value (CHEAT-CHECKLIST). Hermes's own defaults now
+  apply where the seed turned them off: title generation (an auxiliary model call), compression
+  (each compaction now starts a new snapshot file, above), the `tirith` scanner download and the
+  remote model catalogue. Model traffic is recorded for the `providers` rows only (DeepSeek) while
+  `HERMES_CA_BUNDLE` replaces Hermes's roots, so another service the participant picks fails its
+  TLS handshake until the connector reads the model host from Hermes's own config.
+- **Baseline.** The home's `.env` and `auth.json` are listed in the uploaded baseline by name,
+  size and SHA-256 only (D56), as Codex's `auth.json` is: their bytes are hashed, never copied.
+
+This supersedes D40's Hermes clause and D41's seed and key-scan clauses for Hermes, and D49 in
+intent.

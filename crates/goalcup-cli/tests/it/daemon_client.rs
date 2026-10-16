@@ -1088,7 +1088,8 @@ fn pause_points_exist_only_under_test_support() {
 }
 
 /// The only places this crate starts a process are the launch module's one command builder
-/// (which the ordinary spawn and the gate both run), the run-scoped daemon's start
+/// (which the ordinary spawn, the gate and the connector's `capture.configure` commands all
+/// run), the run-scoped daemon's start
 /// (`daemon/spawn.rs`), the D53 version probe (`harness_version.rs`), the `git` that clones
 /// the participant's GitHub repository (`account/github.rs`) and macOS's `/usr/bin/security`,
 /// which exports the system's trusted roots for a shared CA row's file (`ca_bundle.rs`, with a

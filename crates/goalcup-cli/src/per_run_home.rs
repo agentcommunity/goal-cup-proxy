@@ -5,7 +5,9 @@
 //! and nowhere else: its configuration, its credential store, its session snapshots, its logs
 //! and its tool processes' home all live under `<run>/<per_run_dir>`, so nothing of the
 //! participant's own app-wide home (`home.real_dirs`) is read and nothing is written to it.
-//! For example, Hermes's connector makes:
+//! For example, Hermes's connector made, while it ran headless (its frozen copy under
+//! `goalcup-protocol/tests/fixtures/headless-connectors/hermes-cli`; the shipped one shares its
+//! home since D61):
 //!
 //! ```text
 //! <run>/hermes          0700   HERMES_HOME (`home.env`, `home.per_run_dir`)

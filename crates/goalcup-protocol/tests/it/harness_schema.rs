@@ -3657,3 +3657,153 @@ fn the_chat_mode_connector_drafts_validate() {
         assert_eq!(m.capture.home.skills_dir.as_deref(), Some("skills"), "{id}");
     }
 }
+
+/// The TOML value of `capture.configure`: an array of argument arrays.
+fn commands(items: &[&[&str]]) -> Value {
+    Value::Array(items.iter().map(|c| strings(c)).collect())
+}
+
+/// D61: `capture.configure` holds a few short commands of the harness's own program, each held
+/// to every `args` rule (deny policy, pinned path rule, argument guard, delivery rule) and to its
+/// own bounds, with no template token: it runs before any run value exists.
+#[test]
+fn a_configure_command_is_held_to_the_argument_rules() {
+    let ok: &[&str] = &["config", "set", "sessions.write_json_snapshots", "true"];
+    let mut t = chat();
+    set(&mut t, &["capture"], "configure", commands(&[ok]));
+    admitted(&t, PINNED);
+    // Absent is the default and changes nothing.
+    admitted(&chat(), PINNED);
+
+    let long = "x".repeat(257);
+    let many: Vec<String> = (0..17).map(|n| format!("a{n}")).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    let cases: Vec<(Value, &[&str])> = vec![
+        (
+            commands(&[ok, ok, ok, ok, ok]),
+            &["capture.configure", "4 commands"],
+        ),
+        (
+            commands(&[&[]]),
+            &["capture.configure", "1 to 16 arguments"],
+        ),
+        (
+            commands(&[&many]),
+            &["capture.configure", "1 to 16 arguments"],
+        ),
+        (commands(&[&[""]]), &["capture.configure", "1 to 256 bytes"]),
+        (
+            commands(&[&[long.as_str()]]),
+            &["capture.configure", "1 to 256 bytes"],
+        ),
+        (
+            commands(&[&["set", "{goal}"]]),
+            &["capture.configure", "no template"],
+        ),
+        (
+            commands(&[&["set", "{workspace}"]]),
+            &["capture.configure", "no template"],
+        ),
+        (
+            commands(&[&["--profile", "x"]]),
+            &["capture.configure", "--profile"],
+        ),
+        (
+            commands(&[&["set", "base_url"]]),
+            &["capture.configure", "model endpoint"],
+        ),
+        (
+            commands(&[&["set", "/etc/x"]]),
+            &["capture.configure", "/etc/x"],
+        ),
+        (
+            commands(&[&["set", "goalcup"]]),
+            &["capture.configure", "tracker"],
+        ),
+    ];
+    for (value, needles) in cases {
+        let mut t = chat();
+        set(&mut t, &["capture"], "configure", value);
+        refused(&t, PINNED, needles);
+    }
+    // D61: a configure command stores the session, and never sets the model, the provider, an
+    // address or a credential: a dotted key with one of those words as a part is refused.
+    for arg in [
+        "model.provider",
+        "MODEL.default",
+        "model",
+        "--model",
+        "providers.deepseek.provider",
+        "providers.x.api_key",
+        "auth.key",
+        "gateway.token",
+        "vault.Secret",
+    ] {
+        let mut t = chat();
+        set(
+            &mut t,
+            &["capture"],
+            "configure",
+            commands(&[&["config", "set", arg, "x"]]),
+        );
+        // A word the `args` rules already refuse (`api_key`) keeps their reason.
+        refused(&t, PINNED, &["capture.configure", arg]);
+    }
+    let mut t = chat();
+    set(
+        &mut t,
+        &["capture"],
+        "configure",
+        commands(&[&["config", "set", "model.provider", "x"]]),
+    );
+    refused(
+        &t,
+        PINNED,
+        &[
+            "`model.provider` names `model`",
+            "only how the harness stores its session",
+        ],
+    );
+    // A word that only holds one of them is not one of them.
+    for arg in [
+        "compression.in_place",
+        "max_tokens",
+        "keys_seen",
+        "tokenizer.cache",
+    ] {
+        let mut t = chat();
+        set(
+            &mut t,
+            &["capture"],
+            "configure",
+            commands(&[&["config", "set", arg, "false"]]),
+        );
+        admitted(&t, PINNED);
+    }
+    // The pinned path rule is the one `Dev` relaxes, as for `args`.
+    let mut t = chat();
+    set(
+        &mut t,
+        &["capture"],
+        "configure",
+        commands(&[&["set", "/etc/x"]]),
+    );
+    admitted(&t, DEV);
+    // The connector's own argument guard covers its configure commands too.
+    let mut t = chat();
+    let mut guard = Table::new();
+    guard.insert("long".to_string(), strings(&["tui"]));
+    set(&mut t, &["capture"], "argv_guard", Value::Table(guard));
+    admitted(&t, PINNED);
+    set(
+        &mut t,
+        &["capture"],
+        "configure",
+        commands(&[&["--tui", "config"]]),
+    );
+    refused(&t, PINNED, &["capture.configure", "--tui"]);
+    // A headless profile has no prep launch to run them with.
+    let mut t = hermes();
+    set(&mut t, &["capture"], "configure", commands(&[ok]));
+    refused(&t, PINNED, &["capture.configure", "chat-mode"]);
+}

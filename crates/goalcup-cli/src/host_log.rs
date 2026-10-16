@@ -109,6 +109,20 @@ fn panic_to_log(info: &std::panic::PanicHookInfo<'_>) -> bool {
     true
 }
 
+/// `<run_dir>/host.log`, opened to append (mode 0600, never through a link), for a child whose
+/// output belongs in the log and never on the terminal: the connector's `capture.configure`
+/// commands (D61). Returns the file and its path.
+pub fn open_for_child(run_dir: &Path) -> std::io::Result<(std::fs::File, PathBuf)> {
+    let path = run_dir.join(HOST_LOG_NAME);
+    open_log(&path).map(|file| (file, path))
+}
+
+/// `path` opened to append as [`open_for_child`] opens `host.log`: for a log of another
+/// command's children (`goalcup prep`'s `prep.log`).
+pub fn open_append(path: &Path) -> std::io::Result<std::fs::File> {
+    open_log(path)
+}
+
 fn open_log(path: &Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.append(true).create(true);

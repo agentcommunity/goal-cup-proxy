@@ -221,7 +221,7 @@ fn sensitivity_a_missing_harness_toml_is_refused() {
 
 #[test]
 fn sensitivity_load_dir_refuses_an_unnamed_file_under_files() {
-    let (_tmp, dir) = copy_connector("hermes-cli");
+    let (_tmp, dir) = copy_headless_connector("hermes-cli");
     std::fs::write(dir.join("files/stray.txt"), b"x\n").unwrap();
     let err = check_dir(&dir).expect_err("a stray file");
     assert!(
@@ -232,7 +232,7 @@ fn sensitivity_load_dir_refuses_an_unnamed_file_under_files() {
 
 #[test]
 fn sensitivity_load_dir_refuses_a_seed_the_directory_lacks() {
-    let (_tmp, dir) = copy_connector("hermes-cli");
+    let (_tmp, dir) = copy_headless_connector("hermes-cli");
     std::fs::remove_file(dir.join("files/auth.json")).unwrap();
     let err = check_dir(&dir).expect_err("a missing seed");
     assert!(

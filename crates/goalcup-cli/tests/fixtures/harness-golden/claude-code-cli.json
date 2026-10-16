@@ -17,6 +17,7 @@
       "NODE_EXTRA_CA_CERTS"
     ],
     "config_home": "shared",
+    "configure": [],
     "continuation": "chat: the participant types the prompt and may type keep going",
     "env": {
       "CLAUDE_CODE_RETRY_WATCHDOG": "1",

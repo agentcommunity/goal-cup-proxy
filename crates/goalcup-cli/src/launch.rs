@@ -1120,6 +1120,92 @@ pub fn prep_launch(
     })
 }
 
+/// How long one `capture.configure` command may run before it is ended and the launch refused.
+pub const CONFIGURE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Run the connector's `capture.configure` commands (D61), in order, each as the harness's own
+/// program with exactly the environment [`build_prep_launch`] gives it (the run's `HOME`, the
+/// harness home, no proxy and no CA), stdin `/dev/null`, its own process group, and stdout and
+/// stderr appended to `log`. The first one that does not exit 0 within [`CONFIGURE_TIMEOUT`]
+/// refuses with a sentence naming it and how it ended, then `then` (where its output is, and
+/// what to do next).
+/// `goalcup prep` runs them after the participant's own setup, `goalcup start` before each
+/// launch; nothing they print reaches the terminal or the trace.
+pub fn configure_harness(
+    c: &HarnessConnector,
+    launch: &PrepLaunch<'_>,
+    workspace: &Path,
+    log: &std::fs::File,
+    then: &str,
+) -> Result<(), CliError> {
+    let profile = &c.loaded.manifest.capture;
+    if profile.configure.is_empty() {
+        return Ok(());
+    }
+    let mut vars = TemplateVars::new();
+    vars.set("workspace", workspace.display().to_string());
+    vars.set(
+        "session_id",
+        "00000000-0000-4000-8000-000000000000".to_string(),
+    );
+    let plan = build_prep_launch(c, &vars, workspace, launch)?;
+    let name = c.display_name();
+    for command in &profile.configure {
+        let shown = format!("{} {}", profile.executable.program, command.join(" "));
+        let refuse = |why: String| {
+            CliError::Refused(format!(
+                "{name} could not be set up for recording: `{shown}` {why}. {then}"
+            ))
+        };
+        // The one command builder: the plan's environment, built from nothing, and nothing
+        // else. Then this command's own stdio and a group of its own, so a timeout ends all it
+        // started.
+        let mut one = plan.clone();
+        one.argv = command.clone();
+        let (mut cmd, _) = build_command(&one, Pipes::default(), None);
+        cmd.stdin(std::process::Stdio::null());
+        let handles = (log.try_clone(), log.try_clone());
+        let (Ok(stdout), Ok(stderr)) = handles else {
+            return Err(refuse("could not be given its log".to_string()));
+        };
+        cmd.stdout(stdout).stderr(stderr);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| refuse(format!("could not be started ({e})")))?;
+        let Some(status) = crate::harness_version::wait_or_end_group(&mut child, CONFIGURE_TIMEOUT)
+        else {
+            return Err(refuse(format!(
+                "did not finish within {} seconds",
+                CONFIGURE_TIMEOUT.as_secs()
+            )));
+        };
+        if !status.success() {
+            return Err(refuse(format!("ended with {}", describe_status(&status))));
+        }
+    }
+    Ok(())
+}
+
+/// `exit code N` or `signal N`, for a refusal.
+fn describe_status(status: &std::process::ExitStatus) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return format!("signal {signal}");
+        }
+    }
+    match status.code() {
+        Some(code) => format!("exit code {code}"),
+        None => "no exit code".to_string(),
+    }
+}
+
 fn absolute_utf8<'a>(what: &str, path: &'a Path) -> Result<&'a str, CliError> {
     match path.to_str() {
         Some(text) if path.is_absolute() && !text.contains('\0') => Ok(text),

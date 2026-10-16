@@ -1,19 +1,42 @@
-# Hermes Agent 0.19.0, capture only (D40, D41). Facts: docs/harnesses/hermes-cli.md.
+# Hermes Agent 0.19.0, capture profile (D57, D61). Facts: docs/harnesses/hermes-cli.md.
 schema_version = 1
 id = "hermes-cli"
 
 [participant]
 display_name = "Hermes"
+# Shown just before Hermes opens. A home that `goalcup prep` set up asks nothing; one that was
+# not set up asks first, and Hermes closes when its setup ends (measured 16 Oct 2026). Then
+# `hermes chat --continue` finds no session and exits 1, so the way on is `goalcup prep`, not
+# `goalcup continue`. A field may not name the tracker (F7), so the hint says "prep".
+first_screen = "If Hermes asks to run setup, answer Y and pick your provider and model. It then closes: run prep again, then start your run."
 
 [capture]
-# hermes chat -Q --provider deepseek --query=<goal>. The provider follows the one admitted
-# credential (DEEPSEEK_API_KEY); the model is Hermes's own default (owner direction, 2026-10-14).
-args = ["chat", "-Q", "--provider", "deepseek"]
-goal_flag = "--query"
+# Chat mode (D57): `hermes chat` opens Hermes's classic REPL in the participant's terminal and the
+# participant types the prompt; `/exit`, `/quit` or Ctrl-D end it with exit 0 (measured 16 Oct
+# 2026). No provider, model or key option (D61): Hermes uses whatever the participant set up in
+# its home, and the tracer never sees, passes or stores a provider key.
+interactive = true
+continuation = "chat: the participant types the prompt and may type keep going"
+args = ["chat"]
+# `goalcup continue`: reopen the most recent session in the tracer's home (measured 16 Oct 2026:
+# `hermes chat --continue` resumes it, `Resumed session <id>`).
+resume_args = ["--continue"]
+# How Hermes stores its session, and nothing about how the agent behaves (D61). Run in the shared
+# home after the participant's setup and before each launch; each writes one key into
+# `config.yaml`, and neither has an environment variable.
+# - `sessions.write_json_snapshots` (default off): without it there is no session file to read.
+# - `compression.in_place` (default on): an in-place compaction keeps the session id with fewer
+#   messages, and Hermes then never rewrites a snapshot that holds more (`run_agent.py:2754`), so
+#   the file stops changing. Off, a compaction starts a new id and so a new
+#   `session_<id>.json` (`agent/conversation_compression.py:1247`, `run_agent.py:2723`), which the
+#   native source reads. Compression itself stays as the participant has it.
+configure = [
+  ["config", "set", "sessions.write_json_snapshots", "true"],
+  ["config", "set", "compression.in_place", "false"],
+]
 # Hermes's own switches (HERMES_SAFE_MODE, HERMES_IGNORE_USER_CONFIG) would silently stop the
 # session snapshot; `capture.env` may set none of them.
 reserved_env_prefixes = ["HERMES_"]
-continuation = "none: hermes chat -Q one turn, session JSON snapshot on, stdin /dev/null"
 # The model host, from the shared provider table (crates/goalcup-protocol/providers.toml).
 providers = ["deepseek"]
 
@@ -23,21 +46,13 @@ program = "hermes"
 [capture.env]
 TERMINAL_HOME_MODE = "profile"
 
+# D39 R10, D61: one shared isolated HERMES_HOME; never seeded; runs serialized. The participant's
+# own setup (`goalcup prep` opens Hermes there) keeps the provider, model and key in it.
 [capture.home]
 run_home = "empty"
-config_home = "per_run"
+config_home = "shared"
 env = "HERMES_HOME"
-per_run_dir = "hermes"
-dirs = ["home"]
 real_dirs = ["{user_home}/.hermes"]
-seed = [
-  { file = "config.yaml" },
-  { file = "auth.json" },
-  { file = ".update_check" },
-]
-
-[capture.credential]
-env = "DEEPSEEK_API_KEY"
 
 # HERMES_CA_BUNDLE replaces the roots of Hermes's provider clients with the proxy CA alone, which
 # fails closed (D41).
@@ -45,18 +60,19 @@ env = "DEEPSEEK_API_KEY"
 env = ["HERMES_CA_BUNDLE"]
 mode = "replace"
 
+# D57: no session id is known at launch (the banner prints one on the terminal, which the tracer
+# does not read). The run's sessions are every snapshot new or written since the run started,
+# which is safe because runs on the shared home are serialized (D39).
 [capture.identity]
-source = "stderr_line"
-binding = "deferred"
-prefix = "session_id: "
-grammar = "timestamp-hex"
+source = "none"
 
-# Only the run's own snapshot; never a request_dump_* file (D41). No native decoder yet.
+# Only session snapshots; never a request_dump_* file (D41). No native decoder yet.
 [[capture.native]]
 name = "session"
 root = "{config_home}/sessions"
-pattern = "session_{id}.json"
+pattern = "session_*.json"
 form = "snapshot"
+since_run_start = true
 
 # Hermes scans raw argv for -p/--profile, --tui, --cli and -h before argparse, which abbreviates.
 [capture.argv_guard]

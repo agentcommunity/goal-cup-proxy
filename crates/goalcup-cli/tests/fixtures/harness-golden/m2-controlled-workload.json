@@ -21,6 +21,7 @@
       "NODE_EXTRA_CA_CERTS"
     ],
     "config_home": "shared",
+    "configure": [],
     "continuation": "none: one fixed traffic plan, no input after the goal",
     "env": {},
     "executable": {

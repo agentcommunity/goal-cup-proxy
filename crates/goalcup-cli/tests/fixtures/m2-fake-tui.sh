@@ -24,6 +24,23 @@
 out="$M2_FAKE_OUT"
 # A connector with a shared run home (D59) has no home variable: its home is HOME.
 home="${CODEX_HOME:-$HOME}"
+# A connector's `capture.configure` command (`configure <key> <value>`, D61): the setting goes
+# into `$home/settings.txt`, one line per run of it, and what it was run with goes to
+# `tui.configure` (its argv, whether stdin is a terminal) and `tui.configure.env`; it prints one
+# `tui: configured` line. With $M2_FAKE_OUT/tui.configure.fail it fails with status 3 instead.
+if [ "$1" = configure ]; then
+  if [ -t 0 ]; then stdin=tty; else stdin=not-a-tty; fi
+  echo "$* $stdin" >> "$out/tui.configure"
+  env > "$out/tui.configure.env"
+  if [ -f "$out/tui.configure.fail" ]; then
+    echo "tui: configure failed"
+    exit 3
+  fi
+  mkdir -p "$home"
+  echo "$2=$3" >> "$home/settings.txt"
+  echo "tui: configured $2"
+  exit 0
+fi
 echo "$HOME" > "$out/tui.home"
 echo run >> "$HOME/tui-runs.txt"
 echo $$ > "$out/tui.pid.tmp" && mv "$out/tui.pid.tmp" "$out/tui.pid"
