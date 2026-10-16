@@ -1549,6 +1549,76 @@ fn a_blocked_evidence_queue_does_not_outlast_the_one_finish_deadline() {
     assert_eq!(report.exit_code(), 1);
 }
 
+/// D56: a connection that outlives the harness (here a request nobody answers, held by a
+/// process the harness left behind) must not spend the Git read's floor. The proxy stop waits
+/// for it only until the drain share, which ends `GIT_READ_FLOOR` and the commit reserve before
+/// the deadline, so the seal is asked with at least that much left. With the old bound (the
+/// budget less the reserve) the stop ran to the end and the request stated about 2 s.
+#[test]
+fn a_connection_held_open_at_the_finish_leaves_the_seal_the_git_floor() {
+    use goalcup_protocol::control::{FINISH_COMMIT_RESERVE, GIT_READ_FLOOR};
+    let _lock = table_lock::TableLock::acquire();
+    let rig = Rig::new();
+    // 34 s: the drain share is 34 - 2 - 30 = 2 s. (`Rig::new` names 10 s; the next rig resets it.)
+    goalcup_cli::set_finish_budget(Duration::from_secs(34));
+    let upstream = Upstream::start_holding(&rig.runtime);
+    rig.tell("stop", "");
+    rig.tell("steps.sh", &upstream.curl_waiting(r#"{"n":1}"#));
+    let goal = rig.goal(GOAL);
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let began = Instant::now();
+    let (result, out) = std::thread::scope(|s| {
+        joined(rig.start(
+            s,
+            &client,
+            rig.options(&goal, RESERVE),
+            Some(upstream.roots()),
+        ))
+    });
+    let took = began.elapsed();
+    goalcup_cli::set_finish_budget(Duration::from_secs(10));
+    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+
+    // The request went out through the proxy and was never answered: it was open at the stop.
+    let (_, records) = rig.read_trace(&client.created().entry_id);
+    let opened = |wanted: CaptureSource| {
+        records
+            .iter()
+            .any(|r| matches!(r, CaptureRecord::Open { source, .. } if *source == wanted))
+    };
+    assert!(
+        opened(CaptureSource::WireRequest),
+        "no request was held open\n{out}"
+    );
+    assert!(
+        !opened(CaptureSource::WireResponse),
+        "the request was answered\n{out}"
+    );
+    // Cut by the stop, and said so. (A Linux harness's leftover process is swept before the
+    // finish, so there the connection has already ended.)
+    if !cfg!(target_os = "linux") {
+        assert!(out.contains(" cut=1"), "{out}");
+    }
+
+    // The seal was asked with the floor and the reserve still to run, less a small margin.
+    let book = client.book();
+    let ms = book
+        .seals
+        .first()
+        .and_then(|seal| seal.remaining_finish_ms)
+        .expect("the launcher states its remaining budget");
+    let wanted = (GIT_READ_FLOOR + FINISH_COMMIT_RESERVE).as_millis() as u64 - 500;
+    assert!(
+        ms >= wanted,
+        "the seal was asked with {ms} ms left of 34000; the Git floor needs {wanted}\n{out}"
+    );
+    assert!(
+        took < Duration::from_secs(30),
+        "the finish took {took:?}\n{out}"
+    );
+}
+
 #[test]
 fn a_test_build_trusts_the_upstream_roots_its_environment_names() {
     let _lock = table_lock::TableLock::acquire();

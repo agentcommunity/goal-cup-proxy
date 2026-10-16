@@ -3214,10 +3214,12 @@ fn admitted(
 
 /// The one `proxy admission:` line: `accepted` and `intercepted` always, every other counter only
 /// when it is not zero, as `name=count` words in a fixed order. A run in which nothing went wrong
-/// is two numbers; one in which something did names it. The tunnels (`tunneled_auth_host`, to a
-/// connector's authentication hosts, and `tunneled_not_approved`, to any host it does not list)
-/// are named too, so that `accepted` is accounted for: they are opaque by design and leave no
-/// record in the chain, so this line is the only place that says they happened.
+/// is two numbers; one in which something did names it. The completed tunnels
+/// (`tunneled_auth_host`, to a connector's authentication hosts, and `tunneled_not_approved`, to
+/// any host it does not list) are named too: they are opaque by design and leave no record in
+/// the chain, so this line is the only place that says they happened. A tunnel still open at the
+/// stop is not counted. `cut` is the intercepted connections the stop itself cut (their streams
+/// end `Interrupted`, as for a peer that dropped TLS, which this tells apart).
 fn proxy_admission_line(
     h: &crate::proxy::ProxyHealth,
     a: &crate::proxy::AdmissionFailureCounts,
@@ -3226,6 +3228,7 @@ fn proxy_admission_line(
     let when_nonzero = [
         ("tunneled_auth_host", h.tunneled_auth_host),
         ("tunneled_not_approved", h.tunneled_not_approved),
+        ("cut", h.cut_intercepted),
         ("fail_open", h.tunneled_fail_open),
         ("auth_refused", h.admission_refused_auth),
         ("failed", h.admission_failed),
@@ -4009,9 +4012,10 @@ mod tests {
     use super::*;
     use crate::daemon::MockDaemonClient;
 
-    /// A run's tunnels are opaque and chained nowhere, so the `proxy admission:` line is where a
-    /// reader reconciles `accepted` with `intercepted` (a real Codex run: 26 accepted, 23
-    /// intercepted, the other 3 tunnels). A run with none keeps its two numbers.
+    /// A run's completed tunnels are opaque and chained nowhere, and a connection the stop cut
+    /// has no marker of its own in the chain, so the `proxy admission:` line names both (a real
+    /// Codex run: 26 accepted, 23 intercepted, the rest tunnels). A run with none keeps its two
+    /// numbers.
     #[test]
     fn the_admission_line_accounts_for_the_tunnels() {
         let none = crate::proxy::AdmissionFailureCounts::default();
@@ -4026,9 +4030,10 @@ mod tests {
         );
         health.tunneled_auth_host = 1;
         health.tunneled_not_approved = 2;
+        health.cut_intercepted = 1;
         assert_eq!(
             proxy_admission_line(&health, &none),
-            "proxy admission: accepted=26 intercepted=23 tunneled_auth_host=1 tunneled_not_approved=2"
+            "proxy admission: accepted=26 intercepted=23 tunneled_auth_host=1 tunneled_not_approved=2 cut=1"
         );
     }
 

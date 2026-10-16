@@ -72,8 +72,9 @@ consistent, not that the participant followed the rules.
   approved host is a loss. A tunnel to a host that is not approved stays opaque by design when its
   ClientHello names none, names an unapproved host, or is not TLS. Such a tunnel, and one to an
   authentication host, leaves no record in the chain; the `proxy admission:` line at the finish
-  counts them (`tunneled_not_approved`, `tunneled_auth_host`), so `accepted` less `intercepted`
-  is accounted for. A decided tunnel still open at
+  counts the completed ones (`tunneled_not_approved`, `tunneled_auth_host`). A tunnel still open
+  at the stop is not counted, so `accepted` less `intercepted` can exceed the line. A connection
+  the stop cut is counted as `cut`. A decided tunnel still open at
   stop (a dev server that outlived the harness) is cut without a loss.
 - **The seal lists what it cannot read, and has no time bound inside a file walk.** A local run
   walks the workspace. A symlink, FIFO, socket or device is listed with the absent digest and never

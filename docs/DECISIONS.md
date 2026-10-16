@@ -379,7 +379,8 @@ is not empty, is refused.
 - **Time.** `LOCAL_CAPTURE_FINISH_BUDGET` is 180 s; the commit reserve stays 2 s. For a clone the
   drain share (the daemon's ingest drain and the launcher's proxy stop) ends 30 s before the
   deadline, so Git always gets time. A real Codex run showed the proxy stop had not: it waited for
-  a connection the harness held open until the reserve, and the Git read ran out of time.
+  a connection the harness held open until the reserve, and the Git read ran out of time. The
+  Hermes marker wait (CONTRACTS C6 para 3) ends one second before the reserve and keeps no floor.
 
 ## D57. Connectors run the harness in chat mode and record every session file since the start.
 
