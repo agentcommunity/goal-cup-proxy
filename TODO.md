@@ -46,8 +46,10 @@ Owner decisions of 16 Oct 2026:
   accounts, repo and host identifiers) before any research group gets it. Researchers never get
   access to our database or R2; each group gets a cleaned export through custom, narrow access
   (clean-up 14). The design doc is kept privately; it is built after the event.
-- Keyed runs (a harness given an API key, such as Hermes) are uploaded. #208 is in progress: it
-  redacts the exact key values and adds a check before upload.
+- No keyed runs: the tracer never sees, forwards or stores a provider key (D61). Every harness,
+  Hermes included, keeps its own login in its home, and every run uploads under the same rules.
+  #208 redacts the run's own proxy credential by exact value; #214 runs Hermes in chat mode from
+  its own home; #215 removes the key-forwarding mechanism.
 - Amp ships. Its metadata log is a native source, labelled as such. #206 waits for the owner's live
   run (the thread log is not yet measured in chat mode).
 - Claude Code's folder-trust dialog: the participant answers it. The RULES exemption for that one
@@ -104,7 +106,7 @@ are the order found.
 24. Page buttons "Approve/Deny" for every purpose. Fixed: website #307.
 25. Replace warning had no start time. Fixed: website #307 (migration applied to prod), SQL mirror #207.
 26. Prep opened the harness with no pause. Fixed: #204.
-Also open: keyed runs not uploaded (#208, in progress); Amp (#206, waits for the owner's run).
+Also open: Amp (#206, waits for the owner's run). Keyed runs are gone (D61, #214, #215).
 Participant-guide text is one pass at the end (UX-F): approvals, trust dialog, Little Snitch.
 
 ### WP1: Event window and event switch (server). Land first.

@@ -272,7 +272,7 @@ This build ships two connectors for chat mode, on macOS, Linux and Windows throu
 | Claude Code CLI | `claude-code-cli` | Any build. The build that ran is recorded. |
 | Codex CLI | `codex-cli` | The tracker launches the real binary, not the npm wrapper. |
 
-`hermes-cli` also ships, and is not on the supported list yet. Other harnesses can join through a merged, tested
+`hermes-cli` also ships as a connector. Other harnesses can join through a merged, tested
 connector pull request before the window opens; the supported list is final when the window opens.
 Only modes that meet the minimum capture contract and pass the public conformance suite appear in
 the supported list. A harness not on it has no recording path, and its runs are not entries.

@@ -179,18 +179,28 @@ cheapest-model clause is superseded by D52.
 - **Disk reservation.** One 3 GiB reserve file for each run (`RUN_RESERVE_BYTES`), held by the run host, reused all week
   and released after the last upload. A chain is quota-only (`CHAIN_QUOTA_BYTES`, 1 TiB logical).
   It preallocates nothing, so no grow-then-shrink release exists to fail.
-- **Hermes** *(superseded by D61)*: the tracer passes Hermes no key. No base URL is set (D1).
+- **Hermes** uses its `deepseek` provider with `DEEPSEEK_API_KEY` passed to the child only. No
+  DeepSeek base URL is set.
+
+*Superseded in part by D61: no key is passed, and Hermes uses the provider the participant set up
+in its home.*
 
 ## D41. **(M2)** Hermes reference row: model, CA trust, key-fingerprint and key-fragment rules.
 
 - **CA trust.** `HERMES_CA_BUNDLE` replaces Hermes's roots with the tracer's proxy CA. That fails
   closed: Hermes trusts only the proxy, and the proxy verifies the real upstream. `SSL_CERT_FILE`
   stays refused. D43 generalises this to any connector.
-- **Key fingerprint and key fragments** *(superseded by D61)*. The tracer holds no key, so it
-  seeds no key-pool guard and runs no key-fragment scan. Masked-key forms are still redacted on
-  the wire (`masked_key`, a soft rule that only adds redaction).
+- **Key fingerprint.** The private `auth.json` is pre-seeded so that Hermes never seeds its
+  credential pool from the env key or writes `secret_fingerprint`.
+- **Key fragments.** Before any Hermes run artifact is kept, a scan with the in-memory key (never
+  stored) looks for its prefix (`key[:8]`), suffix (`key[-8:]`) and masked forms. A hit fails the
+  row and the run folder stays local. Masked-key forms are also redacted on the wire (`masked_key`,
+  a soft rule that only adds redaction).
 - **Isolation.** Every Hermes call, version probes included, uses a private `HOME` and
   `HERMES_HOME`. The model clause is superseded by D52.
+
+*Superseded in part by D61: Hermes's home is the participant's own and is not seeded, and the
+tracer holds no key, so no run is scanned for one. The `masked_key` rule stays.*
 
 ## D42. Open source: data-only harnesses, open harness PRs.
 
@@ -205,7 +215,10 @@ The protocol freezes at v5 for v0.x. macOS is the measured platform, Linux next,
 The contract is `connectors/<id>/harness.toml`, schema 1.
 
 1. One file per connector. No claim fields (`family`, `tier`, `tested_version_range`) exist.
-2. *(Superseded by D61.)* A connector names no credential: `[capture.credential]` is refused.
+2. Credentials are a closed list (`CREDENTIAL_ENV`): `DEEPSEEK_API_KEY`, `AMP_API_KEY` (D49). A
+   credential needs a per-run config home and either `stderr_line` + `deferred` or
+   `stdout_json` + `at_launch` identity (D50). `preassigned` and `none` stay refused.
+   *Superseded in part by D61: the list is gone, and `[capture.credential]` is refused.*
 3. *(Amended by WP12.)* A CA variable's name is connector data, held to a closed shape: a name
    ending `_CA_CERTIFICATE`, `_CA_CERTIFICATES`, `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or
    `_CA_FILE`, under the shared env-name rules, or one of the two shared rows `SSL_CERT_FILE` and
@@ -267,13 +280,22 @@ the V1 cadence keys were deleted before release, and `DaemonConfig` refuses them
 
 ## D49. **(M2)** Admit `AMP_API_KEY` as a child credential. *(Superseded by D61/D60.)*
 
-The child-credential list it joined is gone (D61). The one secret the tracer hands a harness is
-its own proxy credential (D60). An Amp connector signs in with Amp's own login.
+`AMP_API_KEY` joins `CREDENTIAL_ENV`. It goes to the harness child only, through the child-secret
+seam, under the shared grammar (20 to 256 bytes of `[A-Za-z0-9_-]`). It is never a manifest value.
+D41's key-fragment scan applies. This admits a name only; it admits no Amp connector.
+
+*Superseded by D61/D60: the child-credential list and seam are gone (D61). The one secret the
+tracer hands a harness is its own proxy credential (D60).*
 
 ## D50. **(M2)** Amend D43 ruling 3 for `stdout_json` identity. *(Superseded by D61.)*
 
-No connector passes a credential, so there is no key scan for an identity reader to share. A
-`stdout_json` identity is read by its own stdout tee, as bytes arrive.
+A credential may pair with `stdout_json` + `at_launch` identity. One reader of the child's stdout
+feeds both the key-fragment scan and the identity matcher, and the identity is read as bytes
+arrive. Output holding a fragment is withheld and fails the row. A key-bearing identity line (or a
+key-bearing `stderr_line` marker) binds no identity. The per-run config home stays required.
+
+*Superseded by D61: no connector passes a credential, so there is no key scan. A `stdout_json`
+identity is read by its own stdout tee.*
 
 ## D51. A connector's argv and env are data; review is the control.
 

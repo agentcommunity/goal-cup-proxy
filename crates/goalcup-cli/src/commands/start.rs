@@ -868,7 +868,7 @@ pub fn validate_shared_capture_home_for_uid(path: &Path, uid: u32) -> Result<(),
 ///
 /// Every way out of the later phases that does not run to the harness's own end goes through
 /// [`Forked::unlaunched`] or [`Forked::sealed_launch`], so a run that ends early is sealed the
-/// the same way.
+/// same way.
 struct Forked<'a> {
     client: &'a (dyn DaemonClient + Sync),
     cfg: &'a Path,
@@ -3357,10 +3357,10 @@ fn finish(
     sealed
 }
 
-/// The upload server this run opens with: `None` with no `goalcup login`. With a server, `goalcup prep` must have run: its repository,
-/// its work folder and the GitHub token are checked here, all before the participant is asked for
-/// anything and before anything is created. A `--dev` run is uploaded like any other; the server refuses a
-/// connector it does not accept.
+/// The upload server this run opens with: `None` with no `goalcup login`. With a server, `goalcup
+/// prep` must have run: its repository, its work folder and the GitHub token are checked here, all
+/// before the participant is asked for anything and before anything is created. A `--dev` run is
+/// uploaded like any other; the server refuses a connector it does not accept.
 fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,

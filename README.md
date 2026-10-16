@@ -188,10 +188,11 @@ in [OPERATING](docs/OPERATING.md#running-the-daemon).
   made in the folder you run `goalcup start` from, or beside the goal file for a headless harness.
   The sealed trace is under the daemon's `artifact_root`. A run on the server works in a clone of
   the participant's GitHub repository instead.
-- **What the harness sees.** Its environment is built from nothing. Of your shell only `USER`,
-  `LOGNAME` and `TMPDIR` reach it: never a provider key (D61). A harness keeps its own login in
-  its home. The tracer never sets a
-  model base URL. The only proxy the harness gets is the tracer's own loopback recorder.
+- **What the harness sees.** Its environment is built from nothing. Of your shell only these
+  reach it: `USER`, `LOGNAME` and `TMPDIR` for every harness, and for a chat-mode harness also
+  `PATH`, `TERM`, `COLORTERM`, `LANG`, `SHELL` and every `LC_*` (a headless harness gets a fixed
+  `PATH`). Never a provider key (D61): a harness keeps its own login in its home. The tracer never
+  sets a model base URL. The only proxy the harness gets is the tracer's own loopback recorder.
 - <a id="the-daemon"></a>**The daemon.** `goalcup start` uses the daemon that answers on
   `$GOALCUP_CONFIG_DIR/control.json` and starts `goalcup-daemon --exit-when-idle` when none does. It
   is found beside `goalcup` or on `PATH`, runs in its own session with an environment built from
