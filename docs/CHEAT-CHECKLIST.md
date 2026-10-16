@@ -50,8 +50,8 @@ consistent, not that the participant followed the rules.
   (`$HOME/.cache/amp/logs/threads/T-<uuid>.log`): transport states, JSON-RPC request names, server
   message types with frame lengths and tool executions, and almost no conversation text. So the
   user's prompts, the model's turns and the tool results are on the wire leg alone, and no local
-  record can disagree with them. No decoder reads either leg yet (`amp-thread-log`,
-  `amp-thread-jsonrpc`), so an Amp run's `analysis.cross_leg` reads `unchecked`, and its
+  record can disagree with them. No decoder reads either leg yet
+  (`amp-thread-metadata-no-transcript`, `amp-thread-jsonrpc`), so an Amp run's `analysis.cross_leg` reads `unchecked`, and its
   `assistance.evidence` reads `none_observed`, which here means "no decoder", not "the participant
   typed nothing". The trust is not fail-closed either: Amp (a Bun
   binary) reads `NODE_EXTRA_CA_CERTS`, which adds the proxy CA to the system roots (`mode =

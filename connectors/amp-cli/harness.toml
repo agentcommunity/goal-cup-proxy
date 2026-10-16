@@ -67,14 +67,15 @@ source = "none"
 # METADATA ONLY, NO TRANSCRIPT. Amp keeps the conversation on ampcode.com. Locally it writes one
 # JSON-lines log per thread: transport states, JSON-RPC requests, server message types with frame
 # lengths and each tool execution, and almost no conversation text (live probe, execute mode;
-# chat mode not yet measured). It can cross-check the wire leg; it cannot replace it. The hint has
-# no decoder, so this source is capture-only.
+# chat mode not yet measured). It can cross-check the wire leg; it cannot replace it. The row name
+# (the trace's stream label) and the hint (the verifier report's `analysis.undecoded`) both say
+# so. The hint has no decoder, so this source is capture-only.
 [[capture.native]]
-name = "thread-metadata"
+name = "thread-metadata-no-transcript"
 root = "{run_home}/.cache/amp/logs/threads"
 pattern = "T-*.log"
 form = "append_only"
-protocol_hint = "amp-thread-log"
+protocol_hint = "amp-thread-metadata-no-transcript"
 since_run_start = true
 
 # The npm `.bin/amp` is a link to the native executable, which is the process the tracer starts.
@@ -93,6 +94,8 @@ extra_patterns = [
 # Amp's only model host (live probe): the thread is created by POST /api/thread-actors, then runs
 # over one WebSocket of JSON-RPC text frames. `/api/internal` is NOT selected: it carries
 # `getUserInfo` (e-mail) and `getSecretFingerprints`, and one path would select every method.
+# That also leaves out `getThreadTail`, `archiveThread` and an orb thread's goal
+# (`createRemoteExecutorThread`): docs/harnesses/amp-cli.md, section 10.
 # The hint has no decoder yet, so the wire leg is capture-only.
 [[capture.hosts]]
 host = "ampcode.com"

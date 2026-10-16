@@ -22,8 +22,8 @@
   },
   "native_streams_opened": [
     {
-      "label": "thread-metadata:T-unknown.log#g1",
-      "protocol_hint": "amp-thread-log"
+      "label": "thread-metadata-no-transcript:T-unknown.log#g1",
+      "protocol_hint": "amp-thread-metadata-no-transcript"
     }
   ]
 }
