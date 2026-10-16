@@ -177,15 +177,16 @@ fn gate_release_execs_with_stable_pid_and_start_identity() {
     let mut spawned = gated.release().expect("released");
     assert_eq!(spawned.child.id(), pid, "the registered pid is the harness");
     wait_for("the harness to run", || w.ran());
+    // The script writes `ran` just before its own `exec`, so `ran` alone does not say the exec
+    // has happened (under load the shell was seen between the two). Wait for the exec itself:
+    // the process table naming the harness's command, which is what is asserted.
+    wait_for("the script's exec", || {
+        command_of(pid).contains("/bin/sleep 30")
+    });
     assert_eq!(
         process_start_identity(pid).as_deref(),
         Some(parked_start.as_str()),
         "exec does not change the creation identity the daemon was handed"
-    );
-    assert!(
-        command_of(pid).contains("/bin/sleep 30"),
-        "after the release it is the harness (the script's exec): {}",
-        command_of(pid)
     );
     assert_eq!(spawned.program, "/bin/sh");
     kill9(pid);
