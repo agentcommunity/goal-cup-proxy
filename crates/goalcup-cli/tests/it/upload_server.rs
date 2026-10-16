@@ -1144,14 +1144,23 @@ fn the_heartbeat_helper_sees_the_heartbeats() {
 
 #[test]
 fn an_unsealed_run_is_incomplete_after_the_close_time_and_takes_nothing() {
+    // The stand-in's clock counts whole seconds, so a one-second run is over somewhere between
+    // 0 and 1 s after the open. Once it is over, a chunk is 503 `awaiting_final` until the final
+    // heartbeat has committed the end. So the final heartbeat comes first: after it the chunk is
+    // taken whether the run is over or not. The run is still never sealed, so it still goes
+    // `incomplete`. `close_after_seconds: 2` leaves the setup at least 2 s before the close.
     let rig = Rig::with(ServerOptions {
         run_seconds: Some(1),
-        close_after_seconds: 1,
+        close_after_seconds: 2,
         ..two_tokens()
     });
     let (run, entry) = rig.open_ok();
+    assert_eq!(
+        rig.heartbeat(&run, &entry, 3, &head(3), true, None).status,
+        200
+    );
     rig.put_ok(&run, &entry, &Chunk::first());
-    // Over at 1 s, closed after 1 s more.
+    // Over at 1 s, closed after 2 s more; wait for the status, not for a guessed time.
     let mut status = String::new();
     for _ in 0..100 {
         status = rig.get(&run, TOKEN).body["status"]
