@@ -1280,29 +1280,15 @@ mod segments {
     #[test]
     fn continue_after_the_deadline_is_refused_and_creates_nothing() {
         let rig = Rig::chat();
-        let server = server(
-            &rig,
-            ServerOptions {
-                run_seconds: Some(6),
-                ..ServerOptions::default()
-            },
-        );
+        // A long run, so a slow setup cannot reach its deadline before the agent is up. The
+        // test ends it itself once the first part is over.
+        let server = server(&rig, ServerOptions::default());
         let mut first = rig.start_on_pty(&[DISK, BEATING]);
         first.wait_shown("tui: ready");
         kill_agent(&rig);
         assert!(first.wait().success());
         let run_id = the_run(&server);
-        let deadline = goalcup_protocol::control::parse_z(
-            goalcup_cli::run::read(&rig.cfg, &run_id)
-                .unwrap()
-                .deadline_at
-                .as_deref()
-                .unwrap(),
-        )
-        .unwrap();
-        wait_until("the run's deadline", || {
-            goalcup_cli::run::now_unix() > deadline
-        });
+        server.end_run_now(&run_id);
         let uploads = || {
             let mut names: Vec<_> = std::fs::read_dir(rig.cfg.join("uploads"))
                 .unwrap()

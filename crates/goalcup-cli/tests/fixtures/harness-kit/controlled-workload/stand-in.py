@@ -1,5 +1,6 @@
 #!/usr/bin/python3
-"""One offline native write and one HTTPS echo through the recording proxy."""
+"""One offline native write, then a second once the runner says the first is recorded, and one
+HTTPS echo through the recording proxy."""
 
 import base64
 import os
@@ -53,7 +54,21 @@ def echo(port, test_id):
         raise RuntimeError("echo mismatch")
 
 
-port, test_id, marker = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+def wait_for_go(path, patience=60.0):
+    """Wait for the runner to say it holds the first line, so the append is a later write.
+
+    The runner creates `path` once the recorded chain holds the first line. A fixed sleep here
+    raced the recorder on a loaded host; this wait depends on the recorder, not the clock.
+    """
+    deadline = time.monotonic() + patience
+    while not os.path.exists(path):
+        if time.monotonic() > deadline:
+            print("kit stand-in: the runner never released the append", file=sys.stderr, flush=True)
+            sys.exit(4)
+        time.sleep(0.02)
+
+
+port, test_id, marker, go = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 open(marker, "w").close()
 native = os.path.join(os.environ["HOME"], "native")
 os.makedirs(native, mode=0o700)
@@ -62,7 +77,7 @@ with open(path, "w") as stream:
     stream.write('{"message":"controlled first"}\n')
     stream.flush()
     os.fsync(stream.fileno())
-time.sleep(0.75)
+wait_for_go(go)
 with open(path, "a") as stream:
     stream.write('{"message":"controlled native"}\n')
 echo(port, test_id)

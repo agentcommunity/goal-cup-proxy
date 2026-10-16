@@ -950,6 +950,17 @@ impl OnPty {
         file.write_all(format!("{line}\r").as_bytes()).unwrap();
     }
 
+    /// Type `bytes` as they are: no Enter after them. For a control character that must be the
+    /// only thing on the line, such as Ctrl-D (`"\u{4}"`). A trailing Enter would stay queued in
+    /// the terminal and be read by whatever asks next.
+    pub fn type_bytes(&self, bytes: &str) {
+        use std::io::Write;
+        use std::os::fd::AsFd;
+        let fd = self.master.as_ref().expect("the window is open").as_fd();
+        let mut file = std::fs::File::from(fd.try_clone_to_owned().unwrap());
+        file.write_all(bytes.as_bytes()).unwrap();
+    }
+
     /// The terminal's foreground process group.
     pub fn foreground_group(&self) -> i32 {
         use std::os::fd::AsRawFd;

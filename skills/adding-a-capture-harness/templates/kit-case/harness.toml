@@ -1,8 +1,8 @@
 # Template for crates/goalcup-cli/tests/fixtures/harness-kit/<HARNESS_ID>/harness.toml.
 # A kit case mirrors the connector's home, identity and native shape, but runs a Python
 # stand-in against the kit's own offline upstream. Keep every @NAME@ token exactly: the kit
-# runner replaces them before loading (stand-in path, marker path, upstream port and test
-# id). Replace every <PLACEHOLDER>.
+# runner replaces them before loading (stand-in path, marker path, go-file path, upstream
+# port and test id). Replace every <PLACEHOLDER>.
 # Headless connectors only: a chat-mode connector (interactive = true) needs no kit case, because
 # the kit runs every pinned chat-mode connector from its own harness.toml.
 
@@ -12,9 +12,11 @@ schema_version = 1
 id = "kit-<HARNESS_ID>"
 
 [capture]
-# Keep the first six items. Identity "preassigned": insert "{session_id}" before "--"
-# (the stand-in reads it as argv[4]). The kit always places the goal after "--".
-args = ["-I", "-S", "@STAND_IN@", "@PORT@", "@TEST_ID@", "@MARKER@", "--"]
+# Keep the first seven items. "@GO@" is a file the runner creates once the chain holds the
+# first native write; the stand-in waits for it instead of sleeping. Identity "preassigned":
+# insert "{session_id}" before "--" (the stand-in reads it as argv[5]). The kit always places
+# the goal after "--".
+args = ["-I", "-S", "@STAND_IN@", "@PORT@", "@TEST_ID@", "@MARKER@", "@GO@", "--"]
 continuation = "one offline echo and one native file for <HARNESS_ID>"
 
 [capture.executable]
