@@ -47,6 +47,32 @@ fn rendered(templates: &[String], vars: &TemplateVars) -> Vec<String> {
     templates.iter().map(|t| render(t, vars).unwrap()).collect()
 }
 
+/// Every shipped connector names itself for the participant, in plain text, and core code
+/// reads that name through `HarnessConnector::display_name` (the id is only the fallback).
+#[test]
+fn every_connector_declares_a_display_name_that_passes_validation() {
+    for id in shipped_connector_ids() {
+        let connector = load(&id);
+        let declared = connector
+            .loaded
+            .manifest
+            .participant
+            .as_ref()
+            .unwrap_or_else(|| panic!("{id}: no [participant] table"));
+        assert_eq!(connector.display_name(), declared.display_name, "{id}");
+        assert_ne!(connector.display_name(), id, "{id}: the name is the id");
+        if let Some(why) = goalcup_protocol::harness::display_name_problem(connector.display_name())
+        {
+            panic!("{id}: display_name {why}");
+        }
+        if let Some(hint) = connector.first_screen()
+            && let Some(why) = goalcup_protocol::harness::first_screen_problem(hint)
+        {
+            panic!("{id}: first_screen {why}");
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // The folder and its pin.
 // ---------------------------------------------------------------------------------------

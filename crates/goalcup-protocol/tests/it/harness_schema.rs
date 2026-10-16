@@ -2718,6 +2718,218 @@ fn the_closed_sets_are_non_exhaustive_so_a_downstream_match_must_end_in_a_wildca
 }
 
 // ---------------------------------------------------------------------------------------
+// `[participant]`: the display name and first-screen hint
+// ---------------------------------------------------------------------------------------
+
+/// `t` with `[participant]` holding `display_name` and, when given, `first_screen`.
+fn with_participant(mut t: Table, display_name: &str, first_screen: Option<&str>) -> Table {
+    let mut p = Table::new();
+    p.insert("display_name".into(), Value::String(display_name.into()));
+    if let Some(f) = first_screen {
+        p.insert("first_screen".into(), Value::String(f.into()));
+    }
+    t.insert("participant".into(), Value::Table(p));
+    t
+}
+
+#[test]
+fn the_participant_table_is_optional_and_the_name_falls_back_to_the_id() {
+    // The frozen fixtures predate the table: they still load and validate.
+    for id in ["hermes-cli", "codex-cli", "claude-code-cli"] {
+        let m = parsed(&fixture(id));
+        assert!(m.participant.is_none(), "{id}");
+        assert_eq!(m.display_name(), id);
+        assert_eq!(m.first_screen(), None);
+    }
+}
+
+#[test]
+fn a_participant_table_names_the_harness_and_its_first_screen() {
+    let hint = "Claude Code may ask whether you trust this folder. Choose Yes.";
+    let m = parsed(&with_participant(claude(), "Claude Code", Some(hint)));
+    assert_eq!(m.display_name(), "Claude Code");
+    assert_eq!(m.first_screen(), Some(hint));
+    // The hint may be absent.
+    let m = parsed(&with_participant(codex(), "Codex", None));
+    assert_eq!(m.display_name(), "Codex");
+    assert_eq!(m.first_screen(), None);
+    // The limits are inclusive.
+    admitted(
+        &with_participant(codex(), &"n".repeat(40), Some(&"h".repeat(200))),
+        PINNED,
+    );
+    // Punctuation and single inner spaces are plain text.
+    admitted(
+        &with_participant(
+            codex(),
+            "Open-Code (v2), the 1st!",
+            Some("Press `y`; then Enter."),
+        ),
+        PINNED,
+    );
+}
+
+/// One input from each class the allow-list closes, with a label for the failure message. Each
+/// is spliced into a string of plain letters, so the class is the only thing wrong with it.
+const NOT_PRINTABLE_ASCII: &[(&str, &str)] = &[
+    ("\x1b", "ESC (starts an ANSI sequence)"),
+    ("\x1b[31m", "an SGR sequence"),
+    ("\x1b]0;title\x07", "an OSC title and BEL"),
+    ("\x00", "NUL"),
+    ("\x1f", "last C0 control"),
+    ("\n", "newline"),
+    ("\r", "carriage return"),
+    ("\t", "tab"),
+    ("\x7f", "DEL"),
+    ("\u{80}", "first C1 control"),
+    ("\u{9b}", "C1 CSI"),
+    ("\u{9f}", "last C1 control"),
+    ("\u{a0}", "no-break space"),
+    ("\u{ad}", "soft hyphen"),
+    ("\u{34f}", "combining grapheme joiner"),
+    ("\u{61c}", "Arabic letter mark (bidi)"),
+    ("\u{115f}", "Hangul filler"),
+    ("\u{180e}", "Mongolian vowel separator"),
+    ("\u{1680}", "Ogham space"),
+    ("\u{2000}", "en quad"),
+    ("\u{200a}", "hair space"),
+    ("\u{200b}", "zero-width space"),
+    ("\u{200c}", "zero-width non-joiner"),
+    ("\u{200d}", "zero-width joiner"),
+    ("\u{200e}", "left-to-right mark"),
+    ("\u{200f}", "right-to-left mark"),
+    ("\u{2028}", "line separator"),
+    ("\u{2029}", "paragraph separator"),
+    ("\u{202a}", "left-to-right embedding"),
+    ("\u{202d}", "left-to-right override"),
+    ("\u{202e}", "right-to-left override"),
+    ("\u{202f}", "narrow no-break space"),
+    ("\u{205f}", "medium mathematical space"),
+    ("\u{2060}", "word joiner"),
+    ("\u{2064}", "invisible plus"),
+    ("\u{2066}", "left-to-right isolate"),
+    ("\u{2069}", "pop directional isolate"),
+    ("\u{206a}", "deprecated format character"),
+    ("\u{206f}", "last deprecated format character"),
+    ("\u{2800}", "blank braille"),
+    ("\u{3000}", "ideographic space"),
+    ("\u{3164}", "Hangul filler"),
+    ("\u{fe00}", "variation selector"),
+    ("\u{fe0f}", "variation selector 16"),
+    ("\u{feff}", "byte-order mark"),
+    ("\u{ffa0}", "halfwidth Hangul filler"),
+    ("\u{fff9}", "interlinear annotation anchor"),
+    ("\u{fffc}", "object replacement character"),
+    ("\u{e0001}", "language tag"),
+    ("\u{e0041}", "tag letter A"),
+    ("\u{e007f}", "cancel tag"),
+    ("\u{e9}", "an ordinary accented letter"),
+    ("\u{4e2d}", "an ordinary CJK letter"),
+    ("\u{1f600}", "an emoji"),
+];
+
+#[test]
+fn a_display_name_that_is_not_printable_ascii_is_refused() {
+    for (bad, why) in NOT_PRINTABLE_ASCII {
+        for text in [
+            format!("Co{bad}dex"),
+            format!("{bad}Codex"),
+            format!("Codex{bad}"),
+        ] {
+            let t = with_participant(codex(), &text, None);
+            let Some(msg) = outcome(&t, PINNED) else {
+                panic!("admitted {text:?}: {why}");
+            };
+            assert!(msg.contains("participant.display_name"), "{why}: {msg}");
+        }
+    }
+    let t = with_participant(codex(), "Codex", None);
+    admitted(&t, PINNED);
+}
+
+#[test]
+fn a_display_name_has_no_stray_spaces_and_a_bounded_length() {
+    for (text, why) in [
+        ("", "empty"),
+        (" ", "one space"),
+        ("   ", "only spaces"),
+        (" Codex", "leading space"),
+        ("Codex ", "trailing space"),
+        ("Claude  Code", "two spaces in a row"),
+    ] {
+        let t = with_participant(codex(), text, None);
+        assert!(outcome(&t, PINNED).is_some(), "admitted {text:?}: {why}");
+    }
+    let long = "n".repeat(41);
+    refused(
+        &with_participant(codex(), &long, None),
+        PINNED,
+        &["participant.display_name", "41"],
+    );
+    admitted(&with_participant(codex(), "Claude Code", None), PINNED);
+    admitted(&with_participant(codex(), &"n".repeat(40), None), PINNED);
+}
+
+#[test]
+fn a_first_screen_that_is_not_one_plain_line_is_refused() {
+    for (bad, why) in NOT_PRINTABLE_ASCII {
+        for text in [
+            format!("Choose {bad}Yes."),
+            format!("{bad}Choose Yes."),
+            format!("Choose Yes.{bad}"),
+        ] {
+            let t = with_participant(codex(), "Codex", Some(&text));
+            let Some(msg) = outcome(&t, PINNED) else {
+                panic!("admitted {text:?}: {why}");
+            };
+            assert!(msg.contains("participant.first_screen"), "{why}: {msg}");
+        }
+    }
+    for (text, why) in [
+        ("", "empty"),
+        ("  ", "only spaces"),
+        (" Choose Yes.", "leading space"),
+        ("Choose Yes. ", "trailing space"),
+        ("Choose  Yes.", "two spaces in a row"),
+        ("Line one.\nLine two.", "a newline"),
+    ] {
+        let t = with_participant(codex(), "Codex", Some(text));
+        assert!(outcome(&t, PINNED).is_some(), "admitted {text:?}: {why}");
+    }
+    let long = "h".repeat(201);
+    refused(
+        &with_participant(codex(), "Codex", Some(&long)),
+        PINNED,
+        &["participant.first_screen", "201"],
+    );
+    admitted(
+        &with_participant(
+            claude(),
+            "Claude Code",
+            Some("Claude Code may ask whether you trust this folder. Choose Yes."),
+        ),
+        PINNED,
+    );
+    // No exemption for Dev.
+    refused(
+        &with_participant(codex(), "Co\x1b[0mdex", None),
+        DEV,
+        &["participant.display_name"],
+    );
+}
+
+#[test]
+fn the_participant_table_keeps_the_schema_strict() {
+    // An unknown key is refused as a newer schema's, and a table without a name is a TOML error.
+    let mut t = with_participant(codex(), "Codex", None);
+    set(&mut t, &["participant"], "colour", "red");
+    refused(&t, PINNED, &["colour"]);
+    let mut t = codex();
+    t.insert("participant".into(), Value::Table(Table::new()));
+    refused(&t, PINNED, &["display_name"]);
+}
+
+// ---------------------------------------------------------------------------------------
 // `[capture.platform.<os>-<arch>]`: the per-platform env
 // ---------------------------------------------------------------------------------------
 

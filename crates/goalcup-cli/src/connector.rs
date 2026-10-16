@@ -32,6 +32,19 @@ pub struct HarnessConnector {
     pub loaded: LoadedConnector,
 }
 
+impl HarnessConnector {
+    /// The name to show the participant: the manifest's `participant.display_name`, else the
+    /// connector id. Core messages name a harness only through this.
+    pub fn display_name(&self) -> &str {
+        self.loaded.manifest.display_name()
+    }
+
+    /// The manifest's `participant.first_screen` hint, when it has one.
+    pub fn first_screen(&self) -> Option<&str> {
+        self.loaded.manifest.first_screen()
+    }
+}
+
 /// Load the schema-1 connector declaring `id` under `dir`.
 ///
 /// Discovery enumerates child directories, then the protocol loader reads each directory once.

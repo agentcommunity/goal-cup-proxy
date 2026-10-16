@@ -2,6 +2,11 @@
 schema_version = 1
 id = "claude-code-cli"
 
+[participant]
+display_name = "Claude Code"
+# Shown just before the harness opens: a fresh run folder makes it ask this once.
+first_screen = "Claude Code may ask whether you trust this folder. Choose Yes."
+
 [capture]
 auth_hosts = ["platform.claude.com"]
 # The model host, from the shared provider table (crates/goalcup-protocol/providers.toml).

@@ -275,6 +275,70 @@ pub struct HarnessManifest {
     pub capture: CaptureSpec,
     #[serde(default)]
     pub redaction: Option<RedactionSpec>,
+    /// How core messages name the harness to the participant. Optional; see [`ParticipantSpec`].
+    #[serde(default)]
+    pub participant: Option<ParticipantSpec>,
+}
+
+/// The most characters a `participant.display_name` may hold.
+pub const MAX_DISPLAY_NAME_CHARS: usize = 40;
+
+/// The most characters a `participant.first_screen` may hold.
+pub const MAX_FIRST_SCREEN_CHARS: usize = 200;
+
+/// `[participant]`: what the participant is told about the harness, in the harness's own words,
+/// so core messages never hard-code a harness name. Both strings are printed to a terminal, so
+/// [`display_name_problem`] and [`first_screen_problem`] refuse anything that is not plain text.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ParticipantSpec {
+    /// The harness's name as a person says it. Core code uses it in place of the connector id.
+    pub display_name: String,
+    /// What the harness shows first, and what to do about it (a folder-trust question, for
+    /// example). Shown just before the harness opens. Absent when the harness asks nothing.
+    #[serde(default)]
+    pub first_screen: Option<String>,
+}
+
+/// Why `s` is not fit to print to a terminal as one line of plain text, or `None` when it is.
+///
+/// An allow-list, not a deny-list: only printable ASCII (0x20 to 0x7E) is accepted. That closes
+/// every control, escape, invisible, bidirectional, tag and odd-space character at once, with no
+/// Unicode table to keep complete. The text also has 1 to `max` characters, no leading or
+/// trailing space, and never two spaces in a row.
+fn plain_line_problem(s: &str, max: usize) -> Option<String> {
+    let n = s.chars().count();
+    if s.trim_matches(' ').is_empty() {
+        return Some("must not be empty".to_string());
+    }
+    if n > max {
+        return Some(format!("must be 1 to {max} characters; this has {n}"));
+    }
+    if !s.chars().all(|c| matches!(c, ' '..='~')) {
+        return Some(
+            "must be plain printable ASCII on one line (letters, digits, punctuation and single \
+             spaces)"
+                .to_string(),
+        );
+    }
+    if s.starts_with(' ') || s.ends_with(' ') {
+        return Some("must not start or end with a space".to_string());
+    }
+    if s.contains("  ") {
+        return Some("must not hold two spaces in a row".to_string());
+    }
+    None
+}
+
+/// Why `s` is not a valid `participant.display_name`: 1 to 40 printable characters.
+pub fn display_name_problem(s: &str) -> Option<String> {
+    plain_line_problem(s, MAX_DISPLAY_NAME_CHARS)
+}
+
+/// Why `s` is not a valid `participant.first_screen`: one plain line of at most 200 characters.
+pub fn first_screen_problem(s: &str) -> Option<String> {
+    plain_line_problem(s, MAX_FIRST_SCREEN_CHARS)
 }
 
 /// `[capture]`: the **profile**, the whole recipe for capturing one harness.
@@ -1306,7 +1370,36 @@ impl HarnessManifest {
     /// `capture_harness`. Neither trusts the other's check.
     pub fn validate(&self, origin: Origin) -> Result<(), ProtocolError> {
         self.validate_recipe(origin)?;
-        self.for_each_platform(|resolved| resolved.validate_recipe(origin))
+        self.for_each_platform(|resolved| resolved.validate_recipe(origin))?;
+        self.check_participant()
+    }
+
+    /// The name core messages use for this harness: `participant.display_name`, else the id.
+    pub fn display_name(&self) -> &str {
+        self.participant
+            .as_ref()
+            .map_or(self.id.as_str(), |p| p.display_name.as_str())
+    }
+
+    /// The harness's first-screen hint, when its manifest has one.
+    pub fn first_screen(&self) -> Option<&str> {
+        self.participant
+            .as_ref()
+            .and_then(|p| p.first_screen.as_deref())
+    }
+
+    /// `[participant]`: both strings reach a terminal, so they are held to plain text.
+    fn check_participant(&self) -> Result<(), ProtocolError> {
+        let Some(p) = &self.participant else {
+            return Ok(());
+        };
+        if let Some(why) = display_name_problem(&p.display_name) {
+            return Err(refuse("participant.display_name", why));
+        }
+        if let Some(why) = p.first_screen.as_deref().and_then(first_screen_problem) {
+            return Err(refuse("participant.first_screen", why));
+        }
+        Ok(())
     }
 
     /// Run `check` on the recipe each `[capture.platform.<key>]` resolves to.
