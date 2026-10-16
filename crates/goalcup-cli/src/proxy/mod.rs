@@ -409,9 +409,19 @@ impl ProxyHandle {
     /// that runtime's own timers; `stop` still returns by the deadline, reporting the stuck task as
     /// `unterminated` with the close `NotAttempted`, as long as the runtime polling `stop` can
     /// still run timers.
-    pub async fn stop(mut self) -> ProxyStopReport {
-        let deadline = Instant::now() + self.shutdown_deadline;
-        let cut = deadline - (self.shutdown_deadline / 4).min(SHUTDOWN_CANCEL_RESERVE);
+    pub async fn stop(self) -> ProxyStopReport {
+        let bound = self.shutdown_deadline;
+        self.stop_within(bound).await
+    }
+
+    /// [`ProxyHandle::stop`] inside `bound` instead, never longer than the configured
+    /// [`ProxyConfig::shutdown_deadline`]. For a stop while the harness still runs (the run's
+    /// deadline): its open connections do not end on their own then, so waiting the whole
+    /// shutdown deadline for them only delays the stop.
+    pub async fn stop_within(mut self, bound: Duration) -> ProxyStopReport {
+        let bound = bound.min(self.shutdown_deadline);
+        let deadline = Instant::now() + bound;
+        let cut = deadline - (bound / 4).min(SHUTDOWN_CANCEL_RESERVE);
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }

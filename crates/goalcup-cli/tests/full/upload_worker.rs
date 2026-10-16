@@ -431,7 +431,7 @@ fn upload_worker_the_worker_stops_the_run_at_its_deadline() {
     assert!(started.elapsed() < Duration::from_secs(30), "{out}");
     assert!(
         out.contains("deadline: the server says the run is over")
-            || out.contains("deadline: the run's time is up by this machine's clock"),
+            || out.contains("deadline: the run's time is up by the server's count"),
         "{out}"
     );
     let position = worker.get(

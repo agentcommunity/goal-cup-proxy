@@ -1215,10 +1215,11 @@ fn watch_deadline(
     let mut next_beat = Instant::now();
     let tick = policy.poll.min(Duration::from_secs(1));
     while !done.load(Ordering::SeqCst) {
-        // This machine's clock first: it needs no network, so a hanging server cannot hold it.
+        // The server's count, kept here, first: it needs no network, so a hanging server cannot
+        // hold it.
         let local = local_deadline.filter(LocalDeadline::passed).map(|_| {
             format!(
-                "the run's time is up by this machine's clock (its deadline was {})",
+                "the run's time is up by the server's count (its deadline was {})",
                 record.deadline_at
             )
         });
