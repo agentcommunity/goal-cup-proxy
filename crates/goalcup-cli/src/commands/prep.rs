@@ -44,7 +44,7 @@ use crate::wsl_gate::Host;
 use goalcup_protocol::harness::Origin;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 /// The default work folder's name, beside the participant's other folders in their home.
@@ -133,6 +133,9 @@ pub trait Doors {
     fn github_api(&self) -> String;
     /// The token for `repo_url`: asked for on the terminal, and read without showing it.
     fn read_token(&self, repo_url: &str) -> Result<GithubSetup, CliError>;
+    /// Wait for the participant to press Enter before the harness takes the terminal; `false`
+    /// when the input ended without one (the participant chose not to go on).
+    fn wait_for_enter(&self) -> bool;
     /// Open the harness in its home for the participant; whether it exited 0.
     fn open_harness(
         &self,
@@ -191,6 +194,11 @@ impl Doors for Here {
         let read = GithubSetup::read_token(repo_url, &mut std::io::stdin().lock());
         drop(echo);
         read
+    }
+
+    fn wait_for_enter(&self) -> bool {
+        let mut line = String::new();
+        matches!(std::io::stdin().lock().read_line(&mut line), Ok(n) if n > 0)
     }
 
     fn open_harness(
@@ -319,8 +327,8 @@ pub fn prep_with(
             STEP_HARNESS_HOME,
             State::Todo,
             true,
-            "choose and install the harness first (the step above); then `goalcup prep` opens \
-             it so you can sign in and add your settings, MCP servers and skills",
+            "choose and install your agent first (the step above). Then `goalcup prep` opens it \
+             so you can sign in and add your settings, MCP servers and skills",
         ),
     };
     report.push(home)?;
@@ -359,15 +367,24 @@ pub fn prep_with(
             .map_or("<id>", |c| c.loaded.manifest.id.as_str());
         put(
             report.out,
-            &format!("goalcup prep: ready. Start your run with `goalcup start --harness {id}`.\n"),
+            &format!(
+                "goalcup prep: ready. Next: goalcup start --harness {id}, inside the start \
+                 window.\n"
+            ),
         )?;
     } else {
         let waiting = report.steps.iter().filter(|s| s.state != State::Ok).count();
+        // The last line on the screen is the next action: the first step that needs the person.
+        let next = report
+            .steps
+            .iter()
+            .find(|s| s.state != State::Ok)
+            .map(|s| s.say.as_str())
+            .unwrap_or_default();
         put(
             report.out,
             &format!(
-                "goalcup prep: {waiting} of {} steps still need you. Run `goalcup prep` again \
-                 when they are done; the steps that passed are not repeated.\n",
+                "goalcup prep: {waiting} of {} steps need you. Next: {next}\n",
                 report.steps.len()
             ),
         )?;
@@ -419,16 +436,17 @@ fn save(cfg: &Path, now: &PrepFile, before: &PrepFile) -> Result<(), CliError> {
 
 fn login_step(cfg: &Path) -> Step {
     match crate::server::read_server_config(cfg) {
-        Ok(Some(server)) if server.account.is_some() => step(
-            STEP_LOGIN,
-            State::Ok,
-            false,
-            format!(
-                "logged in as {} on {}",
-                server.account.unwrap_or_default(),
-                server.url
-            ),
-        ),
+        Ok(Some(server)) if server.account.is_some() => {
+            let mut say = format!(
+                "this computer is connected ({})",
+                server.account.unwrap_or_default()
+            );
+            // The address is news only when it is not the Goal Cup server.
+            if server.url.trim_end_matches('/') != crate::server::DEFAULT_SERVER_URL {
+                say.push_str(&format!("; runs upload to {}", server.url));
+            }
+            step(STEP_LOGIN, State::Ok, false, say)
+        }
         Ok(_) => step(STEP_LOGIN, State::Todo, true, "run `goalcup login`"),
         Err(error) => step(STEP_LOGIN, State::Fail, true, error.to_string()),
     }
@@ -496,9 +514,11 @@ fn harness_step(
                         State::Todo,
                         false,
                         format!(
-                            "choose the harness you will run: `goalcup prep --harness <id>`, \
-                             one of {}",
-                            ids.join(", ")
+                            "choose your agent: {}",
+                            ids.iter()
+                                .map(|id| format!("`goalcup prep --harness {id}`"))
+                                .collect::<Vec<_>>()
+                                .join(" or ")
                         ),
                     ),
                 );
@@ -534,10 +554,7 @@ fn harness_step(
             );
         }
     };
-    let say = format!(
-        "{id}: `{}` at {path}, version {version}",
-        profile.executable.program
-    );
+    let say = format!("{id} {version} ({path})");
     (Some(connector), step(STEP_HARNESS, State::Ok, false, say))
 }
 
@@ -561,9 +578,7 @@ fn home_step(
             STEP_HARNESS_HOME,
             State::Ok,
             false,
-            format!(
-                "{id} is given a fresh home for each run from the connector's own files: nothing to set up"
-            ),
+            format!("{id} needs no set-up here: each run gets a fresh home"),
         ));
     };
     // The person's word counts only while the home they set up is still there.
@@ -572,27 +587,31 @@ fn home_step(
             STEP_HARNESS_HOME,
             State::Ok,
             false,
-            format!(
-                "you have opened {id} here and set it up; runs use that home ({})",
-                home.display()
-            ),
+            format!("{id} is set up in its Goal Cup home. Your runs use it."),
         ));
     }
     if !acting {
         return Ok(human(
             State::Todo,
             format!(
-                "run `goalcup prep` in a terminal: it opens {id} in the home your runs will use \
-                 ({}), and you sign in there and add your settings, MCP servers and skills, then \
-                 exit it",
+                "run `goalcup prep` in a terminal. It opens {id} in its Goal Cup home ({}). \
+                 Sign in there, add your settings, MCP servers and skills, then exit {id} the \
+                 normal way",
                 home.display()
             ),
         ));
     }
     report.tell(&format!(
-        "Opening {id} in the home your runs will use. Nothing is recorded. Sign in, add your \
-         settings, MCP servers and skills, then exit {id} normally."
+        "Next, {id} opens here in its own Goal Cup home (not your usual setup). Nothing is \
+         recorded.\n  1. Sign in.\n  2. Add the settings, MCP servers and skills you want your \
+         agent to have.\n  3. Exit {id} the normal way.\nPress Enter to open {id}, or Ctrl-C to stop."
     ))?;
+    if !doors.wait_for_enter() {
+        return Ok(human(
+            State::Todo,
+            format!("{id} was not opened. Run `goalcup prep` again, then press Enter"),
+        ));
+    }
     match doors.open_harness(connector, cfg, env) {
         Ok(true) => {
             file.home_ready = true;
@@ -600,14 +619,14 @@ fn home_step(
                 STEP_HARNESS_HOME,
                 State::Ok,
                 false,
-                format!("you set {id} up in {}", home.display()),
+                format!("{id} is set up in its Goal Cup home. Your runs use it."),
             ))
         }
         Ok(false) => Ok(human(
             State::Todo,
             format!(
-                "{id} did not exit cleanly. Run `goalcup prep` again, sign in, and exit {id} \
-                 normally when you are done"
+                "{id} did not exit normally. Run `goalcup prep` again, then exit {id} the \
+                 normal way"
             ),
         )),
         Err(error) => Ok(human(State::Fail, error.to_string())),
@@ -629,8 +648,8 @@ fn github_step(
             STEP_GITHUB,
             State::Todo,
             true,
-            "create a new empty public repository on GitHub, then run `goalcup prep --repo \
-             https://github.com/<owner>/<repo>`",
+            "create a new, empty, public repository on GitHub (no README, license or \
+             .gitignore). Then run: goalcup prep --repo https://github.com/<owner>/<repo>",
         ));
     }
     let repo = file.repo_url.clone();
@@ -832,6 +851,18 @@ fn machine_step(
     if let Err(why) = &work_check {
         note(State::Fail, why.clone());
     }
+    // Each run is a clone, and the daemon refuses a run folder inside a Git repository. Found
+    // here, it costs a command; found at `goalcup start`, it costs an approval and a clone.
+    let work_in_git = git_repository_of(work_root);
+    if let Some(repo) = &work_in_git {
+        let default = crate::per_run_home::home_from(env)
+            .ok()
+            .map(|home| home.join(DEFAULT_WORK_ROOT_NAME));
+        note(
+            State::Fail,
+            work_in_git_message(work_root, repo, default.as_deref()),
+        );
+    }
     if host.version() != Some(1) {
         let artifacts = artifact_root(cfg);
         if let Err(why) = host.check(&[
@@ -873,8 +904,36 @@ fn machine_step(
     }
     Machine {
         step: step(STEP_MACHINE, worst, false, say),
-        work_root_ok: work_check.is_ok(),
+        work_root_ok: work_check.is_ok() && work_in_git.is_none(),
     }
+}
+
+/// The nearest folder at or above `path` that holds a `.git` entry, file or directory (a linked
+/// worktree has a file): the same rule as the daemon's `git_worktree_of`, which the CLI cannot
+/// call (the CLI never links the daemon). A folder that does not exist yet is judged by its
+/// parents.
+fn git_repository_of(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|dir| dir.join(".git").symlink_metadata().is_ok())
+        .map(Path::to_path_buf)
+}
+
+/// The refusal for a work folder inside a Git repository: what is wrong, then the command that
+/// fixes it. The suggested folder is `~/goalcup-work` unless that folder is inside a repository
+/// too (a home folder that is itself a repository), when only the shape of the fix is given.
+fn work_in_git_message(work_root: &Path, repo: &Path, default: Option<&Path>) -> String {
+    let fix = match default {
+        Some(folder) if git_repository_of(folder).is_none() => {
+            format!("goalcup prep --work-root ~/{DEFAULT_WORK_ROOT_NAME}")
+        }
+        _ => "goalcup prep --work-root <full path of a folder outside any repository>".to_string(),
+    };
+    format!(
+        "Your work folder {} is inside a Git repository ({}). Choose a folder outside any \
+         repository: {fix}",
+        work_root.display(),
+        repo.display()
+    )
 }
 
 /// The host and port of a server URL: the port the URL names, else the scheme's (443 for
@@ -906,15 +965,13 @@ fn endpoint_of(url: &str) -> (String, u16) {
 
 fn practice_step(cfg: &Path, harness: Option<&str>) -> Step {
     let id = harness.unwrap_or("<id>");
-    let start = format!("run `goalcup start --harness {id} --practice`");
+    let start = format!("goalcup start --harness {id} --practice");
     let Some(harness) = harness else {
         return step(
             STEP_PRACTICE,
             State::Todo,
             true,
-            format!(
-                "once the harness is chosen, {start}: a short practice run, to see it all work"
-            ),
+            format!("choose your agent first. Then do a practice run: {start}"),
         );
     };
     let spool = cfg.join(crate::upload::UPLOADS_DIR_NAME);
@@ -929,15 +986,15 @@ fn practice_step(cfg: &Path, harness: Option<&str>) -> Step {
             .find(|entry| !crate::upload::uploader::is_sent(&spool, &entry.entry_id))
             .map(|entry| entry.entry_id.clone())
     };
-    if let Some(run) = practice
+    if practice
         .iter()
-        .find(|run| !run.entries.is_empty() && unsent(run).is_none())
+        .any(|run| !run.entries.is_empty() && unsent(run).is_none())
     {
         return step(
             STEP_PRACTICE,
             State::Ok,
             false,
-            format!("practice run {} was sealed and uploaded", run.run_id),
+            "your practice run is done and uploaded".to_string(),
         );
     }
     if let Some(entry) = practice.first().and_then(unsent) {
@@ -946,7 +1003,8 @@ fn practice_step(cfg: &Path, harness: Option<&str>) -> Step {
             State::Todo,
             true,
             format!(
-                "your last practice run is not uploaded yet: run `goalcup upload {entry}`, or {start}"
+                "your last practice run is not fully uploaded. Run: goalcup upload {entry}. Or \
+                 do a new practice run: {start}"
             ),
         );
     }
@@ -954,7 +1012,10 @@ fn practice_step(cfg: &Path, harness: Option<&str>) -> Step {
         STEP_PRACTICE,
         State::Todo,
         true,
-        format!("{start}: a short practice run, to see it all work. Prep does not start it"),
+        format!(
+            "do a 10-minute practice run: {start}. It does not count, never pushes, and never \
+             replaces your competition run. Prep does not start it"
+        ),
     )
 }
 
@@ -1072,6 +1133,10 @@ impl Doors for Injected {
         Here.read_token(repo_url)
     }
 
+    fn wait_for_enter(&self) -> bool {
+        Here.wait_for_enter()
+    }
+
     fn open_harness(
         &self,
         connector: &HarnessConnector,
@@ -1084,7 +1149,35 @@ impl Doors for Injected {
 
 #[cfg(test)]
 mod tests {
-    use super::endpoint_of;
+    use super::{endpoint_of, work_in_git_message};
+    use std::path::Path;
+
+    #[test]
+    fn the_work_folder_fix_is_not_the_default_folder_when_the_default_is_in_a_repository() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join(".git")).unwrap();
+        let default = home.path().join("goalcup-work");
+        let said = work_in_git_message(
+            &home.path().join("repo/work"),
+            home.path(),
+            Some(default.as_path()),
+        );
+        assert!(
+            said.contains("goalcup prep --work-root <") && !said.contains("~/goalcup-work"),
+            "{said}"
+        );
+        // And with a home that is not a repository, the default folder is the fix.
+        let clean = tempfile::tempdir().unwrap();
+        let said = work_in_git_message(
+            Path::new("/r/work"),
+            Path::new("/r"),
+            Some(clean.path().join("goalcup-work").as_path()),
+        );
+        assert!(
+            said.contains("goalcup prep --work-root ~/goalcup-work"),
+            "{said}"
+        );
+    }
 
     #[test]
     fn a_server_address_is_probed_on_its_own_port_and_on_the_schemes_when_it_names_none() {

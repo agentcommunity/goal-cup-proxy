@@ -85,7 +85,7 @@ fn a_workspace_inside_a_git_worktree_or_holding_files_is_refused() {
         artifact_root: t.path().join("tracker/art"),
     };
     let err = check_workspace_available(&roots).expect_err("R3: outside any Git worktree");
-    assert!(format!("{err}").contains("Git worktree"), "got {err}");
+    assert!(format!("{err}").contains("Git repository"), "got {err}");
 
     let ws = t.path().join("fresh");
     std::fs::create_dir_all(&ws).unwrap();
@@ -441,7 +441,7 @@ fn a_workspace_inside_another_work_tree_is_refused() {
         artifact_root: art.clone(),
     })
     .expect_err("R3: a work tree inside another is refused");
-    assert!(format!("{err}").contains("Git worktree"), "got {err}");
+    assert!(format!("{err}").contains("Git repository"), "got {err}");
 
     // A linked worktree (`.git` is a file) is not the root of its own clone.
     let linked = t.path().join("linked");
@@ -452,7 +452,7 @@ fn a_workspace_inside_another_work_tree_is_refused() {
         artifact_root: art.clone(),
     })
     .expect_err("only a `.git` directory makes a clone root");
-    assert!(format!("{err}").contains("Git worktree"), "got {err}");
+    assert!(format!("{err}").contains("Git repository"), "got {err}");
 
     // The root of its own clone is admitted with its files.
     let clone = t.path().join("clone");

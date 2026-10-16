@@ -627,7 +627,10 @@ mod server_runs {
                 std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
             let refused = result.expect_err(what);
             assert_eq!(refused.exit_code(), 1, "{what}: {refused}");
-            assert_eq!(refused.to_string(), "run `goalcup prep` first", "{what}");
+            assert!(
+                refused.to_string().contains("goalcup prep"),
+                "{what}: the refusal names the command: {refused}"
+            );
             assert!(
                 server.device_requests().is_empty(),
                 "{what}: approval was asked"

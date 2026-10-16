@@ -397,7 +397,7 @@ fn doctor_has_no_verify_mode_and_the_help_footers_say_so() {
     let top = goalcup().arg("--help").output().unwrap();
     let top = String::from_utf8(top.stdout).unwrap();
     assert!(
-        top.contains("This command never exits with 2 or 4"),
+        top.contains("never exits with 2 or 4"),
         "the footer says 2 and 4 are never this binary's: {top}"
     );
 }
@@ -468,7 +468,7 @@ fn doctor_json_is_one_parseable_document_on_stdout_through_the_binary() {
 // The binary is the M2 capture CLI: nine commands, and the removed V1 ones refuse by name
 // instead of vanishing into a clap usage error.
 
-/// The commands `goalcup --help` lists, in order, and nothing else.
+/// The commands `goalcup --help` lists, in the order a participant takes them, and nothing else.
 #[test]
 fn goalcup_lists_the_nine_commands_and_nothing_else() {
     for flag in ["-h", "--help"] {
@@ -485,8 +485,8 @@ fn goalcup_lists_the_nine_commands_and_nothing_else() {
         assert_eq!(
             listed,
             [
-                "start", "continue", "status", "entries", "seal", "doctor", "login", "prep",
-                "upload"
+                "login", "prep", "start", "status", "continue", "upload", "entries", "seal",
+                "doctor"
             ],
             "`goalcup {flag}` lists the capture commands and nothing else"
         );

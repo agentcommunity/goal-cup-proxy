@@ -220,6 +220,12 @@ fn kept_run(rig: &Rig, run_id: &str, entries: &[(&str, bool)], practice: bool, t
     }
 }
 
+/// Answer the pause before the harness opens: prep asks for Enter, then takes the terminal.
+fn press_enter(on_pty: &OnPty) {
+    on_pty.wait_shown("Press Enter to open");
+    on_pty.type_line("");
+}
+
 fn prep_file(cfg: &Path) -> PrepFile {
     read_prep_lenient(cfg)
 }
@@ -256,6 +262,13 @@ fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
     assert!(
         practice.starts_with("[todo] practice:")
             && practice.contains("goalcup start --harness m2-fake-tui --practice"),
+        "{text}"
+    );
+    // The last line is the next action: the first step that needs the person.
+    let last = text.lines().last().unwrap();
+    assert!(
+        last.starts_with("goalcup prep: 4 of 6 steps need you. Next: ")
+            && last.contains("goalcup login"),
         "{text}"
     );
     // The six steps are printed in order.
@@ -352,8 +365,10 @@ fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
     ] {
         assert!(line(&text, step).starts_with("[ok]"), "{step}: {text}");
     }
+    let last = text.lines().last().unwrap();
     assert!(
-        text.contains("goalcup start --harness m2-fake-tui"),
+        last.starts_with("goalcup prep: ready.")
+            && last.contains("goalcup start --harness m2-fake-tui"),
         "{text}"
     );
     // And what was settled is what a run on a server reads.
@@ -375,6 +390,7 @@ fn a_second_prep_skips_passed_steps() {
 
     // The first prep, on a terminal: it opens the harness and asks for the token.
     let mut first = OnPty::spawn(prep_command(&rig, &["--repo", REPO], &facts), None);
+    press_enter(&first);
     first.wait_shown("tui: ready");
     first.type_line("/exit");
     first.wait_shown("GitHub token for");
@@ -434,6 +450,75 @@ fn a_second_prep_skips_passed_steps() {
     // GitHub is asked again, for all three (public and pushable, then empty), and no token is
     // wanted because the stored one passes.
     assert_eq!(github.asked(), 3, "the repository is checked on every prep");
+}
+
+#[test]
+fn prep_waits_for_enter_before_it_opens_the_harness() {
+    let rig = Rig::chat();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    log_in(&rig, "http://127.0.0.1:1");
+
+    let mut on_pty = OnPty::spawn(prep_command(&rig, &["--repo", REPO], &facts), None);
+    on_pty.wait_shown("Press Enter to open");
+    // The pause is real: the harness has not started, and nothing is recorded as set up.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(
+        !rig.out.join("tui.pid").exists(),
+        "the harness opened before Enter:\n{}",
+        on_pty.shown()
+    );
+    assert!(!prep_file(&rig.cfg).home_ready);
+    on_pty.type_line("");
+    on_pty.wait_shown("tui: ready");
+    on_pty.type_line("/exit");
+    on_pty.wait_shown("GitHub token for");
+    on_pty.type_line(&token());
+    on_pty.wait();
+    assert!(prep_file(&rig.cfg).home_ready);
+}
+
+#[test]
+fn prep_refuses_a_work_folder_inside_a_git_repository_and_names_the_fix() {
+    let rig = Rig::chat();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    log_in(&rig, "http://127.0.0.1:1");
+    let repo = rig.root.join("some-repo");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    let inside = repo.join("work");
+
+    let (code, text) = prep(
+        &rig,
+        &["--repo", REPO, "--work-root", inside.to_str().unwrap()],
+        &facts,
+    );
+    assert_eq!(code, 1, "{text}");
+    let machine = line(&text, "machine");
+    assert!(
+        machine.starts_with("[fail] machine:")
+            && machine.contains(&inside.display().to_string())
+            && machine.contains(&repo.display().to_string())
+            && machine.contains("goalcup prep --work-root ~/goalcup-work"),
+        "{text}"
+    );
+    // A refused folder is not kept, so a later `goalcup start` cannot use it.
+    assert!(prep_file(&rig.cfg).work_root.is_empty());
+
+    // A `.git` file (a linked worktree) counts too, and a folder outside any repository passes.
+    let linked = rig.root.join("linked");
+    std::fs::create_dir_all(&linked).unwrap();
+    std::fs::write(linked.join(".git"), "gitdir: /elsewhere\n").unwrap();
+    let (_, text) = prep(
+        &rig,
+        &["--work-root", linked.join("w").to_str().unwrap()],
+        &facts,
+    );
+    assert!(line(&text, "machine").starts_with("[fail]"), "{text}");
+    let outside = rig.root.join("outside/work");
+    let (_, text) = prep(&rig, &["--work-root", outside.to_str().unwrap()], &facts);
+    assert!(line(&text, "machine").starts_with("[ok]"), "{text}");
+    assert_eq!(prep_file(&rig.cfg).work_root, outside.display().to_string());
 }
 
 #[test]
@@ -600,6 +685,7 @@ fn prep_does_not_start_a_run() {
     let (_, text) = prep(&rig, &["--json"], &facts);
     json(&text);
     let mut on_pty = OnPty::spawn(prep_command(&rig, &[], &facts), None);
+    press_enter(&on_pty);
     on_pty.wait_shown("tui: ready");
     on_pty.type_line("/exit");
     on_pty.wait();
@@ -968,6 +1054,7 @@ fn prep_opens_a_harness_that_needs_its_interpreter_with_the_participants_environ
         .env("LC_API_TOKEN", "lc-token-value");
     let mut on_pty = OnPty::spawn(command, None);
     // With the old fixed PATH the script's interpreter is not found and the harness never draws.
+    press_enter(&on_pty);
     on_pty.wait_shown("tui: ready");
     on_pty.type_line("/exit");
     on_pty.wait();
@@ -1078,6 +1165,7 @@ fn prep_logs_in_to_the_run_home_a_later_start_uses() {
         prep_command(&rig, &["--harness", CHAT_HOME_ID, "--repo", REPO], &facts),
         None,
     );
+    press_enter(&on_pty);
     on_pty.wait_shown("tui: ready");
     on_pty.type_line("/exit");
     on_pty.wait();
@@ -1174,6 +1262,7 @@ fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
             prep_command(&rig, &["--harness", id, "--repo", REPO], &facts),
             None,
         );
+        press_enter(&on_pty);
         let status = on_pty.wait();
         let shown = on_pty.shown();
         let what = format!("{kind}, holder {holder:?}:\n{shown}");

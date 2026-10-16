@@ -74,7 +74,7 @@ pub fn check_artifact_placement(artifact_root: &Path, workspace: &Path) -> Resul
     if artifact_root.parent() == workspace.parent() {
         return Err(DaemonError::Guard(format!(
             "artifact root {} is a sibling of workspace {}; the agent enumerates the \
-             parent directory on its first tool call (M0 §2.4)",
+             parent folder on its first tool call",
             artifact_root.display(),
             workspace.display()
         )));
@@ -365,8 +365,8 @@ pub fn check_workspace_available(roots: &Roots) -> Result<(), DaemonError> {
     }
     if let Some(repo) = git_worktree_of(&roots.workspace) {
         return Err(DaemonError::Guard(format!(
-            "workspace {} is inside the Git worktree {} (R3: a new directory outside any \
-             Git worktree)",
+            "the run's folder {} is inside the Git repository {}; it must be outside any \
+             repository",
             roots.workspace.display(),
             repo.display()
         )));
@@ -383,7 +383,7 @@ pub fn check_workspace_available(roots: &Roots) -> Result<(), DaemonError> {
     };
     if existing > 0 {
         return Err(DaemonError::Guard(format!(
-            "workspace {} is not empty ({existing} entries); R3 asks for zero",
+            "the run's folder {} is not empty ({existing} entries); it must be new and empty",
             roots.workspace.display()
         )));
     }

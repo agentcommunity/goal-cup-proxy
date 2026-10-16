@@ -105,6 +105,9 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in connectors.iterdir()), ["codex-cli", "hermes-cli"])
         # Nothing else is written in the home directory.
         self.assertEqual([p.name for p in self.home.iterdir()], [".local"])
+        # The last line is the next step for a new participant, and the folder reads as typed.
+        self.assertIn("~/.local/bin", result.stdout)
+        self.assertEqual(result.stdout.strip().splitlines()[-1], "Next: goalcup login")
 
     def test_wrong_checksum_installs_nothing(self) -> None:
         release = make_release(self.root, {"codex-cli": "a"})
