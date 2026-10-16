@@ -1214,25 +1214,44 @@ fn an_unsealed_run_is_incomplete_after_the_close_time_and_takes_nothing() {
 
 #[test]
 fn a_sealed_run_stays_sealed_when_it_closes() {
+    // The stand-in's clock counts whole seconds, so a one-second run is over somewhere between
+    // 0 and 1 s after the open, whatever the load. The setup below never depends on which: the
+    // final heartbeat comes first, and once the end is committed the chunk and the seal are
+    // taken whether the run is over or not. Only the close ends it, `close_after_seconds` later,
+    // and 2 s of that leaves the setup at least 2 s however slow the machine is.
     let rig = Rig::with(ServerOptions {
         run_seconds: Some(1),
-        close_after_seconds: 1,
+        close_after_seconds: 2,
         ..two_tokens()
     });
     let (run, entry) = rig.open_ok();
-    rig.put_ok(&run, &entry, &Chunk::first());
     assert_eq!(
         rig.heartbeat(&run, &entry, 3, &head(3), true, None).status,
         200
     );
+    rig.put_ok(&run, &entry, &Chunk::first());
     let sealed = rig.json(
         "POST",
         &format!("/v1/runs/{run}/seal"),
         TOKEN,
         &seal_body(&entry),
     );
-    assert_eq!(sealed.status, 200);
-    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(sealed.status, 200, "{}", sealed.body);
+
+    // Wait for the close itself, not a time that should be after it: a repeat of the committed
+    // final heartbeat is answered 200 until the run closes, and 410 from then on.
+    let mut closed = false;
+    for _ in 0..150 {
+        let repeat = rig.heartbeat(&run, &entry, 3, &head(3), true, None);
+        if repeat.status == 410 {
+            assert_eq!(repeat.body["error"], "closed", "{}", repeat.body);
+            closed = true;
+            break;
+        }
+        assert_eq!(repeat.status, 200, "{}", repeat.body);
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(closed, "the run never closed");
     assert_eq!(rig.get(&run, TOKEN).body["status"], "sealed");
 }
 

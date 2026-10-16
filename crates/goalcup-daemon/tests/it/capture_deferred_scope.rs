@@ -354,38 +354,51 @@ async fn a_wrong_folder_digest_twin_does_not_hide_the_genuine_deferred_harness_o
     assert_eq!(launched.status(), 204, "{}", launched.body());
     write_snapshot(&rig, ID);
 
-    support::copy_tree(&genuine, &connectors.path().join("hermes-cli"));
-    let order = (0..64)
+    // The wrong-folder twins: the genuine bytes under each pinned folder name. The loader
+    // refuses every one (a pinned folder holds its own pinned connector), and the restart must
+    // go on past it to the genuine harness. That only exercises the refusal when a twin is
+    // listed BEFORE the genuine directory, and `read_dir` order is the filesystem's, not ours:
+    // hash order on ext4 (a fresh seed per `mkfs`), arbitrary on APFS. So the test looks at the
+    // order it got and renames the genuine directory until a twin comes first. With one twin
+    // whose hash happened to sort last, 64 names were not always enough (about 1 filesystem in
+    // 65 never listed it first); with three twins and 4096 names the chance of not finding an
+    // order is about one in ten billion.
+    const TWINS: [&str; 3] = ["hermes-cli", "codex-cli", "claude-code-cli"];
+    for twin in TWINS {
+        support::copy_tree(&genuine, &connectors.path().join(twin));
+    }
+    let listed = |root: &std::path::Path| -> Vec<std::ffi::OsString> {
+        std::fs::read_dir(root)
+            .unwrap()
+            .map(|child| child.unwrap().file_name())
+            .collect()
+    };
+    let twin_first = |entries: &[std::ffi::OsString], genuine: &std::path::Path| -> bool {
+        let right = entries
+            .iter()
+            .position(|name| name == genuine.file_name().unwrap())
+            .unwrap();
+        entries
+            .iter()
+            .position(|name| TWINS.iter().any(|twin| name == twin))
+            .unwrap()
+            < right
+    };
+    let order = (0..4096)
         .find_map(|n| {
-            let entries: Vec<_> = std::fs::read_dir(connectors.path())
-                .unwrap()
-                .map(|child| child.unwrap().file_name())
-                .collect();
-            let wrong = entries
-                .iter()
-                .position(|name| name == "hermes-cli")
-                .unwrap();
-            let right = entries
-                .iter()
-                .position(|name| name == genuine.file_name().unwrap())
-                .unwrap();
-            if wrong < right {
+            let entries = listed(connectors.path());
+            if twin_first(&entries, &genuine) {
                 return Some(entries);
             }
             let renamed = connectors
                 .path()
-                .join(format!("zz-genuine-deferred-{n:02}"));
+                .join(format!("zz-genuine-deferred-{n:04}"));
             std::fs::rename(&genuine, &renamed).unwrap();
             genuine = renamed;
             None
         })
-        .expect("fixture must enumerate the rejected matching digest before the genuine harness");
-    let wrong = order.iter().position(|name| name == "hermes-cli").unwrap();
-    let right = order
-        .iter()
-        .position(|name| name == genuine.file_name().unwrap())
-        .unwrap();
-    assert!(wrong < right, "fixture order: {order:?}");
+        .expect("fixture must enumerate a rejected matching digest before the genuine harness");
+    assert!(twin_first(&order, &genuine), "fixture order: {order:?}");
 
     let rig = rig.restart().await;
     let sealed = seal(&rig, &info.entry_id, Some(ID), None).await;
