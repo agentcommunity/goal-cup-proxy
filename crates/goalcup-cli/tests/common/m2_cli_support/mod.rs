@@ -1495,22 +1495,32 @@ pub struct Upstream {
     pub port: u16,
     root: rustls::pki_types::CertificateDer<'static>,
     root_pem: String,
+    /// The file a holding upstream writes once it has read a request's head.
+    held: Option<PathBuf>,
     accept: tokio::task::JoinHandle<()>,
 }
 
 impl Upstream {
     pub fn start(runtime: &tokio::runtime::Runtime) -> Upstream {
-        Upstream::serve(runtime, false)
+        Upstream::serve(runtime, false, None)
     }
 
     /// An upstream that reads each request and never answers it: it holds the connection open
     /// until the other side closes it, as a model's long streaming answer (or a kept-alive
     /// WebSocket) holds a harness's connection open while the harness runs.
     pub fn start_holding(runtime: &tokio::runtime::Runtime) -> Upstream {
-        Upstream::serve(runtime, true)
+        Upstream::serve(runtime, true, None)
     }
 
-    fn serve(runtime: &tokio::runtime::Runtime, hold: bool) -> Upstream {
+    /// [`Upstream::start_holding`] that also writes `held` once it has read a request's head.
+    /// The proxy opens a request's record before it forwards the head, so from then on the
+    /// request is in flight and recorded. A harness that waits for the file
+    /// ([`Upstream::wait_held`]) ends with its request held open, not still being sent.
+    pub fn start_holding_marked(runtime: &tokio::runtime::Runtime, held: &Path) -> Upstream {
+        Upstream::serve(runtime, true, Some(held.to_path_buf()))
+    }
+
+    fn serve(runtime: &tokio::runtime::Runtime, hold: bool, held: Option<PathBuf>) -> Upstream {
         let pki = TestPki::new("m2 cli upstream");
         let (chain, key) = pki.leaf(&["localhost"]);
         let config = rustls::ServerConfig::builder_with_provider(super::m2_common::provider())
@@ -1524,9 +1534,11 @@ impl Upstream {
             .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
             .unwrap();
         let port = listener.local_addr().unwrap().port();
+        let marker = held.clone();
         let accept = runtime.spawn(async move {
             while let Ok((tcp, _)) = listener.accept().await {
                 let acceptor = acceptor.clone();
+                let marker = marker.clone();
                 tokio::spawn(async move {
                     let Ok(mut tls) = acceptor.accept(tcp).await else {
                         return;
@@ -1534,6 +1546,9 @@ impl Upstream {
                     let (head, mut body) = read_head(&mut tls).await;
                     if hold {
                         use tokio::io::AsyncReadExt;
+                        if let Some(marker) = &marker {
+                            std::fs::write(marker, "held\n").unwrap();
+                        }
                         let mut rest = [0u8; 4096];
                         while matches!(tls.read(&mut rest).await, Ok(n) if n > 0) {}
                         return;
@@ -1559,6 +1574,7 @@ impl Upstream {
             port,
             root: pki.root(),
             root_pem: pki.root_pem(),
+            held,
             accept,
         }
     }
@@ -1589,6 +1605,16 @@ impl Upstream {
     /// five minutes for the answer, so the connection stays open while the harness runs.
     pub fn curl_waiting(&self, body: &str) -> String {
         self.post(&format!("--data '{body}'"), 300, " &")
+    }
+
+    /// Shell lines that wait, up to 30 s, for this upstream to hold a request
+    /// ([`Upstream::start_holding_marked`]). A harness that ends without them can end before its
+    /// background request has even reached the proxy, and then nothing was held open.
+    pub fn wait_held(&self) -> String {
+        let held = self.held.as_ref().expect("an upstream started marked");
+        let held = held.display().to_string();
+        assert!(!held.contains('\''), "the test path must be shell-quotable");
+        format!("i=0; while [ ! -f '{held}' ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done\n")
     }
 
     fn post(&self, data: &str, max_time: u32, then: &str) -> String {
