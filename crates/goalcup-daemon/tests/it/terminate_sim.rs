@@ -1797,6 +1797,16 @@ enum RootRead {
     /// read answers `[sh]` (its memory is freed, so `ps` prints only its name) while its
     /// creation identity still reads as registered, and it is gone by the next `liveness`.
     ArgvGoneThenExits { after_kills: usize },
+    /// The same exit window, held open longer: once `after_kills` signals have been delivered,
+    /// the root's argv reads `[sh]` and `liveness` still answers live for `live_reads` reads
+    /// before the root is gone. Measured on Linux (Docker, a SIGTERMed `python3.13` root): the
+    /// window outlived the guard's second `liveness` read, and the seal reported a lost
+    /// authority instead of `Confirmed`.
+    ArgvGoneExitsAfterReads { after_kills: usize, live_reads: i64 },
+    /// The root's argv reads `[sh]` once `after_kills` signals have been delivered, and the
+    /// root never exits: a process with no readable argv that stays live is not provably the
+    /// registered program.
+    ArgvGoneWhileLive { after_kills: usize },
     /// The argv read answers a program the launch never registered, and the root stays live.
     RenamedWhileLive,
     /// The same, but only once `after_kills` signals have been delivered.
@@ -1811,8 +1821,9 @@ struct RacingRoot {
     sim: Sim,
     read: RootRead,
     fired: std::sync::atomic::AtomicBool,
-    /// Set by the `[sh]` argv read: the root exits before the next `liveness` read.
-    exiting: std::sync::atomic::AtomicBool,
+    /// Set by the `[sh]` argv read: how many more `liveness` reads find the root live before
+    /// it exits. Negative: no exit is pending.
+    exit_in: std::sync::atomic::AtomicI64,
 }
 
 impl RacingRoot {
@@ -1821,7 +1832,7 @@ impl RacingRoot {
             sim: sim.clone(),
             read,
             fired: std::sync::atomic::AtomicBool::new(false),
-            exiting: std::sync::atomic::AtomicBool::new(false),
+            exit_in: std::sync::atomic::AtomicI64::new(-1),
         }
     }
 }
@@ -1832,8 +1843,17 @@ impl ProcessOs for RacingRoot {
     }
     fn liveness(&self, pid: u32) -> Result<bool, ProcessError> {
         use std::sync::atomic::Ordering::SeqCst;
-        if pid == ROOT && self.exiting.swap(false, SeqCst) {
-            self.sim.world().exit(ROOT);
+        if pid == ROOT {
+            match self.exit_in.load(SeqCst) {
+                0 => {
+                    self.exit_in.store(-1, SeqCst);
+                    self.sim.world().exit(ROOT);
+                }
+                n if n > 0 => {
+                    self.exit_in.store(n - 1, SeqCst);
+                }
+                _ => {}
+            }
         }
         self.sim.liveness(pid)
     }
@@ -1848,7 +1868,23 @@ impl ProcessOs for RacingRoot {
                 if !self.fired.load(SeqCst) && self.sim.world().kills.len() >= after_kills =>
             {
                 self.fired.store(true, SeqCst);
-                self.exiting.store(true, SeqCst);
+                self.exit_in.store(0, SeqCst);
+                read.map(|(age, _)| (age, "[sh]".to_string()))
+            }
+            RootRead::ArgvGoneExitsAfterReads {
+                after_kills,
+                live_reads,
+            } if self.sim.world().kills.len() >= after_kills => {
+                // Every read while the exit is pending answers `[sh]`; the first one starts it.
+                if !self.fired.swap(true, SeqCst) {
+                    self.exit_in.store(live_reads, SeqCst);
+                }
+                read.map(|(age, _)| (age, "[sh]".to_string()))
+            }
+            RootRead::ArgvGoneWhileLive { after_kills }
+                if self.sim.world().kills.len() >= after_kills =>
+            {
+                self.fired.store(true, SeqCst);
                 read.map(|(age, _)| (age, "[sh]".to_string()))
             }
             RootRead::RenamedWhileLive => read.map(|(age, _)| (age, "/usr/bin/vim".to_string())),
@@ -1877,6 +1913,8 @@ impl ProcessOs for RacingRoot {
             RootRead::Stranger => Some("sim:stranger".to_string()),
             RootRead::UnreadableWhileLive => None,
             RootRead::ArgvGoneThenExits { .. }
+            | RootRead::ArgvGoneExitsAfterReads { .. }
+            | RootRead::ArgvGoneWhileLive { .. }
             | RootRead::RenamedWhileLive
             | RootRead::RenamedAfterKills { .. } => self.sim.start_identity(pid),
         }
@@ -2026,6 +2064,66 @@ fn a_root_whose_argv_is_gone_because_it_is_exiting_after_a_signal_is_not_a_loss(
             w.describe()
         );
         assert!(w.alive_born().is_empty(), "{platform:?}:\n{}", w.describe());
+    }
+}
+
+/// The same exit window, held open past the guard's second `liveness` read (D7, measured on
+/// Linux in Docker: a SIGTERMed `python3.13` root read `[python3.13]` with state `R` and was
+/// gone 1.4 to 2.3 ms later). The guard waits a bounded time for the exit instead of reading
+/// the empty argv as a renamed program, and the seal is the kill working.
+#[test]
+fn a_root_still_exiting_at_the_guards_second_read_is_not_a_loss() {
+    for platform in [Platform::Macos, Platform::Linux] {
+        let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
+        let handle = sim.handle(None, None);
+        let os = RacingRoot::new(
+            &sim,
+            RootRead::ArgvGoneExitsAfterReads {
+                after_kills: 1,
+                live_reads: 3,
+            },
+        );
+        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let w = sim.world();
+        assert!(
+            os.fired.load(std::sync::atomic::Ordering::SeqCst),
+            "{platform:?}: the interleaving was never injected\n{}",
+            w.describe()
+        );
+        assert!(
+            report.observed_gone && !report.harness_unverified,
+            "{platform:?}: a root still exiting at the second read lost the chase: {report:?}\n{}",
+            w.describe()
+        );
+        assert!(w.alive_born().is_empty(), "{platform:?}:\n{}", w.describe());
+    }
+}
+
+/// The wait is bounded and changes no refusal: a root whose argv stays `[sh]` while it stays
+/// live is still a lost anchor, and the root itself is never signalled.
+#[test]
+fn a_live_root_with_no_readable_argv_is_still_a_loss() {
+    for platform in [Platform::Macos, Platform::Linux] {
+        let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
+        let handle = sim.handle(None, None);
+        let os = RacingRoot::new(&sim, RootRead::ArgvGoneWhileLive { after_kills: 1 });
+        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let w = sim.world();
+        assert!(
+            os.fired.load(std::sync::atomic::Ordering::SeqCst),
+            "{platform:?}: the interleaving was never injected\n{}",
+            w.describe()
+        );
+        assert!(
+            report.harness_unverified && !report.observed_gone,
+            "{platform:?}: {report:?}\n{}",
+            w.describe()
+        );
+        assert!(
+            w.kills.iter().all(|k| k.pid != ROOT),
+            "{platform:?}: a root with no readable argv was signalled: {:?}",
+            w.kills
+        );
     }
 }
 

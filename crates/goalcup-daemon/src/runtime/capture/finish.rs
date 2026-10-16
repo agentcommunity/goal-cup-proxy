@@ -2,6 +2,7 @@
 //! owner stop it waits on.
 
 use super::*;
+use std::io::Write as _;
 
 /// No refusable finish stage begins with less than this left of the deadline. It covers the
 /// last commit step (append `LocalFinish`, sync, `seal.json`, registry row), dominated by the
@@ -398,7 +399,7 @@ impl Daemon {
         let requested_at = self.finalization_timestamp("termination request")?;
         let began = std::time::Instant::now();
         let (termination, ran) = bind_termination(recorded, || {
-            let (outcome, _) = match &row.last_process {
+            let (outcome, note) = match &row.last_process {
                 // No signed walk budget binds a local capture: the module's own ceiling does.
                 Some(handle) => super::super::termination::terminate_handle(
                     self,
@@ -410,9 +411,18 @@ impl Daemon {
                     self,
                     &requested_at,
                     TerminationFailureV1::ProcessAuthorityUnavailable,
-                    String::new(),
+                    "no registered process".to_string(),
                 )?,
             };
+            // Which path chose the outcome, in `daemon.log`: pids, counts and the guard's own
+            // refusal, nothing from a request. The chained outcome cannot say it, and one
+            // `Unresolved` cannot otherwise be told apart from another. A failed write (a full
+            // disk) must not fail the finish.
+            let _ = writeln!(
+                std::io::stderr(),
+                "goalcup-daemon: termination of {entry_id}: {outcome:?}: {}",
+                note.as_deref().unwrap_or("")
+            );
             Ok::<_, DaemonError>(outcome)
         })?;
         // The time this attempt spent ending the harness is added back to the deadline.
