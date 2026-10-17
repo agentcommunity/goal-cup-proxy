@@ -860,7 +860,7 @@ fn signed_trace_with_cutoff(
             session_id: "session-t18".to_string(),
             started_at: STARTED_AT.to_string(),
             deadline_at: receipt_deadline.to_string(),
-            manifest_sha256: "11".repeat(32),
+            manifest_sha256: "cc".repeat(32),
             chain_head: head,
             connector_dir_sha256: None,
             run_public_key: None,
@@ -1404,7 +1404,7 @@ fn signed_receipt_clock_is_returned_without_replacing_launch_clock() {
             session_id: "session-t18".to_string(),
             started_at: STARTED_AT.to_string(),
             deadline_at: DEADLINE_AT.to_string(),
-            manifest_sha256: "11".repeat(32),
+            manifest_sha256: "cc".repeat(32),
             chain_head: head,
             connector_dir_sha256: None,
             run_public_key: None,
@@ -1506,7 +1506,7 @@ fn receipt_trace_with_launch_key(receipt_key: Option<&str>, launch_key: &str) ->
             session_id: "session-t18".to_string(),
             started_at: STARTED_AT.to_string(),
             deadline_at: DEADLINE_AT.to_string(),
-            manifest_sha256: "11".repeat(32),
+            manifest_sha256: "cc".repeat(32),
             chain_head: head,
             connector_dir_sha256: None,
             run_public_key: receipt_key.map(str::to_string),
@@ -2692,7 +2692,7 @@ fn a_receipt_signed_by_an_untrusted_key_is_never_a_signed_anchor() {
                 session_id: "session-t18".to_string(),
                 started_at: STARTED_AT.to_string(),
                 deadline_at: DEADLINE_AT.to_string(),
-                manifest_sha256: "11".repeat(32),
+                manifest_sha256: "cc".repeat(32),
                 chain_head: head,
                 connector_dir_sha256: None,
                 run_public_key: None,
@@ -2758,7 +2758,7 @@ fn receipt_and_ack_bindings_fail_closed() {
         session_id: "session-t18".to_string(),
         started_at: STARTED_AT.to_string(),
         deadline_at: DEADLINE_AT.to_string(),
-        manifest_sha256: "11".repeat(32),
+        manifest_sha256: "cc".repeat(32),
         chain_head: head,
         connector_dir_sha256: None,
         run_public_key: None,
@@ -3481,4 +3481,95 @@ fn a_native_discovery_loss_gap_makes_a_whole_native_trace_incomplete() {
 
     let (report, _) = scan(make_trace(&native(false), true).path());
     assert_eq!(report.exit_code(), 0, "{report:#?}");
+}
+
+/// A genuine receipt must describe the Launch it anchors. A missing directory claim in an
+/// older receipt remains valid; a present signed claim must not be missing or changed in Launch.
+#[test]
+fn a_signed_receipts_profile_claims_must_agree_with_launch() {
+    let options = supplied(&server_key());
+    let matching = "aa".repeat(32);
+    let different = "bb".repeat(32);
+    let cases = [
+        ("legacy", "codex-cli", "cc", None, None, 0),
+        (
+            "matching",
+            "codex-cli",
+            "cc",
+            Some(&matching),
+            Some(&matching),
+            0,
+        ),
+        (
+            "legacy receipt with newer Launch",
+            "codex-cli",
+            "cc",
+            None,
+            Some(&matching),
+            0,
+        ),
+        ("connector differs", "other-cli", "cc", None, None, 2),
+        ("profile differs", "codex-cli", "dd", None, None, 2),
+        (
+            "directory differs",
+            "codex-cli",
+            "cc",
+            Some(&matching),
+            Some(&different),
+            2,
+        ),
+        (
+            "signed directory missing from Launch",
+            "codex-cli",
+            "cc",
+            Some(&matching),
+            None,
+            2,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (name, connector, digest_byte, receipt_dir, launch_dir, want_exit) in cases {
+        let mut records = launched(complete_wire(None));
+        if let Some(CaptureRecord::Launch {
+            connector_dir_sha256,
+            ..
+        }) = records
+            .iter_mut()
+            .find(|r| matches!(r, CaptureRecord::Launch { .. }))
+        {
+            *connector_dir_sha256 = launch_dir.cloned();
+        }
+        let dir = make_trace(&records, true);
+        let baseline_head = chain_lines(dir.path())[0].link.hash.clone();
+        let receipt = StartReceipt::sign(
+            StartReceiptClaims {
+                entry_id: ENTRY.to_string(),
+                connector_id: connector.to_string(),
+                workspace: "/ws".to_string(),
+                session_id: "session-t18".to_string(),
+                started_at: STARTED_AT.to_string(),
+                deadline_at: DEADLINE_AT.to_string(),
+                manifest_sha256: digest_byte.repeat(32),
+                chain_head: baseline_head,
+                connector_dir_sha256: receipt_dir.cloned(),
+                run_public_key: None,
+                questionnaire_version: None,
+            },
+            &server_key(),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(RECEIPT_FILE),
+            serde_json::to_vec(&receipt).unwrap(),
+        )
+        .unwrap();
+        let (report, _) = scan_with(dir.path(), &options);
+        if report.exit_code() != want_exit
+            || (want_exit == 2 && !has(&report, "receipt_launch_mismatch"))
+            || (want_exit == 0 && report.anchor != AnchorState::Signed)
+        {
+            failures.push(format!("{name}: wanted exit {want_exit}, got {report:#?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

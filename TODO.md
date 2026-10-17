@@ -60,6 +60,14 @@ Owner decisions of 16 Oct 2026:
   exists on staging only.
 - Wire-only core (a connector with no native leg) is deferred: not before 4 Nov.
 
+## Review 13 core corrections (17 Oct)
+
+Required native files left waiting at finish now record a `SourceChanged` gap
+(B-01). Signed receipt connector/profile claims and any signed directory digest must agree with
+Launch before research callbacks (C-02, D63); older receipts without a directory claim stay valid.
+No new capture, decoder or credential behavior. Remaining review items stay in the maintainer's
+external Review 13 ledger; longer real-harness interruption/resume tests follow these corrections.
+
 ## Work to the feature stop (4 Nov), in order
 
 Review 12 (16 Oct) produced this list from six code reviews and three test reviews. Each item names

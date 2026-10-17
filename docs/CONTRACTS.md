@@ -498,8 +498,10 @@ Every capture child of `goalcup start` is spawned through `launch::spawn_gated`.
   `expected.toml`, run by `goalcup-verifier/tests/it/v5_corpus.rs` against the real `goalcup-verify`
   binary. A corpus expectation changes only in a PR that carries the DECISIONS entry.
 - **`Launch` fields.** `profile_digest` is the SHA-256 of the `harness.toml` bytes of the profile;
-  the reader does not check it. `run_public_key` is written by the daemon from the key it minted at
-  create. The reader requires 64 lowercase hex that decodes to a usable Ed25519 point and, when a
+  the reader does not independently hash it. With a verified receipt, its connector id and
+  profile digest must agree with Launch, and any signed directory claim must be present and equal
+  (`receipt_launch_mismatch`, D63). A receipt without that optional claim remains valid.
+  `run_public_key` is written by the daemon from the key it minted at create. The reader requires 64 lowercase hex that decodes to a usable Ed25519 point and, when a
   verified receipt carries a run key, that the two agree. `connector_dir_sha256` is 64 lowercase hex
   and is never compared against a pin by the reader. `allowed_tool_rule` and
   `process_handoff_digest` are written by no daemon since D52; the reader admits them by shape

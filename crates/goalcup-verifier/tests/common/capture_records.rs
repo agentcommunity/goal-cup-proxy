@@ -336,6 +336,8 @@ pub const STARTED_AT: &str = "2026-10-02T11:59:30Z";
 pub const DEADLINE_AT: &str = "2026-10-02T12:30:00Z";
 
 /// A start receipt over the chain's current head, written beside it. Returns its digest.
+/// D63 keeps the historical `11…11` profile claim here: the corpus Launch uses `cc…cc`,
+/// and these unchanged signed fixtures now exercise receipt/Launch disagreement.
 pub fn write_receipt(export: &mut TraceExport, run_public_key: Option<&str>) -> Sha256Digest {
     let (_, head) = export.head().unwrap();
     let receipt = StartReceipt::sign(

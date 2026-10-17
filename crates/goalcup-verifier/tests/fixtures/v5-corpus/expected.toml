@@ -520,34 +520,28 @@ verified_ack = false
 "segment" = 1
 
 [[case]]
-# A start receipt, a signed acknowledgement and a signed finalization, verified under a supplied server key: anchor signed.
+# D63: historical signed profile placeholder disagrees with Launch; retained unchanged.
 name = "signed-receipt-ack-finalization"
 path = "signed-receipt-ack-finalization"
-exit = 0
+exit = 2
 dev_key = true
-integrity = "valid"
-findings = ["server_key_unpinned"]
-sealed = true
-anchor = "signed"
+integrity = "invalid"
+findings = ["receipt_launch_mismatch", "server_key_unpinned"]
+sealed = false
+anchor = "local_only"
 key_source = "supplied"
-validated_records = 21
-validated_head = "7c3073308f4c5086bdd3870cce9ad69a53e5bc0c428a77fa2641addb7c96f036"
+validated_records = 5
+validated_head = "3bddd4449a409bc3d1f0ff7c3d7b635b79a41531cfd52792580e808d32683722"
 gap_count = 0
 coverage_incomplete = false
 torn_tail = false
-terminal_kind = "signed_finalization"
-verified_ack = true
+terminal_kind = "none"
+verified_ack = false
 [case.record_counts]
-"connection.close.complete" = 1
-"connection.open" = 1
-"end.complete" = 4
-"launch" = 1
+"end.complete" = 1
 "open.goal" = 1
-"open.native" = 1
-"open.wire_request" = 1
-"open.wire_response" = 1
-"producer_closed" = 3
-"segment" = 4
+"producer_closed" = 1
+"segment" = 1
 
 [[case]]
 # The same trace without the server key: the receipt and ack are unverifiable, so the trace is invalid.
@@ -568,34 +562,28 @@ terminal_kind = "none"
 verified_ack = false
 
 [[case]]
-# Launch run_public_key equals the receipt's run key.
+# D63: historical signed profile placeholder disagrees with Launch; retained unchanged.
 name = "signed-receipt-key-agrees"
 path = "signed-receipt-key-agrees"
-exit = 0
+exit = 2
 dev_key = true
-integrity = "valid"
-findings = ["server_key_unpinned"]
-sealed = true
-anchor = "signed"
+integrity = "invalid"
+findings = ["receipt_launch_mismatch", "server_key_unpinned"]
+sealed = false
+anchor = "local_only"
 key_source = "supplied"
-validated_records = 21
-validated_head = "14cae01d595a471e16925dcedf718242f1fbad9e14d00400699e183c53ab970b"
+validated_records = 5
+validated_head = "3bddd4449a409bc3d1f0ff7c3d7b635b79a41531cfd52792580e808d32683722"
 gap_count = 0
 coverage_incomplete = false
 torn_tail = false
-terminal_kind = "signed_finalization"
-verified_ack = true
+terminal_kind = "none"
+verified_ack = false
 [case.record_counts]
-"connection.close.complete" = 1
-"connection.open" = 1
-"end.complete" = 4
-"launch" = 1
+"end.complete" = 1
 "open.goal" = 1
-"open.native" = 1
-"open.wire_request" = 1
-"open.wire_response" = 1
-"producer_closed" = 3
-"segment" = 4
+"producer_closed" = 1
+"segment" = 1
 
 [[case]]
 # Launch run_public_key differs from the receipt's run key.

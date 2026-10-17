@@ -831,6 +831,32 @@ impl<'k> Scan<'k> {
                 return Ok(());
             }
 
+            if let EventBody::Capture {
+                record:
+                    CaptureRecord::Launch {
+                        profile_id,
+                        profile_digest,
+                        connector_dir_sha256,
+                        ..
+                    },
+            } = &env.body
+                && let Some(receipt) = &self.receipt
+            {
+                let claims = &receipt.receipt.claims;
+                // D63: old receipts may lack the directory claim. A present signed claim
+                // must agree with Launch, as must the mandatory connector/profile pair.
+                if claims.connector_id != *profile_id
+                    || claims.manifest_sha256 != *profile_digest
+                    || claims
+                        .connector_dir_sha256
+                        .as_ref()
+                        .is_some_and(|digest| Some(digest) != connector_dir_sha256.as_ref())
+                {
+                    self.fail("receipt_launch_mismatch");
+                    return Ok(());
+                }
+            }
+
             // Individually validated.
             self.validated_records += 1;
             self.validated_bytes += read as u64;
