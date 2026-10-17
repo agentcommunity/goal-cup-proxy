@@ -191,8 +191,14 @@ fn every_corpus_trace_keeps_its_exact_verdict() {
                     ndjson.as_os_str(),
                 ],
             );
+            // D63 preserves contradictory signed fixtures as invalid, including research.
+            let research_exit = output.status.code();
             assert!(
-                output.status.code().is_some_and(|c| c <= 1),
+                if case.exit == 2 {
+                    research_exit == Some(2)
+                } else {
+                    research_exit.is_some_and(|c| c <= 1)
+                },
                 "{name}: research exit"
             );
             let text = std::fs::read_to_string(&ndjson).unwrap();

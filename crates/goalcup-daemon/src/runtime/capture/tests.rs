@@ -2050,3 +2050,58 @@ fn a_scope_the_collector_refuses_notes_its_cause() {
     assert_eq!(counted.tick, 1);
     assert!(counted.last.unwrap().contains("a scope id is 1-128 ASCII"));
 }
+
+#[test]
+fn a_required_native_file_waiting_for_a_stream_slot_is_a_gap_at_finish() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    for name in ["a", "b"] {
+        std::fs::write(home.path().join(format!("{name}.jsonl")), b"x\n").unwrap();
+    }
+
+    let writer = writer(dir.path(), 64 << 20);
+    let sink = Arc::new(OwnerSink::default());
+    let native = NativeCapture::new(
+        NativeCaptureConfig {
+            sources: vec![NativeSourceSpec {
+                name: "store".into(),
+                root: home.path().to_path_buf(),
+                pattern: "*.jsonl".into(),
+                form: NativeStoreForm::AppendOnly,
+                hint: None,
+                scope_id: None,
+                modified_since: None,
+            }],
+            limits: NativeCaptureLimits {
+                max_open_streams: 1,
+                ..NativeCaptureLimits::default()
+            },
+        },
+        sink.clone(),
+        Box::new(SystemNativeClock::new()),
+    )
+    .unwrap();
+
+    // Match production's launch-to-owner handoff. `take_native` makes the source required.
+    let owner = Owner::new(sink, writer, clock(), &[], Default::default(), None, None);
+    let control = OwnerControl::default();
+    *lock(&control.pending_native) = Some(native);
+    control.finish_budget_ns.store(u64::MAX, Ordering::Release);
+    control.stop.store(true, Ordering::Release);
+    owner.run(&control);
+
+    let chain = records(dir.path());
+    assert_eq!(
+        chain
+            .iter()
+            .filter(|r| matches!(r, CaptureRecord::Open { .. }))
+            .count(),
+        1,
+        "one of the two matched append-only files never got a stream slot",
+    );
+    assert_eq!(
+        streamless(&chain, GapReason::SourceChanged),
+        1,
+        "a required native file never opened by finish must be a SourceChanged gap",
+    );
+}

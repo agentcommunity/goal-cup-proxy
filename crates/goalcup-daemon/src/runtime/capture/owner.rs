@@ -121,7 +121,9 @@ impl Owner {
             });
             let changed = native.loss_report().source_changes > 0;
             if self.required_native
-                && (changed || finished.completed_streams + finished.interrupted_streams == 0)
+                && (changed
+                    || finished.uncaptured_files > 0
+                    || finished.completed_streams + finished.interrupted_streams == 0)
             {
                 lock(&self.writer).streamless_gap(GapReason::SourceChanged, &(self.clock)());
             }

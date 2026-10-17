@@ -1274,7 +1274,7 @@ fn verified_reader_facts_are_the_only_terminal_and_delivery_authority() {
             session_id: "session-t22".to_string(),
             started_at: STARTED_AT.to_string(),
             deadline_at: DEADLINE_AT.to_string(),
-            manifest_sha256: "11".repeat(32),
+            manifest_sha256: "cc".repeat(32),
             chain_head: head,
             connector_dir_sha256: None,
             run_public_key: None,

@@ -569,3 +569,23 @@ records that service and nothing else.
   harness saves it. `providers.toml` stays for a harness that can reach one fixed service.
 
 This supersedes D61's "model traffic is recorded for the `providers` rows only" for Hermes.
+
+
+## D63. A signed receipt must describe the Launch it anchors.
+
+17 Oct 2026, Review 13 C-02: the capture reader compares each Launch with its verified receipt.
+`connector_id` must equal `profile_id`, and `manifest_sha256` must equal `profile_digest`.
+When the receipt signs `connector_dir_sha256`, Launch must carry that same digest. Older receipts
+without a directory claim stay valid, including when Launch carries a digest. This binds existing
+claims to each other; it does not independently hash a connector, add a pin check to integrity,
+change receipt head binding, or change the existing optional run-key rule.
+
+A contradiction is invalid with `receipt_launch_mismatch`, before the Launch reaches research
+callbacks. This deliberately tightens the v5 reader under the format-freeze exception in
+CONTRACTS: previously accepted contradictory receipt/Launch pairs now fail. The historical corpus
+bytes are preserved. `signed-receipt-ack-finalization` and `signed-receipt-key-agrees` both sign
+placeholder `11…11` profiles but launch `cc…cc`; their expected verdicts become invalid. The
+run-key mismatch case keeps its earlier `record_field_invalid` precedence. Dynamic signed tests
+use coherent profile claims and cover matching tuples, each contradiction and legacy absence.
+No record schema, canonical bytes, receipt signature domain, server API or local-only verdict
+changes.
