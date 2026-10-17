@@ -203,7 +203,7 @@ and disk ([redact/stream.rs](../crates/goalcup-daemon/src/redact/stream.rs), rul
 |---|---|
 | Hard: shared set plus the connector's `extra_patterns` | First rule wins an overlap |
 | Soft: `masked_key` (D41) | Loses every overlap. Can only add redaction |
-| Block: `private_key` (PEM) | An `END` must start within 12 288 bytes of `BEGIN`, else the block is those bytes |
+| Block: `private_key` (PEM) | An `END` must start within 15 872 bytes of `BEGIN`, else the block is those bytes, up to the first later `BEGIN` in them. The parts inside JSON strings are redacted, and a part outside them holding a base64 run of 16 or more characters with a letter (not counting `e`/`E`) |
 
 At most `MAX_HELD_BYTES` (16 KiB) of undecided bytes are held per stream. Past that the stream
 **fails closed**: everything from the earliest undecided byte is replaced up to the next safe

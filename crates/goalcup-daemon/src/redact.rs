@@ -99,11 +99,64 @@ impl std::fmt::Debug for Pattern {
 
 /// The kind of the one block rule in the shared set (the run's exact values, [`RunSecrets`],
 /// are blocks too, but are not in the shared set): a PEM private key, from its `BEGIN` line
-/// to the first `END` line that starts within 12,288 bytes, else those bytes, extended to the
-/// end of a character they cut (a key cut off before its `END`). Only [`compile`] reads this name. A block claim absorbs every hard
-/// claim it contains or that crosses its edge, so a key is never left raw because something
-/// inside it, or touching it, was claimed first; see [`select`] and [`Pattern::block`].
+/// to the first `END` line that starts within [`PEM_BODY_MAX`] bytes, else those bytes (a key
+/// cut off before its `END`, or an `END` split across two strings), extended to the end of a
+/// character they cut. [`candidates`] then keeps only the parts of that range inside JSON
+/// strings ([`string_pieces`]). Only [`compile`] and [`candidates`] read this name. A block
+/// claim absorbs every hard claim it contains or that crosses its edge, so a key is never left
+/// raw because something inside it, or touching it, was claimed first; see [`select`] and
+/// [`Pattern::block`].
 pub(crate) const BLOCK_KIND: &str = "private_key";
+
+/// The most bytes the `private_key` rule takes after its `BEGIN` line: an `END` line must start
+/// within them, and without one the block is them. Both arms of the regex literal spell it
+/// (`{0,15872}`), and a test in `capture_redaction.rs` pins that.
+///
+/// Why 15.5 KiB: the longest key body to expect is RSA-16384, the largest RSA key OpenSSH
+/// generates. Measured on two PKCS#8 files from `openssl genpkey` (12,628 and 12,632 bytes), the
+/// bytes between the `BEGIN` and `END` lines are at most: 12,579 raw; 14,529 as Claude Code's
+/// Read tool prints it (`N→` on each of its 196 lines) JSON-escaped; 14,724 escaped twice;
+/// 15,114 escaped once with the arrow as `\u2192`; 15,504 escaped twice that way (Python's
+/// default `json.dumps`, twice). Every one of these fits. Escaped three times that way it is
+/// 16,284, which does not, and the tail past the bound leaks. The bound stays 512 bytes under
+/// the stream's 16 KiB hold ([`stream::MAX_HELD_BYTES`]), which is room for a `BEGIN` and an
+/// `END` line, so a block is decided below the hold as this regex decides it. The hold is not
+/// raised: it is in "Keep as is".
+pub const PEM_BODY_MAX: usize = 15_872;
+
+/// What an invalid byte reads as when the rules match: one ASCII `0`. Every key body class in
+/// the set takes it (it is the one character `[A-Za-z0-9]`, `[0-9A-Z]` and `[a-f0-9]` share)
+/// and no shared rule's fixed prefix starts or completes with it. So a key with an invalid byte
+/// inside its body is still one match, where the Unicode classes would end it at that byte and
+/// leave the rest raw (H-20).
+pub(crate) const INVALID_BYTE_AS: u8 = b'0';
+
+/// The bytes the rules match on: `bytes`, with every byte that is not part of a valid UTF-8
+/// sequence read as [`INVALID_BYTE_AS`]. One byte stands for one byte, so every offset is an
+/// offset in `bytes`, and the replacement still copies the original bytes. Borrowed (no copy)
+/// when `bytes` is valid UTF-8, which is nearly every record.
+///
+/// "Not valid" is per byte, the stream's `decode` rule: a lead byte whose sequence breaks is
+/// one invalid byte, each continuation byte after it is another, and a sequence cut off at
+/// the end of `bytes` is invalid bytes too. Called on a stream's held bytes, which start and
+/// end on a decoded unit, it reads each byte as the whole stream would.
+pub(crate) fn match_view(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let Err(mut error) = std::str::from_utf8(bytes) else {
+        return std::borrow::Cow::Borrowed(bytes);
+    };
+    let mut view = bytes.to_vec();
+    let mut at = 0;
+    loop {
+        let from = at + error.valid_up_to();
+        let bad = error.error_len().unwrap_or(bytes.len() - from);
+        view[from..from + bad].fill(INVALID_BYTE_AS);
+        at = from + bad;
+        match std::str::from_utf8(&bytes[at..]) {
+            Ok(_) => return std::borrow::Cow::Owned(view),
+            Err(next) => error = next,
+        }
+    }
+}
 
 /// The shared set: `spikes/redact.py`'s ten original rules in its order, plus `masked_key`
 /// (listed right after `openai_key` here and last in the script; a soft rule never wins an
@@ -113,14 +166,15 @@ pub(crate) const BLOCK_KIND: &str = "private_key";
 /// the ten keep the script's spelling and their place in its list. The script carries the
 /// three `proxy_credential` literals too, after its ten and before its last rule.
 ///
-/// Two deliberate deltas from the script. `generic_secret_assignment` is one kind spelled as
-/// two literals, and the seven vendor prefixes are new: shapes the script predates.
+/// One deliberate delta from the script: the seven vendor prefixes are new, shapes the script
+/// predates. `generic_secret_assignment` is one kind spelled as two literals, in both (the
+/// script took the JSON form in H-20 re-review 3, so the two oracles agree on a quoted key).
 /// `tests/it/redaction.rs` holds the whole comparison (every script regex against this list,
 /// with the differences written out) so that either side drifting fails a test.
 ///
-/// The split exists because the script's rule requires `[=:]` immediately after the key
-/// word, so it never fires on a quoted JSON key — and JSON is the only shape this stage is
-/// ever handed. `{"api_key":"…"}` would produce zero spans. Widening the script's value class
+/// The split exists because the script's original rule requires `[=:]` immediately after the
+/// key word, so it never fires on a quoted JSON key — and JSON is the only shape this stage is
+/// ever handed. `{"api_key":"…"}` would produce zero spans. Widening that value class
 /// to `[A-Za-z0-9_\-+/=.]{16,}` cannot reach a quoted key and does reach into ordinary
 /// source: `let token = entry.keys.signing_key` would become a span. So:
 ///
@@ -173,17 +227,22 @@ const SHARED: &[(&str, &str)] = &[
         r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}",
     ),
     // Bounded, because a capture stream is one text: an unbounded block with no END ran to the
-    // end of the stream, a whole session. A real key ends within the bound: an RSA-8192 PKCS#8
-    // file is 6,388 bytes, and as Claude Code's Read tool prints it (`N→` on each of its 100
-    // lines), JSON-escaped, its body is 7,325. A key cut off before its END takes the next
-    // 12,288 bytes, not the rest. The bound counts bytes, any byte: a body may carry `→` or an
-    // invalid byte, and a bounded Unicode `[\s\S]` compiles past the regex crate's 10 MiB limit.
-    // `candidates` extends a match that ends inside a character to that character's end, so
-    // the marker never leaves half of one behind. 12 KiB keeps a lone BEGIN below the 16 KiB
-    // hold, so the stream decides it as this regex does.
+    // end of the stream, a whole session. The bound is [`PEM_BODY_MAX`] bytes, any byte: a body
+    // may carry `→` or an invalid byte, and a bounded Unicode `[\s\S]` compiles past the regex
+    // crate's 10 MiB limit. `candidates` extends a match that ends inside a character to that
+    // character's end, so the marker never leaves half of one behind.
+    //
+    // Any bytes, in both arms, so a key printed with line numbers, escaped, or streamed as many
+    // JSON string deltas is still one block, and so is one cut off before its END or whose END
+    // line is split across two deltas (the second arm takes the bound). `candidates` then cuts
+    // the range at each unescaped quote and keeps only the string interiors (H-20): every
+    // fragment of the key goes, and the JSON between the strings stays, so a lone BEGIN (an
+    // agent writing a PEM parser, `grep` output) no longer breaks the records after it. A
+    // match of the second arm ends at the first later BEGIN inside it, where the next match
+    // starts (`pem_matches`), and is cut once at `PEM_SLICE`.
     (
         "private_key",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,12288})",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,15872}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,15872})",
     ),
     ("slack_token", r"xox[baprs]-[A-Za-z0-9\-]{10,}"),
     // (i) the JSON form: a quoted key, a quoted value. The key word may sit inside an
@@ -617,16 +676,46 @@ pub(crate) struct Claim<'a> {
     /// A block claim absorbs the hard claims it contains or touches; see [`select`] and
     /// [`BLOCK_KIND`].
     pub(crate) block: bool,
+    /// A piece of a PEM block that ended at its bound, or at a later BEGIN, with no END: a lone
+    /// BEGIN's window ([`pem_matches`]). Only such a block is cut at [`PEM_SLICE`], and only it
+    /// may be released by the stream in parts.
+    pub(crate) bounded: bool,
 }
 
 /// Every match of every rule in `set`, in the rule's span form ([`Pattern::span_group`]).
 /// Rules are independent here; overlaps are resolved by [`select`].
+///
+/// The rules match on [`match_view`]`(bytes)`, so an invalid byte inside a key body does not
+/// end the key. The offsets are offsets in `bytes` either way.
+///
+/// A `private_key` match is cut into the pieces [`string_pieces`] names, each its own block
+/// claim. Every piece keeps the whole match as its `whole_start..whole_end`, so the stream
+/// holds and releases the match as one.
 pub(crate) fn candidates<'a>(
     set: impl Iterator<Item = &'a Pattern>,
     bytes: &[u8],
 ) -> Vec<Claim<'a>> {
+    let view = match_view(bytes);
+    let bytes: &[u8] = &view;
     let mut found_all = Vec::new();
     for (priority, p) in set.enumerate() {
+        if p.block && p.kind == BLOCK_KIND {
+            for ((from, to), (start, end), bounded) in pem_pieces(&p.re, bytes) {
+                found_all.push(Claim {
+                    priority,
+                    start: from,
+                    end: to,
+                    whole_start: start,
+                    whole_end: end,
+                    kind: p.kind.as_str(),
+                    quote: false,
+                    soft: false,
+                    block: true,
+                    bounded,
+                });
+            }
+            continue;
+        }
         // `find_iter` on the common path: a pattern that declares no capture group has
         // nothing to ask `captures_iter` for, and that engine is the slower one.
         // `or_else(|| c.get(0))` covers an optional group that did not participate in
@@ -663,10 +752,223 @@ pub(crate) fn candidates<'a>(
                 quote,
                 soft: p.soft,
                 block: p.block,
+                bounded: false,
             });
         }
     }
     found_all
+}
+
+/// Where a lone BEGIN's window is cut in two: [`PEM_SLICE`] bytes after the BEGIN. The stream
+/// may release the first part and hold the rest when a candidate starts in the second, so a run
+/// that crosses the window's end (a Codex `encrypted_content` value) no longer holds the whole
+/// window past the 16 KiB hold (H-20 re-review 2). Half the hold: after the cut the stream holds
+/// at most the second part and a candidate's own reach.
+pub const PEM_SLICE: usize = 8 * 1024;
+
+/// The `BEGIN` line of the `private_key` rule, alone, and its `END` line at the end of a match.
+/// `None` only if a fixed literal failed to compile, which a test rules out; this crate raises
+/// no panic in `src/`.
+fn pem_lines() -> Option<&'static (regex::bytes::Regex, regex::bytes::Regex)> {
+    static LINES: OnceLock<Option<(regex::bytes::Regex, regex::bytes::Regex)>> = OnceLock::new();
+    LINES
+        .get_or_init(|| {
+            let begin = regex::bytes::Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").ok()?;
+            let end = regex::bytes::Regex::new(r"-----END [A-Z ]*PRIVATE KEY-----\z").ok()?;
+            Some((begin, end))
+        })
+        .as_ref()
+}
+
+/// The first `BEGIN` line that starts in `from..to` of `bytes` (it may end after `to`).
+pub(crate) fn first_begin(bytes: &[u8], from: usize, to: usize) -> Option<usize> {
+    pem_lines()?
+        .0
+        .find_at(bytes, from)
+        .map(|m| m.start())
+        .filter(|&at| at < to)
+}
+
+/// Every `private_key` match in `bytes` as `(start, end, bounded)`, left to right. A match
+/// that ends on an `END` line is as the regex finds it. One that does not (`bounded`, a lone
+/// BEGIN's window) ends at the first later `BEGIN` that starts inside it, and the search goes on
+/// from that `BEGIN`: so a real key whose `BEGIN` falls late in a lone mention's window gets its
+/// own whole window, instead of losing its tail past the first window's bound (H-20 re-review
+/// 2). The end of a match the bound ends is taken to the end of a character it cuts.
+pub(crate) fn pem_matches(re: &regex::bytes::Regex, bytes: &[u8]) -> Vec<(usize, usize, bool)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Some(m) = re.find_at(bytes, at) {
+        let start = m.start();
+        let bounded = pem_lines().is_none_or(|lines| !lines.1.is_match(m.as_bytes()));
+        let (end, next) = match first_begin(bytes, start + 1, m.end()).filter(|_| bounded) {
+            Some(begin) => (begin, begin),
+            None => {
+                let end = char_end(bytes, m.end());
+                (end, end.max(start + 1))
+            }
+        };
+        out.push((start, end, bounded));
+        at = next;
+    }
+    out
+}
+
+/// The quote state at a point of a block: inside a string or not, and whether an odd run of
+/// backslashes ends just before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Quotes {
+    pub(crate) inside: bool,
+    pub(crate) escaped: bool,
+}
+
+impl Quotes {
+    /// At a block's `BEGIN`: text, so inside a string.
+    pub(crate) const START: Quotes = Quotes {
+        inside: true,
+        escaped: false,
+    };
+
+    /// This state after `bytes`.
+    pub(crate) fn after(mut self, bytes: &[u8]) -> Quotes {
+        for &b in bytes {
+            if b == b'"' && !self.escaped {
+                self.inside = !self.inside;
+            }
+            self.escaped = b == b'\\' && !self.escaped;
+        }
+        self
+    }
+}
+
+/// The claimed pieces of a PEM block's `from..end`, its quote state at `from` being `quotes`:
+/// [`string_pieces`], then, when `cut` (a bounded block's `BEGIN` plus [`PEM_SLICE`]) falls
+/// strictly inside a piece, that piece in two.
+///
+/// A cut right after a backslash first moves past the run of backslashes and the byte they
+/// escape, so no escape (`\n`, `\"`, `\\`) is split. The stream decides the first part on the
+/// bytes up to the cut alone, where a piece loses the backslashes it ends on
+/// ([`string_pieces_from`]): a cut inside an escape left them raw between the two markers,
+/// `<redacted:private_key>\<redacted:private_key>`, which is not JSON (H-20 re-review 3).
+pub(crate) fn block_pieces(
+    bytes: &[u8],
+    from: usize,
+    end: usize,
+    quotes: Quotes,
+    cut: Option<usize>,
+) -> Vec<(usize, usize)> {
+    let mut pieces = string_pieces_from(bytes, from, end, quotes);
+    if let Some(mut cut) = cut {
+        while cut > 0 && cut < end && bytes[cut - 1] == b'\\' {
+            cut += 1;
+        }
+        if let Some(i) = pieces.iter().position(|&(a, b)| a < cut && cut < b) {
+            let (a, b) = pieces[i];
+            pieces.splice(i..=i, [(a, cut), (cut, b)]);
+        }
+    }
+    pieces
+}
+
+type PemPiece = ((usize, usize), (usize, usize), bool);
+
+/// The claimed pieces of every `private_key` match in `bytes`, as `(piece, whole match,
+/// bounded)`: [`pem_matches`], each cut into its [`block_pieces`] from the quote state at its
+/// `BEGIN` (text, so inside a string), a bounded one once at [`PEM_SLICE`].
+pub(crate) fn pem_pieces(re: &regex::bytes::Regex, bytes: &[u8]) -> Vec<PemPiece> {
+    let mut out = Vec::new();
+    for (start, end, bounded) in pem_matches(re, bytes) {
+        let cut = bounded.then_some(start + PEM_SLICE);
+        for piece in block_pieces(bytes, start, end, Quotes::START, cut) {
+            out.push((piece, (start, end), bounded));
+        }
+    }
+    out
+}
+
+/// The pieces of every block of the shared `private_key` rule in `bytes`, exactly as
+/// [`candidates`] claims them (on [`match_view`]). A test oracle, so that "every piece of a
+/// block is redacted" is checked against the real cut and not a copy of it.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn pem_block_pieces(bytes: &[u8]) -> Vec<(usize, usize)> {
+    let view = match_view(bytes);
+    patterns()
+        .iter()
+        .filter(|p| p.block && p.kind == BLOCK_KIND)
+        .flat_map(|p| pem_pieces(&p.re, &view))
+        .map(|(piece, _, _)| piece)
+        .collect()
+}
+
+/// The parts of a PEM block's range `start..end` that are redacted: the range is cut at every
+/// unescaped `"` (one after an even run of backslashes), starting inside a string, because the
+/// `BEGIN` that starts it is text, and every piece inside a string is kept as a claim. So a key
+/// streamed as many string deltas loses every delta's text and keeps the JSON between them, and
+/// each record still parses. A piece loses any backslashes it ends on, so an escaped quote at
+/// the bound (`\"`) is never split. Text with no quote is one piece, the whole range. A piece
+/// left empty is dropped.
+///
+/// A piece outside the strings is a claim too when it holds a key-shaped run
+/// ([`holds_a_base64_run`]). JSON and SSE framing never does: event names break at `_` and
+/// `.`, and a number has no letter but an exponent's `e`, which the run test leaves out. Raw text does, when the quotes do not pair as JSON (a note
+/// that mentions a BEGIN, then quotes once, then prints a whole key), so there the key's body is
+/// still redacted, as it was before the cut (H-20 re-review).
+pub fn string_pieces(bytes: &[u8], start: usize, end: usize) -> Vec<(usize, usize)> {
+    string_pieces_from(bytes, start, end, Quotes::START)
+}
+
+/// [`string_pieces`] from a point whose quote state is `quotes`: the stream's resume point in a
+/// block it released in part.
+pub(crate) fn string_pieces_from(
+    bytes: &[u8],
+    start: usize,
+    end: usize,
+    quotes: Quotes,
+) -> Vec<(usize, usize)> {
+    let mut pieces = Vec::new();
+    let mut push = |from: usize, mut to: usize| {
+        while to > from && bytes[to - 1] == b'\\' {
+            to -= 1;
+        }
+        if to > from {
+            pieces.push((from, to));
+        }
+    };
+    let (mut inside, mut from, mut slashes) = (quotes.inside, start, usize::from(quotes.escaped));
+    for (at, &b) in bytes.iter().enumerate().take(end).skip(start) {
+        if b == b'"' && slashes % 2 == 0 {
+            if inside || holds_a_base64_run(&bytes[from..at]) {
+                push(from, at);
+            }
+            from = at + 1;
+            inside = !inside;
+        }
+        slashes = if b == b'\\' { slashes + 1 } else { 0 };
+    }
+    if inside || holds_a_base64_run(&bytes[from..end]) {
+        push(from, end);
+    }
+    pieces
+}
+
+/// Whether `bytes` holds a run of sixteen or more base64 characters (`[A-Za-z0-9+/=]`) with at
+/// least one letter in it other than `e` or `E`: a line of a key's body. A run of digits, `e`,
+/// `E` and `+` is number-shaped (an exponent float such as `2.4691357802469136e-05` in logprobs
+/// holds the run `4691357802469136e`) and does not count.
+pub fn holds_a_base64_run(bytes: &[u8]) -> bool {
+    let (mut run, mut letter) = (0usize, false);
+    for &b in bytes {
+        if b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=') {
+            run += 1;
+            letter |= b.is_ascii_alphabetic() && !matches!(b, b'e' | b'E');
+            if run >= 16 && letter {
+                return true;
+            }
+        } else {
+            (run, letter) = (0, false);
+        }
+    }
+    false
 }
 
 /// The end of the UTF-8 character that `end` falls inside, or `end` on a boundary. The block
@@ -705,8 +1007,9 @@ fn char_end(bytes: &[u8], end: usize) -> usize {
 /// claims inside a block vanish into it, and a claim across its edge extends it, so a block
 /// is never shadowed and never leaves the outside part of a claim raw. The group becomes one
 /// span from its earliest start to its latest end, named for the block. A block's match runs
-/// from its `BEGIN` line to the first `END` line, or to the end of the record when no `END`
-/// follows (a key cut off by an output limit is still a key). No rule is reordered, and
+/// from its `BEGIN` line to the first `END` line within [`PEM_BODY_MAX`] bytes, or those bytes
+/// when no `END` follows (a key cut off by an output limit is still a key), and its claims are
+/// the string interiors in that range ([`string_pieces`]). No rule is reordered, and
 /// containment wins nowhere else. Because the merge starts from the first-wins result and
 /// only joins what overlaps a block, what a block adds is redaction: the coverage is a
 /// superset of first-wins alone (`apply_first_wins_only`, the test oracle).
@@ -912,6 +1215,7 @@ mod tests {
             quote: false,
             soft: false,
             block,
+            bounded: false,
         }
     }
 

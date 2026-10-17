@@ -12,11 +12,25 @@ exceptions. private_key is the block rule: it runs first, on the original text, 
 grows to take in every other rule's match that overlaps it (and every match that overlaps
 those), so a PEM block is one redaction whatever an earlier rule would have matched inside it
 or across its edge, and no raw remainder of such a match is left behind (the daemon's block
-rule merges the same claims into the block). A block with no END line runs to the end of the
-text. And the last rule, masked_key, is soft: after that pass, any byte of a masked-key shape (matched on the
+rule merges the same claims into the block). An END line must start within 15,872 characters of
+the BEGIN line; without one, the block is those characters. (The daemon counts the bound in
+bytes; for a body with non-ASCII text this script's block is longer, never shorter.) A block is
+then cut at every unescaped `"` and only the parts inside JSON strings are redacted, starting
+inside: a key streamed as many JSON string deltas loses every delta's text, and the JSON
+between the strings stays. A block with no END ends at the first later BEGIN inside it, where
+the next block starts, and is cut once 8,192 characters after its BEGIN (past any backslashes
+there and the character they escape, so no escape is split). A rule whose span is a capture
+group (SPAN_GROUP: the JSON form of generic_secret_assignment) replaces that group alone, so the
+record stays JSON, and a match whose group overlaps an earlier rule's marker is dropped, as the
+daemon's first-wins selection drops a claim over claimed bytes. And the last rule, masked_key,
+is soft: after that pass, any byte of a masked-key shape (matched on the
 ORIGINAL text) that is still raw is replaced too, as its own "residual" marker. The daemon
 (crates/goalcup-daemon/src/redact.rs) reaches the same result by a different route; the shared
 rules, and the few places the two differ, are pinned by crates/goalcup-daemon/tests/it/redaction.rs.
+
+Bytes that are not valid UTF-8 match as the character "0", one per byte, as in the daemon: so an
+invalid byte inside a key body does not end the key. They are written back unchanged where no
+rule fires.
 
 Two offset frames in OUT.redactions.jsonl, both counted in characters, not bytes:
   - an entry from the sequential pass (no "residual" key) has start/end in the text as the
@@ -29,6 +43,12 @@ offset for offset; compare the redacted output, or the kinds.
 """
 import hashlib, json, re, sys
 
+# The JSON form of generic_secret_assignment, the daemon's spelling: a quoted key whose `_`/`-`
+# segment is the key word, then a quoted value of sixteen or more characters with no quote and no
+# backslash. Each quote may follow up to seven backslashes (a secret inside an escaped string).
+# Only the value, group 1, is replaced (SPAN_GROUP below): the key, the colon and the quotes stay.
+GENERIC_JSON = re.compile(r'(?i)\\{0,7}"(?:[A-Za-z0-9_\-]{0,999}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"([^"\\]{16,})\\{0,7}"')
+
 PATTERNS = [
     ("anthropic_key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
     ("openai_key", re.compile(r"sk-(?:proj-)?[A-Za-z0-9_\-]{20,}")),
@@ -37,8 +57,10 @@ PATTERNS = [
     ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("bearer", re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]{16,}")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")),
-    ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)")),
+    ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]{0,15872}?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]{0,15872})")),
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}")),
+    # The JSON form first, then the shell/TOML form, as the daemon lists them.
+    ("generic_secret_assignment", GENERIC_JSON),
     ("generic_secret_assignment", re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})")),
     ("email", re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")),
     # The tracer's own proxy credential (H8), as the daemon spells it: the userinfo of the
@@ -59,6 +81,16 @@ PATTERNS = [
 
 SOFT_KIND = "masked_key"
 BLOCK_KIND = "private_key"
+
+# The rules whose span is a capture group, not the whole match (the daemon's
+# `Pattern::span_group`). The shell/TOML form's groups capture too, but its span is the whole
+# match, as the committed fixtures carry it.
+SPAN_GROUP = {GENERIC_JSON: 1}
+
+
+def span_of(rx, m):
+    """The span a match of rx replaces: its group in SPAN_GROUP, or the whole match."""
+    return m.span(SPAN_GROUP.get(rx, 0))
 
 
 class Segments:
@@ -99,15 +131,98 @@ def union(spans):
     return out
 
 
+def string_pieces(text, start, end):
+    """The parts of text[start:end] a block redacts: cut at every unescaped quote (one after an
+    even run of backslashes), starting inside a string, every piece inside a string, and a piece
+    outside one when it holds a key-shaped run (holds_a_base64_run): raw text whose quotes do
+    not pair as JSON. A piece loses the backslashes it ends on, and an empty piece is dropped.
+    The daemon's `string_pieces` in redact.rs."""
+    pieces, inside, frm, slashes = [], True, start, 0
+
+    def push(a, b):
+        while b > a and text[b - 1] == "\\":
+            b -= 1
+        if b > a:
+            pieces.append([a, b])
+
+    for at in range(start, end):
+        c = text[at]
+        if c == '"' and slashes % 2 == 0:
+            if inside or holds_a_base64_run(text[frm:at]):
+                push(frm, at)
+            frm = at + 1
+            inside = not inside
+        slashes = slashes + 1 if c == "\\" else 0
+    if inside or holds_a_base64_run(text[frm:end]):
+        push(frm, end)
+    return pieces
+
+
+BASE64_RUN = re.compile(r"[A-Za-z0-9+/=]{16,}")
+
+
+def holds_a_base64_run(text):
+    """A run of sixteen or more base64 characters with a letter in it other than e or E, so a
+    number-shaped run (an exponent float) does not count (the daemon's `holds_a_base64_run`)."""
+    return any(re.search(r"[A-DF-Za-df-z]", m.group(0)) for m in BASE64_RUN.finditer(text))
+
+
+BEGIN_LINE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+END_AT_END = re.compile(r"-----END [A-Z ]*PRIVATE KEY-----\Z")
+PEM_SLICE = 8192
+
+
+def pem_matches(rx, text):
+    """Each private_key match as (start, end, bounded). A match with no END line (bounded, a lone
+    BEGIN's window) ends at the first later BEGIN inside it, and the search goes on from there.
+    The daemon's `pem_matches` in redact.rs."""
+    out, at = [], 0
+    while True:
+        m = rx.search(text, at)
+        if not m:
+            return out
+        start, end = m.span()
+        bounded = not END_AT_END.search(m.group(0))
+        nxt = end
+        if bounded:
+            b = BEGIN_LINE.search(text, start + 1)
+            if b and b.start() < end:
+                end = nxt = b.start()
+        out.append((start, end, bounded))
+        at = max(nxt, start + 1)
+
+
+def block_pieces(text, start, end, bounded):
+    """string_pieces, and for a bounded block the piece that holds start + PEM_SLICE in two
+    there. A cut right after a backslash first moves past the run of backslashes and the
+    character they escape, so no escape is split (the daemon's `block_pieces`)."""
+    pieces = string_pieces(text, start, end)
+    cut = start + PEM_SLICE
+    if bounded:
+        while cut < end and text[cut - 1] == "\\":
+            cut += 1
+        for i, (a, b) in enumerate(pieces):
+            if a < cut < b:
+                pieces[i:i + 1] = [[a, cut], [cut, b]]
+                break
+    return pieces
+
+
 def block_spans(text):
-    """The block rule's spans: each private_key match, grown over every other (non-soft)
-    rule's match that overlaps it, and over every match overlapping those, until nothing more
-    joins. Spans that then overlap are one."""
-    blocks = [list(m.span()) for kind, rx in PATTERNS if kind == BLOCK_KIND for m in rx.finditer(text)]
+    """The block rule's spans: the string pieces of each private_key match, each grown over
+    every other (non-soft) rule's match that overlaps it, and over every match overlapping
+    those, until nothing more joins. Spans that then overlap are one."""
+    blocks = [
+        piece
+        for kind, rx in PATTERNS
+        if kind == BLOCK_KIND
+        for start, end, bounded in pem_matches(rx, text)
+        for piece in block_pieces(text, start, end, bounded)
+    ]
     if not blocks:
         return []
     others = sorted(
-        m.span()
+        span_of(rx, m)
         for kind, rx in PATTERNS
         if kind not in (BLOCK_KIND, SOFT_KIND)
         for m in rx.finditer(text)
@@ -136,7 +251,9 @@ def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__)
     src, dst = sys.argv[1], sys.argv[2]
-    original = open(src, encoding="utf-8", errors="replace").read()
+    # An invalid byte is one lone surrogate here, and "0" in the text the rules match on.
+    source = open(src, encoding="utf-8", errors="surrogateescape").read()
+    original = re.sub("[\udc80-\udcff]", "0", source)
     log = open(dst + ".redactions.jsonl", "w")
     count = 0
     segments = Segments(original)
@@ -155,7 +272,12 @@ def main():
         if kind == BLOCK_KIND:
             found = [(a, b) for a, b in block_spans(joined)]
         else:
-            found = [m.span() for m in rx.finditer(joined)]
+            found = [span_of(rx, m) for m in rx.finditer(joined)]
+            if rx in SPAN_GROUP:
+                # A group span over an earlier rule's marker is dropped, as the daemon drops a
+                # claim that overlaps a claimed span. (A whole-match rule never matches into a
+                # marker: no shared value class takes `<`, `:` or `>`.)
+                found = [(a, b) for a, b in found if all(p[3] for p in segments.slice(a, b))]
         for start, end in found:
             s = joined[start:end]
             h, replacement = marker(kind, s)
@@ -210,9 +332,12 @@ def main():
             log.write(json.dumps({"kind": SOFT_KIND, "start": oa, "end": ob, "sha256_8": h, "residual": True}) + "\n")
             count += 1
             final.append(replacement)
+        elif raw:
+            # The original text, invalid bytes and all.
+            final.append(source[oa:ob])
         else:
             final.append(text)
-    open(dst, "w", encoding="utf-8").write("".join(final))
+    open(dst, "w", encoding="utf-8", errors="surrogateescape").write("".join(final))
     print(f"{count} redactions -> {dst}", file=sys.stderr)
 
 

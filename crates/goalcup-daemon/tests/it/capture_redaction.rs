@@ -6,8 +6,8 @@
 //! synthetic.
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use goalcup_daemon::redact::Redactor;
 use goalcup_daemon::redact::stream::{MAX_HELD_BYTES, StreamRedactor};
+use goalcup_daemon::redact::{PEM_BODY_MAX, PEM_SLICE, Redactor};
 use goalcup_protocol::capture::*;
 use goalcup_protocol::chain::Link;
 use goalcup_protocol::envelope::{Envelope, EventBody};
@@ -1515,8 +1515,8 @@ fn long_secrets_are_chunking_invariant() {
     let b64ish = b"abcdefghijklmnopqrstuvwxyz0123456789/";
     let mut cases: Vec<(&str, Vec<u8>, bool, &[u8])> = Vec::new();
 
-    // A PEM block is at most 12,288 bytes after its BEGIN line, so a longer body is the bounded
-    // block and then text: the stream equals the whole-record policy.
+    // A PEM block is at most `PEM_BODY_MAX` bytes after its BEGIN line, so a longer body is the
+    // bounded block and then text: the stream equals the whole-record policy.
     let mut pem = b"key follows: -----BEGIN RSA PRIVATE KEY-----\nSYNTHETICBODYMARK".to_vec();
     let body = lower(&mut rng, 40_000, b64ish);
     pem.extend_from_slice(&body);
@@ -1570,7 +1570,8 @@ fn long_secrets_are_chunking_invariant() {
     spaced.extend_from_slice(b"abcdefghijklmnopqrstuvwxyz end");
     cases.push(("bearer-spaces", spaced, false, b""));
 
-    // A PEM block with no END line: replaced for 12,288 bytes, not to the end of the stream.
+    // A PEM block with no END line and no quote: replaced for `PEM_BODY_MAX` bytes, not to the
+    // end of the stream.
     let mut open_pem = b"-----BEGIN PRIVATE KEY-----\nSYNTHETICOPENPEMMARK".to_vec();
     open_pem.extend_from_slice(&lower(&mut rng, 30_000, b64ish));
     cases.push(("pem-unterminated", open_pem, true, b"SYNTHETICOPENPEMMARK"));
@@ -1755,7 +1756,7 @@ fn a_pem_block_is_never_shadowed_at_any_split_point() {
     }
 }
 
-/// The same at the PEM bound: an END line must start within 12,288 bytes of the BEGIN line,
+/// The same at the PEM bound: an END line must start within `PEM_BODY_MAX` bytes of the BEGIN line,
 /// and without one the block is those units (I-1), which fit the hold. A block with a claim
 /// inside it is one redaction; a block whose END comes later, and a key with no END, are the
 /// bounded block with the claim inside it, and the text after the bound stays. The stream
@@ -1764,7 +1765,7 @@ fn a_pem_block_is_never_shadowed_at_any_split_point() {
 fn a_pem_block_with_a_claim_inside_is_one_redaction_at_the_pem_bound() {
     const BEGIN: &str = "-----BEGIN RSA PRIVATE KEY-----\n";
     const END: &str = "-----END RSA PRIVATE KEY-----";
-    const BOUND: usize = 12288;
+    const BOUND: usize = PEM_BODY_MAX;
     let mut rng = Rng(0xB10C);
     let filler = |rng: &mut Rng, n: usize| -> String {
         let set = b"abcdefghijklmnopqrstuvwxyz0123456789/";
@@ -1829,14 +1830,16 @@ fn a_pem_block_with_a_claim_inside_is_one_redaction_at_the_pem_bound() {
 
     for (name, input, end) in &cases {
         let want = legacy(input);
-        let first = &want.1[0];
+        let (kind, start, block_end, parts) = block_run(&want.1);
         assert_eq!(
-            (first.kind.as_str(), first.start, first.end),
+            (kind, start, block_end),
             ("private_key", 4, *end as u64),
             "{name}: the block"
         );
+        // A block with no END is cut once, at `PEM_SLICE` past its BEGIN.
+        assert!(parts <= 2, "{name}: {parts} parts");
         assert!(
-            !want.1[1..].iter().any(|s| s.start < *end as u64),
+            !want.1[parts..].iter().any(|s| s.start < *end as u64),
             "{name}: one redaction for the block"
         );
         for chunks in [
@@ -2207,7 +2210,7 @@ fn metadata_is_redacted_without_retaining_query() {
     assert!(metadata.validate().is_ok());
 }
 
-/// A PEM body far past the bound (one MiB) never grows the hold: its first 12,288 bytes are
+/// A PEM body far past the bound (one MiB) never grows the hold: its first `PEM_BODY_MAX` bytes are
 /// the block, and the rest leaves as it streams past, exactly as the whole-record policy
 /// redacts it (I-1).
 #[test]
@@ -2255,13 +2258,15 @@ fn long_private_key_does_not_grow_pending_buffer() {
     let (bytes, spans) = retained_of(&records, 1);
     let key_start = lead.len() as u64;
     assert_eq!(
-        spans[0],
-        RedactionAuditSpan {
-            kind: "private_key".into(),
-            start: key_start,
-            end: key_start + (begin.len() - 1 + 12288) as u64
-        }
+        block_run(&spans),
+        (
+            "private_key",
+            key_start,
+            key_start + (begin.len() - 1 + PEM_BODY_MAX) as u64,
+            2
+        )
     );
+    assert_eq!(spans[1].start, key_start + PEM_SLICE as u64);
     assert_eq!((bytes, spans), legacy(&input));
 
     // Interrupted mid-key, the undecided key is dropped: the retained source range ends where
@@ -3375,12 +3380,14 @@ fn a_long_codex_reasoning_item_streams_through_intact() {
     }
 }
 
-/// I-1: a lone PEM `BEGIN` (an agent writing a PEM parser, `grep` output, a key cut off by an
-/// output limit) with no END used to redact the rest of the stream, a whole native session,
-/// because a capture stream is one text and the block ran to its end. The measured shape: one
-/// JSONL record mentioning `BEGIN`, then 2,000 ordinary records. The block is now at most
-/// 12,288 bytes, so the stream equals the whole-record policy, and every record past the bound
-/// leaves intact and parses.
+/// I-1, then H-20: a lone PEM `BEGIN` (an agent writing a PEM parser, `grep` output, a key cut
+/// off by an output limit) with no END used to redact the rest of the stream, a whole native
+/// session, because a capture stream is one text and the block ran to its end; then the next
+/// 12,288 bytes as one span, which broke the JSON of every record it reached. The measured
+/// shape: one JSONL record mentioning `BEGIN`, then 2,000 ordinary records. The block is now at
+/// most `PEM_BODY_MAX` bytes, and only the string interiors inside it go: every record parses,
+/// the JSON between the strings stays, and every byte past the bound is kept. The stream equals
+/// the whole-record policy.
 #[test]
 fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
     let mut input =
@@ -3398,16 +3405,20 @@ fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
     }
     input.extend_from_slice(&later);
     let begin_at = 44;
-    let block_end = begin_at + "-----BEGIN PRIVATE KEY-----".len() + 12288;
+    let block_end = begin_at + "-----BEGIN PRIVATE KEY-----".len() + PEM_BODY_MAX;
     let want = legacy(&input);
-    assert_eq!(
-        want.1,
-        vec![RedactionAuditSpan {
-            kind: "private_key".into(),
-            start: begin_at as u64,
-            end: block_end as u64
-        }]
+    assert_eq!(want.1[0].start, begin_at as u64);
+    assert!(want.1.len() > 100, "one claim per string interior");
+    assert!(
+        want.1
+            .iter()
+            .all(|s| s.kind == "private_key" && s.end as usize <= block_end),
+        "every claim is a piece of the block"
     );
+    for span in &want.1 {
+        let piece = &input[span.start as usize..span.end as usize];
+        assert!(!piece.contains(&b'"') || piece.windows(2).any(|w| w == b"\\\""));
+    }
     let mut rng = Rng(0x0B_E61A);
     for chunks in [
         vec![MAX_SEGMENT_BYTES],
@@ -3419,9 +3430,10 @@ fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
             1,
         );
         assert_eq!(got, want, "chunks {:?}", &chunks[..1]);
-        // Everything from the first record boundary after the block is kept as it was.
-        let rest = &input[block_end..];
-        let kept_from = block_end + rest.iter().position(|&b| b == b'\n').unwrap() + 1;
+        // Everything from the first record boundary after the block is kept as it was, and
+        // every record parses.
+        let kept_from =
+            block_end + input[block_end..].iter().position(|&b| b == b'\n').unwrap() + 1;
         assert!(
             got.0.ends_with(&input[kept_from..]),
             "chunks {:?}: the records after the bound were lost ({} of {} bytes kept)",
@@ -3429,7 +3441,10 @@ fn a_lone_pem_begin_redacts_at_most_the_pem_bound() {
             got.0.len(),
             input.len()
         );
-        assert!(input.len() - kept_from > 120_000);
+        for record in got.0.split(|&b| b == b'\n').filter(|r| !r.is_empty()) {
+            serde_json::from_slice::<serde_json::Value>(record).expect("each record is JSON");
+        }
+        assert!(input.len() - kept_from > 100_000);
     }
 }
 
@@ -3576,7 +3591,7 @@ fn a_pem_bound_inside_a_character_takes_the_character() {
     let begin = "-----BEGIN PRIVATE KEY-----";
     for pad in 0..4 {
         let mut input = format!("x {begin}");
-        input.push_str(&"a".repeat(12288 - 1 - pad));
+        input.push_str(&"a".repeat(PEM_BODY_MAX - 1 - pad));
         input.push_str(&"\u{1F511}".repeat(4));
         input.push_str(" after\n");
         let input = input.as_bytes();
@@ -3594,4 +3609,1022 @@ fn a_pem_bound_inside_a_character_takes_the_character() {
             assert_eq!(got, (bytes.clone(), spans.clone()), "pad {pad}");
         }
     }
+}
+
+// ── H-20: invalid UTF-8 inside a key body, and a lone BEGIN ─────────────────────────────
+
+/// Run `spikes/redact.py` over `input`, bytes in and bytes out, with its per-match digest
+/// stripped (`<redacted:KIND:0123abcd>` becomes `<redacted:KIND>`); `None` without `python3`.
+fn redact_py(input: &[u8]) -> Option<Vec<u8>> {
+    let script =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../spikes/redact.py");
+    let dir = tempfile::tempdir().unwrap();
+    let (src, dst) = (dir.path().join("in"), dir.path().join("out"));
+    std::fs::write(&src, input).unwrap();
+    match std::process::Command::new("python3")
+        .arg("-B")
+        .arg(&script)
+        .arg(&src)
+        .arg(&dst)
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(status) => assert!(status.success(), "redact.py failed"),
+        Err(e) => {
+            eprintln!("python3 is not available ({e}); the script half is skipped");
+            return None;
+        }
+    }
+    let out = std::fs::read(&dst).unwrap();
+    let digest = regex::bytes::Regex::new(r"<redacted:([A-Za-z0-9_\-]+):[0-9a-f]{8}>").unwrap();
+    Some(digest.replace_all(&out, &b"<redacted:$1>"[..]).into_owned())
+}
+
+/// The stream at three chunkings, the whole-record `Redactor` and `spikes/redact.py` all give
+/// the same bytes for `input`; the whole-record result. A shape the script does not carry (the
+/// vendor prefixes it predates) is checked against the first two only.
+fn all_three_agree(name: &str, input: &[u8]) -> (Vec<u8>, Vec<RedactionAuditSpan>) {
+    agree(name, input, true)
+}
+
+fn agree(name: &str, input: &[u8], script_has_it: bool) -> (Vec<u8>, Vec<RedactionAuditSpan>) {
+    let want = legacy(input);
+    let mut rng = Rng(0x4_20 + input.len() as u64);
+    for chunks in [
+        vec![MAX_SEGMENT_BYTES],
+        vec![1],
+        random_chunks(&mut rng, 97),
+    ] {
+        let got = retained_of(&stream_through(StreamRedactor::new(), input, &chunks, 2), 1);
+        assert_eq!(
+            got,
+            want,
+            "{name}: the stream differs at {:?}",
+            &chunks[..1]
+        );
+    }
+    if let Some(script) = redact_py(input).filter(|_| script_has_it) {
+        assert_eq!(
+            String::from_utf8_lossy(&script),
+            String::from_utf8_lossy(&want.0),
+            "{name}: spikes/redact.py differs"
+        );
+        assert_eq!(script, want.0, "{name}: spikes/redact.py differs in bytes");
+    }
+    want
+}
+
+/// No eight-byte run of `secret` is in `out`.
+fn no_run_of(out: &[u8], secret: &[u8]) -> Option<String> {
+    secret
+        .windows(8)
+        .find(|w| contains(out, w))
+        .map(|w| String::from_utf8_lossy(w).into_owned())
+}
+
+/// H-20: a byte that is not valid UTF-8 inside a key's body used to end the key there, so the
+/// part after it, or the whole key when the part before it was too short for the rule, stayed
+/// raw. The rules now read an invalid byte as `0`, a character every key body class takes:
+/// the key is one match. For each known key shape, an invalid byte (a lone `0xFF`, a lone lead
+/// byte, a surrogate's three bytes, a cut-off sequence) early in the body: no eight-byte run of
+/// the key is retained, and the stream, the whole-record policy and `spikes/redact.py` agree.
+#[test]
+fn a_key_with_invalid_utf8_in_its_body_is_still_redacted() {
+    let alnum = |n: usize| -> Vec<u8> {
+        (0..n)
+            .map(|i| b"Ab3dEf7hJk9mNp2qRs5tUv8wXy"[i % 26])
+            .collect()
+    };
+    let mut keys: Vec<(&str, Vec<u8>)> = Vec::new();
+    let mut key = |name: &'static str, parts: &[&[u8]]| keys.push((name, parts.concat()));
+    // Shapes `spikes/redact.py` predates: the daemon's own rules.
+    let daemon_only = ["google_key", "gitlab_token"];
+    key(
+        "anthropic_key",
+        &[b"sk-ant-api03-Ab3dE", b"\xff", &alnum(35)],
+    );
+    key("openai_key", &[b"sk-proj-Ab3", b"\xff", &alnum(40)]);
+    key("github_token", &[b"ghp_Ab3", b"\xff", &alnum(33)]);
+    key("github_pat", &[b"github_pat_Ab3dE", b"\xff", &alnum(70)]);
+    key("aws_access_key", &[b"AKIAIOSF", b"\xff", b"DNN7EXAMPLE"]);
+    key(
+        "slack_token",
+        &[b"xoxb-12", b"\xff", b"34567890-ABCDEFGHIJ"],
+    );
+    key("google_key", &[b"AIzaSyAb3", b"\xff", &alnum(30)]);
+    key("gitlab_token", &[b"glpat-Ab3", b"\xff", &alnum(20)]);
+    key(
+        "jwt",
+        &[
+            b"eyJhbGciOiJIUzI1",
+            b"\xff",
+            b"NiJ9.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4",
+        ],
+    );
+    key(
+        "proxy_credential",
+        &[b"goalcup:0123a", b"\xff", b"56789abcdef0123456789abcdef"],
+    );
+    key(
+        "lone lead byte",
+        &[b"sk-ant-api03-Ab3dE", b"\xc3", &alnum(35)],
+    );
+    key(
+        "surrogate",
+        &[b"sk-ant-api03-Ab3dE", b"\xed\xa0\x80", &alnum(35)],
+    );
+    key(
+        "cut-off sequence",
+        &[b"sk-ant-api03-Ab3dE", b"\xe2\x82", &alnum(35)],
+    );
+    key(
+        "pem body",
+        &[
+            b"-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBgkq",
+            b"\xff",
+            b"hkiG9w0BAQEFAASC\\n-----END PRIVATE KEY-----",
+        ],
+    );
+    for (name, secret) in &keys {
+        let input = [
+            &br#"{"type":"tool_result","content":"found "#[..],
+            secret,
+            &b" in the file\"}\n{\"type\":\"next\"}\n"[..],
+        ]
+        .concat();
+        let (out, spans) = agree(name, &input, !daemon_only.contains(name));
+        assert_eq!(spans.len(), 1, "{name}: one redaction");
+        if let Some(run) = no_run_of(&out, secret) {
+            panic!("{name}: {run:?} of the key is retained");
+        }
+        assert!(
+            contains(&out, b" in the file\"}\n{\"type\":\"next\"}\n"),
+            "{name}"
+        );
+    }
+
+    // A JSON secret value: `[^"\\]` did not take an invalid byte either.
+    let value = [&b"q8Zr2Lm"[..], b"\xff", b"N0pX4vB7cT1yW9"].concat();
+    let input = [&br#"{"api_key":""#[..], &value, b"\"}\n"].concat();
+    let (out, _) = all_three_agree("json value", &input);
+    assert_eq!(
+        out,
+        b"{\"api_key\":\"<redacted:generic_secret_assignment>\"}\n"
+    );
+
+    // The invalid byte at every position of one body, every line its own record.
+    let mut every = Vec::new();
+    for at in 0..40 {
+        let mut body = alnum(40);
+        body[at] = 0xFF;
+        every.extend_from_slice(b"{\"k\":\"sk-ant-api03-");
+        every.extend_from_slice(&body);
+        every.extend_from_slice(b"\"}\n");
+    }
+    let (out, spans) = all_three_agree("every position", &every);
+    assert_eq!(spans.len(), 40);
+    assert!(!contains(&out, b"Ab3dEf7h") && !contains(&out, b"\xff"));
+    // An invalid byte where no key is stays as it was.
+    let (out, spans) = all_three_agree("no key", b"plain \xff\xfe bytes \xc3( kept\n");
+    assert!(spans.is_empty());
+    assert_eq!(out, b"plain \xff\xfe bytes \xc3( kept\n");
+}
+
+/// H-20: a lone `-----BEGIN PRIVATE KEY-----` with no END redacted the next 12,288 bytes as
+/// one span, across every record they reached, and broke their JSON. Now only the string
+/// interiors in the block's `PEM_BODY_MAX` bytes go: a key cut off by an output limit is still
+/// taken whole, the JSON between strings (numbers, `false`, the braces) stays, every record
+/// parses, and the 4 KiB of ordinary JSON past the bound is kept byte for byte. Raw text with no
+/// quote loses exactly `PEM_BODY_MAX` bytes after its BEGIN line. All three redactors agree.
+#[test]
+fn a_lone_begin_does_not_redact_to_the_end_of_the_record() {
+    let body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj\\n\
+                MzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDuictGeurT8jNbvJZHtCSuYEvu\\n\
+                [output truncated]";
+    let lead = r#"{"type":"tool_result","content":"$ head -c 200 key.pem\n"#;
+    let begin = "-----BEGIN PRIVATE KEY-----\\n";
+    let mut rest = String::from(r#"","is_error":false,"files":["#);
+    let mut i = 0;
+    while rest.len() < PEM_BODY_MAX + 4096 {
+        rest.push_str(&format!(
+            r#"{{"path":"src/module_{i}.rs","lines":{},"note":"an ordinary entry"}},"#,
+            40 + i
+        ));
+        i += 1;
+    }
+    rest.push_str(r#"{"path":"README.md"}]}"#);
+    let record = format!("{lead}{begin}{body}{rest}\n");
+    let input = format!("{record}{{\"type\":\"next\",\"n\":1}}\n");
+    let (out, spans) = all_three_agree("lone begin in JSON", input.as_bytes());
+    let start = lead.len();
+    let bound = start + "-----BEGIN PRIVATE KEY-----".len() + PEM_BODY_MAX;
+    assert_eq!(
+        (spans[0].start as usize, spans[0].end as usize),
+        (start, start + begin.len() + body.len()),
+        "the BEGIN and the cut-off body to its closing quote"
+    );
+    assert!(
+        spans
+            .iter()
+            .all(|s| s.kind == "private_key" && s.end as usize <= bound)
+    );
+    let text = String::from_utf8(out).unwrap();
+    assert!(!text.contains("MIIEvQIBADAN") && !text.contains("truncated"));
+    assert!(text.contains(r#"<redacted:private_key>","<redacted:private_key>":false,"#));
+    // From the first entry wholly past the bound, the record is kept as it was.
+    let tail_from = bound + input[bound..].find("{\"path\"").unwrap();
+    assert!(input.len() - tail_from > 4096);
+    assert!(
+        text.ends_with(&input[tail_from..]),
+        "the JSON past the bound is kept"
+    );
+    for line in text.lines() {
+        serde_json::from_str::<serde_json::Value>(line).expect("each record still parses");
+    }
+
+    // Raw text with no quote and no END loses exactly `PEM_BODY_MAX` bytes after its BEGIN
+    // line, and keeps the rest.
+    let begin = "-----BEGIN PRIVATE KEY-----";
+    let after: String = (0..PEM_BODY_MAX + 4096)
+        .map(|i| char::from(b"abcdefghij \n"[i % 12]))
+        .collect();
+    let input = format!("log {begin}{after}");
+    let (out, spans) = all_three_agree("lone begin in raw text", input.as_bytes());
+    let end = 4 + begin.len() + PEM_BODY_MAX;
+    assert_eq!(
+        (spans.len(), block_run(&spans)),
+        (2, ("private_key", 4, end as u64, 2)),
+        "the BEGIN line and the bounded block, cut once at PEM_SLICE"
+    );
+    assert_eq!(spans[1].start, (4 + PEM_SLICE) as u64);
+    assert!(out.ends_with(&input.as_bytes()[end..]));
+}
+
+/// The bound both arms of the regex literal spell is [`PEM_BODY_MAX`], and a block whose bound
+/// falls on the backslash of an escaped quote leaves the escape whole, so the record parses.
+#[test]
+fn the_pem_block_keeps_an_escaped_quote_and_spells_the_bound() {
+    let source = goalcup_daemon::redact::patterns()
+        .iter()
+        .find(|p| p.kind == "private_key")
+        .expect("the private_key rule")
+        .re
+        .as_str();
+    let body = format!("(?-u:[\\x00-\\xFF]){{0,{PEM_BODY_MAX}}}");
+    assert_eq!(source.matches(&body).count(), 2, "{source}");
+
+    let begin = "-----BEGIN PRIVATE KEY-----";
+    for before in [PEM_BODY_MAX - 1, PEM_BODY_MAX - 2, PEM_BODY_MAX] {
+        let input = format!(
+            "{{\"t\":\"{begin}{}\\\"quoted\\\" and on\"}}\n",
+            "a".repeat(before)
+        );
+        serde_json::from_str::<serde_json::Value>(&input).expect("the input is JSON");
+        let (out, spans) = all_three_agree("escaped quote at the bound", input.as_bytes());
+        assert_eq!(block_run(&spans).3, spans.len());
+        assert_eq!(spans.len(), 2, "one string, cut once at PEM_SLICE");
+        let text = String::from_utf8(out).unwrap();
+        serde_json::from_str::<serde_json::Value>(&text).expect("the record parses");
+        assert!(!text.contains("aaaaaaaa"), "{before}");
+    }
+}
+
+/// One SSE shape a model's text deltas arrive in: the event a delta is framed in.
+fn sse_event(shape: &str, delta: &str) -> String {
+    let d = serde_json::to_string(delta).unwrap();
+    match shape {
+        "anthropic" => format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":{d}}}}}\n\n"
+        ),
+        "chat" => format!(
+            "data: {{\"id\":\"chatcmpl-9xYz\",\"object\":\"chat.completion.chunk\",\"created\":1760000000,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{d}}},\"finish_reason\":null}}]}}\n\n"
+        ),
+        "responses" => format!(
+            "event: response.output_text.delta\ndata: {{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_0a1b2c\",\"output_index\":0,\"content_index\":0,\"delta\":{d}}}\n\n"
+        ),
+        _ => unreachable!(),
+    }
+}
+
+/// The text deltas of an SSE stream, parsed back and joined: what a reader of the trace sees.
+fn sse_text(shape: &str, stream: &[u8]) -> String {
+    let mut text = String::new();
+    for line in String::from_utf8_lossy(stream).lines() {
+        let Some(json) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        let v: serde_json::Value = serde_json::from_str(json).expect("each data line parses");
+        let delta = match shape {
+            "anthropic" => &v["delta"]["text"],
+            "chat" => &v["choices"][0]["delta"]["content"],
+            "responses" => match v["type"].as_str() {
+                Some("response.output_text.delta") => &v["delta"],
+                _ => continue,
+            },
+            _ => unreachable!(),
+        };
+        // A delta whose keys were redacted (inside a block) has no path; `sse_strings` reads it.
+        if let Some(delta) = delta.as_str() {
+            text.push_str(delta);
+        }
+    }
+    text
+}
+
+/// Every string of every data line of an SSE stream, keys included, decoded and joined.
+fn sse_strings(stream: &[u8]) -> String {
+    fn walk(v: &serde_json::Value, out: &mut String) {
+        match v {
+            serde_json::Value::String(s) => out.push_str(s),
+            serde_json::Value::Array(a) => a.iter().for_each(|v| walk(v, out)),
+            serde_json::Value::Object(o) => o.iter().for_each(|(k, v)| {
+                out.push_str(k);
+                walk(v, out);
+            }),
+            _ => {}
+        }
+    }
+    let mut out = String::new();
+    for line in String::from_utf8_lossy(stream).lines() {
+        if let Some(json) = line.strip_prefix("data: ") {
+            let v: serde_json::Value = serde_json::from_str(json).expect("each data line parses");
+            walk(&v, &mut out);
+        }
+    }
+    out
+}
+
+/// H-20 review: a key the model prints arrives as many SSE text deltas. Spread over 20 or more
+/// deltas in the Anthropic, chat-completions and Responses shapes, complete, cut off before its
+/// END, and with its END line split across two deltas (the BEGIN line whole in one delta), no
+/// 16-character run of the body survives, in the raw bytes or in the text rebuilt from the
+/// deltas (every string of every data line, decoded). Every data line still parses, the text past the bound is kept, and the stream at
+/// three chunkings, the whole-record policy and `spikes/redact.py` agree.
+#[test]
+fn a_key_streamed_as_sse_deltas_is_redacted_in_every_delta() {
+    const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
+    const END: &str = "-----END PRIVATE KEY-----";
+    let b64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut checked = 0;
+    for seed in 1..=3u64 {
+        let mut rng = Rng(0x55E_0000 + seed);
+        let lines: Vec<String> = (0..26)
+            .map(|_| (0..64).map(|_| char::from(b64[rng.below(64)])).collect())
+            .collect();
+        let after: String = (0..3000)
+            .map(|i| ["keep ", "it ", "safe ", "and ", "rotate ", "it. "][i % 6])
+            .collect();
+        for variant in ["complete", "truncated", "split end"] {
+            let body = match variant {
+                "truncated" => lines.join("\n")[..1200].to_string(),
+                _ => lines.join("\n"),
+            };
+            let key = match variant {
+                "truncated" => format!("{BEGIN}\n{body}"),
+                _ => format!("{BEGIN}\n{body}\n{END}"),
+            };
+            let lead = "Here is the key you asked for:\n";
+            let text = format!("{lead}{key}\n{after}");
+            let begin_at = lead.len();
+            let key_end = begin_at + key.len();
+            let end_at = key_end - END.len();
+            // 24 cuts in the key after its BEGIN line. A whole END line, or one cut inside it.
+            let mut cuts: Vec<usize> = (0..24)
+                .map(|_| begin_at + BEGIN.len() + rng.below(key.len() - BEGIN.len()))
+                .collect();
+            if variant == "split end" {
+                cuts.retain(|&c| c <= end_at || c >= key_end);
+                cuts.push(end_at + 7);
+            } else if variant == "complete" {
+                cuts.retain(|&c| c <= end_at || c >= key_end);
+            }
+            cuts.push(begin_at);
+            cuts.sort_unstable();
+            cuts.dedup();
+            let key_deltas = cuts.len();
+            // The text after the key in 80-byte deltas.
+            cuts.extend((key_end..text.len()).step_by(80));
+            let mut deltas = Vec::new();
+            let mut at = 0;
+            for c in cuts.into_iter().chain([text.len()]) {
+                if c > at {
+                    deltas.push(&text[at..c]);
+                    at = c;
+                }
+            }
+            assert!(
+                key_deltas >= 20,
+                "{variant} seed {seed}: {key_deltas} deltas"
+            );
+            for shape in ["anthropic", "chat", "responses"] {
+                let name = format!("{shape} {variant} seed {seed}");
+                let stream: String = deltas.iter().map(|d| sse_event(shape, d)).collect();
+                assert_eq!(
+                    sse_text(shape, stream.as_bytes()),
+                    text,
+                    "{name}: the generator"
+                );
+                let (out, _) = all_three_agree(&name, stream.as_bytes());
+                let rebuilt = sse_strings(&out);
+                for line in &lines {
+                    for run in line.as_bytes().windows(16) {
+                        assert!(
+                            !contains(&out, run)
+                                && !rebuilt.contains(std::str::from_utf8(run).unwrap()),
+                            "{name}: {:?} of the body survives",
+                            std::str::from_utf8(run).unwrap()
+                        );
+                        checked += 1;
+                    }
+                }
+                assert!(
+                    !rebuilt.contains("BEGIN") && !rebuilt.contains(" KEY-"),
+                    "{name}"
+                );
+                assert!(
+                    sse_text(shape, &out).ends_with(&after[after.len() - 2000..]),
+                    "{name}: the text past the bound is kept"
+                );
+            }
+        }
+    }
+    assert!(checked > 10_000);
+}
+
+/// H-20 re-review: a second BEGIN inside a lone BEGIN's block is no match to the whole-record
+/// regex (it lies inside the first match), but the stream held it to its own bound, so the first
+/// block outlived the hold and the stream failed closed: a one-line request body lost every
+/// later turn. The stream no longer starts a BEGIN inside an open block. Two BEGIN mentions
+/// 0.5, 4, 8 and 15.9 KB apart, in a one-line JSON body and in JSONL: the stream equals the
+/// whole-record policy at three chunkings (and `spikes/redact.py` agrees), every record parses,
+/// and every later turn's marker past the blocks is kept.
+#[test]
+fn a_second_begin_inside_a_block_keeps_the_stream_equal_to_the_record() {
+    const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
+    for gap in [500usize, 4000, 8000, 15_900] {
+        for one_line in [true, false] {
+            let name = format!("gap {gap}, one line {one_line}");
+            let (open, sep, close) = if one_line {
+                (r#"{"model":"m","messages":["#, ",", "]}\n")
+            } else {
+                ("", "\n", "\n")
+            };
+            let turn = |text: &str| format!(r#"{{"role":"user","content":"{text}"}}"#);
+            let mut turns = vec![turn(&format!("parse lines that start with {BEGIN} please"))];
+            let mut filler = 0;
+            loop {
+                let so_far: usize = turns.iter().map(|t| t.len() + 1).sum();
+                if so_far + 40 >= gap {
+                    break;
+                }
+                let n = (gap - so_far - 40).min(200);
+                turns.push(turn(&"x".repeat(n.saturating_sub(30).max(1))));
+                filler += 1;
+            }
+            turns.push(turn(&format!("and also {BEGIN} here")));
+            let first_later = turns.len();
+            for i in 0..1000 {
+                turns.push(turn(&format!("later turn MARK-{i:04} ordinary text")));
+            }
+            let input = format!("{open}{}{close}", turns.join(sep));
+            assert!(filler > 0 || gap < 600, "{name}");
+            let (out, spans) = all_three_agree(&name, input.as_bytes());
+            let text = String::from_utf8(out).unwrap();
+            for line in text.lines() {
+                serde_json::from_str::<serde_json::Value>(line).expect("each record parses");
+            }
+            // Every marker that starts past the last block's bound is kept.
+            let last = spans.iter().map(|s| s.end).max().unwrap() as usize;
+            let mut kept = 0;
+            for t in &turns[first_later..] {
+                let at = input.find(t.as_str()).unwrap();
+                if at > last {
+                    assert!(text.contains(t.as_str()), "{name}: {t} lost");
+                    kept += 1;
+                }
+            }
+            assert!(kept > 600, "{name}: {kept} later turns kept");
+        }
+    }
+}
+
+/// H-20 re-review: in raw text the quotes need not pair as JSON. A note mentions a BEGIN, quotes
+/// once, then prints a whole key: the key's body fell outside the pieces the block cut at quotes
+/// and was kept. A piece outside the strings that holds a key-shaped run is redacted too, so no
+/// 16-character run of the key survives, and the stream, the whole-record policy and
+/// `spikes/redact.py` agree. With the quotes paired, ordinary JSON framing is still kept.
+#[test]
+fn a_key_after_an_odd_quote_in_raw_text_is_still_redacted() {
+    let b64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut rng = Rng(0x0DD_9007E);
+    let lines: Vec<String> = (0..26)
+        .map(|_| (0..64).map(|_| char::from(b64[rng.below(64)])).collect())
+        .collect();
+    for quotes in [1, 3] {
+        let note = format!(
+            "# Notes\n\nKeys start with a `-----BEGIN PRIVATE KEY-----` line.\n{}He said \"use this one:\n\
+             -----BEGIN RSA PRIVATE KEY-----\n{}\n-----END RSA PRIVATE KEY-----\nThanks.\n",
+            "a \"quoted\" word, ".repeat((quotes - 1) / 2),
+            lines.join("\n")
+        );
+        let name = format!("{quotes} quotes");
+        let (out, _) = all_three_agree(&name, note.as_bytes());
+        for line in &lines {
+            if let Some(run) = no_run_of_len(&out, line.as_bytes(), 16) {
+                panic!("{name}: {run:?} of the key survives");
+            }
+        }
+        assert!(out.starts_with(b"# Notes\n\nKeys start with a `"), "{name}");
+    }
+}
+
+/// No `n`-byte run of `secret` is in `out`.
+fn no_run_of_len(out: &[u8], secret: &[u8], n: usize) -> Option<String> {
+    secret
+        .windows(n)
+        .find(|w| contains(out, w))
+        .map(|w| String::from_utf8_lossy(w).into_owned())
+}
+
+/// H-20 re-review (Minor): the 512 bytes the bound leaves under the hold are room for a real
+/// BEGIN line. A label far longer than any real one holds its block past the hold, and the
+/// stream fails closed there: it may redact more than the whole-record policy, but never less,
+/// and no run of the key survives in either.
+#[test]
+fn a_long_begin_label_fails_safe() {
+    let b64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut rng = Rng(0x1AB_E15);
+    let lines: Vec<String> = (0..26)
+        .map(|_| (0..64).map(|_| char::from(b64[rng.below(64)])).collect())
+        .collect();
+    for label in [450usize, 500, 1100, 4000] {
+        let begin = format!("-----BEGIN {} PRIVATE KEY-----", "A".repeat(label));
+        for (shape, input) in [
+            (
+                "json",
+                format!(
+                    "{{\"text\":\"{begin}\\n{}\"}}\n{{\"next\":1}}\n",
+                    lines.join("\\n")
+                ),
+            ),
+            ("raw", format!("{begin}\n{}\n", lines.join("\n"))),
+        ] {
+            let name = format!("label {label} {shape}");
+            let input = input.as_bytes();
+            let want = legacy(input);
+            let mut rng = Rng(label as u64);
+            for chunks in [
+                vec![MAX_SEGMENT_BYTES],
+                vec![1],
+                random_chunks(&mut rng, 97),
+            ] {
+                let got = retained_of(&stream_through(StreamRedactor::new(), input, &chunks, 2), 1);
+                assert!(
+                    uncovered(&want.1, &got.1).is_empty(),
+                    "{name}: the stream redacts less than the whole-record policy"
+                );
+                for (what, out) in [("stream", &got.0), ("record", &want.0)] {
+                    for line in &lines {
+                        if let Some(run) = no_run_of_len(out, line.as_bytes(), 16) {
+                            panic!("{name}: the {what} keeps {run:?} of the key");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Words for filler: no quote, no backslash, no base64 run of 16.
+fn words(n: usize) -> String {
+    "lorem ipsum dolor sit amet consectetur adipiscing elit "
+        .chars()
+        .cycle()
+        .take(n)
+        .collect()
+}
+
+/// `lines` lines of 64 base64 characters, a key body.
+fn key_lines(rng: &mut Rng, lines: usize) -> Vec<String> {
+    let b64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    (0..lines)
+        .map(|_| (0..64).map(|_| char::from(b64[rng.below(64)])).collect())
+        .collect()
+}
+
+/// H-20 re-review 2: a lone BEGIN mention opens a window; a real key whose BEGIN falls late in
+/// it, with its END past the window, lost the tail past the bound. A window with no END now
+/// ends at the first BEGIN inside it, and that BEGIN opens its own. The real key's BEGIN at
+/// 12 to 16 KB after the mention, for RSA-2048 and RSA-4096 bodies, in JSONL and raw text: no
+/// 16-character run survives, and the stream, the whole-record policy and `spikes/redact.py`
+/// agree.
+#[test]
+fn a_real_key_late_in_a_lone_begins_window_is_redacted_whole() {
+    const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
+    const END: &str = "-----END PRIVATE KEY-----";
+    let mut rng = Rng(0x1A7E_0B16);
+    let mut offsets: Vec<usize> = (12_000..=16_000).step_by(500).collect();
+    offsets.extend([15_870, 15_871, 15_872, 15_873]);
+    for (size, n) in [("rsa2048", 26), ("rsa4096", 51)] {
+        let lines = key_lines(&mut rng, n);
+        for &t in &offsets {
+            // JSONL: the mention, one filler record, the key read by a tool, more records.
+            let rec1 = format!(r#"{{"type":"tool","output":"grep: {BEGIN} in parser.rs"}}"#);
+            let body1 = rec1.find(BEGIN).unwrap() + BEGIN.len();
+            let (fill, key_at) = (r#"{"type":"msg","text":""#, r#"{"type":"tool","output":""#);
+            let used = (rec1.len() + 1 - body1) + fill.len() + 3 + key_at.len();
+            let jsonl = format!(
+                "{rec1}\n{fill}{}\"}}\n{key_at}{BEGIN}\\n{}\\n{END}\\n\"}}\n{}",
+                words(t - used),
+                lines.join("\\n"),
+                "{\"type\":\"msg\",\"text\":\"after\"}\n".repeat(50)
+            );
+            assert_eq!(jsonl.rfind(BEGIN).unwrap() - body1, t);
+            // Raw text: the mention, filler, the key.
+            let head = format!("grep hit: {BEGIN} in parser.rs\n");
+            let raw = format!(
+                "{head}{}\n{BEGIN}\n{}\n{END}\nafter\n",
+                words(t - (head.len() - head.find(BEGIN).unwrap() - BEGIN.len()) - 1),
+                lines.join("\n")
+            );
+            for (shape, input) in [("jsonl", jsonl), ("raw", raw)] {
+                let name = format!("{size} {shape} at {t}");
+                let (out, _) = all_three_agree(&name, input.as_bytes());
+                for line in &lines {
+                    if let Some(run) = no_run_of_len(&out, line.as_bytes(), 16) {
+                        panic!("{name}: {run:?} of the key survives");
+                    }
+                }
+                if shape == "jsonl" {
+                    for record in String::from_utf8(out).unwrap().lines() {
+                        serde_json::from_str::<serde_json::Value>(record)
+                            .unwrap_or_else(|e| panic!("{name}: {e}: {record}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// H-20 re-review 2: a base64url run (no `/`: a Codex `encrypted_content` value) that starts
+/// inside a lone BEGIN's window and crosses its end kept the email recognizer live from inside
+/// the window, so the whole window was held past the hold and the stream failed closed: a
+/// one-line body lost every later record. A decided window now leaves in parts, at its pieces
+/// (and its one cut at `PEM_SLICE`), so the stream equals the whole-record policy. The
+/// reviewer's runs, as `(start in the window, length)`, in JSONL and in a one-line body.
+#[test]
+fn a_run_across_the_end_of_a_lone_begins_window_keeps_the_stream_equal() {
+    const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
+    let b64url = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let b64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut rng = Rng(0xE0C_0DE);
+    let cases: &[(&str, usize, usize)] = &[
+        ("base64url", 100, 16_000),
+        ("base64url", 100, 16_500),
+        ("base64url", 100, 20_000),
+        ("base64url", 15_000, 2_000),
+        ("base64url", 15_000, 5_000),
+        ("base64url", 15_500, 1_000),
+        ("base64url", 15_800, 500),
+        ("base64url", 15_860, 300),
+        ("base64url", 17_000, 3_000),
+        ("base64", 100, 20_000),
+        ("base64", 15_000, 5_000),
+        ("letters", 15_000, 2_000),
+    ];
+    for &(class, s, len) in cases {
+        let run: String = (0..len)
+            .map(|_| match class {
+                "base64url" => char::from(b64url[rng.below(64)]),
+                "base64" => char::from(b64[rng.below(64)]),
+                _ => 'w',
+            })
+            .collect();
+        for one_line in [false, true] {
+            let name = format!("{class} {s}/{len} one line {one_line}");
+            let (sep, open, close) = if one_line {
+                (",", r#"{"input":["#, "]}\n")
+            } else {
+                ("\n", "", "\n")
+            };
+            let rec1 = format!(r#"{{"type":"message","text":"look for {BEGIN} lines"}}"#);
+            let body1 = open.len() + rec1.find(BEGIN).unwrap() + BEGIN.len();
+            let fill = r#"{"type":"message","text":""#;
+            let blob = r#"{"type":"reasoning","encrypted_content":""#;
+            let used = (open.len() + rec1.len() + sep.len() - body1) + fill.len() + 2 + sep.len();
+            let mut records = vec![rec1];
+            if s > used + blob.len() {
+                records.push(format!("{fill}{}\"}}", words(s - used - blob.len())));
+            }
+            records.push(format!("{blob}{run}\"}}"));
+            for i in 0..300 {
+                records.push(format!(r#"{{"type":"message","text":"turn MARK-{i:04}"}}"#));
+            }
+            let input = format!("{open}{}{close}", records.join(sep));
+            if s > used + blob.len() {
+                assert_eq!(input.find(&run).unwrap() - body1, s, "{name}");
+            }
+            let (out, spans) = all_three_agree(&name, input.as_bytes());
+            let text = String::from_utf8(out).unwrap();
+            for line in text.lines() {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .unwrap_or_else(|e| panic!("{name}: {e}"));
+            }
+            let last = spans.iter().map(|s| s.end).max().unwrap() as usize;
+            for i in 0..300 {
+                let mark = format!("turn MARK-{i:04}");
+                if input.find(&mark).unwrap() > last {
+                    assert!(text.contains(&mark), "{name}: {mark} lost");
+                }
+            }
+            assert!(text.contains("turn MARK-0299"), "{name}");
+        }
+    }
+}
+
+/// H-20 re-review 3 (Important 1): a bounded window's cut at `PEM_SLICE` that fell right after
+/// a backslash left that backslash raw between the two markers. The stream decides the first
+/// part on the bytes up to the cut alone, where a piece loses the backslashes it ends on, so its
+/// first marker ended early: `<redacted:private_key>\<redacted:private_key>`, which is not
+/// JSON and differs from the whole-record policy. The cut now moves past a backslash run and
+/// the byte it escapes, in all three redactors. One string holds the cut and crosses the
+/// window's end with a 10,000-character base64url run, so the stream must release at the cut.
+/// The bytes before the cut are swept over each escape shape (`\n`; `\"` and `\\\"`;
+/// `C:\\path`; `\u2192` and `\n`; a raw `→`; a key body): for one run of each kind in the
+/// shape, every position with a backslash before the cut and the position after the run, and
+/// one ordinary position; in JSONL for every shape, and in a one-line body and SSE for the
+/// runs of one, two and three backslashes (`quote`, `path`). Each: the stream at three
+/// chunkings equals the whole-record policy and `spikes/redact.py` (the raw `→` excepted: the
+/// script counts the bound in characters, so its block ends later in bytes); the two markers
+/// touch; every record parses; and no 16-character run of the key body survives.
+#[test]
+fn a_cut_right_after_a_backslash_leaves_nothing_between_the_two_markers() {
+    const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
+    let b64url = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut rng = Rng(0x0BAC_51A5);
+    let run: String = (0..10_000)
+        .map(|_| char::from(b64url[rng.below(64)]))
+        .collect();
+    let body = key_lines(&mut rng, 26);
+    // A string's text as the tool or model wrote it; the JSON escaping puts the backslashes
+    // in. `ascii` writes `→` as `\u2192`, as `ensure_ascii` would.
+    let escape = |text: &str, ascii: bool| -> String {
+        let json = serde_json::to_string(text).unwrap();
+        let inner = json[1..json.len() - 1].to_string();
+        if ascii {
+            inner.replace('\u{2192}', "\\u2192")
+        } else {
+            inner
+        }
+    };
+    let arrows = "     1\u{2192}line\n     2\u{2192}line\n";
+    // (name, one period of the text, repeats, ascii, the script counts the same)
+    let shapes: Vec<(&str, String, usize, bool, bool)> = vec![
+        (
+            "newline",
+            "line one\nline two\nline three\n".into(),
+            40,
+            true,
+            true,
+        ),
+        (
+            "quote",
+            "he said \\\"no\\\" then \"yes\" again ".into(),
+            40,
+            true,
+            true,
+        ),
+        ("path", "C:\\Users\\a\\b\\c path ".into(), 40, true, true),
+        ("u2192", arrows.into(), 40, true, true),
+        ("raw arrow", arrows.into(), 40, false, false),
+        ("key body", format!("{}\n", body[0]), 26, true, true),
+    ];
+    let later: Vec<String> = (0..100).map(|i| format!("MARK-{i:04} later")).collect();
+    let build = |form: &str, text: &str| -> String {
+        match form {
+            "jsonl" => {
+                let mut s = format!("{{\"type\":\"tool_result\",\"content\":\"grep: {BEGIN}\"}}\n");
+                s.push_str(&format!(
+                    "{{\"type\":\"reasoning\",\"content\":\"{text}\"}}\n"
+                ));
+                for mark in &later {
+                    s.push_str(&format!("{{\"type\":\"note\",\"text\":\"{mark}\"}}\n"));
+                }
+                s
+            }
+            "body" => {
+                let mut turns = vec![
+                    format!("{{\"role\":\"user\",\"content\":\"grep {BEGIN}\"}}"),
+                    format!("{{\"role\":\"assistant\",\"content\":\"{text}\"}}"),
+                ];
+                turns.extend(
+                    later
+                        .iter()
+                        .map(|m| format!("{{\"role\":\"user\",\"content\":\"{m}\"}}")),
+                );
+                format!("{{\"input\":[{}]}}\n", turns.join(","))
+            }
+            _ => {
+                let ev = |t: &str| {
+                    format!(
+                        "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{t}\"}}}}\n\n"
+                    )
+                };
+                let mut s = ev(&format!("The parser checks {BEGIN} first."));
+                s.push_str(&ev(text));
+                for mark in &later {
+                    s.push_str(&ev(&format!(" {mark}")));
+                }
+                s
+            }
+        }
+    };
+    let parses = |form: &str, text: &str, name: &str| {
+        let lines: Vec<&str> = match form {
+            "jsonl" | "body" => text.lines().collect(),
+            _ => text
+                .lines()
+                .filter_map(|l| l.strip_prefix("data: "))
+                .collect(),
+        };
+        assert!(!lines.is_empty(), "{name}");
+        for line in lines {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap_or_else(|e| panic!("{name}: a record does not parse: {e}\n{line}"));
+        }
+    };
+    let mut cases = 0;
+    for (shape, text, repeats, ascii, script_counts_the_same) in &shapes {
+        let period = escape(text, *ascii);
+        let piece = period.repeat(*repeats);
+        let e = period.as_bytes();
+        // Where the cut lands in the period: for the first run of each length, after each of
+        // its backslashes and after the byte it escapes; and one ordinary position.
+        let mut at: std::collections::BTreeSet<usize> = [0].into();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut s = 0;
+        while s < e.len() {
+            if e[s] != b'\\' {
+                s += 1;
+                continue;
+            }
+            let len = e[s..].iter().take_while(|&&b| b == b'\\').count();
+            if seen.insert(len) {
+                at.extend(s + 1..=s + len + 1);
+            }
+            s += len;
+        }
+        let forms: &[&str] = if matches!(*shape, "quote" | "path") {
+            &["jsonl", "body", "sse"]
+        } else {
+            &["jsonl"]
+        };
+        for &form in forms {
+            for &k in &at {
+                let name = format!("{shape} {form} cut at {k}");
+                let probe = build(form, &format!("{piece}{run}"));
+                let begin = probe.find(BEGIN).unwrap();
+                let piece_at = probe.find(&piece).unwrap();
+                let pad = begin + PEM_SLICE - piece_at - k;
+                let input = build(form, &format!("{}{piece}{run}", words(pad)));
+                assert_eq!(input.find(BEGIN).unwrap(), begin, "{name}");
+                let piece_at = input.find(&piece).unwrap();
+                assert_eq!(
+                    piece_at + k,
+                    begin + PEM_SLICE,
+                    "{name}: the cut lands at {k}"
+                );
+                let (out, spans) = agree(&name, input.as_bytes(), *script_counts_the_same);
+                let text = String::from_utf8(out).unwrap();
+                assert!(
+                    text.contains("<redacted:private_key><redacted:private_key>"),
+                    "{name}: the two markers do not touch"
+                );
+                assert!(
+                    !text.contains(">\\<"),
+                    "{name}: a backslash between markers"
+                );
+                parses(form, &text, &name);
+                let last = spans.iter().map(|s| s.end).max().unwrap() as usize;
+                assert!(
+                    last > begin + PEM_SLICE,
+                    "{name}: the block ends past the cut"
+                );
+                if *shape == "key body" {
+                    for line in &body {
+                        if let Some(w) = line
+                            .as_bytes()
+                            .windows(16)
+                            .find(|w| text.as_bytes().windows(16).any(|t| t == *w))
+                        {
+                            panic!(
+                                "{name}: {:?} of the key survives",
+                                String::from_utf8_lossy(w)
+                            );
+                        }
+                    }
+                }
+                cases += 1;
+            }
+        }
+    }
+    assert!(cases >= 40, "{cases} cases swept");
+}
+
+/// H-20 re-review 3 (Minor 2): `spikes/redact.py` had only the shell/TOML form of
+/// `generic_secret_assignment`. On a logprobs `"token"` whose value holds a second `BEGIN`
+/// mid-string it wrote two touching block markers where the daemon, whose JSON-form claim spans
+/// both pieces, writes one. The script now carries the JSON form with the value alone as its
+/// span: the three agree, the record stays JSON, a quoted key the shell form cannot reach is
+/// redacted, and a value an earlier rule already claimed is not redacted twice.
+#[test]
+fn the_script_carries_the_json_form_of_a_generic_secret() {
+    let chunk = |content: &str, logprob: &str| {
+        format!(
+            "data: {{\"object\": \"chat.completion.chunk\", \"choices\": [{{\"index\": 0, \"delta\": {{\"content\": \"{content}\"}}, \"logprobs\": {{\"content\": [{{\"token\": \"{content}\", \"logprob\": {logprob}}}]}}}}]}}\n\n"
+        )
+    };
+    let mut input = chunk(
+        "The parser checks -----BEGIN PRIVATE KEY-----",
+        "-1.2345678901234568e-05",
+    );
+    for i in 0..40 {
+        input.push_str(&chunk(&format!(" word{i}"), "-2.4691357802469136e-05"));
+    }
+    let (out, _) = all_three_agree("logprob token", input.as_bytes());
+    let text = String::from_utf8(out).unwrap();
+    for line in text.lines().filter_map(|l| l.strip_prefix("data: ")) {
+        serde_json::from_str::<serde_json::Value>(line).expect("each event parses");
+    }
+    assert!(
+        text.contains(r#""<redacted:private_key>": "<redacted:private_key>", "<redacted:private_key>": -1.2345678901234568e-05"#),
+        "one marker for the token value:\n{text}"
+    );
+
+    let input = concat!(
+        r#"{"api_key":"q8Zr2LmN0pX4vB7cT1yW9"}"#,
+        "\n",
+        r#"{"x-api-key":"sk-ant-api03-AAAABBBBCCCCDDDDEEEEFFFF"}"#,
+        "\n",
+        r#"{"refresh_token": "abcdefghijklmnopqrstuvwxyz tail"}"#,
+        "\n",
+        r#"{"tokenizer":"abcdefghijklmnopqrstuvwxyz"}"#,
+        "\n",
+        r#"{"note":"password: \"abcdefghijklmnopqrstuvwxyz\""}"#,
+        "\n",
+    );
+    let (out, spans) = all_three_agree("quoted keys", input.as_bytes());
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        concat!(
+            r#"{"api_key":"<redacted:generic_secret_assignment>"}"#,
+            "\n",
+            r#"{"x-api-key":"<redacted:anthropic_key>"}"#,
+            "\n",
+            r#"{"refresh_token": "<redacted:generic_secret_assignment>"}"#,
+            "\n",
+            r#"{"tokenizer":"abcdefghijklmnopqrstuvwxyz"}"#,
+            "\n",
+            // The shell form, as before: its span takes the opening `\"` and leaves the closing one.
+            r#"{"note":"<redacted:generic_secret_assignment>\""}"#,
+            "\n",
+        )
+    );
+    assert_eq!(spans.len(), 4);
+}
+
+/// H-20 re-review 2 (Minor): an exponent float holds a run of digits and an `e`
+/// (`2.4691357802469136e-05`), which is number-shaped and not a key line, so metric records
+/// inside a lone BEGIN's window keep their numbers and parse; the three redactors agree.
+#[test]
+fn exponent_floats_inside_a_block_keep_their_records_parsing() {
+    let mut input = String::from(r#"{"text":"match -----BEGIN PRIVATE KEY----- here"}"#);
+    input.push('\n');
+    for i in 0..200 {
+        input.push_str(&format!(
+            "{{\"token\":{i},\"logprob\":-2.4691357802469136e-05,\"p\":9.99975309247135E+01}}\n"
+        ));
+    }
+    let (out, _) = all_three_agree("exponent floats", input.as_bytes());
+    let text = String::from_utf8(out).unwrap();
+    for line in text.lines() {
+        serde_json::from_str::<serde_json::Value>(line).expect("each record parses");
+    }
+    assert!(text.contains("2.4691357802469136e-05"));
+}
+
+/// The first span's kind, its start, the end of the run of same-kind spans that touch it, and
+/// how many spans that run is: a PEM block cut at `PEM_SLICE` is two touching spans.
+fn block_run(spans: &[RedactionAuditSpan]) -> (&str, u64, u64, usize) {
+    let first = &spans[0];
+    let mut end = first.end;
+    let mut parts = 1;
+    for s in &spans[1..] {
+        if s.kind != first.kind || s.start != end {
+            break;
+        }
+        end = s.end;
+        parts += 1;
+    }
+    (first.kind.as_str(), first.start, end, parts)
 }

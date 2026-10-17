@@ -1393,10 +1393,10 @@ fn with_script(body: &str) -> String {
 /// Two differ in a bound, because the daemon's stream holds an undecided run and the script
 /// holds nothing. The daemon's `email` local part is at most 1,024 units, so a bare token run does
 /// not hold to the hold bound (I-2); the script keeps `+` and redacts a longer local part whole.
-/// The daemon's PEM block ends at an END line that starts within 12,288 bytes, or is those
-/// bytes, so a lone BEGIN no longer redacts the rest of the stream (I-1); the script
-/// runs the block to its END line or the end of the text. In both the script redacts more,
-/// never less.
+/// The PEM block has the same bound and the same lone-BEGIN window in both (H-20), but the
+/// daemon counts the bound in bytes and the script in characters, so the daemon spells its body
+/// as byte classes; for a body with non-ASCII text the script's window is the longer one. In
+/// both the script redacts more, never less.
 const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     (
         "generic_secret_assignment",
@@ -1410,16 +1410,16 @@ const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     ),
     (
         "private_key",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,12288}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,12288})",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]{0,15872}?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]{0,15872})",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,15872}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,15872})",
     ),
 ];
 
-/// The shared literals the script has no counterpart for, in `patterns()` order: the JSON form
-/// of `generic_secret_assignment` (the script needs `[=:]` right after the key word, so it
-/// never fires on a quoted JSON key) and the seven vendor prefixes it predates.
+/// The shared literals the script has no counterpart for, in `patterns()` order: the seven
+/// vendor prefixes it predates. (It carries both forms of `generic_secret_assignment`: the JSON
+/// form since H-20 re-review 3, spelled as the daemon spells it, with the value alone as its
+/// span.)
 const RUST_ONLY_KINDS: &[&str] = &[
-    "generic_secret_assignment",
     "google_key",
     "huggingface_token",
     "npm_token",
@@ -1454,9 +1454,9 @@ fn spikes_redact_py_patterns_match_the_shared_set() {
         .collect();
     assert_eq!(
         script.len(),
-        15,
-        "the script's ten rules, the fine-grained github_token, the three proxy_credential \
-         forms and masked_key"
+        16,
+        "the script's ten rules, the fine-grained github_token, the JSON form of \
+         generic_secret_assignment, the three proxy_credential forms and masked_key"
     );
     let shared = goalcup_daemon::redact::patterns();
 
@@ -1707,8 +1707,9 @@ fn shared_rule_probes() -> Vec<String> {
     add(format!("secret=ABCDEFGHIJ{block}\nz"));
     add(format!("{block}x@y.com tail"));
     add(format!("{block}x@y.com{block}"));
-    // A BEGIN with no END runs to the end of the text. It is last because the script runs over
-    // every probe as one text, where its end is the end of the last probe.
+    // A BEGIN with no END and no quote after it runs to the end of the text (inside the bound).
+    // It is last because the script runs over every probe as one text, where its end is the
+    // end of the last probe.
     add("-----BEGIN PRIVATE KEY-----\nMIIB\nno end line".into());
     p
 }
@@ -2288,17 +2289,12 @@ const PEM_PIECES: &[&str] = &[
 
 /// The differential: for every input of a PEM-heavy corpus, what a block leaves redacted is a
 /// superset of what first-wins alone redacts (`apply_first_wins_only`, the real selection with
-/// the blocks not merged), every byte of every block match is redacted, and the spans are
+/// the blocks not merged), every byte of every block match's pieces is redacted (all of it when
+/// it holds no quote; `pem_block_pieces`, the daemon's own cut), and the spans are
 /// sorted and never overlap. Includes the reviewer's two examples, a key with no END, and
 /// blocks meeting a token on either side.
 #[test]
 fn a_block_only_ever_adds_redaction_to_first_wins() {
-    let block_re = goalcup_daemon::redact::patterns()
-        .iter()
-        .find(|p| p.kind == "private_key")
-        .unwrap()
-        .re
-        .clone();
     let mut rng = Lcg(0x9E37_7991_2345_6789);
     let mut corpus: Vec<String> = vec![
         format!("{KEY}x@a.glpat-ABCDEFGHIJKLMNOPQRSTUVWXYZ tail"),
@@ -2330,15 +2326,14 @@ fn a_block_only_ever_adds_redaction_to_first_wins() {
             out.spans.windows(2).all(|w| w[0].end <= w[1].start),
             "{text:?}: spans are sorted and disjoint"
         );
-        let mut has_block = false;
-        for m in block_re.find_iter(input) {
-            has_block = true;
+        let pieces = goalcup_daemon::redact::pem_block_pieces(input);
+        for &(a, b) in &pieces {
             assert!(
-                now[m.start()..m.end()].iter().all(|c| *c),
-                "{text:?}: a block match is not wholly redacted"
+                now[a..b].iter().all(|c| *c),
+                "{text:?}: a piece of a block match is not wholly redacted"
             );
         }
-        with_block += usize::from(has_block);
+        with_block += usize::from(!pieces.is_empty());
         strictly_more += usize::from(now != was);
     }
     eprintln!(
