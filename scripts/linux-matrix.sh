@@ -387,6 +387,7 @@ docker run -d --name "$name" --label "$label" --init --cpus="$cpus" \
     -v "$volume":$VOL -v "$logdir":/logs "$@" \
     -e HOME=$VOL/home -e TMPDIR=$VOL/tmp -e GOALCUP_CONFIG_DIR=$CFG \
     -e GOALCUP_CONNECTORS_DIR=/src/connectors -e LINUX_MATRIX_SERVER="$server" \
+    -e MATRIX_BIN_DIR=/target/debug \
     -e GOALCUP_TEST_MEMBER_ID="$member" -e LINUX_MATRIX_HOST_LOG_DIR="$logdir" \
     -e PATH=/target/debug:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     -w $VOL "$img" sleep infinity >/dev/null || fail "container"

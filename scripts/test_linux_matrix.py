@@ -112,6 +112,12 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertTrue(any("cargo build --offline --locked --workspace" in x
                             for x in self.docker_lines("exec")))
 
+    def test_matrix_selects_the_container_build_over_mounted_host_binaries(self) -> None:
+        run = self.run_script("run", "codex-cli")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        [docker_run] = self.docker_lines("run")
+        self.assertIn("-e MATRIX_BIN_DIR=/target/debug", docker_run)
+
     def test_a_key_in_the_environment_is_refused_before_docker_runs(self) -> None:
         run = self.run_script("run", "codex-cli", GOALCUP_TEST_APPROVAL_KEY=SENTINEL)
         self.assertNotEqual(run.returncode, 0)
