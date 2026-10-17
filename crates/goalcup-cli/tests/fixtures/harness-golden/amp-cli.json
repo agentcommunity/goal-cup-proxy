@@ -17,6 +17,7 @@
       "NODE_EXTRA_CA_CERTS"
     ],
     "config_home": "per_run",
+    "configure": [],
     "continuation": "chat: the participant types the prompt and may type keep going",
     "env": {
       "AMP_SKIP_UPDATE_CHECK": "1",
@@ -75,17 +76,6 @@
     "launch_home_env": null,
     "launch_program": "amp",
     "validates": "ok"
-  },
-  "credential": {
-    "child_secret_from_env": {
-      "bad_characters": "none",
-      "empty": "none",
-      "quote": "none",
-      "too_short": "none",
-      "unset": "none",
-      "well_formed": "none"
-    },
-    "credential_env": null
   },
   "env_differs_from_policy": [],
   "goal_placement_for_an_option_shaped_goal": {

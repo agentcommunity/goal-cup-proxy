@@ -50,8 +50,9 @@ Owner decisions of 16 Oct 2026:
   Hermes included, keeps its own login in its home, and every run uploads under the same rules.
   #208 redacts the run's own proxy credential by exact value; #214 runs Hermes in chat mode from
   its own home; #215 removes the key-forwarding mechanism.
-- Amp ships. Its metadata log is a native source, labelled as such. #206 waits for the owner's live
-  run (the thread log is not yet measured in chat mode).
+- Amp's native source is its metadata log, labelled as such. Logged-in macOS chat through the
+  tracer completed on 17 Oct with zero capture gaps; #206 is completing staging and integration.
+  Both Amp sources are capture-only until a separate decoder is added.
 - Claude Code's folder-trust dialog: the participant answers it. The RULES exemption for that one
   answer is still to be written (UX-F).
 - Every start needs a human click in the browser, also when it replaces a run. The test approval key
@@ -67,12 +68,13 @@ its source report, e.g. [C4-F4]; the reports are kept outside the repo (maintain
 fast` before every commit.
 
 ### WP0: Measure
-Status (16 Oct): first real runs on macOS against staging (0.6.0). Codex (luna) recorded, stopped,
-sealed and uploaded. Claude (haiku) stopped at the folder-trust dialog. Left:
-- Mac Codex and Claude matrix rows still have to pass. They are blocked on a Little Snitch rule for
-  the new build.
-- Linux Codex sign-in needs the owner (Chrome must be signed in to OpenAI, or the owner enters the
-  device code). Linux Claude and Amp need owner logins.
+Status (17 Oct): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging
+practice runs: deadline stop, seal, matching uploaded server position and zero-gap research
+reports. Hermes native snapshots remain undecoded. Amp's logged-in macOS local traced task
+passed with zero gaps; its staging practice is being completed with #206. Left:
+- Claude (haiku) reached its weekly quota after the folder-trust dialog. Retry when quota returns;
+  preserve the incomplete-stop trace and its gaps rather than count it as a successful task.
+- Linux Amp and Claude task runs remain unmeasured; no Linux Amp login or capture claim.
 - Then: the 8-hour runs on macOS and Linux, Intel Mac, x86_64 Linux and WSL2, and the edge cases in
   [OPERATING](docs/OPERATING.md). The matrix is `scripts/matrix.sh` (Linux: `scripts/linux-matrix.sh`, #198).
 
@@ -294,8 +296,9 @@ These look odd but are right. Do not "fix" them.
 
 ## Open owner questions
 
-- WP0 needs: a Little Snitch rule for the new build (Mac), a ChatGPT sign-in in Chrome or the device
-  code (Linux Codex), and logins for Linux Claude and Amp. A live Amp run before #206 merges.
+- WP0: the owner completed Linux Codex sign-in and Amp's private-home macOS sign-in. A rebuilt
+  Mac binary may need a new Little Snitch approval. Claude remains deferred until quota returns;
+  Linux Amp task coverage is still outstanding.
 
 ## Known issues
 

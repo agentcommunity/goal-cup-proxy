@@ -1,4 +1,4 @@
-# Amp 0.0.1791676897-g77c125, capture profile (D57, D59). Facts: docs/harnesses/amp-cli.md.
+# Amp 0.0.1792209635-g24a9fe, capture profile (D57, D59). Facts: docs/harnesses/amp-cli.md.
 # The native leg is Amp's per-thread METADATA log, not a transcript (owner ruling, 16 Oct 2026).
 schema_version = 1
 id = "amp-cli"
@@ -12,7 +12,7 @@ first_screen = "Amp may ask whether you want to log in. Choose yes and finish th
 # `amp login` polls this host for the device code; tunnelled, never recorded.
 auth_hosts = ["authapi.ampcode.com"]
 # Chat mode (D57): `amp` with no argument opens Amp's TUI in the participant's terminal, and the
-# participant types the prompt (measured with no login, docs/harnesses/amp-cli.md, section 1).
+# participant types the prompt (logged-in chat measured 17 Oct, docs/harnesses/amp-cli.md).
 # No mode, model, visibility or permission option: the participant's own choice (D57).
 interactive = true
 continuation = "chat: the participant types the prompt and may type keep going"
@@ -67,7 +67,7 @@ source = "none"
 # METADATA ONLY, NO TRANSCRIPT. Amp keeps the conversation on ampcode.com. Locally it writes one
 # JSON-lines log per thread: transport states, JSON-RPC requests, server message types with frame
 # lengths and each tool execution, and almost no conversation text (live probe, execute mode;
-# chat mode not yet measured). It can cross-check the wire leg; it cannot replace it. The row name
+# chat mode measured 17 Oct 2026). It can cross-check the wire leg; it cannot replace it. The row name
 # (the trace's stream label) and the hint (the verifier report's `analysis.undecoded`) both say
 # so. The hint has no decoder, so this source is capture-only.
 [[capture.native]]
