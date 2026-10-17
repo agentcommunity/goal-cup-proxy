@@ -19,7 +19,15 @@ How to read this sheet. Unless explicitly dated 17 Oct, measurements below used 
 
 Amp `0.0.1792209635-g24a9fe` ran on macOS arm64 in the tracer's private, kept `HOME`, using the owner's normal Amp sign-in. The participant prompt asked it to create `amp-tracer-check.txt` containing `trace check`, read it with a terminal command, and reply with that text. The file and readback completed. The native thread log recorded `async_shell_command` and `shell_command` tool executions. Two Ctrl-C presses ended Amp with exit 0; the tracer sealed the local run.
 
-The sealed trace has 367 records, zero capture gaps, two WebSocket upgrades, 33 client-message streams, 67 server-message streams, two HTTP request/response pairs and one 54,112-byte native metadata stream. Capture integrity verifies valid. This local trial used `--dev` and has no server acknowledgement; deadline and upload evidence must come from the staging practice. A second fresh start on the same private home selected only its new thread log; the earlier run's `T-*.log` was absent from its native streams. The recorded WebSocket streams all used `/actors/gateway/threadActor/websocket/`; this is not a claim about traffic that bypassed the proxy. Both Amp hints remain undecoded: the research report says `analysis: unavailable` and cross-leg `unchecked`. Raw capture is measured; structured token and action extraction is not.
+The sealed trace has 367 records, zero capture gaps, two WebSocket upgrades, 33 client-message streams, 67 server-message streams, two HTTP request/response pairs and one 54,112-byte native metadata stream. Capture integrity verifies valid. This local trial used `--dev` and has no server acknowledgement; the separate pinned staging practice below supplies deadline and delivery evidence. A second fresh start on the same private home selected only its new thread log; the earlier run's `T-*.log` was absent from its native streams. The recorded WebSocket streams all used `/actors/gateway/threadActor/websocket/`; this is not a claim about traffic that bypassed the proxy. Both Amp hints remain undecoded: the research report says `analysis: unavailable` and cross-leg `unchecked`. Raw capture is measured; structured token and action extraction is not.
+
+### Pinned staging practice (17 Oct 2026)
+
+The same native version completed the file-plus-shell task through the rebuilt, pinned connector (`dev = false`). The ten-minute practice produced 963 records / 962,353 bytes, zero capture gaps, two WebSocket upgrades, 131 client-message streams, 166 server-message streams and one 58,205-byte native metadata stream. Capture integrity verifies valid; the research report identifies the connector as `Pinned`. The server's byte offset, record count, head, committed final record and acknowledgement match the local chain through its terminal record. Verification used the supplied staging public key, which is not a production trust claim.
+
+The server deadline was `12:20:30Z`; termination was requested at `12:20:31Z`. The CLI observed Amp exit after signal 9; the trace sealed at `12:20:42Z` and the server acknowledged it at `12:20:48Z`. **Termination is `Unresolved(ProcessAuthorityUnavailable)`, not `Confirmed`.** The daemon reported five targeted processes, one killed after the grace, no remaining targeted process, and `observed_gone = false`. A subsequent process check found no test Amp or helper, but the trace cannot certify the whole process tree gone. The exact loss of termination authority is not established; `process_group` is a strategy, not proof of which termination path ran. Keep this distinction under the [termination contract](../TERMINATION.md) in longer tests.
+
+Both Amp sources remain undecoded (`analysis: unavailable`, cross-leg `unchecked`). A limited check found the recorded `wsToken` field redacted and no JWT-shaped or tracer-proxy-credential-shaped candidates; this does not establish exhaustive secret removal. The fresh staging run selected only its new thread log. Raw test traces are retained privately, not published as fixtures.
 
 ## 1. Run one prompt, in chat mode first
 
@@ -175,7 +183,7 @@ Skills are scanned from the cwd and every ancestor up to `/`; Amp also loads ski
 
 Remaining measurements (the owner's private-home sign-in now works):
 
-- A staging practice with deadline termination, sealing and a matching server position. The logged-in local chat, its thread log, and its native/WebSocket streams are measured above; no exhaustive secret-removal claim follows from that trial.
+- Investigate the `Unresolved(ProcessAuthorityUnavailable)` outcome on the macOS deadline practice before making any `Confirmed` process-tree claim. Capture, seal and server-copy matching passed as recorded above.
 - `amp last` through `goalcup continue`: the same thread, and the same log file appended to.
 - The live bytes of `executor_environment_snapshot`, `executor_tool_result` and the thread create, to write any further `extra_patterns` to their real shapes.
 - Long-run native log rotation/truncation. Two fresh starts were measured on 17 Oct: each selected only its own thread log.

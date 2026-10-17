@@ -51,7 +51,8 @@ Owner decisions of 16 Oct 2026:
   #208 redacts the run's own proxy credential by exact value; #214 runs Hermes in chat mode from
   its own home; #215 removes the key-forwarding mechanism.
 - Amp's native source is its metadata log, labelled as such. Logged-in macOS chat through the
-  tracer completed on 17 Oct with zero capture gaps; #206 is completing staging and integration.
+  tracer completed on 17 Oct with zero capture gaps. #206's pinned macOS staging practice also
+  passed capture/seal/upload matching; process-tree termination remains `Unresolved` (below).
   Both Amp sources are capture-only until a separate decoder is added.
 - Claude Code's folder-trust dialog: the participant answers it. The RULES exemption for that one
   answer is still to be written (UX-F).
@@ -70,8 +71,8 @@ fast` before every commit.
 ### WP0: Measure
 Status (17 Oct): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging
 practice runs: deadline stop, seal, matching uploaded server position and zero-gap research
-reports. Hermes native snapshots remain undecoded. Amp's logged-in macOS local traced task
-passed with zero gaps; its staging practice is being completed with #206. Left:
+reports. Hermes native snapshots remain undecoded. Amp's pinned macOS task, capture and delivery
+passed with zero gaps (#206); its trace does not confirm process-tree termination. Left:
 - Claude (haiku) reached its weekly quota after the folder-trust dialog. Retry when quota returns;
   preserve the incomplete-stop trace and its gaps rather than count it as a successful task.
 - Linux Amp and Claude task runs remain unmeasured; no Linux Amp login or capture claim.
@@ -110,7 +111,8 @@ are the order found.
 26. Prep opened the harness with no pause. Fixed: #204.
 27. Linux matrix selected Mac binaries from the mounted checkout when they existed. The runner
     now explicitly selects its Linux build at `/target/debug` through `MATRIX_BIN_DIR`.
-Also open: Amp (#206, waits for the owner's run). Keyed runs are gone (D61, #214, #215).
+Amp #206 records the macOS practice evidence and the unresolved termination qualification.
+Keyed runs are gone (D61, #214, #215).
 Participant-guide text is one pass at the end (UX-F): approvals, trust dialog, Little Snitch.
 
 ### WP1: Event window and event switch (server). Land first.
@@ -301,6 +303,12 @@ These look odd but are right. Do not "fix" them.
   Linux Amp task coverage is still outstanding.
 
 ## Known issues
+
+- **Amp macOS deadline termination:** the 17 Oct pinned practice passed capture and delivery,
+  and the CLI observed exit after signal 9, but the trace records
+  `Unresolved(ProcessAuthorityUnavailable)`, with no remaining targeted process and
+  `observed_gone = false`. Investigate the authority-loss cause during longer tests; do not
+  claim `Confirmed` process-tree termination. [Measured facts](docs/harnesses/amp-cli.md#pinned-staging-practice-17-oct-2026).
 
 - **T25 (measure, dry run):** fault coverage still open: a literal ENOSPC on a disposable volume, a
   live-receiver TCP close, and RSS growth over a long run.

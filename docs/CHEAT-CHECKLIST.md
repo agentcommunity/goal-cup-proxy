@@ -62,7 +62,10 @@ consistent, not that the participant followed the rules.
   bytes, which arrive over TLS that the proxy checks against the real host, so the agent cannot
   write them as it can write a local file; WebSocket message-index holes and `Loss` frames; the
   recorded build digests (D53); and the metadata log's tool events and frame counts, which a later
-  decoder can compare with the wire. Facts: [amp-cli](harnesses/amp-cli.md).
+  decoder can compare with the wire. The pinned macOS practice on 17 Oct passed capture and
+  delivery, but its termination outcome is `Unresolved(ProcessAuthorityUnavailable)`: no
+  remaining targeted process was reported, and whole-tree death is not certified. See the
+  [termination contract](TERMINATION.md). Facts: [amp-cli](harnesses/amp-cli.md).
 - **An unpinned build may be anything on `PATH`** (a wrapper that unsets `HTTPS_PROXY`, a fake that
   writes a session file and calls no model). Bounded by: the recorded build digests (D53) and the
   judges comparing the native session's model turns with the wire leg's model calls. The research
