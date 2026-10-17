@@ -106,6 +106,8 @@ are the order found.
 24. Page buttons "Approve/Deny" for every purpose. Fixed: website #307.
 25. Replace warning had no start time. Fixed: website #307 (migration applied to prod), SQL mirror #207.
 26. Prep opened the harness with no pause. Fixed: #204.
+27. Linux matrix selected Mac binaries from the mounted checkout when they existed. The runner
+    now explicitly selects its Linux build at `/target/debug` through `MATRIX_BIN_DIR`.
 Also open: Amp (#206, waits for the owner's run). Keyed runs are gone (D61, #214, #215).
 Participant-guide text is one pass at the end (UX-F): approvals, trust dialog, Little Snitch.
 
