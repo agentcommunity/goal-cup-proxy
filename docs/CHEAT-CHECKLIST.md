@@ -45,6 +45,27 @@ consistent, not that the participant followed the rules.
   through the proxy; and the research report's `analysis.cross_leg` notes
   `native_activity_without_wire_streams` when the session file shows model work the proxy did not
   record.
+- **Amp's native leg is a metadata log, not a transcript (owner ruling, 16 Oct 2026).** Amp keeps
+  the conversation on `ampcode.com`. The `amp-cli` connector records Amp's per-thread log
+  (`$HOME/.cache/amp/logs/threads/T-<uuid>.log`): transport states, JSON-RPC request names, server
+  message types with frame lengths and tool executions, and almost no conversation text. So the
+  user's prompts, the model's turns and the tool results are on the wire leg alone, and no local
+  record can disagree with them. No decoder reads either leg yet
+  (`amp-thread-metadata-no-transcript`, `amp-thread-jsonrpc`), so an Amp run's `analysis.cross_leg` reads `unchecked`, and its
+  `assistance.evidence` reads `none_observed`, which here means "no decoder", not "the participant
+  typed nothing". The trust is not fail-closed either: Amp (a Bun
+  binary) reads `NODE_EXTRA_CA_CERTS`, which adds the proxy CA to the system roots (`mode =
+  "extend"`), so a connection Amp made past the proxy would still verify, and nothing records it.
+  Bounded by: the hash chain, the seal and the server's signed acknowledgements; the child
+  environment, built from nothing with `HTTPS_PROXY` (in the live probe every Amp request used the
+  proxy, and with no login a dead proxy left Amp unable to reach `ampcode.com` at all); the wire
+  bytes, which arrive over TLS that the proxy checks against the real host, so the agent cannot
+  write them as it can write a local file; WebSocket message-index holes and `Loss` frames; the
+  recorded build digests (D53); and the metadata log's tool events and frame counts, which a later
+  decoder can compare with the wire. The pinned macOS practice on 17 Oct passed capture and
+  delivery, but its termination outcome is `Unresolved(ProcessAuthorityUnavailable)`: no
+  remaining targeted process was reported, and whole-tree death is not certified. See the
+  [termination contract](TERMINATION.md). Facts: [amp-cli](harnesses/amp-cli.md).
 - **An unpinned build may be anything on `PATH`** (a wrapper that unsets `HTTPS_PROXY`, a fake that
   writes a session file and calls no model). Bounded by: the recorded build digests (D53) and the
   judges comparing the native session's model turns with the wire leg's model calls. The research

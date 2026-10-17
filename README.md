@@ -62,7 +62,7 @@ goalcup-verify --capture-integrity <trace>        # copy the `verify:` line that
 browser approval; a run on the server asks for one at each `goalcup start`, and `goalcup login`
 asks once ([why](docs/PARTICIPANT-GUIDE.md#2-log-in-goalcup-login)). There is no daemon to
 install: `goalcup start` starts `goalcup-daemon` for the run. The shipped harnesses (Codex CLI,
-Claude Code, Hermes) run in chat mode and refuse `--goal-file`. From another terminal with
+Claude Code, Hermes, Amp) run in chat mode and refuse `--goal-file`. From another terminal with
 the same `GOALCUP_CONFIG_DIR`, `goalcup status` shows the run and `goalcup seal` ends it early.
 Only one run per harness can record at a time.
 
