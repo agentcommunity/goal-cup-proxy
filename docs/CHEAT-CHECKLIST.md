@@ -108,24 +108,31 @@ consistent, not that the participant followed the rules.
     the 108 whose `BEGIN` line was split all leak 16-character runs of the body; the 108 with the
     `BEGIN` line whole, `END` split or not, leak none. A key the agent reads reaches the
     next request as one whole string, which is redacted; the hole is the model's own echo.
+    A key streamed as small SSE deltas spans 5-20 times its length in the stream (about 90
+    bytes of framing per delta), so even with its `BEGIN` line whole, its tail past 15 872
+    bytes still leaks: measured, an RSA-2048 key in 2-6 character deltas puts its `END` 52 KB
+    after its `BEGIN`.
   - **A body longer than the bound** leaks its tail. Every printed form of an RSA-16384 key
-    measured fits (15 504 bytes at most, escaped twice with `\u2192`); escaped three times that
-    way (16 284 bytes) it does not.
+    measured fits when the key is read as one string (15 504 bytes at most, escaped twice with
+    `\u2192`); escaped three times that way (16 284 bytes) it does not.
   - **Non-PEM key dumps in raw text after an odd quote.** In raw text whose quotes do not pair,
     only base64-shaped runs are redacted after a lone `BEGIN`: a colon-hex or decimal dump of
     key material there (`openssl -text` output) is kept. Without an earlier `BEGIN`, no rule
     redacts such a dump at all.
   - **Over-redaction, not a leak.** A lone `BEGIN` (code that parses PEM, `grep` output) empties
     every string, keys included, for the next 15 872 bytes, in two markers (the window is cut
-    once, 8 192 bytes after its `BEGIN`, so the stream can release its first part). A lone
-    `BEGIN` followed within the bound by another key's `END` is one block across records, cut
-    the same way. The records inside a block still parse, with three exceptions, each of which
+    once, 8 192 bytes after its `BEGIN`, or just past the escape there, so the stream can
+    release its first part). A lone `BEGIN` followed within the bound by another key's `END`
+    is one block across records, not cut. The records inside a block still parse, with three exceptions, each of which
     redacts more: framing outside the strings that holds a base64 run with a letter (an SSE
     `id:` line carrying a ULID; a number, exponent floats included, does not count) is replaced
     whole; a connector rule's claim that spans quotes (a JSON object value) merges with
     the block and takes the quotes between; and a `BEGIN` line longer than about 450 bytes (no
     real label is) makes the stream fail closed to the end of that record, or of a one-line body.
-    A run that crosses the end of a block (a Codex `encrypted_content` value) no longer does.
+    A run that crosses the end of a lone `BEGIN`'s window (a Codex `encrypted_content` value)
+    no longer does; a complete key whose `END` is within about 400 bytes of the bound, directly
+    followed by such a run, still fails the stream closed (it redacts more, never less: measured,
+    15 of 50 such inputs, none on main, and a run in the next string or record never does).
 
   An invalid UTF-8 byte reads as `0` when the rules match, so it no longer ends a key.
 - **The proxy credential reaches the provider, not the trace (H8).** The harness's

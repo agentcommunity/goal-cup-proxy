@@ -166,14 +166,15 @@ pub(crate) fn match_view(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 /// the ten keep the script's spelling and their place in its list. The script carries the
 /// three `proxy_credential` literals too, after its ten and before its last rule.
 ///
-/// Two deliberate deltas from the script. `generic_secret_assignment` is one kind spelled as
-/// two literals, and the seven vendor prefixes are new: shapes the script predates.
+/// One deliberate delta from the script: the seven vendor prefixes are new, shapes the script
+/// predates. `generic_secret_assignment` is one kind spelled as two literals, in both (the
+/// script took the JSON form in H-20 re-review 3, so the two oracles agree on a quoted key).
 /// `tests/it/redaction.rs` holds the whole comparison (every script regex against this list,
 /// with the differences written out) so that either side drifting fails a test.
 ///
-/// The split exists because the script's rule requires `[=:]` immediately after the key
-/// word, so it never fires on a quoted JSON key — and JSON is the only shape this stage is
-/// ever handed. `{"api_key":"…"}` would produce zero spans. Widening the script's value class
+/// The split exists because the script's original rule requires `[=:]` immediately after the
+/// key word, so it never fires on a quoted JSON key — and JSON is the only shape this stage is
+/// ever handed. `{"api_key":"…"}` would produce zero spans. Widening that value class
 /// to `[A-Za-z0-9_\-+/=.]{16,}` cannot reach a quoted key and does reach into ordinary
 /// source: `let token = entry.keys.signing_key` would become a span. So:
 ///
@@ -699,22 +700,19 @@ pub(crate) fn candidates<'a>(
     let mut found_all = Vec::new();
     for (priority, p) in set.enumerate() {
         if p.block && p.kind == BLOCK_KIND {
-            for (start, end, bounded) in pem_matches(&p.re, bytes) {
-                let cut = bounded.then_some(start + PEM_SLICE);
-                for (from, to) in block_pieces(bytes, start, end, Quotes::START, cut) {
-                    found_all.push(Claim {
-                        priority,
-                        start: from,
-                        end: to,
-                        whole_start: start,
-                        whole_end: end,
-                        kind: p.kind.as_str(),
-                        quote: false,
-                        soft: false,
-                        block: true,
-                        bounded,
-                    });
-                }
+            for ((from, to), (start, end), bounded) in pem_pieces(&p.re, bytes) {
+                found_all.push(Claim {
+                    priority,
+                    start: from,
+                    end: to,
+                    whole_start: start,
+                    whole_end: end,
+                    kind: p.kind.as_str(),
+                    quote: false,
+                    soft: false,
+                    block: true,
+                    bounded,
+                });
             }
             continue;
         }
@@ -797,7 +795,7 @@ pub(crate) fn first_begin(bytes: &[u8], from: usize, to: usize) -> Option<usize>
 /// from that `BEGIN`: so a real key whose `BEGIN` falls late in a lone mention's window gets its
 /// own whole window, instead of losing its tail past the first window's bound (H-20 re-review
 /// 2). The end of a match the bound ends is taken to the end of a character it cuts.
-pub fn pem_matches(re: &regex::bytes::Regex, bytes: &[u8]) -> Vec<(usize, usize, bool)> {
+pub(crate) fn pem_matches(re: &regex::bytes::Regex, bytes: &[u8]) -> Vec<(usize, usize, bool)> {
     let mut out = Vec::new();
     let mut at = 0;
     while let Some(m) = re.find_at(bytes, at) {
@@ -819,20 +817,20 @@ pub fn pem_matches(re: &regex::bytes::Regex, bytes: &[u8]) -> Vec<(usize, usize,
 /// The quote state at a point of a block: inside a string or not, and whether an odd run of
 /// backslashes ends just before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Quotes {
-    pub inside: bool,
-    pub escaped: bool,
+pub(crate) struct Quotes {
+    pub(crate) inside: bool,
+    pub(crate) escaped: bool,
 }
 
 impl Quotes {
     /// At a block's `BEGIN`: text, so inside a string.
-    pub const START: Quotes = Quotes {
+    pub(crate) const START: Quotes = Quotes {
         inside: true,
         escaped: false,
     };
 
     /// This state after `bytes`.
-    pub fn after(mut self, bytes: &[u8]) -> Quotes {
+    pub(crate) fn after(mut self, bytes: &[u8]) -> Quotes {
         for &b in bytes {
             if b == b'"' && !self.escaped {
                 self.inside = !self.inside;
@@ -846,7 +844,13 @@ impl Quotes {
 /// The claimed pieces of a PEM block's `from..end`, its quote state at `from` being `quotes`:
 /// [`string_pieces`], then, when `cut` (a bounded block's `BEGIN` plus [`PEM_SLICE`]) falls
 /// strictly inside a piece, that piece in two.
-pub fn block_pieces(
+///
+/// A cut right after a backslash first moves past the run of backslashes and the byte they
+/// escape, so no escape (`\n`, `\"`, `\\`) is split. The stream decides the first part on the
+/// bytes up to the cut alone, where a piece loses the backslashes it ends on
+/// ([`string_pieces_from`]): a cut inside an escape left them raw between the two markers,
+/// `<redacted:private_key>\<redacted:private_key>`, which is not JSON (H-20 re-review 3).
+pub(crate) fn block_pieces(
     bytes: &[u8],
     from: usize,
     end: usize,
@@ -854,13 +858,46 @@ pub fn block_pieces(
     cut: Option<usize>,
 ) -> Vec<(usize, usize)> {
     let mut pieces = string_pieces_from(bytes, from, end, quotes);
-    if let Some(cut) = cut
-        && let Some(i) = pieces.iter().position(|&(a, b)| a < cut && cut < b)
-    {
-        let (a, b) = pieces[i];
-        pieces.splice(i..=i, [(a, cut), (cut, b)]);
+    if let Some(mut cut) = cut {
+        while cut > 0 && cut < end && bytes[cut - 1] == b'\\' {
+            cut += 1;
+        }
+        if let Some(i) = pieces.iter().position(|&(a, b)| a < cut && cut < b) {
+            let (a, b) = pieces[i];
+            pieces.splice(i..=i, [(a, cut), (cut, b)]);
+        }
     }
     pieces
+}
+
+type PemPiece = ((usize, usize), (usize, usize), bool);
+
+/// The claimed pieces of every `private_key` match in `bytes`, as `(piece, whole match,
+/// bounded)`: [`pem_matches`], each cut into its [`block_pieces`] from the quote state at its
+/// `BEGIN` (text, so inside a string), a bounded one once at [`PEM_SLICE`].
+pub(crate) fn pem_pieces(re: &regex::bytes::Regex, bytes: &[u8]) -> Vec<PemPiece> {
+    let mut out = Vec::new();
+    for (start, end, bounded) in pem_matches(re, bytes) {
+        let cut = bounded.then_some(start + PEM_SLICE);
+        for piece in block_pieces(bytes, start, end, Quotes::START, cut) {
+            out.push((piece, (start, end), bounded));
+        }
+    }
+    out
+}
+
+/// The pieces of every block of the shared `private_key` rule in `bytes`, exactly as
+/// [`candidates`] claims them (on [`match_view`]). A test oracle, so that "every piece of a
+/// block is redacted" is checked against the real cut and not a copy of it.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn pem_block_pieces(bytes: &[u8]) -> Vec<(usize, usize)> {
+    let view = match_view(bytes);
+    patterns()
+        .iter()
+        .filter(|p| p.block && p.kind == BLOCK_KIND)
+        .flat_map(|p| pem_pieces(&p.re, &view))
+        .map(|(piece, _, _)| piece)
+        .collect()
 }
 
 /// The parts of a PEM block's range `start..end` that are redacted: the range is cut at every
@@ -882,7 +919,7 @@ pub fn string_pieces(bytes: &[u8], start: usize, end: usize) -> Vec<(usize, usiz
 
 /// [`string_pieces`] from a point whose quote state is `quotes`: the stream's resume point in a
 /// block it released in part.
-pub fn string_pieces_from(
+pub(crate) fn string_pieces_from(
     bytes: &[u8],
     start: usize,
     end: usize,

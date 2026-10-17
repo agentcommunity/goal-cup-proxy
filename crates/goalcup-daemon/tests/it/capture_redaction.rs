@@ -3642,7 +3642,7 @@ fn redact_py(input: &[u8]) -> Option<Vec<u8>> {
 
 /// The stream at three chunkings, the whole-record `Redactor` and `spikes/redact.py` all give
 /// the same bytes for `input`; the whole-record result. A shape the script does not carry (the
-/// vendor prefixes it predates, a quoted JSON key) is checked against the first two only.
+/// vendor prefixes it predates) is checked against the first two only.
 fn all_three_agree(name: &str, input: &[u8]) -> (Vec<u8>, Vec<RedactionAuditSpan>) {
     agree(name, input, true)
 }
@@ -3766,7 +3766,7 @@ fn a_key_with_invalid_utf8_in_its_body_is_still_redacted() {
     // A JSON secret value: `[^"\\]` did not take an invalid byte either.
     let value = [&b"q8Zr2Lm"[..], b"\xff", b"N0pX4vB7cT1yW9"].concat();
     let input = [&br#"{"api_key":""#[..], &value, b"\"}\n"].concat();
-    let (out, _) = agree("json value", &input, false);
+    let (out, _) = all_three_agree("json value", &input);
     assert_eq!(
         out,
         b"{\"api_key\":\"<redacted:generic_secret_assignment>\"}\n"
@@ -4340,6 +4340,257 @@ fn a_run_across_the_end_of_a_lone_begins_window_keeps_the_stream_equal() {
             assert!(text.contains("turn MARK-0299"), "{name}");
         }
     }
+}
+
+/// H-20 re-review 3 (Important 1): a bounded window's cut at `PEM_SLICE` that fell right after
+/// a backslash left that backslash raw between the two markers. The stream decides the first
+/// part on the bytes up to the cut alone, where a piece loses the backslashes it ends on, so its
+/// first marker ended early: `<redacted:private_key>\<redacted:private_key>`, which is not
+/// JSON and differs from the whole-record policy. The cut now moves past a backslash run and
+/// the byte it escapes, in all three redactors. One string holds the cut and crosses the
+/// window's end with a 10,000-character base64url run, so the stream must release at the cut.
+/// The bytes before the cut are swept over each escape shape (`\n`; `\"` and `\\\"`;
+/// `C:\\path`; `\u2192` and `\n`; a raw `→`; a key body): for one run of each kind in the
+/// shape, every position with a backslash before the cut and the position after the run, and
+/// one ordinary position; in JSONL for every shape, and in a one-line body and SSE for the
+/// runs of one, two and three backslashes (`quote`, `path`). Each: the stream at three
+/// chunkings equals the whole-record policy and `spikes/redact.py` (the raw `→` excepted: the
+/// script counts the bound in characters, so its block ends later in bytes); the two markers
+/// touch; every record parses; and no 16-character run of the key body survives.
+#[test]
+fn a_cut_right_after_a_backslash_leaves_nothing_between_the_two_markers() {
+    const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
+    let b64url = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut rng = Rng(0x0BAC_51A5);
+    let run: String = (0..10_000)
+        .map(|_| char::from(b64url[rng.below(64)]))
+        .collect();
+    let body = key_lines(&mut rng, 26);
+    // A string's text as the tool or model wrote it; the JSON escaping puts the backslashes
+    // in. `ascii` writes `→` as `\u2192`, as `ensure_ascii` would.
+    let escape = |text: &str, ascii: bool| -> String {
+        let json = serde_json::to_string(text).unwrap();
+        let inner = json[1..json.len() - 1].to_string();
+        if ascii {
+            inner.replace('\u{2192}', "\\u2192")
+        } else {
+            inner
+        }
+    };
+    let arrows = "     1\u{2192}line\n     2\u{2192}line\n";
+    // (name, one period of the text, repeats, ascii, the script counts the same)
+    let shapes: Vec<(&str, String, usize, bool, bool)> = vec![
+        (
+            "newline",
+            "line one\nline two\nline three\n".into(),
+            40,
+            true,
+            true,
+        ),
+        (
+            "quote",
+            "he said \\\"no\\\" then \"yes\" again ".into(),
+            40,
+            true,
+            true,
+        ),
+        ("path", "C:\\Users\\a\\b\\c path ".into(), 40, true, true),
+        ("u2192", arrows.into(), 40, true, true),
+        ("raw arrow", arrows.into(), 40, false, false),
+        ("key body", format!("{}\n", body[0]), 26, true, true),
+    ];
+    let later: Vec<String> = (0..100).map(|i| format!("MARK-{i:04} later")).collect();
+    let build = |form: &str, text: &str| -> String {
+        match form {
+            "jsonl" => {
+                let mut s = format!("{{\"type\":\"tool_result\",\"content\":\"grep: {BEGIN}\"}}\n");
+                s.push_str(&format!(
+                    "{{\"type\":\"reasoning\",\"content\":\"{text}\"}}\n"
+                ));
+                for mark in &later {
+                    s.push_str(&format!("{{\"type\":\"note\",\"text\":\"{mark}\"}}\n"));
+                }
+                s
+            }
+            "body" => {
+                let mut turns = vec![
+                    format!("{{\"role\":\"user\",\"content\":\"grep {BEGIN}\"}}"),
+                    format!("{{\"role\":\"assistant\",\"content\":\"{text}\"}}"),
+                ];
+                turns.extend(
+                    later
+                        .iter()
+                        .map(|m| format!("{{\"role\":\"user\",\"content\":\"{m}\"}}")),
+                );
+                format!("{{\"input\":[{}]}}\n", turns.join(","))
+            }
+            _ => {
+                let ev = |t: &str| {
+                    format!(
+                        "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{t}\"}}}}\n\n"
+                    )
+                };
+                let mut s = ev(&format!("The parser checks {BEGIN} first."));
+                s.push_str(&ev(text));
+                for mark in &later {
+                    s.push_str(&ev(&format!(" {mark}")));
+                }
+                s
+            }
+        }
+    };
+    let parses = |form: &str, text: &str, name: &str| {
+        let lines: Vec<&str> = match form {
+            "jsonl" | "body" => text.lines().collect(),
+            _ => text
+                .lines()
+                .filter_map(|l| l.strip_prefix("data: "))
+                .collect(),
+        };
+        assert!(!lines.is_empty(), "{name}");
+        for line in lines {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap_or_else(|e| panic!("{name}: a record does not parse: {e}\n{line}"));
+        }
+    };
+    let mut cases = 0;
+    for (shape, text, repeats, ascii, script_counts_the_same) in &shapes {
+        let period = escape(text, *ascii);
+        let piece = period.repeat(*repeats);
+        let e = period.as_bytes();
+        // Where the cut lands in the period: for the first run of each length, after each of
+        // its backslashes and after the byte it escapes; and one ordinary position.
+        let mut at: std::collections::BTreeSet<usize> = [0].into();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut s = 0;
+        while s < e.len() {
+            if e[s] != b'\\' {
+                s += 1;
+                continue;
+            }
+            let len = e[s..].iter().take_while(|&&b| b == b'\\').count();
+            if seen.insert(len) {
+                at.extend(s + 1..=s + len + 1);
+            }
+            s += len;
+        }
+        let forms: &[&str] = if matches!(*shape, "quote" | "path") {
+            &["jsonl", "body", "sse"]
+        } else {
+            &["jsonl"]
+        };
+        for &form in forms {
+            for &k in &at {
+                let name = format!("{shape} {form} cut at {k}");
+                let probe = build(form, &format!("{piece}{run}"));
+                let begin = probe.find(BEGIN).unwrap();
+                let piece_at = probe.find(&piece).unwrap();
+                let pad = begin + PEM_SLICE - piece_at - k;
+                let input = build(form, &format!("{}{piece}{run}", words(pad)));
+                assert_eq!(input.find(BEGIN).unwrap(), begin, "{name}");
+                let piece_at = input.find(&piece).unwrap();
+                assert_eq!(
+                    piece_at + k,
+                    begin + PEM_SLICE,
+                    "{name}: the cut lands at {k}"
+                );
+                let (out, spans) = agree(&name, input.as_bytes(), *script_counts_the_same);
+                let text = String::from_utf8(out).unwrap();
+                assert!(
+                    text.contains("<redacted:private_key><redacted:private_key>"),
+                    "{name}: the two markers do not touch"
+                );
+                assert!(
+                    !text.contains(">\\<"),
+                    "{name}: a backslash between markers"
+                );
+                parses(form, &text, &name);
+                let last = spans.iter().map(|s| s.end).max().unwrap() as usize;
+                assert!(
+                    last > begin + PEM_SLICE,
+                    "{name}: the block ends past the cut"
+                );
+                if *shape == "key body" {
+                    for line in &body {
+                        if let Some(w) = line
+                            .as_bytes()
+                            .windows(16)
+                            .find(|w| text.as_bytes().windows(16).any(|t| t == *w))
+                        {
+                            panic!(
+                                "{name}: {:?} of the key survives",
+                                String::from_utf8_lossy(w)
+                            );
+                        }
+                    }
+                }
+                cases += 1;
+            }
+        }
+    }
+    assert!(cases >= 40, "{cases} cases swept");
+}
+
+/// H-20 re-review 3 (Minor 2): `spikes/redact.py` had only the shell/TOML form of
+/// `generic_secret_assignment`. On a logprobs `"token"` whose value holds a second `BEGIN`
+/// mid-string it wrote two touching block markers where the daemon, whose JSON-form claim spans
+/// both pieces, writes one. The script now carries the JSON form with the value alone as its
+/// span: the three agree, the record stays JSON, a quoted key the shell form cannot reach is
+/// redacted, and a value an earlier rule already claimed is not redacted twice.
+#[test]
+fn the_script_carries_the_json_form_of_a_generic_secret() {
+    let chunk = |content: &str, logprob: &str| {
+        format!(
+            "data: {{\"object\": \"chat.completion.chunk\", \"choices\": [{{\"index\": 0, \"delta\": {{\"content\": \"{content}\"}}, \"logprobs\": {{\"content\": [{{\"token\": \"{content}\", \"logprob\": {logprob}}}]}}}}]}}\n\n"
+        )
+    };
+    let mut input = chunk(
+        "The parser checks -----BEGIN PRIVATE KEY-----",
+        "-1.2345678901234568e-05",
+    );
+    for i in 0..40 {
+        input.push_str(&chunk(&format!(" word{i}"), "-2.4691357802469136e-05"));
+    }
+    let (out, _) = all_three_agree("logprob token", input.as_bytes());
+    let text = String::from_utf8(out).unwrap();
+    for line in text.lines().filter_map(|l| l.strip_prefix("data: ")) {
+        serde_json::from_str::<serde_json::Value>(line).expect("each event parses");
+    }
+    assert!(
+        text.contains(r#""<redacted:private_key>": "<redacted:private_key>", "<redacted:private_key>": -1.2345678901234568e-05"#),
+        "one marker for the token value:\n{text}"
+    );
+
+    let input = concat!(
+        r#"{"api_key":"q8Zr2LmN0pX4vB7cT1yW9"}"#,
+        "\n",
+        r#"{"x-api-key":"sk-ant-api03-AAAABBBBCCCCDDDDEEEEFFFF"}"#,
+        "\n",
+        r#"{"refresh_token": "abcdefghijklmnopqrstuvwxyz tail"}"#,
+        "\n",
+        r#"{"tokenizer":"abcdefghijklmnopqrstuvwxyz"}"#,
+        "\n",
+        r#"{"note":"password: \"abcdefghijklmnopqrstuvwxyz\""}"#,
+        "\n",
+    );
+    let (out, spans) = all_three_agree("quoted keys", input.as_bytes());
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        concat!(
+            r#"{"api_key":"<redacted:generic_secret_assignment>"}"#,
+            "\n",
+            r#"{"x-api-key":"<redacted:anthropic_key>"}"#,
+            "\n",
+            r#"{"refresh_token": "<redacted:generic_secret_assignment>"}"#,
+            "\n",
+            r#"{"tokenizer":"abcdefghijklmnopqrstuvwxyz"}"#,
+            "\n",
+            // The shell form, as before: its span takes the opening `\"` and leaves the closing one.
+            r#"{"note":"<redacted:generic_secret_assignment>\""}"#,
+            "\n",
+        )
+    );
+    assert_eq!(spans.len(), 4);
 }
 
 /// H-20 re-review 2 (Minor): an exponent float holds a run of digits and an `e`

@@ -2113,7 +2113,6 @@ impl Scanner {
             return;
         }
         let n = (cut - base) as usize;
-        // The decided window the cut falls in goes on as an open block.
         // The decided window the cut falls in goes on as the open block, with the quote state
         // at the cut. An open block the cut does not fall in has ended.
         let carry = carried.map(|i| (i, &found[i])).map(|(i, m)| {

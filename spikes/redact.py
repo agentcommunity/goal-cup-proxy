@@ -18,7 +18,12 @@ bytes; for a body with non-ASCII text this script's block is longer, never short
 then cut at every unescaped `"` and only the parts inside JSON strings are redacted, starting
 inside: a key streamed as many JSON string deltas loses every delta's text, and the JSON
 between the strings stays. A block with no END ends at the first later BEGIN inside it, where
-the next block starts, and is cut once 8,192 characters after its BEGIN. And the last rule, masked_key, is soft: after that pass, any byte of a masked-key shape (matched on the
+the next block starts, and is cut once 8,192 characters after its BEGIN (past any backslashes
+there and the character they escape, so no escape is split). A rule whose span is a capture
+group (SPAN_GROUP: the JSON form of generic_secret_assignment) replaces that group alone, so the
+record stays JSON, and a match whose group overlaps an earlier rule's marker is dropped, as the
+daemon's first-wins selection drops a claim over claimed bytes. And the last rule, masked_key,
+is soft: after that pass, any byte of a masked-key shape (matched on the
 ORIGINAL text) that is still raw is replaced too, as its own "residual" marker. The daemon
 (crates/goalcup-daemon/src/redact.rs) reaches the same result by a different route; the shared
 rules, and the few places the two differ, are pinned by crates/goalcup-daemon/tests/it/redaction.rs.
@@ -38,6 +43,12 @@ offset for offset; compare the redacted output, or the kinds.
 """
 import hashlib, json, re, sys
 
+# The JSON form of generic_secret_assignment, the daemon's spelling: a quoted key whose `_`/`-`
+# segment is the key word, then a quoted value of sixteen or more characters with no quote and no
+# backslash. Each quote may follow up to seven backslashes (a secret inside an escaped string).
+# Only the value, group 1, is replaced (SPAN_GROUP below): the key, the colon and the quotes stay.
+GENERIC_JSON = re.compile(r'(?i)\\{0,7}"(?:[A-Za-z0-9_\-]{0,999}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"([^"\\]{16,})\\{0,7}"')
+
 PATTERNS = [
     ("anthropic_key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
     ("openai_key", re.compile(r"sk-(?:proj-)?[A-Za-z0-9_\-]{20,}")),
@@ -48,6 +59,8 @@ PATTERNS = [
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")),
     ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]{0,15872}?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]{0,15872})")),
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}")),
+    # The JSON form first, then the shell/TOML form, as the daemon lists them.
+    ("generic_secret_assignment", GENERIC_JSON),
     ("generic_secret_assignment", re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})")),
     ("email", re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")),
     # The tracer's own proxy credential (H8), as the daemon spells it: the userinfo of the
@@ -68,6 +81,16 @@ PATTERNS = [
 
 SOFT_KIND = "masked_key"
 BLOCK_KIND = "private_key"
+
+# The rules whose span is a capture group, not the whole match (the daemon's
+# `Pattern::span_group`). The shell/TOML form's groups capture too, but its span is the whole
+# match, as the committed fixtures carry it.
+SPAN_GROUP = {GENERIC_JSON: 1}
+
+
+def span_of(rx, m):
+    """The span a match of rx replaces: its group in SPAN_GROUP, or the whole match."""
+    return m.span(SPAN_GROUP.get(rx, 0))
 
 
 class Segments:
@@ -171,10 +194,13 @@ def pem_matches(rx, text):
 
 def block_pieces(text, start, end, bounded):
     """string_pieces, and for a bounded block the piece that holds start + PEM_SLICE in two
-    there (the daemon's `block_pieces`)."""
+    there. A cut right after a backslash first moves past the run of backslashes and the
+    character they escape, so no escape is split (the daemon's `block_pieces`)."""
     pieces = string_pieces(text, start, end)
     cut = start + PEM_SLICE
     if bounded:
+        while cut < end and text[cut - 1] == "\\":
+            cut += 1
         for i, (a, b) in enumerate(pieces):
             if a < cut < b:
                 pieces[i:i + 1] = [[a, cut], [cut, b]]
@@ -196,7 +222,7 @@ def block_spans(text):
     if not blocks:
         return []
     others = sorted(
-        m.span()
+        span_of(rx, m)
         for kind, rx in PATTERNS
         if kind not in (BLOCK_KIND, SOFT_KIND)
         for m in rx.finditer(text)
@@ -246,7 +272,12 @@ def main():
         if kind == BLOCK_KIND:
             found = [(a, b) for a, b in block_spans(joined)]
         else:
-            found = [m.span() for m in rx.finditer(joined)]
+            found = [span_of(rx, m) for m in rx.finditer(joined)]
+            if rx in SPAN_GROUP:
+                # A group span over an earlier rule's marker is dropped, as the daemon drops a
+                # claim that overlaps a claimed span. (A whole-match rule never matches into a
+                # marker: no shared value class takes `<`, `:` or `>`.)
+                found = [(a, b) for a, b in found if all(p[3] for p in segments.slice(a, b))]
         for start, end in found:
             s = joined[start:end]
             h, replacement = marker(kind, s)
