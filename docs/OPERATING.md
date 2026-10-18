@@ -342,10 +342,11 @@ On the maintainer's machine every cargo command carries `--offline`, so run `car
 first. The CLI tests drive the shipped `goalcup-daemon` and `goalcup-verify` binaries, and only
 `--workspace` builds them; they say so by name rather than skip.
 
-The gate skips every `#[ignore]` test (child halves, fixture regenerators, real-process and live-harness
-campaigns, vertical suites). List them with `rg '^\s*#\[ignore' crates` and run one suite at a time with its
-documented setup. The default gate is not proof that ignored coverage ran. The synthetic vertical suite
-runs by hand after building the workspace binaries:
+The fast gate skips `#[ignore]` tests. The full gate explicitly selects the ignored
+`m2_synthetic_vertical`, `capture_failure_campaign` and `upload_worker` families. Other ignored
+cases (fixture regenerators, child halves and tests needing special setup) stay manual. List them
+with `rg '^\s*#\[ignore' crates` and follow each suite's setup. To run just the synthetic vertical
+suite after building the workspace binaries:
 
 ```sh
 cargo test -p goalcup-cli --offline --features test-support --test full m2_synthetic_vertical:: -- --ignored --test-threads=1

@@ -290,27 +290,47 @@ fn own_guard_probes(m: &HarnessManifest) -> Vec<String> {
 }
 
 /// Every argument a launch may pass, `args` then `resume_args`, rendered for a run, passes the
-/// connector's own argv guard and the shared deny list; a chat-mode connector can be continued
-/// (it has `resume_args`), and a headless one places its goal after them.
+/// connector's own argv guard and the shared deny list. Resume arguments are optional; a
+/// chat-mode connector without them reopens its ordinary chat.
 #[test]
 fn every_connector_argv_passes_its_own_guard_and_the_shared_deny_list() {
+    for id in shipped_connector_ids() {
+        assert_connector_argv(&load(&id));
+    }
+}
+
+fn assert_connector_argv(connector: &HarnessConnector) {
+    let id = &connector.loaded.manifest.id;
+    let c = &connector.loaded.manifest.capture;
     let l = s::Layout::new();
     let vars = s::vars(&l);
-    for id in shipped_connector_ids() {
-        let c = load(&id).loaded.manifest.capture;
-        if c.interactive {
-            assert!(
-                !c.resume_args.is_empty(),
-                "{id}: a chat-mode connector says how `goalcup continue` reopens its session"
-            );
-        }
-        let args = rendered(&c.args, &vars);
-        let resume = rendered(&c.resume_args, &vars);
-        for arg in args.iter().chain(resume.iter()) {
-            assert_eq!(harness_arg_refusal(&c, arg), None, "{id}: `{arg}`");
-            assert_eq!(capture_arg_denied(arg), None, "{id}: `{arg}`");
-        }
+    let args = rendered(&c.args, &vars);
+    let resume = rendered(&c.resume_args, &vars);
+    for arg in args.iter().chain(resume.iter()) {
+        assert_eq!(harness_arg_refusal(c, arg), None, "{id}: `{arg}`");
+        assert_eq!(capture_arg_denied(arg), None, "{id}: `{arg}`");
     }
+}
+
+#[test]
+fn connector_contract_accepts_chat_without_resume_args() {
+    let mut connector = load("codex-cli");
+    connector.loaded.manifest.capture.resume_args.clear();
+    connector.loaded.manifest.validate(Origin::Pinned).unwrap();
+    assert_connector_argv(&connector);
+
+    let layout = s::Layout::new();
+    let vars = s::vars(&layout);
+    let executable = s::fake_harness(&layout.bin);
+    let resolved = s::resolved(&executable);
+    let proxy = s::proxy_url();
+    let parent = s::parent_env();
+    let launch = s::chat_launch(&layout, &resolved, &proxy, &parent);
+    let resumed = build_resumed_launch(&connector, &vars, &layout.workspace, &launch).unwrap();
+    assert_eq!(
+        resumed.argv,
+        rendered(&connector.loaded.manifest.capture.args, &vars)
+    );
 }
 
 /// Every connector's stream and identity plans follow from its manifest by one rule. A chat-mode
@@ -386,89 +406,108 @@ fn hostile_parent(c: &goalcup_protocol::harness::CaptureSpec) -> BTreeMap<String
 #[test]
 fn every_connector_launch_environment_is_built_from_nothing() {
     for id in shipped_connector_ids() {
-        let c = load(&id);
-        let capture = &c.loaded.manifest.capture;
-        let l = s::Layout::new();
-        let exe = s::fake_harness(&l.bin);
-        let resolved = s::resolved(&exe);
-        let proxy = s::proxy_url();
-        let parent = hostile_parent(capture);
-        let original = parent.clone();
-        let bundle = l.root.path().join("bundle.pem");
-        std::fs::write(&bundle, b"roots\n").unwrap();
-        let goal = GOAL.as_bytes();
-        let plan = build_capture_launch(
-            &c,
-            &s::vars(&l),
-            &l.workspace,
-            &CaptureLaunch {
-                goal: (!capture.interactive).then_some(goal),
-                ca_bundle: Some(&bundle),
-                ..s::chat_launch(&l, &resolved, &proxy, &parent)
-            },
-        )
-        .unwrap_or_else(|e| panic!("{id}: {e}"));
-        assert_eq!(parent, original, "{id}: the parent env is untouched");
-
-        let own = capture.resolved_env(PlatformKey::current());
-        let mut allowed: BTreeSet<String> = own.keys().cloned().collect();
-        for pin in [
-            "HOME",
-            "PATH",
-            "HTTPS_PROXY",
-            "https_proxy",
-            "NO_PROXY",
-            "no_proxy",
-            "USER",
-            "LOGNAME",
-            "TMPDIR",
-        ] {
-            allowed.insert(pin.to_string());
-        }
-        allowed.extend(capture.home.env.iter().cloned());
-        allowed.extend(capture.ca.env.iter().cloned());
-        if capture.interactive {
-            allowed.extend(goalcup_cli::launch::CHAT_PASSTHROUGH_ENV.map(str::to_string));
-        }
-        for key in plan.env_set.keys() {
-            assert!(
-                allowed.contains(key) || (capture.interactive && key.starts_with("LC_")),
-                "{id}: `{key}` is in the launch environment"
-            );
-            assert!(
-                !key.to_ascii_uppercase().ends_with("_BASE_URL"),
-                "{id}: `{key}`"
-            );
-        }
-        let get = |k: &str| plan.env_set.get(k).map(String::as_str);
-        assert_eq!(get("HOME"), l.run_home.to_str(), "{id}");
-        assert_eq!(get("HTTPS_PROXY"), Some(proxy.as_str()), "{id}");
-        assert_eq!(get("https_proxy"), Some(proxy.as_str()), "{id}");
-        assert_eq!(get("NO_PROXY"), Some(CAPTURE_NO_PROXY), "{id}");
-        if let Some(home) = &capture.home.env {
-            assert_eq!(get(home), l.harness_home.to_str(), "{id}: `{home}`");
-        }
-        for name in &capture.ca.env {
-            let want = if SHARED_CA_ENV.contains(&name.as_str()) {
-                &bundle
-            } else {
-                &l.ca
-            };
-            assert_eq!(get(name), want.to_str(), "{id}: `{name}`");
-        }
-        for (k, v) in &own {
-            assert_eq!(get(k), Some(v.as_str()), "{id}: its own `{k}`");
-        }
-
-        for name in ["OPENAI_API_KEY", "DEEPSEEK_API_KEY", "AMP_API_KEY"] {
-            assert!(!plan.env_set.contains_key(name), "{id}: `{name}`");
-        }
-        assert!(plan.env_set.values().all(|v| !v.contains(KEY)), "{id}");
-        assert!(plan.argv.iter().all(|a| !a.contains(KEY)), "{id}");
-        for text in [format!("{plan:?}"), format!("{plan:#?}")] {
-            assert!(!text.contains(KEY) && !text.contains(&KEY[..8]), "{id}");
-        }
+        assert_connector_launch_environment(&load(&id));
     }
+}
+
+fn assert_connector_launch_environment(c: &HarnessConnector) {
+    let id = &c.loaded.manifest.id;
+    let capture = &c.loaded.manifest.capture;
+    let l = s::Layout::new();
+    let exe = s::fake_harness(&l.bin);
+    let resolved = s::resolved(&exe);
+    let proxy = s::proxy_url();
+    let parent = hostile_parent(capture);
+    let original = parent.clone();
+    let bundle = l.root.path().join("bundle.pem");
+    std::fs::write(&bundle, b"roots\n").unwrap();
+    let goal = GOAL.as_bytes();
+    let plan = build_capture_launch(
+        c,
+        &s::vars(&l),
+        &l.workspace,
+        &CaptureLaunch {
+            goal: (!capture.interactive).then_some(goal),
+            ca_bundle: Some(&bundle),
+            ..s::chat_launch(&l, &resolved, &proxy, &parent)
+        },
+    )
+    .unwrap_or_else(|e| panic!("{id}: {e}"));
+    assert_eq!(parent, original, "{id}: the parent env is untouched");
+
+    let own = capture.resolved_env(PlatformKey::current());
+    let mut allowed: BTreeSet<String> = own.keys().cloned().collect();
+    for pin in [
+        "HOME",
+        "PATH",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "NO_PROXY",
+        "no_proxy",
+        "USER",
+        "LOGNAME",
+        "TMPDIR",
+    ] {
+        allowed.insert(pin.to_string());
+    }
+    allowed.extend(capture.home.env.iter().cloned());
+    allowed.extend(capture.ca.env.iter().cloned());
+    if capture.interactive {
+        allowed.extend(goalcup_cli::launch::CHAT_PASSTHROUGH_ENV.map(str::to_string));
+    }
+    for key in plan.env_set.keys() {
+        assert!(
+            allowed.contains(key) || (capture.interactive && key.starts_with("LC_")),
+            "{id}: `{key}` is in the launch environment"
+        );
+        assert!(
+            !key.to_ascii_uppercase().ends_with("_BASE_URL"),
+            "{id}: `{key}`"
+        );
+    }
+    let get = |k: &str| plan.env_set.get(k).map(String::as_str);
+    assert_eq!(get("HOME"), l.run_home.to_str(), "{id}");
+    assert_eq!(get("HTTPS_PROXY"), Some(proxy.as_str()), "{id}");
+    assert_eq!(get("https_proxy"), Some(proxy.as_str()), "{id}");
+    assert_eq!(get("NO_PROXY"), Some(CAPTURE_NO_PROXY), "{id}");
+    if let Some(home) = &capture.home.env {
+        assert_eq!(get(home), l.harness_home.to_str(), "{id}: `{home}`");
+    }
+    for name in &capture.ca.env {
+        let want = if SHARED_CA_ENV.contains(&name.as_str()) {
+            &bundle
+        } else {
+            &l.ca
+        };
+        assert_eq!(get(name), want.to_str(), "{id}: `{name}`");
+    }
+    let mut env_vars = s::vars(&l);
+    env_vars.set("config_home", l.harness_home.to_str().unwrap());
+    env_vars.set("run_home", l.run_home.to_str().unwrap());
+    for (k, v) in &own {
+        let expected = render(v, &env_vars).unwrap();
+        assert_eq!(get(k), Some(expected.as_str()), "{id}: its own `{k}`");
+    }
+
+    for name in ["OPENAI_API_KEY", "DEEPSEEK_API_KEY", "AMP_API_KEY"] {
+        assert!(!plan.env_set.contains_key(name), "{id}: `{name}`");
+    }
+    assert!(plan.env_set.values().all(|v| !v.contains(KEY)), "{id}");
+    assert!(plan.argv.iter().all(|a| !a.contains(KEY)), "{id}");
+    for text in [format!("{plan:?}"), format!("{plan:#?}")] {
+        assert!(!text.contains(KEY) && !text.contains(&KEY[..8]), "{id}");
+    }
+}
+
+#[test]
+fn connector_contract_accepts_home_env_templates() {
+    let mut connector = load("codex-cli");
+    connector.loaded.manifest.capture.env.extend([
+        ("DATA_DIR".into(), "{config_home}/data".into()),
+        ("RUN_DATA_DIR".into(), "{run_home}/data".into()),
+    ]);
+    connector.loaded.manifest.validate(Origin::Pinned).unwrap();
+    assert_connector_launch_environment(&connector);
 }
 
 /// What a launch places, by mode (D57). A chat-mode connector places no goal: its argv is its

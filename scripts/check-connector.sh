@@ -19,22 +19,21 @@
 #   2. pins: `sh scripts/pin-manifests.sh`, then the pin diff against HEAD is printed. It fails
 #      when the diff touches another connector's line; a new or changed line for <id> is
 #      expected and must be committed with the connector.
-#   3. schema: `cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::`.
+#   3. schema: `cargo test --offline -p goalcup-protocol --test it -- harness_conformance:: connector_pins::`.
 #   4. goldens: the CLI and daemon `harness_contract_golden` tests, without regeneration (an
 #      exported GOALCUP_REGEN_HARNESS_GOLDEN is unset first). On a failure the regeneration
 #      command is printed; review its diff before committing. A new connector adds only its
 #      own files, <id>.json and <id>.daemon.json; no shared golden names a connector. Off macOS
 #      the daemon's live golden (<id>.daemon.json) compiles to nothing, so it is SKIPPED (not a
 #      failure); a maintainer checks it on a Mac.
-#   5. kit (macOS and Linux): `cargo build`, then `cargo test -p goalcup-cli --test it
+#   5. kit (macOS and Linux): `cargo build --offline`, then `cargo test --offline -p goalcup-cli --test it
 #      harness_contract_kit::`, then the connector contract: its static half
 #      (`--test it connector_contract::`) and its dynamic half (`--test full connector_contract::`,
 #      one participant-shaped run of every connector folder). On any other system the kit
 #      compiles to zero tests, so the step is SKIPPED and the script exits non-zero unless
 #      --allow-no-kit is given.
 #
-# It checks a new connector, and each shipped one: all three run in chat mode (hermes-cli since
-# D61), so none needs a kit case of its own.
+# It checks a new connector, and each shipped one: all shipped connectors run in chat mode, so none needs a kit case of its own.
 #
 # Exit status: 0 when every step passed (or only the kit was skipped with --allow-no-kit),
 # 1 when a step failed or the kit was skipped without --allow-no-kit, 2 on a usage error.
@@ -273,8 +272,8 @@ else
 fi
 
 # 3. Schema and pin tests.
-step "schema: cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::"
-if cargo test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::; then
+step "schema: cargo test --offline -p goalcup-protocol --test it -- harness_conformance:: connector_pins::"
+if cargo test --offline -p goalcup-protocol --test it -- harness_conformance:: connector_pins::; then
   pass "schema"
 else
   fail "schema (field rules: docs/CONNECTOR-SCHEMA.md)"
@@ -285,8 +284,8 @@ os=$(uname -s 2>/dev/null || echo unknown)
 log=$(mktemp "${TMPDIR:-/tmp}/check-connector.XXXXXX")
 trap 'rm -f "$log"' EXIT
 for crate in goalcup-cli goalcup-daemon; do
-  step "goldens: cargo test -p $crate --test it harness_contract_golden::"
-  { cargo test -p "$crate" --test it harness_contract_golden:: 2>&1; echo "exit=$?"; } | tee "$log"
+  step "goldens: cargo test --offline -p $crate --test it harness_contract_golden::"
+  { cargo test --offline -p "$crate" --test it harness_contract_golden:: 2>&1; echo "exit=$?"; } | tee "$log"
   if [ "$(tail -n 1 "$log")" = exit=0 ]; then
     pass "goldens ($crate)"
   else
@@ -294,7 +293,7 @@ for crate in goalcup-cli goalcup-daemon; do
       n = $1; sub(/.*\//, "", n); print n }' "$log" | sort -u | tr '\n' ' ')
     echo "golden files that differ: ${files:-(see the output above)}"
     echo "a file for '$id' ($id.json or $id.daemon.json): regenerate, then review the diff:"
-    echo "  GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p $crate --test it harness_contract_golden::"
+    echo "  GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p $crate --test it harness_contract_golden::"
     echo "any other file did not change because of your connector: do not"
     echo "commit its regenerated form; restore it with git checkout and name it in the PR"
     fail "goldens ($crate): ${files:-see output}"
@@ -311,11 +310,11 @@ fi
 # 5. The harness kit, on macOS and Linux.
 case $os in
   Darwin | Linux)
-    step "kit: cargo build && cargo test -p goalcup-cli --test it harness_contract_kit::," \
+    step "kit: cargo build --offline && cargo test --offline -p goalcup-cli --test it harness_contract_kit::," \
       "then --test it connector_contract:: and --test full connector_contract::"
-    if cargo build && cargo test -p goalcup-cli --test it harness_contract_kit:: &&
-      cargo test -p goalcup-cli --test it connector_contract:: &&
-      cargo test -p goalcup-cli --test full connector_contract::; then
+    if cargo build --offline && cargo test --offline -p goalcup-cli --test it harness_contract_kit:: &&
+      cargo test --offline -p goalcup-cli --test it connector_contract:: &&
+      cargo test --offline -p goalcup-cli --test full connector_contract::; then
       pass "kit"
     else
       fail "kit"

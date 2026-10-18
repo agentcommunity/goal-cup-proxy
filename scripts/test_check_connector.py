@@ -105,6 +105,17 @@ class CheckConnectorTest(unittest.TestCase):
     def cargo_calls(self) -> list[str]:
         return self.log.read_text().splitlines() if self.log.exists() else []
 
+    def test_every_cargo_build_and_test_stays_offline(self) -> None:
+        for platform in ("Darwin", "Linux"):
+            with self.subTest(platform=platform):
+                self.log.unlink(missing_ok=True)
+                result = self.run_script("toy-cli", uname=platform)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                calls = self.cargo_calls()
+                self.assertTrue(calls, "the checker must execute its Cargo checks")
+                for call in calls:
+                    self.assertIn("--offline", call.split(), call)
+
     # Argument handling.
 
     def test_no_argument_is_a_usage_error(self) -> None:
@@ -176,10 +187,10 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertIn(DAEMON_SKIP, result.stdout)
         self.assertIn("toy-cli: 6 passed, 0 failed, 1 skipped", result.stdout)
         calls = self.cargo_calls()
-        kit = "test -p goalcup-cli --test it harness_contract_kit::"
+        kit = "test --offline -p goalcup-cli --test it harness_contract_kit::"
         self.assertIn(kit, calls)
-        self.assertLess(calls.index("build"), calls.index(kit))
-        self.assertIn("test -p goalcup-daemon --test it harness_contract_golden::", calls)
+        self.assertLess(calls.index("build --offline"), calls.index(kit))
+        self.assertIn("test --offline -p goalcup-daemon --test it harness_contract_golden::", calls)
 
     def test_another_system_skips_the_kit_loudly_and_fails_without_the_flag(self) -> None:
         result = self.run_script("toy-cli", uname="FreeBSD")
@@ -188,7 +199,7 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertIn("FAIL kit skipped without --allow-no-kit", result.stdout)
         calls = self.cargo_calls()
         self.assertFalse(any("harness_contract_kit" in c for c in calls), calls)
-        self.assertNotIn("build", calls)
+        self.assertNotIn("build --offline", calls)
 
     def test_another_system_with_the_flag_passes_but_still_says_skipped(self) -> None:
         result = self.run_script("--allow-no-kit", "toy-cli", uname="FreeBSD")
@@ -197,10 +208,10 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertIn("toy-cli: 5 passed, 0 failed, 2 skipped", result.stdout)
         calls = self.cargo_calls()
         self.assertIn(
-            "test -p goalcup-protocol --test it -- harness_conformance:: connector_pins::", calls
+            "test --offline -p goalcup-protocol --test it -- harness_conformance:: connector_pins::", calls
         )
-        self.assertIn("test -p goalcup-cli --test it harness_contract_golden::", calls)
-        self.assertIn("test -p goalcup-daemon --test it harness_contract_golden::", calls)
+        self.assertIn("test --offline -p goalcup-cli --test it harness_contract_golden::", calls)
+        self.assertIn("test --offline -p goalcup-daemon --test it harness_contract_golden::", calls)
 
     def test_macos_builds_then_runs_the_kit(self) -> None:
         result = self.run_script("toy-cli", uname="Darwin")
@@ -208,12 +219,12 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertNotIn("SKIPPED", result.stdout)
         self.assertIn("toy-cli: 6 passed, 0 failed, 0 skipped", result.stdout)
         calls = self.cargo_calls()
-        kit = "test -p goalcup-cli --test it harness_contract_kit::"
+        kit = "test --offline -p goalcup-cli --test it harness_contract_kit::"
         self.assertIn(kit, calls)
-        self.assertLess(calls.index("build"), calls.index(kit))
+        self.assertLess(calls.index("build --offline"), calls.index(kit))
         # The connector contract, both halves, after the kit and in the same step.
-        static = "test -p goalcup-cli --test it connector_contract::"
-        dynamic = "test -p goalcup-cli --test full connector_contract::"
+        static = "test --offline -p goalcup-cli --test it connector_contract::"
+        dynamic = "test --offline -p goalcup-cli --test full connector_contract::"
         self.assertLess(calls.index(kit), calls.index(static))
         self.assertLess(calls.index(static), calls.index(dynamic))
 
@@ -225,7 +236,7 @@ class CheckConnectorTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 1)
         self.assertIn(
-            "GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test it "
+            "GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-daemon --test it "
             "harness_contract_golden::",
             result.stdout,
         )
@@ -304,7 +315,7 @@ class CheckConnectorTest(unittest.TestCase):
         result = self.run_script("toy-cli", uname="Darwin")
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("PASS files (chat mode)", result.stdout)
-        self.assertIn("test -p goalcup-cli --test it harness_contract_kit::", self.cargo_calls())
+        self.assertIn("test --offline -p goalcup-cli --test it harness_contract_kit::", self.cargo_calls())
 
     def test_a_chat_mode_connector_with_a_placeholder_left_fails_the_files_step(self) -> None:
         shutil.rmtree(self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli")

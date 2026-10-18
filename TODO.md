@@ -68,6 +68,18 @@ Launch before research callbacks (C-02, D63); older receipts without a directory
 No new capture, decoder or credential behavior. Remaining review items stay in the maintainer's
 external Review 13 ledger; longer real-harness interruption/resume tests follow these corrections.
 
+## Connector contribution wrap (18 Oct)
+
+[Add and test a connector](docs/HARNESS-ONBOARDING.md#quick-path) is the single contributor path:
+manifest/facts, pins/goldens, offline checker/gate, isolated real smoke, then explicit server
+practice. Stand-ins, real capture, decoder support and event qualification are separate claims.
+Roster, private-home/security and gate descriptions follow current code. Shared contract tests
+must accept supported connector data without a per-harness Rust edit. This is contributor/docs
+work; longer runs, installer rollback and the remaining runtime/release backlog stay queued.
+The wider Python suite also found two preexisting `test_fetch_run` positives using a signed
+corpus case D63 now intentionally rejects. Refresh their positive test data before the full
+release gate, preserving the historical corpus and the stricter verifier.
+
 ## Work to the feature stop (4 Nov), in order
 
 Review 12 (16 Oct) produced this list from six code reviews and three test reviews. Each item names

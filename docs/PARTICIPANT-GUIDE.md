@@ -13,9 +13,10 @@ stops at each step that needs you.
 - A Mac (Apple silicon or Intel) or a Linux machine (x86_64 or arm64). On Windows, use WSL2
   (Ubuntu inside Windows) and do everything below inside it.
 - `git`.
-- A harness the tracer runs in chat mode: Claude Code (`claude-code-cli`) or Codex CLI
-  (`codex-cli`), any build, with the subscription or account it signs in with. The tracer records
-  which build ran; it does not refuse one.
+- A shipped chat-mode harness with the account or model service it uses. The current source
+  connectors are Claude Code, Codex CLI, Hermes and Amp; `goalcup doctor --harness all` shows
+  your installed build's roster. See the [facts sheets](harnesses/README.md) for measured support
+  and capture-only limits. The tracer records which harness build ran.
 - A GitHub account.
 - An Agent Community account, signed up for the Goal Cup on the website.
 
@@ -89,9 +90,9 @@ every step is ok it says `goalcup prep: ready.` and prints the start command. Ot
 line names the first step that needs you.
 
 1. **login.** You have run `goalcup login`.
-2. **harness.** The harness you will run, found on your `PATH`, with its version. This build
-   offers two, so choose one: `goalcup prep --harness claude-code-cli` or
-   `goalcup prep --harness codex-cli`. Prep remembers your choice.
+2. **harness.** A shipped harness on your `PATH`, with its version. Prep discovers the installed
+   connectors. Choose one, for example `goalcup prep --harness codex-cli`; the current source
+   also has `claude-code-cli`, `hermes-cli` and `amp-cli`. Prep remembers your choice.
 3. **harness_home.** Prep opens the harness once, in the home the tracer keeps for it. This is
    never your own `~/.claude` or `~/.codex`. Sign in there, and add the settings, MCP servers and
    skills you want your agent to have. Then exit the harness normally. Your runs use this home.

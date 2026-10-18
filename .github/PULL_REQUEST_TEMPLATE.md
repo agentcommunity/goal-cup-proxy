@@ -35,13 +35,13 @@ author's half of that list, so say where the reviewer can check it.
 - [ ] Exact version and executable SHA-256, and the official artifact they came from; `program` is
       the harness's own entry point (item 4).
 - [ ] Each file under `files/`, `args`, `env` value, seed, host, native pattern, identity source and
-      CA or credential variable is justified in this description, with no model base URL or
+      CA variable is justified in this description, with no model base URL or
       redirect (items 1 to 9).
-- [ ] Kit case under `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/` (the connector id) and the output of
-      `cargo test -p goalcup-cli --test it harness_contract_kit::` after `cargo build`. Fixtures
-      went through `spikes/redact.py` (items 7 and 10).
-- [ ] The diff touches only `connectors/<id>/`, the pin line above, the goldens, the kit case
-      `<case>` and `docs/harnesses/<id>.md`; no `.rs` file is changed and no policy row or decoder
+- [ ] Headless only: kit case under `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/` and
+      the checker output. Chat mode: mark this not applicable; the generic connector contract
+      supplies its stand-in. Any committed fixture went through `spikes/redact.py` (items 7 and 10).
+- [ ] The diff touches only `connectors/<id>/`, the pin line above, the goldens, a headless-only kit case
+      when needed, and `docs/harnesses/<id>.md`; no `.rs` file is changed and no policy row or decoder
       is added (item 10).
 - [ ] Last lines of `sh scripts/check-connector.sh <id>` and `sh scripts/gate.sh fast` pasted.
       Claim only what passed: the kit runs a stand-in, not the real harness.

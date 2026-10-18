@@ -69,10 +69,10 @@ say so in the PR, and a maintainer runs the gate.
 
 ## Adding a harness
 
-Start with [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md), then give your coding agent the
+Start with [Add and test a connector](docs/HARNESS-ONBOARDING.md#quick-path), then give your coding agent the
 step-by-step [skill](skills/adding-a-capture-harness/SKILL.md). The reviewer checklist is
-[HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md). The source tree has three connectors:
-`codex-cli`, `claude-code-cli` and `hermes-cli`. Check first that the harness can be captured at
+[HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md#reviewing-a-connector-pr). The current source roster
+is the [connector directory](connectors), with [facts sheets](docs/harnesses/README.md). Check first that the harness can be captured at
 all ([HARNESS-ONBOARDING, check first](docs/HARNESS-ONBOARDING.md#row-0)).
 
 A data-only harness PR contains:
@@ -88,13 +88,13 @@ A data-only harness PR contains:
   `skills/adding-a-capture-harness/templates/harness-facts.md` ([docs/harnesses](docs/harnesses/README.md));
 - headless connectors only: a harness-kit case under
   `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/` (`harness.toml`, `stand-in.py` and
-  `expect.toml`), added beside the six baseline cases. A chat-mode connector needs none: the kit
+  `expect.toml`), added beside the baseline cases. A chat-mode connector needs none: the kit
   runs every pinned chat-mode connector from its `harness.toml`;
 - the last lines of `sh scripts/check-connector.sh <id>` and `sh scripts/gate.sh fast`.
 
 Your PR contains no `.rs` file. A connector's arguments, model name and environment variables are
 data, held to generic rules (D51). So are a CA variable's name and a `providers` name. A new
-policy row (credential, CA mode or name shape, provider host, redaction form, identity carrier,
+policy row (CA mode or name shape, provider host, redaction form, identity carrier,
 native-store form or interpreter) is a separate core PR with a
 `docs/DECISIONS.md` entry. A semantic decoder is a separate verifier PR.
 
