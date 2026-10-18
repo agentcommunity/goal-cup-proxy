@@ -26,10 +26,10 @@ not a clean-capture or process-containment claim. The failed evidence remains pr
 The main native turn used high effort. The wire contained 26 high-effort model requests and one
 Luna/low automatic thread-title request. Installed-tag source forces low for that auxiliary
 request ([thread_title.rs](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/tui/src/app/thread_title.rs)).
-For the repeat, a participant can assign a literal name with `/rename Research validation` at
-the ready prompt before submitting the workload; the inline name path sends only a name update,
-and automatic title generation requires an unnamed thread. This is a harness prelaunch setting,
-not tracer or connector policy. Its effect still needs verification in the repeat's captured wire.
+The 19 Oct repeat assigned `/rename Research validation` at the ready prompt before submitting
+the workload; the inline name path sends only a name update, and automatic title generation
+requires an unnamed thread. All 22 captured repeat requests were Luna/high, with no low-effort
+title request observed. This is a harness prelaunch setting, not tracer or connector policy.
 
 Native delegation was disabled for this experiment: installed-tag full-history forks do not
 provide a global guarantee of the requested child model/effort. Native-child coverage remains
@@ -38,8 +38,26 @@ and shared tracer contain no model-specific enforcement or title-generation work
 
 The baseline yielded 564 decoded observations, including 225 unknown records across native and
 Responses decoders. Those are partial interpretations of retained source bytes; paired tool
-observations on both legs are not separate tool executions. A fresh-build repeat after independent
-review and the fast gate is still required. See [the tracker](../../TODO.md#research-recorder-validation).
+observations on both legs are not separate tool executions.
+
+The fresh-build repeat on 19 Oct (00:24 WITA; 18 Oct UTC), after independent code review and the
+fast gate, used the same supplied prompt once and finished in 175.376 seconds. Early manual seal
+returned in under one second; no continuation input was supplied. Both local and actual retrieved
+staging traces verified valid: 53,129 records, 47,425,207 bytes, zero gaps, identical head, and
+byte-identical research NDJSON (439,223 bytes). Signed delivery reached the terminal. The supplied
+staging receipt key is not production pinned; identical trust options were used for both replays.
+Independent review sampled three passing tests, localhost HTTP 200 and a later HTTP 400 check,
+a docs.python.org lookup, and the final assistant reply decoded on the Responses leg. No package
+install or browser automation was established; requirements had no non-comment packages.
+
+Termination remained `Unresolved(ProcessAuthorityUnavailable)`. The post-seal check found no
+remaining Python/Node/Codex processes whose cwd was under the workload workspace, but cannot
+establish containment of every escaped descendant. Native decoder 0.153.0 produced 192 observations
+(107 unknown); Responses decoder v2 produced 290 (87 unknown). Both decoder incomplete flags were
+false, while interpretation still retains those 194 unknown observations. Context-visible tool
+calls/results are available; independent full tool-output collection is outside this experiment.
+Native-child, endurance and other-platform coverage remain unmeasured by this repeat. See
+[the tracker](../../TODO.md#research-recorder-validation).
 
 ## 1. Run one prompt, in chat mode first
 

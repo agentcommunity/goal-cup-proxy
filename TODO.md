@@ -32,10 +32,22 @@ and report. Capture was incomplete: a standalone-seal producer drain deadline an
 process authority; an orphan localhost workload server required verified cleanup. The failed
 trace is preserved privately. Shared termination-before-drain is being validated with synthetic
 live-stream, final-native-write, retry and budget regressions; no harness-specific core policy
-or verifier verdict change is intended. Main inference was high, but one auxiliary automatic
+or verifier verdict change was introduced. Main inference was high, but one auxiliary automatic
 title request used low effort. Native delegation was disabled because the installed harness
-could not globally enforce child model/effort; child capture remains unmeasured. A reviewed,
-fresh-build repeat is required before calling this path reliable.
+could not globally enforce child model/effort; child capture remains unmeasured.
+
+19 Oct local repeat (00:24 WITA; 18 Oct UTC), same supplied workload/model/platform after the
+reviewed shared fix: 175.376 seconds of work, then early manual seal with no continuation.
+Local and actual retrieved staging traces both verified valid: 53,129 records, 47,425,207 bytes,
+zero gaps, identical head and byte-identical decoded reports. All 22 wire requests were Luna/high;
+a literal thread name assigned before the workload avoided the auxiliary low-effort title turn.
+Delivery was acknowledged through the terminal. Termination still reports
+`Unresolved(ProcessAuthorityUnavailable)`; no remaining Python/Node/Codex process was found with
+a cwd under the workload workspace, which does not establish process-tree containment. Independent
+source/decoder review found three passing tests, local HTTP 200 and 400 checks, a docs.python.org
+lookup, and the final response. Decoding retains 194 unknown observations among 482; native
+children, browser automation and endurance remain separate coverage checks. No additional paid repetition is needed to fill time. The fast gate and
+nine synthetic verticals passed; no full release/platform claim is made.
 
 ## Dates (UTC)
 

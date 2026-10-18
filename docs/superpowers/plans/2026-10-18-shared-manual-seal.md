@@ -41,6 +41,6 @@
 
 - [x] Independently review the net implementation and tests; repair demonstrated findings through the implementer.
 - [x] Rebuild all workspace binaries and run `sh scripts/gate.sh fast` using installed Rust 1.99. Run relevant Python checks if their implementation changes.
-- [ ] Run the supplied workload once more with the same model/effort/platform and seal-only watchdog. Seal early on actual task completion, no continuation input. Record idle/work/finish timing separately.
-- [ ] Retrieve real indexed staging bytes, verify and decode under the same supplied staging public key/options, reconcile local/rebuilt count, bytes, head and observations, and independently sample context-visible activity.
-- [ ] Update TODO and the harness facts sheet with measured outcomes and limitations, preserving historical checkpoints. Commit reviewed source/docs only after required gate; no push or deployment.
+- [x] Run the supplied workload once more with the same model/effort/platform and seal-only watchdog. Seal early on actual task completion, no continuation input. Record idle/work/finish timing separately.
+- [x] Retrieve real indexed staging bytes, verify and decode under the same supplied staging public key/options, reconcile local/rebuilt count, bytes, head and observations, and independently sample context-visible activity.
+- [x] Update TODO and the harness facts sheet with measured outcomes and limitations, preserving historical checkpoints. Commit reviewed source/docs only after required gate; no push or deployment.
