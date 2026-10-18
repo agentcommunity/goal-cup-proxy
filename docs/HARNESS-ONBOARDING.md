@@ -23,6 +23,12 @@ Three other documents complete it:
 4. A passing stand-in check is synthetic evidence. [Real practice and event qualification](#getting-a-harness-into-the-event)
    are separate. A connector can capture an unfamiliar format before it has a semantic decoder.
 
+The [research target](RESEARCH-TARGET.md) defines the coverage to establish with a real harness.
+Check context-visible tool calls/results and subagent conversations separately. Full independent
+tool-output/spill capture is not required. Reuse shared wire decoders where the protocol fits;
+native formats may need their own decoder. Record unmeasured coverage explicitly. The
+[local research handoff](LOCAL-RESEARCH-HANDOFF.md) gives the current validation sequence.
+
 <a id="test-a-connector"></a>
 
 ## Test a connector
@@ -101,7 +107,8 @@ headless harness's facts sheet, with no provider-key handoff or improvised app-w
 
 The tracer starts one harness for a participant and records two things:
 
-- the session file the harness writes for that run (its own transcript);
+- the declared native session artifacts the harness writes for that run, which may contain a
+  transcript or only metadata (as with Amp);
 - its model traffic, through a local proxy set by `HTTPS_PROXY` for that one process only. The
   proxy certificate is trusted through the harness's CA variable (for example
   `NODE_EXTRA_CA_CERTS` or `SSL_CERT_FILE`), set for that process and its children only.

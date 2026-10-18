@@ -1,9 +1,17 @@
 # Working in this repository
 
-Goal Cup is a one-prompt, 168-hour coding-agent contest. This repository holds the tracer. It
-launches a participant's coding agent (the harness), records what the agent does into a sealed
-hash chain, uploads the chain to the Goal Cup server, and ships a verifier that anyone can run
-offline. This file is the map for agents and people. Open work is in [`TODO.md`](TODO.md).
+This repository holds a research tracer for running coding agents across harnesses and operating
+systems. It records declared model traffic and native session artifacts into a sealed hash chain,
+with offline verification and versioned research decoders. Goal Cup's one-prompt, 168-hour contest
+uses that evidence and adds server upload and event rules. Current support is macOS and Linux;
+Windows uses WSL2, with real-machine validation pending and native Windows planned.
+This file is the map for agents and people. Open work is in [`TODO.md`](TODO.md).
+
+Read the [research target](docs/RESEARCH-TARGET.md) and
+[local research handoff](docs/LOCAL-RESEARCH-HANDOFF.md) before planning capture work. Tool calls
+and results visible in agent context are sufficient; independent full tool-output/spill capture
+is not required. Preserve subagent conversations where exposed and state where coverage is
+unmeasured. These targets do not establish that current connectors capture every activity.
 
 ## Map
 

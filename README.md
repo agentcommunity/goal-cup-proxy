@@ -1,9 +1,20 @@
 # goal-cup
 
-Goal Cup is a one-prompt, 168-hour coding-agent contest. This repository is the tracer. It
-launches a participant's coding agent (the harness) on their machine, records the agent's model
-traffic and its own session files, seals them into one hash-chained trace, and uploads the trace
-to the Goal Cup server. `goalcup-verify` checks a trace offline.
+This repository is a tracer for research into running coding agents. Its target is to retain as
+much useful evidence of agent work as possible across harnesses and macOS, Linux and Windows,
+within explicit capture and privacy boundaries. Current platform support is listed below;
+native Windows remains planned.
+
+The tracer launches a coding agent (the harness), records declared model traffic and native
+session artifacts, and seals them into one hash-chained trace. `goalcup-verify` checks a trace
+offline and produces research observations through versioned decoders. Goal Cup's one-prompt,
+168-hour contest is one use of that evidence; server runs upload to the Goal Cup server.
+
+The [research target](docs/RESEARCH-TARGET.md) defines the intended evidence and acceptance
+criteria. The [local research handoff](docs/LOCAL-RESEARCH-HANDOFF.md) records the next validation
+work. Tool calls and results visible in the agent's context are the target; separate collection
+of full tool-output files is not required. Subagent conversations are valuable evidence in their
+own right, and their coverage must be measured for each harness.
 
 The chain catches a stray edit and accidental corruption. A trace that never reached the server
 can be edited, re-hashed and re-sealed, and it still verifies. A trace uploaded during the run

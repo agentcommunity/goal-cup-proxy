@@ -6,14 +6,25 @@ their agents. Wire formats are in [CONTRACTS](CONTRACTS.md); rules that bind the
 
 ## 1. What the tracer is for
 
-The contest rule is: one prompt, then the agent works alone for 168 hours. The tracer makes that
-rule checkable. It records the agent's own session files and its model traffic, seals them into a
-hash chain, and uploads the chain. Judges and the public verifier read the chain later.
+The tracer preserves evidence of running agent work for research across harnesses and operating
+systems. It records declared native session artifacts and model traffic, seals them into a hash
+chain, and leaves interpretation to versioned decoders. Goal Cup's one-prompt, 168-hour contest
+uses this evidence for review and adds upload, deadline and participant rules.
+
+The [research target](RESEARCH-TARGET.md) defines the desired evidence and how to test coverage;
+the [local research handoff](LOCAL-RESEARCH-HANDOFF.md) identifies the next validation work.
+Context-visible tool calls/results are sufficient without independently recording full tool
+output or spill files. Subagent conversations are a separate research objective whose coverage
+must be measured. These are targets, not assertions of universal capture. Platform status is in
+the [README](../README.md#platforms): native Windows is planned; WSL2 is a Linux path awaiting
+real Windows-machine validation.
 
 The tracer guarantees:
 
-1. **Bounded capture.** The harness's session files and its model traffic for the run. Coverage is
-   what the connector declares. Missing evidence is a gap in the chain, never an invented record.
+1. **Bounded capture.** The harness's declared native artifacts and model traffic for the run.
+   Detected capture loss is a gap in the chain, never an invented record. Activity outside the
+   selected sources may be unobserved without a gap. Integrity completeness is not proof that
+   every agent action was observed.
 2. **Tamper evidence, not tamper proof.** The participant controls the machine. The chain, the
    server's signed receipt and acknowledgements, and the gaps make changes reviewable.
 3. **Scope.** It records the bound session and workspace. It does not read other sessions,

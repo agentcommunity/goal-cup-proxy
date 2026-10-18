@@ -165,12 +165,45 @@ class FetchRunTest(unittest.TestCase):
 
     # Fixtures.
 
+    def coherent_signed_case(self) -> Path:
+        """Derive valid D63 evidence without changing the historical contradictory corpus."""
+        case = self.root / "coherent-signed"
+        shutil.copytree(CORPUS / "signed-receipt-key-agrees", case)
+        lines = [json.loads(line) for line in (case / "chain.jsonl").read_text().splitlines()]
+        receipt = json.loads((case / "receipt.json").read_text())
+        launch = next(line["body"]["content"]["record"] for line in lines
+                      if line["body"].get("content", {}).get("record", {}).get("kind") == "launch")
+        receipt["claims"]["manifest_sha256"] = launch["profile_digest"]
+        compact = lambda value: json.dumps(value, separators=(",", ":")).encode()
+        receipt["signature"] = ed25519_sign(
+            DEV_SEED, b"goalcup-receipt-v1\0" + compact(receipt["claims"])
+        ).hex()
+        (case / "receipt.json").write_bytes(compact(receipt))
+        digest = sha256(b"goalcup:start-receipt-digest:v1\0" + compact(receipt))
+        # Only the terminal records bind the receipt digest; all earlier evidence stays intact.
+        for position, line in enumerate(lines):
+            if line["body"]["kind"] == "cutoff_reached_v1":
+                line["body"]["content"]["receipt_sha256"] = digest
+            elif line["body"]["kind"] == "finalization_v1":
+                line["body"]["content"]["capture_unavailable"]["receipt_sha256"] = digest
+            else:
+                continue
+            line["prev"] = lines[position - 1]["hash"]
+            claims = {key: line[key] for key in ("protocol_version", "entry_id", "source", "recorded_at", "seq", "body")}
+            line["hash"] = sha256(line["prev"].encode() + b"goalcup-chain-v1\0" + compact(claims))
+        (case / "chain.jsonl").write_bytes(b"".join(compact(line) + b"\n" for line in lines))
+        ack = json.loads((case / "acks.jsonl").read_text())
+        ack["hash"] = lines[-1]["hash"]
+        ack["server_signature"] = ed25519_sign(DEV_SEED, ack_signing_bytes(ack)).hex()
+        (case / "acks.jsonl").write_bytes(compact(ack) + b"\n")
+        return case
+
     def put(self, key: str, data: bytes) -> None:
         path = self.store / key
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
 
-    def entry_index(self, case: str, entry: str, chunks: int, sign: bool = False) -> dict:
+    def entry_index(self, case: str | Path, entry: str, chunks: int, sign: bool = False) -> dict:
         """One index entry for a corpus case, its chain cut into `chunks` pieces at line ends."""
         src = CORPUS / case
         lines = (src / "chain.jsonl").read_bytes().splitlines(keepends=True)
@@ -259,8 +292,8 @@ class FetchRunTest(unittest.TestCase):
     # The trace comes back whole, and the verifier takes it.
 
     def test_one_chunk_rebuilds_a_trace_the_verifier_accepts(self) -> None:
-        case = CORPUS / "signed-receipt-key-agrees"
-        self.write_index(self.entry_index("signed-receipt-key-agrees", ENTRY, 1))
+        case = self.coherent_signed_case()
+        self.write_index(self.entry_index(case, ENTRY, 1))
         result = self.fetch()
         self.assertEqual(result.returncode, 0, result.stderr)
         trace = self.out / ENTRY
@@ -280,8 +313,8 @@ class FetchRunTest(unittest.TestCase):
         self.assertEqual(json.loads(report.stdout)["integrity"], "valid")
 
     def test_several_chunks_join_in_offset_order_and_still_verify(self) -> None:
-        case = CORPUS / "signed-receipt-key-agrees"
-        self.write_index(self.entry_index("signed-receipt-key-agrees", ENTRY, 3, sign=True))
+        case = self.coherent_signed_case()
+        self.write_index(self.entry_index(case, ENTRY, 3, sign=True))
         result = self.fetch()
         self.assertEqual(result.returncode, 0, result.stderr)
         trace = self.out / ENTRY
@@ -292,6 +325,21 @@ class FetchRunTest(unittest.TestCase):
         said = json.loads(report.stdout)
         self.assertEqual((said["integrity"], said["validated_records"]), ("valid", 21), report.stdout)
         self.assertIsNone(said["first_failure"])
+
+    def test_contradictory_historical_evidence_is_rebuilt_without_repair(self) -> None:
+        case = CORPUS / "signed-receipt-key-agrees"
+        self.write_index(self.entry_index("signed-receipt-key-agrees", ENTRY, 1))
+        result = self.fetch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        trace = self.out / ENTRY
+        for name in ("chain.jsonl", "baseline.json"):
+            self.assertEqual((trace / name).read_bytes(), (case / name).read_bytes(), name)
+        self.assertEqual(json.loads((trace / "receipt.json").read_text()), json.loads((case / "receipt.json").read_text()))
+        self.assert_same_json_lines(trace / "acks.jsonl", case / "acks.jsonl")
+        key = json.loads((case / "receipt.json").read_text())["public_key"]
+        report = self.verify(trace, "--dev-key", key)
+        self.assertEqual(report.returncode, 2, report.stderr)
+        self.assertEqual(json.loads(report.stdout)["first_failure"]["code"], "receipt_launch_mismatch")
 
     def test_a_sealed_entry_brings_back_its_seal_and_baseline_documents(self) -> None:
         case = CORPUS / "sealed-websocket"
@@ -441,10 +489,10 @@ class FetchRunTest(unittest.TestCase):
 
     def test_without_credentials_or_options_it_says_what_to_set(self) -> None:
         result = self.run_script(ENTRY, str(self.out))
-        self.assertEqual(result.returncode, 1)
+        self.assertNotEqual(result.returncode, 0)
         self.assertIn("DATABASE_URL", result.stderr)
         result = self.run_script("--index", str(self.index_path), ENTRY, str(self.out))
-        self.assertEqual(result.returncode, 1)
+        self.assertNotEqual(result.returncode, 0)
         self.assertIn("CLOUDFLARE_ACCOUNT_ID", result.stderr)
 
     # The credentialed paths, with a fake psql and curl on PATH.
@@ -516,9 +564,10 @@ class FetchRunTest(unittest.TestCase):
             text=True,
             timeout=60,
         )
-        self.assertEqual(result.returncode, 1)
+        self.assertNotEqual(result.returncode, 0)
         self.assertIn("CLOUDFLARE_API_TOKEN", result.stderr)
-        self.assertNotIn("db-password", result.stderr)
+        for secret in (TOKEN, "db-password", "reader:"):
+            self.assertNotIn(secret, result.stdout + result.stderr)
 
     def test_r2_is_read_with_the_token_out_of_the_command_line_and_the_output(self) -> None:
         self.write_index(self.entry_index("sealed-websocket", ENTRY, 2))

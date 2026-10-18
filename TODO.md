@@ -4,6 +4,28 @@ The single tracker. Done means: the fast gate passes, one reviewer reads the PR 
 this file is updated if behaviour changed ([AGENTS.md](AGENTS.md)). Ticket IDs below (F-04, H-20,
 ...) are names only. [CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md) uses the same names.
 
+## Research recorder validation
+
+The [research target](docs/RESEARCH-TARGET.md) and
+[local research handoff](docs/LOCAL-RESEARCH-HANDOFF.md) define the research scope and next work.
+The target is useful evidence of agent work across harnesses and operating systems, with explicit
+coverage limits. Context-visible tool calls/results are sufficient; independently collecting full
+tool-output/spill files is not required. Subagent conversations need separate coverage checks.
+Existing event rules and privacy requirements remain in force.
+
+Validate in three phases, without treating a lifecycle/integrity PASS as proof of research coverage:
+
+1. Establish one reliable end-to-end path, reconciling known activity with retained evidence and
+   decoded observations. Start with Codex using Luna at high reasoning effort for up to 30 minutes;
+   Claude validation waits for available budget. Record versions, configuration and evidence.
+2. Repeat that validation per harness, reusing shared wire decoders where protocols match and
+   documenting native-format and subagent differences. Keep unmeasured platform cells explicit.
+3. Establish endurance only after the shorter paths are reliable: interruptions, resumptions,
+   rotation, capture fidelity and resource growth over longer runs. Native Windows remains
+   planned; a WSL2 run is evidence for that Linux environment, not native Windows support.
+
+These are validation targets. They do not mark the runtime or measurement gaps below as fixed.
+
 ## Dates (UTC)
 
 | When | What |
