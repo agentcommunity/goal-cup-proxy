@@ -25,6 +25,8 @@ Validate in three phases, without treating a lifecycle/integrity PASS as proof o
    planned; a WSL2 run is evidence for that Linux environment, not native Windows support.
 
 These are validation targets. They do not mark the runtime or measurement gaps below as fixed.
+The [coverage matrix](docs/research/coverage-matrix.md) distinguishes real activity, retrieval,
+decoding and child coverage for each measured harness/platform cell.
 
 18 Oct local research baseline (macOS arm64, Codex 0.156.1, Luna/high): staging upload and
 actual stored-byte retrieval/replay succeeded, with identical local/rebuilt counts, bytes, head
@@ -55,10 +57,23 @@ inherited Luna/high (verified in its own turn). Local-only sealed capture verifi
 but no prompt/oracle/workspace access, recovered the inherited context note exactly and located
 the child identity, parent link, assignment, four tool call/result pairs and final reply.
 Recording coverage passed; the child's requested calculation failed and is not claimed as done.
-The decoded report counts three `human_message` observations across the actual parent prompt,
+The original decoded report counted three `human_message` observations across the actual parent prompt,
 copied fork history and child assignment; that is not three independently authored human inputs.
-Fork-aware lineage/authorship reporting remains open. This local probe does not extend the
+Fork-aware lineage/authorship reporting is now corrected with immutable source identity;
+fresh replay counts one actual parent human marker and preserves both native source contexts. This local probe does not extend the
 previous staging-retrieval measurement or establish every harness's child coverage.
+
+19 Oct cross-harness replay: existing Hermes and Amp staging practice captures were actually
+retrieved with indexed object hash/length checks and read-only SQL/R2 retrieval operations. Fresh local/rebuilt
+chains and reports match for both. Hermes has 30 decoded wire observations with successful
+responses/tool contexts; its earlier invalid-key characterization referred to the wrong evidence
+and is corrected. Amp now has a separately versioned decoder for its measured thread WebSocket format: seven
+decoded assistant/tool/model/usage facts and 302 retained unknowns. Its native metadata remains
+capture-only; server-side provider requests/system prompts are unobserved. The generic [replay helper](docs/research/replay-comparison.md) preserves failures
+and compares supplied artifacts without claiming to retrieve them. An existing unpaid upload
+outage test also passed. The historical Claude no-reply capture was retrieved/replayed with
+identical reports and exit 1 preserved for its three gaps; no new Claude inference ran.
+Real-harness endurance remains open. See the coverage matrix for limits.
 
 ## Dates (UTC)
 
@@ -109,7 +124,8 @@ Owner decisions of 16 Oct 2026:
 - Amp's native source is its metadata log, labelled as such. Logged-in macOS chat through the
   tracer completed on 17 Oct with zero capture gaps. #206's pinned macOS staging practice also
   passed capture/seal/upload matching; process-tree termination remains `Unresolved` (below).
-  Both Amp sources are capture-only until a separate decoder is added.
+  Amp's native metadata and HTTP setup remain capture-only. The separately versioned thread
+  decoder now interprets complete WebSocket conversation snapshots; hidden provider requests remain unobserved.
 - Claude Code's folder-trust dialog: the participant answers it. The RULES exemption for that one
   answer is still to be written (UX-F).
 - Every start needs a human click in the browser, also when it replaces a run. The test approval key

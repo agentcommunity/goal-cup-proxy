@@ -66,8 +66,13 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "the decoder id a report prints",
     ),
     (
+        "crates/goalcup-verifier/src/capture_analysis/thread.rs",
+        "amp-thread-jsonrpc",
+        "the retained WebSocket format hint and independent decoder id, not harness policy",
+    ),
+    (
         "crates/goalcup-verifier/src/capture_analysis/registry.rs",
-        "Codex CLI 0.153.0 rollout JSONL: a cli-launched session and real exec-launched chains",
+        "Codex CLI 0.153.0 CLI/exec rollouts and 0.156.1 native child with inherited context",
         "evidence note: the harness build this decoder was measured against",
     ),
     (
@@ -87,7 +92,12 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/goalcup-verifier/src/capture_analysis/registry.rs",
-        "no real traffic yet: the live Hermes/DeepSeek row predates this decoder and has not been re-decoded",
+        "one retrieved/replayed Hermes HTTP sample: request context, three SSE replies and one JSON reply",
+        "evidence note: the harness build this decoder was measured against",
+    ),
+    (
+        "crates/goalcup-verifier/src/capture_analysis/registry.rs",
+        "one retrieved/replayed macOS Amp 0.0.1792209635-g24a9fe thread WebSocket sample",
         "evidence note: the harness build this decoder was measured against",
     ),
 ];

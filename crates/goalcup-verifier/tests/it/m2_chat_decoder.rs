@@ -4,8 +4,9 @@
 //! byte of it is synthetic: it follows the public Chat Completions wire format (SSE `data:`
 //! chunks, `[DONE]`, `choices[].delta`, `tool_calls` by `index`, `finish_reason`, `usage`, a
 //! per-chunk `model`, the non-stream `chat.completion` body and the `error` body). There is no
-//! sanitized real Hermes trace in git, so nothing here is "measured"; the oracles are the
-//! literals this file wrote, never the decoder's own output. The decoder is driven through a
+//! sanitized real Hermes trace in git. The registry separately names the privately replayed
+//! real sample; this suite remains synthetic. Its oracles are the literals this file wrote,
+//! never the decoder's own output. The decoder is driven through a
 //! `DecodeSession` (`support::decode`), so routing is under test too.
 
 use crate::common as support;
