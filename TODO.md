@@ -26,6 +26,17 @@ Validate in three phases, without treating a lifecycle/integrity PASS as proof o
 
 These are validation targets. They do not mark the runtime or measurement gaps below as fixed.
 
+18 Oct local research baseline (macOS arm64, Codex 0.156.1, Luna/high): staging upload and
+actual stored-byte retrieval/replay succeeded, with identical local/rebuilt counts, bytes, head
+and report. Capture was incomplete: a standalone-seal producer drain deadline and unresolved
+process authority; an orphan localhost workload server required verified cleanup. The failed
+trace is preserved privately. Shared termination-before-drain is being validated with synthetic
+live-stream, final-native-write, retry and budget regressions; no harness-specific core policy
+or verifier verdict change is intended. Main inference was high, but one auxiliary automatic
+title request used low effort. Native delegation was disabled because the installed harness
+could not globally enforce child model/effort; child capture remains unmeasured. A reviewed,
+fresh-build repeat is required before calling this path reliable.
+
 ## Dates (UTC)
 
 | When | What |

@@ -31,10 +31,12 @@
 //!
 //! The v5 seal runs inside one local-finish budget (`LOCAL_CAPTURE_FINISH_BUDGET`, CONTRACTS.md
 //! "C6 local finish budget (H-10 4a)"), split into a drain share and a
-//! commit reserve ([`FINISH_COMMIT_RESERVE`]). It closes admission, lets live wire producers
-//! drain until the end of the drain share, stops the owner (native finish, remaining producers
-//! cut as losses, flush, sync), chains the proxy's counters as gaps, ends the registered process
-//! tree and records its actual outcome (termination time is outside the budget), seals the
+//! commit reserve ([`FINISH_COMMIT_RESERVE`]). Under the entry's run lock it first ends the
+//! registered process tree with wire and native capture live, recording its actual outcome.
+//! Both budget boundaries move by the actual termination time, which is outside the budget.
+//! It then closes admission, lets existing wire producers drain until the end of the drain
+//! share, stops the owner (native finish, remaining producers cut as losses, flush, sync),
+//! chains the proxy's counters as gaps, seals the
 //! workspace (a clone's Git state or why it could not be read, else the walk; D56), and calls `write_local_finish` once. The
 //! drain share expiring is the existing cut-with-a-gap, never a refusal. A stage that waits on a permit, the
 //! entry's lock or the owner, or that is about to begin with less than [`FINISH_RESPONSE_MARGIN`]

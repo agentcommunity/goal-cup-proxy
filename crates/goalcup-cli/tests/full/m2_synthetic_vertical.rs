@@ -696,6 +696,71 @@ fn production_recovery_keeps_relay_and_gap_history() {
     );
 }
 
+/// Keeping the harness alive until ingest drains consumes the drain share even though the
+/// launcher could close its producer normally once the daemon stops the owned harness.
+#[test]
+#[ignore = "real processes and sockets; run by name with --ignored"]
+fn standalone_seal_stops_live_stream_before_draining_its_producer() {
+    let _lock = TableLock::acquire();
+    let v = Vertical::new("stream", json!({}));
+    let mut start = v.start(RESERVE);
+    let entry = v.entry_id();
+    let harness = v.harness_pid();
+    m2_vertical_support::wait_until("real WebSocket messages and a registered launch", || {
+        v.events()
+            .iter()
+            .filter(|e| e["lane"] == "ws" && e["ok"] == true)
+            .count()
+            >= 3
+            && v.status(&entry)
+                .payload
+                .capture
+                .is_some_and(|s| s.run == RunState::Running)
+    });
+
+    // No release file: stopping this ongoing workload is the standalone seal's job.
+    let (sealed, said, took) = v.seal(&entry);
+    assert!(sealed.success(), "{said}");
+    assert!(said.contains("Confirmed"), "{said}");
+    support::wait_until_gone(harness);
+    let at_finish = v.chain(&entry);
+    let exit = start.wait(RUN);
+    assert!(exit.success(), "{exit}\n{}", start.output());
+    let after = v.chain(&entry);
+    assert_eq!(
+        after.sha256(),
+        at_finish.sha256(),
+        "competing launcher finish appends nothing"
+    );
+    assert_eq!(
+        after.count(|r| matches!(r, CaptureRecord::LocalFinish { .. })),
+        1
+    );
+    let wire = after.first_wire_producer();
+    assert_eq!(
+        after.count(
+            |r| matches!(r, CaptureRecord::ProducerClosed { producer, .. } if *producer == wire)
+        ),
+        1,
+        "the proxy closes its producer after the harness stops"
+    );
+    assert_eq!(
+        after.count(|r| matches!(
+            r,
+            CaptureRecord::Gap {
+                reason: GapReason::ShutdownDeadline,
+                ..
+            }
+        )),
+        0,
+        "a live harness must not manufacture a shutdown-deadline gap"
+    );
+    assert!(
+        took < Duration::from_millis(m2_vertical_support::TEST_FINISH_BUDGET_MS * 3 / 4),
+        "owned stop waited for the drain share: {took:?}"
+    );
+}
+
 #[test]
 #[ignore = "real processes and sockets; run by name with --ignored"]
 fn finish_drains_once_and_never_appends_after_terminal() {
@@ -724,7 +789,7 @@ fn finish_drains_once_and_never_appends_after_terminal() {
             .is_some_and(|capture| capture.run == RunState::Running)
     });
 
-    // The seal while traffic flows: one drain deadline, then the harness is ended.
+    // The seal while traffic flows: end the harness before draining its proxy producer.
     let (sealed, said, took) = v.seal(&entry);
     assert!(sealed.success(), "{said}");
     // The daemon's own line says which path chose the outcome (pids, counts, the refusal).
@@ -771,13 +836,23 @@ fn finish_drains_once_and_never_appends_after_terminal() {
     assert!(after.lines.iter().all(|l| l.protocol_version == 5));
     assert!(v.trace(&entry).join("seal.json").is_file());
 
-    // The proxy's producer was cut at the drain deadline: no close, and its partial tails
-    // stay visible.
+    // Termination lets the launcher close its proxy producer normally. The interrupted
+    // response stays explicit even though the producer itself closes cleanly.
     let wire = after.first_wire_producer();
     assert_eq!(
         after.count(
             |r| matches!(r, CaptureRecord::ProducerClosed { producer, .. } if *producer == wire)
         ),
+        1
+    );
+    assert_eq!(
+        after.count(|r| matches!(
+            r,
+            CaptureRecord::Gap {
+                reason: GapReason::ShutdownDeadline,
+                ..
+            }
+        )),
         0
     );
     let streams = after.streams();
@@ -788,10 +863,15 @@ fn finish_drains_once_and_never_appends_after_terminal() {
         .collect();
     assert!(
         matches!(tails.as_slice(), [(end, gaps, len)]
-            if *end != Some(EndReason::Complete) && !gaps.is_empty() && *len > 0),
-        "the open response keeps its retained prefix and a recorded tail: {tails:?}"
+            if *end == Some(EndReason::Interrupted) && gaps.is_empty() && *len > 0),
+        "the open response keeps its prefix and explicit interrupted end without a manufactured gap: {tails:?}"
     );
-    let integrity = assert_incomplete(&v, &entry);
+    // Capturing an intentional stream interruption is not a gap in recorded bytes. The
+    // unchanged verifier can validate the capture now that the drain deadline did not cut it.
+    let (code, integrity) = v.verify(&entry);
+    assert_eq!(code, 0, "{integrity}");
+    assert_eq!(integrity["integrity"], "valid");
+    assert_eq!(integrity["coverage_incomplete"], false);
     assert_eq!(integrity["torn_tail"], false);
     assert_eq!(integrity["terminal"]["seq"].as_u64(), Some(last.seq));
     assert!(

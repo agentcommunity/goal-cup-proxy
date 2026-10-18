@@ -10,6 +10,37 @@ Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm
 ([current WP0 measurements](../../TODO.md#wp0-measure)). Earlier pending rows below describe the
 older measurement checkpoint; longer/resume/platform gaps remain open.
 
+## 18 Oct research checkpoint (Codex 0.156.1)
+
+Measured separately from the historical 0.153.0 rows: macOS arm64, native Homebrew cask
+0.156.1, Luna/high, one supplied workload prompt, organizer staging test run. Work completed
+in 159.176 seconds; no continuation was injected. Two test runs passed and localhost HTTP 200
+was observed. External lookup, dependency installation and native delegation were not exercised.
+
+Actual stored staging bytes were retrieved and replayed: local/rebuilt record count, byte count,
+head and research NDJSON agreed. Capture remained incomplete with one shutdown drain deadline,
+an unclosed producer and `Unresolved(ProcessAuthorityUnavailable)` termination. An orphan
+localhost workload server was identified and stopped separately. Upload completion is therefore
+not a clean-capture or process-containment claim. The failed evidence remains private.
+
+The main native turn used high effort. The wire contained 26 high-effort model requests and one
+Luna/low automatic thread-title request. Installed-tag source forces low for that auxiliary
+request ([thread_title.rs](https://github.com/openai/codex/blob/rust-v0.156.1/codex-rs/tui/src/app/thread_title.rs)).
+For the repeat, a participant can assign a literal name with `/rename Research validation` at
+the ready prompt before submitting the workload; the inline name path sends only a name update,
+and automatic title generation requires an unnamed thread. This is a harness prelaunch setting,
+not tracer or connector policy. Its effect still needs verification in the repeat's captured wire.
+
+Native delegation was disabled for this experiment: installed-tag full-history forks do not
+provide a global guarantee of the requested child model/effort. Native-child coverage remains
+unmeasured. Participant settings live only in the existing dedicated capture home. The connector
+and shared tracer contain no model-specific enforcement or title-generation workaround.
+
+The baseline yielded 564 decoded observations, including 225 unknown records across native and
+Responses decoders. Those are partial interpretations of retained source bytes; paired tool
+observations on both legs are not separate tool executions. A fresh-build repeat after independent
+review and the fast gate is still required. See [the tracker](../../TODO.md#research-recorder-validation).
+
 ## 1. Run one prompt, in chat mode first
 
 Chat mode is the product (D57). The connector opens Codex's chat with `codex` and no goal (the args are only the `-c` and `-C` options in section 10); the participant types the prompt; one Ctrl-C at an idle prompt quits and prints the resume line; `resume --last` reopens the most recent session. Section 10 has the argv and the measurements.

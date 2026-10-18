@@ -324,8 +324,8 @@ capture failure does not stop the harness.
 
 Native binding of a family that learns its session identity only at the end of its turn (Hermes)
 is `NativeBinding::Deferred`. It becomes `Bound` at most once, installed only inside a finish at
-stage 4 under the run lock. A finish with no usable scope appends one stream-less `SourceChanged`
-gap at stage 5 and the binding is `Unbound`, terminal. A daemon restart forgets the binding.
+stage 5 under the run lock. A finish with no usable scope appends one stream-less `SourceChanged`
+gap at stage 6 and the binding is `Unbound`, terminal. A daemon restart forgets the binding.
 
 ## C6. Local finish
 
@@ -368,25 +368,37 @@ reports `seal_write_failed`, and the status is `Failed`, never `Sealed`.
   proxy's producer close was not queued, the sender's connection is ended too, bounded to 1 s
   (`RUNNING_HARNESS_SINK_SHUTDOWN`), so the daemon's ingest drain reads a lost producer instead of
   waiting for a live one. The seal that ends the harness is then asked within seconds of the stop.
-- ¶4 *Daemon stages.* `D` starts when the daemon decodes the request. In order: (1) close
-  admission and drain ingest until `drain_end`; expiry cuts with `ShutdownDeadline` gaps and is never
-  a refusal. (2) blocking permit. (3) the entry's run lock; a committed finish is answered as
-  committed. (4) owner stop. (5) carried proxy-counter and latched gaps are appended. (6)
-  termination. (7) workspace into the seal manifest (a clone's Git state, else a walk). (8)
-  `LocalFinish`, sync, `seal.json`, registry row. Stages 2, 3, 4, 6, 7 and 8 begin only while more
-  than `FINISH_RESPONSE_MARGIN` remains of `D' = D + τ` (τ is time already spent in stage 6). Once
-  stage 8 begins it completes under the no-retry terminal rule. A refusal is
-  `DaemonError::FinishDeadline { stage }`, writes no terminal, and uses the tokens `not_started`,
-  `blocking_permit`, `run_lock`, `owner_drain`, `termination`, `workspace_walk`, `local_finish`.
-- ¶5 *Sticky latch.* A refusal at stage 2, 4, 6, 7 or 8 (not 3), or a request dropped before stage
-  3, sets the entry's in-memory `ExpiredFinish { proxy_pending, termination }`. The next finish that
-  reaches stage 5 chains the pending counters, then one stream-less `Gap { ShutdownDeadline }`,
-  before `LocalFinish`. At stage 6 that finish reuses a recorded `termination` only if it is
-  `Confirmed`. Otherwise it terminates again, because a harness that was parked, refused or
-  unresolved may be running, and a seal never binds a run it left running. It binds the new outcome,
-  except when the new outcome is `AlreadyStopped` and the recorded one is `Unresolved` with reason
-  `ProcessStillRunning` or `RequestFailed`: then it binds the recorded outcome. The latch is never
-  cleared by a refusal. Across a restart the reopen's `IngestLost` gap keeps the run incomplete.
+- ¶4 *Daemon stages.* `D` starts when the daemon decodes the request. In order: (1) blocking
+  permit. (2) the entry's run lock; a committed finish is answered as committed. (3) termination,
+  with ingest admission, existing producers and the native owner still live. Add the actual
+  termination duration `τ` to **both** `D` and `drain_end`. (4) close admission and drain ingest
+  until the shifted `drain_end`; expiry cuts with `ShutdownDeadline` gaps and is never a refusal.
+  (5) owner stop, with native finish using the shifted drain share. (6) carried proxy-counter
+  and latched gaps are appended. (7) workspace into the seal manifest (a clone's Git state, else
+  a walk). (8) `LocalFinish`, sync, `seal.json`, registry row. Stages 1, 2, 3, 5, 7 and 8 begin only
+  while more than `FINISH_RESPONSE_MARGIN` remains of the shifted deadline. Once stage 8 begins
+  it completes under the no-retry terminal rule. A refusal is `DaemonError::FinishDeadline { stage }`,
+  writes no terminal, and uses the unchanged tokens `not_started`, `blocking_permit`, `run_lock`,
+  `owner_drain`, `termination`, `workspace_walk`, `local_finish`.
+  This amends the former drain-before-termination order: a standalone seal reaches a harness
+  that is still running, and its launcher closes the proxy only after that harness exits. Waiting
+  for that producer first spent the entire drain share and manufactured shutdown loss. The run
+  lock serializes competing finishes through termination and drain. Control operations that can
+  wait on that lock (status, entries, health, goal, abandon and process registration; launch already
+  runs there) use the blocking pool so they cannot strand async ingest on a runtime worker.
+  Parsing/body bounds, authentication, registration validation order and durable replay/error
+  handling remain unchanged.
+- ¶5 *Sticky latch.* A refusal at stage 1, 3, 5, 7 or 8 (not 2), or a request dropped before stage
+  2, sets the entry's in-memory `ExpiredFinish { proxy_pending, termination }`. The next finish that
+  reaches stage 6 chains the pending counters, then one stream-less `Gap { ShutdownDeadline }`,
+  before `LocalFinish`. At stage 3 that finish reads the latch without consuming it and reuses a
+  recorded `termination` only if it is `Confirmed`. Otherwise it terminates again, because a
+  harness that was parked, refused or unresolved may be running, and a seal never binds a run
+  it left running. It binds the new outcome, except when the new outcome is `AlreadyStopped`
+  and the recorded one is `Unresolved` with reason `ProcessStillRunning` or `RequestFailed`:
+  then it binds the recorded outcome. An owner refusal after termination keeps that outcome
+  and any unchained counters. A workspace error keeps the bound outcome as well. The latch is
+  never cleared by a refusal. Across a restart the reopen's `IngestLost` gap keeps the run incomplete.
   Every finish attempt sets `CaptureEntry::finishing`, which nothing clears.
 - ¶6 *Transport.* `DaemonClient::seal_capture(entry_id, request, read_timeout)`. The CLI's
   `read_timeout = remaining + termination_allowance + CONNECT_TIMEOUT` (2 s).
@@ -405,7 +417,7 @@ reports `seal_write_failed`, and the status is `Failed`, never `Sealed`.
   skewed refusal.
 - ¶9 *Native scope.* The scope of a family that learns it at the end of its turn rides only on a
   capture finish request (`CaptureSealRequest.native_scope`). It is installed only inside a
-  finish, at stage 4, while `finishing` is set, after the committed-finish answer and before the
+  finish, at stage 5, while `finishing` is set, after the committed-finish answer and before the
   owner is told to stop. A scope on any other family's finish is ignored.
 - ¶10 *Evidence.* The real-binary repro rows run debug, test-feature builds of the shipped binaries
   (`pause_at` needs `test-support`); the two test-only holds are observed through seams in

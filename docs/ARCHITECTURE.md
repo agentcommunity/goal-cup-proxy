@@ -145,11 +145,17 @@ CLI phases are in `commands/start.rs` (`prepare`, `create_and_gate`, `register_a
    releases the harness. No binary bytes are read. No execution is bound to an inode.
 4. **Run.** `Launch` is appended. The native and wire legs capture. The CLI uploads chunks and
    sends heartbeats.
-5. **Finish.** Stop the proxy, drain, persist loss, stop the owners, read the workspace state (Git for
-   a clone, a file walk otherwise) and write `LocalFinish` plus `seal.json`. A refused finish writes no terminal. The budget is
-   `LOCAL_CAPTURE_FINISH_BUDGET` (180 s) with a 2 s commit reserve (D40, D56).
-6. **Termination.** SIGTERM, the connector's grace, SIGKILL, sweep and reconfirm. This runs outside
-   the finish budget ([TERMINATION](TERMINATION.md)).
+5. **Stop the harness.** A standalone seal enters the daemon's entry run lock, then SIGTERM,
+   the connector's grace, SIGKILL, sweep and reconfirm run with wire and native capture still live.
+   This runs outside the capture budget ([TERMINATION](TERMINATION.md)); both the drain-share
+   boundary and final deadline move by actual termination time. The launcher sees the child exit
+   and stops its proxy; competing finishes share one terminal.
+6. **Finish capture.** Close admission, drain the existing producers, persist explicit loss,
+   stop the owner, read the workspace state (Git for a clone, a file walk otherwise), then write
+   `LocalFinish` plus `seal.json`. A refused finish writes no terminal and retains its termination
+   outcome for retry. The capture budget is `LOCAL_CAPTURE_FINISH_BUDGET` (180 s) with a 2 s commit
+   reserve (D40, D56). Control operations that can wait on the entry lock run on the blocking
+   pool so ingest remains able to drain.
 7. **Seal, verify.** Bind seal and termination, print the `verify:` line,
    upload the rest (the wrap-up).
 

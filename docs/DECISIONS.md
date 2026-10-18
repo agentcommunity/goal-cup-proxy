@@ -173,7 +173,12 @@ cheapest-model clause is superseded by D52.
 - **Termination bound.** Finish keeps SIGTERM, the connector's grace, then SIGKILL. The capture
   budget never cuts the grace short. Inside the capture budget a drain share and a named commit
   reserve are split, so a producer that never settles still seals with a gap. The budget is 180 s
-  (D56); the reserve is 2 s.
+  (D56); the reserve is 2 s. The daemon terminates under the entry's run lock before draining
+  ingest or stopping the native owner, keeping both capture legs live during termination.
+  Both capture budget boundaries move by actual termination time. This amends C6's former
+  drain-first order: a manual seal must let the launcher observe harness exit and close its
+  proxy producer, rather than spend the drain share waiting on a producer whose harness is live.
+  Stalled producers still expire with explicit loss; D22 and D30's authority limits are unchanged.
 - **Spawn gate.** A capture launch must not leave a live harness that the tracer never durably
   recorded. The child waits before `exec` until the daemon has registered it.
 - **Disk reservation.** One 3 GiB reserve file for each run (`RUN_RESERVE_BYTES`), held by the run host, reused all week

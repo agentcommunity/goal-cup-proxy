@@ -21,22 +21,22 @@ pub(super) const LOCAL_FINISH_REASON: &str = "manual";
 
 /// The stages of the v5 local finish that can wait or be refused, in order. A refusal names the
 /// stage it stopped before; the token is the wire message of `finish_deadline`. The numbers are
-/// those of CONTRACTS.md, C6 local finish budget ¶4. Stage 1 (drain ingest, which
-/// expires as a cut with gaps) and stage 5 (carried gaps, which are appended and not waited on)
+/// those of CONTRACTS.md, C6 local finish budget ¶4. Stage 4 (drain ingest, which
+/// expires as a cut with gaps) and stage 6 (carried gaps, which are appended and not waited on)
 /// are never refused, so they have no variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FinishStage {
     /// Stage 0, a zero budget: refused before any finish step, admission still open.
     NotStarted,
-    /// Stage 2: the blocking permit.
+    /// Stage 1: the blocking permit.
     BlockingPermit,
-    /// Stage 3: the entry's run lock. Another finish owns the entry, so a refusal here latches
+    /// Stage 2: the entry's run lock. Another finish owns the entry, so a refusal here latches
     /// nothing.
     RunLock,
-    /// Stage 4: the owner stop.
-    OwnerDrain,
-    /// Stage 6: ending the registered process tree.
+    /// Stage 3: ending the registered process tree.
     Termination,
+    /// Stage 5: the owner stop.
+    OwnerDrain,
     /// Stage 7: the workspace into the seal manifest: a clone's Git state, else the walk.
     WorkspaceWalk,
     /// Stage 8: `LocalFinish`, sync, `seal.json` and the registry row.
@@ -49,8 +49,8 @@ impl FinishStage {
         FinishStage::NotStarted,
         FinishStage::BlockingPermit,
         FinishStage::RunLock,
-        FinishStage::OwnerDrain,
         FinishStage::Termination,
+        FinishStage::OwnerDrain,
         FinishStage::WorkspaceWalk,
         FinishStage::LocalFinish,
     ];
@@ -75,8 +75,8 @@ impl FinishStage {
 }
 
 /// One finish's share of the one local-finish budget, fixed when the daemon decodes the
-/// request: the end of its drain share and its deadline. Termination time is added back at each
-/// later stage (`excluded`), because it keeps TERMINATION.md's bound and is never cut.
+/// request: the end of its drain share and its deadline. Both boundaries move by the actual
+/// termination duration, because it keeps TERMINATION.md's bound and is never cut.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct FinishBudget {
     pub(super) drain_end: tokio::time::Instant,
@@ -111,16 +111,24 @@ impl FinishBudget {
         })
     }
 
-    /// The last instant a refusable stage may begin, given `excluded` termination time.
-    pub(super) fn last_start(&self, excluded: Duration) -> tokio::time::Instant {
-        let end = self.deadline + excluded;
-        end.checked_sub(FINISH_RESPONSE_MARGIN)
+    /// Termination leaves both capture shares intact, including the native finish allowance.
+    pub(super) fn excluding_termination(self, elapsed: Duration) -> Self {
+        Self {
+            drain_end: self.drain_end + elapsed,
+            deadline: self.deadline + elapsed,
+        }
+    }
+
+    /// The last instant a refusable stage may begin.
+    pub(super) fn last_start(&self) -> tokio::time::Instant {
+        self.deadline
+            .checked_sub(FINISH_RESPONSE_MARGIN)
             .unwrap_or_else(tokio::time::Instant::now)
     }
 
     /// Whether a refusable stage may begin now: more than [`FINISH_RESPONSE_MARGIN`] remains.
-    pub(super) fn admits(&self, excluded: Duration) -> bool {
-        tokio::time::Instant::now() < self.last_start(excluded)
+    pub(super) fn admits(&self) -> bool {
+        tokio::time::Instant::now() < self.last_start()
     }
 
     /// What the native adapter may still spend: the rest of the drain share.
@@ -155,8 +163,8 @@ pub(super) fn refused_at(stage: FinishStage) -> DaemonError {
     }
 }
 
-/// What an expired finish left for the next one to chain. Set by a refusal at stage 2, 4, 6, 7
-/// or 8 (never 3: another finish owns the entry; see [`FinishStage`]), merged with what an earlier refusal left;
+/// What an expired finish left for the next one to chain. Set by a refusal at stage 1, 3, 5, 7
+/// or 8 (never 2: another finish owns the entry; see [`FinishStage`]), merged with what an earlier refusal left;
 /// taken, and appended, only by a finish that reaches the proxy-counter stage; never cleared by
 /// a refusal. Across a restart it is lost, and reopen's own stream-less `IngestLost` gap keeps a
 /// registered or launched run incomplete.
@@ -164,7 +172,7 @@ pub(super) fn refused_at(stage: FinishStage) -> DaemonError {
 pub(super) struct ExpiredFinish {
     /// The launcher's proxy counters, when the expired attempt had them and had not chained them.
     pub(super) proxy_pending: Option<ProxyCounters>,
-    /// The outcome an expired attempt had already bound at stage 6. A later finish reuses it
+    /// The outcome an expired attempt had already bound at stage 3. A later finish reuses it
     /// only if it is `Confirmed`; see [`bind_termination`].
     pub(super) termination: Option<TerminationOutcomeV1>,
 }
@@ -208,8 +216,8 @@ pub(super) fn bind_termination<E>(
 }
 
 /// Armed for the async part of a finish, which axum drops when the caller's connection closes.
-/// A dropped attempt has set `finishing` and closed admission, and the launcher's proxy counters
-/// it carried exist nowhere else, so while armed its drop latches them exactly as a stage-2
+/// A dropped attempt has set `finishing`, and the launcher's proxy counters it carried exist
+/// nowhere else, so while armed its drop latches them exactly as a stage-1
 /// refusal does: the next finish chains them and one stream-less `ShutdownDeadline` gap. The
 /// blocking part, once spawned, always runs to completion and latches through its own paths, so
 /// the guard is disarmed just before it starts. Raw facts only: "an attempt began and its caller
@@ -276,16 +284,10 @@ impl Daemon {
             proxy: request.proxy,
             armed: true,
         };
-        // Stage 1: close admission and drain ingest until the end of the drain share. Expiry is
-        // the existing cut with `ShutdownDeadline` gaps, never a refusal.
-        if let Some(ingest) = &capture.ingest {
-            ingest.close_admission();
-            ingest.drain(budget.drain_end).await;
-        }
-        // Stage 2: the blocking permit.
-        let permit = if budget.admits(Duration::ZERO) {
+        // Stage 1: the blocking permit.
+        let permit = if budget.admits() {
             tokio::time::timeout_at(
-                budget.last_start(Duration::ZERO),
+                budget.last_start(),
                 self.inner.blocking.clone().acquire_owned(),
             )
             .await
@@ -327,11 +329,11 @@ impl Daemon {
         request: &CaptureSealRequest,
         budget: FinishBudget,
     ) -> Result<CaptureFinishReport, DaemonError> {
-        // Stage 3: the entry's run lock, polled until the last instant a stage may begin. Another
+        // Stage 2: the entry's run lock, polled until the last instant a stage may begin. Another
         // finish holds it while it commits, and a committed finish is answered as committed.
         capture.pause_before(FinishStage::RunLock);
-        let until = if budget.admits(Duration::ZERO) {
-            budget.last_start(Duration::ZERO)
+        let until = if budget.admits() {
+            budget.last_start()
         } else {
             tokio::time::Instant::now()
         };
@@ -364,33 +366,10 @@ impl Daemon {
             return self.commit_finish(capture, run, report, chained.sealed_at);
         }
 
-        // Stage 4: stop the owner. Native finish gets the rest of the drain share; the owner's
-        // exit is awaited until the last instant a stage may begin, and is never joined while it
-        // runs. A slow owner is a refusal; its thread stays with the entry for the next finish.
-        capture.pause_before(FinishStage::OwnerDrain);
-        // A deferred native scope rides on this request. It is installed here, under the run
-        // lock and before the owner is stopped, so the owner finishes it within the native
-        // budget below (CONTRACTS.md, C6 local finish budget ¶9).
-        capture.install_deferred_scope(request.native_scope.as_deref(), run.launched());
-        let stopped = budget.admits(Duration::ZERO)
-            && matches!(
-                capture.stop_owner(
-                    budget.native_budget(),
-                    Some(budget.last_start(Duration::ZERO)),
-                ),
-                OwnerStop::Exited
-            );
-        if !stopped {
-            return Err(capture.expire(FinishStage::OwnerDrain, request.proxy, None));
-        }
-
-        // Stage 5: the writer is uncontended now.
-        let recorded = capture.chain_carried_gaps(request, run.launched());
-
-        // Stage 6: end the registered process tree, outside the budget.
+        // Stage 3: end the registered process tree, outside the budget.
         capture.pause_before(FinishStage::Termination);
-        if !budget.admits(Duration::ZERO) {
-            return Err(capture.expire(FinishStage::Termination, None, recorded));
+        if !budget.admits() {
+            return Err(capture.expire(FinishStage::Termination, request.proxy, None));
         }
         let row = self
             .registry()
@@ -398,6 +377,11 @@ impl Daemon {
             .ok_or_else(|| DaemonError::Missing(format!("entry {entry_id}")))?;
         let requested_at = self.finalization_timestamp("termination request")?;
         let began = std::time::Instant::now();
+        // Read without taking the latch: a failed termination or an owner refusal must keep
+        // the earlier outcome and proxy counters for the next serialized attempt.
+        let recorded = lock(&capture.expired)
+            .as_ref()
+            .and_then(|e| e.termination.clone());
         let (termination, ran) = bind_termination(recorded, || {
             let (outcome, note) = match &row.last_process {
                 // No signed walk budget binds a local capture: the module's own ceiling does.
@@ -425,18 +409,51 @@ impl Daemon {
             );
             Ok::<_, DaemonError>(outcome)
         })?;
-        // The time this attempt spent ending the harness is added back to the deadline.
-        let excluded = if ran { began.elapsed() } else { Duration::ZERO };
+        let budget =
+            budget.excluding_termination(if ran { began.elapsed() } else { Duration::ZERO });
+
+        // Stage 4: drain ingest. Existing producers and the native owner stayed live throughout
+        // termination. The launcher's child wait can now close its proxy producer normally. Only
+        // after that stop do we close admission and spend the remaining drain share (D40).
+        if let Some(ingest) = &capture.ingest {
+            tokio::runtime::Handle::current().block_on(ingest.drain(budget.drain_end));
+        }
+
+        // Stage 5: stop the owner. Native finish gets the rest of the drain share; the owner's
+        // exit is awaited until the last instant a stage may begin, and is never joined while it
+        // runs. A slow owner is a refusal; its thread stays with the entry for the next finish.
+        capture.pause_before(FinishStage::OwnerDrain);
+        // A deferred native scope rides on this request. It is installed here, under the run
+        // lock and before the owner is stopped, so the owner finishes it within the native
+        // budget below (CONTRACTS.md, C6 local finish budget ¶9).
+        capture.install_deferred_scope(request.native_scope.as_deref(), run.launched());
+        let stopped = budget.admits()
+            && matches!(
+                capture.stop_owner(budget.native_budget(), Some(budget.last_start())),
+                OwnerStop::Exited
+            );
+        if !stopped {
+            return Err(capture.expire(
+                FinishStage::OwnerDrain,
+                request.proxy,
+                Some(termination.clone()),
+            ));
+        }
+
+        // Stage 6: the writer is uncontended now; counters and any earlier refusal's gaps precede
+        // the terminal. Termination was bound before the latch is taken here.
+        capture.chain_carried_gaps(request, run.launched());
 
         // Stage 7: the workspace seal.
         capture.pause_before(FinishStage::WorkspaceWalk);
-        if !budget.admits(excluded) {
+        if !budget.admits() {
             return Err(capture.expire(FinishStage::WorkspaceWalk, None, Some(termination)));
         }
         let sealed_at = now_rfc3339();
         // A clone's Git state may take what is left but the commit reserve; the drain share left
         // it at least `GIT_READ_FLOOR` (D56).
-        let git_budget = (budget.deadline + excluded)
+        let git_budget = budget
+            .deadline
             .checked_sub(FINISH_COMMIT_RESERVE)
             .map_or(Duration::ZERO, |end| {
                 end.saturating_duration_since(tokio::time::Instant::now())
@@ -461,7 +478,7 @@ impl Daemon {
         // Stage 8: the terminal. Once it begins it completes under the existing no-retry rule;
         // only its registry half (`commit_finish`) is retried as it stands.
         capture.pause_before(FinishStage::LocalFinish);
-        if !budget.admits(excluded) {
+        if !budget.admits() {
             return Err(capture.expire(FinishStage::LocalFinish, None, Some(termination)));
         }
         let mut writer = lock(&capture.writer);
@@ -697,22 +714,14 @@ impl CaptureEntry {
     #[inline(always)]
     pub(super) fn pause_before(&self, _stage: FinishStage) {}
 
-    /// Finish stage 5, with the writer uncontended: chain what this finish carries, in the order
+    /// Finish stage 6, with the writer uncontended: chain what this finish carries, in the order
     /// the chain reads it (CONTRACTS.md, C6 local finish budget ¶4 and ¶5). First the
     /// deferred-scope gap, if the entry still owes it. Then the launcher's proxy counters, this
     /// request's or an expired attempt's. Then one stream-less `ShutdownDeadline` gap if an
-    /// earlier attempt expired: the harness ran between the two attempts with admission closed,
-    /// so whatever it did then was not recorded. Takes the sticky [`ExpiredFinish`] and returns
-    /// the termination outcome it had already bound, for stage 6.
-    pub(super) fn chain_carried_gaps(
-        &self,
-        request: &CaptureSealRequest,
-        launched: bool,
-    ) -> Option<TerminationOutcomeV1> {
+    /// earlier attempt expired: its incomplete finish left capture continuity uncertain.
+    /// Takes the sticky [`ExpiredFinish`] after the recorded termination was bound at stage 3.
+    pub(super) fn chain_carried_gaps(&self, request: &CaptureSealRequest, launched: bool) {
         let latched = lock(&self.expired).take();
-        let recorded = latched
-            .as_ref()
-            .and_then(|latched| latched.termination.clone());
         let counters = request
             .proxy
             .or(latched.as_ref().and_then(|latched| latched.proxy_pending));
@@ -729,6 +738,5 @@ impl CaptureEntry {
         if latched.is_some() {
             writer.streamless_gap(GapReason::ShutdownDeadline, &(self.clock)());
         }
-        recorded
     }
 }

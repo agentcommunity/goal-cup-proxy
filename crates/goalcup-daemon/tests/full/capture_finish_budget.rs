@@ -85,6 +85,198 @@ fn table_full_counters() -> Value {
     })
 }
 
+/// Every route here can wait on the run lock held by finish. On a one-worker daemon it
+/// must not strand the receiver/timer needed for that same finish's live-producer drain.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_control_waiters_leave_serialized_ingest_drain_running() {
+    use support::control::ControlClient;
+    struct DaemonProcess(std::process::Child);
+    impl Drop for DaemonProcess {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let harness = Child::sleeping();
+    let mut failures = Vec::new();
+    for route in [
+        "baseline", "entries", "health", "goal", "abandon", "process",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let config = root.join("daemon.toml");
+        let log_path = root.join("daemon.log");
+        let connectors = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
+        std::fs::write(&config, format!(
+            "artifact_root = {:?}\nconfig_dir = {:?}\nworkspace_parent = {:?}\nconnectors_dir = {:?}\ncontrol_addr = \"127.0.0.1:0\"\n",
+            root.join("artifacts"), root.join("config"), root.join("workspaces"), connectors,
+        )).unwrap();
+        let log = std::fs::File::create(&log_path).unwrap();
+        let mut daemon = DaemonProcess(
+            std::process::Command::new(env!("CARGO_BIN_EXE_goalcup-daemon"))
+                .arg("--config")
+                .arg(&config)
+                .arg("--foreground")
+                .env_clear()
+                .env("HOME", root.join("home"))
+                .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+                .env("TOKIO_WORKER_THREADS", "1")
+                .stdin(std::process::Stdio::null())
+                .stdout(log.try_clone().unwrap())
+                .stderr(log)
+                .spawn()
+                .unwrap(),
+        );
+        let until = Instant::now() + Duration::from_secs(10);
+        let control = loop {
+            if let Ok(bytes) = std::fs::read(root.join("config/control.json"))
+                && let Ok(control) = serde_json::from_slice::<Value>(&bytes)
+            {
+                break control;
+            }
+            assert!(
+                Instant::now() < until && daemon.0.try_wait().unwrap().is_none(),
+                "daemon startup: {}",
+                std::fs::read_to_string(&log_path).unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        let client = ControlClient {
+            addr: control["address"].as_str().unwrap().parse().unwrap(),
+            token: control["token"].as_str().unwrap().into(),
+        };
+        let info: CaptureWorkspaceInfo = client.post_json(goalcup_protocol::control::ROUTE_CAPTURE_WORKSPACES, &json!({
+            "workspace": root.join("workspaces/entry"), "profile_id": "codex-cli",
+            "connector_dir_sha256": goalcup_protocol::pins::pinned_connector_dir_sha256("codex-cli").unwrap(),
+            "reserve_bytes": 4 * 1024 * 1024, "run_home": root.join("run-home"), "config_home": root.join("config-home"),
+        })).await;
+        let wired = info.clone();
+        let wire = tokio::task::spawn_blocking(move || Wire::connect(&wired, &wired.producer_id))
+            .await
+            .unwrap();
+        // Establish an authenticated live producer before finish; no fixed admission sleep.
+        loop {
+            let status: goalcup_protocol::control::SignedStatus = client
+                .get(&entry_route(
+                    &info.entry_id,
+                    goalcup_protocol::control::SUFFIX_STATUS,
+                ))
+                .await
+                .json()
+                .unwrap();
+            if status.payload.producers_consumed == Some(1) {
+                break;
+            }
+            assert!(Instant::now() < until, "producer was not admitted");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let seal_path = entry_route(&info.entry_id, SUFFIX_SEAL);
+        let body = request(None, Some(3_000));
+        let finish = client.post_body(&seal_path, &body);
+        let waiting = async {
+            // The daemon logs the bound termination outcome under the run lock, immediately
+            // before drain. Wait on that condition so the competing call really overlaps it.
+            while !std::fs::read_to_string(&log_path)
+                .unwrap()
+                .contains(&format!("termination of {}:", info.entry_id))
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            match route {
+                "baseline" => None,
+                "entries" => Some(client.get(goalcup_protocol::control::ROUTE_ENTRIES).await),
+                "health" => Some(client.get(goalcup_protocol::control::ROUTE_HEALTH).await),
+                "goal" => Some(
+                    client
+                        .post_body(
+                            &entry_route(
+                                &info.entry_id,
+                                goalcup_protocol::control::SUFFIX_CAPTURE_GOAL,
+                            ),
+                            &json!({"bytes": [120]}),
+                        )
+                        .await,
+                ),
+                "abandon" => Some(
+                    client
+                        .post_body(
+                            &entry_route(&info.entry_id, goalcup_protocol::control::SUFFIX_ABANDON),
+                            &json!({}),
+                        )
+                        .await,
+                ),
+                "process" => Some(
+                    client
+                        .post_body(
+                            &entry_route(&info.entry_id, goalcup_protocol::control::SUFFIX_PROCESS),
+                            &harness.registration(info.process_generation),
+                        )
+                        .await,
+                ),
+                _ => unreachable!(),
+            }
+        };
+        let began = Instant::now();
+        let completed = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(finish, waiting)
+        })
+        .await;
+        // Kill our subprocess even after a timeout, releasing blocked sockets and workers.
+        let _ = daemon.0.kill();
+        let _ = daemon.0.wait();
+        drop(wire);
+        match completed {
+            Err(_) => failures.push(format!(
+                "{route}: control call stranded finish beyond 5 seconds"
+            )),
+            Ok((sealed, other)) => {
+                assert_eq!(sealed.status(), 200, "{route}: {}", sealed.body());
+                if let Some(other) = other {
+                    if matches!(route, "entries" | "health") {
+                        assert_eq!(other.status(), 200, "{route}: {}", other.body());
+                    } else {
+                        assert!(
+                            matches!(other.status(), 404 | 409),
+                            "{route}: {} {}",
+                            other.status(),
+                            other.body()
+                        );
+                    }
+                }
+                let bytes = std::fs::read(
+                    root.join("artifacts/artifacts")
+                        .join(&info.entry_id)
+                        .join("trace/chain.jsonl"),
+                )
+                .unwrap();
+                let records: Vec<goalcup_protocol::envelope::Envelope> = bytes
+                    .split(|b| *b == b'\n')
+                    .filter(|line| !line.is_empty())
+                    .map(|line| serde_json::from_slice(line).unwrap())
+                    .collect();
+                assert_eq!(
+                    records
+                        .iter()
+                        .filter(|record| matches!(
+                            &record.body,
+                            goalcup_protocol::envelope::EventBody::Capture {
+                                record: CaptureRecord::LocalFinish { .. }
+                            }
+                        ))
+                        .count(),
+                    1,
+                    "{route}: exactly one committed terminal"
+                );
+                println!(
+                    "{route}: finish and competing control call completed in {:?}",
+                    began.elapsed()
+                );
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// A capture-dev entry with a live harness registered and its launch recorded.
 async fn launched(rig: &Rig, child: &Child) -> CaptureWorkspaceInfo {
     let info = rig.created("capture-dev").await;
@@ -160,7 +352,7 @@ async fn blocked_permit_refuses_without_terminal_then_seals_with_gap() {
 }
 
 /// A finish whose caller goes away mid-handler (a daemon stalled past the CLI's read timeout, or
-/// the launcher dying) has already set `finishing` and closed admission. The launcher's proxy
+/// the launcher dying) has already set `finishing`. The launcher's proxy
 /// counters exist nowhere else, so the dropped attempt must latch them like a refusal does: the
 /// next finish, a standalone `goalcup seal` that sends no counters, chains them and one
 /// stream-less `ShutdownDeadline` gap, and the trace reads incomplete.
@@ -291,6 +483,177 @@ async fn slow_owner_refuses_without_terminal_and_never_appends_after_local_finis
         "nothing is appended after the LocalFinish"
     );
     assert_eq!(local_finishes(&rig.records(&info.entry_id)), 1);
+}
+
+/// Stopping native capture before signalling drops the harness's final native write even
+/// though the workspace seal sees its final file. Both must describe the stopped workload.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn termination_keeps_native_final_writes_and_final_workspace_state() {
+    use base64::Engine as _;
+    use capture_lifecycle_support::controlled_native_rig;
+    use goalcup_protocol::capture::CaptureSource;
+    let (rig, native, _connectors) = controlled_native_rig().await;
+    let _lock = TableLock::acquire();
+    let info = rig.created("capture-dev").await;
+    let ready = rig.root.join("final-write-ready");
+    let native_file = native.join("last.jsonl");
+    let workspace_file = rig
+        .daemon
+        .registry()
+        .get(&info.entry_id)
+        .unwrap()
+        .unwrap()
+        .workspace
+        .join("stopped.txt");
+    // Builtins only: there are no helper children to kill before this shell can handle TERM.
+    let script = r#"trap 'printf "%s\n" "{\"event\":\"stopped\"}" >> "$1"; printf "final workspace\n" > "$2"; exit 0' TERM
+: > "$3"
+while :; do :; done"#;
+    struct Harness(std::process::Child);
+    impl Drop for Harness {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let harness = Harness(
+        std::process::Command::new("/bin/sh")
+            .args(["-c", script, "finish-fixture"])
+            .arg(&native_file)
+            .arg(&workspace_file)
+            .arg(&ready)
+            .env_clear()
+            .env("HOME", rig.run_home())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let until = Instant::now() + Duration::from_secs(10);
+    while !ready.exists() {
+        assert!(
+            Instant::now() < until,
+            "the signal handler never became ready"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let mut handle = support::handle_for_now(harness.0.id());
+    handle.program = "/bin/sh".into();
+    handle.argv = vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        script.into(),
+        "finish-fixture".into(),
+        native_file.display().to_string(),
+        workspace_file.display().to_string(),
+        ready.display().to_string(),
+    ];
+    let registered = rig
+        .register(
+            &info.entry_id,
+            &ProcessRegistration {
+                generation: info.process_generation,
+                handle,
+            },
+        )
+        .await;
+    assert_eq!(registered.status(), 204, "{}", registered.body());
+    let goal = rig
+        .goal_accepted(&info.entry_id, b"write final state")
+        .await;
+    let launch = rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    assert_eq!(launch.status(), 204, "{}", launch.body());
+
+    let (sealed, _) = seal(&rig, &info.entry_id, request(None, Some(10_000))).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    assert_eq!(
+        std::fs::read(&native_file).unwrap(),
+        b"{\"event\":\"stopped\"}\n"
+    );
+    let records = rig.records(&info.entry_id);
+    let stream = records
+        .iter()
+        .find_map(|r| match r {
+            CaptureRecord::Open {
+                stream,
+                source: CaptureSource::Native,
+                ..
+            } => Some(stream),
+            _ => None,
+        })
+        .expect("native capture remains live for the termination handler's new file");
+    let retained: Vec<u8> = records
+        .iter()
+        .filter_map(|r| match r {
+            CaptureRecord::Segment {
+                stream: key,
+                data_b64,
+                ..
+            } if key == stream => Some(
+                base64::engine::general_purpose::STANDARD
+                    .decode(data_b64)
+                    .unwrap(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(retained, b"{\"event\":\"stopped\"}\n");
+    let manifest: goalcup_protocol::seal::SealManifest = serde_json::from_slice(
+        &std::fs::read(rig.trace_dir(&info.entry_id).join("seal.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        manifest.files.iter().any(|file| file.path == "stopped.txt"
+            && file.bytes == 16
+            && file.sha256 == "f4db0dd50d3d942db323dcb2b8c2f24c1c5a4fc36f3c3b93e87031b121ba50d3"),
+        "{manifest:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_refusal_still_stops_harness_and_retry_preserves_confirmed() {
+    let (rig, _native, _connectors) = native_rig().await;
+    let harness = Child::sleeping();
+    let pid = harness.0.id();
+    let info = launched(&rig, &harness).await;
+    rig.daemon.delay_capture_finish_stage(
+        &info.entry_id,
+        "owner_drain",
+        Duration::from_millis(2_300),
+    );
+
+    let (refused, _) = seal(
+        &rig,
+        &info.entry_id,
+        request(Some(table_full_counters()), Some(3_000)),
+    )
+    .await;
+    assert_finish_deadline(&refused, "owner_drain");
+    assert!(!alive(pid), "owned termination precedes the owner refusal");
+    assert_eq!(local_finishes(&rig.records(&info.entry_id)), 0);
+
+    // Repeated refusals merge the latch rather than discarding Confirmed or the counters.
+    rig.daemon.delay_capture_finish_stage(
+        &info.entry_id,
+        "owner_drain",
+        Duration::from_millis(2_300),
+    );
+    let (again, _) = seal(&rig, &info.entry_id, request(None, Some(3_000))).await;
+    assert_finish_deadline(&again, "owner_drain");
+    let (sealed, _) = seal(&rig, &info.entry_id, request(None, None)).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let report: CaptureFinishReport = sealed.json().unwrap();
+    assert!(
+        matches!(report.termination, TerminationOutcomeV1::Confirmed { .. }),
+        "{:?}",
+        report.termination
+    );
+    let records = rig.records(&info.entry_id);
+    assert_eq!(local_finishes(&records), 1);
+    assert_eq!(streamless(&records, GapReason::LimitExceeded), 1);
+    assert_eq!(streamless(&records, GapReason::ShutdownDeadline), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -795,7 +1158,7 @@ fn spawn_sigterm_ignoring_sleep() -> std::process::Child {
     child
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn termination_time_is_outside_the_budget() {
     // A harness that ignores SIGTERM is ended only after the connector's whole grace. A caller
     // budget shorter than that grace must not cut it, and must not refuse the stages after it.
@@ -818,6 +1181,24 @@ async fn termination_time_is_outside_the_budget() {
         .await;
     assert_eq!(registered.status(), 204, "{}", registered.body());
 
+    let wired = info.clone();
+    let pid = stubborn.id();
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let closed = tokio::task::spawn_blocking(move || {
+        let mut wire = Wire::connect(&wired, &wired.producer_id);
+        wire.send(0, support_connection(&fresh_id()));
+        ready_tx.send(()).unwrap();
+        let until = Instant::now() + Duration::from_secs(15);
+        while alive(pid) {
+            assert!(Instant::now() < until, "the harness was never stopped");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // A real producer may take a little time to close after the harness exits. Its drain
+        // share must survive the entire 4 s grace and its reconfirm, not only the final commit deadline.
+        std::thread::sleep(Duration::from_millis(600));
+        wire.close();
+    });
+    ready_rx.await.unwrap();
     let (sealed, took) = seal(&rig, &info.entry_id, request(None, Some(3_000))).await;
     let _ = stubborn.kill();
     let _ = stubborn.wait();
@@ -825,6 +1206,20 @@ async fn termination_time_is_outside_the_budget() {
     assert_eq!(sealed.status(), 200, "{}", sealed.body());
     let report: CaptureFinishReport = sealed.json().unwrap();
     assert_eq!(report.seal, LocalSealOutcome::SealWritten);
+    let records = rig.records(&info.entry_id);
+    assert_eq!(records.iter().filter(|r| matches!(r, CaptureRecord::ProducerClosed { producer, .. } if *producer == info.producer_id)).count(), 1,
+        "termination grace must leave time for the producer's normal close");
+    assert!(
+        !records.iter().any(|r| matches!(
+            r,
+            CaptureRecord::Gap {
+                reason: GapReason::ShutdownDeadline,
+                ..
+            }
+        )),
+        "{records:#?}"
+    );
+    closed.await.unwrap();
     assert!(
         took >= Duration::from_millis(4_000),
         "the connector's 4 s grace was given in full, though the budget was 3 s: {took:?}"
