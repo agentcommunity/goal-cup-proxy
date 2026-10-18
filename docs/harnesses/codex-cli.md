@@ -59,6 +59,29 @@ calls/results are available; independent full tool-output collection is outside 
 Native-child, endurance and other-platform coverage remain unmeasured by this repeat. See
 [the tracker](../../TODO.md#research-recorder-validation).
 
+## 19 Oct focused native-child recording probe
+
+Measured on the same macOS/native Codex 0.156.1 setup: a 23.800-second parent turn spawned one
+14.140-second full-context native child. Both actual turns were `gpt-5.6-luna` / `high`.
+Inherited model/effort was used; the exposed override list did not offer the legacy Luna slug.
+A prior short probe refused before spawning and is retained as a failed experiment.
+
+The supported local-only capture path reused the existing isolated logged-in home; it made no
+server run and required no browser approval. The sealed chain verified valid (`local_only`),
+2,549 records / 4,451,190 bytes / zero gaps. A blind independent Luna review recovered a private
+inherited context marker exactly and found the child assignment, own model/effort, four tool
+calls/results and final failure reply. Child identity and parent/fork links are present in the
+child's first native `session_meta`; the following header replays the parent's metadata. No
+prompt/oracle/workspace file was supplied to the reviewer.
+
+The child attempted further delegation rather than completing its assigned calculation; that
+task failed. Recording coverage of the observed child context/actions/reply passed. The decoded
+report emits three `human_message` observations for the parent prompt, inherited copied prompt
+and child assignment. These must not be treated as three independent human submissions. Decoded
+fork lineage/authorship needs separate work; raw source is sufficient for this measured recovery.
+This is one full-context child measurement, not proof of every delegation path or global model
+restrictions. Original isolated settings and staging routing were restored after the probe.
+
 ## 1. Run one prompt, in chat mode first
 
 Chat mode is the product (D57). The connector opens Codex's chat with `codex` and no goal (the args are only the `-c` and `-C` options in section 10); the participant types the prompt; one Ctrl-C at an idle prompt quits and prints the resume line; `resume --last` reopens the most recent session. Section 10 has the argv and the measurements.

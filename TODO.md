@@ -49,6 +49,17 @@ lookup, and the final response. Decoding retains 194 unknown observations among 
 children, browser automation and endurance remain separate coverage checks. No additional paid repetition is needed to fill time. The fast gate and
 nine synthetic verticals passed; no full release/platform claim is made.
 
+19 Oct focused native-child probe: one full-context Codex child was actually spawned with
+inherited Luna/high (verified in its own turn). Local-only sealed capture verified valid with
+2,549 records, 4,451,190 bytes and zero gaps. An independent Luna reviewer, given recordings
+but no prompt/oracle/workspace access, recovered the inherited context note exactly and located
+the child identity, parent link, assignment, four tool call/result pairs and final reply.
+Recording coverage passed; the child's requested calculation failed and is not claimed as done.
+The decoded report counts three `human_message` observations across the actual parent prompt,
+copied fork history and child assignment; that is not three independently authored human inputs.
+Fork-aware lineage/authorship reporting remains open. This local probe does not extend the
+previous staging-retrieval measurement or establish every harness's child coverage.
+
 ## Dates (UTC)
 
 | When | What |
