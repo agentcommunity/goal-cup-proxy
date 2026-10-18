@@ -83,8 +83,8 @@ core deny policy and the optional argument guard.
 With `interactive = true` (D57) there is no goal slot: the participant types the prompt in the
 harness. The profile then takes no `goal_flag`, its `args` need not end in `--` and may be
 empty, and its `identity.source` must be `none`. With `false`, the default, every
-rule above holds unchanged. `resume_args` may be set either way; `goalcup continue` appends it
-after `args`.
+rule above holds unchanged. `resume_args` parses in either recipe, but `goalcup continue`
+currently supports chat mode only and appends it after `args`; headless continuation is unsupported.
 
 ### Configure commands
 

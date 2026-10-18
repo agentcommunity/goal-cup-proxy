@@ -37,10 +37,12 @@ one of those is known, not new, unless it shows that the stated bound does not h
   harness's trust roots rather than extending them, so a harness that ignores it fails its TLS
   handshake instead of leaving traffic uncaptured. D43 governs which other variables a connector
   may use.
-- Gives every run a fresh `HOME`. Codex and Claude Code use isolated shared config homes
-  (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`). Claude Code's run home gets a link to the macOS Keychains
-  directory. Hermes uses a per-run `HERMES_HOME` filled only from declared seeds. The tracer never
-  writes app-wide harness configuration such as `~/.claude` or `~/.codex`.
+- Uses isolated harness homes rather than the user's normal stores. Codex, Claude Code and
+  Hermes keep shared config homes (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `HERMES_HOME`); Amp keeps
+  an isolated shared `HOME`. Runs sharing a home are serialized. Claude Code's per-run home
+  links the macOS Keychains directory. Hermes's shared home is never seeded: its own setup
+  keeps its provider and login there. The tracer passes no provider key and never writes
+  app-wide harness configuration such as `~/.claude`, `~/.codex` or `~/.hermes`.
 - With `goalcup login`, talks to the Goal Cup server (`https://ingest.agentcommunity.org`) and to
   GitHub for the participant's repository. A run's credential is stored at mode 0600 under the
   configuration directory and is never put in the harness's environment or argv.
@@ -70,8 +72,9 @@ a `capture.hosts` entry or a seeded file is a code-execution or data-exfiltratio
 directory pins detect tampering after a build. They do not defend against a malicious merge,
 because a connector PR regenerates them. Every connector change is reviewed by a code owner against
 the [checklist](docs/HARNESS-ONBOARDING.md#reviewing-a-connector-pr), and you must not run an
-unreviewed build (D51). The source tree has three connectors (`codex-cli`, `claude-code-cli`,
-`hermes-cli`). A release tarball carries the first two.
+unreviewed build (D51). Every committed [connector directory](connectors) is packaged for release;
+its [facts sheet](docs/harnesses/README.md) records measured support and gaps. Packaging inclusion
+is not proof of a published binary or a successful real harness run.
 
 ## Guarantees the code aims to keep
 

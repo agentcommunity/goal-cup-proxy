@@ -8,7 +8,7 @@ description: Use when adding or supporting a CLI coding-agent harness in Goal Cu
 This skill holds no procedure of its own. The procedure is one document. Read it and follow it
 in order.
 
-1. Read [docs/HARNESS-ONBOARDING.md](../../docs/HARNESS-ONBOARDING.md) from top to bottom. It has
+1. Start at [Add and test a connector](../../docs/HARNESS-ONBOARDING.md#quick-path), then read the guide in order. It has
    the steps, the commands, the expected output of each command, the stop rules, the table that
    says whether you need a core change, and the reviewer checklist.
 2. Look up every `harness.toml` field in [docs/CONNECTOR-SCHEMA.md](../../docs/CONNECTOR-SCHEMA.md).

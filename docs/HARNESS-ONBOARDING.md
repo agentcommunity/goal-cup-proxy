@@ -9,6 +9,94 @@ Three other documents complete it:
 - [writing-a-decoder](../skills/adding-a-capture-harness/writing-a-decoder.md): a separate
   verifier change. A connector needs no decoder.
 
+<a id="quick-path"></a>
+
+## Quick path: add and test a connector
+
+1. [Check capture support](#row-0). Unknown isolation/auth/transport facts or a required core
+   change mean **facts only**; that is still a useful contribution.
+2. Follow [the steps](#steps): fill the [facts template](../skills/adding-a-capture-harness/templates/harness-facts.md),
+   then the [chat-mode connector template](../skills/adding-a-capture-harness/templates/connector-harness.toml).
+   Use the existing schema; no Rust code belongs in an ordinary connector PR.
+3. Regenerate pins and the connector's goldens. A chat connector needs no separate kit case;
+   headless connectors do. [Test it](#test-a-connector), then review and open the PR.
+4. A passing stand-in check is synthetic evidence. [Real practice and event qualification](#getting-a-harness-into-the-event)
+   are separate. A connector can capture an unfamiliar format before it has a semantic decoder.
+
+<a id="test-a-connector"></a>
+
+## Test a connector
+
+Run from the repository root after the one-time dependency setup and after filling the connector
+and facts sheet. Replace `<id>` with its connector id. Pins are compiled in; rebuild after edits.
+
+```sh
+sh scripts/pin-manifests.sh
+GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-cli --test it harness_contract_golden::
+GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-daemon --test it harness_contract_golden::
+sh scripts/check-connector.sh <id>
+sh scripts/gate.sh fast
+```
+
+Review the pin/golden diff before committing. Expect `check-connector: <id>: 6 passed, 0 failed,
+0 skipped` on macOS, or `6 passed, 0 failed, 1 skipped` on Linux (Mac live golden still needed),
+then `gate fast: PASS in <N>s`. The checker regenerates pins and tests the shared stand-ins;
+it does not run your installed harness or prove real model traffic.
+
+**One real chat-mode smoke run.** Install the harness version recorded in your facts sheet.
+Use a fresh test config and launch folder on APFS/ext4/XFS outside any Git repository:
+
+```sh
+export PATH="$PWD/target/debug:$PATH"
+export GOALCUP_CONNECTORS_DIR="$PWD/connectors"
+goalcup_test_root=$(mktemp -d "$HOME/goalcup-connector.XXXXXX")
+export GOALCUP_CONFIG_DIR="$goalcup_test_root/config"
+mkdir "$goalcup_test_root/launch"
+cd "$goalcup_test_root/launch"
+goalcup prep --harness <id>
+goalcup doctor --harness <id>
+goalcup start --harness <id>
+```
+
+Do not log this fresh config into the server for a local smoke. In prep, sign into the harness in
+its isolated home and exit normally; server/GitHub/practice `[todo]` steps are expected locally.
+In start, type a small task, let the harness respond, then exit normally. The tracer seals the run.
+A pinned connector needs no `--dev`. Keep the config/trace for diagnosis. In another terminal with
+the same config, `goalcup status` shows progress and `goalcup seal` ends the run early.
+
+Copy the exact `trace:` path printed by start/seal. With a new output file outside that trace:
+
+```sh
+goalcup-verify --capture-integrity <trace>
+goalcup-verify --research-json <trace> --output "$goalcup_test_root/report.ndjson"
+```
+
+Integrity exits: **0** complete/valid, **1** incomplete/unsealed, **2** invalid, **3** no usable
+report. Local-only anchoring is expected without a server. Read research output privately: check
+that native evidence and real model request/response traffic were retained, inspect gaps and
+undecoded formats, and record task success and termination separately. Integrity exit 0 alone
+can occur with no model traffic. Unknown semantics may honestly be capture-only. Neither real
+traces nor research NDJSON belongs in a public PR; even reports can contain excerpts.
+
+**Server delivery is a practice run, explicitly.** In the dedicated test config, with an approved
+server that accepts the new connector:
+
+```sh
+goalcup login --server <approved-server-url>
+goalcup prep --harness <id> --repo https://github.com/<owner>/<empty-public-repo> --work-root <absolute-folder-outside-git>
+goalcup start --harness <id> --practice
+```
+
+Finish prep's human steps and the separate login/run approvals; the [participant guide](PARTICIPANT-GUIDE.md)
+explains them. Let the server's practice deadline stop, seal and upload the run. Use `goalcup entries`
+and `goalcup upload <entry>` if delivery is pending, verify the resulting trace, and check signed
+acknowledgement through the terminal. Run prep again to check its practice step. See
+[event qualification](#getting-a-harness-into-the-event) for the contributor report and organizer run.
+
+Headless connectors still use the synthetic checks, but real `start` needs `--goal-file <path>`.
+Prep and continue currently support chat mode only; use the measured isolated setup in the
+headless harness's facts sheet, with no provider-key handoff or improvised app-wide config.
+
 ## What the tracer does
 
 The tracer starts one harness for a participant and records two things:
@@ -22,9 +110,9 @@ At the end the tracer seals both into one hash-linked trace. `goalcup-verify --c
 <trace>` checks it.
 
 The tracer never sets a model base URL, never writes app-wide config (`~/.claude`, `~/.codex`,
-`~/.hermes`), and never prompts the agent. Each run has its own private `HOME`. An API key goes to
-the harness process only, and the tracer checks that no part of it reaches the trace. Sign-in
-hosts are tunnelled and not recorded.
+`~/.hermes`), and never prompts the agent. Harness homes are isolated from the user's normal
+stores; a connector may keep its private home across serialized runs. The harness's own sign-in/setup stores its login there. The tracer never
+sees, forwards or stores a provider key (D61). Sign-in hosts are tunnelled and not recorded.
 
 A harness is data. A contribution has no `.rs` file:
 
@@ -110,7 +198,7 @@ is the harness executable. Run every command from the repository root.
    ```sh
    cargo nextest --version || cargo install cargo-nextest --locked
    cargo fetch --locked
-   cargo build
+   cargo build --offline
    ```
    Expect `Finished` and exit 0. After this the gate runs cargo with `--offline`. Warm timings:
    `check-connector.sh` about 1 to 1.5 minutes, `gate.sh fast` about 2.5 minutes. Keep one cargo
@@ -204,8 +292,8 @@ is the harness executable. Run every command from the repository root.
    `connectors/<id>/`. Never edit a pin by hand.
 7. **Regenerate the goldens.**
    ```sh
-   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-cli --test it harness_contract_golden::
-   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test -p goalcup-daemon --test it harness_contract_golden::
+   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-cli --test it harness_contract_golden::
+   GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-daemon --test it harness_contract_golden::
    git status --short crates/goalcup-cli/tests/fixtures/harness-golden
    ```
    Expect both `test result: ok.`, a new `<id>.json` and `<id>.daemon.json`, and no other
@@ -244,13 +332,12 @@ is the harness executable. Run every command from the repository root.
    Fix the field that the `right` side came from.
 10. **Run the gate.** `sh scripts/gate.sh fast`. Expect the last line `gate fast: PASS in <N>s`.
 11. **Review your own diff** against the [reviewer checklist](#reviewing-a-connector-pr).
-    Optional, on your own account (a trial, not a judged entry): run `cargo build` (the pins are
-    compiled in), then one short run with `target/debug/goalcup start --harness <id>`, and check it
-    with `target/debug/goalcup-verify --capture-integrity <trace>`. A pinned id needs no `--dev`.
-    Put nothing from a real trace in the PR. It holds your transcript.
+    For a real trial, use the fresh-config [local smoke](#test-a-connector), or choose the
+    explicit `--practice` server path there. Plain `start` with a logged-in config can select
+    competition mode. Put no real trace or private research report in the PR.
 12. **Open the PR** (next section).
 
-Fast loop while fixing schema errors: `cargo test -p goalcup-protocol --test it --
+Fast loop while fixing schema errors: `cargo test --offline -p goalcup-protocol --test it --
 harness_conformance:: connector_pins::`.
 
 <a id="what-goes-in-the-pr"></a>
@@ -310,6 +397,7 @@ moves). Never spell around a rule.
 | 12 | Other refusals | no refused env name, argv path or custom regex is needed | core change |
 | 13 | Argv and env | always, when no generic rule refuses them | refused by row 12 |
 | 14 | Chat-mode sign-in | the harness keeps its sign-in in its own config home (a login command, or the macOS Keychain) | core change: chat mode cannot pass an env-only API key |
+| 15 | Participant-selected model host without a config-home variable | `model_host_from` needs `home.env` and `config_home = "shared"` | facts only/core change; a shared run HOME with per-run config can use fixed host rows only |
 
 The security lists (row 7 and the redaction regex in row 12) are closed on purpose. A CA mode
 is a trust statement about the participant's machine, so the two modes and the CA-name shape are
@@ -450,9 +538,10 @@ qualification.
 
 A harness can join until the last release, **6 Nov 2026 12:00 UTC**. After a connector PR merges:
 
-1. You run one real practice run with the harness: `goalcup start --harness <id> --practice`, then
-   `goalcup-verify --capture-integrity <trace>`. Send the verifier's report (never the transcript) to
-   goalcup@agentcommunity.org or attach it to the PR.
+1. Follow the [server practice setup](#test-a-connector): login to the approved server, complete
+   prep, then explicitly run `goalcup start --harness <id> --practice`. Verify the sealed trace
+   with `goalcup-verify --capture-integrity <trace>`. Send that integrity report (never the
+   transcript or research NDJSON) to goalcup@agentcommunity.org or attach it to the PR.
 2. The organizers run a 1-hour test run of the harness themselves before it ships.
 3. Model access for testing: if the harness lets you pick the model provider, the organizers can
    supply test API access. If the model comes only through the harness's own subscription and there

@@ -265,17 +265,21 @@ disclosure and no-side-channel rules.
 Cloud and remote execution modes (Claude Code on the web, Codex cloud, Cursor cloud agents, CI runners,
 remote servers) are not eligible, because they leave no local trace.
 
-This build ships two connectors for chat mode, on macOS, Linux and Windows through WSL2:
+Every connector shipped with the participant build is available to participants. Run
+`goalcup doctor --harness all` for that build's roster; the source [facts index](harnesses/README.md)
+records platform measurements and capture/decoder limits. Current chat-mode connectors are:
 
 | Harness | Id | Notes |
 |---|---|---|
-| Claude Code CLI | `claude-code-cli` | Any build. The build that ran is recorded. |
-| Codex CLI | `codex-cli` | The tracker launches the real binary, not the npm wrapper. |
+| Claude Code CLI | `claude-code-cli` | The build that ran is recorded. |
+| Codex CLI | `codex-cli` | Launch the native binary, not the npm wrapper. |
+| Hermes Agent | `hermes-cli` | Its own setup keeps provider/login state; native snapshots are capture-only. |
+| Amp CLI | `amp-cli` | Native metadata is not a transcript; both sources are capture-only. |
 
-`hermes-cli` also ships as a connector. Other harnesses can join through a merged, tested
-connector pull request before the window opens; the supported list is final when the window opens.
-Only modes that meet the minimum capture contract and pass the public conformance suite appear in
-the supported list. A harness not on it has no recording path, and its runs are not entries.
+Other harnesses can join through the [connector process](HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)
+before the last release. The supported list is final when the start window opens. A harness
+without a shipped, tested connector has no supported recording path and its runs are not entries.
+Source inclusion, event qualification and actual platform measurements remain distinct.
 
 ## Submission
 

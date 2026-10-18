@@ -29,7 +29,8 @@ on version X", or "unknown". Write "unknown" rather than guess. "Same as macOS" 
 
 The `Status:` line takes one of three values:
 
-- **shipped connector**: `connectors/<id>/` is on main, or the same PR adds it.
+- **shipped connector**: `connectors/<id>/` is on main, or the same PR adds it. This is source
+  inclusion, not a claim that participant binaries are published or event practice is complete.
 - **core ready, connector pending**: no row of the core-change table in
   [HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md#do-i-need-a-core-change) needs a core change, but no
   connector exists yet.

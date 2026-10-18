@@ -13,6 +13,7 @@ of everything acknowledged ([cheat checklist](docs/CHEAT-CHECKLIST.md)).
 Support: goalcup@agentcommunity.org. Participants: start with
 [docs/PARTICIPANT-GUIDE.md](docs/PARTICIPANT-GUIDE.md). This README is for people who build, test
 or change the tracer. Agents: start with [AGENTS.md](AGENTS.md).
+Adding a harness? Start with [Add and test a connector](docs/HARNESS-ONBOARDING.md#quick-path).
 
 ## Install
 
@@ -46,11 +47,13 @@ This builds `goalcup`, `goalcup-daemon` and `goalcup-verify`. A binary copied ou
 ## Quickstart
 
 A local run needs no login and uploads nothing. You need a supported platform ([Platforms](#platforms)),
-a Claude or ChatGPT subscription, and Claude Code or Codex CLI installed. The tracer runs the build
-it finds on `PATH` and records which build ran.
+a shipped CLI harness installed with the account or model service it uses. All shipped connectors
+are available to participants; `goalcup doctor --harness all` lists the installed roster. The tracer
+runs the build on `PATH` and records it. Use a fresh config for the local example below; a config
+that has been logged into the server follows the server-run path instead.
 
 ```sh
-export GOALCUP_CONFIG_DIR="$HOME/goalcup"         # where the tracer keeps its state
+export GOALCUP_CONFIG_DIR="$(mktemp -d "$HOME/goalcup-local.XXXXXX")"  # fresh local-only test state
 goalcup prep --harness claude-code-cli            # sign in once in the tracer's own harness home (press Enter when it asks)
 # then, from an empty folder outside any git repository:
 goalcup doctor --harness claude-code-cli          # optional: checks the connector files, the harness on PATH and the daemon
@@ -75,7 +78,7 @@ A run on the server needs `goalcup login`, `goalcup prep` and a practice run fir
 |---|---|
 | macOS, Apple silicon | Measured. Use the arm64 build of the tracer and of the harness. |
 | macOS, Intel | Builds. No run measured. |
-| Linux, arm64 | Fast gate passes in Docker. No logged-in harness run measured. See [Linux](#linux). |
+| Linux, arm64 | Docker gates and logged-in Codex/Hermes staging practices passed. Longer runs remain pending. See [Linux](#linux) and [current measurements](TODO.md#wp0-measure). |
 | Linux, x86_64 | Reservation tests and a no-login harness smoke pass on a hosted runner. The full suites are not measured. |
 | Windows | Run the tracer in WSL2. See [Windows](#windows-use-wsl2). Native Windows is planned. |
 
@@ -184,8 +187,10 @@ refuses a tag that differs from `Cargo.toml`. Details and how to try the build b
 The reference behind the quickstart. Every flag is in `goalcup <command> --help`; config keys are
 in [OPERATING](docs/OPERATING.md#running-the-daemon).
 
-- **Where things go.** A run's folder (the harness `HOME`, and for a local run its `workspace/`) is
+- **Where things go.** A run's folder (including a local run's `workspace/`) is
   made in the folder you run `goalcup start` from, or beside the goal file for a headless harness.
+  Its harness homes are isolated: connectors may keep a shared config home or shared `HOME`
+  under the tracer configuration directory for sign-in across serialized runs.
   The sealed trace is under the daemon's `artifact_root`. A run on the server works in a clone of
   the participant's GitHub repository instead.
 - **What the harness sees.** Its environment is built from nothing. Of your shell only these reach

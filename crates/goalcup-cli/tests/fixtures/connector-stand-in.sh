@@ -14,6 +14,8 @@
 #   KIT_CA_VARS       the connector's `capture.ca.env` names, space-separated;
 #   KIT_ID_STREAM     `stdout`, `stderr` or empty: where the identity line goes;
 #   KIT_ID_LINE       the identity line in the connector's own grammar, or empty;
+#   KIT_SESSION_ARG   preassigned identity's 1-based argument position, or 0;
+#   KIT_SESSION_PREFIX text before the id in that argument (for --session-id=<id>, for example);
 #   KIT_CONFIGURE     the connector's `capture.configure` commands, one per line, each argument
 #                     list joined by spaces (empty: none).
 #
@@ -38,6 +40,20 @@ if [ -n "$KIT_CONFIGURE" ] && printf '%s\n' "$KIT_CONFIGURE" | grep -Fxq -- "$*"
   env > "$out/configure.env"
   echo "kit: configured"
   exit 0
+fi
+# `goalcup start` mints a 36-byte UUID. Read it from the connector's declared argv slot,
+# preserving argv, and use it in the native path rather than inventing a different id.
+if [ "$KIT_SESSION_ARG" -gt 0 ]; then
+  index=0
+  for arg in "$@"; do
+    index=$((index + 1))
+    if [ "$index" -eq "$KIT_SESSION_ARG" ]; then
+      value=${arg#"$KIT_SESSION_PREFIX"}
+      session=$(printf '%s' "$value" | cut -c 1-36)
+      KIT_NATIVE_FILE="${KIT_NATIVE_FILE%%\{id\}*}$session${KIT_NATIVE_FILE#*\{id\}}"
+      break
+    fi
+  done
 fi
 # One argument per line; no arguments is an empty file (printf would print one empty line).
 : > "$out/argv"

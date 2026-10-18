@@ -92,16 +92,18 @@ decoder is added.
   `PATH` and records `Launch.harness_build` (program digest, running-image digest, platform) and
   the version the harness prints (D53).
 - **Discovery.** `$GOALCUP_CONNECTORS_DIR`, else `../share/goalcup/connectors` or
-  `../../connectors` beside the binary. The source tree has `codex-cli`, `claude-code-cli` and
-  `hermes-cli`. A release tarball carries the first two.
-- **Homes.** Every run gets a fresh `HOME`. Codex and Claude Code use a shared isolated config
+  `../../connectors` beside the binary. Release packaging discovers every committed
+  [connector folder](../connectors); each has a [facts sheet](harnesses/README.md).
+- **Homes.** Harness homes are isolated from the user's normal stores. Codex and Claude Code use a shared isolated config
   home (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) under `<config>/capture-homes/<id>`; runs on one are
   serialized by a lock (D39). Claude Code's run home links the macOS Keychains directory. Hermes
   shares one `HERMES_HOME` the same way; the participant's own Hermes setup keeps its provider and
-  key there, and the tracer passes it none (D61).
+  key there, and the tracer passes it none (D61). Amp instead keeps one isolated shared `HOME`
+  across serialized runs. Other run homes are fresh, according to the connector.
 - **Contract kit.** Four synthetic cases (`controlled-workload`, `synthetic-preassigned`,
   `synthetic-stderr-token` and `synthetic-stdout-json`) under `crates/goalcup-cli/tests/fixtures/harness-kit/` test the
-  shared modules with stand-ins. A new connector adds a case. A passing kit says "synthetic
+  shared modules with stand-ins. A headless connector adds a case; chat connectors use the
+  manifest-driven shared stand-in. A passing kit says "synthetic
   tested", not "works with the real harness".
 
 ## 5. The two legs
