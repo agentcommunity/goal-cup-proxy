@@ -1,9 +1,20 @@
 # goal-cup
 
-Goal Cup is a one-prompt, 168-hour coding-agent contest. This repository is the tracer. It
-launches a participant's coding agent (the harness) on their machine, records the agent's model
-traffic and its own session files, seals them into one hash-chained trace, and uploads the trace
-to the Goal Cup server. `goalcup-verify` checks a trace offline.
+This repository is a tracer for research into running coding agents. Its target is to retain as
+much useful evidence of agent work as possible across harnesses and macOS, Linux and Windows,
+within explicit capture and privacy boundaries. Current platform support is listed below;
+native Windows remains planned.
+
+The tracer launches a coding agent (the harness), records declared model traffic and native
+session artifacts, and seals them into one hash-chained trace. `goalcup-verify` checks a trace
+offline and produces research observations through versioned decoders. Goal Cup's one-prompt,
+168-hour contest is one use of that evidence; server runs upload to the Goal Cup server.
+
+The [research target](docs/RESEARCH-TARGET.md) defines the intended evidence and acceptance
+criteria. The [local research handoff](docs/LOCAL-RESEARCH-HANDOFF.md) records the next validation
+work. Tool calls and results visible in the agent's context are the target; separate collection
+of full tool-output files is not required. Subagent conversations are valuable evidence in their
+own right, and their coverage must be measured for each harness.
 
 The chain catches a stray edit and accidental corruption. A trace that never reached the server
 can be edited, re-hashed and re-sealed, and it still verifies. A trace uploaded during the run
@@ -31,13 +42,15 @@ add `-s -- --version <x.y.z>` after `sh` for a particular release. The builds ar
 download by `curl` is not quarantined on macOS, so they run. There is no Homebrew tap; native
 Windows comes later. The release workflow and the script:
 [packaging/README.md](packaging/README.md).
+If no binary release is published yet, use the source-build steps below.
 
 <a id="build"></a>**From source.** You need Rust 1.99 (`rust-toolchain.toml` selects it; install
 [rustup](https://rustup.rs)), a C compiler (macOS: the Xcode command line tools; Debian or
 Ubuntu: `build-essential`), `python3` and `shasum` or `sha256sum`. From the repository root:
 
 ```sh
-cargo build --release
+cargo fetch --locked       # one-time dependency download
+cargo build --release --offline
 export PATH="$PWD/target/release:$PATH"
 ```
 
@@ -48,17 +61,19 @@ This builds `goalcup`, `goalcup-daemon` and `goalcup-verify`. A binary copied ou
 
 A local run needs no login and uploads nothing. You need a supported platform ([Platforms](#platforms)),
 a shipped CLI harness installed with the account or model service it uses. All shipped connectors
-are available to participants; `goalcup doctor --harness all` lists the installed roster. The tracer
+are available to participants; `goalcup doctor --harness all` checks the shipped roster and its
+install status. It can exit 1 when an optional shipped harness is not installed. The tracer
 runs the build on `PATH` and records it. Use a fresh config for the local example below; a config
 that has been logged into the server follows the server-run path instead.
 
 ```sh
 export GOALCUP_CONFIG_DIR="$(mktemp -d "$HOME/goalcup-local.XXXXXX")"  # fresh local-only test state
 goalcup prep --harness claude-code-cli            # sign in once in the tracer's own harness home (press Enter when it asks)
-# then, from an empty folder outside any git repository:
+RUN_DIR="$(mktemp -d "$HOME/goalcup-run.XXXXXX")"
+cd "$RUN_DIR"                                    # keep the run workspace outside any git repository
 goalcup doctor --harness claude-code-cli          # optional: checks the connector files, the harness on PATH and the daemon
 goalcup start --harness claude-code-cli           # the harness opens here: answer its trust question, type your prompt, press Enter; exit the harness (Claude Code: /exit) to end the run
-goalcup-verify --capture-integrity <trace>        # copy the `verify:` line that start printed
+# After start exits, run the exact `verify:` command it printed.
 ```
 
 `prep` steps that need a login print `[todo]`. That is fine for a local run. A local run asks for no
@@ -132,12 +147,12 @@ Once per machine:
 
 ```
 cargo install cargo-nextest --locked
-cargo fetch --locked          # the gate runs cargo --offline
+cargo fetch --locked          # one-time dependency download; project build and gate commands use --offline
 ```
 
 - **fast:** the version check (`scripts/check-version.py`: the version is written in the workspace
-  `Cargo.toml` only), `cargo build --workspace`, `cargo fmt --all --check`, `cargo clippy
-  --workspace --all-targets -- -D warnings`, every test except the slow tier (under
+  `Cargo.toml` only), `cargo build --workspace --offline`, `cargo fmt --all --check`, `cargo clippy
+  --workspace --all-targets --offline -- -D warnings`, every test except the slow tier (under
   cargo-nextest), then the doctests. About a minute warm.
 - **full:** fast, plus the slow tier, the CLI's `#[ignore]`d end-to-end tests
   (`m2_synthetic_vertical`, `capture_failure_campaign`, `upload_worker`), the Worker's own tests
@@ -175,10 +190,13 @@ A test that guards one of these is never deleted. It may move tier.
 ## Releasing
 
 The workspace `version` in `Cargo.toml` is the only place a version is written; the gate fails on
-any other copy. `main` is protected, so a release is two steps that never push `main`:
+any other copy. The active repository ruleset protects `main`, and the release script never pushes
+it directly:
 `sh scripts/release.sh prepare <x.y.z>` opens a pull request that bumps the version (it does
-nothing if `origin/main` already has it), and, once that is merged, `sh scripts/release.sh tag
-<x.y.z>` tags `origin/main` and pushes only the tag. The tag starts the release workflow, which
+nothing if `origin/main` already has it). After the version PR is merged, run the full gate on that
+versioned `origin/main` commit and the separate `sh scripts/linux-check.sh`, then
+`sh scripts/release.sh tag <x.y.z>` tags that commit and pushes
+only the tag. The tag starts the release workflow, which
 refuses a tag that differs from `Cargo.toml`. Details and how to try the build by hand:
 [packaging/README.md](packaging/README.md#cutting-a-release).
 
@@ -220,7 +238,8 @@ in [OPERATING](docs/OPERATING.md#running-the-daemon).
 **`goalcup-verify --capture-integrity` exit codes:** 0 complete
 and valid, 1 incomplete or not sealed, 2 invalid (including a torn last record), 3 no usable report.
 Exit 0 says the record is complete and consistent. It is not a judged result.
-`goalcup-verify --research-json <trace> --output <REPORT.ndjson>` writes the private research report.
+`goalcup-verify --research-json "$TRACE_DIR" --output "$REPORT_PATH"` writes a private research
+report; set those variables to an immutable trace directory and a new `.ndjson` path first.
 
 ## More
 

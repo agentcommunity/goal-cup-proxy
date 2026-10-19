@@ -12,6 +12,9 @@ The sheets so far: [codex-cli](codex-cli.md) (the worked example), [claude-code-
 [hermes-cli](hermes-cli.md) and [amp-cli](amp-cli.md). The Amp sheet is a draft that Goal Cup wrote for the
 Amp team to correct; its connector records a metadata log, not a transcript, as the native leg.
 
+Current research validation evidence and its limits are tracked in the
+[coverage matrix](../research/coverage-matrix.md), separately from these capability facts.
+
 ## What is public
 
 Everything in a sheet is public. A sheet holds facts from your documentation, or that anyone can

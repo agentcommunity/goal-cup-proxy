@@ -4,9 +4,11 @@
 #
 # - A `v*` tag push builds and publishes the release for that tag. The tag must equal
 #   `v` plus the workspace version in Cargo.toml, because the binaries print that version and
-#   the smoke tests check it. `sh scripts/release.sh <x.y.z>` sets the version and makes the tag.
+#   the smoke tests check it. Use `sh scripts/release.sh prepare <x.y.z>` for the version PR when
+#   needed, then merge it, run the full gate and separate Linux check on `origin/main`, and use `sh scripts/release.sh tag
+#   <x.y.z>`.
 # - A manual start builds and packages only: the tarballs are the run's artifacts, and nothing
-#   is published. Use it to try a release before tagging.
+#   is published. Use it to try package builds before pushing a release tag.
 #
 # It runs on tags and by hand only, never on pull requests; everyday CI is ci.yml. Layout and
 # publishing steps: packaging/README.md.
@@ -62,8 +64,10 @@ jobs:
       - run: >-
           rustup toolchain install --profile minimal --target "$TARGET"
           "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+      # Fetch the locked target graph, including manifests used by licence metadata, once.
+      - run: cargo fetch --locked --target "$TARGET"
       - run: >-
-          cargo build --release --locked --target "$TARGET"
+          cargo build --offline --release --locked --target "$TARGET"
           -p goalcup-cli -p goalcup-daemon -p goalcup-verifier
       - run: sh scripts/package-release.sh "$TARGET" "$VERSION" dist
       # Unpacks the tarball and runs both binaries and `goalcup doctor` from it; a failure here

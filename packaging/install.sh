@@ -87,6 +87,52 @@ sha256() {
     fi
 }
 
+# Restore one promoted destination. The staging files themselves record which renames
+# completed, including when a signal arrives between a rename and the next shell command.
+restore() {
+    destination=$1
+    slot=$2
+    kind=$3
+    if [ -e "$slot/old" ] || [ -L "$slot/old" ]; then
+        if [ "$kind" = file ]; then
+            rm -f "$destination" || return 1
+        else
+            rm -rf "$destination" || return 1
+        fi
+        mv "$slot/old" "$destination" || return 1
+    elif [ ! -e "$slot/new" ]; then
+        if [ "$kind" = file ]; then
+            rm -f "$destination" || return 1
+        else
+            rm -rf "$destination" || return 1
+        fi
+    fi
+}
+
+cleanup() {
+    cleanup_status=$1
+    trap - EXIT
+    trap '' HUP INT TERM
+    set +e
+    rollback_failed=0
+    if [ "$promoting" = 1 ] && [ "$committed" = 0 ]; then
+        for binary in goalcup-verify goalcup-daemon goalcup; do
+            restore "$prefix/bin/$binary" "$bin_stage/$binary" file || rollback_failed=1
+        done
+        restore "$prefix/share/goalcup" "$share_stage" directory || rollback_failed=1
+    fi
+    if [ "$rollback_failed" = 1 ]; then
+        printf 'goalcup install: rollback could not finish; recoverable files remain in %s and %s\n' \
+            "$bin_stage" "$share_stage" >&2
+        cleanup_status=1
+    else
+        [ -z "$bin_stage" ] || rm -rf "$bin_stage"
+        [ -z "$share_stage" ] || rm -rf "$share_stage"
+    fi
+    rm -rf "$work"
+    exit "$cleanup_status"
+}
+
 main() {
     version="${GOALCUP_VERSION:-}"
     prefix="${GOALCUP_PREFIX:-}"
@@ -122,7 +168,11 @@ main() {
     fi
 
     work=$(mktemp -d)
-    trap 'rm -rf "$work"' EXIT
+    bin_stage=""
+    share_stage=""
+    promoting=0
+    committed=0
+    trap 'cleanup $?' EXIT
     trap 'exit 130' HUP INT TERM
 
     say "Looking for the $target build ..."
@@ -157,31 +207,55 @@ main() {
         fi
     done
 
-    mkdir -p "$prefix/bin" "$prefix/share"
-    # The connectors first and whole: each pin covers every byte of its folder, so the folder is
-    # replaced, never merged into an older one. A rename in the same directory is atomic.
-    share="$prefix/share/goalcup"
-    cp -R "$root/share/goalcup" "$prefix/share/goalcup.new.$$"
-    cp "$root/LICENSE" "$root/NOTICE" "$root/THIRD-PARTY-LICENSES.md" "$prefix/share/goalcup.new.$$/" 2>/dev/null || true
-    if [ -e "$share" ]; then
-        mv "$share" "$prefix/share/goalcup.old.$$"
-    fi
-    mv "$prefix/share/goalcup.new.$$" "$share"
-    rm -rf "$prefix/share/goalcup.old.$$"
-    # Each binary is copied beside its place and renamed over it, so a goalcup that is running now
-    # keeps its old file and no copy is ever half written.
+    # Refuse conflicting user paths before creating anything in the prefix. In particular,
+    # mv to a directory would put a binary inside it and falsely report a successful install.
     for binary in goalcup goalcup-daemon goalcup-verify; do
-        cp "$root/bin/$binary" "$prefix/bin/.$binary.new.$$"
-        chmod 755 "$prefix/bin/.$binary.new.$$"
-        mv -f "$prefix/bin/.$binary.new.$$" "$prefix/bin/$binary"
+        destination="$prefix/bin/$binary"
+        if [ -d "$destination" ] || { [ -e "$destination" ] && [ ! -f "$destination" ]; }; then
+            die "$destination is not a regular file; nothing was installed"
+        fi
     done
+    share="$prefix/share/goalcup"
+    if { [ -e "$share" ] || [ -L "$share" ]; } && [ ! -d "$share" ]; then
+        die "$share is not a directory; nothing was installed"
+    fi
+
+    mkdir -p "$prefix/bin" "$prefix/share"
+    # Stage every artifact before changing any installed file. Separate private directories
+    # keep each promotion on the destination filesystem, even when bin and share differ.
+    bin_stage=$(mktemp -d "$prefix/bin/.goalcup-install.XXXXXX")
+    share_stage=$(mktemp -d "$prefix/share/.goalcup-install.XXXXXX")
+    cp -R "$root/share/goalcup" "$share_stage/new"
+    cp "$root/LICENSE" "$root/NOTICE" "$root/THIRD-PARTY-LICENSES.md" "$share_stage/new/"
+    for binary in goalcup goalcup-daemon goalcup-verify; do
+        mkdir "$bin_stage/$binary"
+        cp "$root/bin/$binary" "$bin_stage/$binary/new"
+        chmod 755 "$bin_stage/$binary/new"
+    done
+
+    # Retain the old files until all promotions and the final executable check succeed.
+    # EXIT and handled signals restore them on failure. These individual renames are not a
+    # crash-atomic transaction: SIGKILL or power loss can require manual recovery.
+    promoting=1
+    if [ -e "$share" ] || [ -L "$share" ]; then
+        mv "$share" "$share_stage/old"
+    fi
+    mv "$share_stage/new" "$share"
+    for binary in goalcup goalcup-daemon goalcup-verify; do
+        if [ -e "$prefix/bin/$binary" ] || [ -L "$prefix/bin/$binary" ]; then
+            mv "$prefix/bin/$binary" "$bin_stage/$binary/old"
+        fi
+        mv "$bin_stage/$binary/new" "$prefix/bin/$binary"
+    done
+    installed_version=$("$prefix/bin/goalcup" --version)
+    committed=1
 
     # Show the folder the way a person types it: ~ for the home folder.
     where="$prefix/bin"
     case $where in
     "${HOME:-/nonexistent}"/*) where="~${where#"$HOME"}" ;;
     esac
-    say "Installed $("$prefix/bin/goalcup" --version) in $where."
+    say "Installed $installed_version in $where."
     found=$(command -v goalcup 2>/dev/null || true)
     if [ -n "$found" ] && [ "$found" != "$prefix/bin/goalcup" ]; then
         say ""

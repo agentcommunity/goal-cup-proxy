@@ -1,17 +1,24 @@
 //! The Codex rollout-JSONL format (`codex-jsonl`).
 //!
-//! Facts measured on `spikes/codex-cli/fixtures/rollout-main-01a06614.jsonl` (Codex CLI
-//! 0.153.0, TUI launch) and on real `exec`-launch chains. 0.153.0 exactly matches the
-//! connector's `tested_version_range`.
+//! Decoder version 2: measured on Codex CLI 0.153.0 CLI/exec rollouts and a 0.156.1
+//! native child containing inherited context. Decoder version is independent of harness version.
 //!
-//! **Authorship.** `internal_chat_message_metadata_passthrough.content_item_kinds` containing
-//! `"user.text"` on a `response_item` message of `role: "user"` is the human marker (an
-//! injected `<environment_context>` user-role message carries
-//! `["environments.environment_context"]` instead). It counts only on a stream whose
-//! `session_meta.payload.source` is `"cli"` or `"vscode"`. An `exec` launch has no input
-//! channel: its first marked message is the tracker's own delivered goal, which carries the
-//! identical marker (measured on real bytes), and no later one is claimed either. A stream
-//! with no `session_meta` before the message has an unknown launch, so nothing on it is claimed.
+//! **Authorship.** The first `session_meta` fixes source authority for this stream, even
+//! when malformed or ambiguous. A `cli`/`vscode` source with no child/fork indicators allows
+//! the positive `user.text` marker on a user-role response item; an id is not required.
+//! Exec input, child assignments and copied parent prompts never become new human input.
+//! Later copied headers cannot promote the stream. Missing headers and loss before the first
+//! header leave authority unavailable; established identity survives explicit capture loss.
+//!
+//! **Source-session provenance.** Parsed observations may carry `fields.native_context`:
+//! `role` (interactive/headless/subagent/fork/unknown), supplied `launch_source`, bounded own
+//! `session_id` from `payload.id` only, and agreeing supplied `parent_session_id`. `header_source`
+//! references the first header's retained parts; `identity_field`/`parent_field` name the supplied
+//! fields used. IDs over 256 bytes or inconsistent parent IDs are omitted. A parent-valued
+//! `payload.session_id` never replaces the child's own id. `history_scope: may_include_inherited`
+//! qualifies child/fork containers: it labels neither each record's author nor its freshness.
+//! All copied tool/model/usage occurrences remain; no cross-stream deduplication is performed.
+//! Unsupported records remain source-referenced unknowns, including session metadata itself.
 
 use super::super::api::kinds;
 use super::{NativeFormat, NativeOut, dotted};
@@ -21,12 +28,17 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Codex;
 
-/// What a Codex stream remembers across its records: two small fields.
+/// Bounded source identity and authorship authority belonging to one native stream.
 #[derive(Default)]
 pub struct CodexStream {
     /// The session's own declared `session_meta.payload.source`, once that record has been
     /// seen on this stream. `None` until then (or if it never arrives).
-    launch: Option<String>,
+    launch: Option<&'static str>,
+    /// The first header is authoritative even when unusable. Loss before it also closes
+    /// this gate: a later inherited parent header cannot impersonate the missing owner.
+    header_seen: bool,
+    /// A small, bounded projection of the first header, never replaced by copied headers.
+    native_context: Option<Value>,
     /// True once this `exec` stream's one delivered-goal record has been labelled as such.
     goal_excluded: bool,
 }
@@ -34,19 +46,21 @@ pub struct CodexStream {
 impl NativeFormat for Codex {
     const HINT: &'static str = "codex-jsonl";
     const ID: &'static str = "codex-native";
-    const VERSION: &'static str = "0.153.0";
+    const VERSION: &'static str = "2";
     type Stream = CodexStream;
+
+    fn lost_context(stream: &mut CodexStream) {
+        // Established identity survives loss; the framework still reports that loss.
+        stream.header_seen = true;
+    }
 
     fn interpret(v: &Value, stream: &mut CodexStream, out: &mut NativeOut<'_>) {
         let record_type = v.get("type").and_then(Value::as_str);
-        // Bookkeeping only (no observation shape changes): remembers whether this stream's
-        // session was launched as `exec` (its argv goal is not human input) or something
-        // else. `session_meta` is still counted as `unknown{unrecognized}` below, unchanged.
-        if record_type == Some("session_meta") {
-            stream.launch = dotted(v, "payload.source")
-                .and_then(Value::as_str)
-                .map(String::from);
+        if record_type == Some("session_meta") && !stream.header_seen {
+            stream.header_seen = true;
+            stream.bind_header(v, out);
         }
+        out.set_native_context(stream.native_context.as_ref());
         match record_type {
             Some("turn_context") => {
                 if let Some(model) = dotted(v, "payload.model").and_then(Value::as_str) {
@@ -66,6 +80,83 @@ impl NativeFormat for Codex {
             Some("event_msg") => event_msg(v, out),
             other => out.unrecognized(other),
         }
+    }
+}
+
+/// Context strings are display/provenance identifiers, not arbitrary header content. The
+/// three possible parent fields and one own id are each capped; no history-sized state.
+const MAX_CONTEXT_ID_BYTES: usize = 256;
+
+fn context_id(value: &Value) -> Option<&str> {
+    value
+        .as_str()
+        .filter(|s| !s.is_empty() && s.len() <= MAX_CONTEXT_ID_BYTES)
+}
+
+impl CodexStream {
+    fn bind_header(&mut self, record: &Value, out: &NativeOut<'_>) {
+        let payload = record.get("payload").unwrap_or(&Value::Null);
+        let source = payload.get("source").and_then(Value::as_str);
+        let thread_source = payload.get("thread_source");
+        let subagent = dotted(payload, "source.subagent").is_some_and(|v| !v.is_null())
+            || thread_source.and_then(Value::as_str) == Some("subagent");
+        let parents: Vec<_> = [
+            (
+                "payload.source.subagent.thread_spawn.parent_thread_id",
+                dotted(payload, "source.subagent.thread_spawn.parent_thread_id"),
+            ),
+            ("payload.parent_thread_id", payload.get("parent_thread_id")),
+            ("payload.forked_from_id", payload.get("forked_from_id")),
+        ]
+        .into_iter()
+        .filter_map(|(path, v)| v.filter(|v| !v.is_null()).map(|v| (path, v)))
+        .collect();
+        let ordinary_thread =
+            thread_source.is_none_or(|v| v.is_null() || v.as_str() == Some("user"));
+        let role = if subagent {
+            "subagent"
+        } else if !parents.is_empty() {
+            "fork"
+        } else if !ordinary_thread {
+            "unknown"
+        } else {
+            match source {
+                Some("cli" | "vscode") => "interactive",
+                Some("exec") => "headless",
+                _ => "unknown",
+            }
+        };
+        self.launch = match (role, source) {
+            ("interactive", Some("cli")) => Some("cli"),
+            ("interactive", Some("vscode")) => Some("vscode"),
+            ("headless", Some("exec")) => Some("exec"),
+            _ => None,
+        };
+        let mut context = json!({"role": role, "header_source": out.source_ref()});
+        if let Some(source @ ("cli" | "vscode" | "exec")) = source {
+            context["launch_source"] = json!(source);
+        } else if dotted(payload, "source.subagent.thread_spawn").is_some() {
+            context["launch_source"] = json!("subagent.thread_spawn");
+        }
+        // In measured forked sources session_id can still name the parent. Only id is
+        // the own identity; missing/oversize id does not remove ordinary CLI eligibility.
+        if let Some(id) = payload.get("id").and_then(context_id) {
+            context["session_id"] = json!(id);
+            context["identity_field"] = json!("payload.id");
+        }
+        if let Some((path, first)) = parents.first()
+            && let Some(parent) = context_id(first)
+            && parents
+                .iter()
+                .all(|(_, value)| context_id(value) == Some(parent))
+        {
+            context["parent_session_id"] = json!(parent);
+            context["parent_field"] = json!(path);
+        }
+        if matches!(role, "subagent" | "fork") {
+            context["history_scope"] = json!("may_include_inherited");
+        }
+        self.native_context = Some(context);
     }
 }
 
@@ -97,7 +188,7 @@ fn response_item(v: &Value, stream: &mut CodexStream, out: &mut NativeOut<'_>) {
             // The marker counts only in a session launched with an input channel. An
             // `exec` stream's first marked message is the tracker's delivered goal; no
             // marked message on an `exec` or unknown-launch stream is claimed human.
-            match stream.launch.as_deref() {
+            match stream.launch {
                 Some("cli" | "vscode") => {}
                 Some("exec") if !stream.goal_excluded => {
                     stream.goal_excluded = true;

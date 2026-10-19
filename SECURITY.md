@@ -5,8 +5,8 @@ tracer or reviews a change to it.
 
 ## Supported versions
 
-The latest tagged release and `main`. The first binary release is due 23 to 24 Oct 2026. Release
-tarballs are unsigned and not notarized ([packaging/README.md](packaging/README.md)).
+The latest tagged release and `main`. Release tarballs are unsigned and not notarized
+([packaging/README.md](packaging/README.md)).
 
 ## Reporting a vulnerability
 

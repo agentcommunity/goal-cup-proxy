@@ -79,9 +79,11 @@
 //! **Time.** `observed` spans the contributing retained segments in their own clock: an interval,
 //! never a latency. A provider-supplied time stays a separate `provider_created`.
 //!
-//! **Measured forms.** None yet: the live Hermes/DeepSeek row was captured before this decoder
-//! existed and has not been re-decoded. Every form follows the public Chat Completions wire shapes
-//! and is tested on synthetic bytes only.
+//! **Measured forms.** One retrieved/replayed Hermes HTTP sample: request context including
+//! tool results, three SSE replies (content, model, tool calls and finish reasons through
+//! `[DONE]`) and one non-stream JSON reply. Its harness version was not reported. Usage-only
+//! chunks, error bodies, missing `[DONE]` and data after it remain synthetic-only; this sample
+//! does not establish coverage of other versions or every supported provider form.
 //!
 //! **Bounds.** At most [`MAX_EVENT_BYTES`] per logical record and [`MAX_BUFFERED_BYTES`] over every
 //! open stream, counting the text kept for aggregation; at most `MAX_OPEN_STREAMS` tracked streams.

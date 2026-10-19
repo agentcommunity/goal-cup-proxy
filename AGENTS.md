@@ -1,9 +1,17 @@
 # Working in this repository
 
-Goal Cup is a one-prompt, 168-hour coding-agent contest. This repository holds the tracer. It
-launches a participant's coding agent (the harness), records what the agent does into a sealed
-hash chain, uploads the chain to the Goal Cup server, and ships a verifier that anyone can run
-offline. This file is the map for agents and people. Open work is in [`TODO.md`](TODO.md).
+This repository holds a research tracer for running coding agents across harnesses and operating
+systems. It records declared model traffic and native session artifacts into a sealed hash chain,
+with offline verification and versioned research decoders. Goal Cup's one-prompt, 168-hour contest
+uses that evidence and adds server upload and event rules. Current support is macOS and Linux;
+Windows uses WSL2, with real-machine validation pending and native Windows planned.
+This file is the map for agents and people. Open work is in [`TODO.md`](TODO.md).
+
+Read the [research target](docs/RESEARCH-TARGET.md) and
+[local research handoff](docs/LOCAL-RESEARCH-HANDOFF.md) before planning capture work. Tool calls
+and results visible in agent context are sufficient; independent full tool-output/spill capture
+is not required. Preserve subagent conversations where exposed and state where coverage is
+unmeasured. These targets do not establish that current connectors capture every activity.
 
 ## Map
 
@@ -28,8 +36,8 @@ Both are checked by tests.
 
 1. [`README.md`](README.md): build, install, run, the gate.
 2. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): how the parts fit, and the terms.
-3. [`docs/DECISIONS.md`](docs/DECISIONS.md): rules that still bind the code. Code comments cite
-   them as `D<number>`. Treat them as constraints.
+3. [`docs/DECISIONS.md`](docs/DECISIONS.md): current rules and historical decisions. Code comments
+   cite them as `D<number>`; follow any explicit superseding or retired status.
 4. [`docs/RULES.md`](docs/RULES.md): the participant contract.
 5. [`docs/CHEAT-CHECKLIST.md`](docs/CHEAT-CHECKLIST.md): read before you trust a verifier Pass.
    [`docs/TERMINATION.md`](docs/TERMINATION.md): what `Confirmed` does and does not claim.
@@ -46,7 +54,8 @@ sh scripts/gate.sh full   # before a release
 ```
 
 Setup and what each tier runs: [README](README.md#the-gate). CI (`check`) is a small Linux smoke,
-not the gate. Every cargo command is `--offline`; run `cargo fetch --locked` once first.
+not the gate. After the one-time `cargo fetch --locked` and `cargo install cargo-nextest --locked`
+setup, project build and gate Cargo commands run with `--offline`.
 
 ## Hard rules
 

@@ -1,11 +1,12 @@
 # Decisions
 
-Rules that still bind the code. Code and docs cite them as `D<number>`. A number never changes
-and is never reused. Add or change an entry only when a rule changes. Entries for rules that no
-code or doc cites any more are removed; git history keeps them.
+Current rules and historical decisions. Code and docs cite them as `D<number>`. A number never
+changes and is never reused. Add or change an entry only when a rule changes. Entries for rules
+that no code or doc cites any more are removed; git history keeps them. An entry marked
+superseded or retired is retained to explain history and references; follow the named replacement.
 
-Entries are short on purpose. The code and its tests are the detail. D1 to D26 are older rules,
-kept only so that the references to them resolve.
+Entries are short on purpose. The code and its tests are the detail. D1 to D26 are older decisions
+retained for references; some have been superseded or retired.
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
@@ -173,7 +174,12 @@ cheapest-model clause is superseded by D52.
 - **Termination bound.** Finish keeps SIGTERM, the connector's grace, then SIGKILL. The capture
   budget never cuts the grace short. Inside the capture budget a drain share and a named commit
   reserve are split, so a producer that never settles still seals with a gap. The budget is 180 s
-  (D56); the reserve is 2 s.
+  (D56); the reserve is 2 s. The daemon terminates under the entry's run lock before draining
+  ingest or stopping the native owner, keeping both capture legs live during termination.
+  Both capture budget boundaries move by actual termination time. This amends C6's former
+  drain-first order: a manual seal must let the launcher observe harness exit and close its
+  proxy producer, rather than spend the drain share waiting on a producer whose harness is live.
+  Stalled producers still expire with explicit loss; D22 and D30's authority limits are unchanged.
 - **Spawn gate.** A capture launch must not leave a live harness that the tracer never durably
   recorded. The child waits before `exec` until the daemon has registered it.
 - **Disk reservation.** One 3 GiB reserve file for each run (`RUN_RESERVE_BYTES`), held by the run host, reused all week

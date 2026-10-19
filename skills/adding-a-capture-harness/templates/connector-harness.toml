@@ -157,7 +157,7 @@ source = "none"
 # prefix = "<session_id: >"             # 1-32 printable ASCII bytes
 # grammar = "<token|timestamp-hex>"     # token: [A-Za-z0-9_-]{1,128}
 
-# Exactly one own-session native store. Never a request dump, credential or seed file.
+# Exactly one local native artifact source (transcript or metadata). Never a request dump, credential or seed file.
 [[capture.native]]
 name = "<session>"                      # label in the chain; [A-Za-z0-9._-]{1,64}
 root = "{config_home}/<sessions>"       # {config_home} (C1) or {run_home} (C2), plus relative parts

@@ -12,8 +12,9 @@ members = [
 edition = "2024"
 # The only place a version is written. Every crate inherits it (`version.workspace = true`), and
 # the binaries and report fields read it through `env!("CARGO_PKG_VERSION")`. Change it with
-# `sh scripts/release.sh <x.y.z>`; `scripts/check-version.py` (run by the gate) fails on any
-# other hard-coded copy.
+# `sh scripts/release.sh prepare <x.y.z>` opens the version PR when needed; after it merges, run
+# the full gate on that `origin/main`, then use `sh scripts/release.sh tag <x.y.z>`. The gate fails
+# on any other hard-coded copy.
 version = "0.6.0"
 license = "Apache-2.0"
 # 1.99: the latest stable release at the owner's decision of 2026-10-11. The code needs

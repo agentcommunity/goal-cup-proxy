@@ -80,6 +80,10 @@ pub trait NativeFormat: 'static {
     /// One successfully parsed logical record of one stream. Emits at least one observation
     /// through `out`: a known kind, or `unknown` through [`NativeOut::unrecognized`].
     fn interpret(record: &Value, stream: &mut Self::Stream, out: &mut NativeOut<'_>);
+
+    /// Lost or unreadable context. Formats may prevent a later copied header from becoming
+    /// initial authority; existing formats need not change their interpretation.
+    fn lost_context(_stream: &mut Self::Stream) {}
 }
 
 /// Walk a dotted path into a JSON value. `dotted(v, "payload.thread_source")`.
@@ -180,15 +184,30 @@ pub struct NativeOut<'a> {
     source: &'a SourceRef,
     observed: &'a ObservationTimeRange,
     timestamp: Option<&'a str>,
+    native_context: Option<Value>,
     counts: &'a mut Counts,
     emit: &'a mut dyn FnMut(Observation),
 }
 
 impl NativeOut<'_> {
+    /// The current record's retained source, also usable as provenance for supplied identity.
+    fn source_ref(&self) -> &SourceRef {
+        self.source
+    }
+
+    /// Optional decoder-versioned source-session context. It labels the container, never
+    /// the authorship or freshness of every record in it. Formats opt in explicitly.
+    fn set_native_context(&mut self, context: Option<&Value>) {
+        self.native_context = context.cloned();
+    }
+
     /// One observation of `kind`. `fields` is a JSON object.
     fn kind(&mut self, kind: &str, supplied_id: Option<String>, mut fields: Value) {
         if let Value::Object(map) = &mut fields {
             map.insert("format".to_string(), Value::String(self.hint.to_string()));
+            if let Some(context) = &self.native_context {
+                map.insert("native_context".to_string(), context.clone());
+            }
             if let Some(ts) = self.timestamp {
                 map.insert(
                     "source_timestamp".to_string(),
@@ -321,7 +340,8 @@ impl<F: NativeFormat> NativeDecoder<F> {
     /// Lost coverage on a still-open tracked stream (a `Gap`, or a segment whose bytes cannot
     /// be recovered): whatever was mid-flight is reported `interrupted`, never parsed across.
     fn invalidate_line(&mut self, stream: &StreamKey, emit: &mut dyn FnMut(Observation)) {
-        if let Some((line, _)) = self.streams.get_mut(stream) {
+        if let Some((line, state)) = self.streams.get_mut(stream) {
+            F::lost_context(state);
             self.incomplete = true;
             let taken = std::mem::take(line);
             self.total_buffered -= taken.pending.len();
@@ -461,10 +481,12 @@ impl<F: NativeFormat> NativeDecoder<F> {
             return; // a blank line: not a record, not an error.
         }
         if line.over_budget {
+            self.lose_context(stream);
             self.unknown(stream, &line, "oversize", None, emit);
             return;
         }
         let Ok(value) = serde_json::from_slice::<Value>(&line.pending) else {
+            self.lose_context(stream);
             if line.redacted {
                 let kinds: Vec<Value> = line
                     .redacted_kinds
@@ -494,10 +516,17 @@ impl<F: NativeFormat> NativeDecoder<F> {
             source: &source,
             observed: &observed,
             timestamp,
+            native_context: None,
             counts: &mut self.counts,
             emit,
         };
         F::interpret(&value, state, &mut out);
+    }
+
+    fn lose_context(&mut self, stream: &StreamKey) {
+        if let Some((_, state)) = self.streams.get_mut(stream) {
+            F::lost_context(state);
+        }
     }
 
     /// An `unknown` observation over `line` that comes from assembly, not interpretation: it
@@ -517,6 +546,7 @@ impl<F: NativeFormat> NativeDecoder<F> {
             source: &source,
             observed: &observed,
             timestamp: None,
+            native_context: None,
             counts: &mut self.counts,
             emit,
         }

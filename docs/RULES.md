@@ -29,9 +29,11 @@ evidence about the current agent ecosystem.
 
 All times are UTC.
 
-- **23–24 October:** first tracer release. From then until 6 November, 00:00, the dry-run window is
-  open: you can start dry runs on any day. The last release is on 6 November, 12:00. Install the latest release on macOS, Linux or WSL2 with
-  `curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh` ([guide](PARTICIPANT-GUIDE.md#1-install)).
+- **Release availability:** install the latest published tracer release on macOS, Linux or WSL2
+  with `curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh`
+  ([guide](PARTICIPANT-GUIDE.md#1-install)).
+- **23 October to 6 November, 00:00:** the dry-run window is open; you can start dry runs on any
+  day. The last scheduled release is on 6 November, 12:00.
 - **Before the window:** you prepare with `goalcup prep` and practice runs. Practice is not limited
   to the window.
 - **7 November 2026, 00:00:** the 24-hour start window opens. It closes at 00:00 on 8 November.
@@ -274,7 +276,7 @@ records platform measurements and capture/decoder limits. Current chat-mode conn
 | Claude Code CLI | `claude-code-cli` | The build that ran is recorded. |
 | Codex CLI | `codex-cli` | Launch the native binary, not the npm wrapper. |
 | Hermes Agent | `hermes-cli` | Its own setup keeps provider/login state; native snapshots are capture-only. |
-| Amp CLI | `amp-cli` | Native metadata is not a transcript; both sources are capture-only. |
+| Amp CLI | `amp-cli` | Conversation snapshots are decoded from the proxy; local metadata is not a transcript. |
 
 Other harnesses can join through the [connector process](HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)
 before the last release. The supported list is final when the start window opens. A harness

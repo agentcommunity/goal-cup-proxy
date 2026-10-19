@@ -50,10 +50,15 @@ consistent, not that the participant followed the rules.
   (`$HOME/.cache/amp/logs/threads/T-<uuid>.log`): transport states, JSON-RPC request names, server
   message types with frame lengths and tool executions, and almost no conversation text. So the
   user's prompts, the model's turns and the tool results are on the wire leg alone, and no local
-  record can disagree with them. No decoder reads either leg yet
-  (`amp-thread-metadata-no-transcript`, `amp-thread-jsonrpc`), so an Amp run's `analysis.cross_leg` reads `unchecked`, and its
-  `assistance.evidence` reads `none_observed`, which here means "no decoder", not "the participant
-  typed nothing". The trust is not fail-closed either: Amp (a Bun
+  transcript can independently corroborate them. The `amp-thread-jsonrpc` decoder reads complete
+  server conversation snapshots, including assistant text and context-visible tool calls/results;
+  deltas, user send/echo text, executor events and unsupported forms remain referenced unknowns.
+  The native metadata hint (`amp-thread-metadata-no-transcript`) remains capture-only. An Amp
+  run's `analysis.cross_leg` therefore remains `unchecked`: the metadata supplies no decoded native
+  model activity, and the wire carries application events rather than provider request bodies.
+  `assistance.evidence: none_observed` means no positive human-authorship evidence, not "the
+  participant typed nothing". Hidden server-side prompts are not reconstructed. The trust is not
+  fail-closed either: Amp (a Bun
   binary) reads `NODE_EXTRA_CA_CERTS`, which adds the proxy CA to the system roots (`mode =
   "extend"`), so a connection Amp made past the proxy would still verify, and nothing records it.
   Bounded by: the hash chain, the seal and the server's signed acknowledgements; the child

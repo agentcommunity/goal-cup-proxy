@@ -33,7 +33,7 @@ use goalcup_protocol::receipt::{StartReceipt, StartReceiptClaims};
 use goalcup_protocol::redaction::{RedactionAudit, RedactionAuditSpan};
 use goalcup_protocol::seal::{SealManifest, SealedFile};
 use goalcup_verifier::capture_analysis::reader::scan_capture_trace;
-use goalcup_verifier::capture_analysis::{anthropic, api::kinds, chat, openai};
+use goalcup_verifier::capture_analysis::{anthropic, api::kinds, chat, openai, thread};
 use goalcup_verifier::{ResearchResult, VerifyOptions, write_research_report};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -60,12 +60,13 @@ const GOAL_TEXT: &[u8] = b"Build the parser and make its tests pass.";
 const GOAL_PART: usize = 32 * 1024;
 const STARTED_AT: &str = "2026-09-29T11:59:30Z";
 const DEADLINE_AT: &str = "2026-09-29T12:30:00Z";
-const DECODERS: [&str; 5] = [
+const DECODERS: [&str; 6] = [
     "codex-native",
     "claude-code-native",
     "openai-responses",
     "anthropic-messages",
     chat::DECODER_ID,
+    thread::DECODER_ID,
 ];
 
 // ---------------------------------------------------------------------------------------
@@ -863,11 +864,12 @@ fn mixed_observations_end_in_one_bound_summary() {
 
     // Each decoder: its declared identity and version, and counts that are its own lines.
     let versions = [
-        "0.153.0",
+        "2",
         "2.1.259-2.1.283",
         openai::DECODER_VERSION,
         anthropic::DECODER_VERSION,
         chat::DECODER_VERSION,
+        thread::DECODER_VERSION,
     ];
     let entries = summary["analysis"]["decoders"].as_array().unwrap();
     assert_eq!(entries.len(), DECODERS.len());
@@ -876,10 +878,9 @@ fn mixed_observations_end_in_one_bound_summary() {
         assert_eq!(entry["summary"]["decoder_id"], id);
         assert_eq!(entry["summary"]["decoder_version"], version);
         let written = body.iter().filter(|l| l["decoder"] == id).count();
-        // The mixed trace carries no Chat Completions stream (`m2_chat_decoder.rs` and
-        // `m2_hermes_capture_only.rs` hold that decoder's end-to-end cases), so the fifth
-        // decoder is registered, ran, and found nothing: the pinned fixtures stay one row longer.
-        if id == chat::DECODER_ID {
+        // The mixed trace carries no Chat Completions or thread WS streams.
+        // Their focused suites exercise the registered decoders with matching streams.
+        if id == chat::DECODER_ID || id == thread::DECODER_ID {
             assert_eq!(written, 0, "{id} saw no stream");
         } else {
             assert!(written > 0, "{id} wrote nothing");
@@ -967,7 +968,7 @@ fn the_report_echoes_launch_keys_and_presents_connector_pin_provenance() {
     assert_eq!(summary["run"]["connector"], "Dev/unpinned");
     assert_eq!(
         hex::encode(Sha256::digest(unversioned(&bytes))),
-        "727713ee45d7c17aed2c8669339803399085078de2972b1d869bd10c46707868"
+        "c78371197fe85f7e8cad184437fb22e408503ba8fbb6c067d8d3ab2f9cb3a8fb"
     );
 
     let (pinned_id, pinned_digest) = CONNECTOR_DIR_SHA256S[0];

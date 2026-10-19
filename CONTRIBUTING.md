@@ -44,9 +44,10 @@ sh scripts/gate.sh fast
 sh scripts/gate.sh full   # before a release
 ```
 
-Run `cargo fetch --locked` once first (the gate runs cargo `--offline`), and install cargo-nextest
-once. Report the gate's last line, the platform and the Rust version in the PR. If you cannot run
-the gate, run CI's form `cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli`,
+Run `cargo fetch --locked` and install `cargo-nextest --locked` once as setup; project build and
+gate commands then run with `--offline`. Report the gate's last line, the platform and the Rust
+version in the PR. If you cannot run the gate, run CI's form
+`cargo test --offline --workspace --exclude goalcup-daemon --exclude goalcup-cli`,
 say so in the PR, and a maintainer runs the gate.
 
 ## What `main` requires

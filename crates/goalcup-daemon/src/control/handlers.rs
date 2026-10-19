@@ -16,6 +16,19 @@ use goalcup_protocol::process::{
 use serde::Deserialize;
 use std::path::Path as FsPath;
 
+/// Run operations that can wait on a capture's run lock away from the async receiver.
+/// Finish holds that lock through ingest drain, so blocking a runtime worker while waiting
+/// for it can strand the very receiver/timer that releases the lock.
+async fn blocking_control(operation: impl FnOnce() -> Response + Send + 'static) -> Response {
+    match tokio::task::spawn_blocking(operation).await {
+        Ok(response) => response,
+        Err(join) => ControlErrorResponse::new(ControlError::Internal(format!(
+            "the control operation did not complete: {join}"
+        )))
+        .into_response(),
+    }
+}
+
 /// A path this build serves nothing on, in the contract's shape.
 ///
 /// The message names no path. The caller knows what it asked for, and a 404 that echoed
@@ -52,25 +65,29 @@ pub(super) async fn wrong_method() -> Response {
 
 /// `GET /v0/health` — the one call `goalcup doctor` needs to answer "is the daemon there".
 pub(super) async fn health(State(state): State<ControlState>) -> Response {
-    let open = match state.daemon.entries() {
-        Ok(entries) => entries
-            .iter()
-            .filter(|entry| {
-                entry.sealed_at.is_none()
-                    && entry.health != goalcup_protocol::events::HealthState::SealingRecoveryNeeded
-            })
-            .count(),
-        Err(e) => return ControlErrorResponse::from(e).into_response(),
-    };
-    axum::Json(DaemonHealth {
-        control_api_version: CONTROL_API_VERSION,
-        daemon_version: DAEMON_VERSION.to_string(),
-        uptime_seconds: state.started_at.elapsed().as_secs(),
-        entries_open: u32::try_from(open).unwrap_or(u32::MAX),
-        cycles: state.daemon.cycle_errors(),
-        reopen_failed: state.daemon.reopen_failed_ids(),
+    blocking_control(move || {
+        let open = match state.daemon.entries() {
+            Ok(entries) => entries
+                .iter()
+                .filter(|entry| {
+                    entry.sealed_at.is_none()
+                        && entry.health
+                            != goalcup_protocol::events::HealthState::SealingRecoveryNeeded
+                })
+                .count(),
+            Err(e) => return ControlErrorResponse::from(e).into_response(),
+        };
+        axum::Json(DaemonHealth {
+            control_api_version: CONTROL_API_VERSION,
+            daemon_version: DAEMON_VERSION.to_string(),
+            uptime_seconds: state.started_at.elapsed().as_secs(),
+            entries_open: u32::try_from(open).unwrap_or(u32::MAX),
+            cycles: state.daemon.cycle_errors(),
+            reopen_failed: state.daemon.reopen_failed_ids(),
+        })
+        .into_response()
     })
-    .into_response()
+    .await
 }
 
 /// `GET /v0/entries/{id}/status` — public, and the one signed document.
@@ -85,15 +102,23 @@ pub(super) async fn entry_status(
     State(state): State<ControlState>,
     Path(id): Path<String>,
 ) -> Response {
-    match state.daemon.signed_status(&id) {
-        Ok(Some(signed)) => axum::Json(signed).into_response(),
+    // A capture finish holds the run lock while ending the harness and draining ingest.
+    // Waiting for that lock on a runtime worker can strand the receiver it needs to drain
+    // (in particular on a one-worker runtime). Keep the status read on the blocking pool.
+    let daemon = state.daemon.clone();
+    match tokio::task::spawn_blocking(move || daemon.signed_status(&id)).await {
+        Ok(Ok(Some(signed))) => axum::Json(signed).into_response(),
         // Not "no such entry, here is the list": this route is unauthenticated, and the
         // only thing it may confirm is what the caller already named.
-        Ok(None) => ControlErrorResponse::new(ControlError::NotFound(
+        Ok(Ok(None)) => ControlErrorResponse::new(ControlError::NotFound(
             "no status for that entry".to_string(),
         ))
         .into_response(),
-        Err(e) => ControlErrorResponse::from(e).into_response(),
+        Ok(Err(e)) => ControlErrorResponse::from(e).into_response(),
+        Err(join) => ControlErrorResponse::new(ControlError::Internal(format!(
+            "the status read did not complete: {join}"
+        )))
+        .into_response(),
     }
 }
 
@@ -107,10 +132,11 @@ pub(super) async fn entry_status(
 ///
 /// [`EntrySummary`]: goalcup_protocol::control::EntrySummary
 pub(super) async fn list_entries(State(state): State<ControlState>) -> Response {
-    match state.daemon.entries() {
+    blocking_control(move || match state.daemon.entries() {
         Ok(entries) => axum::Json(entries).into_response(),
         Err(e) => ControlErrorResponse::from(e).into_response(),
-    }
+    })
+    .await
 }
 
 // --------------------------------------------------------------- the terminal handlers
@@ -336,10 +362,13 @@ pub(super) async fn record_capture_goal(
     if std::str::from_utf8(&request.bytes).is_err() {
         return refuse("a goal is UTF-8 text".to_string());
     }
-    match state.daemon.record_capture_goal(&id, &request.bytes) {
-        Ok(key) => axum::Json(key).into_response(),
-        Err(e) => ControlErrorResponse::from(e).into_response(),
-    }
+    blocking_control(
+        move || match state.daemon.record_capture_goal(&id, &request.bytes) {
+            Ok(key) => axum::Json(key).into_response(),
+            Err(e) => ControlErrorResponse::from(e).into_response(),
+        },
+    )
+    .await
 }
 
 /// `POST /v0/entries/{id}/capture/launch` — the `Launch` record, after the harness is
@@ -418,6 +447,25 @@ pub(super) async fn register_process(
         Ok(registration) => registration,
         Err(e) => return e.into_response(),
     };
+    // The authority check on recovered entries and fresh/prepared registration can wait
+    // on the capture run lock. Keep their existing validation/admission order together.
+    // A worker panic is ambiguous process admission, just like a lost connection.
+    match tokio::task::spawn_blocking(move || register_process_blocking(state, id, registration))
+        .await
+    {
+        Ok(response) => response,
+        Err(join) => uncertain_process_admission(DaemonError::Refused(format!(
+            "the process registration did not complete: {join}"
+        )))
+        .into_response(),
+    }
+}
+
+fn register_process_blocking(
+    state: ControlState,
+    id: String,
+    registration: ProcessRegistration,
+) -> Response {
     if let Err(e) = state.daemon.require_live_capture_mutation_authority(&id) {
         return ControlErrorResponse::from(e).into_response();
     }
@@ -608,10 +656,13 @@ pub(super) async fn abandon_entry(
     let reason = request
         .reason
         .unwrap_or_else(|| "the CLI abandoned the run before it started".to_string());
-    if let Err(e) = state.daemon.abandon(&id, &reason) {
-        return ControlErrorResponse::from(e).into_response();
-    }
-    StatusCode::NO_CONTENT.into_response()
+    blocking_control(move || {
+        if let Err(e) = state.daemon.abandon(&id, &reason) {
+            return ControlErrorResponse::from(e).into_response();
+        }
+        StatusCode::NO_CONTENT.into_response()
+    })
+    .await
 }
 
 // ------------------------------------------------------ the workspace, end to end

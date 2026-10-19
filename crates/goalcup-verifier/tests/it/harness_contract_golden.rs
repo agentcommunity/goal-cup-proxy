@@ -1,7 +1,7 @@
 //! Characterization goldens for the harness contract (D42): the verifier half. Neither file is
 //! keyed by a connector, so adding one changes neither.
 //!
-//! * Decoder selection (`DecoderRegistry::builtin()`): which of the five registered
+//! * Decoder selection (`DecoderRegistry::builtin()`): which of the registered
 //!   decoders a stream is shown to, for every combination of stream source, `protocol_hint` and
 //!   payload shape in a fixed probe list. Observed through `write_research_report`: the summary's
 //!   `analysis.decoders` rows. The hint a decoder keys on is data in the stream's metadata
@@ -347,12 +347,13 @@ fn verifier_decoder_selection_per_protocol_hint_is_pinned() {
         "openai_ws_message",
         "anthropic_request_body",
     ];
-    let hints: [Option<&str>; 7] = [
+    let hints: [Option<&str>; 8] = [
         Some("codex-jsonl"),
         Some("claude-code-jsonl"),
         Some("openai-responses"),
         Some("anthropic-messages"),
         Some("openai-chat-completions"),
+        Some("amp-thread-jsonrpc"),
         Some("e00-controlled"),
         None,
     ];

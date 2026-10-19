@@ -69,18 +69,30 @@ crate inherits it, and the binaries and the report fields (`tracer_version`, `da
 `verifier_version`) read it at build time. Docs say "the latest release" and never write it;
 `scripts/check-version.py`, run by both gate tiers, fails on any other copy.
 
-`main` is protected, so `scripts/release.sh` never pushes it: the version bump is a pull request,
-and the release is a tag on what that pull request merged.
+The active repository ruleset protects `main`, so `scripts/release.sh` never pushes it: the
+version bump is a pull request, and the release is a tag on merged `origin/main`.
 
-1. Run `sh scripts/gate.sh full` on the commit you mean to release.
-2. `sh scripts/release.sh prepare <x.y.z>` branches `release/v<x.y.z>` from `origin/main`, sets the
-   version, updates `Cargo.lock`, runs the version check, commits, pushes the branch and opens a
-   pull request. If `origin/main` already has `<x.y.z>` (the case for the first release, 0.6.0),
-   it says so and does nothing. Merge the pull request.
-3. `sh scripts/release.sh tag <x.y.z>` fetches, checks that `origin/main` has `<x.y.z>` in its
-   `Cargo.toml`, tags `origin/main`'s commit (never a local branch) and pushes only the tag.
+For a package build, fetch locked dependencies for the selected target before using offline build
+commands. The release workflow fetches its target graph, then builds with `--offline`.
+
+1. If the intended version is not already on `origin/main`, run
+   `sh scripts/release.sh prepare <x.y.z>`. It branches `release/v<x.y.z>` from `origin/main`,
+   sets the version, updates `Cargo.lock`, checks it, commits, pushes the branch and opens a pull
+   request. If `origin/main` already has that version, `prepare` says so and does nothing. Merge a
+   version PR through the repository ruleset.
+2. Fetch the merged `origin/main` and run `sh scripts/gate.sh full` and the separate
+   `sh scripts/linux-check.sh` on that exact versioned commit. Run them sequentially; the Linux
+   check needs Docker with privileged-container support. The tag command does not run either check.
+3. Run `sh scripts/release.sh tag <x.y.z>`. It fetches, checks that `origin/main` has the version in
+   `Cargo.toml`, tags that commit (never a local branch) and pushes only the tag.
 4. The tag starts the workflow. It refuses a tag that differs from `Cargo.toml`, builds the four
    targets and creates the GitHub release with every asset.
+
+The installer stages the new binaries and connector tree before changing the prefix and refuses a
+directory at a binary destination. If a handled failure or signal occurs during promotion, it
+attempts to restore the previous files. If restoration itself fails, it preserves and reports the
+recovery paths. This is rollback for handled failures; separate file renames do not make the whole
+prefix atomic against power loss, forced process termination, or concurrent installs.
 
 To try the build without releasing, start the workflow by hand (`gh workflow run release.yml --ref
 <branch>`, or Actions, `release`, Run workflow). It uploads the tarballs as run artifacts and

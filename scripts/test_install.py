@@ -11,8 +11,10 @@ from __future__ import annotations
 import hashlib
 import os
 import platform
+import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -205,6 +207,121 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(out.strip(), f"{binary} {VERSION}")
         connectors = self.home / ".local/share/goalcup/connectors/codex-cli/harness.toml"
         self.assertEqual(connectors.read_text(), "old")
+
+    def tree(self, root: Path) -> dict[str, bytes | None]:
+        """The observable installed files and directories, including unexpected leftovers."""
+        return {str(path.relative_to(root)): None if path.is_dir() else path.read_bytes()
+                for path in root.rglob("*")}
+
+    def fault_path(self, tool: str, destination: Path, *, signal_after: bool = False) -> str:
+        """Fail one filesystem operation, or TERM the installer just after it completes.
+
+        All other operations use the real tool, including the rollback. This replaces only
+        an otherwise difficult-to-reproduce filesystem failure, not the installer behavior.
+        """
+        fake = Path(tempfile.mkdtemp(dir=self.root))
+        wrapper = fake / tool
+        wrapper.write_text(
+            f"#!{sys.executable}\n"
+            "import os, pathlib, signal, subprocess, sys\n"
+            f"real = {shutil.which(tool)!r}\n"
+            f"destination = pathlib.Path({str(destination)!r})\n"
+            f"marker = pathlib.Path({str(fake / 'triggered')!r})\n"
+            "args = sys.argv[1:]\n"
+            "match = pathlib.Path(args[-1]) == destination\n"
+            # Staging can change, but the binary being copied and its prefix remain observable.
+            "if pathlib.Path(sys.argv[0]).name == 'cp':\n"
+            "    match = (pathlib.Path(args[-2]).name == destination.name\n"
+            "             and destination.parent in pathlib.Path(args[-1]).parents)\n"
+            "if match and not marker.exists():\n"
+            "    marker.touch()\n"
+            f"    if {signal_after!r}:\n"
+            "        result = subprocess.run([real, *args])\n"
+            "        if result.returncode == 0:\n"
+            "            os.kill(os.getppid(), signal.SIGTERM)\n"
+            "        sys.exit(result.returncode)\n"
+            "    sys.exit(1)\n"
+            "os.execv(real, [real, *args])\n"
+        )
+        wrapper.chmod(0o755)
+        return f"{fake}{os.pathsep}{os.environ['PATH']}"
+
+    def assert_old_install(self, prefix: Path, before: dict[str, bytes | None]) -> None:
+        self.assertEqual(self.tree(prefix), before)
+        for binary in ("goalcup", "goalcup-daemon", "goalcup-verify"):
+            result = subprocess.run([str(prefix / "bin" / binary), "--version"],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), f"{binary} {VERSION}")
+
+    def test_each_binary_copy_failure_preserves_the_complete_old_install(self) -> None:
+        old = make_release(self.root, {"codex-cli": "old"})
+        prefix = self.root / "prefix with spaces"
+        self.assertEqual(self.install(old, "--prefix", str(prefix)).returncode, 0)
+        before = self.tree(prefix)
+        newer = make_release(Path(tempfile.mkdtemp(dir=self.root)), {"codex-cli": "new"}, "9.8.8")
+        for binary in ("goalcup", "goalcup-daemon", "goalcup-verify"):
+            with self.subTest(binary=binary):
+                result = self.install(newer, "--prefix", str(prefix),
+                                      PATH=self.fault_path("cp", prefix / "bin" / binary))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("Installed", result.stdout)
+                self.assert_old_install(prefix, before)
+
+    def test_each_failed_promotion_restores_the_complete_old_install(self) -> None:
+        old = make_release(self.root, {"codex-cli": "old"})
+        prefix = self.root / "prefix with spaces"
+        self.assertEqual(self.install(old, "--prefix", str(prefix)).returncode, 0)
+        before = self.tree(prefix)
+        newer = make_release(Path(tempfile.mkdtemp(dir=self.root)), {"codex-cli": "new"}, "9.8.8")
+        for relative in ("share/goalcup", "bin/goalcup", "bin/goalcup-daemon", "bin/goalcup-verify"):
+            with self.subTest(destination=relative):
+                result = self.install(newer, "--prefix", str(prefix),
+                                      PATH=self.fault_path("mv", prefix / relative))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("Installed", result.stdout)
+                self.assert_old_install(prefix, before)
+
+    def test_term_after_each_promotion_restores_the_complete_old_install(self) -> None:
+        old = make_release(self.root, {"codex-cli": "old"})
+        prefix = self.root / "prefix with spaces"
+        self.assertEqual(self.install(old, "--prefix", str(prefix)).returncode, 0)
+        before = self.tree(prefix)
+        newer = make_release(Path(tempfile.mkdtemp(dir=self.root)), {"codex-cli": "new"}, "9.8.8")
+        for relative in ("share/goalcup", "bin/goalcup", "bin/goalcup-daemon", "bin/goalcup-verify"):
+            with self.subTest(destination=relative):
+                result = self.install(newer, "--prefix", str(prefix),
+                                      PATH=self.fault_path("mv", prefix / relative, signal_after=True))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("Installed", result.stdout)
+                self.assert_old_install(prefix, before)
+
+    def test_helper_destination_directories_are_preserved_and_refused(self) -> None:
+        release = make_release(self.root, {"codex-cli": "new"})
+        for binary in ("goalcup-daemon", "goalcup-verify"):
+            with self.subTest(binary=binary):
+                prefix = Path(tempfile.mkdtemp(dir=self.root))
+                conflict = prefix / "bin" / binary
+                conflict.mkdir(parents=True)
+                (conflict / "keep").write_text("participant data")
+                before = self.tree(prefix)
+                result = self.install(release, "--prefix", str(prefix))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("Installed", result.stdout)
+                self.assertEqual(self.tree(prefix), before)
+
+    def test_space_containing_prefix_installs_and_upgrades_all_three_binaries(self) -> None:
+        prefix = self.root / "prefix with spaces"
+        for version in (VERSION, "9.8.8"):
+            release = make_release(Path(tempfile.mkdtemp(dir=self.root)), {"codex-cli": version}, version)
+            result = self.install(release, "--prefix", str(prefix))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for binary in ("goalcup", "goalcup-daemon", "goalcup-verify"):
+                out = subprocess.run([str(prefix / "bin" / binary), "--version"],
+                                     capture_output=True, text=True)
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertEqual(out.stdout.strip(), f"{binary} {version}")
+            self.assertEqual((prefix / "share/goalcup/connectors/codex-cli/harness.toml").read_text(), version)
 
 
 if __name__ == "__main__":

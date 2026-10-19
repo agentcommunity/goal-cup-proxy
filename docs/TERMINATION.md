@@ -6,6 +6,18 @@ owned set (D30). Code: `terminate_with` in `mod.rs`; guard, ordering and fail-cl
 `authority.rs`; the macOS singleton path in `darwin.rs`; the capture finish in
 `runtime/termination.rs`.
 
+Local capture finish holds the entry's run lock and terminates before draining ingest or stopping
+its native owner. Both capture legs stay live during the stop, so final native writes remain
+eligible for capture and the launcher can observe child exit and close its proxy producer.
+The actual termination duration shifts both capture deadline boundaries; its grace is never
+spent from the drain share. A later finish refusal retains the outcome, and a retry reuses
+`Confirmed` instead of relabeling the stopped harness `AlreadyStopped` (C6, D40).
+
+This order does not expand termination authority. The macOS research run's unresolved owned-set
+outcome and surviving reparented server remain separate, unresolved evidence of the D30 limits;
+a successful synthetic stop does not establish escaped-orphan cleanup. An empty targeted set
+cannot establish that an escaped process was found or ended.
+
 ## Outcomes (`TerminationOutcomeV1`)
 
 | Outcome | It claims | It does not claim |

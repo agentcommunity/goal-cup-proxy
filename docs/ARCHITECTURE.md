@@ -6,14 +6,25 @@ their agents. Wire formats are in [CONTRACTS](CONTRACTS.md); rules that bind the
 
 ## 1. What the tracer is for
 
-The contest rule is: one prompt, then the agent works alone for 168 hours. The tracer makes that
-rule checkable. It records the agent's own session files and its model traffic, seals them into a
-hash chain, and uploads the chain. Judges and the public verifier read the chain later.
+The tracer preserves evidence of running agent work for research across harnesses and operating
+systems. It records declared native session artifacts and model traffic, seals them into a hash
+chain, and leaves interpretation to versioned decoders. Goal Cup's one-prompt, 168-hour contest
+uses this evidence for review and adds upload, deadline and participant rules.
+
+The [research target](RESEARCH-TARGET.md) defines the desired evidence and how to test coverage;
+the [local research handoff](LOCAL-RESEARCH-HANDOFF.md) identifies the next validation work.
+Context-visible tool calls/results are sufficient without independently recording full tool
+output or spill files. Subagent conversations are a separate research objective whose coverage
+must be measured. These are targets, not assertions of universal capture. Platform status is in
+the [README](../README.md#platforms): native Windows is planned; WSL2 is a Linux path awaiting
+real Windows-machine validation.
 
 The tracer guarantees:
 
-1. **Bounded capture.** The harness's session files and its model traffic for the run. Coverage is
-   what the connector declares. Missing evidence is a gap in the chain, never an invented record.
+1. **Bounded capture.** The harness's declared native artifacts and model traffic for the run.
+   Detected capture loss is a gap in the chain, never an invented record. Activity outside the
+   selected sources may be unobserved without a gap. Integrity completeness is not proof that
+   every agent action was observed.
 2. **Tamper evidence, not tamper proof.** The participant controls the machine. The chain, the
    server's signed receipt and acknowledgements, and the gaps make changes reviewable.
 3. **Scope.** It records the bound session and workspace. It does not read other sessions,
@@ -51,7 +62,7 @@ TypeScript).
 | `goalcup seal`, `status`, `entries`, `doctor` | End a run early; read status; list runs; check the machine | [commands/](../crates/goalcup-cli/src/commands/) |
 | Proxy | Loopback CONNECT proxy. Relays bytes unchanged; tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
 | Daemon | Control API on loopback; ingest; per-producer redaction; chain append; native-file capture; finish; termination | [runtime/capture/](../crates/goalcup-daemon/src/runtime/capture/mod.rs) |
-| Verifier | Integrity reader and research report. Five built-in decoders: native `codex-native` and `claude-code-native`; wire `openai-responses`, `anthropic-messages`, `openai-chat-completions` | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
+| Verifier | Integrity reader and research report. Six built-in decoders: native `codex-native` and `claude-code-native`; wire `openai-responses`, `anthropic-messages`, `openai-chat-completions`, and `amp-thread-jsonrpc` | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
 | Upload server | Checks the run credential, stores chunks in R2, signs receipts and acknowledgements, sends the run emails | [server/worker](../server/worker/README.md), [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DESIGN.md) |
 
 The control API (version `CONTROL_API_VERSION`, now 9) requires its version on mutating requests.
@@ -134,11 +145,17 @@ CLI phases are in `commands/start.rs` (`prepare`, `create_and_gate`, `register_a
    releases the harness. No binary bytes are read. No execution is bound to an inode.
 4. **Run.** `Launch` is appended. The native and wire legs capture. The CLI uploads chunks and
    sends heartbeats.
-5. **Finish.** Stop the proxy, drain, persist loss, stop the owners, read the workspace state (Git for
-   a clone, a file walk otherwise) and write `LocalFinish` plus `seal.json`. A refused finish writes no terminal. The budget is
-   `LOCAL_CAPTURE_FINISH_BUDGET` (180 s) with a 2 s commit reserve (D40, D56).
-6. **Termination.** SIGTERM, the connector's grace, SIGKILL, sweep and reconfirm. This runs outside
-   the finish budget ([TERMINATION](TERMINATION.md)).
+5. **Stop the harness.** A standalone seal enters the daemon's entry run lock, then SIGTERM,
+   the connector's grace, SIGKILL, sweep and reconfirm run with wire and native capture still live.
+   This runs outside the capture budget ([TERMINATION](TERMINATION.md)); both the drain-share
+   boundary and final deadline move by actual termination time. The launcher sees the child exit
+   and stops its proxy; competing finishes share one terminal.
+6. **Finish capture.** Close admission, drain the existing producers, persist explicit loss,
+   stop the owner, read the workspace state (Git for a clone, a file walk otherwise), then write
+   `LocalFinish` plus `seal.json`. A refused finish writes no terminal and retains its termination
+   outcome for retry. The capture budget is `LOCAL_CAPTURE_FINISH_BUDGET` (180 s) with a 2 s commit
+   reserve (D40, D56). Control operations that can wait on the entry lock run on the blocking
+   pool so ingest remains able to drain.
 7. **Seal, verify.** Bind seal and termination, print the `verify:` line,
    upload the rest (the wrap-up).
 
@@ -253,7 +270,7 @@ native Windows. Operating the binaries: [OPERATING](OPERATING.md).
 - **capture-only**: bytes recorded and not decoded, because no decoder accepts the stream or the
   harness has no decoder.
 - **decoder, observation**: a verifier component that turns the retained bytes of the streams it
-  accepts into observations. Trait `DecoderV1`; `DecoderRegistry::builtin()` lists the five.
+  accepts into observations. Trait `DecoderV1`; `DecoderRegistry::builtin()` lists six.
   `protocol_hint` is open, grammar-checked metadata that tells the registry which decoders to offer.
 - **gap, Loss, Recovery**: section 7.
 - **seal**: ending an entry: finish, terminate owned processes, write `LocalFinish` and `seal.json`.

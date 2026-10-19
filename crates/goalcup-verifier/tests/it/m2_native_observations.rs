@@ -59,7 +59,7 @@ use goalcup_protocol::capture::{
 use goalcup_protocol::redaction::{RedactionAudit, RedactionAuditSpan};
 use goalcup_verifier::capture_analysis::api::{DecoderSummary, DecoderV1, Observation};
 use goalcup_verifier::capture_analysis::native::{ClaudeNativeDecoder, CodexNativeDecoder};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 const CODEX_FIXTURE: &[u8] = include_bytes!("../fixtures/m2-native/codex-native-excerpt.jsonl");
@@ -287,7 +287,7 @@ fn codex_tool_and_usage_keep_native_references() {
     assert_eq!(cumulative.fields["total_token_usage"]["output_tokens"], 127);
 
     assert_eq!(summary.decoder_id, "codex-native");
-    assert_eq!(summary.decoder_version, "0.153.0");
+    assert_eq!(summary.decoder_version, "2");
     assert!(!summary.incomplete);
 }
 
@@ -337,7 +337,29 @@ fn split_every_byte_matches_unsplit_observations() {
         records.push(end_native(PRODUCER, STREAM, EndReason::Complete));
         let (obs, _summary) = collect(codex, &records);
         obs.into_iter()
-            .map(|o| (o.kind, o.supplied_id, o.fields, o.observed))
+            .map(|mut o| {
+                if let Some(context) = o.fields.get_mut("native_context") {
+                    // Nested identity provenance also follows actual segment boundaries.
+                    let start: usize = CODEX_FIXTURE
+                        .split_inclusive(|b| *b == b'\n')
+                        .take(11)
+                        .map(|line| line.len())
+                        .sum();
+                    let end = CODEX_FIXTURE.len() - 1; // the terminating newline also supplies a segment
+                    let source = context["header_source"].as_object_mut().unwrap();
+                    assert_eq!(
+                        source["first_part"],
+                        splits.iter().filter(|&&at| at <= start).count()
+                    );
+                    assert_eq!(
+                        source["last_part"],
+                        splits.iter().filter(|&&at| at <= end).count()
+                    );
+                    source.remove("first_part");
+                    source.remove("last_part");
+                }
+                (o.kind, o.supplied_id, o.fields, o.observed)
+            })
             .collect()
     }
     // The baseline is one segment per source line (never fewer than one line per segment, so
@@ -1276,4 +1298,246 @@ fn structurally_eligible_later_message_with_explicit_flags_is_still_human() {
     let human = find(&obs, |o| o.kind == "human_message");
     assert_eq!(human.fields["text"], "actually, use a different filename");
     assert_eq!(human.supplied_id.as_deref(), Some("p3"));
+}
+
+// Synthetic structures matching the privately reviewed 0.156.1 fork, without raw run data.
+fn codex_rows(rows: &[Value], stream: u64) -> Vec<CaptureRecord> {
+    let bytes: Vec<u8> = rows
+        .iter()
+        .flat_map(|row| {
+            let mut line = serde_json::to_vec(row).unwrap();
+            line.push(b'\n');
+            line
+        })
+        .collect();
+    let mut records = vec![open_native(PRODUCER, stream, "codex-jsonl")];
+    records.extend(segment_bytes(
+        PRODUCER,
+        stream,
+        &bytes,
+        &per_line_splits(&bytes),
+    ));
+    records.push(end_native(PRODUCER, stream, EndReason::Complete));
+    records
+}
+
+fn marked_codex_message(id: &str) -> Value {
+    json!({"type":"response_item","payload":{"type":"message","id":id,"role":"user",
+        "content":[{"type":"input_text","text":"same supplied text"}],
+        "internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}})
+}
+
+#[test]
+fn codex_copied_parent_header_cannot_promote_child_history_or_assignment_to_human() {
+    let parent = json!({"type":"session_meta","payload":{"id":"parent","source":"cli"}});
+    let child = json!({"type":"session_meta","payload":{"id":"child","session_id":"parent",
+        "forked_from_id":"parent","parent_thread_id":"parent","thread_source":"subagent",
+        "source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}}}});
+    let tool = json!({"type":"response_item","payload":{"type":"function_call","call_id":"same-call","name":"read"}});
+    let result = json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"same-call","output":"copied"}});
+    let mut records = codex_rows(
+        &[
+            parent.clone(),
+            marked_codex_message("prompt"),
+            tool.clone(),
+            result.clone(),
+        ],
+        1,
+    );
+    records.extend(codex_rows(
+        &[
+            child,
+            parent,
+            marked_codex_message("prompt"),
+            marked_codex_message("assignment"),
+            tool.clone(),
+            result.clone(),
+            tool,
+            result,
+            json!({"type":"turn_context","payload":{"model":"child-model"}}),
+        ],
+        2,
+    ));
+    let (obs, summary) = collect(codex, &records);
+    let humans: Vec<_> = obs.iter().filter(|o| o.kind == "human_message").collect();
+    assert_eq!(
+        humans.len(),
+        1,
+        "copied input and agent assignment are not new human input"
+    );
+    assert_eq!(humans[0].source.stream.stream, 1);
+    let model = find(&obs, |o| o.kind == "model");
+    assert_eq!(model.fields["native_context"]["session_id"], "child");
+    assert_eq!(
+        model.fields["native_context"]["parent_session_id"],
+        "parent"
+    );
+    assert_eq!(model.fields["native_context"]["role"], "subagent");
+    assert_eq!(
+        model.fields["native_context"]["history_scope"],
+        "may_include_inherited"
+    );
+    assert_eq!(
+        model.fields["native_context"]["header_source"]["first_part"],
+        0
+    );
+    assert_eq!(
+        model.source.first_part, 8,
+        "event and identity have distinct provenance"
+    );
+    assert_eq!(obs.iter().filter(|o| o.kind == "tool_call").count(), 3);
+    assert_eq!(obs.iter().filter(|o| o.kind == "tool_result").count(), 3);
+    assert_eq!(
+        obs.iter()
+            .filter(|o| o.source.stream.stream == 2
+                && o.kind == "unknown"
+                && o.fields["record_type"] == "response_item.message")
+            .count(),
+        2
+    );
+    assert!(!summary.incomplete);
+}
+
+#[test]
+fn codex_first_header_authority_is_immutable_without_requiring_an_identity() {
+    for source in ["cli", "vscode"] {
+        let records = codex_rows(
+            &[
+                json!({"type":"session_meta","payload":{"source":source}}),
+                marked_codex_message("first"),
+                json!({"type":"session_meta","payload":{"id":"resume","source":source}}),
+                marked_codex_message("later"),
+            ],
+            1,
+        );
+        let (obs, _) = collect(codex, &records);
+        assert_eq!(
+            obs.iter().filter(|o| o.kind == "human_message").count(),
+            2,
+            "{source}: ordinary resume keeps its markers"
+        );
+        assert!(
+            obs.iter()
+                .all(|o| o.fields["native_context"].get("session_id").is_none())
+        );
+    }
+    for payload in [
+        json!(null),
+        json!({"source":null}),
+        json!({"source":"exec"}),
+        json!({"source":"cli","forked_from_id":"parent"}),
+        json!({"source":"cli","parent_thread_id":17}),
+        json!({"source":"cli","thread_source":"subagent"}),
+        json!({"source":"cli","thread_source":"unrecognized"}),
+    ] {
+        let records = codex_rows(
+            &[
+                json!({"type":"session_meta","payload":payload}),
+                json!({"type":"session_meta","payload":{"source":"cli"}}),
+                marked_codex_message("later"),
+            ],
+            1,
+        );
+        let (obs, _) = collect(codex, &records);
+        assert!(!obs.iter().any(|o| o.kind == "human_message"), "{payload}");
+    }
+}
+
+#[test]
+fn codex_loss_before_header_blocks_promotion_but_known_identity_survives_loss() {
+    for before in [true, false] {
+        let mut records = codex_rows(
+            &[
+                json!({"type":"session_meta","payload":{"id":"own","source":"cli"}}),
+                marked_codex_message("input"),
+            ],
+            1,
+        );
+        records.insert(
+            if before { 1 } else { 2 },
+            CaptureRecord::Gap {
+                stream: Some(stream_key(PRODUCER, 1)),
+                observed: byte_time(PRODUCER, 1),
+                reason: GapReason::IngestLost,
+                lost_bytes: None,
+            },
+        );
+        let (obs, summary) = collect(codex, &records);
+        assert_eq!(
+            obs.iter().filter(|o| o.kind == "human_message").count(),
+            usize::from(!before)
+        );
+        assert!(
+            summary.incomplete,
+            "loss remains explicit regardless of identity"
+        );
+        if !before {
+            assert_eq!(
+                find(&obs, |o| o.kind == "human_message").fields["native_context"]["session_id"],
+                "own"
+            );
+        }
+    }
+}
+
+#[test]
+fn codex_identity_provenance_is_bounded_and_conflicting_parent_ids_are_not_claimed() {
+    let huge = "x".repeat(1024);
+    let records = codex_rows(
+        &[
+            json!({"type":"session_meta","payload":{"id":huge,"source":"cli"}}),
+            marked_codex_message("input"),
+        ],
+        1,
+    );
+    let (obs, _) = collect(codex, &records);
+    let human = find(&obs, |o| o.kind == "human_message");
+    assert!(human.fields["native_context"].get("session_id").is_none());
+    let records = codex_rows(
+        &[
+            json!({"type":"session_meta","payload":{"id":"child","source":"cli","forked_from_id":"a","parent_thread_id":"b"}}),
+            marked_codex_message("input"),
+        ],
+        1,
+    );
+    let (obs, _) = collect(codex, &records);
+    assert!(!obs.iter().any(|o| o.kind == "human_message"));
+    assert!(
+        obs[0].fields["native_context"]
+            .get("parent_session_id")
+            .is_none()
+    );
+}
+
+#[test]
+fn codex_unreadable_first_header_cannot_be_replaced_by_a_later_cli_header() {
+    for prefix in [b"{invalid json}\n".to_vec(), {
+        let mut bytes = vec![b'x'; 2 * 1024 * 1024];
+        bytes.push(b'\n');
+        bytes
+    }] {
+        let rows = [
+            json!({"type":"session_meta","payload":{"source":"cli"}}),
+            marked_codex_message("copied"),
+        ];
+        let mut bytes = prefix;
+        for row in rows {
+            bytes.extend(serde_json::to_vec(&row).unwrap());
+            bytes.push(b'\n');
+        }
+        let splits: Vec<_> = (32_000..bytes.len()).step_by(32_000).collect();
+        let mut records = vec![open_native(PRODUCER, 1, "codex-jsonl")];
+        records.extend(segment_bytes(PRODUCER, 1, &bytes, &splits));
+        records.push(end_native(PRODUCER, 1, EndReason::Complete));
+        let (obs, summary) = collect(codex, &records);
+        assert!(!obs.iter().any(|o| o.kind == "human_message"));
+        assert!(
+            obs.iter()
+                .any(|o| o.fields["reason"] == "malformed" || o.fields["reason"] == "oversize")
+        );
+        assert_eq!(
+            summary.unknown_records, 3,
+            "every record remains source-referenced"
+        );
+    }
 }

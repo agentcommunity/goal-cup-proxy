@@ -51,7 +51,7 @@ def main() -> None:
     parser.add_argument("--target", required=True, help="the target triple the release is for")
     args = parser.parse_args()
     meta = json.loads(subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--locked",
+        ["cargo", "metadata", "--offline", "--format-version", "1", "--locked",
          "--filter-platform", args.target],
         check=True, capture_output=True, text=True).stdout)
 

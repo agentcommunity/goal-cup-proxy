@@ -1482,22 +1482,16 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
     assert_eq!(small.native_budget(), Duration::ZERO);
     let small = FinishBudget::from_request(&request(Some(4_000)), false).unwrap();
     assert!(small.native_budget() > Duration::from_millis(1_500));
-    assert!(full.admits(Duration::ZERO));
-    assert_eq!(
-        full.last_start(Duration::ZERO) + FINISH_RESPONSE_MARGIN,
-        full.deadline
-    );
+    assert!(full.admits());
+    assert_eq!(full.last_start() + FINISH_RESPONSE_MARGIN, full.deadline);
 
     // Less than the reserve left: no drain share at all, and no stage is admitted inside the
     // margin.
     let tight = FinishBudget::from_request(&request(Some(900)), false).unwrap();
     assert_eq!(tight.native_budget(), Duration::ZERO);
+    assert!(!tight.admits(), "900 ms is inside the 1 s margin");
     assert!(
-        !tight.admits(Duration::ZERO),
-        "900 ms is inside the 1 s margin"
-    );
-    assert!(
-        tight.admits(Duration::from_secs(1)),
+        tight.excluding_termination(Duration::from_secs(1)).admits(),
         "termination time is added back to the deadline"
     );
 

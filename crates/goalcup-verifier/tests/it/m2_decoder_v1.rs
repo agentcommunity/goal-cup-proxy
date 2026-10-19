@@ -974,6 +974,11 @@ fn decoder_acceptance_is_the_authoritative_hint_registry() {
             "openai-chat-completions",
             &[CaptureSource::WireRequest, CaptureSource::WireResponse],
         ),
+        (
+            "amp-thread-jsonrpc",
+            "amp-thread-jsonrpc",
+            &[CaptureSource::WsClient, CaptureSource::WsServer],
+        ),
     ];
     let mut decoders_with_a_hint = std::collections::BTreeSet::new();
     for (decoder, hint, accepted_sources) in rows {
@@ -1047,16 +1052,17 @@ fn the_registry_refuses_a_duplicate_or_malformed_id() {
 }
 
 #[test]
-fn the_builtin_registry_lists_the_five_decoders_in_report_order() {
+fn the_builtin_registry_lists_the_six_decoders_in_report_order() {
     assert_eq!(DECODER_API_VERSION, 1);
     assert_eq!(
         DecoderRegistry::builtin().ids(),
         [
-            ("codex-native", "0.153.0"),
+            ("codex-native", "2"),
             ("claude-code-native", "2.1.259-2.1.283"),
             ("openai-responses", "2"),
             ("anthropic-messages", "3"),
             ("openai-chat-completions", "2"),
+            ("amp-thread-jsonrpc", "1"),
         ]
     );
     assert!(DecoderRegistry::empty().ids().is_empty());

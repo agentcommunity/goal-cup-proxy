@@ -17,7 +17,7 @@
 
 use super::api::{DecoderV1, StreamOpen};
 use super::session::quiet;
-use super::{anthropic, chat, native, openai};
+use super::{anthropic, chat, native, openai, thread};
 use std::fmt;
 use std::sync::Arc;
 
@@ -123,8 +123,7 @@ impl DecoderRegistry {
         for registered in [
             Registered::new(
                 || Box::new(native::CodexNativeDecoder::new()),
-                "Codex CLI 0.153.0 rollout JSONL: a cli-launched session and real exec-launched \
-                 chains",
+                "Codex CLI 0.153.0 CLI/exec rollouts and 0.156.1 native child with inherited context",
                 &[],
             ),
             Registered::new(
@@ -149,15 +148,19 @@ impl DecoderRegistry {
             ),
             Registered::new(
                 || Box::new(chat::ChatCompletionsDecoder::new()),
-                "no real traffic yet: the live Hermes/DeepSeek row predates this decoder and has \
-                 not been re-decoded",
+                "one retrieved/replayed Hermes HTTP sample: request context, three SSE replies and one JSON reply",
                 &[
-                    "SSE chunks: content deltas, finish_reason, per-chunk model, [DONE]",
-                    "tool_calls deltas merged by index",
-                    "usage, including a usage-only chunk",
-                    "the non-stream chat.completion body",
+                    "usage-only chunks",
                     "error objects and JSON error bodies, including a 401 masked-key echo",
                     "a stream that ends without [DONE], and data after [DONE]",
+                ],
+            ),
+            Registered::new(
+                || Box::new(thread::ThreadDecoder::new()),
+                "one retrieved/replayed macOS Amp 0.0.1792209635-g24a9fe thread WebSocket sample",
+                &[
+                    "thinking blocks",
+                    "complete message snapshots inside batch arrays",
                 ],
             ),
         ] {

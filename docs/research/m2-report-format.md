@@ -15,7 +15,14 @@ that no one helped.
   path inside the trace directory. The file is created with mode `0600`.
 - Stdout stays empty. Stderr carries the development-flag notices and one summary line.
 - `--research-json` cannot be combined with a trace directory, `--capture-integrity` or `--json`.
-  Every refused invocation exits 3 before anything is written.
+- Every refused invocation exits 3 before anything is written.
+
+Use an immutable, sealed trace or a complete retrieved copy for repeatable analysis. Rotated chain
+parts are opened lazily while the reader walks the trace: a part already open remains readable if
+upload pruning later unlinks it, but a subsequently enumerated part that has disappeared causes an
+I/O failure and no usable report. Missing parts are not skipped or re-enumerated. A trace whose
+initial parts were already pruned remains incomplete (`chain_pruned_locally`). The reader does not
+lock the trace against concurrent upload pruning.
 - `--dev-key HEX` keeps its `--capture-integrity` meaning, and the summary records it under
   `options`.
 
@@ -50,7 +57,7 @@ The research-report kind vocabulary (schemas 1 and 2) is closed at these ten val
 |---|---|---|
 | `model_request` | wire decoders | One provider request and its supplied request fields. |
 | `model` | native and wire decoders | A model identity supplied by the source. |
-| `model_response` | wire decoders | Provider response content or one response content item. |
+| `model_response` | wire decoders | Source-qualified response content or one response content item; an application thread snapshot does not establish a direct provider response. |
 | `tool_call` | native and wire decoders | One tool invocation supplied by the source. |
 | `tool_result` | native and wire decoders | One returned or replayed tool result. |
 | `usage` | native and wire decoders | One source-supplied usage snapshot. |
@@ -58,6 +65,33 @@ The research-report kind vocabulary (schemas 1 and 2) is closed at these ten val
 | `error` | native and wire decoders | A provider or session error, with only safe supplied fields. |
 | `unknown` | native and wire decoders | One emitted, source-referenced unknown condition; never a decoded fact. Spanless findings have no observation line. |
 | `human_message` | native decoders only | A message positively marked as human-authored by the source. |
+
+### Optional native source-session context
+
+A native decoder may add decoder-versioned `fields.native_context` to parsed observations.
+This is source-session provenance, not per-record authorship or proof of fresh activity. The
+shared convention is `session_id` (the source's own session), optional `parent_session_id`,
+`role`, optional `launch_source`, and `header_source` (a `SourceRef` to the supplying header).
+`identity_field` and `parent_field` identify the supplied field paths. Missing, conflicting or
+overlong identities are omitted rather than guessed. This convention can be adopted by other
+native formats; their decoders document their own source mappings and versions.
+
+`codex-native` version `2` fixes authority and context from its first `session_meta`. A later
+copied parent header cannot replace the child or turn child user-role records into typed human
+input. Own identity comes from `payload.id`; `payload.session_id` can still name the parent.
+IDs are nonempty strings of at most 256 UTF-8 bytes. Parent IDs must agree across the supplied
+nested thread-spawn, `parent_thread_id`, and `forked_from_id` fields. `role` is `interactive`,
+`headless`, `subagent`, `fork`, or `unknown`. Child/fork context includes
+`history_scope: "may_include_inherited"`; it does not classify each occurrence as fresh or copied.
+Tool/model/history occurrences remain separate, including repeated supplied IDs across streams.
+
+Ordinary CLI/vscode input still requires the existing positive message marker and does not
+require a session ID. A malformed/ambiguous first header cannot be repaired into human authority
+by a later CLI-looking header. Lost/unreadable context before a first header prevents promotion;
+loss after established identity retains that identity alongside the existing explicit loss.
+Unsupported or ambiguous user records remain `unknown`; this neither discards raw evidence nor
+changes capture integrity, the ten kinds, Decoder API version 1, or report schema 4. Decoder
+identity/version and measured-source qualifications remain in `analysis.decoders`.
 
 ### Summary line
 
@@ -76,7 +110,7 @@ The research-report kind vocabulary (schemas 1 and 2) is closed at these ten val
 | `delivery` | `anchor` (`local_only` or `signed`), `verified_ack` and `receipt_clock` exactly as the reader verified them, and `state`: `local_only` (no verified receipt or ACK), `none_acknowledged` (a verified receipt, no verified ACK), `partial` (a verified ACK behind the terminal, or no terminal), `through_terminal` (a verified ACK at or past the terminal). `records_after_deadline` and `last_seq_at_or_before_deadline` are the reader's counts of validated records stamped after, and the last seq stamped at or before, the receipt's `deadline_at`, by the participant's own machine clock (a hint; `null` without a verified, head-bound receipt). `last_ack_at` is the `acked_at` of the last verified ACK, signed by the server (the trusted time; `null` without one). |
 | `assistance` | `explicit_records` (the chain's `Assistance` records), `positive_native_markers` (the `human_message` observations written) and `evidence`: `observed` or `none_observed`. |
 | `analysis.state` | `available` (decoded observations written, no decoder degraded), `partial` (decoded observations written, some decoder degraded) or `unavailable` (no decoded observation written; source-referenced `unknown` observations may still be written). `KindTally` excludes `unknown` lines from decoded state. A capture-only stream can coexist with decoded streams; only the absence of a decoded fact makes analysis unavailable, while other decoded streams can make it available or partial. |
-| `analysis.decoders` | One entry per decoder, in the order they ran: `decoder`, its own `summary` (`decoder_id`, `decoder_version`, `observations`, `unknown_records`, `incomplete`; `null` if it failed), `written`, `over_budget`, `failure` (`{"phase","error"}` or `null`; `phase` is `create`, `accepts`, `push` or `finish`, `error` a short token such as an I/O error kind, or `panicked`), `measured` (the real traffic the decoder was checked against) and `synthetic_only` (the forms it decodes that only synthetic tests have seen; a judge reads a non-empty list as "never checked on real traffic", for example the whole `openai-chat-completions` decoder). `unknown_records` counts both emitted source-referenced `unknown` observations and spanless findings counted only in the decoder summary, so it can exceed written `unknown` lines. |
+| `analysis.decoders` | One entry per decoder, in the order they ran: `decoder`, its own `summary` (`decoder_id`, `decoder_version`, `observations`, `unknown_records`, `incomplete`; `null` if it failed), `written`, `over_budget`, `failure` (`{"phase","error"}` or `null`; `phase` is `create`, `accepts`, `push` or `finish`, `error` a short token such as an I/O error kind, or `panicked`), `measured` (the real traffic the decoder was checked against) and `synthetic_only` (the forms it decodes that only synthetic tests have seen; a judge reads a non-empty list as "never checked on real traffic", for example an unmeasured error form). `unknown_records` counts both emitted source-referenced `unknown` observations and spanless findings counted only in the decoder summary, so it can exceed written `unknown` lines. |
 | `analysis.undecoded` | The capture-only streams: the streams no decoder accepted, recorded and not read. One `{"source","hint","streams","bytes","bytes_incomplete"}` per distinct source and `protocol_hint` (`hint` is `null` when the stream had none, and at most its first 64 bytes, the hint grammar's bound; a longer hint is cut and the group adds `"hint_truncated": true`, otherwise that key is absent), in first-seen order, at most 64 groups. `bytes` counts the streams' segment source bytes; `bytes_incomplete` is `true` when too many were live at once to count them all. The goal stream is never listed. A misspelled hint in a new connector shows here. |
 | `analysis.undecoded_omitted` | Capture-only streams of groups past the bound. |
 | `analysis.models` | What the run used, as its sources state it: one `{"decoder","model","count"}` per model identity a decoder's kept `model` observations name (`fields.model`), in decoder then name order, at most 16 names of at most 128 bytes per decoder. A native decoder's names come from the harness's session file, a wire decoder's from the recorded requests and responses. |
@@ -160,7 +194,7 @@ constructs a `DecodeSession` over the built-in registry and feeds it the validat
 built-in registry
 (`DecoderRegistry::builtin()` in `crates/goalcup-verifier/src/capture_analysis/registry.rs`) lists
 `codex-native`, `claude-code-native`, `openai-responses`, `anthropic-messages` and
-`openai-chat-completions`. A new decoder
+`openai-chat-completions`, and `amp-thread-jsonrpc`. A new decoder
 implements `DecoderV1` (`capture_analysis/api.rs`) and becomes one more `Registered` entry, with
 the traffic it was measured on and its synthetic-only forms. The registry supplies every decoder
 as a candidate; `accepts` receives the full `StreamOpen`, and that decoder decides which fields
@@ -188,10 +222,37 @@ recorded here because they change a summary:
 - Everything up to `[DONE]` is complete. Non-empty data after it emits one `unknown` observation
   with reason `data_after_done` (`events`, `bytes`); no decoded fact comes from the trailing data.
 - An `End` `interrupted` or `decode_error` is a faithful early-end finding and leaves the decoder
-  summary `incomplete` false when no bytes were lost (D45). All three wire decoders share this
+  summary `incomplete` false when no bytes were lost (D45). The shared wire framing uses this
   close classification. Provider fields such as `done_seen`, `stream_complete`,
   `message_complete`, or incomplete tool input remain provider detail; gaps, dropped bytes,
   bounds, recovery, and unterminated streams still degrade analysis.
+
+`amp-thread-jsonrpc` version `1` reads only WebSocket client/server messages with that exact
+hint. It interprets complete server `message_added.params.message` snapshots, with
+`scope: "application_thread"`: assistant text/thinking as `model_response`, assistant
+`tool_use` as `tool_call`, and user `tool_result.run.result.output` as the context-visible
+`tool_result`. Model-facing tool names stay as supplied; executor names do not replace them.
+Safe supplied `messageId`, `threadId`, block IDs and block indices identify each occurrence.
+Tool input is bounded serialized JSON; text/thinking and tool output use bounded text fields.
+A supplied assistant `usage.model` yields `model`; the integer `inputTokens`, `outputTokens`,
+`cacheCreationInputTokens`, `cacheReadInputTokens`, `totalInputTokens`, and `maxInputTokens`
+remain per-snapshot `usage` fields. Values are not summed or completed from earlier messages.
+
+This thread evidence exposes neither a direct provider request nor the exact hidden system or
+inference context. It emits no `model_request`, `human_message`, or provider `outcome`.
+Deltas, leases, executor events, user send/echo, settings, RPC results, future forms and literal
+ping/pong remain source-referenced `unknown` observations. Batch array items are handled
+individually under the existing list bound. There is no cross-message accumulator or global
+deduplication: repeated complete snapshots remain per-source occurrences. Loss, redaction,
+malformed JSON, capture decode errors and limits cannot establish complete content. The native
+`amp-thread-metadata-no-transcript` leg and HTTP streams remain capture-only. Measurement is
+one retrieved macOS Amp `0.0.1792209635-g24a9fe` sample; thinking blocks and complete-message
+batch arrays remain synthetic-only. See the [Amp facts](../harnesses/amp-cli.md).
+
+The Chat Completions registry measurement now names the retrieved/replayed Hermes HTTP sample
+with three SSE replies and one JSON reply. The harness version was unreported; usage-only chunks,
+error bodies and unusual stream endings remain explicitly unmeasured forms. This is a sample
+qualification, not coverage of every harness/provider version.
 
 Registering a decoder adds one entry to `analysis.decoders` of every summary, including those of
 traces whose streams it does not accept; the pinned report bytes under
