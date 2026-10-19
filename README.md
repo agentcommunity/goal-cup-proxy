@@ -156,8 +156,13 @@ cargo fetch --locked          # one-time dependency download; project build and 
   cargo-nextest), then the doctests. About a minute warm.
 - **full:** fast, plus the slow tier, the CLI's `#[ignore]`d end-to-end tests
   (`m2_synthetic_vertical`, `capture_failure_campaign`, `upload_worker`), the Worker's own tests
-  (`npm --prefix server/worker test`), the scripts' unit tests and the link check. Run it before
-  every tag: nothing else runs the slow tier. The Worker tests need Node 22.18+ and `npm ci` in
+  (`npm --prefix server/worker test`), the scripts' unit tests and the link check. The Python
+  modules run whole with at most two concurrent workers for the audited allowlist. Unknown
+  modules run alone; process-sensitive fetch, matrix and linux_matrix modules also run alone. To run
+  the scripts serially, use `python3 -m unittest discover -s scripts` or
+  `python3 scripts/run-script-tests.py --jobs 1`. Cancellation stops new modules and waits for
+  active modules to clean up; it can wait indefinitely if a module hangs. Run it before every tag:
+  nothing else runs the slow tier. The Worker tests need Node 22.18+ and `npm ci` in
   `server/worker`.
 - Without cargo-nextest the gate falls back to `cargo test`, which runs every tier.
 
@@ -193,8 +198,11 @@ The workspace `version` in `Cargo.toml` is the only place a version is written; 
 any other copy. The active repository ruleset protects `main`, and the release script never pushes
 it directly:
 `sh scripts/release.sh prepare <x.y.z>` opens a pull request that bumps the version (it does
-nothing if `origin/main` already has it). After the version PR is merged, run the full gate on that
-versioned `origin/main` commit and the separate `sh scripts/linux-check.sh`, then
+nothing if `origin/main` already has it). After the version PR is merged, check out the exact
+versioned `origin/main` commit with the required dependencies and prerequisites in place and no
+modified or untracked source validation inputs. Run `sh scripts/gate.sh full` and the separate
+`sh scripts/linux-check.sh` sequentially on that checkout. Full includes the fast checks, so run it
+directly for release qualification. Then
 `sh scripts/release.sh tag <x.y.z>` tags that commit and pushes
 only the tag. The tag starts the release workflow, which
 refuses a tag that differs from `Cargo.toml`. Details and how to try the build by hand:

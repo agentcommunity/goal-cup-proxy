@@ -121,8 +121,19 @@ class GateTests(unittest.TestCase):
         # The real Worker under `wrangler dev`, by name.
         self.assertIn("--run-ignored ignored-only", runs[2])
         self.assertIn("upload_worker", runs[2])
-        self.assertIn("python3 -m unittest discover -s scripts", self.calls())
-        self.assertIn("python3 scripts/check-links.py --root .", self.calls())
+        calls = self.calls()
+        self.assertEqual(
+            [c for c in calls if c.startswith("python3 ")],
+            [
+                VERSION_CHECK,
+                "python3 scripts/run-script-tests.py",
+                "python3 scripts/check-links.py --root .",
+            ],
+        )
+        self.assertLess(
+            calls.index("npm --prefix server/worker test"),
+            calls.index("python3 scripts/run-script-tests.py"),
+        )
         # The Worker's own tests (typecheck, wrangler.toml guards, rate limits) run in `full` only.
         self.assertIn("npm --prefix server/worker test", self.calls())
 
@@ -138,6 +149,14 @@ class GateTests(unittest.TestCase):
         self.run_gate("fast")
         self.assertEqual([c for c in self.calls() if c.startswith("python3")], [VERSION_CHECK])
         self.assertEqual([c for c in self.calls() if c.startswith("npm")], [])
+
+    def test_script_runner_failure_stops_before_link_check(self) -> None:
+        result = self.run_gate("full", STUB_FAIL_ON="scripts/run-script-tests.py")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.splitlines()[-1], "gate full: FAIL")
+        calls = self.calls()
+        self.assertEqual(calls.count("python3 scripts/run-script-tests.py"), 1)
+        self.assertNotIn("python3 scripts/check-links.py --root .", calls)
 
     def test_full_stops_without_the_workers_dependencies(self) -> None:
         # Said at once, before any long step, rather than after the build and the tests.

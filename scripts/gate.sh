@@ -97,7 +97,7 @@ fi
 
 if [ "$tier" = full ]; then
     step npm --prefix server/worker test
-    step python3 -m unittest discover -s scripts
+    step python3 scripts/run-script-tests.py
     step python3 scripts/check-links.py --root .
 fi
 
