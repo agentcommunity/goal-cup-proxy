@@ -184,6 +184,7 @@ struct SimWorld {
     killpgs: Vec<KillpgRecord>,
     liveness_errs: u32,
     snapshot_errs: u32,
+    unavailable_witnesses: BTreeSet<u32>,
 }
 
 /// A tree to build the world from.
@@ -246,6 +247,7 @@ impl SimWorld {
             killpgs: Vec::new(),
             liveness_errs: 0,
             snapshot_errs: 0,
+            unavailable_witnesses: BTreeSet::new(),
         };
         // Strangers: init and the participant's shell, which leads the terminal group.
         world.insert(1, 0, 1, "launchd", false);
@@ -793,8 +795,15 @@ impl ProcessOs for Sim {
     }
 
     fn fork_witness(&self, pid: u32) -> Option<Box<dyn ForkWitness>> {
+        if self.world().unavailable_witnesses.contains(&pid) {
+            return None;
+        }
         self.attach(pid)
             .map(|witness| Box::new(witness) as Box<dyn ForkWitness>)
+    }
+
+    fn requires_fork_witness(&self) -> bool {
+        self.world().platform == Platform::Macos
     }
 
     fn instance_authority(&self, pid: u32) -> Option<Box<dyn InstanceAuthority>> {
@@ -1790,6 +1799,8 @@ enum RootRead {
     /// The number is held by a stranger: the read answers a creation identity the handle
     /// never registered, and the process stays live.
     Stranger,
+    /// The root stays live but its identity becomes unavailable at a later read boundary.
+    UnreadableAfterReads { after_reads: usize },
     /// The identity cannot be read although the process is still live (not a recycle, but
     /// not provably an exit either).
     UnreadableWhileLive,
@@ -1821,6 +1832,7 @@ struct RacingRoot {
     sim: Sim,
     read: RootRead,
     fired: std::sync::atomic::AtomicBool,
+    identity_reads: std::sync::atomic::AtomicUsize,
     /// Set by the `[sh]` argv read: how many more `liveness` reads find the root live before
     /// it exits. Negative: no exit is pending.
     exit_in: std::sync::atomic::AtomicI64,
@@ -1832,6 +1844,7 @@ impl RacingRoot {
             sim: sim.clone(),
             read,
             fired: std::sync::atomic::AtomicBool::new(false),
+            identity_reads: std::sync::atomic::AtomicUsize::new(0),
             exit_in: std::sync::atomic::AtomicI64::new(-1),
         }
     }
@@ -1910,6 +1923,15 @@ impl ProcessOs for RacingRoot {
                 }
                 self.sim.start_identity(pid)
             }
+            RootRead::UnreadableAfterReads { after_reads } => {
+                let reads = self.identity_reads.fetch_add(1, SeqCst) + 1;
+                if reads >= after_reads {
+                    self.fired.store(true, SeqCst);
+                    None
+                } else {
+                    self.sim.start_identity(pid)
+                }
+            }
             RootRead::Stranger => Some("sim:stranger".to_string()),
             RootRead::UnreadableWhileLive => None,
             RootRead::ArgvGoneThenExits { .. }
@@ -1933,6 +1955,9 @@ impl ProcessOs for RacingRoot {
     }
     fn fork_witness(&self, pid: u32) -> Option<Box<dyn ForkWitness>> {
         self.sim.fork_witness(pid)
+    }
+    fn requires_fork_witness(&self) -> bool {
+        self.sim.requires_fork_witness()
     }
     fn instance_authority(&self, pid: u32) -> Option<Box<dyn InstanceAuthority>> {
         self.sim.instance_authority(pid)
@@ -2176,6 +2201,74 @@ fn a_live_root_renamed_after_a_signal_is_still_a_loss() {
             w.kills
         );
     }
+}
+
+/// Losing a live root's creation identity is unverified at every read boundary,
+/// including the guard between phase A's completed child sweep and phase B.
+#[test]
+fn a_live_root_identity_lost_at_any_read_boundary_never_reports_observed_gone() {
+    for platform in [Platform::Macos, Platform::Linux] {
+        let mut injected = 0;
+        for after_reads in 1..=24 {
+            let tree = node(
+                ROOT,
+                "sh",
+                false,
+                OnTerm::DiesAfterPolls(0),
+                vec![leaf(101, "sleep", false, OnTerm::DiesAfterPolls(0))],
+            );
+            let sim = Sim::new(platform, tree, vec![]);
+            let handle = sim.handle(None, None);
+            let os = RacingRoot::new(&sim, RootRead::UnreadableAfterReads { after_reads });
+            let result = terminate_with(&handle, WALK_CAP, &os);
+            if !os.fired.load(std::sync::atomic::Ordering::SeqCst) {
+                continue;
+            }
+            injected += 1;
+            if let Ok(report) = result {
+                assert!(
+                    report.harness_unverified && !report.observed_gone && !report.all_gone,
+                    "{platform:?} identity read {after_reads}: lost authority became a positive report: {report:?}"
+                );
+            }
+        }
+        assert!(
+            injected > 1,
+            "{platform:?}: cover both early and later root reads"
+        );
+    }
+}
+
+/// A failed macOS witness acquisition cannot silently adopt Linux's orphan residual.
+#[test]
+fn missing_required_macos_fork_witness_refuses_observed_gone() {
+    let sim = Sim::new(Platform::Macos, root_respawns_on_term_tree(), vec![]);
+    sim.world().unavailable_witnesses.insert(ROOT);
+    let report = run(&sim, &sim.handle(None, None)).expect("termination can still be attempted");
+    let world = sim.world();
+    assert!(
+        !world.alive_born().is_empty(),
+        "the synthetic fork must survive outside the walk"
+    );
+    assert!(
+        !report.observed_gone && !report.all_gone,
+        "missing witness promoted an unwitnessed escape to positive proof: {report:?}"
+    );
+}
+
+/// Linux deliberately has no fork witness; its documented orphan residual stays unchanged.
+#[test]
+fn unsupported_linux_fork_witness_keeps_its_documented_observation() {
+    let sim = Sim::new(Platform::Linux, root_respawns_on_term_tree(), vec![]);
+    let report = run(&sim, &sim.handle(None, None)).expect("the Linux owned set terminates");
+    assert!(
+        !sim.world().alive_born().is_empty(),
+        "the synthetic orphan is the Linux residual"
+    );
+    assert!(
+        report.observed_gone,
+        "unsupported witness is ordinary Linux behavior: {report:?}"
+    );
 }
 
 // ─── The property runner ────────────────────────────────────────────────────────────────

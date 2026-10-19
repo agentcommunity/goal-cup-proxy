@@ -351,7 +351,12 @@ pub fn terminate_with(
     if !esc.targeted.contains(&handle.pid) {
         esc.targeted.push(handle.pid);
     }
-    if matches!(guard_registered(os, handle), Ok(Presence::Live)) {
+    let root_live = match guard_registered(os, handle) {
+        Ok(Presence::Live) => true,
+        Ok(Presence::Absent) => false,
+        Err(_) => return Ok(esc.into_containment(os, handle, started)),
+    };
+    if root_live {
         if group.is_some() {
             let _ = signal_registered_group(os, handle, libc::SIGTERM);
         }
@@ -461,8 +466,10 @@ impl Escalation {
             return;
         }
         self.instances.insert(pid, os.start_identity(pid));
-        if let Some(witness) = os.fork_witness(pid) {
-            self.witnesses.push((pid, witness));
+        match os.fork_witness(pid) {
+            Some(witness) => self.witnesses.push((pid, witness)),
+            None if os.requires_fork_witness() => self.fork_unaccounted = true,
+            None => {}
         }
     }
 

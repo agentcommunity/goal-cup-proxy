@@ -198,8 +198,11 @@ sh "$TRACER_REPO/scripts/matrix.sh" --check-copy "$GOALCUP_CONFIG_DIR" "$RUN_ID"
 
 The matrix has a supplied-key fallback. Use the same key/options for local and retrieved data.
 
-Position agreement is not retrieval. With organizer read-only database and staging R2 access
-configured through the existing secure environment, fetch the actual stored chunks:
+Position agreement is not retrieval. An organizer/local operator with secure, read-only staging
+database and R2 access fetches the actual stored chunks. The command selects a named run; the
+credentials may permit broader staging reads unless their grants explicitly restrict them.
+Keep those credentials with the authorized custodian. Researchers receive cleaned exports,
+not direct database/bucket access or raw captures:
 
 ```sh
 sh "$TRACER_REPO/scripts/fetch-run.sh" --bucket goalcup-traces-staging "$RUN_ID" "$RESEARCH_RESULTS/$RUN_ID/rebuilt"

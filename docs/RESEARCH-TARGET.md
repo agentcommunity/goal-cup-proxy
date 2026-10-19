@@ -17,8 +17,12 @@ today. Start execution with the [local handoff](LOCAL-RESEARCH-HANDOFF.md).
 - Subagent conversations are valuable in their own right. Check their capture and parent links
   separately; a parent's summary does not establish collection of a child's conversation.
 - Capture-time redaction stays bounded. More extensive personal-information and key cleaning
-  belongs in the server-side research export. This does not make raw captures public or excuse
-  known credential leakage. No researcher access to the organizer database or bucket is needed.
+  belongs in the cleaned research export. Raw captures remain private, and known credential
+  leakage still requires a fix. Reproducing the retrieval acceptance path uses an organizer/local
+  operator's secure, read-only staging access. The retrieval command selects a named run; its
+  credentials may permit broader staging reads unless the grants explicitly restrict them.
+  Keep those credentials with the authorized custodian; researchers receive cleaned exports
+  rather than direct database or bucket access.
 - The tracer observes and never supplies encouragement, prompts, or automatic restarts. Native
   same-harness subagents and continuation configured before launch are allowed (D10, D37).
 - Current implementation is Unix-only: macOS and Linux, with WSL2 as a separate Linux environment.

@@ -159,7 +159,7 @@ Cannot be captured:
 
 | Item | Why | What it would take |
 |---|---|---|
-| No local session file (sessions kept on a server) | Schema 1 needs exactly one native row | A wire-only claim level |
+| No local native artifact at all (sessions kept only on a server) | Schema 1 needs exactly one declared native source row | A core capability for wire-only connectors |
 | A database session store (SQLite, LevelDB) | `native.form` is `append_only` or `snapshot` only | A read-only snapshot native form |
 | HTTP/2-only or gRPC model traffic | The proxy speaks HTTP/1.1 and WebSocket upgrades; an `h2`-only client cannot connect | An `h2` proxy path and a decoder for its framing |
 | A local or loopback model | The proxy never sees loopback traffic. A connector that names a loopback or single-label host is refused | A loopback relay the tracer records |
@@ -401,7 +401,7 @@ moves). Never spell around a rule.
 | 6 | XDG | the harness falls back to `$HOME` and needs no XDG variable | core change |
 | 7 | CA variable | the harness honours its own variable ending `_CA_CERTIFICATE`, `_CA_CERTIFICATES`, `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or `_CA_FILE`, or else `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` | core change |
 | 8 | Native form | the own-session file is appended JSONL or rewritten whole | core change |
-| 9 | One native row | exactly one local own-session store | core change |
+| 9 | One native row | exactly one local native artifact source; it may be metadata-only and need not be a transcript | core change |
 | 10 | Executable | one entry-point file (a binary, or a script with a shebang), not an interpreter | fits |
 | 11 | Endpoint names | you set no endpoint variable at all | issue, not blocking |
 | 12 | Other refusals | no refused env name, argv path or custom regex is needed | core change |
@@ -524,7 +524,7 @@ What each manifest field must establish:
 | `capture.ca` | variable names and process scope; no secret value; no app-wide trust; the CA variable and its mode cite a source or a measurement in the facts sheet, and an own-name variable is not one that tool children also read |
 | `capture.model_host_from` | the file and key the harness saves the participant's model service in; a config file, never a key file |
 | `capture.hosts`, `auth_hosts` | provider host, narrow evidence paths, protocol hint |
-| `capture.native` | one own-session store, its form, root, pattern and scope; no request dump or credential store |
+| `capture.native` | one local native artifact source, its form, root, pattern and scope; say whether it is a transcript or metadata, and exclude request dumps and credential stores |
 | `capture.identity` | the measured carrier, its grammar and fields, and its binding to that store |
 | `redaction.extra_patterns` | plan, billing, quota and key-fragment coverage |
 

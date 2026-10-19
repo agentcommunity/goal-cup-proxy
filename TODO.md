@@ -79,8 +79,8 @@ Real-harness endurance remains open. See the coverage matrix for limits.
 
 | When | What |
 |---|---|
-| ~23 Oct 2026 | First tagged release, so dry runs use a real build. More releases follow as needed |
-| From the first release | Dry runs whenever everything runs; 10-minute tests any time. No fixed dry-run date |
+| Release cut | Version PR (if needed), merge under the `main` ruleset, full gate and separate `scripts/linux-check.sh` on merged `origin/main`, then tag |
+| 23 Oct to 6 Nov 00:00 | Dry-run window; dry runs can start on any day |
 | 4 Nov 00:00 | Feature stop: after this, fixes only |
 | 6 Nov 12:00 | Last release, including the last connectors (connector cut-off) |
 | 7 Nov 00:00 | Start window opens. It lasts 24 hours. Each run then has 168 hours |
@@ -102,8 +102,9 @@ Owner decisions of 16 Oct 2026:
   down from that and never trusts the machine's own date (WP11).
 - A harness is a plug-in module: its folder carries every harness-specific setting, and tests and
   release discover it. No harness name by hand anywhere else (WP5, WP12).
-- The larger clean-ups run now, by parallel agents on separate files, before the feature stop:
-  the first release has not made any compatibility promise yet.
+- Historical launch-planning note (16 Oct): larger clean-ups were scheduled before the feature stop.
+  It is not a current compatibility or review policy; follow `AGENTS.md`, `CONTRIBUTING.md` and
+  the current release checklist below.
 - Demo and questionnaire: due 24 hours after each run's 168 hours end (a later start gets a later
   due time). They go through the website portal, not the tracer; the website may close it leniently.
 - Harnesses: 15+ expected, Hermes Agent among them. All shipped connectors go to participants.
@@ -209,21 +210,22 @@ Participant-guide text is one pass at the end (UX-F): approvals, trust dialog, L
 
 ### WP1: Event window and event switch (server). Land first.
 Status (16 Oct): done. #165 and website #305 merged; production migration applied (cup 7-8 Nov 00:00 UTC, dry run 23 Oct to 6 Nov 00:00); Workers Logs on with invocation logs off (#169); deployed to prod and staging. Left: the 6 Nov `EVENT_ID` switch (runbook in `server/worker/README.md`).
-- The events row is 16 h early. `goalcup-cup-2026` opens 6 Nov 16:00 UTC. Add a new website migration (agentCommunity_PAGE `supabase/migrations/`) that sets opens `2026-11-07T00:00:00Z` and closes `2026-11-08T00:00:00Z` (staging=false), and opens the dry-run row from the first release to 6 Nov 00:00 UTC, so a dry run can start any day. Copy it into `server/worker/sql/goal-cup-tracer-upload.sql`. Fix the stale comment at `:1788-1789`. Drop `[CONFIRM]` at `server/worker/README.md:236-239`. [C6-01, docs]
+- The events row is 16 h early. `goalcup-cup-2026` opens 6 Nov 16:00 UTC. Add a new website migration (agentCommunity_PAGE `supabase/migrations/`) that sets opens `2026-11-07T00:00:00Z` and closes `2026-11-08T00:00:00Z` (staging=false), and keeps the dry-run row open from 23 Oct to 6 Nov 00:00 UTC, so a dry run can start any day. Copy it into `server/worker/sql/goal-cup-tracer-upload.sql`. Fix the stale comment at `:1788-1789`. Drop `[CONFIRM]` at `server/worker/README.md:236-239`. [C6-01, docs]
 - The `EVENT_ID` switch: `wrangler.toml:37-40` still says `goalcup-dryrun-2026`. Write a dated runbook step: "~30 Oct: set `goalcup-cup-2026`, `npm test`, `npx wrangler deploy`, open one practice and one test run, check the R2 prefix `traces/goalcup-cup-2026/`." Do it on 6 Nov with the last release. [C6-02]
 - Turn on Workers Logs: `[observability] enabled = true` at top level and in `[env.staging]`, pinned in `test/config.test.ts`. [C6-04]
 - Why: the wrong window refuses real starts after 7 Nov 16:00 UTC. A missed switch writes cup runs outside the 180-day bucket lock.
 - Accept: `select id,start_window_opens,start_window_closes from goal_cup_tracer.events` shows the new values. `npm --prefix server/worker test` passes.
 
-### WP2: Release pipeline shakedown. Start 17 Oct; four runners are untested.
-Status (16 Oct): code done (#164: 0.6.0 single source, `install.sh`, every connector ships, `release.sh prepare`/`tag`, no Homebrew). Left: the first real tag and publish (WP10).
-- Version, one source: workspace `Cargo.toml:13` says `0.1.0` while tag `v0.5.0` exists. Make the workspace version the only place a version is written; every crate, binary, report field (`verifier_version`, `tracer_version`, `DAEMON_VERSION`), the Worker's expected tracer version if any, the install script and the release notes read it. `scripts/release.sh <x.y.z>` sets it, updates `Cargo.lock`, commits and tags; `release.yml` refuses a tag that differs from it. Docs never write a version number by hand (they say "the latest release"); a gate test fails on any other hard-coded version string in the repo. Start at `0.6.0`. Also fix the stale `v0.5.1` at `:15` and "dev-only signer" at `:82`. [C5-F5, C6-05, C6-15, docs]
-- Ship every connector. `scripts/package-release.sh:38` archives only codex-cli and claude-code-cli. Archive all of `connectors/`, with no list of names (Hermes ships too; H-21 is closed). Fix the comment at `:11-13`, `packaging/README.md:28,38-39`, and SKILL step 12 ("ships once merged"). [C3-F2, C6-06]
-- Run `gh workflow run release.yml` by hand now. It publishes nothing. Fix what fails (`macos-15-intel`, `ubuntu-22.04-arm`, `third-party-licenses.py`). [C6-05]
-- Install for every platform: an `install.sh` published with each release (`curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh`). It picks the build for macOS arm64/x86_64 or Linux arm64/x86_64 (WSL2 is Linux), checks the SHA-256, and installs to `~/.local/bin`. A download by `curl` is not quarantined on macOS, so unsigned builds run. Drop the Homebrew tap from the plan (maybe later, Mac-only nicety). Native Windows later gets an `install.ps1`. Update README, RULES, PARTICIPANT-GUIDE and the setup skill.
-- Put the Worker tests in the gate: add `step npm --prefix server/worker test` in the `full` block of `scripts/gate.sh:89`, and assert it in `scripts/test_gate.py::test_full_runs_everything`. Keep it out of ci.yml, because CI stays lean. [C6-03, T3-F2]
-- `.github/CODEOWNERS`: add `/server/ @nembal`. In `ci.yml:8-10,28-30`, drop `v1/trunk`. [C6-11, C6-15]
-- Accept: the manual release run is green on all four targets, and `install.sh` installs it on macOS and Linux. The tarball holds every non-excluded `connectors/*`. `python3 -m pytest scripts/test_gate.py` passes.
+### WP2: Release pipeline shakedown
+Prepublication snapshot (19 Oct, before the release cut): release implementation complete (#164: workspace version source, `install.sh`,
+all connectors packaged, `release.sh prepare`/`tag`, and no Homebrew tap). The workspace is at
+0.6.0; the latest published tag remains v0.5.0. The first 0.6.0 tag and publication remain open
+under WP10. Earlier implementation checklist items are closed by #164 and retained here by their
+ticket references: version and workflow (#C5-F5, C6-05, C6-15), connector packaging (C3-F2,
+C6-06), Worker gate (C6-03, T3-F2), and CODEOWNERS/CI scope (C6-11, C6-15). The manual workflow
+builds and stores run artifacts; only a pushed release tag publishes assets.
+For current build and publication status, see [release workflow runs](https://github.com/agentcommunity/goal-cup-tracer/actions/workflows/release.yml)
+and [published releases](https://github.com/agentcommunity/goal-cup-tracer/releases).
 
 ### WP3: Participant-facing CLI and daemon fixes
 Status (16 Oct): done (#159, #158).
@@ -246,7 +248,7 @@ Status (16 Oct): done (#175).
 
 ### WP5: Harness onboarding for #4..#15. Land before the connector cut-off.
 Status (16 Oct): done (#160, #172).
-- The template and skill build headless (Hermes) connectors, but the product is chat mode (D57). Add a chat-mode block, on by default, to `skills/adding-a-capture-harness/templates/connector-harness.toml:14-22,41`. In SKILL `:71,:102`, point at codex-cli. The facts sheet starts in chat mode and asks for the CA variable and every provider host. [C3-F1, C3-F7, C3-F13]
+- Historical checklist item (closed by #160/#172, with later D62 guidance): the chat-mode template, onboarding skill and facts sheet replaced the earlier host-list-first workflow. Contributor guidance now finds a participant-selected model host in its config and uses fixed host rows only for fixed-service harnesses. [C3-F1, C3-F7, C3-F13]
 - Chat-mode kit: replace the id list at `cli/tests/full/harness_contract_kit.rs:1069` (and the match at `:1005`) with every pinned `interactive = true` connector. Pass `KIT_NATIVE_FILE`, derived from `[[capture.native]]`. Drop the per-harness branches in `tests/fixtures/m2-fake-chat-harness.sh:18-33`. [C3-F1, T2-F1]
 - Find connectors by discovery, not hard-coded ids. One `shipped_connector_ids()` helper replaces the lists at `cli/tests/shipped_connectors.rs:95,143,220,258,544` (compare `:258` to the pins file), `protocol/tests/it/harness_conformance.rs:35`, `full/preflight_doctor.rs:44,138,206,252` and `it/harness_launch_plan.rs:287`. Delete the per-harness recipe asserts (`shipped_connectors.rs:26-82`, `harness_launch_plan.rs:19-56`). Loop the generic rules over every connector. [T1-F4, T2-F1, T2-F12]
 - The name ban must grow with `connectors/`. In `protocol/tests/it/no_family_literals.rs:19`, add the connector ids (strip `-cli`, match whole tokens). [T3-F9]
@@ -313,7 +315,8 @@ Status (16 Oct): done (#187, #189, #190, #192, #193). A scratch fifth connector 
 - Everything harness-specific lives in `connectors/<id>/`: launch, chat mode, env, CA variables,
   redaction rules, provider hosts, native session files. Core reads it; core never names a harness.
 - Move the redaction rules and the CA-variable list from Rust tables into manifest data
-  (After-event items 3 and 4 below; signed daemon change, fine before the first release).
+  (After-event items 3 and 4 below; the signed daemon change may land only after its review and
+  release checks).
 - Tests and the release find connectors by reading `connectors/` (WP5); a per-connector contract
   test runs for every folder (item 7 below).
 - Clean out every hard-coded Codex, Claude Code and Hermes special case in Rust and tests; each of
@@ -323,9 +326,16 @@ Status (16 Oct): done (#187, #189, #190, #192, #193). A scratch fifth connector 
 - Accept: a scratch connector folder for a fifth harness passes `check-connector.sh` and the contract
   test, ships in the release tarball, with zero Rust edits.
 
-### WP10: Release cut (first ~23 Oct, last 6 Nov 12:00 UTC)
-- Run `gate.sh full` once (including `upload_worker` and `npm test`), then `scripts/linux-check.sh`. Run `scripts/release.sh 0.6.0` and the release workflow.
-- Accept: `install.sh` works on clean Apple Silicon and Intel Macs and on Linux arm64/x86_64. `goalcup doctor --harness all` lists every shipped connector. The release notes list the pinned ids.
+### WP10: Release cut (next version; last scheduled release 6 Nov 12:00 UTC)
+- If the version is not already on `origin/main`, run `scripts/release.sh prepare <x.y.z>` and
+  merge its PR under the `main` ruleset. On merged, versioned `origin/main`, run
+  `sh scripts/gate.sh full` and the separate `sh scripts/linux-check.sh`; then run
+  `sh scripts/release.sh tag <x.y.z>`. `tag` does not run the full gate. A manual release workflow
+  run only builds and tests artifacts; it does not publish.
+- Accept: the tag workflow passes on all four targets and publishes four tarballs, `SHA256SUMS`,
+  and `install.sh`; verify the published installer in a fresh private prefix. `goalcup doctor
+  --harness all` checks every shipped connector and reports install status (it may exit 1 when an
+  optional harness is absent). Report source version, tag and published assets as separate states.
 
 ## Feature stop
 
@@ -352,7 +362,7 @@ UTC. Every change passes `gate.sh fast`; Worker changes also pass `npm test`; ev
 Run these in parallel worktrees, two writers never on the same files. Items 3 and 7 are WP12.
 Anything not done by 4 Nov moves to after the event.
 
-Status (16 Oct): 3, 4, 7 and 9 done (WP12). 10 done (#183, #184); the Anthropic port to the shared tracker waits until after the event. 11 and 12 done. 1, 2 and 5 wait until after the first release.
+Status (16 Oct): 3, 4, 7 and 9 done (WP12). 10 done (#183, #184); the Anthropic port to the shared tracker waits until after the event. 11 and 12 done. 1, 2 and 5 wait until after the event.
 
 1. **Run lifecycle module.** Add a persisted `enum StopReason` that falls back to the old strings, and `run/lifecycle.rs` `phase()`, read by status, reserve and finish. Add `HarnessState::Exited.code`. Move `RunMode` to `run/`. Rename the wire field `reserve_bytes` to `chain_quota_bytes` with an alias. [C4-F1, F10, F11]
 2. **Split `start.rs` and `uploader.rs`.** `commands/start/` plus `crate::shared_home`, and `uploader.rs` in five parts, keeping `pub use`. After the move: an Undo guard, `StartCx`, `SealArgs`, `TestDoors` and shared helpers. [C4-F2, F3, F8, F9, F12]

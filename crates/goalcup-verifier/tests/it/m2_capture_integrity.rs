@@ -3388,6 +3388,87 @@ fn a_rotated_chain_verifies_like_one_file() {
 }
 
 #[test]
+#[cfg(unix)]
+fn a_week_of_rotated_parts_verifies_with_a_small_descriptor_budget() {
+    use std::os::unix::process::CommandExt;
+
+    let mut records = launched(complete_wire(None));
+    records.extend((0..350).map(|_| CaptureRecord::Assistance {
+        observed: at(DAEMON_CLOCK, 100),
+        action: "keep going".to_string(),
+    }));
+    let one = make_trace(&records, true);
+    let rotated = make_trace(&records, true);
+    let count = chain_lines(rotated.path()).len();
+    let parts = split_into_parts(rotated.path(), &(1..count).collect::<Vec<_>>());
+    assert!(parts.len() > 336, "more than a week of half-hour parts");
+    support::make_private(rotated.path());
+
+    let verify = |root: &Path| {
+        let mut command = bin();
+        command.arg("--capture-integrity").arg(root);
+        // Only this verifier child gets the smaller limit; the test process and
+        // concurrently running tests keep their existing descriptor budgets.
+        // SAFETY: the post-fork closure only gets/sets a process-local rlimit and
+        // returns an OS error on failure; it touches no shared locks or allocations.
+        unsafe {
+            command.pre_exec(|| {
+                let mut limit = libc::rlimit {
+                    rlim_cur: 0,
+                    rlim_max: 0,
+                };
+                if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                limit.rlim_cur = limit.rlim_cur.min(64);
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        command.output().unwrap()
+    };
+    let single = verify(one.path());
+    assert_eq!(single.status.code(), Some(0), "{single:?}");
+    let split = verify(rotated.path());
+    assert_eq!(split.status.code(), Some(0), "{split:?}");
+    assert_eq!(split.stdout, single.stdout, "rotation preserves the report");
+}
+
+#[test]
+fn removing_a_future_part_during_scan_leaves_no_usable_report() {
+    let dir = make_trace(&launched(complete_wire(None)), true);
+    let parts = split_into_parts(dir.path(), &[1, 4, 9]);
+    let mut remove = Some(parts[2].clone());
+    let result = scan_capture_trace(dir.path(), &VerifyOptions::default(), &mut |_| {
+        if let Some(path) = remove.take() {
+            std::fs::remove_file(path)?;
+        }
+        Ok(())
+    });
+    assert!(result.is_err(), "an enumerated part must never be skipped");
+}
+
+#[test]
+fn an_already_open_part_survives_unlink_during_scan() {
+    let one = make_trace(&launched(complete_wire(None)), true);
+    let dir = make_trace(&launched(complete_wire(None)), true);
+    let parts = split_into_parts(dir.path(), &[1, 4, 9]);
+    // The first callback is in part 1, after the baseline-only part 0.
+    let mut remove = Some(parts[1].clone());
+    let report = scan_capture_trace(dir.path(), &VerifyOptions::default(), &mut |_| {
+        if let Some(path) = remove.take() {
+            std::fs::remove_file(path)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(report.exit_code(), 0, "{report:#?}");
+    assert_eq!(report, scan(one.path()).0);
+}
+
+#[test]
 fn a_chain_missing_its_first_part_says_verify_the_server_copy() {
     let key = server_key();
     let options = supplied(&key);

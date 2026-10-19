@@ -29,9 +29,11 @@ evidence about the current agent ecosystem.
 
 All times are UTC.
 
-- **23–24 October:** first tracer release. From then until 6 November, 00:00, the dry-run window is
-  open: you can start dry runs on any day. The last release is on 6 November, 12:00. Install the latest release on macOS, Linux or WSL2 with
-  `curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh` ([guide](PARTICIPANT-GUIDE.md#1-install)).
+- **Release availability:** install the latest published tracer release on macOS, Linux or WSL2
+  with `curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh`
+  ([guide](PARTICIPANT-GUIDE.md#1-install)).
+- **23 October to 6 November, 00:00:** the dry-run window is open; you can start dry runs on any
+  day. The last scheduled release is on 6 November, 12:00.
 - **Before the window:** you prepare with `goalcup prep` and practice runs. Practice is not limited
   to the window.
 - **7 November 2026, 00:00:** the 24-hour start window opens. It closes at 00:00 on 8 November.

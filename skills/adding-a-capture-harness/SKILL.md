@@ -13,8 +13,11 @@ in order.
    says whether you need a core change, and the reviewer checklist.
 2. Look up every `harness.toml` field in [docs/CONNECTOR-SCHEMA.md](../../docs/CONNECTOR-SCHEMA.md).
 3. Write the facts sheet from [templates/harness-facts.md](templates/harness-facts.md). The rules
-   are in [docs/harnesses/README.md](../../docs/harnesses/README.md). Start in chat mode, and ask
-   first for the CA variable the harness honours and every provider host it can reach.
+   are in [docs/harnesses/README.md](../../docs/harnesses/README.md). Start in chat mode and ask
+   which CA variable the harness honours. If participants choose a model service, find the config
+   file and key that store it (`model_host_from`, D62). Ask for a fixed provider host only when the
+   harness cannot choose its service. Record authentication and refresh hosts separately as
+   tunnel-only paths.
 4. Copy the templates:
    - [templates/connector-harness.toml](templates/connector-harness.toml) to
      `connectors/<id>/harness.toml`. It is chat mode (D57), the product's mode. The closest

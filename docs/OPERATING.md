@@ -47,7 +47,7 @@ All times UTC.
 
 | Date | What |
 |---|---|
-| 23–24 Oct | First release (`scripts/release.sh prepare`, merge, `scripts/release.sh tag`) |
+| Release cut | Prepare the version PR if needed, merge under the `main` ruleset, run the full gate and separate `scripts/linux-check.sh` on merged `origin/main`, then tag that commit with `scripts/release.sh tag` |
 | 23 Oct to 6 Nov 00:00 | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
 | 4 Nov 00:00 | Feature stop: fixes only |
 | 6 Nov | `EVENT_ID` switch and last release (12:00). See [EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026-with-the-last-release). |
@@ -125,7 +125,9 @@ sh scripts/delete-test-runs.sh --older-than '7 days' --yes   # only runs older t
 
 A `v*` tag that equals the workspace version builds four tarballs, `SHA256SUMS` and `install.sh`
 (participants install with it). Steps and layout are in [packaging/README.md](../packaging/README.md).
-The binaries are unsigned and not notarized. Run `sh scripts/gate.sh full` before every tag. A release
+The binaries are unsigned and not notarized. Before every tag, run `sh scripts/gate.sh full` and
+then `sh scripts/linux-check.sh` on the merged versioned commit. The Linux check needs Docker with
+privileged-container support. A release
 tarball carries every folder under `connectors/`; a merged connector ships by being merged, but the
 pins are compiled in, so a connector merged after a release needs a point release.
 
@@ -330,12 +332,12 @@ clocks.
 - **`shasum` or `sha256sum`**, because a test runs `scripts/pin-manifests.sh --print`, and **`python3`**
   if you change `connectors/`.
 
-`cargo test --workspace` is the whole suite. "Green" means `sh scripts/gate.sh fast` passes (and `full`
+`cargo test --offline --workspace` is the whole suite. "Green" means `sh scripts/gate.sh fast` passes (and `full`
 before a release); [README, The gate](../README.md#the-gate) has the tiers. Narrow runs:
 
 ```
-cargo test -p goalcup-daemon                          # one crate
-cargo test -p goalcup-daemon --test it control_api::  # one module of one crate
+cargo test --offline -p goalcup-daemon                          # one crate
+cargo test --offline -p goalcup-daemon --test it control_api::  # one module of one crate
 ```
 
 On the maintainer's machine every cargo command carries `--offline`, so run `cargo fetch --locked` once
@@ -376,8 +378,7 @@ nothing about macOS.
 
 ## Installing the participant binaries
 
-A clean checkout has none of `goalcup`, `goalcup-daemon` and `goalcup-verify` on `PATH`. `cargo build
---release` makes them. Either put `target/release` in front of `PATH`, or copy the three binaries and set
+A clean checkout has none of `goalcup`, `goalcup-daemon` and `goalcup-verify` on `PATH`. `cargo fetch --locked` downloads dependencies once; `cargo build --release --offline` makes them. Either put `target/release` in front of `PATH`, or copy the three binaries and set
 `GOALCUP_CONNECTORS_DIR` to this checkout's `connectors/`.
 
 The connector directories (`harness.toml` and seeds) are the rulebook: how a harness is launched and
@@ -477,12 +478,14 @@ run. Neither makes a failing entry pass.
 
 ## Running the verifier
 
-```
-goalcup-verify --capture-integrity <trace> [--dev-key <hex>]
-goalcup-verify --research-json <trace> --output <report.ndjson> [--dev-key <hex>]
+```sh
+goalcup-verify --capture-integrity "$TRACE_DIR"
+goalcup-verify --research-json "$TRACE_DIR" --output "$REPORT_PATH"
 ```
 
-`<trace>` is a protocol-v5 trace directory (`chain.jsonl` and the files beside it). `--capture-integrity`
+Set `TRACE_DIR` to a protocol-v5 trace directory (`chain.jsonl` and the files beside it), and
+`REPORT_PATH` to a new `.ndjson` path. For staging, append `--dev-key "$STAGING_PUBLIC_KEY"`
+to each command, with that variable set to the staging public key. `--capture-integrity`
 prints the integrity report on stdout and nothing else. `--research-json` writes the private research report
 to a new `*.ndjson` file outside the trace and leaves stdout empty. Notices, errors and the summary line are
 stderr.
@@ -499,6 +502,13 @@ This build pins the production ingest key. A production trace verifies without a
 signer) gives `receipt_key_not_accepted` or `ack_signature_unverified`. `--dev-key <hex>` (repeatable, 64 hex characters) accepts signatures under that
 key for one run, and the report records `key_source: "supplied"` so a development run is never mistaken for a
 production one.
+
+Use a sealed, immutable trace directory for repeatable analysis. The reader opens rotated chain parts
+as it enumerates them: a part already open remains readable if it is later unlinked, but a later
+part that disappears before it is opened produces an I/O error and no usable report. The reader does
+not skip or re-enumerate missing parts. A chain whose initial parts were already pruned remains
+incomplete (`chain_pruned_locally`). Avoid analyzing a local trace while upload pruning can change
+it; retrieve a complete sealed copy when needed.
 
 ### Judging a run from the server's copy
 

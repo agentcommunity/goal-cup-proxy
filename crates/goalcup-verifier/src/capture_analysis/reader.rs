@@ -52,8 +52,8 @@ use goalcup_protocol::chain::GENESIS;
 use goalcup_protocol::control::parse_z;
 use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::export::{
-    ACKS_FILE, BASELINE_FILE, ChainPhaseReplay, ExportError, RECEIPT_FILE, SEAL_FILE, TerminalKind,
-    chain_parts, check_terminal_manifest, manifest_sha256, part_file_name,
+    ACKS_FILE, BASELINE_FILE, ChainPart, ChainPhaseReplay, ExportError, RECEIPT_FILE, SEAL_FILE,
+    TerminalKind, chain_parts, check_terminal_manifest, manifest_sha256, part_file_name,
 };
 use goalcup_protocol::provenance::{Rfc3339Utc, Sha256Digest, TerminationOutcomeV1};
 use goalcup_protocol::receipt::StartReceipt;
@@ -287,6 +287,12 @@ impl CaptureIntegrityReport {
 /// capture-record rules that need the removed records are not, and the report is incomplete
 /// with `chain_pruned_locally`, because only the server's copy can be judged whole.
 ///
+/// Parts are opened one at a time through the retained trace-directory capability, so
+/// descriptor use does not grow with their count. An already opened part survives unlink,
+/// but an enumerated later part removed before its open ends the scan with an I/O error,
+/// never a skipped part or a fresh listing. Scan an immutable sealed/retrieved copy to avoid
+/// racing local pruning. This reader does not snapshot all part handles as writer resume does.
+///
 /// `Err` means no usable report. That covers an unreadable or replaced trace artifact (the
 /// no-follow containment policy refuses symbolic links and hard links), a chain whose
 /// first record is not protocol v5 (this build reads no other), an I/O failure, or
@@ -311,15 +317,11 @@ pub fn scan_capture_trace(
     };
     let no_chain = || io::Error::new(io::ErrorKind::NotFound, "the trace has no chain.jsonl");
     let first = parts.first().ok_or_else(no_chain)?.start;
-    let mut chain = Vec::with_capacity(parts.len());
-    for part in &parts {
-        chain.push(open_file(&root, &part_file_name(part.start))?.ok_or_else(no_chain)?);
-    }
     if first > 0 {
         scan.pruned_before(first);
     }
     let mut acks = open_file(&root, ACKS_FILE)?.map(AckStream::new);
-    scan.read_chain(chain, acks.as_mut(), emit)?;
+    scan.read_chain(&root, &parts, acks.as_mut(), emit)?;
     // What follows is about the documents and the chain as a whole, not one record.
     scan.at = None;
     if scan.chain_clean {
@@ -683,17 +685,27 @@ impl<'k> Scan<'k> {
     /// Read the chain's parts, in order, as one stream.
     fn read_chain(
         &mut self,
-        parts: Vec<std::fs::File>,
+        root: &TraceDir,
+        parts: &[ChainPart],
         mut acks: Option<&mut AckStream>,
         emit: &mut dyn FnMut(&CaptureRecord) -> io::Result<()>,
     ) -> io::Result<()> {
         let limit = MAX_ENVELOPE_BYTES as u64;
-        let mut parts = parts.into_iter();
+        let mut parts = parts.iter();
         let Some(first) = parts.next() else {
             self.chain_clean = true;
             return Ok(());
         };
-        let mut reader = BufReader::new(first);
+        let open_part = |part: &ChainPart| {
+            let name = part_file_name(part.start);
+            open_file(root, &name)?.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("enumerated chain part {name} disappeared before it could be read"),
+                )
+            })
+        };
+        let mut reader = BufReader::new(open_part(first)?);
         let mut line = Vec::with_capacity(16 * 1024);
         loop {
             line.clear();
@@ -707,7 +719,7 @@ impl<'k> Scan<'k> {
             if read == 0 {
                 match parts.next() {
                     Some(next) => {
-                        reader = BufReader::new(next);
+                        reader = BufReader::new(open_part(next)?);
                         continue;
                     }
                     None => {

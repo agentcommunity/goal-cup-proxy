@@ -62,7 +62,7 @@ TypeScript).
 | `goalcup seal`, `status`, `entries`, `doctor` | End a run early; read status; list runs; check the machine | [commands/](../crates/goalcup-cli/src/commands/) |
 | Proxy | Loopback CONNECT proxy. Relays bytes unchanged; tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
 | Daemon | Control API on loopback; ingest; per-producer redaction; chain append; native-file capture; finish; termination | [runtime/capture/](../crates/goalcup-daemon/src/runtime/capture/mod.rs) |
-| Verifier | Integrity reader and research report. Five built-in decoders: native `codex-native` and `claude-code-native`; wire `openai-responses`, `anthropic-messages`, `openai-chat-completions` | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
+| Verifier | Integrity reader and research report. Six built-in decoders: native `codex-native` and `claude-code-native`; wire `openai-responses`, `anthropic-messages`, `openai-chat-completions`, and `amp-thread-jsonrpc` | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
 | Upload server | Checks the run credential, stores chunks in R2, signs receipts and acknowledgements, sends the run emails | [server/worker](../server/worker/README.md), [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DESIGN.md) |
 
 The control API (version `CONTROL_API_VERSION`, now 9) requires its version on mutating requests.
@@ -270,7 +270,7 @@ native Windows. Operating the binaries: [OPERATING](OPERATING.md).
 - **capture-only**: bytes recorded and not decoded, because no decoder accepts the stream or the
   harness has no decoder.
 - **decoder, observation**: a verifier component that turns the retained bytes of the streams it
-  accepts into observations. Trait `DecoderV1`; `DecoderRegistry::builtin()` lists the five.
+  accepts into observations. Trait `DecoderV1`; `DecoderRegistry::builtin()` lists six.
   `protocol_hint` is open, grammar-checked metadata that tells the registry which decoders to offer.
 - **gap, Loss, Recovery**: section 7.
 - **seal**: ending an entry: finish, terminate owned processes, write `LocalFinish` and `seal.json`.

@@ -4,14 +4,14 @@
 # protected, so this script never pushes it: a version bump is a pull request, and the release
 # is a tag on what that pull request merged.
 #
-#   sh scripts/release.sh prepare <x.y.z>   branch release/v<x.y.z> from origin/main, set the
+#   sh scripts/release.sh prepare <x.y.z>   when needed, branch release/v<x.y.z> from origin/main, set the
 #                                           version, update Cargo.lock, run the version check,
 #                                           commit, push the branch and open a pull request.
 #                                           If origin/main already has <x.y.z>, it says so and
 #                                           does nothing.
-#   sh scripts/release.sh tag <x.y.z>       after that pull request is merged: fetch, check that
-#                                           origin/main's version is <x.y.z>, tag origin/main's
-#                                           commit (not any local branch) and push only the tag.
+#   sh scripts/release.sh tag <x.y.z>       after the version is on origin/main and the full gate
+#                                           and separate Linux check passed there: fetch, check origin/main's version, tag
+#                                           its commit (not a local branch) and push only the tag.
 #
 # The tag starts .github/workflows/release.yml, which builds the four targets and publishes the
 # release. It refuses a tag that differs from Cargo.toml.
@@ -71,7 +71,7 @@ fi
 # prepare
 if [ "$main_version" = "$new" ]; then
     echo "release: origin/main is already at version $new, so there is nothing to bump."
-    echo "Next: sh scripts/release.sh tag $new"
+    echo "Next: on that origin/main commit, run sh scripts/gate.sh full, then sh scripts/linux-check.sh, then sh scripts/release.sh tag $new"
     exit 0
 fi
 highest=$(printf '%s\n%s\n' "$main_version" "$new" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
@@ -107,9 +107,9 @@ git add Cargo.toml Cargo.lock
 git commit -q -m "Release $new"
 if ! { git push -q -u origin "$branch" &&
     gh pr create --base main --head "$branch" --title "Release $new" \
-        --body "Sets the workspace version to $new. After it is merged: sh scripts/release.sh tag $new"; }; then
+        --body "Sets the workspace version to $new. After it is merged, run sh scripts/gate.sh full and then sh scripts/linux-check.sh on that origin/main commit before sh scripts/release.sh tag $new"; }; then
     git checkout -q "$start"
     die "the release commit is on the local branch $branch (and on origin if the push worked). Finish by hand: git push -u origin $branch && gh pr create --base main --head $branch"
 fi
 git checkout -q "$start"
-echo "release: pull request opened for $branch. After it is merged: sh scripts/release.sh tag $new"
+echo "release: pull request opened for $branch. After it is merged, run sh scripts/gate.sh full and then sh scripts/linux-check.sh on that origin/main commit before sh scripts/release.sh tag $new"

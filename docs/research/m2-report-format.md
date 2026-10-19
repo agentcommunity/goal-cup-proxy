@@ -15,7 +15,14 @@ that no one helped.
   path inside the trace directory. The file is created with mode `0600`.
 - Stdout stays empty. Stderr carries the development-flag notices and one summary line.
 - `--research-json` cannot be combined with a trace directory, `--capture-integrity` or `--json`.
-  Every refused invocation exits 3 before anything is written.
+- Every refused invocation exits 3 before anything is written.
+
+Use an immutable, sealed trace or a complete retrieved copy for repeatable analysis. Rotated chain
+parts are opened lazily while the reader walks the trace: a part already open remains readable if
+upload pruning later unlinks it, but a subsequently enumerated part that has disappeared causes an
+I/O failure and no usable report. Missing parts are not skipped or re-enumerated. A trace whose
+initial parts were already pruned remains incomplete (`chain_pruned_locally`). The reader does not
+lock the trace against concurrent upload pruning.
 - `--dev-key HEX` keeps its `--capture-integrity` meaning, and the summary records it under
   `options`.
 
@@ -187,7 +194,7 @@ constructs a `DecodeSession` over the built-in registry and feeds it the validat
 built-in registry
 (`DecoderRegistry::builtin()` in `crates/goalcup-verifier/src/capture_analysis/registry.rs`) lists
 `codex-native`, `claude-code-native`, `openai-responses`, `anthropic-messages` and
-`openai-chat-completions` and `amp-thread-jsonrpc`. A new decoder
+`openai-chat-completions`, and `amp-thread-jsonrpc`. A new decoder
 implements `DecoderV1` (`capture_analysis/api.rs`) and becomes one more `Registered` entry, with
 the traffic it was measured on and its synthetic-only forms. The registry supplies every decoder
 as a candidate; `accepts` receives the full `StreamOpen`, and that decoder decides which fields

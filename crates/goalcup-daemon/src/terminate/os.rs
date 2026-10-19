@@ -69,6 +69,13 @@ pub trait ProcessOs {
     /// moment on. macOS: an `EVFILT_PROC` kqueue. Linux: `None`.
     fn fork_witness(&self, pid: u32) -> Option<Box<dyn ForkWitness>>;
 
+    /// Whether a missing fork witness prevents a positive owned-set observation.
+    /// macOS needs a witness for its fork-and-exit guarantee; Linux explicitly accepts
+    /// the unwitnessed orphan window. Simulated platforms override the native default.
+    fn requires_fork_witness(&self) -> bool {
+        cfg!(target_os = "macos")
+    }
+
     /// The instance-bound signal authority the Darwin singleton path runs on: an audit
     /// token plus the witness above, acquired together. `None` off macOS, or when either
     /// half cannot be acquired, and the generic path runs instead.

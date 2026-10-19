@@ -1,11 +1,12 @@
 # Decisions
 
-Rules that still bind the code. Code and docs cite them as `D<number>`. A number never changes
-and is never reused. Add or change an entry only when a rule changes. Entries for rules that no
-code or doc cites any more are removed; git history keeps them.
+Current rules and historical decisions. Code and docs cite them as `D<number>`. A number never
+changes and is never reused. Add or change an entry only when a rule changes. Entries for rules
+that no code or doc cites any more are removed; git history keeps them. An entry marked
+superseded or retired is retained to explain history and references; follow the named replacement.
 
-Entries are short on purpose. The code and its tests are the detail. D1 to D26 are older rules,
-kept only so that the references to them resolve.
+Entries are short on purpose. The code and its tests are the detail. D1 to D26 are older decisions
+retained for references; some have been superseded or retired.
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 

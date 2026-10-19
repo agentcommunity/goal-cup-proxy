@@ -2,7 +2,9 @@
 
 Connector id: `hermes-cli` · Facts for version: `0.19.0` · Written by: Goal Cup team · Last checked: 2026-10-16
 Public disclosure: yes. Everything here comes from the public connector, Goal Cup's source reading of the installed package and one live reference row on macOS; no keys, tokens or personal paths are included.
-Status: shipped connector (capture-only: Goal Cup records the run, but there is no native decoder for the session snapshot, so no own-session claim is made yet)
+Status: shipped connector. Its native session snapshot is capture-only, so it supports no own-session
+claim yet. The `openai-chat-completions` wire decoder has been measured on retrieved Hermes traffic;
+the historical reference row below remains explicitly not re-decoded.
 
 Source words used in every cell: "measured" means Goal Cup ran it (macOS 26, arm64, Hermes 0.19.0, CPython 3.13.13, 2026-09-03 spike and 2026-10-02 reference row); "source" means Goal Cup read the installed 0.19.0 package without running that path; "vendor docs" means a quote that Goal Cup's research file took from Nous Research's documentation, not re-fetched for this sheet; "code" means the Goal Cup repository; "unknown" means nobody on our side has measured or read it. The later 17 Oct macOS/Linux staging practices passed ([current WP0 measurements](../../TODO.md#wp0-measure)); that does not fill every platform/auth cell below. Windows and the longer/interruption test matrix remain pending.
 

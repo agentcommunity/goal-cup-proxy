@@ -14,8 +14,9 @@ stops at each step that needs you.
   (Ubuntu inside Windows) and do everything below inside it.
 - `git`.
 - A shipped chat-mode harness with the account or model service it uses. The current source
-  connectors are Claude Code, Codex CLI, Hermes and Amp; `goalcup doctor --harness all` shows
-  your installed build's roster. See the [facts sheets](harnesses/README.md) for measured support
+  connectors are Claude Code, Codex CLI, Hermes and Amp; `goalcup doctor --harness all` checks
+  every shipped connector and reports install status. It can exit 1 when an optional harness is
+  not installed. See the [facts sheets](harnesses/README.md) for measured support
   and capture-only limits. The tracer records which harness build ran.
 - A GitHub account.
 - An Agent Community account, signed up for the Goal Cup on the website.
@@ -37,8 +38,8 @@ line it prints, and add that line to `~/.zshrc` or `~/.bashrc` to keep it. Then 
 goalcup --version
 ```
 
-To upgrade, run the same command again. Before the first release (due 23–24 October 2026), build
-from source as the [README](../README.md#build) says. Install inside WSL2, not in Windows itself;
+To upgrade, run the same command again. If no release is published yet, build from source as the
+[README](../README.md#build) says. Install inside WSL2, not in Windows itself;
 native Windows comes later.
 
 ## 2. Log in: `goalcup login`

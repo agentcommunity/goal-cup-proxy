@@ -107,7 +107,9 @@ does.
 
 ## Shared plumbing
 
-All three built-in wire decoders share these `capture_analysis/wire.rs` transport mechanics:
+The three SSE/provider wire decoders (`openai-responses`, `anthropic-messages`, and
+`openai-chat-completions`) share the SSE-specific mechanics below. `amp-thread-jsonrpc` is a fourth
+wire decoder; it parses WebSocket thread snapshots and does not use the SSE framer.
 
 - `Span`, `SegmentView` and retained-segment projection: which segments contributed to a record
   (`touch` per byte, `merge` to extend a span over later records), with the redaction audit kinds.
@@ -223,10 +225,11 @@ Source: `marker()` in `crates/goalcup-daemon/src/redact.rs`; streaming policy in
 
 ## Tests
 
-Model: `crates/goalcup-verifier/tests/it/m2_anthropic_decoder.rs` and `m2_openai_decoder.rs`, which
-drive the decoder through a `DecodeSession` (`tests/common/decode.rs`), so routing is under test
-too. The three wire suites share only transport builders in `tests/common/wire.rs`; provider
-payload builders stay local.
+Model: `crates/goalcup-verifier/tests/it/m2_anthropic_decoder.rs`, `m2_openai_decoder.rs`,
+`m2_chat_decoder.rs`, and `m2_thread_decoder.rs`. The three provider/SSE suites drive decoders
+through a `DecodeSession` (`tests/common/decode.rs`) and share transport builders in
+`tests/common/wire.rs`; the Amp thread suite uses shared wire record builders but tests the
+WebSocket snapshot protocol separately. Provider payload builders stay local.
 
 - Every split: the same bytes cut at every offset, at random offsets, and one byte per segment,
   give identical facts (property-style, with a tiny deterministic generator, no dependency).
@@ -261,7 +264,7 @@ the decoder list in the research report format (`docs/research/m2-report-format.
 
 ## Rulings that closed old questions
 
-- **Interrupted streams (D45, 2026-10-05; applied by all three wire decoders).** The integrity exit never
+- **Interrupted streams (D45, 2026-10-05; applied by all three provider/SSE wire decoders).** The integrity exit never
   depends on a decoder, and D45 keeps interrupted runs at exit 0 in the detail as well. A
   decoder records an `End` `interrupted` or `decode_error` as provider-specific detail and leaves
   its summary `incomplete` false when nothing was lost. A pending partial logical record is
