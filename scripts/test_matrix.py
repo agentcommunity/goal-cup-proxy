@@ -49,8 +49,9 @@ if "--goal-file" in args:
 
 chat = os.environ["STUB_MODE"] == "chat"
 if chat:
-    print("Recording in chat mode: stub starts now in this terminal.", flush=True)
+    # setraw flushes pending input: finish that transition before the feeder sees ready.
     tty.setraw(0)
+    print("Recording in chat mode: stub starts now in this terminal.", flush=True)
     chunks, t0 = [], time.time()
     while time.time() - t0 < 30:
         if select.select([0], [], [], 0.2)[0]:
