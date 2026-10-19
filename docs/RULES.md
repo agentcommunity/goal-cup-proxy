@@ -274,7 +274,7 @@ records platform measurements and capture/decoder limits. Current chat-mode conn
 | Claude Code CLI | `claude-code-cli` | The build that ran is recorded. |
 | Codex CLI | `codex-cli` | Launch the native binary, not the npm wrapper. |
 | Hermes Agent | `hermes-cli` | Its own setup keeps provider/login state; native snapshots are capture-only. |
-| Amp CLI | `amp-cli` | Native metadata is not a transcript; both sources are capture-only. |
+| Amp CLI | `amp-cli` | Conversation snapshots are decoded from the proxy; local metadata is not a transcript. |
 
 Other harnesses can join through the [connector process](HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)
 before the last release. The supported list is final when the start window opens. A harness

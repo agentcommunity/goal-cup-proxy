@@ -28,6 +28,9 @@ Check context-visible tool calls/results and subagent conversations separately. 
 tool-output/spill capture is not required. Reuse shared wire decoders where the protocol fits;
 native formats may need their own decoder. Record unmeasured coverage explicitly. The
 [local research handoff](LOCAL-RESEARCH-HANDOFF.md) gives the current validation sequence.
+The [coverage matrix](research/coverage-matrix.md) records measured examples and limits; the
+[harness-neutral replay helper](research/replay-comparison.md) compares local and retrieved
+traces after the separate stored-byte fetch.
 
 <a id="test-a-connector"></a>
 

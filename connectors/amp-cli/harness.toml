@@ -96,7 +96,7 @@ extra_patterns = [
 # `getUserInfo` (e-mail) and `getSecretFingerprints`, and one path would select every method.
 # That also leaves out `getThreadTail`, `archiveThread` and an orb thread's goal
 # (`createRemoteExecutorThread`): docs/harnesses/amp-cli.md, section 10.
-# The hint has no decoder yet, so the wire leg is capture-only.
+# Complete server WebSocket snapshots have a versioned decoder; HTTP setup remains capture-only.
 [[capture.hosts]]
 host = "ampcode.com"
 evidence_paths = ["/api/thread-actors"]
