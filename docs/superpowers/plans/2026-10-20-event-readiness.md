@@ -177,10 +177,9 @@ in user text. Terms ID `goal-cup-tracer-2026-10-15` stays (opaque; nobody re-acc
 | 2 | Code and comments; `tracer_version` to `proxy_version`, server accepts both | low | same PR |
 | 3 | Connector comments; regenerate pins | low | same PR |
 | 4 | Repo rename `goal-cup-proxy`; test old install and release URLs | medium | next release |
-| 5 | DB schema rename with a Worker deploy in one window | medium | after the event (recommended) |
+| 5 | DB schema rename with a Worker deploy in one window | medium | with the 26 Oct point release |
 
-Risk view: steps 2 to 5 protect no invariant. Doing them before 7 Nov is the owner's call; the
-lowest-risk path is step 1 now and the rest after the event.
+Risk view: steps 2 to 5 protect no invariant; the owner chose to do them before the event.
 
 ## 5. Event operations
 
@@ -203,8 +202,20 @@ lowest-risk path is step 1 now and the rest after the event.
 5. 28 Oct to 3 Nov: fix findings; WP-D to production; adversarial review; dashboards and alerts.
 6. 4 Nov feature stop; 6 Nov last release and `EVENT_ID` switch.
 
-## Open owner questions
+## Owner decisions (20 Oct, round 2)
 
-- RULES: how judges treat a `StorageFull` gap.
-- WP-E: block a flagged trace from export, or clean and keep it?
-- WP-H: steps 2 to 5 before the event, or after?
+- A `StorageFull` gap is a red flag: something was off. Judges decide case by case.
+- A trace with a detected secret passes through, flagged. It is cleaned before anyone else gets it.
+- WP-H: all five steps before the event. Step 5 (schema) goes in a short window with the 26 Oct
+  point release, before the 168 h run; with WP-A merged, runs keep recording through it.
+
+## Where each part runs
+
+| Needs the owner's machine or credentials | Can be built and tested in the cloud |
+|---|---|
+| WP-0 measurements on private chains | WP-A, WP-B, WP-C code with stand-in tests |
+| Staging R2, Supabase and Worker log reads | WP-D Worker and SQL with `npm test` |
+| Real harness runs: ladder, drills, canary, 168 h | WP-E verifier scan and split-key corpus |
+| macOS sleep and wake; WSL2 | WP-F sampler and `k6` script (runs need staging access) |
+| `k6` against staging; production migration | WP-G matcher; WP-H steps 1 to 3 |
+| Clean `gate.sh fast` as a normal user | T25 only if the container allows a loop device |
