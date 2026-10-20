@@ -1,11 +1,13 @@
 -- COPY, for reference. The authority is the website repo (agentCommunity_PAGE), supabase/migrations/.
--- This file is every *goal_cup_tracer*.sql migration there, in name order, one after the other, each
+-- This file is every *goal_cup*.sql migration there, in name order, one after the other, each
 -- under a "-- ===== <file name> =====" line. Do not edit it by hand. After a website migration merges,
 -- run this from the root of the website checkout (at its main), with F set to this file, to rewrite it
 -- (the header above the REGEN-END line is kept, the rest is regenerated):
---   F=<tracer>/server/worker/sql/goal-cup-tracer-upload.sql; { sed '/^-- REGEN-END/q' "$F"; for m in supabase/migrations/*goal_cup_tracer*.sql; do printf '\n-- ======================== %s ========================\n' "${m##*/}"; cat "$m"; done; } > "$F.new" && mv "$F.new" "$F"
+--   F=<tracer>/server/worker/sql/goal-cup-tracer-upload.sql; { sed '/^-- REGEN-END/q' "$F"; for m in supabase/migrations/*goal_cup*.sql; do printf '\n-- ======================== %s ========================\n' "${m##*/}"; cat "$m"; done; } > "$F.new" && mv "$F.new" "$F"
 -- Change a migration there first, then regenerate here. Applied to the Agent Community Supabase
 -- project on 2026-10-15 (20261016120000: applied before this copy of it merged).
+-- The 2026-10-21 sign-up migrations (20261021090000_goal_cup_signups through
+-- 20261021090400_goal_cup_terms_2026_10_23) are NOT yet applied to production.
 -- REGEN-END
 
 -- ======================== 20261015120000_goal_cup_tracer_upload.sql ========================
@@ -2348,3 +2350,1161 @@ BEGIN
     'terms_version', current_terms_version(),
     'decided_by_you', v_dev.member_id IS NOT DISTINCT FROM p_actor_id AND v_dev.status <> 'pending');
 END $$;
+
+-- ======================== 20261021090000_goal_cup_signups.sql ========================
+-- Goal Cup Edition 01 sign-up: who enters the cup, and with which team.
+--
+-- Spec: docs/specs/2026-10-20-goal-cup-data-flows-design.md (A, F); plan:
+-- docs/plans/2026-10-21-goal-cup-signup-data-flows.md (Task 2).
+--
+--   * events.requires_signup (new, default false): the start gate. True for goalcup-cup-2026 and for the new
+--     staging rehearsal event goalcup-cup-staging; no other event. The open_run gate and device_request (a later
+--     migration) read it; requires_signup = false is the start-gate kill switch and leaves sign-ups open.
+--   * events.signup_open (new, default false): sign-ups are taken. True for the same two events; goal_cup_signup
+--     reads it (with the start window). signup_open = false closes sign-ups and leaves the start gate on.
+--   * goal_cup_tracer.signups: one active sign-up per member and event (the operator), numbered per event.
+--   * goal_cup_tracer.teammates: the people an operator lists, by lower-cased and trimmed email. An email
+--     is listed at most once per event. Plus-aliases are not merged: matching is exact.
+--   * goal_cup_tracer.is_frozen / email_in_use / normalized_team: helpers for this and later migrations; never granted.
+--   * public.goal_cup_current_terms() and public.goal_cup_signup(...): the website's sign-up page
+--     (server, service-role client, the signed-in member as p_actor_id). service_role only.
+--
+-- Locking: goal_cup_signup takes pg_advisory_xact_lock(hashtext('goal_cup_signup:' || event_id)) before
+-- anything else. Every write that enforces a rule across signups and teammates takes the same lock first, so
+-- the checks below see a stable picture and a collision returns 'email_taken' / 'already_signed_up'. The
+-- unique indexes are a backstop only; there is deliberately no unique_violation handler. events is never
+-- locked FOR UPDATE (it would block the FOR KEY SHARE lock open_run takes).
+--
+-- Additive: two new columns with a default, one UPDATE and one INSERT of events rows, new tables, new
+-- functions. No existing function is replaced.
+--
+-- Apply: psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+
+-- ---- events ---------------------------------------------------------------------------------------
+
+-- Two switches, set independently: requires_signup gates the official start, signup_open takes sign-ups.
+ALTER TABLE goal_cup_tracer.events ADD COLUMN requires_signup boolean NOT NULL DEFAULT false;
+ALTER TABLE goal_cup_tracer.events ADD COLUMN signup_open boolean NOT NULL DEFAULT false;
+
+UPDATE goal_cup_tracer.events SET requires_signup = true, signup_open = true
+ WHERE id = 'goalcup-cup-2026' AND mode = 'competition' AND staging = false;
+
+-- The staging rehearsal of the cup. Organizers move its window with an UPDATE when they rehearse.
+INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, run_hours, staging, requires_signup, signup_open)
+VALUES ('goalcup-cup-staging', 'competition', '2026-10-21T00:00:00Z', '2026-10-22T00:00:00Z', 168, true, true, true)
+ON CONFLICT (id) DO NOTHING;
+
+-- ---- tables ---------------------------------------------------------------------------------------
+
+-- member_id is the operator's auth.users id, with no foreign key (the same convention as runs).
+-- org_verified means "came from the operator's own ORGANIZATION registration", not a verified identity.
+CREATE TABLE goal_cup_tracer.signups (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id            text NOT NULL REFERENCES goal_cup_tracer.events (id),
+  member_id           uuid NOT NULL,
+  entry_no            integer NOT NULL CHECK (entry_no > 0),
+  name                text NOT NULL CHECK (name = btrim(name) AND char_length(name) BETWEEN 1 AND 80),
+  org_registration_id uuid,
+  org_name            text CHECK (org_name = btrim(org_name) AND char_length(org_name) BETWEEN 1 AND 200),
+  org_verified        boolean NOT NULL DEFAULT false,
+  anonymous           boolean NOT NULL DEFAULT false,
+  research_opt_in     boolean NOT NULL DEFAULT false,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now(),
+  withdrawn_at        timestamptz,
+  CHECK (org_verified = (org_registration_id IS NOT NULL)),
+  UNIQUE (event_id, entry_no),
+  UNIQUE (id, event_id)  -- target of the teammates (signup_id, event_id) key
+);
+CREATE UNIQUE INDEX goal_cup_tracer_signups_one_active ON goal_cup_tracer.signups (event_id, member_id)
+  WHERE withdrawn_at IS NULL;
+CREATE INDEX goal_cup_tracer_signups_member ON goal_cup_tracer.signups (member_id);
+
+-- event_id is copied from the sign-up (the composite key keeps it equal) for the per-event uniqueness rule.
+CREATE TABLE goal_cup_tracer.teammates (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  signup_id        uuid NOT NULL,
+  event_id         text NOT NULL,
+  name             text NOT NULL CHECK (name = btrim(name) AND char_length(name) BETWEEN 1 AND 80),
+  email_normalized text NOT NULL CHECK (email_normalized = lower(btrim(email_normalized)))
+                                 CHECK (char_length(email_normalized) BETWEEN 3 AND 254),
+  role_label       text CHECK (role_label = btrim(role_label) AND char_length(role_label) BETWEEN 1 AND 40),
+  show_name        boolean NOT NULL DEFAULT false,
+  notice_sent_at   timestamptz,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  FOREIGN KEY (signup_id, event_id) REFERENCES goal_cup_tracer.signups (id, event_id) ON DELETE CASCADE,
+  UNIQUE (event_id, email_normalized)
+);
+CREATE INDEX goal_cup_tracer_teammates_signup ON goal_cup_tracer.teammates (signup_id);
+
+ALTER TABLE goal_cup_tracer.signups   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE goal_cup_tracer.teammates ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON goal_cup_tracer.signups, goal_cup_tracer.teammates FROM PUBLIC, anon, authenticated;
+
+-- ---- helpers (schema goal_cup_tracer; never granted to anyone) --------------------------------------
+
+-- Frozen: the operator has a competition run in the sign-up's event. official_start is NOT NULL by
+-- schema, so any such run counts, a replaced one included. Once frozen, the team list is locked.
+CREATE FUNCTION goal_cup_tracer.is_frozen(p_signup_id uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM signups s
+      JOIN runs r ON r.member_id = s.member_id AND r.event_id = s.event_id
+     WHERE s.id = p_signup_id AND r.mode = 'competition' AND r.official_start IS NOT NULL)
+$$;
+
+-- Where an email is already in use in an event: 'teammate' (listed on an entry), 'operator' (the current
+-- auth.users email of an active sign-up's operator) or NULL. p_except_signup leaves one sign-up out (its own
+-- list when that list is replaced). The email is compared lower-cased and trimmed.
+CREATE FUNCTION goal_cup_tracer.email_in_use(p_event_id text, p_email text, p_except_signup uuid) RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+  SELECT CASE
+    WHEN EXISTS (SELECT 1 FROM teammates t
+                  WHERE t.event_id = p_event_id AND t.email_normalized = lower(btrim(p_email))
+                    AND t.signup_id IS DISTINCT FROM p_except_signup) THEN 'teammate'
+    WHEN EXISTS (SELECT 1 FROM signups s JOIN auth.users u ON u.id = s.member_id
+                  WHERE s.event_id = p_event_id AND s.withdrawn_at IS NULL
+                    AND s.id IS DISTINCT FROM p_except_signup
+                    AND lower(btrim(u.email)) = lower(btrim(p_email))) THEN 'operator'
+  END
+$$;
+
+-- A team list from a form, normalised: [{"name","email","role"}] in input order, or NULL when it is malformed.
+-- NULL means an empty list. Otherwise it must be an array of at most 10 objects with string "name" and "email" and a
+-- string, null or absent "role". Names 1-80 characters after trimming, role trimmed (blank means none) up to 40,
+-- email lower-cased and trimmed, up to 254, of the form x@y.z with no spaces, unique within the list; no control
+-- characters. goal_cup_signup and goal_cup_teammates_set share it, so both apply the same limits.
+CREATE FUNCTION goal_cup_tracer.normalized_team(p_list jsonb) RETURNS jsonb
+LANGUAGE plpgsql IMMUTABLE SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_list         jsonb := coalesce(p_list, '[]'::jsonb);
+  v_team         jsonb := '[]'::jsonb;
+  v_item         jsonb;
+  v_member_name  text;
+  v_member_email text;
+  v_role         text;
+BEGIN
+  IF jsonb_typeof(v_list) <> 'array' THEN RETURN NULL; END IF;
+  IF jsonb_array_length(v_list) > 10 THEN RETURN NULL; END IF;
+  FOR v_item IN SELECT value FROM jsonb_array_elements(v_list) WITH ORDINALITY ORDER BY ordinality LOOP
+    IF jsonb_typeof(v_item) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(v_item -> 'name') IS DISTINCT FROM 'string'
+       OR jsonb_typeof(v_item -> 'email') IS DISTINCT FROM 'string'
+       OR coalesce(jsonb_typeof(v_item -> 'role'), 'null') NOT IN ('string', 'null') THEN
+      RETURN NULL;
+    END IF;
+    v_member_name  := btrim(v_item ->> 'name');
+    v_member_email := lower(btrim(v_item ->> 'email'));
+    v_role         := nullif(btrim(v_item ->> 'role'), '');
+    IF char_length(v_member_name) NOT BETWEEN 1 AND 80 OR v_member_name ~ '[[:cntrl:]]'
+       OR char_length(v_member_email) > 254
+       OR v_member_email !~ '^[^@[:space:][:cntrl:]]+@[^@[:space:][:cntrl:]]+\.[^@[:space:][:cntrl:]]+$'
+       OR char_length(v_role) > 40 OR v_role ~ '[[:cntrl:]]'
+       OR v_team @> jsonb_build_array(jsonb_build_object('email', v_member_email)) THEN
+      RETURN NULL;
+    END IF;
+    v_team := v_team || jsonb_build_array(jsonb_build_object('name', v_member_name, 'email', v_member_email, 'role', v_role));
+  END LOOP;
+  RETURN v_team;
+END $$;
+
+-- ---- the website's functions (service_role only; the server passes the signed-in member) -----------
+
+-- The terms version the sign-up form must send back.
+CREATE FUNCTION public.goal_cup_current_terms() RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$ SELECT current_terms_version() $$;
+
+-- Sign the signed-in member up for an event as an operator, with an optional team.
+--
+-- p_teammates: [{"name": text, "email": text, "role": text|null}], at most 10 (NULL = none).
+-- p_team_confirmed: the operator confirms everyone listed knows and is 18 or older; required when anyone is
+-- listed. p_org_registration_id: one of the actor's own ORGANIZATION registrations (org_name is then taken
+-- from it and org_verified is true); without it, p_org_name is optional free text (org_verified false).
+--
+-- Returns {"result":"ok","signup_id","entry_no","teammates":[{"id","name","email"}]} or {"result": R}.
+-- The checks run in this fixed order, and the first that fails is the result:
+--    1. not_a_member         no auth.users row with a confirmed email for p_actor_id
+--    2. stale_version        p_terms_version is not the current terms version
+--    3. not_signup_event     no such event, or signup_open is false (requires_signup is not read: it gates the
+--                            start only)
+--    4. closed               now() is at or after the event's start_window_closes
+--    5. already_signed_up    the actor has an active sign-up in the event
+--    6. withdrawn_after_run  the actor has a withdrawn sign-up in the event and a competition run in it
+--    7. is_teammate          the actor's email is listed on an entry in the event (a list kept by a withdrawal
+--                            after a cup run counts: such a list is never freed in the edition)
+--    8. invalid              malformed name, org_name or teammates (shape, lengths, email form, duplicates)
+--    9. invalid_org          p_org_registration_id is not one of the actor's ORGANIZATION registrations
+--   10. team_not_confirmed   someone is listed and p_team_confirmed is not true
+--   11. operator_is_listed   the actor's own email is in the list
+--   12. email_taken          a listed email is in use in the event (the first one, in list order), plus "email"
+-- On 'ok' the consent for p_terms_version is recorded (kept if already there).
+--
+-- Limits: name and teammate names 1-80 characters after trimming, free-text org_name up to 120 (blank means
+-- none; ignored when p_org_registration_id is given), role up to 40 (blank means none), email up to 254 and of
+-- the form x@y.z with no spaces; no control characters in any text. A registration's organization_name is
+-- snapshotted trimmed and cut to 200 characters.
+CREATE FUNCTION public.goal_cup_signup(
+  p_actor_id uuid, p_event_id text, p_terms_version text, p_name text, p_org_registration_id uuid,
+  p_org_name text, p_research_opt_in boolean, p_team_confirmed boolean, p_teammates jsonb
+) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_event        events;
+  v_email        text;
+  v_name         text := btrim(p_name);
+  v_org_name     text := nullif(btrim(p_org_name), '');
+  v_org_verified boolean := false;
+  v_team         jsonb := normalized_team(p_teammates);  -- [{"name","email","role"}], NULL when malformed
+  v_item         jsonb;
+  v_taken        text;
+  v_signup_id    uuid;
+  v_entry_no     integer;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('goal_cup_signup:' || p_event_id));
+
+  -- 1. not_a_member
+  SELECT lower(btrim(u.email)) INTO v_email FROM auth.users u
+   WHERE u.id = p_actor_id AND u.email_confirmed_at IS NOT NULL;
+  IF NOT FOUND THEN RETURN jsonb_build_object('result', 'not_a_member'); END IF;
+
+  -- 2. stale_version
+  IF p_terms_version IS DISTINCT FROM current_terms_version() THEN
+    RETURN jsonb_build_object('result', 'stale_version');
+  END IF;
+
+  -- 3. not_signup_event, 4. closed
+  SELECT * INTO v_event FROM events WHERE id = p_event_id;
+  IF NOT FOUND OR NOT v_event.signup_open THEN RETURN jsonb_build_object('result', 'not_signup_event'); END IF;
+  IF now() >= v_event.start_window_closes THEN RETURN jsonb_build_object('result', 'closed'); END IF;
+
+  -- 5. already_signed_up
+  IF EXISTS (SELECT 1 FROM signups WHERE event_id = p_event_id AND member_id = p_actor_id AND withdrawn_at IS NULL) THEN
+    RETURN jsonb_build_object('result', 'already_signed_up');
+  END IF;
+
+  -- 6. withdrawn_after_run: withdrawal after a cup run is final for the edition.
+  IF EXISTS (SELECT 1 FROM signups WHERE event_id = p_event_id AND member_id = p_actor_id AND withdrawn_at IS NOT NULL)
+     AND EXISTS (SELECT 1 FROM runs WHERE event_id = p_event_id AND member_id = p_actor_id AND mode = 'competition') THEN
+    RETURN jsonb_build_object('result', 'withdrawn_after_run');
+  END IF;
+
+  -- 7. is_teammate (the actor's email is confirmed, checked in 1)
+  IF EXISTS (SELECT 1 FROM teammates WHERE event_id = p_event_id AND email_normalized = v_email) THEN
+    RETURN jsonb_build_object('result', 'is_teammate');
+  END IF;
+
+  -- 8. invalid
+  IF v_name IS NULL OR char_length(v_name) NOT BETWEEN 1 AND 80 OR v_name ~ '[[:cntrl:]]'
+     OR (p_org_registration_id IS NULL AND (char_length(v_org_name) > 120 OR v_org_name ~ '[[:cntrl:]]'))
+     OR v_team IS NULL THEN
+    RETURN jsonb_build_object('result', 'invalid');
+  END IF;
+
+  -- 9. invalid_org
+  IF p_org_registration_id IS NOT NULL THEN
+    SELECT nullif(btrim(left(btrim(r.organization_name), 200)), '') INTO v_org_name FROM public.registrations r
+     WHERE r.id = p_org_registration_id AND r.user_id = p_actor_id AND r.registration_type = 'ORGANIZATION';
+    IF NOT FOUND THEN RETURN jsonb_build_object('result', 'invalid_org'); END IF;
+    v_org_verified := true;
+  END IF;
+
+  -- 10. team_not_confirmed
+  IF jsonb_array_length(v_team) > 0 AND p_team_confirmed IS NOT TRUE THEN
+    RETURN jsonb_build_object('result', 'team_not_confirmed');
+  END IF;
+
+  -- 11. operator_is_listed
+  IF v_team @> jsonb_build_array(jsonb_build_object('email', v_email)) THEN
+    RETURN jsonb_build_object('result', 'operator_is_listed');
+  END IF;
+
+  -- 12. email_taken
+  FOR v_item IN SELECT value FROM jsonb_array_elements(v_team) WITH ORDINALITY ORDER BY ordinality LOOP
+    v_taken := email_in_use(p_event_id, v_item ->> 'email', NULL);
+    IF v_taken IS NOT NULL THEN
+      RETURN jsonb_build_object('result', 'email_taken', 'email', v_item ->> 'email');
+    END IF;
+  END LOOP;
+
+  -- Insert: entry_no is max + 1 under the lock (gaps after a withdrawal are expected).
+  SELECT coalesce(max(entry_no), 0) + 1 INTO v_entry_no FROM signups WHERE event_id = p_event_id;
+  INSERT INTO signups (event_id, member_id, entry_no, name, org_registration_id, org_name, org_verified, research_opt_in)
+  VALUES (p_event_id, p_actor_id, v_entry_no, v_name, p_org_registration_id, v_org_name, v_org_verified,
+          coalesce(p_research_opt_in, false))
+  RETURNING id INTO v_signup_id;
+
+  INSERT INTO consents (member_id, terms_version) VALUES (p_actor_id, p_terms_version)
+  ON CONFLICT (member_id, terms_version) DO NOTHING;
+
+  WITH listed AS (
+    SELECT value ->> 'name' AS name, value ->> 'email' AS email, value ->> 'role' AS role, ordinality
+      FROM jsonb_array_elements(v_team) WITH ORDINALITY
+  ), inserted AS (
+    INSERT INTO teammates (signup_id, event_id, name, email_normalized, role_label)
+    SELECT v_signup_id, p_event_id, name, email, role FROM listed ORDER BY ordinality
+    RETURNING id, name, email_normalized
+  )
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', i.id, 'name', i.name, 'email', i.email_normalized) ORDER BY l.ordinality), '[]'::jsonb)
+    INTO v_team
+    FROM inserted i JOIN listed l ON l.email = i.email_normalized;
+
+  RETURN jsonb_build_object('result', 'ok', 'signup_id', v_signup_id, 'entry_no', v_entry_no, 'teammates', v_team);
+END $$;
+
+-- ---- privileges ---------------------------------------------------------------------------------------
+-- Supabase grants EXECUTE on new functions to PUBLIC, anon and authenticated; revoke all three explicitly
+-- (docs/SUPABASE.md, "SECURITY DEFINER grants").
+REVOKE ALL ON FUNCTION
+  goal_cup_tracer.is_frozen(uuid),
+  goal_cup_tracer.normalized_team(jsonb),
+  goal_cup_tracer.email_in_use(text, text, uuid),
+  public.goal_cup_current_terms(),
+  public.goal_cup_signup(uuid, text, text, text, uuid, text, boolean, boolean, jsonb)
+FROM PUBLIC, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION
+  public.goal_cup_current_terms(),
+  public.goal_cup_signup(uuid, text, text, text, uuid, text, boolean, boolean, jsonb)
+TO service_role;
+
+-- An apply against drifted production rows must fail loudly, not leave the gate off or sign-ups closed (or open on
+-- another event).
+DO $$
+DECLARE
+  v_gated text;
+  v_open  text;
+BEGIN
+  SELECT coalesce(string_agg(id, ',' ORDER BY id), '') INTO v_gated
+    FROM goal_cup_tracer.events WHERE requires_signup;
+  IF v_gated IS DISTINCT FROM 'goalcup-cup-2026,goalcup-cup-staging' THEN
+    RAISE EXCEPTION 'goal cup sign-up gate: requires_signup is set on [%], expected [goalcup-cup-2026,goalcup-cup-staging]', v_gated;
+  END IF;
+  SELECT coalesce(string_agg(id, ',' ORDER BY id), '') INTO v_open
+    FROM goal_cup_tracer.events WHERE signup_open;
+  IF v_open IS DISTINCT FROM 'goalcup-cup-2026,goalcup-cup-staging' THEN
+    RAISE EXCEPTION 'goal cup sign-up gate: signup_open is set on [%], expected [goalcup-cup-2026,goalcup-cup-staging]', v_open;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM goal_cup_tracer.events
+                  WHERE id = 'goalcup-cup-staging' AND mode = 'competition' AND staging) THEN
+    RAISE EXCEPTION 'goal cup sign-up gate: goalcup-cup-staging is not a competition event with staging = true';
+  END IF;
+END $$;
+
+-- ======================== 20261021090100_goal_cup_signup_team.sql ========================
+-- Goal Cup Edition 01 sign-up: managing the team, the entry view, withdrawal and teammate removal.
+--
+-- Spec: docs/specs/2026-10-20-goal-cup-data-flows-design.md (B, C); plan:
+-- docs/plans/2026-10-21-goal-cup-signup-data-flows.md (Task 3).
+--
+--   * public.goal_cup_my_entry: the entry page for an operator or a linked teammate.
+--   * public.goal_cup_teammates_set / goal_cup_signup_update / goal_cup_signup_withdraw: the operator's edits.
+--   * public.goal_cup_teammate_show_name: a linked teammate's own opt-in to show their name.
+--   * public.goal_cup_teammate_preview / goal_cup_teammate_remove: the "Remove me" page. They take no actor: the
+--     website verifies the HMAC-signed removal token first.
+--   * goal_cup_tracer.current_cup_run / operator_name: helpers; never granted.
+--
+-- Every id from a form is checked against p_actor_id here. A sign-up the actor does not operate, or one that does
+-- not exist, is 'not_operator' either way, so existence does not leak.
+--
+-- Locking (spec database rules 1 and 2): teammates_set, signup_withdraw, teammate_show_name and teammate_remove
+-- take pg_advisory_xact_lock(hashtext('goal_cup_signup:' || event_id)) first (when only an id is given, its
+-- event id is read unlocked first), then the signups row FOR UPDATE, then the teammates rows. All four check is_frozen
+-- in a later statement than the row lock, so a cup run committed while they waited is seen (open_run holds the
+-- sign-up FOR SHARE until it commits, but only while requires_signup is on; with the start gate off, a withdrawal
+-- or erasure racing a first start can still delete the team: accepted). teammates_set, teammate_show_name and teammate_remove refuse a frozen list.
+-- signup_withdraw is allowed after a run too; it checks is_frozen only to decide whether the teammate rows are
+-- deleted: before any cup run they are (their emails are freed), after one they are kept (their emails stay used for
+-- the edition, so a listed person cannot start the entry again as an operator). events is never locked FOR UPDATE.
+-- There is no unique_violation handler: the advisory lock makes a collision 'email_taken'.
+--
+-- Additive: new functions only (the shared team validation, goal_cup_tracer.normalized_team, is in the previous
+-- migration).
+--
+-- Apply: psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+
+-- ---- helpers (schema goal_cup_tracer; never granted to anyone) --------------------------------------
+
+-- The operator's current cup run in an event: the latest non-replaced competition run by official start, else the
+-- latest replaced one. NULL when there is none.
+CREATE FUNCTION goal_cup_tracer.current_cup_run(p_member_id uuid, p_event_id text) RETURNS goal_cup_tracer.runs
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+  SELECT * FROM runs
+   WHERE member_id = p_member_id AND event_id = p_event_id AND mode = 'competition'
+   ORDER BY (replaced_at IS NULL) DESC, official_start DESC, created_at DESC, id DESC
+   LIMIT 1
+$$;
+
+-- The operator's name as teammates see it: the full_name of the operator's own registration (the one the entry
+-- is linked to first, then an INDIVIDUAL one, then the most recent), cut to 120 characters. Without one, the
+-- entry name stands in. Never the operator's email.
+CREATE FUNCTION goal_cup_tracer.operator_name(p_signup_id uuid) RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+  SELECT coalesce(
+    (SELECT btrim(left(btrim(r.full_name), 120)) FROM public.registrations r
+      WHERE r.user_id = s.member_id AND nullif(btrim(r.full_name), '') IS NOT NULL
+      ORDER BY (r.id = s.org_registration_id) IS TRUE DESC, (r.registration_type = 'INDIVIDUAL') DESC,
+               r.created_at DESC NULLS LAST, r.id
+      LIMIT 1),
+    s.name)
+  FROM signups s WHERE s.id = p_signup_id
+$$;
+
+-- ---- the website's functions (service_role only; the server passes the signed-in member) -----------
+
+-- The entry the signed-in member is on in an event.
+--
+-- Which entry: the actor's active sign-up (role operator); else the entry that lists the actor's verified email
+-- (role teammate; the account's email_confirmed_at must be set, matched lower-cased and trimmed); else the
+-- actor's latest withdrawn sign-up (role operator). Otherwise {"result":"none","email": the account email as
+-- stored, or null when there is no account}.
+--
+-- {"result":"ok","role","frozen","signup":{"id","entry_no","name","org_name","org_verified","anonymous",
+--  "research_opt_in","withdrawn_at"},"operator_name","teammates":[…],"run":{"status","official_start",
+--  "deadline_at","final_commit"}|null,"show_name"}
+--   * teammates, ordered by when they were listed, then name: for an operator {"id","name","email","role",
+--     "show_name"}; for a teammate {"name","role","show_name"} only (no ids, no emails).
+--   * show_name: the signed-in teammate's own choice; null for an operator.
+--   * run: the operator's current cup run (current_cup_run), null when there is none.
+--   * Times are RFC 3339 UTC strings to the second.
+CREATE FUNCTION public.goal_cup_my_entry(p_actor_id uuid, p_event_id text) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_email      text;
+  v_confirmed  boolean := false;
+  v_signup     signups;
+  v_self       teammates;
+  v_role       text;
+  v_run        runs;
+  v_team       jsonb;
+BEGIN
+  SELECT u.email, u.email_confirmed_at IS NOT NULL INTO v_email, v_confirmed FROM auth.users u WHERE u.id = p_actor_id;
+
+  SELECT * INTO v_signup FROM signups
+   WHERE event_id = p_event_id AND member_id = p_actor_id AND withdrawn_at IS NULL;
+  IF FOUND THEN
+    v_role := 'operator';
+  ELSE
+    IF v_confirmed THEN
+      SELECT * INTO v_self FROM teammates
+       WHERE event_id = p_event_id AND email_normalized = lower(btrim(v_email));
+      IF FOUND THEN
+        SELECT * INTO v_signup FROM signups WHERE id = v_self.signup_id;
+        v_role := 'teammate';
+      END IF;
+    END IF;
+    IF v_role IS NULL THEN
+      SELECT * INTO v_signup FROM signups
+       WHERE event_id = p_event_id AND member_id = p_actor_id
+       ORDER BY withdrawn_at DESC, created_at DESC, id DESC
+       LIMIT 1;
+      IF NOT FOUND THEN RETURN jsonb_build_object('result', 'none', 'email', v_email); END IF;
+      v_role := 'operator';
+    END IF;
+  END IF;
+
+  IF v_role = 'operator' THEN
+    SELECT coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'email', t.email_normalized,
+                                                 'role', t.role_label, 'show_name', t.show_name)
+                              ORDER BY t.created_at, t.name, t.id), '[]'::jsonb)
+      INTO v_team FROM teammates t WHERE t.signup_id = v_signup.id;
+  ELSE
+    SELECT coalesce(jsonb_agg(jsonb_build_object('name', t.name, 'role', t.role_label, 'show_name', t.show_name)
+                              ORDER BY t.created_at, t.name, t.id), '[]'::jsonb)
+      INTO v_team FROM teammates t WHERE t.signup_id = v_signup.id;
+  END IF;
+
+  v_run := current_cup_run(v_signup.member_id, v_signup.event_id);
+
+  RETURN jsonb_build_object(
+    'result', 'ok',
+    'role', v_role,
+    'frozen', is_frozen(v_signup.id),
+    'signup', jsonb_build_object(
+      'id', v_signup.id, 'entry_no', v_signup.entry_no, 'name', v_signup.name, 'org_name', v_signup.org_name,
+      'org_verified', v_signup.org_verified, 'anonymous', v_signup.anonymous,
+      'research_opt_in', v_signup.research_opt_in, 'withdrawn_at', fmt_time(v_signup.withdrawn_at)),
+    'operator_name', operator_name(v_signup.id),
+    'teammates', v_team,
+    'run', CASE WHEN v_run.id IS NULL THEN NULL ELSE jsonb_build_object(
+      'status', v_run.status, 'official_start', fmt_time(v_run.official_start),
+      'deadline_at', fmt_time(v_run.deadline_at), 'final_commit', v_run.final_commit) END,
+    'show_name', CASE WHEN v_role = 'teammate' THEN v_self.show_name END);
+END $$;
+
+-- Replace the operator's team list. It diffs by email: an email that stays keeps its row (id, notice_sent_at,
+-- show_name), with the new name and role; a new email gets a new row; a dropped email's row is deleted.
+--
+-- p_teammates and p_team_confirmed follow goal_cup_signup: the same list shape and limits (normalized_team), NULL
+-- means an empty list, and the confirmation is required whenever anyone is listed.
+--
+-- Returns {"result":"ok","added":[{"id","name","email"}]} (the new rows, in list order) or {"result": R}. The
+-- checks run in this fixed order, and the first that fails is the result:
+--   1. not_operator         p_signup_id is not a sign-up of p_actor_id (or does not exist)
+--   2. withdrawn            the sign-up is withdrawn
+--   3. frozen               the operator has a cup run in the event (is_frozen)
+--   4. invalid              malformed list
+--   5. team_not_confirmed   someone is listed and p_team_confirmed is not true
+--   6. operator_is_listed   the operator's own current email is in the list
+--   7. email_taken          an email being added is in use in the event (the first, in list order), plus "email".
+--                           Emails already on this list are not re-checked.
+CREATE FUNCTION public.goal_cup_teammates_set(p_actor_id uuid, p_signup_id uuid, p_teammates jsonb, p_team_confirmed boolean)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_event_id text;
+  v_signup   signups;
+  v_team     jsonb;
+  v_email    text;
+  v_item     jsonb;
+  v_added    jsonb;
+BEGIN
+  -- 1. not_operator (read unlocked for the event id, then again under the locks)
+  SELECT event_id INTO v_event_id FROM signups WHERE id = p_signup_id AND member_id = p_actor_id;
+  IF NOT FOUND THEN RETURN jsonb_build_object('result', 'not_operator'); END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('goal_cup_signup:' || v_event_id));
+  SELECT * INTO v_signup FROM signups WHERE id = p_signup_id AND member_id = p_actor_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('result', 'not_operator'); END IF;
+
+  -- 2. withdrawn
+  IF v_signup.withdrawn_at IS NOT NULL THEN RETURN jsonb_build_object('result', 'withdrawn'); END IF;
+
+  -- 3. frozen (a statement after the row lock, so a run committed while this call waited is seen)
+  IF is_frozen(p_signup_id) THEN RETURN jsonb_build_object('result', 'frozen'); END IF;
+
+  -- 4. invalid
+  v_team := normalized_team(p_teammates);
+  IF v_team IS NULL THEN RETURN jsonb_build_object('result', 'invalid'); END IF;
+
+  -- 5. team_not_confirmed
+  IF jsonb_array_length(v_team) > 0 AND p_team_confirmed IS NOT TRUE THEN
+    RETURN jsonb_build_object('result', 'team_not_confirmed');
+  END IF;
+
+  -- 6. operator_is_listed
+  SELECT lower(btrim(u.email)) INTO v_email FROM auth.users u WHERE u.id = p_actor_id;
+  IF v_email IS NOT NULL AND v_team @> jsonb_build_array(jsonb_build_object('email', v_email)) THEN
+    RETURN jsonb_build_object('result', 'operator_is_listed');
+  END IF;
+
+  -- 7. email_taken
+  FOR v_item IN SELECT value FROM jsonb_array_elements(v_team) WITH ORDINALITY ORDER BY ordinality LOOP
+    CONTINUE WHEN EXISTS (SELECT 1 FROM teammates WHERE signup_id = p_signup_id AND email_normalized = v_item ->> 'email');
+    IF email_in_use(v_event_id, v_item ->> 'email', p_signup_id) IS NOT NULL THEN
+      RETURN jsonb_build_object('result', 'email_taken', 'email', v_item ->> 'email');
+    END IF;
+  END LOOP;
+
+  -- Write: the sign-up row is locked above; the teammates rows are changed after it.
+  DELETE FROM teammates t
+   WHERE t.signup_id = p_signup_id
+     AND NOT v_team @> jsonb_build_array(jsonb_build_object('email', t.email_normalized));
+
+  UPDATE teammates t SET name = l.value ->> 'name', role_label = l.value ->> 'role'
+    FROM jsonb_array_elements(v_team) l
+   WHERE t.signup_id = p_signup_id AND t.email_normalized = l.value ->> 'email'
+     AND (t.name, t.role_label) IS DISTINCT FROM (l.value ->> 'name', l.value ->> 'role');
+
+  WITH listed AS (
+    SELECT value ->> 'name' AS name, value ->> 'email' AS email, value ->> 'role' AS role, ordinality
+      FROM jsonb_array_elements(v_team) WITH ORDINALITY
+  ), inserted AS (
+    INSERT INTO teammates (signup_id, event_id, name, email_normalized, role_label)
+    SELECT p_signup_id, v_event_id, l.name, l.email, l.role FROM listed l
+     WHERE NOT EXISTS (SELECT 1 FROM teammates t WHERE t.signup_id = p_signup_id AND t.email_normalized = l.email)
+     ORDER BY l.ordinality
+    RETURNING id, name, email_normalized
+  )
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', i.id, 'name', i.name, 'email', i.email_normalized) ORDER BY l.ordinality), '[]'::jsonb)
+    INTO v_added
+    FROM inserted i JOIN listed l ON l.email = i.email_normalized;
+
+  UPDATE signups SET updated_at = now() WHERE id = p_signup_id;
+
+  RETURN jsonb_build_object('result', 'ok', 'added', v_added);
+END $$;
+
+-- Change the entry's name, anonymity and research opt-in. All three are required (the form sends them all).
+-- Returns, in this order: not_operator, withdrawn, invalid (name 1-80 characters after trimming with no control
+-- characters; a NULL argument), run_ended (the research opt-in changes while the operator's current cup run,
+-- current_cup_run, is no longer 'open'; the name and anonymity can still change), or ok.
+-- A single-row write: it locks the sign-up FOR UPDATE and takes no advisory lock.
+CREATE FUNCTION public.goal_cup_signup_update(p_actor_id uuid, p_signup_id uuid, p_name text, p_anonymous boolean, p_research_opt_in boolean)
+RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_signup signups;
+  v_name   text := btrim(p_name);
+  v_run    runs;
+BEGIN
+  SELECT * INTO v_signup FROM signups WHERE id = p_signup_id AND member_id = p_actor_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN 'not_operator'; END IF;
+  IF v_signup.withdrawn_at IS NOT NULL THEN RETURN 'withdrawn'; END IF;
+  IF v_name IS NULL OR char_length(v_name) NOT BETWEEN 1 AND 80 OR v_name ~ '[[:cntrl:]]'
+     OR p_anonymous IS NULL OR p_research_opt_in IS NULL THEN
+    RETURN 'invalid';
+  END IF;
+  IF p_research_opt_in IS DISTINCT FROM v_signup.research_opt_in THEN
+    v_run := current_cup_run(v_signup.member_id, v_signup.event_id);
+    IF v_run.id IS NOT NULL AND v_run.status <> 'open' THEN RETURN 'run_ended'; END IF;
+  END IF;
+  UPDATE signups SET name = v_name, anonymous = p_anonymous, research_opt_in = p_research_opt_in, updated_at = now()
+   WHERE id = p_signup_id;
+  RETURN 'ok';
+END $$;
+
+-- Withdraw the operator's sign-up: set withdrawn_at. Before any cup run (not is_frozen) it also deletes the
+-- teammate rows, which frees their emails. After a cup run it is final for the edition (goal_cup_signup answers
+-- withdrawn_after_run) and keeps the teammate rows: the list stays frozen, its emails stay in use (goal_cup_signup
+-- answers is_teammate to a listed account, email_taken to anyone listing one), and closing that path is the point:
+-- a listed person must not start the withdrawn entry again under a new sign-up. A listed person can still leave
+-- through erasure (goal_cup_erase_member). Returns not_operator, already_withdrawn or ok.
+CREATE FUNCTION public.goal_cup_signup_withdraw(p_actor_id uuid, p_signup_id uuid) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_event_id text;
+  v_signup   signups;
+  v_frozen   boolean;
+BEGIN
+  SELECT event_id INTO v_event_id FROM signups WHERE id = p_signup_id AND member_id = p_actor_id;
+  IF NOT FOUND THEN RETURN 'not_operator'; END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('goal_cup_signup:' || v_event_id));
+  SELECT * INTO v_signup FROM signups WHERE id = p_signup_id AND member_id = p_actor_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN 'not_operator'; END IF;
+  IF v_signup.withdrawn_at IS NOT NULL THEN RETURN 'already_withdrawn'; END IF;
+
+  -- A statement after the row lock, so a cup run committed while this call waited on open_run's FOR SHARE is seen.
+  v_frozen := is_frozen(p_signup_id);
+
+  UPDATE signups SET withdrawn_at = now(), updated_at = now() WHERE id = p_signup_id;
+  IF NOT v_frozen THEN
+    DELETE FROM teammates WHERE signup_id = p_signup_id;
+  END IF;
+  RETURN 'ok';
+END $$;
+
+-- A linked teammate shows or hides their own name (p_show NULL hides it). The actor must have a confirmed email
+-- that is listed in the event. Returns not_listed, frozen or ok.
+CREATE FUNCTION public.goal_cup_teammate_show_name(p_actor_id uuid, p_event_id text, p_show boolean) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_email     text;
+  v_teammate  uuid;
+  v_signup_id uuid;
+BEGIN
+  SELECT lower(btrim(u.email)) INTO v_email FROM auth.users u WHERE u.id = p_actor_id AND u.email_confirmed_at IS NOT NULL;
+  IF v_email IS NULL THEN RETURN 'not_listed'; END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('goal_cup_signup:' || p_event_id));
+  SELECT signup_id INTO v_signup_id FROM teammates WHERE event_id = p_event_id AND email_normalized = v_email;
+  IF NOT FOUND THEN RETURN 'not_listed'; END IF;
+  PERFORM 1 FROM signups WHERE id = v_signup_id FOR UPDATE;
+  SELECT id INTO v_teammate FROM teammates WHERE event_id = p_event_id AND email_normalized = v_email FOR UPDATE;
+  IF NOT FOUND THEN RETURN 'not_listed'; END IF;
+
+  IF is_frozen(v_signup_id) THEN RETURN 'frozen'; END IF;
+
+  UPDATE teammates SET show_name = (p_show IS TRUE) WHERE id = v_teammate;
+  RETURN 'ok';
+END $$;
+
+-- What the "Remove me" page shows. {"result":"ok","name","entry_name","operator_name","frozen"} or
+-- {"result":"not_found"}. No emails.
+CREATE FUNCTION public.goal_cup_teammate_preview(p_teammate_id uuid) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_name      text;
+  v_entry     text;
+  v_signup_id uuid;
+BEGIN
+  SELECT t.name, s.name, s.id INTO v_name, v_entry, v_signup_id
+    FROM teammates t JOIN signups s ON s.id = t.signup_id WHERE t.id = p_teammate_id;
+  IF NOT FOUND THEN RETURN jsonb_build_object('result', 'not_found'); END IF;
+  RETURN jsonb_build_object('result', 'ok', 'name', v_name, 'entry_name', v_entry,
+                            'operator_name', operator_name(v_signup_id), 'frozen', is_frozen(v_signup_id));
+END $$;
+
+-- Remove a teammate from an entry (the "Remove me" link): delete the row unless the list is frozen.
+-- Returns not_found, frozen or ok.
+CREATE FUNCTION public.goal_cup_teammate_remove(p_teammate_id uuid) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_event_id  text;
+  v_signup_id uuid;
+BEGIN
+  SELECT event_id INTO v_event_id FROM teammates WHERE id = p_teammate_id;
+  IF NOT FOUND THEN RETURN 'not_found'; END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('goal_cup_signup:' || v_event_id));
+  SELECT signup_id INTO v_signup_id FROM teammates WHERE id = p_teammate_id;
+  IF NOT FOUND THEN RETURN 'not_found'; END IF;
+  PERFORM 1 FROM signups WHERE id = v_signup_id FOR UPDATE;
+  PERFORM 1 FROM teammates WHERE id = p_teammate_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN 'not_found'; END IF;
+
+  IF is_frozen(v_signup_id) THEN RETURN 'frozen'; END IF;
+
+  DELETE FROM teammates WHERE id = p_teammate_id;
+  RETURN 'ok';
+END $$;
+
+-- ---- privileges ---------------------------------------------------------------------------------------
+-- Supabase grants EXECUTE on new functions to PUBLIC, anon and authenticated; revoke all three explicitly
+-- (docs/SUPABASE.md, "SECURITY DEFINER grants").
+REVOKE ALL ON FUNCTION
+  goal_cup_tracer.current_cup_run(uuid, text),
+  goal_cup_tracer.operator_name(uuid),
+  public.goal_cup_my_entry(uuid, text),
+  public.goal_cup_teammates_set(uuid, uuid, jsonb, boolean),
+  public.goal_cup_signup_update(uuid, uuid, text, boolean, boolean),
+  public.goal_cup_signup_withdraw(uuid, uuid),
+  public.goal_cup_teammate_show_name(uuid, text, boolean),
+  public.goal_cup_teammate_preview(uuid),
+  public.goal_cup_teammate_remove(uuid)
+FROM PUBLIC, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION
+  public.goal_cup_my_entry(uuid, text),
+  public.goal_cup_teammates_set(uuid, uuid, jsonb, boolean),
+  public.goal_cup_signup_update(uuid, uuid, text, boolean, boolean),
+  public.goal_cup_signup_withdraw(uuid, uuid),
+  public.goal_cup_teammate_show_name(uuid, text, boolean),
+  public.goal_cup_teammate_preview(uuid),
+  public.goal_cup_teammate_remove(uuid)
+TO service_role;
+
+-- ======================== 20261021090200_goal_cup_signup_gate.sql ========================
+-- Goal Cup Edition 01 sign-up: the gate on the official start, the approval page, account erasure and the staging seed.
+--
+-- Spec: docs/specs/2026-10-20-goal-cup-data-flows-design.md (database rules 1-5 and 9, H); plan:
+-- docs/plans/2026-10-21-goal-cup-signup-data-flows.md (Task 4).
+--
+-- Replaces three live functions from their latest bodies, with the same argument lists (a new argument would add a
+-- PUBLIC-executable overload), and adds one:
+--   * public.goal_cup_upload_open_run (latest body: 20261015170000_goal_cup_tracer_test_replaces_test.sql). A
+--     competition run in an event with requires_signup needs the operator's active sign-up. Without one it answers
+--     {"result":"forbidden","message":"Sign up for Goal Cup at agentcommunity.org/goalcup before your official start."}
+--     (the Worker passes a forbidden message through as its 403). Practice, dry run and test events are not gated.
+--     requires_signup = false is the start-gate kill switch (sign-ups stay open); signup_open = false closes sign-ups
+--     (goal_cup_signup) and leaves this gate on. The sign-up row is read FOR SHARE before the replacement UPDATE of
+--     runs and held to the end of the transaction: a withdrawal (FOR UPDATE) that committed first makes the start
+--     forbidden, and a withdrawal that comes second waits for the start and then succeeds (final for the edition).
+--   * public.goal_cup_device_request (latest body: 20261016130000_goal_cup_tracer_device_request_replaces.sql). Three
+--     new keys, always present: signup_required, signed_up, operator_name. signup_required follows requires_signup
+--     (the start gate), not signup_open.
+--   * public.goal_cup_erase_member (latest body: 20261015150000_goal_cup_tracer_production.sql). It also withdraws the
+--     member's active sign-ups, deletes their entries' teammate rows by the withdrawal rule (only on entries without a
+--     cup run) and deletes every teammate row listing the member's verified email; three new keys report it:
+--     signups_withdrawn, entry_teammates, teammate_listings.
+--   * goal_cup_tracer.seed_staging_signup(member, name) (new): a sign-up on goalcup-cup-staging for a staging test
+--     member, whom the real sign-up cannot serve (no account). service_role only.
+--
+-- Locking (spec database rule 1): erasure takes the event advisory lock of every event it touches, in sorted order,
+-- before any row; then run credentials, sign-ups and teammates, in the order open_run locks them (credential, then
+-- sign-up), so an erasure racing a start waits rather than deadlocks. events is never locked FOR UPDATE.
+--
+-- CREATE OR REPLACE keeps each function's ACL; the grants are asserted again below anyway. No table, column or row
+-- changes.
+--
+-- Apply: psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+
+-- ---- open_run: the sign-up gate ---------------------------------------------------------------------------
+-- Unchanged from 20261015170000 except the gate, placed after the credential checks (so a retried start of a run
+-- that already exists still answers 'existing') and before the first write.
+CREATE OR REPLACE FUNCTION public.goal_cup_upload_open_run(
+  p_member_id text, p_event_id text, p_mode text, p_run_id text, p_entry_id text,
+  p_official_start text, p_deadline_at text,
+  p_connector_id text, p_manifest_sha256 text, p_connector_dir_sha256 text,
+  p_workspace text, p_session_id text, p_harness_version text, p_tracer_version text, p_repo_url text,
+  p_machine jsonb, p_client_ip text, p_client_country text,
+  p_credential_hash text, p_credential_expires_at text
+) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_member  uuid := p_member_id::uuid;
+  v_staging boolean := caller_is_staging();
+  v_event   events;
+  v_start   timestamptz := p_official_start::timestamptz;
+  v_deadline timestamptz := p_deadline_at::timestamptz;
+  v_cred_expires timestamptz := p_credential_expires_at::timestamptz;
+  v_bound   text;
+  v_try     integer;
+BEGIN
+  SELECT * INTO v_event FROM events WHERE id = p_event_id AND staging = v_staging;
+  -- The event must be of the run's kind: practice in a practice event, a test run in a test
+  -- event, a competition run in the competition or the dry run.
+  IF NOT FOUND
+     OR (p_mode = 'practice' AND v_event.mode <> 'practice')
+     OR (p_mode = 'test' AND v_event.mode <> 'test')
+     OR (p_mode = 'competition' AND v_event.mode NOT IN ('competition', 'dry_run')) THEN
+    RETURN jsonb_build_object('result', 'forbidden', 'message', 'This event is not open for runs.');
+  END IF;
+  -- Test runs: allowlisted organizer accounts only; their length is the event's run_hours.
+  IF p_mode = 'test' THEN
+    IF NOT is_test_operator(v_member) THEN
+      RETURN jsonb_build_object('result', 'forbidden', 'message', 'Test runs are for Goal Cup organizers only.');
+    END IF;
+    v_deadline := v_start + make_interval(hours => v_event.run_hours);
+    v_cred_expires := v_deadline + interval '24 hours';
+  END IF;
+  IF NOT has_current_terms(v_member) THEN
+    RETURN jsonb_build_object('result', 'forbidden', 'message', 'Accept the Goal Cup terms on the website first.');
+  END IF;
+  IF p_mode = 'competition' THEN
+    IF v_start < v_event.start_window_opens THEN
+      RETURN jsonb_build_object('result', 'forbidden', 'message', 'The start window has not opened yet.');
+    END IF;
+    IF v_start > v_event.start_window_closes THEN
+      RETURN jsonb_build_object('result', 'forbidden',
+                                'message', 'after the start window you can only `goalcup continue` your run');
+    END IF;
+  END IF;
+
+  -- The credential opens runs for its own member and mode only: a credential approved for one
+  -- member can never open (or replace) a run of another.
+  SELECT run_id INTO v_bound FROM run_credentials
+   WHERE credential_hash = p_credential_hash AND staging = v_staging
+     AND member_id = v_member AND mode = p_mode FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('result', 'conflict');
+  END IF;
+  IF v_bound IS NOT NULL THEN
+    IF EXISTS (SELECT 1 FROM runs r JOIN entries e ON e.run_id = r.id AND e.segment = 0
+                WHERE r.id = v_bound AND r.member_id = v_member AND r.staging = v_staging AND e.session_id = p_session_id) THEN
+      RETURN jsonb_build_object('result', 'existing')
+             || run_json(v_bound, (SELECT e.id FROM entries e WHERE e.run_id = v_bound AND e.segment = 0));
+    END IF;
+    RETURN jsonb_build_object('result', 'conflict');
+  END IF;
+
+  -- The sign-up gate (20261021090200): an official start in an event that requires a sign-up needs the operator's
+  -- active sign-up. FOR SHARE holds the row until this transaction ends, so a withdrawal (FOR UPDATE) cannot commit
+  -- in between; a start that waited on a withdrawal re-reads the row, finds it withdrawn and is refused. Nothing has
+  -- been written yet, so the refusal leaves no trace.
+  IF p_mode = 'competition' AND v_event.mode = 'competition' AND v_event.requires_signup THEN
+    PERFORM 1 FROM signups
+     WHERE event_id = p_event_id AND member_id = v_member AND withdrawn_at IS NULL
+       FOR SHARE;
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object('result', 'forbidden',
+                                'message', 'Sign up for Goal Cup at agentcommunity.org/goalcup before your official start.');
+    END IF;
+  END IF;
+
+  FOR v_try IN 1..2 LOOP
+    -- The same mode replaces the same mode: a competition run its competition run, a test run its
+    -- test run. A test run never touches a competition run, and practice never replaces.
+    IF p_mode IN ('competition', 'test') THEN
+      UPDATE runs SET replaced_at = greatest(v_start, official_start)
+       WHERE member_id = v_member AND mode = p_mode AND status = 'open' AND replaced_at IS NULL
+         AND staging = v_staging;
+    END IF;
+    BEGIN
+      INSERT INTO runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url,
+                        machine, client_ip, client_country, staging)
+      VALUES (p_run_id, p_event_id, v_member, p_mode, v_start, v_deadline, p_repo_url,
+              nullif(p_machine, 'null'::jsonb), p_client_ip, p_client_country, v_staging);
+      EXIT;
+    EXCEPTION WHEN unique_violation THEN
+      IF v_try = 2 THEN RAISE; END IF;
+    END;
+  END LOOP;
+
+  INSERT INTO entries (id, run_id, segment, connector_id, manifest_sha256, connector_dir_sha256,
+                       workspace, session_id, harness_version, tracer_version)
+  VALUES (p_entry_id, p_run_id, 0, p_connector_id, p_manifest_sha256, p_connector_dir_sha256,
+          p_workspace, p_session_id, p_harness_version, p_tracer_version);
+  UPDATE run_credentials
+     SET run_id = p_run_id, expires_at = v_cred_expires
+   WHERE credential_hash = p_credential_hash;
+  RETURN jsonb_build_object('result', 'created') || run_json(p_run_id);
+END $$;
+
+-- ---- device_request: what the approval page needs to know about the sign-up --------------------------------
+-- Unchanged from 20261016130000 except three new keys, always present:
+--   * signup_required: the request is a run in competition mode, and its own deployment (device_requests.staging)
+--     has an event with requires_signup, mode competition and the start window open now. If several match, the one
+--     whose window opened last (then the lowest id). That event is "the sign-up event" below.
+--   * signed_up: the actor has an active sign-up in the sign-up event.
+--   * operator_name: the actor's verified email (email_confirmed_at set; matched lower-cased and trimmed) is listed
+--     on another operator's active entry in the sign-up event: that operator's name (operator_name()).
+-- Otherwise false, false and null.
+CREATE OR REPLACE FUNCTION public.goal_cup_device_request(p_actor_id uuid, p_user_code text) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_dev           device_requests;
+  v_replaces      timestamptz;
+  v_signup_event  text;
+  v_signed_up     boolean := false;
+  v_operator_name text;
+BEGIN
+  SELECT * INTO v_dev FROM device_requests
+   WHERE user_hash = encode(sha256(convert_to(upper(replace(coalesce(p_user_code, ''), '-', '')), 'UTF8')), 'hex');
+  IF NOT FOUND THEN RETURN jsonb_build_object('result', 'not_found'); END IF;
+  IF v_dev.purpose = 'run' AND v_dev.mode IN ('competition', 'test') THEN
+    SELECT max(r.official_start) INTO v_replaces FROM runs r
+     WHERE r.member_id = p_actor_id AND r.mode = v_dev.mode AND r.status = 'open'
+       AND r.replaced_at IS NULL AND r.staging = v_dev.staging AND now() < r.deadline_at;
+  END IF;
+  IF v_dev.purpose = 'run' AND v_dev.mode = 'competition' THEN
+    SELECT e.id INTO v_signup_event FROM events e
+     WHERE e.staging = v_dev.staging AND e.requires_signup AND e.mode = 'competition'
+       AND e.start_window_opens <= now() AND now() <= e.start_window_closes
+     ORDER BY e.start_window_opens DESC, e.id
+     LIMIT 1;
+    IF v_signup_event IS NOT NULL THEN
+      v_signed_up := EXISTS (SELECT 1 FROM signups s
+                              WHERE s.event_id = v_signup_event AND s.member_id = p_actor_id AND s.withdrawn_at IS NULL);
+      SELECT operator_name(s.id) INTO v_operator_name
+        FROM auth.users u
+        JOIN teammates t ON t.event_id = v_signup_event AND t.email_normalized = lower(btrim(u.email))
+        JOIN signups s ON s.id = t.signup_id AND s.withdrawn_at IS NULL AND s.member_id <> p_actor_id
+       WHERE u.id = p_actor_id AND u.email_confirmed_at IS NOT NULL;
+    END IF;
+  END IF;
+  RETURN jsonb_build_object(
+    'result', 'ok',
+    'status', CASE WHEN v_dev.status = 'pending' AND now() >= v_dev.expires_at THEN 'expired' ELSE v_dev.status END,
+    'purpose', v_dev.purpose,
+    'mode', v_dev.mode,
+    'connector_id', v_dev.connector_id,
+    'tracer_version', v_dev.tracer_version,
+    'expires_at', fmt_time(v_dev.expires_at),
+    'replaces_open_run', v_replaces IS NOT NULL,
+    'replaces_run_started_at', fmt_time(v_replaces),
+    'terms_ok', has_current_terms(p_actor_id),
+    'terms_version', current_terms_version(),
+    'decided_by_you', v_dev.member_id IS NOT DISTINCT FROM p_actor_id AND v_dev.status <> 'pending',
+    'signup_required', v_signup_event IS NOT NULL,
+    'signed_up', v_signed_up,
+    'operator_name', v_operator_name);
+END $$;
+
+-- ---- erase_member: the sign-up and the team lists too --------------------------------------------------------
+-- From 20261015150000, with (spec H; account deletion wins over the contest):
+--   * signups_withdrawn: the member's active sign-ups are withdrawn, whether or not a run has started (the entry is
+--     not judged). The rows stay, like runs: an entry number is never reused.
+--   * entry_teammates: the teammate rows deleted from the member's own sign-ups, by the rule goal_cup_signup_withdraw
+--     follows: a sign-up without a cup run in its event (not is_frozen) loses its rows, which frees their emails; a
+--     sign-up with one keeps them (other people's listings; keeping them keeps the emails used, so a listed person
+--     cannot start the entry again). Checked in a statement after the sign-up UPDATE, which waits on open_run's FOR
+--     SHARE, so a run committed meanwhile is seen. That holds only while requires_signup is on: with the start gate
+--     off, open_run does not take the FOR SHARE, so an erasure racing a first start can still delete the team
+--     (accepted).
+--     Residual (owner decision 2026-10-21: keep teams after a started withdrawal): when an operator with a cup run is
+--     erased, the entry's teammate rows are kept, so those teammates can still read the withdrawn entry's name, org
+--     name and operator name (which falls back to the entry name) through goal_cup_my_entry and
+--     goal_cup_teammate_preview. Accepted.
+--   * teammate_listings: every teammate row listing the member's email is deleted, in any event, on a frozen list too
+--     (privacy wins over the frozen list). The email is the account's current auth.users email, lower-cased and
+--     trimmed, and only when it is verified (spec database rule 7: an account matches a teammate only with
+--     email_confirmed_at set; an unverified account never removes a listing of an address it has not proven).
+--     DELETE /api/my-data calls this before it deletes the auth user.
+-- Order: the event advisory locks of every event touched, sorted, re-read until no new event appears; then the run
+-- credentials (before the sign-ups, as open_run locks them), the sign-ups, the teammates; then, as before, consents,
+-- notices, runs and heartbeats. Idempotent: a second call changes nothing and answers zeros.
+CREATE OR REPLACE FUNCTION public.goal_cup_erase_member(p_actor_id uuid) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_consents   integer;
+  v_unsent     integer;
+  v_sent       integer;
+  v_runs       integer;
+  v_heartbeats integer;
+  v_creds      integer;
+  v_email      text;
+  v_locked     text[] := '{}';
+  v_new        text[];
+  v_event      text;
+  v_withdrawn  integer;
+  v_entry_team integer;
+  v_listings   integer;
+BEGIN
+  IF p_actor_id IS NULL THEN RAISE EXCEPTION 'goal_cup_erase_member: no member' USING ERRCODE = '22023'; END IF;
+
+  SELECT lower(btrim(u.email)) INTO v_email FROM auth.users u
+   WHERE u.id = p_actor_id AND u.email_confirmed_at IS NOT NULL;
+
+  -- The event locks, before any row. A sign-up or listing committed while this waited shows up on the next pass.
+  LOOP
+    SELECT array_agg(x.event_id ORDER BY x.event_id COLLATE "C") INTO v_new FROM (
+      SELECT s.event_id FROM signups s WHERE s.member_id = p_actor_id AND s.withdrawn_at IS NULL
+      UNION
+      SELECT t.event_id FROM teammates t JOIN signups s ON s.id = t.signup_id WHERE s.member_id = p_actor_id
+      UNION
+      SELECT t.event_id FROM teammates t WHERE t.email_normalized = v_email
+    ) x
+    WHERE x.event_id <> ALL (v_locked);
+    EXIT WHEN v_new IS NULL;
+    FOREACH v_event IN ARRAY v_new LOOP
+      PERFORM pg_advisory_xact_lock(hashtext('goal_cup_signup:' || v_event));
+    END LOOP;
+    v_locked := v_locked || v_new;
+  END LOOP;
+
+  UPDATE run_credentials SET expires_at = now() WHERE member_id = p_actor_id AND expires_at > now();
+  GET DIAGNOSTICS v_creds = ROW_COUNT;
+
+  UPDATE signups SET withdrawn_at = now(), updated_at = now()
+   WHERE member_id = p_actor_id AND withdrawn_at IS NULL AND event_id = ANY (v_locked);
+  GET DIAGNOSTICS v_withdrawn = ROW_COUNT;
+  DELETE FROM teammates t USING signups s
+   WHERE s.id = t.signup_id AND s.member_id = p_actor_id AND t.event_id = ANY (v_locked)
+     AND NOT is_frozen(s.id);
+  GET DIAGNOSTICS v_entry_team = ROW_COUNT;
+  DELETE FROM teammates t WHERE t.email_normalized = v_email AND t.event_id = ANY (v_locked);
+  GET DIAGNOSTICS v_listings = ROW_COUNT;
+
+  DELETE FROM consents WHERE member_id = p_actor_id;
+  GET DIAGNOSTICS v_consents = ROW_COUNT;
+  DELETE FROM notices WHERE member_id = p_actor_id AND sent_at IS NULL;
+  GET DIAGNOSTICS v_unsent = ROW_COUNT;
+  UPDATE notices SET sent_to = NULL WHERE member_id = p_actor_id AND sent_to IS NOT NULL;
+  GET DIAGNOSTICS v_sent = ROW_COUNT;
+  UPDATE runs SET client_ip = NULL, client_country = NULL, last_client_ip = NULL, last_client_country = NULL
+   WHERE member_id = p_actor_id
+     AND (client_ip IS NOT NULL OR client_country IS NOT NULL OR last_client_ip IS NOT NULL OR last_client_country IS NOT NULL);
+  GET DIAGNOSTICS v_runs = ROW_COUNT;
+  UPDATE heartbeats h SET client_ip = NULL, client_country = NULL
+    FROM runs r
+   WHERE h.run_id = r.id AND r.member_id = p_actor_id AND (h.client_ip IS NOT NULL OR h.client_country IS NOT NULL);
+  GET DIAGNOSTICS v_heartbeats = ROW_COUNT;
+  RETURN jsonb_build_object('consents', v_consents, 'unsent_notices', v_unsent, 'sent_notices', v_sent,
+                            'runs', v_runs, 'heartbeats', v_heartbeats, 'credentials', v_creds,
+                            'signups_withdrawn', v_withdrawn, 'entry_teammates', v_entry_team,
+                            'teammate_listings', v_listings);
+END $$;
+
+-- ---- the staging seed ----------------------------------------------------------------------------------------
+-- An active sign-up on goalcup-cup-staging for a staging test member (goal_cup_tracer.test_members), for the
+-- rehearsal: synthetic members have no account and cannot use the real sign-up. Refuses (raises) anyone else and a
+-- name that is not 1-80 characters after trimming without control characters. Takes the event's sign-up lock, then
+-- numbers the entry max + 1 like goal_cup_signup. Idempotent: a member who already has an active sign-up there gets
+-- its id back, unchanged. No team, no organization, no consent (the rehearsal records terms separately).
+CREATE FUNCTION goal_cup_tracer.seed_staging_signup(p_member uuid, p_name text) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_event    constant text := 'goalcup-cup-staging';
+  v_name     text := btrim(p_name);
+  v_id       uuid;
+  v_entry_no integer;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('goal_cup_signup:' || v_event));
+  IF NOT EXISTS (SELECT 1 FROM test_members WHERE member_id = p_member) THEN
+    RAISE EXCEPTION 'seed_staging_signup: % is not a staging test member', p_member USING ERRCODE = '42501';
+  END IF;
+  IF v_name IS NULL OR char_length(v_name) NOT BETWEEN 1 AND 80 OR v_name ~ '[[:cntrl:]]' THEN
+    RAISE EXCEPTION 'seed_staging_signup: the name must be 1 to 80 characters' USING ERRCODE = '22023';
+  END IF;
+  SELECT id INTO v_id FROM signups
+   WHERE event_id = v_event AND member_id = p_member AND withdrawn_at IS NULL FOR UPDATE;
+  IF FOUND THEN RETURN v_id; END IF;
+  SELECT coalesce(max(entry_no), 0) + 1 INTO v_entry_no FROM signups WHERE event_id = v_event;
+  INSERT INTO signups (event_id, member_id, entry_no, name) VALUES (v_event, p_member, v_entry_no, v_name)
+  RETURNING id INTO v_id;
+  RETURN v_id;
+END $$;
+
+-- ---- privileges ---------------------------------------------------------------------------------------------
+-- Asserted again exactly as 20261015120000 and 20261015150000 grant them (CREATE OR REPLACE keeps an ACL, but this
+-- states it): open_run for both Worker roles and service_role; device_request and erase_member for service_role.
+-- Supabase grants EXECUTE on new functions to PUBLIC, anon and authenticated; revoke all three explicitly
+-- (docs/SUPABASE.md, "SECURITY DEFINER grants").
+REVOKE ALL ON FUNCTION
+  public.goal_cup_upload_open_run(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, jsonb, text, text, text, text),
+  public.goal_cup_device_request(uuid, text),
+  public.goal_cup_erase_member(uuid)
+FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION
+  public.goal_cup_upload_open_run(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, jsonb, text, text, text, text)
+TO goal_cup_ingest_staging, goal_cup_ingest_production, service_role;
+GRANT EXECUTE ON FUNCTION
+  public.goal_cup_device_request(uuid, text),
+  public.goal_cup_erase_member(uuid)
+TO service_role;
+
+REVOKE ALL ON FUNCTION goal_cup_tracer.seed_staging_signup(uuid, text)
+FROM PUBLIC, anon, authenticated, goal_cup_ingest_staging, goal_cup_ingest_production;
+GRANT EXECUTE ON FUNCTION goal_cup_tracer.seed_staging_signup(uuid, text) TO service_role;
+
+-- ======================== 20261021090300_goal_cup_signup_state.sql ========================
+-- Goal Cup Edition 01 sign-up: the state of one sign-up, for the email follow-up.
+--
+-- Spec: docs/specs/2026-10-20-goal-cup-data-flows-design.md; plan: docs/plans/2026-10-21-goal-cup-signup-data-flows.md
+-- (Task 5).
+--
+-- Adds one function:
+--   * public.goal_cup_signup_state(p_signup_id uuid) RETURNS text. The email follow-up calls it at send time to
+--     re-check that a mail is still wanted. It answers:
+--       'withdrawn'  the sign-up has withdrawn_at set (wins over 'started': a withdrawal after the start is final),
+--       'started'    otherwise, and goal_cup_tracer.is_frozen(p_signup_id): the operator has a competition run in the
+--                    sign-up's event, a replaced run included,
+--       'active'     otherwise,
+--       NULL         no such sign-up (or a NULL id). The follow-up treats NULL as "do not send".
+--     It only reads; it takes no lock, so a state read never waits on a start or a withdrawal.
+--
+-- service_role only, like the other goal_cup_* functions. No table, column or row changes.
+--
+-- Apply: psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+
+CREATE FUNCTION public.goal_cup_signup_state(p_signup_id uuid) RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+  SELECT CASE
+           WHEN s.withdrawn_at IS NOT NULL THEN 'withdrawn'
+           WHEN is_frozen(s.id) THEN 'started'
+           ELSE 'active'
+         END
+    FROM signups s
+   WHERE s.id = p_signup_id
+$$;
+
+-- Supabase grants EXECUTE on new functions to PUBLIC, anon and authenticated; revoke all three explicitly
+-- (docs/SUPABASE.md, "SECURITY DEFINER grants").
+REVOKE ALL ON FUNCTION public.goal_cup_signup_state(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.goal_cup_signup_state(uuid) TO service_role;
+
+-- ======================== 20261021090400_goal_cup_terms_2026_10_23.sql ========================
+-- Goal Cup Edition 01: the terms version for the 23 Oct rules and privacy texts.
+--
+-- Spec: docs/specs/2026-10-20-goal-cup-data-flows-design.md; plan: docs/plans/2026-10-21-goal-cup-signup-data-flows.md
+-- (Task 5).
+--
+-- APPLY ONLY AFTER the website with the 23 Oct texts is live. The sign-up form sends back the version it was
+-- rendered with (public.goal_cup_current_terms()); once this migration is applied, a member who accepted the old
+-- version 'goal-cup-tracer-2026-10-15' no longer has current terms (has_current_terms) and must accept again, so
+-- the texts members read must already be the 23 Oct ones.
+--
+-- Rules/privacy text hash: TBD at apply time (owner)
+--
+-- Replaces goal_cup_tracer.current_terms_version() from 20261015120000_goal_cup_tracer_upload.sql (~line 225) with the
+-- same attributes (LANGUAGE sql IMMUTABLE, SET search_path = pg_catalog, pg_temp); only the returned value changes.
+-- That migration grants the function to nobody (REVOKE ALL ON ALL FUNCTIONS IN SCHEMA goal_cup_tracer ...) and
+-- CREATE OR REPLACE keeps the ACL; the revoke is asserted again below. No table, column or row changes.
+--
+-- Apply: psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+
+CREATE OR REPLACE FUNCTION goal_cup_tracer.current_terms_version() RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp
+AS $$ SELECT 'goal-cup-2026-10-23'::text $$;
+
+REVOKE ALL ON FUNCTION goal_cup_tracer.current_terms_version() FROM PUBLIC, anon, authenticated;

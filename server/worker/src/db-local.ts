@@ -9,6 +9,7 @@
 //   state/devices/{sha256}.json  a device request, by the hash of its device code
 //   state/usercodes/{sha256}.json  {"device_sha256": …}: the request a user code belongs to
 //   state/credentials/{sha256}.json  a run credential, by its own hash
+//   state/signups/{event}/{member}.json  {"withdrawn_at": …}: a member's Goal Cup sign-up for an event (see `signUp`)
 //   state/notices/{run_id}.{kind}.{key}.json  a queued notice (the outbox); `key` is the dedupe key, URL-encoded, "-" when empty
 //
 // Not built for load: a run's whole state is one object. Fine for a developer and for tests.
@@ -101,10 +102,18 @@ export interface LocalOptions {
   closeAfterSeconds?: number;
   /** The competition start window; an unset edge is open. Unset: always open. */
   startWindow?: { opens: string | null; closes: string | null };
+  /**
+   * The events that require a sign-up (the database's events.requires_signup): a competition run in
+   * one of them needs the member's active sign-up (`signUp`). Any other event, and every practice
+   * or test run, is never gated. Unset: none is. Production's equivalent is in the database.
+   */
+  signupEvents?: string[];
 }
 
 const BEFORE_WINDOW = "The start window has not opened yet.";
 const AFTER_WINDOW = "after the start window you can only `goalcup continue` your run";
+/** The database's words (goal_cup_upload_open_run, 20261021090200). */
+const SIGNUP_REQUIRED = "Sign up for Goal Cup at agentcommunity.org/goalcup before your official start.";
 
 const entryOf = (run: StoredRun, entryId: string): StoredEntry | undefined => run.entries.find((e) => e.entry_id === entryId);
 const currentOf = (run: StoredRun): StoredEntry => run.entries[run.entries.length - 1]!;
@@ -144,11 +153,13 @@ export class LocalDb implements Db {
   readonly #bucket: R2Bucket;
   readonly #closeAfterSeconds: number;
   readonly #window: LocalOptions["startWindow"];
+  readonly #signupEvents: ReadonlySet<string>;
 
   private constructor(bucket: R2Bucket, options: LocalOptions) {
     this.#bucket = bucket;
     this.#closeAfterSeconds = options.closeAfterSeconds ?? CLOSE_AFTER_SECONDS;
     this.#window = options.startWindow;
+    this.#signupEvents = new Set(options.signupEvents ?? []);
   }
 
   static create(bucket: R2Bucket, options: LocalOptions = {}): LocalDb {
@@ -201,6 +212,7 @@ export class LocalDb implements Db {
     throw new Error("local state is too contended; try again");
   }
 
+  #signupKey = (event: string, member: string) => `state/signups/${encodeURIComponent(event)}/${encodeURIComponent(member)}.json`;
   #deviceKey = (sha: string) => `state/devices/${sha}.json`;
   #userCodeKey = (sha: string) => `state/usercodes/${sha}.json`;
   #credentialKey = (sha: string) => `state/credentials/${sha}.json`;
@@ -259,6 +271,25 @@ export class LocalDb implements Db {
     return new Date(now).getTime() < new Date(cred.expires_at).getTime() ? cred : null;
   }
 
+  // ---- sign-ups (local seeding; the website writes them in production) --------------------
+
+  /** Give `member` an active sign-up for `event`, replacing a withdrawn one. Not part of `Db`: the Worker only reads sign-ups. */
+  async signUp(event: string, member: string): Promise<void> {
+    await this.#bucket.put(this.#signupKey(event, member), JSON.stringify({ withdrawn_at: null }));
+  }
+
+  /** Withdraw the member's sign-up for `event` at `at`; a withdrawn sign-up does not count. No sign-up: nothing happens. */
+  async withdrawSignup(event: string, member: string, at: string): Promise<void> {
+    await this.#updateObject<{ withdrawn_at: string | null }, null>(this.#signupKey(event, member), null, (cur) =>
+      cur.withdrawn_at === null ? { next: { withdrawn_at: at }, answer: null } : { answer: null },
+    );
+  }
+
+  async #hasActiveSignup(event: string, member: string): Promise<boolean> {
+    const obj = await this.#bucket.get(this.#signupKey(event, member));
+    return obj !== null && ((await obj.json()) as { withdrawn_at: string | null }).withdrawn_at === null;
+  }
+
   // ---- Db: runs --------------------------------------------------------------------------
 
   async openRun(a: OpenRunArgs): Promise<OpenRunResult> {
@@ -267,6 +298,14 @@ export class LocalDb implements Db {
     if (a.mode === "competition" && w !== undefined) {
       if (w.opens !== null && a.official_start < w.opens) return { kind: "forbidden", message: BEFORE_WINDOW };
       if (w.closes !== null && a.official_start > w.closes) return { kind: "forbidden", message: AFTER_WINDOW };
+    }
+    // The sign-up gate. Like the database, it comes after the window and after the credential checks
+    // (a credential that is unknown or already bound skips it, so a retried start still answers
+    // `existing` or `conflict`) and before the first write, so a refusal leaves nothing behind.
+    if (a.mode === "competition" && this.#signupEvents.has(a.event_id)) {
+      const held = await this.#bucket.get(this.#credentialKey(a.credential));
+      const unbound = held !== null && ((await held.json()) as Credential).run_id === null;
+      if (unbound && !(await this.#hasActiveSignup(a.event_id, a.member_id))) return { kind: "forbidden", message: SIGNUP_REQUIRED };
     }
     // The credential binds first, so one that cannot bind opens no run and leaves nothing behind.
     const bound = await this.#updateObject<Credential, string | null | true>(this.#credentialKey(a.credential), null, (cred) =>

@@ -158,6 +158,45 @@ test("the competition start window: its edges are inside, practice has none", as
   assert.equal((await db.openRun(openArgs(8, "s8", "2026-11-06T09:00:00Z", DEADLINE, c))).kind, "created");
 });
 
+const SIGNUP_MESSAGE = "Sign up for Goal Cup at agentcommunity.org/goalcup before your official start.";
+
+test("refuses a local cup start without a sign-up with the gate message", async () => {
+  const db = LocalDb.create(asR2(new FakeBucket()), { signupEvents: ["cup"] });
+  const c = await credential(db);
+  // No sign-up: refused with the database's words, and the refusal leaves the credential unbound.
+  assert.deepEqual(await db.openRun(openArgs(1, "s1", START, DEADLINE, c)), { kind: "forbidden", message: SIGNUP_MESSAGE });
+  assert.equal((await db.credential(c, START))?.run_id, null);
+  assert.equal(await db.getRun("m1", R1, null), null);
+
+  // An active sign-up opens the same credential; another member's sign-up does not count.
+  await db.signUp("cup", "m2");
+  assert.equal((await db.openRun(openArgs(1, "s1", START, DEADLINE, c))).kind, "forbidden");
+  await db.signUp("cup", "m1");
+  assert.equal((await db.openRun(openArgs(1, "s1", START, DEADLINE, c))).kind, "created");
+  // A retried start of the run that exists answers `existing`, even after the sign-up is withdrawn.
+  await db.withdrawSignup("cup", "m1", START);
+  assert.equal((await db.openRun(openArgs(1, "s1", START, DEADLINE, c))).kind, "existing");
+
+  // Withdrawn: a new competition start is refused again. Sign-ups for another event do not count.
+  const c2 = await credential(db);
+  assert.deepEqual(await db.openRun(openArgs(2, "s2", START, DEADLINE, c2)), { kind: "forbidden", message: SIGNUP_MESSAGE });
+  await db.signUp("other", "m1");
+  assert.equal((await db.openRun(openArgs(2, "s2", START, DEADLINE, c2))).kind, "forbidden");
+});
+
+test("the local sign-up gate covers competition runs of the events that require it, and nothing else", async () => {
+  const db = LocalDb.create(asR2(new FakeBucket()), { signupEvents: ["cup"] });
+  const kind = async (n: number, mode: RunMode, event_id: string) =>
+    (await db.openRun(openArgs(n, `s${n}`, START, DEADLINE, await credential(db, "m1", mode), { mode, event_id }))).kind;
+  assert.equal(await kind(1, "practice", "cup"), "created");
+  assert.equal(await kind(2, "test", "cup"), "created");
+  assert.equal(await kind(3, "competition", "dry-run"), "created"); // an event that does not require sign-up
+  assert.equal(await kind(4, "competition", "cup"), "forbidden");
+  // Without the option nothing is gated (the default).
+  const open = LocalDb.create(asR2(new FakeBucket()));
+  assert.equal((await open.openRun(openArgs(5, "s5", START, DEADLINE, await credential(open)))).kind, "created");
+});
+
 test("a credential binds in the step that opens the run: a bound or unknown one opens nothing", async () => {
   const db = LocalDb.create(asR2(new FakeBucket()));
   const [c1, c2] = [await credential(db), await credential(db)];
