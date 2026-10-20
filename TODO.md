@@ -217,10 +217,9 @@ Status (16 Oct): done. #165 and website #305 merged; production migration applie
 - Accept: `select id,start_window_opens,start_window_closes from goal_cup_tracer.events` shows the new values. `npm --prefix server/worker test` passes.
 
 ### WP2: Release pipeline shakedown
-Prepublication snapshot (19 Oct, before the release cut): release implementation complete (#164: workspace version source, `install.sh`,
-all connectors packaged, `release.sh prepare`/`tag`, and no Homebrew tap). The workspace is at
-0.6.0; the latest published tag remains v0.5.0. The first 0.6.0 tag and publication remain open
-under WP10. Earlier implementation checklist items are closed by #164 and retained here by their
+Status (20 Oct): release implementation complete (#164: workspace version source, `install.sh`,
+all connectors packaged, `release.sh prepare`/`tag`, and no Homebrew tap). v0.6.0 was tagged and
+published on 19 Oct; later releases follow WP10. Earlier implementation checklist items are closed by #164 and retained here by their
 ticket references: version and workflow (#C5-F5, C6-05, C6-15), connector packaging (C3-F2,
 C6-06), Worker gate (C6-03, T3-F2), and CODEOWNERS/CI scope (C6-11, C6-15). The manual workflow
 builds and stores run artifacts; only a pushed release tag publishes assets.
