@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -32,6 +34,97 @@ class ScriptRunnerTests(unittest.TestCase):
              "--start-directory", str(self.root)],
             capture_output=True, text=True, timeout=15,
         )
+
+    def run_standard_discovery(self) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "unittest", "discover", "-v", "-s", str(self.root)],
+            cwd=self.root, capture_output=True, text=True, timeout=15,
+        )
+
+    @staticmethod
+    def observed_ids(output: str) -> Counter[str]:
+        return Counter(re.findall(r"(?m)^\S+ \(([^)]+)\) \.\.\.", output))
+
+    def test_nested_module_load_tests_matches_standard_discovery_ids(self) -> None:
+        self.write("test_parent.py", """
+from pathlib import Path
+def load_tests(loader, tests, pattern):
+    return loader.discover(str(Path(__file__).parent / 'suite'), pattern=pattern)
+""")
+        self.write("suite/__init__.py", "")
+        self.write("suite/test_child.py", """
+import unittest
+class C(unittest.TestCase):
+    def test_child(self): pass
+""")
+        standard = self.run_standard_discovery()
+        self.assertEqual(standard.returncode, 0, standard.stdout + standard.stderr)
+        expected = self.observed_ids(standard.stdout + standard.stderr)
+        self.assertEqual(expected, Counter({"suite.test_child.C.test_child": 2}))
+        for jobs in (1, 2):
+            with self.subTest(jobs=jobs):
+                result = self.run_runner(jobs)
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, 0, output)
+                self.assertEqual(self.observed_ids(output), expected, output)
+
+    def test_file_package_name_collision_fails_without_duplicate_package_run(self) -> None:
+        self.write("test_collision.py", """
+import unittest
+class FileCase(unittest.TestCase):
+    def test_file(self): pass
+""")
+        self.write("test_collision/__init__.py", """
+import unittest
+class PackageCase(unittest.TestCase):
+    def test_package(self): pass
+""")
+        standard = self.run_standard_discovery()
+        self.assertNotEqual(standard.returncode, 0, standard.stdout + standard.stderr)
+        self.assertEqual(self.observed_ids(standard.stdout + standard.stderr), Counter())
+        for jobs in (1, 2):
+            with self.subTest(jobs=jobs):
+                result = self.run_runner(jobs)
+                output = result.stdout + result.stderr
+                self.assertNotEqual(result.returncode, 0, output)
+                self.assertEqual(self.observed_ids(output), Counter(), output)
+
+    def test_preloaded_module_from_wrong_path_fails_discovery(self) -> None:
+        self.write("test_collision.py", """
+import unittest
+class ExpectedCase(unittest.TestCase):
+    def test_expected(self): pass
+""")
+        self.write("shadow/test_collision.py", """
+import unittest
+class ShadowCase(unittest.TestCase):
+    def test_shadow(self): pass
+""")
+        self.write("site/sitecustomize.py", """
+import importlib, sys
+from pathlib import Path
+shadow = str(Path(__file__).parents[1] / 'shadow')
+sys.path.insert(0, shadow)
+importlib.import_module('test_collision')
+sys.path.remove(shadow)
+""")
+        env = {**os.environ, "PYTHONPATH": str(self.root / "site")}
+        standard = subprocess.run(
+            [sys.executable, "-m", "unittest", "discover", "-v", "-s", str(self.root)],
+            cwd=self.root, env=env, capture_output=True, text=True, timeout=15,
+        )
+        self.assertNotEqual(standard.returncode, 0, standard.stdout + standard.stderr)
+        self.assertEqual(self.observed_ids(standard.stdout + standard.stderr), Counter())
+        for jobs in (1, 2):
+            with self.subTest(jobs=jobs):
+                result = subprocess.run(
+                    [sys.executable, str(RUNNER), "--jobs", str(jobs),
+                     "--start-directory", str(self.root)],
+                    env=env, capture_output=True, text=True, timeout=15,
+                )
+                output = result.stdout + result.stderr
+                self.assertNotEqual(result.returncode, 0, output)
+                self.assertEqual(self.observed_ids(output), Counter(), output)
 
     def test_serial_and_parallel_run_the_same_discovered_tests_and_fixtures(self) -> None:
         self.write("test_check_connector.py", """

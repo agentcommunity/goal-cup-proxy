@@ -42,6 +42,39 @@ step() {
     "$@" || fail
 }
 
+script_tests() {
+    # Keep the gate alive while the runner drains workers in their own sessions. A
+    # background child may inherit SIGINT ignored by the shell, so forward TERM for
+    # either cancellation signal; the runner handles TERM by stopping dispatch and
+    # waiting for its active workers to finish normally.
+    cancelled=0
+    runner_pid=
+    trap 'cancelled=1; if [ -n "$runner_pid" ]; then kill -TERM "$runner_pid" 2>/dev/null || :; fi' INT TERM
+    echo "+ python3 scripts/run-script-tests.py"
+    if [ "$cancelled" -eq 0 ]; then
+        python3 scripts/run-script-tests.py &
+        runner_pid=$!
+        if [ "$cancelled" -ne 0 ]; then
+            kill -TERM "$runner_pid" 2>/dev/null || :
+        fi
+        runner_status=0
+        while :; do
+            # A trapped signal interrupts wait before the child exits. Wait again
+            # until this directly owned runner has actually finished.
+            wait "$runner_pid" || runner_status=$?
+            if ! kill -0 "$runner_pid" 2>/dev/null; then
+                break
+            fi
+        done
+    else
+        runner_status=1
+    fi
+    trap - INT TERM
+    if [ "$cancelled" -ne 0 ] || [ "$runner_status" -ne 0 ]; then
+        fail
+    fi
+}
+
 # The Worker's tests need its node_modules; say so at once rather than after the long steps.
 if [ "$tier" = full ] && [ ! -d server/worker/node_modules ]; then
     echo "run npm ci in server/worker"
@@ -97,7 +130,7 @@ fi
 
 if [ "$tier" = full ]; then
     step npm --prefix server/worker test
-    step python3 scripts/run-script-tests.py
+    script_tests
     step python3 scripts/check-links.py --root .
 fi
 

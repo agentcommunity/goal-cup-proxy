@@ -161,7 +161,8 @@ cargo fetch --locked          # one-time dependency download; project build and 
   modules run alone; process-sensitive fetch, matrix and linux_matrix modules also run alone. To run
   the scripts serially, use `python3 -m unittest discover -s scripts` or
   `python3 scripts/run-script-tests.py --jobs 1`. Cancellation stops new modules and waits for
-  active modules to clean up; it can wait indefinitely if a module hangs. Run it before every tag:
+  active modules to clean up; the full gate waits for the same cleanup when interrupted during
+  this step. It can wait indefinitely if a module hangs. Run it before every tag:
   nothing else runs the slow tier. The Worker tests need Node 22.18+ and `npm ci` in
   `server/worker`.
 - Without cargo-nextest the gate falls back to `cargo test`, which runs every tier.

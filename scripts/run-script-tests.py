@@ -50,6 +50,8 @@ def discover_units(start: Path) -> list[tuple[str, str]]:
         elif path.is_dir() and (path / "__init__.py").is_file():
             # A package may supply load_tests, which can suppress ordinary recursion.
             units.append(("package", path.name))
+    if len({name for _, name in units}) != len(units):
+        raise ValueError(f"ambiguous unittest module and package names in {start}")
     if not units:
         raise ValueError(f"no unittest modules found in {start}")
     return units
@@ -61,6 +63,9 @@ def run_worker(start: Path, kind: str, name: str, result_file: Path) -> int:
     signal.pthread_sigmask(signal.SIG_UNBLOCK, STOP_SIGNALS)
     sys.path.insert(0, str(start))
     loader = unittest.TestLoader()
+    # Discovery supplies this context to module load_tests hooks. A hook's nested
+    # discover call needs the same top-level directory to preserve test IDs.
+    loader._top_level_dir = str(start)
     try:
         if kind == "module":
             try:
@@ -69,6 +74,10 @@ def run_worker(start: Path, kind: str, name: str, result_file: Path) -> int:
                 # Match discover's import-time skip rather than treating it as an error.
                 suite = _make_skipped_test(name, exc, loader.suiteClass)
             else:
+                expected = (start / f"{name}.py").resolve()
+                imported = getattr(module, "__file__", None)
+                if imported is None or Path(imported).resolve() != expected:
+                    raise ImportError(f"{name} was imported from {imported}, expected {expected}")
                 suite = loader.loadTestsFromModule(module, pattern="test*.py")
         else:
             suite = loader.discover(str(start / name), pattern="test*.py", top_level_dir=str(start))

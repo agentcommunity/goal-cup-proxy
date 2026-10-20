@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import stat
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 
 GATE = Path(__file__).with_name("gate.sh")
+RUNNER = Path(__file__).with_name("run-script-tests.py")
 
 # The stub logs "<tool> <argv>" per call. `cargo nextest --version` fails when STUB_NO_NEXTEST is
 # set, and any call whose argv starts with $STUB_FAIL_ON fails.
@@ -157,6 +161,96 @@ class GateTests(unittest.TestCase):
         calls = self.calls()
         self.assertEqual(calls.count("python3 scripts/run-script-tests.py"), 1)
         self.assertNotIn("python3 scripts/check-links.py --root .", calls)
+
+    @unittest.skipUnless(os.name == "posix", "process signals require POSIX")
+    def test_full_signal_waits_for_owned_python_runner(self) -> None:
+        # A copied real gate calls the copied real runner. Only slow/external commands are
+        # stubbed. A worker remains blocked until the test releases it after checking the gate.
+        # This catches a shell that exits on signal while its runner still owns live workers.
+        (self.gate.parent / "run-script-tests.py").write_text(RUNNER.read_text())
+        python_stub = Path(self.env["PATH"].split(os.pathsep)[0]) / "python3"
+        python_stub.write_text("""#!/bin/sh
+echo "python3 $*" >> "$STUB_LOG"
+if [ "$1" = scripts/run-script-tests.py ]; then
+    shift
+    exec "$REAL_PYTHON" scripts/run-script-tests.py "$@"
+fi
+exit 0
+""")
+        python_stub.chmod(python_stub.stat().st_mode | stat.S_IXUSR)
+        root = self.gate.parent.parent
+        (self.gate.parent / "test_hold.py").write_text("""
+import os
+import time
+import unittest
+from pathlib import Path
+root = Path(os.environ['GATE_FIXTURE_ROOT'])
+class Hold(unittest.TestCase):
+    def test_cleanup(self):
+        (root / 'started').write_text('yes')
+        try:
+            deadline = time.monotonic() + 20
+            while not (root / 'release').exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue((root / 'release').exists(), 'release barrier timed out')
+        finally:
+            (root / 'cleaned').write_text('yes')
+""")
+        (self.gate.parent / "test_pending.py").write_text("""
+from pathlib import Path
+import os
+Path(os.environ['GATE_FIXTURE_ROOT'], 'pending_started').write_text('yes')
+""")
+        for signum, target in ((signal.SIGTERM, "pid"), (signal.SIGINT, "pid"),
+                               (signal.SIGTERM, "group"), (signal.SIGINT, "group")):
+            with self.subTest(signal=signum, target=target):
+                for name in ("started", "release", "cleaned", "pending_started"):
+                    (root / name).unlink(missing_ok=True)
+                self.log.write_text("")
+                sentinel = subprocess.Popen(
+                    [sys.executable, "-c", "import time; time.sleep(20)"],
+                    start_new_session=True,
+                )
+                proc = subprocess.Popen(
+                    ["sh", str(self.gate), "full"],
+                    env={**self.env, "REAL_PYTHON": sys.executable,
+                         "GATE_FIXTURE_ROOT": str(root), "PYTHONDONTWRITEBYTECODE": "1"},
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    start_new_session=True,
+                )
+                try:
+                    deadline = time.monotonic() + 5
+                    while not (root / "started").exists() and time.monotonic() < deadline:
+                        self.assertIsNone(proc.poll(), "gate exited before worker started")
+                        time.sleep(0.01)
+                    self.assertTrue((root / "started").exists(), "worker did not start")
+                    if target == "pid":
+                        os.kill(proc.pid, signum)
+                    else:
+                        os.killpg(proc.pid, signum)
+                    # Give the shell a scheduling turn to handle the signal. This checks
+                    # lifecycle ordering, not a duration or throughput target.
+                    time.sleep(0.1)
+                    gate_exited_before_release = proc.poll() is not None
+                    self.assertIsNone(sentinel.poll(), "unrelated process was signalled")
+                finally:
+                    (root / "release").write_text("yes")
+                    try:
+                        output, _ = proc.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        output, _ = proc.communicate(timeout=5)
+                        self.fail(f"gate did not drain runner after release:\n{output}")
+                    sentinel.terminate()
+                    sentinel.wait(timeout=5)
+                self.assertFalse(gate_exited_before_release, output)
+                self.assertNotEqual(proc.returncode, 0, output)
+                self.assertTrue((root / "cleaned").exists(), output)
+                self.assertIn("test_cleanup (test_hold.Hold.test_cleanup)", output)
+                self.assertIn("gate full: FAIL", output)
+                self.assertNotIn("gate full: PASS", output)
+                self.assertFalse((root / "pending_started").exists(), output)
+                self.assertNotIn("python3 scripts/check-links.py --root .", self.calls())
 
     def test_full_stops_without_the_workers_dependencies(self) -> None:
         # Said at once, before any long step, rather than after the build and the tests.
