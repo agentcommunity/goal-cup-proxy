@@ -250,6 +250,11 @@ the heavy-run lock itself (never run it inside the lock: it refuses when `GOALCU
 gives up after 30 minutes), with `--cpus=6`. Codex's tracker home is set to `gpt-5.6-luna` at low
 reasoning effort before each run; the run fails unless every Codex turn it recorded says exactly that.
 The harness can read the checkout and the key files, so run it from a clean checkout. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
+It also installs `claude-code-cli` (set to `haiku` with thinking off, checked after the run), `amp-cli`
+and `hermes-cli`. For long runs in parallel: `linux-matrix.sh build` once, then
+`LINUX_MATRIX_CELL=<cell> LINUX_MATRIX_PREBUILT=1 sh scripts/linux-matrix.sh run <id> -- --test --duration <s>`
+gives each cell its own volume, sign-in and container. `matrix.sh --test --duration <s>` does the same
+on a host. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
 
 **`--check-copy`.** For a run you made by hand, verifies every entry of the run locally and compares each
 with the server's position, using the run's credential from the configuration directory. It starts and
