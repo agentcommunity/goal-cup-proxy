@@ -56,7 +56,11 @@ not prove: other platforms, other harness versions, model behaviour, or particip
 ## Cells
 
 A cell is one harness, on one machine kind, for one duration, with one test member and its own
-login. Copy `scripts/campaign.example.json` and edit it. `python3 scripts/campaign.py check CONFIG`
+login. Copy `scripts/campaign.example.json` and edit it: the key file path, host `config_dir`s and
+members. The default prompt is [campaign-workload.txt](campaign-workload.txt): a cheap, many-step
+coding task that stays in the workspace and stops on its own. An agent that finishes early and idles
+is still a valid infrastructure run; note the idle time in the report. Codex effort `minimal` is
+refused unless the installed Codex lists it for Luna; use `low` until that is checked. `python3 scripts/campaign.py check CONFIG`
 refuses duplicate members among parallel cells, shared config directories, production, and an
 unreadable key file.
 
@@ -121,7 +125,7 @@ WP-C lands, record what happens (T25); after it, the agent must keep running wit
 
 ```sh
 python3 scripts/research-measure.py "$TRACE_DIR" --json > "$RESULTS/measure-<run>.json"
-python3 scripts/research-staging.py --event test-staging --json > "$RESULTS/staging.json"
+python3 scripts/research-staging.py --event test-staging --json   # dry runs: --event goalcup-dryrun-staging > "$RESULTS/staging.json"
 ```
 
 `research-measure.py` reads private chain parts and prints only sizes, counts, quiet gaps and
