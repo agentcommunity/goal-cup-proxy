@@ -7,7 +7,9 @@
 -- Change a migration there first, then regenerate here. Applied to the Agent Community Supabase
 -- project on 2026-10-15 (20261016120000: applied before this copy of it merged).
 -- The 2026-10-21 sign-up migrations (20261021090000_goal_cup_signups through
--- 20261021090400_goal_cup_terms_2026_10_23) are NOT yet applied to production.
+-- 20261021090400_goal_cup_terms_2026_10_23) are NOT yet applied to production. Neither is
+-- 20261017150200_goal_cup_notices_via_email_queue (website main; it changes only goal_cup_upload_claim_notices
+-- and needs the website's email_queue and email_tracking tables, which this copy does not create).
 -- REGEN-END
 
 -- ======================== 20261015120000_goal_cup_tracer_upload.sql ========================
@@ -2351,6 +2353,81 @@ BEGIN
     'decided_by_you', v_dev.member_id IS NOT DISTINCT FROM p_actor_id AND v_dev.status <> 'pending');
 END $$;
 
+-- ======================== 20261017150200_goal_cup_notices_via_email_queue.sql ========================
+-- Goal Cup notices now hand off to the email service atomically under the notice
+-- row lock. sent_at means durable email-service handoff, never provider delivery.
+-- Returning [] prevents an older upload Worker from submitting the mail itself.
+-- queue_id deliberately has no FK: queue retention is independent of run evidence.
+ALTER TABLE goal_cup_tracer.notices ADD COLUMN queue_id bigint;
+
+DO $migration$
+DECLARE old_expression text;
+BEGIN
+  SELECT pg_get_expr(conbin, conrelid) INTO old_expression FROM pg_constraint
+   WHERE conrelid = 'public.email_tracking'::regclass AND conname = 'email_tracking_email_type_check';
+  IF old_expression IS NULL THEN RAISE EXCEPTION 'email tracking constraint missing' USING ERRCODE = '55000'; END IF;
+  ALTER TABLE public.email_tracking DROP CONSTRAINT email_tracking_email_type_check;
+  EXECUTE 'ALTER TABLE public.email_tracking ADD CONSTRAINT email_tracking_email_type_check CHECK (('
+    || old_expression || ') OR email_type = ''goalcup_run_notice'')';
+END $migration$;
+
+CREATE OR REPLACE FUNCTION public.goal_cup_upload_claim_notices(p_limit integer, p_now text) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+DECLARE
+  v_now timestamptz := p_now::timestamptz;
+  v_staging boolean := caller_is_staging();
+  v_n record;
+  v_to text;
+  v_data jsonb;
+  v_queue_id bigint;
+BEGIN
+  FOR v_n IN
+    SELECT n.* FROM notices n JOIN runs r ON r.id = n.run_id AND r.staging = v_staging
+     WHERE n.sent_at IS NULL AND n.queue_id IS NULL AND n.skipped_at IS NULL
+       AND (n.claimed_at IS NULL OR n.claimed_at < v_now - interval '15 minutes')
+       AND n.attempts < 5
+     ORDER BY n.created_at, n.id
+     LIMIT greatest(least(coalesce(p_limit, 20), 200), 0)
+     FOR UPDATE OF n SKIP LOCKED
+  LOOP
+    IF v_staging THEN
+      v_to := 'delivered@resend.dev';
+    ELSE
+      SELECT u.email INTO v_to FROM auth.users u WHERE u.id = v_n.member_id;
+    END IF;
+    IF v_to IS NULL OR btrim(v_to) = '' THEN
+      UPDATE notices SET skipped_at = v_now, skipped_reason = 'no_address' WHERE id = v_n.id;
+      CONTINUE;
+    END IF;
+    v_to := lower(btrim(v_to));
+    v_data := test_marked(notice_text(v_n.kind, v_n.payload, v_n.run_id), v_n.run_id)
+      || jsonb_build_object('run_id', v_n.run_id, 'kind', v_n.kind);
+    IF v_staging THEN
+      v_data := jsonb_set(v_data, '{subject}', to_jsonb('[staging] ' || (v_data ->> 'subject')));
+    END IF;
+
+    -- Delivery policy and unsubscribe links belong to the gateway. This named
+    -- site template has no stored content row and follows site-announcement retries.
+    INSERT INTO public.email_queue(template, recipient_email, data, source, user_id,
+                                   metadata, writer, kind, list_key, content_id)
+    VALUES ('goalcup_run_notice', v_to, v_data, 'cron',
+            CASE WHEN v_staging THEN NULL ELSE v_n.member_id END,
+            jsonb_build_object('goal_cup_notice_id', v_n.id, 'run_id', v_n.run_id, 'kind', v_n.kind),
+            'goalcup', 'announcement', 'goalcup', NULL)
+    RETURNING id INTO v_queue_id;
+
+    UPDATE notices SET sent_at = v_now, sent_to = v_to, queue_id = v_queue_id,
+                       claimed_at = v_now, attempts = attempts + 1
+     WHERE id = v_n.id;
+  END LOOP;
+  RETURN '[]'::jsonb;
+END $$;
+
+-- CREATE OR REPLACE preserves the existing service/ingest-role grants and signature.
+-- finish_notice stays unchanged for an older Worker with an outstanding claim.
+REVOKE ALL ON FUNCTION public.goal_cup_upload_claim_notices(integer, text) FROM PUBLIC, anon, authenticated;
+
 -- ======================== 20261021090000_goal_cup_signups.sql ========================
 -- Goal Cup Edition 01 sign-up: who enters the cup, and with which team.
 --
@@ -2360,8 +2437,11 @@ END $$;
 --   * events.requires_signup (new, default false): the start gate. True for goalcup-cup-2026 and for the new
 --     staging rehearsal event goalcup-cup-staging; no other event. The open_run gate and device_request (a later
 --     migration) read it; requires_signup = false is the start-gate kill switch and leaves sign-ups open.
---   * events.signup_open (new, default false): sign-ups are taken. True for the same two events; goal_cup_signup
---     reads it (with the start window). signup_open = false closes sign-ups and leaves the start gate on.
+--   * events.signup_open (new, default false): sign-ups are taken. True ONLY for goalcup-cup-staging here.
+--     goalcup-cup-2026 stays false: production sign-ups open together with the 23 Oct terms version, in
+--     20261021090400_goal_cup_terms_2026_10_23.sql (spec: sign-up opens only with the new terms version).
+--     goal_cup_signup reads it (and needs the start window not yet closed; it is not bounded below by
+--     start_window_opens). signup_open = false closes sign-ups and leaves the start gate on.
 --   * goal_cup_tracer.signups: one active sign-up per member and event (the operator), numbered per event.
 --   * goal_cup_tracer.teammates: the people an operator lists, by lower-cased and trimmed email. An email
 --     is listed at most once per event. Plus-aliases are not merged: matching is exact.
@@ -2378,7 +2458,7 @@ END $$;
 -- Additive: two new columns with a default, one UPDATE and one INSERT of events rows, new tables, new
 -- functions. No existing function is replaced.
 --
--- Apply: psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+-- Apply: as docs/admin/GOAL-CUP-SIGNUP-RUNBOOK.md says (one transaction after SET lock_timeout = '5s'); then pnpm db:check.
 
 -- ---- events ---------------------------------------------------------------------------------------
 
@@ -2386,12 +2466,16 @@ END $$;
 ALTER TABLE goal_cup_tracer.events ADD COLUMN requires_signup boolean NOT NULL DEFAULT false;
 ALTER TABLE goal_cup_tracer.events ADD COLUMN signup_open boolean NOT NULL DEFAULT false;
 
-UPDATE goal_cup_tracer.events SET requires_signup = true, signup_open = true
+-- The cup's start gate is on from now, but its sign-ups stay closed (signup_open keeps its default false) until the
+-- terms migration 20261021090400 opens them.
+UPDATE goal_cup_tracer.events SET requires_signup = true
  WHERE id = 'goalcup-cup-2026' AND mode = 'competition' AND staging = false;
 
--- The staging rehearsal of the cup. Organizers move its window with an UPDATE when they rehearse.
+-- The staging rehearsal of the cup. Organizers move its window with an UPDATE when they rehearse. The seeded window
+-- is closed and in the past, so the event gates nothing until a rehearsal opens it: while a goalcup-cup-staging window
+-- is open, staging dry-run approvals answer signup_required (see the runbook).
 INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, run_hours, staging, requires_signup, signup_open)
-VALUES ('goalcup-cup-staging', 'competition', '2026-10-21T00:00:00Z', '2026-10-22T00:00:00Z', 168, true, true, true)
+VALUES ('goalcup-cup-staging', 'competition', '2026-10-01T00:00:00Z', '2026-10-02T00:00:00Z', 168, true, true, true)
 ON CONFLICT (id) DO NOTHING;
 
 -- ---- tables ---------------------------------------------------------------------------------------
@@ -2672,8 +2756,8 @@ GRANT EXECUTE ON FUNCTION
   public.goal_cup_signup(uuid, text, text, text, uuid, text, boolean, boolean, jsonb)
 TO service_role;
 
--- An apply against drifted production rows must fail loudly, not leave the gate off or sign-ups closed (or open on
--- another event).
+-- An apply against drifted production rows must fail loudly, not leave the gate off, staging sign-ups closed, or
+-- sign-ups open on any other event (the cup's own sign-ups must still be closed here).
 DO $$
 DECLARE
   v_gated text;
@@ -2686,8 +2770,8 @@ BEGIN
   END IF;
   SELECT coalesce(string_agg(id, ',' ORDER BY id), '') INTO v_open
     FROM goal_cup_tracer.events WHERE signup_open;
-  IF v_open IS DISTINCT FROM 'goalcup-cup-2026,goalcup-cup-staging' THEN
-    RAISE EXCEPTION 'goal cup sign-up gate: signup_open is set on [%], expected [goalcup-cup-2026,goalcup-cup-staging]', v_open;
+  IF v_open IS DISTINCT FROM 'goalcup-cup-staging' THEN
+    RAISE EXCEPTION 'goal cup sign-up gate: signup_open is set on [%], expected [goalcup-cup-staging]', v_open;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM goal_cup_tracer.events
                   WHERE id = 'goalcup-cup-staging' AND mode = 'competition' AND staging) THEN
@@ -2725,7 +2809,7 @@ END $$;
 -- Additive: new functions only (the shared team validation, goal_cup_tracer.normalized_team, is in the previous
 -- migration).
 --
--- Apply: psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+-- Apply: as docs/admin/GOAL-CUP-SIGNUP-RUNBOOK.md says (one transaction after SET lock_timeout = '5s'); then pnpm db:check.
 
 -- ---- helpers (schema goal_cup_tracer; never granted to anyone) --------------------------------------
 
@@ -3121,7 +3205,7 @@ TO service_role;
 -- CREATE OR REPLACE keeps each function's ACL; the grants are asserted again below anyway. No table, column or row
 -- changes.
 --
--- Apply: psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+-- Apply: as docs/admin/GOAL-CUP-SIGNUP-RUNBOOK.md says (one transaction after SET lock_timeout = '5s'); then pnpm db:check.
 
 -- ---- open_run: the sign-up gate ---------------------------------------------------------------------------
 -- Unchanged from 20261015170000 except the gate, placed after the credential checks (so a retried start of a run
@@ -3464,7 +3548,7 @@ GRANT EXECUTE ON FUNCTION goal_cup_tracer.seed_staging_signup(uuid, text) TO ser
 --
 -- service_role only, like the other goal_cup_* functions. No table, column or row changes.
 --
--- Apply: psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+-- Apply: as docs/admin/GOAL-CUP-SIGNUP-RUNBOOK.md says (one transaction after SET lock_timeout = '5s'); then pnpm db:check.
 
 CREATE FUNCTION public.goal_cup_signup_state(p_signup_id uuid) RETURNS text
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
@@ -3496,15 +3580,32 @@ GRANT EXECUTE ON FUNCTION public.goal_cup_signup_state(uuid) TO service_role;
 --
 -- Rules/privacy text hash: TBD at apply time (owner)
 --
+-- Opens production sign-ups: sign-up opens only with the new terms version (spec), so this migration also sets
+-- events.signup_open = true for goalcup-cup-2026, which 20261021090000 left false. Every sign-up therefore records the
+-- 23 Oct terms. goalcup-cup-staging has been open since 090000. To close sign-ups again later, set signup_open = false.
+--
 -- Replaces goal_cup_tracer.current_terms_version() from 20261015120000_goal_cup_tracer_upload.sql (~line 225) with the
 -- same attributes (LANGUAGE sql IMMUTABLE, SET search_path = pg_catalog, pg_temp); only the returned value changes.
 -- That migration grants the function to nobody (REVOKE ALL ON ALL FUNCTIONS IN SCHEMA goal_cup_tracer ...) and
--- CREATE OR REPLACE keeps the ACL; the revoke is asserted again below. No table, column or row changes.
+-- CREATE OR REPLACE keeps the ACL; the revoke is asserted again below. No table or column changes; one row update
+-- (the signup_open flag on the cup).
 --
--- Apply: psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+-- Apply: as docs/admin/GOAL-CUP-SIGNUP-RUNBOOK.md says (one transaction after SET lock_timeout = '5s'); then pnpm db:check.
 
 CREATE OR REPLACE FUNCTION goal_cup_tracer.current_terms_version() RETURNS text
 LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp
 AS $$ SELECT 'goal-cup-2026-10-23'::text $$;
 
 REVOKE ALL ON FUNCTION goal_cup_tracer.current_terms_version() FROM PUBLIC, anon, authenticated;
+
+-- Production sign-ups open together with the new terms version, in the same transaction. Exactly one row must
+-- change: zero means the cup row is missing or renamed, so the apply fails instead of leaving sign-ups closed.
+DO $open$
+DECLARE v_changed integer;
+BEGIN
+  UPDATE goal_cup_tracer.events SET signup_open = true WHERE id = 'goalcup-cup-2026';
+  GET DIAGNOSTICS v_changed = ROW_COUNT;
+  IF v_changed <> 1 THEN
+    RAISE EXCEPTION 'goal cup terms: opening sign-ups changed % rows of goalcup-cup-2026, expected 1', v_changed;
+  END IF;
+END $open$;
