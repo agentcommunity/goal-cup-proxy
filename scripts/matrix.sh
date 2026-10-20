@@ -2,8 +2,8 @@
 # scripts/matrix.sh <connector> <server-url> [options]
 # scripts/matrix.sh --check-copy <config-dir> [run-id]
 #
-# One practice run of one connector against one upload server, start to finish, and one result
-# row:
+# One practice run (or, with --test, one organizer test run sealed after --duration) of one
+# connector against one upload server, start to finish, and one result row:
 #
 #     <connector> <os>-<arch> <harness_version> PASS|FAIL <date>
 #
@@ -48,6 +48,14 @@
 #                              https://github.com/agentcommunity/goalcup-matrix-empty).
 #   MATRIX_PROMPT              what is typed into the harness, or for a headless connector
 #                              written to its goal file (default: a one-line greeting).
+#   MATRIX_PROMPT_FILE         a regular file holding the prompt instead (UTF-8; long workloads).
+#                              Not together with MATRIX_PROMPT. A headless connector's goal file
+#                              gets the text as it is, newlines included. A chat-mode harness gets
+#                              it typed on ONE line: every run of white space, newlines included,
+#                              becomes one space, because a newline typed into a TUI submits (or
+#                              splits) the prompt early. Control characters other than tab and
+#                              newline are refused. A long prompt reaches the TUI as a paste; give
+#                              it time with MATRIX_SUBMIT_DELAY before the Enter.
 #   MATRIX_PROMPT_DELAY        seconds between "the harness is up" and the prompt (fake: 1,
 #                              any other connector: 30). Chat mode only.
 #   MATRIX_SUBMIT_DELAY        seconds between the typed prompt and the Enter that submits it
@@ -73,9 +81,30 @@
 #   --allow-production   permit https://ingest.agentcommunity.org. Tests never use it.
 #   --keep               do not delete the temporary directory (it holds the run's trace).
 #   --log FILE           where the details go (default: a new file in $TMPDIR).
-#   --timeout SECONDS    give up on the run after this long (default 1800). One budget: for a
-#                        headless run the wait for the server's deadline takes what the start
-#                        left of it.
+#   --timeout SECONDS    give up on the run after this long (default 1800; with --duration,
+#                        the duration plus 1800). One budget: for a headless run the wait for
+#                        the server's deadline takes what the start left of it, and for a test
+#                        run the seal, the end of `goalcup start` and any `goalcup upload` take
+#                        what is left after the duration.
+#   --test --duration SECONDS
+#                        an organizer test run (`goalcup start --harness <id> --test`, approved
+#                        through the same test key flow; the member must be a test operator)
+#                        instead of a practice run, ended by this script: SECONDS (1 to 604800)
+#                        after the prompt is submitted (a headless connector: after its run
+#                        record appears, since the goal is its input from the launch), or when
+#                        the harness exits if that is earlier, it runs `goalcup seal <entry>` for
+#                        this run's own entry. The entry is the one entry of the one run record
+#                        this start wrote (a test run, of this connector), and `goalcup entries
+#                        --json` must list it with this connector; anything else FAILs and nothing
+#                        is sealed (never a guess). Then `goalcup start` finishes its wrap-up; if
+#                        it did not report the seal uploaded, `goalcup upload <entry>` runs. The
+#                        checks are the practice ones, except that the end is the seal, not the
+#                        deadline: the server's copy must say `sealed` and equal the local chain,
+#                        and `stop` is not required (the server's 168-hour deadline is far off).
+#                        A run that FAILs after its entry was found and before it was sealed is
+#                        sealed on the way out (best effort, logged). Both options go together,
+#                        only with a real connector (not a fake) and MATRIX_CONFIG_DIR. The log
+#                        names the mode and the duration (`mode=test duration=<N>s`).
 #   --check-copy DIR [RUN]
 #                        only the server-copy check, for a run you made by hand (the edge cases
 #                        in docs/OPERATING.md): every entry of RUN (default: the newest) in the
@@ -119,11 +148,20 @@ ALLOW_PRODUCTION=0
 KEEP=0
 LOG=""
 TIMEOUT=1800
+TIMEOUT_SET=0
+TEST=0
+DURATION=""
 while [ $# -gt 0 ]; do
   case $1 in
     -h | --help) usage ;;
     --allow-production) ALLOW_PRODUCTION=1 ;;
     --keep) KEEP=1 ;;
+    --test) TEST=1 ;;
+    --duration)
+      [ $# -ge 2 ] || usage
+      DURATION=$2
+      shift
+      ;;
     --check-copy)
       [ $# -ge 2 ] || usage
       CHECK_CFG=$2
@@ -142,6 +180,7 @@ while [ $# -gt 0 ]; do
     --timeout)
       [ $# -ge 2 ] || usage
       TIMEOUT=$2
+      TIMEOUT_SET=1
       shift
       ;;
     -*) usage ;;
@@ -221,6 +260,53 @@ case $TIMEOUT in
     exit 2
     ;;
 esac
+
+# --test and --duration: a test run of a real harness, in a prepared configuration directory,
+# sealed by this script. Never one without the other: a test run left to the server lasts 168 h.
+if [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
+  if [ -n "$CHECK_CFG" ]; then
+    echo "matrix: --test and --duration are not for --check-copy" >&2
+    exit 2
+  fi
+  if [ "$TEST" != 1 ] || [ -z "$DURATION" ]; then
+    echo "matrix: --test and --duration go together (a test run lasts 168 hours on the server; the script seals it after --duration SECONDS)" >&2
+    exit 2
+  fi
+  case $DURATION in
+    *[!0-9]* | "" | 0*)
+      echo "matrix: --duration is a whole number of seconds from 1 to 604800" >&2
+      exit 2
+      ;;
+  esac
+  if [ "${#DURATION}" -gt 6 ] || [ "$DURATION" -gt 604800 ]; then
+    echo "matrix: --duration is a whole number of seconds from 1 to 604800" >&2
+    exit 2
+  fi
+  case $CONNECTOR in
+    "$FAKE_ID" | "$FAKE_HEADLESS_ID")
+      echo "matrix: --test needs a real connector, not $CONNECTOR" >&2
+      exit 2
+      ;;
+  esac
+  if [ -z "${MATRIX_CONFIG_DIR:-}" ]; then
+    echo "matrix: --test needs MATRIX_CONFIG_DIR (a prepared configuration directory whose harness is signed in)" >&2
+    exit 2
+  fi
+  [ "$TIMEOUT_SET" = 1 ] || TIMEOUT=$((DURATION + 1800))
+fi
+
+# The prompt from a file: checked here, read once the connector's mode is known.
+PROMPT_FILE=${MATRIX_PROMPT_FILE:-}
+if [ -n "$PROMPT_FILE" ]; then
+  if [ -n "${MATRIX_PROMPT:-}" ]; then
+    echo "matrix: set MATRIX_PROMPT or MATRIX_PROMPT_FILE, not both" >&2
+    exit 2
+  fi
+  if [ ! -f "$PROMPT_FILE" ] || [ ! -r "$PROMPT_FILE" ]; then
+    echo "matrix: MATRIX_PROMPT_FILE must name a regular file this user can read" >&2
+    exit 2
+  fi
+fi
 
 # The server: https://..., or http:// to this machine. Never production without the flag.
 validate_server() {
@@ -321,6 +407,12 @@ ROOT=""
 CFG=""
 OWN_CONFIG=0
 STARTED_RUN=0
+# A test run: when the prompt went in, this run's own entry, and when its seal was asked for.
+SUBMIT_AT=""
+SEAL_ENTRY=""
+SEAL_ASKED_AT=""
+EARLY=0
+START_LAUNCHED=0
 
 print_row() {
   [ "$ROW_PRINTED" = 0 ] || return 0
@@ -343,8 +435,19 @@ cleanup() {
   exec 2>>"$LOG"
   if [ -n "$ROOT" ] && [ -d "$ROOT" ]; then {
     : >"$ROOT/done" 2>/dev/null
+    # A test run that failed after its entry was found and before its seal was asked for would
+    # go on for 168 hours: seal that entry (and only it) first, best effort and bounded.
+    if [ "$TEST" = 1 ] && [ -n "$SEAL_ENTRY" ] && [ -z "$SEAL_ASKED_AT" ]; then
+      log "the test run's entry $SEAL_ENTRY was not sealed; sealing it now (best effort, at most 120s)"
+      run_bounded seal 120 "seal $SEAL_ENTRY"
+      log "goalcup seal $SEAL_ENTRY on the way out: exit $?"
+      log_file "goalcup seal (output)" "$ROOT/seal.out"
+      log_file "goalcup seal (stderr)" "$ROOT/seal.err"
+    elif [ "$TEST" = 1 ] && [ -z "$SEAL_ENTRY" ] && [ "$START_LAUNCHED" = 1 ]; then
+      log "a test run may still be open on the server, its entry unknown here: in $CFG run goalcup entries, then goalcup seal <entry>"
+    fi
     # Whatever is still running from this script's own temporary directory, by that unique path.
-    for pidfile in "$ROOT/login.pid" "$ROOT/start.pid"; do
+    for pidfile in "$ROOT/login.pid" "$ROOT/start.pid" "$ROOT/entries.pid" "$ROOT/seal.pid" "$ROOT/upload.pid"; do
       if [ -f "$pidfile" ] && [ ! -f "$ROOT/$(basename "$pidfile" .pid).rc" ]; then kill -TERM "$(cat "$pidfile")" 2>/dev/null; fi
     done
     if command -v pkill >/dev/null 2>&1; then
@@ -455,17 +558,189 @@ write_wrapper() { # file name "goalcup arguments" [stty]
 }
 
 # Wait for the background job that writes its exit status to $1, scanning the output $2 for
-# approvals meanwhile. 0 when it finished (status in $1), 1 on timeout, 2 on a refused approval.
+# approvals meanwhile. 0 when it finished (status in $1), 1 on timeout, 2 on a refused approval,
+# 3 when a step of the test run's flow failed (FAIL_REASON says which). The limit is wall-clock
+# time, so a step that takes a while inside the loop still counts.
 wait_job() { # rcfile outfile limit
-  waited=0
+  wj_start=$(date +%s)
   while [ ! -f "$1" ]; do
     if [ "$SCAN" = 1 ]; then scan_and_approve "$2" || return 2; fi
-    after_scan "$2"
-    if [ "$waited" -ge "$3" ]; then return 1; fi
+    after_scan "$2" || return 3
+    if [ $(($(date +%s) - wj_start)) -ge "$3" ]; then return 1; fi
     sleep 2
-    waited=$((waited + 2))
   done
   return 0
+}
+
+# One goalcup command through its wrapper, in the background, waited for at most LIMIT seconds:
+# its standard output in $ROOT/NAME.out, its standard error in $ROOT/NAME.err. Returns its exit
+# status, or 124 when it ran out of time (it is then ended by its recorded process id).
+run_bounded() { # name limit "goalcup arguments"
+  write_wrapper "$ROOT/$1-wrapper.sh" "$1" "$3"
+  rm -f "$ROOT/$1.rc"
+  ( ( (sh "$ROOT/$1-wrapper.sh" >"$ROOT/$1.out" 2>"$ROOT/$1.err" </dev/null); echo $? >"$ROOT/$1.rc") 2>/dev/null & )
+  rb_start=$(date +%s)
+  while [ ! -s "$ROOT/$1.rc" ]; do
+    if [ $(($(date +%s) - rb_start)) -ge "$2" ]; then
+      kill -TERM "$(cat "$ROOT/$1.pid" 2>/dev/null)" 2>/dev/null
+      return 124
+    fi
+    sleep 1
+  done
+  return "$(cat "$ROOT/$1.rc")"
+}
+
+# The run records this start wrote: every run.json under the configuration directory not older
+# than the start's wrapper (whole seconds on some systems, so equal counts as new), newest first.
+fresh_runs() {
+  ls -t "$CFG"/runs/*/run.json 2>/dev/null | while IFS= read -r f; do
+    if ! [ "$WRAP" -nt "$f" ]; then printf '%s\n' "$f"; fi
+  done
+}
+
+# What is left of --timeout since the start began, never below zero.
+budget_left() {
+  bl=$((TIMEOUT - ($(date +%s) - START_AT)))
+  [ "$bl" -gt 0 ] || bl=0
+  printf '%s\n' "$bl"
+}
+
+# ---- a test run: find its own entry, and seal it
+
+# This run's entry, never a guess: exactly one run record written by this start, a test run of
+# this connector with exactly one entry (e + 16 hex digits), and `goalcup entries --json` lists
+# that entry with this connector. Sets SEAL_ENTRY; anything else fails and nothing is sealed.
+resolve_entry() {
+  fresh_runs >"$ROOT/fresh.txt"
+  n=$(grep -c . "$ROOT/fresh.txt")
+  [ "$n" = 1 ] ||
+    fail "cannot tell this run's entry: $n run records under $CFG/runs are as new as this start (want exactly one); nothing was sealed" || return 1
+  rj=$(cat "$ROOT/fresh.txt")
+  facts=$(python3 - "$rj" "$CONNECTOR" <<'PY'
+import json, re, sys
+try:
+    r = json.load(open(sys.argv[1]))
+except (OSError, ValueError) as e:
+    print("problem=the run record cannot be read (%s)" % type(e).__name__)
+    sys.exit(0)
+problems = []
+if r.get("test") is not True:
+    problems.append("it is not a test run")
+if r.get("connector_id") != sys.argv[2]:
+    problems.append("its connector is %r" % r.get("connector_id"))
+entries = r.get("entries") or []
+if len(entries) != 1:
+    problems.append("it has %d entries, not one" % len(entries))
+elif not re.fullmatch(r"e[0-9a-f]{16}", str(entries[0].get("entry_id"))):
+    problems.append("its entry id is not e followed by 16 hex digits")
+if problems:
+    print("problem=" + "; ".join(problems))
+else:
+    print("run=" + re.sub(r"[^A-Za-z0-9_-]", "?", str(r.get("run_id"))))
+    print("entry=" + entries[0]["entry_id"])
+PY
+  )
+  problem=$(printf '%s\n' "$facts" | sed -n 's/^problem=//p')
+  [ -z "$problem" ] || fail "the run record $rj is not this test run's: $problem; nothing was sealed" || return 1
+  entry=$(printf '%s\n' "$facts" | sed -n 's/^entry=//p')
+  case $entry in e[0-9a-f]*) ;; *) fail "no entry id in the run record $rj; nothing was sealed" || return 1 ;; esac
+  run_bounded entries 120 "entries --json"
+  erc=$?
+  log_file "goalcup entries --json" "$ROOT/entries.out"
+  log_file "goalcup entries --json (stderr)" "$ROOT/entries.err"
+  [ "$erc" = 0 ] || fail "goalcup entries --json exited $erc; nothing was sealed" || return 1
+  listed=$(python3 - "$ROOT/entries.out" "$entry" "$CONNECTOR" <<'PY'
+import json, sys
+try:
+    items = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    print("unreadable")
+    sys.exit(0)
+hits = [e for e in items if isinstance(e, dict) and e.get("entry_id") == sys.argv[2]] if isinstance(items, list) else []
+if len(hits) != 1:
+    print("absent")
+elif hits[0].get("connector_id") != sys.argv[3]:
+    print("another connector")
+else:
+    print("listed")
+PY
+  )
+  [ "$listed" = listed ] ||
+    fail "goalcup entries --json does not list entry $entry of $CONNECTOR ($listed); nothing was sealed" || return 1
+  SEAL_ENTRY=$entry
+  log "this test run: run $(printf '%s\n' "$facts" | sed -n 's/^run=//p'), entry $SEAL_ENTRY (from $rj, listed by goalcup entries --json)"
+}
+
+# Ask for the seal of this run's entry, in the background: `goalcup start` keeps running and
+# does its own wrap-up when the daemon has stopped the harness.
+request_seal() { # why
+  SEAL_ASKED_AT=$(date +%s)
+  say "goalcup seal $SEAL_ENTRY: $1"
+  write_wrapper "$ROOT/seal-wrapper.sh" seal "seal $SEAL_ENTRY"
+  rm -f "$ROOT/seal.rc"
+  ( ( (sh "$ROOT/seal-wrapper.sh" >"$ROOT/seal.out" 2>"$ROOT/seal.err" </dev/null); echo $? >"$ROOT/seal.rc") 2>/dev/null & )
+}
+
+# Called every turn of the wait for `goalcup start`: notes when the prompt went in (and finds the
+# entry at once, so a failure shows early and a later failure can still seal it), then asks for
+# the seal once the duration has passed.
+test_tick() {
+  tt_now=$(date +%s)
+  if [ -z "$SUBMIT_AT" ]; then
+    if [ "$MODE" = headless ]; then
+      [ -n "$(fresh_runs)" ] || return 0
+      SUBMIT_AT=$tt_now
+      log "the run is open and the headless harness has its goal; the seal is due in ${DURATION}s"
+    else
+      [ -f "$ROOT/sent" ] || return 0
+      SUBMIT_AT=$tt_now
+      log "the prompt was submitted; the seal is due in ${DURATION}s"
+    fi
+    resolve_entry || return 1
+    return 0
+  fi
+  [ -z "$SEAL_ASKED_AT" ] || return 0
+  [ $((tt_now - SUBMIT_AT)) -ge "$DURATION" ] || return 0
+  request_seal "${DURATION}s have passed since the prompt was submitted"
+  return 0
+}
+
+# After `goalcup start` has ended in a test run: the seal asked for (now, if the harness ended
+# first), finished within the budget, and successful.
+finish_test_seal() {
+  if [ -z "$SEAL_ASKED_AT" ]; then
+    EARLY=1
+    if [ -z "$SUBMIT_AT" ] && [ "$MODE" = headless ] && [ -n "$(fresh_runs)" ]; then
+      # A headless harness has its goal from the launch; it ended before the next look.
+      SUBMIT_AT=$(date +%s)
+      log "the headless harness ended before the run was seen open"
+      resolve_entry || return 1
+    fi
+    if [ -z "$SUBMIT_AT" ]; then
+      log "goalcup start ended before the prompt was submitted"
+      if resolve_entry; then
+        request_seal "goalcup start ended before the prompt was submitted"
+      fi
+      fail "goalcup start ended before the prompt was submitted; the tracer's last words: $(last_line "$ROOT/start.out")" || return 1
+    fi
+    log "the harness ended $(($(date +%s) - SUBMIT_AT))s after the prompt was submitted, before the duration (${DURATION}s)"
+    request_seal "the harness ended before the duration"
+  fi
+  left=$(budget_left)
+  ws=$(date +%s)
+  while [ ! -s "$ROOT/seal.rc" ]; do
+    if [ $(($(date +%s) - ws)) -ge "$left" ]; then
+      log_file "goalcup seal (output so far)" "$ROOT/seal.out"
+      fail "goalcup seal $SEAL_ENTRY did not finish within the --timeout budget" || return 1
+    fi
+    sleep 2
+  done
+  log_file "goalcup seal $SEAL_ENTRY (output)" "$ROOT/seal.out"
+  log_file "goalcup seal $SEAL_ENTRY (stderr)" "$ROOT/seal.err"
+  src=$(cat "$ROOT/seal.rc")
+  [ "$src" = 0 ] ||
+    fail "goalcup seal $SEAL_ENTRY exited $src: $(cat "$ROOT/seal.out" "$ROOT/seal.err" | last_line /dev/stdin)" || return 1
+  log "mode=test duration=${DURATION}s: entry $SEAL_ENTRY sealed, asked for $((SEAL_ASKED_AT - SUBMIT_AT))s after the prompt was submitted$([ "$EARLY" = 1 ] && echo " (the harness ended first)")"
 }
 after_scan() { :; }
 # Whether the log being waited on is still scanned for an approval code. It stops once the
@@ -482,6 +757,11 @@ run_matrix() {
     fail "goalcup, goalcup-daemon and goalcup-verify are needed (cargo build --workspace, or MATRIX_BIN_DIR)" || return 1
   GOALCUP_VERSION=$("$GOALCUP" --version 2>&1 | head -1)
   log "matrix $CONNECTOR on $PLATFORM against $SERVER, $DATE"
+  if [ "$TEST" = 1 ]; then
+    log "mode=test duration=${DURATION}s timeout=${TIMEOUT}s (an organizer test run, sealed by this script)"
+  else
+    log "mode=practice timeout=${TIMEOUT}s"
+  fi
   log "goalcup: $GOALCUP ($GOALCUP_VERSION); verifier: $VERIFY; daemon: $DAEMON"
   log "key file supplied: $([ -n "$KEYFILE" ] && echo yes || echo no); member: $MEMBER; repository: $REPO_URL"
 
@@ -544,6 +824,24 @@ run_matrix() {
   MATRIX_TERM=${MATRIX_TERM:-$([ "$CONNECTOR" = "$FAKE_ID" ] && echo dumb || echo xterm-256color)}
   read_manifest || return 1
   PROMPT=${MATRIX_PROMPT:-"Goal Cup matrix check: reply with the single word ok."}
+  if [ -n "$PROMPT_FILE" ]; then
+    PROMPT=$(python3 - "$PROMPT_FILE" "$MODE" 2>"$ROOT/prompt.err" <<'PY'
+import sys
+try:
+    text = open(sys.argv[1], "rb").read().decode("utf-8")
+except UnicodeDecodeError:
+    sys.exit("it is not UTF-8")
+if any((ord(c) < 32 and c not in "\t\n\r") or ord(c) == 127 for c in text):
+    sys.exit("it holds a control character other than tab and newline")
+# Chat mode: one line, as typed. Headless: the text as it is (the goal file is not typed).
+text = " ".join(text.split()) if sys.argv[2] == "chat" else text.strip()
+if not text:
+    sys.exit("it is empty")
+sys.stdout.write(text)
+PY
+    ) || fail "MATRIX_PROMPT_FILE $PROMPT_FILE: $(last_line "$ROOT/prompt.err")" || return 1
+    log "prompt from MATRIX_PROMPT_FILE $PROMPT_FILE: ${#PROMPT} characters$([ "$MODE" = chat ] && echo ", typed on one line")"
+  fi
 
   if [ "$OWN_CONFIG" = 1 ]; then
     # What `goalcup prep` would have settled. A practice clone is anonymous and installs no push
@@ -575,10 +873,11 @@ run_matrix() {
   [ "$(cat "$ROOT/login.rc")" = 0 ] ||
     fail "goalcup login exited $(cat "$ROOT/login.rc"): $(last_line "$ROOT/login.out")" || return 1
 
-  # ---- start --practice
+  # ---- start --practice (or --test)
   : >"$ROOT/seen.txt"
   WRAP="$ROOT/start-wrapper.sh"
-  START_ARGS="start --harness $CONNECTOR $DEV_FLAG --practice"
+  if [ "$TEST" = 1 ]; then RUN_FLAG=--test; else RUN_FLAG=--practice; fi
+  START_ARGS="start --harness $CONNECTOR $DEV_FLAG $RUN_FLAG"
   WRAP_KIND=""
   if [ "$MODE" = headless ]; then
     # The goal is a file: the goal of a headless harness is its only input, typed by nobody.
@@ -589,7 +888,11 @@ run_matrix() {
   fi
   write_wrapper "$WRAP" start "$START_ARGS" "$WRAP_KIND"
   if [ "$MODE" = headless ]; then
-    say "start --practice, headless (the harness ends the run; then waiting for the server's deadline)"
+    if [ "$TEST" = 1 ]; then
+      say "start --test, headless (sealed ${DURATION}s after the run opens, or when the harness ends)"
+    else
+      say "start --practice, headless (the harness ends the run; then waiting for the server's deadline)"
+    fi
     # No terminal and nothing typed: the harness's input is empty. (Started from a subshell, as the
     # login is.)
     ( ( (sh "$WRAP" >"$ROOT/start.out" 2>&1 </dev/null); echo $? >"$ROOT/start.rc") 2>/dev/null & )
@@ -607,7 +910,11 @@ run_matrix() {
     fi
     sleep 1
   done"
-    say "start --practice (the run lasts the server's practice length; waiting for its deadline)"
+    if [ "$TEST" = 1 ]; then
+      say "start --test (an organizer test run; sealed ${DURATION}s after the prompt is submitted, or when the harness ends)"
+    else
+      say "start --practice (the run lasts the server's practice length; waiting for its deadline)"
+    fi
     if [ "$OS" = macos ]; then
       ( ( (eval "$FEED") | (script -q /dev/null sh "$WRAP" >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
     else
@@ -615,7 +922,7 @@ run_matrix() {
     fi
     READY_AT=""
     PRE_AT=""
-    after_scan() {
+    chat_tick() {
       if [ -n "$READY_AT" ]; then
         now=$(date +%s)
         if [ -n "$PRE_KEYS" ] && [ -z "$PRE_AT" ] && [ $((now - READY_AT)) -ge "$PRE_DELAY" ]; then
@@ -634,8 +941,14 @@ run_matrix() {
         SCAN=0
         log "the harness is up"
       fi
+      return 0
     }
   fi
+  after_scan() {
+    [ "$MODE" = headless ] || chat_tick
+    [ "$TEST" = 0 ] || test_tick
+  }
+  START_LAUNCHED=1
   START_AT=$(date +%s)
   wait_job "$ROOT/start.rc" "$ROOT/start.out" "$TIMEOUT"
   w=$?
@@ -644,22 +957,20 @@ run_matrix() {
   case $w in
     1) fail "the run did not finish within ${TIMEOUT}s" || return 1 ;;
     2) fail "the test approval was refused (wrong key, member, or not a test server)" || return 1 ;;
+    3) return 1 ;;
   esac
   START_RC=$(cat "$ROOT/start.rc")
-  log "goalcup start exit status: $START_RC$([ "$MODE" = headless ] || echo " (script's status; the harness is stopped by the deadline, so a non-zero status is not itself a failure)")"
+  if [ "$TEST" = 1 ]; then
+    log "goalcup start exit status: $START_RC (the harness is stopped by the seal, so a non-zero status is not itself a failure)"
+    finish_test_seal || return 1
+  else
+    log "goalcup start exit status: $START_RC$([ "$MODE" = headless ] || echo " (script's status; the harness is stopped by the deadline, so a non-zero status is not itself a failure)")"
+  fi
 
   tr -d '\r' <"$ROOT/start.out" >"$ROOT/start.txt"
 
   # ---- what the run left (the newest run record this start wrote)
-  RUN_JSON=""
-  ls -t "$CFG"/runs/*/run.json 2>/dev/null >"$ROOT/runs.txt"
-  while IFS= read -r f; do
-    # Not older than the wrapper (whole seconds on some systems, so equal counts as new).
-    if ! [ "$WRAP" -nt "$f" ]; then
-      RUN_JSON=$f
-      break
-    fi
-  done <"$ROOT/runs.txt"
+  RUN_JSON=$(fresh_runs | head -1)
   [ -n "$RUN_JSON" ] ||
     fail "no run record under $CFG/runs; the tracer's last words: $(last_line "$ROOT/start.txt")" || return 1
   RUN_DIR=$(dirname "$RUN_JSON")
@@ -703,7 +1014,32 @@ PY
 
   COPY_TRIES=6
   COPY_SLEEP=5
-  if [ "$MODE" = headless ]; then
+  STRICT=1
+  if [ "$TEST" = 1 ]; then
+    # The end is this script's seal, not the server's deadline (168 hours away).
+    [ "$ENTRY_ID" = "$SEAL_ENTRY" ] ||
+      fail "the run record's last entry $ENTRY_ID is not the entry that was sealed, $SEAL_ENTRY" || return 1
+    if [ "$MODE" = headless ] && [ "$EARLY" = 1 ]; then
+      exited=$(grep '^harness exited:' "$ROOT/ended.txt" | tail -1 | cut -c1-200)
+      [ -n "$exited" ] || exited="no harness-exited line; the tracer's last words: $(last_line "$ROOT/start.txt")"
+      [ "$exited" = "harness exited: exit code 0." ] ||
+        fail "the headless harness did not finish its goal: $exited" || return 1
+    fi
+    if ! grep -Eq '^uploaded:.*(the|its) seal' "$ROOT/ended.txt"; then
+      left=$(budget_left)
+      say "goalcup start did not report the seal uploaded; goalcup upload $SEAL_ENTRY (at most ${left}s)"
+      run_bounded upload "$left" "upload $SEAL_ENTRY"
+      urc=$?
+      log_file "goalcup upload (output)" "$ROOT/upload.out"
+      log_file "goalcup upload (stderr)" "$ROOT/upload.err"
+      [ "$urc" = 0 ] || fail "goalcup upload $SEAL_ENTRY exited $urc" || return 1
+      tr -d '\r' <"$ROOT/upload.out" >>"$ROOT/ended.txt"
+      tr -d '\r' <"$ROOT/upload.err" >>"$ROOT/ended.txt"
+    fi
+    grep -Eq '^uploaded:.*(the|its) seal' "$ROOT/ended.txt" ||
+      fail "neither goalcup start nor goalcup upload reported the upload finished with the seal" || return 1
+    STRICT=sealed
+  elif [ "$MODE" = headless ]; then
     # The harness ends the run when it is done. It ended at the deadline (a long goal) or on its
     # own with exit code 0; any other exit is a harness that did not do its job.
     if ! grep -q '^deadline:' "$ROOT/ended.txt"; then
@@ -723,8 +1059,10 @@ PY
     grep -q '^deadline:' "$ROOT/ended.txt" ||
       fail "the run did not end at its deadline (no 'deadline:' line in the terminal output or host.log); the tracer's last words: $(last_line "$ROOT/ended.txt")" || return 1
   fi
-  grep -q '^uploaded:.*the seal' "$ROOT/ended.txt" ||
-    fail "the tracer did not report the upload finished with the seal (no 'uploaded: ... and the seal' line)" || return 1
+  if [ "$TEST" = 0 ]; then
+    grep -q '^uploaded:.*the seal' "$ROOT/ended.txt" ||
+      fail "the tracer did not report the upload finished with the seal (no 'uploaded: ... and the seal' line)" || return 1
+  fi
   if [ "$CONNECTOR" = "$FAKE_ID" ]; then
     grep -q 'tui: noted' "$ROOT/start.txt" || fail "the typed prompt never reached the harness" || return 1
   fi
@@ -732,7 +1070,7 @@ PY
 
   # ---- 1. the local verifier, 2. the server's copy
   verify_trace "$TRACE" || return 1
-  compare_copy "$RUN_ID" "$ENTRY_ID" "$TRACE" "$RUN_DIR/credential" 1 || return 1
+  compare_copy "$RUN_ID" "$ENTRY_ID" "$TRACE" "$RUN_DIR/credential" "$STRICT" || return 1
 
   RESULT=PASS
   return 0
@@ -774,7 +1112,8 @@ verify_trace() { # trace [allow_incomplete]
 # The upload API returns a position, not the stored bytes, so this compares what the server says it
 # holds (offset, record count, head, committed end, last acknowledgement) with the local chain
 # the verifier has just checked end to end. With strict=1 (the last entry of a finished run) the
-# run must also be sealed and over.
+# run must also be sealed and over; with strict=sealed (a test run this script sealed) it must be
+# sealed, and `stop` is not required (the server's deadline has not come).
 compare_copy() { # run_id entry_id trace credential_file strict
   tries=0
   while :; do
@@ -783,7 +1122,7 @@ compare_copy() { # run_id entry_id trace credential_file strict
       http GET "/v1/runs/$1?entry_id=$2" "$ROOT/server.json" -H @-)
     log "GET /v1/runs/$1?entry_id=$2: HTTP $status $(cat "$ROOT/server.json" 2>/dev/null)"
     [ "$status" = 200 ] || fail "GET /v1/runs/$1 with the run's credential answered HTTP $status" || return 1
-    [ "$5" = 1 ] || break
+    [ "$5" != 0 ] || break
     [ "$(py_get "$ROOT/server.json" status)" = sealed ] && break
     tries=$((tries + 1))
     [ "$tries" -lt "${COPY_TRIES:-6}" ] || break
@@ -794,7 +1133,8 @@ import json, os, sys
 server = json.load(open(sys.argv[1]))
 verify = json.load(open(sys.argv[2]))
 chain_bytes = os.path.getsize(sys.argv[3])
-strict = sys.argv[4] == "1"
+strict = sys.argv[4] in ("1", "sealed")
+stop = sys.argv[4] == "1"
 records = verify["validated_records"]
 head = verify["validated_head"]
 final = server.get("final") or {}
@@ -811,10 +1151,9 @@ if strict or verify.get("sealed"):
         ("committed end (final).head = local chain head", final.get("head"), head),
     ]
 if strict:
-    checks += [
-        ("status is sealed", server.get("status"), "sealed"),
-        ("the run is over (stop)", server.get("stop"), True),
-    ]
+    checks += [("status is sealed", server.get("status"), "sealed")]
+if stop:
+    checks += [("the run is over (stop)", server.get("stop"), True)]
 ok = True
 for name, got, want in checks:
     good = got == want

@@ -22,6 +22,7 @@ SCRIPT = Path(__file__).with_name("linux-matrix.sh")
 SENTINEL = "SENTINEL-KEY-VALUE-never-printed-0123456789"
 STUB = """#!/bin/sh
 echo "$*" >> "$STUB_LOG"
+case "$*" in "build "*) cat >> "$STUB_LOG.dockerfiles" ;; esac
 case "$*" in *inner-home-ready*) echo "${STUB_HOME_READY:-no}" ;; esac
 case "$*" in "ps -q "*) [ -z "${STUB_BUSY:-}" ] || echo "$STUB_BUSY" ;; esac
 if [ -n "${STUB_SLEEP:-}" ]; then case "$*" in *"$STUB_SLEEP"*) sleep 15 ;; esac; fi
@@ -57,7 +58,11 @@ class LinuxMatrixTests(unittest.TestCase):
             "GOALCUP_TEST_APPROVAL_KEY_FILE": str(self.key),
         }
         for name in ("GOALCUP_TEST_APPROVAL_KEY", "LINUX_MATRIX_SERVER",
-                     "GOALCUP_TEST_MEMBER_ID", "GOALCUP_HEAVY_LOCK_HELD", "LINUX_MATRIX_LOCK_WAIT"):
+                     "GOALCUP_TEST_MEMBER_ID", "GOALCUP_HEAVY_LOCK_HELD", "LINUX_MATRIX_LOCK_WAIT",
+                     "LINUX_MATRIX_CELL", "LINUX_MATRIX_PREBUILT", "LINUX_MATRIX_CODEX_EFFORT",
+                     "MATRIX_PROMPT", "MATRIX_PROMPT_FILE", "MATRIX_PROMPT_DELAY",
+                     "MATRIX_SUBMIT_DELAY", "MATRIX_PRE_PROMPT_KEYS", "MATRIX_PRE_PROMPT_DELAY",
+                     "MATRIX_REPO_URL"):
             self.env.pop(name, None)
 
     def run_script(self, *args: str, **env: str) -> subprocess.CompletedProcess:
@@ -233,6 +238,278 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertIn('[projects."/w"]\ntrust_level = "trusted"\nmodel = "kept-in-table"', text)
         self.assertEqual(stat.S_IMODE((home / "config.toml").stat().st_mode), 0o600)
 
+    # ---- build once, run prebuilt, cells, options
+
+    def test_build_makes_the_images_and_binaries_once_under_the_lock(self) -> None:
+        run = self.run_script("build", "codex-cli", "claude-code-cli", "amp-cli")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        builds = self.docker_lines("build")
+        self.assertEqual(len(builds), 3)
+        versions = {c: version_of(c) for c in ("codex-cli", "claude-code-cli", "amp-cli")}
+        for c, v in versions.items():
+            self.assertTrue(any(f"goalcup-linux-matrix-{c}:{v}" in b for b in builds), (c, v))
+        dockerfiles = Path(str(self.log) + ".dockerfiles").read_text()
+        self.assertIn(f"npm install -g @anthropic-ai/claude-code@{versions['claude-code-cli']}", dockerfiles)
+        self.assertIn(f"npm install --prefix /opt/amp @ampcode/cli@{versions['amp-cli']}", dockerfiles)
+        self.assertIn("-g24a9fe", versions["amp-cli"])
+        cargo = [x for x in self.docker_lines("exec") if "cargo build" in x]
+        self.assertEqual(len(cargo), 1)
+        [docker_run] = self.docker_lines("run")
+        self.assertNotIn(":/vol", docker_run, "the build touched a connector's volume")
+        self.assertIn(":/target ", docker_run + " ")
+        self.assertTrue(run.stdout.rstrip().splitlines()[-1].startswith("linux-matrix: built"))
+        self.assertFalse(self.lock.exists(), "the heavy lock was left held")
+
+    def test_build_with_no_connector_builds_every_one_with_a_recipe(self) -> None:
+        run = self.run_script("build")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        tags = " ".join(self.docker_lines("build"))
+        for c in ("codex-cli", "claude-code-cli", "amp-cli", "hermes-cli"):
+            self.assertIn(f"goalcup-linux-matrix-{c}:", tags)
+
+    def test_a_prebuilt_run_never_builds_and_takes_no_heavy_lock(self) -> None:
+        self.lock.mkdir()  # someone else holds it: a prebuilt run does not wait for it
+        run = self.run_script("run", "codex-cli", LINUX_MATRIX_PREBUILT="1", LINUX_MATRIX_LOCK_WAIT="0")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(self.docker_lines("build"), [])
+        self.assertFalse(any(" cargo " in f" {x} " for x in self.docker_lines("exec")))
+        self.assertTrue(any(x.startswith("image inspect goalcup-linux-matrix-codex-cli:")
+                            for x in self.log.read_text().splitlines()))
+        [docker_run] = self.docker_lines("run")
+        self.assertRegex(docker_run, r"-v goalcup-linux-matrix-target-\d+:/target:ro ")
+        [chown] = [x for x in self.docker_lines("exec") if "chown" in x]
+        self.assertNotIn("/target", chown)
+        self.assertTrue(self.lock.is_dir(), "the script removed a lock it did not take")
+
+    def test_a_prebuilt_run_without_the_image_fails_and_says_build(self) -> None:
+        run = self.run_script("run", "codex-cli", LINUX_MATRIX_PREBUILT="1", STUB_FAIL="image inspect")
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("run scripts/linux-matrix.sh build codex-cli first", run.stdout)
+        self.assertEqual(self.docker_lines("run"), [])
+
+    def test_a_cell_has_its_own_fixed_name_volume_and_label(self) -> None:
+        run = self.run_script("run", "codex-cli", LINUX_MATRIX_CELL="lx-a")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        [docker_run] = self.docker_lines("run")
+        self.assertIn("--name goalcup-linux-matrix-codex-cli-lx-a ", docker_run)
+        self.assertIn("--label goalcup-linux-matrix=codex-cli/lx-a ", docker_run)
+        self.assertIn("-v goalcup-linux-matrix-codex-cli-lx-a:/vol ", docker_run)
+        self.assertIn("-e LINUX_MATRIX_CELL=lx-a ", docker_run)
+        self.assertTrue(any("label=goalcup-linux-matrix=codex-cli/lx-a" in x
+                            for x in self.docker_lines("ps")))
+        self.assertEqual(self.log.read_text().splitlines()[-1], "rm -f goalcup-linux-matrix-codex-cli-lx-a")
+
+    def test_a_busy_cell_is_refused_and_its_container_left_alone(self) -> None:
+        run = self.run_script("run", "codex-cli", LINUX_MATRIX_CELL="lx-a", STUB_BUSY="abc123")
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("(cell lx-a) is running", run.stdout)
+        self.assertNotIn("rm -f goalcup-linux-matrix-codex-cli-lx-a", self.log.read_text())
+        self.assertNotIn("rm -f abc123", self.log.read_text())
+
+    def test_a_bad_cell_name_is_refused_before_docker(self) -> None:
+        for bad in ("Lx", "a_b", "-a", "a b", "x" * 41):
+            with self.subTest(bad=bad):
+                run = self.run_script("run", "codex-cli", LINUX_MATRIX_CELL=bad)
+                self.assertEqual(run.returncode, 1)
+                self.assertIn("LINUX_MATRIX_CELL", run.stdout)
+        self.assertEqual(self.log.read_text(), "")
+
+    def test_matrix_options_after_the_separator_reach_the_matrix(self) -> None:
+        run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "7200", "--keep")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        [inner] = [x for x in self.docker_lines("exec") if "inner-run" in x]
+        self.assertTrue(inner.endswith("inner-run codex-cli --test --duration 7200 --keep"), inner)
+        self.assertNotIn(SENTINEL, self.log.read_text() + run.stdout + run.stderr)
+
+    def test_other_matrix_options_are_refused(self) -> None:
+        for extra in (["--allow-production"], ["--log", "/x"], ["--duration", "2h"],
+                      ["--check-copy", "/x"], ["--duration"]):
+            with self.subTest(extra=extra):
+                run = self.run_script("run", "codex-cli", "--", *extra)
+                self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertEqual(self.docker_lines("run"), [])
+        login = self.run_script("login", "codex-cli", "--", "--test")
+        self.assertEqual(login.returncode, 2)
+
+    def test_a_prompt_file_is_mounted_read_only_and_named_to_the_matrix(self) -> None:
+        prompt = self.base / "prompt.txt"
+        prompt.write_text("Build it.\nThen test it.\n")
+        run = self.run_script("run", "codex-cli", MATRIX_PROMPT_FILE=str(prompt))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        [docker_run] = self.docker_lines("run")
+        self.assertIn(f"-v {prompt}:/run/goalcup/prompt:ro", docker_run)
+        [inner] = [x for x in self.docker_lines("exec") if "inner-run" in x]
+        self.assertIn("-e MATRIX_PROMPT_FILE=/run/goalcup/prompt", inner)
+        self.assertNotIn("Build it.", self.log.read_text())
+
+    def test_a_relative_or_missing_prompt_file_is_refused(self) -> None:
+        for path in ("prompt.txt", str(self.base / "missing.txt")):
+            run = self.run_script("run", "codex-cli", MATRIX_PROMPT_FILE=path)
+            self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertEqual(self.docker_lines("run"), [])
+
+    def test_matrix_settings_that_are_set_are_passed_on(self) -> None:
+        run = self.run_script("run", "claude-code-cli", MATRIX_SUBMIT_DELAY="5",
+                              MATRIX_PRE_PROMPT_KEYS="")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        [docker_run] = self.docker_lines("run")
+        self.assertIn("-e MATRIX_SUBMIT_DELAY=5 ", docker_run)
+        # Set but empty still travels: it overrides the Claude trust-dialog default.
+        self.assertIn("-e MATRIX_PRE_PROMPT_KEYS= ", docker_run)
+        self.assertNotIn("MATRIX_PROMPT_DELAY", docker_run)
+
+    def test_codex_effort_is_low_or_minimal_and_reaches_the_container(self) -> None:
+        run = self.run_script("run", "codex-cli")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        [docker_run] = self.docker_lines("run")
+        self.assertIn("-e LINUX_MATRIX_CODEX_EFFORT=low ", docker_run)
+        bad = self.run_script("run", "codex-cli", LINUX_MATRIX_CODEX_EFFORT="high")
+        self.assertEqual(bad.returncode, 1)
+        self.assertIn("low or minimal", bad.stdout)
+        self.assertEqual(len(self.docker_lines("run")), 1)
+
+    def test_the_claude_login_records_file_names_in_a_login_log(self) -> None:
+        run = self.run_script("login", "claude-code-cli", STUB_HOME_READY="yes", LINUX_MATRIX_CELL="lx-c")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertTrue(any("inner-home-files claude-code-cli" in x for x in self.docker_lines("exec")))
+        self.assertTrue(list((self.base / "logs").glob("login-claude-code-cli-lx-c-*.log")))
+        self.assertNotIn(SENTINEL, self.log.read_text() + run.stdout + run.stderr)
+
+
+def version_of(connector: str) -> str:
+    first = (SCRIPT.parent.parent / f"connectors/{connector}/harness.toml").read_text().split("\n")[0]
+    return next(w.rstrip(",") for w in first.split() if w[:1].isdigit())
+
+
+class ContainerHalfTests(unittest.TestCase):
+    """The container half's home config and file listing, on a temporary volume."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name).resolve()
+        self.script = self.base / "linux-matrix.sh"
+        self.script.write_text(SCRIPT.read_text().replace("VOL=/vol\n", f"VOL={self.base / 'vol'}\n", 1))
+        self.homes = self.base / "vol/cfg/capture-homes"
+        self.bin = self.base / "bin"
+        self.bin.mkdir()
+
+    def inner(self, *args: str, **env: str) -> subprocess.CompletedProcess:
+        environment = {k: v for k, v in os.environ.items()
+                       if k not in ("LINUX_MATRIX_CODEX_EFFORT", "MATRIX_PRE_PROMPT_KEYS")}
+        environment["PATH"] = f"{self.bin}:{os.environ['PATH']}"
+        environment.update(env)
+        return subprocess.run(["sh", str(self.script), *args], env=environment,
+                              capture_output=True, text=True)
+
+    def codex_stub(self, efforts: list[str]) -> None:
+        doc = {"models": [
+            {"slug": "gpt-6-astra", "supported_reasoning_levels": [{"effort": "minimal"}]},
+            {"slug": "gpt-5.6-luna", "supported_reasoning_levels": [{"effort": e} for e in efforts]},
+        ]}
+        stub = self.bin / "codex"
+        stub.write_text("#!/bin/sh\n[ \"$*\" = \"debug models --bundled\" ] || exit 2\n"
+                        f"cat <<'EOF'\n{json.dumps(doc)}\nEOF\n")
+        stub.chmod(0o755)
+
+    def test_claude_settings_are_merged_keeping_other_keys(self) -> None:
+        home = self.homes / "claude-code-cli"
+        home.mkdir(parents=True)
+        (home / "settings.json").write_text(json.dumps({
+            "model": "opus", "alwaysThinkingEnabled": True, "theme": "dark",
+            "permissions": {"allow": ["Bash(ls)"]}}))
+        run = self.inner("inner-home-config", "claude-code-cli")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        doc = json.loads((home / "settings.json").read_text())
+        self.assertEqual(doc["model"], "haiku")
+        self.assertIs(doc["alwaysThinkingEnabled"], False)
+        self.assertEqual(doc["theme"], "dark")
+        self.assertEqual(doc["permissions"], {"allow": ["Bash(ls)"]})
+        self.assertEqual(stat.S_IMODE((home / "settings.json").stat().st_mode), 0o600)
+
+    def test_claude_settings_are_written_when_there_are_none(self) -> None:
+        run = self.inner("inner-home-config", "claude-code-cli")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        doc = json.loads((self.homes / "claude-code-cli/settings.json").read_text())
+        self.assertEqual(doc, {"model": "haiku", "alwaysThinkingEnabled": False})
+
+    def test_claude_settings_that_are_not_json_are_left_alone_and_fail(self) -> None:
+        home = self.homes / "claude-code-cli"
+        home.mkdir(parents=True)
+        (home / "settings.json").write_text("{not json")
+        run = self.inner("inner-home-config", "claude-code-cli")
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("FAIL", run.stdout)
+        self.assertEqual((home / "settings.json").read_text(), "{not json")
+
+    def test_codex_minimal_effort_is_set_when_codex_lists_it(self) -> None:
+        self.codex_stub(["minimal", "low", "medium"])
+        run = self.inner("inner-home-config", "codex-cli", LINUX_MATRIX_CODEX_EFFORT="minimal")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        lines = (self.homes / "codex-cli/config.toml").read_text().splitlines()
+        self.assertEqual(lines[:2], ['model = "gpt-5.6-luna"', 'model_reasoning_effort = "minimal"'])
+
+    def test_codex_minimal_effort_fails_when_codex_does_not_list_it_for_luna(self) -> None:
+        self.codex_stub(["low", "medium"])  # astra lists minimal; luna does not
+        run = self.inner("inner-home-config", "codex-cli", LINUX_MATRIX_CODEX_EFFORT="minimal")
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("does not list minimal", run.stdout)
+        self.assertFalse((self.homes / "codex-cli/config.toml").exists())
+
+    def inner_run_world(self) -> Path:
+        """A stand-in /src: the connector's manifest and a matrix.sh that records what it got
+        and leaves one haiku transcript, on a volume where prep recorded the sign-in."""
+        src = self.base / "src"
+        (src / "connectors/claude-code-cli").mkdir(parents=True)
+        (src / "connectors/claude-code-cli/harness.toml").write_text(
+            (SCRIPT.parent.parent / "connectors/claude-code-cli/harness.toml").read_text())
+        (src / "scripts").mkdir()
+        got = self.base / "matrix-got.json"
+        (src / "scripts/matrix.sh").write_text(f"""#!/bin/sh
+python3 -c 'import json, os, sys; json.dump({{"argv": sys.argv[1:], "keys": os.environ.get("MATRIX_PRE_PROMPT_KEYS"), "cfg": os.environ.get("MATRIX_CONFIG_DIR")}}, open("{got}", "w"))' "$@"
+d="$MATRIX_CONFIG_DIR/capture-homes/claude-code-cli/projects/-w"
+mkdir -p "$d"
+echo '{{"type":"assistant","message":{{"model":"claude-haiku-4-5"}}}}' > "$d/s.jsonl"
+echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
+""")
+        cfg = self.base / "vol/cfg"
+        cfg.mkdir(parents=True)
+        (cfg / "prep.json").write_text(json.dumps({"harness": "claude-code-cli", "home_ready": True}))
+        self.script.write_text(self.script.read_text().replace("/src/", f"{src}/"))
+        return got
+
+    def test_inner_run_passes_matrix_options_and_the_claude_trust_keys(self) -> None:
+        got = self.inner_run_world()
+        run = self.inner("inner-run", "claude-code-cli", "--test", "--duration", "7200",
+                         TMPDIR=str(self.base / "tmp"), LINUX_MATRIX_SERVER="https://s.example")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        seen = json.loads(got.read_text())
+        self.assertEqual(seen["argv"][0:2], ["claude-code-cli", "https://s.example"])
+        self.assertEqual(seen["argv"][4:], ["--test", "--duration", "7200"])
+        self.assertEqual(seen["keys"], "\\033[B\\r")
+        self.assertEqual(seen["cfg"], str(self.base / "vol/cfg"))
+        self.assertTrue(run.stdout.rstrip().splitlines()[-1].endswith("PASS 2026-10-20"))
+        settings = json.loads((self.homes / "claude-code-cli/settings.json").read_text())
+        self.assertEqual(settings["model"], "haiku")
+
+    def test_inner_run_keeps_trust_keys_that_were_set_even_empty(self) -> None:
+        got = self.inner_run_world()
+        run = self.inner("inner-run", "claude-code-cli", MATRIX_PRE_PROMPT_KEYS="",
+                         TMPDIR=str(self.base / "tmp"), LINUX_MATRIX_SERVER="https://s.example")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(json.loads(got.read_text())["keys"], "")
+
+    def test_home_files_lists_names_never_contents(self) -> None:
+        home = self.homes / "claude-code-cli"
+        (home / "projects/p").mkdir(parents=True)
+        (home / ".credentials.json").write_text(SENTINEL)
+        (home / "projects/p/s.jsonl").write_text(SENTINEL)
+        run = self.inner("inner-home-files", "claude-code-cli")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn(".credentials.json", run.stdout)
+        self.assertIn("projects/p/s.jsonl", run.stdout)
+        self.assertNotIn(SENTINEL, run.stdout + run.stderr)
+
 
 class CodexModelCheckTests(unittest.TestCase):
     """The container half's check of the run's Codex turns, on a temporary volume."""
@@ -260,9 +537,12 @@ class CodexModelCheckTests(unittest.TestCase):
             past = time.time() - 7200
             os.utime(path, (past, past))
 
-    def check(self) -> subprocess.CompletedProcess:
+    def check(self, effort: str | None = None) -> subprocess.CompletedProcess:
+        env = {k: v for k, v in os.environ.items() if k != "LINUX_MATRIX_CODEX_EFFORT"}
+        if effort:
+            env["LINUX_MATRIX_CODEX_EFFORT"] = effort
         return subprocess.run(["sh", str(self.script), "inner-model-check", "codex-cli",
-                               str(self.marker)], capture_output=True, text=True)
+                               str(self.marker)], capture_output=True, text=True, env=env)
 
     def test_luna_at_low_passes(self) -> None:
         self.rollout("a", ("gpt-5.6-luna", "low"), ("gpt-5.6-luna", "low"))
@@ -287,6 +567,74 @@ class CodexModelCheckTests(unittest.TestCase):
     def test_sessions_from_before_the_run_are_not_counted(self) -> None:
         self.rollout("old", ("gpt-6-astra", "high"), old=True)
         self.rollout("new", ("gpt-5.6-luna", "low"))
+        self.assertEqual(self.check().returncode, 0)
+
+    def test_the_configured_effort_is_the_one_required(self) -> None:
+        self.rollout("a", ("gpt-5.6-luna", "minimal"))
+        self.assertEqual(self.check("minimal").returncode, 0)
+        self.assertEqual(self.check("low").returncode, 1)
+
+
+class ClaudeModelCheckTests(unittest.TestCase):
+    """The container half's check of the run's Claude transcripts, on a temporary volume."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name).resolve()
+        self.projects = self.base / "vol/cfg/capture-homes/claude-code-cli/projects/-vol-work-x"
+        self.projects.mkdir(parents=True)
+        self.script = self.base / "linux-matrix.sh"
+        self.script.write_text(SCRIPT.read_text().replace("VOL=/vol\n", f"VOL={self.base / 'vol'}\n", 1))
+        self.marker = self.base / "marker"
+        self.marker.touch()
+        past = time.time() - 3600
+        os.utime(self.marker, (past, past))
+
+    def transcript(self, name: str, *models: str, old: bool = False) -> None:
+        lines = [json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}})]
+        lines += [json.dumps({"type": "assistant", "message": {"role": "assistant", "model": m}})
+                  for m in models]
+        path = self.projects / f"{name}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n")
+        if old:
+            past = time.time() - 7200
+            os.utime(path, (past, past))
+
+    def check(self) -> subprocess.CompletedProcess:
+        return subprocess.run(["sh", str(self.script), "inner-model-check", "claude-code-cli",
+                               str(self.marker)], capture_output=True, text=True)
+
+    def test_haiku_passes(self) -> None:
+        self.transcript("a", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001")
+        run = self.check()
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("claude-haiku-4-5-20251001 x2", run.stdout)
+
+    def test_another_model_fails_even_in_a_subagent(self) -> None:
+        self.transcript("a", "claude-haiku-4-5-20251001")
+        self.transcript("a/subagents/agent-1", "claude-sonnet-4-5")
+        self.assertEqual(self.check().returncode, 1)
+
+    def test_no_assistant_message_fails(self) -> None:
+        self.transcript("a")
+        run = self.check()
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("could not be confirmed", run.stdout)
+
+    def test_synthetic_messages_are_counted_apart(self) -> None:
+        self.transcript("a", "claude-haiku-4-5-20251001", "<synthetic>")
+        run = self.check()
+        self.assertEqual(run.returncode, 0, run.stdout)
+        self.assertIn("1 <synthetic>", run.stdout)
+        self.transcript("b", "<synthetic>")
+        self.transcript("a", "<synthetic>")
+        self.assertEqual(self.check().returncode, 1)
+
+    def test_transcripts_from_before_the_run_are_not_counted(self) -> None:
+        self.transcript("old", "claude-opus-4-1", old=True)
+        self.transcript("new", "claude-haiku-4-5-20251001")
         self.assertEqual(self.check().returncode, 0)
 
 
