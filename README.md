@@ -66,6 +66,18 @@ install status. It can exit 1 when an optional shipped harness is not installed.
 runs the build on `PATH` and records it. Use a fresh config for the local example below; a config
 that has been logged into the server follows the server-run path instead.
 
+In an interactive terminal, `goalcup` opens setup. On first use, choose a harness with the arrow
+keys and Enter (a sole available harness is chosen automatically); setup remembers the choice,
+so subsequent setup keeps the same harness. The picker also
+links to the add/request-a-harness guide. `goalcup prep --harness <id>` still selects explicitly,
+and piped commands and `--json` keep their plain output. `NO_COLOR` disables colour and animation;
+`GOALCUP_NO_ANIMATION=1` keeps the green UI still. Narrow terminals use a compact header.
+
+The welcome UI is in `crates/goalcup-cli/src/ui/`: lettering in `assets.rs`, colours in
+`theme.rs`, rendering in `menu.rs` and terminal input in `terminal.rs`. It receives labels and
+returns a selection. Connector discovery lives in `welcome.rs`; existing `commands/` functions
+own setup, saved state and recording. UI changes need no capture or protocol changes.
+
 ```sh
 export GOALCUP_CONFIG_DIR="$(mktemp -d "$HOME/goalcup-local.XXXXXX")"  # fresh local-only test state
 goalcup prep --harness claude-code-cli            # sign in once in the tracer's own harness home (press Enter when it asks)

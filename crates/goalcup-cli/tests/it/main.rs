@@ -47,3 +47,5 @@ mod upload_open;
 mod upload_server;
 mod upload_server_device;
 mod upload_server_segments;
+#[cfg(unix)]
+mod welcome;

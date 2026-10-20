@@ -57,7 +57,11 @@ pub mod server;
 /// The goal-cup skill a chat-mode harness finds in its home (D57).
 pub mod skill;
 pub mod subreaper;
+/// Replaceable terminal presentation, independent of command operations.
+pub mod ui;
 pub mod upload;
+/// Harness discovery for the first-time setup screen.
+pub mod welcome;
 /// The WSL version and Windows-drive checks of `prep`, `start` and `continue`.
 pub mod wsl_gate;
 

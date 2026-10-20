@@ -239,7 +239,22 @@ fn main() -> ExitCode {
     {
         goalcup_cli::set_finish_budget(std::time::Duration::from_millis(ms));
     }
-    let args = match Args::try_parse() {
+    // The interactive welcome is a route to existing setup, not a new command. Pipes keep
+    // the ordinary help and exit contract; only interactive setup uses the picker.
+    let parsed = if std::env::args_os().len() == 1 && goalcup_cli::ui::interactive() {
+        Ok(Args {
+            command: Command::Prep {
+                harness: None,
+                repo: None,
+                work_root: None,
+                json: false,
+                dev: false,
+            },
+        })
+    } else {
+        Args::try_parse()
+    };
+    let args = match parsed {
         Ok(args) => args,
         Err(e) => {
             let usage_error = e.use_stderr();
@@ -411,11 +426,54 @@ fn login(server: Option<String>) -> Result<(), CliError> {
 
 /// `goalcup prep`, with what it reads from this machine resolved here, as `start` does. It
 /// starts no daemon: it records nothing.
-fn prep(opts: commands::prep::PrepOptions) -> Result<u8, CliError> {
+fn prep(mut opts: commands::prep::PrepOptions) -> Result<u8, CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
     let env = goalcup_cli::launch::process_env();
     let mut out = std::io::stdout();
+    if !opts.json
+        && opts.harness.is_none()
+        && goalcup_cli::ui::interactive()
+        && goalcup_cli::prep_file::read_prep_lenient(&cfg)
+            .harness
+            .is_empty()
+    {
+        let harnesses = goalcup_cli::welcome::harness_choices(&connectors, &env, opts.dev)?;
+        // Preserve prep's existing automatic choice when there is only one chat connector.
+        if let [harness] = harnesses.as_slice() {
+            opts.harness = Some(harness.id.clone());
+        } else {
+            let labels: Vec<_> = harnesses
+                .iter()
+                .map(|h| (h.label.as_str(), h.installed))
+                .collect();
+            let selection =
+                goalcup_cli::ui::choose_harness(&labels).map_err(|source| CliError::Io {
+                    path: "setup terminal".into(),
+                    source,
+                })?;
+            let Some(selection) = selection else {
+                return Ok(0);
+            };
+            match harnesses.get(selection) {
+                Some(harness) => opts.harness = Some(harness.id.clone()),
+                None => {
+                    use std::io::Write;
+                    writeln!(
+                        out,
+                        "Add or request a harness: {}",
+                        goalcup_cli::welcome::ADD_GUIDE
+                    )
+                    .map_err(|source| CliError::Io {
+                        path: "stdout".into(),
+                        source,
+                    })?;
+                    browser_opener()(goalcup_cli::welcome::ADD_GUIDE);
+                    return Ok(0);
+                }
+            }
+        }
+    }
     #[cfg(feature = "test-support")]
     if let Ok(spec) = std::env::var(commands::prep::Injected::VAR) {
         let door = commands::prep::Injected::parse(&spec).ok_or_else(|| {
