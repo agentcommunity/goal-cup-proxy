@@ -33,8 +33,8 @@
 #         run sealed after two hours; the member must be a test operator). Prints the matrix row
 #         last, and exits with matrix.sh's status.
 #
-# Owner rules kept here, applied to the tracker home before every login and run (never ~/.codex
-# or ~/.claude, which are not touched):
+# Owner rules (scripts/kit_settle.py, which campaign.py applies to host cells too), applied to the
+# tracker home before every login and run (never ~/.codex or ~/.claude, which are not touched):
 #   codex-cli        config.toml gets `model = "gpt-5.6-luna"` (never gpt-6-astra) and
 #                    `model_reasoning_effort` = LINUX_MATRIX_CODEX_EFFORT. After the run, every
 #                    turn of the run's new Codex sessions must say gpt-5.6-luna at that effort.
@@ -110,6 +110,7 @@ set -u
 
 STAGING=https://goalcup-ingest-staging.b-9a5.workers.dev
 SYNTHETIC_MEMBER=00000000-0000-4000-8000-0000000c0de1
+# The owner's models, for the words this script prints (scripts/kit_settle.py holds the rules).
 LUNA=gpt-5.6-luna
 CLAUDE_MODEL=haiku
 # Paths inside the container.
@@ -152,114 +153,11 @@ codex_effort() {
 # ------------------------------------------------------------------ inside the container
 # These run as `dev` in the container, called by the host half below.
 
-# Whether the installed codex lists `minimal` for the Luna model: `codex debug models --bundled`,
-# read as JSON; the object that names the model (slug, id, model or name) must hold "minimal"
-# somewhere. Anything else (no such command, another format) is a no.
-codex_accepts_minimal() {
-    command -v codex >/dev/null 2>&1 || return 1
-    models=$(mktemp) || return 1
-    if ! codex debug models --bundled >"$models" 2>/dev/null; then
-        rm -f "$models"
-        return 1
-    fi
-    python3 - "$models" "$LUNA" <<'PY'
-import json, sys
-
-try:
-    doc = json.load(open(sys.argv[1]))
-except ValueError:
-    sys.exit(1)
-
-def objects(o):
-    if isinstance(o, dict):
-        yield o
-        for v in o.values():
-            yield from objects(v)
-    elif isinstance(o, list):
-        for v in o:
-            yield from objects(v)
-
-def strings(o):
-    if isinstance(o, str):
-        yield o
-    elif isinstance(o, dict):
-        for k, v in o.items():
-            yield k
-            yield from strings(v)
-    elif isinstance(o, list):
-        for v in o:
-            yield from strings(v)
-
-named = [o for o in objects(doc) if any(o.get(k) == sys.argv[2] for k in ("slug", "id", "model", "name"))]
-sys.exit(0 if any("minimal" in set(strings(o)) for o in named) else 1)
-PY
-    ok=$?
-    rm -f "$models"
-    return $ok
-}
-
-# The tracker home's config for a harness that has a model rule.
+# The tracker home's config for a harness that has a model rule (scripts/kit_settle.py
+# home-config; minimal only if the installed codex lists it for the Luna model).
 inner_home_config() { # connector
-    case $1 in
-    codex-cli)
-        effort=$(codex_effort) || fail "LINUX_MATRIX_CODEX_EFFORT must be low or minimal"
-        if [ "$effort" = minimal ] && ! codex_accepts_minimal; then
-            fail "LINUX_MATRIX_CODEX_EFFORT=minimal: the installed codex does not list minimal for $LUNA (codex debug models --bundled); use low"
-        fi
-        home=$CFG/capture-homes/codex-cli
-        mkdir -p "$home" && chmod 700 "$CFG/capture-homes" "$home" || fail "codex home"
-        python3 - "$home/config.toml" "$LUNA" "$effort" <<'PY' || fail "codex config"
-import os, re, sys
-
-path, model, effort = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    lines = open(path).read().splitlines()
-except FileNotFoundError:
-    lines = []
-# Top-level keys come before the first table; drop ours there and put them first.
-kept, top = [], True
-for line in lines:
-    if line.lstrip().startswith("["):
-        top = False
-    if top and re.match(r"\s*(model|model_reasoning_effort)\s*=", line):
-        continue
-    kept.append(line)
-text = "\n".join([f'model = "{model}"', f'model_reasoning_effort = "{effort}"'] + kept) + "\n"
-fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, "w") as f:
-    f.write(text)
-os.replace(path + ".new", path)
-PY
-        echo "linux-matrix: codex home config: model $LUNA, reasoning effort $effort"
-        ;;
-    claude-code-cli)
-        home=$CFG/capture-homes/claude-code-cli
-        mkdir -p "$home" && chmod 700 "$CFG/capture-homes" "$home" || fail "claude home"
-        python3 - "$home/settings.json" "$CLAUDE_MODEL" <<'PY' || fail "claude settings.json (left as it was)"
-import json, os, sys
-
-path, model = sys.argv[1], sys.argv[2]
-try:
-    with open(path) as f:
-        doc = json.load(f)
-except FileNotFoundError:
-    doc = {}
-except ValueError:
-    sys.exit(f"linux-matrix: {path} is not JSON; not overwritten")
-if not isinstance(doc, dict):
-    sys.exit(f"linux-matrix: {path} is not a JSON object; not overwritten")
-doc["model"] = model
-doc["alwaysThinkingEnabled"] = False
-fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, "w") as f:
-    json.dump(doc, f, indent=2)
-    f.write("\n")
-os.chmod(path + ".new", 0o600)
-os.replace(path + ".new", path)
-PY
-        echo "linux-matrix: claude home settings: model $CLAUDE_MODEL, thinking off"
-        ;;
-    esac
+    effort=$(codex_effort) || fail "LINUX_MATRIX_CODEX_EFFORT must be low or minimal"
+    python3 "$KIT" home-config "$CFG" "$1" "$effort" || fail "home config of $1 (left as it was)"
 }
 
 # The names (never the contents) of the files in a connector's tracker home and its run home,
@@ -354,80 +252,12 @@ rule_of() { # connector
     esac
 }
 
-# The run's models, from what the harness itself wrote since the marker. A connector without a
-# rule passes.
-#   codex-cli: each turn's model and effort, from the rollouts' `turn_context` lines
-#     (spikes/codex-app/fixtures). Every turn must say gpt-5.6-luna at the configured effort.
-#   claude-code-cli: each `assistant` line's message.model in the transcripts under projects/
-#     (subagents included). Each must contain "haiku"; `<synthetic>` is no model call.
-# Finding nothing fails too: the rule cannot be confirmed.
+# The run's models, from what the harness itself wrote since the marker (scripts/kit_settle.py
+# model-check). A connector without a rule passes; finding nothing fails: the rule cannot be
+# confirmed.
 inner_model_check() { # connector marker
-    case $1 in
-    codex-cli)
-        effort=$(codex_effort) || fail "LINUX_MATRIX_CODEX_EFFORT must be low or minimal"
-        python3 - "$CFG/capture-homes/codex-cli/sessions" "$2" "$LUNA" "$effort" <<'PY'
-import json, os, sys
-
-root, marker, want, effort = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-since = os.stat(marker).st_mtime
-turns = []
-for d, _, files in os.walk(root):
-    for f in files:
-        path = os.path.join(d, f)
-        if not (f.startswith("rollout-") and f.endswith(".jsonl")) or os.stat(path).st_mtime < since:
-            continue
-        for line in open(path, errors="replace"):
-            try:
-                o = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(o, dict) and o.get("type") == "turn_context":
-                ctx = o.get("payload") or {}
-                turns.append((ctx.get("model"), ctx.get("effort")))
-seen = sorted({f"{m} at effort {e}" for m, e in turns})
-print("linux-matrix: Codex turns of this run: " + (", ".join(seen) if seen else "none found"))
-if not turns:
-    print("linux-matrix: the model could not be confirmed (no Codex turn in the run's sessions)")
-    sys.exit(1)
-sys.exit(0 if all(m == want and e == effort for m, e in turns) else 1)
-PY
-        ;;
-    claude-code-cli)
-        python3 - "$CFG/capture-homes/claude-code-cli/projects" "$2" "$CLAUDE_MODEL" <<'PY'
-import json, os, sys
-from collections import Counter
-
-root, marker, want = sys.argv[1], sys.argv[2], sys.argv[3]
-since = os.stat(marker).st_mtime
-models, synthetic = Counter(), 0
-for d, _, files in os.walk(root):
-    for f in files:
-        path = os.path.join(d, f)
-        if not f.endswith(".jsonl") or os.stat(path).st_mtime < since:
-            continue
-        for line in open(path, errors="replace"):
-            try:
-                o = json.loads(line)
-            except ValueError:
-                continue
-            if not (isinstance(o, dict) and o.get("type") == "assistant"):
-                continue
-            m = (o.get("message") or {}).get("model") if isinstance(o.get("message"), dict) else None
-            if m == "<synthetic>":
-                synthetic += 1
-                continue
-            models[m if isinstance(m, str) else repr(m)] += 1
-seen = ", ".join(f"{m} x{n}" for m, n in sorted(models.items()))
-print("linux-matrix: Claude assistant messages of this run: " + (seen or "none found")
-      + (f" (and {synthetic} <synthetic>)" if synthetic else ""))
-if not models:
-    print("linux-matrix: the model could not be confirmed (no Claude assistant message in the run's transcripts)")
-    sys.exit(1)
-sys.exit(0 if all(want in m for m in models) else 1)
-PY
-        ;;
-    *) return 0 ;;
-    esac
+    effort=$(codex_effort) || fail "LINUX_MATRIX_CODEX_EFFORT must be low or minimal"
+    python3 "$KIT" model-check "$CFG" "$1" "$2" "$effort"
 }
 
 inner_run() { # connector [matrix.sh options]

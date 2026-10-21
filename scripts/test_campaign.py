@@ -889,6 +889,63 @@ class CampaignRun(Base):
         self.assertEqual(res["verdict"], "FAIL")
         self.assertIn("settle exited 1", res["error"])
 
+    def host_run(self, cell, writes):
+        """One host cell run with the real kit helper; the fake matrix.sh calls writes(cfgdir)
+        and prints a PASS row. The cell's result.json."""
+        runner = FakeRunner()
+        runner.real_kit = True
+
+        def make_proc(argv):
+            writes(Path(cell["config_dir"]))
+            return FakeProc([f"{cell.get('connector', 'codex-cli')} darwin-arm64 0.1 PASS 2026-10-23"])
+        runner.make_proc = make_proc
+        camp, _ = self.make([cell], runner)
+        camp.run()
+        return json.loads((self.root / "out" / cell["id"] / "result.json").read_text())
+
+    @staticmethod
+    def rollout(cfgdir, *turns):
+        d = cfgdir / "capture-homes/codex-cli/sessions/2026/10/23"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "rollout-a.jsonl").write_text("".join(
+            json.dumps({"type": "turn_context", "payload": {"model": m, "effort": e}}) + "\n"
+            for m, e in turns))
+
+    @staticmethod
+    def transcript(cfgdir, *models):
+        d = cfgdir / "capture-homes/claude-code-cli/projects/-w"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "s.jsonl").write_text("".join(
+            json.dumps({"type": "assistant", "message": {"model": m}}) + "\n" for m in models))
+
+    def test_a_host_cells_homes_get_the_cheapest_model_rules(self):
+        cell = self.host_cell("mac-codex", "m1")
+        res = self.host_run(cell, lambda d: self.rollout(d, ("gpt-5.6-luna", "low")))
+        self.assertEqual(res["verdict"], "PASS", res["final_row"])
+        home = Path(cell["config_dir"]) / "capture-homes"
+        self.assertEqual((home / "codex-cli/config.toml").read_text().splitlines()[:2],
+                         ['model = "gpt-5.6-luna"', 'model_reasoning_effort = "low"'])
+        cell = self.host_cell("mac-claude", "m2", connector="claude-code-cli")
+        res = self.host_run(cell, lambda d: self.transcript(d, "claude-haiku-4-5"))
+        self.assertEqual(res["verdict"], "PASS", res["final_row"])
+        settings = json.loads((Path(cell["config_dir"]) /
+                               "capture-homes/claude-code-cli/settings.json").read_text())
+        self.assertEqual((settings["model"], settings["alwaysThinkingEnabled"]), ("haiku", False))
+
+    def test_a_turn_on_another_model_fails_the_host_cell(self):
+        cell = self.host_cell("mac-codex", "m1")
+        res = self.host_run(cell, lambda d: self.rollout(d, ("gpt-5.6-luna", "low"),
+                                                         ("gpt-6-astra", "low")))
+        self.assertEqual(res["verdict"], "FAIL")
+        self.assertTrue(res["final_row"].startswith("FAIL owner rule: "), res["final_row"])
+        self.assertIn("gpt-6-astra", res["final_row"])
+        cell = self.host_cell("mac-claude", "m2", connector="claude-code-cli")
+        res = self.host_run(cell, lambda d: self.transcript(d, "claude-sonnet-4-5"))
+        self.assertEqual(res["verdict"], "FAIL")
+        res = self.host_run(self.host_cell("mac-none", "m3"), lambda d: None)
+        self.assertEqual(res["verdict"], "FAIL")
+        self.assertIn("could not be confirmed", res["final_row"])
+
     def matrix_sh_tail(self, result):
         """What the real scripts/matrix.sh prints last: its print_row function, run."""
         src = (HERE / "matrix.sh").read_text()

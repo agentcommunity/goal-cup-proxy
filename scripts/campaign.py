@@ -23,6 +23,12 @@ and writes, per cell, under DIR/<cell>/:
 and DIR/summary.json plus DIR/summary.md over all cells. `evaluate DIR` recomputes the pass lines
 from the files (also for cells still running), so a supervising agent can poll it.
 
+Every cell is held to the owner's cheapest-model rules (scripts/kit_settle.py): Codex
+gpt-5.6-luna at `codex_effort` (default low), Claude Code haiku with thinking off. A docker cell's
+container applies and checks them (linux-matrix.sh); for a host cell this script does, in its
+config_dir's tracker homes before the run, and checks the run's turns after it: a turn on another
+model, or none found, fails the cell.
+
 Drills. Docker: `network_cut` disconnects the container from each of its networks and reconnects
 it after `seconds`; `pause` is `docker pause` then `docker unpause` (a stand-in for sleep). A
 drill is always undone (try/finally; on Ctrl-C too). Host: the campaign never runs a privileged
@@ -357,9 +363,6 @@ def validate(cfg, cells, parallel):
         eff = cell.get("codex_effort")
         if eff is not None and eff not in EFFORTS:
             errors.append(f"{tag}: codex_effort must be one of {', '.join(EFFORTS)}")
-        elif eff is not None and where == "host":
-            warnings.append(f"{tag}: codex_effort is not applied to a host cell (its config_dir's "
-                            "Codex home sets the effort)")
         if where == "host":
             cd = cell.get("config_dir")
             if not cd:
@@ -497,6 +500,13 @@ def settle_command(cfg, cell):
     if os.environ.get("MATRIX_REPO_URL"):
         argv.append(os.environ["MATRIX_REPO_URL"])
     return argv, child_env({TOKEN_ENV: cfg["github_token_file"]})
+
+
+def kit_command(cell, *args):
+    """scripts/kit_settle.py home-config or model-check for a host cell: the owner's cheapest-model
+    rules, as linux-matrix.sh applies them in a container (codex_effort, default low)."""
+    return [sys.executable, str(KIT), args[0], cell["config_dir"], cell["connector"], *args[1:],
+            cell.get("codex_effort") or "low"]
 
 
 def sampler_command(cfg, cell, cell_dir):
@@ -1079,10 +1089,14 @@ class CellRun:
     def _run(self):
         camp, cell = self.camp, self.cell
         argv, extra = run_command(camp.cfg, cell, self.dir)
+        marker = self.dir / "run-start"
         if cell["where"] == "docker":
             (self.dir / "logs").mkdir(exist_ok=True)
         else:
             self._settle()
+            self._kit("home-config")
+            # What the harness writes from here on is this run's (model-check reads the mtimes).
+            marker.touch()
         self.start_mono = camp.clock.monotonic()
         self.start_utc = camp.clock.utcnow()
         self.set_state(state="running", start_utc=utc(self.start_utc))
@@ -1101,6 +1115,8 @@ class CellRun:
         sampler_thread.start()
         rc = self.proc.wait()
         reader.join(timeout=10)
+        if cell["where"] == "host" and not camp.stopping.is_set():
+            self._model_check(marker)
         self.stop.set()
         drill_thread.join(timeout=120)
         sampler_thread.join(timeout=30)
@@ -1117,6 +1133,28 @@ class CellRun:
         self.event("settle", exit_code=rc)
         if rc != 0:
             raise RuntimeError(f"settle exited {rc}: {(out.strip().splitlines() or [''])[-1]}")
+
+    def _kit(self, *args):
+        """One scripts/kit_settle.py home-config or model-check for a host cell; (rc, last line).
+        home-config refused ends the cell before anything starts."""
+        rc, out = self.camp.runner.run(kit_command(self.cell, *args), env=child_env({}),
+                                       timeout=120)
+        lines = out.strip().splitlines()
+        for line in lines:
+            self.logline(line, own=True)
+        self.event(args[0], exit_code=rc)
+        last = lines[-1].removeprefix("kit: ") if lines else f"exit {rc}"
+        if rc != 0 and args[0] == "home-config":
+            raise RuntimeError(f"home-config exited {rc}: {last}")
+        return rc, last
+
+    def _model_check(self, marker):
+        """After a host cell's run, as linux-matrix.sh does in a container: a turn on another
+        model (or none found) fails the cell."""
+        rc, last = self._kit("model-check", str(marker))
+        if rc != 0:
+            self.final_row = f"FAIL owner rule: {last}"
+            self.logline(f"FAIL owner rule: {last}", own=True)
 
     def _read(self):
         for raw in self.proc.stdout:
