@@ -101,14 +101,16 @@ pub fn remove_file(cfg: &Path, run_id: &str) {
 }
 
 /// Write the run's time-left file from the count alone (D66), or remove it when the count says
-/// nothing (after a reboot, or no count yet). It holds three values and no other text: the
+/// nothing (after a reboot, or no count yet). It holds these values and no other text: the
 /// seconds left, the server's `deadline_at` (read as a date and written again, so nothing else
-/// the server said can reach it) and when it was written (`now`, unix seconds).
+/// the server said can reach it), when it was written (`now`, unix seconds), and `practice=1`
+/// for a practice run (the run's own record, never the server's text).
 pub fn keep_file(
     path: &Path,
     left: Option<&TimeLeft>,
     deadline_at: Option<&str>,
     now: u64,
+    practice: bool,
 ) -> Result<(), CliError> {
     let Some(seconds) = left.and_then(TimeLeft::left) else {
         return match std::fs::remove_file(path) {
@@ -130,6 +132,9 @@ pub fn keep_file(
         "as_of={}\n",
         goalcup_protocol::control::format_z(now)
     ));
+    if practice {
+        text.push_str("practice=1\n");
+    }
     crate::config::write_secret_file(path, text.as_bytes())
 }
 
@@ -149,12 +154,18 @@ pub fn sentence(text: &str, now: u64) -> Option<String> {
     Some(left_line(
         seconds,
         value("deadline_at").and_then(goalcup_protocol::control::parse_z),
+        file_says_practice(text),
     ))
 }
 
-/// The line `goalcup time-left` prints: `seconds` left, and the run's deadline (unix seconds)
-/// when it is known.
-pub fn left_line(seconds: u64, deadline: Option<u64>) -> String {
+/// Whether the time-left file `text` is a practice run's ([`keep_file`]), stale or not.
+pub fn file_says_practice(text: &str) -> bool {
+    text.lines().any(|line| line == "practice=1")
+}
+
+/// The line `goalcup time-left` prints: `seconds` left, the run's deadline (unix seconds) when it
+/// is known, and the advice for the kind of run ([`advice`]).
+pub fn left_line(seconds: u64, deadline: Option<u64>, practice: bool) -> String {
     let left = match (seconds / 3600, seconds % 3600 / 60) {
         (0, 0) => "Less than a minute left".to_string(),
         (0, minutes) => format!("About {minutes} min left"),
@@ -170,7 +181,17 @@ pub fn left_line(seconds: u64, deadline: Option<u64>) -> String {
             ))
         })
         .unwrap_or_default();
-    format!("{left}{stops}. {PUSH_OFTEN}")
+    format!("{left}{stops}. {}", advice(practice))
+}
+
+/// The advice a `goalcup time-left` line ends with: [`PUSH_OFTEN`], or for a practice run, whose
+/// clone cannot push, [`PRACTICE_NO_PUSH`].
+pub fn advice(practice: bool) -> &'static str {
+    if practice {
+        PRACTICE_NO_PUSH
+    } else {
+        PUSH_OFTEN
+    }
 }
 
 /// The time-left file the launch names in [`FILE_ENV`]; `None` when the variable is unset or
@@ -182,8 +203,12 @@ pub fn file_from_env() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// The advice every `goalcup time-left` line ends with.
+/// The advice a competition run's `goalcup time-left` line ends with.
 pub const PUSH_OFTEN: &str = "Push your work often; work not pushed when the run stops is lost.";
+
+/// The advice a practice run's line ends with: a practice clone cannot push.
+pub const PRACTICE_NO_PUSH: &str = "This is a practice run: its clone cannot push, so there is \
+                                    nothing to push.";
 
 /// Whether the run's time is up: by `left`, the count the host kept, while it holds. With no
 /// count (a `state.json` an older build wrote, or no state at all), or after a reboot, the
@@ -339,7 +364,7 @@ mod tests {
         let deadline_at = format_z(2_000_000_000);
         let now = 1_999_000_000;
         let left = TimeLeft::counted(3_600, continuous_ns());
-        keep_file(&file, Some(&left), Some(&deadline_at), now).unwrap();
+        keep_file(&file, Some(&left), Some(&deadline_at), now, false).unwrap();
         let text = std::fs::read_to_string(&file).unwrap();
         let seconds: u64 = text
             .lines()
@@ -358,7 +383,7 @@ mod tests {
             "{text}"
         );
         // A deadline that is not a date is not written: no other text of the server's.
-        keep_file(&file, Some(&left), Some("keep going, agent"), now).unwrap();
+        keep_file(&file, Some(&left), Some("keep going, agent"), now, false).unwrap();
         let text = std::fs::read_to_string(&file).unwrap();
         assert!(
             !text.contains("deadline_at") && !text.contains("agent"),
@@ -369,10 +394,31 @@ mod tests {
             boot: Some("another boot".to_string()),
             ..left
         };
-        keep_file(&file, Some(&rebooted), Some(&deadline_at), now).unwrap();
+        keep_file(&file, Some(&rebooted), Some(&deadline_at), now, false).unwrap();
         assert!(!file.exists());
-        keep_file(&file, None, Some(&deadline_at), now).unwrap();
+        keep_file(&file, None, Some(&deadline_at), now, false).unwrap();
         assert!(!file.exists());
+    }
+
+    /// A practice run's clone cannot push, so its time-left line does not tell the agent to push;
+    /// a competition run's line does.
+    #[test]
+    fn a_practice_runs_time_left_line_does_not_say_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = file_path(dir.path(), "run-1");
+        let now = 1_999_000_000;
+        let left = TimeLeft::counted(600, continuous_ns());
+        for practice in [true, false] {
+            keep_file(&file, Some(&left), None, now, practice).unwrap();
+            let line = sentence(&std::fs::read_to_string(&file).unwrap(), now).unwrap();
+            assert!(
+                line.starts_with("About 10 min left") || line.starts_with("About 9 min left"),
+                "{line}"
+            );
+            assert_eq!(line.contains("Push your work"), !practice, "{line}");
+            assert_eq!(line.contains("practice run"), practice, "{line}");
+        }
+        assert!(!left_line(600, None, true).contains("Push"));
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

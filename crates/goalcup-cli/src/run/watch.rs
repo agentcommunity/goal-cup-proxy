@@ -260,6 +260,7 @@ impl Ticker {
                 count.as_ref(),
                 self.run.deadline_at.as_deref(),
                 super::now_unix(),
+                self.run.practice,
             )
         {
             crate::host_log::log_only(&format!(
