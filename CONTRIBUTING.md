@@ -50,6 +50,11 @@ version in the PR. If you cannot run the gate, run CI's form
 `cargo test --offline --workspace --exclude goalcup-daemon --exclude goalcup-cli`,
 say so in the PR, and a maintainer runs the gate.
 
+The gate runs each test in its own process (nextest); CI runs plain `cargo test`, where the tests
+of one binary are threads of one process. A test that touches process-wide state (signal handlers
+and flags, a process group it signals, a shared address table, the environment) holds a lock for
+its whole body or re-runs itself in a child process, or it races under CI.
+
 ## What `main` requires
 
 - A change reaches `main` only through a pull request. No force pushes, no branch deletion.

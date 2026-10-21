@@ -8,28 +8,38 @@ and the [local campaign](LOCAL-CAMPAIGN.md).
 
 ## 1. Review and merge
 
-- [ ] Open a pull request from `smart/zen-gates-d9tmbh` to `main` (29 commits). One reviewer reads it
-      once (AGENTS.md "Done"). Main areas: D64 (errors never stop a run), D65 (disk pause), D66
-      (time left, no self-seal), parallel test runs, size limit, vitals, judged push, rename.
+- [x] Draft PR [#226](https://github.com/agentcommunity/goal-cup-tracer/pull/226) from
+      `smart/zen-gates-d9tmbh` to `main`. CI (`check`) is green. Ignore the DCO check: no sign-off
+      is required (D47).
+- [ ] One reviewer reads it once (AGENTS.md "Done"), ticks the PR boxes, marks it ready and merges
+      after step 2 passes. Main areas: D64 (errors never stop a run), D65 (disk pause), D66 (time
+      left, no self-seal), parallel test runs, size limit, vitals, judged push, rename.
 - [ ] Pull it locally and build: `cargo fetch --locked`, `cargo build --offline --workspace`.
 
 ## 2. Gate as a normal user (not root)
 
 - [ ] `sh scripts/gate.sh fast`, then `sh scripts/gate.sh full`, and `sh scripts/linux-check.sh`.
-- [ ] The cloud container ran as root, so 7 permission tests always failed there. They must pass here:
+- [ ] The cloud container ran as root, so 7 permission tests always failed there. On 21 Oct they
+      passed in the cloud as a non-root user, except the m2_proxy one (the container has no IPv6).
+      Confirm here:
       `upload_chunks::retries` (2), `launch::tests::a_session_is_a_native_file_written_since_the_run_started`,
       `m2_proxy_integration::start_refuses_invalid_configuration_before_touching_the_sink`,
       `dir_modes::an_owner_denying_umask…`, `capture_native::finish_reports_discovery_it_could_not_complete`,
       `harness_contract_kit::every_kit_case_seals_and_matches_expectations`.
-- [ ] These full-tier tests also failed in the cloud before and after the changes. Check them here:
+- [ ] These full-tier tests failed in the cloud only because `*.localhost` did not resolve there; with
+      a hosts entry they passed. Check them here:
       `capture_crash_campaign::torn_tail_is_preserved_and_nonresumable`,
       `capture_crash_campaign::daemon_exit_preserves_prefix_and_honest_recovery_limit`,
       `capture_crash_campaign::a_standalone_seal_that_commits_first_keeps_the_proxys_loss`,
       `launcher_sweep::the_launcher_sweeps_an_orphan_forked_after_the_root_died_before_the_seal`.
-- [ ] macOS: the new `machine::process_usage` code was only type-checked. Run its test on the Mac.
-- [ ] `npm --prefix server/worker test` (245). One run in five failed once under load in the cloud.
+- [ ] macOS: the new `machine::process_usage` code was only type-checked, and a cloud cross-check
+      needs the macOS SDK. Build and run its test on the Mac.
+- [ ] `npm --prefix server/worker test` (251). Three clock races were fixed on 21 Oct; it then
+      passed repeatedly in the cloud, also under load.
 - [ ] `capture_lifecycle::a_seal_whose_registry_write_was_lost_is_committed_without_a_second_terminal`
       failed once in the cloud fast gate under load and passed 3 of 3 alone: watch it for flakiness.
+- [ ] Running the gate inside Docker: add `127.0.0.1 api.e00.localhost auth.e00.localhost` to the
+      container's `/etc/hosts` and make sure it has IPv6 on loopback (README, "The gate").
 
 ## 3. Database migrations (website repo): one shared database
 
@@ -38,7 +48,8 @@ One file in `server/worker/sql/pending/`: `20261021100000_goal_cup_tracer_event_
 push, notice wording). Apply it **before** deploying the Worker that needs it.
 
 - [ ] Run `sh server/worker/scripts/check-sql.sh` first: it applies the mirror and the file on a
-      throwaway Postgres in one transaction and smoke-tests the functions.
+      throwaway Postgres in one transaction and smoke-tests the functions. It passed in the cloud
+      on 21 Oct (Postgres 16). The file is apply-once: a second apply fails and rolls back.
 - [ ] Staging and production share ONE database: applying a file applies it to both at once.
       There is no "staging first" for SQL. The old-signature wrappers keep the live production
       Worker working.
@@ -72,11 +83,13 @@ push, notice wording). Apply it **before** deploying the Worker that needs it.
       volumes (ext4), never bind mounts on the Mac disk.
 - [ ] WSL2: files inside the Linux file system (not `/mnt/c`), Windows Update restarts paused, WSL
       idle shutdown off, mains power.
-- [ ] `python3 scripts/campaign.py check CONFIG`, then `build` once.
+- [ ] `python3 scripts/campaign.py check CONFIG`, then `build` once. `check` passed in the cloud; `build`
+      could not run there (its container did not trust the sandbox proxy), so it is untested.
 - [ ] Sign in once per cell: `campaign.py login CONFIG <cell>` (Codex rotates its login token, so
       never share or copy a login between cells). Cheapest settings are set by the scripts:
       Codex `gpt-5.6-luna` at `low`, Claude Code `haiku`, thinking off.
-- [ ] Sandbox for participants: run `goalcup doctor` in one sandbox and send the output. goalcup refuses
+- [ ] Sandbox for participants: run `goalcup doctor` in one sandbox and send the output. Without
+      `goalcup prep` first, `doctor` checks every harness and exits 1 unless all are installed. goalcup refuses
       overlayfs, btrfs, ZFS, NFS, SMB, tmpfs and FUSE; a container sandbox may need an ext4 or XFS volume.
 
 ## 6. Measure what the cloud could not

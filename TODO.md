@@ -119,6 +119,9 @@ Status (21 Oct, branch `smart/zen-gates-d9tmbh`, not yet released):
   no disk stop verdict, vitals in heartbeats and status, cleanup of sent parts after a run. The
   daemon recorder-hold rework is dropped: the pause comes first.
 - WP-H steps 1 to 3 done (Goal Cup Proxy; the client sends proxy_version and tracer_version). Open: step 4 repo rename (owner, on GitHub), step 5 schema rename.
+- Cloud checks (21 Oct, draft PR #226, CI green): six test races under plain `cargo test` and the
+  Worker's clock fixed; the root-only and full-tier tests pass as a normal user; the SQL file, script
+  tests, release package and CLI smoke pass. Left for the owner's machines: [local next steps](docs/research/LOCAL-NEXT-STEPS.md).
 
 ### WP0: Measure
 Status (17 Oct): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging

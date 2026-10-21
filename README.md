@@ -222,8 +222,10 @@ sh scripts/gate.sh full                # before a release
 - **Run the gate as a normal user, not root.** Some permission tests always fail as root, so the
   gate stops at once when run as root. Set `GOALCUP_GATE_ALLOW_ROOT=1` to run it anyway, for
   example in a throwaway container, and expect those tests to fail.
-- On Linux the gate also needs `nc`, procps `ps`, `*.localhost` on loopback and `TMPDIR` on ext4
-  or XFS. If `/tmp` is tmpfs or btrfs and your home is ext4 or XFS, run this first:
+- On Linux the gate also needs `nc`, procps `ps`, `*.localhost` on loopback, IPv6 on loopback and
+  `TMPDIR` on ext4 or XFS. A plain Debian or Ubuntu container does not resolve `*.localhost`
+  (it lacks `nss-myhostname`): add `127.0.0.1 api.e00.localhost auth.e00.localhost` to its
+  `/etc/hosts`. If `/tmp` is tmpfs or btrfs and your home is ext4 or XFS, run this first:
   `export TMPDIR="$HOME/.cache/goalcup-tmp"; mkdir -p "$TMPDIR"`. CI (`check`) is a small Linux
   smoke, not the gate. More: [OPERATING](docs/OPERATING.md#building-and-verifying).
 
