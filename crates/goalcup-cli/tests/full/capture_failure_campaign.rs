@@ -607,9 +607,7 @@ fn local_finish_under_backlog_has_one_deadline() {
     );
     assert_eq!(exit.code(), Some(1), "{}", start.output());
     assert!(
-        start
-            .output()
-            .contains("did not answer the finish of entry"),
+        start.output().contains("did not answer the finish of part"),
         "{}",
         start.output()
     );
