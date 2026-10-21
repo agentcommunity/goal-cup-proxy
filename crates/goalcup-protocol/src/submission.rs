@@ -1,35 +1,13 @@
-//! Workspace-submission vocabulary that outlived the V4 submission writer: the daemon
-//! configuration's profile and limits, and the outcome a status document reports.
+//! Workspace-submission vocabulary that outlived the V4 submission writer: the outcome a
+//! finish report (`control::FinishReportV1`) and a status document's finalization projection
+//! can still name on the wire.
 //!
 //! The submission manifest, and the finalization arm that bound it, left with D54: no v5
-//! writer produced either.
+//! writer produced either. The daemon-configuration profile and limit types left with the D54
+//! amendment of 21 Oct 2026: nothing read them.
 
 use crate::provenance::Sha256Digest;
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SubmissionProfileV1 {
-    WorkspaceSnapshotV1,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LimitProfileV1 {
-    pub id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EffectiveSubmissionLimitsV1 {
-    pub object_count: u64,
-    pub total_bytes: u64,
-    /// Milliseconds available to drain admitted pre-cutoff records.
-    pub pre_cutoff_drain: u64,
-    /// Maximum owned process identities/targets that one termination attempt may
-    /// discover, retain, and signal. Timeout/grace policy is carried separately.
-    pub process_walk: u64,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

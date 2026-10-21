@@ -3,7 +3,6 @@
 use crate::ProtocolError;
 use crate::chain::{CHAIN_DOMAIN, Link, link_hash};
 use crate::control::parse_z;
-use crate::provenance::{CutoffReachedV1, FinalizationV1};
 use crate::redaction::RedactionAudit;
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +12,7 @@ use serde::{Deserialize, Serialize};
 pub struct Envelope {
     pub protocol_version: u32,
     pub entry_id: String,
-    /// Who appended the record. A cutoff, finalization or local finish must say `"daemon"`;
+    /// Who appended the record. A local finish must say `"daemon"`;
     /// on other records it is descriptive text inside the hash.
     pub source: String,
     /// RFC 3339 with a trailing `Z`, not a float: a float could serialise as `null` (NaN)
@@ -77,10 +76,12 @@ impl Envelope {
     }
 }
 
-/// Closed by design at the five bodies a protocol-v5 chain may carry: the daemon interprets
+/// Closed by design at the three bodies a protocol-v5 chain may carry: the daemon interprets
 /// nothing (D3). The pre-v5 bodies (leg-1 and leg-2 records, health, heartbeats, home seeding,
 /// repository observations and the rest) left the protocol with D54: no writer has produced
-/// them since D48, and a v5 chain never admitted them.
+/// them since D48, and a v5 chain never admitted them. The signed-mode `cutoff_reached_v1` and
+/// `finalization_v1` bodies left with the D54 amendment of 21 Oct 2026: no product writer ever
+/// produced either, and a v5 line carrying one now reads as `record_malformed`.
 ///
 /// **Variants are additive.** An adjacently tagged enum serialises each variant on its own, so
 /// adding or removing a variant changes no other variant's bytes; every v5 chain hashes exactly
@@ -89,7 +90,7 @@ impl Envelope {
 /// Adjacently tagged (`tag = "kind"`, `content = "content"`): the variant's fields sit in a
 /// nested `content` object, so a field of a body can never collide with the outer `kind` tag.
 ///
-/// `Capture` is far larger than the other four, and it is the body almost every line carries:
+/// `Capture` is far larger than the other two, and it is the body almost every line carries:
 /// boxing it would allocate once per record to shrink the rare ones.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "content", rename_all = "snake_case")]
@@ -123,10 +124,6 @@ pub enum EventBody {
         sealed_at: String,
         file_count: u64,
     },
-    /// The once-only local cutoff boundary. Written only by the export's cutoff method.
-    CutoffReachedV1(CutoffReachedV1),
-    /// The terminal capture/publication result. Written only by the export's finalization method.
-    FinalizationV1(FinalizationV1),
     /// One M2 recorder observation. `CaptureRecord::LocalFinish` is reserved to the export's
     /// terminal writer, never an ordinary append.
     Capture {

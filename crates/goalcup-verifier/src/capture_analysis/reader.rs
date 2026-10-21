@@ -13,8 +13,7 @@
 //! decoded only after its encoded length is checked. The retained state is also bounded:
 //! at most `MAX_PRODUCERS` producer summaries (a few flags each), `MAX_OPEN_STREAMS` live
 //! streams and `MAX_OPEN_CONNECTIONS` live connections, at most `MAX_GOAL_STREAMS` launch goal
-//! streams and as many completed goal streams, plus one baseline claim, one terminal and one
-//! cutoff.
+//! streams and as many completed goal streams, plus one baseline claim and one terminal.
 //! No other completed stream is kept and there is no per-record index, so a longer run
 //! grows none of it. Acknowledgements stream alongside the chain in the same pass, one line
 //! at a time.
@@ -121,11 +120,11 @@ pub struct VerifiedReceiptClock {
 #[serde(rename_all = "snake_case")]
 pub enum CaptureTerminalKind {
     LocalFinish,
-    SignedFinalization,
 }
 
-/// The verified terminal record of a trace. `LocalFinish` retains its full `CaptureTime`;
-/// a signed finalization carries wall-clock evidence only, so `observed` is `None`.
+/// The verified terminal record of a trace: a local finish, with its full `CaptureTime`. The
+/// fields stay optional so the report keeps its JSON shape; the signed finalization that left
+/// them empty left with the D54 amendment of 21 Oct 2026.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaptureTerminalFacts {
     pub seq: u64,
@@ -177,8 +176,7 @@ pub struct CaptureIntegrityReport {
     pub schema_version: u32,
     pub integrity: CaptureIntegrity,
     pub anchor: AnchorState,
-    /// A terminal record was validated and bound: a local finish to its fixed `seal.json`,
-    /// or a signed finalization to its verified receipt and cutoff.
+    /// A terminal record was validated and bound: a local finish to its fixed `seal.json`.
     pub sealed: bool,
     /// Chain records (envelopes, baseline and terminal included) in the validated prefix.
     pub validated_records: u64,
@@ -208,8 +206,8 @@ pub struct CaptureIntegrityReport {
     /// Not a verdict: see "Deadline facts" on the struct. `None` without a verified, head-bound
     /// receipt clock, never a guess.
     ///
-    /// What it counts depends on the run. A run the participant finished early has 0. A run cut at
-    /// its deadline has the cutoff and the finalization here, and any drain records, unless they fall
+    /// What it counts depends on the run. A run the participant finished early has 0. A run that
+    /// went on past its deadline has its later records and its terminal here, unless they fall
     /// in the deadline's own second: that second counts as before. So 0, 1, 2 or more all occur,
     /// and the count alone says little. Read `last_seq_at_or_before_deadline`.
     #[serde(default)]
@@ -484,17 +482,10 @@ fn export_code(error: &ExportError) -> Violation {
 /// A start receipt that verified under an accepted key.
 struct VerifiedReceipt {
     receipt: StartReceipt,
-    digest: Sha256Digest,
     /// Its `chain_head` names a link of the validated chain.
     head_bound: bool,
     /// Its entry and clocks hold. False once any binding failed.
     bound: bool,
-}
-
-/// The cutoff a signed finalization closes, kept from the one pass.
-struct CutoffFacts {
-    receipt_sha256: Sha256Digest,
-    deadline_at: String,
 }
 
 struct Scan<'k> {
@@ -519,8 +510,6 @@ struct Scan<'k> {
     /// The seq-0 baseline's claim about `baseline.json`: its digest and file count.
     baseline: Option<(String, u64)>,
     terminal: Option<Envelope>,
-    cutoff: Option<CutoffFacts>,
-    receipt_present: bool,
     receipt: Option<VerifiedReceipt>,
     /// The key that verified the receipt or, without one, the first ACK.
     anchor: Option<(&'k str, KeySource)>,
@@ -566,8 +555,6 @@ impl<'k> Scan<'k> {
             capture: CaptureState::default(),
             baseline: None,
             terminal: None,
-            cutoff: None,
-            receipt_present: false,
             receipt: None,
             anchor: None,
             acks_failed: false,
@@ -629,13 +616,11 @@ impl<'k> Scan<'k> {
             Fixed::Absent => return Ok(()),
             Fixed::Bytes(bytes) if bytes.is_empty() => return Ok(()),
             Fixed::TooLarge => {
-                self.receipt_present = true;
                 self.fail("receipt_too_large");
                 return Ok(());
             }
             Fixed::Bytes(bytes) => bytes,
         };
-        self.receipt_present = true;
         let Ok(receipt) = serde_json::from_slice::<StartReceipt>(&bytes) else {
             self.fail("receipt_malformed");
             return Ok(());
@@ -657,10 +642,10 @@ impl<'k> Scan<'k> {
             return Ok(());
         }
         self.anchor = Some((key, source));
-        let Ok(digest) = receipt.canonical_digest() else {
+        if receipt.canonical_digest().is_err() {
             self.fail("receipt_malformed");
             return Ok(());
-        };
+        }
         let claims = &receipt.claims;
         let clocks = Rfc3339Utc::try_from(claims.started_at.as_str()).is_ok()
             && Rfc3339Utc::try_from(claims.deadline_at.as_str()).is_ok()
@@ -675,7 +660,6 @@ impl<'k> Scan<'k> {
         }
         self.receipt = Some(VerifiedReceipt {
             receipt,
-            digest,
             head_bound: false,
             bound: clocks,
         });
@@ -902,12 +886,6 @@ impl<'k> Scan<'k> {
             {
                 self.baseline = Some((manifest_sha256.clone(), *file_count));
             }
-            if let EventBody::CutoffReachedV1(cutoff) = &env.body {
-                self.cutoff = Some(CutoffFacts {
-                    receipt_sha256: cutoff.receipt_sha256.clone(),
-                    deadline_at: cutoff.deadline_at.as_str().to_string(),
-                });
-            }
             if let Some(acks) = acks.as_deref_mut() {
                 self.acks_at(acks, seq, &env.link.hash)?;
             }
@@ -1050,10 +1028,10 @@ impl<'k> Scan<'k> {
     }
 
     /// Bind the validated terminal to what it claims. A local finish binds its fixed
-    /// `seal.json`, with no receipt prerequisite. A signed finalization binds its verified
-    /// receipt and its cutoff. The two terminal modes are never interchangeable. The V1 seal
-    /// terminal, which the phase replay still admits, ends no v5 capture chain: no v5 writer
-    /// produces one, so a v5 chain that ends in one is invalid.
+    /// `seal.json`, with no receipt prerequisite. The V1 seal terminal, which the phase replay
+    /// still admits, ends no v5 capture chain: no v5 writer produces one, so a v5 chain that
+    /// ends in one is invalid. A signed-mode cutoff or finalization body no longer decodes at
+    /// all, so a chain carrying one stops at it as `record_malformed` (D54).
     fn bind_terminal(&mut self, root: &TraceDir) -> io::Result<()> {
         // A pruned chain may have lost the link a receipt witnessed.
         if let Some(receipt) = &self.receipt
@@ -1072,7 +1050,6 @@ impl<'k> Scan<'k> {
         };
         let bound = match terminal.kind {
             TerminalKind::LocalFinish => self.bind_fixed_manifest(root, &env)?,
-            TerminalKind::FinalizationV1 => self.bind_signed_finalization(&env),
             TerminalKind::LegacySeal => {
                 self.fail("chain_phase_invalid");
                 false
@@ -1119,36 +1096,6 @@ impl<'k> Scan<'k> {
             self.short("seal_git_missing");
         }
         Ok(true)
-    }
-
-    fn bind_signed_finalization(&mut self, env: &Envelope) -> bool {
-        if !matches!(env.body, EventBody::FinalizationV1(_)) {
-            self.fail("chain_phase_invalid");
-            return false;
-        }
-        let Some(receipt) = &self.receipt else {
-            if !self.receipt_present {
-                // A signed-mode terminal whose receipt is not retained cannot be proven.
-                self.short("signed_terminal_receipt_missing");
-            }
-            return false;
-        };
-        let Some(cutoff) = &self.cutoff else {
-            self.fail("chain_phase_invalid");
-            return false;
-        };
-        let mut faults: Vec<Violation> = Vec::new();
-        if cutoff.receipt_sha256 != receipt.digest {
-            faults.push("cutoff_receipt_mismatch");
-        }
-        if cutoff.deadline_at != receipt.receipt.claims.deadline_at {
-            faults.push("cutoff_deadline_mismatch");
-        }
-        let proven = receipt.bound && receipt.head_bound;
-        for fault in &faults {
-            self.fail(fault);
-        }
-        faults.is_empty() && proven
     }
 
     fn report(mut self) -> CaptureIntegrityReport {
@@ -1259,17 +1206,6 @@ fn terminal_facts(env: &Envelope) -> Option<CaptureTerminalFacts> {
             Some(termination.clone()),
             Some(seal_manifest_sha256.clone()),
         ),
-        EventBody::FinalizationV1(finalization) => {
-            let termination = finalization.termination().clone();
-            (
-                None,
-                env.recorded_at.clone(),
-                CaptureTerminalKind::SignedFinalization,
-                None,
-                Some(termination),
-                None,
-            )
-        }
         _ => return None,
     };
     Some(CaptureTerminalFacts {

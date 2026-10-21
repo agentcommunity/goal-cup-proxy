@@ -7,8 +7,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use ed25519_dalek::{Signer, SigningKey};
-use goalcup_protocol::ack::AckCheckpoint;
+use ed25519_dalek::SigningKey;
 use goalcup_protocol::capture::{
     CaptureMeta, CaptureRecord, CaptureSource, CaptureTime, ConnectionEvent, ConnectionOutcome,
     EndReason, GapReason, M2_PROTOCOL_VERSION, StreamKey, WireIdentity,
@@ -16,13 +15,7 @@ use goalcup_protocol::capture::{
 use goalcup_protocol::chain::Link;
 use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::export::TraceExport;
-use goalcup_protocol::provenance::{
-    CaptureUnavailableV1, CutoffReachedV1, FinalizationV1, NoRepositoryReasonV1,
-    PreCutoffDrainOutcomeV1, PublisherNotAttemptedReasonV1, PublisherNotAttemptedV1,
-    RepositoryNonSelectionV1, Rfc3339Utc, Sha256Digest, SnapshotNotAttemptedV1,
-    TerminationMethodV1, TerminationOutcomeV1,
-};
-use goalcup_protocol::receipt::{StartReceipt, StartReceiptClaims};
+use goalcup_protocol::provenance::{Rfc3339Utc, TerminationMethodV1, TerminationOutcomeV1};
 use goalcup_protocol::redaction::RedactionAudit;
 use goalcup_protocol::seal::{SealManifest, SealedFile};
 use std::path::Path;
@@ -281,7 +274,7 @@ pub fn local_finish(
 }
 
 /// A trace directory: baseline for `manifest`, then `records`, then whatever `finish` does
-/// (nothing, a local finish, or a receipt, acks and a signed finalization).
+/// (nothing, or a local finish).
 pub fn build_trace(
     dir: &Path,
     manifest: &SealManifest,
@@ -307,8 +300,9 @@ pub fn write_trace(dir: &Path, records: &[CaptureRecord], sealed: bool) {
     });
 }
 
-/// The seed of the synthetic signer of receipts and acknowledgements: a public, test-only
-/// key the verifier never trusts.
+/// The seed of the synthetic signer of the frozen `signed-receipt-*` cases' receipts and
+/// acknowledgements: a public, test-only key the verifier never trusts. Their writer left with
+/// the D54 amendment; the key is still what `--dev-key` supplies for them.
 pub const SERVER_SEED: [u8; 32] = [0x42; 32];
 
 pub fn server_key() -> SigningKey {
@@ -317,83 +311,6 @@ pub fn server_key() -> SigningKey {
 
 pub fn server_public_key_hex() -> String {
     hex::encode(server_key().verifying_key().to_bytes())
-}
-
-/// A signed acknowledgement of `link`.
-pub fn sign_ack(link: &Link) -> AckCheckpoint {
-    let mut ack = AckCheckpoint {
-        entry_id: ENTRY.to_string(),
-        seq: link.seq,
-        hash: link.hash.clone(),
-        acked_at: "2026-10-02T12:01:00Z".to_string(),
-        server_signature: String::new(),
-    };
-    ack.server_signature = hex::encode(server_key().sign(&ack.signing_bytes().unwrap()).to_bytes());
-    ack
-}
-
-pub const STARTED_AT: &str = "2026-10-02T11:59:30Z";
-pub const DEADLINE_AT: &str = "2026-10-02T12:30:00Z";
-
-/// A start receipt over the chain's current head, written beside it. Returns its digest.
-/// D63 keeps the historical `11…11` profile claim here: the corpus Launch uses `cc…cc`,
-/// and these unchanged signed fixtures now exercise receipt/Launch disagreement.
-pub fn write_receipt(export: &mut TraceExport, run_public_key: Option<&str>) -> Sha256Digest {
-    let (_, head) = export.head().unwrap();
-    let receipt = StartReceipt::sign(
-        StartReceiptClaims {
-            entry_id: ENTRY.to_string(),
-            connector_id: "codex-cli".to_string(),
-            workspace: "/ws".to_string(),
-            session_id: "session-corpus".to_string(),
-            started_at: STARTED_AT.to_string(),
-            deadline_at: DEADLINE_AT.to_string(),
-            manifest_sha256: "11".repeat(32),
-            chain_head: head,
-            connector_dir_sha256: None,
-            run_public_key: run_public_key.map(str::to_string),
-            questionnaire_version: None,
-        },
-        &server_key(),
-    )
-    .unwrap();
-    export.write_receipt(&receipt).unwrap();
-    receipt.canonical_digest().unwrap()
-}
-
-/// The signed terminal: a cutoff and a finalization that cite the receipt.
-pub fn signed_finalization(export: &mut TraceExport, receipt: &Sha256Digest) -> Link {
-    export
-        .write_cutoff_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-10-02T12:00:08Z",
-            CutoffReachedV1 {
-                receipt_sha256: receipt.clone(),
-                deadline_at: utc(DEADLINE_AT),
-                pre_cutoff_drain: PreCutoffDrainOutcomeV1::Complete,
-            },
-        )
-        .unwrap();
-    export
-        .write_finalization_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-10-02T12:00:09Z",
-            FinalizationV1::CaptureUnavailable {
-                receipt_sha256: receipt.clone(),
-                termination: confirmed(),
-                capture: CaptureUnavailableV1::NotAttempted(SnapshotNotAttemptedV1 {
-                    selection: RepositoryNonSelectionV1::None {
-                        reason: NoRepositoryReasonV1::NotFound,
-                    },
-                }),
-                publisher: PublisherNotAttemptedV1 {
-                    reason: PublisherNotAttemptedReasonV1::SelectionFailed,
-                },
-            },
-        )
-        .unwrap()
 }
 
 /// A second wire producer, for the recovery case.

@@ -17,4 +17,3 @@ mod provenance_wire;
 mod ps_env;
 mod roundtrip;
 mod signing_vectors;
-mod submission_contract;

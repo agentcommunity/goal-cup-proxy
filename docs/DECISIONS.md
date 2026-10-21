@@ -392,6 +392,12 @@ or publication types. v5 bytes and every v5 trace's verdict are frozen. A line d
 to 4 is `capture_envelope_invalid`; any other non-v5 version is `protocol_version_unsupported`. A
 removed body in a v5 line is `record_malformed`.
 
+*Amended 21 Oct 2026:* the signed-mode `cutoff_reached_v1` and `finalization_v1` bodies, their
+Git and publisher vocabulary and their test-only writers are removed; no product writer ever
+produced them. A v5 chain carrying one is still rejected (exit 2), now as `record_malformed` at
+that line. The frozen `signed-receipt-*` corpus bytes stay; only `signed-receipt-ack-unkeyed`
+changes, by this rule alone (findings and validated prefix, same exit).
+
 ## D55. The capture chain rotates into part files.
 
 The first part is `chain.jsonl`; later parts are `chain.<start>.jsonl`, where `<start>` is the

@@ -544,17 +544,21 @@ verified_ack = false
 "segment" = 1
 
 [[case]]
-# The same trace without the server key: the receipt and ack are unverifiable, so the trace is invalid.
+# The same trace without the server key: the receipt is unverifiable, so the trace is invalid.
+# D54 amendment (21 Oct 2026): the signed cutoff and finalization bodies left the protocol, and a
+# v5 line carrying a removed body is `record_malformed`. The scan therefore stops at seq 19, the
+# cutoff, instead of reading through the finalization to the ack it can no longer reach
+# (`ack_signature_unverified`). Same bytes, same exit 2; only the findings and prefix moved.
 name = "signed-receipt-ack-unkeyed"
 path = "signed-receipt-ack-finalization"
 exit = 2
 integrity = "invalid"
-findings = ["receipt_key_not_accepted", "ack_signature_unverified"]
+findings = ["receipt_key_not_accepted", "record_malformed"]
 sealed = false
 anchor = "local_only"
 key_source = "none"
-validated_records = 21
-validated_head = "7c3073308f4c5086bdd3870cce9ad69a53e5bc0c428a77fa2641addb7c96f036"
+validated_records = 19
+validated_head = "fc3e5a8d7d4e7d1e46d0f55d39d46ba7b9a759555b7cd90f5ce7dc1bd85227f7"
 gap_count = 0
 coverage_incomplete = false
 torn_tail = false

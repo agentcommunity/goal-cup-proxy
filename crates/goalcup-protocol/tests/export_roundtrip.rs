@@ -7,12 +7,6 @@ use goalcup_protocol::capture::{CaptureRecord, CaptureTime, GapReason, M2_PROTOC
 use goalcup_protocol::chain::{GENESIS, Link, link_hash};
 use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::export::*;
-use goalcup_protocol::provenance::{
-    CaptureUnavailableV1, CutoffReachedV1, FinalizationV1, NoRepositoryReasonV1,
-    PreCutoffDrainOutcomeV1, PublisherNotAttemptedReasonV1, PublisherNotAttemptedV1,
-    RepositoryNonSelectionV1, Rfc3339Utc, Sha256Digest, SnapshotNotAttemptedV1,
-    TerminationOutcomeV1,
-};
 use goalcup_protocol::receipt::{StartReceipt, StartReceiptClaims};
 use goalcup_protocol::redaction::RedactionAudit;
 use goalcup_protocol::seal::{SealManifest, SealedFile};
@@ -130,35 +124,6 @@ fn receipt() -> StartReceipt {
         },
         public_key: "dd".repeat(32),
         signature: "ee".repeat(64),
-    }
-}
-
-fn provenance_digest(byte: &str) -> Sha256Digest {
-    Sha256Digest::try_from(byte.repeat(64)).unwrap()
-}
-
-fn cutoff(receipt_byte: &str) -> CutoffReachedV1 {
-    CutoffReachedV1 {
-        receipt_sha256: provenance_digest(receipt_byte),
-        deadline_at: Rfc3339Utc::try_from("2026-09-10T00:00:00Z").unwrap(),
-        pre_cutoff_drain: PreCutoffDrainOutcomeV1::Complete,
-    }
-}
-
-fn unavailable_finalization(receipt_byte: &str) -> FinalizationV1 {
-    FinalizationV1::CaptureUnavailable {
-        receipt_sha256: provenance_digest(receipt_byte),
-        termination: TerminationOutcomeV1::AlreadyStopped {
-            checked_at: Rfc3339Utc::try_from("2026-09-10T00:00:01Z").unwrap(),
-        },
-        capture: CaptureUnavailableV1::NotAttempted(SnapshotNotAttemptedV1 {
-            selection: RepositoryNonSelectionV1::None {
-                reason: NoRepositoryReasonV1::NotFound,
-            },
-        }),
-        publisher: PublisherNotAttemptedV1 {
-            reason: PublisherNotAttemptedReasonV1::SelectionFailed,
-        },
     }
 }
 
@@ -1252,8 +1217,7 @@ fn a_resumed_export_remembers_the_baseline_it_found() {
     assert_eq!(first.link.hash, baseline.hash);
 }
 
-/// `EventBody::Seal`, `Baseline`, `CutoffReachedV1` and `FinalizationV1` are their writers'
-/// to build, and `append_chain` will not take one: the position and once-only
+/// `EventBody::Seal` and `Baseline` are their writers' to build, and `append_chain` will not take one: the position and once-only
 /// rules are enforced by those methods, and a body chained around them would carry
 /// none of them. A second seal link gives an acknowledgement two heads to anchor;
 /// a hand-chained baseline is a "what the workspace held at t0" claim taken at any
@@ -1281,26 +1245,6 @@ fn append_chain_refuses_every_body_the_export_reserves() {
         ),
         "a hand-assembled seal is the seal writer's to build"
     );
-
-    let mut cutoff = reserved(
-        "2026-09-10T00:00:00Z",
-        EventBody::CutoffReachedV1(cutoff("a")),
-    );
-    assert!(matches!(
-        x.append_chain(&mut cutoff),
-        Err(ExportError::ReservedBody { kind: "cutoff" })
-    ));
-
-    let mut finalization = reserved(
-        "2026-09-10T00:00:01Z",
-        EventBody::FinalizationV1(unavailable_finalization("a")),
-    );
-    assert!(matches!(
-        x.append_chain(&mut finalization),
-        Err(ExportError::ReservedBody {
-            kind: "finalization"
-        })
-    ));
 
     let mut baseline = reserved(
         "2026-09-04T00:00:00Z",
@@ -1393,189 +1337,13 @@ fn resume_refuses_a_complete_final_envelope_without_its_newline() {
     );
 }
 
+/// A terminal closes the chain for resume as it does for the writer: a correctly linked
+/// record, baseline or second seal after the seal makes the chain unresumable, and the
+/// refusal rewrites nothing.
 #[test]
-fn cutoff_allows_only_one_bound_finalization_and_then_closes_the_chain() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (mut export, _) = started(tmp.path());
-    let cutoff_link = export
-        .write_cutoff_for_protocol(V5, "e1", "2026-09-10T00:00:00Z", cutoff("a"))
-        .unwrap();
-    assert_eq!(cutoff_link.seq, 1);
-
-    let before_refusal = std::fs::read(tmp.path().join(CHAIN_FILE)).unwrap();
-    let head_before_refusal = export.head();
-    assert!(matches!(
-        export.append_chain(&mut env(1)),
-        Err(ExportError::AfterCutoff { cutoff_seq: 1 })
-    ));
-    assert_eq!(export.head(), head_before_refusal);
-    assert_eq!(
-        std::fs::read(tmp.path().join(CHAIN_FILE)).unwrap(),
-        before_refusal
-    );
-    assert!(matches!(
-        export.write_cutoff_for_protocol(V5, "e1", "2026-09-10T00:00:01Z", cutoff("a")),
-        Err(ExportError::CutoffAlreadyChained { seq: 1 })
-    ));
-    assert!(matches!(
-        export.write_baseline_for_protocol(V5, &manifest()),
-        Err(ExportError::AfterCutoff { cutoff_seq: 1 })
-    ));
-    assert!(matches!(
-        export.write_seal_for_protocol(V5, &manifest()),
-        Err(ExportError::AfterCutoff { cutoff_seq: 1 })
-    ));
-
-    let final_link = export
-        .write_finalization_for_protocol(
-            V5,
-            "e1",
-            "2026-09-10T00:00:01Z",
-            unavailable_finalization("a"),
-        )
-        .unwrap();
-    assert_eq!(final_link.seq, 2);
-    let closed = std::fs::read(tmp.path().join(CHAIN_FILE)).unwrap();
-    assert!(matches!(
-        export.write_finalization_for_protocol(
-            V5,
-            "e1",
-            "2026-09-10T00:00:02Z",
-            unavailable_finalization("a")
-        ),
-        Err(ExportError::FinalizationAlreadyChained { seq: 2 })
-    ));
-    assert_eq!(std::fs::read(tmp.path().join(CHAIN_FILE)).unwrap(), closed);
-
-    export
-        .append_ack(&AckCheckpoint {
-            entry_id: "e1".to_string(),
-            seq: final_link.seq,
-            hash: final_link.hash,
-            acked_at: "2026-09-10T00:00:02Z".to_string(),
-            server_signature: "ab".repeat(64),
-        })
-        .unwrap();
-}
-
-#[test]
-fn finalization_binding_mismatch_and_pre_cutoff_call_refuse_without_writing() {
-    let before = tempfile::tempdir().unwrap();
-    let (mut open, _) = started(before.path());
-    let open_bytes = std::fs::read(before.path().join(CHAIN_FILE)).unwrap();
-    assert!(matches!(
-        open.write_finalization_for_protocol(
-            V5,
-            "e1",
-            "2026-09-10T00:00:01Z",
-            unavailable_finalization("a")
-        ),
-        Err(ExportError::FinalizationBeforeCutoff)
-    ));
-    assert_eq!(
-        std::fs::read(before.path().join(CHAIN_FILE)).unwrap(),
-        open_bytes
-    );
-
-    let tmp = tempfile::tempdir().unwrap();
-    let (mut export, _) = started(tmp.path());
-    export
-        .write_cutoff_for_protocol(V5, "e1", "2026-09-10T00:00:00Z", cutoff("a"))
-        .unwrap();
-    let before = std::fs::read(tmp.path().join(CHAIN_FILE)).unwrap();
-    let head = export.head();
-
-    assert!(matches!(
-        export.write_finalization_for_protocol(
-            V5,
-            "e2",
-            "2026-09-10T00:00:01Z",
-            unavailable_finalization("a")
-        ),
-        Err(ExportError::FinalizationBindingMismatch)
-    ));
-    assert!(matches!(
-        export.write_finalization_for_protocol(
-            V5,
-            "e1",
-            "2026-09-10T00:00:01Z",
-            unavailable_finalization("b")
-        ),
-        Err(ExportError::FinalizationBindingMismatch)
-    ));
-    assert_eq!(export.head(), head);
-    assert_eq!(std::fs::read(tmp.path().join(CHAIN_FILE)).unwrap(), before);
-}
-
-#[test]
-fn cutoff_and_terminal_phases_are_reconstructed_on_resume() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (mut export, _) = started(tmp.path());
-    export
-        .write_cutoff_for_protocol(V5, "e1", "2026-09-10T00:00:00Z", cutoff("a"))
-        .unwrap();
-    drop(export);
-
-    let mut resumed = reopen(tmp.path());
-    let final_link = resumed
-        .write_finalization_for_protocol(
-            V5,
-            "e1",
-            "2026-09-10T00:00:01Z",
-            unavailable_finalization("a"),
-        )
-        .unwrap();
-    drop(resumed);
-
-    let mut terminal = reopen(tmp.path());
-    assert_eq!(terminal.head().unwrap().0, final_link.seq);
-    assert!(matches!(
-        terminal.append_chain(&mut env(1)),
-        Err(ExportError::Terminal { terminal_seq: 2 })
-    ));
-}
-
-#[test]
-fn resume_rejects_a_correctly_linked_finalization_with_the_wrong_receipt_binding() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (mut export, _) = started(tmp.path());
-    let cutoff_link = export
-        .write_cutoff_for_protocol(V5, "e1", "2026-09-10T00:00:00Z", cutoff("a"))
-        .unwrap();
-    drop(export);
-
-    append_correctly_linked_test_envelope(
-        tmp.path(),
-        Some(&cutoff_link),
-        reserved(
-            "2026-09-10T00:00:01Z",
-            EventBody::FinalizationV1(unavailable_finalization("b")),
-        ),
-    );
-    assert_resume_refuses_without_rewriting(tmp.path(), 2);
-}
-
-#[test]
-fn resume_rejects_every_correctly_linked_illegal_new_phase_transition() {
-    let before_cutoff = tempfile::tempdir().unwrap();
-    let (export, baseline) = started(before_cutoff.path());
-    drop(export);
-    append_correctly_linked_test_envelope(
-        before_cutoff.path(),
-        Some(&baseline),
-        reserved(
-            "2026-09-10T00:00:00Z",
-            EventBody::FinalizationV1(unavailable_finalization("a")),
-        ),
-    );
-    assert_resume_refuses_without_rewriting(before_cutoff.path(), 1);
-
+fn resume_rejects_every_correctly_linked_record_after_the_terminal() {
     for illegal_tail in [
-        env(1),
-        reserved(
-            "2026-09-10T00:00:01Z",
-            EventBody::CutoffReachedV1(cutoff("a")),
-        ),
+        env(2),
         reserved(
             "2026-09-10T00:00:01Z",
             EventBody::Baseline {
@@ -1592,47 +1360,16 @@ fn resume_rejects_every_correctly_linked_illegal_new_phase_transition() {
             },
         ),
     ] {
-        let after_cutoff = tempfile::tempdir().unwrap();
-        let (mut export, _) = started(after_cutoff.path());
-        let cutoff_link = export
-            .write_cutoff_for_protocol(V5, "e1", "2026-09-10T00:00:00Z", cutoff("a"))
-            .unwrap();
-        drop(export);
-        append_correctly_linked_test_envelope(
-            after_cutoff.path(),
-            Some(&cutoff_link),
-            illegal_tail,
-        );
-        assert_resume_refuses_without_rewriting(after_cutoff.path(), 2);
-    }
-
-    for illegal_tail in [
-        env(2),
-        reserved(
-            "2026-09-10T00:00:02Z",
-            EventBody::FinalizationV1(unavailable_finalization("a")),
-        ),
-    ] {
         let after_terminal = tempfile::tempdir().unwrap();
         let (mut export, _) = started(after_terminal.path());
-        export
-            .write_cutoff_for_protocol(V5, "e1", "2026-09-10T00:00:00Z", cutoff("a"))
-            .unwrap();
-        let finalization_link = export
-            .write_finalization_for_protocol(
-                V5,
-                "e1",
-                "2026-09-10T00:00:01Z",
-                unavailable_finalization("a"),
-            )
-            .unwrap();
+        let (_, seal_link) = export.write_seal_for_protocol(V5, &manifest()).unwrap();
         drop(export);
         append_correctly_linked_test_envelope(
             after_terminal.path(),
-            Some(&finalization_link),
+            Some(&seal_link),
             illegal_tail,
         );
-        assert_resume_refuses_without_rewriting(after_terminal.path(), 3);
+        assert_resume_refuses_without_rewriting(after_terminal.path(), 2);
     }
 }
 

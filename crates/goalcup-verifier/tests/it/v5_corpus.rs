@@ -699,40 +699,11 @@ fn regenerate_the_corpus() {
         ),
     );
 
-    // A receipt, an ack and a signed finalization, with and without a run key on the receipt.
-    let other_key = hex::encode(
-        SigningKey::from_bytes(&[0x11; 32])
-            .verifying_key()
-            .to_bytes(),
-    );
-    for (name, launch_key, receipt_key) in [
-        ("signed-receipt-ack-finalization", None, None),
-        (
-            "signed-receipt-key-agrees",
-            Some(real_key.clone()),
-            Some(real_key.clone()),
-        ),
-        (
-            "signed-receipt-key-mismatch",
-            Some(real_key.clone()),
-            Some(other_key.clone()),
-        ),
-    ] {
-        // The receipt binds the chain head after the Launch; the exchange follows it.
-        let records = with_launch(launch("codex-cli", launch_key.as_deref(), None));
-        let dir = corpus_dir().join(name);
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let exchange = hermes_run();
-        build_trace(&dir, &manifest(), &records, |export| {
-            let digest = write_receipt(export, receipt_key.as_deref());
-            for record in &exchange {
-                append_record(export, record);
-            }
-            let finish = signed_finalization(export, &digest);
-            export.append_ack_synced(&sign_ack(&finish)).unwrap();
-        });
-    }
+    // `signed-receipt-ack-finalization`, `signed-receipt-key-agrees` and
+    // `signed-receipt-key-mismatch` end in a signed-mode cutoff and finalization. Their writer
+    // left with the D54 amendment of 21 Oct 2026, so this generator no longer writes them: their
+    // committed bytes are frozen reader inputs, and regenerating leaves the three directories
+    // exactly as they are.
 
     // A torn tail: a real trace plus the front of a line that never got its newline.
     let dir = case("torn-tail", plain(), false);

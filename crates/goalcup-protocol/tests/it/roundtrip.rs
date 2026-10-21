@@ -4,12 +4,6 @@ use goalcup_protocol::capture::{CaptureRecord, CaptureTime, GapReason, M2_PROTOC
 use goalcup_protocol::chain::{GENESIS, Link, link_hash};
 use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::events::HealthState;
-use goalcup_protocol::provenance::{
-    CaptureUnavailableV1, CutoffReachedV1, FinalizationV1, NoRepositoryReasonV1,
-    PreCutoffDrainOutcomeV1, PublisherNotAttemptedReasonV1, PublisherNotAttemptedV1,
-    RepositoryNonSelectionV1, Rfc3339Utc, Sha256Digest, SnapshotNotAttemptedV1,
-    TerminationOutcomeV1,
-};
 use goalcup_protocol::receipt::{StartReceipt, StartReceiptClaims};
 use goalcup_protocol::seal::{SealManifest, SealedFile};
 
@@ -60,27 +54,12 @@ fn envelope_round_trips_every_body() {
             sealed_at: "2026-09-10T07:42:00Z".into(),
             file_count: 1,
         },
-        EventBody::CutoffReachedV1(CutoffReachedV1 {
-            receipt_sha256: Sha256Digest::try_from("aa".repeat(32)).unwrap(),
-            deadline_at: Rfc3339Utc::try_from("2026-09-10T07:42:00Z").unwrap(),
-            pre_cutoff_drain: PreCutoffDrainOutcomeV1::Complete,
-        }),
-        EventBody::FinalizationV1(FinalizationV1::CaptureUnavailable {
-            receipt_sha256: Sha256Digest::try_from("aa".repeat(32)).unwrap(),
-            termination: TerminationOutcomeV1::AlreadyStopped {
-                checked_at: Rfc3339Utc::try_from("2026-09-10T07:42:01Z").unwrap(),
-            },
-            capture: CaptureUnavailableV1::NotAttempted(SnapshotNotAttemptedV1 {
-                selection: RepositoryNonSelectionV1::None {
-                    reason: NoRepositoryReasonV1::NotFound,
-                },
-            }),
-            publisher: PublisherNotAttemptedV1 {
-                reason: PublisherNotAttemptedReasonV1::SelectionFailed,
-            },
-        }),
     ];
-    assert_eq!(bodies.len(), 5, "EventBody is closed at the five v5 bodies");
+    assert_eq!(
+        bodies.len(),
+        3,
+        "EventBody is closed at the three v5 bodies"
+    );
 
     let mut prev = GENESIS.to_string();
     for (seq, body) in bodies.into_iter().enumerate() {
@@ -107,6 +86,20 @@ fn envelope_round_trips_every_body() {
         assert!(v.get("seq").is_some(), "seq must be top level, got {text}");
         assert!(v.get("prev").is_some());
         assert!(v.get("hash").is_some());
+    }
+}
+
+/// The signed-mode cutoff and finalization bodies left the protocol (D54 amendment): no
+/// product writer produced either. A body naming one no longer decodes, so a reader reports
+/// the line as malformed instead of admitting it.
+#[test]
+fn the_removed_signed_terminal_bodies_do_not_decode() {
+    for kind in ["cutoff_reached_v1", "finalization_v1"] {
+        let body = serde_json::json!({"kind": kind, "content": {}});
+        assert!(
+            serde_json::from_value::<EventBody>(body).is_err(),
+            "{kind} must not decode"
+        );
     }
 }
 
