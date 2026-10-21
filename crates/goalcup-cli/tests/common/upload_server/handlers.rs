@@ -531,12 +531,13 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
     if !bind_credential(&s, who.credential.as_deref(), &run) {
         return Err(opened_already());
     }
-    // A competition start replaces the member's other open competition run: it ends now. A
-    // test run replaces only another test run, and a competition run never replaces a test one.
-    if !practice {
+    // Only competition replaces: a competition start ends the member's other open competition
+    // run now. A test run replaces nothing and is never replaced (an operator's test runs run side
+    // by side), and practice never replaces.
+    if who.mode == "competition" {
         for other in runs.values_mut() {
             if other.member == member
-                && other.mode == who.mode
+                && other.mode == "competition"
                 && other.status == RunStatus::Open
                 && other.replaced_at.is_none()
             {
@@ -989,6 +990,15 @@ async fn put_chunk(
                 "Goalcup-First-Seq is not the server's next seq.",
             ));
         }
+        // The run's size limit, before the body is read. A retry of a held chunk was answered
+        // above, so it is never refused here.
+        if run.stored_bytes() + hdr.content_length > s.run_max_bytes {
+            return Err(ApiError::new(
+                413,
+                "quota_exceeded",
+                "This chunk would take the run past the server's size limit. Nothing was stored.",
+            ));
+        }
         let entry_id = entry.entry_id.clone();
         (hdr, entry_id)
     };
@@ -1082,6 +1092,7 @@ async fn put_chunk(
         head: hdr.head,
         body_path: final_path,
         ack,
+        stored_bytes: hdr.content_length,
     };
     let reply = chunk_reply(&chunk);
     run.entry_mut(&entry_id)

@@ -6,10 +6,9 @@
 --   F=<tracer>/server/worker/sql/goal-cup-tracer-upload.sql; { sed '/^-- REGEN-END/q' "$F"; for m in supabase/migrations/*goal_cup_tracer*.sql; do printf '\n-- ======================== %s ========================\n' "${m##*/}"; cat "$m"; done; } > "$F.new" && mv "$F.new" "$F"
 -- Change a migration there first, then regenerate here. Applied to the Agent Community Supabase
 -- project on 2026-10-15 (20261016120000: applied before this copy of it merged).
--- PENDING (2026-10-21): the last five sections, 20261021100000, 20261021110000, 20261021120000,
--- 20261021130000 and 20261021140000, were written here first and are not yet in the website repo nor
--- applied anywhere: see sql/pending/README.md. Once they merge there, regenerate as above; the output must equal this file
--- below REGEN-END.
+-- PENDING (2026-10-21): the last section, 20261021100000_goal_cup_tracer_event_readiness.sql, was
+-- written here first and is not yet in the website repo nor applied anywhere: see sql/pending/README.md.
+-- Once it merges there, regenerate as above; the output must equal this file below REGEN-END.
 -- REGEN-END
 
 -- ======================== 20261015120000_goal_cup_tracer_upload.sql ========================
@@ -2353,26 +2352,131 @@ BEGIN
     'decided_by_you', v_dev.member_id IS NOT DISTINCT FROM p_actor_id AND v_dev.status <> 'pending');
 END $$;
 
--- ======================== 20261021100000_goal_cup_tracer_test_runs_parallel.sql ========================
--- Goal Cup tracer: test runs no longer replace each other (owner, 2026-10-21: "several organiser
--- test runs of one test operator can run in parallel").
+-- ======================== 20261021100000_goal_cup_tracer_event_readiness.sql ========================
+-- Goal Cup tracer: event readiness (2026-10-21). One migration for five changes, applied once.
 --
--- 20261015170000 made a new test run end the operator's open test run ("the same mode replaces the
--- same mode"). Now only competition replaces:
---   * a new competition run ends the member's open competition run (unchanged);
---   * a test run replaces nothing and is never replaced, so one operator may have several open
---     test runs at once; it still never touches a competition run;
---   * practice still never replaces.
---   * goal_cup_device_request answers replaces_open_run = true and replaces_run_started_at only for a
---     competition run request. The website's approval page shows "This replaces your current run"
---     from those keys, so it stops saying it for test runs without a website change (check the
---     page's own wording for test runs in the website repo).
+-- 1. Test runs no longer replace each other (owner, 21 Oct 2026: "several organiser test runs of one
+--    test operator can run in parallel"). 20261015170000 made a new test run end the operator's
+--    open test run. Now only competition replaces:
+--      * a new competition run ends the member's open competition run (unchanged);
+--      * a test run replaces nothing and is never replaced, so one operator may have several open
+--        test runs at once; it still never touches a competition run;
+--      * practice still never replaces;
+--      * goal_cup_device_request answers replaces_open_run = true and replaces_run_started_at only
+--        for a competition run request. The website's approval page shows "This replaces your
+--        current run" from those keys, so it stops saying it for test runs without a website change
+--        (check the page's own wording for test runs in the website repo).
+--    Test runs that 20261015170000 already marked replaced stay replaced.
 --
--- Additive: two functions replaced (CREATE OR REPLACE keeps their grants). No table, column, row or
--- grant changes. Test runs that 20261015170000 already marked replaced stay replaced.
+-- 2. A per-run server size limit (owner approved; event-readiness plan WP-D). The Worker refuses a
+--    chunk that would take a run past RUN_MAX_COMPRESSED_BYTES (a Worker variable, 64 GiB) with 413
+--    quota_exceeded, before it stores anything in R2. To know what a run holds, the database counts it:
+--      * entries.stored_bytes: the compressed bytes of the entry's committed chunks (each chunk's
+--        request Content-Length, which is what R2 stores); entries.chunk_count: how many chunks.
+--        Both start at 0. Chunks committed before this migration are not counted (no compressed
+--        size was kept for them); the counters cover every chunk from here on.
+--      * chunks.stored_bytes: the compressed bytes of that chunk; null for chunks from before.
+--      * goal_cup_tracer.run_json adds "stored_bytes" and "chunk_count" to the run object: the sums
+--        over the run's entries. Every function that answers a run (position, open, continue,
+--        runs_for_tick) carries them; a Worker that does not read them ignores them.
+--      * public.goal_cup_upload_commit_chunk(…, p_stored_bytes): a new overload. In the same atomic
+--        step as before it records the chunk and adds p_stored_bytes and one chunk to the entry.
+--    Operator notices at 50% and 100% of the limit are Worker log lines (quota-half, quota-full,
+--    quota-exceeded), not rows in goal_cup_tracer.notices: that outbox mails the run's member.
 --
--- Apply: staging first, then production (lead agent applies, owner approves):
+-- 3. Heartbeat vitals and the disk_full email. The heartbeat gains an optional "vitals" object
+--    (docs/UPLOAD-API.md, heartbeat):
+--      {"disk_free_bytes": u64, "disk_short": bool, "agent_paused": "disk" | null,
+--       "rss_bytes": u64, "cpu_ms": u64, "open_files": u64}
+--    about the tracer's own processes and the machine's free disk, nothing else. The Worker checks
+--    it and passes only these keys, nulls dropped. The tracer pauses the agent itself when the disk
+--    is almost full ("agent_paused": "disk") and resumes it once there is space again.
+--      * heartbeats.vitals: the vitals that heartbeat sent; null when it sent none.
+--      * runs.last_vitals: the latest vitals any heartbeat of the run sent (a heartbeat without
+--        vitals keeps the last), like last_client_ip.
+--      * runs.disk_paused_at: when the current disk pause began; null while the agent is not
+--        paused. A heartbeat whose vitals say agent_paused "disk" starts a pause (if none is
+--        running); one whose vitals do not say it ends it. A heartbeat without vitals changes
+--        neither: an older tracer, or one that could not measure, says nothing about a pause.
+--      * runs.disk_notice_at: the start of the latest pause that is owed a disk_full email. A pause
+--        that begins sets it, unless the one it holds is less than 6 hours old (at most one
+--        disk_full email per run per 6 hours).
+--      * notices.kind may now be 'disk_full'. The Worker's cron queues one per disk_notice_at
+--        (dedupe key) for a competition or test run before its end, never for practice: the same
+--        rules as the other run emails, and a test run's email goes to its operator with "[TEST] ".
+--      * public.goal_cup_upload_runs_for_tick: each run also carries "disk_notice_at".
+--      * public.goal_cup_upload_heartbeat(…, p_vitals jsonb): a new overload that stores the vitals
+--        and moves the run's pause state in the same step. The Worker calls it when a heartbeat
+--        carries vitals, and the old 13-argument form otherwise.
+--
+-- 4. The judged commit is the last push before the deadline (owner, 21 Oct 2026): the last push to
+--    the repository's default branch that GitHub itself timestamped at or before the run's ends_at.
+--    The Worker's cron reads it from GET /repos/{owner}/{repo}/activity (the `timestamp` GitHub gave
+--    each push); commit dates are ignored. runs.final_commit keeps its meaning (that commit, or
+--    'none'); these columns say how it was found (all null for rows recorded before this):
+--      * runs.final_pushed_at: when GitHub received the judged push; null when not known.
+--      * runs.final_branch: the default branch that was read.
+--      * runs.final_late_push: GitHub had a push to that branch after ends_at when it was asked.
+--      * runs.final_force_push: GitHub had a force push to that branch between official_start and
+--        ends_at.
+--      * runs.final_head_fallback: the commit is the head GitHub had when asked (commits/HEAD),
+--        because the activity API was unavailable or listed no update of the branch.
+--      * public.goal_cup_upload_record_final_commit(…, p_pushed_at, p_branch, p_late_push,
+--        p_force_push, p_head_fallback): a new overload that stores the commit and these, once
+--        (the first stays, as before).
+--
+-- 5. New words for three run emails (docs/research/NOTIFICATIONS.md), in goal_cup_tracer.notice_text:
+--      * silence: no longer says "Your run stopped" (a wifi drop, a sleeping computer or our own
+--        outage look the same from here). It says when we last heard from the run, that recording
+--        goes on while the computer is offline or asleep, to run `goalcup status` and do what its
+--        Next line says, and never to run `goalcup start`. The subject changes to match. The Worker
+--        mails it only when the server itself was well for the whole silence; that rule is in the
+--        Worker.
+--      * ended: when the payload says part of the run has not arrived ("uploaded": false), it says
+--        to run `goalcup upload` before "closes_at" (the end + 24 hours); "uploaded": true says
+--        nothing more is needed; a payload without the key (an older Worker) gets neither line.
+--      * disk_full: free space outside the run's folder, and never anything the agent made.
+--    The other kinds keep their words.
+--
+-- Old signatures stay. The Worker that is live while this is applied keeps calling the 3-argument
+-- goal_cup_upload_commit_chunk (now: no size, 0 bytes and one chunk), the 13-argument
+-- goal_cup_upload_heartbeat and goal_cup_tracer.note_heartbeat (now: no vitals) and the 4-argument
+-- goal_cup_upload_record_final_commit (now: no detail); each calls the new form. A later migration
+-- can drop them once every Worker sends the new arguments. The new parameters have no DEFAULT on
+-- purpose: with one, PostgREST could not choose between the two overloads for a call without them.
+-- Each old form is defined before its new one on purpose: the mirror's parity test reads the last
+-- definition of each name.
+--
+-- Additive: new columns (constant defaults or null, no table rewrite), the notices kind CHECK
+-- widened, functions replaced with the same signatures (grants kept), four new function overloads
+-- with their grants. No row is changed.
+--
+-- Apply ONCE: staging and production share one database, so there is no "staging first" for SQL.
+-- First run it on a throwaway Postgres loaded with the mirror (server/worker/scripts/check-sql.sh in
+-- goal-cup-tracer). Then the lead agent applies it, the owner approves:
 --   psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+-- Then deploy and test the staging Worker, then deploy production.
+
+-- ---- columns and the notices kind CHECK ---------------------------------------------------------
+
+ALTER TABLE goal_cup_tracer.entries ADD COLUMN stored_bytes bigint NOT NULL DEFAULT 0 CHECK (stored_bytes >= 0);
+ALTER TABLE goal_cup_tracer.entries ADD COLUMN chunk_count  bigint NOT NULL DEFAULT 0 CHECK (chunk_count >= 0);
+ALTER TABLE goal_cup_tracer.chunks  ADD COLUMN stored_bytes bigint CHECK (stored_bytes >= 0);
+ALTER TABLE goal_cup_tracer.heartbeats ADD COLUMN vitals jsonb CHECK (vitals IS NULL OR jsonb_typeof(vitals) = 'object');
+ALTER TABLE goal_cup_tracer.runs ADD COLUMN last_vitals jsonb CHECK (last_vitals IS NULL OR jsonb_typeof(last_vitals) = 'object');
+ALTER TABLE goal_cup_tracer.runs ADD COLUMN disk_paused_at timestamptz;
+ALTER TABLE goal_cup_tracer.runs ADD COLUMN disk_notice_at timestamptz;
+ALTER TABLE goal_cup_tracer.runs ADD COLUMN final_pushed_at     timestamptz;
+ALTER TABLE goal_cup_tracer.runs ADD COLUMN final_branch        text CHECK (final_branch IS NULL OR length(final_branch) BETWEEN 1 AND 255);
+ALTER TABLE goal_cup_tracer.runs ADD COLUMN final_late_push     boolean;
+ALTER TABLE goal_cup_tracer.runs ADD COLUMN final_force_push    boolean;
+ALTER TABLE goal_cup_tracer.runs ADD COLUMN final_head_fallback boolean;
+
+ALTER TABLE goal_cup_tracer.notices DROP CONSTRAINT notices_kind_check;
+ALTER TABLE goal_cup_tracer.notices ADD CONSTRAINT notices_kind_check
+  CHECK (kind IN ('started', 'silence', 'idle_3h', 'idle_6h', 'recording', 'ended', 'disk_full'));
+
+-- ---- 1. only competition replaces ---------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.goal_cup_upload_open_run(
   p_member_id text, p_event_id text, p_mode text, p_run_id text, p_entry_id text,
@@ -2502,43 +2606,7 @@ BEGIN
     'decided_by_you', v_dev.member_id IS NOT DISTINCT FROM p_actor_id AND v_dev.status <> 'pending');
 END $$;
 
--- ======================== 20261021110000_goal_cup_tracer_run_size_limit.sql ========================
--- Goal Cup tracer: a per-run server size limit (owner approved, 2026-10-21; event-readiness plan WP-D).
---
--- The upload Worker refuses a chunk that would take a run past RUN_MAX_COMPRESSED_BYTES (a Worker
--- variable, 64 GiB) with 413 quota_exceeded, before it stores anything in R2. To know what a run
--- holds, the database now counts it:
---   * entries.stored_bytes: the compressed bytes of the entry's committed chunks (each chunk's
---     request Content-Length, which is what R2 stores); entries.chunk_count: how many chunks.
---     Both start at 0. Chunks committed before this migration are not counted (no compressed size
---     was kept for them); the counters cover every chunk from here on.
---   * chunks.stored_bytes: the compressed bytes of that chunk; null for chunks from before.
---   * goal_cup_tracer.run_json adds "stored_bytes" and "chunk_count" to the run object: the sums
---     over the run's entries. Every function that answers a run (position, open, continue,
---     runs_for_tick) carries them; a Worker that does not read them ignores them.
---   * public.goal_cup_upload_commit_chunk(p_member_id, p_run_id, p_chunk, p_stored_bytes): a new
---     overload. In the same atomic step as before it records the chunk and adds p_stored_bytes and
---     one chunk to the entry. The Worker of this change calls it.
---   * The old three-argument goal_cup_upload_commit_chunk stays for the Worker that is live while
---     this is applied; it now calls the new one with no size, so it still counts the chunk (and adds
---     0 bytes). A later migration can drop it once every Worker sends p_stored_bytes.
---
--- Order: apply this before deploying the Worker that sends p_stored_bytes (staging, then
--- production). The live Worker keeps working on it unchanged.
---
--- Additive: two new columns on entries and one on chunks (constant defaults or null, no table
--- rewrite), one function replaced, one new function with its grants. No row is changed.
---
--- Operator notices at 50% and 100% of the limit are Worker log lines (quota-half, quota-full,
--- quota-exceeded), not rows in goal_cup_tracer.notices: that outbox mails the run's member, and a
--- new kind would mean widening its CHECK constraint and a new recipient rule.
---
--- Apply: staging first, then production (lead agent applies, owner approves):
---   psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
-
-ALTER TABLE goal_cup_tracer.entries ADD COLUMN stored_bytes bigint NOT NULL DEFAULT 0 CHECK (stored_bytes >= 0);
-ALTER TABLE goal_cup_tracer.entries ADD COLUMN chunk_count  bigint NOT NULL DEFAULT 0 CHECK (chunk_count >= 0);
-ALTER TABLE goal_cup_tracer.chunks  ADD COLUMN stored_bytes bigint CHECK (stored_bytes >= 0);
+-- ---- 2. the per-run size limit ------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION goal_cup_tracer.run_json(p_run_id text, p_entry_id text DEFAULT NULL) RETURNS jsonb
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
@@ -2646,64 +2714,7 @@ BEGIN
   RETURN 'committed';
 END $$;
 
--- Supabase grants EXECUTE on new functions to PUBLIC, anon and authenticated; revoke all three
--- (docs/SUPABASE.md, "SECURITY DEFINER grants"). Then the same Worker roles as the old form.
-REVOKE ALL ON FUNCTION public.goal_cup_upload_commit_chunk(text, text, jsonb, bigint) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.goal_cup_upload_commit_chunk(text, text, jsonb, bigint)
-  TO goal_cup_ingest_staging, goal_cup_ingest_production, service_role;
-
--- ======================== 20261021120000_goal_cup_tracer_vitals_disk_notice.sql ========================
--- Goal Cup tracer: heartbeat vitals and the disk_full email (2026-10-21).
---
--- The tracer's heartbeat gains an optional "vitals" object (docs/UPLOAD-API.md, heartbeat):
---   {"disk_free_bytes": u64, "disk_short": bool, "agent_paused": "disk" | null,
---    "rss_bytes": u64, "cpu_ms": u64, "open_files": u64}
--- about the tracer's own processes and the machine's free disk, nothing else. The Worker checks it
--- and passes only these keys, nulls dropped. The tracer pauses the agent itself when the disk is
--- almost full ("agent_paused": "disk") and resumes it once there is space again.
---   * heartbeats.vitals: the vitals that heartbeat sent; null when it sent none.
---   * runs.last_vitals: the latest vitals any heartbeat of the run sent (a heartbeat without
---     vitals keeps the last), like last_client_ip.
---   * runs.disk_paused_at: when the current disk pause began; null while the agent is not paused.
---     A heartbeat whose vitals say agent_paused "disk" starts a pause (if none is running); one
---     whose vitals do not say it (agent_paused null or absent) ends it. A heartbeat without vitals
---     changes neither: an older tracer, or one that could not measure, says nothing about a pause.
---   * runs.disk_notice_at: the start of the latest pause that is owed a disk_full email. A pause
---     that begins sets it, unless the one it holds is less than 6 hours old (at most one disk_full
---     email per run per 6 hours, so a disk that fills and frees in a loop does not flood the member).
---   * notices.kind may now be 'disk_full'. The Worker's cron queues one per disk_notice_at
---     (dedupe key) for a competition or test run before its end, never for practice: the same
---     rules as the other run emails, and a test run's email goes to its operator with "[TEST] ".
---     The cron, not the heartbeat, queues it, like every other notice.
---   * goal_cup_tracer.notice_text: the disk_full email.
---   * public.goal_cup_upload_runs_for_tick: each run also carries "disk_notice_at".
---   * public.goal_cup_upload_heartbeat(…, p_vitals jsonb): a new overload that stores the vitals and
---     moves the run's pause state in the same step. The Worker of this change calls it when a
---     heartbeat carries vitals, and the old 13-argument form otherwise.
---   * The old 13-argument goal_cup_upload_heartbeat (and goal_cup_tracer.note_heartbeat) stay, for
---     the Worker that is live while this is applied; each now calls the new form with no vitals.
---     p_vitals has no DEFAULT on purpose: with one, PostgREST could not choose between the two
---     overloads for a call without it.
---
--- Order: apply this before deploying the Worker that sends p_vitals (staging, then production). The
--- live Worker keeps working on it unchanged. A new Worker on a database without this migration
--- still records every heartbeat that carries no vitals; one that carries vitals is 502 (retried).
---
--- Additive: three new nullable columns on runs and one on heartbeats (no table rewrite), one CHECK
--- constraint widened, three functions replaced with the same signatures (grants kept), two new
--- function overloads with their grants. No row is changed.
---
--- Apply: staging first, then production (lead agent applies, owner approves):
---   psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
-
-ALTER TABLE goal_cup_tracer.heartbeats ADD COLUMN vitals jsonb CHECK (vitals IS NULL OR jsonb_typeof(vitals) = 'object');
-ALTER TABLE goal_cup_tracer.runs ADD COLUMN last_vitals jsonb CHECK (last_vitals IS NULL OR jsonb_typeof(last_vitals) = 'object');
-ALTER TABLE goal_cup_tracer.runs ADD COLUMN disk_paused_at timestamptz;
-ALTER TABLE goal_cup_tracer.runs ADD COLUMN disk_notice_at timestamptz;
-
-ALTER TABLE goal_cup_tracer.notices DROP CONSTRAINT notices_kind_check;
-ALTER TABLE goal_cup_tracer.notices ADD CONSTRAINT notices_kind_check
-  CHECK (kind IN ('started', 'silence', 'idle_3h', 'idle_6h', 'recording', 'ended', 'disk_full'));
+-- ---- 3. heartbeat vitals and the disk pause -----------------------------------------------------
 
 -- The run-level facts a heartbeat adds, now with its vitals and the disk pause they report.
 CREATE FUNCTION goal_cup_tracer.note_heartbeat(
@@ -2839,98 +2850,7 @@ AS $$
           OR least(r.deadline_at, coalesce(r.replaced_at, r.deadline_at)) >= p_at::timestamptz - interval '48 hours')
 $$;
 
--- The email for one notice: {subject, text}. The website owns this copy. Same as before, plus disk_full.
--- The product is named Goal Cup Proxy (goalcup) in the footer and the recording and disk_full emails.
-CREATE OR REPLACE FUNCTION goal_cup_tracer.notice_text(p_kind text, p_payload jsonb, p_run_id text) RETURNS jsonb
-LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp
-AS $$
-  SELECT jsonb_build_object('subject', s.subject, 'text', s.body || E'\n\nRun ' || p_run_id ||
-    E'.\nYou get this email because you started a Goal Cup run with Goal Cup Proxy (goalcup).\n-- Agent Community, https://agentcommunity.org/goalcup\n')
-  FROM (SELECT
-    CASE p_kind
-      WHEN 'started'   THEN 'Goal Cup: your agent started'
-      WHEN 'silence'   THEN 'Goal Cup: your run stopped'
-      WHEN 'idle_3h'   THEN 'Goal Cup: no model calls for 3 hours'
-      WHEN 'idle_6h'   THEN 'Goal Cup: no model calls for 6 hours'
-      WHEN 'recording' THEN 'Goal Cup: Goal Cup Proxy reports a recording problem'
-      WHEN 'ended'     THEN 'Goal Cup: your agent finished'
-      WHEN 'disk_full' THEN 'Goal Cup: your agent is paused, the disk is almost full'
-    END AS subject,
-    CASE p_kind
-      WHEN 'started' THEN
-        'Your agent started its Goal Cup run at ' || coalesce(p_payload->>'official_start', '?') ||
-        ' (UTC). The run ends at ' || coalesce(p_payload->>'deadline_at', '?') || E' (UTC).\n\n' ||
-        'Repository: ' || coalesce(p_payload->>'repo_url', '?') || E'\n\n' ||
-        'To check on it, run `goalcup status` on the machine that started it.'
-      WHEN 'silence' THEN
-        'We have not heard from your run since ' || coalesce(p_payload->>'last_heartbeat_at', 'it started') ||
-        E' (UTC).\n\nYour run stopped. Run `goalcup continue` on the machine that started it.'
-      WHEN 'idle_3h' THEN
-        'Your agent made no model calls for 3 hours (since ' || coalesce(p_payload->>'since', '?') ||
-        E' UTC): is it finished, out of tokens, or offline?'
-      WHEN 'idle_6h' THEN
-        'Your agent made no model calls for 6 hours (since ' || coalesce(p_payload->>'since', '?') ||
-        E' UTC): is it finished, out of tokens, or offline?'
-      WHEN 'recording' THEN
-        'Goal Cup Proxy reports a recording problem (' || coalesce(p_payload->>'recording', 'unknown') ||
-        E'). Run `goalcup status` on the machine that started the run.'
-      WHEN 'ended' THEN
-        'Your agent finished at ' || coalesce(p_payload->>'ends_at', '?') || E' (UTC).\n\n' ||
-        CASE WHEN p_payload->>'commit' IS NULL THEN 'No commit was recorded for ' || coalesce(p_payload->>'repo_url', 'your repository') || '.'
-             ELSE 'The commit we recorded is ' || (p_payload->>'commit') || ' in ' || coalesce(p_payload->>'repo_url', 'your repository') || '.' END
-      WHEN 'disk_full' THEN
-        'Goal Cup Proxy paused your agent at ' || coalesce(p_payload->>'since', '?') ||
-        E' (UTC) because the disk of the machine running it is almost full.\n\n' ||
-        'Free some disk space on that machine: the agent resumes by itself. ' ||
-        'If it still seems stuck after that, type "keep going" in the agent.'
-    END AS body) s
-$$;
-
--- Supabase grants EXECUTE on new functions to PUBLIC, anon and authenticated; revoke all three
--- (docs/SUPABASE.md, "SECURITY DEFINER grants"). Then the same Worker roles as the old form.
-REVOKE ALL ON FUNCTION goal_cup_tracer.note_heartbeat(text, text, timestamptz, text, bigint, text, text, jsonb) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.goal_cup_upload_heartbeat(text, text, text, bigint, text, bigint, boolean, text, text, bigint, text, text, text, jsonb) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.goal_cup_upload_heartbeat(text, text, text, bigint, text, bigint, boolean, text, text, bigint, text, text, text, jsonb)
-  TO goal_cup_ingest_staging, goal_cup_ingest_production, service_role;
-
--- ======================== 20261021130000_goal_cup_tracer_final_push.sql ========================
--- Goal Cup tracer: the judged commit is the last push before the deadline (owner, 2026-10-21).
---
--- The judged version of a run is the last push to the repository's default branch that GitHub
--- itself timestamped at or before the run's ends_at. Pushes after that do not count. The Worker's
--- cron reads it from GitHub's repository activity API (GET /repos/{owner}/{repo}/activity, the
--- `timestamp` GitHub gave each push) instead of the head GitHub has when asked; commit dates are
--- ignored. runs.final_commit keeps its meaning (that commit, or 'none'); these columns say how it
--- was found:
---   * runs.final_pushed_at: when GitHub received the judged push; null when not known.
---   * runs.final_branch: the default branch that was read.
---   * runs.final_late_push: GitHub had a push to that branch after ends_at when it was asked.
---   * runs.final_force_push: GitHub had a force push to that branch between official_start and ends_at.
---   * runs.final_head_fallback: the commit is the head GitHub had when asked (commits/HEAD), because
---     the activity API was unavailable or listed no update of the branch.
---   All null for rows recorded before this migration (and for 'none' from a missing repository).
---   * public.goal_cup_upload_record_final_commit(…, p_pushed_at, p_branch, p_late_push,
---     p_force_push, p_head_fallback): a new overload that stores the commit and these, once (the
---     first stays, as before). The Worker of this change calls it.
---   * The old 4-argument form stays for the Worker that is live while this is applied; it now calls
---     the new one with no detail. The new parameters have no DEFAULT on purpose: with one, PostgREST
---     could not choose between the two overloads for a call without them.
---
--- Order: apply this before deploying the Worker that sends p_pushed_at (staging, then production).
--- The live Worker keeps working on it unchanged. A new Worker on a database without this migration
--- cannot record a final commit (502, logged; the next tick retries).
---
--- Additive: five new nullable columns on runs (no table rewrite), one function replaced with the
--- same signature (grants kept), one new function overload with its grants. No row is changed.
---
--- Apply: staging first, then production (lead agent applies, owner approves):
---   psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
-
-ALTER TABLE goal_cup_tracer.runs ADD COLUMN final_pushed_at     timestamptz;
-ALTER TABLE goal_cup_tracer.runs ADD COLUMN final_branch        text CHECK (final_branch IS NULL OR length(final_branch) BETWEEN 1 AND 255);
-ALTER TABLE goal_cup_tracer.runs ADD COLUMN final_late_push     boolean;
-ALTER TABLE goal_cup_tracer.runs ADD COLUMN final_force_push    boolean;
-ALTER TABLE goal_cup_tracer.runs ADD COLUMN final_head_fallback boolean;
+-- ---- 4. the judged commit is the last push before the deadline ----------------------------------
 
 -- The old form, for the Worker that is live while this is applied: no detail. Defined before the new
 -- function on purpose: the mirror's parity test reads the last definition of each name.
@@ -2963,39 +2883,7 @@ BEGIN
   RETURN v_rows = 1;
 END $$;
 
--- Supabase grants EXECUTE on new functions to PUBLIC, anon and authenticated; revoke all three
--- (docs/SUPABASE.md, "SECURITY DEFINER grants"). Then the same Worker roles as the old form.
-REVOKE ALL ON FUNCTION public.goal_cup_upload_record_final_commit(text, text, text, text, text, text, boolean, boolean, boolean) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.goal_cup_upload_record_final_commit(text, text, text, text, text, text, boolean, boolean, boolean)
-  TO goal_cup_ingest_staging, goal_cup_ingest_production, service_role;
-
--- ======================== 20261021140000_goal_cup_tracer_notice_text.sql ========================
--- Goal Cup tracer: new words for the silence, ended and disk_full emails (2026-10-21).
---
--- The run emails are one system, run by the server (owner, 21 Oct 2026). This changes only their
--- words (docs/research/NOTIFICATIONS.md has the reasons and the full table):
---   * silence: no longer says "Your run stopped". The server does not know that: a wifi drop, a
---     sleeping computer or our own outage look the same from here. It now says when we last heard
---     from the run, that recording goes on while the computer is offline or asleep, to run
---     `goalcup status` and do what its Next line says, and never to run `goalcup start` (a new
---     start replaces the run). The subject changes to match. The Worker of this change also mails
---     it only when the server itself was well for the whole silence (docs/UPLOAD-API.md, "The
---     server's health"); that rule is in the Worker, not here.
---   * ended: when the payload says part of the run has not arrived ("uploaded": false), the email
---     says to run `goalcup upload` before the close ("closes_at", the end + 24 hours). When it says
---     the run is in ("uploaded": true), it says nothing more is needed. A payload without the key
---     (queued by an older Worker) gets neither line, as before.
---   * disk_full: says where to free space: outside the run's folder, and never anything the agent
---     made.
--- The other kinds keep their words. The kinds and the CHECK constraint do not change.
---
--- Order: either way round with the Worker of this change. Before it, the ended payload has no
--- "uploaded" key, and the ended email reads as before.
---
--- Additive: one function replaced with the same signature (grants kept). No row is changed.
---
--- Apply: staging first, then production (lead agent applies, owner approves):
---   psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+-- ---- 5. the run emails --------------------------------------------------------------------------
 
 -- The email for one notice: {subject, text}. The website owns this copy.
 -- The product is named Goal Cup Proxy (goalcup) in the footer and the recording and disk_full emails.
@@ -3054,3 +2942,18 @@ AS $$
         'The agent resumes by itself. If it still seems stuck after that, type "keep going" in the agent.'
     END AS body) s
 $$;
+
+-- ---- grants -------------------------------------------------------------------------------------
+
+-- Supabase grants EXECUTE on new functions to PUBLIC, anon and authenticated; revoke all three
+-- (docs/SUPABASE.md, "SECURITY DEFINER grants"). Then the same Worker roles as the old form.
+REVOKE ALL ON FUNCTION public.goal_cup_upload_commit_chunk(text, text, jsonb, bigint) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.goal_cup_upload_commit_chunk(text, text, jsonb, bigint)
+  TO goal_cup_ingest_staging, goal_cup_ingest_production, service_role;
+REVOKE ALL ON FUNCTION goal_cup_tracer.note_heartbeat(text, text, timestamptz, text, bigint, text, text, jsonb) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.goal_cup_upload_heartbeat(text, text, text, bigint, text, bigint, boolean, text, text, bigint, text, text, text, jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.goal_cup_upload_heartbeat(text, text, text, bigint, text, bigint, boolean, text, text, bigint, text, text, text, jsonb)
+  TO goal_cup_ingest_staging, goal_cup_ingest_production, service_role;
+REVOKE ALL ON FUNCTION public.goal_cup_upload_record_final_commit(text, text, text, text, text, text, boolean, boolean, boolean) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.goal_cup_upload_record_final_commit(text, text, text, text, text, text, boolean, boolean, boolean)
+  TO goal_cup_ingest_staging, goal_cup_ingest_production, service_role;

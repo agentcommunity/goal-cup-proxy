@@ -8,7 +8,8 @@ import { afterEach, mock, test } from "node:test";
 import { LocalDb } from "../src/db-local.ts";
 import type { Ctx } from "../src/context.ts";
 import type { TickRun } from "../src/db.ts";
-import { GITHUB_GRACE, GITHUB_SETTLE, queueNotices, recordFinalCommits, runTick } from "../src/notices.ts";
+import { GITHUB_GRACE, GITHUB_SETTLE } from "../src/github.ts";
+import { queueNotices, recordFinalCommits, runTick } from "../src/notices.ts";
 import { credentialFor } from "./helpers/client.ts";
 import { T0, WINDOW, type Rig, lifecycle } from "./helpers/rig.ts";
 

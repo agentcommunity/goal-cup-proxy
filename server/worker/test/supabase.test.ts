@@ -230,7 +230,7 @@ test("a run's stored_bytes and chunk_count come through when the database sends 
   const counted = { ...run, stored_bytes: 68_719_476_736, chunk_count: 2048 };
   stub({ run: counted, entry }, { run, entry });
   assert.deepEqual(await db().getRun("m", "r1", null), { run: counted, entry });
-  assert.equal((await db().getRun("m", "r1", null))!.run.stored_bytes, undefined); // a database before 20261021110000
+  assert.equal((await db().getRun("m", "r1", null))!.run.stored_bytes, undefined); // a database before 20261021100000
   const quiet = console.error;
   console.error = () => {};
   try {
@@ -308,7 +308,7 @@ test("recordHeartbeat sends p_vitals only when the heartbeat carried vitals (the
   assert.equal(Object.keys(calls[0]!.args).length, Object.keys(calls[1]!.args).length + 1);
 });
 
-test("a tick run's disk_notice_at comes through, is checked, and may be absent (a database before 20261021120000)", async () => {
+test("a tick run's disk_notice_at comes through, is checked, and may be absent (a database before 20261021100000)", async () => {
   const owed = { ...tickRun, disk_notice_at: "2026-11-06T10:00:00Z" };
   stub([owed, { ...tickRun, disk_notice_at: null }, tickRun]);
   assert.deepEqual(await db().runsForTick(T), [owed, { ...tickRun, disk_notice_at: null }, tickRun]);

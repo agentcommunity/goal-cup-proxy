@@ -24,8 +24,13 @@
 //!
 //! The run lifecycle: a competition start replaces the member's other open competition run, a
 //! practice credential opens a practice run (never replacing, no window), a test credential opens a
-//! test run (a competition run that replaces, and is replaced by, only another test run), and
-//! `ServerOptions::start_window_opens` / `start_window_closes` bound competition starts.
+//! test run (like a competition run, but it never replaces and is never replaced, so one operator's
+//! test runs run side by side), and `ServerOptions::start_window_opens` / `start_window_closes`
+//! bound competition starts.
+//!
+//! The per-run size limit: a chunk that would take the compressed bytes a run holds (each stored
+//! chunk's `Content-Length`, over all its entries) past `ServerOptions::run_max_compressed_bytes`
+//! is `413 quota_exceeded`, before the body is read, as the Worker's `RUN_MAX_COMPRESSED_BYTES`.
 //!
 //! What the Worker does on its own (the 5-minute cron: closing runs, the commit at the deadline
 //! and the run emails, see "What the server does on its own" in `UPLOAD-API.md`) is not built here;
@@ -81,6 +86,9 @@ pub struct ServerOptions {
     /// both unset, the default, means always open.
     pub start_window_opens: Option<u64>,
     pub start_window_closes: Option<u64>,
+    /// The per-run size limit in compressed bytes (the Worker's `RUN_MAX_COMPRESSED_BYTES`,
+    /// default 64 GiB).
+    pub run_max_compressed_bytes: u64,
     /// Seed of the Ed25519 key that signs receipts and acknowledgements.
     pub signing_seed: [u8; 32],
     /// A fixed port, so a test can restart on the same one. `None` picks a free port.
@@ -98,6 +106,7 @@ impl Default for ServerOptions {
             close_after_seconds: 24 * 3600,
             start_window_opens: None,
             start_window_closes: None,
+            run_max_compressed_bytes: 64 << 30,
             signing_seed: [7u8; 32],
             port: None,
         }
@@ -128,6 +137,7 @@ impl UploadServer {
             run_secs: config.run_seconds.unwrap_or(config.run_hours * 3600),
             practice_secs: config.practice_run_seconds,
             close_after_secs: config.close_after_seconds,
+            run_max_bytes: config.run_max_compressed_bytes,
             window_opens: config.start_window_opens,
             window_closes: config.start_window_closes,
             key,

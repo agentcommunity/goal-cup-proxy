@@ -95,7 +95,7 @@ export interface RunRow {
    * What the run holds in R2 so far, over all its entries: the compressed bytes (each committed
    * chunk's Content-Length) and the number of committed chunks. The per-run size limit
    * (RUN_MAX_COMPRESSED_BYTES) is checked against `stored_bytes`. Undefined only when the
-   * database predates the counters (website migration 20261021110000 not applied yet).
+   * database predates the counters (website migration 20261021100000 not applied yet).
    */
   stored_bytes?: number;
   chunk_count?: number;
@@ -361,7 +361,7 @@ export interface TickRun extends RunRow {
   /**
    * The start of the latest disk pause that is owed a disk_full email (see `HeartbeatResult`); null
    * until a heartbeat reports one. Undefined only when the database predates website migration
-   * 20261021120000.
+   * 20261021100000.
    */
   disk_notice_at?: string | null;
 }

@@ -3,9 +3,9 @@
 
 import type { Auth } from "./auth.ts";
 import type { Ctx } from "./context.ts";
-import type { Env } from "./env.ts";
 import { type EntryRow, type MachineFacts, type RecordingState, type RunRow, type Vitals, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
+import { githubHeaders } from "./github.ts";
 import {
   REPO_URL,
   addSeconds,
@@ -233,17 +233,6 @@ export async function continueRun(ctx: Ctx, auth: Auth, runId: string, request: 
     case "not_found":
       throw notFound("No such run for this credential.");
   }
-}
-
-/** The headers every call to the GitHub API carries (the token, if there is one, only raises the rate limit). */
-export function githubHeaders(env: Env): Record<string, string> {
-  const headers: Record<string, string> = {
-    accept: "application/vnd.github+json",
-    "user-agent": "goalcup-upload-worker",
-    "x-github-api-version": "2022-11-28",
-  };
-  if (env.GITHUB_TOKEN) headers.authorization = `Bearer ${env.GITHUB_TOKEN}`;
-  return headers;
 }
 
 /** GitHub says the repository exists and is public. Failures to ask are 502, so goalcup retries. */

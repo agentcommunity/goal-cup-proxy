@@ -34,6 +34,10 @@ pub struct StoredChunk {
     pub body_path: PathBuf,
     /// The acknowledgement answered for this chunk, kept so a retry gets the same bytes back.
     pub ack: AckCheckpoint,
+    /// The compressed bytes stored (the request's `Content-Length`): what counts against the
+    /// run's size limit.
+    #[serde(default)]
+    pub stored_bytes: u64,
 }
 
 /// One heartbeat the server accepted, with the server's own receive time.
@@ -222,6 +226,15 @@ impl RunRecord {
         self.deadline_secs().saturating_sub(now_secs())
     }
 
+    /// The compressed bytes the run holds: its stored chunks, over all its entries.
+    pub fn stored_bytes(&self) -> u64 {
+        self.entries
+            .iter()
+            .flat_map(|e| &e.chunks)
+            .map(|c| c.stored_bytes)
+            .sum()
+    }
+
     /// True once the server's clock is at or past the end of the run.
     pub fn stopped(&self) -> bool {
         now_secs() >= self.ends_secs()
@@ -288,6 +301,8 @@ pub struct Shared {
     pub practice_secs: u64,
     /// How long after a run ends it is closed (`sealed`, or `incomplete`).
     pub close_after_secs: u64,
+    /// The most compressed bytes one run may hold.
+    pub run_max_bytes: u64,
     /// The competition start window, in epoch seconds; an unset edge is open.
     pub window_opens: Option<u64>,
     pub window_closes: Option<u64>,

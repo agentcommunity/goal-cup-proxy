@@ -121,7 +121,7 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
  */
 function checkQuota(ctx: Ctx, run: RunRow, contentLength: number): void {
   if (run.stored_bytes === undefined) {
-    // The database does not count stored bytes yet (website migration 20261021110000 missing): do
+    // The database does not count stored bytes yet (website migration 20261021100000 missing): do
     // not let a run past a limit nobody can see. 502 is retried; goalcup keeps the data.
     console.error(`quota-unknown ${run.run_id}: the database sends no stored_bytes; apply the size-limit migration`);
     throw new ApiError(502, "upstream_error", "The database cannot say how much this run holds right now.");

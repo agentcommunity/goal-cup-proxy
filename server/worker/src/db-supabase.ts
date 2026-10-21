@@ -82,7 +82,7 @@ const RUN_SHAPE: Record<string, Check> = {
   first_entry_id: isEntryId,
   current_entry_id: isEntryId,
   current_sealed_at: nullable(isTime),
-  // Website migration 20261021110000 adds these. Before it they are absent, and chunks.ts refuses
+  // Website migration 20261021100000 adds these. Before it they are absent, and chunks.ts refuses
   // uploads (502, retried) instead of letting a run past the size limit; every other call still works.
   stored_bytes: optional(uint),
   chunk_count: optional(uint),
@@ -94,7 +94,7 @@ const TICK_SHAPE: Record<string, Check> = {
   flagged_at: nullable(isTime),
   flag_reason: nullable(oneOf("gaps", "failed")),
   final_commit: nullable((v) => typeof v === "string" && /^([0-9a-f]{40}|none)$/.test(v)),
-  // Website migration 20261021120000 adds it; before it the cron owes no disk_full email.
+  // Website migration 20261021100000 adds it; before it the cron owes no disk_full email.
   disk_notice_at: optional(nullable(isTime)),
 };
 const ENTRY_SHAPE: Record<string, Check> = {
@@ -362,7 +362,7 @@ export class SupabaseDb implements Db {
       p_client_country: a.client_country,
       p_at: a.at,
       // Only with vitals: without them the 13-argument form answers, which a database without
-      // website migration 20261021120000 still has, so plain heartbeats work before it is applied.
+      // website migration 20261021100000 still has, so plain heartbeats work before it is applied.
       ...(a.vitals === null ? {} : { p_vitals: a.vitals }),
     });
     return this.#word("upload_heartbeat", v, ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"] as const);
@@ -405,7 +405,7 @@ export class SupabaseDb implements Db {
   }
 
   async recordFinalCommit(memberId: string, runId: string, commit: string, at: string, d: FinalCommitDetail = NO_FINAL_DETAIL): Promise<void> {
-    // Website migration 20261021130000: the 9-argument form (the old 4-argument one stays for the live Worker).
+    // Website migration 20261021100000: the 9-argument form (the old 4-argument one stays for the live Worker).
     const v = await this.#rpc("upload_record_final_commit", {
       p_member_id: memberId,
       p_run_id: runId,

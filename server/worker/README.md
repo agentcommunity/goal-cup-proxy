@@ -52,7 +52,8 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/auth.ts` | Bearer run credential to member, and the one run it may touch |
 | `src/runs.ts` | Open, continue, receipt, abandon, position, heartbeat, seal |
 | `src/chunks.ts` | The chunk upload: early refusals, retry rule, streaming to R2, atomic commit |
-| `src/notices.ts` | The 5-minute cron: close runs, record the judged GitHub commit (last push before the deadline), queue the run emails |
+| `src/notices.ts` | The 5-minute cron: close runs, record the judged GitHub commit, queue the run emails |
+| `src/github.ts` | The GitHub API: the judged commit (last push before the deadline) and the headers every GitHub call carries |
 | `src/mail.ts` | Sends each queued notice once through Resend |
 | `src/sign.ts` | Ed25519 receipts and acknowledgements (byte-exact with the Rust formats) |
 | `src/db.ts` | The `Db` interface: one method per step, and the run-state rules (`endsAt`, `statusAt`) |
@@ -60,7 +61,8 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
 | `src/context.ts`, `env.ts`, `errors.ts`, `util.ts` | Configuration, bindings, error types, helpers |
 | `sql/goal-cup-tracer-upload.sql` | Copy of the website's migration that `db-supabase.ts` calls. The website repo is the authority. |
-| `sql/pending/` | Migrations written here first, not yet in the website repo nor applied (its README says how to land them) |
+| `sql/pending/` | The migration written here first, not yet in the website repo nor applied (its README says how to land it) |
+| `scripts/check-sql.sh` | Applies the mirror and the pending migration to a throwaway local Postgres and smoke-calls the new functions |
 | `scripts/delete-test-runs.sh` | Deletes all organizer test runs, rows and R2 objects ([OPERATING](../../docs/OPERATING.md#test-runs)) |
 | `test/` | `sign.test.ts` (the signing vectors shared with the Rust crate), `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
 
@@ -374,7 +376,7 @@ order, each in its own try/catch: `closeRuns`, `recordFinalCommits`, `queueNotic
 that ended in the last 48 hours; never abandoned ones). The constants (20 minutes of silence, idle at 3
 and 6 hours, an hour to wait for the commit, 5 minutes before GitHub is asked, an hour of grace for a
 `404` or a failing activity API, 50 runs asked of GitHub per tick, 20 emails per tick) are in
-`notices.ts` and `mail.ts` and have no variable. The rules are in
+`notices.ts`, `github.ts` and `mail.ts` and have no variable. The rules are in
 [UPLOAD-API](../../docs/UPLOAD-API.md#what-the-server-does-on-its-own).
 
 Cost: each step reads the run list with one call. `queueNotices` makes one call for the whole batch

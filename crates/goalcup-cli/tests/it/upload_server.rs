@@ -539,6 +539,36 @@ fn a_retried_chunk_is_answered_from_the_stored_ack_without_its_body() {
 }
 
 #[test]
+fn a_chunk_past_the_run_size_limit_is_413_quota_exceeded_and_nothing_is_kept() {
+    let (c1, c2) = (Chunk::first(), Chunk::second());
+    let both = (c1.body.len() + c2.body.len()) as u64;
+    let limited = |max: u64| {
+        Rig::with(ServerOptions {
+            run_max_compressed_bytes: max,
+            ..two_tokens()
+        })
+    };
+
+    // One byte short of both chunks: the second is refused, before its body is stored.
+    let rig = limited(both - 1);
+    let (run, entry) = rig.open_ok();
+    let first = rig.put_ok(&run, &entry, &c1);
+    assert_err(&rig.put(&run, &entry, &c2).unwrap(), 413, "quota_exceeded");
+    assert_eq!(rig.server.position(&run).unwrap().offset, 100);
+    assert_eq!(rig.server.chunks(&run).len(), 1);
+    let dir = rig._dir.path().join(&run).join(&entry);
+    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 1);
+    // A retry of the chunk the server holds is still answered, whatever the limit.
+    assert_eq!(rig.put_ok(&run, &entry, &c1).body, first.body);
+
+    // Exactly at the limit is within it.
+    let rig = limited(both);
+    let (run, entry) = rig.open_ok();
+    rig.put_ok(&run, &entry, &c1);
+    rig.put_ok(&run, &entry, &c2);
+}
+
+#[test]
 fn a_tampered_body_is_422_and_nothing_is_kept() {
     let rig = Rig::new();
     let (run, entry) = rig.open_ok();
