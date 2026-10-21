@@ -26,6 +26,7 @@ import type {
   Db,
   DevicePoll,
   EntryRow,
+  FinalCommitDetail,
   HeartbeatArgs,
   HeartbeatResult,
   NoticeArgs,
@@ -39,7 +40,7 @@ import type {
   StoreReceiptResult,
   TickRun,
 } from "./db.ts";
-import { NOTICE_KINDS } from "./db.ts";
+import { NOTICE_KINDS, NO_FINAL_DETAIL } from "./db.ts";
 import { ApiError } from "./errors.ts";
 import type { StartReceipt } from "./sign.ts";
 import { RUN_ID, isEntryId, isHex64, isTime } from "./util.ts";
@@ -403,8 +404,19 @@ export class SupabaseDb implements Db {
     this.#word("upload_finish_notice", v, ["ok", "not_found"] as const);
   }
 
-  async recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void> {
-    const v = await this.#rpc("upload_record_final_commit", { p_member_id: memberId, p_run_id: runId, p_commit: commit, p_at: at });
+  async recordFinalCommit(memberId: string, runId: string, commit: string, at: string, d: FinalCommitDetail = NO_FINAL_DETAIL): Promise<void> {
+    // Website migration 20261021130000: the 9-argument form (the old 4-argument one stays for the live Worker).
+    const v = await this.#rpc("upload_record_final_commit", {
+      p_member_id: memberId,
+      p_run_id: runId,
+      p_commit: commit,
+      p_at: at,
+      p_pushed_at: d.pushed_at,
+      p_branch: d.branch,
+      p_late_push: d.late_push,
+      p_force_push: d.force_push,
+      p_head_fallback: d.head_fallback,
+    });
     this.#flag("upload_record_final_commit", v);
   }
 

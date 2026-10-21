@@ -446,15 +446,32 @@ suppression. A staging Worker is never given an address by the database and send
 its test address. (While the maintenance switch is on the
 cron does nothing, since no client can send a heartbeat.)
 
-**The commit at the deadline.** For a competition run that reached its deadline (not a replaced run,
-not practice), the server asks GitHub for the head commit of `repo_url`
-(`GET /repos/{owner}/{repo}/commits/HEAD`, 8 seconds, at most 50 runs per tick, oldest first) and
-keeps the sha, with the time it was asked (`final_commit_at`). It is asked on the first tick at or
-after `ends_at`, not at that instant, so it may include pushes made in the minutes after the
-deadline; the final heartbeat's `repo_head` is Goal Cup Proxy's own account. GitHub saying the
-repository does not exist or is empty (`404`, `409`) is kept as "no commit". Any other answer, or
-none, keeps nothing and the next tick asks again. Runs that ended more than 48 hours ago and are
-closed are not asked.
+**The judged commit.** For a competition run that reached its deadline (not a replaced run, not
+practice), the judged version is the last push to the repository's default branch that GitHub
+itself timestamped at or before the run's `ends_at` (owner, 21 Oct 2026). Pushes after that do not
+count; commit dates are ignored. From the first tick at or after `ends_at` + 5 minutes (so a push
+GitHub received just before the deadline has reached its activity list), at most 50 runs per tick,
+oldest first, 8 seconds per call, the server reads:
+
+1. `GET /repos/{owner}/{repo}`: `default_branch`.
+2. `GET /repos/{owner}/{repo}/activity?ref=refs/heads/<branch>&per_page=100`, newest first, following
+   the `Link` header's `rel="next"` back to the run's `official_start` (at most 5 pages). Every
+   activity type that moves the branch counts as a push (`push`, `force_push`, `pr_merge`,
+   `merge_queue_merge`, `branch_creation`); each item's `after` is the sha and `timestamp` the time
+   GitHub received it.
+
+It keeps the `after` of the newest activity with `timestamp <= ends_at` (`final_commit`), with that
+timestamp (`final_pushed_at`), the branch (`final_branch`), the time it was decided
+(`final_commit_at`) and two flags: `final_late_push` (GitHub listed a push after `ends_at` when asked)
+and `final_force_push` (a `force_push` between `official_start` and `ends_at`). If no activity at or
+before `ends_at` is listed but later ones are, the branch stood at the oldest later push's `before`.
+If the branch has no activity at all, or the activity API keeps failing for an hour after `ends_at`,
+the server keeps `GET /repos/{owner}/{repo}/commits/HEAD` instead and sets `final_head_fallback`.
+A `404` for the repository is retried each tick for an hour after `ends_at` (a repository briefly
+private must not lose the submission), then kept as "no commit" (`none`), as is an empty repository
+(`commits/HEAD` `409`). Any other failure keeps nothing and the next tick asks again. Runs that
+ended more than 48 hours ago and are closed are not asked. The final heartbeat's `repo_head` is Goal
+Cup Proxy's own account of the clone.
 
 **The seven emails.** Each is queued at most once per run, kind and key. None is queued for a practice
 run, and none after the run's end except `ended`. A test run mails its operator, with `[TEST]` in
@@ -467,7 +484,7 @@ the subject.
 | `idle_3h` | the run is beating (last heartbeat within 20 minutes), has reported `model_requests` at least once, and its last model request is more than 3 hours old | last model request |
 | `idle_6h` | the same, 6 hours | last model request |
 | `recording` | a heartbeat has flagged the run (`gaps` or `failed`) | run |
-| `ended` | the run reached its deadline (a replaced run is not the main run and has none) and the commit was recorded, or an hour has passed without it | run |
+| `ended` | the run reached its deadline (a replaced run is not the main run and has none) and the judged commit was recorded, or an hour has passed without it | run |
 | `disk_full` | a heartbeat's vitals started a disk pause (`agent_paused: "disk"`) and no `disk_full` was owed for the run in the 6 hours before | start of that pause |
 
 The last model request is unset until a heartbeat first reports `model_requests`, so a client that

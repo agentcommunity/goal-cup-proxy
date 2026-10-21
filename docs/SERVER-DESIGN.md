@@ -24,7 +24,7 @@ Recording on the participant's machine never waits on the network. The daemon ha
 | Supabase (Postgres) | Runs, entries, chunk index, heartbeats, notices, device requests, credentials (hashes only). The Worker calls one SQL function for each step. |
 | `DeviceLimiter` (Durable Object) | Counts device-flow calls per minute. |
 | Resend | Sends the run emails. |
-| GitHub API | Checks `repo_url` at open. Reads the repository's head commit at the deadline. |
+| GitHub API | Checks `repo_url` at open. Reads the last push to the default branch at or before the deadline (repository activity API). |
 | Website (another repo) | Owns the database schema and migrations, sign-up, terms, the approval page, and the member's address for mail. |
 
 This repository owns Goal Cup Proxy and the Worker. The Worker's SQL
@@ -63,8 +63,10 @@ for every table. Production and staging each have their own key and role.
    the committed end. Without a network Goal Cup Proxy stops on its own clock.
 8. **Close.** 24 hours after `ends_at` the server closes the run: `sealed` if the last entry is
    sealed, otherwise `incomplete`. It then answers `410`. There is no grace period and no late window.
-9. **Commit at the deadline.** The cron reads the head commit of the participant's repository once the
-   run has reached its deadline and keeps it. That commit is what judges review.
+9. **Commit at the deadline.** Once the run has reached its deadline the cron reads, from GitHub's
+   repository activity API, the last push to the default branch that GitHub timestamped at or before
+   `ends_at`, and keeps it with flags for later pushes and force-pushes
+   ([UPLOAD-API](UPLOAD-API.md#what-the-server-does-on-its-own)). That commit is what judges review.
 
 ## Storage
 

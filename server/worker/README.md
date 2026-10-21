@@ -52,7 +52,7 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/auth.ts` | Bearer run credential to member, and the one run it may touch |
 | `src/runs.ts` | Open, continue, receipt, abandon, position, heartbeat, seal |
 | `src/chunks.ts` | The chunk upload: early refusals, retry rule, streaming to R2, atomic commit |
-| `src/notices.ts` | The 5-minute cron: close runs, record the GitHub commit at the deadline, queue the run emails |
+| `src/notices.ts` | The 5-minute cron: close runs, record the judged GitHub commit (last push before the deadline), queue the run emails |
 | `src/mail.ts` | Sends each queued notice once through Resend |
 | `src/sign.ts` | Ed25519 receipts and acknowledgements (byte-exact with the Rust formats) |
 | `src/db.ts` | The `Db` interface: one method per step, and the run-state rules (`endsAt`, `statusAt`) |
@@ -93,7 +93,7 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 | `RECEIPT_SIGNING_KEY` | The Ed25519 seed, 32 bytes as 64 hex characters, generated offline. Its public key is pinned in the verifier. |
 | `SUPABASE_URL`, `SUPABASE_KEY` | The project URL, and a Supabase secret API key whose role may only run `public.goal_cup_upload_*`. Not the community-wide service key. |
 | `RATE_LIMIT_KEY` | Random, at least 32 characters: the HMAC key of every rate-limit key. A deployment answers every device call `500 misconfigured` without it. |
-| `GITHUB_TOKEN` | Read-only token for public repositories. Required in production and staging: the cron reads each run's commit at its deadline, and the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses. |
+| `GITHUB_TOKEN` | Read-only token for public repositories. Required in production and staging: the cron reads each run's judged commit (repository, activity and possibly `commits/HEAD`), and the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses. Without it the cron logs `WARNING: GITHUB_TOKEN is not set` and carries on. |
 | `RESEND_API_KEY` | Switches the run emails on. Send-only. |
 | `TEST_APPROVAL_KEY` | **Tests and staging only.** Switches on `POST /v1/device/approve`, which approves a device request as any member. Set anywhere else, every call answers `500 misconfigured`. Unset, the route is `404`. Never set it in production. |
 
@@ -372,13 +372,16 @@ or on production. Treat both as open. When you run one, write the date and the r
 order, each in its own try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`, `sendNotices`
 (`src/mail.ts`). All take the time as a parameter. They read `Db.runsForTick(now)` (open runs, and runs
 that ended in the last 48 hours; never abandoned ones). The constants (20 minutes of silence, idle at 3
-and 6 hours, an hour to wait for the commit, 50 GitHub calls per tick, 20 emails per tick) are in
+and 6 hours, an hour to wait for the commit, 5 minutes before GitHub is asked, an hour of grace for a
+`404` or a failing activity API, 50 runs asked of GitHub per tick, 20 emails per tick) are in
 `notices.ts` and `mail.ts` and have no variable. The rules are in
 [UPLOAD-API](../../docs/UPLOAD-API.md#what-the-server-does-on-its-own).
 
 Cost: each step reads the run list with one call. `queueNotices` makes one call for the whole batch
-however many runs there are. `closeRuns` makes one call per run due to close. `recordFinalCommits` makes
-at most 50 GitHub fetches and 50 writes. That is about a hundred subrequests in a busy tick, so the cron
+however many runs there are. `closeRuns` makes one call per run due to close. `recordFinalCommits` asks
+GitHub about at most 50 runs, each with 2 to 3 fetches (repository, activity, and `commits/HEAD` only
+as a fallback; up to 7 for a run with more than 100 activities), and makes 50 writes. That is a few
+hundred subrequests in a busy tick, so the cron
 needs the paid Workers plan (the free plan allows 50 per invocation). A failed step is logged
 (`tick <step> <run_id>: <message>` or `tick queueNotices: <message>`) and the next tick retries; a notice
 is stored once per run, kind and key, so a retry is safe.

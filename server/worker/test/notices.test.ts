@@ -6,12 +6,16 @@
 import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
 import { LocalDb } from "../src/db-local.ts";
-import { queueNotices, runTick } from "../src/notices.ts";
+import type { Ctx } from "../src/context.ts";
+import type { TickRun } from "../src/db.ts";
+import { GITHUB_GRACE, GITHUB_SETTLE, queueNotices, recordFinalCommits, runTick } from "../src/notices.ts";
 import { credentialFor } from "./helpers/client.ts";
 import { T0, WINDOW, type Rig, lifecycle } from "./helpers/rig.ts";
 
 const REPO = "https://github.com/someone/goal-cup-entry"; // what openBody sends
 const SHA = "a1".repeat(20);
+const ZERO = "0".repeat(40);
+const API = "https://api.github.com/repos/someone/goal-cup-entry";
 /** A competition run of one hour, so the end is a short step away. */
 const HOUR = { ...WINDOW, RUN_SECONDS: "3600" };
 
@@ -20,18 +24,50 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-/** Stand in for the GitHub API: `reply` answers each request; the calls are recorded. */
-function stubGithub(reply: (n: number) => Response | Error) {
+/** Stand in for the GitHub API: `reply` answers each request (its number, its URL); the calls are recorded. */
+function stubGithub(reply: (n: number, url: string) => Response | Error) {
   const calls: { url: string; headers: Record<string, string> }[] = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     calls.push({ url: String(input), headers: (init?.headers ?? {}) as Record<string, string> });
-    const r = reply(calls.length);
+    const r = reply(calls.length, String(input));
     if (r instanceof Error) throw r;
     return r;
   }) as typeof fetch;
   return calls;
 }
-const head = (sha: string) => new Response(JSON.stringify({ sha }), { status: 200 });
+const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers });
+
+interface Push {
+  after: string;
+  at: string;
+  type?: string;
+  before?: string;
+}
+/**
+ * One public repository on GitHub, default branch `main`: `pushes` is its activity, newest first, in
+ * pages of `page` (Link rel="next" with an `after` cursor); its head is the newest push. A status in
+ * `fail` replaces an endpoint's answer ("offline": the call throws).
+ */
+function repo(pushes: Push[], fail: { repo?: number; activity?: number | "offline"; head?: number } = {}, page = 100) {
+  return (_n: number, url: string): Response | Error => {
+    const u = new URL(url);
+    if (u.pathname.endsWith("/activity")) {
+      if (fail.activity === "offline") return new Error("offline");
+      if (fail.activity !== undefined) return json({}, fail.activity);
+      const from = Number(u.searchParams.get("after") ?? 0);
+      const items = pushes.slice(from, from + page).map((p) => ({
+        id: 1, node_id: "n", before: p.before ?? ZERO, after: p.after, ref: "refs/heads/main", timestamp: p.at, activity_type: p.type ?? "push", actor: null,
+      }));
+      const more = from + page < pushes.length;
+      return json(items, 200, more ? { link: `<https://api.github.com/repositories/1/activity?after=${from + page}>; rel="next"` } : {});
+    }
+    if (u.pathname.endsWith("/commits/HEAD")) return fail.head !== undefined ? json({}, fail.head) : json({ sha: pushes[0]?.after ?? ZERO });
+    return fail.repo !== undefined ? json({}, fail.repo) : json({ default_branch: "main", private: false });
+  };
+}
+/** A repository whose last push, during the run, was `sha`. */
+const pushed = (sha: string) => repo([{ after: sha, at: T0 }]);
+const ASKED = [API, `${API}/activity?ref=refs%2Fheads%2Fmain&per_page=100`];
 
 interface Notice {
   run_id: string;
@@ -49,6 +85,8 @@ const t = (seconds: number) => new Date(Date.parse(T0) + seconds * 1000).toISOSt
 
 const MIN = 60;
 const HOURS = 3600;
+/** The first time GitHub is asked about a run that ends at `deadline`. */
+const settled = (deadline: string) => new Date(Date.parse(deadline) + GITHUB_SETTLE * 1000).toISOString().replace(".000Z", "Z");
 
 lifecycle("opening a competition run queues one started notice", async (r) => {
   const run = await r.start(await r.cred("alice"), "s1");
@@ -282,7 +320,7 @@ lifecycle("the open keeps its IP and country; heartbeats and a continue keep the
 }, undefined, undefined, { country: "DE" });
 
 lifecycle("one run whose commit cannot be written does not stop the others", async (r) => {
-  stubGithub(() => head(SHA));
+  stubGithub(pushed(SHA));
   const [a, b] = [await r.cred("alice"), await r.cred("bob")];
   const first = await r.start(a, "s1");
   const second = await r.start(b, "s2");
@@ -294,7 +332,7 @@ lifecycle("one run whose commit cannot be written does not stop the others", asy
   const logged: string[] = [];
   const log = mock.method(console, "error", (...args: unknown[]) => void logged.push(args.map(String).join(" ")));
   try {
-    r.at(first.deadline_at);
+    r.at(settled(first.deadline_at));
     await r.tick();
   } finally {
     bad.mock.restore();
@@ -363,40 +401,109 @@ lifecycle("a batch that fails is logged once and the next tick retries all of it
 });
 
 lifecycle("the end queues one ended notice with the commit", async (r) => {
-  const calls = stubGithub(() => head(SHA));
+  const calls = stubGithub(pushed(SHA));
   const token = await r.cred("alice");
   const run = await r.start(token, "s1");
   await r.beat(token, run.run_id, run.entry_id);
   r.at(t(3600 - 1));
   await r.tick();
-  assert.equal(calls.length, 0, "nothing is asked of GitHub before the end");
   r.at(run.deadline_at);
   await r.tick();
+  assert.equal(calls.length, 0, "nothing is asked of GitHub before the end has settled");
+  r.at(settled(run.deadline_at));
+  await r.tick();
   assert.deepEqual(only(r, "ended").map((n) => [n.dedupe_key, n.payload]), [["", { ends_at: run.deadline_at, commit: SHA, repo_url: REPO }]]);
-  assert.deepEqual(calls.map((c) => c.url), ["https://api.github.com/repos/someone/goal-cup-entry/commits/HEAD"]);
-  assert.equal(calls[0]!.headers.authorization, "Bearer tok");
+  assert.deepEqual(calls.map((c) => c.url), ASKED);
+  assert.ok(calls.every((c) => c.headers.authorization === "Bearer tok"));
   r.after(5 * MIN);
   await r.tick();
   assert.equal(only(r, "ended").length, 1);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
 }, { ...HOUR, GITHUB_TOKEN: "tok" });
 
-lifecycle("a repository GitHub does not have is a recorded absence, and the ended notice says so", async (r) => {
-  for (const status of [404, 409]) {
-    const asked = stubGithub(() => new Response("{}", { status }));
-    const run = await r.start(await r.cred(`m${status}`), `s${status}`);
-    r.at(run.deadline_at);
-    await r.tick();
-    assert.equal(r.storedRun(run.run_id).final_commit, "none");
-    // The absence is final: later ticks never ask GitHub again, for this run or the one before it.
-    r.after(30 * MIN);
-    await r.tick();
-    r.after(2 * HOURS);
-    await r.tick();
-    assert.equal(asked.length, 1);
-    assert.deepEqual(only(r, "ended").filter((n) => n.run_id === run.run_id).map((n) => n.payload.commit), [null]);
-    r.at(t(0));
-  }
+lifecycle("the judged commit is the last push before the deadline; a later push is not judged and is flagged", async (r) => {
+  const run = await r.start(await r.cred("alice"), "s1");
+  const LATE = "c3".repeat(20);
+  stubGithub(repo([{ after: LATE, before: SHA, at: t(3600 + 60) }, { after: SHA, at: t(3000) }, { after: "b2".repeat(20), at: t(600) }]));
+  r.at(settled(run.deadline_at));
+  await r.tick();
+  const s = r.storedRun(run.run_id);
+  assert.deepEqual(
+    [s.final_commit, s.final_pushed_at, s.final_branch, s.final_late_push, s.final_force_push, s.final_head_fallback],
+    [SHA, t(3000), "main", true, false, false],
+  );
+  assert.deepEqual(only(r, "ended").map((n) => n.payload.commit), [SHA]);
+}, HOUR);
+
+lifecycle("a force push during the run is flagged (the activity is read page by page back to the start)", async (r) => {
+  const run = await r.start(await r.cred("alice"), "s1");
+  const calls = stubGithub(repo([
+    { after: SHA, at: t(3000) },
+    { after: "f0".repeat(20), at: t(2000), type: "force_push" },
+    { after: "b2".repeat(20), at: t(-600) },
+    { after: "b1".repeat(20), at: t(-1200), type: "force_push" }, // before the run, and on a page never read
+  ], {}, 1));
+  r.at(settled(run.deadline_at));
+  await r.tick();
+  const s = r.storedRun(run.run_id);
+  assert.deepEqual([s.final_commit, s.final_force_push, s.final_late_push], [SHA, true, false]);
+  assert.equal(calls.filter((c) => c.url.includes("/activity")).length, 3, "the page that reaches back before the start is the last read");
+}, HOUR);
+
+lifecycle("an activity API that keeps failing falls back to commits/HEAD after an hour, flagged", async (r) => {
+  const run = await r.start(await r.cred("alice"), "s1");
+  const LATE = "c3".repeat(20);
+  const calls = stubGithub(repo([{ after: LATE, at: t(3600 + 60) }], { activity: 503 }));
+  r.at(settled(run.deadline_at));
+  await r.tick();
+  r.at(t(3600 + GITHUB_GRACE - 1));
+  await r.tick();
+  assert.equal(r.storedRun(run.run_id).final_commit ?? null, null, "a failing activity API is retried within the hour");
+  assert.ok(!calls.some((c) => c.url.endsWith("/commits/HEAD")));
+  r.at(t(3600 + GITHUB_GRACE));
+  await r.tick();
+  const s = r.storedRun(run.run_id);
+  assert.deepEqual([s.final_commit, s.final_head_fallback, s.final_pushed_at, s.final_branch], [LATE, true, null, "main"]);
+}, HOUR);
+
+lifecycle("a 404 is retried for an hour before the absence is recorded, and the ended notice says so", async (r) => {
+  // A repository that is briefly private: the 404 is not kept, and the next tick records the push.
+  const back = await r.start(await r.cred("bob"), "s0");
+  stubGithub(repo([], { repo: 404 }));
+  r.at(settled(back.deadline_at));
+  await r.tick();
+  assert.equal(r.storedRun(back.run_id).final_commit ?? null, null);
+  stubGithub(pushed(SHA));
+  r.after(5 * MIN);
+  await r.tick();
+  assert.equal(r.storedRun(back.run_id).final_commit, SHA);
+
+  r.at(t(0));
+  const run = await r.start(await r.cred("alice"), "s1");
+  const asked = stubGithub(repo([], { repo: 404 }));
+  r.at(settled(run.deadline_at));
+  await r.tick();
+  r.at(t(3600 + GITHUB_GRACE - 1));
+  await r.tick();
+  assert.equal(r.storedRun(run.run_id).final_commit ?? null, null);
+  r.at(t(3600 + GITHUB_GRACE));
+  await r.tick();
+  assert.equal(r.storedRun(run.run_id).final_commit, "none");
+  // The absence is final: later ticks never ask GitHub again.
+  const count = asked.length;
+  r.after(2 * HOURS);
+  await r.tick();
+  assert.equal(asked.length, count);
+  assert.deepEqual(only(r, "ended").filter((n) => n.run_id === run.run_id).map((n) => n.payload.commit), [null]);
+}, HOUR);
+
+lifecycle("an empty repository (no activity, commits/HEAD 409) is a recorded absence at once", async (r) => {
+  const run = await r.start(await r.cred("alice"), "s1");
+  stubGithub(repo([], { head: 409 }));
+  r.at(settled(run.deadline_at));
+  await r.tick();
+  const s = r.storedRun(run.run_id);
+  assert.deepEqual([s.final_commit, s.final_head_fallback, s.final_late_push], ["none", true, false]);
 }, HOUR);
 
 lifecycle("the ended notice goes out an hour after the end even when GitHub never answered", async (r) => {
@@ -411,7 +518,7 @@ lifecycle("the ended notice goes out an hour after the end even when GitHub neve
   await r.tick();
   assert.deepEqual(only(r, "ended").map((n) => n.payload), [{ ends_at: run.deadline_at, commit: null, repo_url: REPO }]);
   // GitHub comes back: the commit is recorded, but the notice was already sent once.
-  stubGithub(() => head(SHA));
+  stubGithub(pushed(SHA));
   r.after(5 * MIN);
   await r.tick();
   assert.equal(r.storedRun(run.run_id).final_commit, SHA);
@@ -419,10 +526,11 @@ lifecycle("the ended notice goes out an hour after the end even when GitHub neve
 }, HOUR);
 
 lifecycle("the deadline commit is recorded once and retried after a GitHub failure", async (r) => {
-  const calls = stubGithub((n) => (n === 1 ? new Error("offline") : n === 2 ? new Response("{}", { status: 503 }) : n === 3 ? new Response("{}", { status: 403 }) : head(SHA)));
+  const ok = pushed(SHA);
+  const calls = stubGithub((n, url) => (n === 1 ? new Error("offline") : n === 2 ? json({}, 503) : n === 3 ? json({}, 403) : ok(n, url)));
   const run = await r.start(await r.cred("alice"), "s1");
   const stored = () => r.storedRun(run.run_id).final_commit ?? null;
-  r.at(run.deadline_at);
+  r.at(settled(run.deadline_at));
   for (let i = 0; i < 3; i++) {
     await r.tick();
     assert.equal(stored(), null, `failure ${i + 1} stores nothing`);
@@ -430,21 +538,21 @@ lifecycle("the deadline commit is recorded once and retried after a GitHub failu
   }
   await r.tick();
   assert.equal(stored(), SHA);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 5);
   r.after(5 * MIN);
   await r.tick();
-  assert.equal(calls.length, 4, "a recorded commit is not asked for again");
-  // A body without a commit is a failure too.
-  stubGithub(() => new Response(JSON.stringify({ sha: "not-a-sha" }), { status: 200 }));
+  assert.equal(calls.length, 5, "a recorded commit is not asked for again");
+  // An activity answer that is not a list of activities is a failure too.
+  stubGithub(repo([{ after: "not-a-sha", at: T0 }]));
   r.at(t(0));
   const other = await r.start(await r.cred("bob"), "s2");
-  r.at(other.deadline_at);
+  r.at(settled(other.deadline_at));
   await r.tick();
   assert.equal(r.storedRun(other.run_id).final_commit ?? null, null);
 }, HOUR);
 
 lifecycle("no notice after the end, for practice, or for a replaced run", async (r) => {
-  const asked = stubGithub(() => head(SHA));
+  const asked = stubGithub(pushed(SHA));
   const [a, b, pr] = [await r.cred("alice"), await r.cred("alice"), await r.cred("alice", "practice")];
   const practice = await r.start(pr, "p1");
   await r.beat(pr, practice.run_id, practice.entry_id, { recording: "failed" });
@@ -464,25 +572,25 @@ lifecycle("no notice after the end, for practice, or for a replaced run", async 
   assert.deepEqual(kinds(r, second.run_id), ["recording", "started"]);
 
   // The second run's end: the ended notice, and nothing else (it was flagged, and it is over).
-  r.at(second.deadline_at);
+  r.at(settled(second.deadline_at));
   await r.tick();
   assert.deepEqual(kinds(r, second.run_id), ["ended", "recording", "started"]);
   r.at(t(10 * HOURS));
   await r.tick();
   assert.deepEqual(kinds(r, first.run_id), []);
   assert.deepEqual(kinds(r, practice.run_id), []);
-  assert.deepEqual(asked.map((c) => c.url), ["https://api.github.com/repos/someone/goal-cup-entry/commits/HEAD"], "only the main run's commit is asked for");
+  assert.deepEqual(asked.map((c) => c.url), ASKED, "only the main run's commit is asked for");
   assert.equal(r.storedRun(first.run_id).final_commit ?? null, null);
   assert.equal(r.storedRun(practice.run_id).final_commit ?? null, null);
 }, HOUR);
 
 lifecycle("after the end nothing but ended is queued, even for a run the tick never saw", async (r) => {
-  stubGithub(() => head(SHA));
+  stubGithub(pushed(SHA));
   const token = await r.cred("alice");
   const run = await r.start(token, "s1");
   await r.beat(token, run.run_id, run.entry_id, { recording: "gaps" });
-  r.at(run.deadline_at); // no tick since the start: no started, no recording, no silence either
-  assert.equal(await queueNotices(await r.ctx(), new Date(run.deadline_at)), 0, "the commit is not recorded yet, and the hour has not passed");
+  r.at(settled(run.deadline_at)); // no tick since the start: no started, no recording, no silence either
+  assert.equal(await queueNotices(await r.ctx(), new Date(settled(run.deadline_at))), 0, "the commit is not recorded yet, and the hour has not passed");
   await r.tick();
   assert.deepEqual(kinds(r), ["ended"]);
 }, HOUR);
@@ -503,7 +611,7 @@ lifecycle("queueNotices counts the notices it queued, and a repeat queues none",
 });
 
 lifecycle("the cron closes a run that is over, so its status is final without anyone calling", async (r) => {
-  stubGithub(() => head(SHA));
+  stubGithub(pushed(SHA));
   const [c1, c2] = [await r.cred("alice"), await r.cred("bob")];
   const sealed = await r.start(c1, "s1");
   const lost = await r.start(c2, "s2");
@@ -524,7 +632,7 @@ lifecycle("the cron closes a run that is over, so its status is final without an
 }, HOUR);
 
 lifecycle("a step that fails does not stop the others", async (r) => {
-  stubGithub(() => head(SHA));
+  stubGithub(pushed(SHA));
   const token = await r.cred("alice");
   const run = await r.start(token, "s1");
   await r.finish(token, run.run_id, run.entry_id, await r.hold("alice", run.run_id, run.entry_id));
@@ -535,7 +643,7 @@ lifecycle("a step that fails does not stop the others", async (r) => {
   const logged: string[] = [];
   const log = mock.method(console, "error", (...args: unknown[]) => void logged.push(args.map(String).join(" ")));
   try {
-    r.at(run.deadline_at); // closing is the first step, and it fails
+    r.at(settled(run.deadline_at)); // closing is the first step, and it fails
     await r.tick();
   } finally {
     closeRun.mock.restore();
@@ -680,7 +788,7 @@ lifecycle("no disk_full for a practice run; a test run gets one (its operator's,
 }, { ...WINDOW, TEST_EVENT_ID: "test" });
 
 lifecycle("after the run's end a disk pause is owed no email", async (r) => {
-  stubGithub(() => head(SHA));
+  stubGithub(pushed(SHA));
   const token = await r.cred("alice");
   const run = await r.start(token, "s1");
   r.at(run.deadline_at);
@@ -688,3 +796,20 @@ lifecycle("after the run's end a disk pause is owed no email", async (r) => {
   await r.tick();
   assert.deepEqual(only(r, "disk_full"), []);
 }, HOUR);
+
+test("without GITHUB_TOKEN outside local tests the final-commit step warns loudly and still runs", async () => {
+  const due = { run_id: "r0000000000000001", member_id: "m", mode: "competition", repo_url: REPO, official_start: T0, deadline_at: t(3600), replaced_at: null, final_commit: null } as unknown as TickRun;
+  const ctx = { env: { DB_BACKEND: "supabase" }, db: { runsForTick: async () => [due] } } as unknown as Ctx;
+  stubGithub(() => new Error("offline"));
+  const logged: string[] = [];
+  const log = mock.method(console, "error", (...args: unknown[]) => void logged.push(args.map(String).join(" ")));
+  try {
+    assert.equal(await recordFinalCommits(ctx, new Date(t(3600 + 10 * MIN))), 0);
+    assert.ok(logged.some((l) => l.startsWith("WARNING") && l.includes("GITHUB_TOKEN")), logged.join("\n"));
+    logged.length = 0;
+    assert.equal(await recordFinalCommits({ ...ctx, env: { DB_BACKEND: "supabase", GITHUB_TOKEN: "tok" } } as unknown as Ctx, new Date(t(3600 + 10 * MIN))), 0);
+    assert.ok(!logged.some((l) => l.includes("GITHUB_TOKEN")), logged.join("\n"));
+  } finally {
+    log.mock.restore();
+  }
+});

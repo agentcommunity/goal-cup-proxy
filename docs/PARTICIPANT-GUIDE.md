@@ -326,8 +326,10 @@ agent is stopped in whatever state it is in. There is no grace period.
   Then, when you are online:
   - Run `goalcup upload`. With no entry id, it sends the unsent entries of your newest run.
   - To send one entry, run `goalcup upload <entry>`. `goalcup entries` shows the entry ids.
-- The server records the latest commit in your GitHub repository at the deadline. That commit is
-  what is judged, so your agent must push its work before then. Goal Cup Proxy never pushes for it.
+- The server records the last push to your repository's default branch that GitHub received before
+  the deadline (GitHub's timestamp, not the commit date). That commit is what is judged, so your agent
+  must push its work before then; later pushes are not judged and are flagged, and so is a
+  force-push. Goal Cup Proxy never pushes for it.
 - After the run you hand in a demo video and answer a questionnaire. They are due 24 hours
   after your run's 168 hours end. You hand them in on the website, not through Goal Cup Proxy.
 - Without a network at the deadline, Goal Cup Proxy stops the run once 168 hours have passed on the

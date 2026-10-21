@@ -375,10 +375,16 @@ test("queueNotices -> one upload_queue_notices call with the whole batch, the co
 });
 
 test("recordFinalCommit -> upload_record_final_commit", async () => {
-  const calls = stub(true, false);
+  const calls = stub(true, false, true);
   await db().recordFinalCommit("m", "r1", "a".repeat(40), "t");
   await db().recordFinalCommit("m", "r1", "none", "t");
-  assert.deepEqual(calls[0], { fn: "upload_record_final_commit", args: { p_member_id: "m", p_run_id: "r1", p_commit: "a".repeat(40), p_at: "t" } });
+  await db().recordFinalCommit("m", "r1", "b".repeat(40), "t", { pushed_at: T, branch: "main", late_push: true, force_push: false, head_fallback: false });
+  const none = { p_pushed_at: null, p_branch: null, p_late_push: null, p_force_push: null, p_head_fallback: false };
+  assert.deepEqual(calls[0], { fn: "upload_record_final_commit", args: { p_member_id: "m", p_run_id: "r1", p_commit: "a".repeat(40), p_at: "t", ...none } });
+  assert.deepEqual(calls[2], {
+    fn: "upload_record_final_commit",
+    args: { p_member_id: "m", p_run_id: "r1", p_commit: "b".repeat(40), p_at: "t", p_pushed_at: T, p_branch: "main", p_late_push: true, p_force_push: false, p_head_fallback: false },
+  });
 });
 
 test("closeRun -> upload_close_run", async () => {

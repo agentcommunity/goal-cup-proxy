@@ -27,6 +27,7 @@ import type {
   Db,
   DevicePoll,
   EntryRow,
+  FinalCommitDetail,
   HeartbeatArgs,
   HeartbeatResult,
   MachineFacts,
@@ -43,7 +44,7 @@ import type {
   TickRun,
   Vitals,
 } from "./db.ts";
-import { CLOSE_AFTER_SECONDS, DISK_NOTICE_GAP_SECONDS, FIRST_SEQ, GENESIS, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
+import { CLOSE_AFTER_SECONDS, DISK_NOTICE_GAP_SECONDS, FIRST_SEQ, GENESIS, NO_FINAL_DETAIL, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
 import type { StartReceipt } from "./sign.ts";
 import { addSeconds, formatTime, sha256Hex, toHex } from "./util.ts";
 
@@ -87,6 +88,12 @@ interface StoredRun extends Omit<RunRow, "first_entry_id" | "current_entry_id" |
   flag_reason?: "gaps" | "failed" | null;
   final_commit?: string | null;
   final_commit_at?: string | null;
+  /** How the judged commit was found (`FinalCommitDetail`). */
+  final_pushed_at?: string | null;
+  final_branch?: string | null;
+  final_late_push?: boolean | null;
+  final_force_push?: boolean | null;
+  final_head_fallback?: boolean | null;
   /** The latest vitals a heartbeat sent; the start of the running disk pause; the start of the latest pause owed a disk_full email. */
   last_vitals?: Vitals | null;
   disk_paused_at?: string | null;
@@ -476,9 +483,23 @@ export class LocalDb implements Db {
     } while (cursor !== undefined);
   }
 
-  recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void> {
+  recordFinalCommit(memberId: string, runId: string, commit: string, at: string, d: FinalCommitDetail = NO_FINAL_DETAIL): Promise<void> {
     return this.#updateRun<void>(runId, memberId, undefined, (run) =>
-      run.final_commit != null ? { answer: undefined } : { next: { ...run, final_commit: commit, final_commit_at: at }, answer: undefined },
+      run.final_commit != null
+        ? { answer: undefined }
+        : {
+            next: {
+              ...run,
+              final_commit: commit,
+              final_commit_at: at,
+              final_pushed_at: d.pushed_at,
+              final_branch: d.branch,
+              final_late_push: d.late_push,
+              final_force_push: d.force_push,
+              final_head_fallback: d.head_fallback,
+            },
+            answer: undefined,
+          },
     );
   }
 
@@ -633,6 +654,7 @@ function toRun(r: StoredRun): RunRow {
     machine: _m, client_ip: _i, client_country: _c, abandon_reason: _a, sealed_at: _s, entries: _e,
     last_client_ip: _p, last_client_country: _q,
     last_heartbeat_at: _h, last_model_request_at: _l, flagged_at: _f, flag_reason: _g, final_commit: _k, final_commit_at: _t,
+    final_pushed_at: _pa, final_branch: _b, final_late_push: _lp, final_force_push: _fp, final_head_fallback: _hf,
     last_vitals: _v, disk_paused_at: _d, disk_notice_at: _n,
     ...row
   } = r;

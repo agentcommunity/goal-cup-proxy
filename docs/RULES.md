@@ -42,8 +42,8 @@ All times are UTC.
 - **The run's start:** the server opens the run, stamps its official start on its own clock, and
   sets its deadline 168 hours later.
 - **At 168 hours, on the server's clock:** a hard stop. Goal Cup Proxy stops the agent in whatever state
-  it is in, seals and uploads the record, and the server records the latest commit of your GitHub
-  repository. The clock never pauses. There is no grace period for a build.
+  it is in, seals and uploads the record, and the server records the last push to your GitHub
+  repository's default branch before the deadline ([Submission](#submission)). The clock never pauses. There is no grace period for a build.
 - **24 hours after the end:** the server closes the run. A run whose final upload has not arrived by
   then is closed as *incomplete* and judged on what arrived.
 - **After that:** compliance review, preliminary review if needed, judging, public results, and
@@ -300,9 +300,11 @@ Source inclusion, event qualification and actual platform measurements remain di
 
 ## Submission
 
-- The submission is your run's GitHub repository. At the deadline the server stops the run and records
-  the repository's latest commit. Your agent pushes its own work; Goal Cup Proxy never pushes, makes no
-  commit of its own and never force-pushes. Work not pushed by the deadline is not in the submission.
+- The submission is your run's GitHub repository. At the deadline the server stops the run. The judged
+  version is the last push to the repository's default branch that GitHub received before your deadline,
+  by GitHub's own timestamp; commit dates are ignored. Later pushes are not judged and are flagged, and a
+  force-push during the run is flagged. Your agent pushes its own work; Goal Cup Proxy never pushes, makes
+  no commit of its own and never force-pushes. Work not pushed by the deadline is not in the submission.
 - At the stop Goal Cup Proxy also records the commit your clone had, and a digest of any uncommitted
   changes, in the sealed record.
 - The MIT License must exist in the submitted repository. The result must be a fresh, usable or

@@ -356,7 +356,7 @@ export interface TickRun extends RunRow {
   /** When a heartbeat first said the recording had `gaps` or `failed`, and which of the two. */
   flagged_at: string | null;
   flag_reason: "gaps" | "failed" | null;
-  /** The GitHub commit at the deadline: 40 hex, `none` for a repository GitHub does not have, null until asked. */
+  /** The judged GitHub commit (see `FinalCommitDetail`): 40 hex, `none` for a repository GitHub does not have, null until decided. */
   final_commit: string | null;
   /**
    * The start of the latest disk pause that is owed a disk_full email (see `HeartbeatResult`); null
@@ -365,6 +365,26 @@ export interface TickRun extends RunRow {
    */
   disk_notice_at?: string | null;
 }
+
+/**
+ * How the judged commit was found (docs/UPLOAD-API.md, "The judged commit"): the last push to the
+ * repository's default branch that GitHub timestamped at or before the run's `ends_at`.
+ */
+export interface FinalCommitDetail {
+  /** When GitHub received the judged push (its activity `timestamp`); null when not known. */
+  pushed_at: string | null;
+  /** The default branch that was read; null when GitHub gave none. */
+  branch: string | null;
+  /** GitHub had a push to that branch after `ends_at` when it was asked (not judged); null when not known. */
+  late_push: boolean | null;
+  /** GitHub had a force push to that branch between the run's start and `ends_at`; null when not known. */
+  force_push: boolean | null;
+  /** The commit is the head GitHub had when asked (`commits/HEAD`): the activity API was unavailable, or listed no update of the branch. */
+  head_fallback: boolean;
+}
+
+/** No detail: what a caller that passes none stores. */
+export const NO_FINAL_DETAIL: FinalCommitDetail = { pushed_at: null, branch: null, late_push: null, force_push: null, head_fallback: false };
 
 /** A run that is over this long, and no longer open, is not looked at by the cron any more. */
 export const TICK_LOOKBACK_SECONDS = 48 * 3600;
@@ -442,8 +462,11 @@ export interface Db {
   claimNotices(limit: number, now: string): Promise<ClaimedNotice[]>;
   /** Record how sending a claimed notice ended. `to` is the address used (for `sent`). */
   finishNotice(id: number, outcome: NoticeOutcome, to: string | null, detail: string, now: string): Promise<void>;
-  /** Store the commit found at the deadline (a 40-hex sha, or `none`). The first one stored stays. */
-  recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void>;
+  /**
+   * Store the judged commit (a 40-hex sha, or `none`), the time it was decided, and how it was found.
+   * The first one stored stays. `detail` left out stores no detail (all null, no fallback).
+   */
+  recordFinalCommit(memberId: string, runId: string, commit: string, at: string, detail?: FinalCommitDetail): Promise<void>;
   /** A stored chunk of the entry that starts at `offset`, or null. */
   getChunk(memberId: string, runId: string, entryId: string, offset: number): Promise<ChunkRecord | null>;
   storeReceipt(memberId: string, runId: string, entryId: string, chainHead: string, receipt: StartReceipt): Promise<StoreReceiptResult>;

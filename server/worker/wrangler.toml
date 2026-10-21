@@ -76,7 +76,7 @@ DEVICE_TOKEN_PER_MINUTE = "1200"
 #   SUPABASE_URL         https://<project>.supabase.co
 #   SUPABASE_KEY         a Supabase secret API key whose role may only execute public.goal_cup_upload_*
 #   RESEND_API_KEY       optional: switches the run emails on (the website's Resend account)
-#   GITHUB_TOKEN         read-only; required in production and staging (the cron's commit fetch fails without it)
+#   GITHUB_TOKEN         read-only; required in production and staging (the cron's judged-commit reads; it warns without it)
 #   RATE_LIMIT_KEY       random, at least 32 characters: HMAC key of the rate-limit keys (src/ratelimit.ts)
 #   TEST_APPROVAL_KEY    never in production. Staging only (with STAGING = "on"): switches on
 #                        POST /v1/device/approve, which approves a device request as any member.

@@ -9,9 +9,9 @@ Copy each file into the website repo's `supabase/migrations/`, unchanged and wit
 and merge it there. Apply it to staging first, then to production: the lead agent applies, the
 owner approves. All are additive: functions, columns and one widened CHECK constraint, no row
 changes. Apply them, in name order, before deploying the Worker that needs them (it calls the new
-`goal_cup_upload_commit_chunk` and `goal_cup_upload_heartbeat` overloads); the Worker that is live
-keeps working on them. Then regenerate the mirror from the website repo
-(command in its header) and delete this folder.
+`goal_cup_upload_commit_chunk`, `goal_cup_upload_heartbeat` and `goal_cup_upload_record_final_commit`
+overloads); the Worker that is live keeps working on them. Then regenerate the mirror from the
+website repo (command in its header) and delete this folder.
 
 - `20261021100000_goal_cup_tracer_test_runs_parallel.sql`: only competition replaces; test runs of
   one operator run side by side (owner, 21 Oct 2026).
@@ -22,3 +22,7 @@ keeps working on them. Then regenerate the mirror from the website repo
   (`heartbeats.vitals`, `runs.last_vitals`), the run's disk pause (`runs.disk_paused_at`,
   `runs.disk_notice_at`), the notice kind `disk_full` with its email, `disk_notice_at` in
   `goal_cup_upload_runs_for_tick`, and `goal_cup_upload_heartbeat(…, p_vitals)`.
+- `20261021130000_goal_cup_tracer_final_push.sql`: the judged commit is the last push to the default
+  branch that GitHub timestamped at or before `ends_at` (owner, 21 Oct 2026): `runs.final_pushed_at`,
+  `final_branch`, `final_late_push`, `final_force_push`, `final_head_fallback`, and
+  `goal_cup_upload_record_final_commit(…, p_pushed_at, p_branch, p_late_push, p_force_push, p_head_fallback)`.
