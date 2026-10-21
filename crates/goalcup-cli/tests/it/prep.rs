@@ -126,6 +126,8 @@ fn facts(github: &str, more: &[&str]) -> String {
         "hosts=ok".to_string(),
         "awake=ok".to_string(),
         format!("github={github}"),
+        // Every folder on ext4 unless the test says otherwise, whatever this machine's are.
+        "fs=/=ext4".to_string(),
     ];
     parts.extend(more.iter().map(|s| s.to_string()));
     // The parser takes the last of a repeated key.
@@ -696,6 +698,55 @@ fn prep_fails_wsl_artifact_root_and_config_folder_on_a_windows_host_filesystem()
     assert!(
         machine.contains("config folder") && machine.contains("(virtiofs)"),
         "{text}"
+    );
+}
+
+/// A run keeps its records on APFS, ext4 or XFS only: prep says so for the work folder, the
+/// artifact root and the configuration folder, with the way to move each, on any machine.
+#[test]
+fn prep_fails_a_folder_on_an_unsupported_filesystem_and_says_how_to_move_it() {
+    let rig = Rig::chat();
+    let github = FakeGithub::good();
+    let work = rig.root.join("btrfs").join("goalcup-work");
+    let on_btrfs = facts(
+        &github.base,
+        &[&format!("fs={}=btrfs", rig.root.join("btrfs").display())],
+    );
+    let (code, text) = prep(&rig, &["--work-root", work.to_str().unwrap()], &on_btrfs);
+    assert_eq!(code, 1, "{text}");
+    let machine = line(&text, "machine");
+    assert!(
+        machine.starts_with("[fail] machine:")
+            && machine.contains(&format!("work folder {} is on btrfs", work.display()))
+            && machine.contains("ext4, XFS or APFS")
+            && machine.contains("goalcup prep --work-root"),
+        "{text}"
+    );
+    // A refused work folder is not kept for `goalcup start` to find.
+    assert_ne!(prep_file(&rig.cfg).work_root, work.display().to_string());
+
+    let elsewhere = rig.root.join("goalcup-work");
+    let on_overlay = facts(
+        &github.base,
+        &[&format!("fs={}=overlay", rig.cfg.display())],
+    );
+    let (code, text) = prep(
+        &rig,
+        &["--work-root", elsewhere.to_str().unwrap()],
+        &on_overlay,
+    );
+    assert_eq!(code, 1, "{text}");
+    let machine = line(&text, "machine");
+    assert!(
+        machine.contains("config folder")
+            && machine.contains("overlayfs")
+            && machine.contains("GOALCUP_CONFIG_DIR")
+            && !machine.contains("work folder"),
+        "{text}"
+    );
+    assert_eq!(
+        prep_file(&rig.cfg).work_root,
+        elsewhere.display().to_string()
     );
 }
 

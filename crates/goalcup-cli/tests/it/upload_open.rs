@@ -791,6 +791,86 @@ mod server_runs {
         assert!(!rig.harness_started());
     }
 
+    /// A fake GitHub API that answers every request with `body`, and counts the requests.
+    fn fake_github(body: &'static str) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = asked.clone();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
+                    head.push(byte[0]);
+                }
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(reply.as_bytes());
+            }
+        });
+        (base, asked)
+    }
+
+    /// A competition or a test run needs a repository no other run has pushed to: with commits
+    /// in it, the start is refused before the approval and before anything is created. A
+    /// practice run never pushes, and is not asked.
+    #[test]
+    fn a_competition_or_test_start_refuses_a_repository_with_commits_and_practice_does_not() {
+        let (used, asked) =
+            fake_github(r#"{"private":false,"size":12,"permissions":{"push":true}}"#);
+        for mode in [RunMode::Competition, RunMode::Test] {
+            let rig = Rig::new();
+            let upload = server(&rig);
+            rig.prepare_for(&upload.url());
+            rig.with_env(goalcup_cli::commands::start::TEST_GITHUB_API, &used);
+            let goal = rig.goal(GOAL);
+            let http = rig.client();
+            let client = Hooked::new(&http, &rig);
+            let mut opts = rig.options(&goal, RESERVE);
+            opts.mode = mode;
+            let (result, out) =
+                std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+            let refused = result.expect_err("a repository with commits was used");
+            assert_eq!(refused.exit_code(), 1, "{mode:?}: {refused}");
+            let said = refused.to_string();
+            assert!(
+                said.contains("A new run needs a new empty repository")
+                    && said.contains("goalcup prep --repo"),
+                "{mode:?}: {said}"
+            );
+            assert!(upload.device_requests().is_empty(), "{mode:?}: approval");
+            assert!(client.book().creates.is_empty(), "{mode:?}: {out}");
+            assert!(rig.run_dirs().is_empty(), "{mode:?}");
+            assert!(rig.clones().is_empty(), "{mode:?}");
+            assert!(!rig.harness_started(), "{mode:?}");
+        }
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        // Practice keeps today's behaviour: GitHub is not asked, and the run goes ahead.
+        let rig = Rig::new();
+        let upload = server(&rig);
+        rig.prepare_for(&upload.url());
+        rig.with_env(goalcup_cli::commands::start::TEST_GITHUB_API, &used);
+        run_to_end(&rig, true);
+        assert_eq!(upload.run_ids().len(), 1);
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        // An empty repository lets a competition run start.
+        let (empty, _) = fake_github(r#"{"private":false,"size":0,"permissions":{"push":true}}"#);
+        let rig = Rig::new();
+        let upload = server(&rig);
+        rig.prepare_for(&upload.url());
+        rig.with_env(goalcup_cli::commands::start::TEST_GITHUB_API, &empty);
+        run_to_end(&rig, false);
+        assert_eq!(upload.run_ids().len(), 1);
+    }
+
     /// A start that fails after the run opened, with the server away so the run cannot be given
     /// back then, keeps that run's credential: the next start gives the run back with it.
     #[test]

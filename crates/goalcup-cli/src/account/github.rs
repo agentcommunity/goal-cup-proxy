@@ -306,11 +306,47 @@ pub fn check_empty(api_base: &str, s: &GithubSetup) -> Result<(), CliError> {
     judge(api_base, s, false, true)
 }
 
+/// Whether the repository has no commits, by the same request and rule as [`check_empty`]:
+/// `goalcup start` asks it for a competition or test run, which needs a repository that no
+/// other run has pushed to. A failure to ask is refused in [`check`]'s own sentences.
+pub fn is_empty(api_base: &str, s: &GithubSetup) -> Result<bool, CliError> {
+    Ok(ask(api_base, s)?.size == 0)
+}
+
 /// One request to GitHub, judged on the halves asked for, in the order public, empty, pushable.
 fn judge(api_base: &str, s: &GithubSetup, access: bool, empty: bool) -> Result<(), CliError> {
     let (owner, repo) = s.parts()?;
+    let answer = ask(api_base, s)?;
+    if access && answer.private {
+        return Err(CliError::Refused(format!(
+            "the repository {owner}/{repo} is private, and Goal Cup needs a public one. Make it \
+             public (Settings, then Danger Zone, then Change visibility) or create a new public \
+             repository, then run `goalcup prep` again."
+        )));
+    }
+    if empty && answer.size != 0 {
+        return Err(CliError::Refused(format!(
+            "the repository {owner}/{repo} is not empty ({} KB). Goal Cup needs a new \
+             repository with no README, license or .gitignore: create one, then run `goalcup \
+             prep` again.",
+            answer.size
+        )));
+    }
+    if access && !answer.permissions.is_some_and(|p| p.push) {
+        return Err(CliError::Refused(format!(
+            "the token cannot push to {owner}/{repo}. Create a fine-grained token for that one \
+             repository with Contents set to read and write, then run `goalcup prep` again."
+        )));
+    }
+    Ok(())
+}
+
+/// GitHub's answer about the repository, asked with the token. A wrong token, a repository the
+/// token cannot see, and any other failure are refused in a sentence of their own.
+fn ask(api_base: &str, s: &GithubSetup) -> Result<RepoAnswer, CliError> {
+    let (owner, repo) = s.parts()?;
     let client = ServerClient::bearer(api_base, &s.token);
-    let answer: RepoAnswer = client
+    client
         .json("GET", &format!("/repos/{owner}/{repo}"), None::<&()>)
         .map_err(|e| match e {
             ServerError::Status { status, .. } if status == 401 || status == 403 => {
@@ -335,29 +371,7 @@ fn judge(api_base: &str, s: &GithubSetup, access: bool, empty: bool) -> Result<(
             other => CliError::Refused(format!(
                 "could not check {owner}/{repo} on GitHub: {other}. Try again in a minute."
             )),
-        })?;
-    if access && answer.private {
-        return Err(CliError::Refused(format!(
-            "the repository {owner}/{repo} is private, and Goal Cup needs a public one. Make it \
-             public (Settings, then Danger Zone, then Change visibility) or create a new public \
-             repository, then run `goalcup prep` again."
-        )));
-    }
-    if empty && answer.size != 0 {
-        return Err(CliError::Refused(format!(
-            "the repository {owner}/{repo} is not empty ({} KB). Goal Cup needs a new \
-             repository with no README, license or .gitignore: create one, then run `goalcup \
-             prep` again.",
-            answer.size
-        )));
-    }
-    if access && !answer.permissions.is_some_and(|p| p.push) {
-        return Err(CliError::Refused(format!(
-            "the token cannot push to {owner}/{repo}. Create a fine-grained token for that one \
-             repository with Contents set to read and write, then run `goalcup prep` again."
-        )));
-    }
-    Ok(())
+        })
 }
 
 // ------------------------------------------------------------------ the clone

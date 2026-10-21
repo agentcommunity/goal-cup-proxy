@@ -56,6 +56,34 @@ impl Host {
         machine::wsl_check_with(self.version, folders, &|p| self.filesystem_of(p))
     }
 
+    /// `Ok` unless a folder is on a filesystem a run cannot keep its traces on (btrfs, ZFS, NFS,
+    /// tmpfs, overlayfs or FUSE; see [`machine::unsupported_fstype`]), on any machine, WSL or
+    /// not. The `Err` says each such folder and how to move it, with no full stop at the end.
+    pub fn check_filesystems(&self, folders: &[(&str, &Path)]) -> Result<(), String> {
+        let refused: Vec<String> = folders
+            .iter()
+            .filter_map(|(what, path)| {
+                let name = match &self.mounts {
+                    None => machine::unsupported_filesystem(path),
+                    Some(_) => self
+                        .filesystem_of(path)
+                        .and_then(|name| machine::unsupported_fstype(&name)),
+                }?;
+                Some(format!(
+                    "the {what} {} is on {name}, which a run cannot keep its records on. Move it \
+                     to an ext4, XFS or APFS volume ({})",
+                    path.display(),
+                    move_hint(what)
+                ))
+            })
+            .collect();
+        if refused.is_empty() {
+            Ok(())
+        } else {
+            Err(refused.join(". "))
+        }
+    }
+
     /// The refusal for `goalcup start` and `goalcup continue`: the folders a run writes to, all
     /// judged before anything is created or changed. `untouched` closes the sentence
     /// (`Nothing was created.`).
@@ -66,6 +94,17 @@ impl Host {
     ) -> Result<(), crate::CliError> {
         self.check(folders)
             .map_err(|why| crate::CliError::Refused(format!("{why}. {untouched}")))
+    }
+}
+
+/// How to move a folder of [`Host::check_filesystems`]: the work folder by its flag, the others
+/// with the configuration folder, beside which the records are kept.
+fn move_hint(what: &str) -> &'static str {
+    if what == "work folder" {
+        "for example: goalcup prep --work-root <a folder on that volume>"
+    } else {
+        "for example: set GOALCUP_CONFIG_DIR to a folder on that volume, and the records are kept \
+         beside it"
     }
 }
 

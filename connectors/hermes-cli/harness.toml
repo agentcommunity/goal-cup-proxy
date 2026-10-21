@@ -9,7 +9,7 @@ display_name = "Hermes"
 # has no session file yet, so `goalcup continue` opens `hermes chat` the normal way, without
 # `--continue` (which would find no session and exit 1), and the setup is kept in the home. A
 # field may not name the tracker (F7), so the hint says "continue the run".
-first_screen = "If Hermes asks to run setup, answer Y and pick your provider and model. Hermes then closes: continue the run to start working."
+first_screen = "If Hermes asks to run setup, do it now, before you type your prompt: answer Y and pick your provider and model. Hermes then closes; continue the run, then type your prompt."
 
 [capture]
 # Chat mode (D57): `hermes chat` opens Hermes's classic REPL in the participant's terminal and the

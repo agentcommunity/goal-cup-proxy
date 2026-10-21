@@ -314,6 +314,68 @@ pub fn wsl_check(folders: &[(&str, &Path)]) -> Result<(), String> {
     wsl_check_with(wsl_version(), folders, &windows_host_filesystem)
 }
 
+/// The name to say for a filesystem type a run's folders cannot be on: btrfs, ZFS, NFS, tmpfs,
+/// overlayfs and FUSE. A run keeps its traces on APFS, ext4 or XFS only. `name` is a type name as
+/// `/proc/self/mountinfo` or macOS `statfs` writes it; `None` for any other type.
+#[doc(hidden)]
+pub fn unsupported_fstype(name: &str) -> Option<&'static str> {
+    let name = name.to_ascii_lowercase();
+    match name.as_str() {
+        "btrfs" => Some("btrfs"),
+        "zfs" => Some("ZFS"),
+        "nfs" | "nfs4" => Some("NFS"),
+        "tmpfs" => Some("tmpfs"),
+        "overlay" | "overlayfs" => Some("overlayfs"),
+        // `fuse`, `fuseblk`, `fuse.sshfs` on Linux; `macfuse`, `osxfuse` on macOS.
+        _ if name.starts_with("fuse") || name.ends_with("fuse") => Some("FUSE"),
+        _ => None,
+    }
+}
+
+/// [`unsupported_fstype`] for the magic number Linux `statfs` reports as `f_type`.
+#[doc(hidden)]
+pub fn unsupported_magic(f_type: u64) -> Option<&'static str> {
+    match f_type {
+        0x9123_683E => Some("btrfs"),
+        0x2FC1_2FC1 => Some("ZFS"),
+        0x6969 => Some("NFS"),
+        0x0102_1994 => Some("tmpfs"),
+        0x794C_7630 => Some("overlayfs"),
+        0x6573_5546 => Some("FUSE"),
+        _ => None,
+    }
+}
+
+/// The name of the filesystem `path` is on when a run's folders cannot be on it (see
+/// [`unsupported_fstype`]), or `None` when it is fine or cannot be told. `path` need not exist
+/// yet: the nearest existing ancestor is looked at, by its real path.
+pub fn unsupported_filesystem(path: &Path) -> Option<&'static str> {
+    let existing = nearest_existing(path)?;
+    #[cfg(target_os = "linux")]
+    {
+        statfs_type(&existing).and_then(unsupported_magic)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let c = CString::new(existing.as_os_str().as_bytes()).ok()?;
+        let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
+        // SAFETY: `c` is NUL-terminated and `stat` is a writable statfs for the call.
+        if unsafe { libc::statfs(c.as_ptr(), stat.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        // SAFETY: statfs returned 0, so it filled the struct.
+        let stat = unsafe { stat.assume_init() };
+        // SAFETY: `f_fstypename` is a NUL-terminated name inside the struct.
+        let name = unsafe { std::ffi::CStr::from_ptr(stat.f_fstypename.as_ptr()) };
+        unsupported_fstype(&name.to_string_lossy())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = existing;
+        None
+    }
+}
+
 /// Whether the machine runs on mains power; `None` when that cannot be told (a desktop with
 /// no battery, or no readable source).
 pub fn on_ac_power() -> Option<bool> {

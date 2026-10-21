@@ -87,7 +87,8 @@ the same `GOALCUP_CONFIG_DIR`, `goalcup status` shows the run and `goalcup seal`
 Only one run per harness can record at a time.
 
 A run on the server needs `goalcup login`, `goalcup prep` and a practice run first
-([participant's guide](docs/PARTICIPANT-GUIDE.md)).
+([participant's guide](docs/PARTICIPANT-GUIDE.md)). A competition or test `goalcup start` refuses
+a repository that is not empty: each such run needs a new one (`goalcup prep --repo <url>`).
 
 ## Platforms
 
@@ -100,7 +101,9 @@ A run on the server needs `goalcup login`, `goalcup prep` and a practice run fir
 | Windows | Run Goal Cup Proxy in WSL2. See [Windows](#windows-use-wsl2). Native Windows is planned. |
 
 The trace folder (`artifact_root` in `daemon.toml`) must be on APFS, ext4 or XFS. Goal Cup Proxy
-refuses btrfs, ZFS, NFS, tmpfs, overlayfs and FUSE before it creates anything.
+refuses btrfs, ZFS, NFS, tmpfs, overlayfs and FUSE before it creates anything. `goalcup prep`
+checks the configuration folder, the trace folder and the work folder for this and says how to
+move them.
 
 ## Linux
 

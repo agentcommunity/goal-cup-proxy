@@ -3482,6 +3482,9 @@ fn uploading(
         return Err(CliError::Refused(crate::prep_file::PREP_FIRST.to_string()));
     }
     refuse_goal_folder_inside_work_root(&work_root, beside)?;
+    if !mode.is_practice() {
+        refuse_used_repository(env, &github)?;
+    }
     #[cfg(feature = "test-support")]
     let clone_source = env.get(TEST_CLONE_SOURCE).cloned();
     #[cfg(not(feature = "test-support"))]
@@ -3496,6 +3499,39 @@ fn uploading(
         work_root,
         clone_source,
     }))
+}
+
+/// A test build's door to GitHub for [`refuse_used_repository`]: the base address of a fake
+/// GitHub API. A test build without it skips that check, because its clone comes from a local
+/// stand-in ([`TEST_CLONE_SOURCE`]), not from GitHub. A shipped build always asks GitHub.
+#[cfg(feature = "test-support")]
+pub const TEST_GITHUB_API: &str = "GOALCUP_TEST_GITHUB_API";
+
+/// A competition or test run needs a repository of its own: a run that clones what an earlier
+/// run pushed would be seeded by it. So the repository must still be empty, by the same request
+/// and rule `goalcup prep` uses, asked before the approval and before anything is created. A
+/// practice run never pushes and is not asked.
+fn refuse_used_repository(
+    env: &BTreeMap<String, String>,
+    github: &crate::account::github::GithubSetup,
+) -> Result<(), CliError> {
+    #[cfg(feature = "test-support")]
+    let Some(api) = env.get(TEST_GITHUB_API).cloned() else {
+        return Ok(());
+    };
+    #[cfg(not(feature = "test-support"))]
+    let api = {
+        let _ = env;
+        crate::account::github::GITHUB_API.to_string()
+    };
+    if crate::account::github::is_empty(&api, github)? {
+        return Ok(());
+    }
+    Err(CliError::Refused(format!(
+        "{} is not empty. A new run needs a new empty repository. Make one and run: goalcup prep \
+         --repo <url>. Nothing was created.",
+        github.repo_url
+    )))
 }
 
 /// What a start that fails after the approval says once it has removed what it made (said once,

@@ -15,8 +15,9 @@
 //!    token ([`crate::account::github::check`]); with a terminal, the token is read unshown.
 //! 5. **machine**: mains power, free space for a run's reservation, the server's and the
 //!    provider's hosts reachable, `git` on `PATH`, under WSL the WSL2 version and a work folder,
-//!    artifact root and configuration folder that are not on a Windows-host filesystem, and a
-//!    sleep lock the machine can take (one it cannot take is said, and is never a `todo`).
+//!    artifact root and configuration folder that are not on a Windows-host filesystem, the
+//!    same three folders on APFS, ext4 or XFS (not btrfs, ZFS, NFS, tmpfs, overlayfs or FUSE),
+//!    and a sleep lock the machine can take (one it cannot take is said, and is never a `todo`).
 //! 6. **practice**: a practice run of this harness whose every entry was sealed and uploaded.
 //!    Prep never starts a run: it says `goalcup start --practice` and stops.
 //!
@@ -979,6 +980,19 @@ fn machine_step(
             note(State::Fail, why);
         }
     }
+    // On any machine: a run keeps its records on APFS, ext4 or XFS only. Found here, the folder
+    // is moved before any approval or clone; the work folder is judged alone, as above.
+    let work_fs = host.check_filesystems(&[("work folder", work_root)]);
+    if let Err(why) = &work_fs {
+        note(State::Fail, why.clone());
+    }
+    let artifacts = artifact_root(cfg);
+    if let Err(why) = host.check_filesystems(&[
+        ("artifact root", artifacts.as_path()),
+        ("config folder", cfg),
+    ]) {
+        note(State::Fail, why);
+    }
 
     // A sleep lock the machine cannot take never makes the step not-ok (WSL2 never has one, nor
     // does a Linux without `systemd-inhibit`): the person is told to keep the machine awake
@@ -1011,7 +1025,7 @@ fn machine_step(
     }
     Machine {
         step: step(STEP_MACHINE, worst, false, say),
-        work_root_ok: work_check.is_ok() && work_in_git.is_none(),
+        work_root_ok: work_check.is_ok() && work_fs.is_ok() && work_in_git.is_none(),
     }
 }
 
