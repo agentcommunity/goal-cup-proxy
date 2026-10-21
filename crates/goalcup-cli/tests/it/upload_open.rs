@@ -1140,9 +1140,50 @@ mod server_runs {
 
     /// A Ctrl-C while the participant has not yet approved ends the start with one sentence:
     /// no run directory, no clone, no daemon entry, and no run opened on the server. A real
-    /// SIGINT, which `goalcup start` catches into a flag; each test is its own process.
+    /// SIGINT, which `goalcup start` catches into a process-global flag, so the case runs in a
+    /// process of its own (this test binary, re-run on [`CTRL_C_CHILD`] alone). Under plain
+    /// `cargo test` every other start in this binary shares the flag: one closing or clearing
+    /// it swallowed the Ctrl-C, and this start then waited out the whole device code, while a
+    /// start the SIGINT landed in refused itself.
     #[test]
     fn ctrl_c_while_waiting_for_approval_creates_nothing() {
+        let out = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+            .args([
+                "--exact",
+                CTRL_C_CHILD,
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CTRL_C_HOST, "1")
+            .output()
+            .expect("the child runs");
+        let printed = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.status.success(), "the child failed:\n{printed}");
+        assert!(
+            printed.contains("1 passed"),
+            "the child did not run its one test:\n{printed}"
+        );
+    }
+
+    // The libtest name inside the folded `it` binary, which prefixes the module path.
+    const CTRL_C_CHILD: &str =
+        "upload_open::server_runs::ctrl_c_while_waiting_for_approval_child_half";
+    /// Set only in the process [`ctrl_c_while_waiting_for_approval_creates_nothing`] starts.
+    const CTRL_C_HOST: &str = "GOALCUP_TEST_CTRL_C_HOST";
+
+    /// Run only by [`ctrl_c_while_waiting_for_approval_creates_nothing`], in a process of its own.
+    #[test]
+    #[ignore = "run by its parent, in a process of its own"]
+    fn ctrl_c_while_waiting_for_approval_child_half() {
+        if std::env::var_os(CTRL_C_HOST).is_none() {
+            println!("${CTRL_C_HOST} is unset: this case is run by its parent, not alone.");
+            return;
+        }
         let rig = Rig::new();
         let waiting = Waiting::start();
         rig.prepare_for(&waiting.url());
