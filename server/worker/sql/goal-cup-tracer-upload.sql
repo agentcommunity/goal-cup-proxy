@@ -2905,6 +2905,7 @@ BEGIN
   RETURN jsonb_build_object(
     'result', 'ok',
     'role', v_role,
+    -- Relies on current_cup_run matching is_frozen (runs.official_start NOT NULL; replaced runs counted): change both.
     'frozen', v_run.id IS NOT NULL,
     'signup', jsonb_build_object(
       'id', v_signup.id, 'entry_no', v_signup.entry_no, 'name', v_signup.name, 'org_name', v_signup.org_name,
