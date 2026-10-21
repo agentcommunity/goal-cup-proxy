@@ -11,11 +11,11 @@
 //! ([`time_left_of_open_run`]).
 
 use crate::CliError;
-use crate::run::time_left::{left_line, sentence};
+use crate::run::time_left::{file_says_practice, left_line, sentence};
 use std::io::Read;
 use std::path::Path;
 
-/// The most of the file read: three short lines.
+/// The most of the file read: four short lines.
 const MAX_BYTES: u64 = 4096;
 
 /// Print the time left from `file` (the one [`crate::run::time_left::file_from_env`] names) at
@@ -27,7 +27,11 @@ pub fn time_left_with(file: &Path, now: u64, out: &mut dyn std::io::Write) -> Re
         .and_then(|f| f.take(MAX_BYTES).read_to_string(&mut text))
         .ok()
         .and_then(|_| sentence(&text, now))
-        .ok_or_else(|| CliError::Refused(crate::participant::time_left_unknown()))?;
+        .ok_or_else(|| {
+            CliError::Refused(crate::participant::time_left_unknown(file_says_practice(
+                &text,
+            )))
+        })?;
     put(out, &line)
 }
 
@@ -54,7 +58,7 @@ pub fn time_left_of_open_run(
                 .deadline_at
                 .as_deref()
                 .and_then(goalcup_protocol::control::parse_z);
-            Some(left_line(left, deadline))
+            Some(left_line(left, deadline, run.practice))
         })
         .ok_or_else(|| {
             CliError::Refused(crate::participant::no_open_run_time_left().to_string())

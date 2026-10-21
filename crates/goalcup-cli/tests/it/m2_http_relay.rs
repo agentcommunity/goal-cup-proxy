@@ -1,7 +1,7 @@
 //! `proxy::http::relay_http` between two in-memory peers, against a test-local recording
 //! sink. Every expectation is the literal bytes a peer wrote, or a value the test derives
-//! independently of the relay (flate2's encoders, RFC 6455's sample key, the frame oracle in
-//! `m2_http_support`).
+//! independently of the relay (flate2's and zstd's encoders, a fixture from the reference brotli
+//! encoder, RFC 6455's sample key, the frame oracle in `m2_http_support`).
 
 use crate::common::m2_http_support;
 
@@ -574,10 +574,86 @@ async fn transport_codings_are_decoded_on_the_capture_side_only() {
     assert_eq!(view.end, Some(EndReason::DecodeError));
 }
 
+/// The body `tests/fixtures/m2-http/sse-body.br` holds, brotli-coded by the reference encoder
+/// (`brotli -q 11`): a streamed reply's shape, long enough for several decoded pieces.
+fn sse_body() -> Vec<u8> {
+    (0..2000)
+        .map(|i| {
+            format!(
+                "event: content_block_delta\ndata: {{\"index\":{i},\"delta\":{{\"text\":\"token {i}\"}}}}\n\n"
+            )
+        })
+        .collect::<String>()
+        .into_bytes()
+}
+
+#[tokio::test]
+async fn brotli_and_zstd_replies_decode_with_no_gap() {
+    let plain = sse_body();
+    let br = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/m2-http/sse-body.br"),
+    )
+    .unwrap();
+    let zstd_one = zstd::encode_all(plain.as_slice(), 3).unwrap();
+    let zstd_two = [
+        zstd::encode_all(&plain[..1000], 3).unwrap(),
+        zstd::encode_all(&plain[1000..], 19).unwrap(),
+    ]
+    .concat();
+    let mut chunked = Vec::new();
+    for piece in br.chunks(37) {
+        chunked.extend(chunk(piece));
+    }
+    chunked.extend(b"0\r\n\r\n");
+    let cases: Vec<(&str, Vec<String>, &[u8])> = vec![
+        ("br", vec!["Content-Encoding: br".into(), length(&br)], &br),
+        (
+            "br, chunked",
+            vec![
+                "Content-Encoding: br".into(),
+                "Transfer-Encoding: chunked".into(),
+            ],
+            &chunked,
+        ),
+        (
+            "zstd",
+            vec!["Content-Encoding: zstd".into(), length(&zstd_one)],
+            &zstd_one,
+        ),
+        (
+            "zstd, two frames",
+            vec!["Content-Encoding: zstd".into(), length(&zstd_two)],
+            &zstd_two,
+        ),
+    ];
+    for (name, headers, coded) in cases {
+        let headers: Vec<&str> = headers.iter().map(String::as_str).collect();
+        let view = capture_coded_response(&headers, coded).await;
+        assert!(view.bytes == plain, "{name}: decoded body differs");
+        assert!(view.gaps.is_empty(), "{name}: {:?}", view.gaps);
+        assert_eq!(view.end, Some(EndReason::Complete), "{name}");
+    }
+
+    // Cut short, either keeps what it decoded and says the rest failed to decode.
+    for (name, coded) in [
+        ("br", &br[..br.len() / 2]),
+        ("zstd", &zstd_one[..zstd_one.len() / 2]),
+    ] {
+        let headers = [&format!("Content-Encoding: {name}") as &str, &length(coded)];
+        let view = capture_coded_response(&headers, coded).await;
+        assert!(
+            plain.starts_with(&view.bytes),
+            "{name}: only a decoded prefix"
+        );
+        assert_eq!(view.gaps, vec![GapReason::DecodeFailed], "{name}");
+        assert_eq!(view.end, Some(EndReason::DecodeError), "{name}");
+    }
+}
+
 #[tokio::test]
 async fn unsupported_encoding_yields_a_named_gap_and_no_body_bytes() {
     let opaque = noise(3000, 5);
-    for coding in ["br", "zstd", "gzip, br", "compress"] {
+    for coding in ["gzip, br", "br, zstd", "compress", "x-unknown"] {
         let view = capture_coded_response(
             &[&format!("Content-Encoding: {coding}"), &length(&opaque)],
             &opaque,
@@ -599,7 +675,7 @@ async fn unsupported_encoding_yields_a_named_gap_and_no_body_bytes() {
     let req = request(
         "POST",
         "/v1/responses",
-        &["Content-Encoding: zstd", &length(&opaque)],
+        &["Content-Encoding: compress", &length(&opaque)],
         &opaque,
     );
     round_trip(

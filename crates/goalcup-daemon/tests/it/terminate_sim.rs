@@ -1751,6 +1751,12 @@ enum RootRead {
     /// root never exits: a process with no readable argv that stays live is not provably the
     /// registered program.
     ArgvGoneWhileLive { after_kills: usize },
+    /// macOS's exit window: once `after_kills` signals have been delivered, the root's start
+    /// identity cannot be read (`proc_pidinfo` fails for a dying process) while `ps` still shows
+    /// it in state `E`, so `liveness` answers live for `live_reads` reads before it is gone.
+    /// Measured on the 22 Oct smokes (Amp and Codex roots, 30 to 45 ms): the guard read the
+    /// unreadable identity as a recycled number and the seal was `Unresolved`.
+    StartGoneExitsAfterReads { after_kills: usize, live_reads: i64 },
     /// The argv read answers a program the launch never registered, and the root stays live.
     RenamedWhileLive,
     /// The same, but only once `after_kills` signals have been delivered.
@@ -1865,6 +1871,17 @@ impl ProcessOs for RacingRoot {
                     self.sim.start_identity(pid)
                 }
             }
+            RootRead::StartGoneExitsAfterReads {
+                after_kills,
+                live_reads,
+            } if self.sim.world().kills.len() >= after_kills => {
+                // Every read while the exit is pending finds nothing; the first one starts it.
+                if !self.fired.swap(true, SeqCst) {
+                    self.exit_in.store(live_reads, SeqCst);
+                }
+                None
+            }
+            RootRead::StartGoneExitsAfterReads { .. } => self.sim.start_identity(pid),
             RootRead::Stranger => Some("sim:stranger".to_string()),
             RootRead::UnreadableWhileLive => None,
             RootRead::ArgvGoneThenExits { .. }
@@ -2053,6 +2070,71 @@ fn a_root_still_exiting_at_the_guards_second_read_is_not_a_loss() {
             w.describe()
         );
         assert!(w.alive_born().is_empty(), "{platform:?}:\n{}", w.describe());
+    }
+}
+
+/// macOS's exit window after a signal: the root's start identity is already unreadable while
+/// `liveness` still reads its `E` state as live for a few reads. The guard waits for the exit
+/// as it does for an empty argv, and the seal is the kill working, not a recycled number.
+#[test]
+fn a_root_whose_start_identity_is_gone_because_it_is_exiting_is_not_a_loss() {
+    for platform in [Platform::Macos, Platform::Linux] {
+        let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
+        let handle = sim.handle(None, None);
+        let os = RacingRoot::new(
+            &sim,
+            RootRead::StartGoneExitsAfterReads {
+                after_kills: 1,
+                live_reads: 3,
+            },
+        );
+        let report = terminate_with(&handle, &os).expect("the chase completes");
+        let w = sim.world();
+        assert!(
+            os.fired.load(std::sync::atomic::Ordering::SeqCst),
+            "{platform:?}: the interleaving was never injected\n{}",
+            w.describe()
+        );
+        assert!(
+            report.observed_gone && !report.harness_unverified,
+            "{platform:?}: an exiting root's unreadable identity lost the chase: {report:?}\n{}",
+            w.describe()
+        );
+        assert!(w.alive_born().is_empty(), "{platform:?}:\n{}", w.describe());
+    }
+}
+
+/// The wait is bounded and changes no refusal: a root whose start identity stays unreadable
+/// while it stays live past the wait is still a lost anchor, and it is never signalled again.
+#[test]
+fn a_root_with_no_readable_start_identity_still_live_after_the_wait_is_a_loss() {
+    for platform in [Platform::Macos, Platform::Linux] {
+        let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
+        let handle = sim.handle(None, None);
+        let os = RacingRoot::new(
+            &sim,
+            RootRead::StartGoneExitsAfterReads {
+                after_kills: 1,
+                live_reads: i64::MAX,
+            },
+        );
+        let report = terminate_with(&handle, &os).expect("the chase completes");
+        let w = sim.world();
+        assert!(
+            os.fired.load(std::sync::atomic::Ordering::SeqCst),
+            "{platform:?}: the interleaving was never injected\n{}",
+            w.describe()
+        );
+        assert!(
+            report.harness_unverified && !report.observed_gone,
+            "{platform:?}: {report:?}\n{}",
+            w.describe()
+        );
+        assert!(
+            w.kills.iter().all(|k| k.pid != ROOT),
+            "{platform:?}: a root with no readable identity was signalled: {:?}",
+            w.kills
+        );
     }
 }
 

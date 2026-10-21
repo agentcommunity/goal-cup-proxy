@@ -154,11 +154,11 @@ pub fn seconds_left(
 }
 
 /// `goalcup time-left` inside the agent's session, with no fresh time-left file: the advice
-/// first, then why there is no number.
-pub fn time_left_unknown() -> String {
+/// first (a stale file still says whether the run is a practice), then why there is no number.
+pub fn time_left_unknown(practice: bool) -> String {
     format!(
         "{} The time left is unknown right now: there is no fresh time-left file.",
-        crate::run::time_left::PUSH_OFTEN
+        crate::run::time_left::advice(practice)
     )
 }
 

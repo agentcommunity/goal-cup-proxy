@@ -715,12 +715,14 @@ the agent pulls, and nothing is sent to it.
   per-harness code.
 - **Only these values.** The watch tick (every 30 s) writes `seconds_left` from the server's count
   kept in `state.json` on the continuous clock, `deadline_at` (the server's value, parsed as a date
-  and written again), and `as_of` (when it was written). No other string from the server is
-  written. When the count says nothing (after a reboot) the file is removed.
+  and written again), `as_of` (when it was written), and `practice=1` for a practice run (from
+  the run's own record). No other string from the server is written. When the count says nothing
+  (after a reboot) the file is removed.
 - **The agent asks.** `goalcup time-left` reads the file through the variable and prints one line
   ("About 41 h 12 min left (the run stops at 2026-11-14 00:00 UTC). Push your work often; work not
-  pushed when the run stops is lost.") and exits 0; a missing file, or one written more than 5
-  minutes ago, is "unknown right now" and exit 1. The goal-cup skill tells the agent the command
+  pushed when the run stops is lost."; a practice run, whose clone cannot push, gets "This is a
+  practice run: its clone cannot push, so there is nothing to push." instead) and exits 0; a
+  missing file, or one written more than 5 minutes ago, is "unknown right now" and exit 1. The goal-cup skill tells the agent the command
   exists. The skill reaches only harnesses with a `skills_dir` (Codex, Claude Code); Hermes and Amp
   need a skills folder measured locally before their connectors get one.
 - **`goalcup seal` refuses inside the harness.** Every recording launch also sets

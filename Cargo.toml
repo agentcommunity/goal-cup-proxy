@@ -123,5 +123,10 @@ sha1 = "0.11"
 # Its fixed 15-bit window is the strategy the proxy uses; the zlib-only window-size
 # constructors do not exist in this build and must not be called.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# HTTP `br` content decoding in `proxy::http`: Anthropic answers brotli whenever a request offers
+# it. Decode only and pure Rust (no encoder, no C). `default-features = false` leaves out its
+# `std` allocator crate (`alloc-stdlib`, which ships no licence file); `proxy::http` supplies
+# the few lines of allocator itself.
+brotli-decompressor = { version = "5", default-features = false }
 # Tests only: parse the certificates the proxy mints.
 x509-parser = "0.18"

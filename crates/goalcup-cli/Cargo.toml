@@ -73,9 +73,10 @@ rcgen.workspace = true
 socket2.workspace = true
 webpki-roots.workspace = true
 # `sha1`: the WebSocket accept-key derivation only (`proxy::http`). `flate2`: content
-# decoding and permessage-deflate.
+# decoding and permessage-deflate. `brotli-decompressor`: `br` content decoding.
 sha1.workspace = true
 flate2.workspace = true
+brotli-decompressor.workspace = true
 # Fresh random 128-bit producer and connection identifiers (`proxy::api::CaptureEmitter`).
 # The workspace version the daemon already links, so no new crate.
 rand.workspace = true

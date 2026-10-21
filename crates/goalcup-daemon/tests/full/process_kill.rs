@@ -597,6 +597,49 @@ fn a_tree_that_ignores_sigterm_is_given_the_whole_grace_and_then_killed() {
     );
 }
 
+/// macOS's exit window (K10, the 22 Oct smokes). A dying macOS process shows state `E` in
+/// `ps` for 30 to 45 ms, so `liveness` reads it live, while `proc_pidinfo` already fails, so
+/// its start identity is unreadable. The guard read that as a recycled number and the Amp and
+/// Codex seals ended `Unresolved` although nothing survived. Here a multi-process tree in the
+/// shipped TUI shape ignores SIGTERM, so its root is SIGKILLed after the grace: the report
+/// must be the kill working, with the root's identity held, which is what `Confirmed` reads.
+/// A small shell tears down faster than the guard's next read, so this does not force the
+/// window; `terminate_sim`'s `StartGoneExitsAfterReads` interleaving pins it deterministically.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_darwin_root_sigkilled_while_exiting_is_observed_gone_not_lost() {
+    let child = support::spawn_stubborn();
+    let tree = goalcup_protocol::process::descendants(child.pid, &support::ps());
+    assert!(
+        tree.len() > 1,
+        "a singleton would prove nothing here: {tree:?}"
+    );
+    let mut h = support::handle(child.pid, KillStrategy::NativePid, "sleep");
+    h.pgid = None; // the shipped TUI shape
+    h.argv = vec!["/bin/sh".to_string()];
+
+    let r = terminate(&h).expect("the tree terminates");
+
+    assert!(
+        !r.survived_term.is_empty(),
+        "the root must be SIGKILLed: {r:?}"
+    );
+    assert!(
+        r.observed_gone
+            && !r.targeted.is_empty()
+            && r.still_alive.is_empty()
+            && !r.walk_cap_exceeded
+            && !r.harness_unverified,
+        "a root caught exiting after SIGKILL is not a lost authority: {r:?}"
+    );
+    for pid in tree {
+        assert!(
+            !goalcup_protocol::process::is_alive(pid),
+            "pid {pid} survived: {r:?}"
+        );
+    }
+}
+
 /// The stale-pid guard. A pid that cannot be the process the CLI registered is never
 /// signalled — the alternative is the daemon killing whatever the OS handed the number to.
 #[test]
