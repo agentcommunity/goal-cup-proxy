@@ -28,8 +28,14 @@ export const HEALTH_KEY = "cron/health.json";
 export const IDLE_HOURS = [3, 6] as const;
 /** The ended notice waits this long for the judged commit, then goes out without one. */
 export const ENDED_WAIT = 3600;
-/** The most runs one tick asks GitHub about (oldest first; the rest wait for the next tick). Each takes at most 2 + ACTIVITY_PAGES calls. */
+/**
+ * The most runs one tick asks GitHub about. When more are due, each tick starts where the window of
+ * the tick before ended (`inTurn`), so runs GitHub keeps failing on cannot crowd out the others.
+ * Each takes at most 3 + ACTIVITY_PAGES calls.
+ */
 export const COMMITS_PER_TICK = 50;
+/** The cron's period: ticks are numbered by it to turn the window. */
+const TICK_MS = 5 * 60 * 1000;
 
 const earlier = (now: Date, seconds: number) => formatTime(addSeconds(now, -seconds));
 
@@ -66,12 +72,19 @@ export async function recordFinalCommits(ctx: Ctx, now: Date): Promise<number> {
   if (due.length > 0 && !ctx.env.GITHUB_TOKEN && ctx.env.DB_BACKEND !== "local") {
     console.error("WARNING: GITHUB_TOKEN is not set. Production must set it: unauthenticated GitHub calls share one small rate limit and the judged commits may not be read.");
   }
-  return eachRun("recordFinalCommits", due.slice(0, COMMITS_PER_TICK), async (run) => {
+  return eachRun("recordFinalCommits", inTurn(due, now), async (run) => {
     const judged = await judgedCommit(ctx, run, now);
     if (judged === null) return 0;
     await ctx.db.recordFinalCommit(run.member_id, run.run_id, judged.commit, formatTime(now), judged.detail);
     return 1;
   });
+}
+
+/** At most COMMITS_PER_TICK of `due` (oldest first), the window moving on by that many each tick. */
+export function inTurn<T>(due: T[], now: Date): T[] {
+  if (due.length <= COMMITS_PER_TICK) return due;
+  const from = (Math.floor(now.getTime() / TICK_MS) * COMMITS_PER_TICK) % due.length;
+  return [...due.slice(from), ...due.slice(0, from)].slice(0, COMMITS_PER_TICK);
 }
 
 /**

@@ -8,7 +8,7 @@ import { ApiError } from "./errors.ts";
 import { Signer } from "./sign.ts";
 import { isTime, parseSafeUint } from "./util.ts";
 
-/** The default per-run size limit: 64 GiB of compressed chunks (owner, WP-D). */
+/** The default per-run size limit: 64 GiB of compressed chunks. */
 export const DEFAULT_RUN_MAX_COMPRESSED_BYTES = 68_719_476_736;
 
 export interface Config {

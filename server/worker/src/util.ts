@@ -78,16 +78,16 @@ export function strField(o: Record<string, unknown>, name: string, max: number, 
 /**
  * The Goal Cup Proxy's version from a device or run body: `proxy_version` (the current name) or
  * `tracer_version` (the name older releases send). Either is accepted; when both are sent they must
- * be equal. At most 64 characters. Stored as `tracer_version` (the database's name, for now).
+ * be equal. Null is absent, as for other optional fields. At most 64 characters. Stored as
+ * `tracer_version` (the database's name, for now).
  */
 export function proxyVersionField(o: Record<string, unknown>): string {
-  const proxy = o.proxy_version;
-  const tracer = o.tracer_version;
-  if (proxy === undefined && tracer === undefined) throw malformed("proxy_version must be a string.");
-  const p = proxy === undefined ? undefined : strField(o, "proxy_version", 64);
-  const t = tracer === undefined ? undefined : strField(o, "tracer_version", 64);
-  if (p !== undefined && t !== undefined && p !== t) throw malformed("proxy_version and tracer_version differ; send one.");
-  return (p ?? t)!;
+  const p = o.proxy_version == null ? null : strField(o, "proxy_version", 64);
+  const t = o.tracer_version == null ? null : strField(o, "tracer_version", 64);
+  if (p !== null && t !== null && p !== t) throw malformed("proxy_version and tracer_version differ; send one.");
+  const version = p ?? t;
+  if (version === null) throw malformed("proxy_version must be a string.");
+  return version;
 }
 
 export function hexField(o: Record<string, unknown>, name: string): string {

@@ -67,6 +67,11 @@ for every table. Production and staging each have their own key and role.
    repository activity API, the last push to the default branch that GitHub timestamped at or before
    `ends_at`, and keeps it with flags for later pushes and force-pushes
    ([UPLOAD-API](UPLOAD-API.md#what-the-server-does-on-its-own)). That commit is what judges review.
+   When the activity API cannot say (unavailable, no activity, or a listing cut off by the page
+   limit), the cron falls back to the commit list by commit date, then `commits/HEAD`, and sets
+   `final_head_fallback`; a GitHub error status that lasts the grace hour is kept as `none` with the
+   same flag. A row with `final_head_fallback` is not the rule's answer (commit dates can be set by
+   the pusher, and the head may be a later push), so an organizer reviews it by hand.
 
 ## Storage
 
@@ -117,7 +122,10 @@ only as a Worker secret. The verifier pins the public key (`SERVER_PUBLIC_KEYS` 
   before it reads or stores the body: over the limit is `413 quota_exceeded`, nothing stored.
   Goal Cup Proxy keeps its data and retries, so raising the variable (a deploy) resumes the upload. The check
   reads the total of a moment ago, so concurrent uploads to several entries of one run can pass it by
-  one chunk each. The operators see Worker log lines `quota-half` and `quota-full` when a committed
+  one chunk each. Follow-up (not done): make the check atomic by passing the limit to
+  `goal_cup_upload_commit_chunk` and refusing in the same step that counts the bytes; that needs a
+  new database signature and the R2 object is already stored by then, so it is a larger change. The
+  operators see Worker log lines `quota-half` and `quota-full` when a committed
   chunk takes a run to 50% or 100% of the limit, and `quota-exceeded` on each refusal (repeated at
   Goal Cup Proxy's retry pace). These are log lines, not emails: the notice outbox mails the run's member,
   and an operator email would need a new notice kind and recipient rule in the website's database.

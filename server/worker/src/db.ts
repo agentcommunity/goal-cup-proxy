@@ -94,11 +94,10 @@ export interface RunRow {
   /**
    * What the run holds in R2 so far, over all its entries: the compressed bytes (each committed
    * chunk's Content-Length) and the number of committed chunks. The per-run size limit
-   * (RUN_MAX_COMPRESSED_BYTES) is checked against `stored_bytes`. Undefined only when the
-   * database predates the counters (website migration 20261021100000 not applied yet).
+   * (RUN_MAX_COMPRESSED_BYTES) is checked against `stored_bytes`.
    */
-  stored_bytes?: number;
-  chunk_count?: number;
+  stored_bytes: number;
+  chunk_count: number;
 }
 
 /** One segment of a run: its own chain, receipt and seal. Segment 0 is made by `POST /v1/runs`. */
@@ -360,10 +359,9 @@ export interface TickRun extends RunRow {
   final_commit: string | null;
   /**
    * The start of the latest disk pause that is owed a disk_full email (see `HeartbeatResult`); null
-   * until a heartbeat reports one. Undefined only when the database predates website migration
-   * 20261021100000.
+   * until a heartbeat reports one.
    */
-  disk_notice_at?: string | null;
+  disk_notice_at: string | null;
 }
 
 /**
@@ -379,12 +377,18 @@ export interface FinalCommitDetail {
   late_push: boolean | null;
   /** GitHub had a force push to that branch between the run's start and `ends_at`; null when not known. */
   force_push: boolean | null;
-  /** The commit is the head GitHub had when asked (`commits/HEAD`): the activity API was unavailable, or listed no update of the branch. */
+  /**
+   * The commit was not read from the activity API, so an organizer reviews it by hand: it came from
+   * the commit list (`commits?sha=<branch>&until=<ends_at>`, by commit date) or `commits/HEAD` (the
+   * head when asked, which may be a later push), because the activity API was unavailable, listed
+   * no update of the branch, or listed only updates after `ends_at` within its page limit; or it is
+   * `none` because GitHub kept answering an error status for the grace hour.
+   */
   head_fallback: boolean;
 }
 
 /** No detail: what a caller that passes none stores. */
-export const NO_FINAL_DETAIL: FinalCommitDetail = { pushed_at: null, branch: null, late_push: null, force_push: null, head_fallback: false };
+export const NO_FINAL_DETAIL: Readonly<FinalCommitDetail> = Object.freeze({ pushed_at: null, branch: null, late_push: null, force_push: null, head_fallback: false });
 
 /** A run that is over this long, and no longer open, is not looked at by the cron any more. */
 export const TICK_LOOKBACK_SECONDS = 48 * 3600;
@@ -433,7 +437,7 @@ export interface Db {
    * Open a run (segment 0) for the account and bind the credential to it, in one atomic step.
    * A competition run replaces the account's other open competition run (`replaced_at` = this
    * run's `official_start`). Only competition replaces: a test run or a practice run replaces
-   * nothing and is never replaced, so an operator's test runs can run side by side (owner, 21 Oct 2026).
+   * nothing and is never replaced, so an operator's test runs can run side by side.
    */
   openRun(args: OpenRunArgs): Promise<OpenRunResult>;
   /** Add the next segment. See `ContinueRunResult`. */

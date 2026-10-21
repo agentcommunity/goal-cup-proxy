@@ -8,8 +8,8 @@ import { afterEach, mock, test } from "node:test";
 import { LocalDb } from "../src/db-local.ts";
 import type { Ctx } from "../src/context.ts";
 import type { TickRun } from "../src/db.ts";
-import { GITHUB_GRACE, GITHUB_SETTLE } from "../src/github.ts";
-import { queueNotices, recordFinalCommits, runTick } from "../src/notices.ts";
+import { ACTIVITY_PAGES, GITHUB_GRACE, GITHUB_SETTLE } from "../src/github.ts";
+import { COMMITS_PER_TICK, inTurn, queueNotices, recordFinalCommits, runTick } from "../src/notices.ts";
 import { credentialFor } from "./helpers/client.ts";
 import { T0, WINDOW, type Rig, lifecycle } from "./helpers/rig.ts";
 
@@ -46,10 +46,11 @@ interface Push {
 }
 /**
  * One public repository on GitHub, default branch `main`: `pushes` is its activity, newest first, in
- * pages of `page` (Link rel="next" with an `after` cursor); its head is the newest push. A status in
- * `fail` replaces an endpoint's answer ("offline": the call throws).
+ * pages of `page` (Link rel="next" with an `after` cursor); its head is the newest push, and its
+ * commit list (`commits?until=`) dates each commit at its push. A status in `fail` replaces an
+ * endpoint's answer ("offline": the call throws).
  */
-function repo(pushes: Push[], fail: { repo?: number; activity?: number | "offline"; head?: number } = {}, page = 100) {
+function repo(pushes: Push[], fail: { repo?: number; activity?: number | "offline"; head?: number; commits?: number } = {}, page = 100) {
   return (_n: number, url: string): Response | Error => {
     const u = new URL(url);
     if (u.pathname.endsWith("/activity")) {
@@ -63,6 +64,11 @@ function repo(pushes: Push[], fail: { repo?: number; activity?: number | "offlin
       return json(items, 200, more ? { link: `<https://api.github.com/repositories/1/activity?after=${from + page}>; rel="next"` } : {});
     }
     if (u.pathname.endsWith("/commits/HEAD")) return fail.head !== undefined ? json({}, fail.head) : json({ sha: pushes[0]?.after ?? ZERO });
+    if (u.pathname.endsWith("/commits")) {
+      if (fail.commits !== undefined) return json({}, fail.commits);
+      const until = u.searchParams.get("until") ?? "";
+      return json(pushes.filter((p) => p.at <= until).slice(0, 1).map((p) => ({ sha: p.after })));
+    }
     return fail.repo !== undefined ? json({}, fail.repo) : json({ default_branch: "main", private: false });
   };
 }
@@ -584,6 +590,87 @@ lifecycle("an activity API that keeps failing falls back to commits/HEAD after a
   assert.deepEqual([s.final_commit, s.final_head_fallback, s.final_pushed_at, s.final_branch], [LATE, true, null, "main"]);
 }, HOUR);
 
+lifecycle("the fallback asks the commit list for the branch up to the end before commits/HEAD, still flagged", async (r) => {
+  const run = await r.start(await r.cred("alice"), "s1");
+  const LATE = "c3".repeat(20);
+  const calls = stubGithub(repo([{ after: LATE, at: t(3600 + 60) }, { after: SHA, at: t(3000) }], { activity: 503 }));
+  r.at(t(3600 + GITHUB_GRACE));
+  await r.tick();
+  const s = r.storedRun(run.run_id);
+  assert.deepEqual([s.final_commit, s.final_head_fallback, s.final_pushed_at], [SHA, true, null]);
+  assert.ok(calls.some((c) => c.url === `${API}/commits?sha=main&until=${encodeURIComponent(run.deadline_at)}&per_page=1`), calls.map((c) => c.url).join("\n"));
+  assert.ok(!calls.some((c) => c.url.endsWith("/commits/HEAD")));
+}, HOUR);
+
+lifecycle("activity pages that are all after the end never judge a later push's before: retried, then the flagged fallback", async (r) => {
+  const run = await r.start(await r.cred("alice"), "s1");
+  // One activity per page, every one after the end: the page limit stops the read before the end.
+  const late = Array.from({ length: ACTIVITY_PAGES + 1 }, (_, i) => ({ after: `c${i}`.repeat(20), before: `d${i}`.repeat(20), at: t(3600 + 600 - i) }));
+  stubGithub(repo([...late, { after: SHA, at: t(3000) }], {}, 1));
+  r.at(settled(run.deadline_at));
+  await r.tick();
+  r.at(t(3600 + GITHUB_GRACE - 1));
+  await r.tick();
+  assert.equal(r.storedRun(run.run_id).final_commit ?? null, null, "an incomplete listing is retried within the hour");
+  r.at(t(3600 + GITHUB_GRACE));
+  await r.tick();
+  const s = r.storedRun(run.run_id);
+  assert.deepEqual([s.final_commit, s.final_head_fallback, s.final_late_push], [SHA, true, true]);
+}, HOUR);
+
+lifecycle("an error status that lasts the grace hour (a rate limit, 451) is kept as none, flagged, and logged", async (r) => {
+  const runs = [await r.start(await r.cred("alice"), "s1"), await r.start(await r.cred("bob"), "s2")];
+  const statuses = [403, 451];
+  stubGithub((_n, url) => (url.includes("/repos/") ? json({}, statuses[0]!, { "x-ratelimit-remaining": "0" }) : json({})));
+  const logged: string[] = [];
+  const warn = mock.method(console, "warn", (...args: unknown[]) => void logged.push(args.map(String).join(" ")));
+  const err = mock.method(console, "error", (...args: unknown[]) => void logged.push(args.map(String).join(" ")));
+  try {
+    r.at(settled(runs[1]!.deadline_at));
+    await r.tick();
+    assert.ok(runs.every((x) => (r.storedRun(x.run_id).final_commit ?? null) === null), "retried within the hour");
+    assert.ok(logged.some((l) => l.includes("github-status 403") && l.includes("ratelimit-remaining=0")), logged.join("\n"));
+    statuses.shift();
+    r.at(t(3600 + GITHUB_GRACE));
+    await r.tick();
+  } finally {
+    warn.mock.restore();
+    err.mock.restore();
+  }
+  for (const x of runs) {
+    const s = r.storedRun(x.run_id);
+    assert.deepEqual([s.final_commit, s.final_head_fallback], ["none", true]);
+  }
+  assert.ok(logged.some((l) => l.includes("still answers 451")), logged.join("\n"));
+}, HOUR);
+
+test("a GitHub answer that is not a 200 has its body cancelled unread", async () => {
+  let cancelled = false;
+  globalThis.fetch = (async () => new Response(new ReadableStream({ cancel: () => void (cancelled = true) }), { status: 503 })) as typeof fetch;
+  const due = { run_id: "r0000000000000001", member_id: "m", mode: "competition", repo_url: REPO, official_start: T0, deadline_at: t(3600), replaced_at: null, final_commit: null } as unknown as TickRun;
+  const ctx = { env: { DB_BACKEND: "local" }, db: { runsForTick: async () => [due] } } as unknown as Ctx;
+  const warn = mock.method(console, "warn", () => {});
+  try {
+    assert.equal(await recordFinalCommits(ctx, new Date(t(3600 + 10 * MIN))), 0);
+  } finally {
+    warn.mock.restore();
+  }
+  assert.ok(cancelled);
+});
+
+test("when more runs are due than one tick asks about, the window turns so every run gets its turn", () => {
+  const due = Array.from({ length: COMMITS_PER_TICK + 7 }, (_, i) => i);
+  const seen = new Set<number>();
+  const at = Date.parse(T0);
+  for (let tick = 0; tick < 2; tick++) {
+    const asked = inTurn(due, new Date(at + tick * 5 * 60 * 1000));
+    assert.equal(asked.length, COMMITS_PER_TICK);
+    for (const i of asked) seen.add(i);
+  }
+  assert.equal(seen.size, due.length, "two ticks ask about every run");
+  assert.deepEqual(inTurn([1, 2, 3], new Date(at)), [1, 2, 3]);
+});
+
 lifecycle("a 404 is retried for an hour before the absence is recorded, and the ended notice says so", async (r) => {
   // A repository that is briefly private: the 404 is not kept, and the next tick records the push.
   const back = await r.start(await r.cred("bob"), "s0");
@@ -829,22 +916,54 @@ lifecycle("vitals are kept on the heartbeat and as the run's latest; unknown key
   assert.deepEqual(stored().last_vitals, {});
 });
 
-lifecycle("malformed vitals are 400 and change nothing", async (r) => {
+lifecycle("malformed vitals never cost the heartbeat: a bad field is dropped and logged, without its value", async (r) => {
   const token = await r.cred("alice");
   const run = await r.start(token, "s1");
-  for (const vitals of [
-    5, "disk", [], true,
-    { disk_free_bytes: -1 }, { disk_free_bytes: 1.5 }, { disk_free_bytes: "12" }, { disk_free_bytes: 2 ** 53 },
-    { rss_bytes: true }, { cpu_ms: {} }, { open_files: [] },
-    { disk_short: "yes" }, { disk_short: 1 },
-    { agent_paused: "memory" }, { agent_paused: true }, { agent_paused: "" },
-  ]) {
-    const res = await r.beat(token, run.run_id, run.entry_id, { vitals });
-    assert.equal(res.status, 400, JSON.stringify(vitals));
-    assert.equal((res.body as { error: string }).error, "malformed");
+  const stored = () => r.storedRun(run.run_id) as unknown as DiskState & { last_heartbeat_at: string | null };
+  const logged: string[] = [];
+  const log = mock.method(console, "warn", (...args: unknown[]) => void logged.push(args.map(String).join(" ")));
+  try {
+    for (const [field, bad] of [
+      ["disk_free_bytes", -1], ["disk_free_bytes", 1.5], ["disk_free_bytes", "12"], ["disk_free_bytes", 2 ** 53],
+      ["rss_bytes", true], ["cpu_ms", {}], ["open_files", []], ["disk_short", "yes"], ["disk_short", 1],
+    ] as const) {
+      logged.length = 0;
+      const good = field === "cpu_ms" ? "rss_bytes" : "cpu_ms"; // a sound field beside it is kept
+      const res = await r.beat(token, run.run_id, run.entry_id, { vitals: { [good]: 7, [field]: bad } });
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      assert.deepEqual(stored().last_vitals, { [good]: 7 }, `${field}: ${JSON.stringify(bad)}`);
+      assert.deepEqual(logged, [`vitals-dropped vitals.${field} ${run.run_id}`]);
+    }
+  } finally {
+    log.mock.restore();
   }
-  const s = r.storedRun(run.run_id) as unknown as DiskState & { last_heartbeat_at: string | null };
-  assert.deepEqual([s.last_heartbeat_at, s.last_vitals, s.disk_paused_at], [null, null, null]);
+  assert.notEqual(stored().last_heartbeat_at, null);
+});
+
+lifecycle("a vitals that is not an object, or an unknown agent_paused, says nothing about a pause and costs nothing", async (r) => {
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  const stored = () => r.storedRun(run.run_id) as unknown as DiskState;
+  r.after(MIN);
+  await r.beat(token, run.run_id, run.entry_id, PAUSED);
+  const log = mock.method(console, "warn", () => {});
+  try {
+    for (const vitals of [5, "disk", [], true, { agent_paused: "memory" }, { agent_paused: true }, { agent_paused: "" }]) {
+      r.after(MIN);
+      const res = await r.beat(token, run.run_id, run.entry_id, { vitals });
+      assert.equal(res.status, 200, JSON.stringify(vitals));
+      // Neither ends the running pause nor replaces the run's latest vitals.
+      assert.deepEqual([stored().disk_paused_at, stored().last_vitals], [t(MIN), PAUSED.vitals], JSON.stringify(vitals));
+    }
+    await r.beat(token, run.run_id, run.entry_id, RUNNING);
+    assert.equal(stored().disk_paused_at, null);
+    for (const vitals of [{ agent_paused: "memory", disk_free_bytes: 1 }, "disk"]) {
+      await r.beat(token, run.run_id, run.entry_id, { vitals });
+      assert.equal(stored().disk_paused_at, null, `${JSON.stringify(vitals)} started no pause`);
+    }
+  } finally {
+    log.mock.restore();
+  }
 });
 
 lifecycle("a disk pause queues one disk_full notice per pause, again after a resume, but not twice within 6 hours", async (r) => {

@@ -95,8 +95,9 @@ test("statusAt: sealed once over with the current entry sealed, incomplete once 
   const run = {
     run_id: R1, event_id: "cup", member_id: "m1", mode: "competition" as const, status: "open" as const, official_start: START,
     deadline_at: DEADLINE, replaced_at: null as string | null, repo_url: "u", first_entry_id: E1, current_entry_id: E1, current_sealed_at: null as string | null,
+    stored_bytes: 0, chunk_count: 0,
   };
-  const at = (iso: string, over = {}) => statusAt({ ...run, ...over }, new Date(iso));
+  const at =(iso: string, over = {}) => statusAt({ ...run, ...over }, new Date(iso));
   assert.equal(at("2026-11-13T08:59:59Z"), "open");
   assert.equal(at("2026-11-13T08:59:59Z", { current_sealed_at: START }), "open"); // sealed, but not over
   assert.equal(at(DEADLINE, { current_sealed_at: START }), "sealed");

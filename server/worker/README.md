@@ -381,8 +381,9 @@ and 6 hours, an hour to wait for the commit, 5 minutes before GitHub is asked, a
 
 Cost: each step reads the run list with one call. `queueNotices` makes one call for the whole batch
 however many runs there are. `closeRuns` makes one call per run due to close. `recordFinalCommits` asks
-GitHub about at most 50 runs, each with 2 to 3 fetches (repository, activity, and `commits/HEAD` only
-as a fallback; up to 7 for a run with more than 100 activities), and makes 50 writes. That is a few
+GitHub about at most 50 runs (taking turns when more are due), each with 2 to 4 fetches (repository,
+activity, and the commit list and `commits/HEAD` only as a fallback; up to 8 for a run with more than
+100 activities), and makes 50 writes. That is a few
 hundred subrequests in a busy tick, so the cron
 needs the paid Workers plan (the free plan allows 50 per invocation). A failed step is logged
 (`tick <step> <run_id>: <message>` or `tick queueNotices: <message>`) and the next tick retries; a notice

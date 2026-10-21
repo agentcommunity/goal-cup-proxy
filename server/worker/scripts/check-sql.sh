@@ -43,7 +43,8 @@ cleanup() {
   $as_pg "$PG_BIN/pg_ctl" -D "$tmp/data" -m immediate stop >/dev/null 2>&1 || true
   rm -rf "$tmp"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'cleanup; trap - EXIT; exit 130' INT TERM
 cd "$tmp"
 
 $as_pg "$PG_BIN/initdb" -D "$tmp/data" -U postgres --auth=trust -E UTF8 --no-locale >/dev/null
@@ -64,11 +65,17 @@ SQL
 
 # The mirror up to the line before its first pending section, and the check that the rest of it is
 # the pending files (the regeneration format: a blank line, the "=====" line, the file).
-pending=$(ls "$sql"/pending/*.sql)
-first=$(basename "$(echo "$pending" | head -n 1)")
+# The pending files, in name order, as the positional parameters (a glob, so a name with a space
+# stays one name).
+set -- "$sql"/pending/*.sql
+if [ ! -e "$1" ]; then
+  echo "check-sql: no file in sql/pending/" >&2
+  exit 2
+fi
+first=$(basename "$1")
 marker="-- ======================== $first ========================"
 awk -v m="$marker" '$0 == m { exit } NR > 1 { print prev } { prev = $0 }' "$mirror" > "$tmp/base.sql"
-for f in $pending; do
+for f in "$@"; do
   printf '\n-- ======================== %s ========================\n' "${f##*/}"
   cat "$f"
 done > "$tmp/sections.sql"
@@ -79,7 +86,7 @@ fi
 
 pg -1 -f "$tmp/stubs.sql" -f "$tmp/base.sql"
 echo "check-sql: applied the mirror up to $first"
-for f in $pending; do
+for f in "$@"; do
   pg -1 -f "$f"
   echo "check-sql: applied ${f##*/}"
 done
@@ -132,6 +139,15 @@ BEGIN
   ASSERT k = 'committed', 'commit_chunk (3 args): ' || k;
   r := goal_cup_tracer.run_json('r0000000000000001') -> 'run';
   ASSERT r ->> 'stored_bytes' = '40' AND r ->> 'chunk_count' = '2', 'run totals after chunks: ' || r::text;
+  k := NULL;
+  BEGIN
+    k := public.goal_cup_upload_commit_chunk(m, 'r0000000000000001', jsonb_build_object(
+           'entry_id', 'e0000000000000001', 'offset', 150, 'length', 10, 'sha256', z, 'first_seq', 7, 'last_seq', 7,
+           'prev', h2, 'head', h1, 'r2_key', 'k3', 'received_at', t0, 'ack', '{}'::jsonb), (-1)::bigint);
+  EXCEPTION WHEN raise_exception THEN
+    k := 'raised';
+  END;
+  ASSERT k = 'raised', 'commit_chunk took a negative size: ' || coalesce(k, 'null');
 
   -- 3. Vitals and the disk pause, through the new and the old heartbeat.
   k := public.goal_cup_upload_heartbeat(m, 'r0000000000000001', 'e0000000000000001', 6, h2, 150, false, NULL, 'ok', 1,
@@ -146,6 +162,22 @@ BEGIN
   k := public.goal_cup_upload_heartbeat(m, 'r0000000000000001', 'e0000000000000001', 6, h2, 150, false, NULL, 'ok', 1,
          NULL, NULL, (t0 + interval '2 minutes')::text, '{"disk_free_bytes": 9}'::jsonb);
   ASSERT (SELECT disk_paused_at IS NULL FROM goal_cup_tracer.runs WHERE id = 'r0000000000000001'), 'pause not ended';
+  -- A new pause within 6 hours of the last owed one owes nothing; paused to paused is the same pause.
+  k := public.goal_cup_upload_heartbeat(m, 'r0000000000000001', 'e0000000000000001', 6, h2, 150, false, NULL, 'ok', 1,
+         NULL, NULL, (t0 + interval '3 minutes')::text, '{"agent_paused": "disk"}'::jsonb);
+  SELECT * INTO run FROM goal_cup_tracer.runs WHERE id = 'r0000000000000001';
+  ASSERT run.disk_paused_at = t0 + interval '3 minutes' AND run.disk_notice_at = t0, 'second pause within 6 hours';
+  k := public.goal_cup_upload_heartbeat(m, 'r0000000000000001', 'e0000000000000001', 6, h2, 150, false, NULL, 'ok', 1,
+         NULL, NULL, (t0 + interval '4 minutes')::text, '{"agent_paused": "disk"}'::jsonb);
+  SELECT * INTO run FROM goal_cup_tracer.runs WHERE id = 'r0000000000000001';
+  ASSERT run.disk_paused_at = t0 + interval '3 minutes' AND run.disk_notice_at = t0, 'paused to paused moved the pause';
+  k := public.goal_cup_upload_heartbeat(m, 'r0000000000000001', 'e0000000000000001', 6, h2, 150, false, NULL, 'ok', 1,
+         NULL, NULL, (t0 + interval '5 minutes')::text, '{}'::jsonb);
+  -- 6 hours after the last owed pause, a new one is owed again.
+  k := public.goal_cup_upload_heartbeat(m, 'r0000000000000001', 'e0000000000000001', 6, h2, 150, false, NULL, 'ok', 1,
+         NULL, NULL, (t0 + interval '6 hours')::text, '{"agent_paused": "disk"}'::jsonb);
+  SELECT * INTO run FROM goal_cup_tracer.runs WHERE id = 'r0000000000000001';
+  ASSERT run.disk_paused_at = t0 + interval '6 hours' AND run.disk_notice_at = t0 + interval '6 hours', 'pause after 6 hours owes a notice';
   r := public.goal_cup_upload_runs_for_tick(t0::text);
   ASSERT jsonb_array_length(r) = 2 AND r -> 0 ? 'disk_notice_at', 'runs_for_tick: ' || r::text;
   INSERT INTO goal_cup_tracer.notices (run_id, member_id, kind, dedupe_key, created_at)
@@ -166,6 +198,28 @@ BEGIN
   END LOOP;
   ASSERT goal_cup_tracer.notice_text('silence', '{}', 'r') ->> 'text' LIKE '%goalcup status%', 'silence words';
   ASSERT goal_cup_tracer.notice_text('ended', '{"uploaded": false}', 'r') ->> 'text' LIKE '%goalcup upload%', 'ended words';
+
+  -- 6. Grants: the Worker roles can call the new overloads; anon, authenticated and PUBLIC cannot,
+  --    nor call the internal 8-argument note_heartbeat.
+  FOREACH k IN ARRAY ARRAY[
+    'public.goal_cup_upload_commit_chunk(text, text, jsonb, bigint)',
+    'public.goal_cup_upload_heartbeat(text, text, text, bigint, text, bigint, boolean, text, text, bigint, text, text, text, jsonb)',
+    'public.goal_cup_upload_record_final_commit(text, text, text, text, text, text, boolean, boolean, boolean)'
+  ] LOOP
+    ASSERT has_function_privilege('goal_cup_ingest_staging', k, 'EXECUTE'), 'staging Worker cannot call ' || k;
+    ASSERT has_function_privilege('goal_cup_ingest_production', k, 'EXECUTE'), 'production Worker cannot call ' || k;
+    ASSERT has_function_privilege('service_role', k, 'EXECUTE'), 'service_role cannot call ' || k;
+  END LOOP;
+  FOREACH k IN ARRAY ARRAY[
+    'public.goal_cup_upload_commit_chunk(text, text, jsonb, bigint)',
+    'public.goal_cup_upload_heartbeat(text, text, text, bigint, text, bigint, boolean, text, text, bigint, text, text, text, jsonb)',
+    'public.goal_cup_upload_record_final_commit(text, text, text, text, text, text, boolean, boolean, boolean)',
+    'goal_cup_tracer.note_heartbeat(text, text, timestamptz, text, bigint, text, text, jsonb)'
+  ] LOOP
+    ASSERT NOT has_function_privilege('anon', k, 'EXECUTE'), 'anon can call ' || k;
+    ASSERT NOT has_function_privilege('authenticated', k, 'EXECUTE'), 'authenticated can call ' || k;
+    ASSERT NOT has_function_privilege('public', k, 'EXECUTE'), 'PUBLIC can call ' || k;
+  END LOOP;
 END $$;
 SQL
 echo "check-sql: smoke calls passed"

@@ -2353,7 +2353,7 @@ BEGIN
 END $$;
 
 -- ======================== 20261021100000_goal_cup_tracer_event_readiness.sql ========================
--- Goal Cup tracer: event readiness (2026-10-21). One migration for five changes, applied once.
+-- Goal Cup Proxy: event readiness (2026-10-21). One migration for five changes, applied once.
 --
 -- 1. Test runs no longer replace each other (owner, 21 Oct 2026: "several organiser test runs of one
 --    test operator can run in parallel"). 20261015170000 made a new test run end the operator's
@@ -2381,6 +2381,7 @@ END $$;
 --        runs_for_tick) carries them; a Worker that does not read them ignores them.
 --      * public.goal_cup_upload_commit_chunk(…, p_stored_bytes): a new overload. In the same atomic
 --        step as before it records the chunk and adds p_stored_bytes and one chunk to the entry.
+--        A negative p_stored_bytes raises; NULL (no size known) comes only from the old wrapper.
 --    Operator notices at 50% and 100% of the limit are Worker log lines (quota-half, quota-full,
 --    quota-exceeded), not rows in goal_cup_tracer.notices: that outbox mails the run's member.
 --
@@ -2388,8 +2389,8 @@ END $$;
 --    (docs/UPLOAD-API.md, heartbeat):
 --      {"disk_free_bytes": u64, "disk_short": bool, "agent_paused": "disk" | null,
 --       "rss_bytes": u64, "cpu_ms": u64, "open_files": u64}
---    about the tracer's own processes and the machine's free disk, nothing else. The Worker checks
---    it and passes only these keys, nulls dropped. The tracer pauses the agent itself when the disk
+--    about Goal Cup Proxy's own processes and the machine's free disk, nothing else. The Worker checks
+--    it and passes only these keys, nulls dropped. Goal Cup Proxy pauses the agent itself when the disk
 --    is almost full ("agent_paused": "disk") and resumes it once there is space again.
 --      * heartbeats.vitals: the vitals that heartbeat sent; null when it sent none.
 --      * runs.last_vitals: the latest vitals any heartbeat of the run sent (a heartbeat without
@@ -2397,7 +2398,7 @@ END $$;
 --      * runs.disk_paused_at: when the current disk pause began; null while the agent is not
 --        paused. A heartbeat whose vitals say agent_paused "disk" starts a pause (if none is
 --        running); one whose vitals do not say it ends it. A heartbeat without vitals changes
---        neither: an older tracer, or one that could not measure, says nothing about a pause.
+--        neither: an older Goal Cup Proxy, or one that could not measure, says nothing about a pause.
 --      * runs.disk_notice_at: the start of the latest pause that is owed a disk_full email. A pause
 --        that begins sets it, unless the one it holds is less than 6 hours old (at most one
 --        disk_full email per run per 6 hours).
@@ -2444,8 +2445,8 @@ END $$;
 -- goal_cup_upload_record_final_commit (now: no detail); each calls the new form. A later migration
 -- can drop them once every Worker sends the new arguments. The new parameters have no DEFAULT on
 -- purpose: with one, PostgREST could not choose between the two overloads for a call without them.
--- Each old form is defined before its new one on purpose: the mirror's parity test reads the last
--- definition of each name.
+-- The mirror's parity test (test/supabase.test.ts) checks that each Worker call matches exactly one
+-- overload.
 --
 -- Additive: new columns (constant defaults or null, no table rewrite), the notices kind CHECK
 -- widened, functions replaced with the same signatures (grants kept), four new function overloads
@@ -2660,8 +2661,7 @@ AS $$
 $$;
 
 -- The Worker that is live while this migration is applied still calls the three-argument form.
--- It now goes through the new function (no size known: 0 bytes, one chunk). Defined before the
--- new function on purpose: the mirror's parity test reads the last definition of each name.
+-- It now goes through the new function (no size known: NULL, counted as 0 bytes, one chunk).
 CREATE OR REPLACE FUNCTION public.goal_cup_upload_commit_chunk(p_member_id text, p_run_id text, p_chunk jsonb) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
 AS $$
@@ -2677,8 +2677,11 @@ DECLARE
   v_entry entries;
   v_off   bigint := (p_chunk ->> 'offset')::bigint;
   v_len   bigint := (p_chunk ->> 'length')::bigint;
-  v_bytes bigint := greatest(coalesce(p_stored_bytes, 0), 0);
+  v_bytes bigint := coalesce(p_stored_bytes, 0); -- NULL only from the old wrapper above
 BEGIN
+  IF p_stored_bytes < 0 THEN
+    RAISE EXCEPTION 'goal_cup_upload_commit_chunk: p_stored_bytes is negative (%)', p_stored_bytes;
+  END IF;
   SELECT * INTO v_run FROM runs WHERE id = p_run_id AND member_id = p_member_id::uuid AND staging = caller_is_staging() FOR UPDATE;
   IF NOT FOUND THEN RETURN 'not_found'; END IF;
   SELECT * INTO v_entry FROM entries WHERE id = p_chunk ->> 'entry_id' AND run_id = p_run_id FOR UPDATE;
@@ -2716,7 +2719,9 @@ END $$;
 
 -- ---- 3. heartbeat vitals and the disk pause -----------------------------------------------------
 
--- The run-level facts a heartbeat adds, now with its vitals and the disk pause they report.
+-- The run-level facts a heartbeat adds, now with its vitals and the disk pause they report. The
+-- disk pause rule has a twin in the Worker's local store, diskPause in server/worker/src/db-local.ts
+-- (goal-cup-tracer): change both together.
 CREATE FUNCTION goal_cup_tracer.note_heartbeat(
   p_run_id text, p_entry_id text, p_at timestamptz, p_recording text, p_model_requests bigint,
   p_client_ip text, p_client_country text, p_vitals jsonb
@@ -2763,8 +2768,7 @@ END $$;
 
 -- The Worker that is live while this migration is applied still calls the 13-argument form, and
 -- the new Worker calls it for a heartbeat without vitals. It goes through the new function with
--- none. Defined before the new function on purpose: the mirror's parity test reads the last
--- definition of each name.
+-- none.
 CREATE OR REPLACE FUNCTION public.goal_cup_upload_heartbeat(
   p_member_id text, p_run_id text, p_entry_id text,
   p_seq bigint, p_head text, p_offset_local bigint, p_final boolean, p_repo_head text,
@@ -2852,8 +2856,7 @@ $$;
 
 -- ---- 4. the judged commit is the last push before the deadline ----------------------------------
 
--- The old form, for the Worker that is live while this is applied: no detail. Defined before the new
--- function on purpose: the mirror's parity test reads the last definition of each name.
+-- The old form, for the Worker that is live while this is applied: no detail.
 CREATE OR REPLACE FUNCTION public.goal_cup_upload_record_final_commit(p_member_id text, p_run_id text, p_commit text, p_at text) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
 AS $$

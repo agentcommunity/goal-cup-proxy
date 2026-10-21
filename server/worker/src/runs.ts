@@ -93,7 +93,7 @@ export function requireOpen(ctx: Ctx, run: RunRow, entry: EntryRow): void {
 
 /**
  * Whole seconds from the server's clock now to the run's `deadline_at`, rounded up, and 0 once it
- * has come. goalcup counts down from this and never from its own machine's date (WP11), so it
+ * has come. goalcup counts down from this and never from its own machine's date, so it
  * is on every answer that tells goalcup about the deadline: open, continue and heartbeat.
  */
 export function secondsLeft(run: { deadline_at: string }, now: Date): number {
@@ -360,7 +360,7 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
     throw malformed('recording must be "ok", "gaps", "failed" or "unknown".');
   }
   const model_requests = b.model_requests == null ? null : uintField(b, "model_requests");
-  const vitals = vitalsField(b);
+  const vitals = vitalsField(b, runId);
   const { run, entry } = await requireRun(ctx, member, runId, entry_id);
   // An abandoned or closed run accepts nothing more, a final heartbeat included.
   requireAccepting(ctx, run);
@@ -404,22 +404,35 @@ const VITAL_COUNTS = ["disk_free_bytes", "rss_bytes", "cpu_ms", "open_files"] as
 
 /**
  * `vitals`, if sent: an object of the known fields, each optional, null meaning absent. Keys the
- * server does not know are dropped (a newer goalcup may send more); a known field of the wrong
- * type is 400, like any other field. Only the known fields, nulls left out, go further.
+ * server does not know are dropped (a newer goalcup may send more). Vitals never cost a heartbeat
+ * (it is what keeps the run alive, D64): a known field of the wrong type is dropped, and a `vitals`
+ * that is not an object, or an `agent_paused` other than "disk" or null, drops the whole vitals, so
+ * the heartbeat says nothing about a pause (neither starts nor ends one). Each drop is a log line
+ * `vitals-dropped <field> <run_id>`, without the value. Only the known fields, nulls left out, go further.
  */
-function vitalsField(b: Record<string, unknown>): Vitals | null {
-  if (b.vitals == null) return null;
-  const v = asObject(b.vitals, "vitals");
+function vitalsField(b: Record<string, unknown>, runId: string): Vitals | null {
+  const dropped = (field: string) => console.warn(`vitals-dropped ${field} ${runId}`);
+  const v = b.vitals;
+  if (v == null) return null;
+  if (typeof v !== "object" || Array.isArray(v)) {
+    dropped("vitals");
+    return null;
+  }
+  const got: Record<string, unknown> = { ...v };
+  if (got.agent_paused != null && got.agent_paused !== "disk") {
+    dropped("vitals.agent_paused");
+    return null;
+  }
   const out: Vitals = {};
-  for (const name of VITAL_COUNTS) if (v[name] != null) out[name] = uintField(v, name, `vitals.${name}`);
-  if (v.disk_short != null) {
-    if (typeof v.disk_short !== "boolean") throw malformed("vitals.disk_short must be true or false.");
-    out.disk_short = v.disk_short;
+  if (got.agent_paused === "disk") out.agent_paused = "disk";
+  for (const name of VITAL_COUNTS) {
+    const n = got[name];
+    if (n == null) continue;
+    if (typeof n === "number" && Number.isSafeInteger(n) && n >= 0) out[name] = n;
+    else dropped(`vitals.${name}`);
   }
-  if (v.agent_paused != null) {
-    if (v.agent_paused !== "disk") throw malformed('vitals.agent_paused must be "disk" or null.');
-    out.agent_paused = "disk";
-  }
+  if (typeof got.disk_short === "boolean") out.disk_short = got.disk_short;
+  else if (got.disk_short != null) dropped("vitals.disk_short");
   return out;
 }
 

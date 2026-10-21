@@ -51,6 +51,9 @@ test("Goal Cup Proxy's version is proxy_version or tracer_version; both must agr
   assert.equal(proxyVersionField({ tracer_version: "0.6.0" }), "0.6.0");
   assert.equal(proxyVersionField({ proxy_version: "0.7.0", tracer_version: "0.7.0" }), "0.7.0");
   assert.equal(proxyVersionField({ proxy_version: "x".repeat(64) }), "x".repeat(64));
+  // Null is absent, as for other optional fields.
+  assert.equal(proxyVersionField({ proxy_version: null, tracer_version: "0.6.0" }), "0.6.0");
+  assert.equal(proxyVersionField({ proxy_version: "0.7.0", tracer_version: null }), "0.7.0");
   for (const bad of [
     {},
     { proxy_version: "0.7.0", tracer_version: "0.6.0" },
@@ -60,7 +63,7 @@ test("Goal Cup Proxy's version is proxy_version or tracer_version; both must agr
     { tracer_version: "x".repeat(65) },
     { proxy_version: 7 },
     { proxy_version: null },
-    { proxy_version: null, tracer_version: "0.6.0" },
+    { proxy_version: null, tracer_version: null },
     { proxy_version: "0.7.0", tracer_version: "x".repeat(65) },
   ]) assert.throws(() => proxyVersionField(bad), isMalformed, JSON.stringify(bad));
 });

@@ -44,6 +44,7 @@ const T = "2026-11-06T09:00:00Z";
 const run: RunRow = {
   run_id: "r0000000000000001", event_id: "cup", member_id: "m", mode: "competition", status: "open", official_start: T,
   deadline_at: "2026-11-13T09:00:00Z", replaced_at: null, repo_url: "https://github.com/a/b", first_entry_id: "e0000000000000001", current_entry_id: "e0000000000000001", current_sealed_at: null,
+  stored_bytes: 0, chunk_count: 0,
 };
 const entry: EntryRow = {
   entry_id: "e0000000000000001", run_id: "r0000000000000001", segment: 0, connector_id: "c", manifest_sha256: H("a"), connector_dir_sha256: H("c"),
@@ -226,11 +227,11 @@ test("commitChunk -> upload_commit_chunk(p_chunk, p_stored_bytes)", async () => 
   assert.deepEqual(calls[0], { fn: "upload_commit_chunk", args: { p_member_id: "m", p_run_id: "r1", p_chunk: chunk, p_stored_bytes: 4321 } });
 });
 
-test("a run's stored_bytes and chunk_count come through when the database sends them, are checked, and may be absent", async () => {
+test("a run's stored_bytes and chunk_count come through, are checked, and must be there", async () => {
   const counted = { ...run, stored_bytes: 68_719_476_736, chunk_count: 2048 };
-  stub({ run: counted, entry }, { run, entry });
+  stub({ run: counted, entry });
   assert.deepEqual(await db().getRun("m", "r1", null), { run: counted, entry });
-  assert.equal((await db().getRun("m", "r1", null))!.run.stored_bytes, undefined); // a database before 20261021100000
+  const { stored_bytes: _s, ...uncounted } = run;
   const quiet = console.error;
   console.error = () => {};
   try {
@@ -238,6 +239,8 @@ test("a run's stored_bytes and chunk_count come through when the database sends 
       stub({ run: { ...run, ...bad }, entry });
       await assert.rejects(db().getRun("m", "r1", null), (e) => e instanceof ApiError && e.status === 502, JSON.stringify(bad));
     }
+    stub({ run: uncounted, entry }); // a database without the migration this Worker needs
+    await assert.rejects(db().getRun("m", "r1", null), (e) => e instanceof ApiError && e.status === 502);
   } finally {
     console.error = quiet;
   }
@@ -308,14 +311,14 @@ test("recordHeartbeat sends p_vitals only when the heartbeat carried vitals (the
   assert.equal(Object.keys(calls[0]!.args).length, Object.keys(calls[1]!.args).length + 1);
 });
 
-test("a tick run's disk_notice_at comes through, is checked, and may be absent (a database before 20261021100000)", async () => {
+test("a tick run's disk_notice_at comes through, is checked, and must be there", async () => {
   const owed = { ...tickRun, disk_notice_at: "2026-11-06T10:00:00Z" };
-  stub([owed, { ...tickRun, disk_notice_at: null }, tickRun]);
-  assert.deepEqual(await db().runsForTick(T), [owed, { ...tickRun, disk_notice_at: null }, tickRun]);
+  stub([owed, tickRun]);
+  assert.deepEqual(await db().runsForTick(T), [owed, tickRun]);
   const quiet = console.error;
   console.error = () => {};
   try {
-    for (const bad of ["yesterday", 5, true]) {
+    for (const bad of ["yesterday", 5, true, undefined]) {
       stub([{ ...tickRun, disk_notice_at: bad }]);
       await assert.rejects(db().runsForTick(T), (e) => e instanceof ApiError && e.status === 502, JSON.stringify(bad));
     }
@@ -332,6 +335,7 @@ test("a claimed disk_full notice is a notice the Worker knows", async () => {
 
 const tickRun: TickRun = {
   ...run, last_heartbeat_at: "2026-11-06T09:05:00Z", last_model_request_at: T, flagged_at: null, flag_reason: null, final_commit: null,
+  disk_notice_at: null,
 };
 
 test("runsForTick -> upload_runs_for_tick(p_at), each row checked", async () => {
@@ -439,10 +443,16 @@ test("a refused request logs PostgREST's code and message, not its details or hi
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Every `this.#rpc("<name>", { p_…: … })` call in db-supabase.ts, with the `p_` keys of its object. */
-function workerCalls(): Map<string, Set<string>> {
+/** The `p_` keys written in a piece of an argument object. */
+const pKeys = (text: string) => [...text.matchAll(/\b(p_[a-z0-9_]+)\s*[:,}\n]/g)].map((k) => k[1] as string);
+
+/**
+ * Every `this.#rpc("<name>", { p_…: … })` call in db-supabase.ts, once per argument set it can send:
+ * a conditional spread `...(cond ? {} : { p_x: … })` makes two variants, without and with its keys.
+ */
+function workerCalls(): { name: string; args: Set<string> }[] {
   const src = readFileSync(join(SRC, "src", "db-supabase.ts"), "utf8");
-  const calls = new Map<string, Set<string>>();
+  const calls: { name: string; args: Set<string> }[] = [];
   for (const m of src.matchAll(/#rpc\("([a-z_]+)",\s*\{/g)) {
     let depth = 1;
     let i = (m.index ?? 0) + m[0].length;
@@ -451,8 +461,12 @@ function workerCalls(): Map<string, Set<string>> {
       if (src[i] === "{") depth++;
       else if (src[i] === "}") depth--;
     }
-    const keys = new Set([...src.slice(start, i - 1).matchAll(/\b(p_[a-z0-9_]+)\s*[:,}\n]/g)].map((k) => k[1] as string));
-    calls.set(m[1] as string, keys);
+    const body = src.slice(start, i - 1);
+    const spread = /\.\.\.\([^?]*\?\s*\{\s*\}\s*:\s*\{([^}]*)\}\s*\)/g;
+    const optional = [...body.matchAll(spread)].map((s) => pKeys(s[1] as string));
+    let variants = [pKeys(body.replace(spread, ""))];
+    for (const keys of optional) variants = variants.flatMap((v) => [v, [...v, ...keys]]);
+    for (const v of variants) calls.push({ name: m[1] as string, args: new Set(v) });
   }
   return calls;
 }
@@ -462,10 +476,13 @@ interface SqlFn {
   required: Set<string>;
 }
 
-/** The last `CREATE [OR REPLACE] FUNCTION public.goal_cup_<name>(…)` for each public function: that one wins. */
-function sqlFunctions(): Map<string, SqlFn> {
+/**
+ * Every overload of each `public.goal_cup_<name>` in the mirror. A later `CREATE OR REPLACE` with the
+ * same parameters replaces an earlier one (the last wins); different parameters are another overload.
+ */
+function sqlFunctions(): Map<string, SqlFn[]> {
   const sql = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
-  const fns = new Map<string, SqlFn>();
+  const fns = new Map<string, Map<string, SqlFn>>();
   for (const m of sql.matchAll(/CREATE (?:OR REPLACE )?FUNCTION public\.goal_cup_([a-z_]+)\(/g)) {
     let depth = 1;
     let i = (m.index ?? 0) + m[0].length;
@@ -494,28 +511,37 @@ function sqlFunctions(): Map<string, SqlFn> {
       params.add(name);
       if (!/\bDEFAULT\b/i.test(p)) required.add(name);
     }
-    fns.set(m[1] as string, { params, required });
+    const name = m[1] as string;
+    if (!fns.has(name)) fns.set(name, new Map());
+    fns.get(name)!.set([...params].join(","), { params, required });
   }
-  return fns;
+  return new Map([...fns].map(([name, overloads]) => [name, [...overloads.values()]]));
 }
 
-test("every RPC the Worker calls exists in the SQL, with the same argument names", () => {
+/** An overload answers a named call when it has every argument sent and gets every one it requires. */
+const answers = (fn: SqlFn, args: Set<string>) => [...args].every((a) => fn.params.has(a)) && [...fn.required].every((r) => args.has(r));
+
+test("every RPC the Worker calls exists in the SQL, with the same argument names, and each call matches exactly one overload", () => {
   const calls = workerCalls();
   const fns = sqlFunctions();
   // The scan must see every call site, or a call could hide from the check.
   const sites = readFileSync(join(SRC, "src", "db-supabase.ts"), "utf8").split('#rpc("').length - 1;
-  assert.equal(calls.size, sites, "the scan missed a #rpc call");
+  assert.equal(new Set(calls.map((c) => c.name)).size, sites, "the scan missed a #rpc call");
   assert.ok(fns.size >= sites, `found only ${fns.size} SQL functions: the scan is broken`);
+  // The heartbeat is sent with and without p_vitals: both forms must be checked.
+  assert.deepEqual(calls.filter((c) => c.name === "upload_heartbeat").map((c) => c.args.size).sort(), [13, 14], "the scan missed a call variant");
   const problems: string[] = [];
-  for (const [name, args] of calls) {
-    const fn = fns.get(name);
-    if (!fn) {
+  for (const { name, args } of calls) {
+    const overloads = fns.get(name);
+    if (!overloads) {
       problems.push(`${name}: no CREATE FUNCTION public.goal_cup_${name}( in the SQL`);
       continue;
     }
     if (args.size === 0) problems.push(`${name}: no p_ argument was read from the Worker call: the scan is broken`);
-    for (const a of args) if (!fn.params.has(a)) problems.push(`${name}: the Worker sends ${a}; the SQL has no such parameter`);
-    for (const r of fn.required) if (!args.has(r)) problems.push(`${name}: the SQL requires ${r}; the Worker does not send it`);
+    const matched = overloads.filter((fn) => answers(fn, args));
+    if (matched.length !== 1) {
+      problems.push(`${name}(${[...args].join(", ")}): ${matched.length} overloads answer it, not exactly one`);
+    }
   }
   assert.deepEqual(problems, []);
 });

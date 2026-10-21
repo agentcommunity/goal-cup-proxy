@@ -66,7 +66,7 @@ code is only ever in a request body, never in a URL or a log.
 
 All four fields are required. `proxy_version` (at most 64 characters) may also come under its old
 name `tracer_version`, as releases before the rename send it; when both are sent they must be equal
-(else `400 malformed`). The same holds in the open and continue calls. `200`:
+(else `400 malformed`). `null` for either means absent, as for other optional fields. The same holds in the open and continue calls. `200`:
 
 ```json
 {"device_code": "<64 hex>", "user_code": "BCDF-GHJK",
@@ -345,9 +345,12 @@ They never describe other processes, the agent's work, file names or paths. The 
 the heartbeat and as the run's latest vitals; they are in no answer, key or log, and are not public.
 
 **Shape.** The whole object and each field may be absent, and `null` means absent. Numbers are whole,
-non-negative, at most 2^53 - 1. Keys the server does not know are ignored (and not stored). A known
-field of the wrong type, an `agent_paused` other than `"disk"` or `null`, or a `vitals` that is not an
-object is `400 malformed`, like any other field; the heartbeat is then not recorded.
+non-negative, at most 2^53 - 1. Keys the server does not know are ignored (and not stored). Vitals
+never cost a heartbeat, since the heartbeat is what shows the run is alive (D64): a known field of
+the wrong type is dropped and the rest are kept; a `vitals` that is not an object, or an
+`agent_paused` other than `"disk"` or `null`, drops the whole object, so that heartbeat neither
+starts nor ends a disk pause. Each drop is a Worker log line `vitals-dropped <field> <run_id>`,
+without the value. The heartbeat's own fields are still checked strictly (`400 malformed`).
 
 **The disk pause.** A heartbeat whose vitals say `"agent_paused": "disk"` starts a disk pause, if one
 is not already running. A heartbeat with vitals that do not say it (`agent_paused` `null` or absent)
@@ -450,8 +453,9 @@ cron does nothing but delete its health marker, since no client can send a heart
 practice), the judged version is the last push to the repository's default branch that GitHub
 itself timestamped at or before the run's `ends_at` (owner, 21 Oct 2026). Pushes after that do not
 count; commit dates are ignored. From the first tick at or after `ends_at` + 5 minutes (so a push
-GitHub received just before the deadline has reached its activity list), at most 50 runs per tick,
-oldest first, 8 seconds per call, the server reads:
+GitHub received just before the deadline has reached its activity list), at most 50 runs per tick
+(oldest first; when more are due, each tick starts where the tick before stopped, so runs GitHub
+keeps failing on cannot hold up the others), 8 seconds per call, the server reads:
 
 1. `GET /repos/{owner}/{repo}`: `default_branch`.
 2. `GET /repos/{owner}/{repo}/activity?ref=refs/heads/<branch>&per_page=100`, newest first, following
@@ -464,14 +468,28 @@ It keeps the `after` of the newest activity with `timestamp <= ends_at` (`final_
 timestamp (`final_pushed_at`), the branch (`final_branch`), the time it was decided
 (`final_commit_at`) and two flags: `final_late_push` (GitHub listed a push after `ends_at` when asked)
 and `final_force_push` (a `force_push` between `official_start` and `ends_at`). If no activity at or
-before `ends_at` is listed but later ones are, the branch stood at the oldest later push's `before`.
-If the branch has no activity at all, or the activity API keeps failing for an hour after `ends_at`,
-the server keeps `GET /repos/{owner}/{repo}/commits/HEAD` instead and sets `final_head_fallback`.
+before `ends_at` is listed but later ones are, and the listing reached back to `official_start`, the
+branch stood at the oldest later push's `before`. If the 5-page limit stopped the listing first, the
+update that set the branch at the deadline was not read: the server asks again each tick for an hour
+after `ends_at`, then uses the fallback.
+
+**The fallback, and why its rows need an organizer.** If the branch has no activity at all, the
+activity API keeps failing for an hour after `ends_at`, or the listing stays incomplete as above,
+the server keeps the newest commit on the branch whose commit date is at or before `ends_at`
+(`GET /repos/{owner}/{repo}/commits?sha=<branch>&until=<ends_at>&per_page=1`), else the head GitHub
+has when asked (`GET /repos/{owner}/{repo}/commits/HEAD`), and sets `final_head_fallback`. Neither is
+the rule above: commit dates are the pusher's to set, and the head may be a push after the deadline.
+So every row with `final_head_fallback` set needs manual review by an organizer before it is judged.
+
 A `404` for the repository is retried each tick for an hour after `ends_at` (a repository briefly
 private must not lose the submission), then kept as "no commit" (`none`), as is an empty repository
-(`commits/HEAD` `409`). Any other failure keeps nothing and the next tick asks again. Runs that
-ended more than 48 hours ago and are closed are not asked. The final heartbeat's `repo_head` is Goal
-Cup Proxy's own account of the clone.
+(`commits/HEAD` `409`). Any other error status (a `403` rate limit, `451`, a `5xx` that does not go
+away) is retried for the same hour, then kept as `none` with `final_head_fallback` set, so it too goes
+to an organizer. Every GitHub answer that is not a `200` is a Worker log line `github-status <status>
+<path> ratelimit-remaining=<n>`, and a GitHub that cannot be reached at all is `github-unreachable`;
+an unreachable GitHub keeps nothing and the next tick asks again. Runs that ended more than 48 hours
+ago and are closed are not asked. The final heartbeat's `repo_head` is Goal Cup Proxy's own account
+of the clone.
 
 **The seven emails.** Each is queued at most once per run, kind and key. None is queued for a practice
 run, and none after the run's end except `ended`. A test run mails its operator, with `[TEST]` in
@@ -503,9 +521,14 @@ that the database failed (the marker is written only after the database answered
 `silence` is queued only once both the run's last heartbeat and the start of the well stretch are
 more than 20 minutes old. So during our trouble no one is mailed, and after it every run has 20
 minutes to come back (Goal Cup Proxy's retries are at most about 15 minutes apart, D64). The key is still the
-last heartbeat, so a silence that outlasts our trouble is mailed once, after it. The limit: a run
-that is the only one beating cannot be told apart from a server nobody reaches, so a lone run gets
-no `silence`.
+last heartbeat, so a silence that outlasts our trouble is mailed once, after it.
+
+**Known gap: a lone run never gets a `silence` email.** The well stretch needs some run's heartbeat
+in the last 10 minutes. When only one run is open and it goes quiet, no heartbeat reaches the server,
+every tick starts the stretch again, and its silence is never mailed, however long it lasts. From
+the server a lone quiet run looks the same as a server nobody can reach. This matters most at the
+start of the event and for a test run on its own. Whether to change the rule is an owner decision
+that is still pending; until then the behaviour stays as described.
 
 The words of each email are in the database (`goal_cup_tracer.notice_text`, owned by the website);
 `docs/research/NOTIFICATIONS.md` lists every message a participant gets, by email and in the

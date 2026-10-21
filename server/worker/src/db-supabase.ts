@@ -54,11 +54,6 @@ const isObject: Check = (v) => typeof v === "object" && v !== null && !Array.isA
 const text: Check = (v) => typeof v === "string";
 const uint: Check = (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 const hex64: Check = isHex64;
-/** A field a database without the latest migration does not send yet; when sent it must pass `check`. */
-const optional =
-  (check: Check): Check =>
-  (v) =>
-    v === undefined || check(v);
 const nullable =
   (check: Check): Check =>
   (v) =>
@@ -82,10 +77,9 @@ const RUN_SHAPE: Record<string, Check> = {
   first_entry_id: isEntryId,
   current_entry_id: isEntryId,
   current_sealed_at: nullable(isTime),
-  // Website migration 20261021100000 adds these. Before it they are absent, and chunks.ts refuses
-  // uploads (502, retried) instead of letting a run past the size limit; every other call still works.
-  stored_bytes: optional(uint),
-  chunk_count: optional(uint),
+  // Website migration 20261021100000 adds these; this Worker needs it applied first (README).
+  stored_bytes: uint,
+  chunk_count: uint,
 };
 const TICK_SHAPE: Record<string, Check> = {
   ...RUN_SHAPE,
@@ -94,8 +88,7 @@ const TICK_SHAPE: Record<string, Check> = {
   flagged_at: nullable(isTime),
   flag_reason: nullable(oneOf("gaps", "failed")),
   final_commit: nullable((v) => typeof v === "string" && /^([0-9a-f]{40}|none)$/.test(v)),
-  // Website migration 20261021100000 adds it; before it the cron owes no disk_full email.
-  disk_notice_at: optional(nullable(isTime)),
+  disk_notice_at: nullable(isTime),
 };
 const ENTRY_SHAPE: Record<string, Check> = {
   entry_id: isEntryId,
@@ -361,8 +354,8 @@ export class SupabaseDb implements Db {
       p_client_ip: a.client_ip,
       p_client_country: a.client_country,
       p_at: a.at,
-      // Only with vitals: without them the 13-argument form answers, which a database without
-      // website migration 20261021100000 still has, so plain heartbeats work before it is applied.
+      // Only with vitals: without them the 13-argument form answers (the new 14-argument form has
+      // no DEFAULT, so each call matches exactly one overload; test/supabase.test.ts checks both).
       ...(a.vitals === null ? {} : { p_vitals: a.vitals }),
     });
     return this.#word("upload_heartbeat", v, ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"] as const);

@@ -334,7 +334,7 @@ export class LocalDb implements Db {
    * Store a new run. A competition run first marks the account's latest competition run replaced,
    * then takes the account's slot with a conditional put; if someone else took it meanwhile, go
    * round again (that run is replaced in turn). Only competition replaces: a test run or a practice
-   * run is just stored, so an operator's test runs run side by side (owner, 21 Oct 2026).
+   * run is just stored, so an operator's test runs run side by side.
    */
   async #keep(run: StoredRun): Promise<void> {
     const create = { onlyIf: { etagDoesNotMatch: "*" } };
@@ -538,8 +538,10 @@ export class LocalDb implements Db {
     });
   }
 
-  commitChunk(a: CommitChunkArgs): Promise<CommitChunkResult> {
+  async commitChunk(a: CommitChunkArgs): Promise<CommitChunkResult> {
     const c = a.chunk;
+    // The database raises on this too (goal_cup_upload_commit_chunk): a negative size is a Worker bug.
+    if (!Number.isSafeInteger(a.stored_bytes) || a.stored_bytes < 0) throw new Error(`commitChunk: stored_bytes ${a.stored_bytes} is not a size`);
     return this.#updateRun<CommitChunkResult>(a.run_id, a.member_id, "not_found", (run) => {
       const entry = entryOf(run, c.entry_id);
       if (entry === undefined) return { answer: "not_found" };
@@ -557,7 +559,7 @@ export class LocalDb implements Db {
         head: c.head,
         last_ack: c.ack,
         chunks: [...entry.chunks, c],
-        stored_bytes: (entry.stored_bytes ?? 0) + Math.max(0, a.stored_bytes),
+        stored_bytes: (entry.stored_bytes ?? 0) + a.stored_bytes,
         chunk_count: (entry.chunk_count ?? 0) + 1,
       };
       return { next: withEntry(run, next), answer: "committed" };
@@ -604,7 +606,11 @@ function withSignals(run: StoredRun, entry: StoredEntry, a: HeartbeatArgs): Stor
   };
 }
 
-/** The run's vitals and disk pause after this heartbeat (the same rule as the database's note_heartbeat). */
+/**
+ * The run's vitals and disk pause after this heartbeat. Twin of the rule in
+ * goal_cup_tracer.note_heartbeat (sql/pending/20261021100000_goal_cup_tracer_event_readiness.sql,
+ * section 3): change both together.
+ */
 function diskPause(run: StoredRun, a: HeartbeatArgs): Pick<StoredRun, "last_vitals" | "disk_paused_at" | "disk_notice_at"> {
   if (a.vitals === null) return {}; // no vitals: nothing said about a pause
   if (a.vitals.agent_paused !== "disk") return { last_vitals: a.vitals, disk_paused_at: null };

@@ -195,16 +195,22 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
         token,
         json: { entry_id: run.entry_id, seq: 0, head: GENESIS, offset_local: 0, final: false, repo_head: null, ...extra },
       });
+    // The clock moves between the open and the heartbeat, so seconds_left is a range, not one number.
+    const answered = (body: Record<string, unknown>) => {
+      const { seconds_left, ...rest } = body;
+      assert.deepEqual(rest, { stop: false, deadline_at: run.deadline_at, reason: null });
+      assert.ok(typeof seconds_left === "number" && seconds_left > 168 * 3600 - 60 && seconds_left <= 168 * 3600, JSON.stringify(body));
+    };
     for (const recording of ["ok", "gaps", "failed", "unknown"]) {
       const r = await beat({ recording, model_requests: 12 });
       assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual({ ...r.body, seconds_left: undefined }, { stop: false, deadline_at: run.deadline_at, seconds_left: undefined, reason: null });
+      answered(r.body);
     }
     assert.equal((await beat({})).status, 200);
     // null is absent, as for repo_head.
     const nulls = await beat({ recording: null, model_requests: null });
     assert.equal(nulls.status, 200, JSON.stringify(nulls.body));
-    assert.deepEqual({ ...nulls.body, seconds_left: undefined }, { stop: false, deadline_at: run.deadline_at, seconds_left: undefined, reason: null });
+    answered(nulls.body);
     assertError(await beat({ model_requests: 2 ** 53 }), 400, "malformed");
     assertError(await beat({ recording: "fine" }), 400, "malformed");
     assertError(await beat({ model_requests: -1 }), 400, "malformed");
