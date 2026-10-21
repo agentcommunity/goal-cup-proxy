@@ -391,12 +391,15 @@ pub(super) fn guard_registered(
     // that is still live with no readable identity stays refused, and so does any
     // *different* identity: only "no longer live" is read as an exit, and a pid recycled
     // between the reads is live (or again unreadable) and fails the same check.
-    if observed_start.is_none() {
-        match os.liveness(handle.pid) {
-            Ok(false) => return Ok(Presence::Absent),
-            Ok(true) => {}
-            Err(e) => return Err(Refused::Unavailable(e)),
-        }
+    //
+    // **macOS reads an exiting root as live for a while.** For about 30 to 45 ms after death a
+    // macOS process shows state `E` in `ps`, which `liveness` counts as live (it excludes only
+    // `Z`), while `proc_pidinfo` already fails, so the start identity is unreadable. Measured on
+    // the 22 Oct smokes: Amp and Codex roots sealed `Unresolved` with `still_alive=[]`. So the
+    // question is asked again as [`exited_within_wait`] asks it, for at most
+    // [`EXITING_ARGV_WAIT`]; a root still live at the end is refused as before, fail-closed.
+    if observed_start.is_none() && exited_within_wait(os, handle.pid)? {
+        return Ok(Presence::Absent);
     }
     if expected_start.is_none() || expected_start != observed_start.as_deref() {
         return Err(Refused::Recycled(ProcessError::NoTarget(format!(
@@ -418,7 +421,8 @@ pub(super) fn guard_registered(
 }
 
 /// The longest [`exited_or_renamed`] waits for a root whose argv reads `[comm]` to finish
-/// exiting. Measured (D7, Linux in Docker, a SIGTERMed one-thread `python3.13` root, state
+/// exiting, and [`guard_registered`] for a live root whose start identity cannot be read (the
+/// macOS `E` window, 30 to 45 ms measured on the 22 Oct smokes). Measured (D7, Linux in Docker, a SIGTERMed one-thread `python3.13` root, state
 /// `R`, empty `/proc/<pid>/cmdline`): gone 1 to 13 ms after the guard's argv read, and in 3 of
 /// 80 seals still live at a second `liveness` read taken at once. The bound is far above that
 /// and far below the termination bound.
@@ -430,29 +434,52 @@ const EXITING_ARGV_POLL: Duration = Duration::from_millis(5);
 /// The live root's argv names no registered program: is it gone, or another program?
 ///
 /// `liveness` is asked again: no longer live is the exit, the ordinary absent root. A live
-/// root is refused as renamed, at once for any argv but `[comm]`. `[comm]` is what `ps`
-/// prints for a process with no readable command line, which for a process whose creation
+/// root is refused as renamed, at once for any argv but `[comm]` (`(comm)` on macOS). That
+/// is what `ps` prints for a process with no readable command line, which for a process whose creation
 /// identity matched a moment ago is one that is exiting, so the question is asked again every
 /// [`EXITING_ARGV_POLL`] for at most [`EXITING_ARGV_WAIT`]. The wait changes no refusal:
 /// nothing is signalled while it runs, and a root still live at its end is refused as renamed,
 /// as before. Fail-closed (docs/TERMINATION.md, the Linux residual).
 fn exited_or_renamed(os: &dyn ProcessOs, pid: u32, args: &str) -> Result<Presence, Refused> {
-    let exiting = no_readable_argv(args);
-    let until = os.now() + EXITING_ARGV_WAIT;
-    loop {
-        match os.liveness(pid) {
-            Ok(false) => return Ok(Presence::Absent),
-            Err(e) => return Err(Refused::Unavailable(e)),
-            Ok(true) if !exiting || os.now() >= until => return Err(Refused::ArgvRenamed),
-            Ok(true) => os.sleep(EXITING_ARGV_POLL),
-        }
+    let exited = if no_readable_argv(args) {
+        exited_within_wait(os, pid)?
+    } else {
+        !live(os, pid)?
+    };
+    if exited {
+        Ok(Presence::Absent)
+    } else {
+        Err(Refused::ArgvRenamed)
     }
 }
 
-/// Is `args` the `[comm]` line `ps` prints for a process with an empty command line?
+/// Ask `liveness` every [`EXITING_ARGV_POLL`] for at most [`EXITING_ARGV_WAIT`]: `true` once
+/// `pid` is no longer live, `false` if it is still live at the end. Nothing is signalled while
+/// it runs; the caller refuses a root still live.
+fn exited_within_wait(os: &dyn ProcessOs, pid: u32) -> Result<bool, Refused> {
+    let until = os.now() + EXITING_ARGV_WAIT;
+    loop {
+        if !live(os, pid)? {
+            return Ok(true);
+        }
+        if os.now() >= until {
+            return Ok(false);
+        }
+        os.sleep(EXITING_ARGV_POLL);
+    }
+}
+
+fn live(os: &dyn ProcessOs, pid: u32) -> Result<bool, Refused> {
+    os.liveness(pid).map_err(Refused::Unavailable)
+}
+
+/// Is `args` the line `ps` prints for a process with no readable command line: `[comm]` on
+/// Linux, `(comm)` on macOS?
 fn no_readable_argv(args: &str) -> bool {
     let args = args.trim();
-    args.len() > 2 && args.starts_with('[') && args.ends_with(']')
+    args.len() > 2
+        && ((args.starts_with('[') && args.ends_with(']'))
+            || (args.starts_with('(') && args.ends_with(')')))
 }
 
 /// What [`guard_registered`] found at the registered number: the launch's own process,
@@ -658,6 +685,9 @@ mod tests {
     fn only_the_line_of_an_empty_command_line_reads_as_no_argv() {
         assert!(no_readable_argv("[python3.13]"));
         assert!(no_readable_argv("  [sh]\n"));
+        assert!(no_readable_argv("(node)"), "macOS prints `(comm)`");
+        assert!(!no_readable_argv("()"));
+        assert!(!no_readable_argv("(node) --flag"));
         assert!(!no_readable_argv("/usr/bin/vim notes.md"));
         assert!(!no_readable_argv("[python3.13] <defunct>"));
         assert!(!no_readable_argv("python3 [x]"));

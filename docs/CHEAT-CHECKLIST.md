@@ -70,7 +70,9 @@ consistent, not that the participant followed the rules.
   recorded build digests (D53); and the metadata log's tool events and frame counts, which a later
   decoder can compare with the wire. The pinned macOS practice on 17 Oct passed capture and
   delivery, but its termination outcome is `Unresolved(ProcessAuthorityUnavailable)`: no
-  remaining targeted process was reported, and whole-tree death is not certified. See the
+  remaining targeted process was reported, and whole-tree death is not certified. The likely
+  cause, a root caught in macOS's exiting window, is now waited for (up to 200 ms); until a
+  rerun seals `Confirmed`, treat Amp on macOS as unconfirmed. See the
   [termination contract](TERMINATION.md). Facts: [amp-cli](harnesses/amp-cli.md).
 - **An unpinned build may be anything on `PATH`** (a wrapper that unsets `HTTPS_PROXY`, a fake that
   writes a session file and calls no model). Bounded by: the recorded build digests (D53) and the

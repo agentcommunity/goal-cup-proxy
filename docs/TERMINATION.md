@@ -126,6 +126,13 @@ the second's line gone from the table before the next snapshot (a grandchild for
 orphaned) — are one paid bit. A handler that runs a subprocess which exits before the next
 snapshot is refused (a fork nothing adopted): fail-closed. `all_gone` is never true. The
 singleton path proves one process's death and cannot see a descendant reparented before it attached.
+**The exiting window.** For about 30 to 45 ms after death a macOS process shows state `E` in `ps`,
+which `liveness` reads as live (only `Z` is gone), while `proc_pidinfo` already fails, so its start
+identity cannot be read. A root caught there is waited for as on Linux: `liveness` again every 5 ms
+for at most 200 ms, no longer live is the exit, nothing is signalled meanwhile, and a root still
+live at the end is refused as recycled (fail-closed). An argv read as `(comm)`, macOS's form of
+Linux's `[comm]`, is waited for the same way. Measured on the 22 Oct smokes: Amp and Codex roots
+caught in the window sealed `Unresolved(ProcessAuthorityUnavailable)` with nothing left alive.
 
 ## The launcher's ending of a child it just released (D40, outside this contract)
 
