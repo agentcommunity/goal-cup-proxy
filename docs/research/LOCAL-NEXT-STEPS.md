@@ -2,7 +2,8 @@
 
 What the owner and the local agent do on their own machines, in order, to take branch
 `smart/zen-gates-d9tmbh` from "built and unit tested in a cloud container" to "measured and
-released". Nothing here ran against real Docker, staging, GitHub or a real harness yet. Record every
+released". Nothing here ran against real Docker, staging, GitHub or a real harness yet. The
+[local test day](LOCAL-TEST-DAY.md) is the plan for doing steps 2 to 7 in one day. Record every
 result as you go (step 9). Background: the [readiness plan](../plans/2026-10-20-event-readiness.md)
 and the [local campaign](LOCAL-CAMPAIGN.md).
 

@@ -27,6 +27,7 @@ You run the event, the server and the test runs.
 - [How a run ends](research/HOW-A-RUN-ENDS.md): the plain-English plan for the end of a run.
 - [Event readiness plan](plans/2026-10-20-event-readiness.md): invariants and work packages from 20 Oct to 6 Nov.
 - [Local next steps](research/LOCAL-NEXT-STEPS.md): what to do on real machines next, in order.
+- [Local test day](research/LOCAL-TEST-DAY.md): the 8-hour plan and handover for one day of local testing on every surface.
 - [Local campaign](research/LOCAL-CAMPAIGN.md): how long test cells and drills run on a maintainer's test machines.
 - [campaign-cell agent](../.claude/agents/campaign-cell.md): a public Claude Code subagent that watches one running campaign cell and reports back. It only reads.
 

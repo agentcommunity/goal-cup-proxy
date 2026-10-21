@@ -79,6 +79,13 @@ Suggested first campaign:
 Claude cells start at 2 h: the subscription hit its weekly quota before. Add Hermes only with an
 API-key provider the owner approves.
 
+The default workload never pushes. A **full-flow cell** tests pushes and the judged commit: give
+it a new empty repository of its own (a test start refuses one that is not empty), run
+`goalcup prep --repo <url>` in the cell's config with a real token before the run (the kit keeps
+a prep'd repository and token, and writes its fake practice token only when none is set), and
+use [campaign-build-workload.txt](campaign-build-workload.txt). The
+[local test day](LOCAL-TEST-DAY.md) plans a day of such cells across every surface.
+
 ## Logins: one per cell
 
 Codex rotates its refresh token and writes `auth.json` back (measured); a copied login breaks the
