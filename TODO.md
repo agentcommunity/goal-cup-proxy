@@ -165,6 +165,20 @@ The [event readiness plan](docs/superpowers/plans/2026-10-20-event-readiness.md)
 work from 20 Oct to 6 Nov: invariants, work packages WP-A to WP-H, the test ladder and the owner
 decisions.
 
+Status (21 Oct, branch `smart/zen-gates-d9tmbh`, not yet released):
+- WP-A done (D64): no server error stops a run or ends its upload. Follow-up: a `410` answer to
+  `continue` still marks the run over; a bad deploy of that route would refuse continues.
+- WP-B part 1 done: acknowledged parts are deleted at once when the disk is short. The quiet-time
+  upload trigger waits for WP-0 gap data.
+- WP-D done in the Worker, plus parallel test runs (test runs no longer replace each other). Both
+  need the website migrations in `server/worker/sql/pending/`, applied before that Worker deploys.
+  Check the website approval page wording for test runs.
+- WP-E docs done (H-29 widened, login guidance, StorageFull rule). The verifier scan is open.
+- WP-F kit done: `scripts/campaign.py`, `matrix.sh --test --duration`, `linux-matrix.sh` cells,
+  `research-measure.py`, `research-sample.py`, `research-staging.py`;
+  [local campaign](docs/research/LOCAL-CAMPAIGN.md). Not yet run against real Docker or staging.
+- Open: WP-C (after T25), WP-E scan, WP-G, WP-H rename.
+
 ### WP0: Measure
 Status (17 Oct): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging
 practice runs: deadline stop, seal, matching uploaded server position and zero-gap research

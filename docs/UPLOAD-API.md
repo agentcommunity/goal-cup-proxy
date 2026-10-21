@@ -30,19 +30,22 @@ missing). It is not in CI.
 
   | Status | `error` | Meaning | Tracer does |
   |---|---|---|---|
-  | 400 | `malformed` | A field or header is missing or has the wrong shape. | stops, reports |
-  | 401 | `unauthorized` | No credential, or not one the server knows, or it has expired. | stops: `goalcup login` again |
+  | 400 | `malformed` | A field or header is missing or has the wrong shape. | during a run and its wrap-up: keeps its data, retries with backoff (D64); `goalcup upload` reports |
+  | 401 | `unauthorized` | No credential, or not one the server knows, or it has expired. | during a run and its wrap-up: keeps recording, retries (D64); `goalcup upload` gives up: `goalcup login` again |
   | 403 | `forbidden` | The member may not start a run now (terms not accepted, outside the start window), or a device request was denied. | stops, reports |
-  | 404 | `not_found` | No such run for this credential, or not this run's entry. | stops, reports |
+  | 404 | `not_found` | No such run for this credential, or not this run's entry. | during a run and its wrap-up: retries (D64); `goalcup upload` gives up, reports |
   | 409 | `conflict` | The request does not continue where the server is (offset, `prev`, seq), the credential already opened a run, `previous_entry_id` is not the run's latest entry, or a seal comes before the final heartbeat. | chunk: re-reads the position (`GET`), then continues |
-  | 410 | `closed` | The run is abandoned, or closed 24 hours after it ended; the entry is sealed; the request goes past what the final heartbeat committed; or the run is over and cannot be continued. A device request has expired or was already picked up. | stops, reports |
-  | 413 | `too_large` | A body over its cap. | stops, reports (a tracer bug) |
+  | 410 | `closed` | The run is abandoned, or closed 24 hours after it ended; the entry is sealed; the request goes past what the final heartbeat committed; or the run is over and cannot be continued. A device request has expired or was already picked up. | during a run and its wrap-up: retries (D64); `goalcup upload` gives up, reports; a refused `continue` marks the run over |
+  | 413 | `too_large` | A body over its cap. | retries with backoff, reports (a tracer bug) |
   | 413 | `quota_exceeded` | The chunk would take the run past the server's per-run size limit. Nothing was stored. | keeps its data, retries with backoff |
   | 422 | `digest_mismatch` | The body's SHA-256 is not `Goalcup-Sha256`. Nothing was stored. | retries with backoff |
   | 429 | `rate_limited` | Too many calls. `Retry-After` says when. | retries with backoff |
   | 503 | `maintenance` | The server asks every tracer to wait. `Retry-After` says when. | retries with backoff |
   | 503 | `awaiting_final` | The run is over (`ends_at`), and the entry's final heartbeat has not arrived. | sends it, then retries |
 
+  During a run, no error stops the run or ends its upload (D64, owner 21 Oct 2026): only a
+  heartbeat answer with `stop: true`, or the tracer's own count, stops it. After 3 refusals in a
+  row of one status the participant sees one line that recording continues and nothing is lost.
   Any other 5xx, and any network failure, is retried with backoff. Backoff starts at 60 s,
   doubles to at most 15 min, with up to 25 % random jitter, and never waits less than a
   `Retry-After` (seconds) the server sent. Recording never waits on any of this.
@@ -338,6 +341,8 @@ A run ends at `ends_at` = `min(deadline_at, replaced_at)`: at its deadline, or w
 later competition start replaced it. At `ends_at` the run is over, in whatever state the agent is
 in. There is no grace period and no late window.
 
+- **Only two things stop a run:** a heartbeat answer with `stop: true`, or the tracer's own
+  count below. No error answer does (D64).
 - **The server says stop.** Every heartbeat answered at or after `ends_at` carries `stop: true` and
   the `reason`. The tracer stops recording at once. Without a network it stops on its own count:
   the `seconds_left` of the last answer it had (the open, the continue or a heartbeat), counted
