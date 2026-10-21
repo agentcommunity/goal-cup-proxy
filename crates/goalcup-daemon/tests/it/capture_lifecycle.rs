@@ -441,123 +441,21 @@ fn gaps_after_launch(records: &[CaptureRecord]) -> Vec<GapReason> {
         .collect()
 }
 
-/// A shipped family declares one required scoped source; no scope records one gap.
-/// V1 supplemental stores add no gaps. A controlled family retains run-HOME capture.
+/// A launch records no gap for the one native store: chat mode names no session, so the store
+/// is read from the create on, and a scope on the request is ignored.
 #[tokio::test]
-async fn a_launch_marks_each_store_it_does_not_read() {
-    let rig = Rig::start_headless().await;
-    let info = rig.created("headless-codex-cli").await;
-    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
-    let mut request = launch_request(&goal);
-    request.native_scope = None;
-    let launched = rig.launch(&info.entry_id, &request).await;
-    assert_eq!(launched.status(), 204, "{}", launched.body());
-    let stores = 1;
-    assert_eq!(
-        gaps_after_launch(&rig.records(&info.entry_id)),
-        vec![GapReason::SourceChanged; stores]
-    );
-    let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
-    assert_eq!(capture.gap_count, stores as u64);
-    assert_eq!(capture.capture, CaptureState::Incomplete);
-
+async fn a_launch_marks_no_store_unread() {
     let (rig, _native, _connectors) = native_rig().await;
     let info = rig.created("capture-dev").await;
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
-    let launched = rig.launch(&info.entry_id, &launch_request(&goal)).await;
+    let mut request = launch_request(&goal);
+    request.native_scope = Some("../foreign".into());
+    let launched = rig.launch(&info.entry_id, &request).await;
     assert_eq!(launched.status(), 204, "{}", launched.body());
     assert_eq!(gaps_after_launch(&rig.records(&info.entry_id)), vec![]);
     let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
     assert_eq!(capture.gap_count, 0);
     assert_eq!(capture.capture, CaptureState::Recording);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_scope_excludes_other_runs_files() {
-    use base64::Engine as _;
-    for (profile, directory, own_name, other_name) in [
-        (
-            "headless-codex-cli",
-            "sessions/2026/09/30",
-            "rollout-now-test-session.jsonl",
-            "rollout-now-foreign.jsonl",
-        ),
-        (
-            "headless-claude-code-cli",
-            "projects/workspace",
-            "test-session.jsonl",
-            "foreign.jsonl",
-        ),
-    ] {
-        let rig = Rig::start_headless().await;
-        let native = rig.root.join("config-home").join(directory);
-        std::fs::create_dir_all(&native).unwrap();
-        std::fs::write(native.join(own_name), b"own session\n").unwrap();
-        std::fs::write(
-            native.join(other_name),
-            b"foreign session must never persist\n",
-        )
-        .unwrap();
-        // V1 supplemental store content must also remain outside this capture.
-        std::fs::write(
-            rig.root.join("config-home/history.jsonl"),
-            b"foreign history\n",
-        )
-        .unwrap();
-        let info = rig.created(profile).await;
-        let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
-        let request = launch_request(&goal);
-        assert_eq!(rig.launch(&info.entry_id, &request).await.status(), 204);
-        rig.records_when(&info.entry_id, |records| native_producer(records).is_some())
-            .await;
-        // A retried Launch neither appends another Launch nor rebinds to a foreign scope.
-        let mut retry = request.clone();
-        retry.native_scope = Some("foreign".into());
-        assert_eq!(rig.launch(&info.entry_id, &retry).await.status(), 204);
-        assert_eq!(rig.seal(&info.entry_id, None).await.status(), 200);
-        let records = rig.records(&info.entry_id);
-        let native_opens: Vec<_> = records
-            .iter()
-            .filter_map(|record| match record {
-                CaptureRecord::Open {
-                    stream,
-                    source: CaptureSource::Native,
-                    metadata,
-                    ..
-                } => Some((stream, &metadata.label)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(native_opens.len(), 1, "{records:?}");
-        assert!(
-            native_opens[0].1.contains(own_name),
-            "{:?}",
-            native_opens[0]
-        );
-        let retained: Vec<u8> = records
-            .iter()
-            .filter_map(|record| match record {
-                CaptureRecord::Segment {
-                    stream, data_b64, ..
-                } if stream == native_opens[0].0 => Some(
-                    base64::engine::general_purpose::STANDARD
-                        .decode(data_b64)
-                        .unwrap(),
-                ),
-                _ => None,
-            })
-            .flatten()
-            .collect();
-        assert_eq!(retained, b"own session\n");
-        assert_eq!(gaps_after_launch(&records), vec![]);
-        assert_eq!(
-            records
-                .iter()
-                .filter(|r| matches!(r, CaptureRecord::Launch { .. }))
-                .count(),
-            1
-        );
-    }
 }
 
 /// Incident H-17: a refusal test that points `config_home` into the live `HOME` must never
@@ -677,65 +575,6 @@ async fn refused_native_roots_child_half() {
                 .map_or(true, |mut dir| dir.next().is_none())
         );
     }
-}
-
-#[tokio::test]
-async fn native_scope_unavailable_records_named_gap() {
-    for scope in [None, Some("../foreign"), Some(""), Some("bad.scope")] {
-        for profile in ["headless-codex-cli", "headless-claude-code-cli"] {
-            let rig = Rig::start_headless().await;
-            let info = rig.created(profile).await;
-            let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
-            let mut request = launch_request(&goal);
-            request.native_scope = scope.map(str::to_owned);
-            assert_eq!(rig.launch(&info.entry_id, &request).await.status(), 204);
-            assert_eq!(rig.seal(&info.entry_id, None).await.status(), 200);
-            let records = rig.records(&info.entry_id);
-            assert_eq!(gaps_after_launch(&records), vec![GapReason::SourceChanged]);
-            assert!(native_producer(&records).is_none());
-            assert_eq!(local_finishes(&records), 1);
-        }
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scoped_native_source_never_opened_is_a_gap() {
-    for vanished in [false, true] {
-        let rig = Rig::start_headless().await;
-        let source = rig
-            .root
-            .join("config-home/sessions/2026/09/30/rollout-now-test-session.jsonl");
-        let info = rig.created("headless-codex-cli").await;
-        let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
-        assert_eq!(
-            rig.launch(&info.entry_id, &launch_request(&goal))
-                .await
-                .status(),
-            204
-        );
-        if vanished {
-            std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-            std::fs::write(&source, b"own native bytes\n").unwrap();
-            rig.records_when(&info.entry_id, |records| native_producer(records).is_some())
-                .await;
-            std::fs::remove_file(&source).unwrap();
-        }
-        assert_eq!(rig.seal(&info.entry_id, None).await.status(), 200);
-        let records = rig.records(&info.entry_id);
-        assert_eq!(gaps_after_launch(&records), vec![GapReason::SourceChanged]);
-        assert_eq!(local_finishes(&records), 1);
-    }
-    // A fixed source root that disappears after create cannot be constructed at Launch.
-    let rig = Rig::start_headless().await;
-    let info = rig.created("headless-codex-cli").await;
-    std::fs::remove_dir(rig.root.join("config-home/sessions")).unwrap();
-    let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
-    rig.launch(&info.entry_id, &launch_request(&goal)).await;
-    assert_eq!(rig.seal(&info.entry_id, None).await.status(), 200);
-    assert_eq!(
-        gaps_after_launch(&rig.records(&info.entry_id)),
-        vec![GapReason::SourceChanged]
-    );
 }
 
 #[tokio::test]
@@ -860,13 +699,10 @@ async fn both_shipped_manifests_compile_at_preflight() {
 
 #[tokio::test]
 async fn a_restart_never_rebuilds_a_capture_row_as_a_legacy_runtime() {
-    let rig = Rig::start_headless().await;
-    let info = rig.created("headless-codex-cli").await;
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
-    let mut launch = launch_request(&goal);
-    // This fixture isolates reopen behavior: no native producer is bound.
-    launch.native_scope = None;
-    rig.launch(&info.entry_id, &launch).await;
+    rig.launch(&info.entry_id, &launch_request(&goal)).await;
     let chain = rig.trace_dir(&info.entry_id).join("chain.jsonl");
     let before = std::fs::read(&chain).unwrap();
     let records_before = rig.records(&info.entry_id).len();
@@ -878,10 +714,8 @@ async fn a_restart_never_rebuilds_a_capture_row_as_a_legacy_runtime() {
     let capture = reopened.payload.capture.unwrap();
     assert_eq!(capture.run, RunState::Running);
     // No producer was live at the stop, as after a crash, so the stop chained nothing. The
-    // reopened entry admits nothing, and its one stream-less gap says so, beside the launch's
-    // one required-source gap for the unavailable native scope.
-    let unread = 1;
-    assert_eq!(capture.gap_count, unread + 1);
+    // reopened entry admits nothing, and its one stream-less gap says so.
+    assert_eq!(capture.gap_count, 1);
     assert_eq!(capture.capture, CaptureState::Incomplete);
     let after = std::fs::read(&chain).unwrap();
     assert_eq!(
@@ -896,10 +730,15 @@ async fn a_restart_never_rebuilds_a_capture_row_as_a_legacy_runtime() {
         (0, None),
         "nothing failed to rebuild"
     );
-    // The reopen gap is the one record the restart adds: no legacy restart record.
+    // The stop closes the native source's producer, and the reopen gap is the one record the
+    // restart adds: no legacy restart record.
     assert!(after.starts_with(&before));
     let records = rig.records(&info.entry_id);
-    assert_eq!(records.len(), records_before + 1);
+    assert_eq!(records.len(), records_before + 2, "{records:#?}");
+    assert!(matches!(
+        records[records.len() - 2],
+        CaptureRecord::ProducerClosed { .. }
+    ));
     assert!(matches!(
         records.last(),
         Some(CaptureRecord::Gap {

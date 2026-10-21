@@ -255,8 +255,9 @@ pub enum Advice {
     /// The run is over (its deadline passed, a newer run replaced it, or it was stopped for its
     /// end): there is nothing left to continue.
     Over,
-    /// The run is not over, but it cannot be continued: it has no server, its connector runs
-    /// headless, or this machine holds no credential for it.
+    /// The run is not over, but it cannot be continued: it has no server, its state says it
+    /// cannot be restarted (a run of the removed headless mode), or this machine holds no
+    /// credential for it.
     Cannot,
 }
 
@@ -1298,7 +1299,8 @@ mod tests {
         replaced.stopped = Some("a newer run on your account replaced this one".to_string());
         assert_eq!(advice(cfg.path(), &run, &replaced, now), Advice::Over);
 
-        // A headless connector: not over, and not continuable.
+        // A state that says the run cannot be restarted (a run of the removed headless mode):
+        // not over, and not continuable.
         let mut headless = state.clone();
         headless.continuable = false;
         let cannot = advice(cfg.path(), &run, &headless, now);

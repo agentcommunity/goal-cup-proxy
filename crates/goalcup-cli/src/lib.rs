@@ -32,7 +32,6 @@
 pub mod account;
 pub(crate) mod arming;
 pub mod ca_bundle;
-pub mod capture_tee;
 pub mod commands;
 pub mod config;
 pub mod connector;
@@ -95,6 +94,35 @@ pub fn set_finish_budget(budget: std::time::Duration) {
         u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
         std::sync::atomic::Ordering::SeqCst,
     );
+}
+
+/// Whether this process runs a chat-mode harness without a terminal: never, in a shipped build.
+/// A test build can say so ([`set_chat_without_terminal`], or `GOALCUP_TEST_CHAT_WITHOUT_TERMINAL=1`
+/// for the binary), so that a lifecycle test with no pseudo-terminal still runs the one launch
+/// path every connector takes (D57): `goalcup start` then neither asks for the terminal nor
+/// takes it, says what it would have written to the run's log on its own output, and gives the
+/// harness `/dev/null` for stdin.
+pub fn chat_without_terminal() -> bool {
+    #[cfg(feature = "test-support")]
+    {
+        CHAT_WITHOUT_TERMINAL.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(feature = "test-support"))]
+    {
+        false
+    }
+}
+
+#[cfg(feature = "test-support")]
+static CHAT_WITHOUT_TERMINAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// **Test-only.** Run chat-mode harnesses in this process without a terminal
+/// ([`chat_without_terminal`]).
+#[doc(hidden)]
+#[cfg(feature = "test-support")]
+pub fn set_chat_without_terminal(on: bool) {
+    CHAT_WITHOUT_TERMINAL.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// The version this build carries, printed by `goalcup --version`.

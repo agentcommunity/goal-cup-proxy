@@ -29,8 +29,8 @@ has each line with its comment. The full reference below has every rule.
 
 Only when needed: `capture.configure` (a setting with no environment variable, as Hermes has),
 `capture.argv_guard` and `capture.reserved_env_prefixes` (a harness that scans its own options or
-has a safe-mode variable). A chat connector never writes `goal_flag`, an identity `binding` or
-selector, or `[capture.credential]`. Seeds (`capture.home.seed`) are allowed but no shipped
+has a safe-mode variable). A connector never writes `goal_flag`, an identity `binding` or
+selector, or `[capture.credential]`: each is refused. Seeds (`capture.home.seed`) are allowed but no shipped
 connector uses them.
 
 The executable authority is
@@ -60,7 +60,7 @@ All public schema structs and enums are non-exhaustive. A manifest cannot select
 
 - `Origin::Pinned` is an in-tree or pin-checked connector. It refuses an interpreter as the
   executable and refuses an absolute, home-relative, parent-relative or expanding path in an
-  argument. There is no per-connector list in Rust (D51): `capture.args`, `goal_flag` and
+  argument. There is no per-connector list in Rust (D51): `capture.args` and
   `capture.env` are held to the generic rules below, and a new connector, variable or argument,
   a model name included, is a data change reviewed in its PR. An unpinned id is refused at the
   pin gate and runs only under `--dev`.
@@ -83,8 +83,8 @@ optional field or table is absent.
 | `participant` | optional, default absent | `[participant]`: the harness's display name and first-screen hint for messages to the participant; see below. |
 | `redaction` | optional, default absent | Connector-selected rows from the core redaction mirror. |
 | `capture.args` | required | 0–64 strings in chat mode; each at most 4096 bytes and without control characters. |
-| `capture.goal_flag` | headless only (see below) | One long option, at most 32 bytes, matching `--[a-z][a-z0-9-]*`; no `=` or value. Refused with `interactive`. |
-| `capture.interactive` | write `true` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57). The default `false` is headless (see below). |
+| `capture.goal_flag` | refused | Headless mode's goal option; refused as chat mode only (see below). |
+| `capture.interactive` | required: `true` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57). `false`, or leaving it out, is refused as chat mode only (see below). |
 | `capture.resume_args` | optional, default `[]` | Strings appended after `capture.args` when a run is continued and already has a file in one of its `[[capture.native]]` stores; otherwise the harness opens the normal way. Each is held to every `args` rule, and `args` and `resume_args` together hold at most 64. |
 | `capture.configure` | optional, default `[]` | `interactive` only. At most 4 commands, each 1–16 arguments of 1–256 bytes. Each argument is held to every `args` rule and takes no template (`{` and `}` are refused). See [Configure commands](#configure-commands). |
 | `capture.continuation` | required | Non-blank, one line, 1–512 bytes; declarative provenance for unattended continuation. |
@@ -105,16 +105,15 @@ optional field or table is absent.
 | `capture.model_host_from` | optional, default absent | `{ file = "<path>", key = "<dotted key>" }`: where the harness's own config names its model service. Requires `config_home = "shared"`. See [The model host from the harness's config](#the-model-host-from-the-harnesss-config). |
 
 With `interactive = true` (D57) there is no goal slot: the participant types the prompt in the
-harness. The profile takes no `goal_flag`, its `args` may be empty, and its `identity.source` must
-be `none`. Every argument and every `resume_args` entry passes the core deny policy and the
+harness. Its `args` may be empty, and its `identity.source` is `none`. Every argument and every `resume_args` entry passes the core deny policy and the
 optional argument guard. `goalcup continue` appends `resume_args` after `args`.
 
-**Headless (core only, being removed).** Headless mode (`interactive = false`) gives the harness
-one goal as an argument (after a trailing `--`, or as `--flag=<goal>` through `goal_flag`) and allows the
-`preassigned`, `stdout_json` and `stderr_line` identity sources. No shipped connector uses it, the
-participant tools (`prep`, `continue`) do not support it, and it is being removed from the code
-(simplification plan, A1). Do not write a headless connector. The rules for its fields stay below
-only while the code still reads them.
+**Headless mode was removed (21 Oct, simplification plan A1).** It gave the harness one goal as an
+argument and named a session through the `preassigned`, `stdout_json` or `stderr_line` identity
+sources. A manifest that still says `interactive = false` (or leaves it out), or writes
+`goal_flag`, one of those sources or any of their identity fields (`binding`, `match_field`,
+`match_value`, `id_field`, `prefix`, `grammar`, `wait_seconds`), is refused with one "chat mode
+only" message that names the field. It stays `schema_version = 1`.
 
 ### Configure commands
 
@@ -154,13 +153,13 @@ configure = [
   credential, proxy and trust spellings, a profile switch and the connector's own guarded options.
   Review is the control for the rest.
 
-Argument templates (`args` and `resume_args`) admit only `{workspace}` and `{session_id}`.
+Argument templates (`args` and `resume_args`) admit only `{workspace}`.
 `capture.env` value templates also admit `{config_home}` (the isolated harness home) and
 `{run_home}` (the run's private `HOME`), so a harness with a second state variable can point it
 inside them (`DATA_DIR = "{config_home}/data"`). The value rules still apply around a token: no
 leading `/` or `~`, no `$`, backtick or `://`, and no `..` component. `{{` and `}}` render literal
-braces. Any other token or unmatched brace is refused. `{session_id}` has the identity rules
-described below.
+braces. Any other token or unmatched brace is refused (`{session_id}` included: no run names
+a session).
 
 ### Executable
 
@@ -371,28 +370,10 @@ new name shape is a core policy and DECISIONS change.
 
 | Field | Required/default | Contract |
 |---|---|---|
-| `capture.identity.source` | required | Write `none`: an `interactive` profile takes `none` only. `preassigned`, `stdout_json` and `stderr_line` are headless only. |
-| `capture.identity.binding` | required except for `none` | Closed values: `at_launch`, `deferred`. |
-| `capture.identity.match_field` | `stdout_json` only; required there | Dot path of 1–4 nonempty `[A-Za-z0-9_]+` segments. |
-| `capture.identity.match_value` | `stdout_json` only; required there | 1–64 bytes, no control character. |
-| `capture.identity.id_field` | `stdout_json` only; required there | Same dot-path grammar as `match_field`. |
-| `capture.identity.wait_seconds` | `stdout_json` only; default 120 | 1–600: how long the launch waits for the identity event before recording the launch without one. |
-| `capture.identity.prefix` | `stderr_line` only; required there | 1–32 printable ASCII bytes. |
-| `capture.identity.grammar` | `stderr_line` only; required there | Closed values: `timestamp-hex`, `token`. |
+| `capture.identity.source` | required | `none`, the one value. `preassigned`, `stdout_json` and `stderr_line` were headless mode's and are refused as chat mode only. |
 
-`timestamp-hex` means `\d{8}_\d{6}_[0-9a-f]{6}`. `token` means 1–128 characters from
-`[A-Za-z0-9_-]`; a lowercase UUID is a token. The only admitted source/binding pairs are:
-
-| Source | Binding |
-|---|---|
-| `preassigned` | `at_launch` |
-| `stdout_json` | `at_launch` |
-| `stderr_line` | `deferred` |
-| `none` | absent |
-
-JSON selector fields are forbidden on all other sources; stderr fields are forbidden on all other
-sources. `none` takes no binding. Widening this table is a core change with an offline harness-kit
-case, but remains schema 1 because it makes a formerly refused combination valid.
+Every other identity field (`binding`, `match_field`, `match_value`, `id_field`, `wait_seconds`,
+`prefix`, `grammar`) is refused as chat mode only.
 
 ## `[[capture.native]]`
 
@@ -407,9 +388,8 @@ Exactly one native row is required.
 | `capture.native[].protocol_hint` | optional, default absent | `append_only` only; 1–64 bytes matching `^[a-z][a-z0-9.-]{0,63}$`. |
 | `capture.native[].since_run_start` | optional, default `false` | Boolean. `true` reads only the files new or written since the run started (D57). |
 
-Pattern components admit `[A-Za-z0-9._-]`, `*`, `?` and the special `{id}` token. Empty, `.` or
-`..` components, recursive `**`, other braces and absolute paths are refused. `{id}` appears
-exactly once when the identity source names a session, and not at all when the source is `none`.
+Pattern components admit `[A-Za-z0-9._-]`, `*` and `?`. Empty, `.` or `..` components,
+recursive `**`, braces (`{id}` included: no run names a session) and absolute paths are refused.
 Globs do not cross `/`.
 
 With `since_run_start = true`, the launcher may send the run's start time (`native_since`, Unix
@@ -445,7 +425,7 @@ All fields default when the optional table is present.
 
 A guarded `--name` or `--name=value` is refused. A single-dash cluster is scanned left to right;
 a guarded short option is refused, while a `short_with_value` option consumes the rest of the
-token and ends scanning. The guard is applied to every `args` and `resume_args` item and to `goal_flag`. It can only
+token and ends scanning. The guard is applied to every `args` and `resume_args` item. It can only
 make the core argument policy stricter.
 
 ## `[capture.termination]`
@@ -614,8 +594,7 @@ extra_patterns = [
 
 In addition to the local rules above, all of these apply:
 
-1. `preassigned` requires `{session_id}` in `capture.args`. `{session_id}` anywhere in `args`,
-   `resume_args` or an environment value requires `preassigned`.
+1. (Retired with headless mode: the `preassigned` and `{session_id}` rule.)
 2. (Retired by D61: the credential rules. A `[capture.credential]` table is refused.)
 3. `capture.home.seed`, `dirs` and an explicit `per_run_dir` require `config_home = "per_run"`.
 4. With `identity.source = "none"`, the native root must be `{run_home}/...` with a run home
@@ -623,7 +602,7 @@ In addition to the local rules above, all of these apply:
    source must declare
    `since_run_start = true`. A shared unscoped source read from before the run could read another
    run's session and is refused.
-5. The native root plus pattern, compared case-insensitively with `{id}` treated as `*`, cannot
+5. The native root plus pattern, compared case-insensitively, cannot
    match a seed destination. A `{run_home}` root is checked both with the config home coincident
    with the run home and nested below `per_run_dir`.
 6. `capture.home.env` (when present) and all `capture.ca.env` names are pairwise

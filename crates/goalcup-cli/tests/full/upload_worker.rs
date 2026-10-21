@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-const GOAL: &str = "write hello.txt, then stop";
 const RESERVE: u64 = 4 * 1024 * 1024;
 /// The Worker's test-only approval key (see `TEST_APPROVAL_KEY` in `server/worker/README.md`).
 const APPROVAL_KEY: &str = "gcw_test_approval_key";
@@ -317,7 +316,7 @@ fn upload_worker_a_run_is_uploaded_and_sealed_and_survives_a_restart() {
     let first = Wrangler::start(&state, port);
     log_in(&rig, &first.url);
     let approver = first.decide_next(true);
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = worker_options(&rig, &goal);
@@ -349,7 +348,7 @@ fn upload_worker_an_incomplete_upload_is_finished_by_goalcup_upload() {
     let first = Wrangler::start(&state, port);
     log_in(&rig, &first.url);
     let approver = first.decide_next(true);
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = worker_options(&rig, &goal);
@@ -386,7 +385,7 @@ fn upload_worker_a_denied_approval_starts_nothing() {
     let worker = Wrangler::start(&rig.root.join("worker"), free_port());
     log_in(&rig, &worker.url);
     let approver = worker.decide_next(false);
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let opts = worker_options(&rig, &goal);
@@ -415,7 +414,7 @@ fn upload_worker_the_worker_stops_the_run_at_its_deadline() {
     );
     log_in(&rig, &worker.url);
     let approver = worker.decide_next(true);
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = worker_options(&rig, &goal);

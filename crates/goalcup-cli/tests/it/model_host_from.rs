@@ -13,7 +13,6 @@ use crate::common::upload_server::{ServerOptions, UploadServer};
 use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
 use goalcup_protocol::harness::{CAPTURE_HOMES_DIR, ModelHostFrom, Origin};
 
-const GOAL: &str = "write hello.txt, then stop";
 const RESERVE: u64 = 4 * 1024 * 1024;
 const MODEL_HOST: &str = "models.example.test";
 const OTHER_HOST: &str = "github.example.test";
@@ -65,7 +64,7 @@ fn headless_run(steps: impl FnOnce(&Upstream) -> String) -> (Rig, String, Vec<Ca
     rig.tell("upstream.pem", &upstream.root_pem());
     rig.tell("stop", "");
     rig.tell("steps.sh", &steps(&upstream));
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, out) = std::thread::scope(|s| {
@@ -202,7 +201,7 @@ fn a_missing_or_loopback_model_host_is_refused_at_start() {
     let rig = Rig::new();
     let from = reads_model_host(&rig, FAKE_ID);
     let home = home(&rig, FAKE_ID);
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let refused = |shown: &str, reason: &str, hidden: Option<&str>| {
         let (result, out) = std::thread::scope(|s| {

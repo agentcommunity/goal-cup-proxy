@@ -506,15 +506,13 @@ fn login_step(cfg: &Path) -> Step {
 
 // ------------------------------------------------------------------ 2. harness
 
-/// Every connector in `connectors` that runs in chat mode and loads, in id order.
+/// Every connector in `connectors` that loads (each runs in chat mode, D57), in id order.
 fn chat_connectors(connectors: &Path, dev: bool) -> Result<Vec<HarnessConnector>, CliError> {
     let origin = if dev { Origin::Dev } else { Origin::Pinned };
     let mut found = Vec::new();
     for dir in harness_dirs(connectors)? {
         // One that does not load is `goalcup doctor`'s to report; it cannot be picked here.
-        if let Ok(loaded) = goalcup_protocol::harness::load_discovered_dir(&dir, origin)
-            && loaded.manifest.capture.interactive
-        {
+        if let Ok(loaded) = goalcup_protocol::harness::load_discovered_dir(&dir, origin) {
             found.push(HarnessConnector { dir, loaded });
         }
     }

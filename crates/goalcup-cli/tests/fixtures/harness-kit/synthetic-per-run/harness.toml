@@ -1,9 +1,10 @@
 schema_version = 1
-id = "kit-synthetic-stdout-json"
+id = "kit-synthetic-per-run"
 
 [capture]
-args = ["-I", "-S", "@STAND_IN@", "@PORT@", "@TEST_ID@", "@MARKER@", "@GO@", "--"]
-continuation = "one stdout-bound offline echo and one snapshot"
+interactive = true
+args = ["-I", "-S", "@STAND_IN@", "@PORT@", "@TEST_ID@", "@MARKER@", "@GO@"]
+continuation = "one offline echo and one snapshot in a per-run home"
 
 [capture.executable]
 program = "python3"
@@ -22,16 +23,12 @@ env = ["NODE_EXTRA_CA_CERTS"]
 mode = "extend"
 
 [capture.identity]
-source = "stdout_json"
-binding = "at_launch"
-match_field = "event.kind"
-match_value = "session.started"
-id_field = "session.id"
+source = "none"
 
 [[capture.native]]
-name = "stdout-case"
+name = "per-run-case"
 root = "{config_home}"
-pattern = "snapshots/{id}.json"
+pattern = "snapshots/*.json"
 form = "snapshot"
 
 [capture.argv_guard]

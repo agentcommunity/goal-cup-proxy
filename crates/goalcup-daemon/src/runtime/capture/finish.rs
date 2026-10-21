@@ -443,10 +443,6 @@ impl Daemon {
         // exit is awaited until the last instant a stage may begin, and is never joined while it
         // runs. A slow owner is a refusal; its thread stays with the entry for the next finish.
         capture.pause_before(FinishStage::OwnerDrain);
-        // A deferred native scope rides on this request. It is installed here, under the run
-        // lock and before the owner is stopped, so the owner finishes it within the native
-        // budget below (CONTRACTS.md, C6 local finish budget ¶9).
-        capture.install_deferred_scope(request.native_scope.as_deref(), run.launched());
         let stopped = budget.admits()
             && matches!(
                 capture.stop_owner(budget.native_budget(), Some(budget.last_start())),
@@ -462,7 +458,7 @@ impl Daemon {
 
         // Stage 6: the writer is uncontended now; counters and any earlier refusal's gaps precede
         // the terminal. Termination was bound before the latch is taken here.
-        capture.chain_carried_gaps(request, run.launched());
+        capture.chain_carried_gaps(request);
 
         // Stage 7: the workspace seal.
         capture.pause_before(FinishStage::WorkspaceWalk);
@@ -738,22 +734,15 @@ impl CaptureEntry {
 
     /// Finish stage 6, with the writer uncontended: chain what this finish carries, in the order
     /// the chain reads it (CONTRACTS.md, C6 local finish budget ¶4 and ¶5). First the
-    /// deferred-scope gap, if the entry still owes it. Then the launcher's proxy counters, this
-    /// request's or an expired attempt's. Then one stream-less `ShutdownDeadline` gap if an
+    /// launcher's proxy counters, this request's or an expired attempt's. Then one stream-less `ShutdownDeadline` gap if an
     /// earlier attempt expired: its incomplete finish left capture continuity uncertain.
     /// Takes the sticky [`ExpiredFinish`] after the recorded termination was bound at stage 3.
-    pub(super) fn chain_carried_gaps(&self, request: &CaptureSealRequest, launched: bool) {
+    pub(super) fn chain_carried_gaps(&self, request: &CaptureSealRequest) {
         let latched = lock(&self.expired).take();
         let counters = request
             .proxy
             .or(latched.as_ref().and_then(|latched| latched.proxy_pending));
-        // A deferred scope that no finish installed: the snapshot was never read, and one
-        // stream-less gap says so.
-        let deferred_gap = self.take_deferred_gap(launched);
         let mut writer = lock(&self.writer);
-        if deferred_gap {
-            writer.streamless_gap(GapReason::SourceChanged, &(self.clock)());
-        }
         if let Some(counters) = &counters {
             writer.proxy_gaps(counters, &(self.clock)());
         }

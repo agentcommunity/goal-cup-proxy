@@ -9,11 +9,9 @@
 #
 # The run is the real thing: `goalcup login`, `goalcup start --practice` (the device-flow
 # approval, the clone of the matrix repository, the harness), the end of the run, the seal and
-# the upload. A chat-mode connector (`interactive = true`) runs under a pseudo-terminal, gets one
-# typed prompt, and is stopped by goalcup at the practice deadline. A headless connector (not
-# `interactive`, like hermes-cli) runs with `--goal-file`, gets its goal from MATRIX_PROMPT in
-# that file, types nothing, and ends when the harness does; the script then waits for the
-# server's deadline before it asks for the server's copy. Then it checks:
+# the upload. Every connector is a chat-mode one (`interactive = true`, D57): it runs under a
+# pseudo-terminal, gets one typed prompt, and is stopped by goalcup at the practice deadline.
+# Then it checks:
 #
 #   1. `goalcup-verify --capture-integrity` on the local trace exits 0 (integrity valid, anchor
 #      signed by the server's acknowledgement);
@@ -25,13 +23,12 @@
 # server's position with the local chain, not a download. docs/OPERATING.md, "The matrix", says
 # why that is enough and what it does not prove.
 #
-# <connector> is `m2-fake-tui` or `m2-fake-headless` (connectors this script writes for itself
-# around the test suite's fake TUI and fake headless harness, admitted with --dev; no harness, no
-# login, no model) or the id of a shipped connector (`codex-cli`, `hermes-cli`, ...), which needs
-# that harness installed and logged in, in a prepared configuration directory (MATRIX_CONFIG_DIR,
-# below). The script reads the connector's harness.toml to tell chat mode from headless:
-# GOALCUP_CONNECTORS_DIR, else the connectors directory beside the goalcup binary, else this
-# checkout's; if none holds it, the connector is taken to be chat mode.
+# <connector> is `m2-fake-tui` (a connector this script writes for itself around the test
+# suite's fake TUI, admitted with --dev; no harness, no login, no model) or the id of a shipped
+# connector (`codex-cli`, `hermes-cli`, ...), which needs that harness installed and logged in,
+# in a prepared configuration directory (MATRIX_CONFIG_DIR, below). The connector's harness.toml
+# must be found: GOALCUP_CONNECTORS_DIR, else the connectors directory beside the goalcup binary,
+# else this checkout's.
 #
 # Environment. The approval key is never in this script's environment, a variable, an argument,
 # a log or a file it writes: you give the PATH of a file that holds it, and the script reads that
@@ -46,18 +43,16 @@
 #   GOALCUP_TEST_MEMBER_ID     the member the test approval approves as (default: member1).
 #   MATRIX_REPO_URL            the empty public repository (default:
 #                              https://github.com/agentcommunity/goalcup-matrix-empty).
-#   MATRIX_PROMPT              what is typed into the harness, or for a headless connector
-#                              written to its goal file (default: a one-line greeting).
+#   MATRIX_PROMPT              what is typed into the harness (default: a one-line greeting).
 #   MATRIX_PROMPT_FILE         a regular file holding the prompt instead (UTF-8; long workloads).
-#                              Not together with MATRIX_PROMPT. A headless connector's goal file
-#                              gets the text as it is, newlines included. A chat-mode harness gets
+#                              Not together with MATRIX_PROMPT. The harness gets
 #                              it typed on ONE line: every run of white space, newlines included,
 #                              becomes one space, because a newline typed into a TUI submits (or
 #                              splits) the prompt early. Control characters other than tab and
 #                              newline are refused. A long prompt reaches the TUI as a paste; give
 #                              it time with MATRIX_SUBMIT_DELAY before the Enter.
 #   MATRIX_PROMPT_DELAY        seconds between "the harness is up" and the prompt (fake: 1,
-#                              any other connector: 30). Chat mode only.
+#                              any other connector: 30).
 #   MATRIX_SUBMIT_DELAY        seconds between the typed prompt and the Enter that submits it
 #                              (default 2). Text and Enter in one write are read by Codex as a
 #                              paste: the text stays in the composer and nothing is submitted.
@@ -82,16 +77,14 @@
 #   --keep               do not delete the temporary directory (it holds the run's trace).
 #   --log FILE           where the details go (default: a new file in $TMPDIR).
 #   --timeout SECONDS    give up on the run after this long (default 1800; with --duration,
-#                        the duration plus 1800). One budget: for a headless run the wait for
-#                        the server's deadline takes what the start left of it, and for a test
-#                        run the seal, the end of `goalcup start` and any `goalcup upload` take
-#                        what is left after the duration.
+#                        the duration plus 1800). One budget: for a test run the seal, the end of
+#                        `goalcup start` and any `goalcup upload` take what is left after the
+#                        duration.
 #   --test --duration SECONDS
 #                        an organizer test run (`goalcup start --harness <id> --test`, approved
 #                        through the same test key flow; the member must be a test operator)
 #                        instead of a practice run, ended by this script: SECONDS (1 to 604800)
-#                        after the prompt is submitted (a headless connector: after its run
-#                        record appears, since the goal is its input from the launch), or when
+#                        after the prompt is submitted, or when
 #                        the harness exits if that is earlier, it runs `goalcup seal <entry>` for
 #                        this run's own entry. The entry is the one entry of the one run record
 #                        this start wrote (a test run, of this connector), and `goalcup entries
@@ -129,7 +122,6 @@ REPO=$(dirname "$HERE")
 
 PRODUCTION_HOST="ingest.agentcommunity.org"
 FAKE_ID="m2-fake-tui"
-FAKE_HEADLESS_ID="m2-fake-headless"
 DEFAULT_REPO_URL="https://github.com/agentcommunity/goalcup-matrix-empty"
 
 usage() {
@@ -283,7 +275,7 @@ if [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
     exit 2
   fi
   case $CONNECTOR in
-    "$FAKE_ID" | "$FAKE_HEADLESS_ID")
+    "$FAKE_ID")
       echo "matrix: --test needs a real connector, not $CONNECTOR" >&2
       exit 2
       ;;
@@ -687,15 +679,9 @@ request_seal() { # why
 test_tick() {
   tt_now=$(date +%s)
   if [ -z "$SUBMIT_AT" ]; then
-    if [ "$MODE" = headless ]; then
-      [ -n "$(fresh_runs)" ] || return 0
-      SUBMIT_AT=$tt_now
-      log "the run is open and the headless harness has its goal; the seal is due in ${DURATION}s"
-    else
-      [ -f "$ROOT/sent" ] || return 0
-      SUBMIT_AT=$tt_now
-      log "the prompt was submitted; the seal is due in ${DURATION}s"
-    fi
+    [ -f "$ROOT/sent" ] || return 0
+    SUBMIT_AT=$tt_now
+    log "the prompt was submitted; the seal is due in ${DURATION}s"
     resolve_entry || return 1
     return 0
   fi
@@ -710,12 +696,6 @@ test_tick() {
 finish_test_seal() {
   if [ -z "$SEAL_ASKED_AT" ]; then
     EARLY=1
-    if [ -z "$SUBMIT_AT" ] && [ "$MODE" = headless ] && [ -n "$(fresh_runs)" ]; then
-      # A headless harness has its goal from the launch; it ended before the next look.
-      SUBMIT_AT=$(date +%s)
-      log "the headless harness ended before the run was seen open"
-      resolve_entry || return 1
-    fi
     if [ -z "$SUBMIT_AT" ]; then
       log "goalcup start ended before the prompt was submitted"
       if resolve_entry; then
@@ -816,16 +796,12 @@ run_matrix() {
     PROMPT_ENTER='\n'
     READY_MARK="tui: ready"
     DELAY=${MATRIX_PROMPT_DELAY:-1}
-  elif [ "$CONNECTOR" = "$FAKE_HEADLESS_ID" ]; then
-    IS_FAKE=1
-    make_fake_headless_connector || return 1
-    DEV_FLAG="--dev"
   fi
   MATRIX_TERM=${MATRIX_TERM:-$([ "$CONNECTOR" = "$FAKE_ID" ] && echo dumb || echo xterm-256color)}
   read_manifest || return 1
   PROMPT=${MATRIX_PROMPT:-"Goal Cup matrix check: reply with the single word ok."}
   if [ -n "$PROMPT_FILE" ]; then
-    PROMPT=$(python3 - "$PROMPT_FILE" "$MODE" 2>"$ROOT/prompt.err" <<'PY'
+    PROMPT=$(python3 - "$PROMPT_FILE" 2>"$ROOT/prompt.err" <<'PY'
 import sys
 try:
     text = open(sys.argv[1], "rb").read().decode("utf-8")
@@ -833,14 +809,14 @@ except UnicodeDecodeError:
     sys.exit("it is not UTF-8")
 if any((ord(c) < 32 and c not in "\t\n\r") or ord(c) == 127 for c in text):
     sys.exit("it holds a control character other than tab and newline")
-# Chat mode: one line, as typed. Headless: the text as it is (the goal file is not typed).
-text = " ".join(text.split()) if sys.argv[2] == "chat" else text.strip()
+# One line, as typed.
+text = " ".join(text.split())
 if not text:
     sys.exit("it is empty")
 sys.stdout.write(text)
 PY
     ) || fail "MATRIX_PROMPT_FILE $PROMPT_FILE: $(last_line "$ROOT/prompt.err")" || return 1
-    log "prompt from MATRIX_PROMPT_FILE $PROMPT_FILE: ${#PROMPT} characters$([ "$MODE" = chat ] && echo ", typed on one line")"
+    log "prompt from MATRIX_PROMPT_FILE $PROMPT_FILE: ${#PROMPT} characters, typed on one line"
   fi
 
   if [ "$OWN_CONFIG" = 1 ]; then
@@ -878,74 +854,55 @@ PY
   WRAP="$ROOT/start-wrapper.sh"
   if [ "$TEST" = 1 ]; then RUN_FLAG=--test; else RUN_FLAG=--practice; fi
   START_ARGS="start --harness $CONNECTOR $DEV_FLAG $RUN_FLAG"
-  WRAP_KIND=""
-  if [ "$MODE" = headless ]; then
-    # The goal is a file: the goal of a headless harness is its only input, typed by nobody.
-    printf '%s\n' "$PROMPT" >"$ROOT/goal.txt"
-    START_ARGS="$START_ARGS --goal-file $(shq "$ROOT/goal.txt")"
-  else
-    WRAP_KIND=stty
+  write_wrapper "$WRAP" start "$START_ARGS" stty
+  # The feeder holds the terminal's input open until the run is over (an end of input would be
+  # an end of the chat) and types the prompt once, when the main loop says the harness is up.
+  # The status file is written by the terminal's side of the pipe, so it appears when script
+  # ends, not when the feeder does.
+  FEED="while [ ! -f $(shq "$ROOT/done") ]; do
+  if [ -f $(shq "$ROOT/prekeys-send") ] && [ ! -f $(shq "$ROOT/prekeys-sent") ]; then
+    printf '$PRE_KEYS'; : > $(shq "$ROOT/prekeys-sent")
   fi
-  write_wrapper "$WRAP" start "$START_ARGS" "$WRAP_KIND"
-  if [ "$MODE" = headless ]; then
-    if [ "$TEST" = 1 ]; then
-      say "start --test, headless (sealed ${DURATION}s after the run opens, or when the harness ends)"
-    else
-      say "start --practice, headless (the harness ends the run; then waiting for the server's deadline)"
-    fi
-    # No terminal and nothing typed: the harness's input is empty. (Started from a subshell, as the
-    # login is.)
-    ( ( (sh "$WRAP" >"$ROOT/start.out" 2>&1 </dev/null); echo $? >"$ROOT/start.rc") 2>/dev/null & )
-  else
-    # The feeder holds the terminal's input open until the run is over (an end of input would be
-    # an end of the chat) and types the prompt once, when the main loop says the harness is up.
-    # The status file is written by the terminal's side of the pipe, so it appears when script
-    # ends, not when the feeder does.
-    FEED="while [ ! -f $(shq "$ROOT/done") ]; do
-    if [ -f $(shq "$ROOT/prekeys-send") ] && [ ! -f $(shq "$ROOT/prekeys-sent") ]; then
-      printf '$PRE_KEYS'; : > $(shq "$ROOT/prekeys-sent")
-    fi
-    if [ -f $(shq "$ROOT/send") ] && [ ! -f $(shq "$ROOT/sent") ]; then
-      printf '%s' $(shq "$PROMPT"); sleep $SUBMIT_DELAY; printf '$PROMPT_ENTER'; : > $(shq "$ROOT/sent")
-    fi
-    sleep 1
+  if [ -f $(shq "$ROOT/send") ] && [ ! -f $(shq "$ROOT/sent") ]; then
+    printf '%s' $(shq "$PROMPT"); sleep $SUBMIT_DELAY; printf '$PROMPT_ENTER'; : > $(shq "$ROOT/sent")
+  fi
+  sleep 1
   done"
-    if [ "$TEST" = 1 ]; then
-      say "start --test (an organizer test run; sealed ${DURATION}s after the prompt is submitted, or when the harness ends)"
-    else
-      say "start --practice (the run lasts the server's practice length; waiting for its deadline)"
-    fi
-    if [ "$OS" = macos ]; then
-      ( ( (eval "$FEED") | (script -q /dev/null sh "$WRAP" >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
-    else
-      ( ( (eval "$FEED") | (script -qec "sh $(shq "$WRAP")" /dev/null >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
-    fi
-    READY_AT=""
-    PRE_AT=""
-    chat_tick() {
-      if [ -n "$READY_AT" ]; then
-        now=$(date +%s)
-        if [ -n "$PRE_KEYS" ] && [ -z "$PRE_AT" ] && [ $((now - READY_AT)) -ge "$PRE_DELAY" ]; then
-          : >"$ROOT/prekeys-send"
-          PRE_AT=$now
-          log "the first-run keys are typed"
-        fi
-        if [ ! -f "$ROOT/send" ] && [ $((now - READY_AT)) -ge "$DELAY" ]; then
-          if [ -z "$PRE_KEYS" ] || { [ -f "$ROOT/prekeys-sent" ] && [ $((now - PRE_AT)) -ge 2 ]; }; then
-            : >"$ROOT/send"
-          fi
-        fi
-      fi
-      if [ -z "$READY_AT" ] && grep -q "$READY_MARK" "$ROOT/start.out" 2>/dev/null; then
-        READY_AT=$(date +%s)
-        SCAN=0
-        log "the harness is up"
-      fi
-      return 0
-    }
+  if [ "$TEST" = 1 ]; then
+    say "start --test (an organizer test run; sealed ${DURATION}s after the prompt is submitted, or when the harness ends)"
+  else
+    say "start --practice (the run lasts the server's practice length; waiting for its deadline)"
   fi
+  if [ "$OS" = macos ]; then
+    ( ( (eval "$FEED") | (script -q /dev/null sh "$WRAP" >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
+  else
+    ( ( (eval "$FEED") | (script -qec "sh $(shq "$WRAP")" /dev/null >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
+  fi
+  READY_AT=""
+  PRE_AT=""
+  chat_tick() {
+    if [ -n "$READY_AT" ]; then
+      now=$(date +%s)
+      if [ -n "$PRE_KEYS" ] && [ -z "$PRE_AT" ] && [ $((now - READY_AT)) -ge "$PRE_DELAY" ]; then
+        : >"$ROOT/prekeys-send"
+        PRE_AT=$now
+        log "the first-run keys are typed"
+      fi
+      if [ ! -f "$ROOT/send" ] && [ $((now - READY_AT)) -ge "$DELAY" ]; then
+        if [ -z "$PRE_KEYS" ] || { [ -f "$ROOT/prekeys-sent" ] && [ $((now - PRE_AT)) -ge 2 ]; }; then
+          : >"$ROOT/send"
+        fi
+      fi
+    fi
+    if [ -z "$READY_AT" ] && grep -q "$READY_MARK" "$ROOT/start.out" 2>/dev/null; then
+      READY_AT=$(date +%s)
+      SCAN=0
+      log "the harness is up"
+    fi
+    return 0
+  }
   after_scan() {
-    [ "$MODE" = headless ] || chat_tick
+    chat_tick
     [ "$TEST" = 0 ] || test_tick
   }
   START_LAUNCHED=1
@@ -953,7 +910,7 @@ PY
   wait_job "$ROOT/start.rc" "$ROOT/start.out" "$TIMEOUT"
   w=$?
   : >"$ROOT/done"
-  log_file "goalcup start ($([ "$MODE" = headless ] && echo output || echo terminal))" "$ROOT/start.out"
+  log_file "goalcup start (terminal)" "$ROOT/start.out"
   case $w in
     1) fail "the run did not finish within ${TIMEOUT}s" || return 1 ;;
     2) fail "the test approval was refused (wrong key, member, or not a test server)" || return 1 ;;
@@ -964,7 +921,7 @@ PY
     log "goalcup start exit status: $START_RC (the harness is stopped by the seal, so a non-zero status is not itself a failure)"
     finish_test_seal || return 1
   else
-    log "goalcup start exit status: $START_RC$([ "$MODE" = headless ] || echo " (script's status; the harness is stopped by the deadline, so a non-zero status is not itself a failure)")"
+    log "goalcup start exit status: $START_RC (script's status; the harness is stopped by the deadline, so a non-zero status is not itself a failure)"
   fi
 
   tr -d '\r' <"$ROOT/start.out" >"$ROOT/start.txt"
@@ -1007,9 +964,9 @@ PY
     log "harness version: $HV"
   fi
 
-  # goalcup's own words about how the run ended. A chat-mode run's `deadline:` line goes to the
-  # run's host.log (the terminal belongs to the harness), a headless run's to the terminal, and
-  # `harness exited:` and `uploaded:` to the terminal in both: so both files are read.
+  # goalcup's own words about how the run ended. The `deadline:` line goes to the run's host.log
+  # (the terminal belongs to the harness), and `harness exited:` and `uploaded:` to the terminal:
+  # so both files are read.
   { cat "$ROOT/start.txt"; [ ! -f "$RUN_DIR/host.log" ] || tr -d '\r' <"$RUN_DIR/host.log"; } >"$ROOT/ended.txt"
 
   COPY_TRIES=6
@@ -1019,12 +976,6 @@ PY
     # The end is this script's seal, not the server's deadline (168 hours away).
     [ "$ENTRY_ID" = "$SEAL_ENTRY" ] ||
       fail "the run record's last entry $ENTRY_ID is not the entry that was sealed, $SEAL_ENTRY" || return 1
-    if [ "$MODE" = headless ] && [ "$EARLY" = 1 ]; then
-      exited=$(grep '^harness exited:' "$ROOT/ended.txt" | tail -1 | cut -c1-200)
-      [ -n "$exited" ] || exited="no harness-exited line; goalcup's last words: $(last_line "$ROOT/start.txt")"
-      [ "$exited" = "harness exited: exit code 0." ] ||
-        fail "the headless harness did not finish its goal: $exited" || return 1
-    fi
     if ! grep -Eq '^uploaded:.*(the|its) seal' "$ROOT/ended.txt"; then
       left=$(budget_left)
       say "goalcup start did not report the seal uploaded; goalcup upload $SEAL_ENTRY (at most ${left}s)"
@@ -1039,22 +990,6 @@ PY
     grep -Eq '^uploaded:.*(the|its) seal' "$ROOT/ended.txt" ||
       fail "neither goalcup start nor goalcup upload reported the upload finished with the seal" || return 1
     STRICT=sealed
-  elif [ "$MODE" = headless ]; then
-    # The harness ends the run when it is done. It ended at the deadline (a long goal) or on its
-    # own with exit code 0; any other exit is a harness that did not do its job.
-    if ! grep -q '^deadline:' "$ROOT/ended.txt"; then
-      exited=$(grep '^harness exited:' "$ROOT/ended.txt" | tail -1 | cut -c1-200)
-      [ -n "$exited" ] || exited="no harness-exited line; goalcup's last words: $(last_line "$ROOT/start.txt")"
-      [ "$exited" = "harness exited: exit code 0." ] ||
-        fail "the headless harness did not finish its goal: $exited" || return 1
-      # Over on the harness's side, open on the server's until its deadline (the practice length).
-      COPY_SLEEP=10
-      # What is left of --timeout after the start, not a second budget.
-      left=$((TIMEOUT - ($(date +%s) - START_AT)))
-      [ "$left" -gt 0 ] || left=0
-      COPY_TRIES=$((left / COPY_SLEEP + 1))
-      say "the harness finished its goal; the server's copy is checked after the server's deadline"
-    fi
   else
     grep -q '^deadline:' "$ROOT/ended.txt" ||
       fail "the run did not end at its deadline (no 'deadline:' line in the terminal output or host.log); goalcup's last words: $(last_line "$ROOT/ended.txt")" || return 1
@@ -1230,12 +1165,10 @@ except Exception:
 print(v if not isinstance(v, bool) else str(v).lower())' "$1" "$2"
 }
 
-# What the connector's harness.toml says about how it runs: MODE (chat when `interactive = true`,
-# headless otherwise: it takes its goal as an argument). Read the way goalcup finds its connectors: GOALCUP_CONNECTORS_DIR, else the
-# directory beside the binary, else this checkout's. A manifest nowhere is a failure. One key
-# per line, as the shipped manifests have them.
+# The connector's harness.toml, found the way goalcup finds its connectors: GOALCUP_CONNECTORS_DIR,
+# else the directory beside the binary, else this checkout's. A manifest nowhere is a failure.
+# Every connector runs in chat mode (D57); goalcup itself refuses one that does not.
 read_manifest() {
-  MODE=chat
   manifest=""
   if [ -n "$CONNECTORS_ENV" ]; then
     manifest="$CONNECTORS_ENV/$CONNECTOR/harness.toml"
@@ -1249,33 +1182,9 @@ read_manifest() {
     done
   fi
   if [ ! -f "$manifest" ]; then
-    # Chat mode is the safe guess for the old fake only: a headless connector taken for chat mode
-    # would get a terminal and a typed prompt, and fail half a minute later for no clear reason.
     fail "no harness.toml found for $CONNECTOR (set GOALCUP_CONNECTORS_DIR to the connectors directory)" || return 1
   fi
-  cat >"$ROOT/manifest.py" <<'PY'
-import re, sys
-table = ""
-interactive = False
-for raw in open(sys.argv[1]):
-    line = raw.strip()
-    if line.startswith("#") or not line:
-        continue
-    m = re.match(r"^\[+([^\]]+)\]+\s*(#.*)?$", line)
-    if m:
-        table = m.group(1).strip()
-        continue
-    m = re.match(r"^([A-Za-z0-9_]+)\s*=\s*(.*?)\s*(#.*)?$", line)
-    if not m:
-        continue
-    key, value = m.group(1), m.group(2)
-    if table == "capture" and key == "interactive":
-        interactive = value == "true"
-print("mode=" + ("chat" if interactive else "headless"))
-PY
-  facts=$(python3 "$ROOT/manifest.py" "$manifest") || fail "cannot read $manifest" || return 1
-  MODE=$(printf '%s\n' "$facts" | sed -n 's/^mode=//p')
-  log "connector $CONNECTOR: $MODE mode"
+  log "connector $CONNECTOR: $manifest"
 }
 
 # The connector for m2-fake-tui: this script's own copy of the test suite's chat-mode fake, in
@@ -1320,67 +1229,6 @@ config_home = "shared"
 env = "CODEX_HOME"
 real_dirs = ["{user_home}/.codex"]
 skills_dir = "skills"
-
-[capture.ca]
-env = ["CODEX_CA_CERTIFICATE"]
-mode = "extend"
-
-[capture.identity]
-source = "none"
-
-[[capture.native]]
-name = "session"
-root = "{config_home}/sessions"
-pattern = "*.jsonl"
-form = "append_only"
-since_run_start = true
-
-[capture.termination]
-strategy = "process_group"
-grace_seconds = 2
-
-[[capture.hosts]]
-host = "localhost"
-evidence_paths = ["/v1/responses"]
-protocol_hint = "openai-responses"
-EOF
-}
-
-# The connector for m2-fake-headless: this script's own copy of the test suite's fake headless
-# harness (tests/fixtures/m2-fake-harness.sh), as a headless connector: the goal after `--`, stdin
-# empty. The `stop` file is there from the start, so the fake ends at once with exit code 0, as a
-# one-turn harness does (hermes-cli): the run ends on the harness's side long before the server's
-# deadline.
-make_fake_headless_connector() {
-  FIXTURE="$REPO/crates/goalcup-cli/tests/fixtures/m2-fake-harness.sh"
-  [ -f "$FIXTURE" ] || fail "the fake headless harness fixture is missing: $FIXTURE" || return 1
-  CONNECTORS_ENV="$ROOT/connectors"
-  mkdir -p "$CONNECTORS_ENV/$FAKE_HEADLESS_ID" "$ROOT/bin" "$ROOT/fake-out"
-  : >"$ROOT/fake-out/stop"
-  {
-    echo '#!/bin/sh'
-    printf 'M2_FAKE_OUT=%s\nexport M2_FAKE_OUT\n' "$(shq "$ROOT/fake-out")"
-    sed '1d' "$FIXTURE"
-  } >"$ROOT/bin/$FAKE_HEADLESS_ID"
-  chmod 755 "$ROOT/bin/$FAKE_HEADLESS_ID"
-  HARNESS_PATH="$ROOT/bin:$PATH"
-  cat >"$CONNECTORS_ENV/$FAKE_HEADLESS_ID/harness.toml" <<EOF
-schema_version = 1
-id = "$FAKE_HEADLESS_ID"
-
-[capture]
-auth_hosts = ["auth.openai.com"]
-continuation = "none: the fake harness takes no input after its goal"
-args = ["run", "-C", "{workspace}", "--"]
-
-[capture.executable]
-program = "$FAKE_HEADLESS_ID"
-
-[capture.home]
-run_home = "empty"
-config_home = "shared"
-env = "CODEX_HOME"
-real_dirs = ["{user_home}/.codex"]
 
 [capture.ca]
 env = ["CODEX_CA_CERTIFICATE"]

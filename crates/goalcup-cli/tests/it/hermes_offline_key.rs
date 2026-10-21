@@ -550,7 +550,6 @@ fn the_real_hermes_writes_its_session_file_once_configured_and_keeps_its_key_out
         &vars,
         &workspace,
         &CaptureLaunch {
-            goal: None,
             executable: &resolved,
             run_home: &run_home,
             config_home: &hermes_home,

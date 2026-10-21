@@ -1661,11 +1661,9 @@ fn the_binary_leads_with_chat_mode_start() {
 
     let out = run(&["--help"]);
     let help = String::from_utf8_lossy(&out.stdout);
-    let chat = help
-        .find("goalcup start --harness <id>")
-        .expect("the start line");
-    let headless = help.find("--goal-file").expect("the headless note");
-    assert!(chat < headless, "chat-mode start leads: {help}");
+    assert!(help.contains("goalcup start --harness <id>"), "{help}");
+    // Headless mode was removed: no goal file is offered anywhere.
+    assert!(!help.contains("--goal-file"), "{help}");
 }
 
 /// `goalcup upload` with no id works on the newest run only, skips entries already sent, says

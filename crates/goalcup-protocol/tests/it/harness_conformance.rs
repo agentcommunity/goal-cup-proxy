@@ -11,7 +11,7 @@
 //! first:
 //! * the declared id is the folder name (`load_dir` does not compare with the folder name);
 //! * no non-comment line of `harness.toml` names the tracker, a rule broader than
-//!   `validate`'s (which scans args, goal flag, env and hosts, not `continuation` or
+//!   `validate`'s (which scans args, env and hosts, not `continuation` or
 //!   `evidence_paths`).
 //!
 //! The set the loop runs over is itself asserted (M-2): every id the pins file pins
@@ -157,12 +157,12 @@ fn copy_connector_as(id: &str, folder: &str) -> (tempfile::TempDir, PathBuf) {
     copy_dir_as(&root().join("connectors").join(id), folder)
 }
 
-/// [`copy_connector`] of the frozen copy of `id` as it shipped while headless, for the tests
-/// of the headless recipe's text.
-fn copy_headless_connector(id: &str) -> (tempfile::TempDir, PathBuf) {
+/// [`copy_connector`] of the frozen copy of `id` as it shipped before chat mode, for the tests
+/// of its recipe's text (Hermes's seeds, Codex's continuation).
+fn copy_frozen_connector(id: &str) -> (tempfile::TempDir, PathBuf) {
     copy_dir_as(
         &root()
-            .join("crates/goalcup-protocol/tests/fixtures/headless-connectors/")
+            .join("crates/goalcup-protocol/tests/fixtures/frozen-connectors/")
             .join(id),
         id,
     )
@@ -221,7 +221,7 @@ fn sensitivity_a_missing_harness_toml_is_refused() {
 
 #[test]
 fn sensitivity_load_dir_refuses_an_unnamed_file_under_files() {
-    let (_tmp, dir) = copy_headless_connector("hermes-cli");
+    let (_tmp, dir) = copy_frozen_connector("hermes-cli");
     std::fs::write(dir.join("files/stray.txt"), b"x\n").unwrap();
     let err = check_dir(&dir).expect_err("a stray file");
     assert!(
@@ -232,7 +232,7 @@ fn sensitivity_load_dir_refuses_an_unnamed_file_under_files() {
 
 #[test]
 fn sensitivity_load_dir_refuses_a_seed_the_directory_lacks() {
-    let (_tmp, dir) = copy_headless_connector("hermes-cli");
+    let (_tmp, dir) = copy_frozen_connector("hermes-cli");
     std::fs::remove_file(dir.join("files/auth.json")).unwrap();
     let err = check_dir(&dir).expect_err("a missing seed");
     assert!(
@@ -260,7 +260,7 @@ fn sensitivity_load_dir_refuses_an_extra_rule_that_is_not_a_form() {
 /// is documentation, never an argument, env value or host.
 #[test]
 fn sensitivity_f7_catches_a_value_validate_does_not_scan() {
-    let (_tmp, dir) = copy_headless_connector("codex-cli");
+    let (_tmp, dir) = copy_frozen_connector("codex-cli");
     mutate(
         &dir.join("harness.toml"),
         "full access with network, stdin",

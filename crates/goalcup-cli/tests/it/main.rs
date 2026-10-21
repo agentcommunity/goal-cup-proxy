@@ -10,7 +10,6 @@ mod ca_bundle;
 mod capture_gate;
 mod capture_only_refusal;
 #[cfg(unix)]
-mod capture_stderr_tee;
 #[cfg(unix)]
 mod connector_contract;
 mod daemon_client;

@@ -262,7 +262,6 @@ pub fn continue_with(
     let start = StartOptions {
         harness: record.connector_id.clone(),
         dev: previous_entry.dev,
-        goal_file: None,
         run_folder: Some(folder),
         disk: opts.disk,
         mode: record.mode(),
@@ -365,7 +364,6 @@ fn close_previous(
             crate::commands::seal::seal_locally(
                 client,
                 entry_id,
-                None,
                 None,
                 deadline,
                 allowance,

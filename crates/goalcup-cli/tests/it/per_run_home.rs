@@ -1,8 +1,8 @@
 //! The per-run private harness home (`config_home = "per_run"`).
 //!
 //! The home is made inside the run directory, from the connector's own seed files, and nothing
-//! outside the run is read or written through it. The subject is the headless fixture connector
-//! (`tests/fixtures/connectors/headless-per-run`); every shipped per-run connector is held to the
+//! outside the run is read or written through it. The subject is the fixture connector
+//! (`tests/fixtures/connectors/chat-per-run`); every shipped per-run connector is held to the
 //! same tree by `connector_contract`. Every directory here is a private temporary one: nothing
 //! resolves a real `HOME`.
 
@@ -19,7 +19,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 fn connector_dir() -> PathBuf {
-    support::fixture_connectors_dir().join("headless-per-run")
+    support::fixture_connectors_dir().join("chat-per-run")
 }
 
 fn loaded_per_run() -> goalcup_protocol::harness::LoadedConnector {
@@ -70,7 +70,7 @@ seed = [
     let new_home =
         format!("dirs = {dirs}\nreal_dirs = [\"{{user_home}}/.perrun\"]\nseed = {seeds}");
     let manifest = original
-        .replace("id = \"headless-per-run\"", "id = \"per-run-home-test\"")
+        .replace("id = \"chat-per-run\"", "id = \"per-run-home-test\"")
         .replace(old_home, &new_home);
     assert_ne!(manifest, original, "the schema-1 fixture was not rewritten");
     std::fs::write(connector.join("harness.toml"), manifest).unwrap();

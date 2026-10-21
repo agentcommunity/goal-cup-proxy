@@ -34,7 +34,6 @@ pub(crate) const MAX_CAPTURE_HOSTS: usize = 16;
 pub(crate) const MAX_CAPTURE_PATHS_PER_HOST: usize = 32;
 pub(crate) const MAX_CAPTURE_PATH_BYTES: usize = 1024;
 pub(crate) const MAX_CONTINUATION_BYTES: usize = 512;
-pub(crate) const MAX_GOAL_FLAG_BYTES: usize = 32;
 
 // ---------------------------------------------------------------------------------------
 // CA trust, credentials, tracker hosts
@@ -976,23 +975,6 @@ pub fn capture_arg_denied(arg: &str) -> Option<&'static str> {
         .iter()
         .find(|(needle, _)| normal.contains(needle))
         .map(|(_, why)| *why)
-}
-
-/// Why a `goal_flag` is refused beyond [`capture_arg_denied`], or `None` (D51). The goal is a
-/// prompt the harness reads: an option whose name says it runs, evaluates or loads its value
-/// (`--exec`, `--command`, `--script`, `--file`, `--config`) would hand the goal text to
-/// something other than the model. Compared lower-cased, word by word (`-` and `_` split).
-pub fn goal_flag_denied(flag: &str) -> Option<&'static str> {
-    const WORDS: &[&str] = &[
-        "exec", "eval", "shell", "cmd", "command", "script", "run", "file", "path", "load",
-        "config", "import", "plugin", "hook",
-    ];
-    // Whole words only: `--exec` and `--prompt-file` are refused, `--execute` (Amp's goal
-    // flag) and `--payload` are not.
-    flag.to_ascii_lowercase()
-        .split(['-', '_'])
-        .any(|part| WORDS.contains(&part))
-        .then_some("names an option that runs, evaluates or loads its value; the goal is a prompt")
 }
 
 /// A configured host: lowercase ASCII letters, digits and hyphens in dot-separated labels

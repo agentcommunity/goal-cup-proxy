@@ -584,20 +584,21 @@ fn goalcup_seal_refuses_inside_the_harness() {
     );
 }
 
-/// `goalcup start` names its goal: the V1 path's flags are not in `--help`, and leaving
-/// `--goal-file` out is a usage error that says so.
+/// `goalcup start` offers neither the V1 path's flags nor headless mode's `--goal-file`: each is
+/// a usage error, said before a daemon is started or anything is made.
 #[test]
-fn goalcup_start_requires_a_goal_file_for_a_headless_harness_and_offers_no_v1_flags() {
+fn goalcup_start_offers_no_goal_file_and_no_v1_flags() {
     let out = goalcup().args(["start", "--help"]).output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8(out.stdout).unwrap();
-    for flag in ["--harness", "--dev", "--goal-file"] {
+    for flag in ["--harness", "--dev"] {
         assert!(
             text.contains(flag),
             "`goalcup start --help` must list {flag}"
         );
     }
     for flag in [
+        "--goal-file",
         "--attach",
         "--print-launch",
         "--no-open",
@@ -610,23 +611,9 @@ fn goalcup_start_requires_a_goal_file_for_a_headless_harness_and_offers_no_v1_fl
             "`goalcup start --help` must not offer {flag}: {text}"
         );
     }
-    // A headless harness without its goal file, and a chat-mode one (D57) with one, are refused
-    // before a daemon is started or anything is made (a configuration directory of the test's
-    // own all the same).
+    // A goal file is refused before a daemon is started or anything is made (a configuration
+    // directory of the test's own all the same).
     let cfg = tempfile::tempdir().unwrap();
-    // The two shapes are the fixture connectors (`tests/fixtures/connectors`), through `--dev`.
-    let out = goalcup()
-        .args(["start", "--harness", "headless-per-run", "--dev"])
-        .env("GOALCUP_CONFIG_DIR", cfg.path())
-        .env("GOALCUP_CONNECTORS_DIR", support::fixture_connectors_dir())
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(1), "a refusal is rung 1");
-    let said = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(
-        said.contains("--goal-file"),
-        "and names the missing flag: {said}"
-    );
     let out = goalcup()
         .args([
             "start",
@@ -640,23 +627,16 @@ fn goalcup_start_requires_a_goal_file_for_a_headless_harness_and_offers_no_v1_fl
         .env("GOALCUP_CONNECTORS_DIR", support::fixture_connectors_dir())
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(1), "a refusal is rung 1");
+    assert_eq!(out.status.code(), Some(1), "a usage error is rung 1");
     let said = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(said.contains("chat mode"), "{said}");
+    assert!(said.contains("--goal-file"), "{said}");
     assert_eq!(
         std::fs::read_dir(cfg.path()).unwrap().count(),
         0,
         "no daemon was started and nothing was written"
     );
     let refused = goalcup()
-        .args([
-            "start",
-            "--harness",
-            "any-harness",
-            "--goal-file",
-            "g.txt",
-            "--attach",
-        ])
+        .args(["start", "--harness", "any-harness", "--attach"])
         .output()
         .unwrap();
     assert_eq!(refused.status.code(), Some(1), "a V1 flag is a usage error");

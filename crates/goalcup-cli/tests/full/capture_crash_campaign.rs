@@ -140,9 +140,9 @@ fn local_finishes(chain: &Chain) -> usize {
     chain.count(|r| matches!(r, CaptureRecord::LocalFinish { .. }))
 }
 
-/// Run directories `goalcup start` made beside the goal file: a relaunch would make a second.
+/// Run directories `goalcup start` made in the run folder: a relaunch would make a second.
 fn run_directories(v: &Vertical) -> usize {
-    std::fs::read_dir(v.goal.parent().unwrap())
+    std::fs::read_dir(&v.runs)
         .unwrap()
         .flatten()
         .filter(|e| e.path().is_dir())

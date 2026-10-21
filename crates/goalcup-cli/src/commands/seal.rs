@@ -234,9 +234,8 @@ fn seal_entry(
                 }
                 Err(_) => crate::daemon::SLOW_CALL_TIMEOUT,
             };
-        // A standalone seal sends no counters and no native scope: whatever identity the
-        // harness printed after it was asked to stop is a later fact (seams design v2, 3).
-        let finish = finish_locally(client, entry_id, None, None, deadline, allowance, None, out)?;
+        // A standalone seal sends no counters.
+        let finish = finish_locally(client, entry_id, None, deadline, allowance, None, out)?;
         // The entry is sealed: the run's reserve is released if nothing will use it again (a run
         // with no server and no host holding it; a run all of whose entries are sent).
         if let Ok(Some(run)) = crate::run::of_entry(cfg, entry_id) {
@@ -279,8 +278,8 @@ fn seal_entry(
 }
 
 /// Finish a local capture entry and say how it finished, where its trace is, and the one
-/// command that checks it. `proxy` is the launcher's proxy report: `goalcup start
-/// --goal-file` hands it over when its harness exits, and this command has none.
+/// command that checks it. `proxy` is the launcher's proxy report: `goalcup start` hands it
+/// over when its harness exits, and this command has none.
 ///
 /// The finish runs inside `deadline`, the one local-finish budget its caller started
 /// (CONTRACTS.md, C6 local finish budget). Every attempt states what remains of it, and its transport timeout
@@ -299,7 +298,6 @@ pub(crate) fn finish_locally(
     client: &dyn DaemonClient,
     entry_id: &str,
     proxy: Option<ProxyCounters>,
-    native_scope: Option<String>,
     deadline: std::time::Instant,
     termination_allowance: std::time::Duration,
     reconnect: Option<&Path>,
@@ -309,7 +307,6 @@ pub(crate) fn finish_locally(
         client,
         entry_id,
         proxy,
-        native_scope,
         deadline,
         termination_allowance,
         reconnect,
@@ -325,7 +322,6 @@ pub(crate) fn seal_locally(
     client: &dyn DaemonClient,
     entry_id: &str,
     proxy: Option<ProxyCounters>,
-    native_scope: Option<String>,
     deadline: std::time::Instant,
     termination_allowance: std::time::Duration,
     reconnect: Option<&Path>,
@@ -334,7 +330,6 @@ pub(crate) fn seal_locally(
         client,
         entry_id,
         proxy,
-        native_scope,
         deadline,
         WrapUp::one_attempt(),
         termination_allowance,
@@ -355,7 +350,6 @@ pub(crate) fn seal_locally_until(
     client: &dyn DaemonClient,
     entry_id: &str,
     proxy: Option<ProxyCounters>,
-    native_scope: Option<String>,
     first_deadline: std::time::Instant,
     until: WrapUp,
     termination_allowance: std::time::Duration,
@@ -380,7 +374,7 @@ pub(crate) fn seal_locally_until(
             let request = CaptureSealRequest {
                 proxy,
                 remaining_finish_ms: Some(u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)),
-                native_scope: native_scope.clone(),
+                native_scope: None,
             };
             waited = crate::daemon::capture_seal_read_timeout(remaining, termination_allowance);
             // A daemon restarted since the caller's client was built is at another port or

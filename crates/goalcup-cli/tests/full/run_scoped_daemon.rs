@@ -104,20 +104,20 @@ fn cli() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_goalcup"))
 }
 
-/// A goal file in a directory of its own (`goalcup start` creates the run directory beside it).
-fn goal_in(rig: &Rig, dir: &str) -> PathBuf {
+/// A folder of its own to start a run from (`goalcup start` creates the run directory in it).
+fn folder_in(rig: &Rig, dir: &str) -> PathBuf {
     let dir = rig.root.join(dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let goal = dir.join("goal.txt");
-    std::fs::write(&goal, "write hello.txt, then stop").unwrap();
-    goal
+    dir
 }
 
-fn start_command(rig: &Rig, binary: &Path, goal: &Path) -> Command {
+/// `goalcup start` from `folder`, in chat mode with no terminal (the test build's seam).
+fn start_command(rig: &Rig, binary: &Path, folder: &Path) -> Command {
     let mut command = goalcup(rig, binary);
     command
-        .args(["start", "--harness", FAKE_ID, "--dev", "--goal-file"])
-        .arg(goal)
+        .args(["start", "--harness", FAKE_ID, "--dev"])
+        .current_dir(folder)
+        .env("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL", "1")
         .env("GOALCUP_TEST_DISK", format!("{RESERVE},0,50"));
     command
 }
@@ -131,8 +131,8 @@ fn said(output: &Output) -> String {
 }
 
 /// `goalcup start` in the background, its output collected when it ends.
-fn start_in_background(rig: &Rig, goal: &Path) -> Child {
-    start_command(rig, &cli(), goal)
+fn start_in_background(rig: &Rig, folder: &Path) -> Child {
+    start_command(rig, &cli(), folder)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -182,7 +182,7 @@ fn start_with_no_daemon_starts_one_that_exits_after_the_seal() {
     assert!(daemons(&rig).is_empty());
     rig.tell("stop", "");
 
-    let output = start_command(&rig, &cli(), &goal_in(&rig, "runs"))
+    let output = start_command(&rig, &cli(), &folder_in(&rig, "runs"))
         .output()
         .unwrap();
     let sealed_at = Instant::now();
@@ -314,7 +314,7 @@ fn status_and_entries_with_no_runs_ever_answer_without_starting_anything() {
 fn status_after_a_mid_run_crash_reopens_the_run_keeps_its_daemon_up_and_seal_adds_no_gap() {
     let rig = Rig::run_scoped();
     let _reaper = reaper(&rig);
-    let start = start_in_background(&rig, &goal_in(&rig, "runs"));
+    let start = start_in_background(&rig, &folder_in(&rig, "runs"));
     let entry = latest_entry(&rig);
     wait_running(&rig, &entry);
     let killed = the_daemon(&rig);
@@ -402,8 +402,8 @@ fn two_concurrent_starts_end_with_exactly_one_daemon() {
     let rig = Rig::run_scoped();
     let _reaper = reaper(&rig);
     rig.tell("stop", "");
-    let first = start_in_background(&rig, &goal_in(&rig, "runs-a"));
-    let second = start_in_background(&rig, &goal_in(&rig, "runs-b"));
+    let first = start_in_background(&rig, &folder_in(&rig, "runs-a"));
+    let second = start_in_background(&rig, &folder_in(&rig, "runs-b"));
     let mut recorded = 0;
     for child in [first, second] {
         let output = child.wait_with_output().unwrap();
@@ -477,7 +477,7 @@ fn the_registry_lock_held_by_another_process_is_waited_out() {
         &goalcup_daemon::registry::Registry::default_path(&rig.config.artifact_root),
     )
     .expect("the registry lock, held by this test");
-    let mut start = start_in_background(&rig, &goal_in(&rig, "runs"));
+    let mut start = start_in_background(&rig, &folder_in(&rig, "runs"));
     let log = rig.cfg.join(goalcup_cli::daemon::spawn::DAEMON_LOG_NAME);
     support::wait_for("a started daemon to meet the held lock", || {
         std::fs::read_to_string(&log)
@@ -533,7 +533,7 @@ fn the_started_daemon_inherits_none_of_the_clis_secrets_or_descriptors() {
         ("HTTPS_PROXY", "http://planted-proxy.invalid:3128"),
         ("GOALCUP_PLANTED", "planted-goalcup-variable"),
     ];
-    let mut command = start_command(&rig, &copied, &goal_in(&rig, "runs"));
+    let mut command = start_command(&rig, &copied, &folder_in(&rig, "runs"));
     command.env("USER", "participant").env("TMPDIR", "/tmp/");
     for (name, value) in planted {
         command.env(name, value);
@@ -600,7 +600,7 @@ fn the_started_daemon_inherits_none_of_the_clis_secrets_or_descriptors() {
 fn status_and_seal_while_a_run_is_open_use_its_daemon() {
     let rig = Rig::run_scoped();
     let _reaper = reaper(&rig);
-    let start = start_in_background(&rig, &goal_in(&rig, "runs"));
+    let start = start_in_background(&rig, &folder_in(&rig, "runs"));
     let entry = latest_entry(&rig);
     wait_running(&rig, &entry);
     let daemon = the_daemon(&rig);
@@ -632,7 +632,7 @@ fn status_and_seal_while_a_run_is_open_use_its_daemon() {
 fn a_daemon_killed_mid_run_is_started_again_by_the_finish_and_the_run_seals_with_one_gap() {
     let rig = Rig::run_scoped();
     let _reaper = reaper(&rig);
-    let start = start_in_background(&rig, &goal_in(&rig, "runs"));
+    let start = start_in_background(&rig, &folder_in(&rig, "runs"));
     let entry = latest_entry(&rig);
     wait_running(&rig, &entry);
     let killed = the_daemon(&rig);
@@ -697,7 +697,7 @@ fn a_moved_connectors_directory_rewrites_the_default_config_and_refuses_an_edite
     let _reaper = reaper(&rig);
     rig.tell("stop", "");
     let config = rig.cfg.join(goalcup_cli::daemon::spawn::DAEMON_CONFIG_NAME);
-    let output = start_command(&rig, &cli(), &goal_in(&rig, "runs-a"))
+    let output = start_command(&rig, &cli(), &folder_in(&rig, "runs-a"))
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", said(&output));
@@ -716,7 +716,7 @@ fn a_moved_connectors_directory_rewrites_the_default_config_and_refuses_an_edite
     let moved = rig.root.join("connectors-moved");
     std::fs::rename(&rig.capture_connectors, &moved).unwrap();
     let from_moved = |goal: &str| {
-        let mut command = start_command(&rig, &cli(), &goal_in(&rig, goal));
+        let mut command = start_command(&rig, &cli(), &folder_in(&rig, goal));
         command.env("GOALCUP_CONNECTORS_DIR", &moved);
         command.output().unwrap()
     };

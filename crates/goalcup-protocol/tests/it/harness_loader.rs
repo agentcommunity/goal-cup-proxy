@@ -254,8 +254,7 @@ fn a_leftover_v1_manifest_is_refused() {
 #[test]
 fn a_bad_manifest_is_refused_with_the_validators_message() {
     let tmp = hermes_dir();
-    let text =
-        fixture_text("hermes-cli").replace("grammar = \"timestamp-hex\"", "grammar = \"uuid\"");
+    let text = fixture_text("hermes-cli").replace("form = \"snapshot\"", "form = \"log\"");
     std::fs::write(tmp.path().join("harness.toml"), text).unwrap();
     assert!(refusal(tmp.path(), Origin::Pinned).contains("newer goalcup"));
     let tmp = hermes_dir();
@@ -471,16 +470,17 @@ fn shipped_dir(id: &str, edit: impl Fn(String) -> String) -> tempfile::TempDir {
     dir_with(&from, edit)
 }
 
-/// The frozen copy of `id` as it shipped while headless (`tests/fixtures/headless-connectors`),
-/// `harness.toml` passed through `edit`. For tests of the headless recipe, which the shipped
-/// connector no longer has once it runs a chat.
-fn headless_dir(id: &str, edit: impl Fn(String) -> String) -> tempfile::TempDir {
-    dir_with(&headless_path(id), edit)
+/// The frozen copy of `id` as it shipped before chat mode (`tests/fixtures/frozen-connectors`,
+/// converted to chat mode when headless mode was removed), `harness.toml` passed through `edit`.
+/// Its recipe has what the shipped connector no longer has: Hermes's per-run home and seeds,
+/// Codex's longer argument list.
+fn frozen_dir(id: &str, edit: impl Fn(String) -> String) -> tempfile::TempDir {
+    dir_with(&frozen_path(id), edit)
 }
 
-fn headless_path(id: &str) -> PathBuf {
+fn frozen_path(id: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/headless-connectors")
+        .join("tests/fixtures/frozen-connectors")
         .join(id)
 }
 
@@ -532,7 +532,7 @@ fn a_pinned_connector_sets_no_env_the_rules_refuse() {
 #[test]
 fn a_pinned_connector_passes_no_args_the_rules_refuse() {
     for extra in ["--insecure", "--cafile", r#"notify=[\"sh\",\"-c\",\"id\"]"#] {
-        let tmp = headless_dir("codex-cli", |toml| {
+        let tmp = frozen_dir("codex-cli", |toml| {
             toml.replace(
                 "  \"--skip-git-repo-check\",\n",
                 &format!("  \"--skip-git-repo-check\",\n  \"{extra}\",\n"),
@@ -541,21 +541,16 @@ fn a_pinned_connector_passes_no_args_the_rules_refuse() {
         let msg = refusal(tmp.path(), Origin::Pinned);
         assert!(msg.contains("capture.args"), "{extra}: {msg}");
     }
-    let tmp = headless_dir("hermes-cli", |toml| {
-        toml.replace("goal_flag = \"--query\"", "goal_flag = \"--exec\"")
-    });
-    let msg = refusal(tmp.path(), Origin::Pinned);
-    assert!(msg.contains("goal_flag"), "{msg}");
     load_dir(
-        headless_dir("claude-code-cli", |toml| toml).path(),
+        frozen_dir("claude-code-cli", |toml| toml).path(),
         Origin::Pinned,
     )
     .expect("the shipped argv passes the rules");
 }
 
 /// Review R7 I-1: a seed's bytes are the harness's own configuration, so they are checked: no
-/// URL, no endpoint or provider switch, no key-shaped run. The seeds Hermes shipped with while it
-/// ran headless (its frozen copy) pass.
+/// URL, no endpoint or provider switch, no key-shaped run. The seeds Hermes shipped with before
+/// chat mode (its frozen copy) pass.
 #[test]
 fn a_seed_carrying_an_endpoint_or_a_key_is_refused() {
     for (file, line) in [
@@ -579,7 +574,7 @@ fn a_seed_carrying_an_endpoint_or_a_key_is_refused() {
             "providers:\n  deepseek:\n    host: api.evil.example\n",
         ),
     ] {
-        let tmp = headless_dir("hermes-cli", |toml| toml);
+        let tmp = frozen_dir("hermes-cli", |toml| toml);
         let path = tmp.path().join("files").join(file);
         let mut bytes = std::fs::read(&path).unwrap();
         bytes.extend_from_slice(line.as_bytes());
@@ -587,17 +582,14 @@ fn a_seed_carrying_an_endpoint_or_a_key_is_refused() {
         let msg = refusal(tmp.path(), Origin::Pinned);
         assert!(msg.contains("capture.home.seed"), "{line}: {msg}");
     }
-    load_dir(
-        headless_dir("hermes-cli", |toml| toml).path(),
-        Origin::Pinned,
-    )
-    .expect("the seeds Hermes shipped with pass");
+    load_dir(frozen_dir("hermes-cli", |toml| toml).path(), Origin::Pinned)
+        .expect("the seeds Hermes shipped with pass");
 }
 
 /// The seed check holds under `--dev` too: it is a D1 rule, not a pin rule.
 #[test]
 fn a_dev_seed_carrying_an_endpoint_is_refused() {
-    let tmp = headless_dir("hermes-cli", |toml| {
+    let tmp = frozen_dir("hermes-cli", |toml| {
         toml.replace("id = \"hermes-cli\"", "id = \"hermes-dev-case\"")
     });
     let path = tmp.path().join("files/config.yaml");
@@ -614,7 +606,7 @@ fn a_dev_seed_carrying_an_endpoint_is_refused() {
 /// `capture_policy.rs` carried a matching per-connector row.)
 #[test]
 fn a_pinned_connector_needs_no_rust_row_for_its_argv_or_env() {
-    let keep = headless_dir("codex-cli", |toml| toml);
+    let keep = frozen_dir("codex-cli", |toml| toml);
     let dir = keep.path().to_path_buf();
     let path = dir.join("harness.toml");
     let text = std::fs::read_to_string(&path).unwrap();

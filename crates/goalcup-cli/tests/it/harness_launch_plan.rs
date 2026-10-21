@@ -1,11 +1,11 @@
 //! Pure decisions derived from harness-contract schema 1, on the fixture connectors
-//! (`tests/fixtures/connectors/`): the headless per-run shape and the chat-mode shared-home shape.
+//! (`tests/fixtures/connectors/`): the per-run shape and the shared-home shape, both chat mode.
 //! What every shipped connector is held to is the connector contract, `it/connector_contract.rs`.
 
 use crate::common::support;
-use goalcup_cli::launch::{LaunchScope, StderrUse, StdoutUse, StreamPlan, harness_arg_refusal};
+use goalcup_cli::launch::harness_arg_refusal;
 use goalcup_cli::preflight::{Level, harness_pin_gate};
-use goalcup_protocol::harness::{HarnessManifest, Origin, load_dir};
+use goalcup_protocol::harness::{Origin, load_dir};
 use goalcup_protocol::pins::shipped_connector_ids;
 use goalcup_protocol::template::TemplateVars;
 use std::collections::BTreeMap;
@@ -27,58 +27,9 @@ fn a_shipped_id() -> String {
     shipped_connector_ids()[0].clone()
 }
 
-/// A fixture manifest with its identity table replaced, parsed without validating: what the
-/// launcher copies from a headless profile that names these rules.
-fn with_identity(id: &str, identity: &str) -> HarnessManifest {
-    let text = std::fs::read_to_string(
-        support::fixture_connectors_dir()
-            .join(id)
-            .join("harness.toml"),
-    )
-    .unwrap();
-    let from = "[capture.identity]\nsource = \"none\"";
-    assert!(text.contains(from), "{id}");
-    HarnessManifest::from_toml_str(&text.replace(from, &format!("[capture.identity]\n{identity}")))
-        .unwrap()
-}
-
-#[test]
-fn identity_rules_are_copied_from_the_manifest() {
-    let json = with_identity(
-        "chat-shared-home",
-        "source = \"stdout_json\"\nbinding = \"at_launch\"\nmatch_field = \"type\"\n\
-         match_value = \"thread.started\"\nid_field = \"thread_id\"",
-    );
-    let StreamPlan {
-        stdout: StdoutUse::IdentityJson(rule),
-        ..
-    } = StreamPlan::for_spec(&json.capture).unwrap()
-    else {
-        panic!("a stdout_json profile must use its stdout JSON identity rule")
-    };
-    assert_eq!(rule.match_field, "type");
-    assert_eq!(rule.match_value, "thread.started");
-    assert_eq!(rule.id_field, "thread_id");
-    assert_eq!(
-        LaunchScope::for_spec(&json.capture).unwrap(),
-        LaunchScope::FromStdout
-    );
-
-    let per_run = fixture("headless-per-run");
-    let StreamPlan {
-        stderr: StderrUse::IdentityLine(rule),
-        ..
-    } = StreamPlan::for_spec(&per_run.manifest.capture).unwrap()
-    else {
-        panic!("a stderr_line profile must use its stderr identity rule")
-    };
-    assert_eq!(rule.prefix, "session_id: ");
-    assert_eq!(rule.grammar.as_str(), "timestamp-hex");
-}
-
 #[test]
 fn argv_guard_comes_from_the_harness_manifest() {
-    let per_run = fixture("headless-per-run");
+    let per_run = fixture("chat-per-run");
     for arg in ["--profile", "--pro", "--tui", "--he", "-p", "-h", "-Qp"] {
         assert!(
             harness_arg_refusal(&per_run.manifest.capture, arg).is_some(),
@@ -278,14 +229,12 @@ fn launch_uses_the_harness_bytes_captured_at_load_time() {
     std::fs::write(&ca, b"test CA\n").unwrap();
     let mut vars = TemplateVars::new();
     vars.set("workspace", workspace.display().to_string());
-    vars.set("session_id", "00000000-0000-4000-8000-000000000001");
     let parent = BTreeMap::new();
     let plan = build_capture_launch(
         &connector,
         &vars,
         &workspace,
         &CaptureLaunch {
-            goal: None,
             executable: &resolved,
             run_home: &run_home,
             config_home: &config_home,
@@ -356,14 +305,12 @@ fn the_env_follows_the_running_platform() {
     std::fs::write(&ca, b"test CA\n").unwrap();
     let mut vars = TemplateVars::new();
     vars.set("workspace", workspace.display().to_string());
-    vars.set("session_id", "00000000-0000-4000-8000-000000000001");
     let parent = BTreeMap::new();
     let plan = build_capture_launch(
         &connector,
         &vars,
         &workspace,
         &CaptureLaunch {
-            goal: None,
             executable: &resolved,
             run_home: &run_home,
             config_home: &config_home,
@@ -413,15 +360,12 @@ fn handed_ca_files(
     let bundle = bundle_for(capture, &ca_dir, proxy.certificate_der()).expect("the bundle");
     let mut vars = TemplateVars::new();
     vars.set("workspace", workspace.display().to_string());
-    vars.set("session_id", "00000000-0000-4000-8000-000000000001");
     let parent = BTreeMap::new();
-    let goal: &[u8] = b"goal";
     let plan = build_capture_launch(
         connector,
         &vars,
         &workspace,
         &CaptureLaunch {
-            goal: (!capture.interactive).then_some(goal),
             executable: &resolved,
             run_home: &run_home,
             config_home: &config_home,
@@ -491,7 +435,6 @@ fn a_shared_ca_row_gets_the_roots_and_an_own_variable_beside_it_does_not() {
     std::fs::write(&ca, b"test CA\n").unwrap();
     let (run_home, config_home) = (root.join("run-home"), root.join("config-home"));
     let launch = |ca_bundle| CaptureLaunch {
-        goal: None,
         executable: &resolved,
         run_home: &run_home,
         config_home: &config_home,
@@ -551,14 +494,12 @@ fn a_harness_without_a_home_variable_gets_only_the_private_home() {
     std::fs::write(&ca, b"test CA\n").unwrap();
     let mut vars = TemplateVars::new();
     vars.set("workspace", workspace.display().to_string());
-    vars.set("session_id", "00000000-0000-4000-8000-000000000001");
     let parent = BTreeMap::new();
     let plan = build_capture_launch(
         &connector,
         &vars,
         &workspace,
         &CaptureLaunch {
-            goal: None,
             executable: &resolved,
             run_home: &run_home,
             config_home: &config_home,
@@ -600,7 +541,6 @@ fn a_node_script_harness_resolves_only_with_node_on_the_path_it_is_given() {
     std::fs::write(&path, text).unwrap();
     let connector = goalcup_cli::connector::load_harness(&root, "example-cli", true).unwrap();
     let profile = &connector.loaded.manifest.capture;
-    assert!(profile.interactive, "the fixture is chat mode");
 
     let bin = root.join("bin");
     std::fs::create_dir(&bin).unwrap();
@@ -608,7 +548,7 @@ fn a_node_script_harness_resolves_only_with_node_on_the_path_it_is_given() {
     std::fs::write(&exe, "#!/usr/bin/env node\nconsole.log('hi')\n").unwrap();
     std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
     let env = BTreeMap::from([("PATH".to_string(), bin.display().to_string())]);
-    assert_eq!(harness_path(profile, &env), bin.display().to_string());
+    assert_eq!(harness_path(&env), bin.display().to_string());
 
     let refused = capture_executable(&connector, profile, &env).expect_err("no node on that PATH");
     assert!(refused.to_string().contains("`node` script"), "{refused}");
@@ -618,78 +558,4 @@ fn a_node_script_harness_resolves_only_with_node_on_the_path_it_is_given() {
     std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).unwrap();
     let resolved = capture_executable(&connector, profile, &env).expect("node is there now");
     assert_eq!(resolved.search_path(), bin.display().to_string());
-}
-
-/// A hostile goal is one `--query=<goal>` element wherever it would otherwise be read by the
-/// harness's raw argv scan (its `argv_guard`) or by its argument parser, and the plan's `Debug`
-/// shows its length, never the goal. The subject is the headless fixture connector
-/// (`goal_flag = "--query"`).
-#[test]
-fn hostile_goals_stay_one_goal_flag_element_and_the_plan_never_shows_them() {
-    use crate::common::m2_profile_support as s;
-    let l = s::Layout::new();
-    let exe = s::fake_harness(&l.bin);
-    let c = support::fixture_connector("headless-per-run");
-    let resolved = s::resolved(&exe);
-    let proxy = s::proxy_url();
-    let parent = s::parent_env();
-    let profile = &c.loaded.manifest.capture;
-    for goal in [
-        "--profile=x",
-        "-p x",
-        "--tui",
-        "-h",
-        "a=b",
-        "-leading dash",
-        "line one\n--tui\nline three",
-        "--query=twice",
-        "--",
-    ] {
-        let plan = goalcup_cli::launch::build_capture_launch(
-            &c,
-            &s::vars(&l),
-            &l.workspace,
-            &s::launch(&l, goal.as_bytes(), &resolved, &proxy, &parent),
-        )
-        .unwrap_or_else(|e| panic!("{goal:?}: {e}"));
-        assert_eq!(plan.argv.len(), profile.args.len() + 1, "{goal:?}");
-        assert_eq!(
-            &plan.argv[..profile.args.len()],
-            profile.args.as_slice(),
-            "{goal:?}: the profile's args come first and unchanged"
-        );
-        assert_eq!(
-            plan.argv.last().unwrap(),
-            &format!("--query={goal}"),
-            "{goal:?}: the goal is the value of the one flag element"
-        );
-        assert!(
-            !plan.argv.iter().any(|a| a == "--"),
-            "{goal:?}: this recipe has no `--`"
-        );
-        let capture = plan.capture.as_ref().unwrap();
-        assert_eq!(capture.goal_index, plan.argv.len() - 1);
-        assert_eq!(capture.goal_prefix, "--query=".len());
-
-        for (surface, text) in [
-            ("Debug", format!("{plan:?}")),
-            ("pretty Debug", format!("{plan:#?}")),
-        ] {
-            // A two-byte goal such as `-h` occurs inside ordinary path text (`run-home`), so the
-            // whole goal is searched for only when it is long enough to mean something, and the
-            // element the goal rides in is searched for always.
-            assert!(
-                !text.contains(&format!("--query={goal}")),
-                "{goal:?}: {surface} shows the goal element"
-            );
-            if goal.len() >= 6 {
-                assert!(!text.contains(goal), "{goal:?}: {surface} shows the goal");
-            }
-        }
-        let debugged = format!("{plan:?}");
-        assert!(
-            debugged.contains(&format!("--query=<goal: {} bytes>", goal.len())),
-            "{debugged}"
-        );
-    }
 }

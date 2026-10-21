@@ -17,12 +17,14 @@
 //! 1. The text is parsed as a generic TOML table and `schema_version` is read first
 //!    (`SUPPORTED_SCHEMA_VERSIONS`). The executable pin's retired keys (`sha256`, `version`) are
 //!    refused here with their own sentence (D53), before the strict deserialization would call
-//!    them a newer schema's, and so is a `[capture.credential]` table (D61).
+//!    them a newer schema's, and so is a `[capture.credential]` table (D61). So is every trace of
+//!    the removed headless mode ([`CHAT_MODE_ONLY`]): `interactive` other than `true`,
+//!    `goal_flag`, and the identity fields beyond `source = "none"`.
 //! 2. It is then deserialized with `deny_unknown_fields` everywhere. An unknown key, and an
 //!    unknown value of a closed-set field, are refused with one sentence ([`NEWER_SENTENCE`]):
 //!    serde's own "unknown variant" text never reaches the user.
 //! 3. [`HarnessManifest::validate`] runs the checks in a fixed order, so the first refusal
-//!    is deterministic: executable, args and goal, env, home, CA, identity,
+//!    is deterministic: executable, args, env, home, CA,
 //!    native, argv guard, termination, model host, hosts, the delivery-agnostic rule (F7), the
 //!    cross-field rules, and then every rule again on the recipe each `[capture.platform.<key>]`
 //!    resolves to (an override may replace only env entries).
@@ -37,10 +39,10 @@ use crate::ProtocolError;
 use crate::capture_policy::{
     CaMode, EnvContext, MAX_CAPTURE_ARG_BYTES, MAX_CAPTURE_ARGS, MAX_CAPTURE_ENV,
     MAX_CAPTURE_ENV_KEY_BYTES, MAX_CAPTURE_ENV_VALUE_BYTES, MAX_CAPTURE_HOSTS,
-    MAX_CAPTURE_PATHS_PER_HOST, MAX_CONTINUATION_BYTES, MAX_GOAL_FLAG_BYTES, arg_path_denied,
-    ca_env_problem, capture_arg_denied, capture_path_problem, env_key_denied, env_value_denied,
-    goal_flag_denied, has_duplicate, is_capture_host, is_interpreter_program, is_tracker_host,
-    local_host_problem, mentions_goalcup, seed_content_problem, startup_file_problem,
+    MAX_CAPTURE_PATHS_PER_HOST, MAX_CONTINUATION_BYTES, arg_path_denied, ca_env_problem,
+    capture_arg_denied, capture_path_problem, env_key_denied, env_value_denied, has_duplicate,
+    is_capture_host, is_interpreter_program, is_tracker_host, local_host_problem, mentions_goalcup,
+    seed_content_problem, startup_file_problem,
 };
 use crate::connector_dir::hash_connector_dir_listing;
 use crate::hints::valid_hint;
@@ -178,33 +180,25 @@ impl<'de> Deserialize<'de> for CaMode {
     }
 }
 
+/// What a manifest written for the removed headless mode is told (21 Oct 2026). Every harness
+/// runs in its chat mode in the participant's terminal (D57): the participant types the prompt,
+/// the launch names no session, and the sessions are the files the native source finds.
+pub const CHAT_MODE_ONLY: &str = "chat mode only: Goal Cup Proxy runs every harness in its chat \
+     mode (`interactive = true`, `identity.source = \"none\"`), where the participant types the \
+     prompt; headless mode, with its goal slot and session identities, was removed";
+
 closed_enum! {
-    /// Where the run's session identity comes from.
-    IdentitySource, "capture.identity.source", special: &[];
-    /// The tracker mints it and passes it as `{session_id}`.
-    Preassigned = "preassigned",
-    /// A JSON event on the first stdout lines names it.
-    StdoutJson = "stdout_json",
-    /// A line on stderr carries it after a fixed prefix.
-    StderrLine = "stderr_line",
-    /// The harness has no session identity; its native store is per run.
+    /// Where the run's session identity comes from. Chat mode names none: the sessions are the
+    /// files the native source finds. The headless sources are refused by name, here and
+    /// before deserialization.
+    IdentitySource, "capture.identity.source",
+        special: &[
+            ("preassigned", CHAT_MODE_ONLY),
+            ("stdout_json", CHAT_MODE_ONLY),
+            ("stderr_line", CHAT_MODE_ONLY),
+        ];
+    /// The harness has no session identity the launch names.
     None = "none",
-}
-
-closed_enum! {
-    /// When the identity is known.
-    Binding, "capture.identity.binding", special: &[];
-    AtLaunch = "at_launch",
-    Deferred = "deferred",
-}
-
-closed_enum! {
-    /// The grammar of an identity read from a stderr line.
-    IdGrammar, "capture.identity.grammar", special: &[];
-    /// `\d{8}_\d{6}_[0-9a-f]{6}`.
-    TimestampHex = "timestamp-hex",
-    /// 1..=128 of `[A-Za-z0-9_-]` (a lowercase UUID is a token).
-    Token = "token",
 }
 
 closed_enum! {
@@ -359,14 +353,14 @@ pub fn first_screen_problem(s: &str) -> Option<String> {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct CaptureSpec {
-    /// The measured headless argument template: ends in `--` (the goal follows as one
-    /// argument) unless [`Self::goal_flag`] names the slot. With [`Self::interactive`] there
-    /// is no slot, and the arguments (none at all is allowed) start the harness's chat.
+    /// The arguments (none at all is allowed) that start the harness's chat. There is no goal
+    /// slot: the participant types the prompt (D57).
     pub args: Vec<String>,
-    /// The harness runs in its normal chat mode in the participant's terminal and the
-    /// participant types the prompt (D57): no goal slot, identity `none`.
+    /// Must be `true`: the harness runs in its normal chat mode in the participant's terminal
+    /// (D57). Anything else is refused ([`CHAT_MODE_ONLY`]); the field stays so that every
+    /// manifest says so.
     #[serde(default)]
-    pub interactive: bool,
+    interactive: bool,
     /// Appended after [`Self::args`] when a run is continued, under the same rules (D51).
     #[serde(default)]
     pub resume_args: Vec<String>,
@@ -378,9 +372,6 @@ pub struct CaptureSpec {
     /// output goes to a log only.
     #[serde(default)]
     pub configure: Vec<Vec<String>>,
-    /// The long option that carries the goal as one `--flag=<goal>` argument.
-    #[serde(default)]
-    pub goal_flag: Option<String>,
     /// Bounded, declarative provenance for how the run continues without input.
     pub continuation: String,
     /// Hosts that always stay opaque tunnels (sign-in and token refresh). Never intercepted.
@@ -548,48 +539,12 @@ pub struct CaSpec {
     pub mode: CaMode,
 }
 
-/// `[capture.identity]`.
+/// `[capture.identity]`: `source = "none"`, the one value chat mode has.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct IdentitySpec {
     pub source: IdentitySource,
-    /// Required unless `source = "none"`.
-    #[serde(default)]
-    pub binding: Option<Binding>,
-    /// `stdout_json` only: the dot path whose value selects the identity event.
-    #[serde(default)]
-    pub match_field: Option<String>,
-    /// `stdout_json` only: the value `match_field` must hold.
-    #[serde(default)]
-    pub match_value: Option<String>,
-    /// `stdout_json` only: the dot path of the identity string.
-    #[serde(default)]
-    pub id_field: Option<String>,
-    /// `stderr_line` only: the fixed prefix before the identity.
-    #[serde(default)]
-    pub prefix: Option<String>,
-    /// `stderr_line` only: the identity's grammar.
-    #[serde(default)]
-    pub grammar: Option<IdGrammar>,
-    /// `stdout_json` only: how long the launch waits for the identity event before recording
-    /// the launch without one, 1 to [`MAX_STDOUT_WAIT_SECONDS`]. Default
-    /// [`DEFAULT_STDOUT_WAIT_SECONDS`].
-    #[serde(default)]
-    pub wait_seconds: Option<u64>,
-}
-
-/// The default of `capture.identity.wait_seconds`: the two minutes Codex's `thread.started`
-/// was measured to need at worst.
-pub const DEFAULT_STDOUT_WAIT_SECONDS: u64 = 120;
-/// The bound of `capture.identity.wait_seconds`.
-pub const MAX_STDOUT_WAIT_SECONDS: u64 = 600;
-
-impl IdentitySpec {
-    /// How long a `stdout_json` launch waits for its identity event.
-    pub fn stdout_wait(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(self.wait_seconds.unwrap_or(DEFAULT_STDOUT_WAIT_SECONDS))
-    }
 }
 
 /// `[[capture.native]]`.
@@ -1116,6 +1071,7 @@ impl HarnessManifest {
         }
         refuse_retired_pin_keys(&table)?;
         refuse_credential_table(&table)?;
+        refuse_headless(&table)?;
         let mut manifest =
             toml::from_str::<HarnessManifest>(text).map_err(|e| map_toml_error(text, &e))?;
         manifest.capture.add_provider_hosts()?;
@@ -1193,20 +1149,64 @@ fn refuse_credential_table(table: &toml::Table) -> Result<(), ProtocolError> {
     Ok(())
 }
 
+/// The `capture.identity.source` values of the removed headless mode.
+const HEADLESS_IDENTITY_SOURCES: &[&str] = &["preassigned", "stdout_json", "stderr_line"];
+
+/// The `[capture.identity]` keys of the removed headless sources.
+const HEADLESS_IDENTITY_KEYS: &[&str] = &[
+    "binding",
+    "match_field",
+    "match_value",
+    "id_field",
+    "prefix",
+    "grammar",
+    "wait_seconds",
+];
+
+/// Refuse a manifest written for the removed headless mode ([`CHAT_MODE_ONLY`]), read from the
+/// generic table before the strict deserialization would call its fields a newer schema's:
+/// `capture.interactive` absent or not `true`, a `capture.goal_flag`, a headless identity source,
+/// or an identity field beyond `source`.
+fn refuse_headless(table: &toml::Table) -> Result<(), ProtocolError> {
+    let Some(capture) = table.get("capture").and_then(toml::Value::as_table) else {
+        return Ok(());
+    };
+    if capture.get("interactive") != Some(&toml::Value::Boolean(true)) {
+        return Err(refuse("capture.interactive", CHAT_MODE_ONLY));
+    }
+    if capture.contains_key("goal_flag") {
+        return Err(refuse("capture.goal_flag", CHAT_MODE_ONLY));
+    }
+    let Some(identity) = capture.get("identity").and_then(toml::Value::as_table) else {
+        return Ok(());
+    };
+    if let Some(source) = identity.get("source").and_then(toml::Value::as_str)
+        && HEADLESS_IDENTITY_SOURCES.contains(&source)
+    {
+        return Err(refuse("capture.identity.source", CHAT_MODE_ONLY));
+    }
+    if let Some(key) = HEADLESS_IDENTITY_KEYS
+        .iter()
+        .find(|key| identity.contains_key(**key))
+    {
+        return Err(refuse(format!("capture.identity.{key}"), CHAT_MODE_ONLY));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------------------
 
-/// Template variables an `args` element may use. `{session_id}` additionally needs
-/// `identity.source = "preassigned"` (a cross-field rule).
-const ARG_TOKENS: &[&str] = &["workspace", "session_id"];
+/// Template variables an `args` element may use.
+const ARG_TOKENS: &[&str] = &["workspace"];
 
 /// Template variables a `capture.env` value may use: the argument tokens, and the two homes the
 /// launch makes for the run (`{config_home}`, the isolated harness home, and `{run_home}`, the
 /// private `HOME`), so a harness with a second state variable can point it inside them. Each
 /// renders to a tracker-made private path; the value rule still refuses a value that starts
 /// with `/` or `~` or holds `..`, so a value cannot leave them.
-const ENV_TOKENS: &[&str] = &["workspace", "session_id", "config_home", "run_home"];
+const ENV_TOKENS: &[&str] = &["workspace", "config_home", "run_home"];
 
 /// A template that may name only `allowed` tokens.
 fn check_template(
@@ -1265,11 +1265,6 @@ fn check_arg(field: &str, origin: Origin, a: &str) -> Result<(), ProtocolError> 
     check_template(field, &format!("`{a}`"), a, ARG_TOKENS)
 }
 
-/// Whether `value` uses `{name}` as a token.
-fn uses_token(value: &str, name: &str) -> bool {
-    crate::template::tokens(value).is_ok_and(|t| t.contains(&name))
-}
-
 fn is_id(s: &str) -> bool {
     let mut b = s.bytes();
     (2..=48).contains(&s.len())
@@ -1304,15 +1299,6 @@ fn relative_path_problem(path: &str, max: usize) -> Option<String> {
         );
     }
     None
-}
-
-/// A dot path of at most 4 segments of `[A-Za-z0-9_]`.
-fn is_dot_path(s: &str) -> bool {
-    let segs: Vec<&str> = s.split('.').collect();
-    (1..=4).contains(&segs.len())
-        && segs
-            .iter()
-            .all(|g| !g.is_empty() && g.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
 }
 
 /// A single-component glob matcher: `*` any run (including none), `?` one character. The
@@ -1378,31 +1364,20 @@ fn split_native_root(root: &str) -> Result<(RootHome, &str), String> {
     Ok((home, rel))
 }
 
-/// The pattern components of a native `pattern`, `{id}` read as `*`, or the reason it is not
-/// the `NativeSourceSpec` grammar.
-fn native_pattern_components(pattern: &str, source_has_id: bool) -> Result<Vec<String>, String> {
+/// The pattern components of a native `pattern`, or the reason it is not the
+/// `NativeSourceSpec` grammar.
+fn native_pattern_components(pattern: &str) -> Result<Vec<String>, String> {
     if pattern.is_empty() || pattern.len() > 1024 {
         return Err("is 1 to 1024 bytes".to_string());
     }
     if pattern.starts_with('/') {
         return Err("is relative to its root".to_string());
     }
-    let ids = pattern.matches("{id}").count();
-    if ids > 1 {
-        return Err("holds more than one `{id}`".to_string());
-    }
-    if source_has_id && ids == 0 {
-        return Err(
-            "needs `{id}`: the identity source names a session, so the pattern must scope to it"
-                .to_string(),
-        );
-    }
-    if !source_has_id && ids == 1 {
+    if pattern.contains("{id}") {
         return Err("names `{id}`, but `identity.source = \"none\"` has no session id".to_string());
     }
-    let stripped = pattern.replace("{id}", "");
-    if stripped.contains(['{', '}']) {
-        return Err("may use no brace but `{id}`".to_string());
+    if pattern.contains(['{', '}']) {
+        return Err("may use no brace".to_string());
     }
     let mut out = Vec::new();
     for part in pattern.split('/') {
@@ -1414,16 +1389,13 @@ fn native_pattern_components(pattern: &str, source_has_id: bool) -> Result<Vec<S
                 "holds `**`: recursive globs are not supported, name each level".to_string(),
             );
         }
-        let literal = part.replace("{id}", "");
-        if !literal
+        if !part
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'*' | b'?'))
         {
-            return Err(
-                "has a component outside `[A-Za-z0-9._-]`, `*`, `?` and `{id}`".to_string(),
-            );
+            return Err("has a component outside `[A-Za-z0-9._-]`, `*` and `?`".to_string());
         }
-        out.push(part.replace("{id}", "*"));
+        out.push(part.to_string());
     }
     if out.len() > 8 {
         return Err("has more than eight components".to_string());
@@ -1526,13 +1498,17 @@ impl HarnessManifest {
                 format!("`{}` must match `^[a-z][a-z0-9-]{{1,47}}$`", self.id),
             ));
         }
+        // `from_toml_str` refuses a headless manifest before this; a manifest that reached here
+        // another way is held to the same rule.
+        if !self.capture.interactive {
+            return Err(refuse("capture.interactive", CHAT_MODE_ONLY));
+        }
         self.check_executable(origin)?;
-        self.check_args_and_goal(origin)?;
+        self.check_args(origin)?;
         self.check_configure(origin)?;
         self.check_env()?;
         self.check_home()?;
         self.check_ca()?;
-        self.check_identity()?;
         self.check_native()?;
         self.check_argv_guard()?;
         self.check_termination()?;
@@ -1591,16 +1567,13 @@ impl HarnessManifest {
         Ok(())
     }
 
-    fn check_args_and_goal(&self, origin: Origin) -> Result<(), ProtocolError> {
+    fn check_args(&self, origin: Origin) -> Result<(), ProtocolError> {
         let c = &self.capture;
-        // An interactive harness may open its chat with no argument at all (D57).
-        if (c.args.is_empty() && !c.interactive) || c.args.len() > MAX_CAPTURE_ARGS {
+        // A chat-mode harness may open its chat with no argument at all (D57).
+        if c.args.len() > MAX_CAPTURE_ARGS {
             return Err(refuse(
                 "capture.args",
-                format!(
-                    "must hold 1 to {MAX_CAPTURE_ARGS} arguments (0 to {MAX_CAPTURE_ARGS} with \
-                     `interactive`)"
-                ),
+                format!("must hold 0 to {MAX_CAPTURE_ARGS} arguments"),
             ));
         }
         for a in &c.args {
@@ -1614,47 +1587,6 @@ impl HarnessManifest {
         }
         for a in &c.resume_args {
             check_arg("capture.resume_args", origin, a)?;
-        }
-        if let Some(flag) = &c.goal_flag {
-            let mut b = flag.bytes();
-            let plain = flag.len() <= MAX_GOAL_FLAG_BYTES
-                && b.next() == Some(b'-')
-                && b.next() == Some(b'-')
-                && b.next().is_some_and(|x| x.is_ascii_lowercase())
-                && b.all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == b'-');
-            if !plain {
-                return Err(refuse(
-                    "capture.goal_flag",
-                    format!(
-                        "`{flag}` must be one long option name: `--`, a lowercase letter, then \
-                         lowercase letters, digits and `-`, at most {MAX_GOAL_FLAG_BYTES} \
-                         bytes, with no `=` and no value"
-                    ),
-                ));
-            }
-            if let Some(why) = capture_arg_denied(flag).or_else(|| goal_flag_denied(flag)) {
-                return Err(refuse("capture.goal_flag", format!("`{flag}` {why}")));
-            }
-        }
-        // The goal is placed exactly one way: after a closing `--`, or inside `goal_flag`. An
-        // interactive profile has no slot: the participant types the prompt (D57).
-        if c.interactive {
-            if c.goal_flag.is_some() {
-                return Err(refuse(
-                    "capture.goal_flag",
-                    "an `interactive` profile takes no goal: the participant types the prompt \
-                     in the harness",
-                ));
-            }
-        } else if usize::from(c.args.last().is_some_and(|a| a == "--"))
-            + usize::from(c.goal_flag.is_some())
-            != 1
-        {
-            return Err(refuse(
-                "capture.goal_flag",
-                "the goal is placed exactly one way: `args` end in `--` and the goal follows as \
-                 one argument, xor `goal_flag` names the option that carries it",
-            ));
         }
         if c.continuation.trim().is_empty()
             || c.continuation.len() > MAX_CONTINUATION_BYTES
@@ -1678,15 +1610,6 @@ impl HarnessManifest {
     fn check_configure(&self, origin: Origin) -> Result<(), ProtocolError> {
         const FIELD: &str = "capture.configure";
         let commands = &self.capture.configure;
-        // The commands run in the home `goalcup prep` opens and with the environment of that
-        // launch, which only a chat-mode profile has (D57).
-        if !commands.is_empty() && !self.capture.interactive {
-            return Err(refuse(
-                FIELD,
-                "is for a chat-mode profile (`interactive = true`): its commands run with the \
-                 environment and in the home that `goalcup prep` opens the harness with",
-            ));
-        }
         if commands.len() > MAX_CONFIGURE_COMMANDS {
             return Err(refuse(
                 FIELD,
@@ -1931,139 +1854,6 @@ impl HarnessManifest {
         Ok(())
     }
 
-    fn check_identity(&self) -> Result<(), ProtocolError> {
-        let i = &self.capture.identity;
-        if self.capture.interactive && i.source != IdentitySource::None {
-            return Err(refuse(
-                "capture.identity.source",
-                "an `interactive` profile takes `none`: its sessions are the files its native \
-                 source finds, not one the launch names",
-            ));
-        }
-        // Which sibling fields each source requires and refuses.
-        let json = (&i.match_field, &i.match_value, &i.id_field);
-        let line = (&i.prefix, &i.grammar);
-        match i.source {
-            IdentitySource::StdoutJson => {
-                let (Some(mf), Some(mv), Some(idf)) = json else {
-                    return Err(refuse(
-                        "capture.identity",
-                        "`stdout_json` needs `match_field`, `match_value` and `id_field`",
-                    ));
-                };
-                for (name, v) in [("match_field", mf), ("id_field", idf)] {
-                    if !is_dot_path(v) {
-                        return Err(refuse(
-                            format!("capture.identity.{name}"),
-                            format!(
-                                "`{v}` must be a dot path of at most 4 segments of `[A-Za-z0-9_]`"
-                            ),
-                        ));
-                    }
-                }
-                if mv.is_empty() || mv.len() > 64 || has_control(mv) {
-                    return Err(refuse(
-                        "capture.identity.match_value",
-                        "must be 1 to 64 bytes without a control character",
-                    ));
-                }
-                if line.0.is_some() || line.1.is_some() {
-                    return Err(refuse(
-                        "capture.identity",
-                        "`prefix` and `grammar` belong to `stderr_line`, not `stdout_json`",
-                    ));
-                }
-                if i.wait_seconds
-                    .is_some_and(|w| !(1..=MAX_STDOUT_WAIT_SECONDS).contains(&w))
-                {
-                    return Err(refuse(
-                        "capture.identity.wait_seconds",
-                        format!("must be 1 to {MAX_STDOUT_WAIT_SECONDS} seconds"),
-                    ));
-                }
-            }
-            IdentitySource::StderrLine => {
-                let (Some(prefix), Some(_)) = line else {
-                    return Err(refuse(
-                        "capture.identity",
-                        "`stderr_line` needs `prefix` and `grammar`",
-                    ));
-                };
-                if prefix.is_empty()
-                    || prefix.len() > 32
-                    || !prefix.bytes().all(|b| (0x20..0x7f).contains(&b))
-                {
-                    return Err(refuse(
-                        "capture.identity.prefix",
-                        "must be 1 to 32 printable ASCII bytes",
-                    ));
-                }
-                if json.0.is_some()
-                    || json.1.is_some()
-                    || json.2.is_some()
-                    || i.wait_seconds.is_some()
-                {
-                    return Err(refuse(
-                        "capture.identity",
-                        "`match_field`, `match_value`, `id_field` and `wait_seconds` belong to \
-                         `stdout_json`, not `stderr_line`",
-                    ));
-                }
-            }
-            IdentitySource::Preassigned | IdentitySource::None => {
-                if json.0.is_some()
-                    || json.1.is_some()
-                    || json.2.is_some()
-                    || line.0.is_some()
-                    || line.1.is_some()
-                    || i.wait_seconds.is_some()
-                {
-                    return Err(refuse(
-                        "capture.identity",
-                        format!(
-                            "`{}` takes no `match_*`, `id_field`, `prefix`, `grammar` or \
-                             `wait_seconds`",
-                            i.source.as_str()
-                        ),
-                    ));
-                }
-            }
-        }
-        // The admitted (source, binding) pairs of schema 1. Widening a row is a core PR that
-        // adds a kit case and stays schema 1.
-        let supported = match (i.source, i.binding) {
-            (IdentitySource::Preassigned, Some(Binding::AtLaunch))
-            | (IdentitySource::StdoutJson, Some(Binding::AtLaunch))
-            | (IdentitySource::StderrLine, Some(Binding::Deferred))
-            | (IdentitySource::None, None) => true,
-            (IdentitySource::None, Some(_)) => {
-                return Err(refuse(
-                    "capture.identity.binding",
-                    "`none` has no session to bind, so it takes no `binding`",
-                ));
-            }
-            (_, None) => {
-                return Err(refuse(
-                    "capture.identity.binding",
-                    "is required unless `source = \"none\"`",
-                ));
-            }
-            _ => false,
-        };
-        if !supported {
-            return Err(refuse(
-                "capture.identity",
-                format!(
-                    "`{}` with binding `{}` is not supported by this build: schema 1 admits \
-                     preassigned+at_launch, stdout_json+at_launch, stderr_line+deferred and none",
-                    i.source.as_str(),
-                    i.binding.map_or("-", Binding::as_str)
-                ),
-            ));
-        }
-        Ok(())
-    }
-
     fn check_native(&self) -> Result<(), ProtocolError> {
         let c = &self.capture;
         let n = match c.native.as_slice() {
@@ -2095,7 +1885,7 @@ impl HarnessManifest {
         }
         split_native_root(&n.root)
             .map_err(|why| refuse("capture.native.root", format!("`{}` {why}", n.root)))?;
-        native_pattern_components(&n.pattern, c.identity.source != IdentitySource::None)
+        native_pattern_components(&n.pattern)
             .map_err(|why| refuse("capture.native.pattern", format!("`{}` {why}", n.pattern)))?;
         match (&n.protocol_hint, n.form) {
             (Some(_), NativeForm::Snapshot) => {
@@ -2156,11 +1946,6 @@ impl HarnessManifest {
             if let Some(why) = g.denies(a) {
                 return Err(refuse(field, format!("`{a}` {why}")));
             }
-        }
-        if let Some(flag) = &self.capture.goal_flag
-            && let Some(why) = g.denies(flag)
-        {
-            return Err(refuse("capture.goal_flag", format!("`{flag}` {why}")));
         }
         Ok(())
     }
@@ -2421,14 +2206,6 @@ impl HarnessManifest {
                 ));
             }
         }
-        if let Some(f) = &c.goal_flag
-            && mentions_goalcup(f)
-        {
-            return Err(refuse(
-                "capture.goal_flag",
-                "names the tracker: a harness is delivery-agnostic",
-            ));
-        }
         for (k, v) in &c.env {
             if k.to_ascii_uppercase().starts_with("GOALCUP_") || mentions_goalcup(v) {
                 return Err(refuse(
@@ -2459,38 +2236,8 @@ impl HarnessManifest {
 
     fn check_cross_field(&self) -> Result<(), ProtocolError> {
         let c = &self.capture;
-        let i = &c.identity;
         let per_run = c.home.config_home == ConfigHome::PerRun;
         let run_shared = c.home.run_home == RunHome::Shared;
-
-        // `{session_id}` and `preassigned` imply each other.
-        let resume_uses_session = c.resume_args.iter().any(|a| uses_token(a, "session_id"));
-        let uses_session = c.args.iter().any(|a| uses_token(a, "session_id"))
-            || resume_uses_session
-            || c.env.values().any(|v| uses_token(v, "session_id"));
-        let args_use_session = c.args.iter().any(|a| uses_token(a, "session_id"));
-        match i.source {
-            IdentitySource::Preassigned if !args_use_session => {
-                return Err(refuse(
-                    "capture.identity.source",
-                    "`preassigned` needs `{session_id}` in `args`: otherwise the minted id \
-                     reaches nothing",
-                ));
-            }
-            IdentitySource::Preassigned => {}
-            _ if uses_session => {
-                return Err(refuse(
-                    if resume_uses_session && !args_use_session {
-                        "capture.resume_args"
-                    } else {
-                        "capture.args"
-                    },
-                    "`{session_id}` needs `identity.source = \"preassigned\"`: otherwise the \
-                     id is not one the tracker minted",
-                ));
-            }
-            _ => {}
-        }
 
         // Per-run-only fields.
         let h = &c.home;
@@ -2515,7 +2262,7 @@ impl HarnessManifest {
             RootHome::Config => !per_run,
             RootHome::Run => run_shared,
         };
-        if i.source == IdentitySource::None && root_shared && !native.since_run_start {
+        if root_shared && !native.since_run_start {
             return Err(refuse(
                 "capture.native.root",
                 "with `identity.source = \"none\"` the root must be per run: `{run_home}/...` \
@@ -2577,8 +2324,7 @@ impl HarnessManifest {
             RootHome::Config => vec![Vec::new()],
             RootHome::Run => vec![Vec::new(), vec![h.per_run_dir_name().to_ascii_lowercase()]],
         };
-        let pattern = native_pattern_components(&native.pattern, i.source != IdentitySource::None)
-            .expect("checked by native");
+        let pattern = native_pattern_components(&native.pattern).expect("checked by native");
         let mut components: Vec<String> = if root_rel.is_empty() {
             Vec::new()
         } else {

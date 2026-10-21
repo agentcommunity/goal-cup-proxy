@@ -5,9 +5,8 @@
 //! and nowhere else: its configuration, its credential store, its session snapshots, its logs
 //! and its tool processes' home all live under `<run>/<per_run_dir>`, so nothing of the
 //! participant's own app-wide home (`home.real_dirs`) is read and nothing is written to it.
-//! For example, Hermes's connector made, while it ran headless (its frozen copy under
-//! `goalcup-protocol/tests/fixtures/headless-connectors/hermes-cli`; the shipped one shares its
-//! home since D61):
+//! For example, Hermes's connector made, before it shared its home (D61; its frozen copy is
+//! under `goalcup-protocol/tests/fixtures/frozen-connectors/hermes-cli`):
 //!
 //! ```text
 //! <run>/hermes          0700   HERMES_HOME (`home.env`, `home.per_run_dir`)
@@ -23,12 +22,13 @@
 //! module reads exactly the bytes the manifest gate has already accepted, and writes them with a
 //! read-back comparison.
 //!
-//! # A run directory beside a goal file must not be in a repository
+//! # A run directory must not be in a repository
 //!
 //! The run directory holds what a harness wrote while it ran, its own login and request dumps
 //! included.
-//! [`refuse_inside_git_work_tree`] stops a launch whose goal file sits inside a Git work tree,
-//! before anything is created, so those files are never one `git add .` away from a commit.
+//! [`refuse_inside_git_work_tree`] stops a launch whose run folder (the one `goalcup start` is
+//! run from) sits inside a Git work tree, before anything is created, so those files are never
+//! one `git add .` away from a commit.
 
 use crate::CliError;
 use goalcup_protocol::harness::{ConfigHome, HomeSpec, LoadedSeed, SeedMode};
@@ -276,9 +276,9 @@ pub fn refuse_inside_git_work_tree(dir: &Path) -> Result<(), CliError> {
     for ancestor in resolved.ancestors() {
         if std::fs::symlink_metadata(ancestor.join(".git")).is_ok() {
             return Err(CliError::Refused(format!(
-                "the goal file is inside a Git work tree ({}), and this run's directory would \
-                 be made beside it: it holds what the harness wrote, which can include \
-                 its login. Put the goal file in a directory outside any \
+                "this folder is inside a Git work tree ({}), and this run's directory would \
+                 be made in it: it holds what the harness wrote, which can include \
+                 its login. Run goalcup start from a folder outside any \
                  repository. Nothing was created.",
                 ancestor.display()
             )));
@@ -344,9 +344,9 @@ pub fn refuse_synced_folder_probing(
             });
     if synced {
         return Err(CliError::Refused(format!(
-            "the goal file is in a folder a sync client uploads ({}), and this run's directory \
-             would be made beside it: it holds what the harness wrote, which can include its \
-             login. Put the goal file in a directory that is not synced. \
+            "this folder is one a sync client uploads ({}), and this run's directory \
+             would be made in it: it holds what the harness wrote, which can include its \
+             login. Run goalcup start from a folder that is not synced. \
              Nothing was created.",
             resolved.display()
         )));

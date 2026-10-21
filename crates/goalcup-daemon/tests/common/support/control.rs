@@ -447,11 +447,12 @@ pub fn shipped_connector_dir(connector_id: &str) -> PathBuf {
         .join(connector_id)
 }
 
-/// A frozen copy of a connector as it shipped while it was headless (`{id}`-scoped native
-/// source, one-turn argv). Fixtures for tests of that behaviour; not the shipped connector.
-pub fn headless_connector_dir(connector_id: &str) -> PathBuf {
+/// A frozen copy of a connector as it shipped before chat mode (its one-turn argv, converted to
+/// chat mode when headless mode was removed). A fixture that does not follow the shipped
+/// connector; not the shipped connector.
+pub fn frozen_connector_dir(connector_id: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../goalcup-protocol/tests/fixtures/headless-connectors")
+        .join("../goalcup-protocol/tests/fixtures/frozen-connectors")
         .join(connector_id)
 }
 

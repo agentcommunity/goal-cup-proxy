@@ -18,12 +18,12 @@
   },
   "env_differs_from_policy": [],
   "goal_placement_for_an_option_shaped_goal": {
-    "argv_len": 4,
-    "goal_index": 3,
-    "goal_prefix": 0,
+    "argv_len": 2,
+    "goal_index": null,
+    "goal_prefix": null,
     "tail": [
-      "--",
-      "--profile evil -p x"
+      "/synthetic/workload.py",
+      "/synthetic/config.json"
     ]
   },
   "home": {
@@ -33,14 +33,9 @@
   "plan": {
     "argv": [
       "/synthetic/workload.py",
-      "/synthetic/config.json",
-      "--",
-      "write result.txt"
+      "/synthetic/config.json"
     ],
-    "capture": {
-      "goal_index": 3,
-      "goal_prefix": 0
-    },
+    "capture": null,
     "cwd": "<TMP>/workspace",
     "env_base_keys": [],
     "env_remove": [],
@@ -64,7 +59,7 @@
       "native_binary": null,
       "strategy": "process_group"
     },
-    "mode": "Server",
+    "mode": "Tui",
     "program": "<TMP>/bin/fake-harness"
   },
   "redaction": {

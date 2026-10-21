@@ -64,7 +64,7 @@ impl ModelHost {
         format!("{}:{}", self.host, self.port)
     }
 
-    /// The run's detail line (`host.log`, or the headless start's output).
+    /// The run's detail line (`host.log`).
     pub fn detail(&self) -> String {
         format!("model service: {} ({})", self.authority(), self.from)
     }

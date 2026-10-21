@@ -226,9 +226,7 @@ Measured in Docker: `the_launcher_sweeps_an_orphan_forked_after_the_root_died_be
 controlled workload's `orphan-after-root` mode. Its member forks a detached `sleep 300` only after
 the root has died. The orphan is gone when `goalcup start` returns, the sweep line comes before the
 seal's report, and the trace verifies. Without the subreaper the same test fails with the orphan
-alive. `a_root_reaped_by_the_scope_wait_still_has_its_orphans_swept` repeats it under a
-`stdout_json` identity (Codex's shape) whose root exits before any scope line, so the launcher's
-scope wait reaps the root before the launch is recorded; the sweep is armed before that wait.
+alive.
 
 The residuals, stated plainly:
 

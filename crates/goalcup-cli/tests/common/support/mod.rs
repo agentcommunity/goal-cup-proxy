@@ -68,8 +68,8 @@ pub fn connector(id: &str) -> goalcup_cli::connector::HarnessConnector {
 
 /// The fixture connectors, one per launch shape: `tests/fixtures/connectors/<id>/`. An engine
 /// test loads one of these, never a shipped connector, so a shipped manifest edit changes no
-/// engine test. `headless-per-run` is the headless, per-run-home shape; `chat-shared-home`
-/// is the chat-mode, shared-home shape. No build pins them: they load through `--dev`.
+/// engine test. `chat-per-run` is the per-run-home shape; `chat-shared-home` is the shared-home
+/// shape; both are chat mode (D57). No build pins them: they load through `--dev`.
 pub fn fixture_connectors_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/connectors")
 }
@@ -97,24 +97,6 @@ pub fn copy_fixture_connector(id: &str, root: &Path, folder: &str, as_id: &str) 
     )
     .unwrap();
     dir
-}
-
-/// A `stdout_json` identity rule: the first stdout line whose `type` is `thread.started`
-/// names the session in its `thread_id` (the shape a JSON-event harness prints).
-pub fn stdout_event_rule() -> goalcup_cli::launch::StdoutJsonRule {
-    goalcup_cli::launch::StdoutJsonRule {
-        match_field: "type".into(),
-        match_value: "thread.started".into(),
-        id_field: "thread_id".into(),
-    }
-}
-
-/// A `stderr_line` identity rule: one stderr line `session_id: <timestamp-hex id>`.
-pub fn stderr_marker_rule() -> goalcup_cli::launch::StderrLineRule {
-    goalcup_cli::launch::StderrLineRule {
-        prefix: "session_id: ".into(),
-        grammar: goalcup_protocol::harness::IdGrammar::TimestampHex,
-    }
 }
 
 /// `connectors/<id>/` copied to `<tmp>/<id>/`, whole — the `harness.toml` and any `files/`
@@ -368,13 +350,12 @@ pub fn never_open(_url: &str) -> bool {
 /// What one `goalcup start` was asked to do, with the flag a test must never leave on.
 ///
 /// `dev` is `false`, so the default options are a judged run's — a test that wants the door
-/// open opens it in one line at the call site that is about it. No `goal_file`, so the run is
-/// refused as the removed V1 path (D48); a v5 test sets it.
+/// open opens it in one line at the call site that is about it. No `run_folder`, so the run is
+/// made in this process's current directory; a test that starts one sets it.
 pub fn start_options(id: &str) -> goalcup_cli::commands::start::StartOptions {
     goalcup_cli::commands::start::StartOptions {
         harness: id.to_string(),
         dev: false,
-        goal_file: None,
         run_folder: None,
         disk: disk_of(4 << 20),
         mode: goalcup_cli::account::device::RunMode::Competition,

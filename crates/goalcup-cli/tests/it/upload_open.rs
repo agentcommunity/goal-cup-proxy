@@ -51,7 +51,6 @@ mod server_runs {
     use goalcup_cli::upload::uploader::Policy;
     use std::path::{Path, PathBuf};
 
-    const GOAL: &str = "write hello.txt, then stop";
     const RESERVE: u64 = 4 * 1024 * 1024;
 
     fn server(rig: &Rig) -> UploadServer {
@@ -82,7 +81,7 @@ mod server_runs {
 
     /// One whole run: the harness is told to stop before it starts, so the run ends at once.
     fn run_to_end(rig: &Rig, practice: bool) -> Ended {
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         run_to_end_with(rig, practice, &goal)
     }
 
@@ -304,7 +303,7 @@ mod server_runs {
         let rig = Rig::new();
         let server = server(&rig);
         rig.prepare_for(&server.url());
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let ended = run_to_end_in(&rig, RunMode::Test, &goal);
         let run_id = server.run_ids()[0].clone();
         let requests = server.device_requests();
@@ -516,69 +515,6 @@ mod server_runs {
         assert_eq!(refused.exit_code(), 1, "{refused}");
     }
 
-    fn reserve_files(rig: &Rig) -> Vec<PathBuf> {
-        std::fs::read_dir(goalcup_cli::run::reserve::artifact_root(&rig.cfg).join("reserve"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| entry.path())
-            .collect()
-    }
-
-    /// A run on the server whose agent ended by itself, and whose connector is headless (it has
-    /// no `continue`): its reserve goes back to the disk once all of it is on the server, and not
-    /// before. A run whose upload fell short keeps it until `goalcup upload` finishes the job.
-    #[test]
-    fn a_headless_run_gives_its_reserve_back_once_it_is_all_on_the_server() {
-        // Everything is sent at the end: nothing is left to hold the reserve for.
-        let rig = Rig::new();
-        let whole = server(&rig);
-        rig.prepare_for(&whole.url());
-        let ended = run_to_end(&rig, false);
-        assert!(ended.out.contains("uploaded:"), "{}", ended.out);
-        assert!(
-            reserve_files(&rig).is_empty(),
-            "{:?}\n{}",
-            reserve_files(&rig),
-            ended.out
-        );
-
-        // The server stores no chunk: the upload falls short, the run is not over, and `continue`
-        // cannot restart it. The reserve stays for now.
-        let rig = Rig::new();
-        let server = server(&rig);
-        rig.prepare_for(&server.url());
-        server.fail_next_chunks(1_000_000);
-        rig.tell("stop", "");
-        let goal = rig.goal(GOAL);
-        let http = rig.client();
-        let client = Hooked::new(&http, &rig);
-        let mut opts = rig.options(&goal, RESERVE);
-        opts.upload_policy = quick_policy();
-        let (result, out) =
-            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
-        let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
-        assert!(out.contains("upload incomplete"), "{out}");
-        assert_eq!(reserve_files(&rig).len(), 1, "{out}");
-
-        // `goalcup upload` finishes the last entry: the reserve goes.
-        server.fail_next_chunks(0);
-        let mut said = Vec::new();
-        goalcup_cli::commands::upload::upload_with(
-            &rig.cfg,
-            &outcome.entry_id,
-            quick_policy(),
-            &mut said,
-        )
-        .unwrap_or_else(|e| panic!("{e}\n{}", String::from_utf8_lossy(&said)));
-        assert!(
-            reserve_files(&rig).is_empty(),
-            "{:?}\n{}",
-            reserve_files(&rig),
-            String::from_utf8_lossy(&said)
-        );
-    }
-
     /// A server run needs `goalcup prep` first: its repository and work folder in `prep.json`
     /// and the GitHub token in `github.json`. Whatever is missing, the refusal is the one
     /// sentence, and it comes before the participant is asked to approve anything and before
@@ -626,7 +562,7 @@ mod server_runs {
             let server = server(&rig);
             rig.prepare_for(&server.url());
             breakage(&rig);
-            let goal = rig.goal(GOAL);
+            let goal = rig.run_folder();
             let http = rig.client();
             let client = Hooked::new(&http, &rig);
             let opts = rig.options(&goal, RESERVE);
@@ -665,7 +601,7 @@ mod server_runs {
                 .display()
                 .to_string(),
         );
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         let opts = rig.options(&goal, RESERVE);
@@ -684,17 +620,16 @@ mod server_runs {
         assert!(!goalcup_cli::run::runs_dir(&rig.cfg).exists());
     }
 
-    /// The goal file may sit in the work folder itself (`~/goalcup/goal.txt` with the clones in
-    /// `~/goalcup`): the run directory and the clone get names of their own, and the harness's home
-    /// is in the run directory, not in the clone the agent works in.
+    /// The run may be started from the work folder itself (`~/goalcup`, which holds the clones):
+    /// the run directory and the clone get names of their own, and the harness's home is in the run
+    /// directory, not in the clone the agent works in.
     #[test]
-    fn a_goal_file_in_the_work_folder_keeps_the_run_directory_out_of_the_clone() {
+    fn a_run_from_the_work_folder_keeps_the_run_directory_out_of_the_clone() {
         let rig = Rig::new();
         let server = server(&rig);
         rig.prepare_for(&server.url());
-        let goal = rig.work_root().join("goal.txt");
-        std::fs::write(&goal, GOAL).unwrap();
-        let ended = run_to_end_with(&rig, false, &goal);
+        let folder = rig.work_root();
+        let ended = run_to_end_with(&rig, false, &folder);
         assert_eq!(server.run_ids().len(), 1, "{}", ended.out);
         assert!(ended.workspace.join(".git").is_dir());
         let env = rig.harness_file("env").unwrap();
@@ -707,27 +642,25 @@ mod server_runs {
             "the harness home {home} is inside the clone {}",
             ended.workspace.display()
         );
-        // Two folders of their own beside the goal file: the run directory and the clone.
-        assert_eq!(rig.clones().len(), 3, "{:?}", rig.clones());
+        // Two folders of their own in the work folder: the run directory and the clone.
+        assert_eq!(rig.clones().len(), 2, "{:?}", rig.clones());
         let run_dir = Path::new(home).parent().unwrap();
         assert_ne!(run_dir, ended.workspace);
         assert_eq!(run_dir.parent(), ended.workspace.parent());
     }
 
-    /// A goal file in a folder below the work folder (inside a clone, say) is refused before the
-    /// participant is asked: its run directory would sit inside that clone.
+    /// A run started from a folder below the work folder (inside a clone, say) is refused before
+    /// the participant is asked: its run directory would sit inside that clone.
     #[test]
-    fn a_goal_file_below_the_work_folder_is_refused_before_the_approval() {
+    fn a_run_folder_below_the_work_folder_is_refused_before_the_approval() {
         let rig = Rig::new();
         let server = server(&rig);
         rig.prepare_for(&server.url());
         let below = rig.work_root().join("goalcup-0123456789abcdef");
         std::fs::create_dir_all(&below).unwrap();
-        let goal = below.join("goal.txt");
-        std::fs::write(&goal, GOAL).unwrap();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
-        let opts = rig.options(&goal, RESERVE);
+        let opts = rig.options(&below, RESERVE);
         let (result, out) =
             std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
         let refused = result.expect_err("refused");
@@ -746,7 +679,7 @@ mod server_runs {
     #[test]
     fn practice_without_a_server_is_refused_before_anything_is_created() {
         let rig = Rig::new();
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         let mut opts = rig.options(&goal, RESERVE);
@@ -771,7 +704,7 @@ mod server_runs {
     #[test]
     fn test_without_a_server_is_refused_before_anything_is_created() {
         let rig = Rig::new();
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         let mut opts = rig.options(&goal, RESERVE);
@@ -829,7 +762,7 @@ mod server_runs {
             let upload = server(&rig);
             rig.prepare_for(&upload.url());
             rig.with_env(goalcup_cli::commands::start::TEST_GITHUB_API, &used);
-            let goal = rig.goal(GOAL);
+            let goal = rig.run_folder();
             let http = rig.client();
             let client = Hooked::new(&http, &rig);
             let mut opts = rig.options(&goal, RESERVE);
@@ -878,7 +811,7 @@ mod server_runs {
         let rig = Rig::new();
         let server = std::sync::Arc::new(server(&rig));
         rig.prepare_for(&server.url());
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         {
@@ -934,7 +867,7 @@ mod server_runs {
             },
         );
         rig.prepare_for(&server.url());
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         let opts = rig.options(&goal, RESERVE);
@@ -1151,7 +1084,7 @@ mod server_runs {
         let rig = Rig::new();
         let waiting = Waiting::start();
         rig.prepare_for(&waiting.url());
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         let opts = rig.options(&goal, RESERVE);

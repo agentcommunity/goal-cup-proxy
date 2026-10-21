@@ -44,9 +44,6 @@ fn disk_spec(quota: u64) -> String {
     )
 }
 
-/// The one goal every run is given.
-pub const GOAL: &str = "exchange the controlled traffic plan through the recording proxy";
-
 /// The E02 sentinel's prefix, built at run time like the load's, so no source holds it.
 pub fn sentinel_prefix() -> Vec<u8> {
     [&b"sk-"[..], b"ant-"].concat()
@@ -65,7 +62,8 @@ pub struct Vertical {
     pub out: PathBuf,
     /// Every child's standard output and error, and every command's.
     pub logs: PathBuf,
-    pub goal: PathBuf,
+    /// The folder `goalcup start` is run from, where it makes the run's directory.
+    pub runs: PathBuf,
     upstream_pem: PathBuf,
     runtime: tokio::runtime::Runtime,
     endpoint: Option<ControlledEndpoint>,
@@ -104,8 +102,7 @@ impl Vertical {
             None => dir("logs"),
         };
         let (workspaces, home) = (dir("workspaces"), dir("home"));
-        let goal = dir("runs").join("goal.txt");
-        std::fs::write(&goal, GOAL).unwrap();
+        let runs = dir("runs");
 
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -170,7 +167,7 @@ impl Vertical {
             artifacts,
             out,
             logs,
-            goal,
+            runs,
             upstream_pem,
             runtime,
             endpoint: Some(endpoint),
@@ -209,9 +206,10 @@ impl Vertical {
         command
     }
 
-    /// `goalcup start --harness m2-controlled-workload --dev --goal-file GOAL`, with chains
-    /// limited to `reserve` bytes (`GOALCUP_TEST_DISK`), in a process group of its own, which
-    /// the harness joins.
+    /// `goalcup start --harness m2-controlled-workload --dev`, run from [`Vertical::runs`] with
+    /// no terminal (the test build's `GOALCUP_TEST_CHAT_WITHOUT_TERMINAL`), with chains limited
+    /// to `reserve` bytes (`GOALCUP_TEST_DISK`), in a process group of its own, which the
+    /// harness joins.
     pub fn start(&self, reserve: u64) -> Launcher {
         self.start_with(disk_spec(reserve), None)
     }
@@ -246,8 +244,9 @@ impl Vertical {
         use std::os::unix::process::CommandExt;
         let mut command = self.goalcup();
         command
-            .args(["start", "--harness", CONNECTOR, "--dev", "--goal-file"])
-            .arg(&self.goal)
+            .args(["start", "--harness", CONNECTOR, "--dev"])
+            .current_dir(&self.runs)
+            .env("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL", "1")
             .env("GOALCUP_TEST_DISK", disk)
             .env("GOALCUP_TEST_UPSTREAM_ROOTS", &self.upstream_pem);
         if let Some(dir) = pause_dir {
@@ -351,9 +350,9 @@ impl Vertical {
         Chain::read(&self.trace(entry).join("chain.jsonl"))
     }
 
-    /// The run directory `goalcup start` made beside the goal file.
+    /// The run directory `goalcup start` made in [`Vertical::runs`].
     pub fn run_dir(&self) -> Option<PathBuf> {
-        std::fs::read_dir(self.goal.parent().unwrap())
+        std::fs::read_dir(&self.runs)
             .unwrap()
             .flatten()
             .map(|e| e.path())

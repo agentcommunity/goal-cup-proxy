@@ -129,11 +129,6 @@ version_of() { # manifest
     sed -n '1s/^#[^0-9]* \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*[-.A-Za-z0-9]*\).*/\1/p' "$1"
 }
 
-# Prints `chat` for a connector whose manifest says `interactive = true` under [capture].
-mode_of() { # manifest
-    awk '/^\[/ { sec = $0 } sec == "[capture]" && /^interactive *= *true/ { c = 1 } END { print c ? "chat" : "headless" }' "$1"
-}
-
 # Codex's reasoning effort, checked: low or minimal.
 codex_effort() {
     e=${LINUX_MATRIX_CODEX_EFFORT:-low}
@@ -449,12 +444,11 @@ inner_run() { # connector [matrix.sh options]
     h=$1
     shift
     inner_home_config "$h"
-    if [ "$(mode_of "/src/connectors/$h/harness.toml")" = chat ]; then
-        [ "$(inner_home_ready "$h")" = yes ] ||
-            fail "$h is not signed in on this volume: run scripts/linux-matrix.sh login $h first"
-        inner_settle
-        export MATRIX_CONFIG_DIR=$CFG
-    fi
+    # Every connector is chat mode (D57): it runs signed in, on this volume's home.
+    [ "$(inner_home_ready "$h")" = yes ] ||
+        fail "$h is not signed in on this volume: run scripts/linux-matrix.sh login $h first"
+    inner_settle
+    export MATRIX_CONFIG_DIR=$CFG
     # Claude Code asks whether it may trust each new workspace, "No, exit" selected: Down, Enter.
     if [ "$h" = claude-code-cli ] && [ -z "${MATRIX_PRE_PROMPT_KEYS+set}" ]; then
         MATRIX_PRE_PROMPT_KEYS='\033[B\r'
@@ -550,13 +544,12 @@ recipe_of() { # connector version
     esac
 }
 
-# The connector's manifest, version, mode, install command and image name.
+# The connector's manifest, version, install command and image name.
 image_of() { # connector
     manifest=connectors/$1/harness.toml
     [ -f "$manifest" ] || fail "no connector $manifest"
     version=$(version_of "$manifest")
     [ -n "$version" ] || fail "the first line of $manifest names no version"
-    mode=$(mode_of "$manifest")
     install=$(recipe_of "$1" "$version") || fail "no install recipe for $1 in this script (none measured for Linux)"
     img=goalcup-linux-matrix-$1:$version
 }
@@ -590,8 +583,6 @@ if [ "$action" = build ]; then
     built="$*"
 else
     image_of "$h"
-    [ "$action" = run ] || [ "$mode" = chat ] ||
-        fail "login: $h is headless (no sign-in to keep); use run"
 
     server=${LINUX_MATRIX_SERVER:-$STAGING}
     case $server in

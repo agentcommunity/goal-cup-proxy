@@ -14,8 +14,8 @@ use crate::common::support;
 
 use goalcup_cli::connector::HarnessConnector;
 use goalcup_cli::launch::{
-    CAPTURE_NO_PROXY, CaptureLaunch, LaunchScope, StderrUse, StdoutUse, StreamPlan,
-    build_capture_launch, build_resumed_launch, harness_arg_refusal,
+    CAPTURE_NO_PROXY, CaptureLaunch, build_capture_launch, build_resumed_launch,
+    harness_arg_refusal,
 };
 use goalcup_cli::preflight::{Level, harness_pin_gate};
 use goalcup_protocol::capture::{CaptureSource, StreamKey};
@@ -39,9 +39,6 @@ fn load(id: &str) -> HarnessConnector {
 
 /// The provider key the plan tests put in the participant's environment: synthetic.
 const KEY: &str = crate::common::secret_support::KEY;
-
-/// `--goal`-shaped on purpose: a headless connector places it as one element.
-const GOAL: &str = "--tui=hello goal";
 
 fn rendered(templates: &[String], vars: &TemplateVars) -> Vec<String> {
     templates.iter().map(|t| render(t, vars).unwrap()).collect()
@@ -333,36 +330,17 @@ fn connector_contract_accepts_chat_without_resume_args() {
     );
 }
 
-/// Every connector's stream and identity plans follow from its manifest by one rule. A chat-mode
-/// connector (D57) leaves the terminal to the harness: both streams inherited, and no identity
-/// at launch, because its sessions are the files its native source finds.
+/// Every connector is a chat-mode one (D57): no identity at launch, because its sessions are
+/// the files its native source finds, and no pattern scoped to one.
 #[test]
-fn every_connector_has_the_stream_and_identity_plan_its_manifest_asks_for() {
-    let mut chat = 0;
+fn every_connector_names_no_session_identity() {
     for id in shipped_connector_ids() {
         let capture = load(&id).loaded.manifest.capture;
-        let plan = StreamPlan::for_spec(&capture).unwrap_or_else(|e| panic!("{id}: {e}"));
-        let scope = LaunchScope::for_spec(&capture).unwrap_or_else(|e| panic!("{id}: {e}"));
-        // When the session is bound follows from the identity carrier alone.
-        let bound = match capture.identity.source {
-            IdentitySource::None => LaunchScope::None,
-            IdentitySource::Preassigned => LaunchScope::Preassigned,
-            IdentitySource::StdoutJson => LaunchScope::FromStdout,
-            IdentitySource::StderrLine => LaunchScope::AtFinish,
-            other => panic!("{id}: an identity source this test does not know: {other:?}"),
-        };
-        assert_eq!(scope, bound, "{id}");
-        if capture.interactive {
-            chat += 1;
-            assert_eq!(plan.stdout, StdoutUse::Inherit, "{id}");
-            assert_eq!(plan.stderr, StderrUse::Inherit, "{id}");
-            assert_eq!(scope, LaunchScope::None, "{id}");
+        assert_eq!(capture.identity.source, IdentitySource::None, "{id}");
+        for native in &capture.native {
+            assert!(!native.pattern.contains("{id}"), "{id}");
         }
     }
-    assert!(
-        chat > 0,
-        "the product is chat mode: at least one connector is"
-    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -417,7 +395,6 @@ fn every_connector_launch_environment_is_built_from_nothing() {
 fn every_connector_launch_names_the_time_left_file_and_the_harness_marker() {
     for id in shipped_connector_ids() {
         let c = load(&id);
-        let capture = &c.loaded.manifest.capture;
         let l = s::Layout::new();
         let exe = s::fake_harness(&l.bin);
         let resolved = s::resolved(&exe);
@@ -429,10 +406,7 @@ fn every_connector_launch_names_the_time_left_file_and_the_harness_marker() {
             &c,
             &s::vars(&l),
             &l.workspace,
-            &CaptureLaunch {
-                goal: (!capture.interactive).then_some(GOAL.as_bytes()),
-                ..s::chat_launch(&l, &resolved, &proxy, &parent)
-            },
+            &s::chat_launch(&l, &resolved, &proxy, &parent),
         )
         .unwrap_or_else(|e| panic!("{id}: {e}"));
         let get = |k: &str| plan.env_set.get(k).map(String::as_str);
@@ -456,13 +430,11 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
     let original = parent.clone();
     let bundle = l.root.path().join("bundle.pem");
     std::fs::write(&bundle, b"roots\n").unwrap();
-    let goal = GOAL.as_bytes();
     let plan = build_capture_launch(
         c,
         &s::vars(&l),
         &l.workspace,
         &CaptureLaunch {
-            goal: (!capture.interactive).then_some(goal),
             ca_bundle: Some(&bundle),
             ..s::chat_launch(&l, &resolved, &proxy, &parent)
         },
@@ -489,12 +461,10 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
     }
     allowed.extend(capture.home.env.iter().cloned());
     allowed.extend(capture.ca.env.iter().cloned());
-    if capture.interactive {
-        allowed.extend(goalcup_cli::launch::CHAT_PASSTHROUGH_ENV.map(str::to_string));
-    }
+    allowed.extend(goalcup_cli::launch::CHAT_PASSTHROUGH_ENV.map(str::to_string));
     for key in plan.env_set.keys() {
         assert!(
-            allowed.contains(key) || (capture.interactive && key.starts_with("LC_")),
+            allowed.contains(key) || key.starts_with("LC_"),
             "{id}: `{key}` is in the launch environment"
         );
         assert!(
@@ -547,13 +517,11 @@ fn connector_contract_accepts_home_env_templates() {
     assert_connector_launch_environment(&connector);
 }
 
-/// What a launch places, by mode (D57). A chat-mode connector places no goal: its argv is its
-/// rendered `args` alone, it is a `Tui` launch (the terminal's foreground group), a goal is
-/// refused, and a continued launch is its `args` then its `resume_args`. A headless connector
-/// refuses a launch with no goal, and places the goal as exactly one element after its `args`,
-/// whatever the goal looks like.
+/// What a launch places (D57): no goal. Its argv is the connector's rendered `args` alone, it
+/// is a `Tui` launch (the terminal's foreground group), and a continued launch is its `args`
+/// then its `resume_args`.
 #[test]
-fn every_connector_places_its_goal_as_its_mode_says() {
+fn every_connector_places_no_goal() {
     for id in shipped_connector_ids() {
         let c = load(&id);
         let capture = &c.loaded.manifest.capture;
@@ -564,39 +532,16 @@ fn every_connector_places_its_goal_as_its_mode_says() {
         let proxy = s::proxy_url();
         let parent = hostile_parent(capture);
         let none = s::chat_launch(&l, &resolved, &proxy, &parent);
-        let some = s::launch(&l, GOAL.as_bytes(), &resolved, &proxy, &parent);
         let args = rendered(&capture.args, &vars);
-        if capture.interactive {
-            let plan = build_capture_launch(&c, &vars, &l.workspace, &none)
-                .unwrap_or_else(|e| panic!("{id}: {e}"));
-            assert_eq!(plan.argv, args, "{id}: the rendered args alone");
-            assert_eq!(plan.capture, None, "{id}: no goal slot");
-            assert_eq!(plan.mode, LaunchMode::Tui, "{id}");
-            let refused = build_capture_launch(&c, &vars, &l.workspace, &some)
-                .expect_err("a goal for a chat-mode connector");
-            assert!(refused.to_string().contains("chat mode"), "{id}: {refused}");
-            let resumed = build_resumed_launch(&c, &vars, &l.workspace, &none)
-                .unwrap_or_else(|e| panic!("{id}: {e}"));
-            let mut want = args.clone();
-            want.extend(rendered(&capture.resume_args, &vars));
-            assert_eq!(resumed.argv, want, "{id}: args, then resume_args");
-        } else {
-            let refused = build_capture_launch(&c, &vars, &l.workspace, &none)
-                .expect_err("no goal for a headless connector");
-            assert!(refused.to_string().contains("headless"), "{id}: {refused}");
-            let plan = build_capture_launch(&c, &vars, &l.workspace, &some)
-                .unwrap_or_else(|e| panic!("{id}: {e}"));
-            assert_eq!(&plan.argv[..args.len()], args.as_slice(), "{id}");
-            let holding: Vec<&String> = plan.argv.iter().filter(|a| a.contains(GOAL)).collect();
-            assert_eq!(holding.len(), 1, "{id}: one element holds the goal");
-            let slot = plan.capture.expect("a goal slot");
-            assert_eq!(&plan.argv[slot.goal_index], holding[0], "{id}");
-            assert_eq!(
-                &plan.argv[slot.goal_index][slot.goal_prefix..],
-                GOAL,
-                "{id}"
-            );
-        }
+        let plan = build_capture_launch(&c, &vars, &l.workspace, &none)
+            .unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert_eq!(plan.argv, args, "{id}: the rendered args alone");
+        assert_eq!(plan.mode, LaunchMode::Tui, "{id}");
+        let resumed = build_resumed_launch(&c, &vars, &l.workspace, &none)
+            .unwrap_or_else(|e| panic!("{id}: {e}"));
+        let mut want = args.clone();
+        want.extend(rendered(&capture.resume_args, &vars));
+        assert_eq!(resumed.argv, want, "{id}: args, then resume_args");
     }
 }
 
@@ -623,7 +568,6 @@ fn handed_ca_files(c: &HarnessConnector, root: &Path) -> (BTreeMap<String, Vec<V
         &s::vars(&l),
         &l.workspace,
         &CaptureLaunch {
-            goal: (!capture.interactive).then_some(GOAL.as_bytes()),
             ca_certificate: &ca,
             ca_bundle: bundle.as_deref(),
             ..s::chat_launch(&l, &resolved, &proxy, &parent)

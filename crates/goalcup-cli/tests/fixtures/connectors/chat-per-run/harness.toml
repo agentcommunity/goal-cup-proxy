@@ -1,16 +1,16 @@
-# NON-SHIPPING fixture connector: the headless, per-run-home shape. Engine tests load it so that
-# no test of a launch rule depends on one shipped connector's values. It has a goal flag, a
-# reserved env prefix, a private home made from its own seed files, a replace-mode CA variable
-# of its own, a session id read from stderr at the finish, one
-# snapshot session file and an argv guard. No build pins it, so it loads only through `--dev`.
+# NON-SHIPPING fixture connector: the chat-mode, per-run-home shape. Engine tests load it so that
+# no test of a launch rule depends on one shipped connector's values. It has a reserved env
+# prefix, a private home made from its own seed files, a replace-mode CA variable of its own, one
+# snapshot session file per run and an argv guard. No build pins it, so it loads only through
+# `--dev`.
 schema_version = 1
-id = "headless-per-run"
+id = "chat-per-run"
 
 [capture]
+interactive = true
 args = ["chat", "-Q"]
-goal_flag = "--query"
 reserved_env_prefixes = ["PERRUN_"]
-continuation = "none: one turn, session snapshot on, stdin /dev/null"
+continuation = "chat: the participant types the prompt, session snapshot on"
 
 [capture.executable]
 program = "per-run-harness"
@@ -35,15 +35,12 @@ env = ["PERRUN_CA_BUNDLE"]
 mode = "replace"
 
 [capture.identity]
-source = "stderr_line"
-binding = "deferred"
-prefix = "session_id: "
-grammar = "timestamp-hex"
+source = "none"
 
 [[capture.native]]
 name = "session"
 root = "{config_home}/sessions"
-pattern = "session_{id}.json"
+pattern = "session_*.json"
 form = "snapshot"
 
 [capture.argv_guard]

@@ -14,7 +14,7 @@
 //! hangup ([`goalcup_platform::terminal::hangup_seen`]) it stays quiet and the rest goes to the
 //! log. A write to a terminal that is gone fails with `EIO` (or `EPIPE`), and while a log is
 //! open such a failure is swallowed: it must not end the host, which has a seal and an upload
-//! to finish. A headless run never opens a log, and its output is exactly what it was.
+//! to finish. A command that opens no log (`goalcup upload`) prints exactly what it did.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -175,8 +175,7 @@ pub fn say(line: &str) {
 
 /// One `goalcup: <line>` in `host.log` only, while a log is open, and never on the terminal: a
 /// measurement for whoever reads the log later (one line per uploaded chunk), too frequent and
-/// too technical for the participant. With no log open (a headless run, `goalcup upload`) it
-/// goes nowhere.
+/// too technical for the participant. With no log open (`goalcup upload`) it goes nowhere.
 pub fn log_only(line: &str) {
     if let Some(log) = sink().log.as_mut() {
         let _ = writeln!(log, "goalcup: {line}");

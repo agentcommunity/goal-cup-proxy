@@ -3,6 +3,7 @@ schema_version = 1
 id = "codex-cli"
 
 [capture]
+interactive = true
 auth_hosts = ["auth.openai.com"]
 # No model, effort or sandbox limit (owner direction, 2026-10-14): the harness's own defaults,
 # full access with network. `danger-full-access` because `codex exec` alone is read-only.
@@ -15,7 +16,6 @@ args = [
   "-s", "danger-full-access",
   "--skip-git-repo-check",
   "-C", "{workspace}",
-  "--",
 ]
 
 [capture.executable]
@@ -43,16 +43,13 @@ env = ["CODEX_CA_CERTIFICATE"]
 mode = "extend"
 
 [capture.identity]
-source = "stdout_json"
-binding = "at_launch"
-match_field = "type"
-match_value = "thread.started"
-id_field = "thread_id"
+source = "none"
 
 [[capture.native]]
 name = "rollout"
 root = "{config_home}/sessions"
-pattern = "*/*/*/rollout-*-{id}.jsonl"
+pattern = "*/*/*/rollout-*.jsonl"
+since_run_start = true
 form = "append_only"
 protocol_hint = "codex-jsonl"
 

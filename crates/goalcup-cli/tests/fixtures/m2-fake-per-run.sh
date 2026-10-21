@@ -1,14 +1,13 @@
 #!/bin/sh
 # The m2-fake-per-run connector's capture executable (tests/common/m2_cli_support): the fixture
-# connector `tests/fixtures/connectors/headless-per-run` under its own id. It is launched the way
-# that connector says: `chat -Q --query=<goal>`, its environment built from nothing, stdin
-# /dev/null.
+# connector `tests/fixtures/connectors/chat-per-run` under its own id. It is launched the way
+# that connector says: `chat -Q`, its environment built from nothing.
 #
 # It records what it was started with under $M2_FAKE_OUT (pid, argv one per line, environment,
 # the file its CA variable names, `started`), runs $M2_FAKE_OUT/steps.sh when the test wrote one,
 # then ends its turn: it writes its own session snapshot under $PERRUN_HOME/sessions, prints its
-# answer on stdout and `session_id: <id>` on stderr, and exits. The test controls the ending with
-# files in $M2_FAKE_OUT: `no-snapshot` (steps.sh wrote its own), `no-marker` (print no identity).
+# answer on stdout, and exits. The test controls the ending with the file `no-snapshot` in
+# $M2_FAKE_OUT (steps.sh wrote its own).
 out="$M2_FAKE_OUT"
 echo $$ > "$out/pid.tmp" && mv "$out/pid.tmp" "$out/pid"
 printf '%s\n' "$@" > "$out/argv"
@@ -26,7 +25,4 @@ if [ ! -f "$out/no-snapshot" ]; then
   printf '{"session_id":"%s","model":"a-model","messages":[{"role":"user","content":"hi"}]}' "$sid" > "$snap.tmp" && mv "$snap.tmp" "$snap"
 fi
 echo "the answer"
-if [ ! -f "$out/no-marker" ]; then
-  echo "session_id: $sid" >&2
-fi
 exit 0

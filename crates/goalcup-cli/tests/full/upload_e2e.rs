@@ -6,7 +6,6 @@ use crate::common::upload_server::{ServerOptions, UploadServer};
 use goalcup_protocol::capture_status::AnchorState;
 use goalcup_verifier::capture_analysis::reader::{CaptureIntegrity, scan_capture_trace};
 
-const GOAL: &str = "write hello.txt, then stop";
 const RESERVE: u64 = 4 * 1024 * 1024;
 const REPO: &str = crate::common::m2_cli_support::PREP_REPO;
 
@@ -39,7 +38,7 @@ fn a_logged_in_start_runs_under_the_servers_entry_and_keeps_its_receipt() {
     let server = server(&store);
     log_in(&rig, &server.url());
     rig.tell("stop", "");
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let opts = rig.options(&goal, RESERVE);
@@ -89,7 +88,7 @@ fn a_denied_or_expired_approval_starts_nothing() {
         let server = server(&rig.root.join("server"));
         log_in(&rig, &server.url());
         server.set_approval(approval);
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         let opts = rig.options(&goal, RESERVE);
@@ -116,7 +115,7 @@ fn an_unreachable_server_starts_nothing() {
     let url = format!("http://{}", closed.local_addr().unwrap());
     drop(closed);
     log_in(&rig, &url);
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let opts = rig.options(&goal, RESERVE);
@@ -138,7 +137,7 @@ fn a_start_that_fails_before_the_launch_gives_the_run_back() {
     let rig = Rig::new();
     let server = server(&rig.root.join("server"));
     log_in(&rig, &server.url());
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     // The recording proxy cannot write its CA file, after the daemon made the entry.
@@ -205,7 +204,7 @@ fn a_launch_refused_after_the_fork_gives_the_run_back() {
     let rig = Rig::new();
     let server = server(&rig.root.join("server"));
     log_in(&rig, &server.url());
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     client.book().registration = Some(crate::common::m2_cli_support::RegistrationFault::Refused);
@@ -261,7 +260,7 @@ fn a_run_left_open_by_a_killed_start_is_given_back_by_the_next() {
     std::mem::forget(goalcup_cli::upload::GiveBack::opened(&client, &rig.cfg, &killed).unwrap());
 
     rig.tell("stop", "");
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let hooked = Hooked::new(&http, &rig);
     let opts = rig.options(&goal, RESERVE);
@@ -396,7 +395,7 @@ fn a_run_is_uploaded_as_it_records_and_sealed_at_the_end() {
     let rig = Rig::new();
     let server = server(&rig.root.join("server"));
     log_in(&rig, &server.url());
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let opts = logged_in_options(&rig, &goal);
@@ -428,7 +427,7 @@ fn a_server_that_goes_away_mid_run_gets_everything_once_it_is_back() {
     let first = server(&store);
     let port = first.port();
     log_in(&rig, &first.url());
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let opts = logged_in_options(&rig, &goal);
@@ -469,7 +468,7 @@ fn an_upload_left_incomplete_is_finished_by_goalcup_upload() {
     let first = server(&store);
     let port = first.port();
     log_in(&rig, &first.url());
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = logged_in_options(&rig, &goal);
@@ -543,7 +542,7 @@ fn a_lost_reply_is_retried_without_a_second_copy() {
     server.drop_next_chunk_reply();
     server.fail_next_chunks(1);
     rig.tell("stop", "");
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let opts = logged_in_options(&rig, &goal);
@@ -564,7 +563,7 @@ fn an_ended_credential_or_a_diverged_chain_stops_the_upload() {
     let first = server(&store);
     let port = first.port();
     log_in(&rig, &first.url());
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = logged_in_options(&rig, &goal);
@@ -671,7 +670,7 @@ fn the_final_heartbeat_with_the_commit_reaches_the_server_before_the_server_seal
             server(&rig.root.join("server"))
         };
         log_in(&rig, &server.url());
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         let mut opts = logged_in_options(&rig, &goal);
@@ -749,7 +748,7 @@ fn the_server_stops_the_run_at_its_deadline() {
     // machine; short enough for a test.
     let server = short_server(&rig.root.join("server"), 8, None);
     log_in(&rig, &server.url());
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = logged_in_options(&rig, &goal);
@@ -819,7 +818,7 @@ fn a_connection_held_open_at_the_deadline_does_not_delay_the_stop() {
     rig.tell("steps.sh", &upstream.curl_waiting(r#"{"n":1}"#));
     let server = short_server(&rig.root.join("server"), 8, None);
     log_in(&rig, &server.url());
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = logged_in_options(&rig, &goal);
@@ -890,7 +889,7 @@ fn without_a_server_the_run_stops_on_its_own_clock_and_is_finished_later() {
     let first = short_server(&store, 3, None);
     let port = first.port();
     log_in(&rig, &first.url());
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = logged_in_options(&rig, &goal);
@@ -1658,9 +1657,9 @@ mod segments {
         assert_eq!(state.entry_id, entries[1]);
     }
 
-    /// Review finding 3. A headless connector, and a terminal that is not there, are refused
-    /// before the shared home is locked and before anything is sealed or sent: the segment the
-    /// daemon still holds open stays open, and the run can still be continued afterwards.
+    /// Review finding 3. A terminal that is not there is refused before the shared home is
+    /// locked and before anything is sealed or sent: the segment the daemon still holds open stays
+    /// open, and the run can still be continued afterwards.
     #[test]
     fn continue_refusals_that_need_no_server_come_before_anything_is_closed() {
         let rig = Rig::chat();
@@ -1688,21 +1687,6 @@ mod segments {
         assert_eq!(output.status.code(), Some(1), "{said}");
         assert!(said.contains("foreground of a terminal"), "{said}");
         untouched(&rig);
-
-        // A headless connector has no session to pick up.
-        let mut record = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap();
-        record.connector_id = crate::common::m2_cli_support::FAKE_ID.to_string();
-        goalcup_cli::run::write(&rig.cfg, &record).unwrap();
-        let output = rig
-            .continue_command(&[DISK, BEATING], None)
-            .output()
-            .unwrap();
-        let said = String::from_utf8_lossy(&output.stderr).into_owned();
-        assert_eq!(output.status.code(), Some(1), "{said}");
-        assert!(said.contains("runs headless"), "{said}");
-        untouched(&rig);
-        record.connector_id = crate::common::m2_cli_support::CHAT_ID.to_string();
-        goalcup_cli::run::write(&rig.cfg, &record).unwrap();
 
         // The run was not damaged: it continues, and the held segment is sealed then.
         let mut second = rig.continue_on_pty(&[DISK, BEATING], None);

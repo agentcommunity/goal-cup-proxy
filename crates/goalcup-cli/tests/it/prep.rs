@@ -2,7 +2,7 @@
 //! run.
 //!
 //! The binary is run against a temporary configuration directory and the chat-mode development
-//! connector (`Rig::chat`, whose harness is `fixtures/m2-fake-tui.sh`). The machine's facts
+//! connector (`Rig::chat_only`, whose harness is `fixtures/m2-fake-tui.sh`). The machine's facts
 //! (mains power, free space, hosts, the sleep lock) are stated through the test door
 //! `GOALCUP_TEST_PREP` rather than read from the machine the test runs on, GitHub is a local
 //! fake, and a run on a terminal is a pseudo-terminal of the test's own.
@@ -238,7 +238,7 @@ fn prep_file(cfg: &Path) -> PrepFile {
 
 #[test]
 fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
 
@@ -392,7 +392,7 @@ fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
 
 #[test]
 fn a_second_prep_skips_passed_steps() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
     log_in(&rig, "http://127.0.0.1:1");
@@ -463,7 +463,7 @@ fn a_second_prep_skips_passed_steps() {
 
 #[test]
 fn prep_waits_for_enter_before_it_opens_the_harness() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
     log_in(&rig, "http://127.0.0.1:1");
@@ -489,7 +489,7 @@ fn prep_waits_for_enter_before_it_opens_the_harness() {
 
 #[test]
 fn prep_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
     log_in(&rig, "http://127.0.0.1:1");
@@ -538,7 +538,7 @@ fn prep_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
 
 #[test]
 fn prep_refuses_a_work_folder_inside_a_git_repository_and_names_the_fix() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
     log_in(&rig, "http://127.0.0.1:1");
@@ -581,7 +581,7 @@ fn prep_refuses_a_work_folder_inside_a_git_repository_and_names_the_fix() {
 
 #[test]
 fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     // The filesystem is judged by its type, not by where it is mounted: a Windows drive mounted
     // at an odd place is refused, and a Linux mount under `/mnt/c` is not.
@@ -641,7 +641,7 @@ fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
 
 #[test]
 fn prep_on_wsl2_the_machine_step_is_ok_without_a_sleep_lock() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let (_, text) = prep(
         &rig,
@@ -671,7 +671,7 @@ fn prep_on_wsl2_the_machine_step_is_ok_without_a_sleep_lock() {
 
 #[test]
 fn prep_fails_wsl_artifact_root_and_config_folder_on_a_windows_host_filesystem() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let work = "/home/me/goalcup-work";
     let artifacts = format!("{}-artifacts", rig.cfg.display());
@@ -705,7 +705,7 @@ fn prep_fails_wsl_artifact_root_and_config_folder_on_a_windows_host_filesystem()
 /// artifact root and the configuration folder, with the way to move each, on any machine.
 #[test]
 fn prep_fails_a_folder_on_an_unsupported_filesystem_and_says_how_to_move_it() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let work = rig.root.join("btrfs").join("goalcup-work");
     let on_btrfs = facts(
@@ -752,7 +752,7 @@ fn prep_fails_a_folder_on_an_unsupported_filesystem_and_says_how_to_move_it() {
 
 #[test]
 fn prep_fails_wsl1_in_one_sentence() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let (code, text) = prep(
         &rig,
@@ -776,7 +776,7 @@ fn prep_fails_wsl1_in_one_sentence() {
 
 #[test]
 fn prep_does_not_start_a_run() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
     let github = FakeGithub::good();
     log_in(&rig, &server.url());
@@ -819,7 +819,7 @@ fn prep_does_not_start_a_run() {
 
 #[test]
 fn prep_json_marks_the_human_steps() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
 
@@ -894,7 +894,7 @@ fn prep_json_marks_the_human_steps() {
 
 #[test]
 fn prep_refuses_what_the_flags_get_wrong_before_it_writes_anything() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
     for args in [
@@ -914,7 +914,7 @@ fn prep_refuses_what_the_flags_get_wrong_before_it_writes_anything() {
 
 #[test]
 fn the_machine_step_judges_power_space_git_and_the_network() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let machine = |more: &[&str]| {
         let (code, text) = prep(&rig, &[], &facts(&github.base, more));
@@ -955,7 +955,7 @@ fn the_machine_step_judges_power_space_git_and_the_network() {
 
 #[test]
 fn the_harness_step_names_what_it_cannot_use() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
 
@@ -965,9 +965,6 @@ fn the_harness_step_names_what_it_cannot_use() {
         harness.starts_with("[fail]") && harness.contains(CHAT_ID),
         "{text}"
     );
-    // The headless connector of the same rig is no chat harness.
-    let (_, text) = prep(&rig, &["--harness", "m2-fake"], &facts);
-    assert!(line(&text, "harness").starts_with("[fail]"), "{text}");
     // A harness that is not installed is a failure that says so.
     let out = prep_command(&rig, &[], &facts)
         .env("PATH", "/usr/bin:/bin")
@@ -1003,7 +1000,7 @@ fn github_that_only_takes(good: &'static str, size: u32) -> FakeGithub {
 
 #[test]
 fn a_revoked_token_is_found_on_the_next_prep_and_replaced_and_replaced() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let new_token = format!("github_pat_{}", "B".repeat(60));
     let new_token: &'static str = Box::leak(new_token.into_boxed_str());
     let github = github_that_only_takes(new_token, 0);
@@ -1059,7 +1056,7 @@ fn a_revoked_token_is_found_on_the_next_prep_and_replaced_and_replaced() {
 
 #[test]
 fn a_repository_that_is_not_empty_is_a_failure_on_every_prep_and_no_reason_for_a_new_token() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let token_in_use: &'static str = Box::leak(token().into_boxed_str());
     let github = github_that_only_takes(token_in_use, 12);
     log_in(&rig, "http://127.0.0.1:1");
@@ -1137,7 +1134,7 @@ fn all_but_the_harness(rig: &Rig) {
 
 #[test]
 fn prep_opens_a_harness_that_needs_its_interpreter_with_the_participants_environment() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
     all_but_the_harness(&rig);
@@ -1213,7 +1210,7 @@ fn prep_opens_a_harness_that_needs_its_interpreter_with_the_participants_environ
 
 #[test]
 fn the_harness_step_checks_the_interpreter_on_the_participants_path() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
 
@@ -1554,7 +1551,7 @@ fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
 /// service there; once the config names an https service on the network, the home is ready.
 #[test]
 fn prep_keeps_the_home_not_ready_while_the_model_service_cannot_be_recorded() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let from = crate::model_host_from::reads_model_host(&rig, CHAT_ID);
     let home = rig.cfg.join("capture-homes").join(CHAT_ID);
     let github = FakeGithub::good();

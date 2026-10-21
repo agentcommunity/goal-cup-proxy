@@ -450,7 +450,8 @@ pub enum Ending<'a> {
     Replaced,
     /// The harness exited after the run's time was up.
     Over { how: &'a str },
-    /// The harness exited, and it cannot be restarted in the same run (it runs headless).
+    /// The harness exited, and it cannot be restarted in the same run (this machine does not
+    /// hold the run's credential).
     NoRestart { how: &'a str, until: String },
 }
 
@@ -1203,31 +1204,6 @@ pub fn cannot_record_model_service(why: &str, id: &str) -> String {
     )
 }
 
-/// A chat-mode connector given a `--goal-file`.
-pub fn takes_no_goal_file(harness: &str, id: &str) -> String {
-    format!(
-        "Run goalcup start --harness {id}, without --goal-file. {harness} runs in chat mode: it \
-         opens in this terminal and you type the prompt there. Nothing was created."
-    )
-}
-
-/// A headless connector given no `--goal-file`.
-pub fn needs_goal_file(harness: &str, id: &str) -> String {
-    format!(
-        "Run goalcup start --harness {id} --goal-file <file>. {harness} runs headless and needs \
-         a goal file. Nothing was created."
-    )
-}
-
-/// `goalcup continue` of a headless harness's run. A new start is not advised: it would replace
-/// the run, which is still open.
-pub fn cannot_continue_headless(harness: &str) -> String {
-    format!(
-        "Nothing to continue. {harness} runs headless: it was given one goal and has no session \
-         to pick up, so its run cannot be continued. The run ends by itself. Nothing was changed."
-    )
-}
-
 /// `goalcup continue` with no record of the run on this computer.
 pub fn not_started_here(run_id: Option<&str>) -> String {
     let which = run_id.map_or_else(|| "The run".to_string(), |id| format!("Run {id}"));
@@ -1769,10 +1745,9 @@ mod tests {
         ] {
             assert!(line.contains("Little Snitch"), "{line}");
         }
-        for open in [home_busy("A", true), cannot_continue_headless("A")] {
-            assert!(!open.contains("run goalcup start"), "{open}");
-            assert!(!open.starts_with("Start"), "{open}");
-        }
+        let open = home_busy("A", true);
+        assert!(!open.contains("run goalcup start"), "{open}");
+        assert!(!open.starts_with("Start"), "{open}");
     }
 
     #[test]
@@ -1813,9 +1788,6 @@ mod tests {
             still_recording("Some Agent", "r1"),
             needs_terminal("Some Agent", "Nothing was created."),
             inside_work_folder(tmp, &tmp.join("x")),
-            takes_no_goal_file("Some Agent", "some-cli"),
-            needs_goal_file("Some Agent", "some-cli"),
-            cannot_continue_headless("Some Agent"),
             not_started_here(Some("r1")),
             not_started_here(None),
             local_only("r1"),

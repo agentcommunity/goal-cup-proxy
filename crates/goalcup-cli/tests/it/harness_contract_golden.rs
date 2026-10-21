@@ -12,8 +12,7 @@
 //!   for this connector differs from the shared policy. The declared manifest is not echoed: the
 //!   pin covers it. The registered process handle is checked against the plan, not pinned.
 //! * Shared files, which no connector changes: `policy.json` (the generic argv and environment
-//!   deny verdicts over fixed probe lists and the CA-variable rules) and `identity-grammar.json`
-//!   (the stdout JSON tee and the stderr marker grammar over fixture streams).
+//!   deny verdicts over fixed probe lists and the CA-variable rules).
 //!
 //! The connector list is `shipped_connector_ids()`, and every per-connector field is derived
 //! from the connector's own files. Adding a connector folder therefore needs no edit here and
@@ -30,14 +29,10 @@
 //! unless set to exactly `1`.
 
 use crate::common::m2_profile_support;
-use crate::common::support;
 
 use goalcup_cli::ca_bundle::{HandedFile, handed_file};
 use goalcup_cli::connector::HarnessConnector;
-use goalcup_cli::launch::{
-    LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan, build_capture_launch,
-    handle, spawn, stdout_tee_with_rule, tee_marked_with_rule,
-};
+use goalcup_cli::launch::{LaunchPlan, build_capture_launch, handle, spawn};
 use goalcup_cli::per_run_home::create_per_run_home;
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::capture_policy::{
@@ -50,11 +45,8 @@ use m2_profile_support as s;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 /// The controlled test workload: a fixture of this file, never a folder under `connectors/`.
 const CONTROLLED: &str = "m2-controlled-workload";
@@ -443,10 +435,8 @@ fn plan_json(l: &s::Layout, p: &LaunchPlan) -> Value {
         "cwd": norm(l, &p.cwd.display().to_string()),
         "mode": format!("{:?}", p.mode),
         "kill": serde_json::to_value(&p.kill).unwrap(),
-        "capture": p.capture.map(|h| json!({
-            "goal_index": h.goal_index,
-            "goal_prefix": h.goal_prefix,
-        })),
+        // Headless mode's goal slot, gone with it (D57): no plan has one.
+        "capture": Value::Null,
     })
 }
 
@@ -485,23 +475,12 @@ fn tree(root: &Path) -> Vec<Value> {
     out
 }
 
-/// The stream decision of one connector, named from the launcher's own plan over its profile:
-/// the `StreamPlan` stream uses and the `LaunchScope`: the stream that carries the identity and
-/// when the native store binds name the decision.
-fn connector_streams_json(p: &CaptureSpec) -> Value {
-    let plan = StreamPlan::for_spec(p).expect("a validated profile has a stream plan");
-    let scope = LaunchScope::for_spec(p).expect("a validated profile has a launch scope");
-    let decision = match (&plan.stdout, &plan.stderr, scope) {
-        (StdoutUse::IdentityJson(_), StderrUse::Inherit, LaunchScope::FromStdout) => "CodexStdout",
-        (StdoutUse::Inherit, StderrUse::IdentityLine(_), LaunchScope::AtFinish) => "MarkedStderr",
-        (StdoutUse::Inherit, StderrUse::Inherit, LaunchScope::Preassigned) => "PreassignedSession",
-        (StdoutUse::Inherit, StderrUse::Inherit, LaunchScope::None) => "Inherit",
-        other => panic!("a launcher plan this golden does not name: {other:?}"),
-    };
-    let pipes = plan.pipes();
+/// The stream decision of one connector. Every connector is chat mode (D57): the harness
+/// inherits all its streams, and no identity is read from one.
+fn connector_streams_json() -> Value {
     json!({
-        "decision": decision,
-        "pipes": {"stdout": pipes.stdout, "stderr": pipes.stderr},
+        "decision": "Inherit",
+        "pipes": {"stdout": false, "stderr": false},
     })
 }
 
@@ -646,28 +625,24 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
     let resolved = s::resolved(&exe);
     let proxy = s::proxy_url();
     let parent = s::parent_env();
-    // A chat-mode profile (D57) is given no goal: its plan is the same whatever the goal.
-    let interactive = profile(c).interactive;
-    let plan_for = |goal: &[u8]| {
-        let launch = if interactive {
-            s::chat_launch(&l, &resolved, &proxy, &parent)
-        } else {
-            s::launch(&l, goal, &resolved, &proxy, &parent)
-        };
-        build_capture_launch(c, &s::vars(&l), &l.workspace, &launch)
-    };
-    let plan = plan_for(b"write result.txt").unwrap_or_else(|e| panic!("{id}: {e}"));
+    // Chat mode (D57) gives the harness no goal: the plan is the connector's args alone.
+    let plan = build_capture_launch(
+        c,
+        &s::vars(&l),
+        &l.workspace,
+        &s::chat_launch(&l, &resolved, &proxy, &parent),
+    )
+    .unwrap_or_else(|e| panic!("{id}: {e}"));
 
-    // Goal placement for a goal that is nothing but an option.
-    let hostile_plan = plan_for(b"--profile evil -p x").unwrap();
+    // What headless mode called goal placement: the argv's tail, and no goal slot.
     let placement = json!({
-        "tail": hostile_plan.argv[hostile_plan.argv.len().saturating_sub(2)..]
+        "tail": plan.argv[plan.argv.len().saturating_sub(2)..]
             .iter()
             .map(|a| norm(&l, a))
             .collect::<Vec<_>>(),
-        "goal_index": hostile_plan.capture.map(|h| h.goal_index),
-        "goal_prefix": hostile_plan.capture.map(|h| h.goal_prefix),
-        "argv_len": hostile_plan.argv.len(),
+        "goal_index": Value::Null,
+        "goal_prefix": Value::Null,
+        "argv_len": plan.argv.len(),
     });
 
     // The handle the manifest's kill fields end up in, from a live fake child.
@@ -746,7 +721,7 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
         },
         "plan": plan_json(&l, &plan),
         "goal_placement_for_an_option_shaped_goal": placement,
-        "streams": connector_streams_json(dp),
+        "streams": connector_streams_json(),
         "home": home,
         "ca": ca_json(&l, dp, &plan),
         "argv_differs_from_policy": argv_differences(m, origin),
@@ -818,316 +793,6 @@ fn the_shared_capture_policy_is_pinned() {
 }
 
 // ---------------------------------------------------------------------------------------
-// Identity grammars.
-// ---------------------------------------------------------------------------------------
-
-/// A reader that hands out its chunks one `read` at a time, then EOF.
-struct Chunks(std::collections::VecDeque<Vec<u8>>);
-
-impl Chunks {
-    fn new(chunks: Vec<Vec<u8>>) -> Chunks {
-        Chunks(chunks.into_iter().filter(|c| !c.is_empty()).collect())
-    }
-}
-
-impl Read for Chunks {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self.0.pop_front() {
-            None => Ok(0),
-            Some(mut chunk) => {
-                let n = chunk.len().min(buf.len());
-                buf[..n].copy_from_slice(&chunk[..n]);
-                if n < chunk.len() {
-                    self.0.push_front(chunk.split_off(n));
-                }
-                Ok(n)
-            }
-        }
-    }
-}
-
-#[derive(Clone, Default)]
-struct Sink(Arc<Mutex<Vec<u8>>>);
-
-impl Write for Sink {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-struct Closed;
-
-impl Write for Closed {
-    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-        Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
-    }
-}
-
-fn started(id: &str) -> Vec<u8> {
-    format!("{{\"type\":\"thread.started\",\"thread_id\":\"{id}\"}}\n").into_bytes()
-}
-
-/// What the stdout JSON tee (`identity.source = "stdout_json"`) announced for these chunks,
-/// and what it forwarded.
-fn stdout_json_tee(chunks: Vec<Vec<u8>>, closed: bool) -> Value {
-    let input: Vec<u8> = chunks.iter().flatten().copied().collect();
-    let (tx, rx) = std::sync::mpsc::channel();
-    let sink = Sink::default();
-    let result = if closed {
-        stdout_tee_with_rule(
-            Chunks::new(chunks),
-            Closed,
-            tx,
-            &support::stdout_event_rule(),
-        )
-    } else {
-        stdout_tee_with_rule(
-            Chunks::new(chunks),
-            sink.clone(),
-            tx,
-            &support::stdout_event_rule(),
-        )
-    };
-    let announced: Vec<Value> = rx.try_iter().map(|m| json!(m)).collect();
-    let forwarded = sink.0.lock().unwrap().clone();
-    json!({
-        "result": if result.is_ok() { "ok" } else { "error" },
-        "announced": announced,
-        "forwarded_equals_input": !closed && forwarded == input,
-        "forwarded_bytes": forwarded.len(),
-    })
-}
-
-/// What the stderr tee (`identity.source = "stderr_line"`) read as the session marker.
-fn stderr_marker(chunks: Vec<Vec<u8>>) -> Value {
-    let tee = tee_marked_with_rule(
-        Chunks::new(chunks),
-        Sink::default(),
-        support::stderr_marker_rule(),
-    )
-    .unwrap();
-    let marker = tee.marker_until(Instant::now() + Duration::from_secs(20));
-    match marker {
-        ScopeMarker::One(id) => json!({"marker": "one", "id": id}),
-        ScopeMarker::Absent => json!({"marker": "absent"}),
-        ScopeMarker::Conflicting => json!({"marker": "conflicting"}),
-    }
-}
-
-fn line(text: &str) -> Vec<u8> {
-    format!("{text}\n").into_bytes()
-}
-
-#[test]
-fn the_identity_grammars_are_pinned() {
-    let big = |n: usize| vec![b'x'; n];
-    let limit = 1024 * 1024;
-    let mut overlong_started = b"{\"type\":\"thread.started\",\"thread_id\":\"".to_vec();
-    overlong_started.extend(big(limit + 8));
-    overlong_started.extend(b"\"}\n");
-    let mut overlong_noise = big(limit + 1);
-    overlong_noise.push(b'\n');
-    let mut at_limit = big(limit);
-    at_limit.push(b'\n');
-
-    let stdout_cases: Vec<(&str, Value)> = vec![
-        (
-            "thread_started",
-            stdout_json_tee(vec![started("t-1")], false),
-        ),
-        (
-            "after_noise",
-            stdout_json_tee(
-                vec![
-                    line("not json"),
-                    line("{\"type\":\"turn.started\"}"),
-                    started("t-2"),
-                ],
-                false,
-            ),
-        ),
-        (
-            "one_byte_chunks",
-            stdout_json_tee(
-                started("t-3").chunks(1).map(<[u8]>::to_vec).collect(),
-                false,
-            ),
-        ),
-        (
-            "no_thread_id",
-            stdout_json_tee(vec![line("{\"type\":\"thread.started\"}")], false),
-        ),
-        (
-            "numeric_thread_id",
-            stdout_json_tee(
-                vec![line("{\"type\":\"thread.started\",\"thread_id\":7}")],
-                false,
-            ),
-        ),
-        (
-            "never_started",
-            stdout_json_tee(vec![line("{\"type\":\"turn.started\"}")], false),
-        ),
-        (
-            "unterminated_last_line",
-            stdout_json_tee(
-                vec![started("t-4").strip_suffix(b"\n").unwrap().to_vec()],
-                false,
-            ),
-        ),
-        (
-            "first_of_two_wins",
-            stdout_json_tee(vec![started("first"), started("second")], false),
-        ),
-        (
-            "type_must_be_exact",
-            stdout_json_tee(
-                vec![line("{\"type\":\"thread.started.x\",\"thread_id\":\"t\"}")],
-                false,
-            ),
-        ),
-        (
-            "crlf",
-            stdout_json_tee(
-                vec![b"{\"type\":\"thread.started\",\"thread_id\":\"t-5\"}\r\n".to_vec()],
-                false,
-            ),
-        ),
-        (
-            "long_id_is_not_judged_here",
-            stdout_json_tee(vec![started(&"a".repeat(200))], false),
-        ),
-        (
-            "overlong_noise_then_started",
-            stdout_json_tee(vec![overlong_noise.clone(), started("late")], false),
-        ),
-        (
-            "overlong_started_line_is_skipped",
-            stdout_json_tee(vec![overlong_started, started("after")], false),
-        ),
-        (
-            "line_exactly_at_the_limit_then_started",
-            stdout_json_tee(vec![at_limit, started("ok")], false),
-        ),
-        (
-            "closed_destination_still_announces",
-            stdout_json_tee(vec![started("t-6")], true),
-        ),
-        ("empty_stream", stdout_json_tee(vec![], false)),
-    ];
-
-    let id = "20260930_141500_a1b2c3";
-    let other = "20260930_141501_ffeedd";
-    let marker = |text: String| stderr_marker(vec![line(&text)]);
-    let stderr_cases: Vec<(&str, Value)> = vec![
-        ("valid", marker(format!("session_id: {id}"))),
-        (
-            "valid_repeated",
-            stderr_marker(vec![
-                line(&format!("session_id: {id}")),
-                line(&format!("session_id: {id}")),
-            ]),
-        ),
-        (
-            "conflicting",
-            stderr_marker(vec![
-                line(&format!("session_id: {id}")),
-                line(&format!("session_id: {other}")),
-            ]),
-        ),
-        ("absent", stderr_marker(vec![line("hello")])),
-        ("empty_stream", stderr_marker(vec![])),
-        ("no_space_after_colon", marker(format!("session_id:{id}"))),
-        ("two_spaces", marker(format!("session_id:  {id}"))),
-        ("leading_space", marker(format!(" session_id: {id}"))),
-        ("embedded_in_a_line", marker(format!("x session_id: {id}"))),
-        ("trailing_text", marker(format!("session_id: {id} x"))),
-        (
-            "trailing_cr",
-            stderr_marker(vec![format!("session_id: {id}\r\n").into_bytes()]),
-        ),
-        (
-            "uppercase_hex",
-            marker("session_id: 20260930_141500_A1B2C3".to_string()),
-        ),
-        (
-            "hex_above_f",
-            marker("session_id: 20260930_141500_a1b2g3".to_string()),
-        ),
-        (
-            "short_hex",
-            marker("session_id: 20260930_141500_a1b2c".to_string()),
-        ),
-        (
-            "long_hex",
-            marker("session_id: 20260930_141500_a1b2c3d".to_string()),
-        ),
-        (
-            "letters_in_date",
-            marker("session_id: 2026093x_141500_a1b2c3".to_string()),
-        ),
-        (
-            "wrong_separator",
-            marker("session_id: 20260930-141500-a1b2c3".to_string()),
-        ),
-        (
-            "a_uuid",
-            marker("session_id: 5f0c2a8e-8a0e-4c1f-9d6b-2b7d2b0e9a11".to_string()),
-        ),
-        (
-            "a_codex_style_token",
-            marker("session_id: rollout-abc".to_string()),
-        ),
-        ("prefix_case", marker(format!("Session_id: {id}"))),
-        (
-            "split_across_chunks",
-            stderr_marker(vec![
-                b"session_".to_vec(),
-                b"id: 2026".to_vec(),
-                b"0930_141500_a1b2c3\n".to_vec(),
-            ]),
-        ),
-        (
-            "unterminated_last_line",
-            stderr_marker(vec![format!("session_id: {id}").into_bytes()]),
-        ),
-        (
-            "overlong_line_before_marker",
-            stderr_marker(vec![
-                big(5000),
-                b"\n".to_vec(),
-                line(&format!("session_id: {id}")),
-            ]),
-        ),
-        (
-            "overlong_marker_line",
-            stderr_marker(vec![
-                format!("session_id: {id}").into_bytes(),
-                big(5000),
-                b"\n".to_vec(),
-            ]),
-        ),
-    ];
-
-    check_golden(
-        "identity-grammar.json",
-        &json!({
-            "stdout_json_tee": stdout_cases.into_iter().collect::<BTreeMap<_, _>>(),
-            "stderr_line_marker": stderr_cases.into_iter().collect::<BTreeMap<_, _>>(),
-            "stdout_line_limit_bytes": limit,
-            "stderr_line_limit_bytes": goalcup_cli::capture_tee::LINE_LIMIT,
-        }),
-    );
-}
-
-// ---------------------------------------------------------------------------------------
 // The connectors this tree ships.
 // ---------------------------------------------------------------------------------------
 
@@ -1145,7 +810,6 @@ fn connector_ids(root: &Path) -> Vec<String> {
 /// of them is keyed by a connector, so adding one changes none of them.
 const SHARED_GOLDENS: &[&str] = &[
     "decoder-selection.json",
-    "identity-grammar.json",
     "launch-allowance-reader.json",
     "policy.json",
     "redaction-extra-patterns.json",
@@ -1184,7 +848,7 @@ const EXTRA: &str = "synthetic-extra-cli";
 const STRAY: &str = "notes-not-a-connector";
 
 /// A connectors directory holding a copy of every shipped connector, one synthetic schema-1
-/// connector in the shape of the kit's stderr-token fixture (with a program that is not an
+/// connector in the shape of the kit's controlled-workload fixture (with a program that is not an
 /// interpreter, so it validates as `Origin::Pinned`), and one folder with no `harness.toml`.
 fn connectors_plus_one() -> tempfile::TempDir {
     fn copy(from: &Path, to: &Path) {
@@ -1208,16 +872,16 @@ fn connectors_plus_one() -> tempfile::TempDir {
         }
     }
     let kit = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/harness-kit/synthetic-stderr-token/harness.toml");
+        .join("tests/fixtures/harness-kit/controlled-workload/harness.toml");
     let mut text = std::fs::read_to_string(kit).unwrap();
     for (from, to) in [
         (
-            "id = \"kit-synthetic-stderr-token\"",
+            "id = \"kit-controlled-workload\"",
             format!("id = \"{EXTRA}\""),
         ),
         (
-            "args = [\"-I\", \"-S\", \"@STAND_IN@\", \"@PORT@\", \"@TEST_ID@\", \"@MARKER@\", \"--\"]",
-            "args = [\"run\", \"--\"]".to_string(),
+            "args = [\"-I\", \"-S\", \"@STAND_IN@\", \"@PORT@\", \"@TEST_ID@\", \"@MARKER@\", \"@GO@\"]",
+            "args = [\"run\"]".to_string(),
         ),
         (
             "program = \"python3\"",
@@ -1298,9 +962,9 @@ fn a_new_connector_needs_no_edit_to_this_file() {
         json!(false),
     );
     expect(
-        "streams (from the stderr_line identity)",
+        "streams (chat mode inherits them all)",
         extra["streams"].clone(),
-        json!({"decision": "MarkedStderr", "pipes": {"stdout": false, "stderr": true}}),
+        json!({"decision": "Inherit", "pipes": {"stdout": false, "stderr": false}}),
     );
     assert!(
         gaps.is_empty(),

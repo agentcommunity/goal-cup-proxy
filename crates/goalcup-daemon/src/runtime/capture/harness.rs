@@ -3,7 +3,6 @@
 use crate::DaemonError;
 use crate::config::DaemonConfig;
 use goalcup_protocol::ProtocolError;
-use goalcup_protocol::connector_dir::connector_dir_sha256;
 use goalcup_protocol::harness::{
     LoadedConnector, Origin, discover_connector_dirs, load_discovered_dir,
 };
@@ -50,56 +49,6 @@ pub(crate) fn capture_harness(
     Ok((connector, digests, every_loaded_real_dir))
 }
 
-/// Locate the exact directory bytes a row recorded without making an unrelated sibling's
-/// current validity a prerequisite for recovery. The digest walk is safe and refuses links;
-/// only the matching directory is parsed, and the loaded digest and declared id are rechecked.
-pub(super) fn recorded_capture_harness(
-    config: &DaemonConfig,
-    connector_id: &str,
-    recorded_digest: &str,
-) -> Option<LoadedConnector> {
-    let children = std::fs::read_dir(&config.connectors_dir).ok()?;
-    recorded_capture_harness_from_paths(
-        connector_id,
-        recorded_digest,
-        children.map(|child| child.map(|child| child.path())),
-    )
-}
-
-/// Restart recovery is deliberately best-effort over the current directory listing: a row's
-/// recorded connector may still be recoverable when an unrelated sibling cannot be enumerated.
-/// The relaxation stops at enumeration. A candidate is accepted only after its safe directory
-/// digest equals the recorded digest, the protocol loader admits its folder/id/pin identity, and
-/// the loaded digest and declared id both repeat the row's provenance.
-fn recorded_capture_harness_from_paths(
-    connector_id: &str,
-    recorded_digest: &str,
-    paths: impl IntoIterator<Item = std::io::Result<std::path::PathBuf>>,
-) -> Option<LoadedConnector> {
-    for path in paths.into_iter().flatten() {
-        if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink())
-        {
-            continue;
-        }
-        let Ok(digest) = connector_dir_sha256(&path) else {
-            continue;
-        };
-        if !digest.eq_ignore_ascii_case(recorded_digest) {
-            continue;
-        }
-        let Ok(connector) = load_child(&path) else {
-            continue;
-        };
-        if connector.manifest.id == connector_id
-            && connector
-                .connector_dir_sha256
-                .eq_ignore_ascii_case(recorded_digest)
-        {
-            return Some(connector);
-        }
-    }
-    None
-}
 /// Load one connector folder. Every error names the folder (a connector id, not a secret),
 /// because one bad sibling refuses every start and an operator must see which one.
 fn load_child(path: &Path) -> Result<LoadedConnector, DaemonError> {
@@ -122,7 +71,7 @@ fn load_child(path: &Path) -> Result<LoadedConnector, DaemonError> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{replaced_once, shipped_connector};
+    use super::super::tests::shipped_connector;
     use super::*;
 
     fn copy_tree(from: &Path, to: &Path) {
@@ -165,42 +114,5 @@ mod tests {
             .expect_err("the daemon consumes the shared folder/id/digest admission policy");
         assert!(error.to_string().contains(&manifest.id), "{error}");
         assert!(error.to_string().contains("folder"), "{error}");
-    }
-
-    #[test]
-    fn restart_lookup_is_best_effort_over_entries_but_still_binds_digest_and_id() {
-        let temp = tempfile::tempdir().unwrap();
-        let connectors = temp.path().join("connectors");
-        std::fs::create_dir(&connectors).unwrap();
-        let (_, shipped, manifest) = shipped_connector();
-        let source = replaced_once(
-            &shipped,
-            &format!("id = {:?}", manifest.id),
-            "id = \"restart-dev\"",
-        );
-        let matching = connectors.join("matching");
-        std::fs::create_dir(&matching).unwrap();
-        std::fs::write(matching.join("harness.toml"), &source).unwrap();
-        let digest = connector_dir_sha256(&matching).unwrap();
-        let wrong = connectors.join("wrong");
-        std::fs::create_dir(&wrong).unwrap();
-        std::fs::write(
-            wrong.join("harness.toml"),
-            format!("{source}\n# different bytes\n"),
-        )
-        .unwrap();
-        let entries = vec![
-            Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "synthetic unreadable directory entry",
-            )),
-            Ok(wrong),
-            Ok(matching),
-        ];
-
-        let loaded = recorded_capture_harness_from_paths("restart-dev", &digest, entries)
-            .expect("restart lookup skips an unreadable entry and finds exact recorded provenance");
-        assert_eq!(loaded.manifest.id, "restart-dev");
-        assert_eq!(loaded.connector_dir_sha256, digest);
     }
 }

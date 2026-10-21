@@ -27,8 +27,6 @@ pub const RESERVE: u64 = 4 * 1024 * 1024;
 /// An empty daemon.
 pub struct Rig {
     h: EmptyControlHarness,
-    /// The connectors directory of [`Rig::start_headless`], kept alive with the rig.
-    _headless: Option<tempfile::TempDir>,
 }
 
 impl std::ops::Deref for Rig {
@@ -39,26 +37,6 @@ impl std::ops::Deref for Rig {
     }
 }
 
-/// Copy the frozen headless connector `id` (with its seed files) into `connectors` as
-/// `headless-<id>`, its declared id renamed to match. The frozen texts differ from the
-/// build-pinned bytes, so they load as development connectors under ids of their own, as
-/// `capture-dev` does.
-pub fn copy_headless(id: &str, connectors: &Path) -> PathBuf {
-    let dir = connectors.join(format!("headless-{id}"));
-    super::support::copy_tree(&super::support::headless_connector_dir(id), &dir);
-    let text = std::fs::read_to_string(dir.join("harness.toml")).unwrap();
-    std::fs::write(
-        dir.join("harness.toml"),
-        text.replacen(
-            &format!("id = \"{id}\""),
-            &format!("id = \"headless-{id}\""),
-            1,
-        ),
-    )
-    .unwrap();
-    dir
-}
-
 impl Rig {
     pub async fn start() -> Rig {
         Rig::start_with(|_| {}).await
@@ -67,29 +45,13 @@ impl Rig {
     /// [`Rig::start`] with one edit to the configuration before the daemon starts.
     pub async fn start_with(edit: impl FnOnce(&mut DaemonConfig)) -> Rig {
         let h = empty_control_harness_with(edit).await;
-        Rig { h, _headless: None }
-    }
-
-    /// [`Rig::start`] over the frozen headless Codex, Claude and Hermes connectors (ids
-    /// `headless-codex-cli`, `headless-claude-code-cli` and `headless-hermes-cli`), so a test of
-    /// the `{id}`-scoped, one-turn behaviour, or of Hermes's deferred `stderr_line` identity,
-    /// does not follow the shipped manifests when they change mode.
-    pub async fn start_headless() -> Rig {
-        let connectors = tempfile::tempdir().unwrap();
-        for id in ["codex-cli", "claude-code-cli", "hermes-cli"] {
-            copy_headless(id, connectors.path());
-        }
-        let dir = connectors.path().to_path_buf();
-        let mut rig = Rig::start_with(move |config| config.connectors_dir = dir).await;
-        rig._headless = Some(connectors);
-        rig
+        Rig { h }
     }
 
     /// Stop this daemon and start another over the same root and configuration.
     pub async fn restart(self) -> Rig {
         Rig {
             h: restart_empty_control(self.h).await,
-            _headless: self._headless,
         }
     }
 
@@ -100,10 +62,7 @@ impl Rig {
         plant: impl FnOnce(&goalcup_daemon::registry::Registry),
     ) -> Result<Rig, goalcup_daemon::DaemonError> {
         let h = super::support::control::restart_empty_control_planting(self.h, plant).await?;
-        Ok(Rig {
-            h,
-            _headless: self._headless,
-        })
+        Ok(Rig { h })
     }
 
     /// A workspace path under this rig that does not exist yet.
@@ -472,7 +431,7 @@ impl Wire {
     }
 }
 
-/// A Codex-family rig with its required scoped rollout directory prepared. The connectors
+/// A Codex-family rig with its rollout directory prepared and one rollout in it. The connectors
 /// directory is returned to outlive the rig.
 pub async fn native_rig() -> (Rig, PathBuf, tempfile::TempDir) {
     let connectors = dev_connectors(|_| {});
@@ -567,7 +526,8 @@ pub fn descriptors_on(path: &Path) -> usize {
 }
 
 /// A connectors directory holding the two shipped connectors and `capture-dev`: the frozen
-/// headless Codex manifest under that id, without foreign scans, with `edit` applied.
+/// Codex manifest under that id, on a per-run config home so its source reads every file there
+/// (not only those written since the create), with `edit` applied.
 pub fn dev_connectors(edit: impl FnOnce(&mut String)) -> tempfile::TempDir {
     let connectors = tempfile::tempdir().unwrap();
     for shipped in ["codex-cli", "claude-code-cli"] {
@@ -577,12 +537,15 @@ pub fn dev_connectors(edit: impl FnOnce(&mut String)) -> tempfile::TempDir {
         );
     }
     let text = std::fs::read_to_string(
-        super::support::headless_connector_dir("codex-cli").join("harness.toml"),
+        super::support::frozen_connector_dir("codex-cli").join("harness.toml"),
     )
     .unwrap();
     let dir = connectors.path().join("capture-dev");
     std::fs::create_dir_all(&dir).unwrap();
-    let mut rendered = text.replacen("id = \"codex-cli\"", "id = \"capture-dev\"", 1);
+    let mut rendered = text
+        .replacen("id = \"codex-cli\"", "id = \"capture-dev\"", 1)
+        .replacen("config_home = \"shared\"", "config_home = \"per_run\"", 1)
+        .replacen("since_run_start = true\n", "", 1);
     edit(&mut rendered);
     std::fs::write(dir.join("harness.toml"), rendered).unwrap();
     connectors

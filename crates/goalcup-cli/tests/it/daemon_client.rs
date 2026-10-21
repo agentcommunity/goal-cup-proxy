@@ -1212,25 +1212,8 @@ fn capture_children_spawn_only_through_the_gate() {
         failed.matches("gated.abort();").count() >= 3,
         "a failed handle, registration, or an interrupt aborts the gate"
     );
-    // A released child is never given back to a spawner: the schema-selected identity tee
-    // only takes its stdout and its already-loaded rule.
-    let scoped_tee = "tee_scoped_capture_with_rule(&mut spawned, rule)";
-    assert_eq!(
-        body.matches(scoped_tee).count(),
-        1,
-        "the gated capture has one authoritative schema-selected identity tee"
-    );
-    let stderr_tee = "tee_stderr_capture_with_rule(&mut spawned, rule)";
-    assert_eq!(
-        body.matches(stderr_tee).count(),
-        1,
-        "the gated capture has one authoritative schema-selected stderr tee"
-    );
-    for tee in [scoped_tee, stderr_tee] {
-        assert!(at("gated.release()") < at(tee));
-    }
-    // The gate is handed the plan and its pipes, and nothing else: no secret rides on it (D61).
-    assert!(flat_body.contains("spawn_gated(&plan, prep.streams.pipes(), GATE_READY_WITHIN)"));
+    // The gate is handed the plan, and nothing else: no secret rides on it (D61).
+    assert!(flat_body.contains("spawn_gated(&plan, GATE_READY_WITHIN)"));
 
     // And the spawners the launch module still has are the ungated ordinary one and the gate.
     let launch = include_str!("../../src/launch.rs");

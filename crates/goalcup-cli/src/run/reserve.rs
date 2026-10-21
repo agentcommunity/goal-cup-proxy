@@ -443,9 +443,9 @@ pub const LONGEST_RUN: Duration =
 /// - A run that has ended is done, whatever became of its upload: its deadline passed, its host
 ///   stopped it for its end (the server's stop, a newer run replacing it), or the server said it
 ///   is sealed or incomplete (`server_ended`).
-/// - A run that is not over is done when `goalcup continue` cannot restart it (a headless
-///   connector, or no credential here) and every one of its entries is sealed and sent. A run
-///   with a chat-mode connector keeps its reserve: `continue` reuses it.
+/// - A run that is not over is done when `goalcup continue` cannot restart it (a state that says
+///   so, or no credential here) and every one of its entries is sealed and sent. A run that can
+///   be continued keeps its reserve: `continue` reuses it.
 pub fn run_is_done(cfg: &Path, record: &super::RunRecord, server_ended: bool, now: u64) -> bool {
     if record.server_url.is_none() || server_ended {
         return true;

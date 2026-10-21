@@ -55,7 +55,6 @@ Steps:
   3. goalcup start --harness <id> --practice     a 10-minute practice run
   4. goalcup start --harness <id>                your run, inside the start window
 While it runs: goalcup status (in another terminal). If the agent stopped early: goalcup continue.
-A headless harness takes `--goal-file <file>` instead of a typed prompt.
 To check a finished run: goalcup-verify --capture-integrity <trace-dir>
 
 Guide: https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/PARTICIPANT-GUIDE.md
@@ -130,7 +129,8 @@ enum Command {
     ///
     /// Your agent opens in this terminal. Type your prompt there, and after it only
     /// "keep going". Until the agent exits, goalcup prints nothing here; open a second terminal
-    /// and run `goalcup status` to see the run. A headless harness takes `--goal-file` instead.
+    /// and run `goalcup status` to see the run. The run's folder is created in the folder you
+    /// run `goalcup start` from.
     Start {
         /// Which harness to run, for example `claude-code-cli` or `codex-cli` (`goalcup doctor`
         /// lists every one this build ships).
@@ -140,12 +140,6 @@ enum Command {
         /// run says so, and it does not count as a competition entry.
         #[arg(long)]
         dev: bool,
-        /// For a headless harness only: a text file holding your goal, the
-        /// agent's first and only prompt. The run's folder is created next to this file, so put
-        /// it in an empty folder of its own, outside any git repository. A chat-mode harness
-        /// refuses it; its run's folder is created in the folder you run `goalcup start` from.
-        #[arg(long, value_name = "PATH")]
-        goal_file: Option<std::path::PathBuf>,
         /// A practice run: the server keeps it apart from the competition, and it never
         /// replaces your competition run. Needs `goalcup login` and `goalcup prep` first,
         /// like a competition run.
@@ -251,6 +245,11 @@ fn main() -> ExitCode {
     {
         goalcup_cli::set_finish_budget(std::time::Duration::from_millis(ms));
     }
+    // A test build can run a chat-mode harness with no terminal (`chat_without_terminal`).
+    #[cfg(feature = "test-support")]
+    if std::env::var_os("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL").is_some_and(|v| v == "1") {
+        goalcup_cli::set_chat_without_terminal(true);
+    }
     let args = match Args::try_parse() {
         Ok(args) => args,
         Err(e) => {
@@ -282,13 +281,11 @@ fn run(command: Command) -> Result<u8, CliError> {
         Command::Start {
             harness,
             dev,
-            goal_file,
             practice,
             test,
         } => start(commands::start::StartOptions {
             harness,
             dev,
-            goal_file,
             run_folder: std::env::current_dir().ok(),
             disk: disk_policy()?,
             mode: if test {
@@ -513,9 +510,9 @@ fn prep(opts: commands::prep::PrepOptions) -> Result<u8, CliError> {
 fn start(opts: commands::start::StartOptions) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
-    // `--goal-file` is for a headless harness only, and a headless one needs it: said before a
-    // daemon is started or anything else is done.
-    commands::start::goal_file_fits_connector(&connectors, &opts)?;
+    // A harness that cannot be loaded is refused before a daemon is started or anything else
+    // is done.
+    goalcup_cli::connector::load_harness(&connectors, &opts.harness, opts.dev)?;
     let client = ensure_daemon(
         &cfg,
         goalcup_cli::daemon::MissingConfig::WriteDefault {

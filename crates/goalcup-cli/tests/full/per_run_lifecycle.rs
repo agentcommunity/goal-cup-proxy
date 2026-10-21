@@ -1,8 +1,7 @@
-//! `goalcup start --goal-file` of a headless per-run connector (a per-run home, a goal flag, a
-//! session id on stderr bound at the finish), through the real daemon in process, the real proxy
-//! and sender inside `start_with`, and a fake harness (`fixtures/m2-fake-per-run.sh`) that writes
-//! its own session snapshot and prints its identity on stderr. The connector is the fixture
-//! `tests/fixtures/connectors/headless-per-run`, never a shipped one.
+//! `goalcup start` of a per-run connector (a per-run home made from its seed files), through the
+//! real daemon in process, the real proxy and sender inside `start_with`, and a fake harness
+//! (`fixtures/m2-fake-per-run.sh`) that writes its own session snapshot and exits. The
+//! connector is the fixture `tests/fixtures/connectors/chat-per-run`, never a shipped one.
 //!
 //! The one provider key here is the synthetic one in `secret_support`. Nothing reads a credential
 //! file or resolves a real `HOME`; every directory is a temporary one.
@@ -18,13 +17,10 @@ use crate::common::table_lock;
 
 use goalcup_cli::CliError;
 use goalcup_protocol::capture::{CaptureRecord, CaptureSource, GapReason};
-use goalcup_protocol::control::{CaptureSealError, CaptureSealRequest, ControlError, DaemonClient};
 use m2_cli_support::{Hooked, Rig};
 use secret_support::KEY;
 use std::path::PathBuf;
-use std::time::Duration;
 
-const GOAL: &str = "say hi, then stop";
 const RESERVE: u64 = 4 * 1024 * 1024;
 
 fn joined<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
@@ -39,7 +35,7 @@ fn run(
     Result<goalcup_cli::commands::start::StartOutcome, CliError>,
     String,
 ) {
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     std::thread::scope(|s| joined(rig.start(s, client, rig.per_run_options(&goal, RESERVE), None)))
 }
 
@@ -77,9 +73,9 @@ fn session_id(rig: &Rig) -> String {
         .to_string()
 }
 
-/// End to end: the launcher reads the identity off stderr after the harness exits, stops the
-/// recording proxy first, carries the identity on the finish request, and the run ends with its own
-/// session snapshot captured and no gap. The child saw the private homes and the loopback
+/// End to end: the launcher stops the recording proxy first, the finish request carries no scope
+/// (chat mode names no session, D57), and the run ends with its own session snapshot captured
+/// and no gap. The child saw the private homes and the loopback
 /// proxy. A provider key exported in the launcher's own environment never reaches it (D61), and
 /// is in nothing this machine kept.
 #[test]
@@ -101,7 +97,7 @@ fn a_per_run_run_ends_with_its_snapshot_captured() {
     let id = session_id(&rig);
     let seals = client.book().seals.clone();
     assert_eq!(seals.len(), 1);
-    assert_eq!(seals[0].native_scope.as_deref(), Some(id.as_str()));
+    assert_eq!(seals[0].native_scope, None);
     assert!(seals[0].remaining_finish_ms.is_some());
 
     let (report, records) = rig.read_trace(&entry);
@@ -122,7 +118,7 @@ fn a_per_run_run_ends_with_its_snapshot_captured() {
         run.join(format!("perrun/sessions/session_{id}.json"))
             .is_file()
     );
-    let seeds = support::fixture_connectors_dir().join("headless-per-run/files");
+    let seeds = support::fixture_connectors_dir().join("chat-per-run/files");
     for name in ["config.yaml", "auth.json"] {
         assert_eq!(
             std::fs::read(run.join("perrun").join(name)).unwrap(),
@@ -133,7 +129,7 @@ fn a_per_run_run_ends_with_its_snapshot_captured() {
 
     // What the child was started with.
     let argv = rig.harness_file("argv").unwrap();
-    assert_eq!(argv, format!("chat\n-Q\n--query={GOAL}\n"));
+    assert_eq!(argv, "chat\n-Q\n", "the args alone: no goal (D57)");
     let env = rig.harness_file("env").unwrap();
     let has = |line: &str| env.lines().any(|l| l == line);
     assert!(
@@ -201,14 +197,14 @@ fn entries(rig: &Rig) -> String {
     text
 }
 
-/// On the wire: a goal file inside a Git work tree is refused before the daemon is
-/// asked for anything.
+/// On the wire: a run folder inside a Git work tree is refused before the daemon is asked for
+/// anything.
 #[test]
-fn a_goal_file_inside_a_git_work_tree_refuses_before_anything_is_created() {
+fn a_run_folder_inside_a_git_work_tree_refuses_before_anything_is_created() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::per_run();
-    let goal = rig.goal(GOAL);
-    std::fs::create_dir(goal.parent().unwrap().join(".git")).unwrap();
+    let goal = rig.run_folder();
+    std::fs::create_dir(goal.join(".git")).unwrap();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, _out) = std::thread::scope(|s| {
@@ -218,7 +214,7 @@ fn a_goal_file_inside_a_git_work_tree_refuses_before_anything_is_created() {
     assert!(matches!(error, CliError::Refused(_)), "{error:?}");
     assert!(error.to_string().contains("Git work tree"), "{error}");
     assert!(client.names().is_empty(), "{:?}", client.names());
-    // The goal's own directory holds the `.git` this test made, and no run directory.
+    // The run folder holds the `.git` this test made, and no run directory.
     assert!(
         rig.run_dirs().iter().all(|d| !d
             .file_name()
@@ -227,101 +223,6 @@ fn a_goal_file_inside_a_git_work_tree_refuses_before_anything_is_created() {
         rig.run_dirs()
     );
     assert!(!rig.harness_started());
-}
-
-/// End to end: a harness that never prints its identity ends the run with exactly one
-/// deferred-scope gap and no native stream, and the finish request carried no scope.
-#[test]
-fn no_marker_means_one_gap_and_a_finish_with_no_scope() {
-    let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::per_run();
-    rig.tell("no-marker", "");
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    let (result, out) = run(&rig, &client);
-    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
-    assert_eq!(client.book().seals[0].native_scope, None);
-    let (report, records) = rig.read_trace(&client.created().entry_id);
-    assert!(native_labels(&records).is_empty());
-    assert_eq!(gaps(&records, GapReason::SourceChanged), 1, "{records:#?}");
-    assert!(report.coverage_incomplete);
-}
-
-/// Two different identities are a conflict, never resolved by picking one.
-#[test]
-fn two_conflicting_markers_send_no_scope() {
-    let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::per_run();
-    rig.tell(
-        "steps.sh",
-        "echo 'session_id: 20261002_000000_000001' >&2\n",
-    );
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    let (result, out) = run(&rig, &client);
-    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
-    assert_eq!(client.book().seals[0].native_scope, None);
-    let (_, records) = rig.read_trace(&client.created().entry_id);
-    assert!(native_labels(&records).is_empty());
-    assert_eq!(gaps(&records, GapReason::SourceChanged), 1, "{records:#?}");
-}
-
-/// A daemon that does not know the scope field refuses the finish as malformed. The command
-/// fails, and the standalone seal that follows (which sends no scope) finishes the run with the
-/// deferred gap.
-#[test]
-fn a_finish_the_daemon_refuses_is_finished_by_a_standalone_seal() {
-    let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::per_run();
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    client.book().seal_fault = Some(|| {
-        CaptureSealError::MaybeAdmitted(ControlError::Malformed(
-            "unknown field `native_scope`".into(),
-        ))
-    });
-    let (result, _out) = run(&rig, &client);
-    let error = result.expect_err("the finish was refused");
-    assert!(
-        matches!(error, CliError::Refused(_) | CliError::Control(_)),
-        "{error:?}"
-    );
-    assert_eq!(
-        client.book().seals[0].native_scope.as_deref(),
-        Some(session_id(&rig).as_str())
-    );
-
-    let entry = client.created().entry_id;
-    http.seal_capture(
-        &entry,
-        &CaptureSealRequest {
-            proxy: None,
-            remaining_finish_ms: None,
-            native_scope: None,
-        },
-        Duration::from_secs(60),
-    )
-    .expect("the standalone seal commits");
-    let (_, records) = rig.read_trace(&entry);
-    assert!(native_labels(&records).is_empty());
-    assert_eq!(gaps(&records, GapReason::SourceChanged), 1, "{records:#?}");
-}
-
-/// The CLI's half: a `stdout_json` finish never carries a scope.
-#[test]
-fn a_stdout_identity_finish_never_carries_a_scope() {
-    let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::stdout_identity();
-    rig.tell("stop", "");
-    let goal = rig.goal(GOAL);
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    let (result, out) =
-        std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, RESERVE), None)));
-    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
-    let seals = client.book().seals.clone();
-    assert_eq!(seals.len(), 1);
-    assert_eq!(seals[0].native_scope, None);
 }
 
 /// A stdout that goes away at the seal report: every write before the report succeeds, and the
@@ -355,7 +256,7 @@ fn a_committed_seal_stays_committed_when_stdout_fails() {
     let rig = Rig::per_run();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let result = std::thread::scope(|s| {
         joined(rig.start_writing(
@@ -383,19 +284,17 @@ fn a_committed_seal_stays_committed_when_stdout_fails() {
     );
 }
 
-/// A goal file in a synced folder is refused before anything is created.
+/// A run folder that a sync client uploads is refused before anything is created.
 #[test]
-fn a_goal_file_in_a_synced_folder_refuses_before_anything_is_created() {
+fn a_run_folder_in_a_synced_folder_refuses_before_anything_is_created() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::per_run();
-    let dir = rig.root.join("Dropbox/goals");
+    let dir = rig.root.join("Dropbox/runs");
     std::fs::create_dir_all(&dir).unwrap();
-    let goal = dir.join("goal.txt");
-    std::fs::write(&goal, GOAL).unwrap();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, _out) = std::thread::scope(|s| {
-        joined(rig.start(s, &client, rig.per_run_options(&goal, RESERVE), None))
+        joined(rig.start(s, &client, rig.per_run_options(&dir, RESERVE), None))
     });
     let error = result.expect_err("a synced folder is refused");
     assert!(matches!(error, CliError::Refused(_)), "{error:?}");

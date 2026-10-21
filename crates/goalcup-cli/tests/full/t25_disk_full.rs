@@ -334,7 +334,8 @@ impl World {
         let child = self
             .goalcup()
             .args(args)
-            .current_dir(self.v.goal.parent().unwrap())
+            .current_dir(&self.v.runs)
+            .env("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL", "1")
             .stdout(std::fs::File::create(logs.join(format!("{name}.out"))).unwrap())
             .stderr(std::fs::File::create(logs.join(format!("{name}.err"))).unwrap())
             .process_group(0)
@@ -350,18 +351,7 @@ impl World {
     }
 
     fn start(&self) -> Running {
-        let goal = self.v.goal.display().to_string();
-        self.spawn(
-            "start",
-            &[
-                "start",
-                "--harness",
-                CONNECTOR,
-                "--dev",
-                "--goal-file",
-                &goal,
-            ],
-        )
+        self.spawn("start", &["start", "--harness", CONNECTOR, "--dev"])
     }
 
     /// One short command to completion, recorded whole.

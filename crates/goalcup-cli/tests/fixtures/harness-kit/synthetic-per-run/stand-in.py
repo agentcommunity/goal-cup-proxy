@@ -1,17 +1,18 @@
 #!/usr/bin/python3
-"""Emit a deferred token identity, append native bytes and make one offline echo."""
+"""Write a snapshot in a per-run home, rewrite it, and make one proxy-captured echo."""
 
 import base64
+import json
 import os
 import socket
 import ssl
 import sys
+import time
 from urllib.parse import unquote, urlsplit
 
 assert sys.flags.isolated and sys.flags.no_site, "fixture Python must use -I -S"
 
 HOST = "api.e00.localhost"
-IDENTITY = "stderr_token_42"
 
 
 def head(sock):
@@ -37,7 +38,7 @@ def echo(port, test_id):
         raise RuntimeError("CONNECT refused")
     tls = ssl.create_default_context(
         cafile=os.environ["NODE_EXTRA_CA_CERTS"]).wrap_socket(sock, server_hostname=HOST)
-    body = b"kit stderr-token echo"
+    body = b"kit per-run echo"
     request = ("POST /v1/echo HTTP/1.1\r\nHost: %s:%s\r\n"
                "x-e00-test-id: %s\r\nContent-Length: %s\r\nConnection: close\r\n\r\n"
                % (HOST, port, test_id, len(body))).encode() + body
@@ -53,13 +54,33 @@ def echo(port, test_id):
         raise RuntimeError("echo mismatch")
 
 
-port, test_id, marker = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+def wait_for_go(path, patience=60.0):
+    """Wait for the runner to say it holds the first snapshot, so the rewrite is a second one.
+
+    The runner creates `path` once the recorded chain holds the first snapshot. A fixed sleep
+    here raced the recorder on a loaded host; this wait depends on the recorder, not the clock.
+    """
+    deadline = time.monotonic() + patience
+    while not os.path.exists(path):
+        if time.monotonic() > deadline:
+            print("kit stand-in: the runner never released the rewrite", file=sys.stderr, flush=True)
+            sys.exit(4)
+        time.sleep(0.02)
+
+
+def write_snapshot(path, message):
+    pending = path + ".pending"
+    with open(pending, "w") as stream:
+        json.dump({"message": message}, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(pending, path)
+
+
+port, test_id, marker, go = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 open(marker, "w").close()
-print("scope: " + IDENTITY, file=sys.stderr, flush=True)
-native = os.path.join(os.environ["HOME"], "sessions")
-os.makedirs(native, mode=0o700, exist_ok=True)
-with open(os.path.join(native, "session-" + IDENTITY + ".jsonl"), "w") as stream:
-    stream.write('{"message":"stderr append"}\n')
-with open(os.path.join(native, "session-wrong_stderr_token.jsonl"), "w") as stream:
-    stream.write('{"message":"stderr decoy"}\n')
+snapshot = os.path.join(os.environ["SYNTHJSON_HOME"], "snapshots", "session.json")
+write_snapshot(snapshot, "snapshot first")
+wait_for_go(go)
+write_snapshot(snapshot, "per-run snapshot")
 echo(port, test_id)

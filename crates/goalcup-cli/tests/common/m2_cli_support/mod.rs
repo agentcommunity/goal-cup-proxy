@@ -3,6 +3,11 @@
 //! one call, a loopback relay in front of the daemon's ingest endpoint, and a TLS upstream
 //! the recording proxy can be told to trust.
 //!
+//! Every connector is a chat-mode one (D57). A rig runs `goalcup start` in this process with no
+//! terminal (`goalcup_cli::set_chat_without_terminal`), so the chat launch path runs with its
+//! output on the test's writer and `/dev/null` for the harness's stdin; [`Rig::start_on_pty`]
+//! runs the binary on a terminal of its own.
+//!
 //! Every wait is bounded; every child the fake harness becomes is ended by its own owner.
 //!
 //! Several test binaries pull this file in (`m2_cli_lifecycle`, and `full` for
@@ -33,7 +38,7 @@ use tokio::io::AsyncWriteExt;
 pub const FAKE_ID: &str = "m2-fake";
 
 /// The per-run-home development connector: the fixture connector
-/// `tests/fixtures/connectors/headless-per-run` (manifest and seed files) under this id, with its
+/// `tests/fixtures/connectors/chat-per-run` (manifest and seed files) under this id, with its
 /// program replaced by `fixtures/m2-fake-per-run.sh`.
 pub const PER_RUN_FAKE_ID: &str = "m2-fake-per-run";
 
@@ -82,34 +87,34 @@ impl Rig {
     }
 
     /// A capture rig whose connector is `m2-fake-per-run` (see [`PER_RUN_FAKE_ID`]): a per-run
-    /// home, a goal flag, and a harness that writes a session file and prints its session
-    /// identity on stderr.
+    /// home, and a harness that writes a session file and exits.
     pub fn per_run() -> Rig {
-        Rig::build(true, Some(2), false, true, true)
+        Rig::build(true, Some(2), true, true)
     }
 
     /// A rig whose connector has no `[capture]` section when `capture` is false.
     pub fn with_capture(capture: bool) -> Rig {
-        Rig::build(capture, None, false, false, true)
+        Rig::build(capture, None, false, true)
     }
 
     /// A capture rig whose connector gives a harness `grace_seconds` between SIGTERM and
     /// SIGKILL (the shipped connector's 10 s is too long for a test that ends a stubborn one).
     pub fn with_grace(grace_seconds: u64) -> Rig {
-        Rig::build(true, Some(grace_seconds), false, false, true)
-    }
-
-    /// A capture rig whose connector reads its identity from stdout (`stdout_json`, bound at
-    /// launch), so the launcher tees the child's stdout and waits for its scope identity.
-    pub fn stdout_identity() -> Rig {
-        Rig::build(true, Some(2), true, false, true)
+        Rig::build(true, Some(grace_seconds), false, true)
     }
 
     /// A capture rig that also has the chat-mode connector [`CHAT_ID`], whose harness is
     /// `fixtures/m2-fake-tui.sh` (on the same `PATH` as the headless fake).
     pub fn chat() -> Rig {
-        let rig = Rig::build(true, Some(2), false, false, true);
+        let rig = Rig::build(true, Some(2), false, true);
         write_chat_connector(&rig.connectors, &rig.root.join("bin"), &rig.out);
+        rig
+    }
+
+    /// [`Rig::chat`] with [`CHAT_ID`] the only connector: `goalcup prep` picks the one there is.
+    pub fn chat_only() -> Rig {
+        let rig = Rig::chat();
+        std::fs::remove_dir_all(rig.connectors.join(FAKE_ID)).unwrap();
         rig
     }
 
@@ -252,19 +257,15 @@ impl Rig {
     /// the ones the default `<cfg>/daemon.toml` names (`<cfg>-artifacts`, `<cfg>-runs`), which
     /// `goalcup start` writes on first use, so [`Rig::trace`] finds what that daemon wrote.
     pub fn run_scoped() -> Rig {
-        Rig::build(true, Some(2), false, false, false)
+        Rig::build(true, Some(2), false, false)
     }
 
-    fn build(
-        capture: bool,
-        grace: Option<u64>,
-        stdout_identity: bool,
-        per_run: bool,
-        start_daemon: bool,
-    ) -> Rig {
+    fn build(capture: bool, grace: Option<u64>, per_run: bool, start_daemon: bool) -> Rig {
         // These tests cut a finish that cannot complete; the shipped budget is three minutes
         // (D56), a test's is ten seconds.
         goalcup_cli::set_finish_budget(std::time::Duration::from_secs(10));
+        // `goalcup start` in this process has no terminal to hand the chat-mode harness.
+        goalcup_cli::set_chat_without_terminal(true);
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         let out = root.join("harness-out");
@@ -288,15 +289,7 @@ impl Rig {
         if per_run {
             write_per_run_connector(&connectors, &capture_connectors, &exe, &out);
         } else {
-            write_connector(
-                &connectors,
-                &capture_connectors,
-                &exe,
-                &out,
-                capture,
-                grace,
-                stdout_identity,
-            );
+            write_connector(&connectors, &capture_connectors, &exe, &out, capture, grace);
         }
         let (artifact_root, workspace_parent) = if start_daemon {
             (root.join("artifacts"), root.join("workspaces"))
@@ -338,28 +331,27 @@ impl Rig {
         HttpDaemonClient::from_config_dir(&self.cfg).unwrap()
     }
 
-    /// A goal file in its own directory, which is where the run directory is created.
-    pub fn goal(&self, text: &str) -> PathBuf {
+    /// The folder `goalcup start` is run from (`<root>/runs`), which is where the run
+    /// directory is created.
+    pub fn run_folder(&self) -> PathBuf {
         let dir = self.root.join("runs");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("goal.txt");
-        std::fs::write(&path, text).unwrap();
-        path
+        dir
     }
 
-    /// `start_with` options for a v5 run of the fake connector, which no build pins, so
-    /// through the one door (`--dev`).
-    pub fn options(&self, goal: &Path, reserve: u64) -> StartOptions {
+    /// `start_with` options for a v5 run of the fake connector from `folder`, which no build
+    /// pins, so through the one door (`--dev`).
+    pub fn options(&self, folder: &Path, reserve: u64) -> StartOptions {
         let mut opts = super::support::start_options(FAKE_ID);
-        opts.goal_file = Some(goal.to_path_buf());
+        opts.run_folder = Some(folder.to_path_buf());
         opts.disk = super::support::disk_of(reserve);
         opts.dev = true;
         opts
     }
 
     /// [`Rig::options`] for the per-run connector ([`Rig::per_run`]).
-    pub fn per_run_options(&self, goal: &Path, reserve: u64) -> StartOptions {
-        let mut opts = self.options(goal, reserve);
+    pub fn per_run_options(&self, folder: &Path, reserve: u64) -> StartOptions {
+        let mut opts = self.options(folder, reserve);
         opts.harness = PER_RUN_FAKE_ID.to_string();
         opts
     }
@@ -598,7 +590,6 @@ fn write_connector(
     out: &Path,
     capture: bool,
     grace: Option<u64>,
-    stdout_identity: bool,
 ) {
     let out_text = out.display().to_string();
     assert!(
@@ -617,28 +608,15 @@ fn write_connector(
     if capture {
         let capture_dir = capture_connectors.join(FAKE_ID);
         std::fs::create_dir_all(&capture_dir).unwrap();
-        let identity = if stdout_identity {
-            r#"source = "stdout_json"
-binding = "at_launch"
-match_field = "type"
-match_value = "thread.started"
-id_field = "thread_id""#
-        } else {
-            "source = \"none\""
-        };
-        let native_pattern = if stdout_identity {
-            "native/*-{id}.jsonl"
-        } else {
-            "native/*.jsonl"
-        };
         let harness = format!(
             r#"schema_version = 1
 id = "{FAKE_ID}"
 
 [capture]
+interactive = true
 auth_hosts = ["auth.openai.com"]
-continuation = "none: the fake harness takes no input after its goal"
-args = ["run", "-C", "{{workspace}}", "--"]
+continuation = "chat: the fake harness takes no input"
+args = ["run", "-C", "{{workspace}}"]
 
 [capture.executable]
 program = "m2-fake-harness"
@@ -654,12 +632,12 @@ env = ["CODEX_CA_CERTIFICATE"]
 mode = "extend"
 
 [capture.identity]
-{identity}
+source = "none"
 
 [[capture.native]]
 name = "fake"
 root = "{{run_home}}"
-pattern = "{native_pattern}"
+pattern = "native/*.jsonl"
 form = "append_only"
 
 [capture.termination]
@@ -677,7 +655,7 @@ protocol_hint = "openai-responses"
     }
 }
 
-/// The fixture connector (`tests/fixtures/connectors/headless-per-run`) rendered into the
+/// The fixture connector (`tests/fixtures/connectors/chat-per-run`) rendered into the
 /// shared schema-1 test root, with its id and program replaced. The fake's report directory is
 /// injected into its private script, not the manifest. A new id is unpinned and admitted only
 /// through `--dev`.
@@ -693,7 +671,7 @@ fn write_per_run_connector(connectors: &Path, capture_connectors: &Path, exe: &P
     )
     .unwrap();
     let dir = super::support::copy_fixture_connector(
-        "headless-per-run",
+        "chat-per-run",
         capture_connectors,
         PER_RUN_FAKE_ID,
         PER_RUN_FAKE_ID,

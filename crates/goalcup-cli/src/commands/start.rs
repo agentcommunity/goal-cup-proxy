@@ -2,10 +2,10 @@
 //! through the recording proxy, and the seal.
 //!
 //! No grant, no arming. The harness is launched through the recording proxy, which runs inside
-//! this process, and the run ends with a seal (see `capture` below for the order). A headless
-//! connector takes `--goal-file`, whose text is the harness's one goal. A chat-mode connector
-//! (D57: `[capture] interactive = true`) takes none: the harness runs in its normal chat mode in
-//! the participant's own terminal and the participant types the prompt.
+//! this process, and the run ends with a seal (see `capture` below for the order). Every
+//! connector is a chat-mode one (D57: `[capture] interactive = true`; headless mode, with its
+//! `--goal-file`, was removed): the harness runs in its normal chat mode in the participant's own
+//! terminal and the participant types the prompt.
 //!
 //! # Chat mode: the terminal is the harness's
 //!
@@ -67,10 +67,7 @@
 use crate::CliError;
 use crate::connector::HarnessConnector;
 use crate::entries::{EntryRecord, remove_entry, write_entry};
-use crate::launch::{
-    CaptureStderr, LaunchPlan, LaunchScope, ScopeMarker, StderrUse, StdoutUse, StreamPlan,
-    gated_handle, spawn_gated, tee_scoped_capture_with_rule, tee_stderr_capture_with_rule,
-};
+use crate::launch::{LaunchPlan, gated_handle, spawn_gated};
 use crate::preflight::Level;
 use crate::proxy::api::{CapturePath, CapturePolicy};
 use crate::proxy::connect::{
@@ -105,13 +102,8 @@ pub struct StartOptions {
     /// door ([`crate::preflight::DEV_DOOR`]), typed by a human and never set by a shipped
     /// code path.
     pub dev: bool,
-    /// `--goal-file`: this file's text is a headless connector's one goal. A headless connector
-    /// refuses `None`, and a chat-mode one (D57) refuses `Some`: its participant types the
-    /// prompt in the harness.
-    pub goal_file: Option<PathBuf>,
-    /// Where a run with no goal file (a chat-mode connector, D57) makes its own folder: the
-    /// directory `goalcup start` was run from, which `main.rs` reads. `None` reads this
-    /// process's current directory. A run with a goal file makes it beside that file.
+    /// Where the run makes its own folder (D57): the directory `goalcup start` was run from,
+    /// which `main.rs` reads. `None` reads this process's current directory.
     pub run_folder: Option<PathBuf>,
     /// The sizes of the run's disk reservation and how often it is watched. The shipped values
     /// ([`DiskPolicy::default`]); only a test build can name others.
@@ -274,7 +266,7 @@ fn started(
 
     let roots = roots.unwrap_or_else(UpstreamRoots::webpki);
     // Every line of the run goes through the one switch that keeps a chat-mode harness's
-    // terminal clear (`crate::host_log`); a headless run's output is unchanged by it.
+    // terminal clear (`crate::host_log`).
     let mut routed = crate::host_log::Routed::new(out);
     capture(
         client,
@@ -282,7 +274,6 @@ fn started(
         cfg,
         env,
         opts,
-        opts.goal_file.as_deref(),
         roots,
         opening,
         &mut routed,
@@ -432,8 +423,7 @@ struct CaptureRun<'a> {
     cfg: &'a Path,
     env: &'a BTreeMap<String, String>,
     opts: &'a StartOptions,
-    /// The folder the run's own folder is made in: the goal file's, or for a chat-mode run the
-    /// one `goalcup start` was run from.
+    /// The folder the run's own folder is made in: the one `goalcup start` was run from.
     beside: &'a Path,
     connector: &'a HarnessConnector,
     profile: &'a CaptureSpec,
@@ -451,10 +441,6 @@ struct CaptureRun<'a> {
 
 /// Everything a capture run decides, and every refusal it makes, before anything is created.
 struct CapturePrep {
-    /// The goal file's bytes; `None` for a chat-mode run, whose participant types the prompt.
-    goal: Option<Vec<u8>>,
-    streams: StreamPlan,
-    scope: LaunchScope,
     /// The harness file this run resolved and hashed; the release refuses it if it changed.
     executable: crate::launch::ResolvedExecutable,
     /// The harness home every run of this connector shares (D39); `None` when each run makes its
@@ -885,8 +871,6 @@ struct Forked<'a> {
     upload: Option<UploadStart>,
     /// This machine's record of the run.
     record: RunRecord,
-    /// The connector is a chat-mode one: `goalcup continue` can restart a run of it.
-    chat_mode: bool,
     /// The run's one disk reservation, held from the entry's creation to the run's end, until
     /// the watch tick takes it over when the harness is released.
     reserve: Option<RunReserve>,
@@ -908,7 +892,7 @@ struct Forked<'a> {
     first_screen: Option<String>,
     /// A first launch, or a continue that picks up the last session or starts a new one.
     opens: crate::participant::Opens,
-    /// A chat-mode run's ids and folders, held back from the launch block and written to its
+    /// The run's ids and folders, held back from the launch block and written to its
     /// `host.log` once it is open.
     details: Vec<String>,
 }
@@ -998,10 +982,9 @@ impl Forked<'_> {
     }
 
     /// Whether the run's reserve file outlives a launch that failed: a segment of a server run
-    /// with a chat-mode connector that is not over goes on to be continued, and its one
-    /// reservation is the run's, not the segment's. A new run that is given back to the server,
-    /// a headless run (it has no `continue`), and a run that is over take their reserve with
-    /// them.
+    /// that is not over goes on to be continued, and its one reservation is the run's, not the
+    /// segment's. A new run that is given back to the server, and a run that is over, take their
+    /// reserve with them.
     fn keeps_reserve(&self) -> bool {
         // Over by the server's count, not this machine's date (WP11).
         let left = self
@@ -1011,7 +994,6 @@ impl Forked<'_> {
             .map(|count| count.time_left());
         self.give_back.is_none()
             && self.record.server_url.is_some()
-            && self.chat_mode
             && !crate::run::time_left::time_up(
                 left.as_ref(),
                 self.record.deadline_at.as_deref(),
@@ -1025,7 +1007,6 @@ impl Forked<'_> {
         mut self,
         child: Child,
         handed: &ProcessHandle,
-        tees: &Tees,
         out: &mut dyn std::io::Write,
     ) -> CliError {
         let keeps_reserve = self.keeps_reserve();
@@ -1061,11 +1042,9 @@ impl Forked<'_> {
                 termination_bound(0),
                 false,
                 None,
-                None,
                 out,
             );
         }
-        tees.finish(deadline, out);
         // Worded from what was observed, never more: a native child that could not be checked is
         // not "nothing is running".
         CliError::Refused(end.refusal(&info.entry_id))
@@ -1096,54 +1075,25 @@ fn release_and_say(reserve: RunReserve) {
 /// What the gate holds for the phases after the fork.
 struct Gate {
     plan: LaunchPlan,
-    /// A chat-mode launch (D57): the harness takes the terminal at its release.
-    chat: bool,
     /// What the harness reported for its `version_args`, or `unreported` (D53).
     harness_version: String,
     goal_stream: goalcup_protocol::capture::StreamKey,
     gated: crate::launch::GatedSpawn,
-    scope_deadline: std::time::Instant,
 }
 
-/// The tees on a released child's streams.
-struct Tees {
-    /// A `stdout_json` child's stdout tee, which also reads the thread id.
-    stdout: Option<crate::launch::CaptureStdout>,
-    /// A `stderr_line` child's stderr tee, which reads the session marker.
-    marked: Option<CaptureStderr>,
-    /// Only a stderr-line identity is sent with the finish.
-    late_scope: bool,
-}
-
-impl Tees {
-    /// The receiver of the stdout JSON identity, from the stdout tee.
-    fn scope(&self) -> Option<&std::sync::mpsc::Receiver<Option<String>>> {
-        self.stdout.as_ref().map(|tee| &tee.scope)
-    }
-
-    /// Let the tees finish while the entry seals, within what remains of the one finish deadline.
-    fn finish(&self, deadline: std::time::Instant, out: &mut dyn std::io::Write) {
-        report_tee_finish(self.stdout.as_ref().map(|tee| tee.finish(deadline)), out);
-        report_tee_finish(self.marked.as_ref().map(|tee| tee.finish(deadline)), out);
-    }
-}
-
-/// A harness registered, released and tee'd.
+/// A harness registered and released.
 struct Released<'a> {
     forked: Forked<'a>,
     handed: ProcessHandle,
     child: Child,
     spawned_at: goalcup_protocol::capture::CaptureTime,
-    tees: Tees,
     goal_stream: goalcup_protocol::capture::StreamKey,
-    scope_deadline: std::time::Instant,
     harness_version: String,
 }
 
 /// A harness that has exited.
 struct Exited<'a> {
     forked: Forked<'a>,
-    tees: Tees,
     status: Result<ExitStatus, CliError>,
     /// The finish a deadline made while the harness was still running, if one did.
     finished_early: Option<Result<CaptureFinishReport, CliError>>,
@@ -1212,21 +1162,16 @@ fn capture(
     cfg: &Path,
     env: &BTreeMap<String, String>,
     opts: &StartOptions,
-    goal_file: Option<&Path>,
     roots: UpstreamRoots,
     opening: Opening,
     out: &mut dyn std::io::Write,
 ) -> Result<StartOutcome, CliError> {
-    let goal = goal_file.map(read_goal).transpose()?;
-    let beside = match goal_file {
-        Some(goal_file) => beside_goal(goal_file),
-        None => match &opts.run_folder {
-            Some(folder) => folder.clone(),
-            None => std::env::current_dir().map_err(|source| CliError::Io {
-                path: "the current directory".to_string(),
-                source,
-            })?,
-        },
+    let beside = match &opts.run_folder {
+        Some(folder) => folder.clone(),
+        None => std::env::current_dir().map_err(|source| CliError::Io {
+            path: "the current directory".to_string(),
+            source,
+        })?,
     };
     // Under WSL: WSL1 cannot run this, and WSL2 cannot keep a run on a Windows drive. Judged
     // before anything is created or removed, over every folder the run writes to.
@@ -1263,13 +1208,6 @@ fn capture(
             (Some(continuing), lock)
         }
     };
-    // A chat-mode connector takes no goal file and a headless one needs one: refused before
-    // anything else is asked or made. A continued run has no goal file at all: only a chat-mode
-    // harness can be continued.
-    match &continuing {
-        None => goal_file_fits(&c, profile.interactive, goal_file.is_some())?,
-        Some(_) => continue_fits(c.display_name(), profile.interactive)?,
-    }
     // The model service the harness's own config names (D62): read once for this segment,
     // so a continue after the participant switched service records the new one.
     let model_host = crate::model_host::for_run(cfg, &c)?;
@@ -1295,7 +1233,7 @@ fn capture(
         over: &over,
         continuing: continuing.as_deref(),
     };
-    let mut prep = prepare(&cx, goal, out)?;
+    let mut prep = prepare(&cx, out)?;
     prep.shared_home_lock = held_home_lock;
     // Every refusal that needs no approval has been made: now the participant approves this
     // run in the browser. Nothing is created until they have. A continued run is approved
@@ -1343,8 +1281,8 @@ fn capture(
             Ok(lock) => (Some(lock), Ok(())),
             Err(why) => (None, Err(why)),
         };
-    let released = register_and_release(forked, gate, &mut prep, out)?;
-    let exited = run_harness(&cx, prep.scope, released, sleep_lock, out)?;
+    let released = register_and_release(forked, gate, out)?;
+    let exited = run_harness(&cx, released, sleep_lock, out)?;
     let finished = finish_run(exited, std::mem::take(&mut draining.drains), out);
     drop(awake);
     finished
@@ -1398,9 +1336,8 @@ impl Drop for DrainsOnDrop<'_> {
 }
 
 /// `goalcup continue`'s refusals that need no server and change nothing, made before the
-/// shared harness home is locked and before any earlier segment is sealed or sent: the connector
-/// must be a chat-mode one, this must be the foreground of a terminal, and the harness, its pin
-/// and its executable must be usable. [`prepare`] asks them again of the segment it launches.
+/// shared harness home is locked and before any earlier segment is sealed or sent: this must be
+/// the foreground of a terminal, and the harness, its pin and its executable must be usable. [`prepare`] asks them again of the segment it launches.
 pub(crate) fn continue_preflight(
     cfg: &Path,
     connector: &HarnessConnector,
@@ -1408,7 +1345,6 @@ pub(crate) fn continue_preflight(
     env: &BTreeMap<String, String>,
 ) -> Result<(), CliError> {
     let profile = &connector.loaded.manifest.capture;
-    continue_fits(connector.display_name(), profile.interactive)?;
     holds_the_terminal(connector.display_name(), "Nothing was changed.")?;
     let pin = crate::preflight::harness_pin_gate(connector, dev);
     if pin.level == Level::Fail {
@@ -1423,47 +1359,6 @@ pub(crate) fn continue_preflight(
     Ok(())
 }
 
-/// A continued run needs a chat-mode harness: a headless one was given its one goal and has no
-/// session to pick up.
-fn continue_fits(name: &str, interactive: bool) -> Result<(), CliError> {
-    if interactive {
-        return Ok(());
-    }
-    Err(CliError::Refused(
-        crate::participant::cannot_continue_headless(name),
-    ))
-}
-
-/// [`goal_file_fits`] for the connector `opts` names, loaded from `connectors`: what `main.rs`
-/// asks before it starts a daemon. `start_with` asks it again of the connector it loads.
-pub fn goal_file_fits_connector(connectors: &Path, opts: &StartOptions) -> Result<(), CliError> {
-    let c = crate::connector::load_harness(connectors, &opts.harness, opts.dev)?;
-    goal_file_fits(
-        &c,
-        c.loaded.manifest.capture.interactive,
-        opts.goal_file.is_some(),
-    )
-}
-
-/// A chat-mode connector (D57) with a goal file, or a headless one without, refused in one
-/// sentence that says what to type instead. Nothing is created before it.
-fn goal_file_fits(
-    c: &HarnessConnector,
-    interactive: bool,
-    has_goal_file: bool,
-) -> Result<(), CliError> {
-    let (name, id) = (c.display_name(), c.loaded.manifest.id.as_str());
-    match (interactive, has_goal_file) {
-        (true, true) => Err(CliError::Refused(crate::participant::takes_no_goal_file(
-            name, id,
-        ))),
-        (false, false) => Err(CliError::Refused(crate::participant::needs_goal_file(
-            name, id,
-        ))),
-        _ => Ok(()),
-    }
-}
-
 /// A chat-mode harness reads and draws on this terminal: `goalcup start`'s input must be a
 /// terminal it holds in the foreground (or the harness's first read stops it with `SIGTTIN` and
 /// the run records a frozen harness), and its output must be a terminal too (a harness drawing
@@ -1471,7 +1366,9 @@ fn goal_file_fits(
 /// behind.
 fn holds_the_terminal(name: &str, then: &str) -> Result<(), CliError> {
     use goalcup_platform::terminal::{is_foreground, is_terminal};
-    if is_foreground(libc::STDIN_FILENO) && is_terminal(libc::STDOUT_FILENO) {
+    if crate::chat_without_terminal()
+        || is_foreground(libc::STDIN_FILENO) && is_terminal(libc::STDOUT_FILENO)
+    {
         return Ok(());
     }
     Err(CliError::Refused(crate::participant::needs_terminal(
@@ -1488,17 +1385,7 @@ pub const CHAT_MODE_GOAL: &str = "chat mode (D57): the harness was given no goal
      harness's session files.";
 
 /// Phase one: every refusal that comes before anything is created.
-fn prepare(
-    cx: &CaptureRun<'_>,
-    goal: Option<Vec<u8>>,
-    out: &mut dyn std::io::Write,
-) -> Result<CapturePrep, CliError> {
-    // The launch plan checks again at its own boundary, but that boundary follows every
-    // capture allocation. Reject unusable goal bytes here so no shared home, run directory,
-    // seeded home, daemon entry or proxy can precede this preflight decision.
-    if let Some(goal) = &goal {
-        crate::launch::checked_goal(goal)?;
-    }
+fn prepare(cx: &CaptureRun<'_>, out: &mut dyn std::io::Write) -> Result<CapturePrep, CliError> {
     // The disk is judged before the server is asked for a run or anything is created. A
     // continued run keeps its reserve file, and `RunReserve::take` judges what is missing of it.
     if cx.continuing.is_none() {
@@ -1525,13 +1412,7 @@ fn prepare(
         Level::Warn => say(out, pin.render().trim_end())?,
         _ => {}
     }
-    // What is done with the child's output, and where its native scope comes from, is decided
-    // here once.
-    let streams = StreamPlan::for_spec(profile)?;
-    let scope = LaunchScope::for_spec(profile)?;
-    if profile.interactive {
-        holds_the_terminal(c.display_name(), "Nothing was created.")?;
-    }
+    holds_the_terminal(c.display_name(), "Nothing was created.")?;
     let executable = crate::launch::capture_executable(c, profile, env)?;
     // The provider hosts, and the model service's own port, answer a TCP connect before
     // anything is created (the recording proxy module's preflight; it names a firewall holding this
@@ -1549,8 +1430,8 @@ fn prepare(
                 )
             })?;
     }
-    // A per-run home is made inside the run directory below. A run directory beside a goal file
-    // inside a Git work tree is refused before anything is created: it would hold what the
+    // A per-run home is made inside the run directory below. A run directory inside a Git work
+    // tree is refused before anything is created: it would hold what the
     // harness wrote, its own login included.
     let per_run = profile.home.config_home == ConfigHome::PerRun;
     if per_run {
@@ -1558,9 +1439,6 @@ fn prepare(
         crate::per_run_home::refuse_synced_folder_under(beside, env.get("HOME").map(Path::new))?;
     }
     Ok(CapturePrep {
-        goal,
-        streams,
-        scope,
         executable,
         shared_home: None,
         shared_run_home: None,
@@ -1831,8 +1709,8 @@ fn create_and_gate<'a>(
     };
     // The run's one reservation, taken here and released when the launch fails or the run ends.
     let mut reserve = None::<RunReserve>;
-    // The run's ids and folders: printed here for a headless run, and for a chat-mode run kept
-    // for its `host.log` and `goalcup status`, so the launch block holds only what to do.
+    // The run's ids and folders, kept for its `host.log` and `goalcup status`, so the launch
+    // block holds only what to do.
     let mut details: Vec<String> = session_note.into_iter().collect();
     // Up to the spawn, a failure unmakes everything above.
     let launched = write_entry(cfg, &template).and_then(|()| {
@@ -1859,11 +1737,6 @@ fn create_and_gate<'a>(
             details.push(model_host.detail());
         }
         details.push(format!("run directory: {}", run.dir.display()));
-        if !profile.interactive {
-            for line in details.drain(..) {
-                say(out, &line)?;
-            }
-        }
         raise_open_file_limit(out)?;
         let proxied = Proxied::start(&info, profile, cx.model_host, &run, roots, credential)?;
         // A shared CA variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) gets the system's roots
@@ -1910,7 +1783,6 @@ fn create_and_gate<'a>(
         }
         let mut vars = goalcup_protocol::template::TemplateVars::new();
         vars.set("workspace", run.workspace.display().to_string());
-        vars.set("session_id", session_id.clone());
         let build_launch = if opens == crate::participant::Opens::LastSession {
             crate::launch::build_resumed_launch
         } else {
@@ -1921,7 +1793,6 @@ fn create_and_gate<'a>(
             &vars,
             &run.workspace,
             &crate::launch::CaptureLaunch {
-                goal: prep.goal.as_deref(),
                 executable: &prep.executable,
                 run_home: &run.home,
                 config_home: &config_home,
@@ -1936,27 +1807,20 @@ fn create_and_gate<'a>(
         // asked again; any other failure aborts the launch, because an answer that did not
         // arrive may have followed an accepted goal and a second would be a second
         // instruction.
-        // A chat-mode run's harness is given no goal, and records the fixed sentence that says so.
+        // The harness is given no goal, and the run records the fixed sentence that says so.
         let goal_request = CaptureGoalRequest {
-            bytes: prep
-                .goal
-                .clone()
-                .unwrap_or_else(|| CHAT_MODE_GOAL.as_bytes().to_vec()),
+            bytes: CHAT_MODE_GOAL.as_bytes().to_vec(),
         };
         let goal_stream = retry_busy(|| client.record_capture_goal(&info.entry_id, &goal_request))?;
         if crate::arming::interrupted() {
             return Err(interrupted_refusal());
         }
-        // A `stdout_json` launch waits this long for its identity event (`thread.started` for
-        // Codex) before recording the launch without one; the connector may set it.
-        let scope_deadline = std::time::Instant::now() + profile.identity.stdout_wait();
         // The only way a capture child is spawned (D40): forked and parked before `exec`,
-        // and released only once its registration is durable. Its pipes are the one
-        // manifest-derived `StreamPlan` decision.
-        let gated = spawn_gated(&plan, prep.streams.pipes(), GATE_READY_WITHIN)?;
-        Ok((proxied, plan, goal_stream, gated, scope_deadline, bound))
+        // and released only once its registration is durable.
+        let gated = spawn_gated(&plan, GATE_READY_WITHIN)?;
+        Ok((proxied, plan, goal_stream, gated, bound))
     });
-    let (proxied, plan, goal_stream, gated, scope_deadline, bound) = match launched {
+    let (proxied, plan, goal_stream, gated, bound) = match launched {
         Ok(launched) => launched,
         Err(error) => {
             if let Some(held) = reserve.take() {
@@ -2019,7 +1883,6 @@ fn create_and_gate<'a>(
             .as_ref()
             .and_then(|o| o.give_back.borrow_mut().take()),
         record,
-        chat_mode: profile.interactive,
         reserve,
         watching: None,
         chat: None,
@@ -2031,33 +1894,28 @@ fn create_and_gate<'a>(
         details,
     };
     let gate = Gate {
-        chat: profile.interactive,
         plan,
         harness_version,
         goal_stream,
         gated,
-        scope_deadline,
     };
     Ok((forked, gate))
 }
 
-/// Phase three, from the fork: take the parked child's handle, register it durably, only then
-/// release it, and start the tees on its streams. Every way out is [`Forked::unlaunched`]: the
-/// child never ran, or it is registered and the seal answers for it.
+/// Phase three, from the fork: take the parked child's handle, register it durably, and only
+/// then release it. Every way out is [`Forked::unlaunched`]: the child never ran, or it is
+/// registered and the seal answers for it.
 fn register_and_release<'a>(
     mut forked: Forked<'a>,
     gate: Gate,
-    prep: &mut CapturePrep,
     out: &mut dyn std::io::Write,
 ) -> Result<Released<'a>, CliError> {
     pause_at("capture-gate-forked");
     let Gate {
         plan,
-        chat,
         harness_version,
         goal_stream,
         gated,
-        scope_deadline,
     } = gate;
     let handed = match gated_handle(&plan, &gated, &crate::launch::launched_at_now()) {
         Ok(handed) => handed,
@@ -2086,10 +1944,10 @@ fn register_and_release<'a>(
         gated.abort();
         return Err(forked.unlaunched(interrupted_before_launch(), out));
     }
-    // A chat-mode harness takes the terminal at its release: the launch line is the last thing
-    // this command prints there, and from here the terminal's signals are absorbed and every
-    // message goes to `host.log` until the harness exits.
-    if chat {
+    // The harness takes the terminal at its release: the launch line is the last thing this
+    // command prints there, and from here the terminal's signals are absorbed and every message
+    // goes to `host.log` until the harness exits.
+    {
         // Moved to the background, or its terminal gone, while the run was approved and cloned:
         // the harness is never released onto a terminal it cannot read.
         if let Err(e) = holds_the_terminal(
@@ -2137,22 +1995,29 @@ fn register_and_release<'a>(
                     source,
                 })
             });
-        match ChatTerminal::take(&run_dir) {
-            Ok(terminal) => {
-                forked.chat = Some(terminal);
-                // The run's ids and folders, kept out of the launch block, go to its log.
-                for line in forked.details.drain(..) {
-                    crate::host_log::say_raw(&line);
-                }
-                panic_while_quiet_for_test();
+        // A test build with no terminal takes none, and says here what the log would hold.
+        if crate::chat_without_terminal() {
+            for line in forked.details.drain(..) {
+                let _ = say(out, &line);
             }
-            Err(e) => {
-                gated.abort();
-                return Err(forked.unlaunched(e, out));
+        } else {
+            match ChatTerminal::take(&run_dir) {
+                Ok(terminal) => {
+                    forked.chat = Some(terminal);
+                    // The run's ids and folders, kept out of the launch block, go to its log.
+                    for line in forked.details.drain(..) {
+                        crate::host_log::say_raw(&line);
+                    }
+                    panic_while_quiet_for_test();
+                }
+                Err(e) => {
+                    gated.abort();
+                    return Err(forked.unlaunched(e, out));
+                }
             }
         }
     }
-    let mut spawned = match gated.release() {
+    let spawned = match gated.release() {
         Ok(spawned) => spawned,
         // No harness ran, so no `Launch` is written, and the entry is sealed; the terminal is
         // this command's again, to say so.
@@ -2168,31 +2033,6 @@ fn register_and_release<'a>(
     // stamps its frames with under its own ID.
     let mut spawned_at = crate::proxy::metadata::capture_time();
     spawned_at.clock_id = forked.info.producer_id.clone();
-    let stdout_rule = match prep.streams.stdout.clone() {
-        StdoutUse::IdentityJson(rule) => Some(rule),
-        StdoutUse::Inherit => None,
-    };
-    // A `stderr_line` child's stderr is read for its session marker (the late scope of the
-    // finish). A tee that cannot start ends the child it could not forward; it is registered,
-    // so the seal answers for it.
-    let marker_rule = match prep.streams.stderr.clone() {
-        StderrUse::IdentityLine(rule) => Some(rule),
-        StderrUse::Inherit => None,
-    };
-    let stdout = match stdout_rule {
-        Some(rule) => match tee_scoped_capture_with_rule(&mut spawned, rule) {
-            Ok(stdout) => Some(stdout),
-            Err(e) => return Err(forked.unlaunched(e, out)),
-        },
-        None => None,
-    };
-    let marked = match marker_rule {
-        Some(rule) => match tee_stderr_capture_with_rule(&mut spawned, rule) {
-            Ok(tee) => Some(tee),
-            Err(e) => return Err(forked.unlaunched(e, out)),
-        },
-        None => None,
-    };
     let child = spawned.child;
     if let Err(e) = write_entry(forked.cfg, &forked.record(Some(handed.pid))) {
         let _ = say(
@@ -2205,13 +2045,7 @@ fn register_and_release<'a>(
         handed,
         child,
         spawned_at,
-        tees: Tees {
-            stdout,
-            marked,
-            late_scope: prep.scope == LaunchScope::AtFinish,
-        },
         goal_stream,
-        scope_deadline,
         harness_version,
     })
 }
@@ -2221,7 +2055,6 @@ fn register_and_release<'a>(
 /// incomplete and never stops the run.
 fn run_harness<'a>(
     cx: &CaptureRun<'_>,
-    scope: LaunchScope,
     released: Released<'a>,
     sleep_lock: Result<(), String>,
     out: &mut dyn std::io::Write,
@@ -2231,21 +2064,19 @@ fn run_harness<'a>(
         handed,
         mut child,
         spawned_at,
-        tees,
         goal_stream,
-        scope_deadline,
         harness_version,
     } = released;
     // Linux: what the harness leaves behind is this process's own child (a subreaper, `main.rs`),
     // and is swept between the root's exit and the seal. Armed first, while the root is certainly
-    // unreaped: the `stdout_json` scope wait below reaps a root that exits before its scope line.
+    // unreaped.
     let sweep = crate::subreaper::Sweep::for_root(handed.pid);
     let (client, entry_id) = (forked.client, forked.info.entry_id.clone());
     // A seal that raced in between the registration and the release cannot have ended a
     // harness that was still parked, so one that is sealed now is a harness running on a
     // sealed entry: this command ends the child it just released (D40).
     match entry_is_sealed(client, &forked.info) {
-        Ok(true) => return Err(forked.sealed_launch(child, &handed, &tees, out)),
+        Ok(true) => return Err(forked.sealed_launch(child, &handed, out)),
         Ok(false) => {}
         Err(e) => {
             let _ = say(
@@ -2257,40 +2088,26 @@ fn run_harness<'a>(
         }
     }
     pause_at("capture-gate-released");
-    let native_scope = match scope {
-        LaunchScope::Preassigned => Some(forked.template.session_id.clone()),
-        LaunchScope::FromStdout => tees.scope().and_then(|receiver| {
-            crate::launch::wait_native_scope(&mut child, receiver, scope_deadline)
-        }),
-        // A `stderr_line` scope is read after the recording proxy stops, and sent with the seal.
-        LaunchScope::AtFinish | LaunchScope::None => None,
-    };
+    // Chat mode names no session (identity `none`): the native store is read without a scope.
     let launch = CaptureLaunchRequest {
         goal_stream,
         spawned_at,
         harness_version,
         continuation: cx.profile.continuation.clone(),
-        native_scope,
+        native_scope: None,
     };
     // A launch the daemon did not record leaves the trace incomplete; it never stops the run,
     // unless the entry is sealed: then the harness has no entry to run on (D40). A `Conflict`
     // on an open entry is a capture-side fault, and it never ends the child.
     if let Err(e) = retry_busy(|| client.record_capture_launch(&entry_id, &launch)) {
         if matches!(entry_is_sealed(client, &forked.info), Ok(true)) {
-            return Err(forked.sealed_launch(child, &handed, &tees, out));
+            return Err(forked.sealed_launch(child, &handed, out));
         }
         let _ = say(
             out,
             &format!(
                 "  (the launch could not be recorded, so the trace will read incomplete: {e})"
             ),
-        );
-    }
-    // A chat-mode run said its launch line before the release, and is quiet now.
-    if forked.chat.is_none() {
-        let _ = say(
-            out,
-            "Recording. The harness runs headless; this command ends with it.",
         );
     }
     // Launched: the run on the server is this participant's now, and is not given back.
@@ -2314,8 +2131,8 @@ fn run_harness<'a>(
     // transition of the agent; and what the threads of the run tell each other.
     let mut launched = crate::run::RunState::launched(&entry_id, sleep_lock);
     // What `goalcup status` may advise of `goalcup continue` for this run: only a run on a server
-    // with a chat-mode connector can be restarted by it.
-    launched.continuable = forked.record.server_url.is_some() && forked.chat_mode;
+    // can be restarted by it.
+    launched.continuable = forked.record.server_url.is_some();
     // What is left of the run, by the server's answer: the uploader keeps it from here (WP11).
     launched.time_left = forked
         .upload
@@ -2415,9 +2232,9 @@ fn run_harness<'a>(
             pause: Some(pause.clone()),
         })
     });
-    // A chat-mode harness that suspends itself is continued at once: suspension is not supported
-    // during a run, and a stopped harness would hold the participant's terminal frozen. The one
-    // stop that is kept is goalcup's own pause on a nearly full disk (D65).
+    // A harness that suspends itself is continued at once: suspension is not supported during a
+    // run, and a stopped harness would hold the participant's terminal frozen. The one stop that
+    // is kept is goalcup's own pause on a nearly full disk (D65).
     let mut continued = |signal: i32| {
         if pause.is_paused() {
             return false;
@@ -2428,11 +2245,7 @@ fn run_harness<'a>(
         ));
         true
     };
-    let on_stopped: Option<&mut dyn FnMut(i32) -> bool> = if forked.chat.is_some() {
-        Some(&mut continued)
-    } else {
-        None
-    };
+    let on_stopped: Option<&mut dyn FnMut(i32) -> bool> = Some(&mut continued);
     let status = crate::upload::wait_stopping(
         &mut child,
         stop_rx,
@@ -2475,7 +2288,6 @@ fn run_harness<'a>(
                 wrap_up,
                 termination_bound(grace),
                 true,
-                None,
                 Some(cfg),
                 &mut said,
             );
@@ -2541,7 +2353,6 @@ fn run_harness<'a>(
     }
     Ok(Exited {
         forked,
-        tees,
         status,
         finished_early,
         uploading,
@@ -2551,8 +2362,8 @@ fn run_harness<'a>(
     })
 }
 
-/// Phase five: stop the recording proxy and seal within the one finish budget, let the tees drain,
-/// and say what became of the run.
+/// Phase five: stop the recording proxy and seal within the one finish budget, and say what became
+/// of the run.
 fn finish_run(
     exited: Exited<'_>,
     draining: Vec<crate::upload::uploader::Draining>,
@@ -2561,7 +2372,6 @@ fn finish_run(
     pause_at("capture-finish-started");
     let Exited {
         forked,
-        tees,
         status,
         finished_early,
         uploading,
@@ -2578,13 +2388,10 @@ fn finish_run(
         chat,
         record,
         home_lock,
-        chat_mode,
         harness_name,
         ..
     } = forked;
-    // Only a chat-mode run says that it can be continued: only its harness can be.
-    let continuable = chat_mode;
-    // A chat-mode run's hold on the terminal (its hangup absorbed, its log open) lasts to the end
+    // A run's hold on the terminal (its hangup absorbed, its log open) lasts to the end
     // of this function: the seal and the upload's wrap-up below must outlive a closed window.
     let _chat = chat;
     let deadline = std::time::Instant::now() + crate::finish_budget();
@@ -2598,11 +2405,6 @@ fn finish_run(
             wrap_up,
             termination_bound(0),
             false,
-            if tees.late_scope {
-                tees.marked.as_ref()
-            } else {
-                None
-            },
             Some(cfg),
             out,
         ),
@@ -2620,9 +2422,9 @@ fn finish_run(
     let ended_by_stop = snapshot.stopped_for_its_end();
     let on_server = record.server_url.is_some();
     let over = !on_server || crate::run::is_over(&record, Some(&snapshot), crate::run::now_unix());
-    // `goalcup continue` can restart the run: a run on a server with a chat-mode connector that
-    // is not over. Only such a run keeps its reserve past this host.
-    let run_goes_on = crate::run::can_continue(cfg, &record, continuable, over);
+    // `goalcup continue` can restart the run: a run on a server that is not over. Only such a
+    // run keeps its reserve past this host.
+    let run_goes_on = crate::run::can_continue(cfg, &record, true, over);
     // The entry is sealed and the run goes on: the reserve is handed over before anything else
     // is let go. This host's watch stops managing it and its lock is dropped, the file kept, so
     // that a `goalcup continue` takes the same file at once instead of finding it held for as
@@ -2635,7 +2437,6 @@ fn finish_run(
     // The shared harness home is free for the next segment or run, and the upload that follows
     // needs none of it.
     drop(home_lock);
-    tees.finish(deadline, out);
     // How the harness ended is the participant's to see: the exit code of a run that was recorded
     // is not this command's own (`main.rs`), so it is said here.
     if let Ok(status) = &status {
@@ -2832,7 +2633,6 @@ fn finish_unlaunched(
         termination_bound(0),
         false,
         None,
-        None,
         out,
     );
 }
@@ -2865,73 +2665,14 @@ fn verified_status(
     Ok(document)
 }
 
-/// Say what became of the tees' last bytes: nothing when they were all forwarded, and what is
-/// known when they were not. `result` is what a tee's finish returned within the one finish
-/// deadline (`None` when the run has no such tee). Expiry is the finish budget as a whole, not
-/// the drain share inside it, and buffered output delivery is then unconfirmed.
-fn report_tee_finish(result: Option<std::io::Result<bool>>, out: &mut dyn std::io::Write) {
-    match result {
-        None | Some(Ok(true)) => {}
-        Some(Ok(false)) => {
-            let _ = say(
-                out,
-                &format!(
-                    "Final harness output did not finish within the {}-second finish budget; its \
-                     tail may be missing.",
-                    crate::finish_budget().as_secs()
-                ),
-            );
-        }
-        Some(Err(error)) => {
-            let _ = say(
-                out,
-                &format!(
-                    "Final harness output could not be drained: {error}; its tail may be missing."
-                ),
-            );
-        }
-    }
-}
-
-/// The goal file's bytes, read once, with the bound applied while reading. What the goal
-/// may hold is the launch builder's and the daemon's to judge; no refusal here quotes it.
-fn read_goal(path: &Path) -> Result<Vec<u8>, CliError> {
-    use std::io::Read;
-    let io = |source| CliError::Io {
-        path: path.display().to_string(),
-        source,
-    };
-    let limit = goalcup_protocol::capture::MAX_GOAL_BYTES;
-    let mut goal = Vec::new();
-    std::fs::File::open(path)
-        .map_err(io)?
-        .take(limit as u64 + 1)
-        .read_to_end(&mut goal)
-        .map_err(io)?;
-    if goal.len() > limit {
-        return Err(CliError::Refused(format!(
-            "the goal in {} is longer than {limit} bytes. Nothing was created.",
-            path.display()
-        )));
-    }
-    Ok(goal)
-}
-
-/// The directory a run's own directory is made in: the goal file's.
-fn beside_goal(goal_file: &Path) -> PathBuf {
-    goal_file
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."))
-        .to_path_buf()
-}
-
-/// This run's own directory, made beside the goal file: `workspace/` (the daemon makes it),
+/// This run's own directory, made in the folder `goalcup start` is run from: `workspace/` (the
+/// daemon makes it),
 /// `home/` (the harness's `HOME`) and `ca/` (the recording proxy's CA certificate).
 ///
 /// A run on a server has its workspace elsewhere: a clone of the participant's repository in
 /// their work folder, `<work_root>/goalcup-<16 hex digits>`, **a random name of its own**, never
-/// this directory's (the goal file's folder may be the work folder, and the two must not meet).
+/// this directory's (the folder it is run from may be the work folder, and the two must not
+/// meet).
 /// It is named before the server has issued the run id (the server and the daemon are told the
 /// path), so the id cannot be in it.
 pub(crate) struct RunDir {
@@ -3343,13 +3084,8 @@ const RUNNING_HARNESS_SINK_SHUTDOWN: Duration = Duration::from_secs(1);
 /// taken when the harness has exited and immediately before the recording proxy's stop: nothing
 /// runs between the two. The recording proxy's stop gets its drain share (the budget less
 /// `FINISH_COMMIT_RESERVE` and `GIT_READ_FLOOR`), the daemon's seal its own request's remainder,
-/// and the sender's drain and the scoped stdout what is left of the same deadline (CONTRACTS.md,
-/// "C6 local finish budget (H-10 4a)").
-///
-/// A `stderr_line` child's session identity is read between the two: after the recording proxy
-/// has stopped and before the seal is sent, by [`crate::capture_tee::marker_wait_end`]'s
-/// deadline, which leaves the daemon's native read its share of the drain. The identity, if
-/// exactly one distinct one was printed, rides on the seal request; any other answer sends none.
+/// and the sender's drain what is left of the same deadline (CONTRACTS.md, "C6 local finish
+/// budget (H-10 4a)").
 ///
 /// `harness_running` is true when the run is stopped while the harness still runs (its
 /// deadline, the server's stop, a full disk, a replacement): the recording proxy's stop then waits
@@ -3365,7 +3101,6 @@ fn finish(
     wrap_up: WrapUp,
     termination: Duration,
     harness_running: bool,
-    marked: Option<&CaptureStderr>,
     reconnect: Option<&Path>,
     out: &mut dyn std::io::Write,
 ) -> Result<CaptureFinishReport, CliError> {
@@ -3407,13 +3142,6 @@ fn finish(
         unterminated: stopped.unterminated as u64,
         sink_refusals: h.sink_refusals,
     };
-    // The marker wait is after the recording proxy's stop and ends before the drain share does.
-    let native_scope = marked.and_then(|tee| {
-        match tee.marker_until(crate::capture_tee::marker_wait_end(deadline)) {
-            ScopeMarker::One(id) => Some(id),
-            ScopeMarker::Absent | ScopeMarker::Conflicting => None,
-        }
-    });
     // After the harness exited, the launcher's own root is reaped and the daemon's termination
     // answers `AlreadyStopped` after one `ps`: `termination_bound(0)`. At a deadline the harness
     // is still running, and the bound gives it its grace.
@@ -3421,7 +3149,6 @@ fn finish(
         client,
         entry_id,
         Some(counters),
-        native_scope,
         deadline,
         wrap_up,
         termination,
@@ -3539,8 +3266,8 @@ fn refuse_used_repository(
 }
 
 /// What a start that fails after the approval says once it has removed what it made (said once,
-/// by `capture`, for every failure of that phase): the run directory beside the goal file, the
-/// clone, and the run's credential directory. It does not
+/// by `capture`, for every failure of that phase): the run directory, the clone, and the run's
+/// credential directory. It does not
 /// remove the work folder itself (the participant's folder, left in place once created) or the
 /// shared harness-home folder of a connector under `<cfg>/capture-homes/` (one per connector,
 /// persistent, and reused by every run of it).
@@ -3603,8 +3330,8 @@ pub(crate) fn refuse_wsl(
     host.refuse(&folders, untouched)
 }
 
-/// The run directory is made beside the goal file (for a chat-mode run, in the folder `goalcup
-/// start` is run from) and holds the harness's `HOME`; the clone is made in the work folder,
+/// The run directory is made in the folder `goalcup start` is run from and holds the harness's
+/// `HOME`; the clone is made in the work folder,
 /// under a name of its own. They cannot be the same folder, but a folder *below* the work folder
 /// would put the run directory (and so the harness's home) inside some other clone, or inside an
 /// older run's folder. So: `beside` may be the work folder itself, or anywhere outside it, and is
@@ -4028,7 +3755,7 @@ impl Uploading {
 
     /// The daemon made the entry under the server's id: fetch the start receipt over its
     /// baseline and keep it. The line that says what the server stamped is returned, for the
-    /// caller to place: on the terminal for a headless run, in `host.log` for a chat-mode one.
+    /// caller to place: in `host.log`.
     fn bind(
         &self,
         cfg: &Path,

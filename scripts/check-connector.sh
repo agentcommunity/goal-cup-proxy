@@ -5,12 +5,10 @@
 #     sh scripts/check-connector.sh [--allow-no-kit] <connector-id>
 #
 # Steps, in order (all run, so one report shows every problem):
-#   1. files: no template placeholder is left: no `<...>` outside comments in
-#      connectors/<id>/harness.toml. A headless connector also needs its kit case
-#      crates/goalcup-cli/tests/fixtures/harness-kit/<id>/ (named after the connector id), with
-#      harness.toml, stand-in.py and expect.toml, the same rule on its two TOML files and no `<`
-#      in the stand-in's EDIT block. A chat-mode connector (`interactive = true`) needs no kit
-#      case: the connector contract runs every connector through one stand-in.
+#   1. files: the connector is chat mode (`interactive = true`; headless mode was removed and
+#      its manifests are refused), and no template placeholder is left: no `<...>` outside
+#      comments in connectors/<id>/harness.toml. A connector needs no kit case of its own: the
+#      connector contract runs every connector through one stand-in.
 #      A missing connectors/<id>/harness.toml is a usage error (exit 2) before anything runs.
 #      Also: when the connector's `program` is on PATH and is a `node` script, the manifest must
 #      set NODE_USE_ENV_PROXY = "1" (D59), or the run records no model traffic. The kit's
@@ -138,41 +136,16 @@ fail() { failed=$((failed + 1)); note "check-connector: FAIL $1"; echo "== FAIL 
 step() { echo; echo "== $1"; }
 
 # 1. Files.
-kit=crates/goalcup-cli/tests/fixtures/harness-kit/$id
-# Chat mode is `interactive = true` in the connector's [capture] table.
-if grep -Eq '^[[:space:]]*interactive[[:space:]]*=[[:space:]]*true' "connectors/$id/harness.toml"; then
-  chat=yes
-else
-  chat=no
-fi
 placeholders() {
   grep -nHE '^[^#]*<[^>]+>' "$@"
 }
-if [ -d "$kit" ] || [ "$chat" = no ]; then
-  step "files: the kit case for this connector"
-  missing=''
-  for f in "$kit/harness.toml" "$kit/stand-in.py" "$kit/expect.toml"; do
-    [ -f "$f" ] || missing="$missing $f"
-  done
-  if [ -z "$missing" ]; then
-    # Placeholders left from the templates, for example the stand-in's b"kit <HARNESS_ID> echo".
-    left=$(placeholders "connectors/$id/harness.toml" "$kit/harness.toml" "$kit/expect.toml"
-      awk '/^# ---- EDIT/ { e = 1 } /^# ---- end EDIT/ { e = 0 }
-        e && /^[^#]*</ { print FILENAME ":" FNR ":" $0 }' "$kit/stand-in.py")
-    if [ -z "$left" ]; then
-      pass "files"
-    else
-      echo "template placeholders left:"
-      echo "$left"
-      fail "files (template placeholders left)"
-    fi
-  else
-    echo "missing:$missing"
-    echo "copy the templates in skills/adding-a-capture-harness/templates/ (see SKILL.md)"
-    fail "files (missing:$missing)"
-  fi
+step "files: a chat-mode connector (the kit runs it; no kit case of its own)"
+# Chat mode is `interactive = true` in the connector's [capture] table.
+if ! grep -Eq '^[[:space:]]*interactive[[:space:]]*=[[:space:]]*true' "connectors/$id/harness.toml"; then
+  echo "connectors/$id/harness.toml does not say \`interactive = true\` under [capture]:"
+  echo "every connector is chat mode; headless mode was removed and its manifests are refused"
+  fail "files (not chat mode)"
 else
-  step "files: a chat-mode connector (the kit runs it; no kit case of its own)"
   left=$(placeholders "connectors/$id/harness.toml")
   if [ -z "$left" ]; then
     pass "files (chat mode)"

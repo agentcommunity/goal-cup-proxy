@@ -1,4 +1,5 @@
-//! The entry's schema-driven native source and binding state.
+//! The entry's schema-driven native source. Chat mode names no session (`identity.source =
+//! "none"`), so the one source is read from the launch on, with no scope to bind.
 
 use super::*;
 use goalcup_protocol::harness::RunHome;
@@ -6,16 +7,7 @@ use goalcup_protocol::harness::RunHome;
 /// Raw native bytes one poll may read: about an eighth of the queue once encoded.
 pub(super) const NATIVE_POLL_BYTES: u64 = 4 * MAX_SEGMENT_BYTES as u64;
 
-/// How an entry reads its harness's one schema-1 native store.
-pub(super) struct NativePlan {
-    /// The schema-declared source when its path contains `{id}`.
-    pub(super) scoped: Option<NativeSourceSpec>,
-    /// Where that source stands before the launch.
-    pub(super) initial_binding: NativeBinding,
-    /// The schema-declared source when its path has no `{id}`; empty when `scoped` is set.
-    pub(super) controlled: Vec<NativeSourceSpec>,
-}
-
+/// How an entry reads its harness's one schema-1 native store: the schema-declared source.
 /// `since` is the run's start in Unix seconds, from which a `since_run_start` source reads
 /// (D57) and which any other ignores: the request's `native_since`, or else the entry's own
 /// create time ([`create_time_floor`]).
@@ -24,7 +16,7 @@ pub(super) fn native_plan(
     run_home: &Path,
     config_home: &Path,
     since: u64,
-) -> Result<NativePlan, DaemonError> {
+) -> Result<Vec<NativeSourceSpec>, DaemonError> {
     let native = capture
         .native
         .first()
@@ -58,7 +50,7 @@ pub(super) fn native_plan(
         .map(NativeHint::new)
         .transpose()
         .map_err(|error| DaemonError::Config(format!("native capture: {error}")))?;
-    let source = NativeSourceSpec {
+    Ok(vec![NativeSourceSpec {
         name: native.name.clone(),
         root,
         pattern: native.pattern.clone(),
@@ -66,34 +58,7 @@ pub(super) fn native_plan(
         hint,
         scope_id: None,
         modified_since,
-    };
-    if native.pattern.contains("{id}") {
-        let initial_binding = match capture.identity.binding {
-            Some(goalcup_protocol::harness::Binding::AtLaunch) => NativeBinding::AtLaunch,
-            Some(goalcup_protocol::harness::Binding::Deferred) => NativeBinding::Deferred,
-            None => {
-                return Err(DaemonError::Config(
-                    "scoped native source has no binding".into(),
-                ));
-            }
-            _ => {
-                return Err(DaemonError::Config(
-                    "unsupported schema-1 identity binding".into(),
-                ));
-            }
-        };
-        Ok(NativePlan {
-            scoped: Some(source),
-            initial_binding,
-            controlled: Vec::new(),
-        })
-    } else {
-        Ok(NativePlan {
-            scoped: None,
-            initial_binding: NativeBinding::NotRequired,
-            controlled: vec![source],
-        })
-    }
+    }])
 }
 
 /// The floor a `since_run_start` source reads from when the request names no run start: the
@@ -305,136 +270,4 @@ pub(super) fn isolated_config_home_for(
         }
     }
     Ok(root)
-}
-
-/// Where an entry's native source stands. In memory only: a daemon restart forgets it, and a
-/// reopened Hermes entry starts at [`NativeBinding::Deferred`] with no source to install.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NativeBinding {
-    /// The profile reads no scoped native source, or this is a reopened entry.
-    NotRequired,
-    /// Due at the launch and not yet dealt with. The launch leaves it as [`Self::Bound`] or
-    /// [`Self::Unbound`].
-    AtLaunch,
-    /// The scope is due at the finish (Hermes). The launch recorded no gap for it.
-    Deferred,
-    /// A source was handed to the owner, at the launch or at finish stage 4.
-    Bound,
-    /// No usable scope: the one gap was recorded, at the launch or at finish stage 5. Terminal: a
-    /// later finish of an expired one never records it twice.
-    Unbound,
-}
-
-impl Daemon {
-    /// Classify a reopened row only when today's connector bytes match its recorded bytes.
-    pub(super) fn recorded_harness_defers_scope(
-        &self,
-        connector_id: &str,
-        recorded_digest: Option<&str>,
-    ) -> bool {
-        let Some(recorded_digest) = recorded_digest else {
-            return false;
-        };
-        let Some(loaded) = recorded_capture_harness(self.config(), connector_id, recorded_digest)
-        else {
-            return false;
-        };
-        matches!(
-            loaded.manifest.capture.identity.binding,
-            Some(goalcup_protocol::harness::Binding::Deferred)
-        )
-    }
-}
-
-impl CaptureEntry {
-    /// The entry's one native source over `source`, scoped to `id`; an error when `id` is not a
-    /// scope identity the collector accepts.
-    pub(super) fn native_for(
-        &self,
-        source: &NativeSourceSpec,
-        id: &str,
-    ) -> Result<NativeCapture, NativeCaptureError> {
-        let mut source = source.clone();
-        source.scope_id = Some(id.to_string());
-        native_capture(vec![source], self.sink.clone())
-    }
-
-    /// Finish stage 4, under the run lock and before the owner stops: a deferred entry given a
-    /// scope identity installs its native source, which the owner takes up when it stops and
-    /// finishes within the drain share. Anything else leaves the binding as it was, so a finish
-    /// that expired before this stage is retried with the same chance, and a source already
-    /// installed is never installed twice.
-    pub(super) fn install_deferred_scope(&self, scope: Option<&str>, launched: bool) {
-        // An owner already told to stop has passed (or will not make) its final take of the
-        // pending source: installing one now would be `Bound` for a source nothing finishes, and
-        // no gap. The binding stays `Deferred`, and stage 5 records the gap.
-        if !launched || self.owner.stop.load(Ordering::Acquire) {
-            return;
-        }
-        let mut binding = lock(&self.native_binding);
-        if *binding != NativeBinding::Deferred {
-            return;
-        }
-        if let Some(id) = scope {
-            self.bind_scope(&mut binding, id);
-        }
-    }
-
-    /// Hand the owner a native capture over the entry's scoped source for session `id`, and mark
-    /// `binding` [`NativeBinding::Bound`]. `false`, with `binding` unchanged, when the profile has
-    /// no scoped source or `id` is not a scope identity the collector accepts. The one place a
-    /// source is bound, at the launch or at finish stage 4.
-    pub(super) fn bind_scope(&self, binding: &mut NativeBinding, id: &str) -> bool {
-        let Some(source) = self.scoped_native.as_ref() else {
-            return false;
-        };
-        let native = match self.native_for(source, id) {
-            Ok(native) => native,
-            Err(error) => {
-                // The caller records the gap, which carries no cause.
-                self.cycles.note(&DaemonError::Refused(format!(
-                    "the native scope was not bound: {error}"
-                )));
-                return false;
-            }
-        };
-        *lock(&self.owner.pending_native) = Some(native);
-        *binding = NativeBinding::Bound;
-        true
-    }
-
-    /// The launch's part of the native binding. An entry whose scope is due at the launch binds
-    /// it from the request, or records its one gap and is [`NativeBinding::Unbound`]. A
-    /// [`NativeBinding::Deferred`] entry with no scope in the request owes nothing yet: the finish
-    /// carries it (CONTRACTS.md, C6 local finish budget ¶9).
-    pub(super) fn bind_launch_scope(
-        &self,
-        scope: Option<&str>,
-        writer: &mut ChainWriter,
-        now: &CaptureTime,
-    ) {
-        if self.scoped_native.is_none() {
-            return;
-        }
-        let mut binding = lock(&self.native_binding);
-        if *binding == NativeBinding::Deferred && scope.is_none() {
-            return;
-        }
-        if scope.is_some_and(|id| self.bind_scope(&mut binding, id)) {
-            return;
-        }
-        writer.streamless_gap(GapReason::SourceChanged, now);
-        *binding = NativeBinding::Unbound;
-    }
-
-    /// Finish stage 5: whether a launched entry still owes the one deferred-scope gap. Taken
-    /// once: the binding becomes terminal either way.
-    pub(super) fn take_deferred_gap(&self, launched: bool) -> bool {
-        let mut binding = lock(&self.native_binding);
-        if launched && *binding == NativeBinding::Deferred {
-            *binding = NativeBinding::Unbound;
-            return true;
-        }
-        false
-    }
 }

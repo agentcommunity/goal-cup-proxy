@@ -3,6 +3,7 @@ schema_version = 1
 id = "codex-cli"
 
 [capture]
+interactive = true
 auth_hosts = ["auth.openai.com"]
 continuation = "none: codex exec one turn, approval_policy=never, workspace-write without network, stdin /dev/null"
 args = [
@@ -15,7 +16,6 @@ args = [
   "-s", "workspace-write",
   "--skip-git-repo-check",
   "-C", "{workspace}",
-  "--",
 ]
 
 [capture.executable]
@@ -37,16 +37,13 @@ env = ["CODEX_CA_CERTIFICATE"]
 mode = "extend"
 
 [capture.identity]
-source = "stdout_json"
-binding = "at_launch"
-match_field = "type"
-match_value = "thread.started"
-id_field = "thread_id"
+source = "none"
 
 [[capture.native]]
 name = "rollout"
 root = "{config_home}/sessions"
-pattern = "*/*/*/rollout-*-{id}.jsonl"
+pattern = "*/*/*/rollout-*.jsonl"
+since_run_start = true
 form = "append_only"
 protocol_hint = "codex-jsonl"
 

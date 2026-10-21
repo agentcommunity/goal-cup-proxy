@@ -29,7 +29,7 @@ hermes chat
 - Hermes scans raw `sys.argv` before `argparse`: `-p`/`--profile` switches `HERMES_HOME`, and `--tui`, `--cli`, `-h` are matched, with abbreviations. Goal Cup guards these (code: `[capture.argv_guard]`).
 - The capture environment: `HOME` is a fresh private directory, `HERMES_HOME` the shared Goal Cup home `<cfg>/capture-homes/hermes-cli`, `TERMINAL_HOME_MODE=profile`, the participant's `PATH`, `TERM`, `COLORTERM`, `LANG`, `SHELL` and `LC_*`, `HTTPS_PROXY` and `HERMES_CA_BUNDLE` (code). No provider key: Hermes reads its own `.env`.
 
-Headless (the recipe before D61, frozen at [`headless-connectors/hermes-cli`](../../crates/goalcup-protocol/tests/fixtures/headless-connectors/hermes-cli/harness.toml) for the tests of that recipe): `hermes chat -Q --provider deepseek --query=<goal>`, with the key passed to the child, a seeded per-run home and the `session_id: <id>` line on stderr as identity.
+Headless (the recipe before D61, frozen at [`frozen-connectors/hermes-cli`](../../crates/goalcup-protocol/tests/fixtures/frozen-connectors/hermes-cli/harness.toml) for the tests of that recipe): `hermes chat -Q --provider deepseek --query=<goal>`, with the key passed to the child, a seeded per-run home and the `session_id: <id>` line on stderr as identity.
 
 ## 2. Install and record a version
 

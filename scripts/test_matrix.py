@@ -3,8 +3,9 @@
 
 `goalcup`, `goalcup-verify`, `goalcup-daemon` and `curl` are stubs in a scratch directory (the real
 ones are covered by running the script, docs/OPERATING.md "The matrix"). The `goalcup` stub records
-what it was started with: its arguments, the parts of its environment that matter, the goal file's
-text and what arrived on its standard input. Every key here is synthetic.
+what it was started with: its arguments, the parts of its environment that matter and what
+arrived on its standard input. Every connector is chat mode (D57), so every run is on a
+pseudo-terminal (script(1)). Every key here is synthetic.
 """
 
 from __future__ import annotations
@@ -74,8 +75,6 @@ assert args[0] == "start", args
 note("start.argv", "\n".join(args))
 note("start.no_browser", os.environ.get("GOALCUP_NO_BROWSER", "unset"))
 note("start.stdin_is_tty", str(os.isatty(0)))
-if "--goal-file" in args:
-    note("start.goal", Path(args[args.index("--goal-file") + 1]).read_text())
 test = "--test" in args
 
 run_dir = cfg / "runs" / "r1"
@@ -98,20 +97,18 @@ def write_run():
 if test:
     write_run()
 
-chat = os.environ["STUB_MODE"] == "chat"
-if chat:
-    # setraw flushes pending input: finish that transition before the feeder sees ready.
-    tty.setraw(0)
-    print("Recording in chat mode: stub starts now in this terminal.", flush=True)
-    chunks, t0 = [], time.time()
-    while time.time() - t0 < 30:
-        if select.select([0], [], [], 0.2)[0]:
-            data = os.read(0, 4096)
-            chunks.append([round(time.time() - t0, 2), data.decode("latin1")])
-            if b"\r" in data and chunks and any(c[1] == os.environ["STUB_PROMPT"] for c in chunks):
-                note("start.submitted_at", repr(time.time()))
-                break
-    note("start.stdin_chunks", json.dumps(chunks))
+# setraw flushes pending input: finish that transition before the feeder sees ready.
+tty.setraw(0)
+print("Recording in chat mode: stub starts now in this terminal.", flush=True)
+chunks, t0 = [], time.time()
+while time.time() - t0 < 30:
+    if select.select([0], [], [], 0.2)[0]:
+        data = os.read(0, 4096)
+        chunks.append([round(time.time() - t0, 2), data.decode("latin1")])
+        if b"\r" in data and chunks and any(c[1] == os.environ["STUB_PROMPT"] for c in chunks):
+            note("start.submitted_at", repr(time.time()))
+            break
+note("start.stdin_chunks", json.dumps(chunks))
 
 if not test:
     write_run()
@@ -123,7 +120,11 @@ if test and os.environ.get("STUB_EXIT_EARLY") != "1":
     while not (out / "sealed").exists() and time.time() - t0 < 60:
         time.sleep(0.2)
     exit_line = "harness exited: ended by signal 15."
-if chat and not test:
+elif test:
+    # Ending first, but a while after the Enter: the matrix polls every two seconds, so it has
+    # seen the prompt submitted before the harness ends.
+    time.sleep(5)
+if not test:
     # A chat-mode run's `deadline:` line goes to the run's host.log, not the terminal.
     (run_dir / "host.log").write_text("deadline: the run's time is up. The agent is stopped.\n")
 print(exit_line)
@@ -163,13 +164,6 @@ Path(target).write_text(json.dumps(body))
 sys.stdout.write("200")
 '''
 
-HEADLESS = """schema_version = 1
-id = "{id}"
-
-[capture]
-args = ["run", "--"]
-goal_flag = "--query"
-{extra}"""
 CHAT = """schema_version = 1
 id = "{id}"
 
@@ -188,7 +182,7 @@ class World:
     """One matrix run against the stubs, in a scratch tree of its own. Runs are slow (the script
     polls every two seconds), so the tests start them all at once and look at the results."""
 
-    def __init__(self, connector: str, mode: str, env: dict[str, str | None] | None = None,
+    def __init__(self, connector: str, env: dict[str, str | None] | None = None,
                  args: tuple[str, ...] = (), prepared: bool = False,
                  prompt_file: str | None = None) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -204,12 +198,8 @@ class World:
         executable(self.bin / "goalcup-daemon", "#!/bin/sh\nexit 0\n")
         executable(self.bin / "curl", CURL)
         self.connectors = self.root / "connectors"
-        for name, text in (
-            ("stubhead", HEADLESS.format(id="stubhead", extra="")),
-            ("stubchat", CHAT.format(id="stubchat")),
-        ):
-            (self.connectors / name).mkdir(parents=True)
-            (self.connectors / name / "harness.toml").write_text(text)
+        (self.connectors / "stubchat").mkdir(parents=True)
+        (self.connectors / "stubchat" / "harness.toml").write_text(CHAT.format(id="stubchat"))
         environment = {
             "PATH": f"{self.bin}:{os.environ['PATH']}",
             "HOME": str(self.root),
@@ -220,7 +210,6 @@ class World:
             "MATRIX_PROMPT_DELAY": "1",
             "MATRIX_SUBMIT_DELAY": "1",
             "STUB_OUT": str(self.out),
-            "STUB_MODE": mode,
             "STUB_PROMPT": PROMPT,
         }
         if prepared:
@@ -275,55 +264,35 @@ TYPED = "Build the thing. Then test it."
 TEST = ("--test", "--duration", str(DURATION))
 
 SCENARIOS = {
-    "headless": ("stubhead", "headless", {}),
-    "exits_non_zero": ("stubhead", "headless", {"STUB_EXIT": "3"}),
-    "no_seal": ("stubhead", "headless", {"STUB_NO_SEAL": "1"}),
-    "no_manifest": ("nosuchconnector", "headless", {}),
-    "chat": ("stubchat", "chat", {"MATRIX_PRE_PROMPT_KEYS": r"\033[B\r", "MATRIX_PRE_PROMPT_DELAY": "1"}),
+    "no_seal": ("stubchat", {"STUB_NO_SEAL": "1"}),
+    "no_manifest": ("nosuchconnector", {}),
+    "chat": ("stubchat", {"MATRIX_PRE_PROMPT_KEYS": r"\033[B\r", "MATRIX_PRE_PROMPT_DELAY": "1"}),
     # Test runs: sealed by the script, the server's copy `sealed` with no `stop`.
-    "test_chat": ("stubchat", "chat", {"STUB_STOP": "0", "STUB_PROMPT": TYPED}, TEST, True, MULTILINE),
-    "test_headless_early": ("stubhead", "headless",
-                            {"STUB_STOP": "0", "STUB_EXIT_EARLY": "1", "STUB_NO_SEAL": "1"},
-                            ("--test", "--duration", "30"), True, MULTILINE),
-    "test_unlisted": ("stubhead", "headless", {"STUB_ENTRIES_EMPTY": "1", "STUB_STOP": "0"},
+    "test_chat": ("stubchat", {"STUB_STOP": "0", "STUB_PROMPT": TYPED}, TEST, True, MULTILINE),
+    "test_chat_early": ("stubchat",
+                        {"STUB_STOP": "0", "STUB_EXIT_EARLY": "1", "STUB_NO_SEAL": "1",
+                         "STUB_PROMPT": TYPED},
+                        ("--test", "--duration", "30"), True, MULTILINE),
+    "test_unlisted": ("stubchat", {"STUB_ENTRIES_EMPTY": "1", "STUB_STOP": "0"},
                       ("--test", "--duration", "30"), True),
-    "test_timeout": ("stubhead", "headless", {"STUB_STOP": "0"},
-                     ("--test", "--duration", "60", "--timeout", "6"), True),
-    "prompt_control": ("stubhead", "headless", {}, (), False, "go\x1b[Bnow\n"),
+    "test_timeout": ("stubchat", {"STUB_STOP": "0"},
+                     ("--test", "--duration", "60", "--timeout", "12"), True),
+    "prompt_control": ("stubchat", {}, (), False, "go\x1b[Bnow\n"),
 }
 
 
+@unittest.skipUnless(shutil.which("script"), "needs script(1)")
 class MatrixTests(unittest.TestCase):
     worlds: dict[str, World] = {}
 
     @classmethod
     def setUpClass(cls) -> None:
-        names = [n for n in SCENARIOS if SCENARIOS[n][1] != "chat" or shutil.which("script")]
+        names = list(SCENARIOS)
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(names)) as pool:
             futures = {n: pool.submit(World, *SCENARIOS[n]) for n in names}
             cls.worlds = {n: f.result() for n, f in futures.items()}
         for world in cls.worlds.values():
             cls.addClassCleanup(world.tmp.cleanup)
-
-    def test_a_headless_connector_gets_a_goal_file_and_no_typing(self) -> None:
-        w = self.worlds["headless"]
-        self.assertEqual(w.run.returncode, 0, w.said())
-        self.assertRegex(w.run.stdout, r"stubhead \S+ stub-harness_9\.9\.9 PASS ")
-        argv = w.seen("start.argv").split("\n")
-        self.assertEqual(argv[:4], ["start", "--harness", "stubhead", "--practice"])
-        self.assertEqual(argv[4], "--goal-file")
-        self.assertEqual(len(argv), 6)
-        self.assertEqual(w.seen("start.goal"), PROMPT + "\n")
-        self.assertEqual(w.seen("start.stdin_is_tty"), "False")
-        # No browser page per approval, for the login and for the run.
-        self.assertEqual(w.seen("login.no_browser"), "1")
-        self.assertEqual(w.seen("start.no_browser"), "1")
-
-    def test_a_headless_harness_that_exits_non_zero_fails_the_row(self) -> None:
-        w = self.worlds["exits_non_zero"]
-        self.assertNotEqual(w.run.returncode, 0)
-        self.assertIn("FAIL", w.run.stdout)
-        self.assertIn("harness exited: exit code 3.", w.run.stderr)
 
     def test_a_run_without_the_seal_line_fails_the_row(self) -> None:
         w = self.worlds["no_seal"]
@@ -336,7 +305,6 @@ class MatrixTests(unittest.TestCase):
         self.assertIn("GOALCUP_CONNECTORS_DIR", w.run.stderr)
         self.assertFalse((w.out / "start.argv").exists())
 
-    @unittest.skipUnless(shutil.which("script"), "needs script(1)")
     def test_a_chat_connector_types_the_prompt_and_submits_it_apart(self) -> None:
         w = self.worlds["chat"]
         self.assertEqual(w.run.returncode, 0, w.said())
@@ -352,7 +320,6 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(text[1], PROMPT)
         self.assertEqual(enter[1], "\r")
 
-    @unittest.skipUnless(shutil.which("script"), "needs script(1)")
     def test_a_test_run_is_sealed_after_its_duration_from_the_submitted_prompt(self) -> None:
         w = self.worlds["test_chat"]
         self.assertEqual(w.run.returncode, 0, w.said())
@@ -372,22 +339,17 @@ class MatrixTests(unittest.TestCase):
         self.assertNotIn("the run is over (stop)", w.log)
         self.assertIn("ok    status is sealed", w.log)
 
-    @unittest.skipUnless(shutil.which("script"), "needs script(1)")
     def test_a_multi_line_prompt_file_is_typed_on_one_line(self) -> None:
         w = self.worlds["test_chat"]
         chunks = json.loads(w.seen("start.stdin_chunks"))
         self.assertEqual(chunks[0][1], TYPED)
         self.assertEqual(chunks[1][1], "\r")
 
-    def test_a_headless_test_run_whose_harness_ends_first_is_sealed_then_uploaded(self) -> None:
-        w = self.worlds["test_headless_early"]
+    def test_a_test_run_whose_harness_ends_first_is_sealed_then_uploaded(self) -> None:
+        w = self.worlds["test_chat_early"]
         self.assertEqual(w.run.returncode, 0, w.said())
-        self.assertRegex(w.run.stdout, r"stubhead \S+ stub-harness_9\.9\.9 PASS ")
-        argv = w.seen("start.argv").split("\n")
-        self.assertEqual(argv[:4], ["start", "--harness", "stubhead", "--test"])
-        self.assertNotIn("--practice", argv)
-        # A headless goal file keeps the prompt file's lines.
-        self.assertEqual(w.seen("start.goal"), MULTILINE.strip() + "\n")
+        self.assertRegex(w.run.stdout, r"stubchat \S+ stub-harness_9\.9\.9 PASS ")
+        self.assertEqual(w.seen("start.argv"), "start\n--harness\nstubchat\n--test")
         # Sealed when the harness ended, long before the 30 s duration.
         self.assertEqual(w.seen("seal.argv"), "seal\n--yes\ne0123456789abcdef")
         self.assertLess(float(w.seen("seal.at")) - w.started, 25)
@@ -408,7 +370,7 @@ class MatrixTests(unittest.TestCase):
     def test_a_test_run_that_fails_after_its_entry_was_found_is_sealed_on_the_way_out(self) -> None:
         w = self.worlds["test_timeout"]
         self.assertNotEqual(w.run.returncode, 0)
-        self.assertIn("did not finish within 6s", w.run.stderr)
+        self.assertIn("did not finish within 12s", w.run.stderr)
         self.assertEqual(w.seen("seal.argv"), "seal\n--yes\ne0123456789abcdef")
         self.assertIn("sealing it now", w.log)
 
@@ -451,7 +413,7 @@ class MatrixArgumentTests(unittest.TestCase):
                     MATRIX_CONFIG_DIR=str(self.cfg)))
 
     def test_a_test_run_needs_a_real_connector(self) -> None:
-        for fake in ("m2-fake-tui", "m2-fake-headless"):
+        for fake in ("m2-fake-tui",):
             with self.subTest(fake=fake):
                 self.assertIn("real connector", self.refuse(
                     fake, "https://x.example", "--test", "--duration", "60",

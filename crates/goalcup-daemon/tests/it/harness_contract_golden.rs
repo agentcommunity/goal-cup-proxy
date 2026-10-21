@@ -238,7 +238,6 @@ mod live {
     use super::*;
     use crate::common::capture_lifecycle_support::{Rig, launch_request};
     use crate::common::support;
-    use goalcup_protocol::harness::{Binding, IdGrammar, IdentitySource};
 
     /// The shipped connectors and the controlled workload, as a connectors directory.
     fn connectors() -> tempfile::TempDir {
@@ -350,7 +349,6 @@ mod live {
     /// `<source name>:<path relative to the source root>#g<generation>`, so it names the root
     /// and pattern each connector's native source resolves to.
     async fn native_opens(id: &str) -> Value {
-        const TIMESTAMP_HEX_ID: &str = "20260930_141500_a1b2c3";
         let dir = connectors();
         let harness = HarnessManifest::from_toml_str(
             &std::fs::read_to_string(dir.path().join(id).join("harness.toml")).unwrap(),
@@ -359,20 +357,9 @@ mod live {
         let Some(native) = harness.capture.native.first() else {
             return json!([]);
         };
-        // The identity the launch or the finish names, from the profile's identity rule.
-        let identity = &harness.capture.identity;
-        let (session, launch_scope, finish_scope): (&str, Option<&str>, Option<&str>) =
-            match (identity.source, identity.binding) {
-                (IdentitySource::None, _) => ("unused", Some("unused"), None),
-                (_, Some(Binding::Deferred)) => {
-                    let session = match identity.grammar {
-                        Some(IdGrammar::TimestampHex) => TIMESTAMP_HEX_ID,
-                        _ => "test-session",
-                    };
-                    (session, None, Some(session))
-                }
-                _ => ("test-session", Some("test-session"), Some("test-session")),
-            };
+        // Chat mode names no session (identity `none`): the launch carries a placeholder scope,
+        // which the daemon ignores.
+        let (session, launch_scope) = ("unused", Some("unused"));
         let path = dir.path().to_path_buf();
         let rig = Rig::start_with(move |config| config.connectors_dir = path).await;
         let config_home = rig.root.join("config-home");
@@ -398,20 +385,6 @@ mod live {
         let mut request = launch_request(&goal);
         request.native_scope = launch_scope.map(str::to_string);
         assert_eq!(rig.launch(&info.entry_id, &request).await.status(), 204);
-        if launch_scope.is_none() {
-            // A deferred identity is learnt at the end of the turn: the finish carries it.
-            let sealed = rig
-                .seal_with(
-                    &info.entry_id,
-                    &goalcup_protocol::control::CaptureSealRequest {
-                        proxy: None,
-                        remaining_finish_ms: None,
-                        native_scope: finish_scope.map(str::to_string),
-                    },
-                )
-                .await;
-            assert_eq!(sealed.status(), 200, "{}", sealed.body());
-        }
         let opened = |records: &[CaptureRecord]| {
             records.iter().any(|r| {
                 matches!(

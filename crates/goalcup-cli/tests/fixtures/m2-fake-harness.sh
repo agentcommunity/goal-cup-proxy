@@ -1,7 +1,8 @@
 #!/bin/sh
 # The m2-fake connector's capture executable (tests/m2_cli_support). It is launched the way a
-# measured headless harness is: its argv ends in `--` and the goal, its environment is built
-# from nothing, stdin is /dev/null and it stays in the launcher's process group.
+# chat-mode harness is (D57), in a test build that runs it with no terminal: no goal in its
+# argv, its environment built from nothing but the terminal pass-through, stdin /dev/null, and
+# it stays in the launcher's process group.
 #
 # It records what it was started with under $M2_FAKE_OUT: its pid, its argv (one argument per
 # line), its whole environment and what stdin held. It then says whether the recording proxy

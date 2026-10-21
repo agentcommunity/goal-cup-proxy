@@ -10,7 +10,6 @@ mod common;
 
 mod binary_surface;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-mod capture_deferred_scope;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod capture_harness_load;
 mod capture_ingest;

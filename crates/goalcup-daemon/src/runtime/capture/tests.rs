@@ -1588,11 +1588,11 @@ fn owner_post_stop_drain_fits_commit_reserve() {
     );
 }
 
-/// The frozen headless connector fixtures (`{id}`-scoped native sources), not the shipped
-/// ones, so these tests keep their subject when the shipped connectors change mode.
-fn headless_manifest_paths() -> Vec<PathBuf> {
+/// The frozen connector fixtures (their recipes before chat mode, converted to it), not the
+/// shipped ones, so these tests keep their subject when the shipped connectors change.
+fn frozen_manifest_paths() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../goalcup-protocol/tests/fixtures/headless-connectors");
+        .join("../goalcup-protocol/tests/fixtures/frozen-connectors");
     let mut paths: Vec<PathBuf> = std::fs::read_dir(root)
         .unwrap()
         .map(|entry| entry.unwrap().path().join("harness.toml"))
@@ -1640,12 +1640,12 @@ fn manifest_at(path: &Path) -> HarnessManifest {
     HarnessManifest::from_toml_str(&text).unwrap()
 }
 
-/// The plan copies what each connector declares: binding, label, hint and form for a scoped
-/// source, a controlled root for one that is not. Every headless fixture, every shipped
-/// connector and the controlled workload are read; none is named here.
+/// The plan copies what each connector declares: its one source's label, hint, form and
+/// resolved root. Every frozen fixture, every shipped connector and the controlled workload are
+/// read; none is named here.
 #[test]
-fn schema_native_plan_copies_binding_label_hint_and_form() {
-    let mut paths = headless_manifest_paths();
+fn schema_native_plan_copies_label_hint_form_and_root() {
+    let mut paths = frozen_manifest_paths();
     paths.extend(
         shipped_connector_dirs()
             .into_iter()
@@ -1655,7 +1655,7 @@ fn schema_native_plan_copies_binding_label_hint_and_form() {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../goalcup-cli/tests/fixtures/m2-controlled-workload/harness.toml"),
     );
-    let (mut scoped, mut controlled) = (0, 0);
+    let mut planned = 0;
     for path in paths {
         let manifest = manifest_at(&path);
         let Some(native) = manifest.capture.native.first() else {
@@ -1669,29 +1669,20 @@ fn schema_native_plan_copies_binding_label_hint_and_form() {
         )
         .unwrap();
         let at = path.display();
-        if !native.pattern.contains("{id}") {
-            assert_eq!(plan.initial_binding, NativeBinding::NotRequired, "{at}");
-            assert!(plan.scoped.is_none(), "{at}");
-            let root = native
-                .root
-                .replace("{run_home}", "/run")
-                .replace("{config_home}", "/config");
-            assert_eq!(plan.controlled[0].root, Path::new(&root), "{at}");
-            controlled += 1;
-            continue;
-        }
-        let binding = match manifest.capture.identity.binding {
-            Some(goalcup_protocol::harness::Binding::AtLaunch) => NativeBinding::AtLaunch,
-            Some(goalcup_protocol::harness::Binding::Deferred) => NativeBinding::Deferred,
-            other => panic!("{at}: a scoped source with binding {other:?}"),
+        let [source] = plan.as_slice() else {
+            panic!("{at}: one source, got {plan:?}");
         };
+        let root = native
+            .root
+            .replace("{run_home}", "/run")
+            .replace("{config_home}", "/config");
+        assert_eq!(source.root, Path::new(&root), "{at}");
+        assert_eq!(source.scope_id, None, "{at}");
         let form = match native.form {
             goalcup_protocol::harness::NativeForm::AppendOnly => NativeStoreForm::AppendOnly,
             goalcup_protocol::harness::NativeForm::Snapshot => NativeStoreForm::Snapshot,
             other => panic!("{at}: form {other:?}"),
         };
-        let source = plan.scoped.expect("a scoped source");
-        assert_eq!(plan.initial_binding, binding, "{at}");
         assert_eq!(
             (source.name.as_str(), source.form),
             (native.name.as_str(), form),
@@ -1702,21 +1693,26 @@ fn schema_native_plan_copies_binding_label_hint_and_form() {
             native.protocol_hint.as_deref(),
             "{at}"
         );
-        scoped += 1;
+        planned += 1;
     }
-    assert!(
-        scoped >= 2 && controlled >= 1,
-        "{scoped} scoped, {controlled} controlled"
-    );
+    assert!(planned >= 5, "{planned} planned");
 }
 
 #[test]
 fn a_since_run_start_source_filters_from_the_run_start() {
-    let headless = headless_manifest_paths().remove(0);
+    // The frozen Hermes, whose per-run source does not declare it.
+    let frozen = frozen_manifest_paths()
+        .into_iter()
+        .find(|path| {
+            !std::fs::read_to_string(path)
+                .unwrap()
+                .contains("since_run_start")
+        })
+        .expect("a frozen fixture without since_run_start");
     let text = replaced_once(
-        &std::fs::read_to_string(&headless).unwrap(),
-        "form = \"append_only\"",
-        "form = \"append_only\"\nsince_run_start = true",
+        &std::fs::read_to_string(&frozen).unwrap(),
+        "form = \"snapshot\"",
+        "form = \"snapshot\"\nsince_run_start = true",
     );
     let manifest = HarnessManifest::from_toml_str(&text).unwrap();
     // A start no clock can hold is refused, not a panic.
@@ -1726,8 +1722,7 @@ fn a_since_run_start_source_filters_from_the_run_start() {
         Path::new("/config"),
         u64::MAX,
     )
-    .err()
-    .expect("an unrepresentable start, no plan");
+    .expect_err("an unrepresentable start, no plan");
     assert!(error.to_string().contains("native_since"), "{error}");
     let plan = native_plan(
         &manifest.capture,
@@ -1737,11 +1732,11 @@ fn a_since_run_start_source_filters_from_the_run_start() {
     )
     .unwrap();
     assert_eq!(
-        plan.scoped.unwrap().modified_since,
+        plan[0].modified_since,
         Some(std::time::UNIX_EPOCH + Duration::from_secs(1_760_000_000))
     );
     // A source that does not declare it ignores the start time.
-    let shipped = manifest_at(&headless);
+    let shipped = manifest_at(&frozen);
     let plan = native_plan(
         &shipped.capture,
         Path::new("/run"),
@@ -1749,7 +1744,7 @@ fn a_since_run_start_source_filters_from_the_run_start() {
         1_760_000_000,
     )
     .unwrap();
-    assert_eq!(plan.scoped.unwrap().modified_since, None);
+    assert_eq!(plan[0].modified_since, None);
     // With no run start in the request, the floor is the row's own create time.
     assert_eq!(
         create_time_floor("2025-10-09T08:53:20Z").unwrap(),
@@ -1759,14 +1754,14 @@ fn a_since_run_start_source_filters_from_the_run_start() {
 
 #[test]
 fn unknown_valid_native_hint_is_copied_byte_for_byte() {
-    let headless = headless_manifest_paths().remove(0);
-    let original = manifest_at(&headless);
+    let frozen = frozen_manifest_paths().remove(0);
+    let original = manifest_at(&frozen);
     let hint = original.capture.native[0]
         .protocol_hint
         .as_deref()
         .expect("the fixture's native source declares a hint");
     let text = replaced_once(
-        &std::fs::read_to_string(&headless).unwrap(),
+        &std::fs::read_to_string(&frozen).unwrap(),
         &format!("protocol_hint = {hint:?}"),
         "protocol_hint = \"future-hint-v7\"",
     );
@@ -1778,10 +1773,7 @@ fn unknown_valid_native_hint_is_copied_byte_for_byte() {
         0,
     )
     .unwrap();
-    assert_eq!(
-        plan.scoped.unwrap().hint.unwrap().as_str(),
-        "future-hint-v7"
-    );
+    assert_eq!(plan[0].hint.as_ref().unwrap().as_str(), "future-hint-v7");
 }
 
 #[test]
@@ -2015,87 +2007,5 @@ fn a_producer_lost_to_a_failed_flush_notes_its_cause() {
         gaps(&records(dir.path()), GapReason::ProducerLost),
         1,
         "the loss is still chained, as before"
-    );
-}
-
-#[test]
-fn a_scope_the_collector_refuses_notes_its_cause() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let mut capture = CaptureEntry::new(
-        entry(dir.path()),
-        Goal::Open,
-        chain(dir.path(), 64 << 20),
-        clock(),
-    );
-    capture.scoped_native = Some(NativeSourceSpec {
-        name: "store".into(),
-        root: home.path().to_path_buf(),
-        pattern: "{id}.jsonl".into(),
-        form: NativeStoreForm::AppendOnly,
-        hint: None,
-        scope_id: None,
-        modified_since: None,
-    });
-    let mut binding = NativeBinding::Deferred;
-    assert!(!capture.bind_scope(&mut binding, "../escape"));
-    assert_eq!(binding, NativeBinding::Deferred, "nothing else changed");
-    let counted = capture.cycles.snapshot();
-    assert_eq!(counted.tick, 1);
-    assert!(counted.last.unwrap().contains("a scope id is 1-128 ASCII"));
-}
-
-#[test]
-fn a_required_native_file_waiting_for_a_stream_slot_is_a_gap_at_finish() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    for name in ["a", "b"] {
-        std::fs::write(home.path().join(format!("{name}.jsonl")), b"x\n").unwrap();
-    }
-
-    let writer = writer(dir.path(), 64 << 20);
-    let sink = Arc::new(OwnerSink::default());
-    let native = NativeCapture::new(
-        NativeCaptureConfig {
-            sources: vec![NativeSourceSpec {
-                name: "store".into(),
-                root: home.path().to_path_buf(),
-                pattern: "*.jsonl".into(),
-                form: NativeStoreForm::AppendOnly,
-                hint: None,
-                scope_id: None,
-                modified_since: None,
-            }],
-            limits: NativeCaptureLimits {
-                max_open_streams: 1,
-                ..NativeCaptureLimits::default()
-            },
-        },
-        sink.clone(),
-        Box::new(SystemNativeClock::new()),
-    )
-    .unwrap();
-
-    // Match production's launch-to-owner handoff. `take_native` makes the source required.
-    let owner = Owner::new(sink, writer, clock(), &[], Default::default(), None, None);
-    let control = OwnerControl::default();
-    *lock(&control.pending_native) = Some(native);
-    control.finish_budget_ns.store(u64::MAX, Ordering::Release);
-    control.stop.store(true, Ordering::Release);
-    owner.run(&control);
-
-    let chain = records(dir.path());
-    assert_eq!(
-        chain
-            .iter()
-            .filter(|r| matches!(r, CaptureRecord::Open { .. }))
-            .count(),
-        1,
-        "one of the two matched append-only files never got a stream slot",
-    );
-    assert_eq!(
-        streamless(&chain, GapReason::SourceChanged),
-        1,
-        "a required native file never opened by finish must be a SourceChanged gap",
     );
 }

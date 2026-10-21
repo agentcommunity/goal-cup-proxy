@@ -304,7 +304,6 @@ fn core_code_names_no_harness_in_a_string_literal() {
     let names = connector_names();
     let capture_paths = [
         root.join("crates/goalcup-cli/src/launch.rs"),
-        root.join("crates/goalcup-cli/src/capture_tee.rs"),
         root.join("crates/goalcup-cli/src/per_run_home.rs"),
         root.join("crates/goalcup-cli/src/commands/start.rs"),
         root.join("crates/goalcup-cli/src/commands/continue_run.rs"),

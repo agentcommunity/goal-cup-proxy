@@ -6,10 +6,10 @@ id = "hermes-cli"
 display_name = "Hermes"
 
 [capture]
-# hermes chat -Q --provider deepseek --query=<goal>. The model is Hermes's own default (owner
+interactive = true
+# hermes chat -Q --provider deepseek (headless until 21 Oct, now chat mode). The model is Hermes's own default (owner
 # direction, 2026-10-14). Goal Cup Proxy passes no key (D61): Hermes reads its own login.
 args = ["chat", "-Q", "--provider", "deepseek"]
-goal_flag = "--query"
 # Hermes's own switches (HERMES_SAFE_MODE, HERMES_IGNORE_USER_CONFIG) would silently stop the
 # session snapshot; `capture.env` may set none of them.
 reserved_env_prefixes = ["HERMES_"]
@@ -43,16 +43,13 @@ env = ["HERMES_CA_BUNDLE"]
 mode = "replace"
 
 [capture.identity]
-source = "stderr_line"
-binding = "deferred"
-prefix = "session_id: "
-grammar = "timestamp-hex"
+source = "none"
 
 # Only the run's own snapshot; never a request_dump_* file (D41). No native decoder yet.
 [[capture.native]]
 name = "session"
 root = "{config_home}/sessions"
-pattern = "session_{id}.json"
+pattern = "session_*.json"
 form = "snapshot"
 
 # Hermes scans raw argv for -p/--profile, --tui, --cli and -h before argparse, which abbreviates.
