@@ -174,7 +174,7 @@ a 300-second timeout, not a guarantee of process death. Keep the machine awake.
 At an earlier task completion, or if the watchdog fails, end the measured entry manually:
 
 ```sh
-goalcup seal ENTRY_ID
+goalcup seal --yes ENTRY_ID
 ```
 
 Let the original `start` process finish its bounded wrap-up. If needed, run `goalcup upload

@@ -459,7 +459,7 @@ cleanup() {
       log_file "goalcup seal (output)" "$ROOT/seal.out"
       log_file "goalcup seal (stderr)" "$ROOT/seal.err"
     elif [ "$TEST" = 1 ] && [ -z "$SEAL_ENTRY" ] && [ "$START_LAUNCHED" = 1 ]; then
-      log "a test run may still be open on the server, its entry unknown here: in $CFG run goalcup entries, then goalcup seal <entry>"
+      log "a test run may still be open on the server, its entry unknown here: in $CFG run goalcup entries, then goalcup seal --yes <entry>"
     fi
     # Whatever is still running from this script's own temporary directory, by that unique path.
     for pidfile in "$ROOT/login.pid" "$ROOT/start.pid" "$ROOT/entries.pid" "$ROOT/seal.pid" "$ROOT/upload.pid"; do
