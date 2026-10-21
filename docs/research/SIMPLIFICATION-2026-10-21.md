@@ -4,6 +4,13 @@ Five reviews: architecture, tests, protocol and connectors, server, scripts and 
 and split by timing. The feature stop is 4 Nov and the event starts 7 Nov, so anything that moves
 lots of code waits until after the event. Sizes are rough.
 
+## Status (21 Oct, evening)
+
+Done on branch `smart/zen-gates-d9tmbh`: B1 to B9, plus A1 (headless mode deleted), A2 (signed
+finalization deleted; the legacy seal stays because a daemon test still writes it) and A5 (`start.rs`,
+`uploader.rs`, `participant.rs` and protocol `harness.rs` split into modules). Fast gate test time
+about 335 s before, about 190 s after. Still after the event: A3, A4, A6 to A13.
+
 ## The honest numbers
 
 - Product code: about 94k lines of Rust, 3.8k TypeScript. Tests: about 125k lines of Rust plus the
