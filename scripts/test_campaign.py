@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -229,6 +230,14 @@ class ConfigValidation(Base):
         errs = self.errors(cfg)
         self.assertTrue(any("needs config_dir" in e for e in errs))
         self.assertTrue(any("config_dir is for host" in e for e in errs))
+
+    def test_matrix_timeout_slack_checked(self):
+        for bad in ("3600", -1, 1.5, True):
+            with self.subTest(slack=bad):
+                cfg = self.config([self.docker_cell("a", "m1")], matrix_timeout_slack_s=bad)
+                self.assertTrue(any("matrix_timeout_slack_s" in e for e in self.errors(cfg)))
+        cfg = self.config([self.docker_cell("a", "m1")], matrix_timeout_slack_s=0)
+        self.assertEqual(self.errors(cfg), [])
 
     def test_missing_member_refused(self):
         cfg = self.config([{"id": "a", "where": "docker"}])
@@ -674,7 +683,8 @@ class CampaignRun(Base):
 
         def make_proc(argv):
             if "matrix.sh" in argv[1] and "linux" not in argv[1]:
-                return FakeProc(["hello", "codex-cli darwin-arm64 0.1 FAIL 2026-10-23"], rc=1)
+                return FakeProc(["hello", "codex-cli darwin-arm64 0.1 FAIL 2026-10-23",
+                                 "log: /tmp/matrix.log"], rc=1)
             return FakeProc(["linux-matrix: build", "linux-matrix: codex-cli linux-x86_64 0.1 PASS 2026-10-23"])
         runner.make_proc = make_proc
         camp, said = self.make(cells, runner)
@@ -711,6 +721,12 @@ class CampaignRun(Base):
         self.assertIn("--test", host_argv)
         host_env = runner.envs[runner.calls.index(host_argv)]
         self.assertEqual(host_env["MATRIX_CONFIG_DIR"], cells[1]["config_dir"])
+        self.assertEqual(mac["final_row"], "codex-cli darwin-arm64 0.1 FAIL 2026-10-23")
+        # The host sampler counts only the processes of the cell's own configuration directory.
+        host_sampler = next(c for c in runner.calls
+                            if "research-sample.py" in " ".join(c) and c[0] != "docker")
+        i = host_sampler.index("--pid-match")
+        self.assertEqual(host_sampler[i + 1], cells[1]["config_dir"] + "/")
         self.assertEqual(host_env["MATRIX_PROMPT_FILE"], str(self.prompt))
         # status and evaluate read the files back.
         st = campaign.status_rows(out)
@@ -721,7 +737,7 @@ class CampaignRun(Base):
     def test_docker_sampler_waits_for_the_container(self):
         runner = FakeRunner()
         gate = threading.Event()
-        proc = FakeProc(["linux-matrix: x linux-x86_64 0.1 PASS d"], finish=False)
+        proc = FakeProc(["linux-matrix: x linux-x86_64 0.1 PASS 2026-10-23"], finish=False)
         runner.make_proc = lambda argv: proc
         runner.on_run = lambda argv: "{{.State.Running}}" in argv and (gate.set(), proc_done())
 
@@ -730,8 +746,9 @@ class CampaignRun(Base):
         camp, _ = self.make([self.docker_cell("lin", "m1")], runner)
         camp.run()
         exec_argv = next(c for c in runner.calls if c[:2] == ["docker", "exec"])
-        self.assertEqual(exec_argv[:6], ["docker", "exec", "goalcup-linux-matrix-codex-cli-lin",
-                                         "python3", "/src/scripts/research-sample.py", "--config"])
+        self.assertEqual(exec_argv[:8], ["docker", "exec", "-u", "dev",
+                                         "goalcup-linux-matrix-codex-cli-lin", "python3",
+                                         "/src/scripts/research-sample.py", "--config"])
         self.assertIn("/logs/samples.csv", exec_argv)
         inspect_i = next(i for i, c in enumerate(runner.calls) if "{{.State.Running}}" in c)
         self.assertLess(inspect_i, runner.calls.index(exec_argv))
@@ -741,7 +758,7 @@ class CampaignRun(Base):
 
     def test_pause_drill_runs_in_a_campaign(self):
         runner = FakeRunner()
-        proc = FakeProc(["linux-matrix: x linux-x86_64 0.1 PASS d"], finish=False)
+        proc = FakeProc(["linux-matrix: x linux-x86_64 0.1 PASS 2026-10-23"], finish=False)
         runner.make_proc = lambda argv: proc
         runner.on_run = lambda argv: argv[1] == "unpause" and proc.finish(0)
         camp, said = self.make([self.docker_cell("lin", "m1", drills=[
@@ -753,7 +770,7 @@ class CampaignRun(Base):
         self.assertTrue(any(l.startswith("DRILL-NOW cell=lin kind=pause") for l in said))
         # The drill's lines are in run.log, tagged, and never taken for the matrix row.
         self.assertIn("| [campaign] DRILL-NOW cell=lin", (self.root / "out" / "lin" / "run.log").read_text())
-        self.assertEqual(res["final_row"], "x linux-x86_64 0.1 PASS d")
+        self.assertEqual(res["final_row"], "x linux-x86_64 0.1 PASS 2026-10-23")
         self.assertEqual(res["verdict"], "PASS")
         events = [json.loads(l)["event"] for l in
                   (self.root / "out" / "lin" / "events.jsonl").read_text().splitlines()]
@@ -784,7 +801,7 @@ class CampaignRun(Base):
         lock = threading.Lock()
 
         def make_proc(argv):
-            p = FakeProc(["linux-matrix: x linux 0 PASS d"], finish=False)
+            p = FakeProc(["linux-matrix: x linux-x86_64 0 PASS 2026-10-23"], finish=False)
             with lock:
                 running[0] += 1
                 peak[0] = max(peak[0], running[0])
@@ -824,6 +841,66 @@ class CampaignRun(Base):
         text = self.all_text() + "\n".join(said)
         self.assertNotIn(SENTINEL, text)
         self.assertNotIn(str(self.key), text)
+
+    def matrix_sh_tail(self, result):
+        """What the real scripts/matrix.sh prints last: its print_row function, run."""
+        src = (HERE / "matrix.sh").read_text()
+        fn = re.search(r"^print_row\(\) \{\n.*?^\}\n", src, re.S | re.M).group(0)
+        script = ("exec 3>/dev/null\nlog() { :; }\n" + fn
+                  + f"ROW_PRINTED=0\nHV='0.1 beta'\nRESULT={result}\nFAIL_REASON=\nCONNECTOR=codex-cli\n"
+                  + "PLATFORM=darwin-arm64\nDATE=2026-10-23\nLOG=/tmp/m.log\nprint_row\n")
+        out = subprocess.run(["sh", "-c", script], capture_output=True, text=True, check=True)
+        lines = out.stdout.splitlines()
+        self.assertTrue(lines[-1].startswith("log: "), lines)  # the shape this test is about
+        return lines
+
+    def test_a_host_cell_passes_on_the_real_matrix_sh_output(self):
+        for result, rc, verdict in (("PASS", 0, "PASS"), ("FAIL", 1, "FAIL")):
+            with self.subTest(result=result):
+                runner = FakeRunner()
+                lines = ["matrix: something"] + self.matrix_sh_tail(result)
+                runner.make_proc = lambda argv: FakeProc(lines, rc=rc)
+                camp, _ = self.make([self.host_cell("mac", "m1")], runner)
+                camp.run()
+                res = json.loads((self.root / "out" / "mac" / "result.json").read_text())
+                self.assertEqual(res["final_row"], f"codex-cli darwin-arm64 0.1_beta {result} 2026-10-23")
+                self.assertEqual(res["verdict"], verdict)
+
+    def test_a_linux_matrix_fail_after_the_row_is_the_final_row(self):
+        runner = FakeRunner()
+        runner.make_proc = lambda argv: FakeProc([
+            "codex-cli linux-x86_64 0.1 PASS 2026-10-23", "log: /logs/m.log",
+            "linux-matrix: FAIL owner rule: luna"], rc=1)
+        camp, _ = self.make([self.docker_cell("lin", "m1")], runner)
+        camp.run()
+        res = json.loads((self.root / "out" / "lin" / "result.json").read_text())
+        self.assertEqual(res["final_row"], "FAIL owner rule: luna")
+        self.assertEqual(res["verdict"], "FAIL")
+
+    def test_a_second_ctrl_c_cannot_cut_the_shutdown_short(self):
+        runner = FakeRunner()
+        seen = []
+        real_signal_group = runner.signal_group
+
+        def signal_group(proc, sig):
+            seen.append((signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)))
+            real_signal_group(proc, sig)
+        runner.signal_group = signal_group
+        started = threading.Event()
+
+        def make_proc(argv):
+            started.set()
+            return FakeProc(["matrix: running"], finish=False)
+        runner.make_proc = make_proc
+        clock = FakeClock()
+        clock.interrupt = started.is_set
+        before = signal.getsignal(signal.SIGINT)
+        camp, _ = self.make([self.host_cell("mac", "m1")], runner, clock)
+        self.assertEqual(camp.run(), 130)
+        self.assertTrue(seen)
+        for handlers in seen:
+            self.assertEqual(handlers, (signal.SIG_IGN, signal.SIG_IGN))
+        self.assertEqual(signal.getsignal(signal.SIGINT), before)
 
     def test_ctrl_c_undoes_the_drill_and_stops_every_child(self):
         runner = FakeRunner()
@@ -899,6 +976,7 @@ class Commands(Base):
         self.assertEqual(campaign.main(["build", path], runner=runner), 0)
         self.assertEqual(len(runner.calls), 1)
         self.assertEqual(runner.calls[0][2:], ["build", "codex-cli"])
+        self.assertNotIn(campaign.KEY_ENV, runner.envs[0])  # a build needs no key
 
     def test_run_refuses_shared_member_before_starting_anything(self):
         path = self.write([{"id": "a", "where": "docker", "test_member_id": "m1"},

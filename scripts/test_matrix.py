@@ -59,6 +59,7 @@ if args[0] == "entries":
     sys.exit(0)
 
 if args[0] == "seal":
+    time.sleep(float(os.environ.get("STUB_SEAL_SLEEP", "0")))
     note("seal.argv", "\n".join(args))
     note("seal.at", repr(time.time()))
     note("sealed", args[1])
@@ -277,6 +278,9 @@ SCENARIOS = {
                       ("--test", "--duration", "30"), True),
     "test_timeout": ("stubchat", {"STUB_STOP": "0"},
                      ("--test", "--duration", "60", "--timeout", "12"), True),
+    # The seal is asked for, then the budget runs out while it is still running.
+    "test_seal_slow": ("stubchat", {"STUB_STOP": "0", "STUB_SEAL_SLEEP": "10"},
+                       ("--test", "--duration", "4", "--timeout", "14"), True),
     "prompt_control": ("stubchat", {}, (), False, "go\x1b[Bnow\n"),
 }
 
@@ -373,6 +377,22 @@ class MatrixTests(unittest.TestCase):
         self.assertIn("did not finish within 12s", w.run.stderr)
         self.assertEqual(w.seen("seal.argv"), "seal\n--yes\ne0123456789abcdef")
         self.assertIn("sealing it now", w.log)
+
+    def test_a_seal_still_running_at_the_end_is_waited_for_not_killed(self) -> None:
+        w = self.worlds["test_seal_slow"]
+        self.assertNotEqual(w.run.returncode, 0)
+        self.assertIn("is still running; waiting for it", w.log)
+        self.assertIn("on the way out: exit 0", w.log)
+        self.assertEqual(w.seen("seal.argv"), "seal\n--yes\ne0123456789abcdef")
+
+    def test_a_bad_command_line_names_the_problem_in_one_line(self) -> None:
+        for args in (("stubchat",), ("--frob", "a", "b"), ("a", "b", "c"), ("a", "b", "--log")):
+            with self.subTest(args=args):
+                run = subprocess.run(["sh", str(MATRIX), *args], stdin=subprocess.DEVNULL,
+                                     capture_output=True, text=True, timeout=30)
+                self.assertEqual(run.returncode, 2)
+                self.assertEqual(len(run.stderr.strip().splitlines()), 1, run.stderr)
+                self.assertIn("see --help", run.stderr)
 
     def test_a_prompt_file_with_a_control_character_is_refused(self) -> None:
         w = self.worlds["prompt_control"]

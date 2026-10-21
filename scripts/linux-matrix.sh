@@ -122,6 +122,11 @@ usage() {
     awk 'NR > 1 && !/^#/ { exit } NR > 1 { print }' "$0" | sed 's/^# \{0,1\}//' >&2
     exit 2
 }
+# A bad command line: one line naming what is wrong.
+bad_usage() { # what
+    echo "linux-matrix: $1; see --help" >&2
+    exit 2
+}
 
 # The connector's version, from its manifest's first line (`# Codex CLI 0.153.0, ...`, or
 # `# Amp 0.0.1792209635-g24a9fe, ...`): digits.digits.digits and any -suffix, up to the comma.
@@ -483,19 +488,20 @@ esac
 
 # ------------------------------------------------------------------ on this machine
 
-[ $# -ge 1 ] || usage
+[ $# -ge 1 ] || bad_usage "no command (build, login or run)"
 action=$1
 shift
 h=""
 extra=""
 case $action in
+-h | --help) usage ;;
 build) ;;
 login | run)
-    [ $# -ge 1 ] || usage
+    [ $# -ge 1 ] || bad_usage "$action needs a connector"
     h=$1
     shift
     if [ $# -gt 0 ]; then
-        [ "$action" = run ] && [ "$1" = -- ] || usage
+        [ "$action" = run ] && [ "$1" = -- ] || bad_usage "unexpected argument $1 after $action $h"
         shift
     fi
     # matrix.sh's options, checked one by one so they can travel as plain words: what a long run
@@ -515,7 +521,7 @@ login | run)
     done
     case $h in *[!a-z0-9-]* | "") fail "the connector id may hold only a-z, 0-9 and -" ;; esac
     ;;
-*) usage ;;
+*) bad_usage "unknown command $action" ;;
 esac
 
 cell=${LINUX_MATRIX_CELL:-}
@@ -589,7 +595,10 @@ else
     https://*) ;;
     *) fail "LINUX_MATRIX_SERVER must be https://" ;;
     esac
-    case $server in *ingest.agentcommunity.org*) fail "production is never a matrix target" ;; esac
+    # Host names are case-insensitive: compare the lowercased address.
+    case $(printf '%s' "$server" | tr '[:upper:]' '[:lower:]') in
+    *ingest.agentcommunity.org*) fail "production is never a matrix target" ;;
+    esac
     member=${GOALCUP_TEST_MEMBER_ID:-$SYNTHETIC_MEMBER}
     case $member in *[!A-Za-z0-9_-]* | "") fail "GOALCUP_TEST_MEMBER_ID may hold only letters, digits, _ -" ;; esac
 fi
@@ -652,7 +661,29 @@ unlock() {
     locked=0
 }
 trap '[ "$created" = 0 ] || docker rm -f "$name" >/dev/null 2>&1; unlock' EXIT
-trap 'exit 130' INT HUP TERM
+# The run's exec job (matrix.sh in the container), once it is running.
+run_job=""
+# On a signal during a run, matrix.sh in the container is stopped first so that its cleanup can
+# seal the test run (removing the container at once would leave it open for 168 hours); at most
+# about 150 s, then the container is removed as always.
+on_signal() {
+    trap '' INT HUP TERM
+    if [ "$created" = 1 ] && [ -n "$run_job" ]; then
+        echo "linux-matrix: stopping matrix.sh in $name so that it can seal its test run (at most 150s)"
+        docker exec -u dev "$name" pkill -TERM -f scripts/matrix.sh >/dev/null 2>&1
+        waited=0
+        while [ "$waited" -lt 150 ]; do
+            if ! kill -0 "$run_job" 2>/dev/null &&
+                ! docker exec -u dev "$name" pgrep -f scripts/matrix.sh >/dev/null 2>&1; then
+                break
+            fi
+            sleep 2
+            waited=$((waited + 2))
+        done
+    fi
+    exit 130
+}
+trap on_signal INT HUP TERM
 # The lock directory names no owner, so a caller that holds it says so (GOALCUP_HEAVY_LOCK_HELD=1)
 # and is refused at once; anyone else waits a bounded time, never for ever.
 take_lock() {
@@ -758,7 +789,8 @@ if [ "$action" = run ]; then
     [ -z "${MATRIX_PROMPT_FILE:-}" ] || set -- "$@" -e MATRIX_PROMPT_FILE=$PROMPT_IN
     # $extra holds checked words only (options and digits), so it splits as meant.
     docker exec -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" $extra &
-    wait $!
+    run_job=$!
+    wait "$run_job"
     exit $?
 fi
 

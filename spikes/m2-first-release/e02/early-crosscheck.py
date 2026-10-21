@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 """NON-SHIPPING E02 Part B independent cross-check (Goal Cup M2). Python 3.9+ stdlib only.
 
     early-crosscheck.py [--eps-s S] [--delta-s S] OUT [EVIDENCE_DIR]

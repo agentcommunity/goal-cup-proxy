@@ -129,6 +129,11 @@ usage() {
   awk 'NR > 1 && !/^#/ { exit } NR > 1 { print }' "$PROG" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
+# A bad command line: one line naming what is wrong, not the whole header.
+bad_usage() { # what
+  echo "matrix: $1; see --help" >&2
+  exit 2
+}
 
 # ------------------------------------------------------------------------------ arguments
 
@@ -150,12 +155,12 @@ while [ $# -gt 0 ]; do
     --keep) KEEP=1 ;;
     --test) TEST=1 ;;
     --duration)
-      [ $# -ge 2 ] || usage
+      [ $# -ge 2 ] || bad_usage "--duration needs a number of seconds"
       DURATION=$2
       shift
       ;;
     --check-copy)
-      [ $# -ge 2 ] || usage
+      [ $# -ge 2 ] || bad_usage "--check-copy needs a configuration directory"
       CHECK_CFG=$2
       shift
       case ${2:-} in "" | -*) ;; *)
@@ -165,34 +170,34 @@ while [ $# -gt 0 ]; do
       esac
       ;;
     --log)
-      [ $# -ge 2 ] || usage
+      [ $# -ge 2 ] || bad_usage "--log needs a file"
       LOG=$2
       shift
       ;;
     --timeout)
-      [ $# -ge 2 ] || usage
+      [ $# -ge 2 ] || bad_usage "--timeout needs a number of seconds"
       TIMEOUT=$2
       TIMEOUT_SET=1
       shift
       ;;
-    -*) usage ;;
+    -*) bad_usage "unknown option $1" ;;
     *)
       if [ -z "$CONNECTOR" ]; then
         CONNECTOR=$1
       elif [ -z "$SERVER" ]; then
         SERVER=$1
       else
-        usage
+        bad_usage "unexpected argument $1 (the arguments are <connector> <server>)"
       fi
       ;;
   esac
   shift
 done
 if [ -n "$CHECK_CFG" ]; then
-  [ -z "$CONNECTOR" ] || usage
+  [ -z "$CONNECTOR" ] || bad_usage "--check-copy takes no connector or server"
   CONNECTOR=check-copy
 else
-  [ -n "$CONNECTOR" ] && [ -n "$SERVER" ] || usage
+  [ -n "$CONNECTOR" ] && [ -n "$SERVER" ] || bad_usage "a connector and a server are needed"
 fi
 
 # The approval key: only ever a FILE. A key in the environment would sit in this process's
@@ -432,7 +437,25 @@ cleanup() {
     if [ "$TEST" = 1 ] && [ -n "$SEAL_ENTRY" ] && [ -z "$SEAL_ASKED_AT" ]; then
       log "the test run's entry $SEAL_ENTRY was not sealed; sealing it now (best effort, at most 120s)"
       run_bounded seal 120 "seal --yes $SEAL_ENTRY"
-      log "goalcup seal $SEAL_ENTRY on the way out: exit $?"
+      src=$?
+      log "goalcup seal $SEAL_ENTRY on the way out: exit $src"
+      [ "$src" = 0 ] || log "seal it by hand: GOALCUP_CONFIG_DIR=$CFG goalcup seal --yes $SEAL_ENTRY"
+      log_file "goalcup seal (output)" "$ROOT/seal.out"
+      log_file "goalcup seal (stderr)" "$ROOT/seal.err"
+    elif [ "$TEST" = 1 ] && [ -n "$SEAL_ENTRY" ] && [ ! -s "$ROOT/seal.rc" ]; then
+      # A seal was asked for and is still running: let it finish (bounded) rather than kill it.
+      log "goalcup seal $SEAL_ENTRY is still running; waiting for it (at most 120s)"
+      cw=0
+      while [ ! -s "$ROOT/seal.rc" ] && [ "$cw" -lt 120 ]; do
+        sleep 2
+        cw=$((cw + 2))
+      done
+      if [ -s "$ROOT/seal.rc" ]; then
+        log "goalcup seal $SEAL_ENTRY on the way out: exit $(cat "$ROOT/seal.rc")"
+      else
+        log "goalcup seal $SEAL_ENTRY did not finish; seal it by hand: GOALCUP_CONFIG_DIR=$CFG goalcup seal --yes $SEAL_ENTRY"
+        printf 'matrix: the test run is not sealed; seal it by hand: GOALCUP_CONFIG_DIR=%s goalcup seal --yes %s\n' "$CFG" "$SEAL_ENTRY" >&3
+      fi
       log_file "goalcup seal (output)" "$ROOT/seal.out"
       log_file "goalcup seal (stderr)" "$ROOT/seal.err"
     elif [ "$TEST" = 1 ] && [ -z "$SEAL_ENTRY" ] && [ "$START_LAUNCHED" = 1 ]; then

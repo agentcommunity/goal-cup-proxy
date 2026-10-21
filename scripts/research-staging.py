@@ -4,6 +4,7 @@ ratio, ACK lag, heartbeat health. For WP-0 on staging; also an event dashboard o
 
     python3 scripts/research-staging.py [--event ID] [--since WHEN] [--json] [--top N]
                                         [--bucket NAME] [--allow-production] [--no-r2]
+                                        [--database-url-file PATH] [--cloudflare-token-file PATH]
 
   --event ID          the event (default test-staging; the staging dry run is goalcup-dryrun-staging)
   --since WHEN        only runs created at or after WHEN: an RFC 3339 time, a date, or 24h / 7d
@@ -13,9 +14,13 @@ ratio, ACK lag, heartbeat health. For WP-0 on staging; also an event dashboard o
   --allow-production  allow the production bucket goalcup-traces and a production event (still
                       read-only: a SELECT in a READ ONLY transaction, and R2 list requests)
   --no-r2             skip the R2 listing (no compressed sizes; needs no Cloudflare credentials)
+  --database-url-file PATH      a file holding the Postgres URL (preferred over DATABASE_URL)
+  --cloudflare-token-file PATH  a file holding the R2 token (preferred over CLOUDFLARE_API_TOKEN)
 
-Needs psql and, in the environment, DATABASE_URL (a Postgres URL; give it a read-only role) and,
-unless --no-r2, CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN (an R2 token with read access).
+Needs psql, the database URL (a Postgres URL; give it a read-only role) and, unless --no-r2,
+CLOUDFLARE_ACCOUNT_ID and the Cloudflare token (an R2 token with read access). The two secrets
+are best given as files (the options above); DATABASE_URL and CLOUDFLARE_API_TOKEN in the
+environment still work, with a warning, since any process of yours can read an environment.
 The queries are scripts/research-staging.sql, sent on psql's stdin; the database connection
 reaches psql through a private service file, never its command line. The Cloudflare token goes
 only into the Authorization header of the list request. Neither is ever printed.
@@ -165,7 +170,7 @@ def query_database(env, event, since, sql, runner=run_psql):
     """Run the queries; return their rows, grouped by section."""
     url = env.get("DATABASE_URL")
     if not url:
-        raise Fail("set DATABASE_URL (a read-only Postgres URL)")
+        raise Fail("give the database URL: --database-url-file PATH (or DATABASE_URL), a read-only Postgres URL")
     tmp = tempfile.mkdtemp(prefix="research-staging.")
     try:
         conf = os.path.join(tmp, "pg_service.conf")
@@ -178,12 +183,17 @@ def query_database(env, event, since, sql, runner=run_psql):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     rows = {}
-    for line in out.splitlines():
+    for n, line in enumerate(out.splitlines(), 1):
         line = line.strip()
         if not line.startswith("{"):
             continue
-        row = json.loads(line)
-        rows.setdefault(row.pop("section"), []).append(row)
+        try:
+            row = json.loads(line)
+            section = row.pop("section")
+        except (ValueError, AttributeError, KeyError):
+            raise Fail(f"psql answer line {n} is not a JSON object with a section "
+                       "(do the script and research-staging.sql match?)") from None
+        rows.setdefault(section, []).append(row)
     return rows
 
 
@@ -208,6 +218,8 @@ def fetch_json(url, token):
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             return json.loads(resp.read().decode("utf-8"))
+    except ValueError:
+        raise Fail("R2 list answered something that is not JSON") from None
     except urllib.error.HTTPError as e:
         raise Fail(f"R2 list answered HTTP {e.code}") from None
     except urllib.error.URLError as e:
@@ -506,8 +518,34 @@ def parser():
     p.add_argument("--bucket", default=STAGING_BUCKET)
     p.add_argument("--allow-production", action="store_true")
     p.add_argument("--no-r2", action="store_true")
+    p.add_argument("--database-url-file", metavar="PATH",
+                   help="a file holding the Postgres URL (instead of DATABASE_URL)")
+    p.add_argument("--cloudflare-token-file", metavar="PATH",
+                   help="a file holding the R2 token (instead of CLOUDFLARE_API_TOKEN)")
     p.add_argument("--sql", default=SQL_PATH, help=argparse.SUPPRESS)
     return p
+
+
+def load_secrets(args, env, stderr):
+    """Put the secrets from their files into env (this process's copy only); warn when one comes
+    from the environment. Never prints a value."""
+    for path, name, option in ((args.database_url_file, "DATABASE_URL", "--database-url-file"),
+                               (args.cloudflare_token_file, "CLOUDFLARE_API_TOKEN",
+                                "--cloudflare-token-file")):
+        if path:
+            try:
+                with open(path) as f:
+                    value = f.read().strip()
+            except OSError as e:
+                raise Fail(f"cannot read {option} {path}: {e.strerror}") from None
+            except UnicodeDecodeError:
+                raise Fail(f"{option} {path} is not text") from None
+            if not value:
+                raise Fail(f"{option} {path} is empty")
+            env[name] = value
+        elif env.get(name):
+            stderr.write(f"research-staging: warning: {name} is taken from the environment; "
+                         f"prefer {option} (a file)\n")
 
 
 def main(argv=None, env=None, psql=run_psql, fetch=fetch_json, stdout=None, stderr=None):
@@ -516,6 +554,8 @@ def main(argv=None, env=None, psql=run_psql, fetch=fetch_json, stdout=None, stde
     secrets = secrets_of(env)
     try:
         args = parser().parse_args(argv)
+        load_secrets(args, env, stderr)
+        secrets = secrets_of(env)
         if not BUCKET_RE.match(args.bucket):
             raise Fail("bad bucket name")
         if args.bucket != STAGING_BUCKET and not args.allow_production:
@@ -523,11 +563,16 @@ def main(argv=None, env=None, psql=run_psql, fetch=fetch_json, stdout=None, stde
         if not args.no_r2:
             for name in ("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"):
                 if not env.get(name):
-                    raise Fail(f"set {name}, or pass --no-r2")
+                    raise Fail(f"set {name}"
+                               + (" (or --cloudflare-token-file)" if name == "CLOUDFLARE_API_TOKEN" else "")
+                               + ", or pass --no-r2")
             if not ACCOUNT_RE.match(env["CLOUDFLARE_ACCOUNT_ID"]):
                 raise Fail("bad CLOUDFLARE_ACCOUNT_ID")
-        with open(args.sql) as f:
-            sql = check_read_only(f.read())
+        try:
+            with open(args.sql) as f:
+                sql = check_read_only(f.read())
+        except OSError as e:
+            raise Fail(f"cannot read the queries {args.sql}: {e.strerror}") from None
         since = args.since or "-infinity"
         rows = query_database(env, args.event, since, sql, runner=psql)
         event = (rows.get("event") or [None])[0]

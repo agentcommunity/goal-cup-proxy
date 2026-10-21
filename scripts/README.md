@@ -73,3 +73,6 @@ request: `test_ci_scope.py`, `test_check_links.py`, `test_check_connector.py` an
 | `test_research_sample.py` | `research-sample.py` |
 | `test_research_staging.py` | `research-staging.py` |
 | `test_research_watch.py` | `research-watch.py` |
+| `test_third_party_licenses.py` | `third-party-licenses.py` |
+
+TODO (after the event): move the helpers `campaign.py`, `matrix.sh` and `linux-matrix.sh` repeat into a shared library, and split `campaign.py` and `matrix.sh` into smaller files.

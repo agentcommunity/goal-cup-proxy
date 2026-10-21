@@ -359,6 +359,56 @@ class Secrets(unittest.TestCase):
             self.assertTrue(rs.statements(Path(f"{log}.sql").read_text())[0].startswith("begin isolation level repeatable read read only"))
 
 
+class SecretFiles(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db = Path(self.tmp.name, "db-url")
+        self.db.write_text(DB_URL + "\n")
+        self.token = Path(self.tmp.name, "token")
+        self.token.write_text(TOKEN + "\n")
+
+    def test_secrets_from_files_are_used_and_never_printed(self):
+        environ = {"CLOUDFLARE_ACCOUNT_ID": ACCOUNT, "PATH": os.environ.get("PATH", "")}
+        code, out, err, psql, r2 = run_main(
+            ["--database-url-file", str(self.db), "--cloudflare-token-file", str(self.token)],
+            environ=environ)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(err, "")  # no warning: nothing came from the environment
+        self.assertIn(f"password={PASSWORD}", psql.calls[0]["service"])
+        self.assertEqual(r2.tokens, [TOKEN] * len(r2.urls))
+        for s in (DB_URL, PASSWORD, TOKEN):
+            self.assertNotIn(s, out + err + " ".join(psql.calls[0]["argv"]))
+
+    def test_secrets_from_the_environment_warn(self):
+        code, _, err, _, _ = run_main([])
+        self.assertEqual(code, 0, err)
+        self.assertIn("DATABASE_URL is taken from the environment", err)
+        self.assertIn("CLOUDFLARE_API_TOKEN is taken from the environment", err)
+        for s in (DB_URL, PASSWORD, TOKEN):
+            self.assertNotIn(s, err)
+
+    def test_an_unreadable_secret_file_fails_clearly(self):
+        missing = str(Path(self.tmp.name, "nope"))
+        code, _, err, psql, _ = run_main(["--no-r2", "--database-url-file", missing])
+        self.assertEqual(code, 1)
+        self.assertIn("cannot read --database-url-file", err)
+        self.assertEqual(psql.calls, [])
+
+    def test_an_unreadable_sql_file_or_bad_psql_answer_fails_clearly(self):
+        code, _, err, _, _ = run_main(["--no-r2", "--sql", str(Path(self.tmp.name, "none.sql"))])
+        self.assertEqual(code, 1)
+        self.assertIn("cannot read the queries", err)
+        self.assertNotIn("Traceback", err)
+
+        class BadPsql(FakePsql):
+            def __call__(self, argv, sql, env):
+                return '{"section": "event", "staging": tru\n'
+        code, _, err, _, _ = run_main(["--no-r2"], psql=BadPsql(fixture_rows()))
+        self.assertEqual(code, 1)
+        self.assertIn("is not a JSON object", err)
+
+
 class Args(unittest.TestCase):
     def test_since_forms(self):
         from datetime import datetime, timezone

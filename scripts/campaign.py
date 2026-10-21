@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run many long test cells in parallel, with drills, and write machine-readable reports.
 
-    campaign.py check CONFIG [--cells a,b] [--parallel N] [--json]
+    campaign.py check CONFIG [--cells a,b] [--parallel N] [--json] [--static]
     campaign.py build CONFIG
     campaign.py login CONFIG CELL
     campaign.py run CONFIG [--cells a,b] [--parallel N] [--out DIR]
@@ -40,6 +40,7 @@ cells may share a member.
 """
 
 import argparse
+import copy
 import csv
 from datetime import datetime, timedelta, timezone
 import json
@@ -79,6 +80,9 @@ ACK_LAG_OK_S = 120
 ACK_RECOVERY_WINDOW_S = 25 * 60
 INSUFFICIENT = "insufficient data"
 CAMPAIGN_TAG = "[campaign]"
+# The matrix row (scripts/matrix.sh print_row): connector, platform-arch, harness version, result,
+# date. matrix.sh prints `log: <path>` after it, and linux-matrix.sh prefixes it.
+MATRIX_ROW = re.compile(r"^\S+ \S+-\S+ \S+ (PASS|FAIL) \d{4}-\d\d-\d\d$")
 EARLY_STOP = re.compile(
     r"was stopped: |replaced by a newer run|harness exited|has exited \(|linux-matrix: FAIL")
 
@@ -196,6 +200,17 @@ def child_env(extra):
     return env
 
 
+def row_of(line):
+    """The matrix row in one line of a child's output (without a `linux-matrix: ` prefix), or a
+    linux-matrix FAIL / OWNER STEP line; None for anything else."""
+    text = (line or "").strip()
+    if text.startswith("linux-matrix: "):
+        text = text[len("linux-matrix: "):]
+        if text.startswith(("FAIL", "OWNER STEP")):
+            return text
+    return text if MATRIX_ROW.match(text) else None
+
+
 def container_name(cell):
     return f"goalcup-linux-matrix-{cell['connector']}-{cell['id']}"
 
@@ -290,6 +305,9 @@ def validate(cfg, cells, parallel):
         v = cfg.get(name)
         if not isinstance(v, int) or isinstance(v, bool) or v < 1:
             errors.append(f"defaults.{name} must be a positive integer")
+    slack = cfg.get("matrix_timeout_slack_s")
+    if slack is not None and (not isinstance(slack, int) or isinstance(slack, bool) or slack < 0):
+        errors.append("defaults.matrix_timeout_slack_s must be an integer of at least 0")
 
     seen_ids, dirs, volumes, members = set(), {}, {}, {}
     for cell in cells:
@@ -454,12 +472,16 @@ def sampler_command(cfg, cell, cell_dir):
     """(argv, env, host path of the CSV)."""
     every = str(cfg["sample_every_s"])
     if cell["where"] == "docker":
-        argv = ["docker", "exec", container_name(cell), "python3", "/src/scripts/research-sample.py",
-                "--config", "/vol/cfg", "--out", "/logs/samples.csv", "--every", every]
+        argv = ["docker", "exec", "-u", "dev", container_name(cell), "python3",
+                "/src/scripts/research-sample.py", "--config", "/vol/cfg",
+                "--out", "/logs/samples.csv", "--every", every]
         return argv, child_env({}), str(Path(cell_dir) / "logs" / "samples.csv")
     out = str(Path(cell_dir) / "samples.csv")
+    # Only this cell's processes: its daemon runs as `goalcup-daemon --config <dir>/daemon.toml`,
+    # so another cell's (or anyone's) goalcup on this machine is not counted.
+    own = cell["config_dir"].rstrip("/") + "/"
     argv = [sys.executable, str(HERE / "research-sample.py"), "--config", cell["config_dir"],
-            "--out", out, "--every", every]
+            "--out", out, "--every", every, "--pid-match", own]
     return argv, child_env({}), out
 
 
@@ -513,7 +535,7 @@ class DockerDrills:
     def begin(self, drill, ctx):
         kind = drill["kind"]
         self.say(f"DRILL-NOW cell={self.cell_id} kind={kind} seconds={drill.get('seconds', 0)} "
-                 f"do: {drill.get('text') or 'note' if kind == 'note' else 'automatic (docker)'}")
+                 f"do: {(drill.get('text') or 'note') if kind == 'note' else 'automatic (docker)'}")
         if kind == "network_cut":
             nets = self.networks()
             ctx["networks"] = []
@@ -969,7 +991,8 @@ class CellRun:
         self.lock = threading.Lock()
         self.last_state_write = None
         self.start_mono = None
-        self.last_child_line = None
+        self.start_utc = None
+        self.final_row = None
         self.result = None
         self.write_state(force=True)
 
@@ -980,13 +1003,18 @@ class CellRun:
         with self.lock, open(self.dir / "events.jsonl", "a") as f:
             f.write(json.dumps(doc, sort_keys=True) + "\n")
 
+    def set_state(self, **fields):
+        with self.lock:
+            self.state.update(fields)
+
     def write_state(self, force=False):
         now = self.camp.clock.monotonic()
-        if not force and self.last_state_write is not None and now - self.last_state_write < 5:
-            return
-        self.last_state_write = now
         with self.lock:
-            write_json(self.dir / "state.json", self.state)
+            if not force and self.last_state_write is not None and now - self.last_state_write < 5:
+                return
+            self.last_state_write = now
+            snapshot = copy.deepcopy(self.state)
+            write_json(self.dir / "state.json", snapshot)
 
     def logline(self, text, own=False):
         """One line into run.log; the campaign's own lines (drills) are tagged [campaign]."""
@@ -1001,7 +1029,7 @@ class CellRun:
     def run(self):
         try:
             if not self.camp.acquire_slot(self.stop):
-                self.state["state"] = "not started"
+                self.set_state(state="not started")
                 self.write_result(exit_code=None, interrupted=True, started=False)
                 return
             try:
@@ -1024,9 +1052,9 @@ class CellRun:
             (self.dir / "logs").mkdir(exist_ok=True)
         self.start_mono = camp.clock.monotonic()
         self.start_utc = camp.clock.utcnow()
-        self.state.update(state="running", start_utc=utc(self.start_utc))
+        self.set_state(state="running", start_utc=utc(self.start_utc))
         self.proc = camp.runner.popen(argv, env=child_env(extra), cwd=str(REPO))
-        self.state["pid"] = getattr(self.proc, "pid", None)
+        self.set_state(pid=getattr(self.proc, "pid", None))
         self.event("start", argv=argv)
         self.write_state(force=True)
         camp.say(f"campaign: cell {cell['id']} started ({cell['where']} {cell['connector']}, "
@@ -1048,14 +1076,24 @@ class CellRun:
 
     def _read(self):
         for raw in self.proc.stdout:
-            text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
-            text = text.rstrip("\r\n")
-            self.logline(text)
-            if text.strip():
-                self.last_child_line = text.strip()
-                self.state["last_line"] = text[-300:]
-                self.state["last_line_utc"] = utc(self.camp.clock.utcnow())
-                self.write_state()
+            # One bad line (a full disk, a state write that failed) never stops the draining:
+            # a child whose pipe is not read blocks.
+            try:
+                text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+                text = text.rstrip("\r\n")
+                row = row_of(text)
+                if row:
+                    self.final_row = row
+                self.logline(text)
+                if text.strip():
+                    self.set_state(last_line=text[-300:],
+                                   last_line_utc=utc(self.camp.clock.utcnow()))
+                    self.write_state()
+            except Exception as e:  # noqa: BLE001 - keep reading
+                try:
+                    self.event("reader-error", error=repr(e))
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _alive(self):
         return self.proc is not None and self.proc.poll() is None
@@ -1069,11 +1107,13 @@ class CellRun:
             ex = HostDrills(self._say_drill, cell["id"], self.camp.clock, self.camp.platform)
 
         def record(rec):
-            if rec.get("event") == "drill-start":
-                self.state["active_drill"] = {k: rec[k] for k in ("kind", "seconds", "started_utc")}
-            else:
-                self.state["active_drill"] = None
-                self.state["drills"].append({k: v for k, v in rec.items() if k != "event"})
+            with self.lock:
+                if rec.get("event") == "drill-start":
+                    self.state["active_drill"] = {k: rec[k]
+                                                  for k in ("kind", "seconds", "started_utc")}
+                else:
+                    self.state["active_drill"] = None
+                    self.state["drills"].append({k: v for k, v in rec.items() if k != "event"})
             self.event(rec.get("event", "drill-skipped"), **{k: v for k, v in rec.items()
                                                              if k != "event"})
             self.write_state(force=True)
@@ -1091,7 +1131,7 @@ class CellRun:
         camp, cell = self.camp, self.cell
         argv, env, path = sampler_command(camp.cfg, cell, self.dir)
         self.sampler_info["path"] = path
-        self.state["sampler_path"] = path
+        self.set_state(sampler_path=path)
         if cell["where"] == "docker":
             name = container_name(cell)
             while not self.stop.is_set():
@@ -1126,22 +1166,21 @@ class CellRun:
         clock = self.camp.clock
         end_utc = clock.utcnow()
         cell = self.cell
-        row = self.last_child_line
-        if row and row.startswith("linux-matrix: "):
-            row = row[len("linux-matrix: "):]
-        ok_row = bool(row) and re.search(r"(^|\s)PASS(\s|$)", row) and not row.startswith(
-            ("FAIL", "OWNER STEP"))
+        # The last matrix row the child printed (matrix.sh prints `log: <path>` after it).
+        row = self.final_row
+        m = MATRIX_ROW.match(row or "")
+        ok_row = bool(m) and m.group(1) == "PASS"
         verdict = "PASS" if exit_code == 0 and ok_row and not interrupted and not error else "FAIL"
         info = {
             "cell": cell["id"], "connector": cell["connector"], "where": cell["where"],
             "test_member_id": cell["test_member_id"], "duration_s": cell["duration_s"],
-            "start_utc": utc(getattr(self, "start_utc", None)) if started else None,
+            "start_utc": utc(self.start_utc) if started else None,
             "end_utc": utc(end_utc) if started else None,
             "elapsed_s": round(clock.monotonic() - self.start_mono, 1)
             if started and self.start_mono is not None else None,
             "exit_code": exit_code, "final_row": row, "verdict": verdict,
             "interrupted": bool(interrupted), "error": error,
-            "drills": self.drills or self.state["drills"],
+            "drills": self.drills or list(self.state["drills"]),
             "sampler": dict(self.sampler_info),
             "run_log": str(self.dir / "run.log"),
             "container": container_name(cell) if cell["where"] == "docker" else None,
@@ -1152,8 +1191,8 @@ class CellRun:
         info["overall"] = overall(info["pass_lines"])
         self.result = info
         write_json(self.dir / "result.json", info)
-        self.state.update(state="interrupted" if interrupted else "done", verdict=verdict,
-                          overall=info["overall"], end_utc=info["end_utc"], active_drill=None)
+        self.set_state(state="interrupted" if interrupted else "done", verdict=verdict,
+                       overall=info["overall"], end_utc=info["end_utc"], active_drill=None)
         self.write_state(force=True)
         self.event("end", exit_code=exit_code, verdict=verdict, overall=info["overall"])
         self.camp.say(f"campaign: cell {cell['id']} {verdict} (overall {info['overall']}) "
@@ -1249,16 +1288,23 @@ class Campaign:
         if not self.runs:
             self.all_done.set()
         interrupted = False
+        saved = None
         try:
-            while not self.all_done.is_set():
-                self.clock.wait(self.all_done, 1.0)
-        except KeyboardInterrupt:
-            interrupted = True
-            self.say("campaign: stopping: undoing drills, then stopping every cell")
-            self.shutdown()
-        for t in threads:
-            t.join(timeout=180)
-        self.write_summary()
+            try:
+                while not self.all_done.is_set():
+                    self.clock.wait(self.all_done, 1.0)
+            except KeyboardInterrupt:
+                interrupted = True
+                # A second Ctrl-C (or SIGTERM) must not cut the shutdown short: drills are undone
+                # and children reaped first.
+                saved = ignore_stop_signals()
+                self.say("campaign: stopping: undoing drills, then stopping every cell")
+                self.shutdown()
+            for t in threads:
+                t.join(timeout=180)
+            self.write_summary()
+        finally:
+            restore_signals(saved)
         self.say(f"campaign: summary {Path(self.out) / 'summary.json'}")
         if interrupted:
             return 130
@@ -1266,7 +1312,16 @@ class Campaign:
                  for r in self.runs)
         return 0 if ok else 1
 
-    def shutdown(self, grace=60):
+    def shutdown(self, grace=200):
+        # grace: linux-matrix.sh waits up to 150 s for matrix.sh to seal its test run, and
+        # matrix.sh up to 120 s for a seal already asked for.
+        saved = ignore_stop_signals()
+        try:
+            self._shutdown(grace)
+        finally:
+            restore_signals(saved)
+
+    def _shutdown(self, grace):
         self.stopping.set()
         for r in self.runs:
             r.stop.set()
@@ -1298,6 +1353,27 @@ class Campaign:
                     proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     pass
+
+
+def ignore_stop_signals():
+    """Ignore SIGINT and SIGTERM (main thread only); what restore_signals needs, or None."""
+    if threading.current_thread() is not threading.main_thread():
+        return None
+    saved = {}
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            saved[sig] = signal.signal(sig, signal.SIG_IGN)
+        except (ValueError, OSError):
+            pass
+    return saved
+
+
+def restore_signals(saved):
+    for sig, handler in (saved or {}).items():
+        try:
+            signal.signal(sig, handler if handler is not None else signal.SIG_DFL)
+        except (ValueError, OSError, TypeError):
+            pass
 
 
 def write_summary_files(out, cells, extra=None):
@@ -1434,7 +1510,8 @@ def cmd_build(args, runner):
         for m in errors:
             print(f"error {m}", file=sys.stderr)
         return 2
-    env = child_env({KEY_ENV: cfg["approval_key_file"], "LINUX_MATRIX_SERVER": cfg["server"]})
+    # A build needs no approval key, so none is passed.
+    env = child_env({"LINUX_MATRIX_SERVER": cfg["server"]})
     connectors = sorted({c["connector"] for c in cfg["cells"] if c["where"] == "docker"})
     if not connectors:
         print("campaign: no docker cell; nothing to build")
@@ -1521,28 +1598,28 @@ def build_parser():
     p = argparse.ArgumentParser(prog="campaign.py", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=True)
-    c = sub.add_parser("check")
-    c.add_argument("config")
-    c.add_argument("--cells")
-    c.add_argument("--parallel", type=int, default=4)
-    c.add_argument("--json", action="store_true")
+    c = sub.add_parser("check", help="validate a config (and probe docker and sign-ins)")
+    c.add_argument("config", help="the campaign config (JSON)")
+    c.add_argument("--cells", help="comma-separated cell ids (default: every cell)")
+    c.add_argument("--parallel", type=int, default=4, help="cells at once (default 4)")
+    c.add_argument("--json", action="store_true", help="print the result as JSON")
     c.add_argument("--static", action="store_true", help="no docker or file probes")
-    b = sub.add_parser("build")
-    b.add_argument("config")
-    l = sub.add_parser("login")
-    l.add_argument("config")
-    l.add_argument("cell")
-    r = sub.add_parser("run")
-    r.add_argument("config")
-    r.add_argument("--cells")
-    r.add_argument("--parallel", type=int, default=4)
-    r.add_argument("--out")
-    s = sub.add_parser("status")
-    s.add_argument("dir")
-    s.add_argument("--json", action="store_true")
-    e = sub.add_parser("evaluate")
-    e.add_argument("dir")
-    e.add_argument("--json", action="store_true")
+    b = sub.add_parser("build", help="build the images and binaries for the docker cells")
+    b.add_argument("config", help="the campaign config (JSON)")
+    l = sub.add_parser("login", help="sign one cell's harness in (interactive)")
+    l.add_argument("config", help="the campaign config (JSON)")
+    l.add_argument("cell", help="the cell id")
+    r = sub.add_parser("run", help="run the cells with their drills and samplers")
+    r.add_argument("config", help="the campaign config (JSON)")
+    r.add_argument("--cells", help="comma-separated cell ids (default: every cell)")
+    r.add_argument("--parallel", type=int, default=4, help="cells at once (default 4)")
+    r.add_argument("--out", help="output directory (default under the temporary directory)")
+    s = sub.add_parser("status", help="show a campaign's live state")
+    s.add_argument("dir", help="the campaign's output directory")
+    s.add_argument("--json", action="store_true", help="print the state as JSON")
+    e = sub.add_parser("evaluate", help="recompute the pass lines from the files")
+    e.add_argument("dir", help="the campaign's output directory")
+    e.add_argument("--json", action="store_true", help="print the results as JSON")
     return p
 
 

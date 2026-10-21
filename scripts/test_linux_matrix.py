@@ -25,7 +25,8 @@ echo "$*" >> "$STUB_LOG"
 case "$*" in "build "*) cat >> "$STUB_LOG.dockerfiles" ;; esac
 case "$*" in *inner-home-ready*) echo "${STUB_HOME_READY:-no}" ;; esac
 case "$*" in "ps -q "*) [ -z "${STUB_BUSY:-}" ] || echo "$STUB_BUSY" ;; esac
-if [ -n "${STUB_SLEEP:-}" ]; then case "$*" in *"$STUB_SLEEP"*) sleep 15 ;; esac; fi
+if [ -n "${STUB_SLEEP:-}" ]; then case "$*" in *"$STUB_SLEEP"*) sleep "${STUB_SLEEP_S:-15}" ;; esac; fi
+case "$*" in *" pgrep "*) [ -z "${STUB_PGREP_NONE:-}" ] || exit 1 ;; esac
 if [ -n "${STUB_FAIL:-}" ]; then case "$*" in *"$STUB_FAIL"*) exit 1 ;; esac; fi
 exit 0
 """
@@ -130,10 +131,40 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertNotIn(SENTINEL, run.stdout + run.stderr)
 
     def test_production_is_refused(self) -> None:
-        run = self.run_script("run", "codex-cli",
-                              LINUX_MATRIX_SERVER="https://ingest.agentcommunity.org")
-        self.assertNotEqual(run.returncode, 0)
+        for server in ("https://ingest.agentcommunity.org", "https://INGEST.AgentCommunity.ORG/",
+                       "https://x.Ingest.agentcommunity.org"):
+            with self.subTest(server=server):
+                run = self.run_script("run", "codex-cli", LINUX_MATRIX_SERVER=server)
+                self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+                self.assertIn("production", run.stdout)
+                self.assertEqual(self.log.read_text(), "")
+
+    def test_a_bad_command_line_names_the_problem_in_one_line(self) -> None:
+        for args in ((), ("frobnicate",), ("run",), ("login", "codex-cli", "extra")):
+            with self.subTest(args=args):
+                run = self.run_script(*args)
+                self.assertEqual(run.returncode, 2)
+                self.assertEqual(len(run.stderr.strip().splitlines()), 1, run.stderr)
+                self.assertIn("see --help", run.stderr)
         self.assertEqual(self.log.read_text(), "")
+
+    def test_a_signal_during_a_run_lets_matrix_seal_before_the_container_goes(self) -> None:
+        proc = self.popen("run", "codex-cli", STUB_SLEEP="inner-run", STUB_SLEEP_S="3",
+                          STUB_PGREP_NONE="1")
+        deadline = time.monotonic() + 30
+        while "inner-run" not in self.log.read_text() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        time.sleep(0.3)
+        proc.send_signal(signal.SIGTERM)
+        self.assertEqual(proc.wait(timeout=60), 130)
+        proc.stdout.close()
+        proc.stderr.close()
+        lines = self.log.read_text().splitlines()
+        name = f"goalcup-linux-matrix-codex-cli-{proc.pid}"
+        stop = f"exec -u dev {name} pkill -TERM -f scripts/matrix.sh"
+        self.assertIn(stop, lines)
+        self.assertEqual(lines[-1], f"rm -f {name}")
+        self.assertLess(lines.index(stop), len(lines) - 1)
 
     def test_login_without_a_terminal_stops_at_the_owner_step(self) -> None:
         run = self.run_script("login", "codex-cli")

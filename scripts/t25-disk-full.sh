@@ -50,7 +50,9 @@ cleanup() {
   fi
   rm -f "$image"
 }
-trap 'cleanup; unhosts' EXIT INT TERM HUP
+# On a signal, exit (the EXIT trap cleans up); never go on with the next row.
+trap 'cleanup; unhosts' EXIT
+trap 'exit 130' INT TERM HUP
 
 mkdir -p "$work" "$mnt" "$out"
 # The controlled endpoint's names (RFC 6761 `.localhost`) do not resolve on every resolver;
