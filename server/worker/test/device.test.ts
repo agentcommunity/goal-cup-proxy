@@ -159,7 +159,14 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
     assert.equal(first.status, 201, JSON.stringify(first.body));
     const again = await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "same" }) });
     assert.equal(again.status, 200, JSON.stringify(again.body));
-    assert.deepEqual(again.body, first.body);
+    // The clock moves between the two answers, so seconds_left may be a second less, never more.
+    const sameRun = (body: Record<string, unknown>) => {
+      const { seconds_left, ...rest } = body;
+      const { seconds_left: firstLeft, ...firstRest } = first.body;
+      assert.deepEqual(rest, firstRest);
+      assert.ok(typeof seconds_left === "number" && seconds_left <= firstLeft && seconds_left > firstLeft - 60, JSON.stringify(body));
+    };
+    sameRun(again.body);
 
     const other = await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "different" }) });
     assertError(other, 409, "conflict");
@@ -168,7 +175,7 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
     // After the receipt, still the same run.
     const r = await api.call("POST", `/v1/runs/${first.body.run_id}/receipt`, { token, json: { entry_id: first.body.entry_id, chain_head: "b".repeat(64) } });
     assert.equal(r.status, 200);
-    assert.deepEqual((await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "same" }) })).body, first.body);
+    sameRun((await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "same" }) })).body);
   });
 
   test("a member's second credential opens a second run, which replaces the first", async () => {

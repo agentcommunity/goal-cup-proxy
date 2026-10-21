@@ -593,7 +593,9 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
   });
 
   test("past the deadline: stop is true on a heartbeat and on GET", async () => {
-    await sleepUntil(alice.deadline);
+    // The four opens can straddle a second on the server's clock, so bob's or dave's run can end a
+    // second after alice's. The tests below need every one of them past its deadline.
+    await sleepUntil(new Date(Math.max(...[alice, bob, dave].map((r) => Date.parse(r.deadline)))).toISOString());
     const r = await beat(alice, ALICE, a1.lastSeq, a1.head, false);
     assert.equal(r.status, 200);
     assert.deepEqual(r.body, { stop: true, deadline_at: alice.deadline, seconds_left: 0, reason: "deadline" });
