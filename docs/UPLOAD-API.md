@@ -324,6 +324,35 @@ heartbeat time (whichever entry sent it), and the server keeps the connection's 
 country on the heartbeat and as the run's latest pair, as for the open call. The notices that follow
 from these are under "What the server does on its own".
 
+A third optional field, `vitals`, says how the tracer itself is doing:
+
+```json
+"vitals": {"disk_free_bytes": 21474836480, "disk_short": false, "agent_paused": null,
+           "rss_bytes": 83886080, "cpu_ms": 41250, "open_files": 37}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `disk_free_bytes` | u64 | Free space on the disk that holds the run's files |
+| `disk_short` | bool | The tracer considers that space short |
+| `agent_paused` | `"disk"` or `null` | `"disk"`: the tracer has paused the agent because the disk is almost full, and resumes it by itself once there is space again |
+| `rss_bytes`, `cpu_ms`, `open_files` | u64 | Resident memory, CPU time used so far, and open files of the tracer's own processes |
+
+**Scope.** The vitals cover only the tracer's own processes plus the machine-wide free disk space.
+They never describe other processes, the agent's work, file names or paths. The server keeps them on
+the heartbeat and as the run's latest vitals; they are in no answer, key or log, and are not public.
+
+**Shape.** The whole object and each field may be absent, and `null` means absent. Numbers are whole,
+non-negative, at most 2^53 - 1. Keys the server does not know are ignored (and not stored). A known
+field of the wrong type, an `agent_paused` other than `"disk"` or `null`, or a `vitals` that is not an
+object is `400 malformed`, like any other field; the heartbeat is then not recorded.
+
+**The disk pause.** A heartbeat whose vitals say `"agent_paused": "disk"` starts a disk pause, if one
+is not already running. A heartbeat with vitals that do not say it (`agent_paused` `null` or absent)
+ends it. A heartbeat without `vitals` neither starts nor ends one. A pause that starts is owed one
+`disk_full` email, unless the run's last owed one started less than 6 hours before (at most one
+`disk_full` email per run per 6 hours); see "What the server does on its own".
+
 `200`: `{"stop": <bool>, "deadline_at": "…", "seconds_left": <u64>, "reason": "deadline" | "replaced" | null}`.
 `seconds_left` is the time left (see the open call). `stop` is
 `true` once the server's clock is at or past `ends_at`: **the run is over**. The tracer then stops
@@ -425,7 +454,7 @@ repository does not exist or is empty (`404`, `409`) is kept as "no commit". Any
 none, keeps nothing and the next tick asks again. Runs that ended more than 48 hours ago and are
 closed are not asked.
 
-**The six emails.** Each is queued at most once per run, kind and key. None is queued for a practice
+**The seven emails.** Each is queued at most once per run, kind and key. None is queued for a practice
 run, and none after the run's end except `ended`. A test run mails its operator, with `[TEST]` in
 the subject.
 
@@ -437,6 +466,7 @@ the subject.
 | `idle_6h` | the same, 6 hours | last model request |
 | `recording` | a heartbeat has flagged the run (`gaps` or `failed`) | run |
 | `ended` | the run reached its deadline (a replaced run is not the main run and has none) and the commit was recorded, or an hour has passed without it | run |
+| `disk_full` | a heartbeat's vitals started a disk pause (`agent_paused: "disk"`) and no `disk_full` was owed for the run in the 6 hours before | start of that pause |
 
 The last model request is unset until a heartbeat first reports `model_requests`, so a tracer that
 never reports gets no idle email; once set, it moves whenever any entry's count first appears or
@@ -444,7 +474,14 @@ grows (a continue's new process reporting 2 after the old one reached 50 counts)
 and goes quiet again gets a new `silence`; a new model request starts a new idle period. The
 `ended` payload holds the end time, the commit (or none) and the repository.
 
+`disk_full` tells the member that the tracer paused the agent because the disk is almost full, that
+the agent resumes by itself once disk space is freed, and to type "keep going" if it still seems
+stuck. The cron queues it within one tick of the pause starting, even if the pause has ended by then
+or the run is silent; its payload holds the time the pause started. The 6-hour limit is kept where
+the heartbeat is stored, so a disk that fills and frees in a loop mails at most once in 6 hours.
+
 **What is stored, and only on the server.** The outbox row holds the run, the member, the kind, the
 key and a small payload (times, hours, the commit, the repository). The run holds the machine facts
-from the open call, the IP address and country of the open call, and the latest pair (moved by each
-`continue` and heartbeat). None of it is in any answer, key or log, and none of it is public.
+from the open call, the IP address and country of the open call, the latest pair (moved by each
+`continue` and heartbeat), the latest heartbeat vitals, and when the current disk pause and the last
+owed `disk_full` began. None of it is in any answer, key or log, and none of it is public.

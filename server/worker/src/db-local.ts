@@ -41,8 +41,9 @@ import type {
   SealResult,
   StoreReceiptResult,
   TickRun,
+  Vitals,
 } from "./db.ts";
-import { CLOSE_AFTER_SECONDS, FIRST_SEQ, GENESIS, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
+import { CLOSE_AFTER_SECONDS, DISK_NOTICE_GAP_SECONDS, FIRST_SEQ, GENESIS, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
 import type { StartReceipt } from "./sign.ts";
 import { addSeconds, formatTime, sha256Hex, toHex } from "./util.ts";
 
@@ -62,6 +63,7 @@ interface StoredEntry extends EntryRow {
     head: string;
     offset_local: number;
     recording: string | null;
+    vitals?: Vitals | null;
     client_ip: string | null;
     client_country: string | null;
   } | null;
@@ -85,6 +87,10 @@ interface StoredRun extends Omit<RunRow, "first_entry_id" | "current_entry_id" |
   flag_reason?: "gaps" | "failed" | null;
   final_commit?: string | null;
   final_commit_at?: string | null;
+  /** The latest vitals a heartbeat sent; the start of the running disk pause; the start of the latest pause owed a disk_full email. */
+  last_vitals?: Vitals | null;
+  disk_paused_at?: string | null;
+  disk_notice_at?: string | null;
   entries: StoredEntry[];
 }
 
@@ -308,6 +314,9 @@ export class LocalDb implements Db {
       flag_reason: null,
       final_commit: null,
       final_commit_at: null,
+      last_vitals: null,
+      disk_paused_at: null,
+      disk_notice_at: null,
       entries: [newEntry(a.entry_id, a.run_id, 0, a)],
     };
     await this.#keep(run);
@@ -382,7 +391,7 @@ export class LocalDb implements Db {
       if (run.status === "abandoned" || run.status === "incomplete") return { answer: "closed" };
       const entry = entryOf(run, a.entry_id);
       if (entry === undefined) return { answer: "not_found" };
-      const note = { at: a.at, seq: a.seq, head: a.head, offset_local: a.offset_local, recording: a.recording, client_ip: a.client_ip, client_country: a.client_country };
+      const note = { at: a.at, seq: a.seq, head: a.head, offset_local: a.offset_local, recording: a.recording, vitals: a.vitals, client_ip: a.client_ip, client_country: a.client_country };
       if (!a.final) {
         // A sealed entry has nothing left to record.
         if (entry.sealed_at !== null) return { answer: "recorded" };
@@ -557,8 +566,8 @@ export class LocalDb implements Db {
 
 /**
  * `entry` with the heartbeat noted, in `run`, and the run-level facts it adds: its time, the latest
- * connection (a missing one keeps the last), the first flag, and an entry's first or higher
- * `model_requests` (each entry counts from zero).
+ * connection (a missing one keeps the last), the first flag, an entry's first or higher
+ * `model_requests` (each entry counts from zero), the latest vitals and the disk pause they report.
  */
 function withSignals(run: StoredRun, entry: StoredEntry, a: HeartbeatArgs): StoredRun {
   const flag = a.recording === "gaps" || a.recording === "failed" ? a.recording : null;
@@ -570,7 +579,18 @@ function withSignals(run: StoredRun, entry: StoredEntry, a: HeartbeatArgs): Stor
     last_client_country: a.client_country ?? run.last_client_country ?? null,
     ...(flag !== null && run.flagged_at == null ? { flagged_at: a.at, flag_reason: flag } : {}),
     ...(grew ? { last_model_request_at: a.at } : {}),
+    ...diskPause(run, a),
   };
+}
+
+/** The run's vitals and disk pause after this heartbeat (the same rule as the database's note_heartbeat). */
+function diskPause(run: StoredRun, a: HeartbeatArgs): Pick<StoredRun, "last_vitals" | "disk_paused_at" | "disk_notice_at"> {
+  if (a.vitals === null) return {}; // no vitals: nothing said about a pause
+  if (a.vitals.agent_paused !== "disk") return { last_vitals: a.vitals, disk_paused_at: null };
+  if (run.disk_paused_at != null) return { last_vitals: a.vitals }; // the same pause goes on
+  const gap = formatTime(addSeconds(new Date(a.at), -DISK_NOTICE_GAP_SECONDS));
+  const owed = run.disk_notice_at == null || run.disk_notice_at <= gap;
+  return { last_vitals: a.vitals, disk_paused_at: a.at, ...(owed ? { disk_notice_at: a.at } : {}) };
 }
 
 const newEntry = (
@@ -613,6 +633,7 @@ function toRun(r: StoredRun): RunRow {
     machine: _m, client_ip: _i, client_country: _c, abandon_reason: _a, sealed_at: _s, entries: _e,
     last_client_ip: _p, last_client_country: _q,
     last_heartbeat_at: _h, last_model_request_at: _l, flagged_at: _f, flag_reason: _g, final_commit: _k, final_commit_at: _t,
+    last_vitals: _v, disk_paused_at: _d, disk_notice_at: _n,
     ...row
   } = r;
   const cur = currentOf(r);
@@ -635,6 +656,7 @@ function toTick(r: StoredRun): TickRun {
     flagged_at: r.flagged_at ?? null,
     flag_reason: r.flag_reason ?? null,
     final_commit: r.final_commit ?? null,
+    disk_notice_at: r.disk_notice_at ?? null,
   };
 }
 

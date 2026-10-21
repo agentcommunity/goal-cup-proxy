@@ -4,7 +4,7 @@
 import type { Auth } from "./auth.ts";
 import type { Ctx } from "./context.ts";
 import type { Env } from "./env.ts";
-import { type EntryRow, type MachineFacts, type RecordingState, type RunRow, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
+import { type EntryRow, type MachineFacts, type RecordingState, type RunRow, type Vitals, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
 import {
   REPO_URL,
@@ -370,6 +370,7 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
     throw malformed('recording must be "ok", "gaps", "failed" or "unknown".');
   }
   const model_requests = b.model_requests == null ? null : uintField(b, "model_requests");
+  const vitals = vitalsField(b);
   const { run, entry } = await requireRun(ctx, member, runId, entry_id);
   // An abandoned or closed run accepts nothing more, a final heartbeat included.
   requireAccepting(ctx, run);
@@ -385,6 +386,7 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
     repo_head: b.final ? repo : null, // only the final heartbeat's repo head means anything
     recording: (b.recording ?? null) as RecordingState | null,
     model_requests,
+    vitals,
     ...clientFacts(request),
     at: formatTime(ctx.now()),
   });
@@ -402,10 +404,33 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
   }
 }
 
-function uintField(o: Record<string, unknown>, name: string): number {
+function uintField(o: Record<string, unknown>, name: string, label: string = name): number {
   const v = o[name];
-  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw malformed(`${name} must be a non-negative whole number.`);
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw malformed(`${label} must be a non-negative whole number.`);
   return v;
+}
+
+const VITAL_COUNTS = ["disk_free_bytes", "rss_bytes", "cpu_ms", "open_files"] as const;
+
+/**
+ * `vitals`, if sent: an object of the known fields, each optional, null meaning absent. Keys the
+ * server does not know are dropped (a newer tracer may send more); a known field of the wrong
+ * type is 400, like any other field. Only the known fields, nulls left out, go further.
+ */
+function vitalsField(b: Record<string, unknown>): Vitals | null {
+  if (b.vitals == null) return null;
+  const v = asObject(b.vitals, "vitals");
+  const out: Vitals = {};
+  for (const name of VITAL_COUNTS) if (v[name] != null) out[name] = uintField(v, name, `vitals.${name}`);
+  if (v.disk_short != null) {
+    if (typeof v.disk_short !== "boolean") throw malformed("vitals.disk_short must be true or false.");
+    out.disk_short = v.disk_short;
+  }
+  if (v.agent_paused != null) {
+    if (v.agent_paused !== "disk") throw malformed('vitals.agent_paused must be "disk" or null.');
+    out.agent_paused = "disk";
+  }
+  return out;
 }
 
 // ---- POST /v1/runs/{id}/seal --------------------------------------------------------------

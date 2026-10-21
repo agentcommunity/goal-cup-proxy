@@ -231,7 +231,7 @@ const mk = async () => {
 };
 const hb = (seq: number, head: string, final: boolean, entry = E1) => ({
   member_id: "m1", run_id: R1, entry_id: entry, seq, head, offset_local: 10, final, repo_head: null, at: DEADLINE,
-  recording: null, model_requests: null, client_ip: null, client_country: null,
+  recording: null, model_requests: null, vitals: null, client_ip: null, client_country: null,
 });
 const chunk = (first: number, last: number, prev: string, head: string, offset: number, entry = E1, stored_bytes = 7) => ({
   member_id: "m1",

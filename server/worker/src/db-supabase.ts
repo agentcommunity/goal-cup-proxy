@@ -39,6 +39,7 @@ import type {
   StoreReceiptResult,
   TickRun,
 } from "./db.ts";
+import { NOTICE_KINDS } from "./db.ts";
 import { ApiError } from "./errors.ts";
 import type { StartReceipt } from "./sign.ts";
 import { RUN_ID, isEntryId, isHex64, isTime } from "./util.ts";
@@ -92,6 +93,8 @@ const TICK_SHAPE: Record<string, Check> = {
   flagged_at: nullable(isTime),
   flag_reason: nullable(oneOf("gaps", "failed")),
   final_commit: nullable((v) => typeof v === "string" && /^([0-9a-f]{40}|none)$/.test(v)),
+  // Website migration 20261021120000 adds it; before it the cron owes no disk_full email.
+  disk_notice_at: optional(nullable(isTime)),
 };
 const ENTRY_SHAPE: Record<string, Check> = {
   entry_id: isEntryId,
@@ -114,7 +117,7 @@ const ENTRY_SHAPE: Record<string, Check> = {
 };
 const NOTICE_SHAPE: Record<string, Check> = {
   id: uint,
-  kind: oneOf("started", "silence", "idle_3h", "idle_6h", "recording", "ended"),
+  kind: oneOf(...NOTICE_KINDS),
   run_id: RUN_SHAPE.run_id!,
   to: nullable(text),
   subject: text,
@@ -357,6 +360,9 @@ export class SupabaseDb implements Db {
       p_client_ip: a.client_ip,
       p_client_country: a.client_country,
       p_at: a.at,
+      // Only with vitals: without them the 13-argument form answers, which a database without
+      // website migration 20261021120000 still has, so plain heartbeats work before it is applied.
+      ...(a.vitals === null ? {} : { p_vitals: a.vitals }),
     });
     return this.#word("upload_heartbeat", v, ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"] as const);
   }

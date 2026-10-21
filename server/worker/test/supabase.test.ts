@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
-import type { ChunkRecord, EntryRow, NoticeArgs, OpenRunArgs, RunRow, TickRun } from "../src/db.ts";
+import { type ChunkRecord, type EntryRow, NOTICE_KINDS, type NoticeArgs, type OpenRunArgs, type RunRow, type TickRun } from "../src/db.ts";
 import { SupabaseDb } from "../src/db-supabase.ts";
 import { ApiError } from "../src/errors.ts";
 import type { StartReceipt } from "../src/sign.ts";
@@ -275,7 +275,7 @@ test("recordHeartbeat -> upload_heartbeat", async () => {
   const calls = stub("recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found");
   const a = {
     member_id: "m", run_id: "r1", entry_id: "e1", seq: 9, head: H("9"), offset_local: 1234, final: true, repo_head: "f".repeat(40),
-    recording: "gaps" as const, model_requests: 77, client_ip: "203.0.113.9", client_country: "DE", at: "t",
+    recording: "gaps" as const, model_requests: 77, vitals: null, client_ip: "203.0.113.9", client_country: "DE", at: "t",
   };
   for (const want of ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"]) {
     assert.equal(await db().recordHeartbeat(a), want);
@@ -292,6 +292,42 @@ test("recordHeartbeat -> upload_heartbeat", async () => {
   const calls2 = stub("recorded");
   await db().recordHeartbeat({ ...a, recording: null, model_requests: null, client_ip: null, client_country: null });
   assert.deepEqual([calls2[0]!.args.p_recording, calls2[0]!.args.p_model_requests, calls2[0]!.args.p_client_ip, calls2[0]!.args.p_client_country], [null, null, null, null]);
+});
+
+test("recordHeartbeat sends p_vitals only when the heartbeat carried vitals (the 13-argument form answers otherwise)", async () => {
+  const a = {
+    member_id: "m", run_id: "r1", entry_id: "e1", seq: 9, head: H("9"), offset_local: 1234, final: false, repo_head: null,
+    recording: null, model_requests: null, client_ip: null, client_country: null, at: "t",
+  };
+  const vitals = { disk_free_bytes: 2 ** 53 - 1, disk_short: true, agent_paused: "disk" as const, rss_bytes: 1, cpu_ms: 2, open_files: 3 };
+  const calls = stub("recorded", "recorded");
+  await db().recordHeartbeat({ ...a, vitals });
+  await db().recordHeartbeat({ ...a, vitals: null });
+  assert.deepEqual(calls[0]!.args.p_vitals, vitals);
+  assert.ok(!("p_vitals" in calls[1]!.args), JSON.stringify(calls[1]!.args));
+  assert.equal(Object.keys(calls[0]!.args).length, Object.keys(calls[1]!.args).length + 1);
+});
+
+test("a tick run's disk_notice_at comes through, is checked, and may be absent (a database before 20261021120000)", async () => {
+  const owed = { ...tickRun, disk_notice_at: "2026-11-06T10:00:00Z" };
+  stub([owed, { ...tickRun, disk_notice_at: null }, tickRun]);
+  assert.deepEqual(await db().runsForTick(T), [owed, { ...tickRun, disk_notice_at: null }, tickRun]);
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    for (const bad of ["yesterday", 5, true]) {
+      stub([{ ...tickRun, disk_notice_at: bad }]);
+      await assert.rejects(db().runsForTick(T), (e) => e instanceof ApiError && e.status === 502, JSON.stringify(bad));
+    }
+  } finally {
+    console.error = quiet;
+  }
+});
+
+test("a claimed disk_full notice is a notice the Worker knows", async () => {
+  const n = { id: 7, kind: "disk_full", run_id: "r0000000000000001", to: null, subject: "s", text: "t" };
+  stub([n]);
+  assert.deepEqual(await db().claimNotices(20, T), [n]);
 });
 
 const tickRun: TickRun = {
@@ -476,4 +512,24 @@ test("every RPC the Worker calls exists in the SQL, with the same argument names
     for (const r of fn.required) if (!args.has(r)) problems.push(`${name}: the SQL requires ${r}; the Worker does not send it`);
   }
   assert.deepEqual(problems, []);
+});
+
+/** The text of the last `CREATE [OR REPLACE] FUNCTION <name>(` in the mirror, up to its closing `$$;`. */
+function lastFunctionBody(name: string): string {
+  const sql = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
+  const at = [...sql.matchAll(new RegExp(`CREATE (?:OR REPLACE )?FUNCTION ${name.replace(".", "\\.")}\\(`, "g"))].at(-1)?.index;
+  assert.ok(at !== undefined, `no ${name} in the SQL`);
+  const open = sql.indexOf("$$", at);
+  return sql.slice(at, sql.indexOf("$$", open + 2));
+}
+
+test("every notice kind the Worker queues is allowed by the notices CHECK constraint and has an email in notice_text", () => {
+  const sql = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
+  // The constraint as the last migration that touches it leaves it (the table's own, or a later ADD CONSTRAINT).
+  const checks = [...sql.matchAll(/(?:ADD CONSTRAINT notices_kind_check\s+CHECK|kind\s+text NOT NULL CHECK) \(kind IN \(([^)]*)\)\)/g)];
+  assert.ok(checks.length >= 2, "the scan found no widened notices_kind_check");
+  const allowed = [...checks.at(-1)![1]!.matchAll(/'([a-z0-9_]+)'/g)].map((m) => m[1]);
+  assert.deepEqual([...allowed].sort(), [...NOTICE_KINDS].sort());
+  const text = lastFunctionBody("goal_cup_tracer.notice_text");
+  for (const kind of NOTICE_KINDS) assert.equal(text.split(`WHEN '${kind}'`).length - 1, 2, `notice_text: ${kind} needs a subject and a body`);
 });

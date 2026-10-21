@@ -10,7 +10,8 @@ Organizer steps (deploy, test runs, bad days) are in [OPERATING](OPERATING.md).
 1. **Keep every trace.** A bad hour for the participant's network or for the server loses nothing.
 2. **Own the clock.** The server stamps the official start, sets the deadline 168 hours later, and
    tells the tracer to stop. The participant's clock cannot extend a run.
-3. **Tell the participant** when a run goes quiet, goes idle, has a recording problem, or has ended.
+3. **Tell the participant** when a run goes quiet, goes idle, has a recording problem, is paused
+   because the disk is almost full, or has ended.
 
 Recording on the participant's machine never waits on the network. The daemon has no network code.
 
@@ -90,6 +91,8 @@ only as a Worker secret. The verifier pins the public key (`SERVER_PUBLIC_KEYS` 
 - The machine facts the tracer sends at open (operating system, architecture, CPUs, memory, disk,
   WSL2, container, mains power). No host name, user name or serial number.
 - The IP address and country of the open call and the latest pair from each `continue` and heartbeat.
+- The heartbeat vitals: free disk space on the machine, and the memory, CPU time and open files of the
+  tracer's own processes. Nothing about other processes.
 - None of this is in an answer, a key, a log or a public page.
 - The Worker does not redact traces. The tracer removes secrets on the participant's machine before
   anything is written or uploaded. Raw traces are never public.
@@ -120,9 +123,16 @@ only as a Worker secret. The verifier pins the public key (`SERVER_PUBLIC_KEYS` 
 ## Notices
 
 The cron closes runs that are over, records deadline commits, queues emails in an outbox, and sends
-them. The six kinds (`started`, `silence`, `idle_3h`, `idle_6h`, `recording`, `ended`) and their
-rules are in [UPLOAD-API](UPLOAD-API.md#what-the-server-does-on-its-own). Each is queued once for its
-run, kind and key, so a repeated tick sends nothing twice. Staging sends every email to a test inbox.
+them. The seven kinds (`started`, `silence`, `idle_3h`, `idle_6h`, `recording`, `ended`,
+`disk_full`) and their rules are in [UPLOAD-API](UPLOAD-API.md#what-the-server-does-on-its-own). Each
+is queued once for its run, kind and key, so a repeated tick sends nothing twice. Staging sends every
+email to a test inbox.
+
+Every notice is decided by the cron, never in a request handler. For `disk_full` the heartbeat only
+records state: its optional `vitals` move the run's disk pause (`disk_paused_at`) and, at most once
+per 6 hours, the start of a pause that is owed an email (`disk_notice_at`, the dedupe key). The cron
+queues one `disk_full` per value, under the same rules as the others: competition and test runs
+before their end, never practice, and a test run's email goes to its operator with `[TEST]`.
 
 ## Test runs
 

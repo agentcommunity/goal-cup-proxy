@@ -101,6 +101,9 @@ function owed(run: TickRun, now: Date): { kind: NoticeKind; key: string; payload
 
   const notices: ReturnType<typeof owed> = [{ kind: "started", key: "", payload: { official_start: run.official_start, deadline_at: run.deadline_at, repo_url: run.repo_url } }];
   if (run.flagged_at !== null) notices.push({ kind: "recording", key: "", payload: { flagged_at: run.flagged_at, recording: run.flag_reason } });
+  // A disk pause the heartbeats marked as owed (at most one per run per 6 hours, decided where the
+  // heartbeat is stored): one email per pause start, whether or not the run is still paused or beating.
+  if (run.disk_notice_at != null) notices.push({ kind: "disk_full", key: run.disk_notice_at, payload: { since: run.disk_notice_at } });
 
   const heard = run.last_heartbeat_at ?? run.official_start;
   if (heard < earlier(now, SILENCE_AFTER)) {

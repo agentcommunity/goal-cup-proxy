@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
 import { LocalDb } from "../src/db-local.ts";
 import { queueNotices, runTick } from "../src/notices.ts";
+import { credentialFor } from "./helpers/client.ts";
 import { T0, WINDOW, type Rig, lifecycle } from "./helpers/rig.ts";
 
 const REPO = "https://github.com/someone/goal-cup-entry"; // what openBody sends
@@ -561,3 +562,129 @@ lifecycle("the cron reads every run, however many there are, a page at a time", 
   await r.tick();
   assert.equal(only(r, "started").length, 7);
 });
+
+// ---- vitals and the disk_full email ----------------------------------------------------------
+
+const PAUSED = { vitals: { disk_free_bytes: 1024, disk_short: true, agent_paused: "disk" } };
+const RUNNING = { vitals: { disk_free_bytes: 50 * 2 ** 30, disk_short: false, agent_paused: null } };
+type DiskState = { last_vitals: unknown; disk_paused_at: string | null; disk_notice_at: string | null; entries: { last_heartbeat: { vitals?: unknown } }[] };
+
+lifecycle("vitals are kept on the heartbeat and as the run's latest; unknown keys and nulls are dropped", async (r) => {
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  const stored = () => r.storedRun(run.run_id) as unknown as DiskState;
+  r.after(MIN);
+  const sent = { disk_free_bytes: 2 ** 53 - 1, disk_short: false, agent_paused: null, rss_bytes: 123_456_789, cpu_ms: 4200, open_files: 17, gpu_temp: 80, nested: { x: 1 } };
+  const res = await r.beat(token, run.run_id, run.entry_id, { vitals: sent });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  const kept = { disk_free_bytes: 2 ** 53 - 1, disk_short: false, rss_bytes: 123_456_789, cpu_ms: 4200, open_files: 17 };
+  assert.deepEqual(stored().entries[0]!.last_heartbeat.vitals, kept);
+  assert.deepEqual(stored().last_vitals, kept);
+
+  // A heartbeat without vitals has none on its own record and keeps the run's latest.
+  r.after(5 * MIN);
+  for (const without of [{}, { vitals: null }]) assert.equal((await r.beat(token, run.run_id, run.entry_id, without)).status, 200);
+  assert.equal(stored().entries[0]!.last_heartbeat.vitals ?? null, null);
+  assert.deepEqual(stored().last_vitals, kept);
+  // An empty object is vitals with nothing measured.
+  await r.beat(token, run.run_id, run.entry_id, { vitals: { cpu_ms: null } });
+  assert.deepEqual(stored().last_vitals, {});
+});
+
+lifecycle("malformed vitals are 400 and change nothing", async (r) => {
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  for (const vitals of [
+    5, "disk", [], true,
+    { disk_free_bytes: -1 }, { disk_free_bytes: 1.5 }, { disk_free_bytes: "12" }, { disk_free_bytes: 2 ** 53 },
+    { rss_bytes: true }, { cpu_ms: {} }, { open_files: [] },
+    { disk_short: "yes" }, { disk_short: 1 },
+    { agent_paused: "memory" }, { agent_paused: true }, { agent_paused: "" },
+  ]) {
+    const res = await r.beat(token, run.run_id, run.entry_id, { vitals });
+    assert.equal(res.status, 400, JSON.stringify(vitals));
+    assert.equal((res.body as { error: string }).error, "malformed");
+  }
+  const s = r.storedRun(run.run_id) as unknown as DiskState & { last_heartbeat_at: string | null };
+  assert.deepEqual([s.last_heartbeat_at, s.last_vitals, s.disk_paused_at], [null, null, null]);
+});
+
+lifecycle("a disk pause queues one disk_full notice per pause, again after a resume, but not twice within 6 hours", async (r) => {
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  const beat = (at: number, extra: Record<string, unknown>) => {
+    r.at(t(at));
+    return r.beat(token, run.run_id, run.entry_id, extra);
+  };
+  const tickAt = async (at: number) => {
+    r.at(t(at));
+    await r.tick();
+  };
+  const stored = () => {
+    const s = r.storedRun(run.run_id) as unknown as DiskState;
+    return [s.disk_paused_at, s.disk_notice_at];
+  };
+  const disk = () => only(r, "disk_full").map((n) => [n.dedupe_key, n.payload]);
+
+  await beat(MIN, PAUSED);
+  await beat(2 * MIN, PAUSED); // the same pause
+  assert.deepEqual(stored(), [t(MIN), t(MIN)]);
+  assert.deepEqual(disk(), []); // the cron decides, not the request
+  await tickAt(5 * MIN);
+  assert.deepEqual(disk(), [[t(MIN), { since: t(MIN) }]]);
+  await tickAt(10 * MIN);
+  assert.equal(disk().length, 1, "one pause, one email");
+
+  // Space again: the pause ends. A new pause within 6 hours of the last email is owed nothing.
+  await beat(20 * MIN, RUNNING);
+  assert.deepEqual(stored(), [null, t(MIN)]);
+  await beat(HOURS, PAUSED);
+  assert.deepEqual(stored(), [t(HOURS), t(MIN)]);
+  await tickAt(HOURS + 5 * MIN);
+  assert.equal(disk().length, 1, "throttled: less than 6 hours since the last");
+  await beat(HOURS + 10 * MIN, { vitals: {} }); // vitals without agent_paused: not paused
+  assert.deepEqual(stored(), [null, t(MIN)]);
+
+  // Six hours after the last email, a new pause is owed one.
+  await beat(6 * HOURS + MIN, PAUSED);
+  assert.deepEqual(stored(), [t(6 * HOURS + MIN), t(6 * HOURS + MIN)]);
+  await tickAt(6 * HOURS + 5 * MIN);
+  assert.deepEqual(disk().map(([key]) => key), [t(MIN), t(6 * HOURS + MIN)]);
+});
+
+lifecycle("a heartbeat without vitals neither starts nor ends a disk pause", async (r) => {
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  const paused = () => (r.storedRun(run.run_id) as unknown as DiskState).disk_paused_at;
+  r.after(MIN);
+  await r.beat(token, run.run_id, run.entry_id, { model_requests: 1 });
+  assert.equal(paused() ?? null, null);
+  await r.beat(token, run.run_id, run.entry_id, PAUSED);
+  r.after(MIN);
+  await r.beat(token, run.run_id, run.entry_id, { vitals: null, model_requests: 2 });
+  assert.equal(paused(), t(MIN));
+});
+
+lifecycle("no disk_full for a practice run; a test run gets one (its operator's, marked [TEST] by the database)", async (r) => {
+  const practice = await r.cred("alice", "practice");
+  const p = await r.start(practice, "p1");
+  const test_ = await credentialFor(r.api, "op-1", "test");
+  const tr = await r.start(test_, "t1");
+  r.after(MIN);
+  await r.beat(practice, p.run_id, p.entry_id, PAUSED);
+  await r.beat(test_, tr.run_id, tr.entry_id, PAUSED);
+  assert.equal((r.storedRun(p.run_id) as unknown as DiskState).disk_notice_at, t(MIN)); // recorded all the same
+  await r.tick();
+  assert.deepEqual(kinds(r, p.run_id), []);
+  assert.deepEqual(kinds(r, tr.run_id), ["disk_full", "started"]);
+}, { ...WINDOW, TEST_EVENT_ID: "test" });
+
+lifecycle("after the run's end a disk pause is owed no email", async (r) => {
+  stubGithub(() => head(SHA));
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  r.at(run.deadline_at);
+  await r.beat(token, run.run_id, run.entry_id, PAUSED);
+  await r.tick();
+  assert.deepEqual(only(r, "disk_full"), []);
+}, HOUR);
