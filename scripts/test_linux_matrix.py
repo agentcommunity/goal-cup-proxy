@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import stat
 import subprocess
@@ -20,6 +21,8 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("linux-matrix.sh")
 SENTINEL = "SENTINEL-KEY-VALUE-never-printed-0123456789"
+TOKEN = "FAKE-GITHUB-TOKEN-for-tests-only-0123456789"
+PRACTICE = "https://github.com/agentcommunity/goalcup-matrix-empty"
 STUB = """#!/bin/sh
 echo "$*" >> "$STUB_LOG"
 case "$*" in "build "*) cat >> "$STUB_LOG.dockerfiles" ;; esac
@@ -63,8 +66,11 @@ class LinuxMatrixTests(unittest.TestCase):
                      "LINUX_MATRIX_CELL", "LINUX_MATRIX_PREBUILT", "LINUX_MATRIX_CODEX_EFFORT",
                      "MATRIX_PROMPT", "MATRIX_PROMPT_FILE", "MATRIX_PROMPT_DELAY",
                      "MATRIX_SUBMIT_DELAY", "MATRIX_PRE_PROMPT_KEYS", "MATRIX_PRE_PROMPT_DELAY",
-                     "MATRIX_REPO_URL"):
+                     "MATRIX_REPO_URL", "MATRIX_GITHUB_TOKEN_FILE"):
             self.env.pop(name, None)
+        self.token = self.base / "github-token"
+        self.token.write_text(TOKEN + "\n")
+        self.token.chmod(0o600)
 
     def run_script(self, *args: str, **env: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -256,9 +262,8 @@ class LinuxMatrixTests(unittest.TestCase):
             'model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n\n'
             '[projects."/w"]\ntrust_level = "trusted"\nmodel = "kept-in-table"\n'
         )
-        script = self.base / "linux-matrix.sh"
         # The container half reads its fixed paths; point them at the temporary volume.
-        script.write_text(SCRIPT.read_text().replace("VOL=/vol\n", f"VOL={self.base / 'vol'}\n", 1))
+        script = container_copy(self.base)
         run = subprocess.run(["sh", str(script), "inner-home-config", "codex-cli"],
                              capture_output=True, text=True)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
@@ -346,11 +351,35 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertEqual(self.log.read_text(), "")
 
     def test_matrix_options_after_the_separator_reach_the_matrix(self) -> None:
-        run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "7200", "--keep")
+        run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "7200", "--keep",
+                              MATRIX_GITHUB_TOKEN_FILE=str(self.token))
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         [inner] = [x for x in self.docker_lines("exec") if "inner-run" in x]
         self.assertTrue(inner.endswith("inner-run codex-cli --test --duration 7200 --keep"), inner)
         self.assertNotIn(SENTINEL, self.log.read_text() + run.stdout + run.stderr)
+
+    def test_the_token_file_is_mounted_read_only_and_never_passes_its_value(self) -> None:
+        run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "60",
+                              MATRIX_GITHUB_TOKEN_FILE=str(self.token))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        [docker_run] = self.docker_lines("run")
+        self.assertIn(f"-v {self.token}:/run/goalcup/github-token:ro", docker_run)
+        [inner] = [x for x in self.docker_lines("exec") if "inner-run" in x]
+        self.assertIn("-e MATRIX_GITHUB_TOKEN_FILE=/run/goalcup/github-token", inner)
+        self.assertNotIn(TOKEN, self.log.read_text() + run.stdout + run.stderr)
+
+    def test_a_test_run_without_the_token_file_is_refused_before_docker(self) -> None:
+        run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "60")
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("MATRIX_GITHUB_TOKEN_FILE is needed for --test", run.stdout)
+        self.assertEqual(self.docker_lines("run"), [])
+
+    def test_login_settles_with_the_token_file(self) -> None:
+        run = self.run_script("login", "codex-cli", STUB_HOME_READY="yes",
+                              MATRIX_GITHUB_TOKEN_FILE=str(self.token))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        [settle] = [x for x in self.docker_lines("exec") if "inner-settle" in x]
+        self.assertIn("-e MATRIX_GITHUB_TOKEN_FILE=/run/goalcup/github-token", settle)
 
     def test_other_matrix_options_are_refused(self) -> None:
         for extra in (["--allow-production"], ["--log", "/x"], ["--duration", "2h"],
@@ -407,6 +436,14 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertNotIn(SENTINEL, self.log.read_text() + run.stdout + run.stderr)
 
 
+def container_copy(base: Path) -> Path:
+    """The script with its volume at base/vol, and the settle helper beside it."""
+    script = base / "linux-matrix.sh"
+    script.write_text(SCRIPT.read_text().replace("VOL=/vol\n", f"VOL={base / 'vol'}\n", 1))
+    shutil.copy(SCRIPT.with_name("kit_settle.py"), base / "kit_settle.py")
+    return script
+
+
 def version_of(connector: str) -> str:
     first = (SCRIPT.parent.parent / f"connectors/{connector}/harness.toml").read_text().split("\n")[0]
     return next(w.rstrip(",") for w in first.split() if w[:1].isdigit())
@@ -419,8 +456,7 @@ class ContainerHalfTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.base = Path(tmp.name).resolve()
-        self.script = self.base / "linux-matrix.sh"
-        self.script.write_text(SCRIPT.read_text().replace("VOL=/vol\n", f"VOL={self.base / 'vol'}\n", 1))
+        self.script = container_copy(self.base)
         self.homes = self.base / "vol/cfg/capture-homes"
         self.bin = self.base / "bin"
         self.bin.mkdir()
@@ -530,6 +566,57 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(json.loads(got.read_text())["keys"], "")
 
+    def settle(self, **env: str) -> subprocess.CompletedProcess:
+        return self.inner("inner-settle", TMPDIR=str(self.base / "tmp"), **env)
+
+    def test_settle_writes_the_token_into_github_json_0600(self) -> None:
+        token = self.base / "github-token"
+        token.write_text(TOKEN + "\n")
+        cfg = self.base / "vol/cfg"
+        cfg.mkdir(parents=True)
+        (cfg / "prep.json").write_text(json.dumps({"harness": "codex-cli", "home_ready": True}))
+        (cfg / "github.json").write_text(json.dumps({"repo_url": PRACTICE,
+                                                     "token": "ghp_matrixfaketoken00000000000000000000"}))
+        run = self.settle(MATRIX_GITHUB_TOKEN_FILE=str(token))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(json.loads((cfg / "github.json").read_text()),
+                         {"repo_url": PRACTICE, "token": TOKEN})
+        prep = json.loads((cfg / "prep.json").read_text())
+        self.assertEqual(prep, {"harness": "codex-cli", "home_ready": True, "repo_url": PRACTICE,
+                                "work_root": str(self.base / "vol/work")})
+        for name in ("github.json", "prep.json"):
+            self.assertEqual(stat.S_IMODE((cfg / name).stat().st_mode), 0o600, name)
+        self.assertEqual(sorted(p.name for p in cfg.iterdir()), ["github.json", "prep.json"])
+        self.assertNotIn(TOKEN, run.stdout + run.stderr)
+
+    def test_settle_keeps_a_prepared_full_flow_repository(self) -> None:
+        token = self.base / "github-token"
+        token.write_text(TOKEN + "\n")
+        cfg = self.base / "vol/cfg"
+        cfg.mkdir(parents=True)
+        prep = json.dumps({"harness": "codex-cli", "repo_url": "https://github.com/someone/entry",
+                           "work_root": "/vol/work", "home_ready": True})
+        gh = json.dumps({"repo_url": "https://github.com/someone/entry",
+                         "token": "FAKE-participant-token-for-tests-0000"})
+        (cfg / "prep.json").write_text(prep)
+        (cfg / "github.json").write_text(gh)
+        run = self.settle(MATRIX_GITHUB_TOKEN_FILE=str(token))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual((cfg / "prep.json").read_text(), prep)
+        self.assertEqual((cfg / "github.json").read_text(), gh)
+
+    def test_settle_refuses_a_token_file_without_a_token_and_never_prints_it(self) -> None:
+        token = self.base / "github-token"
+        token.write_text("not a token " + SENTINEL + "\n")
+        cfg = self.base / "vol/cfg"
+        cfg.mkdir(parents=True)
+        (cfg / "prep.json").write_text(json.dumps({"harness": "codex-cli"}))
+        run = self.settle(MATRIX_GITHUB_TOKEN_FILE=str(token))
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("FAIL settle", run.stdout)
+        self.assertNotIn(SENTINEL, run.stdout + run.stderr)
+        self.assertFalse((cfg / "github.json").exists())
+
     def test_home_files_lists_names_never_contents(self) -> None:
         home = self.homes / "claude-code-cli"
         (home / "projects/p").mkdir(parents=True)
@@ -551,8 +638,7 @@ class CodexModelCheckTests(unittest.TestCase):
         self.base = Path(tmp.name).resolve()
         self.sessions = self.base / "vol/cfg/capture-homes/codex-cli/sessions/2026/10/16"
         self.sessions.mkdir(parents=True)
-        self.script = self.base / "linux-matrix.sh"
-        self.script.write_text(SCRIPT.read_text().replace("VOL=/vol\n", f"VOL={self.base / 'vol'}\n", 1))
+        self.script = container_copy(self.base)
         self.marker = self.base / "marker"
         self.marker.touch()
         past = time.time() - 3600
@@ -615,8 +701,7 @@ class ClaudeModelCheckTests(unittest.TestCase):
         self.base = Path(tmp.name).resolve()
         self.projects = self.base / "vol/cfg/capture-homes/claude-code-cli/projects/-vol-work-x"
         self.projects.mkdir(parents=True)
-        self.script = self.base / "linux-matrix.sh"
-        self.script.write_text(SCRIPT.read_text().replace("VOL=/vol\n", f"VOL={self.base / 'vol'}\n", 1))
+        self.script = container_copy(self.base)
         self.marker = self.base / "marker"
         self.marker.touch()
         past = time.time() - 3600

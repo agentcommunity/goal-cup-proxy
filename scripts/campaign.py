@@ -31,7 +31,13 @@ machine, then `DRILL-END ... do: <undo>` after `seconds`, and records both. `not
 
 Secrets. The approval key is only ever a FILE whose path goes to the child scripts in
 GOALCUP_TEST_APPROVAL_KEY_FILE. This script never opens it, and the path is never in an argument.
-Production (ingest.agentcommunity.org) is refused.
+The same holds for the GitHub token (`defaults.github_token_file`, MATRIX_GITHUB_TOKEN_FILE to the
+children): every cell is a test run, and a test start asks GitHub, with that token, whether the
+repository is empty. scripts/kit_settle.py writes it into the cell's github.json: in the container
+for a docker cell, from here after `login` and before each `run` for a host cell (so a token
+rotated later is picked up). It must not be able to push to the practice repository: one agent
+push there makes every later test start refuse it. Production (ingest.agentcommunity.org) is
+refused.
 
 Before website migration 20261021100000 a test run replaces an earlier test run of the same
 operator, so cells that can run at the same time must have distinct `test_member_id`s; `check` and
@@ -61,6 +67,8 @@ REPO = HERE.parent
 STAGING = "https://goalcup-ingest-staging.b-9a5.workers.dev"
 PRODUCTION_HOST = "ingest.agentcommunity.org"
 KEY_ENV = "GOALCUP_TEST_APPROVAL_KEY_FILE"
+TOKEN_ENV = "MATRIX_GITHUB_TOKEN_FILE"
+KIT = HERE / "kit_settle.py"
 CELL_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 CONNECTOR_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 MEMBER_ID = re.compile(r"[A-Za-z0-9_-]+")
@@ -188,10 +196,10 @@ def read_json(path):
 
 
 def child_env(extra):
-    """The parent's environment without any approval-key variable, plus `extra` (a None value
-    removes that variable)."""
+    """The parent's environment without any approval-key or token-file variable, plus `extra`
+    (a None value removes that variable)."""
     env = {k: v for k, v in os.environ.items()
-           if k not in ("GOALCUP_TEST_APPROVAL_KEY", KEY_ENV)}
+           if k not in ("GOALCUP_TEST_APPROVAL_KEY", KEY_ENV, TOKEN_ENV)}
     for k, v in extra.items():
         if v is None:
             env.pop(k, None)
@@ -248,6 +256,7 @@ def normalize_config(doc, base, source="<config>"):
         "name": str(doc.get("name") or Path(source).stem),
         "server": str(defaults.get("server") or STAGING).rstrip("/"),
         "approval_key_file": _abs(base, defaults.get("approval_key_file") or os.environ.get(KEY_ENV)),
+        "github_token_file": _abs(base, defaults.get("github_token_file")),
         "sample_every_s": defaults.get("sample_every_s"),
         "matrix_timeout_slack_s": defaults.get("matrix_timeout_slack_s"),
         "goalcup": defaults.get("goalcup"),
@@ -301,6 +310,16 @@ def validate(cfg, cells, parallel):
         errors.append("the approval key file must be an absolute path without : or ,")
     elif not (os.path.isfile(key) and os.access(key, os.R_OK)):
         errors.append("the approval key file is not a regular file this user can read")
+    # Every cell is a test run, and a test start asks GitHub, with this token, whether the
+    # repository is empty.
+    token = cfg.get("github_token_file")
+    if not token:
+        errors.append("no GitHub token file: set defaults.github_token_file (a test start asks "
+                      "GitHub, with that token, whether the repository is empty)")
+    elif not os.path.isabs(token) or ":" in token or "," in token:
+        errors.append("the GitHub token file must be an absolute path without : or ,")
+    elif not (os.path.isfile(token) and os.access(token, os.R_OK)):
+        errors.append("the GitHub token file is not a regular file this user can read")
     for name in ("sample_every_s",):
         v = cfg.get(name)
         if not isinstance(v, int) or isinstance(v, bool) or v < 1:
@@ -443,6 +462,8 @@ def run_command(cfg, cell, cell_dir):
     if slack:
         extra = ["--timeout", str(d + int(slack))]
     env = {KEY_ENV: cfg["approval_key_file"], "GOALCUP_TEST_MEMBER_ID": cell["test_member_id"]}
+    if cell["where"] == "docker":
+        env[TOKEN_ENV] = cfg["github_token_file"]
     if cell.get("prompt_file"):
         env["MATRIX_PROMPT_FILE"] = cell["prompt_file"]
         env["MATRIX_PROMPT"] = None  # matrix.sh refuses both
@@ -466,6 +487,16 @@ def run_command(cfg, cell, cell_dir):
                 "--test", "--duration", str(d)] + extra + [
                 "--log", str(Path(cell_dir) / "matrix.log")]
     return argv, env
+
+
+def settle_command(cfg, cell):
+    """(argv, env) of scripts/kit_settle.py for a host cell: its prep.json and github.json, the
+    token's path only in env."""
+    cd = cell["config_dir"]
+    argv = [sys.executable, str(KIT), "settle", cd, os.path.join(cd, "work")]
+    if os.environ.get("MATRIX_REPO_URL"):
+        argv.append(os.environ["MATRIX_REPO_URL"])
+    return argv, child_env({TOKEN_ENV: cfg["github_token_file"]})
 
 
 def sampler_command(cfg, cell, cell_dir):
@@ -1050,6 +1081,8 @@ class CellRun:
         argv, extra = run_command(camp.cfg, cell, self.dir)
         if cell["where"] == "docker":
             (self.dir / "logs").mkdir(exist_ok=True)
+        else:
+            self._settle()
         self.start_mono = camp.clock.monotonic()
         self.start_utc = camp.clock.utcnow()
         self.set_state(state="running", start_utc=utc(self.start_utc))
@@ -1073,6 +1106,17 @@ class CellRun:
         sampler_thread.join(timeout=30)
         self.stop_sampler()
         self.write_result(exit_code=rc, interrupted=camp.stopping.is_set())
+
+    def _settle(self):
+        """A host cell's prep.json and github.json, before its run (a docker cell settles in its
+        container). A refusal ends the cell before anything starts."""
+        argv, env = settle_command(self.camp.cfg, self.cell)
+        rc, out = self.camp.runner.run(argv, env=env, timeout=60)
+        for line in out.splitlines():
+            self.logline(line, own=True)
+        self.event("settle", exit_code=rc)
+        if rc != 0:
+            raise RuntimeError(f"settle exited {rc}: {(out.strip().splitlines() or [''])[-1]}")
 
     def _read(self):
         for raw in self.proc.stdout:
@@ -1506,8 +1550,9 @@ def cmd_check(args, runner, say=print):
 def cmd_build(args, runner):
     cfg = load_config(args.config)
     errors, _ = validate(cfg, cfg["cells"], 1)
-    # Build comes before the sign-ins, and a host cell's configuration directory is made by its login.
-    errors = [e for e in errors if "does not exist" not in e]
+    # Build comes before the sign-ins, and a host cell's configuration directory is made by its
+    # login. A build needs no token either.
+    errors = [e for e in errors if "does not exist" not in e and "GitHub token" not in e]
     if errors:
         for m in errors:
             print(f"error {m}", file=sys.stderr)
@@ -1533,7 +1578,8 @@ def cmd_login(args, runner):
             print(f"error {m}", file=sys.stderr)
         return 2
     if cell["where"] == "docker":
-        env = child_env({KEY_ENV: cfg["approval_key_file"], "LINUX_MATRIX_CELL": cell["id"],
+        env = child_env({KEY_ENV: cfg["approval_key_file"], TOKEN_ENV: cfg["github_token_file"],
+                         "LINUX_MATRIX_CELL": cell["id"],
                          "LINUX_MATRIX_PREBUILT": "1", "LINUX_MATRIX_SERVER": cfg["server"],
                          "GOALCUP_TEST_MEMBER_ID": cell["test_member_id"],
                          "LINUX_MATRIX_CODEX_EFFORT": cell.get("codex_effort")})
@@ -1547,7 +1593,13 @@ def cmd_login(args, runner):
     rc = runner.interactive([goalcup, "login", "--server", cfg["server"]], env=env)
     if rc != 0:
         return rc
-    return runner.interactive([goalcup, "prep", "--harness", cell["connector"]], env=env)
+    rc = runner.interactive([goalcup, "prep", "--harness", cell["connector"]], env=env)
+    if rc != 0:
+        return rc
+    argv, env = settle_command(cfg, cell)
+    rc, out = runner.run(argv, env=env, timeout=60)
+    print(out, end="")
+    return rc
 
 
 def default_out(cfg, clock):

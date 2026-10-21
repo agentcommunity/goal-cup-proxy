@@ -51,6 +51,12 @@
 # Environment. A secret is only ever a FILE, mounted read-only; its path goes to the one command
 # that reads it, and its value is never in an argument, a `-e`, a log or this script's output.
 #   GOALCUP_TEST_APPROVAL_KEY_FILE  the server's test approval key (login and run).
+#   MATRIX_GITHUB_TOKEN_FILE        a GitHub token for the practice repository (login and run;
+#                                   needed for `-- --test`): a test start asks GitHub, with it,
+#                                   whether the repository is empty. Mounted read-only and
+#                                   written into the volume's github.json (scripts/kit_settle.py).
+#                                   It must not be able to push to that repository: one agent
+#                                   push there makes every later test start refuse it.
 #   GOALCUP_TEST_MEMBER_ID          the member approved as
 #                                   (default 00000000-0000-4000-8000-0000000c0de1).
 #   LINUX_MATRIX_SERVER             default https://goalcup-ingest-staging.b-9a5.workers.dev;
@@ -92,9 +98,9 @@
 # The script has no drill of its own: an orchestrator acts on the named container from outside.
 #
 # What the harness can read. It runs as the same user as the script's own steps, so it can read
-# the mounted key files (/run/goalcup/*, read-only; staging's test key) and the whole checkout at
-# /src, untracked files included. Run it from a clean checkout, never one holding secrets (a
-# Worker .dev.vars, for example).
+# the mounted key files (/run/goalcup/*, read-only; staging's test key and the kit's GitHub token)
+# and the whole checkout at /src, untracked files included. Run it from a clean checkout, never
+# one holding secrets (a Worker .dev.vars, for example).
 #
 # Needs: Docker (no privileged container), `cargo fetch --locked` run on this machine first (the
 # container builds --offline from its registry), and network.
@@ -110,7 +116,10 @@ CLAUDE_MODEL=haiku
 VOL=/vol
 CFG=$VOL/cfg
 KEY_IN=/run/goalcup/approval-key
+TOKEN_IN=/run/goalcup/github-token
 PROMPT_IN=/run/goalcup/prompt
+# The settle helper beside this script (/src/scripts in the container).
+KIT=$(dirname "$0")/kit_settle.py
 # matrix.sh's settings this script passes on when they are set.
 PASS_ENV="MATRIX_PROMPT MATRIX_PROMPT_DELAY MATRIX_SUBMIT_DELAY MATRIX_PRE_PROMPT_KEYS MATRIX_PRE_PROMPT_DELAY MATRIX_REPO_URL"
 
@@ -328,37 +337,13 @@ print("yes" if prep.get("harness") == sys.argv[2] and prep.get("home_ready") els
 PY
 }
 
-# After prep: the repository and work folder a practice run needs, as matrix.sh settles them for
-# its own configuration. The token is format-valid and fake: a practice clone is anonymous and
-# installs no push helper, so it is never sent anywhere. prep's own repository step is left as
-# `todo` on purpose; with a repository set it would ask for a real token.
+# After prep: the repository and work folder a run needs (scripts/kit_settle.py settle): the
+# practice repository, unless prep recorded a full-flow one, and github.json with the token from
+# MATRIX_GITHUB_TOKEN_FILE (the mounted file), which a test start sends to GitHub to ask whether
+# the repository is empty. prep's own repository step is left as `todo` on purpose.
 inner_settle() {
     mkdir -p "$VOL/work" || fail "work folder"
-    python3 - "$CFG" "$VOL/work" "${MATRIX_REPO_URL:-https://github.com/agentcommunity/goalcup-matrix-empty}" <<'PY' || fail "settle prep.json"
-import json, os, sys
-
-cfg, work, repo = sys.argv[1:4]
-
-def write(name, doc):
-    path = os.path.join(cfg, name)
-    fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(doc, f, indent=2)
-        f.write("\n")
-    os.replace(path + ".new", path)
-
-prep = json.load(open(os.path.join(cfg, "prep.json")))
-prep["repo_url"] = prep.get("repo_url") or repo
-prep["work_root"] = prep.get("work_root") or work
-write("prep.json", prep)
-gh = os.path.join(cfg, "github.json")
-try:
-    same = json.load(open(gh)).get("repo_url") == prep["repo_url"]
-except (OSError, ValueError):
-    same = False
-if not same:
-    write("github.json", {"repo_url": prep["repo_url"], "token": "ghp_matrixfaketoken00000000000000000000"})
-PY
+    python3 "$KIT" settle "$CFG" "$VOL/work" ${MATRIX_REPO_URL:+"$MATRIX_REPO_URL"} || fail "settle prep.json and github.json"
 }
 
 # The rule the run is held to, in words.
@@ -608,6 +593,8 @@ fi
     fail "GOALCUP_TEST_APPROVAL_KEY in the environment is refused: give the file as GOALCUP_TEST_APPROVAL_KEY_FILE"
 keyfile=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
 unset GOALCUP_TEST_APPROVAL_KEY_FILE
+tokenfile=${MATRIX_GITHUB_TOKEN_FILE:-}
+unset MATRIX_GITHUB_TOKEN_FILE
 mounted_file() { # path what
     case $1 in /*) ;; *) fail "$2 is given as an absolute path" ;; esac
     case $1 in *:* | *,*) fail "the path of $2 may not hold : or ," ;; esac
@@ -618,6 +605,14 @@ if [ "$action" != build ]; then
     [ -n "$keyfile" ] || fail "GOALCUP_TEST_APPROVAL_KEY_FILE is needed (the login and the run are approved with it)"
     mounted_file "$keyfile" "a secret file"
     set -- -v "$keyfile:$KEY_IN:ro"
+    if [ -n "$tokenfile" ]; then
+        mounted_file "$tokenfile" "MATRIX_GITHUB_TOKEN_FILE"
+        set -- "$@" -v "$tokenfile:$TOKEN_IN:ro"
+    else
+        case " $extra " in
+        *" --test "*) fail "MATRIX_GITHUB_TOKEN_FILE is needed for --test (a test start asks GitHub, with that token, whether the repository is empty)" ;;
+        esac
+    fi
     promptfile=${MATRIX_PROMPT_FILE:-}
     if [ -n "$promptfile" ]; then
         [ -z "${MATRIX_PROMPT:-}" ] || fail "set MATRIX_PROMPT or MATRIX_PROMPT_FILE, not both"
@@ -787,6 +782,7 @@ if [ "$action" = run ]; then
     fi
     set -- -e GOALCUP_TEST_APPROVAL_KEY_FILE=$KEY_IN
     [ -z "${MATRIX_PROMPT_FILE:-}" ] || set -- "$@" -e MATRIX_PROMPT_FILE=$PROMPT_IN
+    [ -z "$tokenfile" ] || set -- "$@" -e MATRIX_GITHUB_TOKEN_FILE=$TOKEN_IN
     # $extra holds checked words only (options and digits), so it splits as meant.
     docker exec -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" $extra &
     run_job=$!
@@ -795,6 +791,9 @@ if [ "$action" = run ]; then
 fi
 
 loginlog=$logdir/login-$h${cell:+-$cell}-$(date -u +%Y%m%dT%H%M%SZ).log
+# The settle step reads the token from the mounted file, when there is one.
+token_env=""
+[ -z "$tokenfile" ] || token_env="-e MATRIX_GITHUB_TOKEN_FILE=$TOKEN_IN"
 # Where the harness keeps its login: file names only, on the terminal and in the login log.
 record_home_files() {
     docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-files "$h" | tee -a "$loginlog"
@@ -802,7 +801,7 @@ record_home_files() {
 
 step "login" -e GOALCUP_TEST_APPROVAL_KEY_FILE=$KEY_IN "$name" sh /src/scripts/linux-matrix.sh inner-login "$h"
 if [ "$(docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-ready "$h")" = yes ]; then
-    step "settle" "$name" sh /src/scripts/linux-matrix.sh inner-settle
+    step "settle" $token_env "$name" sh /src/scripts/linux-matrix.sh inner-settle
     record_home_files
     echo "linux-matrix: signed in ($h on volume $volume; prep recorded it before)"
     exit 0
@@ -810,7 +809,7 @@ fi
 unlock
 if ! [ -t 0 ] || ! [ -t 1 ]; then
     echo "linux-matrix: OWNER STEP: in a terminal, from $PWD, run:"
-    echo "  GOALCUP_TEST_APPROVAL_KEY_FILE=$keyfile${cell:+ LINUX_MATRIX_CELL=$cell}$([ "$prebuilt" = 1 ] && echo " LINUX_MATRIX_PREBUILT=1") sh scripts/linux-matrix.sh login $h"
+    echo "  GOALCUP_TEST_APPROVAL_KEY_FILE=$keyfile${tokenfile:+ MATRIX_GITHUB_TOKEN_FILE=$tokenfile}${cell:+ LINUX_MATRIX_CELL=$cell}$([ "$prebuilt" = 1 ] && echo " LINUX_MATRIX_PREBUILT=1") sh scripts/linux-matrix.sh login $h"
     exit 3
 fi
 case $h in
@@ -853,6 +852,6 @@ esac
 docker exec -it -u dev -e TERM=xterm-256color "$name" sh -c "cd $VOL/home && goalcup prep --harness $h --work-root $VOL/work"
 [ "$(docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-ready "$h")" = yes ] ||
     fail "prep did not record the sign-in ($h must exit with /exit, status 0); run login again"
-docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-settle || fail "settle"
+docker exec -u dev $token_env "$name" sh /src/scripts/linux-matrix.sh inner-settle || fail "settle"
 record_home_files
 echo "linux-matrix: signed in ($h on volume $volume)"

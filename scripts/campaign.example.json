@@ -3,6 +3,7 @@
   "defaults": {
     "server": "https://goalcup-ingest-staging.b-9a5.workers.dev",
     "approval_key_file": "/Users/you/.goalcup-secrets/staging-test-approval-key",
+    "github_token_file": "/Users/you/.goalcup-secrets/kit-github-token",
     "connector": "codex-cli",
     "duration_s": 7200,
     "sample_every_s": 600,
