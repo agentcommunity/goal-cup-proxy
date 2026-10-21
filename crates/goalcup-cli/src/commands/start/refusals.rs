@@ -32,7 +32,8 @@ pub(super) fn interrupted_before_launch() -> CliError {
 
 /// `goalcup continue`'s refusals that need no server and change nothing, made before the
 /// shared harness home is locked and before any earlier segment is sealed or sent: this must be
-/// the foreground of a terminal, and the harness, its pin and its executable must be usable. [`prepare`] asks them again of the segment it launches.
+/// the foreground of a terminal, and the harness, its pin and its executable must be usable.
+/// [`prepare`] asks them again of the segment it launches.
 pub(crate) fn continue_preflight(
     cfg: &Path,
     connector: &HarnessConnector,
@@ -78,9 +79,11 @@ pub(super) fn holds_the_terminal(name: &str, then: &str) -> Result<(), CliError>
 pub const TEST_GITHUB_API: &str = "GOALCUP_TEST_GITHUB_API";
 
 /// A competition or test run needs a repository of its own: a run that clones what an earlier
-/// run pushed would be seeded by it. So the repository must still be empty, by the same request
-/// and rule `goalcup prep` uses, asked before the approval and before anything is created. A
-/// practice run never pushes and is not asked.
+/// run pushed would be seeded by it. So the repository must still be empty, by the same request,
+/// rule and sentence `goalcup prep` uses ([`crate::account::github::check_empty`]), asked before
+/// the approval and before anything is created. A practice run never pushes and is not asked.
+/// GitHub's answer can lag a push, so the clone is asked as well once it is made
+/// ([`crate::account::github::clone_has_commits`]).
 pub(super) fn refuse_used_repository(
     env: &BTreeMap<String, String>,
     github: &crate::account::github::GithubSetup,
@@ -94,22 +97,17 @@ pub(super) fn refuse_used_repository(
         let _ = env;
         crate::account::github::GITHUB_API.to_string()
     };
-    if crate::account::github::is_empty(&api, github)? {
-        return Ok(());
-    }
-    Err(CliError::Refused(format!(
-        "{} is not empty. A new run needs a new empty repository. Make one and run: goalcup prep \
-         --repo <url>. Nothing was created.",
-        github.repo_url
-    )))
+    crate::account::github::check_empty(&api, github).map_err(|error| match error {
+        CliError::Refused(why) => CliError::Refused(format!("{why} Nothing was created.")),
+        other => other,
+    })
 }
 
 /// What a start that fails after the approval says once it has removed what it made (said once,
 /// by `capture`, for every failure of that phase): the run directory, the clone, and the run's
-/// credential directory. It does not
-/// remove the work folder itself (the participant's folder, left in place once created) or the
-/// shared harness-home folder of a connector under `<cfg>/capture-homes/` (one per connector,
-/// persistent, and reused by every run of it).
+/// credential directory. It does not remove the work folder itself (the participant's folder,
+/// left in place once created) or the shared harness-home folder of a connector under
+/// `<cfg>/capture-homes/` (one per connector, persistent, and reused by every run of it).
 pub(super) const CLEANED_UP: &str = "Nothing was started, and what this start made was removed.";
 
 /// The folder a continued run's own folder is made in: `requested` (the folder `goalcup
@@ -140,10 +138,13 @@ pub(super) fn prepared_work_folder(cfg: &Path) -> Option<PathBuf> {
     (!kept.is_empty()).then(|| PathBuf::from(kept))
 }
 
-/// The WSL checks over every folder a run writes to: the work folder (when there is one), the
+/// The folder checks over every folder a run writes to: the work folder (when there is one), the
 /// folder the run's own directory is made in, the artifact root and the configuration folder.
-/// See [`crate::wsl_gate`]. `env` states the machine in a test build only.
-pub(crate) fn refuse_wsl(
+/// WSL1, or a folder on a Windows drive under WSL2, is refused; a folder on a filesystem a run
+/// cannot keep its records on is warned about on the terminal and the command goes on (`goalcup
+/// prep` fails its step for it). See [`crate::folder_gate`]. `env` states the machine in a test
+/// build only.
+pub(crate) fn check_run_folders(
     env: &BTreeMap<String, String>,
     cfg: &Path,
     run_folder: &Path,
@@ -151,11 +152,11 @@ pub(crate) fn refuse_wsl(
     untouched: &str,
 ) -> Result<(), CliError> {
     #[cfg(feature = "test-support")]
-    let host = crate::wsl_gate::Host::from_env(env);
+    let host = crate::folder_gate::Host::from_env(env);
     #[cfg(not(feature = "test-support"))]
     let host = {
         let _ = env;
-        crate::wsl_gate::Host::here()
+        crate::folder_gate::Host::here()
     };
     let artifacts = artifact_root(cfg);
     let mut folders = vec![
@@ -166,15 +167,18 @@ pub(crate) fn refuse_wsl(
     if let Some(work_folder) = work_folder {
         folders.insert(0, ("work folder", work_folder));
     }
-    host.refuse(&folders, untouched)
+    host.refuse(&folders, untouched)?;
+    if let Some(warning) = host.warn_filesystems(&folders) {
+        crate::host_log::say(&warning);
+    }
+    Ok(())
 }
 
 /// The run directory is made in the folder `goalcup start` is run from and holds the harness's
-/// `HOME`; the clone is made in the work folder,
-/// under a name of its own. They cannot be the same folder, but a folder *below* the work folder
-/// would put the run directory (and so the harness's home) inside some other clone, or inside an
-/// older run's folder. So: `beside` may be the work folder itself, or anywhere outside it, and is
-/// refused anywhere inside it.
+/// `HOME`; the clone is made in the work folder, under a name of its own. They cannot be the same
+/// folder, but a folder *below* the work folder would put the run directory (and so the
+/// harness's home) inside some other clone, or inside an older run's folder. So: `beside` may be
+/// the work folder itself, or anywhere outside it, and is refused anywhere inside it.
 pub(super) fn refuse_goal_folder_inside_work_root(
     work_root: &Path,
     beside: &Path,

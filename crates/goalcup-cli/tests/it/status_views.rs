@@ -232,7 +232,7 @@ fn entries_lists_one_line_per_entry_json_is_an_array_and_a_sealed_entry_leaves_t
     let tmp = tempfile::tempdir().unwrap();
     let m = support::mock_armed(&tmp, "codex-cli");
     let mut out = Vec::new();
-    entries_with(&m, false, &mut out).unwrap();
+    entries_with(&m, tmp.path(), false, &mut out).unwrap();
     let text = String::from_utf8(out).unwrap();
     assert_eq!(
         text.lines().filter(|l| l.contains("entry-")).count(),
@@ -247,8 +247,34 @@ fn entries_lists_one_line_per_entry_json_is_an_array_and_a_sealed_entry_leaves_t
         "{text}"
     );
     assert!(!text.contains("online"), "{text}");
+    // With a run record for the part, its line names the run `goalcup continue` takes.
+    let entry_id = m.info().entry_id;
+    goalcup_cli::run::write(
+        tmp.path(),
+        &goalcup_cli::run::RunRecord {
+            run_id: "run-with-a-part".to_string(),
+            server_url: Some("https://server.example".to_string()),
+            practice: false,
+            test: false,
+            connector_id: "codex-cli".to_string(),
+            workspace: std::path::PathBuf::from("/w"),
+            started_at_unix: 1,
+            deadline_at: None,
+            entries: vec![goalcup_cli::run::EntryRef {
+                entry_id: entry_id.clone(),
+                trace_dir: std::path::PathBuf::from("/t"),
+            }],
+        },
+    )
+    .unwrap();
     let mut out = Vec::new();
-    entries_with(&m, true, &mut out).unwrap();
+    entries_with(&m, tmp.path(), false, &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("goalcup continue <run-id>"), "{text}");
+    let line = text.lines().find(|l| l.contains(&entry_id)).unwrap();
+    assert!(line.contains("run-with-a-part"), "{text}");
+    let mut out = Vec::new();
+    entries_with(&m, tmp.path(), true, &mut out).unwrap();
     let v: Vec<goalcup_protocol::control::EntrySummary> = serde_json::from_slice(&out).unwrap();
     assert_eq!(v.len(), m.entry_count());
 
@@ -256,7 +282,7 @@ fn entries_lists_one_line_per_entry_json_is_an_array_and_a_sealed_entry_leaves_t
     let before = m.entry_count();
     m.seal(&m.info().entry_id).unwrap();
     let mut out = Vec::new();
-    entries_with(&m, false, &mut out).unwrap();
+    entries_with(&m, tmp.path(), false, &mut out).unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(
         m.entry_count() < before,

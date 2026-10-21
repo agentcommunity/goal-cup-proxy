@@ -70,6 +70,19 @@ pub fn receipt_path(cfg: &Path, entry_id: &str) -> PathBuf {
         .join(format!("{entry_id}.receipt.json"))
 }
 
+/// The start receipt `goalcup start` kept for `entry_id` ([`receipt_path`]).
+pub fn read_receipt(
+    cfg: &Path,
+    entry_id: &str,
+) -> Result<goalcup_protocol::receipt::StartReceipt, CliError> {
+    let path = receipt_path(cfg, entry_id);
+    let bytes = std::fs::read(&path).map_err(|source| CliError::Io {
+        path: path.display().to_string(),
+        source,
+    })?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
 /// The record `goalcup start` kept for `entry_id`, or `None` for a local-only run.
 pub fn read_record(cfg: &Path, entry_id: &str) -> Result<Option<UploadRecord>, CliError> {
     let path = record_path(cfg, entry_id);
@@ -135,11 +148,10 @@ pub fn open_run(server: &ServerClient, request: &OpenRunRequest) -> Result<OpenR
             (Some(start), Some(deadline)) if start < deadline
         );
     if !well_formed {
-        return Err(CliError::Refused(format!(
-            "the Goal Cup server at {} answered a run this tracker cannot use: {run:?}. \
-             Nothing was started.",
-            server.base()
-        )));
+        crate::host_log::log_only(&format!("open run: an answer goalcup cannot use: {run:?}"));
+        return Err(CliError::Refused(
+            crate::participant::server_answer_unusable(server.base(), "run"),
+        ));
     }
     Ok(run)
 }
@@ -201,11 +213,12 @@ pub fn continue_run(
             (Some(start), Some(deadline)) if start < deadline
         );
     if !well_formed {
-        return Err(CliError::Refused(format!(
-            "the Goal Cup server at {} answered a segment this tracker cannot use: {segment:?}. \
-             Nothing was started.",
-            server.base()
-        )));
+        crate::host_log::log_only(&format!(
+            "continue run: an answer goalcup cannot use: {segment:?}"
+        ));
+        return Err(CliError::Refused(
+            crate::participant::server_answer_unusable(server.base(), "part of the run"),
+        ));
     }
     Ok(Continued::Segment(segment))
 }

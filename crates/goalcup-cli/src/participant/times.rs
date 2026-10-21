@@ -1,4 +1,4 @@
-// ------------------------------------------------------------------------------------ times
+//! Times as the participant reads them, and what is left of a run.
 
 /// A moment as the participant reads it: this computer's local time with its zone, and UTC in
 /// brackets, because a short zone name alone is not unique and the event speaks UTC:
@@ -116,6 +116,20 @@ pub fn end_words(deadline_at: &str, left: Option<u64>) -> String {
     }
 }
 
+/// [`seconds_left`] of `run` by the count its `state` keeps: what `goalcup status`, `goalcup
+/// seal` and `goalcup time-left` all say is left of a run.
+pub fn run_seconds_left(
+    run: &crate::run::RunRecord,
+    state: Option<&crate::run::RunState>,
+    now: u64,
+) -> Option<u64> {
+    seconds_left(
+        state.and_then(|state| state.time_left.as_ref()),
+        run.deadline_at.as_deref(),
+        now,
+    )
+}
+
 /// What is left of a run now: by the server's count when it holds (the same boot), else by the
 /// server's `deadline_at` against this machine's date (`now`). Only for words: whether the run is
 /// over is [`crate::run::is_over`]'s to say.
@@ -137,4 +151,19 @@ pub fn seconds_left(
             .and_then(goalcup_protocol::control::parse_z)
             .map(|deadline| deadline.saturating_sub(now))
     })
+}
+
+/// `goalcup time-left` inside the agent's session, with no fresh time-left file: the advice
+/// first, then why there is no number.
+pub fn time_left_unknown() -> String {
+    format!(
+        "{} The time left is unknown right now: there is no fresh time-left file.",
+        crate::run::time_left::PUSH_OFTEN
+    )
+}
+
+/// `goalcup time-left` in a person's own terminal, with no open run on this computer.
+pub fn no_open_run_time_left() -> &'static str {
+    "Run goalcup status to see your runs. No run is open on this computer, so there is no time \
+     left to show."
 }

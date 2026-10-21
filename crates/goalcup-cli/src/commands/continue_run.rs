@@ -29,7 +29,7 @@
 use crate::CliError;
 use crate::commands::say;
 use crate::commands::start::{
-    Continuing, SleepLockFn, StartOptions, continue_preflight, continue_segment, refuse_wsl,
+    Continuing, SleepLockFn, StartOptions, check_run_folders, continue_preflight, continue_segment,
     run_folder_for_continue,
 };
 use crate::connector::HarnessConnector;
@@ -145,7 +145,8 @@ pub fn continue_with(
     let folder = run_folder_for_continue(opts.run_folder.as_deref(), &record.workspace)?;
     // WSL1 cannot run this, and WSL2 cannot keep a run on a Windows drive: judged here, over every
     // folder the segment writes to, before the home is locked or anything is closed or changed.
-    refuse_wsl(
+    // A folder on a filesystem a run cannot keep its records on is only warned about.
+    check_run_folders(
         env,
         cfg,
         &folder,
@@ -211,13 +212,7 @@ pub fn continue_with(
                 continue;
             }
         }
-        let receipt: goalcup_protocol::receipt::StartReceipt = {
-            let path = crate::upload::receipt_path(cfg, entry_id);
-            serde_json::from_slice(&std::fs::read(&path).map_err(|source| CliError::Io {
-                path: path.display().to_string(),
-                source,
-            })?)?
-        };
+        let receipt = crate::upload::read_receipt(cfg, entry_id)?;
         let entry = read_entry(cfg, entry_id)?;
         let how = how_to_close(client, &entry)?;
         earlier.push(Earlier {

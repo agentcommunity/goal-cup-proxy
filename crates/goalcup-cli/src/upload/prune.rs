@@ -153,11 +153,19 @@ pub fn clean_finished(spool: &Path, entry: &crate::run::EntryRef) -> u64 {
     freed
 }
 
-/// [`clean_finished`] for every entry of every run on this machine.
+/// [`clean_finished`] for every entry of every run on this machine. The time-left file of a run
+/// whose host has finished (and that no later segment has taken over) goes too: no agent of it
+/// is left to read it.
 pub fn clean_finished_runs(cfg: &Path) -> u64 {
     let spool = cfg.join(super::UPLOADS_DIR_NAME);
-    crate::run::all(cfg)
-        .iter()
+    let runs = crate::run::all(cfg);
+    for run in &runs {
+        let state = crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id));
+        if state.is_some_and(|state| state.ended) {
+            crate::run::time_left::remove_file(cfg, &run.run_id);
+        }
+    }
+    runs.iter()
         .flat_map(|run| &run.entries)
         .map(|entry| clean_finished(&spool, entry))
         .sum()
@@ -185,6 +193,25 @@ mod tests {
             .iter()
             .map(|p| p.display().to_string())
             .collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn the_time_left_file_of_a_run_whose_host_finished_is_removed() {
+        let cfg = tempfile::tempdir().unwrap();
+        crate::run::tests_support::continuable_run(cfg.path(), "run-a", "part-a", 1);
+        crate::run::tests_support::continuable_run(cfg.path(), "run-b", "part-b", 1);
+        for run in ["run-a", "run-b"] {
+            let file = crate::run::time_left::file_path(cfg.path(), run);
+            crate::config::write_secret_file(&file, b"seconds_left=1\n").unwrap();
+        }
+        // run-a's host has finished; run-b's still records.
+        let dir = crate::run::run_dir(cfg.path(), "run-a");
+        let mut state = crate::run::read_state(&dir).unwrap();
+        state.ended = true;
+        crate::run::StateKeeper::begin(&dir, state);
+        clean_finished_runs(cfg.path());
+        assert!(!crate::run::time_left::file_path(cfg.path(), "run-a").exists());
+        assert!(crate::run::time_left::file_path(cfg.path(), "run-b").exists());
     }
 
     #[test]

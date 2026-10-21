@@ -650,11 +650,7 @@ pub(super) fn register_and_release<'a>(
         // What the participant does now, and when the run ends: the last thing said here
         // before the harness owns the terminal, ending with the ready mark.
         let ends = forked.record.deadline_at.as_deref().map(|deadline_at| {
-            let count = forked
-                .upload
-                .as_ref()
-                .and_then(|start| start.local_deadline)
-                .map(|count| count.time_left());
+            let count = forked.time_left();
             crate::participant::end_words(
                 deadline_at,
                 crate::participant::seconds_left(
@@ -823,18 +819,14 @@ pub(super) fn run_harness<'a>(
     // can be restarted by it.
     launched.continuable = forked.record.server_url.is_some();
     // What is left of the run, by the server's answer: the uploader keeps it from here (WP11).
-    launched.time_left = forked
-        .upload
-        .as_ref()
-        .and_then(|start| start.local_deadline)
-        .map(|count| count.time_left());
+    launched.time_left = forked.time_left();
     let keeper = crate::run::StateKeeper::begin(
         &crate::run::run_dir(forked.cfg, &forked.record.run_id),
         launched,
     );
     let vitals = match forked.proxied.as_ref() {
-        Some(proxied) => crate::run::Vitals::counting(proxied.proxy.model_requests()),
-        None => crate::run::Vitals::default(),
+        Some(proxied) => crate::run::RunSignals::counting(proxied.proxy.model_requests()),
+        None => crate::run::RunSignals::default(),
     };
     // A run on a server reports its disk and goalcup's own processes in its heartbeats.
     let vitals = match forked.upload.as_ref() {

@@ -717,7 +717,8 @@ fn prep_fails_a_folder_on_an_unsupported_filesystem_and_says_how_to_move_it() {
     let machine = line(&text, "machine");
     assert!(
         machine.starts_with("[fail] machine:")
-            && machine.contains(&format!("work folder {} is on btrfs", work.display()))
+            && machine.contains(&format!("work folder {}", work.display()))
+            && machine.contains("btrfs")
             && machine.contains("ext4, XFS or APFS")
             && machine.contains("goalcup prep --work-root"),
         "{text}"

@@ -402,8 +402,8 @@ pub fn validate_shared_capture_home_for_uid(path: &Path, uid: u32) -> Result<(),
 }
 
 /// This run's own directory, made in the folder `goalcup start` is run from: `workspace/` (the
-/// daemon makes it),
-/// `home/` (the harness's `HOME`) and `ca/` (the recording proxy's CA certificate).
+/// daemon makes it), `home/` (the harness's `HOME`) and `ca/` (the recording proxy's CA
+/// certificate).
 ///
 /// A run on a server has its workspace elsewhere: a clone of the participant's repository in
 /// their work folder, `<work_root>/goalcup-<16 hex digits>`, **a random name of its own**, never

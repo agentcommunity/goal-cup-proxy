@@ -192,7 +192,6 @@ fn an_exit_while_the_run_is_open_names_the_command_the_run_and_the_end() {
         run_id: "r0123456789abcdef",
         how: "exit code 1",
         until: until.clone(),
-        disk_stop: false,
     };
     let block = ending_block("Some Agent", &open);
     let text = block.join("\n");
@@ -216,18 +215,6 @@ fn an_exit_while_the_run_is_open_names_the_command_the_run_and_the_end() {
     );
     let closed = after_upload(&open, true, true).join(" ");
     assert!(closed.contains("cannot be continued"), "{closed}");
-    let disk = ending_block(
-        "A",
-        &Ending::Open {
-            run_id: "r1",
-            how: "exit code 0",
-            until,
-            disk_stop: true,
-        },
-    )
-    .join("\n");
-    assert!(disk.contains("disk"), "{disk}");
-    assert!(disk.contains(&format!("{CONTINUE_HINT} r1")), "{disk}");
 }
 
 #[test]
@@ -454,7 +441,6 @@ fn a_leftover_upload_has_one_command() {
         run_id: "r1",
         how: "exit code 1",
         until: "Sat 14 Nov, 10:12 UTC".into(),
-        disk_stop: false,
     };
     let mut said = vec![
         status_next(&Next::Upload),

@@ -151,8 +151,8 @@ pub struct UploadState {
     pub last_ok_at: Option<u64>,
     /// The uploader's last failure, in a sentence; `None` while it works.
     pub problem: Option<String>,
-    /// The uploader gave up on the run. Only an older build's uploader did; a run's own upload
-    /// never gives up now (D64).
+    /// The uploader gave up on the run. Only an older build's uploader did, so only an older
+    /// `state.json` sets it; a run's own upload never gives up now (D64).
     #[serde(default)]
     pub stopped: bool,
     /// The server has refused this run's calls with this status [`REFUSALS_SAID_AFTER`] times in
@@ -194,6 +194,9 @@ pub struct HeartbeatState {
 /// How many heartbeats in a row must fail before `goalcup status` calls it a problem: three,
 /// which at the five-minute cadence is a quarter of an hour without the server hearing the run.
 pub const HEARTBEATS_FAILING_AFTER: u32 = 3;
+
+/// Uploads are failing, for `goalcup status`, when none was acknowledged for this long.
+pub const UPLOAD_FAILING_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// The disk, as the last tick measured it.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,8 +278,7 @@ impl Advice {
 /// Whether the run is over: its host stopped it for its end (the server's stop, a newer run
 /// replacing it), or its time is up by the count of the server's last answer
 /// ([`RunState::time_left`]). This machine's date is never read for it, except for a state with
-/// no count, against `now` (unix seconds; [`time_left::time_up`]). A full disk stops the agent
-/// and leaves the run open.
+/// no count, against `now` (unix seconds; [`time_left::time_up`]).
 pub fn is_over(record: &RunRecord, state: Option<&RunState>, now: u64) -> bool {
     state.is_some_and(RunState::stopped_for_its_end)
         || time_left::time_up(
@@ -405,7 +407,7 @@ impl RunState {
                 .upload
                 .last_ok_at
                 .map_or(0, |last_ok| now.saturating_sub(last_ok));
-            let failing = age >= reserve::UPLOAD_FAILING_AFTER.as_secs();
+            let failing = age >= UPLOAD_FAILING_AFTER.as_secs();
             if self.ended || self.upload.stopped || failing {
                 lines.push(participant::problem_upload(
                     &age_words(age),
@@ -476,7 +478,7 @@ pub(crate) fn age_words(secs: u64) -> String {
 /// What the threads of one run tell each other: the recording as the last tick saw it, the
 /// recording proxy's count of model requests, and how the upload is doing. Cloning shares it.
 #[derive(Debug, Clone)]
-pub struct Vitals {
+pub struct RunSignals {
     recording: Arc<AtomicU8>,
     model_requests: Arc<AtomicU64>,
     upload: Arc<Mutex<UploadVital>>,
@@ -489,7 +491,6 @@ pub struct Vitals {
 #[derive(Debug, Default)]
 struct UploadVital {
     problem: Option<String>,
-    stopped: bool,
     /// Heartbeats in a row that failed, and why the last one did.
     heartbeat_failures: u32,
     heartbeat_last: Option<String>,
@@ -513,17 +514,17 @@ impl UploadVital {
     }
 }
 
-impl Default for Vitals {
+impl Default for RunSignals {
     /// Nothing known: the recording unknown, no model request.
     fn default() -> Self {
-        Vitals::counting(Arc::default())
+        RunSignals::counting(Arc::default())
     }
 }
 
-impl Vitals {
-    /// Vitals that read model requests from `counter` (the recording proxy's).
-    pub fn counting(counter: Arc<AtomicU64>) -> Vitals {
-        Vitals {
+impl RunSignals {
+    /// Signals that read model requests from `counter` (the recording proxy's).
+    pub fn counting(counter: Arc<AtomicU64>) -> RunSignals {
+        RunSignals {
             recording: Arc::new(AtomicU8::new(Recording::Unknown as u8)),
             model_requests: counter,
             upload: Arc::default(),
@@ -532,8 +533,8 @@ impl Vitals {
         }
     }
 
-    /// These vitals, with the heartbeats' `vitals` read by `probe`.
-    pub fn probing(mut self, probe: crate::vitals::Probe) -> Vitals {
+    /// These signals, with the heartbeats' `vitals` read by `probe`.
+    pub fn probing(mut self, probe: crate::vitals::Probe) -> RunSignals {
         self.probe = Some(probe);
         self
     }
@@ -581,19 +582,9 @@ impl Vitals {
         self.upload().problem = Some(why.to_string());
     }
 
-    /// The upload gave up on the run.
-    pub fn upload_stopped(&self, why: &str) {
-        let mut upload = self.upload();
-        upload.problem = Some(why.to_string());
-        upload.stopped = true;
-    }
-
     /// The upload works.
     pub fn upload_ok(&self) {
-        let mut upload = self.upload();
-        if !upload.stopped {
-            upload.problem = None;
-        }
+        self.upload().problem = None;
     }
 
     /// A heartbeat failed: counted until one is stored. The count so far, this one included.
@@ -623,10 +614,9 @@ impl Vitals {
         }
     }
 
-    /// The uploader's last failure, and whether it gave up.
-    pub fn upload_problem(&self) -> (Option<String>, bool) {
-        let upload = self.upload();
-        (upload.problem.clone(), upload.stopped)
+    /// The uploader's last failure; `None` while it works.
+    pub fn upload_problem(&self) -> Option<String> {
+        self.upload().problem.clone()
     }
 
     /// The server refused a call of `channel` with `status` (a `4xx`). Answers `true` exactly
@@ -1301,11 +1291,11 @@ mod tests {
 
         // A state that says the run cannot be restarted (a run of the removed headless mode):
         // not over, and not continuable.
-        let mut headless = state.clone();
-        headless.continuable = false;
-        let cannot = advice(cfg.path(), &run, &headless, now);
+        let mut not_continuable = state.clone();
+        not_continuable.continuable = false;
+        let cannot = advice(cfg.path(), &run, &not_continuable, now);
         assert_eq!(cannot, Advice::Cannot);
-        let lines = headless.problems(now, cannot, &who);
+        let lines = not_continuable.problems(now, cannot, &who);
         assert!(lines[0].contains(has_exited), "{lines:?}");
         assert!(lines[0].contains("cannot be continued"), "{lines:?}");
         assert!(!lines[0].contains("goalcup continue"), "{lines:?}");
@@ -1317,7 +1307,10 @@ mod tests {
 
         // `can_continue` is the one answer: server run, chat-mode, not over, credential here.
         assert!(can_continue(cfg.path(), &run, true, false));
-        assert!(!can_continue(cfg.path(), &run, false, false), "headless");
+        assert!(
+            !can_continue(cfg.path(), &run, false, false),
+            "not continuable"
+        );
         assert!(!can_continue(cfg.path(), &run, true, true), "over");
         assert!(!can_continue(cfg.path(), &local, true, false), "no server");
 
@@ -1386,7 +1379,7 @@ mod tests {
 
     #[test]
     fn heartbeat_failures_count_in_a_row_until_one_is_stored() {
-        let vitals = Vitals::default();
+        let vitals = RunSignals::default();
         assert_eq!(vitals.heartbeat_trouble(), HeartbeatState::default());
         assert_eq!(vitals.heartbeat_failed("503"), 1);
         assert_eq!(vitals.heartbeat_failed("timeout"), 2);
@@ -1423,7 +1416,7 @@ mod tests {
     /// answering does not hide the other's refusals.
     #[test]
     fn a_refusal_is_named_after_three_in_a_row_said_once_and_cleared_by_an_answer() {
-        let vitals = Vitals::default();
+        let vitals = RunSignals::default();
         assert!(!vitals.server_refused(Channel::Upload, 401));
         assert!(!vitals.server_refused(Channel::Upload, 401));
         assert_eq!(vitals.server_refusing(), None, "two are a blip");

@@ -201,7 +201,7 @@ fn one_path_component(entry_id: &str) -> Result<(), CliError> {
     if bad {
         return Err(CliError::Refused(format!(
             "`{entry_id}` does not name an entry: an entry id is one path component, and \
-             this one would name a file outside the tracker's own entries directory."
+             this one would name a file outside goalcup's own entries directory."
         )));
     }
     Ok(())

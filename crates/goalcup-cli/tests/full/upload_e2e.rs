@@ -1733,7 +1733,7 @@ mod segments {
         ] {
             let output = rig
                 .continue_command(&[DISK, BEATING], None)
-                .env(goalcup_cli::wsl_gate::Host::VAR, &wsl)
+                .env(goalcup_cli::folder_gate::Host::VAR, &wsl)
                 .output()
                 .unwrap();
             let said = String::from_utf8_lossy(&output.stderr).into_owned();

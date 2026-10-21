@@ -306,11 +306,24 @@ pub fn check_empty(api_base: &str, s: &GithubSetup) -> Result<(), CliError> {
     judge(api_base, s, false, true)
 }
 
-/// Whether the repository has no commits, by the same request and rule as [`check_empty`]:
-/// `goalcup start` asks it for a competition or test run, which needs a repository that no
-/// other run has pushed to. A failure to ask is refused in [`check`]'s own sentences.
-pub fn is_empty(api_base: &str, s: &GithubSetup) -> Result<bool, CliError> {
-    Ok(ask(api_base, s)?.size == 0)
+/// Whether the clone at `clone` has a commit: `git rev-parse --verify --quiet HEAD` in it, on
+/// this machine and exact. GitHub updates the `size` that [`check_empty`] reads with a delay, so
+/// a repository pushed to a moment ago can still read as empty there; a competition or test
+/// start asks this too, once it has cloned. A clone git cannot read has none.
+pub fn clone_has_commits(clone: &Path) -> bool {
+    run_git(
+        OsStr::new("git"),
+        [
+            OsStr::new("rev-parse"),
+            OsStr::new("--verify"),
+            OsStr::new("--quiet"),
+            OsStr::new("HEAD"),
+        ],
+        Some(clone),
+        CliError::Internal,
+        "git could not read the clone",
+    )
+    .is_ok()
 }
 
 /// One request to GitHub, judged on the halves asked for, in the order public, empty, pushable.
@@ -325,11 +338,9 @@ fn judge(api_base: &str, s: &GithubSetup, access: bool, empty: bool) -> Result<(
         )));
     }
     if empty && answer.size != 0 {
-        return Err(CliError::Refused(format!(
-            "the repository {owner}/{repo} is not empty ({} KB). Goal Cup needs a new \
-             repository with no README, license or .gitignore: create one, then run `goalcup \
-             prep` again.",
-            answer.size
+        return Err(CliError::Refused(crate::participant::repository_not_empty(
+            &format!("{owner}/{repo}"),
+            Some(answer.size),
         )));
     }
     if access && !answer.permissions.is_some_and(|p| p.push) {

@@ -41,17 +41,15 @@ use std::path::Path;
 /// spelled twice is a binary that is one day spelled wrong in the place somebody copies from.
 pub(crate) const VERIFIER_BIN: &str = "goalcup-verify";
 
-/// Refuse `goalcup seal` run from inside the harness: `marker` is the value of
-/// [`crate::launch::IN_HARNESS_ENV`], which every recording launch sets in the harness's
+/// Refuse `goalcup seal` run from inside the harness: `in_harness` is
+/// [`crate::launch::in_harness`], which every recording launch makes true in the harness's
 /// environment, so the agent cannot end its own segment by accident. A seal typed in another
-/// terminal has no marker, and the host's own seal at the end of a run does not come here.
-pub fn refuse_inside_harness(marker: Option<&std::ffi::OsStr>) -> Result<(), CliError> {
-    if marker.is_some_and(|marker| !marker.is_empty()) {
+/// terminal is not in the harness, and the host's own seal at the end of a run does not come
+/// here.
+pub fn refuse_inside_harness(in_harness: bool) -> Result<(), CliError> {
+    if in_harness {
         return Err(CliError::Refused(
-            "`goalcup seal` does not run inside the agent's session, so the agent cannot end \
-             its own run. To end the run early, a person runs `goalcup seal` from another \
-             terminal."
-                .into(),
+            crate::participant::seal_inside_harness().to_string(),
         ));
     }
     Ok(())
@@ -159,18 +157,12 @@ impl PartFacts {
         let state = crate::run::read_state(&run_dir);
         let now = crate::run::now_unix();
         let over = crate::run::is_over(&run, state.as_ref(), now);
+        let left = crate::participant::run_seconds_left(&run, state.as_ref(), now);
         let open_until = run
             .deadline_at
             .as_deref()
             .filter(|_| run.server_url.is_some() && !over)
-            .map(|deadline| {
-                let left = crate::participant::seconds_left(
-                    state.as_ref().and_then(|state| state.time_left.as_ref()),
-                    Some(deadline),
-                    now,
-                );
-                crate::participant::end_words(deadline, left)
-            });
+            .map(|deadline| crate::participant::end_words(deadline, left));
         let continuable = state.as_ref().is_some_and(|state| state.continuable);
         let go_on = open_until
             .clone()
@@ -531,13 +523,13 @@ fn capture_finish_refusal(
     }
 }
 
-/// What the tracker says of the harness's end, in words. The variant name leads (it is what the
+/// What goalcup says of the harness's end, in words. The variant name leads (it is what the
 /// record and the verifier call the outcome), and a stop that could not be confirmed says what
 /// to check.
 pub(crate) fn render_termination(outcome: &TerminationOutcomeV1) -> String {
     match outcome {
         TerminationOutcomeV1::AlreadyStopped { checked_at } => format!(
-            "AlreadyStopped, the harness had already ended when the tracker checked at {}",
+            "AlreadyStopped, the harness had already ended when goalcup checked at {}",
             checked_at.as_str()
         ),
         TerminationOutcomeV1::Confirmed {
@@ -555,7 +547,7 @@ pub(crate) fn render_termination(outcome: &TerminationOutcomeV1) -> String {
             stopped_waiting_at,
             reason,
         } => format!(
-            "Unresolved, the harness was asked to stop at {} and the tracker gave up waiting at \
+            "Unresolved, the harness was asked to stop at {} and goalcup gave up waiting at \
              {} (reason: {}), so its stop is not confirmed; check that no process of this run \
              is still running before you start another in this folder",
             requested_at.as_str(),
@@ -589,13 +581,12 @@ fn wire_words<T: serde::Serialize>(value: &T) -> String {
 mod tests {
     #[test]
     fn seal_refuses_inside_the_harness_and_runs_without_the_marker() {
-        let refused = super::refuse_inside_harness(Some(std::ffi::OsStr::new("1")));
+        let refused = super::refuse_inside_harness(true);
         assert!(
             matches!(&refused, Err(crate::CliError::Refused(said)) if said.contains("another terminal")),
             "{refused:?}"
         );
-        assert!(super::refuse_inside_harness(None).is_ok());
-        assert!(super::refuse_inside_harness(Some(std::ffi::OsStr::new(""))).is_ok());
+        assert!(super::refuse_inside_harness(false).is_ok());
     }
 
     use super::render_termination;

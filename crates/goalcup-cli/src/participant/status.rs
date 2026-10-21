@@ -1,4 +1,4 @@
-// ---------------------------------------------------------------------------------- status
+//! What `goalcup status` says of a run: where it is, its problems, and what to do next.
 
 use super::*;
 use crate::account::device::RunMode;
@@ -363,6 +363,18 @@ pub fn problem_disk(free: &str) -> String {
 pub fn problem_disk_paused() -> &'static str {
     "The disk is almost full, so your agent is paused. Free some disk space; it resumes by \
      itself. If your agent seems stuck afterwards, type keep going."
+}
+
+/// The paused agent was resumed because `free` is free again (D65).
+pub fn disk_resumed(free: &str) -> String {
+    format!("disk: {free} is free again, so your agent was resumed.")
+}
+
+/// The paused agent was resumed because the free disk space could not be read (D65): a pause
+/// must not outlast what it is for.
+pub fn disk_resumed_unread() -> &'static str {
+    "disk: if the disk is nearly full, free some space. Goal Cup Proxy could not read the free \
+     space, so your agent was resumed."
 }
 
 pub fn problem_sleep(why: &str) -> String {

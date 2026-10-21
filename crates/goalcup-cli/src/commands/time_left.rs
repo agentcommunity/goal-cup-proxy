@@ -11,36 +11,23 @@
 //! ([`time_left_of_open_run`]).
 
 use crate::CliError;
-use crate::run::time_left::{FILE_ENV, PUSH_OFTEN, left_line, sentence};
-use std::ffi::OsStr;
+use crate::run::time_left::{left_line, sentence};
 use std::io::Read;
 use std::path::Path;
 
 /// The most of the file read: three short lines.
 const MAX_BYTES: u64 = 4096;
 
-/// Print the time left from the file `file` names (the value of [`FILE_ENV`]) at `now` (unix
-/// seconds), and answer `Ok`. A file that is missing, unreadable or stale is a refusal (exit 1)
-/// that says the time is unknown right now.
-pub fn time_left_with(
-    file: Option<&OsStr>,
-    now: u64,
-    out: &mut dyn std::io::Write,
-) -> Result<(), CliError> {
-    let line = file
-        .filter(|file| !file.is_empty())
-        .and_then(|file| {
-            let mut text = String::new();
-            std::fs::File::open(file)
-                .and_then(|f| f.take(MAX_BYTES).read_to_string(&mut text))
-                .ok()?;
-            sentence(&text, now)
-        })
-        .ok_or_else(|| {
-            CliError::Refused(format!(
-                "the time left is unknown right now (no fresh ${FILE_ENV} file). {PUSH_OFTEN}"
-            ))
-        })?;
+/// Print the time left from `file` (the one [`crate::run::time_left::file_from_env`] names) at
+/// `now` (unix seconds), and answer `Ok`. A file that is missing, unreadable or stale is a
+/// refusal (exit 1) that says the time is unknown right now.
+pub fn time_left_with(file: &Path, now: u64, out: &mut dyn std::io::Write) -> Result<(), CliError> {
+    let mut text = String::new();
+    let line = std::fs::File::open(file)
+        .and_then(|f| f.take(MAX_BYTES).read_to_string(&mut text))
+        .ok()
+        .and_then(|_| sentence(&text, now))
+        .ok_or_else(|| CliError::Refused(crate::participant::time_left_unknown()))?;
     put(out, &line)
 }
 
@@ -62,11 +49,7 @@ pub fn time_left_of_open_run(
             if crate::run::is_over(&run, state.as_ref(), now) {
                 return None;
             }
-            let left = crate::participant::seconds_left(
-                state.as_ref().and_then(|state| state.time_left.as_ref()),
-                run.deadline_at.as_deref(),
-                now,
-            )?;
+            let left = crate::participant::run_seconds_left(&run, state.as_ref(), now)?;
             let deadline = run
                 .deadline_at
                 .as_deref()
@@ -74,11 +57,7 @@ pub fn time_left_of_open_run(
             Some(left_line(left, deadline))
         })
         .ok_or_else(|| {
-            CliError::Refused(
-                "Run goalcup status to see your runs. No run is open on this computer, so there \
-                 is no time left to show."
-                    .to_string(),
-            )
+            CliError::Refused(crate::participant::no_open_run_time_left().to_string())
         })?;
     put(out, &line)
 }
@@ -111,7 +90,7 @@ mod tests {
         time_left_of_open_run(cfg.path(), now, &mut out).unwrap();
         let said = String::from_utf8(out).unwrap();
         assert!(said.starts_with("About 2 h 30 min left"), "{said}");
-        assert!(said.contains(PUSH_OFTEN), "{said}");
+        assert!(said.contains(crate::run::time_left::PUSH_OFTEN), "{said}");
 
         // A run that is over is not the one asked about.
         let over = tempfile::tempdir().unwrap();

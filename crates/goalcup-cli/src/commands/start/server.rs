@@ -204,6 +204,48 @@ pub(super) struct NewRun {
     clone_source: Option<String>,
 }
 
+/// The clone of [`Uploading::clone_workspace`] for a new run, made in `new.work_root`.
+fn clone_new_run(new: &NewRun, dest: &Path) -> Result<(), CliError> {
+    std::fs::create_dir_all(&new.work_root).map_err(|source| CliError::Io {
+        path: new.work_root.display().to_string(),
+        source,
+    })?;
+    let exe = std::env::current_exe().map_err(|source| CliError::Io {
+        path: "the goalcup executable".to_string(),
+        source,
+    })?;
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let cfg = &new.cfg;
+    // The owner's rule: a practice run never pushes, so the competition repository stays
+    // empty until the competition run. Its clone is anonymous and can only read.
+    #[cfg(feature = "test-support")]
+    if new.practice
+        && let Some(source) = &new.clone_source
+    {
+        return crate::account::github::clone_readonly_from(
+            Path::new("git"),
+            source,
+            &new.github,
+            dest,
+        );
+    }
+    if new.practice {
+        return crate::account::github::clone_readonly_into(&new.github, dest);
+    }
+    #[cfg(feature = "test-support")]
+    if let Some(source) = &new.clone_source {
+        return crate::account::github::clone_from(
+            Path::new("git"),
+            source,
+            &new.github,
+            dest,
+            &exe,
+            cfg,
+        );
+    }
+    crate::account::github::clone_into(&new.github, dest, &exe, cfg)
+}
+
 /// The run as the server opened it, what it was asked, and the give-back until the launch.
 pub(super) struct OpenedRun {
     pub(super) run: crate::upload::api::OpenRun,
@@ -239,48 +281,21 @@ impl Uploading {
     /// clone holds no token: its remote is the plain repository address, and its git asks
     /// `goalcup git-credential` for one when it pushes (`account::github`). A practice run's
     /// clone has no such helper and cannot push. A continued run has its clone already.
+    ///
+    /// A competition or test run's clone that has a commit is refused: GitHub's answer before
+    /// the approval (`refuse_used_repository`) can lag a push, the clone cannot.
     pub(super) fn clone_workspace(&self, dest: &Path) -> Result<(), CliError> {
         let UploadHow::Fresh(new) = &self.how else {
             return Ok(());
         };
-        std::fs::create_dir_all(&new.work_root).map_err(|source| CliError::Io {
-            path: new.work_root.display().to_string(),
-            source,
-        })?;
-        let exe = std::env::current_exe().map_err(|source| CliError::Io {
-            path: "the goalcup executable".to_string(),
-            source,
-        })?;
-        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-        let cfg = &new.cfg;
-        // The owner's rule: a practice run never pushes, so the competition repository stays
-        // empty until the competition run. Its clone is anonymous and can only read.
-        #[cfg(feature = "test-support")]
-        if new.practice
-            && let Some(source) = &new.clone_source
-        {
-            return crate::account::github::clone_readonly_from(
-                Path::new("git"),
-                source,
-                &new.github,
-                dest,
-            );
+        clone_new_run(new, dest)?;
+        if !new.practice && crate::account::github::clone_has_commits(dest) {
+            return Err(CliError::Refused(crate::participant::repository_not_empty(
+                &new.github.repo_url,
+                None,
+            )));
         }
-        if new.practice {
-            return crate::account::github::clone_readonly_into(&new.github, dest);
-        }
-        #[cfg(feature = "test-support")]
-        if let Some(source) = &new.clone_source {
-            return crate::account::github::clone_from(
-                Path::new("git"),
-                source,
-                &new.github,
-                dest,
-                &exe,
-                cfg,
-            );
-        }
-        crate::account::github::clone_into(&new.github, dest, &exe, cfg)
+        Ok(())
     }
 
     /// Open the run on the server, before the daemon creates anything; for a continued run, ask

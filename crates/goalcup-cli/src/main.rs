@@ -351,7 +351,7 @@ fn run(command: Command) -> Result<u8, CliError> {
 /// the credential helper. The run a command sends itself is left to it: the newest run for
 /// `upload`, the named part's run for `upload <part-id>`, the run `continue` goes on with.
 fn send_leftovers(command: &Command) {
-    if std::env::var_os(goalcup_cli::launch::IN_HARNESS_ENV).is_some_and(|v| !v.is_empty()) {
+    if goalcup_cli::launch::in_harness() {
         return;
     }
     let Ok(cfg) = goalcup_cli::config::config_dir() else {
@@ -359,9 +359,7 @@ fn send_leftovers(command: &Command) {
     };
     let skip = match command {
         Command::Doctor { .. } | Command::GitCredential { .. } | Command::Seal { .. } => return,
-        Command::TimeLeft if std::env::var_os(goalcup_cli::run::time_left::FILE_ENV).is_some() => {
-            return;
-        }
+        Command::TimeLeft if goalcup_cli::run::time_left::file_from_env().is_some() => return,
         Command::Upload { entry: None } => goalcup_cli::run::newest(&cfg).ok().flatten(),
         Command::Upload { entry: Some(part) } => {
             goalcup_cli::run::of_entry(&cfg, part).ok().flatten()
@@ -385,8 +383,8 @@ fn send_leftovers_skipping(cfg: &std::path::Path, skip: Option<&str>) {
 fn time_left() -> Result<(), CliError> {
     let now = goalcup_cli::run::now_unix();
     let out = &mut std::io::stdout();
-    match std::env::var_os(goalcup_cli::run::time_left::FILE_ENV) {
-        Some(file) => commands::time_left::time_left_with(Some(&file), now, out),
+    match goalcup_cli::run::time_left::file_from_env() {
+        Some(file) => commands::time_left::time_left_with(&file, now, out),
         None => {
             let cfg = goalcup_cli::config::config_dir()?;
             commands::time_left::time_left_of_open_run(&cfg, now, out)
@@ -672,9 +670,7 @@ fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
 /// `<cfg>/daemon.toml` when none answers: that daemon reopens the run for status and seal. It
 /// never writes the file: with no configuration, no daemon was ever started from here.
 fn seal(entry: Option<String>, yes: bool) -> Result<(), CliError> {
-    commands::seal::refuse_inside_harness(
-        std::env::var_os(goalcup_cli::launch::IN_HARNESS_ENV).as_deref(),
-    )?;
+    commands::seal::refuse_inside_harness(goalcup_cli::launch::in_harness())?;
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
     let client = ensure_daemon(&cfg, goalcup_cli::daemon::MissingConfig::Refuse)?;
@@ -720,8 +716,8 @@ fn entries(json: bool) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let mut out = std::io::stdout();
     match daemon_to_read(&cfg)? {
-        Some(client) => commands::entries::entries_with(&client, json, &mut out),
-        None => commands::entries::render_entries(&[], json, &mut out),
+        Some(client) => commands::entries::entries_with(&client, &cfg, json, &mut out),
+        None => commands::entries::render_entries(&cfg, &[], json, &mut out),
     }
 }
 

@@ -7,7 +7,7 @@ use super::{
     waiting_bytes,
 };
 use crate::CliError;
-use crate::run::Vitals;
+use crate::run::RunSignals;
 use crate::upload::UploadRecord;
 use crate::upload::api::{ChunkAnswer, RunPosition};
 use crate::upload::http::{ServerClient, ServerError};
@@ -98,7 +98,7 @@ pub struct Uploader {
     /// Bytes of the chain the server holds, as of the last acknowledgement.
     pub(super) acked_offset: std::sync::Arc<AtomicU64>,
     /// Beside a recording run only: what the run tells its heartbeats.
-    pub(super) vitals: Option<Vitals>,
+    pub(super) vitals: Option<RunSignals>,
     /// A segment closed from its tail (no seal): [`Uploader::finish`] still commits its end in
     /// a final heartbeat, and sends the chain up to it, but has no seal to send.
     pub(super) close_unsealed: bool,
@@ -499,7 +499,7 @@ impl Uploader {
 /// A failed call of a run's upload: a refusal (`4xx`) is counted in `vitals` for the run's
 /// status, and said once when it has repeated ([`crate::run::REFUSALS_SAID_AFTER`]). Nothing
 /// without `vitals` (`goalcup upload`, an earlier segment's drain).
-pub(super) fn note_refusal(vitals: Option<&Vitals>, error: &ServerError) {
+pub(super) fn note_refusal(vitals: Option<&RunSignals>, error: &ServerError) {
     if let (Some(vitals), Some(status)) = (vitals, error.refusal_status())
         && vitals.server_refused(crate::run::Channel::Upload, status)
     {

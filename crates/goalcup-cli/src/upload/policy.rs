@@ -266,7 +266,7 @@ impl ServerError {
 
     /// The status of an answer that refuses the call: any `4xx` but `429`. A `5xx`, a `429` or
     /// no answer at all is the server away or busy, which the upload and heartbeat lines already
-    /// say; a refusal that repeats is said on its own ([`crate::run::Vitals::server_refused`]).
+    /// say; a refusal that repeats is said on its own ([`crate::run::RunSignals::server_refused`]).
     pub fn refusal_status(&self) -> Option<u16> {
         match self {
             ServerError::Status { status, .. } if (400..500).contains(status) && *status != 429 => {

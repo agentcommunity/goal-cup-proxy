@@ -157,13 +157,13 @@ pub fn load(run_dir: &Path) -> Result<RunCredential, CliError> {
     if read as u64 > CREDENTIAL_FILE_MAX_BYTES {
         return Err(CliError::Refused(format!(
             "{} is larger than {CREDENTIAL_FILE_MAX_BYTES} bytes, so it is not a credential \
-             this tracker saved",
+             goalcup saved",
             path.display()
         )));
     }
     let stored: StoredCredential = serde_json::from_str(&text).map_err(|_| {
         CliError::Refused(format!(
-            "{} is not a document this tracker saved",
+            "{} is not a document goalcup saved",
             path.display()
         ))
     })?;

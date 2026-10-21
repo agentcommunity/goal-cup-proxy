@@ -48,11 +48,12 @@ pub(crate) fn note_daemon(pid: u32) {
     }
 }
 
-/// This process, and each daemon it started that is still that same process.
-fn own_pids() -> Vec<u32> {
+/// This process (with no identity), and each daemon it started that is still that same process
+/// (with its start identity).
+fn own_processes() -> Vec<(u32, Option<String>)> {
     use goalcup_protocol::process::{ProcessInstanceStatus, process_instance_status};
     let daemons = DAEMONS.lock().unwrap_or_else(PoisonError::into_inner);
-    std::iter::once(std::process::id())
+    std::iter::once((std::process::id(), None))
         .chain(
             daemons
                 .iter()
@@ -60,19 +61,18 @@ fn own_pids() -> Vec<u32> {
                     process_instance_status(*pid, Some(identity.as_str()))
                         == ProcessInstanceStatus::Same
                 })
-                .map(|(pid, _)| *pid),
+                .map(|(pid, identity)| (*pid, Some(identity.clone()))),
         )
         .collect()
 }
 
-/// Whether the run's `state.json` says goalcup has paused the agent for the disk.
-// The watch tick sets `disk.disk_paused` (D65). Read from the file so a heartbeat never waits on
-// the state lock; a state without the field is not paused.
-pub fn paused_for_disk(run_dir: &Path) -> bool {
-    std::fs::read(run_dir.join(crate::run::STATE_FILE_NAME))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .is_some_and(|state| state["disk"]["disk_paused"] == serde_json::Value::Bool(true))
+/// Whether the daemon `pid` of start `identity` has exited (or its pid now names another
+/// process). This process (`None`) never has.
+fn gone(pid: u32, identity: Option<&str>) -> bool {
+    use goalcup_protocol::process::{ProcessInstanceStatus, process_instance_status};
+    identity.is_some_and(|identity| {
+        process_instance_status(pid, Some(identity)) == ProcessInstanceStatus::GoneOrReused
+    })
 }
 
 /// The vitals as the last heartbeat read them (`<run_dir>/vitals.json`), if any.
@@ -114,17 +114,25 @@ impl Probe {
     }
 
     /// The vitals now, also kept in `<run_dir>/vitals.json` for `goalcup status`. A number that
-    /// cannot be read is left out; a sum is left out when one of its processes cannot be read.
+    /// cannot be read is left out; a sum is left out when one of its processes that still runs
+    /// cannot be read. A daemon that exited while it was read is skipped, and the sum is of the
+    /// others.
     pub fn read(&self) -> HeartbeatVitals {
         let free = self.reader.disk_free(&self.trace_dir);
-        // What the reservation holds, as the watch tick last measured it; a state not yet
-        // measured says nothing.
-        let held = crate::run::read_state(&self.run_dir)
+        // Read once: a heartbeat never waits on the state lock. The watch tick writes both what
+        // the reservation holds (a state not yet measured says nothing) and the pause (D65).
+        let state = crate::run::read_state(&self.run_dir);
+        let held = state
+            .as_ref()
             .filter(|state| state.disk != crate::run::DiskState::default())
             .map(|state| state.disk.reserve_bytes);
-        let usages: Vec<ProcessUsage> = own_pids()
+        let paused = state.as_ref().is_some_and(|state| state.disk.disk_paused);
+        let usages: Vec<ProcessUsage> = own_processes()
             .into_iter()
-            .map(|pid| self.reader.usage(pid))
+            .filter_map(|(pid, identity)| {
+                let usage = self.reader.usage(pid);
+                (!gone(pid, identity.as_deref())).then_some(usage)
+            })
             .collect();
         let sum = |field: fn(&ProcessUsage) -> Option<u64>| {
             usages.iter().try_fold(0u64, |total, usage| {
@@ -136,7 +144,7 @@ impl Probe {
             disk_short: free
                 .zip(held)
                 .map(|(free, held)| crate::run::reserve::short_of_disk(held, free)),
-            agent_paused: paused_for_disk(&self.run_dir).then(|| "disk".to_string()),
+            agent_paused: paused.then(|| "disk".to_string()),
             rss_bytes: sum(|usage| usage.rss_bytes),
             cpu_ms: sum(|usage| usage.cpu_ms),
             open_files: sum(|usage| usage.open_files),
@@ -145,5 +153,57 @@ impl Probe {
             let _ = crate::config::write_secret_file(&self.run_dir.join(VITALS_FILE_NAME), &bytes);
         }
         vitals
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// This process uses 1 MiB; the daemon exits while it is read, and says nothing.
+    struct ExitsWhileRead(Mutex<std::process::Child>);
+
+    impl Reader for ExitsWhileRead {
+        fn disk_free(&self, _near: &Path) -> Option<u64> {
+            None
+        }
+
+        fn usage(&self, pid: u32) -> ProcessUsage {
+            if pid == std::process::id() {
+                return ProcessUsage {
+                    rss_bytes: Some(1 << 20),
+                    cpu_ms: Some(10),
+                    open_files: Some(3),
+                };
+            }
+            let mut child = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let _ = child.kill();
+            let _ = child.wait();
+            ProcessUsage {
+                rss_bytes: None,
+                cpu_ms: None,
+                open_files: None,
+            }
+        }
+    }
+
+    #[test]
+    fn a_daemon_that_exits_while_it_is_read_does_not_blank_the_sums() {
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        note_daemon(child.id());
+        let run_dir = tempfile::tempdir().unwrap();
+        let probe = Probe::reading(
+            run_dir.path(),
+            run_dir.path(),
+            Arc::new(ExitsWhileRead(Mutex::new(child))),
+        );
+        let vitals = probe.read();
+        assert_eq!(vitals.rss_bytes, Some(1 << 20));
+        assert_eq!(vitals.cpu_ms, Some(10));
+        assert_eq!(vitals.open_files, Some(3));
+        assert_eq!(vitals.agent_paused, None);
     }
 }

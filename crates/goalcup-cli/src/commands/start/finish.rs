@@ -65,11 +65,10 @@ pub(super) fn finish_run(
         )),
     };
     // The run is over when it was stopped for its end (its deadline, or a newer run replacing
-    // it; a full disk stops the agent and leaves the run open), when its time is up by the count
-    // of the server's last answer (never this machine's date), and always for a run with no
-    // server. Otherwise the agent's exit
-    // ended this segment only: the run stays open on the server until its deadline and
-    // `goalcup continue` restarts it.
+    // it), when its time is up by the count of the server's last answer (never this machine's
+    // date), and always for a run with no server. Otherwise the agent's exit ended this segment
+    // only: the run stays open on the server until its deadline and `goalcup continue` restarts
+    // it.
     let snapshot = keeper.snapshot();
     let ended_by_stop = snapshot.stopped_for_its_end();
     let on_server = record.server_url.is_some();
@@ -85,6 +84,9 @@ pub(super) fn finish_run(
     let mut watching = watching;
     if run_goes_on {
         drop(watching.take().and_then(crate::run::watch::Watching::end));
+        // The agent is gone and the tick that kept its time-left file has ended: the next
+        // segment writes its own, and none can have started before the home is let go below.
+        crate::run::time_left::remove_file(cfg, &record.run_id);
     }
     // The shared harness home is free for the next segment or run, and the upload that follows
     // needs none of it.
@@ -120,7 +122,6 @@ pub(super) fn finish_run(
             run_id: &record.run_id,
             how: &how,
             until: until(deadline_at),
-            disk_stop: stopped == Some(crate::run::watch::DISK_STOP_REASON),
         }),
         (true, false, true, _) if ended_by_stop => Some(match stopped {
             Some(crate::upload::uploader::REPLACED_REASON) => Ending::Replaced,
@@ -201,6 +202,11 @@ pub(super) fn finish_run(
     // The tick ends here, just before the reservation goes (or is left to the next start): it
     // hands the reservation back even if it died on the way.
     let reserve = watching.and_then(crate::run::watch::Watching::end);
+    // No agent of this run is left to read its time-left file. A run that goes on had it removed
+    // at the seal; its next segment may be writing it by now.
+    if !run_goes_on {
+        crate::run::time_left::remove_file(cfg, &record.run_id);
+    }
     // The host's last word on the run's state, now that nothing else writes it: what became of
     // the upload is what `goalcup status` tells from here on.
     // Not written over a next segment's: its host may have started while this one sent.

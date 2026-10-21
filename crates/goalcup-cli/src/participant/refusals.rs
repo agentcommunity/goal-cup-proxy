@@ -1,4 +1,4 @@
-// --------------------------------------------------------------------------------- refusals
+//! The refusals of `goalcup start` and `goalcup continue`, each with what to do first.
 
 use super::*;
 use std::path::Path;
@@ -61,6 +61,53 @@ pub fn cannot_record_model_service(why: &str, id: &str) -> String {
     format!(
         "{why} Goal Cup records only an https model service that is not on this computer. Run \
          goalcup prep --harness {id}, choose such a service there, then run the command again."
+    )
+}
+
+/// The participant's repository has commits, so a competition or test run cannot use it: by
+/// GitHub's size in KB (`kb`), or, once cloned, by the clone's own commits (`None`). `goalcup
+/// prep` says it too.
+pub fn repository_not_empty(repo: &str, kb: Option<u64>) -> String {
+    let size = kb.map(|kb| format!(" ({kb} KB)")).unwrap_or_default();
+    format!(
+        "Create a new repository with no README, license or .gitignore, then run: goalcup prep \
+         --repo <its address>. The repository {repo} is not empty{size}, and a new run needs a \
+         new empty one."
+    )
+}
+
+/// A folder of a run is on a filesystem a run cannot keep its records on (`name`): what to do
+/// first, with no full stop at the end. The work folder moves by its flag, the others with the
+/// configuration folder, beside which the records are kept.
+pub fn unsupported_filesystem(what: &str, path: &str, name: &str) -> String {
+    let how = if what == "work folder" {
+        "for example: goalcup prep --work-root <a folder on that volume>"
+    } else {
+        "for example: set GOALCUP_CONFIG_DIR to a folder on that volume, and the records are kept \
+         beside it"
+    };
+    format!(
+        "move the {what} {path} to an ext4, XFS or APFS volume ({how}): it is on {name}, which a \
+         run cannot keep its records on"
+    )
+}
+
+/// `goalcup start` or `goalcup continue` found a folder on such a filesystem (`why` is one or
+/// more [`unsupported_filesystem`]): a warning, and the command goes on.
+pub fn filesystem_warning(why: &str) -> String {
+    format!(
+        "Warning: {why}. This command goes on anyway and does not refuse the run, but goalcup prep \
+         fails its check for it."
+    )
+}
+
+/// The server answered `goalcup start` or `goalcup continue` with a `what` (a run, a part of
+/// the run) goalcup cannot use. The answer itself goes to the log, never to the participant.
+pub fn server_answer_unusable(server: &str, what: &str) -> String {
+    format!(
+        "Run the command again, and write to {SUPPORT_ADDRESS} if it keeps happening. The Goal \
+         Cup server at {server} answered with a {what} that goalcup cannot use. Nothing was \
+         started."
     )
 }
 

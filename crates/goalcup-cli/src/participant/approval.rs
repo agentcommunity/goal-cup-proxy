@@ -1,4 +1,4 @@
-// --------------------------------------------------------------------------------- approval
+//! The approval of a run or a login in the browser, and what is said around it.
 
 use super::*;
 use crate::account::device::RunMode;

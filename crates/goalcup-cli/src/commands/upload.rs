@@ -234,13 +234,7 @@ fn upload_entry(
         return Err(not_here());
     }
     let credential = crate::account::credential::load(&run_dir)?;
-    let receipt_path = crate::upload::receipt_path(cfg, entry_id);
-    let receipt: goalcup_protocol::receipt::StartReceipt = serde_json::from_slice(
-        &std::fs::read(&receipt_path).map_err(|source| CliError::Io {
-            path: receipt_path.display().to_string(),
-            source,
-        })?,
-    )?;
+    let receipt = crate::upload::read_receipt(cfg, entry_id)?;
     let server = ServerClient::with_credential(&record.server_url, &credential);
     let spool = cfg.join(crate::upload::UPLOADS_DIR_NAME);
     // One uploader per entry: refused while the run's own `goalcup start` still uploads it.

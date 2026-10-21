@@ -12,8 +12,8 @@
 //! taken on, and a reboot ends what it can say: the boot id changed (where the OS gives one), or
 //! the clock reads below the count's start. A count stored with no boot id says nothing either,
 //! because the clock alone cannot show a reboot once the new uptime passes the count's start.
-//! Then, and for a `state.json` with no count (an older build wrote it), the server's `deadline_at` is held against this machine's date, as before
-//! WP11. A date set forward then only makes the run look over early to the participant
+//! Then, and for a `state.json` with no count (an older build wrote it), the server's
+//! `deadline_at` is held against this machine's date, as before WP11. A date set forward then only makes the run look over early to the participant
 //! themselves; `goalcup continue` asks the server in any case.
 //!
 //! The agent may ask for the count too (D66): the watch tick copies it into a small file the
@@ -94,6 +94,12 @@ pub fn file_path(cfg: &Path, run_id: &str) -> PathBuf {
     cfg.join("time-left").join(run_id)
 }
 
+/// Remove the run's time-left file ([`file_path`]): no agent of the run is left to read it.
+/// Missing is fine.
+pub fn remove_file(cfg: &Path, run_id: &str) {
+    let _ = std::fs::remove_file(file_path(cfg, run_id));
+}
+
 /// Write the run's time-left file from the count alone (D66), or remove it when the count says
 /// nothing (after a reboot, or no count yet). It holds three values and no other text: the
 /// seconds left, the server's `deadline_at` (read as a date and written again, so nothing else
@@ -165,6 +171,15 @@ pub fn left_line(seconds: u64, deadline: Option<u64>) -> String {
         })
         .unwrap_or_default();
     format!("{left}{stops}. {PUSH_OFTEN}")
+}
+
+/// The time-left file the launch names in [`FILE_ENV`]; `None` when the variable is unset or
+/// empty. An empty value is the same as unset, so `goalcup time-left` then reads the newest open
+/// run as in a person's own terminal.
+pub fn file_from_env() -> Option<PathBuf> {
+    std::env::var_os(FILE_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 /// The advice every `goalcup time-left` line ends with.

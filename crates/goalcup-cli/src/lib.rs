@@ -37,6 +37,9 @@ pub mod config;
 pub mod connector;
 pub mod daemon;
 pub mod entries;
+/// The folder checks of `prep`, `start` and `continue`: WSL, and the filesystem a run's records
+/// are kept on.
+pub mod folder_gate;
 pub mod harness_version;
 /// The harness homes runs share (D39, D59) and a run's own directory.
 pub(crate) mod home;
@@ -61,8 +64,6 @@ pub mod subreaper;
 pub mod upload;
 /// The disk and goalcup's own processes, as the heartbeats and `goalcup status` report them.
 pub mod vitals;
-/// The WSL version and Windows-drive checks of `prep`, `start` and `continue`.
-pub mod wsl_gate;
 
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::control::ControlError;

@@ -251,8 +251,8 @@ pub fn approve(
                 "approved" => return finish(answer, purpose),
                 _ => {
                     return Err(CliError::Internal(
-                        "the server answered the approval poll with a status this tracker does \
-                         not know"
+                        "the server answered the approval poll with a status goalcup does not \
+                         know"
                             .into(),
                     ));
                 }
@@ -301,7 +301,7 @@ fn sleep(d: Duration) {
 
 fn bad_answer(what: &str) -> CliError {
     CliError::Internal(format!(
-        "the server's answer to the approval request is not one this tracker accepts ({what}). \
+        "the server's answer to the approval request is not one goalcup accepts ({what}). \
          Nothing was created; run the command again, and report it if it keeps happening."
     ))
 }

@@ -34,7 +34,7 @@
 //!   ([`crate::run::time_left::FILE_ENV`], D66). A connector cannot name either (`GOALCUP_*`
 //!   is refused in `capture.env`).
 //!
-//! **D1: the tracker never sets a model base URL.** Nothing on that list can be one except
+//! **D1: Goal Cup Proxy never sets a model base URL.** Nothing on that list can be one except
 //! the profile's `capture.env`, and `goalcup_protocol::capture_policy` refuses a profile that
 //! names a `*_BASE_URL`, `*_API_URL` or `*ENDPOINT` variable, a `*_PROXY` or bare `PROXY`
 //! (other than `NODE_USE_ENV_PROXY = "1"`, which names no endpoint, D59), or any other `*_URL`
@@ -341,6 +341,12 @@ pub fn harness_path(parent_env: &BTreeMap<String, String>) -> String {
 /// Set to `1` in every recording launch's environment, whatever the harness: `goalcup seal` run
 /// from inside the harness sees it and refuses, so the agent cannot end its own segment.
 pub const IN_HARNESS_ENV: &str = "GOALCUP_IN_HARNESS";
+
+/// Whether this process runs inside a recorded harness: [`IN_HARNESS_ENV`] is set and not
+/// empty. An empty value is the same as unset.
+pub fn in_harness() -> bool {
+    std::env::var_os(IN_HARNESS_ENV).is_some_and(|value| !value.is_empty())
+}
 
 /// The participant's variables a launch carries across ([`CHAT_PASSTHROUGH_ENV`] and every
 /// `LC_*` the schema would admit as a name).

@@ -174,7 +174,7 @@ fn start_on_wsl(wsl: &str, with_work_folder: Option<&str>) -> String {
     o.run_folder = Some(beside.clone());
     let mut env = support::clean_env();
     env.insert(
-        goalcup_cli::wsl_gate::Host::VAR.to_string(),
+        goalcup_cli::folder_gate::Host::VAR.to_string(),
         wsl.replace("{cfg}", &cfg.display().to_string())
             .replace("{beside}", &beside.display().to_string()),
     );

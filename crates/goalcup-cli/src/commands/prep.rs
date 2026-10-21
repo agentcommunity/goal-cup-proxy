@@ -39,9 +39,9 @@
 use crate::CliError;
 use crate::account::github::{self, GithubSetup};
 use crate::connector::{HarnessConnector, harness_dirs};
+use crate::folder_gate::Host;
 use crate::prep_file::{PrepFile, read_prep_lenient, write_prep};
 use crate::run::reserve::{LOW_DISK_BYTES, RUN_RESERVE_BYTES, START_MARGIN, artifact_root, human};
-use crate::wsl_gate::Host;
 use goalcup_protocol::harness::Origin;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -507,7 +507,7 @@ fn login_step(cfg: &Path) -> Step {
 // ------------------------------------------------------------------ 2. harness
 
 /// Every connector in `connectors` that loads (each runs in chat mode, D57), in id order.
-fn chat_connectors(connectors: &Path, dev: bool) -> Result<Vec<HarnessConnector>, CliError> {
+fn loadable_connectors(connectors: &Path, dev: bool) -> Result<Vec<HarnessConnector>, CliError> {
     let origin = if dev { Origin::Dev } else { Origin::Pinned };
     let mut found = Vec::new();
     for dir in harness_dirs(connectors)? {
@@ -528,7 +528,7 @@ fn harness_step(
     dev: bool,
 ) -> (Option<HarnessConnector>, Step) {
     let fail = |say: String| (None, step(STEP_HARNESS, State::Fail, false, say));
-    let chat = match chat_connectors(connectors, dev) {
+    let chat = match loadable_connectors(connectors, dev) {
         Ok(chat) => chat,
         Err(error) => return fail(error.to_string()),
     };

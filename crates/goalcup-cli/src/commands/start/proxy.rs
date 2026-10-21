@@ -190,16 +190,17 @@ pub(super) fn admitted(
             (Some(1), Some(0)) => return Ok(()),
             (_, Some(refused)) if refused > 0 => {
                 return Err(CliError::Refused(format!(
-                    "the tracker did not admit the recording proxy's capture producer ({refused} \
-                     refused), so nothing would be recorded and the harness is not launched."
+                    "Goal Cup Proxy did not admit the recording proxy's capture producer \
+                     ({refused} refused), so nothing would be recorded and the harness is not \
+                     launched."
                 )));
             }
             _ => {}
         }
         if std::time::Instant::now() >= until {
             return Err(CliError::Refused(format!(
-                "the tracker did not show the recording proxy's capture producer admitted within \
-                 {}s, so the harness is not launched.",
+                "Goal Cup Proxy did not show the recording proxy's capture producer admitted \
+                 within {}s, so the harness is not launched.",
                 CAPTURE_STARTUP.as_secs()
             )));
         }

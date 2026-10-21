@@ -205,7 +205,7 @@ fn local_vitals(
     if state.disk != crate::run::DiskState::default() {
         vitals.disk_free_bytes = Some(state.disk.free_bytes);
     }
-    vitals.agent_paused = crate::vitals::paused_for_disk(run_dir).then(|| "disk".to_string());
+    vitals.agent_paused = state.disk.disk_paused.then(|| "disk".to_string());
     vitals
 }
 
@@ -235,11 +235,7 @@ fn run_report(
     let now = parse_z(now).unwrap_or_else(crate::run::now_unix);
     let state = crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id));
     let over = crate::run::is_over(&run, state.as_ref(), now);
-    let left = participant::seconds_left(
-        state.as_ref().and_then(|state| state.time_left.as_ref()),
-        run.deadline_at.as_deref(),
-        now,
-    );
+    let left = participant::run_seconds_left(&run, state.as_ref(), now);
     // Over by a stop (a newer run, the server's close) is not over by the deadline.
     let early = state.as_ref().is_some_and(|state| {
         state.stopped_for_its_end()

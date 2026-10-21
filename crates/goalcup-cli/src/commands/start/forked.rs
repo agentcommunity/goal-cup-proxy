@@ -146,17 +146,22 @@ impl Forked<'_> {
         error
     }
 
+    /// What is left of the run by the server's answer, counted from it on the continuous clock;
+    /// `None` for a run with no server.
+    pub(super) fn time_left(&self) -> Option<crate::run::TimeLeft> {
+        self.upload
+            .as_ref()
+            .and_then(|start| start.local_deadline)
+            .map(|count| count.time_left())
+    }
+
     /// Whether the run's reserve file outlives a launch that failed: a segment of a server run
     /// that is not over goes on to be continued, and its one reservation is the run's, not the
     /// segment's. A new run that is given back to the server, and a run that is over, take their
     /// reserve with them.
     fn keeps_reserve(&self) -> bool {
         // Over by the server's count, not this machine's date (WP11).
-        let left = self
-            .upload
-            .as_ref()
-            .and_then(|start| start.local_deadline)
-            .map(|count| count.time_left());
+        let left = self.time_left();
         self.give_back.is_none()
             && self.record.server_url.is_some()
             && !crate::run::time_left::time_up(

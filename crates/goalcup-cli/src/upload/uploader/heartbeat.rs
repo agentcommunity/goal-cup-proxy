@@ -3,7 +3,7 @@
 
 use super::Policy;
 use super::local::local_end_io;
-use crate::run::Vitals;
+use crate::run::RunSignals;
 use crate::upload::UploadRecord;
 use crate::upload::api::{HeartbeatAnswer, HeartbeatRequest};
 use crate::upload::http::{ServerClient, ServerError};
@@ -38,7 +38,7 @@ pub(super) fn heartbeat(
     record: &UploadRecord,
     is_final: bool,
     repo_head: Option<String>,
-    vitals: Option<&Vitals>,
+    vitals: Option<&RunSignals>,
     timeout: Duration,
 ) -> Beat {
     let parts = match crate::upload::prune::parts_now(Path::new(&record.trace_dir)) {
@@ -58,8 +58,8 @@ pub(super) fn heartbeat(
         is_final,
         repo_head,
         recording: vitals.map(|vitals| vitals.recording().wire().to_string()),
-        model_requests: vitals.map(Vitals::model_requests),
-        vitals: vitals.and_then(Vitals::heartbeat_vitals),
+        model_requests: vitals.map(RunSignals::model_requests),
+        vitals: vitals.and_then(RunSignals::heartbeat_vitals),
     };
     Beat::Answer(server.json_timed(
         "POST",
@@ -99,7 +99,7 @@ pub fn stop_reason(answer: &HeartbeatAnswer) -> Option<String> {
 fn ordinary_beat(
     server: &ServerClient,
     record: &UploadRecord,
-    vitals: &Vitals,
+    vitals: &RunSignals,
     ended: &EndedGate,
     count: &mut Option<LocalDeadline>,
 ) -> Option<String> {
@@ -159,7 +159,7 @@ pub(super) fn watch_deadline(
     record: &UploadRecord,
     policy: Policy,
     local_deadline: Option<LocalDeadline>,
-    vitals: &Vitals,
+    vitals: &RunSignals,
     stopping: &std::sync::mpsc::Sender<String>,
     over: &AtomicBool,
     done: &AtomicBool,

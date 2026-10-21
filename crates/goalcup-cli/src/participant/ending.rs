@@ -1,4 +1,4 @@
-// ------------------------------------------------------------------------------- the end
+//! The end of a part of a run on this computer: what happened, and what to do now.
 
 use super::*;
 use std::path::Path;
@@ -28,8 +28,6 @@ pub enum Ending<'a> {
         how: &'a str,
         /// The run's end ([`end_words`]).
         until: String,
-        /// Goal Cup Proxy stopped the harness because the disk is almost full.
-        disk_stop: bool,
     },
     /// Goal Cup Proxy stopped the harness at the run's deadline.
     TimeUp { practice: bool },
@@ -49,31 +47,12 @@ pub fn ending_block(harness: &str, ending: &Ending<'_>) -> Vec<String> {
     let h = harness;
     let mut lines = vec![String::new()];
     match ending {
-        Ending::Open {
-            run_id,
-            how,
-            until,
-            disk_stop,
-        } => {
-            if *disk_stop {
-                lines.push(format!(
-                    "{h} was stopped: the disk is almost full and uploads are failing."
-                ));
-            } else {
-                lines.push(format!("{h} has exited ({how})."));
-            }
+        Ending::Open { run_id, how, until } => {
+            lines.push(format!("{h} has exited ({how})."));
             lines.push(format!("{STILL_OPEN} {until}."));
-            if *disk_stop {
-                lines.push(format!(
-                    "To go on: free some disk space, then run: {CONTINUE_HINT} {run_id} (you can \
-                     do it in another terminal now)."
-                ));
-            } else {
-                lines.push(format!(
-                    "To go on, run: {CONTINUE_HINT} {run_id} (you can do it in another terminal \
-                     now)."
-                ));
-            }
+            lines.push(format!(
+                "To go on, run: {CONTINUE_HINT} {run_id} (you can do it in another terminal now)."
+            ));
             lines.push(
                 "If your work is done, you need do nothing. The run ends by itself.".to_string(),
             );

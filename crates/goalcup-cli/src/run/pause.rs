@@ -95,6 +95,19 @@ impl AgentPause {
         }
     }
 
+    /// The disk could not be read: resume a paused agent, since nothing then says the disk is
+    /// still full, and a pause must not outlive what it was for. The next low reading pauses it
+    /// again. Nothing once the pause has ended.
+    pub fn follow_unread(&self) -> Option<Change> {
+        let mut state = self.state();
+        if state.ended || !state.paused {
+            return None;
+        }
+        state.freeze.send(libc::SIGCONT);
+        state.paused = false;
+        Some(Change::Resumed)
+    }
+
     /// Continue whatever is paused, and never pause again: called before the harness is ended
     /// and when the host is done with it. Answers whether the agent was paused.
     pub fn end(&self) -> bool {
@@ -127,8 +140,10 @@ impl Drop for EndOnDrop {
 pub struct Tree {
     root: u32,
     pgid: Option<u32>,
-    /// Every pid the last `SIGSTOP` reached, continued with the tree walked again.
-    stopped: Vec<u32>,
+    /// Every pid the last `SIGSTOP` reached, with its start identity, continued with the tree
+    /// walked again. A pid whose identity has changed since (it exited and the system gave the
+    /// pid to another process), or could not be read, is not sent anything.
+    stopped: Vec<(u32, Option<String>)>,
 }
 
 impl Tree {
@@ -142,8 +157,19 @@ impl Tree {
 
 impl Freeze for Tree {
     fn send(&mut self, sig: i32) {
+        use goalcup_protocol::process::{
+            ProcessInstanceStatus, process_instance_status, process_start_identity,
+        };
         let me = std::process::id();
-        let mut reached = std::mem::take(&mut self.stopped);
+        let mut reached: Vec<u32> = std::mem::take(&mut self.stopped)
+            .into_iter()
+            .filter(|(pid, identity)| {
+                identity.as_deref().is_some_and(|identity| {
+                    process_instance_status(*pid, Some(identity)) == ProcessInstanceStatus::Same
+                })
+            })
+            .map(|(pid, _)| pid)
+            .collect();
         // Twice for a stop: a child forked during the first pass is in the second walk.
         let passes = if sig == libc::SIGSTOP { 2 } else { 1 };
         for _ in 0..passes {
@@ -154,13 +180,20 @@ impl Freeze for Tree {
             }
             for &pid in &reached {
                 if pid > 1 && pid != me {
-                    // SAFETY: two integers. The root is this process's own unreaped child; the
-                    // rest are its descendants in the walk just taken.
+                    // SAFETY: `kill` takes two integers and touches no memory of this process.
+                    // Which process gets the signal: every pid here is the root, a descendant in
+                    // a walk just taken, or one the last stop reached whose start identity was
+                    // checked just above. A pid can still be reused in the instant between that
+                    // check (or the walk) and this call; this is best effort, as the module note
+                    // says.
                     unsafe { libc::kill(pid as i32, sig) };
                 }
             }
             // A group of the harness's own (never this process's), led by the root.
-            // SAFETY: integers only.
+            // SAFETY: `getpgrp` and `killpg` take and return integers and touch no memory of
+            // this process. The group id is the root's pid: while the root is this process's
+            // unreaped child no new process or group can take it, and after the root is reaped
+            // the id still names the harness's group for as long as any member of it lives.
             if let Some(pgid) = self.pgid
                 && pgid as i32 != unsafe { libc::getpgrp() }
             {
@@ -168,7 +201,10 @@ impl Freeze for Tree {
             }
         }
         if sig == libc::SIGSTOP {
-            self.stopped = reached;
+            self.stopped = reached
+                .into_iter()
+                .map(|pid| (pid, process_start_identity(pid)))
+                .collect();
         }
     }
 }
@@ -291,6 +327,22 @@ mod tests {
         assert!(pids.iter().all(|&pid| state(pid) != Some('T')), "{pids:?}");
         let _ = root.kill();
         let _ = root.wait();
+    }
+
+    #[test]
+    fn a_disk_that_cannot_be_read_resumes_a_paused_agent() {
+        let (pause, sent) = paused_at(0);
+        assert_eq!(pause.follow_unread(), Some(Change::Resumed));
+        assert!(!pause.is_paused());
+        assert_eq!(sent.take(), [libc::SIGCONT]);
+        // Nothing paused: nothing to resume.
+        assert_eq!(pause.follow_unread(), None);
+        assert!(sent.take().is_empty());
+        // The next low reading pauses it again.
+        assert_eq!(
+            pause.follow(0, &DiskPolicy::default()),
+            Some(Change::Paused)
+        );
     }
 
     #[test]

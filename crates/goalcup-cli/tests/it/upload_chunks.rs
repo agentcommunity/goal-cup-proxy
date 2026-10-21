@@ -998,7 +998,7 @@ mod retries {
             })
         }));
         let trace = std::path::PathBuf::from(&run.record.trace_dir);
-        let vitals = Vitals::default();
+        let vitals = RunSignals::default();
         let (running, stopped) = start_beating(&run, vitals.clone());
         let not_stopped = |when: &str| {
             assert!(
@@ -1076,7 +1076,7 @@ mod retries {
 
     // ------------------------------------------------------------- what the heartbeat says
 
-    use goalcup_cli::run::{Recording, Vitals};
+    use goalcup_cli::run::{Recording, RunSignals};
     use goalcup_cli::upload::uploader::begin;
     use std::sync::atomic::AtomicU64;
 
@@ -1087,7 +1087,7 @@ mod retries {
 
     fn start_beating(
         run: &Run,
-        vitals: Vitals,
+        vitals: RunSignals,
     ) -> (
         goalcup_cli::upload::uploader::Running,
         std::sync::mpsc::Receiver<String>,
@@ -1123,7 +1123,7 @@ mod retries {
     fn the_heartbeat_carries_recording_and_model_requests() {
         let run = Run::new(Box::new(|_| None));
         let counter = Arc::new(AtomicU64::new(7));
-        let vitals = Vitals::counting(counter.clone());
+        let vitals = RunSignals::counting(counter.clone());
         vitals.set_recording(Recording::Gaps);
         let (running, _stopped) = start_beating(&run, vitals.clone());
         let id = run.record.run_id.clone();
@@ -1183,7 +1183,7 @@ mod retries {
             std::path::Path::new(&run.record.trace_dir),
             Arc::new(Partial),
         );
-        let (running, _stopped) = start_beating(&run, Vitals::default().probing(probe));
+        let (running, _stopped) = start_beating(&run, RunSignals::default().probing(probe));
         let id = run.record.run_id.clone();
         let vitals_said = |paused: serde_json::Value| {
             run.server
@@ -1215,7 +1215,7 @@ mod retries {
     #[test]
     fn a_replaced_answer_stops_the_run_with_its_reason() {
         let run = Run::new(Box::new(|_| None));
-        let (running, stopped) = start_beating(&run, Vitals::default());
+        let (running, stopped) = start_beating(&run, RunSignals::default());
         // Beating along, and the server says nothing about stopping.
         wait_for("a first heartbeat", || {
             (run.front.count("POST /v1/runs/") >= 1).then_some(())
@@ -1233,7 +1233,7 @@ mod retries {
         for reason in [Some("deadline".to_string()), None] {
             let run = Run::new(Box::new(|_| None));
             *run.front.stop_reason.lock().unwrap() = Some(reason);
-            let (running, stopped) = start_beating(&run, Vitals::default());
+            let (running, stopped) = start_beating(&run, RunSignals::default());
             let said = stopped
                 .recv_timeout(Duration::from_secs(20))
                 .expect("the run was not stopped");
@@ -1312,7 +1312,7 @@ mod retries {
             run.spool.clone(),
             count,
             stop,
-            Vitals::default(),
+            RunSignals::default(),
         )
         .unwrap();
         wait_for("a heartbeat of the segment", || {
@@ -1458,7 +1458,7 @@ mod retries {
         let run = Run::new(Box::new(move |label| {
             (label.ends_with("/heartbeat") && in_fault.load(Ordering::SeqCst)).then_some(503)
         }));
-        let vitals = Vitals::default();
+        let vitals = RunSignals::default();
         let (running, stopped) = start_beating(&run, vitals.clone());
         let trouble = wait_for("three failed heartbeats", || {
             let trouble = vitals.heartbeat_trouble();
@@ -1493,7 +1493,7 @@ mod retries {
         }));
         let trace = std::path::PathBuf::from(&run.record.trace_dir);
         std::fs::remove_file(trace.join("seal.json")).unwrap();
-        let vitals = Vitals::default();
+        let vitals = RunSignals::default();
         assert_eq!(vitals.server_refusing(), None);
         let (running, stopped) = start_beating(&run, vitals.clone());
         wait_for("the refusal to be named", || {
@@ -1531,7 +1531,7 @@ mod retries {
             2,
             goalcup_protocol::clock::ContinuousOrigin::now(),
         );
-        let vitals = Vitals::default();
+        let vitals = RunSignals::default();
         let running = begin(
             client,
             run.record.clone(),
@@ -1566,7 +1566,7 @@ mod retries {
             }
             None
         }));
-        let (running, _stopped) = start_beating(&run, Vitals::default());
+        let (running, _stopped) = start_beating(&run, RunSignals::default());
         wait_for("a first heartbeat", || {
             (run.front.count("POST /v1/runs/") >= 1).then_some(())
         });
@@ -1609,7 +1609,7 @@ mod retries {
             run.spool.clone(),
             None,
             stop,
-            Vitals::default(),
+            RunSignals::default(),
         )
         .unwrap();
         wait_for("a first heartbeat", || {
@@ -1647,12 +1647,11 @@ mod retries {
         std::fs::remove_file(trace.join("seal.json")).unwrap();
         let acks = trace.join("acks.jsonl");
         std::os::unix::fs::symlink(trace.parent().unwrap().join("elsewhere.jsonl"), &acks).unwrap();
-        let vitals = Vitals::default();
+        let vitals = RunSignals::default();
         let (running, _stopped) = start_beating(&run, vitals.clone());
         wait_for("the acknowledgement to be refused", || {
             vitals
                 .upload_problem()
-                .0
                 .is_some_and(|why| why.contains("acks.jsonl"))
                 .then_some(())
         });
@@ -1664,12 +1663,11 @@ mod retries {
             0,
             "marked as working while an ack is owed"
         );
-        assert!(vitals.upload_problem().0.is_some());
+        assert!(vitals.upload_problem().is_some());
         // Written at last, the upload is well again.
         std::fs::remove_file(&acks).unwrap();
         wait_for("the upload to be well", || {
-            (last_ok.load(Ordering::SeqCst) > 0 && vitals.upload_problem().0.is_none())
-                .then_some(())
+            (last_ok.load(Ordering::SeqCst) > 0 && vitals.upload_problem().is_none()).then_some(())
         });
         assert_eq!(std::fs::read_to_string(&acks).unwrap().lines().count(), 1);
         drop(running);
@@ -1718,9 +1716,9 @@ mod retries {
             trace.join("acks.jsonl"),
         )
         .unwrap();
-        let vitals = Vitals::default();
+        let vitals = RunSignals::default();
         let (running, _stopped) = start_beating(&run, vitals.clone());
-        wait_for("a retry", || vitals.upload_problem().0.map(|_| ()));
+        wait_for("a retry", || vitals.upload_problem().map(|_| ()));
         let began = Instant::now();
         drop(running);
         assert!(
@@ -1730,6 +1728,6 @@ mod retries {
         );
         vitals.upload_ok();
         std::thread::sleep(Duration::from_millis(300));
-        assert_eq!(vitals.upload_problem().0, None, "it retried after the drop");
+        assert_eq!(vitals.upload_problem(), None, "it retried after the drop");
     }
 }

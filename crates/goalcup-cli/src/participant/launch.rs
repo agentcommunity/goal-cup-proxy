@@ -1,4 +1,4 @@
-// ----------------------------------------------------------------------------------- launch
+//! The block said just before the harness is launched.
 
 use super::*;
 use crate::account::device::RunMode;

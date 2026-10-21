@@ -1,9 +1,15 @@
-//! The WSL checks of `goalcup prep`, `start` and `continue`, over the folders a run writes to.
+//! The checks of `goalcup prep`, `start` and `continue` over the folders a run writes to: WSL
+//! ([`Host::check`]) and the filesystem type ([`Host::check_filesystems`]).
 //!
-//! On WSL1 the tracker cannot run at all. On WSL2 it can, but not on a Windows drive: reads there
-//! are slow and file modes are not kept. The tests are by version and by filesystem *type* (see
-//! [`goalcup_platform::machine::windows_host_filesystem`]), never by a path prefix, because a
-//! Windows drive can be mounted anywhere. On a machine that is not WSL nothing is looked at.
+//! On WSL1 Goal Cup Proxy cannot run at all. On WSL2 it can, but not on a Windows drive: reads
+//! there are slow and file modes are not kept. The tests are by version and by filesystem *type*
+//! (see [`goalcup_platform::machine::windows_host_filesystem`]), never by a path prefix, because a
+//! Windows drive can be mounted anywhere. On a machine that is not WSL the WSL check looks at
+//! nothing.
+//!
+//! On any machine a run keeps its records on APFS, ext4 or XFS only. `goalcup prep` fails its
+//! step for a folder on any other filesystem; `start` and `continue` only warn
+//! ([`Host::warn_filesystems`]) and go on, so a run is never refused there for it.
 
 use goalcup_platform::machine;
 use std::path::{Path, PathBuf};
@@ -69,11 +75,10 @@ impl Host {
                         .filesystem_of(path)
                         .and_then(|name| machine::unsupported_fstype(&name)),
                 }?;
-                Some(format!(
-                    "the {what} {} is on {name}, which a run cannot keep its records on. Move it \
-                     to an ext4, XFS or APFS volume ({})",
-                    path.display(),
-                    move_hint(what)
+                Some(crate::participant::unsupported_filesystem(
+                    what,
+                    &path.display().to_string(),
+                    name,
                 ))
             })
             .collect();
@@ -95,16 +100,14 @@ impl Host {
         self.check(folders)
             .map_err(|why| crate::CliError::Refused(format!("{why}. {untouched}")))
     }
-}
 
-/// How to move a folder of [`Host::check_filesystems`]: the work folder by its flag, the others
-/// with the configuration folder, beside which the records are kept.
-fn move_hint(what: &str) -> &'static str {
-    if what == "work folder" {
-        "for example: goalcup prep --work-root <a folder on that volume>"
-    } else {
-        "for example: set GOALCUP_CONFIG_DIR to a folder on that volume, and the records are kept \
-         beside it"
+    /// What `goalcup start` and `goalcup continue` say of [`Host::check_filesystems`]: a
+    /// warning, never a refusal (`goalcup prep` fails its step for the same). `None` when every
+    /// folder is on a filesystem a run can keep its records on.
+    pub fn warn_filesystems(&self, folders: &[(&str, &Path)]) -> Option<String> {
+        self.check_filesystems(folders)
+            .err()
+            .map(|why| crate::participant::filesystem_warning(&why))
     }
 }
 
@@ -189,6 +192,21 @@ mod tests {
             "not WSL: nothing is looked at"
         );
         assert!(!none.is_wsl());
+    }
+
+    #[test]
+    fn an_unsupported_filesystem_is_a_warning_with_the_fix_first() {
+        let folders = [("config folder", Path::new("/home/me/.config/goalcup"))];
+        assert_eq!(
+            stated(None, &[("/home", "ext4")]).warn_filesystems(&folders),
+            None
+        );
+        let warned = stated(None, &[("/home", "tmpfs")])
+            .warn_filesystems(&folders)
+            .expect("tmpfs is warned about");
+        assert!(warned.contains("GOALCUP_CONFIG_DIR"), "{warned}");
+        assert!(warned.contains("tmpfs"), "{warned}");
+        assert!(warned.contains("goalcup prep"), "{warned}");
     }
 
     #[cfg(feature = "test-support")]

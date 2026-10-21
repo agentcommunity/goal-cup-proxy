@@ -42,8 +42,8 @@
 //! its reservation goes back after the last acknowledgement, only when the host stopped the
 //! agent because the run's end had come (the deadline, or a newer run replacing it) or its time
 //! is up by the count of the server's last answer, which the run's `state.json` keeps for every
-//! later command ([`crate::run::TimeLeft`]; never this machine's date); a full disk stops the
-//! agent and leaves the run open. A run with no server has no segments: its end is its end.
+//! later command ([`crate::run::TimeLeft`]; never this machine's date). A run with no server
+//! has no segments: its end is its end.
 //!
 //! `goalcup continue` ([`super::continue_run`]) opens the next segment through the same phases
 //! ([`Opening::Continue`]): no approval, no clone, the run's credential and workspace, the
@@ -76,7 +76,7 @@ pub use crate::home::validate_shared_capture_home_for_uid;
 pub use phases::CHAT_MODE_GOAL;
 #[cfg(feature = "test-support")]
 pub use refusals::{TEST_GITHUB_API, TEST_OFFLINE_UPSTREAMS};
-pub(crate) use refusals::{continue_preflight, refuse_wsl, run_folder_for_continue};
+pub(crate) use refusals::{check_run_folders, continue_preflight, run_folder_for_continue};
 #[cfg(feature = "test-support")]
 pub use server::TEST_CLONE_SOURCE;
 
@@ -391,14 +391,15 @@ fn capture(
         })?,
     };
     // Under WSL: WSL1 cannot run this, and WSL2 cannot keep a run on a Windows drive. Judged
-    // before anything is created or removed, over every folder the run writes to.
+    // before anything is created or removed, over every folder the run writes to; a folder on a
+    // filesystem a run cannot keep its records on is only warned about.
     let work_folder = match &opening {
         Opening::Fresh => prepared_work_folder(cfg),
         Opening::Continue(continuing) => {
             continuing.record.workspace.parent().map(Path::to_path_buf)
         }
     };
-    refuse_wsl(
+    check_run_folders(
         env,
         cfg,
         &beside,

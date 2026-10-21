@@ -5,7 +5,7 @@ use super::heartbeat::watch_deadline;
 use super::session::{Attempt, STOPPING, note_refusal, past, ran_out};
 use super::{EndedGate, LocalDeadline, Policy, Report, Uploader, WrapUp, backoff, lock_entry};
 use crate::CliError;
-use crate::run::Vitals;
+use crate::run::RunSignals;
 use crate::upload::UploadRecord;
 use crate::upload::http::ServerClient;
 use crate::upload::policy::Cadence;
@@ -60,7 +60,7 @@ pub fn begin(
     spool_dir: PathBuf,
     local_deadline: Option<LocalDeadline>,
     stop: std::sync::mpsc::Sender<String>,
-    vitals: Vitals,
+    vitals: RunSignals,
 ) -> Result<Running, CliError> {
     begin_spawning(
         &spawn_thread,
@@ -99,7 +99,7 @@ fn begin_spawning(
     spool_dir: PathBuf,
     local_deadline: Option<LocalDeadline>,
     stop: std::sync::mpsc::Sender<String>,
-    vitals: Vitals,
+    vitals: RunSignals,
 ) -> Result<Running, CliError> {
     let lock = lock_entry(&spool_dir, &record.entry_id)?;
     let entry_id = record.entry_id.clone();
@@ -185,7 +185,7 @@ struct Beside {
     ended: EndedGate,
     /// The counters [`Running::last_ok`] and [`Running::acked_offset`] read.
     shared: (std::sync::Arc<AtomicU64>, std::sync::Arc<AtomicU64>),
-    vitals: Vitals,
+    vitals: RunSignals,
 }
 
 /// Sets its flag when dropped: the watcher thread's signal that the uploader has returned.
@@ -275,7 +275,7 @@ fn resume_for_run(
     policy: Policy,
     spool_dir: &Path,
     until: WrapUp,
-    vitals: Option<&Vitals>,
+    vitals: Option<&RunSignals>,
     label: &str,
 ) -> Result<Uploader, Report> {
     let mut failures = 0u32;
@@ -378,7 +378,7 @@ pub fn finish_advice(closing: Closing, entry_id: &str) -> String {
     match closing {
         Closing::Sealed => format!("Run `goalcup upload {entry_id}` to finish sending it."),
         Closing::FromTail => {
-            "Run `goalcup continue` (it finishes the earlier segment's upload).".to_string()
+            "Run `goalcup continue` (it finishes the earlier part's upload).".to_string()
         }
     }
 }
@@ -612,7 +612,7 @@ mod tests {
             dir.path().join("uploads"),
             None,
             stop,
-            Vitals::default(),
+            RunSignals::default(),
         );
         match result {
             Err(CliError::Io { path, source }) => {
@@ -649,7 +649,7 @@ mod tests {
             dir.path().join("uploads"),
             None,
             stop,
-            Vitals::default(),
+            RunSignals::default(),
         );
         assert!(
             matches!(result, Err(CliError::Io { ref path, .. }) if path.contains("upload")),

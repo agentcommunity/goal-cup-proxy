@@ -1,7 +1,13 @@
-// ------------------------------------------------------------------------------------ seal
+//! What `goalcup seal` asks and says.
 
 use super::*;
 use std::path::Path;
+
+/// `goalcup seal` run inside the agent's session, which never ends its own run.
+pub fn seal_inside_harness() -> &'static str {
+    "To end the run early, a person runs goalcup seal from another terminal. goalcup seal does \
+     not run inside the agent's session, so the agent cannot end its own run."
+}
 
 /// What `goalcup seal` asks before it stops the agent. `until` is the run's end ([`end_words`])
 /// while the run stays open.

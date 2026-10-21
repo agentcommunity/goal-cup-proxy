@@ -773,8 +773,7 @@ mod server_runs {
             assert_eq!(refused.exit_code(), 1, "{mode:?}: {refused}");
             let said = refused.to_string();
             assert!(
-                said.contains("A new run needs a new empty repository")
-                    && said.contains("goalcup prep --repo"),
+                said.contains("is not empty (12 KB)") && said.contains("goalcup prep --repo"),
                 "{mode:?}: {said}"
             );
             assert!(upload.device_requests().is_empty(), "{mode:?}: approval");
@@ -802,6 +801,69 @@ mod server_runs {
         rig.with_env(goalcup_cli::commands::start::TEST_GITHUB_API, &empty);
         run_to_end(&rig, false);
         assert_eq!(upload.run_ids().len(), 1);
+    }
+
+    /// GitHub's size lags a push, so a repository that reads as empty there may already have a
+    /// commit: the clone says so exactly, and a competition start is refused once it has cloned,
+    /// leaving nothing behind and opening no run.
+    #[test]
+    fn a_clone_with_a_commit_refuses_a_competition_start() {
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        // A source with one commit in it, standing in for a repository pushed to a moment ago.
+        let work = rig.root.join("pushed");
+        let source = rig.root.join("pushed.git");
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@example.org")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@example.org")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+        };
+        git(&["init", "--quiet", work.to_str().unwrap()]);
+        git(&[
+            "-C",
+            work.to_str().unwrap(),
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "seed",
+        ]);
+        git(&[
+            "clone",
+            "--quiet",
+            "--bare",
+            work.to_str().unwrap(),
+            source.to_str().unwrap(),
+        ]);
+        rig.with_env(
+            goalcup_cli::commands::start::TEST_CLONE_SOURCE,
+            &source.display().to_string(),
+        );
+        let goal = rig.run_folder();
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let opts = rig.options(&goal, RESERVE);
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("a clone with a commit was used");
+        assert_eq!(refused.exit_code(), 1, "{refused}");
+        let said = refused.to_string();
+        assert!(
+            said.contains("is not empty") && said.contains("goalcup prep --repo"),
+            "{said}"
+        );
+        assert!(out.contains("what this start made was removed"), "{out}");
+        assert!(rig.run_dirs().is_empty());
+        assert!(rig.clones().is_empty(), "{:?}", rig.clones());
+        assert!(server.run_ids().is_empty(), "no run was opened");
+        assert!(!rig.harness_started());
     }
 
     /// A start that fails after the run opened, with the server away so the run cannot be given

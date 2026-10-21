@@ -18,13 +18,16 @@
 //!
 //! Test-build doors used (all documented in `src/main.rs`):
 //! - `GOALCUP_TEST_DISK`: the shipped sizes (3 GiB reserve, 1 GiB start margin, 256 MiB floor,
-//!   the shipped chain quota) with the watch tick at 1 s instead of 30 s;
+//!   the shipped chain quota, and the D65 pause below 1 GiB and resume above 3 GiB) with the
+//!   watch tick at 1 s instead of 30 s;
 //! - `GOALCUP_TEST_UPLOAD_POLICY`: a chunk every 5 s (or at 4 MiB), heartbeats every 10 s,
 //!   retries 1 to 5 s, a 60 s wrap-up;
 //! - `GOALCUP_TEST_UPSTREAM_ROOTS`, `GOALCUP_TEST_NO_BROWSER`, `GOALCUP_TEST_CLONE_SOURCE`,
 //!   `GOALCUP_TEST_FINISH_BUDGET_MS` as in the other full rows.
 //!
-//! `UPLOAD_FAILING_AFTER` (30 min) has no test door, so the stop row with a server waits it out.
+//! `UPLOAD_FAILING_AFTER` (30 min) has no test door. It no longer stops a run (D65): it only
+//! decides when `goalcup status` calls the upload failing, so the server-down row waits it out to
+//! see that line.
 
 use crate::common::m2_cli_support::{FAKE_GITHUB_TOKEN, PREP_REPO};
 use crate::common::m2_vertical_support::{CONNECTOR, Vertical};
@@ -45,9 +48,18 @@ const GIB: u64 = 1 << 30;
 /// Under the shipped 256 MiB floor, with room for a few minutes of the stream workload.
 const UNDER_FLOOR: u64 = 128 * MIB;
 
-/// The shipped disk sizes with a 1 s watch tick.
+/// The shipped disk sizes with a 1 s watch tick, every field named, so the D65 pause is the
+/// shipped one (a spec of fewer fields never pauses the agent).
 fn disk_spec() -> String {
-    format!("{},{},1000,{}", 3 * GIB, GIB, 256 * MIB)
+    let chain_quota = goalcup_protocol::capture::CHAIN_QUOTA_BYTES;
+    format!(
+        "{},{},1000,{},{chain_quota},{},{}",
+        3 * GIB,
+        GIB,
+        256 * MIB,
+        GIB,
+        3 * GIB
+    )
 }
 
 /// interval, poll, backoff min, backoff max, wrap-up (ms), eager bytes, put timeout, heartbeat.

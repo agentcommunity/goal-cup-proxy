@@ -17,10 +17,9 @@
 
 use super::pause::{AgentPause, Change};
 use super::reserve::{
-    DiskPolicy, DiskVerdict, GROW_STEP, RunReserve, human, pressure, short_of_disk, target_with,
-    verdict,
+    DiskPolicy, GROW_STEP, RunReserve, human, is_low, pressure, short_of_disk, target_with,
 };
-use super::{DiskState, EntryRef, Recording, RunRecord, StateKeeper, UploadState, Vitals};
+use super::{DiskState, EntryRef, Recording, RunRecord, RunSignals, StateKeeper, UploadState};
 use crate::upload::prune::{AckAges, deletable, parts_now};
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -45,7 +44,7 @@ pub type AskRecording = Arc<dyn Fn() -> Option<Recording> + Send + Sync>;
 /// What the tick writes to `state.json` and shares with the heartbeat.
 pub struct Beat {
     pub keeper: StateKeeper,
-    pub vitals: Vitals,
+    pub vitals: RunSignals,
     pub ask: AskRecording,
     /// The run's time-left file the agent may read (D66), written each tick from the count in
     /// `state.json` and removed when the count says nothing. `None` writes none.
@@ -140,74 +139,22 @@ pub fn watch_beside(watch: Watch) -> Watching {
     let done = Arc::new(AtomicBool::new(false));
     let reserve = Arc::new(Mutex::new(reserve));
     let beside = (Arc::clone(&done), Arc::clone(&reserve));
+    let mut ticker = Ticker {
+        run,
+        uploads,
+        acked,
+        policy,
+        beat,
+        pause,
+        tick: Tick::default(),
+        pruner: Pruner::within(policy.reserve_bytes),
+    };
     let thread = std::thread::Builder::new()
         .name("goalcup-disk-watch".into())
         .spawn(move || {
             let (done, reserve) = beside;
-            let mut tick = Tick::default();
-            let mut pruner = Pruner::within(policy.reserve_bytes);
             while !done.load(Ordering::SeqCst) {
-                let short = disk_short(&*reserve.lock().unwrap_or_else(PoisonError::into_inner));
-                let on_disk = pruner.sweep(
-                    &run.entries,
-                    &|entry| {
-                        acked
-                            .iter()
-                            .find(|(id, _)| id == entry)
-                            .map_or(0, |(_, offset)| offset.load(Ordering::SeqCst))
-                    },
-                    Instant::now(),
-                    short,
-                    &mut crate::host_log::say,
-                );
-                let free = tick.step(
-                    &mut *reserve.lock().unwrap_or_else(PoisonError::into_inner),
-                    &policy,
-                    on_disk,
-                    &mut crate::host_log::say,
-                );
-                if let (Some(pause), Some(free)) = (&pause, free) {
-                    follow_disk(pause, free, &policy);
-                }
-                if let Some(beat) = &beat {
-                    let recording = recording_within(RECORDING_WAIT, &done, beat.ask.clone());
-                    beat.vitals.set_recording(recording);
-                    let (problem, stopped) = beat.vitals.upload_problem();
-                    let refused = beat.vitals.server_refusing();
-                    let last_ok_at = uploads.iter().map(|last| last.load(Ordering::SeqCst)).max();
-                    let mut disk = tick.disk();
-                    disk.disk_paused = pause.as_ref().is_some_and(AgentPause::is_paused);
-                    let heartbeat = beat.vitals.heartbeat_trouble();
-                    let time_left = beat.vitals.time_left();
-                    let mut count = None;
-                    beat.keeper.update(|state| {
-                        if time_left.is_some() {
-                            state.time_left = time_left;
-                        }
-                        count.clone_from(&state.time_left);
-                        state.recording = recording;
-                        state.heartbeat = heartbeat;
-                        state.upload = UploadState {
-                            last_ok_at,
-                            problem,
-                            stopped,
-                            refused,
-                        };
-                        state.disk = disk;
-                    });
-                    if let Some(file) = &beat.time_left_file
-                        && let Err(error) = super::time_left::keep_file(
-                            file,
-                            count.as_ref(),
-                            run.deadline_at.as_deref(),
-                            super::now_unix(),
-                        )
-                    {
-                        crate::host_log::log_only(&format!(
-                            "time-left: the file could not be written ({error})"
-                        ));
-                    }
-                }
+                ticker.once(&reserve, &done);
                 let wake = Instant::now() + policy.tick;
                 while Instant::now() < wake && !done.load(Ordering::SeqCst) {
                     std::thread::sleep(
@@ -230,19 +177,138 @@ pub fn watch_beside(watch: Watch) -> Watching {
     }
 }
 
-/// One reading of the free disk beyond the reservation for the agent's pause. The pause is said
-/// on the terminal even while a chat-mode harness owns it (the harness is frozen and draws
-/// nothing); the resume goes where every other line goes.
-pub fn follow_disk(pause: &AgentPause, free: u64, policy: &DiskPolicy) {
-    match pause.follow(free, policy) {
-        Some(Change::Paused) => {
+/// What the tick thread works with, and keeps from one tick to the next.
+struct Ticker {
+    run: RunRecord,
+    uploads: Vec<Arc<AtomicU64>>,
+    acked: Vec<(String, Arc<AtomicU64>)>,
+    policy: DiskPolicy,
+    beat: Option<Beat>,
+    pause: Option<AgentPause>,
+    tick: Tick,
+    pruner: Pruner,
+}
+
+impl Ticker {
+    /// One tick: delete the parts that may go, look at the disk (resizing the reserve and
+    /// following the pause, [`look_at_disk`]), and write the beat ([`Ticker::write_beat`]).
+    fn once(&mut self, reserve: &Mutex<RunReserve>, done: &AtomicBool) {
+        let held = || reserve.lock().unwrap_or_else(PoisonError::into_inner);
+        let short = disk_short(&*held());
+        let acked = &self.acked;
+        let on_disk = self.pruner.sweep(
+            &self.run.entries,
+            &|entry| {
+                acked
+                    .iter()
+                    .find(|(id, _)| id == entry)
+                    .map_or(0, |(_, offset)| offset.load(Ordering::SeqCst))
+            },
+            Instant::now(),
+            short,
+            &mut crate::host_log::say,
+        );
+        look_at_disk(
+            &mut self.tick,
+            &mut *held(),
+            &self.policy,
+            on_disk,
+            self.pause.as_ref(),
+            &mut crate::host_log::say,
+        );
+        if let Some(beat) = &self.beat {
+            self.write_beat(beat, done);
+        }
+    }
+
+    /// Ask the daemon how the recording is, write it with the upload, the heartbeats and the
+    /// disk to `state.json`, and keep the time-left file from the count written there.
+    fn write_beat(&self, beat: &Beat, done: &AtomicBool) {
+        let recording = recording_within(RECORDING_WAIT, done, beat.ask.clone());
+        beat.vitals.set_recording(recording);
+        let problem = beat.vitals.upload_problem();
+        let refused = beat.vitals.server_refusing();
+        let last_ok_at = self
+            .uploads
+            .iter()
+            .map(|last| last.load(Ordering::SeqCst))
+            .max();
+        let mut disk = self.tick.disk();
+        disk.disk_paused = self.pause.as_ref().is_some_and(AgentPause::is_paused);
+        let heartbeat = beat.vitals.heartbeat_trouble();
+        let time_left = beat.vitals.time_left();
+        let mut count = None;
+        beat.keeper.update(|state| {
+            if time_left.is_some() {
+                state.time_left = time_left;
+            }
+            count.clone_from(&state.time_left);
+            state.recording = recording;
+            state.heartbeat = heartbeat;
+            state.upload = UploadState {
+                last_ok_at,
+                problem,
+                // Only an older build's uploader gave up (D64).
+                stopped: false,
+                refused,
+            };
+            state.disk = disk;
+        });
+        if let Some(file) = &beat.time_left_file
+            && let Err(error) = super::time_left::keep_file(
+                file,
+                count.as_ref(),
+                self.run.deadline_at.as_deref(),
+                super::now_unix(),
+            )
+        {
+            crate::host_log::log_only(&format!(
+                "time-left: the file could not be written ({error})"
+            ));
+        }
+    }
+}
+
+/// One look at the disk ([`Tick::step`]) and what the agent's pause makes of it. The free bytes
+/// for the pause are read again on their own when the step could not finish (a resize that
+/// failed), so trouble keeping the reservation never holds a pause. A disk that cannot be read
+/// at all resumes a paused agent: nothing then says the disk is still full, and a pause must not
+/// freeze the agent until the run ends. The next low reading pauses it again.
+pub fn look_at_disk(
+    tick: &mut Tick,
+    disk: &mut dyn Disk,
+    policy: &DiskPolicy,
+    footprint: u64,
+    pause: Option<&AgentPause>,
+    say: &mut dyn FnMut(&str),
+) {
+    let stepped = tick.step(disk, policy, footprint, say);
+    if let Some(pause) = pause {
+        follow_disk(pause, stepped.or_else(|| disk.free().ok()), policy, say);
+    }
+}
+
+/// One reading of the free disk beyond the reservation for the agent's pause; `None` when the
+/// disk could not be read. The pause is said on the terminal even while a chat-mode harness owns
+/// it (the harness is frozen and draws nothing); the resume goes to `say`, where every other
+/// line goes.
+pub fn follow_disk(
+    pause: &AgentPause,
+    free: Option<u64>,
+    policy: &DiskPolicy,
+    say: &mut dyn FnMut(&str),
+) {
+    let change = match free {
+        Some(free) => pause.follow(free, policy),
+        None => pause.follow_unread(),
+    };
+    match (change, free) {
+        (Some(Change::Paused), _) => {
             crate::host_log::say_loud(crate::participant::problem_disk_paused())
         }
-        Some(Change::Resumed) => crate::host_log::say(&format!(
-            "disk: {} is free again, so your agent was resumed.",
-            human(free)
-        )),
-        None => {}
+        (Some(Change::Resumed), Some(free)) => say(&crate::participant::disk_resumed(&human(free))),
+        (Some(Change::Resumed), None) => say(crate::participant::disk_resumed_unread()),
+        (None, _) => {}
     }
 }
 
@@ -413,7 +479,8 @@ impl Tick {
     /// once, taking back only when [`GROW_STEP`] is missing), reads what the reserve holds and
     /// what the volume has free again, and judges them. Trouble keeping the reservation goes to
     /// `say`; low space does not (it is [`Tick::disk`]). Answers the free bytes beyond the
-    /// reserve, or `None` when the disk could not be read. It never stops the run (D65).
+    /// reserve, or `None` when the disk could not be read or the reserve could not be resized.
+    /// It never stops the run (D65).
     pub fn step(
         &mut self,
         disk: &mut dyn Disk,
@@ -448,7 +515,7 @@ impl Tick {
         self.disk = DiskState {
             free_bytes: free,
             reserve_bytes: held,
-            low: matches!(verdict(free), DiskVerdict::Low { .. }),
+            low: is_low(free),
             disk_paused: false,
         };
         Some(free)
@@ -616,6 +683,83 @@ mod tests {
         }
         assert_eq!(lows, [true, true, false, true]);
         assert!(said.is_empty(), "{said:?}");
+    }
+
+    /// A disk whose readings and resizes can fail.
+    struct Flaky {
+        free: Option<u64>,
+        resize_fails: bool,
+        reserve: u64,
+    }
+
+    impl Disk for Flaky {
+        fn held(&self) -> u64 {
+            self.reserve
+        }
+        fn free(&self) -> io::Result<u64> {
+            self.free
+                .ok_or_else(|| io::ErrorKind::PermissionDenied.into())
+        }
+        fn resize(&mut self, _: u64) -> io::Result<()> {
+            if self.resize_fails {
+                Err(io::ErrorKind::PermissionDenied.into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// The signals a fake harness was sent.
+    #[derive(Clone, Default)]
+    struct Sent(Arc<Mutex<Vec<i32>>>);
+
+    impl crate::run::pause::Freeze for Sent {
+        fn send(&mut self, sig: i32) {
+            self.0.lock().unwrap().push(sig);
+        }
+    }
+
+    #[test]
+    fn a_failed_resize_still_pauses_and_an_unreadable_disk_resumes() {
+        let policy = DiskPolicy::default();
+        let sent = Sent::default();
+        let pause = AgentPause::new(sent.clone());
+        let mut tick = Tick::default();
+        let mut said = Vec::new();
+        let mut look = |disk: &mut Flaky| {
+            look_at_disk(&mut tick, disk, &policy, 0, Some(&pause), &mut |l| {
+                said.push(l.to_string())
+            })
+        };
+        // The resize fails, but the disk can be read and is nearly full: the agent is paused.
+        let mut disk = Flaky {
+            free: Some(100 * MIB),
+            resize_fails: true,
+            reserve: 2 * GIB,
+        };
+        look(&mut disk);
+        assert!(pause.is_paused());
+        assert_eq!(*sent.0.lock().unwrap(), [libc::SIGSTOP]);
+        // A failed resize with room again resumes it.
+        disk.free = Some(10 * GIB);
+        look(&mut disk);
+        assert!(!pause.is_paused());
+        // Paused again, then the disk cannot be read at all: the agent is resumed, not left
+        // frozen until the run ends.
+        disk.free = Some(0);
+        look(&mut disk);
+        assert!(pause.is_paused());
+        disk.free = None;
+        look(&mut disk);
+        assert!(!pause.is_paused());
+        assert_eq!(
+            *sent.0.lock().unwrap(),
+            [libc::SIGSTOP, libc::SIGCONT, libc::SIGSTOP, libc::SIGCONT]
+        );
+        assert!(
+            said.iter().any(|l| l.contains("could not read")),
+            "{said:?}"
+        );
     }
 
     #[test]

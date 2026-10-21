@@ -1,4 +1,4 @@
-// ------------------------------------------------------------------------ upload and entries
+//! What `goalcup upload` and `goalcup entries` say.
 
 use super::*;
 
@@ -99,8 +99,9 @@ pub fn entries_intro(none: bool) -> Vec<String> {
     } else {
         vec![
             "To show one part in full, run: goalcup status <part-id>".to_string(),
+            format!("To go on with a run whose agent has exited, run: {CONTINUE_HINT} <run-id>"),
             String::new(),
-            "Parts of runs on this computer (part id, harness, state, folder):".to_string(),
+            "Parts of runs on this computer (part id, run id, harness, state, folder):".to_string(),
         ]
     }
 }
