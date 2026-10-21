@@ -410,6 +410,41 @@ fn every_connector_launch_environment_is_built_from_nothing() {
     }
 }
 
+/// Every connector's launch, alike and with no per-harness code, names the run's time-left file
+/// the agent may read (D66) and the marker `goalcup seal` refuses under; the participant's own
+/// values for either do not reach the harness.
+#[test]
+fn every_connector_launch_names_the_time_left_file_and_the_harness_marker() {
+    for id in shipped_connector_ids() {
+        let c = load(&id);
+        let capture = &c.loaded.manifest.capture;
+        let l = s::Layout::new();
+        let exe = s::fake_harness(&l.bin);
+        let resolved = s::resolved(&exe);
+        let proxy = s::proxy_url();
+        let mut parent = s::parent_env();
+        parent.insert("GOALCUP_TIME_LEFT_FILE".into(), "/evil/time-left".into());
+        parent.insert("GOALCUP_IN_HARNESS".into(), "0".into());
+        let plan = build_capture_launch(
+            &c,
+            &s::vars(&l),
+            &l.workspace,
+            &CaptureLaunch {
+                goal: (!capture.interactive).then_some(GOAL.as_bytes()),
+                ..s::chat_launch(&l, &resolved, &proxy, &parent)
+            },
+        )
+        .unwrap_or_else(|e| panic!("{id}: {e}"));
+        let get = |k: &str| plan.env_set.get(k).map(String::as_str);
+        assert_eq!(
+            get(goalcup_cli::run::time_left::FILE_ENV),
+            l.time_left.to_str(),
+            "{id}"
+        );
+        assert_eq!(get(goalcup_cli::launch::IN_HARNESS_ENV), Some("1"), "{id}");
+    }
+}
+
 fn assert_connector_launch_environment(c: &HarnessConnector) {
     let id = &c.loaded.manifest.id;
     let capture = &c.loaded.manifest.capture;
@@ -447,6 +482,8 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
         "USER",
         "LOGNAME",
         "TMPDIR",
+        "GOALCUP_IN_HARNESS",
+        "GOALCUP_TIME_LEFT_FILE",
     ] {
         allowed.insert(pin.to_string());
     }

@@ -113,6 +113,8 @@
     "env_set": {
       "CODEX_CA_CERTIFICATE": "<TMP>/proxy-ca.pem",
       "CODEX_HOME": "<TMP>/harness-home",
+      "GOALCUP_IN_HARNESS": "1",
+      "GOALCUP_TIME_LEFT_FILE": "<TMP>/time-left/entry-0001",
       "HOME": "<TMP>/run-home",
       "HTTPS_PROXY": "<PROXY_URL>",
       "LOGNAME": "participant",
@@ -190,6 +192,8 @@
       "env_keys": [
         "CODEX_CA_CERTIFICATE",
         "CODEX_HOME",
+        "GOALCUP_IN_HARNESS",
+        "GOALCUP_TIME_LEFT_FILE",
         "HOME",
         "HTTPS_PROXY",
         "LOGNAME",

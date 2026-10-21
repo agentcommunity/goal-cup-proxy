@@ -108,6 +108,8 @@ the agent: that is inside the stated boundary ([SECURITY](../SECURITY.md)).
 Feedback on the run's state goes to the participant through `goalcup status` and the signed status
 document. Nothing is injected into the agent.
 
+*Narrowed by D66: the agent may ask `goalcup time-left`; nothing is pushed to it.*
+
 ## D26. Token usage is derived by the verifier, not enforced.
 
 The verifier may sum usage counts. No rule sets a token budget. Plan, credit and billing fields
@@ -632,8 +634,8 @@ call ended the run's upload for good. A server that must end a run says `stop` i
 
 21 Oct 2026, owner ruling (event readiness plan, WP-C): when the disk is about to fill, Goal Cup Proxy
 pauses the agent so that nothing happens unrecorded, and resumes it by itself when space returns.
-This is the one exception to the hard rule "Goal Cup Proxy records and never manages the agent"
-(`AGENTS.md`).
+This is an exception to the hard rule "Goal Cup Proxy records and never manages the agent"
+(`AGENTS.md`); D66 is the other.
 
 - **Freeze, not prompt.** The watch tick (every 30 s) sends `SIGSTOP` to the harness when less
   than 1 GiB is free beyond the run's reservation, and `SIGCONT` once more than 3 GiB is free
@@ -659,3 +661,30 @@ This is the one exception to the hard rule "Goal Cup Proxy records and never man
 - **Not covered.** A `goalcup seal` typed in another terminal while the agent is paused reaches
   the daemon, not the host's pause: the agent gets the termination signal frozen and is ended at
   the end of its grace. The host continues what is left once the root has exited.
+
+## D66. The agent may ask how much time is left; nothing is pushed to it.
+
+21 Oct 2026, owner ruling: the agent may ask how much time its run has left. Goal Cup Proxy never
+pushes anything to the agent. This narrows D25 for one value, and it is the second exception
+to the hard rule "Goal Cup Proxy records and never manages the agent" (`AGENTS.md`), after D65:
+the agent pulls, and nothing is sent to it.
+
+- **Pull only, the same for every harness.** Every recording launch, whatever the connector, gets
+  `GOALCUP_TIME_LEFT_FILE`: a file at `<config dir>/time-left/<run_id>`, in a private (0700) folder
+  outside the workspace and the evidence and beside neither the run's credential nor
+  `control.json`. No connector names it (`GOALCUP_*` is refused in `capture.env`); there is no
+  per-harness code.
+- **Only these values.** The watch tick (every 30 s) writes `seconds_left` from the server's count
+  kept in `state.json` on the continuous clock, `deadline_at` (the server's value, parsed as a date
+  and written again), and `as_of` (when it was written). No other string from the server is
+  written. When the count says nothing (after a reboot) the file is removed.
+- **The agent asks.** `goalcup time-left` reads the file through the variable and prints one line
+  ("About 41 h 12 min left (the run stops at 2026-11-14 00:00 UTC). Push your work often; work not
+  pushed when the run stops is lost.") and exits 0; a missing file, or one written more than 5
+  minutes ago, is "unknown right now" and exit 1. The goal-cup skill tells the agent the command
+  exists. The skill reaches only harnesses with a `skills_dir` (Codex, Claude Code); Hermes and Amp
+  need a skills folder measured locally before their connectors get one.
+- **`goalcup seal` refuses inside the harness.** Every recording launch also sets
+  `GOALCUP_IN_HARNESS=1`, and `goalcup seal` refuses under it and names another terminal, so the
+  agent cannot end its own segment by accident. A seal from another terminal, and the host's own
+  seal at the end of a run, are unchanged.

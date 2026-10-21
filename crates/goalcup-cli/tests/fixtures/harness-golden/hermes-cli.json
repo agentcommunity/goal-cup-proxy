@@ -216,6 +216,8 @@
     "env_base_keys": [],
     "env_remove": [],
     "env_set": {
+      "GOALCUP_IN_HARNESS": "1",
+      "GOALCUP_TIME_LEFT_FILE": "<TMP>/time-left/entry-0001",
       "HERMES_CA_BUNDLE": "<TMP>/proxy-ca.pem",
       "HERMES_HOME": "<TMP>/harness-home",
       "HOME": "<TMP>/run-home",
@@ -258,6 +260,8 @@
         "chat"
       ],
       "env_keys": [
+        "GOALCUP_IN_HARNESS",
+        "GOALCUP_TIME_LEFT_FILE",
         "HERMES_CA_BUNDLE",
         "HERMES_HOME",
         "HOME",

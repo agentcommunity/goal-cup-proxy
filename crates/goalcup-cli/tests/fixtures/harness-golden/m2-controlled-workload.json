@@ -92,6 +92,8 @@
     "env_base_keys": [],
     "env_remove": [],
     "env_set": {
+      "GOALCUP_IN_HARNESS": "1",
+      "GOALCUP_TIME_LEFT_FILE": "<TMP>/time-left/entry-0001",
       "HOME": "<TMP>/run-home",
       "HTTPS_PROXY": "<PROXY_URL>",
       "LOGNAME": "participant",
@@ -136,6 +138,8 @@
         "<goal>"
       ],
       "env_keys": [
+        "GOALCUP_IN_HARNESS",
+        "GOALCUP_TIME_LEFT_FILE",
         "HOME",
         "HTTPS_PROXY",
         "LOGNAME",

@@ -19,7 +19,7 @@ unmeasured. These targets do not establish that current connectors capture every
 |---|---|
 | `crates/goalcup-protocol` | Every byte definition: chain, v5 records, control API types, harness schema (`harness.rs`), trust tables (`capture_policy.rs`), connector pins. No rule logic. |
 | `crates/goalcup-daemon` | `goalcup-daemon`: ingest, redaction, chain writer, native-file capture, finish, process termination. Small on purpose. |
-| `crates/goalcup-cli` | `goalcup` (nine commands: `start`, `continue`, `status`, `entries`, `seal`, `doctor`, `login`, `prep`, `upload`). Launches the harness, runs the recording proxy, uploads. |
+| `crates/goalcup-cli` | `goalcup` (ten commands: `start`, `continue`, `status`, `time-left`, `entries`, `seal`, `doctor`, `login`, `prep`, `upload`). Launches the harness, runs the recording proxy, uploads. |
 | `crates/goalcup-verifier` | `goalcup-verify` and the decoders. Every judgement about the bytes lives here. |
 | `crates/goalcup-platform` | Unix-only OS code shared by the others: disk reservation, capability-based file access, machine facts, sleep lock. |
 | `connectors/<id>/` | One harness = one `harness.toml` plus seed files. Data, not code. Pinned by digest. |
@@ -62,8 +62,9 @@ setup, project build and gate Cargo commands run with `--offline`.
 - **Never set a model base URL on any harness.** The only wire path is the loopback recording
   proxy, reached through the harness's process-scoped `HTTPS_PROXY` (D1, D36).
 - **Goal Cup Proxy records and never manages the agent.** No prompting, no auto "keep going", no
-  finish tool. The participant types the prompt and may type only "keep going". The one
-  exception is D65: on a nearly full disk Goal Cup Proxy freezes the agent and resumes it by itself.
+  finish tool. The participant types the prompt and may type only "keep going". Two exceptions:
+  D65, on a nearly full disk Goal Cup Proxy freezes the agent and resumes it by itself; and D66,
+  the agent may ask `goalcup time-left` how much time is left (pull only, nothing is pushed).
 - **No harness names in core code.** A harness is data (a connector) plus shared modules.
 - **Never write into `~/.claude`, `~/.codex`, `~/.hermes` or any app-wide config.** Goal Cup Proxy
   makes isolated homes. A test that launches a harness uses a private `HOME`.

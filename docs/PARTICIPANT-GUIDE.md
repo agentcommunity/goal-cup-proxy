@@ -352,7 +352,8 @@ again if it comes back after `goalcup continue`. Do not answer a question the ag
 approval the agent needs.
 
 Goal Cup Proxy itself never types to the agent, never says "keep going" for you, and never restarts
-it by itself.
+it by itself. Your agent may ask how much time is left with `goalcup time-left` (you can run it too);
+`goalcup seal` works only from a terminal of your own, never inside the agent's session.
 
 An agent that stops early and stays idle until the deadline is allowed. The idle time is in the
 record.

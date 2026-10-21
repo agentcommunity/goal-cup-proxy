@@ -776,9 +776,23 @@ mod chat {
         ] {
             assert!(!env.contains_key(key), "{key} reached the harness: {env:?}");
         }
-        assert!(
-            !env.keys().any(|k| k.starts_with("GOALCUP_")),
+        // Of goalcup's own variables only the launch's two reach it (D66): the harness marker
+        // and the run's time-left file, under the configuration directory. None of the
+        // participant's (`GOALCUP_CONFIG_DIR` among them).
+        let own: Vec<&str> = env
+            .keys()
+            .map(String::as_str)
+            .filter(|k| k.starts_with("GOALCUP_"))
+            .collect();
+        assert_eq!(
+            own,
+            ["GOALCUP_IN_HARNESS", "GOALCUP_TIME_LEFT_FILE"],
             "goalcup's own variables reached the harness: {env:?}"
+        );
+        assert!(
+            env["GOALCUP_TIME_LEFT_FILE"]
+                .starts_with(&rig.cfg.join("time-left").display().to_string()),
+            "{env:?}"
         );
     }
 

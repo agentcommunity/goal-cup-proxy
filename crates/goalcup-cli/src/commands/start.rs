@@ -1925,6 +1925,7 @@ fn create_and_gate<'a>(
                 ca_certificate: proxied.proxy.ca_certificate(),
                 ca_bundle: ca_bundle.as_deref(),
                 parent_env: env,
+                time_left_file: Some(&crate::run::time_left::file_path(cfg, &record.run_id)),
             },
         )?;
         // Offered once. `busy` is the daemon's refusal before it reads a request and is
@@ -2405,6 +2406,7 @@ fn run_harness<'a>(
                     let key = forked.info.run_public_key.clone();
                     Arc::new(move || ask_recording(&cfg, &entry_id, &key))
                 },
+                time_left_file: Some(crate::run::time_left::file_path(cfg, &forked.record.run_id)),
             }),
             pause: Some(pause.clone()),
         })

@@ -28,7 +28,11 @@
 //! * the passive **loopback** recording proxy through process-scoped `HTTPS_PROXY`/
 //!   `https_proxy` — the M2 reservation AGENTS.md names, and the only proxy a launch may name,
 //!   checked by `loopback_proxy_url` — with `NO_PROXY`/`no_proxy` ([`CAPTURE_NO_PROXY`]) and
-//!   the profile's process-scoped CA variable.
+//!   the profile's process-scoped CA variable;
+//! * Goal Cup Proxy's own two, the same for every harness: [`IN_HARNESS_ENV`], under which
+//!   `goalcup seal` refuses, and the run's time-left file the agent may read
+//!   ([`crate::run::time_left::FILE_ENV`], D66). A connector cannot name either (`GOALCUP_*`
+//!   is refused in `capture.env`).
 //!
 //! **D1: the tracker never sets a model base URL.** Nothing on that list can be one except
 //! the profile's `capture.env`, and `goalcup_protocol::capture_policy` refuses a profile that
@@ -401,6 +405,10 @@ pub fn harness_path(profile: &CaptureSpec, parent_env: &BTreeMap<String, String>
     }
 }
 
+/// Set to `1` in every recording launch's environment, whatever the harness: `goalcup seal` run
+/// from inside the harness sees it and refuses, so the agent cannot end its own segment.
+pub const IN_HARNESS_ENV: &str = "GOALCUP_IN_HARNESS";
+
 /// The participant's variables a chat-mode launch carries across ([`CHAT_PASSTHROUGH_ENV`] and
 /// every `LC_*` the schema would admit as a name); empty for a headless launch.
 fn chat_passthrough(
@@ -632,6 +640,9 @@ pub struct CaptureLaunch<'a> {
     /// The tracker's own environment. Only [`CAPTURE_IDENTITY_ENV`] is read from it, and for a
     /// chat-mode connector also [`CHAT_PASSTHROUGH_ENV`] and `LC_*`.
     pub parent_env: &'a BTreeMap<String, String>,
+    /// The run's time-left file ([`crate::run::time_left::file_path`]), handed to the harness
+    /// as [`crate::run::time_left::FILE_ENV`] (D66). `goalcup start` always gives one.
+    pub time_left_file: Option<&'a Path>,
 }
 
 impl fmt::Debug for CaptureLaunch<'_> {
@@ -651,6 +662,7 @@ impl fmt::Debug for CaptureLaunch<'_> {
             .field("ca_certificate", &self.ca_certificate)
             .field("ca_bundle", &self.ca_bundle)
             .field("parent_env", &Keys(self.parent_env))
+            .field("time_left_file", &self.time_left_file)
             .finish()
     }
 }
@@ -799,6 +811,7 @@ struct Inputs<'a> {
     /// name.
     proxy: Option<(&'a str, &'a Path, Option<&'a Path>)>,
     parent_env: &'a BTreeMap<String, String>,
+    time_left_file: Option<&'a Path>,
 }
 
 impl<'a> Inputs<'a> {
@@ -810,6 +823,7 @@ impl<'a> Inputs<'a> {
             config_home: launch.config_home,
             proxy: Some((launch.proxy_url, launch.ca_certificate, launch.ca_bundle)),
             parent_env: launch.parent_env,
+            time_left_file: launch.time_left_file,
         }
     }
 }
@@ -969,6 +983,13 @@ fn build_launch(
             };
             env.insert(key.clone(), file.to_string());
         }
+        // Goal Cup Proxy's own variables, the same for every harness: the marker `goalcup seal`
+        // refuses under, and the time-left file the agent may read (D66). Nothing is pushed.
+        env.insert(IN_HARNESS_ENV.into(), "1".into());
+        if let Some(file) = launch.time_left_file {
+            let file = absolute_utf8("time-left file", file)?;
+            env.insert(crate::run::time_left::FILE_ENV.into(), file.to_string());
+        }
     }
 
     let termination = c.loaded.manifest.termination();
@@ -1046,6 +1067,7 @@ pub fn build_prep_launch(
             config_home: launch.config_home,
             proxy: None,
             parent_env: launch.parent_env,
+            time_left_file: None,
         },
         false,
     )

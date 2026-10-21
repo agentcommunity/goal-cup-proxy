@@ -40,6 +40,22 @@ use std::path::Path;
 /// spelled twice is a binary that is one day spelled wrong in the place somebody copies from.
 pub(crate) const VERIFIER_BIN: &str = "goalcup-verify";
 
+/// Refuse `goalcup seal` run from inside the harness: `marker` is the value of
+/// [`crate::launch::IN_HARNESS_ENV`], which every recording launch sets in the harness's
+/// environment, so the agent cannot end its own segment by accident. A seal typed in another
+/// terminal has no marker, and the host's own seal at the end of a run does not come here.
+pub fn refuse_inside_harness(marker: Option<&std::ffi::OsStr>) -> Result<(), CliError> {
+    if marker.is_some_and(|marker| !marker.is_empty()) {
+        return Err(CliError::Refused(
+            "`goalcup seal` does not run inside the agent's session, so the agent cannot end \
+             its own run. To end the run early, a person runs `goalcup seal` from another \
+             terminal."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 /// The testable half: everything except resolving a real client and a real config dir.
 ///
 /// `connectors`, `cfg` and `out` are parameters and not lookups for the reason the rest of
@@ -443,6 +459,17 @@ fn say(out: &mut dyn std::io::Write, line: &str) -> Result<(), CliError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn seal_refuses_inside_the_harness_and_runs_without_the_marker() {
+        let refused = super::refuse_inside_harness(Some(std::ffi::OsStr::new("1")));
+        assert!(
+            matches!(&refused, Err(crate::CliError::Refused(said)) if said.contains("another terminal")),
+            "{refused:?}"
+        );
+        assert!(super::refuse_inside_harness(None).is_ok());
+        assert!(super::refuse_inside_harness(Some(std::ffi::OsStr::new(""))).is_ok());
+    }
+
     use super::render_termination;
     use goalcup_protocol::provenance::{
         Rfc3339Utc, TerminationFailureV1, TerminationMethodV1, TerminationOutcomeV1,

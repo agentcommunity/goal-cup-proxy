@@ -35,10 +35,10 @@ use std::process::ExitCode;
     after_help = AFTER_HELP,
     subcommand_required = true,
     arg_required_else_help = true,
-    // So the list under `Commands:` is exactly the nine sub-commands below. clap's built-in
-    // `help` sub-command would be a tenth line in it, indistinguishable to a reader — and to a
-    // test — from a sub-command this tree decided to ship. `goalcup <command> --help` is
-    // the same help by the route the other eight already take.
+    // So the list under `Commands:` is exactly the ten sub-commands below. clap's built-in
+    // `help` sub-command would be an eleventh line in it, indistinguishable to a reader — and
+    // to a test — from a sub-command this tree decided to ship. `goalcup <command> --help` is
+    // the same help by the route the other nine already take.
     disable_help_subcommand = true
 )]
 struct Args {
@@ -78,7 +78,7 @@ Without `--harness` it checks the harness you chose in `goalcup prep`; pass `--h
 check another one, or `--harness all` to check every shipped harness (one you have not \
 installed then makes this command exit 1).";
 
-/// The sub-commands: nine, and the hidden `git-credential` that a run's clone calls. `verify`
+/// The sub-commands: ten, and the hidden `git-credential` that a run's clone calls. `verify`
 /// is deliberately absent: see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
@@ -168,6 +168,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Show how much time your run has left. Your agent may run it too; goalcup never tells
+    /// the agent anything by itself.
+    ///
+    /// It reads the count the running `goalcup start` keeps from the server, and works inside
+    /// the agent's session. When that count is missing or older than five minutes, it says the
+    /// time is unknown right now and exits 1.
+    #[command(name = "time-left")]
+    TimeLeft,
     /// Start your agent again, when it stopped before the run's time was up.
     ///
     /// An agent that exits, a closed window or a restart ends one part of your run. The run
@@ -292,6 +300,12 @@ fn run(command: Command) -> Result<u8, CliError> {
         .map(|()| 0),
         Command::Continue { run } => continue_run(run).map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),
+        Command::TimeLeft => commands::time_left::time_left_with(
+            std::env::var_os(goalcup_cli::run::time_left::FILE_ENV).as_deref(),
+            goalcup_cli::run::now_unix(),
+            &mut std::io::stdout(),
+        )
+        .map(|()| 0),
         Command::Entries { json } => entries(json).map(|()| 0),
         Command::Seal { entry } => seal(entry).map(|()| 0),
         Command::Doctor { json, harness } => {
@@ -612,6 +626,9 @@ fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
 /// `<cfg>/daemon.toml` when none answers: that daemon reopens the run for status and seal. It
 /// never writes the file: with no configuration, no daemon was ever started from here.
 fn seal(entry: Option<String>) -> Result<(), CliError> {
+    commands::seal::refuse_inside_harness(
+        std::env::var_os(goalcup_cli::launch::IN_HARNESS_ENV).as_deref(),
+    )?;
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
     let client = ensure_daemon(&cfg, goalcup_cli::daemon::MissingConfig::Refuse)?;

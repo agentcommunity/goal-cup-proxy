@@ -465,12 +465,12 @@ fn doctor_json_is_one_parseable_document_on_stdout_through_the_binary() {
 
 // ------------------------------------------------------------------ the capture CLI (D48)
 //
-// The binary is the M2 capture CLI: nine commands, and the removed V1 ones refuse by name
+// The binary is the M2 capture CLI: ten commands, and the removed V1 ones refuse by name
 // instead of vanishing into a clap usage error.
 
 /// The commands `goalcup --help` lists, in the order a participant takes them, and nothing else.
 #[test]
-fn goalcup_lists_the_nine_commands_and_nothing_else() {
+fn goalcup_lists_the_ten_commands_and_nothing_else() {
     for flag in ["-h", "--help"] {
         let out = goalcup().arg(flag).output().unwrap();
         assert!(out.status.success());
@@ -485,7 +485,15 @@ fn goalcup_lists_the_nine_commands_and_nothing_else() {
         assert_eq!(
             listed,
             [
-                "login", "prep", "start", "status", "continue", "upload", "entries", "seal",
+                "login",
+                "prep",
+                "start",
+                "status",
+                "time-left",
+                "continue",
+                "upload",
+                "entries",
+                "seal",
                 "doctor"
             ],
             "`goalcup {flag}` lists the capture commands and nothing else"
@@ -497,6 +505,83 @@ fn goalcup_lists_the_nine_commands_and_nothing_else() {
     }
     let bad = goalcup().arg("verify").output().unwrap();
     assert!(!bad.status.success(), "`goalcup verify` must not exist");
+}
+
+/// `goalcup time-left` reads the file its environment names, as it would inside the harness
+/// (D66): a fresh file prints one line and exits 0; a stale or missing one says the time is
+/// unknown and exits 1. No configuration directory is needed.
+#[test]
+fn goalcup_time_left_reads_the_file_its_environment_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("time-left");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let z = goalcup_protocol::control::format_z;
+    let ask = |file: &std::path::Path| {
+        goalcup()
+            .arg("time-left")
+            .env_remove("GOALCUP_CONFIG_DIR")
+            .env("GOALCUP_TIME_LEFT_FILE", file)
+            .output()
+            .unwrap()
+    };
+    std::fs::write(
+        &file,
+        format!(
+            "seconds_left=148320\ndeadline_at=2026-11-14T00:00:00Z\nas_of={}\n",
+            z(now)
+        ),
+    )
+    .unwrap();
+    let fresh = ask(&file);
+    assert_eq!(fresh.status.code(), Some(0), "{fresh:?}");
+    let said = String::from_utf8_lossy(&fresh.stdout);
+    assert!(
+        said.starts_with("About 41 h 12 min left (the run stops at 2026-11-14 00:00 UTC)."),
+        "{said}"
+    );
+    std::fs::write(
+        &file,
+        format!("seconds_left=148320\nas_of={}\n", z(now - 301)),
+    )
+    .unwrap();
+    for out in [ask(&file), ask(&dir.path().join("missing"))] {
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert!(out.stdout.is_empty(), "{out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("unknown right now"),
+            "{out:?}"
+        );
+    }
+}
+
+/// `goalcup seal` run inside the harness (its marker set) refuses before anything else, and
+/// names another terminal; without the marker it goes on to look for the run.
+#[test]
+fn goalcup_seal_refuses_inside_the_harness() {
+    let cfg = tempfile::tempdir().unwrap();
+    let seal = |marker: Option<&str>| {
+        let mut command = goalcup();
+        command.arg("seal").env("GOALCUP_CONFIG_DIR", cfg.path());
+        match marker {
+            Some(marker) => command.env("GOALCUP_IN_HARNESS", marker),
+            None => command.env_remove("GOALCUP_IN_HARNESS"),
+        };
+        command.output().unwrap()
+    };
+    let inside = seal(Some("1"));
+    assert_eq!(inside.status.code(), Some(1), "{inside:?}");
+    assert!(
+        String::from_utf8_lossy(&inside.stderr).contains("from another terminal"),
+        "{inside:?}"
+    );
+    let outside = seal(None);
+    assert!(
+        !String::from_utf8_lossy(&outside.stderr).contains("another terminal"),
+        "{outside:?}"
+    );
 }
 
 /// `goalcup start` names its goal: the V1 path's flags are not in `--help`, and leaving

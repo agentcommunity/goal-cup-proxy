@@ -98,6 +98,10 @@ The latest possible run ends 192 hours after the window opens.
   messages. That is a detection, not a proof. An organizer reviews a message it cannot explain.
 - Goal Cup Proxy never sends anything to the agent, and never relays, edits or blocks your input: no
   reminders, no automatic "keep going", no automatic restart. `goalcup continue` is yours to run.
+- The agent may run `goalcup time-left` to ask how much time the run has left (D66). It is an answer
+  the agent asks for; the tracker never sends it anything.
+- `goalcup seal` refuses to run inside the agent's session, so the agent cannot end its own run. To end
+  a run early, run `goalcup seal` yourself from another terminal.
 - **The harness's folder-trust dialog is not a message, and answering it is allowed.** Claude Code
   asks at the start of each run whether you trust the folder. You answer it yourself, before you
   type your prompt, and again if the dialog comes back after `goalcup continue`. It covers only that

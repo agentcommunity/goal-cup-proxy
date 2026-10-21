@@ -12,7 +12,8 @@
 //! Each tick also asks the daemon how the recording is (a bounded wait: no answer is
 //! [`Recording::Unknown`], never a failure), and writes the run's `state.json` ([`Beat`]).
 //! That is where the disk's low-space warning, the upload's trouble and the recording's gaps
-//! are said; `goalcup status` reads them back.
+//! are said; `goalcup status` reads them back. It also keeps the run's time-left file, which
+//! the agent may read with `goalcup time-left` (D66).
 
 use super::pause::{AgentPause, Change};
 use super::reserve::{
@@ -46,6 +47,9 @@ pub struct Beat {
     pub keeper: StateKeeper,
     pub vitals: Vitals,
     pub ask: AskRecording,
+    /// The run's time-left file the agent may read (D66), written each tick from the count in
+    /// `state.json` and removed when the count says nothing. `None` writes none.
+    pub time_left_file: Option<std::path::PathBuf>,
 }
 
 /// Ask for the recording, waiting at most `within` (and not past `done`). The question runs on
@@ -175,10 +179,12 @@ pub fn watch_beside(watch: Watch) -> Watching {
                     disk.disk_paused = pause.as_ref().is_some_and(AgentPause::is_paused);
                     let heartbeat = beat.vitals.heartbeat_trouble();
                     let time_left = beat.vitals.time_left();
+                    let mut count = None;
                     beat.keeper.update(|state| {
                         if time_left.is_some() {
                             state.time_left = time_left;
                         }
+                        count.clone_from(&state.time_left);
                         state.recording = recording;
                         state.heartbeat = heartbeat;
                         state.upload = UploadState {
@@ -189,6 +195,18 @@ pub fn watch_beside(watch: Watch) -> Watching {
                         };
                         state.disk = disk;
                     });
+                    if let Some(file) = &beat.time_left_file
+                        && let Err(error) = super::time_left::keep_file(
+                            file,
+                            count.as_ref(),
+                            run.deadline_at.as_deref(),
+                            super::now_unix(),
+                        )
+                    {
+                        crate::host_log::log_only(&format!(
+                            "time-left: the file could not be written ({error})"
+                        ));
+                    }
                 }
                 let wake = Instant::now() + policy.tick;
                 while Instant::now() < wake && !done.load(Ordering::SeqCst) {
