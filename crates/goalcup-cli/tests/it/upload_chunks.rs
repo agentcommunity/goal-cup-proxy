@@ -880,12 +880,14 @@ mod retries {
             std::slice::from_ref(&entry),
             &|_| acknowledged,
             t0,
+            false,
             &mut |_| {},
         );
         pruner.sweep(
             std::slice::from_ref(&entry),
             &|_| acknowledged,
             t0 + Duration::from_secs(3 * 3600),
+            false,
             &mut |_| {},
         );
         goalcup_protocol::export::chain_parts(&entry.trace_dir)

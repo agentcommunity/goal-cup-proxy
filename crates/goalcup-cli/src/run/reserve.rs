@@ -179,9 +179,19 @@ pub fn verdict_with(
 }
 
 /// Whether the run's chain parts alone are past the reservation (`reserve_bytes`, the
-/// [`DiskPolicy`]'s): parts that are acknowledged may then go.
+/// [`DiskPolicy`]'s): parts that are acknowledged may then go at once. The disk itself can call
+/// for the same ([`short_of_disk`]).
 pub fn pressure(footprint: u64, reserve_bytes: u64) -> bool {
     footprint > reserve_bytes
+}
+
+/// Whether the disk is short of space, whatever the chain's own size: less than
+/// [`LOW_DISK_BYTES`] free beyond the reserve, or the reserve (`held`) drawn down to nothing.
+/// Parts the server acknowledged then go at once instead of after their safety time, so that
+/// something else filling the disk (the agent's own build) does not meet the run's uploaded
+/// copy still taking room.
+pub fn short_of_disk(held: u64, free_beyond_reserve: u64) -> bool {
+    held == 0 || free_beyond_reserve < LOW_DISK_BYTES
 }
 
 /// The bytes of one entry's chain on disk: the sum of its parts' lengths
@@ -589,6 +599,14 @@ mod tests {
         assert!(!pressure(3 * GIB, RUN_RESERVE_BYTES));
         assert_eq!(verdict(5 * GIB, 0, 50 * GIB, true), DiskVerdict::Ok);
         assert_eq!(verdict(5 * GIB, 0, 50 * GIB, false), DiskVerdict::Ok);
+    }
+
+    #[test]
+    fn the_disk_is_short_under_five_gib_beyond_the_reserve_or_with_the_reserve_gone() {
+        assert!(!short_of_disk(3 * GIB, 5 * GIB));
+        assert!(short_of_disk(3 * GIB, 5 * GIB - 1));
+        assert!(short_of_disk(0, 50 * GIB), "the reserve has nothing left");
+        assert!(!short_of_disk(1, 50 * GIB));
     }
 
     #[test]

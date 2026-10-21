@@ -2,8 +2,10 @@
 //! enough ago.
 //!
 //! A 168-hour run with many agents records more than a disk holds, so a part the server has
-//! acknowledged is deleted [`PRUNE_AFTER`] later, or at once when the parts alone are past the
-//! run's reservation ([`crate::run::reserve::pressure`]). Everything here is a judgement on
+//! acknowledged is deleted [`PRUNE_AFTER`] later, or at once under pressure: the parts alone are
+//! past the run's reservation ([`crate::run::reserve::pressure`]), or the disk is short of space
+//! whatever the chain's size, under 5 GiB free beyond the reserve or the reserve drawn down to
+//! nothing ([`crate::run::reserve::short_of_disk`]). Everything here is a judgement on
 //! names and numbers; the run's watch tick ([`crate::run::watch`]) owns the clock and does the
 //! deleting.
 //!

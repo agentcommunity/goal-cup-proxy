@@ -236,7 +236,9 @@ in the [checklist](CHEAT-CHECKLIST.md). The proxy also strips credential headers
 keeps the server's acknowledgement of each in `acks.jsonl`. Recording never waits on the network.
 The server issues the entry id, the official start and the deadline, signs a start receipt (stored
 as `receipt.json`) and signs an acknowledgement per stored chunk. Parts the server acknowledged
-may be pruned locally; the verifier then reports `chain_pruned_locally` (incomplete, verify the
+are pruned locally two hours later, or at once when the parts alone pass the 3 GiB reservation or
+the disk has under 5 GiB free beyond it (never the part being written or the one holding the last
+acknowledged record); the verifier then reports `chain_pruned_locally` (incomplete, verify the
 server copy). The deadline is 168 hours on the server's clock. At the deadline the CLI stops the
 agent and seals. Details: [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DESIGN.md).
 

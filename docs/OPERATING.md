@@ -512,8 +512,10 @@ Use a sealed, immutable trace directory for repeatable analysis. The reader open
 as it enumerates them: a part already open remains readable if it is later unlinked, but a later
 part that disappears before it is opened produces an I/O error and no usable report. The reader does
 not skip or re-enumerate missing parts. A chain whose initial parts were already pruned remains
-incomplete (`chain_pruned_locally`). Avoid analyzing a local trace while upload pruning can change
-it; retrieve a complete sealed copy when needed.
+incomplete (`chain_pruned_locally`). During a run, a part the server acknowledged is pruned two
+hours later, or at once when the run's parts pass its 3 GiB reservation or the disk has under 5 GiB
+free beyond it. Avoid analyzing a local trace while upload pruning can change it; retrieve a
+complete sealed copy when needed.
 
 ### Judging a run from the server's copy
 

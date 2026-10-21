@@ -1,7 +1,7 @@
 //! The watch tick: while a run records and while its upload wraps up, every
 //! [`super::reserve::WATCH_PERIOD`] it deletes the chain parts the server acknowledged long
-//! ago ([`Pruner`]), measures the disk, resizes the run's reserve, and stops the run cleanly if
-//! the disk is full and uploads are failing.
+//! ago, or at once when space is short ([`Pruner`]), measures the disk, resizes the run's
+//! reserve, and stops the run cleanly if the disk is full and uploads are failing.
 //!
 //! The tick runs on a thread of its own, started before the wait for the harness and ended just
 //! before the reserve is released ([`Watching::end`]). It never touches the recording; its only
@@ -16,7 +16,7 @@
 
 use super::reserve::{
     DiskPolicy, DiskVerdict, GROW_STEP, RunReserve, UPLOAD_FAILING_AFTER, human, pressure,
-    target_with, verdict_with,
+    short_of_disk, target_with, verdict_with,
 };
 use super::{DiskState, EntryRef, Recording, RunRecord, StateKeeper, UploadState, Vitals};
 use crate::upload::prune::{AckAges, deletable, parts_now};
@@ -152,6 +152,7 @@ pub fn watch_beside(watch: Watch) -> Watching {
             let mut pruner = Pruner::within(policy.reserve_bytes);
             while !done.load(Ordering::SeqCst) {
                 let failing = uploads_failing(&uploads, super::now_unix());
+                let short = disk_short(&*reserve.lock().unwrap_or_else(PoisonError::into_inner));
                 let on_disk = pruner.sweep(
                     &run.entries,
                     &|entry| {
@@ -161,6 +162,7 @@ pub fn watch_beside(watch: Watch) -> Watching {
                             .map_or(0, |(_, offset)| offset.load(Ordering::SeqCst))
                     },
                     Instant::now(),
+                    short,
                     &mut crate::host_log::say,
                 );
                 let stop_now = tick.step(
@@ -220,10 +222,25 @@ pub fn watch_beside(watch: Watch) -> Watching {
 /// The most chain parts deleted from one entry in one sweep. A daemon that reopens the entry
 /// lists its parts and opens them one by one, and lists once more when one has vanished
 /// (D55); with deletions a whole tick apart, a second miss cannot happen.
+///
+/// One a tick is fast enough even when the disk is short: a part closes at 256 MiB or 30
+/// minutes ([`goalcup_protocol::export::PART_MAX_BYTES`]), so a recording of 1 GB an hour makes
+/// about four parts an hour, and one part every [`super::reserve::WATCH_PERIOD`] (30 s) deletes
+/// up to 120 an hour, about 30 GiB, from each entry. What holds parts back is the server's
+/// acknowledgement, not this pace.
 const PARTS_PER_SWEEP: usize = 1;
 
+/// Whether the disk under `disk` is short of space ([`short_of_disk`]): acknowledged parts then
+/// go at once. A disk that cannot be read is not short: the parts keep their safety time, and
+/// the tick says the trouble.
+pub fn disk_short(disk: &dyn Disk) -> bool {
+    disk.free()
+        .is_ok_and(|free| short_of_disk(disk.held(), free))
+}
+
 /// Deletes the chain parts the server acknowledged [`crate::upload::prune::PRUNE_AFTER`] ago,
-/// or at once while the parts alone are past the reservation.
+/// or at once while the parts alone are past the reservation or the disk is short
+/// ([`disk_short`]).
 pub struct Pruner {
     ages: AckAges,
     /// A part could not be deleted, and the participant has been told so.
@@ -252,13 +269,14 @@ impl Pruner {
     /// One sweep over `entries`: delete what [`deletable`] allows (at most
     /// [`PARTS_PER_SWEEP`] parts of each entry, oldest first, stopping at the first failure so
     /// that the parts left are always a contiguous suffix) and answer the chain bytes still on
-    /// disk. `acked` gives an entry's acknowledged offset. A failed delete is said once and
-    /// never stops the run.
+    /// disk. `acked` gives an entry's acknowledged offset; `disk_short` ([`disk_short`]) lets
+    /// acknowledged parts go at once. A failed delete is said once and never stops the run.
     pub fn sweep(
         &mut self,
         entries: &[EntryRef],
         acked: &dyn Fn(&str) -> u64,
         now: Instant,
+        disk_short: bool,
         say: &mut dyn FnMut(&str),
     ) -> u64 {
         let listed: Vec<_> = entries
@@ -270,7 +288,7 @@ impl Pruner {
             .flat_map(|(_, parts)| parts.iter().flatten())
             .map(|part| part.len)
             .sum();
-        let under_pressure = pressure(total, self.reserve_bytes);
+        let under_pressure = disk_short || pressure(total, self.reserve_bytes);
         let mut left = total;
         let mut freed = 0u64;
         for (entry, parts) in &listed {
@@ -696,7 +714,7 @@ mod tests {
         let acked = |_: &str| 45;
         let mut said = Vec::new();
         let mut sweep = |pruner: &mut Pruner, at: Instant| {
-            pruner.sweep(std::slice::from_ref(&entry), &acked, at, &mut |l| {
+            pruner.sweep(std::slice::from_ref(&entry), &acked, at, false, &mut |l| {
                 said.push(l.to_string())
             })
         };
@@ -731,7 +749,7 @@ mod tests {
         };
         let (mut pruner, t0) = (Pruner::default(), Instant::now());
         let sweep = |pruner: &mut Pruner, entry: &EntryRef, at: Instant| {
-            pruner.sweep(std::slice::from_ref(entry), &|_| 25, at, &mut |_| {})
+            pruner.sweep(std::slice::from_ref(entry), &|_| 25, at, false, &mut |_| {})
         };
         sweep(&mut pruner, &entry, t0);
         // One tick where the directory cannot be listed must not restart the two hours.
@@ -747,12 +765,16 @@ mod tests {
         let (mut pruner, t0) = (Pruner::default(), Instant::now());
         let mut said = Vec::new();
         let due = t0 + crate::upload::prune::PRUNE_AFTER;
-        pruner.sweep(std::slice::from_ref(&entry), &|_| 25, t0, &mut |l| {
+        pruner.sweep(std::slice::from_ref(&entry), &|_| 25, t0, false, &mut |l| {
             said.push(l.to_string())
         });
-        pruner.sweep(std::slice::from_ref(&entry), &|_| 25, due, &mut |l| {
-            said.push(l.to_string())
-        });
+        pruner.sweep(
+            std::slice::from_ref(&entry),
+            &|_| 25,
+            due,
+            false,
+            &mut |l| said.push(l.to_string()),
+        );
         assert_eq!(said.len(), 1, "{said:?}");
         assert!(said[0].contains("uploaded over two hours ago"), "{said:?}");
     }
@@ -764,7 +786,13 @@ mod tests {
         let mut pruner = Pruner::default();
         let far = Instant::now() + Duration::from_secs(100 * 3600);
         for _ in 0..3 {
-            let left = pruner.sweep(std::slice::from_ref(&entry), &|_| 0, far, &mut |_| {});
+            let left = pruner.sweep(
+                std::slice::from_ref(&entry),
+                &|_| 0,
+                far,
+                false,
+                &mut |_| {},
+            );
             assert_eq!(left, 40);
         }
         assert_eq!(part_starts(dir.path()), [0, 10, 20, 30]);
@@ -794,6 +822,7 @@ mod tests {
             std::slice::from_ref(&entry),
             &|_| 3 * big,
             Instant::now(),
+            false,
             &mut |l| said.push(l.to_string()),
         );
         assert_eq!(
@@ -803,6 +832,113 @@ mod tests {
         );
         assert_eq!(part_starts(dir.path()), [big, 2 * big]);
         assert!(said.iter().any(|l| l.contains("to make room")), "{said:?}");
+    }
+
+    /// A 100 GiB volume with `free` bytes free beyond a reserve that holds `reserve`.
+    fn volume_with(free: u64, reserve: u64) -> Volume {
+        Volume {
+            capacity: 100 * GIB,
+            others: 100 * GIB - free - reserve,
+            reserve,
+            resizes: Vec::new(),
+            leak: 0,
+        }
+    }
+
+    /// One sweep of `entry` with `acked` bytes acknowledged, judging the disk by `volume`.
+    fn sweep_on(pruner: &mut Pruner, entry: &EntryRef, acked: u64, at: Instant, volume: &Volume) {
+        pruner.sweep(
+            std::slice::from_ref(entry),
+            &|_| acked,
+            at,
+            disk_short(volume),
+            &mut |_| {},
+        );
+    }
+
+    #[test]
+    fn a_disk_short_of_space_deletes_acknowledged_parts_before_two_hours() {
+        // 50 bytes of chain, far under the 3 GiB reservation: only the disk calls for the room.
+        let dir = tempfile::tempdir().unwrap();
+        let entry = entry_with_parts(dir.path(), 5, 10);
+        let (mut pruner, t0) = (Pruner::default(), Instant::now());
+        let tick = Duration::from_secs(30);
+        // 4 GiB free beyond a whole reserve: the parts acknowledged a moment ago go, one a tick.
+        let low = volume_with(4 * GIB, 3 * GIB);
+        sweep_on(&mut pruner, &entry, 45, t0, &low);
+        assert_eq!(part_starts(dir.path()), [10, 20, 30, 40]);
+        sweep_on(&mut pruner, &entry, 45, t0 + tick, &low);
+        assert_eq!(part_starts(dir.path()), [20, 30, 40]);
+        // Space came back, but the reserve was drawn down to nothing: still short.
+        let drawn = volume_with(50 * GIB, 0);
+        sweep_on(&mut pruner, &entry, 45, t0 + 2 * tick, &drawn);
+        assert_eq!(part_starts(dir.path()), [30, 40]);
+    }
+
+    #[test]
+    fn a_comfortable_disk_keeps_acknowledged_parts_for_two_hours() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = entry_with_parts(dir.path(), 5, 10);
+        let (mut pruner, t0) = (Pruner::default(), Instant::now());
+        let roomy = volume_with(5 * GIB, 3 * GIB);
+        let due = t0 + crate::upload::prune::PRUNE_AFTER;
+        for at in [
+            t0,
+            t0 + Duration::from_secs(3600),
+            due - Duration::from_secs(1),
+        ] {
+            sweep_on(&mut pruner, &entry, 45, at, &roomy);
+            assert_eq!(part_starts(dir.path()), [0, 10, 20, 30, 40]);
+        }
+        sweep_on(&mut pruner, &entry, 45, due, &roomy);
+        assert_eq!(part_starts(dir.path()), [10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn a_short_disk_never_takes_the_live_part_or_the_last_acknowledged_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = entry_with_parts(dir.path(), 5, 10);
+        let (mut pruner, t0) = (Pruner::default(), Instant::now());
+        let full = volume_with(0, 0);
+        // The server holds bytes 0..30: the last acknowledged record ends part 20..30.
+        for i in 0..6 {
+            sweep_on(
+                &mut pruner,
+                &entry,
+                30,
+                t0 + Duration::from_secs(30 * i),
+                &full,
+            );
+        }
+        assert_eq!(part_starts(dir.path()), [20, 30, 40]);
+        // The server holds everything: only the live part, which also holds that record, stays.
+        for i in 6..12 {
+            sweep_on(
+                &mut pruner,
+                &entry,
+                50,
+                t0 + Duration::from_secs(30 * i),
+                &full,
+            );
+        }
+        assert_eq!(part_starts(dir.path()), [40]);
+    }
+
+    #[test]
+    fn a_disk_that_cannot_be_read_is_not_short() {
+        struct Unreadable;
+        impl Disk for Unreadable {
+            fn held(&self) -> u64 {
+                0
+            }
+            fn free(&self) -> io::Result<u64> {
+                Err(io::ErrorKind::PermissionDenied.into())
+            }
+            fn resize(&mut self, _: u64) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        assert!(!disk_short(&Unreadable));
     }
 
     /// The pressure is the run's own reservation's: a smaller one (a test build's) deletes the
@@ -816,6 +952,7 @@ mod tests {
                 std::slice::from_ref(&entry),
                 &|_| 35,
                 Instant::now(),
+                false,
                 &mut |_| {},
             )
         };
@@ -847,7 +984,7 @@ mod tests {
         let due = t0 + crate::upload::prune::PRUNE_AFTER;
         // The first sweep starts the clocks; the later ones find the first part due and fail.
         for at in [t0, due, due, due] {
-            let left = pruner.sweep(std::slice::from_ref(&entry), &|_| 25, at, &mut |l| {
+            let left = pruner.sweep(std::slice::from_ref(&entry), &|_| 25, at, false, &mut |l| {
                 said.push(l.to_string())
             });
             assert_eq!(left, 30, "nothing was deleted, so nothing is subtracted");
@@ -858,9 +995,13 @@ mod tests {
         assert_eq!(part_starts(dir.path()), [0, 10, 20]);
         // Once the directory allows it, the same part goes at the next tick, and the trouble
         // is forgotten.
-        pruner.sweep(std::slice::from_ref(&entry), &|_| 25, due, &mut |l| {
-            said.push(l.to_string())
-        });
+        pruner.sweep(
+            std::slice::from_ref(&entry),
+            &|_| 25,
+            due,
+            false,
+            &mut |l| said.push(l.to_string()),
+        );
         assert_eq!(part_starts(dir.path()), [10, 20]);
     }
 
