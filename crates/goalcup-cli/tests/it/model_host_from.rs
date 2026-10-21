@@ -46,9 +46,16 @@ fn home(rig: &Rig, id: &str) -> std::path::PathBuf {
     rig.cfg.join(CAPTURE_HOMES_DIR).join(id)
 }
 
+/// Held by each [`headless_run`] for the whole run. The recording proxy's address table is one
+/// per process and maps each stand-in name to one upstream, so under plain `cargo test` (every
+/// test a thread of one process) a second run pointed the first run's names at its own
+/// upstream, whose certificate the first run's harness does not trust.
+static ADDRESS_TABLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// One headless run of the fake that reads its model host from `https://<MODEL_HOST>/v1`, with
 /// `steps` as what the harness does. The upstream answers for both stand-in names.
 fn headless_run(steps: impl FnOnce(&Upstream) -> String) -> (Rig, String, Vec<CaptureRecord>) {
+    let _table = ADDRESS_TABLE.lock().unwrap_or_else(|e| e.into_inner());
     let rig = Rig::new();
     let from = reads_model_host(&rig, FAKE_ID);
     support::write_model_host_config(
