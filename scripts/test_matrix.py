@@ -360,7 +360,7 @@ class MatrixTests(unittest.TestCase):
         self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ stub-harness_9\.9\.9 PASS \d{4}-\d\d-\d\d$")
         self.assertEqual(w.seen("start.argv"), "start\n--harness\nstubchat\n--test")
         # The exact entry of this run, sealed no earlier than the duration after the Enter.
-        self.assertEqual(w.seen("seal.argv"), "seal\ne0123456789abcdef")
+        self.assertEqual(w.seen("seal.argv"), "seal\n--yes\ne0123456789abcdef")
         waited = float(w.seen("seal.at")) - float(w.seen("start.submitted_at"))
         self.assertGreaterEqual(waited, DURATION)
         self.assertLess(waited, DURATION + 20)
@@ -389,7 +389,7 @@ class MatrixTests(unittest.TestCase):
         # A headless goal file keeps the prompt file's lines.
         self.assertEqual(w.seen("start.goal"), MULTILINE.strip() + "\n")
         # Sealed when the harness ended, long before the 30 s duration.
-        self.assertEqual(w.seen("seal.argv"), "seal\ne0123456789abcdef")
+        self.assertEqual(w.seen("seal.argv"), "seal\n--yes\ne0123456789abcdef")
         self.assertLess(float(w.seen("seal.at")) - w.started, 25)
         # start did not upload the seal, so the script ran `goalcup upload` for the same entry.
         self.assertEqual(w.seen("upload.argv"), "upload\ne0123456789abcdef")
@@ -409,7 +409,7 @@ class MatrixTests(unittest.TestCase):
         w = self.worlds["test_timeout"]
         self.assertNotEqual(w.run.returncode, 0)
         self.assertIn("did not finish within 6s", w.run.stderr)
-        self.assertEqual(w.seen("seal.argv"), "seal\ne0123456789abcdef")
+        self.assertEqual(w.seen("seal.argv"), "seal\n--yes\ne0123456789abcdef")
         self.assertIn("sealing it now", w.log)
 
     def test_a_prompt_file_with_a_control_character_is_refused(self) -> None:

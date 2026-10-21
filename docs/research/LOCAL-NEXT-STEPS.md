@@ -27,17 +27,20 @@ and the [local campaign](LOCAL-CAMPAIGN.md).
       `capture_crash_campaign::a_standalone_seal_that_commits_first_keeps_the_proxys_loss`,
       `launcher_sweep::the_launcher_sweeps_an_orphan_forked_after_the_root_died_before_the_seal`.
 - [ ] macOS: the new `machine::process_usage` code was only type-checked. Run its test on the Mac.
-- [ ] `npm --prefix server/worker test` (239). One run in five failed once under load in the cloud.
+- [ ] `npm --prefix server/worker test` (245). One run in five failed once under load in the cloud.
+- [ ] `capture_lifecycle::a_seal_whose_registry_write_was_lost_is_committed_without_a_second_terminal`
+      failed once in the cloud fast gate under load and passed 3 of 3 alone: watch it for flakiness.
 
 ## 3. Database migrations (website repo), staging first
 
-Four files in `server/worker/sql/pending/`, in this order. Apply **before** deploying the Worker
+Five files in `server/worker/sql/pending/`, in this order. Apply **before** deploying the Worker
 that needs them, or chunk uploads (size limit) and vitals heartbeats answer 502 until they land.
 
 - [ ] `20261021100000_goal_cup_tracer_test_runs_parallel.sql` (test runs no longer replace)
 - [ ] `20261021110000_goal_cup_tracer_run_size_limit.sql` (stored bytes, 64 GiB cap)
 - [ ] `20261021120000_goal_cup_tracer_vitals_disk_notice.sql` (vitals, `disk_full` email)
 - [ ] `20261021130000_goal_cup_tracer_final_push.sql` (judged push before the deadline)
+- [ ] `20261021140000_goal_cup_tracer_notice_text.sql` (silence, disk and ended email wording)
 - [ ] Copy each into the website repo `supabase/migrations/`, apply to staging, then regenerate the
       mirror with the command in its header and check it matches.
 - [ ] Production: same files, applied by the lead agent, approved by the owner, before the 26 Oct
@@ -112,6 +115,13 @@ that needs them, or chunk uploads (size limit) and vitals heartbeats answer 502 
       (versions, platforms, pass lines met or missed). Send only aggregates to a cloud agent.
 
 ## Open owner decisions
+
+- Prep's filesystem check fails on overlayfs and btrfs, but the run itself never refused them (only
+  the 3 GiB reservation decides). Warn instead of fail? Test one sandbox with `goalcup doctor` and a
+  practice run first.
+- Mid-run `/model` switch: the guide accepts it, RULES says only "keep going". Allow or forbid?
+- Finish ideas in [HOW-A-RUN-ENDS](HOW-A-RUN-ENDS.md): judged-commit email, freezing the judged
+  commit, hours-worked fact. Before 4 Nov or after?
 
 - `GOALCUP.md` in the final version: required, or optional?
 - Hermes and Amp time-left reach: measure a skills folder, or tell participants to mention
