@@ -80,6 +80,13 @@ impl Vertical {
     /// A daemon, an endpoint and a connector whose workload runs `mode`, with `extra` merged
     /// into its configuration.
     pub fn new(mode: &str, extra: Value) -> Vertical {
+        Vertical::new_logging_to(mode, extra, None)
+    }
+
+    /// [`Vertical::new`] with every child's output kept in `logs` instead of under the world's
+    /// root: the T25 disk-full rows put the root on a volume they fill, and a log on that volume
+    /// would fail together with the recording it is meant to explain.
+    pub fn new_logging_to(mode: &str, extra: Value, logs: Option<PathBuf>) -> Vertical {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         let dir = |name: &str| {
@@ -87,13 +94,15 @@ impl Vertical {
             std::fs::create_dir_all(&path).unwrap();
             path
         };
-        let (cfg, connectors, artifacts, out, logs) = (
-            dir("cfg"),
-            dir("connectors"),
-            dir("artifacts"),
-            dir("out"),
-            dir("logs"),
-        );
+        let (cfg, connectors, artifacts, out) =
+            (dir("cfg"), dir("connectors"), dir("artifacts"), dir("out"));
+        let logs = match logs {
+            Some(logs) => {
+                std::fs::create_dir_all(&logs).unwrap();
+                logs
+            }
+            None => dir("logs"),
+        };
         let (workspaces, home) = (dir("workspaces"), dir("home"));
         let goal = dir("runs").join("goal.txt");
         std::fs::write(&goal, GOAL).unwrap();
@@ -177,7 +186,7 @@ impl Vertical {
     }
 
     /// `goalcup` with only this world's directories in its environment.
-    fn goalcup(&self) -> Command {
+    pub fn goalcup(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_goalcup"));
         command
             .env_clear()
