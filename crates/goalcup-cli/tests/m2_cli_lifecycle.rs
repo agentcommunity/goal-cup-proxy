@@ -320,6 +320,16 @@ fn a_run_holds_one_reserve_file_and_releases_it_at_the_end() {
             .map(|part| part.len)
             .sum();
         let record = goalcup_cli::run::read(&rig.cfg, &entry_id);
+        // The seal waits for the launch: one that comes first refuses the start.
+        support::wait_for("the launch", || {
+            (client.count("record_capture_launch") == 1
+                && http.status(&entry_id).is_ok_and(|s| {
+                    s.payload
+                        .capture
+                        .is_some_and(|c| c.run == RunState::Running)
+                }))
+            .then_some(())
+        });
         // Ending the run through the daemon ends the harness.
         let mut sealed = Vec::new();
         goalcup_cli::commands::seal::seal_with(
