@@ -70,11 +70,26 @@ minute per address; each matrix run does a login and a start). Restarted 90 s ap
 `goalcup status` showed disk, memory and CPU in every cell asked. Docker adds a PROBLEM line "no
 sleep inhibitor on this machine".
 
-### Long cells (started about 18:35, 120-minute practice runs)
+### Long cells (18:21 to 20:31, 120-minute staging practice runs)
 
-Running overnight; results are added here as they end: lx-hermes (network cut 10 min, pause
-20 min), mac-hermes (subagents), mac-amp (subagents), lx-amp (network cut), mac-codex (subagents,
-no git), mac-disk (D65 disk pause and resume).
+Every run reached its deadline, sealed and uploaded. Every matrix row says FAIL for one kit reason:
+after about 30 minutes acknowledged chain parts are pruned locally (by design) and `matrix.sh`
+requires `chain.jsonl` ([plan v3](2026-10-22-fix-plan-v3.md) L1). The server copies were rebuilt
+with `scripts/fetch-run.sh` and verified instead.
+
+| Cell | Workload, drills | Server copy (records / bytes) | Integrity | Notes |
+|---|---|---|---|---|
+| lx-hermes | build task; network cut 10 min, pause 20 min | 2,650 / 73.5 MB | valid, 0 gaps | heartbeat failures 1-2 during the cut, 0 after; run state survived the pause; agent idle after ~7 min |
+| mac-hermes | subagents | 2,751 / 55.9 MB | valid, 0 gaps | 2 delegate_task children, on the wire, unattributed |
+| mac-amp | subagents | 11,740 / 9.9 MB | valid, 0 gaps | subagents on the parent thread with parentToolUseId; subagents used claude-opus-5-5 in mode low |
+| lx-amp | build task; network cut 10 min | 21,115 / 20.9 MB | valid, 0 gaps | prompt received (welcome fixed); ACK covered the pre-cut tail 9.4 min after the cut |
+| mac-codex | subagents, no git | 14,720 / 16.4 MB | valid, 0 gaps | 2 subagent rollouts, attributed; no approval stall without git |
+| mac-disk | build task; D65 disk drill | 2,176 / 52.1 MB | valid, 0 gaps | **D65 PASS**: paused below 1 GiB within 35 s, resumed above 3 GiB within 24 s, a pause held through the deadline and the run still sealed |
+
+Local tail part equals the server copy's tail in all six. Daemon and CLI memory and open files flat
+in every cell. Uploads go on a 30-minute timer by design, so "ACK lag under 2 minutes" is not a
+usable pass line (plan v3 L2). Agents finished in 5 to 7 minutes and idled: Hermes stops at
+`agent.max_turns` (default 90); the workloads are too short for long cells (plan v3 L4).
 
 ## Fixes made today
 
@@ -110,6 +125,14 @@ In priority order. Evidence is aggregates; raw traces stay on the owner's Mac.
    `crates/goalcup-daemon/src/terminate/authority.rs` (~394-406). Plan v2 K10.
 5. **Kit**: campaign starts must be spaced (HTTP 429); `campaign.py login` settles only when prep
    exits 0 (prep exits 1 while any step is todo); Amp's version line holds a relative age.
+   (All three fixed on `fix/v2-kit`.)
+6. **Long runs** ([plan v3](2026-10-22-fix-plan-v3.md)): the matrix must verify a pruned run's
+   server copy (L1), the drill pass line must match the 30-minute upload timer (L2), `goalcup
+   status` must stop saying "up to date" while records wait (L3), long cells need a long workload
+   (L4), and the research report must attribute subagents (L5: Amp parent ids, Codex native
+   message types and `spawn_agent`, Hermes children).
+7. **Amp cost**: Task subagents ran `claude-opus-5-5` while the thread's mode was `low`. Worth a
+   line in the Amp participant notes and in the cheapest-settings rule.
 6. Still to run when the owner is back: the token, then test-run cells with drills via
    `campaign.py`, full-flow cells on the gc-test repositories (judged commit), Claude Code after K5
    and K8, lx-codex after K6.
