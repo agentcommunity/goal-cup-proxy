@@ -83,6 +83,10 @@ push, notice wording). Apply it **before** deploying the Worker that needs it.
 
 - [ ] Claude Code on Linux: where the login file lands (the Docker login logs the names).
 - [ ] Codex: does the installed version accept effort `minimal` for Luna?
+- [ ] Amp subagents: one practice run whose prompt makes Amp use a subagent (for example "use a
+      Task subagent to count the files in this repository"). Check that the subagent's messages appear
+      in the decoded record (`goalcup-verify --research-json`). Today this is unmeasured
+      ([AMP-FOLLOWER](AMP-FOLLOWER.md)).
 - [ ] Hermes and Amp: is there a skills folder they load? Until measured, only Codex and Claude Code
       get the goal-cup skill (and its `goalcup time-left` line).
 - [ ] Inside each harness: the agent runs `goalcup time-left` (answers from the server's count), and
