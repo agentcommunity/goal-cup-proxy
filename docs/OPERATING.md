@@ -449,14 +449,18 @@ works while a daemon holds the lock. It never prints the bearer.
 
 ```
 goalcup start --harness <id> [--practice | --test]   # opens the harness in chat mode in this terminal
-goalcup status | entries | seal | continue | upload <entry>
+goalcup status | upload | seal [<part-id>]           # default: the newest run started here
+goalcup continue [<run-id>]
+goalcup entries | time-left
 goalcup-verify --capture-integrity <trace-dir>       # the line `start` printed
 ```
 
 Every flag is in `goalcup <command> --help`. Run the `verify:` line `start` printed, not one typed from
 memory. `goalcup doctor` checks, per connector, that the files are the pinned ones and finds the harness
-executable on `PATH` (hashed, never started). Any build passes. `goalcup doctor --harness <id>` scopes the
-report and the exit code to one connector; without it, any shipped connector that fails makes the exit 1.
+executable on `PATH` (hashed, never started). Any build passes. Without `--harness` it checks the harness
+`goalcup prep` settled (every shipped connector before `prep` has run). `goalcup doctor --harness <id>` scopes
+the report and the exit code to one connector; with `--harness all`, any shipped connector that fails makes
+the exit 1.
 
 Before anything is created, `goalcup start` makes one TCP connect to port 443 of each provider host the
 connector intercepts, all within 10 s. A host that does not answer refuses the run and names the host and
