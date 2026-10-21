@@ -916,6 +916,13 @@ pub fn problem_disk(free: &str) -> String {
     format!("only {free} of disk is free. Free some space.")
 }
 
+/// The agent is paused because the disk is nearly full (D65), on the terminal and in `goalcup
+/// status`. The words are the owner's.
+pub fn problem_disk_paused() -> &'static str {
+    "The disk is almost full, so your agent is paused. Free some disk space; it resumes by \
+     itself. If your agent seems stuck afterwards, type keep going."
+}
+
 pub fn problem_sleep(why: &str) -> String {
     format!("this computer may go to sleep ({why}). Keep it on mains power with the lid open.")
 }

@@ -469,18 +469,18 @@ pub fn give_back_pending(server_url: &str, cfg: &Path) {
 }
 
 /// Wait for the harness to exit, and when `stop` says the run must stop first (its deadline, or
-/// a full disk), call `on_stop` with the reason while the wait goes on. `on_stop` asks the daemon
+/// a newer run), call `on_stop` with the reason while the wait goes on. `on_stop` asks the daemon
 /// to seal, which ends the harness (the daemon is the only terminator, D22), and so ends this
 /// wait. `stop` is the run's one stop channel: whoever has a reason to end the run sends it there.
 ///
 /// With `on_stopped` (a chat-mode harness, D57) a harness that stops itself is continued at once
 /// and the wait goes on (`goalcup_platform::terminal::wait_resuming`); `on_stopped` hears the
-/// signal that stopped it. The child is then reaped by that wait, not by `child`.
+/// signal that stopped it and answers whether to continue it (not a disk pause, D65). The child is then reaped by that wait, not by `child`.
 pub fn wait_stopping<F: FnOnce(&str) + Send>(
     child: &mut std::process::Child,
     stop: std::sync::mpsc::Receiver<String>,
     on_stop: F,
-    on_stopped: Option<&mut dyn FnMut(i32)>,
+    on_stopped: Option<&mut dyn FnMut(i32) -> bool>,
 ) -> std::io::Result<std::process::ExitStatus> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::RecvTimeoutError;

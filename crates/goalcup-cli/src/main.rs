@@ -357,7 +357,8 @@ fn disk_policy() -> Result<goalcup_cli::run::reserve::DiskPolicy, CliError> {
 }
 
 /// A test build's disk sizes: `reserve_bytes,start_margin_bytes,tick_ms`, then optionally
-/// `free_floor_bytes` and, after it, `chain_quota_bytes`.
+/// `free_floor_bytes`, after it `chain_quota_bytes`, and after that
+/// `pause_below_bytes,resume_above_bytes` (without them the agent is never paused, D65).
 #[cfg(feature = "test-support")]
 const TEST_DISK_POLICY: &str = "GOALCUP_TEST_DISK";
 

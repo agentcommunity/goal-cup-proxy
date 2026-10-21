@@ -62,7 +62,8 @@ setup, project build and gate Cargo commands run with `--offline`.
 - **Never set a model base URL on any harness.** The only wire path is the loopback recording
   proxy, reached through the harness's process-scoped `HTTPS_PROXY` (D1, D36).
 - **The tracer records and never manages the agent.** No prompting, no auto "keep going", no
-  finish tool. The participant types the prompt and may type only "keep going".
+  finish tool. The participant types the prompt and may type only "keep going". The one
+  exception is D65: on a nearly full disk the tracer freezes the agent and resumes it by itself.
 - **No harness names in core code.** A harness is data (a connector) plus shared modules.
 - **Never write into `~/.claude`, `~/.codex`, `~/.hermes` or any app-wide config.** The tracer
   makes isolated homes. A test that launches a harness uses a private `HOME`.

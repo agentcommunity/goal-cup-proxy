@@ -363,28 +363,45 @@ fn a_run_holds_one_reserve_file_and_releases_it_at_the_end() {
     assert!(reserve_files(&rig).is_empty(), "{:?}", reserve_files(&rig));
 }
 
+/// D65: a full disk never ends the run. The disk always reads as full (a floor above any free
+/// space) and a local run uploads nothing, which once stopped it; now the watch only resizes the
+/// reserve and warns, and the run ends when it is sealed.
 #[test]
-fn a_full_disk_with_no_upload_ends_the_run_through_the_one_stop_channel() {
+fn a_full_disk_with_no_upload_never_ends_the_run() {
+    use goalcup_cli::run::{HarnessState, read_state, run_dir};
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = rig.options(&goal, RESERVE);
-    // The disk always reads as full: a floor above any free space. A local run uploads nothing,
-    // so its uploads count as failing, and the watch stops the run as the deadline would.
     opts.disk.free_floor = u64::MAX / 2;
-    let (result, out) = std::thread::scope(|s| joined(rig.start(s, &client, opts, None)));
+    let (started, during) = std::thread::scope(|s| {
+        let start = rig.start(s, &client, opts, None);
+        rig.wait_for("sleeper");
+        let entry_id = client.created().entry_id;
+        // Twenty ticks of a full disk.
+        std::thread::sleep(Duration::from_secs(1));
+        let during = read_state(&run_dir(&rig.cfg, &entry_id));
+        goalcup_cli::commands::seal::seal_with(
+            &http,
+            &rig.connectors,
+            &rig.cfg,
+            &entry_id,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        (joined(start), during)
+    });
+    let (result, out) = started;
     result.unwrap_or_else(|e| panic!("{e}\n{out}"));
-    assert!(
-        out.contains("stopped: the disk is nearly full and uploads are failing"),
-        "{out}"
-    );
-    assert!(out.contains("finished locally"), "{out}");
+    let during = during.expect("the run's state while it records");
+    assert_eq!(during.harness, HarnessState::Running, "{out}");
+    assert_eq!(during.stopped, None, "{out}");
+    assert!(!out.contains("disk is nearly full"), "{out}");
     let entry_id = client.created().entry_id;
     let (report, _) = rig.read_trace(&entry_id);
     assert!(report.sealed, "{:?}", report.findings);
-    assert!(reserve_files(&rig).is_empty());
 }
 
 /// The run's `state.json` follows the run: the launch writes it, the tick fills in how the

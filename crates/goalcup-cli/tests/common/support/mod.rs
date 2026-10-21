@@ -354,6 +354,9 @@ pub fn disk_of(quota: u64) -> goalcup_cli::run::reserve::DiskPolicy {
         free_floor: goalcup_cli::run::reserve::FREE_FLOOR,
         chain_quota: quota,
         tick: std::time::Duration::from_millis(50),
+        // A test never pauses its harness for the machine's own disk.
+        pause_below: 0,
+        resume_above: 0,
     }
 }
 

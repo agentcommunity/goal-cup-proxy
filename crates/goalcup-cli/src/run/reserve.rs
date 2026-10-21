@@ -5,8 +5,8 @@
 //! at 3 GiB ([`target`]), so the reserve gives space back as the chain grows and takes it again
 //! when parts are removed; a run may grow past 3 GiB while the disk has room. The reserve also
 //! gives space back when something else fills the disk (the agent's own build), before the
-//! recording suffers. A run stops cleanly only when the disk itself is nearly full, the reserve
-//! has nothing left to give back, and uploads are failing ([`verdict`]).
+//! recording suffers. A full disk never stops a run: below [`PAUSE_BELOW`] free beyond the
+//! reservation the agent is paused until space returns ([`super::pause`], D65).
 //!
 //! The file sits at `<artifact_root>/reserve/<run_id>`, on the same volume as the traces.
 
@@ -28,6 +28,12 @@ pub const LOW_DISK_BYTES: u64 = 5 << 30;
 
 /// The free space the reserve gives back to keep: below it the disk is full for this purpose.
 pub const FREE_FLOOR: u64 = 256 << 20;
+
+/// Below this much free disk beyond the reservation the agent is paused (D65).
+pub const PAUSE_BELOW: u64 = 1 << 30;
+
+/// Above this much free disk beyond the reservation a paused agent resumes (D65).
+pub const RESUME_ABOVE: u64 = 3 << 30;
 
 /// Uploads are failing when none was acknowledged for this long.
 pub const UPLOAD_FAILING_AFTER: Duration = Duration::from_secs(30 * 60);
@@ -57,6 +63,11 @@ pub struct DiskPolicy {
     pub chain_quota: u64,
     /// How often the watch ticks ([`WATCH_PERIOD`]).
     pub tick: Duration,
+    /// Free bytes beyond the reservation below which the agent is paused ([`PAUSE_BELOW`]);
+    /// 0 never pauses it.
+    pub pause_below: u64,
+    /// Free bytes beyond the reservation above which a paused agent resumes ([`RESUME_ABOVE`]).
+    pub resume_above: u64,
 }
 
 impl Default for DiskPolicy {
@@ -67,14 +78,17 @@ impl Default for DiskPolicy {
             free_floor: FREE_FLOOR,
             chain_quota: CHAIN_QUOTA_BYTES,
             tick: WATCH_PERIOD,
+            pause_below: PAUSE_BELOW,
+            resume_above: RESUME_ABOVE,
         }
     }
 }
 
 impl DiskPolicy {
     /// A test build's sizes from `spec`: `reserve_bytes,start_margin_bytes,tick_ms`, and
-    /// optionally `free_floor_bytes` and then `chain_quota_bytes` after them. A shipped build
-    /// has no such door.
+    /// optionally `free_floor_bytes`, then `chain_quota_bytes`, then
+    /// `pause_below_bytes,resume_above_bytes`. Without the last two a test build never pauses
+    /// the agent. A shipped build has no such door.
     #[cfg(feature = "test-support")]
     pub fn from_test_spec(spec: &str) -> Option<DiskPolicy> {
         let n: Vec<u64> = spec
@@ -84,7 +98,12 @@ impl DiskPolicy {
         let (reserve_bytes, start_margin, tick_ms, free_floor, chain_quota) = match n[..] {
             [a, b, c] => (a, b, c, FREE_FLOOR, CHAIN_QUOTA_BYTES),
             [a, b, c, d] => (a, b, c, d, CHAIN_QUOTA_BYTES),
-            [a, b, c, d, e] => (a, b, c, d, e),
+            [a, b, c, d, e, ..] => (a, b, c, d, e),
+            _ => return None,
+        };
+        let (pause_below, resume_above) = match n[..] {
+            [_, _, _, _, _, f, g] => (f, g),
+            [_, _, _] | [_, _, _, _] | [_, _, _, _, _] => (0, 0),
             _ => return None,
         };
         Some(DiskPolicy {
@@ -93,6 +112,8 @@ impl DiskPolicy {
             free_floor,
             chain_quota,
             tick: Duration::from_millis(tick_ms),
+            pause_below,
+            resume_above,
         })
     }
 }
@@ -124,7 +145,7 @@ pub fn target_with(policy: &DiskPolicy, footprint: u64, free: u64, reserve: u64)
     )
 }
 
-/// What the watch makes of the disk.
+/// What the watch makes of the disk. There is no stop: a full disk never ends a run (D65).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiskVerdict {
     Ok,
@@ -132,44 +153,12 @@ pub enum DiskVerdict {
     Low {
         free: u64,
     },
-    /// The disk is full, nothing is left to give back, and uploads are failing: stop cleanly.
-    Stop,
 }
 
-/// The verdict on one reading.
-///
-/// `held` is what the reserve holds and `free_beyond_reserve` what the volume has beyond it,
-/// both read after the reserve was resized to [`target`]. `Stop` needs all three: the reserve
-/// drawn down to nothing (`held == 0`), the free space below [`FREE_FLOOR`], and uploads
-/// failing. Free space just under the floor while the reserve still holds bytes is a reserve
-/// that has more to give back, not a full disk. The footprint alone never stops a run: it may
-/// grow past 3 GiB while the disk has room, which is why it does not enter the verdict.
-pub fn verdict(
-    footprint: u64,
-    held: u64,
-    free_beyond_reserve: u64,
-    uploads_failing: bool,
-) -> DiskVerdict {
-    verdict_with(
-        &DiskPolicy::default(),
-        footprint,
-        held,
-        free_beyond_reserve,
-        uploads_failing,
-    )
-}
-
-/// [`verdict`] at the floor of `policy`.
-pub fn verdict_with(
-    policy: &DiskPolicy,
-    _footprint: u64,
-    held: u64,
-    free_beyond_reserve: u64,
-    uploads_failing: bool,
-) -> DiskVerdict {
-    if held == 0 && free_beyond_reserve < policy.free_floor && uploads_failing {
-        DiskVerdict::Stop
-    } else if free_beyond_reserve < LOW_DISK_BYTES {
+/// The verdict on one reading of `free_beyond_reserve`, read after the reserve was resized to
+/// [`target`].
+pub fn verdict(free_beyond_reserve: u64) -> DiskVerdict {
+    if free_beyond_reserve < LOW_DISK_BYTES {
         DiskVerdict::Low {
             free: free_beyond_reserve,
         }
@@ -597,8 +586,7 @@ mod tests {
         assert_eq!(target(5 * GIB, 50 * GIB, 0), 0);
         assert!(pressure(5 * GIB, RUN_RESERVE_BYTES));
         assert!(!pressure(3 * GIB, RUN_RESERVE_BYTES));
-        assert_eq!(verdict(5 * GIB, 0, 50 * GIB, true), DiskVerdict::Ok);
-        assert_eq!(verdict(5 * GIB, 0, 50 * GIB, false), DiskVerdict::Ok);
+        assert_eq!(verdict(50 * GIB), DiskVerdict::Ok);
     }
 
     #[test]
@@ -610,19 +598,15 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_filling_the_disk_draws_down_the_reserve_before_any_stop() {
+    fn the_agent_filling_the_disk_draws_down_the_reserve() {
         // 100 MiB free, 2 GiB reserved: the reserve gives back all but the floor.
         let held = target(0, 100 * MIB, 2 * GIB);
         assert_eq!(held, 2 * GIB + 100 * MIB - FREE_FLOOR);
         assert!(held < 2 * GIB);
-        // After it did, the disk has the floor free: low, but not a stop, even with the
-        // uploads failing.
+        // After it did, the disk has the floor free: low.
         let freed = 100 * MIB + (2 * GIB - held);
         assert_eq!(freed, FREE_FLOOR);
-        assert_eq!(
-            verdict(0, held, freed, true),
-            DiskVerdict::Low { free: FREE_FLOOR }
-        );
+        assert_eq!(verdict(freed), DiskVerdict::Low { free: FREE_FLOOR });
     }
 
     #[test]
@@ -632,42 +616,17 @@ mod tests {
     }
 
     #[test]
-    fn a_full_disk_with_failing_uploads_stops() {
-        assert_eq!(verdict(GIB, 0, 100 * MIB, true), DiskVerdict::Stop);
-        assert_eq!(verdict(0, 0, 0, true), DiskVerdict::Stop);
-    }
-
-    #[test]
-    fn a_reserve_that_still_holds_bytes_is_never_a_full_disk() {
-        // Free space just under the floor with the reserve holding GiB: it has more to give.
-        assert_eq!(
-            verdict(0, 2 * GIB, FREE_FLOOR - 4096, true),
-            DiskVerdict::Low {
-                free: FREE_FLOOR - 4096
-            }
-        );
-        assert_eq!(
-            verdict(0, 1, 0, true),
-            DiskVerdict::Low { free: 0 },
-            "even one byte held"
-        );
-    }
-
-    #[test]
-    fn a_full_disk_with_working_uploads_does_not_stop() {
-        assert_eq!(
-            verdict(GIB, 0, 100 * MIB, false),
-            DiskVerdict::Low { free: 100 * MIB }
-        );
+    fn a_full_disk_is_low_and_never_a_stop() {
+        // D65: no reading stops a run, not even a full disk with the reserve drawn down to
+        // nothing; the agent is paused instead (`super::super::pause`).
+        assert_eq!(verdict(0), DiskVerdict::Low { free: 0 });
+        assert_eq!(verdict(100 * MIB), DiskVerdict::Low { free: 100 * MIB });
     }
 
     #[test]
     fn low_below_five_gib_beyond_the_reservation() {
-        assert_eq!(verdict(0, 0, 5 * GIB, true), DiskVerdict::Ok);
-        assert_eq!(
-            verdict(0, 0, 5 * GIB - 1, true),
-            DiskVerdict::Low { free: 5 * GIB - 1 }
-        );
+        assert_eq!(verdict(5 * GIB), DiskVerdict::Ok);
+        assert_eq!(verdict(5 * GIB - 1), DiskVerdict::Low { free: 5 * GIB - 1 });
     }
 
     #[test]
@@ -705,6 +664,8 @@ mod tests {
             free_floor: FREE_FLOOR,
             chain_quota: CHAIN_QUOTA_BYTES,
             tick: Duration::from_millis(50),
+            pause_below: 0,
+            resume_above: 0,
         };
         let refused = RunReserve::take(&path, &policy).unwrap_err();
         assert_eq!(refused.exit_code(), 1);
@@ -722,6 +683,8 @@ mod tests {
             free_floor: FREE_FLOOR,
             chain_quota: CHAIN_QUOTA_BYTES,
             tick: Duration::from_millis(50),
+            pause_below: 0,
+            resume_above: 0,
         };
         let mut reserve = RunReserve::take(&path, &policy).unwrap();
         assert!(reserve.allocated() >= 8 * MIB);
@@ -760,6 +723,8 @@ mod tests {
             free_floor: FREE_FLOOR,
             chain_quota: CHAIN_QUOTA_BYTES,
             tick: Duration::from_millis(50),
+            pause_below: 0,
+            resume_above: 0,
         }
     }
 

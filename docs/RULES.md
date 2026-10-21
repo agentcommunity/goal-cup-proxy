@@ -237,6 +237,8 @@ disclosure and no-side-channel rules.
   while nothing happened is an outage.
 - **A full disk is a red flag.** When the disk fills, the record shows a `StorageFull` gap. It means
   something was off. Judges decide each such gap case by case.
+- **A nearly full disk pauses the agent.** Under 1 GiB free beyond the run's reservation the tracker
+  freezes the agent, so nothing happens unrecorded, and resumes it by itself above 3 GiB (D65).
 - The server is authoritative for the start window, the official start, the deadline and the stop.
   Without a network at the deadline, the tracker stops the run once the run's length has passed on the
   machine's own clock.

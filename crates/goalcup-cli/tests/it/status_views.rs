@@ -845,6 +845,7 @@ fn status_puts_every_problem_first() {
         free_bytes: 3 << 30,
         reserve_bytes: 1 << 30,
         low: true,
+        disk_paused: false,
     };
     state.harness = HarnessState::Exited {
         status: "exit code 1".to_string(),

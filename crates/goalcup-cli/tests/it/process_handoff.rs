@@ -94,6 +94,9 @@ fn this_crate_never_terminates_anything() {
     // The `start.rs` exemption stays ONE file: a second file that signals a launched harness
     // would have to be exempted here as well, by name.
     //
+    // `run/pause.rs` (D65) is not exempt and needs no exemption: it freezes and continues the
+    // harness on a nearly full disk (`SIGSTOP`, `SIGCONT`) and ends nothing.
+    //
     // A NEW file that signals is still caught, which is the whole point of the sweep.
     //
     // The sweep asserts what it walked before it asserts anything about the contents:

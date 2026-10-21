@@ -183,6 +183,19 @@ pub fn log_only(line: &str) {
     }
 }
 
+/// [`say`] on the terminal even while the host is quiet: for the one line a participant must see
+/// while a chat-mode harness owns the terminal, said when the harness is frozen and draws nothing
+/// (the agent paused on a nearly full disk, D65). A terminal that is gone is not an error.
+pub fn say_loud(line: &str) {
+    let line = format!("goalcup: {line}");
+    let mut sink = sink();
+    if let Some(log) = sink.log.as_mut() {
+        let _ = writeln!(log, "{line}");
+    }
+    // On a line of its own after whatever the harness drew, which may be in raw mode.
+    let _ = write!(std::io::stderr(), "\r\n{line}\r\n");
+}
+
 /// [`say`] for a line that already names who says it.
 pub fn say_raw(line: &str) {
     let mut sink = sink();

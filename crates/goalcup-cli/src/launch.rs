@@ -1081,7 +1081,7 @@ pub fn prep_launch(
             None
         }
     };
-    let waited = goalcup_platform::terminal::wait_resuming(spawned.child.id(), &mut |_| {});
+    let waited = goalcup_platform::terminal::wait_resuming(spawned.child.id(), &mut |_| true);
     drop(shield);
     if let Some(modes) = modes {
         let _ = modes.restore();

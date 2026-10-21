@@ -361,7 +361,7 @@ reports `seal_write_failed`, and the status is `Failed`, never `Sealed`.
   `proxy.stop()` and ends at `drain_end - NATIVE_FINISH_MIN` (1 s more than the reserve before
   `D`). With less time left it is skipped. The native scope it reads rides on the seal request
   (¶9). Standalone `goalcup seal` takes `D` after its status read and sends no scope.
-  A run stopped while its harness still runs (its deadline, the server's stop, a full disk, a
+  A run stopped while its harness still runs (its deadline, the server's stop, a
   replacement) takes `D` at the stop instead, with the harness not exited. Its open connections (a
   streaming answer, a kept-alive WebSocket) do not end while it runs: that finish's
   `proxy.stop_within` waits 2 s (`RUNNING_HARNESS_PROXY_DRAIN`) at most, then cuts them. When the

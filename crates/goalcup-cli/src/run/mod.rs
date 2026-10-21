@@ -6,8 +6,10 @@
 //! A run opened on a server uses the server's run id; a local run uses its entry id.
 //!
 //! [`reserve`] holds the run's one disk reservation and the rules for resizing it, [`watch`] is
-//! the 30-second tick that applies them.
+//! the 30-second tick that applies them, and [`pause`] pauses the agent while the disk is nearly
+//! full (D65).
 
+pub mod pause;
 pub mod reserve;
 pub mod time_left;
 pub mod watch;
@@ -197,6 +199,10 @@ pub struct DiskState {
     pub reserve_bytes: u64,
     /// Less than the warning level is free beyond the reservation.
     pub low: bool,
+    /// The agent is paused because the disk is nearly full (D65). Absent from a `state.json` an
+    /// older build wrote, which never paused it.
+    #[serde(default)]
+    pub disk_paused: bool,
 }
 
 /// What a run is doing now, kept at `<run_dir>/state.json`. The watch tick writes it, and the
@@ -411,7 +417,11 @@ impl RunState {
                 why,
             ));
         }
-        if self.disk.low && !self.ended {
+        // A paused agent's line says what to do about the disk, so the low-space line is not
+        // said beside it.
+        if self.disk.disk_paused && !self.ended {
+            lines.push(participant::problem_disk_paused().to_string());
+        } else if self.disk.low && !self.ended {
             lines.push(participant::problem_disk(&reserve::human(
                 self.disk.free_bytes,
             )));
@@ -1059,6 +1069,28 @@ mod tests {
         assert!(lines[0].contains("run: goalcup upload"), "{lines:?}");
     }
 
+    /// D65: a paused agent is one problem line, in the owner's words, instead of the low-disk
+    /// line, and it goes once the agent resumes. A state an older build wrote reads as not paused.
+    #[test]
+    fn a_paused_agent_is_a_problem_until_it_resumes() {
+        let now = 1_000_000;
+        let who = who();
+        let mut state = RunState::launched("e1", Ok(()));
+        state.updated_at = now;
+        state.disk.low = true;
+        state.disk.disk_paused = true;
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert_eq!(lines, [participant::problem_disk_paused()]);
+        state.disk.disk_paused = false;
+        state.disk.free_bytes = 4 << 30;
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("4 GiB"), "{lines:?}");
+        let old: DiskState =
+            serde_json::from_str(r#"{"free_bytes":1,"reserve_bytes":2,"low":true}"#).unwrap();
+        assert!(!old.disk_paused);
+    }
+
     /// Each problem line ends with what to do, and says nothing a participant cannot act on.
     #[test]
     fn every_problem_line_carries_its_fix() {
@@ -1075,6 +1107,7 @@ mod tests {
             free_bytes: 3 << 30,
             reserve_bytes: 0,
             low: true,
+            disk_paused: false,
         };
         let lines = state.problems(now, Advice::Continue, &who);
         let said = lines.join("\n");

@@ -2333,9 +2333,14 @@ fn run_harness<'a>(
         None => vitals,
     };
 
-    // The run's one stop channel: the uploader's deadline or heartbeat stop and the watch's disk
-    // stop both send on it, and the wait for the harness receives from it.
+    // The run's one stop channel: the uploader's deadline or heartbeat stop sends on it, and the
+    // wait for the harness receives from it. A full disk never stops the run (D65).
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<String>();
+    // The agent's pause on a nearly full disk (D65): the watch tick pauses and resumes it, and
+    // what is frozen is continued before the harness is ended, once it has exited, and on every
+    // way out of this function.
+    let pause = crate::run::pause::AgentPause::of_harness(&handed);
+    let _continue_on_exit = pause.end_on_drop();
     let uploading = forked.upload.take().and_then(|start| {
         let server = start.server?;
         let spool = forked.cfg.join(crate::upload::UPLOADS_DIR_NAME);
@@ -2346,7 +2351,7 @@ fn run_harness<'a>(
             start.policy,
             spool,
             start.local_deadline,
-            stop_tx.clone(),
+            stop_tx,
             vitals.clone(),
         ) {
             Ok(running) => Some(running),
@@ -2373,7 +2378,6 @@ fn run_harness<'a>(
         crate::run::watch::watch_beside(crate::run::watch::Watch {
             reserve,
             run: forked.record.clone(),
-            stop: stop_tx,
             // Every entry this process uploads: this segment's, and the earlier segments being
             // closed beside it, each with its own acknowledged offset.
             uploads: uploading
@@ -2401,17 +2405,23 @@ fn run_harness<'a>(
                     Arc::new(move || ask_recording(&cfg, &entry_id, &key))
                 },
             }),
+            pause: Some(pause.clone()),
         })
     });
     // A chat-mode harness that suspends itself is continued at once: suspension is not supported
-    // during a run, and a stopped harness would hold the participant's terminal frozen.
+    // during a run, and a stopped harness would hold the participant's terminal frozen. The one
+    // stop that is kept is goalcup's own pause on a nearly full disk (D65).
     let mut continued = |signal: i32| {
+        if pause.is_paused() {
+            return false;
+        }
         crate::host_log::say(&format!(
             "the harness stopped itself (signal {signal}); a run cannot be suspended, so it \
              was continued at once"
         ));
+        true
     };
-    let on_stopped: Option<&mut dyn FnMut(i32)> = if forked.chat.is_some() {
+    let on_stopped: Option<&mut dyn FnMut(i32) -> bool> = if forked.chat.is_some() {
         Some(&mut continued)
     } else {
         None
@@ -2420,6 +2430,9 @@ fn run_harness<'a>(
         &mut child,
         stop_rx,
         |reason| {
+            // A paused agent is continued before the seal ends it (a stopped process does not
+            // act on SIGTERM), and is never paused again (D65).
+            pause.end();
             let Some(proxied) = proxy_slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
                 return;
             };
@@ -2428,10 +2441,11 @@ fn run_harness<'a>(
             // The one bound of the wrap-up, for the seal below and the upload's finish later.
             let wrap_up = wrap_spec.begin();
             *stopped_wrap.lock().unwrap_or_else(|e| e.into_inner()) = Some(wrap_up);
-            keeper.update(|state| state.stopped = Some(reason.to_string()));
-            let label = if reason == crate::run::watch::DISK_STOP_REASON
-                || reason == crate::upload::uploader::REPLACED_REASON
-            {
+            keeper.update(|state| {
+                state.stopped = Some(reason.to_string());
+                state.disk.disk_paused = false;
+            });
+            let label = if reason == crate::upload::uploader::REPLACED_REASON {
                 "stopped"
             } else {
                 "deadline"
@@ -2467,6 +2481,8 @@ fn run_harness<'a>(
         source,
     });
     forked.proxied = proxy_slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    // What the harness left frozen is continued before the sweep below signals it (D65).
+    pause.end();
     // The harness has exited: the terminal is this command's again, if it is still there.
     if let Some(chat) = forked.chat.as_mut() {
         chat.harness_exited();
@@ -2479,6 +2495,7 @@ fn run_harness<'a>(
         &crate::participant::details_heading(forked.chat.as_ref().map(|chat| chat.quiet.path())),
     );
     keeper.update(|state| {
+        state.disk.disk_paused = false;
         state.harness = crate::run::HarnessState::Exited {
             status: match &status {
                 Ok(status) => describe_exit(status),

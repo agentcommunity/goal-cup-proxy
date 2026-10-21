@@ -625,3 +625,37 @@ agent, and the disk watch still stops it on a nearly full disk with the run left
 This supersedes the earlier behaviour, which no decision recorded: a heartbeat answered `401` or
 `410` stopped the run ("the server closed this run"), and a `401`, `404` or `410` to any upload
 call ended the run's upload for good. A server that must end a run says `stop` in a `200` answer.
+
+*Superseded in part by D65: the disk watch no longer stops a run; it pauses the agent.*
+
+## D65. On a nearly full disk the tracer pauses the agent and resumes it by itself.
+
+21 Oct 2026, owner ruling (event readiness plan, WP-C): when the disk is about to fill, the tracer
+pauses the agent so that nothing happens unrecorded, and resumes it by itself when space returns.
+This is the one exception to the hard rule "the tracer records and never manages the agent"
+(`AGENTS.md`).
+
+- **Freeze, not prompt.** The watch tick (every 30 s) sends `SIGSTOP` to the harness when less
+  than 1 GiB is free beyond the run's reservation, and `SIGCONT` once more than 3 GiB is free
+  again. Nothing is typed to the agent, nothing is killed, and the participant does nothing but
+  free space. The terminal says once: "The disk is almost full, so your agent is paused. Free
+  some disk space; it resumes by itself. If your agent seems stuck afterwards, type keep going."
+  `goalcup status` keeps it as a `PROBLEM:` line, and the run's `state.json` has
+  `disk.disk_paused`, until the agent resumes.
+- **Best effort.** The processes paused are the ones the termination code reaches: the root the
+  tracer spawned and its descendants in a `ps` walk (twice, so a child forked during the first
+  pass is caught), and the harness's own process group when it has one. A process that left the
+  tree (detached, daemonized, or reparented to `goalcup start` by the Linux subreaper) may escape
+  and keep running.
+- **Never paused at the end.** Before anything ends the harness (the deadline, a newer run
+  replacing it, the harness's exit, the end of `goalcup start`) the agent is continued and never
+  paused again, because a stopped process does not act on the termination signal. A chat-mode
+  harness stopped by this pause is not continued by the host's wait, which still continues a
+  harness that suspends itself.
+- **The disk stop verdict is removed.** A run no longer stops when the reserve is drawn down, the
+  disk is below the floor and nothing was acknowledged for 30 minutes. A run never stops for the
+  disk; the pause and, if the disk still fills, the `StorageFull` gap are the record. This
+  supersedes the disk-stop clause of D64.
+- **Not covered.** A `goalcup seal` typed in another terminal while the agent is paused reaches
+  the daemon, not the host's pause: the agent gets the termination signal frozen and is ended at
+  the end of its grace. The host continues what is left once the root has exited.
