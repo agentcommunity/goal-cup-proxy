@@ -629,7 +629,6 @@ More than 128 distinct codes end with `findings_omitted:<n>`.
 | `receipt_clock_invalid` | 2 | `started_at` or `deadline_at` is not a time, or the start is after the deadline. |
 | `receipt_entry_mismatch` | 2 | The receipt is for another entry. |
 | `receipt_chain_head_unbound` | 2 | The receipt's `chain_head` is not a link of this chain. (Not raised on a chain pruned locally.) |
-| `signed_terminal_receipt_missing` | 1 | The chain ends with a signed finalization, but no `receipt.json` was kept. |
 | `cutoff_receipt_mismatch` | 2 | The cutoff record names another receipt than the one kept. |
 | `cutoff_deadline_mismatch` | 2 | The cutoff record names another `deadline_at` than the receipt. This binds the stop to the 168-hour deadline. |
 | `ack_too_large`, `ack_torn_tail`, `ack_malformed` | 2 | A line of `acks.jsonl` is too long, has no newline, or does not parse. |

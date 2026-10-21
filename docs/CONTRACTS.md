@@ -266,7 +266,7 @@ leaves its mark.
   `record_malformed`. The `Launch` check judges the validated prefix, so a trace that breaks before
   its `Launch` also lists `launch_missing`.
 - Reader facts a consumer may rely on: `verified_ack`, `receipt_clock`, `last_ack_at` and `terminal`
-  (`LocalFinish` or `SignedFinalization`). A missing receipt or ACK is never invented.
+  (`LocalFinish`; the signed finalization was removed on 21 Oct, D54). A missing receipt or ACK is never invented.
   `records_after_deadline` and `last_seq_at_or_before_deadline` use the participant's machine clock: a
   hint, not proof. Schema 3 adds `entry_id`, `profile_id` and `first_failure` (`{seq, code}`).
   A complete local trace may exit 0 with anchor `LocalOnly` and delivery `LocalOnly`; that asserts

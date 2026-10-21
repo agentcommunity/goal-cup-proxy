@@ -168,7 +168,7 @@ launched and handed nothing off is abandoned after `UNLAUNCHED_LIMIT` (15 minute
 | Concept | What it is |
 |---|---|
 | Chain | `chain.jsonl`: append-only, hash-linked, byte-canonical v5 envelopes, one writer per entry ([writer.rs](../crates/goalcup-daemon/src/runtime/capture/writer.rs)). Long runs rotate into chain files `chain.<start>.jsonl` at 256 MiB or 30 minutes (D55) |
-| Envelope bodies | `Baseline`, `Seal`, `CutoffReachedV1`, `FinalizationV1`, `Capture` |
+| Envelope bodies | `Baseline`, `Seal`, `Capture` (the cutoff and signed-finalization bodies were removed on 21 Oct; a line carrying one is `record_malformed`, D54) |
 | Capture records | `Open`, `Segment` (redacted, base64), `End`, `Gap`, `Connection`, `Recovery`, `ProducerClosed`, `Launch`, `Assistance`, `LocalFinish` ([capture.rs](../crates/goalcup-protocol/src/capture.rs)) |
 | Gap | A chained statement of loss with a `GapReason`. A trace with a gap is incomplete, never clean |
 | Loss | A stream-zero proxy frame for traffic relayed but not captured. Chained as a stream-less gap |
