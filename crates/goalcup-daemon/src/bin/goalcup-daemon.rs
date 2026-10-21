@@ -62,8 +62,8 @@ const IDLE_GRACE: Duration = Duration::from_secs(30);
 /// asked. It runs in the foreground under whatever started it and configures itself from
 /// one file.
 ///
-/// README.md's "Running the daemon" carries an example of that file, the exit codes, and
-/// what `--print-addresses` answers.
+/// docs/OPERATING.md's "Running the daemon" carries an example of that file, the exit codes,
+/// and what `--print-addresses` answers.
 #[derive(Parser, Debug)]
 #[command(
     name = "goalcup-daemon",
