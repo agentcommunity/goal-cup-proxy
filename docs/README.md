@@ -25,9 +25,10 @@ You run the event, the server and the test runs.
 - [scripts README](../scripts/README.md): one line per script, and which ones CI and the gate run.
 - [Notifications](research/NOTIFICATIONS.md): every message a participant can get, and who sends it.
 - [How a run ends](research/HOW-A-RUN-ENDS.md): the plain-English plan for the end of a run.
-- [Event readiness plan](superpowers/plans/2026-10-20-event-readiness.md): invariants and work packages from 20 Oct to 6 Nov.
+- [Event readiness plan](plans/2026-10-20-event-readiness.md): invariants and work packages from 20 Oct to 6 Nov.
 - [Local next steps](research/LOCAL-NEXT-STEPS.md): what to do on real machines next, in order.
-- [Local campaign](research/LOCAL-CAMPAIGN.md): how long test cells and drills run on the owner's machines.
+- [Local campaign](research/LOCAL-CAMPAIGN.md): how long test cells and drills run on a maintainer's test machines.
+- [campaign-cell agent](../.claude/agents/campaign-cell.md): a public Claude Code subagent that watches one running campaign cell and reports back. It only reads.
 
 ## Harness builder
 
@@ -72,5 +73,5 @@ You read traces and judge what they show.
 Kept for references. Do not plan from these.
 
 - [TODO archive, October 2026](archive/TODO-2026-10.md): finished work packages WP0 to WP12, the 18 to 19 Oct runs, Review 13.
-- [Shared manual-seal plan](superpowers/plans/2026-10-18-shared-manual-seal.md): the 18 Oct plan for seal-time termination.
-- [Research readiness plan](superpowers/plans/2026-10-19-research-readiness.md): the 19 Oct plan for research phases 1 and 2.
+- [Shared manual-seal plan](plans/2026-10-18-shared-manual-seal.md): the 18 Oct plan for seal-time termination.
+- [Research readiness plan](plans/2026-10-19-research-readiness.md): the 19 Oct plan for research phases 1 and 2.

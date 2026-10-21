@@ -1,11 +1,12 @@
-//! The operating-system layer of the tracker. It holds the configuration-directory policy
+//! The operating-system layer of Goal Cup Proxy. It holds the configuration-directory policy
 //! below, a sleep inhibitor, free-disk checks, machine facts, process-image and terminal
 //! helpers, and the handle-rooted file access modules (`sourcecap`, `tracecap`).
 //!
-//! The native capability layers (`sourcecap` and `tracecap`) are implemented for Unix only. Windows is not yet supported; it is planned (D42).
+//! The native capability layers (`sourcecap` and `tracecap`) are implemented for Unix only.
+//! Windows is not yet supported natively; it runs under WSL2, and native Windows is planned (D42).
 //! A non-Unix build fails at compile time below rather than shipping a silently unsupported
-//! binary, and the workspace carries no non-Unix stub code. Linux is best-effort until it is
-//! tested.
+//! binary, and the workspace carries no non-Unix stub code. macOS and Linux are both supported;
+//! what has been measured on each is in the platform table of README.md.
 
 #[cfg(not(unix))]
 compile_error!(

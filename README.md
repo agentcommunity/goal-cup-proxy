@@ -31,7 +31,8 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    For one particular release, add `-s -- --version <x.y.z>` after `sh`.
 2. **Log in** once per computer: `goalcup login`. Check the code in the browser and approve.
 3. **Prep**: `goalcup prep --harness <id>`, then `goalcup prep --repo https://github.com/<owner>/<repo>`.
-   Run `goalcup prep` until all six steps say `[ok]`. Prep opens the harness once in its own
+   Run `goalcup prep` until steps 1 to 5 say `[ok]`; step 6 turns `[ok]` after your practice run
+   (next step). Prep opens the harness once in its own
    isolated home: sign in there, and set it so it never stops to ask you for approval. Your
    repository must be new, empty and public, with a fine-grained token for it.
 4. **Practice**: `goalcup start --harness <id> --practice`. It lasts about ten minutes, never
@@ -50,16 +51,17 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
   anything to the agent: no reminders, no "keep going", no restarts.
 - If the agent stops early (a crash, a reboot, a closed window), run `goalcup continue`. Nobody
   restarts it for you.
-- No server error stops a run. Recording goes on, and uploads are retried with backoff (D64).
+- No server error stops a run. Recording goes on, and uploads are retried, with longer waits
+  between tries.
 - If the disk is nearly full (under 1 GiB free beyond the run's reservation), the agent is paused
-  until space returns, then resumes by itself (D65). Free space outside your run's folders.
+  until space returns, then resumes by itself. Free space outside your run's folders.
 - Keep the machine on mains power, awake and online, and keep the terminal open.
 
 **The end.** At the deadline Goal Cup Proxy stops the agent, seals the record and uploads the
 rest. You do nothing. What is judged is the last push to your repository's default branch that
 GitHub received before the deadline, by GitHub's timestamp. Your agent must push its own work;
 Goal Cup Proxy never pushes. Then hand in your demo video and questionnaire on the event site
-within 24 hours. More: [How a run ends](docs/research/HOW-A-RUN-ENDS.md).
+within 24 hours. More: [the deadline, and after it](docs/PARTICIPANT-GUIDE.md#9-the-deadline-and-after-it).
 
 ## Commands
 
@@ -188,7 +190,8 @@ export PATH="$PWD/target/release:$PATH"
 
 A binary copied out of `target/release` needs `GOALCUP_CONNECTORS_DIR="<checkout>/connectors"`.
 
-**Try a local run without an account.** Use a fresh config, so nothing is uploaded:
+**Try a local run without an account.** The harness must already be installed on this machine
+(`goalcup doctor --harness claude-code-cli` checks). Use a fresh config, so nothing is uploaded:
 
 ```sh
 export GOALCUP_CONFIG_DIR="$(mktemp -d "$HOME/goalcup-local.XXXXXX")"
@@ -215,9 +218,13 @@ sh scripts/gate.sh full                # before a release
 - **full:** fast, plus the slow tier, the CLI's ignored end-to-end tests, the Worker's tests
   (Node 22.18+ and `npm ci` in `server/worker`), the scripts' unit tests and the link check. Run
   it before every tag.
-- **Run the gate as a normal user, not root.** Some permission tests always fail as root.
+- **Run the gate as a normal user, not root.** Some permission tests always fail as root, so the
+  gate stops at once when run as root. Set `GOALCUP_GATE_ALLOW_ROOT=1` to run it anyway, for
+  example in a throwaway container, and expect those tests to fail.
 - On Linux the gate also needs `nc`, procps `ps`, `*.localhost` on loopback and `TMPDIR` on ext4
-  or XFS. CI (`check`) is a small Linux smoke, not the gate. More: [OPERATING](docs/OPERATING.md#building-and-verifying).
+  or XFS. If `/tmp` is tmpfs or btrfs and your home is ext4 or XFS, run this first:
+  `export TMPDIR="$HOME/.cache/goalcup-tmp"; mkdir -p "$TMPDIR"`. CI (`check`) is a small Linux
+  smoke, not the gate. More: [OPERATING](docs/OPERATING.md#building-and-verifying).
 
 **The dependency rule.** The daemon never links the verifier, and the CLI never links the daemon.
 Tests check both. Other hard rules (never a base URL, no harness names in core code, pins

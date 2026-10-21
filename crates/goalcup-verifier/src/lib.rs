@@ -1,4 +1,5 @@
-//! The open-source verifier. Runs identically on the server and offline.
+//! The open-source verifier. It runs offline on any sealed trace. The server is meant to run
+//! the same code, but its verify job is not built yet.
 //!
 //! Redaction is never applied here: the daemon redacts at capture and ships a log;
 //! this crate reads the redacted bytes and never rewrites them.

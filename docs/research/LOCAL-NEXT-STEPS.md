@@ -3,7 +3,7 @@
 What the owner and the local agent do on their own machines, in order, to take branch
 `smart/zen-gates-d9tmbh` from "built and unit tested in a cloud container" to "measured and
 released". Nothing here ran against real Docker, staging, GitHub or a real harness yet. Record every
-result as you go (step 9). Background: the [readiness plan](../superpowers/plans/2026-10-20-event-readiness.md)
+result as you go (step 9). Background: the [readiness plan](../plans/2026-10-20-event-readiness.md)
 and the [local campaign](LOCAL-CAMPAIGN.md).
 
 ## 1. Review and merge
@@ -121,12 +121,17 @@ push, notice wording). Apply it **before** deploying the Worker that needs it.
   the 3 GiB reservation decides). Warn instead of fail? Test one sandbox with `goalcup doctor` and a
   practice run first.
 - Mid-run `/model` switch: the guide accepts it, RULES says only "keep going". Allow or forbid?
+- Remote machines: RULES says remote servers are not eligible, but the guide gives SSH advice and
+  a provided cloud sandbox is planned. Is a machine or VM you control, running `goalcup` on it,
+  eligible? ([B5](PARTICIPANT-REVIEW-2026-10-21.md))
+- Dry runs: RULES opens a dry-run window, but no doc says what a dry run is (a practice run, or a
+  full-length run that does not count?). Define it. ([B9](PARTICIPANT-REVIEW-2026-10-21.md))
 - Finish ideas in [HOW-A-RUN-ENDS](HOW-A-RUN-ENDS.md): judged-commit email, freezing the judged
   commit, hours-worked fact. Before 4 Nov or after?
 
 - `GOALCUP.md` in the final version: required, or optional?
-- Hermes and Amp time-left reach: measure a skills folder, or tell participants to mention
-  `goalcup time-left` in their prompt?
+- Hermes and Amp time-left reach: the guide now tells their users to mention `goalcup time-left`
+  in their prompt. Also measure a skills folder for them, or leave it at that?
 - Who reviews `StorageFull` gaps (RULES says judges never see raw traces)?
 - Known limits to accept or fix: a `goalcup seal` typed elsewhere while the agent is paused for disk
   ends it with a hard kill; a `continue` refused with 410 still marks the run over.

@@ -67,7 +67,7 @@ EFFORTS = ("low", "minimal")  # what linux-matrix.sh accepts (LINUX_MATRIX_CODEX
 DRILL_KINDS = ("network_cut", "pause", "note")
 WHERE = ("docker", "host")
 
-# Pass lines (docs/superpowers/plans/2026-10-20-event-readiness.md, WP-F and section 5).
+# Pass lines (docs/plans/2026-10-20-event-readiness.md, WP-F and section 5).
 RSS_SLOPE_MIB_PER_H = 1.0
 FD_SLOPE_PER_H = 1.0
 WARMUP_S = 3600

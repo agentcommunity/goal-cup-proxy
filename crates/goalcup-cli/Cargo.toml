@@ -1,8 +1,11 @@
 [package]
 name = "goalcup-cli"
+description = "The goalcup command: launches the harness, runs the recording proxy and uploads the run."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 rust-version.workspace = true
 publish = false
 

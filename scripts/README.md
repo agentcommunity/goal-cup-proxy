@@ -48,8 +48,9 @@ details and the options.
 ## Tests of the scripts
 
 Every `test_*.py` file is a unit test of one script, with stubs and no network. The full gate runs
-all of them (`python3 -m unittest discover -s scripts`). CI also runs three of them on every pull
-request: `test_ci_scope.py`, `test_check_links.py` and `test_check_connector.py`.
+all of them (`python3 -m unittest discover -s scripts`). CI also runs four of them on every pull
+request: `test_ci_scope.py`, `test_check_links.py`, `test_check_connector.py` and
+`test_codeowners.py`.
 
 | Test | Tests |
 |---|---|
@@ -58,6 +59,7 @@ request: `test_ci_scope.py`, `test_check_links.py` and `test_check_connector.py`
 | `test_check_links.py` | `check-links.py` (also CI) |
 | `test_check_version.py` | `check-version.py` |
 | `test_ci_scope.py` | `ci-scope.py` (also CI) |
+| `test_codeowners.py` | Every path in `.github/CODEOWNERS` exists (also CI) |
 | `test_early_crosscheck.py` | The E02 cross-check in `spikes/m2-first-release/e02/` (F-16) |
 | `test_fetch_run.py` | `fetch-run.sh` |
 | `test_gate.py` | `gate.sh` |

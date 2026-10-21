@@ -1,8 +1,11 @@
 [package]
 name = "goalcup-verifier"
+description = "The goalcup-verify offline checker and the research decoders for sealed Goal Cup Proxy traces."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 rust-version.workspace = true
 publish = false
 

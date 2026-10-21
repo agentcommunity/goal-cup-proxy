@@ -26,7 +26,7 @@ Update this table in the same PR as any entry it lists.
 | D25 | partly superseded | D66 (the agent may ask for the time left) |
 | D26, D30, D36, D37 | current | |
 | D38 | partly superseded | D52 (the cheapest-model clause) |
-| D39 | partly superseded | D57 (chat mode; the headless launch clause is being removed) |
+| D39 | partly superseded | D57 (chat mode; the headless launch clause is removed) |
 | D40 | partly superseded | D61 (the Hermes clause), D56 (the 180 s budget) |
 | D41 | partly superseded | D43 (CA rule), D52 (model clause), D61 (seed and key scan) |
 | D42 | current | |
@@ -85,7 +85,8 @@ sees the run's evidence. `config.rs` checks this twice: on the spelled paths and
 ## D7. Start flow.
 
 Superseded by D37 and D57. `goalcup start` creates the empty workspace and launches the harness
-fresh. The participant types the first prompt in chat mode; a headless harness takes `--goal-file`.
+fresh. The participant types the first prompt in chat mode. The headless launch and its
+`--goal-file` flag are removed.
 
 ## D9. Gap policy.
 

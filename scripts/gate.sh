@@ -29,6 +29,15 @@ fast | full) ;;
     ;;
 esac
 
+# Some permission tests always fail as root (a root process can open a file mode 000 forbids), so
+# say so at once rather than after the long steps. GOALCUP_GATE_ALLOW_ROOT=1 runs it anyway.
+if [ "$(id -u)" = 0 ] && [ "${GOALCUP_GATE_ALLOW_ROOT:-}" != 1 ]; then
+    echo "gate.sh: do not run the gate as root; some permission tests always fail as root." >&2
+    echo "Run it as a normal user, or set GOALCUP_GATE_ALLOW_ROOT=1 to run it anyway." >&2
+    echo "gate $tier: FAIL"
+    exit 1
+fi
+
 cd "$(dirname "$0")/.."
 start=$(date +%s)
 

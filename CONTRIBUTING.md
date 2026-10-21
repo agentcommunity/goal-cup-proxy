@@ -87,10 +87,8 @@ A data-only harness PR contains:
   connector. The daemon's live golden runs on macOS only;
 - the facts sheet `docs/harnesses/<id>.md`, from
   `skills/adding-a-capture-harness/templates/harness-facts.md` ([docs/harnesses](docs/harnesses/README.md));
-- headless connectors only: a harness-kit case under
-  `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/` (`harness.toml`, `stand-in.py` and
-  `expect.toml`), added beside the baseline cases. A chat-mode connector needs none: the kit
-  runs every pinned chat-mode connector from its `harness.toml`;
+- no harness-kit case: every connector is chat mode, and the kit runs every pinned connector
+  from its `harness.toml`;
 - the last lines of `sh scripts/check-connector.sh <id>` and `sh scripts/gate.sh fast`.
 
 Your PR contains no `.rs` file. A connector's arguments, model name and environment variables are

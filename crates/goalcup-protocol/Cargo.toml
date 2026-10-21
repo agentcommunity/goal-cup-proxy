@@ -1,8 +1,11 @@
 [package]
 name = "goalcup-protocol"
+description = "Every byte definition of Goal Cup Proxy: chain, records, control API, harness schema and connector pins."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 rust-version.workspace = true
 publish = false
 

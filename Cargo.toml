@@ -17,6 +17,8 @@ edition = "2024"
 # on any other hard-coded copy.
 version = "0.6.0"
 license = "Apache-2.0"
+repository = "https://github.com/agentcommunity/goal-cup-tracer"
+homepage = "https://agentcommunity.org/goalcup"
 # 1.99: the latest stable release at the owner's decision of 2026-10-11. The code needs
 # less (atomic `try_update`); locked dependencies need 1.88. Clippy's
 # incompatible_msrv lint enforces this.
@@ -76,7 +78,7 @@ tempfile = "3"
 # `default-features = false` drops ureq's rustls stack and its gzip decoder: the client speaks
 # only to 127.0.0.1, so it links no TLS at all.
 ureq = { version = "2", default-features = false }
-# The entry registry.
+# The daemon's run registry (`goalcup-daemon/src/registry.rs`): every run it knows about.
 redb = "2"
 # The OS calls std does not have (free space, process and signal identity), made through
 # one shared version.
@@ -98,7 +100,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 # thread, which is the only thread allowed to touch a participant's disk.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
 # M2 recorder. The recording proxy is `goalcup-cli`'s `proxy` module (run in-process by
-# `goalcup start --goal-file`); nothing below is linked by the daemon. TLS termination and upstream
+# `goalcup start` and `goalcup continue`); nothing below is linked by the daemon. TLS termination and upstream
 # TLS use rustls with the `ring` provider only: `default-features = false` keeps the aws-lc
 # provider and its C build out of the tree, and `ring` is the only
 # provider.

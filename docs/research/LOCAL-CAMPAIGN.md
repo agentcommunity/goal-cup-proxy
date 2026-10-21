@@ -1,6 +1,6 @@
 # Local test campaign
 
-How the owner's machines run the [event readiness plan](../superpowers/plans/2026-10-20-event-readiness.md)
+How a maintainer's test machines run the [event readiness plan](../plans/2026-10-20-event-readiness.md)
 measurements (WP-0) and long runs (WP-F): a Mac, Docker on that Mac for Linux, and a WSL2 machine.
 One supervising agent runs it; one subagent per cell watches a run and reports back. Read
 [AGENTS.md](../../AGENTS.md) and [OPERATING](../OPERATING.md) ("Test runs", "Edge cases by hand") first.

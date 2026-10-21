@@ -91,7 +91,7 @@ Owner decisions of 16 Oct 2026:
 
 ## Work to the feature stop (4 Nov), in order
 
-The [event readiness plan](docs/superpowers/plans/2026-10-20-event-readiness.md) (20 Oct) sets the
+The [event readiness plan](docs/plans/2026-10-20-event-readiness.md) (20 Oct) sets the
 work from 20 Oct to 6 Nov: invariants, work packages WP-A to WP-H, the test ladder and the owner
 decisions. The [simplification plan](docs/research/SIMPLIFICATION-2026-10-21.md) (21 Oct) lists the
 low-risk clean-ups before the event and the larger ones after it. The Review 12 work packages

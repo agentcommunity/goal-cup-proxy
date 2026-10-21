@@ -135,6 +135,10 @@ home that prep opens. You choose how. For example, Claude Code has a permission 
 not ask (`bypassPermissions`), and Codex can be set to never ask for approval
 (`approval_policy = "never"`). Try your setting in a practice run.
 
+**Hermes and Amp.** The `goal-cup` skill does not reach these two harnesses yet, so their agent is
+not told that it can check the clock. If you want it to know how much time is left, say in your
+prompt that it may run `goalcup time-left`.
+
 ## 4. A practice run: `goalcup start --practice`
 
 ```sh
@@ -230,6 +234,8 @@ When the harness exits, `goalcup` takes the terminal back:
 
 **One run counts.** Your account has one main run. If you start a second competition run inside
 the window, it replaces the first: the server stops the first run, and only the new one counts.
+The new run needs a new, empty repository: `goalcup start` refuses a repository that already has
+commits, so make one and point prep at it with `goalcup prep --repo <new URL>`.
 After the window closes you cannot start a new competition run; you can only `goalcup continue`
 the one you have. To replace a run on the same machine with the same harness, exit the first
 run's harness before you start again: a second `goalcup start` of that harness is refused while
@@ -259,7 +265,9 @@ The run lasts a week. For all of it:
 
 The server emails you about your run: when it starts; when it has heard nothing from Goal Cup Proxy
 for 20 minutes; when your agent has made no model calls for 3 hours, and again at 6 hours; when
-the recording has a problem; and when the run has ended and its commit is recorded.
+the recording has a problem; when Goal Cup Proxy pauses your agent because the disk is almost full
+(free space outside your run's folders, and the agent resumes by itself); and when the run has
+ended and its commit is recorded.
 
 ## 7. Checking on the run: `goalcup status`
 

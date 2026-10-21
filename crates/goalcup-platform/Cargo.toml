@@ -1,8 +1,11 @@
 [package]
 name = "goalcup-platform"
+description = "Unix OS code shared by the Goal Cup Proxy crates: disk reservation, safe file access, machine facts, sleep lock."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 rust-version.workspace = true
 publish = false
 

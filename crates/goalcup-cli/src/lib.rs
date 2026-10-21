@@ -1,7 +1,7 @@
 //! `goalcup` — the participant's command line.
 //!
 //! The ten sub-commands live in [`commands`]; the upload server and the participant's token
-//! for it live in [`server`]; the tracker's own configuration directory
+//! for it live in [`server`]; Goal Cup Proxy's own configuration directory
 //! and the documents in it live in [`config`]; the shipped connector manifests and the
 //! release-hash allowlist over them live in [`connector`]; the one client that speaks
 //! the daemon's control API — one transport, one auth rule, and no retry of its own —
@@ -21,7 +21,7 @@
 //! | Exit | Meaning |
 //! |---|---|
 //! | 0 | The command did what it was asked. |
-//! | 1 | Refused, and the participant can fix it: no daemon, a busy tracker, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. Also, after the seal, on Linux a run whose launcher sweep left a process running (`subreaper.rs`). |
+//! | 1 | Refused, and the participant can fix it: no daemon, a busy daemon, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. Also, after the seal, on Linux a run whose launcher sweep left a process running (`subreaper.rs`). |
 //! | 2 | **Never produced by this CLI.** It is `goalcup-verify`'s "invalid evidence" exit; the V1 `goalcup doctor --verify` that relayed it was removed by D48. |
 //! | 3 | The CLI could not do its job: a file it could not read, a response it could not parse. |
 //! | 4 | **Never produced by this CLI.** It was a gate's number; the V1 arming and `goalcup resume` gates were removed (D48), and control API v6 removed the daemon's `arming_timeout` code. |

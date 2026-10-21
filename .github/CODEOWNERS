@@ -15,7 +15,7 @@
 /crates/goalcup-protocol/pins/                      @nembal
 /crates/goalcup-protocol/src/pins.rs                @nembal
 /crates/goalcup-protocol/src/harness.rs             @nembal
-/crates/goalcup-protocol/src/harness/                 @nembal
+/crates/goalcup-protocol/src/harness/               @nembal
 /crates/goalcup-protocol/src/capture_policy.rs      @nembal
 /crates/goalcup-protocol/src/hints.rs               @nembal
 /crates/goalcup-protocol/src/capture.rs             @nembal
@@ -34,16 +34,14 @@
 /crates/goalcup-cli/src/proxy/                      @nembal
 /crates/goalcup-cli/src/launch.rs                   @nembal
 /crates/goalcup-cli/src/per_run_home.rs             @nembal
-/crates/goalcup-cli/src/commands/start.rs           @nembal
-/crates/goalcup-cli/src/capture_tee.rs              @nembal
+/crates/goalcup-cli/src/commands/start/            @nembal
 
 # Redaction and the capture path in the daemon.
 /crates/goalcup-daemon/src/redact.rs                @nembal
 /crates/goalcup-daemon/src/redact/                  @nembal
 /crates/goalcup-daemon/src/runtime/capture/         @nembal
 
-# Policy, the key loader, packaging and automation.
-/scripts/with-*-key.sh                              @nembal
+# Policy, packaging and automation.
 /packaging/                                         @nembal
 /.github/                                           @nembal
 

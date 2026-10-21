@@ -12,7 +12,9 @@ chain, and leaves interpretation to versioned decoders. Goal Cup's one-prompt, 1
 uses this evidence for review and adds upload, deadline and participant rules.
 
 The [research target](RESEARCH-TARGET.md) defines the desired evidence and how to test coverage;
-the [local research handoff](LOCAL-RESEARCH-HANDOFF.md) identifies the next validation work.
+[local next steps](research/LOCAL-NEXT-STEPS.md) sets the next validation work. The
+[local research handoff](LOCAL-RESEARCH-HANDOFF.md) is history: how the research work was handed
+over, not the work to do next.
 Context-visible tool calls/results are sufficient without independently recording full tool
 output or spill files. Subagent conversations are a separate research objective whose coverage
 must be measured. These are targets, not assertions of universal capture. Platform status is in
@@ -268,7 +270,7 @@ chain files "parts"; read that as chain files.
 - **seal**: ending a segment: stop the harness, finish capture, write `LocalFinish` and `seal.json`.
 - **receipt**: the server's signed start receipt for one segment: its facts and chain head, with its start and deadline.
 - **ack** (acknowledgement): the server's signed note that it stored the chain up to one record.
-- **harness**: the coding agent program (Codex CLI, Claude Code, Hermes).
+- **harness**: the coding agent program (Codex CLI, Claude Code, Hermes, Amp).
 - **connector**: `connectors/<id>/`, the pinned directory that says how to launch and capture one
   harness. Its identity is `connector_dir_sha256`. The loader is `harness::load_dir`.
 - **harness manifest**: `connectors/<id>/harness.toml`, harness-contract schema 1. Parsed by
@@ -297,6 +299,20 @@ chain files "parts"; read that as chain files.
 - **run key**: the entry's per-run Ed25519 key. Its public half is `Launch.run_public_key`.
 - **research-report schema** (now 4): the private NDJSON report format. Not the same as harness-contract
   schema 1 (`harness.toml`) or the decoder API version.
+
+**Names kept from "Goal Cup Tracer" on purpose.** The product is Goal Cup Proxy. These
+identifiers keep the old name, because changing them would break something that is already out:
+
+- the repository URL, `github.com/agentcommunity/goal-cup-tracer`, until the repository is renamed;
+- the server's database schema, `goal_cup_tracer`;
+- `server/worker/sql/goal-cup-tracer-upload.sql`, the mirror of the website's migrations;
+- the `tracer_version` field on the wire, which reports the `goalcup` version.
+
+**The rule for the repository rename.** Do it in one pull request that updates every copy of the
+URL together: `packaging/install.sh`, the `AFTER_HELP` guide URL in
+`crates/goalcup-cli/src/main.rs`, and the install URLs in README, RULES and the participant's
+guide. GitHub then sends the old URL to the new one. Never create a new repository under the old
+name: that would end the redirect, and old install commands would fetch from it.
 
 ## 13. Where each guarantee is tested
 

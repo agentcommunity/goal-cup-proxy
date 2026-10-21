@@ -1,0 +1,72 @@
+name: Bug report
+description: Something in goalcup, goalcup-verify or the docs does not work as described.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Before you send it:
+
+        - **Never paste a token, key, password or real trace.** That means no GitHub token, no
+          harness sign-in file and no prompt text you want to keep private. Cut them out of
+          any output first.
+        - A way to get around or forge the recording is a security problem. Report it privately
+          instead (see SECURITY.md), not here.
+        - During the event you can also write to goalcup@agentcommunity.org.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: goalcup version
+      description: The output of `goalcup --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Harness
+      options:
+        - Claude Code (claude-code-cli)
+        - Codex CLI (codex-cli)
+        - Hermes (hermes-cli)
+        - Amp (amp-cli)
+        - None, or not about a harness
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS, Apple silicon
+        - macOS, Intel
+        - Linux, arm64
+        - Linux, x86_64
+        - Windows, inside WSL2
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: run
+    attributes:
+      label: Run id
+      description: The run id that `goalcup status` shows, if the problem is about a run. A run id is safe to share.
+  - type: textarea
+    id: status
+    attributes:
+      label: goalcup status output
+      description: Paste the output of `goalcup status` (and of `goalcup doctor` if the problem is with setup). Remove any token first.
+      render: text
+  - type: checkboxes
+    id: secrets
+    attributes:
+      label: Check
+      options:
+        - label: This report holds no token, key, password, sign-in file or real trace.
+          required: true

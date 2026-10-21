@@ -8,7 +8,7 @@ Windows uses WSL2, with real-machine validation pending and native Windows plann
 This file is the map for agents and people. Open work is in [`TODO.md`](TODO.md).
 
 Read first: the [docs map](docs/README.md), which lists every doc by audience; the
-[event readiness plan](docs/superpowers/plans/2026-10-20-event-readiness.md), which sets the work to
+[event readiness plan](docs/plans/2026-10-20-event-readiness.md), which sets the work to
 6 Nov; and [local next steps](docs/research/LOCAL-NEXT-STEPS.md), what to measure next and in what
 order. Before planning capture work, also read the [research target](docs/RESEARCH-TARGET.md). Tool
 calls and results visible in agent context are sufficient; independent full tool-output/spill

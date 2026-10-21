@@ -10,8 +10,8 @@
 # - The `scope` step decides whether the Rust smoke runs (scripts/ci-scope.py). Only a change
 #   made entirely of Markdown under docs/, root Markdown or the pull request template skips it.
 #   Anything else, an unknown or failed comparison, or a manual start runs it. The scope tests,
-#   the link checker and the check-connector.sh tests run on every event; a failure in any step
-#   fails the job.
+#   the link checker, the check-connector.sh tests and the CODEOWNERS path check run on every
+#   event; a failure in any step fails the job.
 # - It skips the goalcup-daemon and goalcup-cli test suites. They spawn real process trees,
 #   and on a 2-core Linux runner they hang or kill the VM (docs/OPERATING.md, "CI").
 #   The Linux chain reservation is measured in Docker on ext4 and XFS, not in the gate. The
@@ -76,6 +76,7 @@ jobs:
       - run: python3 -m unittest discover -s scripts -p 'test_ci_scope.py' -v
       - run: python3 -m unittest discover -s scripts -p 'test_check_links.py'
       - run: python3 -m unittest discover -s scripts -p 'test_check_connector.py'
+      - run: python3 -m unittest discover -s scripts -p 'test_codeowners.py'
       - run: python3 scripts/check-links.py --root .
       # Build first, as in the gate (README.md, "The gate"): the shipped, test-hooks-off build,
       # which clippy --all-targets does not compile. It also puts on disk the binaries that the

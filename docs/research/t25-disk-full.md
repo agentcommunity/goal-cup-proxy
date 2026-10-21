@@ -2,7 +2,7 @@
 
 What a run does today when the volume that holds the recording really fills, measured on a
 loop-mounted ext4 image with the real binaries. Nothing in the product was changed. This is the
-input for WP-C (`docs/superpowers/plans/2026-10-20-event-readiness.md`, invariant I3) and closes
+input for WP-C (`docs/plans/2026-10-20-event-readiness.md`, invariant I3) and closes
 the "literal ENOSPC on a disposable volume" item of T25.
 
 **Short answer:** today a full disk silently ends the recording. The first `ENOSPC` on a chain
