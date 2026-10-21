@@ -1051,13 +1051,17 @@ mod support {
     impl Drop for Fixture {
         fn drop(&mut self) {
             // The group, not the pid: the leader's children outlive it otherwise, which is
-            // the very failure these tests exist for.
-            let _ = Command::new("/bin/kill")
-                .args(["-9", &format!("-{}", self.pid)])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            // the very failure these tests exist for. A signal call and not `/bin/kill -9
+            // -<pgid>`: procps-ng 4.0.4's kill reads only the first digit of a negative pid, so
+            // a group whose id starts with 1 became `kill(-1)`, every process this user owns,
+            // the test runner included.
+            if let Ok(group) = i32::try_from(self.pid)
+                && group > 1
+            {
+                // SAFETY: two integers; the group is the one this fixture's leader was spawned
+                // to lead (`own_group`).
+                unsafe { libc::kill(-group, libc::SIGKILL) };
+            }
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
