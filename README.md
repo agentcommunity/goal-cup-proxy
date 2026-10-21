@@ -21,7 +21,8 @@ can be edited, re-hashed and re-sealed, and it still verifies. A trace uploaded 
 carries server acknowledgements signed with a key pinned in the verifier. Those catch a rewrite
 of everything acknowledged ([cheat checklist](docs/CHEAT-CHECKLIST.md)).
 
-Support: goalcup@agentcommunity.org. Participants: start with
+Support: goalcup@agentcommunity.org. Participants: sign up at
+[agentcommunity.org/goalcup](https://agentcommunity.org/goalcup), then start with
 [docs/PARTICIPANT-GUIDE.md](docs/PARTICIPANT-GUIDE.md). This README is for people who build, test
 or change Goal Cup Proxy. Agents: start with [AGENTS.md](AGENTS.md).
 Adding a harness? Start with [Add and test a connector](docs/HARNESS-ONBOARDING.md#quick-path).
@@ -37,9 +38,10 @@ curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/dow
 It picks the build for your machine (macOS or Linux, arm64 or x86_64), checks its SHA-256 against
 the release's `SHA256SUMS`, and installs `goalcup`, `goalcup-daemon` and `goalcup-verify` into
 `~/.local/bin` and the connectors into `~/.local/share/goalcup`. No sudo. It edits no shell
-profile; if `~/.local/bin` is not on your `PATH` it says how to add it. Run it again to upgrade, or
-add `-s -- --version <x.y.z>` after `sh` for a particular release. The builds are unsigned, and a
-download by `curl` is not quarantined on macOS, so they run. There is no Homebrew tap; native
+profile; if `~/.local/bin` is not on your `PATH` it says how to add it. Run it again to upgrade
+(never during a competition run), or add `-s -- --version <x.y.z>` after `sh` for a particular
+release. The builds are unsigned, and a download by `curl` is not quarantined on macOS, so they
+run. There is no Homebrew tap; native
 Windows comes later. The release workflow and the script:
 [packaging/README.md](packaging/README.md).
 If no binary release is published yet, use the source-build steps below.

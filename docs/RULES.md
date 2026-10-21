@@ -51,27 +51,26 @@ All times are UTC.
 
 The latest possible run ends 192 hours after the window opens.
 
-## Accounts and entries
+## Accounts and runs
 
 - A verified email on an Agent Community account is required.
 - Agent Community `pending` status only means the optional endorsement letter has not been signed.
   Pending and endorsed members may both take part.
-- You accept the competition terms and the short rule summary on the website before a run can be
-  approved.
+- You accept the competition terms and the short rule summary on the website
+  ([agentcommunity.org/goalcup](https://agentcommunity.org/goalcup)) before a run can be approved.
 - **One main run per account.** You approve every competition run in the browser. A new competition
   start inside the start window becomes your main run and replaces any earlier one: the server stops
   the earlier run, and only the main run counts. After the window closes, an account can only
   `goalcup continue` its main run.
-- There is no separate entry registration. Every approved competition start creates a run (your
-  entry).
-- A run is made of segments. When the agent stops before the deadline (a crash, a reboot, a closed
-  window), `goalcup continue` starts the next segment of the same run, with the same deadline, on the
-  same machine.
+- There is no separate registration. Every approved competition start creates a run.
+- A run is made of parts. A part is one unbroken stretch of recording. When the agent stops before
+  the deadline (a crash, a reboot, a closed window), `goalcup continue` starts the next part of the
+  same run, with the same deadline, on the same machine.
 - **Practice runs** (`goalcup start --practice`) are short, unlimited, separate from the competition,
   and never replace your main run. A practice run never pushes, so your repository stays empty until
   the competition run.
-- **Organizer test runs** (`goalcup start --test`) are opened only by organizer accounts. They are not
-  entries, and they are deleted from the server afterwards.
+- **Organizer test runs** (`goalcup start --test`) are opened only by organizer accounts. They do not
+  count, and they are deleted from the server afterwards.
 - Your run needs its own prompt, root agent and empty repository.
 - **One harness per run.** Your agent may spawn subagents of its own harness. It must not start a
   different harness (a Codex agent starting Claude Code, under any name), because the cup compares
@@ -99,13 +98,19 @@ The latest possible run ends 192 hours after the window opens.
 - Goal Cup Proxy never sends anything to the agent, and never relays, edits or blocks your input: no
   reminders, no automatic "keep going", no automatic restart. `goalcup continue` is yours to run.
 - The agent may run `goalcup time-left` to ask how much time the run has left (D66). It is an answer
-  the agent asks for; the tracker never sends it anything.
-- `goalcup seal` refuses to run inside the agent's session, so the agent cannot end its own run. To end
-  a run early, run `goalcup seal` yourself from another terminal.
-- **The harness's folder-trust dialog is not a message, and answering it is allowed.** Claude Code
-  asks at the start of each run whether you trust the folder. You answer it yourself, before you
-  type your prompt, and again if the dialog comes back after `goalcup continue`. It covers only that
-  dialog. No other approval, login or question of the harness is covered: see "During the run".
+  the agent asks for; Goal Cup Proxy never sends it anything.
+- `goalcup seal` refuses to run inside the agent's session, so the agent cannot stop itself. You may
+  run `goalcup seal` yourself from another terminal. It stops the agent and ends the current part.
+  It does not end the run: the run stays open until its deadline, and `goalcup continue` goes on
+  with it. When the agent's work is done, you need no extra step.
+- **Harness setup before the first prompt is yours.** This holds for every harness. Anything the
+  harness shows before you type your prompt is allowed: a sign-in, a browser login, a folder-trust
+  question, a model choice, a setup wizard. You choose how to answer it. It is not a message to
+  the agent. When `goalcup continue` opens the harness again, you may answer the same start-up
+  screens again (Claude Code's folder-trust question, for example).
+- After the first prompt, the rule above holds again: the only message you may type is "keep
+  going". If a harness asks you to sign in again during the run, the rules do not cover that yet:
+  contact support (goalcup@agentcommunity.org) before you answer it.
 - An agent that stops early and stays idle until the deadline is permitted. Its idle time is in the
   record.
 
@@ -126,14 +131,14 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
 - Prepared capabilities may help the agent work. A prebuilt product, substantial product code or an
   existing application may not be smuggled in as "context". The judged result must be a fresh build.
 - Participant-controlled instructions and task context available to the agent at the start are frozen
-  for that entry. A human cannot change them during the run.
+  for that run. A human cannot change them during the run.
 - The original prompt and the participant-controlled context the agent actually uses must be disclosed
-  with the public entry. Public skills or pages can be linked by exact version. Private or changeable
+  when the run is published. Public skills or pages can be linked by exact version. Private or changeable
   material needs a frozen publishable copy.
 - An empty workspace is not an empty context, and some harnesses fill it in for you. The Codex desktop
   app injects your saved memory summary and your global skill listing into every thread. OpenCode and
   Cursor read the skills in your home directory into the system prompt. That is allowed, and it is
-  disclosed with your entry like any other prepared context. If you would rather it were not there,
+  disclosed with your run like any other prepared context. If you would rather it were not there,
   turn it off before you start. You cannot change it during the run.
 - If Goal Cup Proxy cannot resolve a referenced skill, website, MCP resource, memory or similar source
   automatically, organizers may ask for access and you must provide the exact frozen material.
@@ -153,8 +158,8 @@ disclosure and no-side-channel rules.
 
 ## During the run
 
-- One measured root agent owns the entry. It may create trace-linked subagents inside the same
-  harness. It may not run another harness; one entry uses one harness.
+- One measured root agent owns the run. It may create trace-linked subagents inside the same
+  harness. It may not run another harness; one run uses one harness.
 - Do not update the harness during the run. Goal Cup Proxy records the harness build that runs and
   refuses no build. Some apps update themselves whatever you do; Goal Cup Proxy samples the version,
   records a change as an event, and an organizer looks at it. That is a flag, not a disqualification.
@@ -175,17 +180,18 @@ disclosure and no-side-channel rules.
   Claude Remote Control and Channels. A message sent through them is a human message like any other.
   Goal Cup Proxy records it where it can see it, and the review treats one it cannot see as unexplained.
 - The human may not write code, answer questions, make product decisions, approve actions or edit the
-  product (except the folder-trust dialog, below).
+  product (except the harness setup before the first prompt, above).
 - No side-channel prompting. You or a collaborator may not change anything the agent can read: files,
   Linear tasks, GitHub issues, messages, documents, email, databases, websites, forms, dashboards,
   webhooks, environment values or similar state.
 - The agent may create and keep its own Linear project, notes, issues, skills or other external state.
-  Humans must leave that state alone until the run seals.
-- Prepare accounts, keys, permissions, payment methods and spending limits before the start. Missing
-  preparation is not itself a violation, but the human may not fix it after the start by typing a key,
-  completing a login, clicking an approval or changing the environment. The one exception is
-  the harness's own folder-trust dialog (Claude Code asks whether you trust the folder): you may
-  answer it, because it only lets the harness open and gives the agent nothing.
+  Humans must leave that state alone until the run ends.
+- Prepare accounts, keys, permissions, payment methods and spending limits before the start. That
+  includes the harness's own approval setting, so it does not stop to ask you before it acts.
+  Missing preparation is not itself a violation, but the human may not fix it after the first prompt
+  by typing a key, completing a login, clicking an approval or changing the environment. The one
+  exception is the harness's own setup before your first prompt
+  ([One prompt, then only "keep going"](#one-prompt-then-only-keep-going)).
 - The agent may authenticate, purchase, create, deploy or operate resources on its own, using
   authority it already has.
 - Power or internet may be restored and the agent restarted in the same run with `goalcup continue`.
@@ -213,7 +219,7 @@ disclosure and no-side-channel rules.
 - **No connector in this build changes app-wide configuration.** Goal Cup Proxy reads nothing from and
   writes nothing to your `~/.claude`, `~/.codex` or `~/.hermes`, and the daemon refuses a config home
   inside any of them. A future connector that must change one would say so in its manifest, and your
-  entry would disclose it.
+  run would disclose it.
 - **Your agent is not limited the same way.** It runs with full access as your user, so it can read
   and write anything you can, those folders and your Keychain included. Codex and Claude Code each use
   one config home in Goal Cup Proxy's own config directory, shared by that connector's runs. Goal Cup Proxy
@@ -251,10 +257,10 @@ disclosure and no-side-channel rules.
   used, harness and model identity when available, run continuity, and final state.
 - The record uploads to the server during the run, every 30 minutes or sooner by size. When the server
   cannot be reached, the record waits on your disk and the upload retries; the run goes on. After the
-  stop, Goal Cup Proxy seals and uploads for at most one hour, and `goalcup upload` finishes the job
-  later. With no entry id it sends the unsent entries of your newest run.
+  stop, Goal Cup Proxy seals and uploads for at most one hour. What is still unsent goes up
+  by itself the next time you run any `goalcup` command, and `goalcup upload` sends it by hand.
 - **What Goal Cup Proxy records, and what it never does.** It observes one process: the harness it
-  launched for your entry, and any program that harness starts. It records that agent's conversation
+  launched for your run, and any program that harness starts. It records that agent's conversation
   with the model provider, every request and every reply, by pointing that one process at a recording
   proxy on your machine through its own environment; nothing else on the machine goes through it. It
   records what you type into that agent, because the review must see every human message. Traffic from
@@ -275,7 +281,7 @@ disclosure and no-side-channel rules.
   credentials from outside their own home directories. That is another reason raw traces are never
   published. They are kept until judging and appeals end, then deleted. The privacy notice on the
   website has the full terms.
-- The public entry includes the original prompt, the disclosed starting context, harness and model
+- A published run includes the original prompt, the disclosed starting context, harness and model
   information when known, the verification status (the verifier's `pass`, `flag` or `fail` verdict
   and its findings), and the final result. A verdict is not proof of anything.
 - Modifying, disabling, bypassing, or deliberately routing work around Goal Cup Proxy is grounds for
@@ -299,7 +305,7 @@ records platform measurements and capture/decoder limits. Current chat-mode conn
 
 Other harnesses can join through the [connector process](HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)
 before the last release. The supported list is final when the start window opens. A harness
-without a shipped, tested connector has no supported recording path and its runs are not entries.
+without a shipped, tested connector has no supported recording path and its runs do not count.
 Source inclusion, event qualification and actual platform measurements remain distinct.
 
 ## Submission
@@ -333,19 +339,19 @@ Source inclusion, event qualification and actual platform measurements remain di
   recorded at the deadline. They do not receive private raw traces.
 - The main Cup goes to the strongest final product. Final judging criteria will be published before
   the window opens.
-- If entry volume is large, a preliminary panel may create a shortlist using the same published
+- If there are many runs, a preliminary panel may create a shortlist using the same published
   product criteria.
 - The first announced judges are Jesse Vincent, creator of Superpowers, and Scott Motte, creator of
   dotenv.
 
 ## Public race and sharing
 
-- The public board may show aggregate entry states such as joined, started, running, sealed,
+- The public board may show aggregate run states such as joined, started, running, sealed,
   published and verified.
 - Participants remain anonymous by default and may opt into public recognition.
 - Agent Community may share aggregate race updates throughout the week.
 - A public X post made before the window opens is worth one bonus point. The participant submits its URL
-  through the authenticated page or CLI; engagement does not affect the point.
+  on the website, signed in; engagement does not affect the point.
 - Each prompt becomes public at the latest at the end of the event (see above). Raw traces never become
   public.
 
@@ -353,7 +359,7 @@ Source inclusion, event qualification and actual platform measurements remain di
 
 - **Participant support:** goalcup@agentcommunity.org.
 - **Offer free access:** give participants product access, credits or API quota. Financial sponsorship
-  is not required for this entry-level support.
+  is not required for this basic support.
 - **Create an award:** pair event sponsorship with a named prize inside the main Cup. The sponsor
   supplies a clear criterion, a prize and a product expert to help judge it. It does not create a
   separate competition.

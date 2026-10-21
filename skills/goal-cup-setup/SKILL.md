@@ -34,8 +34,11 @@ Say these plainly, once, before the first human step:
 - **After each browser approval, return to the terminal now.** The next step happens there.
 - **A firewall such as Little Snitch may ask about `goalcup`.** Allow it. Each Goal Cup Proxy update is a
   new program file, so the firewall may ask again after every update. Allow it again.
-- **Claude Code asks, at the start of each run, whether to trust the folder.** The person answers
-  it themselves (Yes) before they type their prompt. That is allowed. Do not answer it for them.
+- **Any harness may show setup screens before the first prompt** (Claude Code's folder-trust
+  question, a sign-in, a model choice). The person answers them themselves before they type their
+  prompt. That is allowed for every harness. Do not answer them for the person.
+- **Set the harness so it does not stop to ask for approvals.** During the run nobody may approve
+  anything, so choose the harness's own setting for this before the run.
 - **The person types one prompt, and after that only "keep going".**
 
 ## The loop

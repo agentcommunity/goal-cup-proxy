@@ -19,7 +19,9 @@ stops at each step that needs you.
   not installed. See the [facts sheets](harnesses/README.md) for measured support
   and capture-only limits. Goal Cup Proxy records which harness build ran.
 - A GitHub account.
-- An Agent Community account, signed up for the Goal Cup on the website.
+- An Agent Community account, signed up for the Goal Cup on the website,
+  [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup). You also hand in your demo
+  video and questionnaire there after the run.
 
 ## 1. Install
 
@@ -38,9 +40,9 @@ line it prints, and add that line to `~/.zshrc` or `~/.bashrc` to keep it. Then 
 goalcup --version
 ```
 
-To upgrade, run the same command again. If no release is published yet, build from source as the
-[README](../README.md#build) says. Install inside WSL2, not in Windows itself;
-native Windows comes later.
+To upgrade, run the same command again. Do not upgrade goalcup during your run. If no release is
+published yet, build from source as the [README](../README.md#build) says. Install inside WSL2,
+not in Windows itself; native Windows comes later.
 
 ## 2. Log in: `goalcup login`
 
@@ -101,9 +103,11 @@ line names the first step that needs you.
    Nothing is recorded while prep has it open. Prep first lists these steps and says `Press Enter
    to open <harness>, or Ctrl-C to stop.` It opens the harness only after you press Enter.
 4. **github.** Create a new repository on GitHub: public and empty (create it without a README,
-   licence or `.gitignore`, so it has no commits). Then create a fine-grained token for that one
-   repository with Contents set to read and write. Run `goalcup prep --repo
-   https://github.com/<owner>/<repo>` and paste the token when asked; it is not shown as you type.
+   licence or `.gitignore`, so it has no commits). Then create a fine-grained token: give it
+   access to this repository only, and set Contents to read and write. Set its expiry to at
+   least 10 days after the day you plan to start. A token that expires stops your agent's pushes,
+   and work that is not pushed is not judged. Run
+   `goalcup prep --repo https://github.com/<owner>/<repo>` and paste the token when asked; it is not shown as you type.
    Your agent pushes its work to this repository, and Goal Cup Proxy hands the token to `git` when it
    pushes; it is never in the agent's environment.
 5. **machine.** Mains power, enough free disk (a run reserves 3 GiB and warns when less than 5 GiB
@@ -120,6 +124,16 @@ If a firewall such as Little Snitch asks about `goalcup`, allow it: the machine 
 the server or the provider cannot be reached. Each Goal Cup Proxy update is a new program file, so the
 firewall may ask again after every update. Allow it again each time, and check it before you start
 a run you care about.
+
+**Set your harness so it does not stop to ask you.** During the run nobody may approve or answer
+anything for the agent. For Codex and Claude Code, Goal Cup Proxy puts a `goal-cup` skill in the
+harness home that tells the agent so: it makes and approves every decision itself and does not
+wait for a reply. That tells the model only. Many harnesses also stop and ask you before they run
+a command, edit a file or push, and that is a harness setting. You may not answer those prompts
+during the run, so a harness that asks can wait for days. Set it before the run, in the harness
+home that prep opens. You choose how. For example, Claude Code has a permission mode that does
+not ask (`bypassPermissions`), and Codex can be set to never ask for approval
+(`approval_policy = "never"`). Try your setting in a practice run.
 
 ## 4. A practice run: `goalcup start --practice`
 
@@ -185,14 +199,19 @@ do not run it from a Windows drive.
    ```
 
    Type your prompt as the first message, and press Enter. After that, type nothing but "keep
-   going" (section 10).
+   going" (section 10). Tip: write your prompt in a file before the window opens. Then paste it
+   whole and press Enter once, so it goes as one message.
 
-**The folder-trust dialog (Claude Code).** Each run is a fresh clone, so Claude Code asks, at the
-start of every run, whether you trust the folder. The cursor is on "No, exit". Choose "Yes, I
-trust this folder", then type your prompt. Answering this dialog is yours to do, and it is
-allowed. It is not a message to the agent. If you choose "No, exit", Claude Code quits and
-Goal Cup Proxy ends the part of the run it recorded. Run `goalcup status` and do what its `Next:` line
-says. When that is `goalcup continue`, Claude Code opens again with a new session and asks again.
+**The harness's own setup screens.** Before you type your prompt, your harness may show its own
+screens: a sign-in, a browser login, a folder-trust question, a model choice or a setup wizard.
+This holds for every harness. Answer them as you choose; that is allowed, and it is not a message
+to the agent. Once you have typed your prompt, the "keep going" rule holds (section 10).
+
+For example, each run is a fresh clone, so Claude Code asks at the start of every run whether you
+trust the folder. The cursor is on "No, exit". Choose "Yes, I trust this folder", then type your
+prompt. If you choose "No, exit", Claude Code quits and Goal Cup Proxy ends this part of the run.
+Run `goalcup status` and do what its `Next:` line says. When that is `goalcup continue`, Claude
+Code opens again with a new session and asks again.
 
 While the harness is open, `goalcup` prints nothing in this terminal. Use `goalcup status` from
 another terminal to see the run.
@@ -223,8 +242,9 @@ The run lasts a week. For all of it:
 - **Keep the machine on mains power.** On battery a Mac can still sleep, through its lid or its
   power settings.
 - **Keep a laptop's lid open.** A Mac sleeps when its lid closes, whatever Goal Cup Proxy does.
-- **Keep it online.** Recording does not need the network, but uploads and the server's
-  heartbeat do. Goal Cup Proxy retries for as long as the run lasts.
+- **Keep it online.** Your agent needs the network for every model call. Uploads and the
+  server's heartbeat need it too. When the network drops, Goal Cup Proxy keeps recording and
+  retries the uploads for as long as the run lasts.
 - **WSL2:** Goal Cup Proxy cannot keep Windows awake. In Windows Settings, System, Power, set sleep to
   Never for the week of your run.
 - **Keep the terminal window open.** Closing it stops the agent. Goal Cup Proxy still seals that part
@@ -233,7 +253,9 @@ The run lasts a week. For all of it:
 - **Over SSH, start the run inside `tmux`** (or `screen`), so a dropped connection does not close
   the terminal.
 - **Keep disk space free.** If the disk fills, the record shows a gap marked `StorageFull`. That
-  is a red flag: something was off. The judges decide each such gap case by case.
+  is a red flag: something was off. The judges decide each such gap case by case. If you must
+  free space, free it outside your run's folders (the clone in your work folder and the
+  `goalcup-` folder that `goalcup start` made). Never delete anything the agent made.
 
 The server emails you about your run: when it starts; when it has heard nothing from Goal Cup Proxy
 for 20 minutes; when your agent has made no model calls for 3 hours, and again at 6 hours; when
@@ -267,10 +289,10 @@ that has not started a run, `goalcup status` says `no run has been started from 
 |---|---|---|
 | `goalcup has not updated this run for …. The computer may have slept or restarted.` | The `goalcup start` process is not running: the machine rebooted or slept, or the process was killed. | The line ends with the fix. Most often it is `To go on, run: goalcup continue <run id>`. |
 | `the recording has gaps` or `the recording failed` | Part of the record is missing. The server is told and the run is flagged for review. | Leave the run going. If it says to write to support, name the run id it gives. |
-| `nothing was uploaded for … Nothing is lost; it waits on this computer. Check the network.` | Uploads have been failing for half an hour or more. Nothing recorded is lost: it waits on the disk. | Check the network. After the run, `goalcup upload` sends what is left of your newest run. `goalcup upload <entry>` sends one entry. |
+| `nothing was uploaded for … Nothing is lost; it waits on this computer. Check the network.` | Uploads have been failing for half an hour or more. Nothing recorded is lost: it waits on the disk. | Check the network. What is left goes up by itself the next time you run any `goalcup` command. To send it yourself, run `goalcup upload`. |
 | `the server has not heard from this run for about … min` | The server has not heard from the run for about a quarter of an hour. | Check the network. |
-| `only … of disk is free. Free some space.` | Less than 5 GiB is free beyond the run's reservation. | Free some disk. Under 1 GiB Goal Cup Proxy pauses your agent (the line below). |
-| `The disk is almost full, so your agent is paused. Free some disk space; it resumes by itself. If your agent seems stuck afterwards, type keep going.` | Less than 1 GiB is free beyond the run's reservation, so Goal Cup Proxy froze the agent: nothing happens unrecorded. The run never stops for the disk. | Free some disk. Above 3 GiB free the agent resumes by itself. If it then seems stuck, type `keep going`. |
+| `only … of disk is free. Free some space.` | Less than 5 GiB is free beyond the run's reservation. | Free space outside your run's folders. Never delete anything the agent made. Under 1 GiB Goal Cup Proxy pauses your agent (the line below). |
+| `The disk is almost full, so your agent is paused. Free some disk space; it resumes by itself. If your agent seems stuck afterwards, type keep going.` | Less than 1 GiB is free beyond the run's reservation, so Goal Cup Proxy froze the agent: nothing happens unrecorded. The run never stops for the disk. | Free space outside your run's folders. Never delete anything the agent made. Above 3 GiB free the agent resumes by itself. If it then seems stuck, type `keep going`. |
 | `this computer may go to sleep (…)` | Goal Cup Proxy could not keep the machine awake. Under WSL2 this line is always there, because Windows decides. | Keep it on mains power with the lid open, or turn sleep off yourself (WSL2: the Windows power setting above). |
 | `Claude Code has exited (…). Your run is still open until … To go on, run: goalcup continue <run id>` | The agent ended before the deadline: it crashed, you closed the window, or it quit. | Run the command it names. |
 | `Claude Code has exited (…) and the run is over. Nothing to continue.` | The agent left on its own, and the run's time has passed since. | Nothing. |
@@ -296,10 +318,11 @@ one, and `goalcup` says so in one line. No approval is needed, and it says so: `
 No approval is needed: this computer kept the approval for this run.` While it opens, it prints
 `The earlier part of this run uploads in the background.`
 
-The harness may show its folder-trust dialog again (section 5). If the agent has stopped, type
-"keep going". If you never sent your prompt, send it now: it is still your one prompt. Run
-`goalcup continue` from the same kind of folder as `goalcup start` (section 5), in a terminal you
-will leave open.
+The harness may show its setup screens again (section 5), such as Claude Code's folder-trust
+question. You may answer them. If it asks you to sign in again, contact support before you answer
+(see Help). If the agent has stopped, type "keep going". If you never sent your prompt, send it
+now: it is still your one prompt. Run `goalcup continue` from the same kind of folder as
+`goalcup start` (section 5), in a terminal you will leave open.
 
 After you switch the harness to another model service (for example with `/model`), exit the
 harness and run `goalcup continue`: Goal Cup Proxy records the service the harness's settings name
@@ -307,6 +330,11 @@ when it starts.
 
 A run can be continued only on the machine that started it. Goal Cup Proxy never restarts the agent
 on its own.
+
+**Stopping the agent yourself: `goalcup seal`.** Run it from another terminal, never inside the
+agent's session. It stops the agent and ends the current part. It does not end the run: the run
+stays open until its deadline, and `goalcup continue` goes on with it. When the agent's work is
+done, you need no extra step. Leave it; the run ends by itself at the deadline.
 
 ## 9. The deadline, and after it
 
@@ -323,15 +351,18 @@ agent is stopped in whatever state it is in. There is no grace period.
   It keeps trying for up to one hour. If that is not enough, it says
   `Your run is sealed on this computer.` and
   `Part of the run is not uploaded yet. Next: when you are online, run: goalcup upload`.
-  Then, when you are online:
-  - Run `goalcup upload`. With no entry id, it sends the unsent entries of your newest run.
-  - To send one entry, run `goalcup upload <entry>`. `goalcup entries` shows the entry ids.
+  What is left goes up by itself the next time you run any `goalcup` command while you are
+  online. To send it yourself, run `goalcup upload`. It sends every part of your newest run that
+  has not gone up yet.
 - The server records the last push to your repository's default branch that GitHub received before
   the deadline (GitHub's timestamp, not the commit date). That commit is what is judged, so your agent
   must push its work before then; later pushes are not judged and are flagged, and so is a
   force-push. Goal Cup Proxy never pushes for it.
+- The MIT License must be in your repository at that commit. Your repository starts empty, and
+  you may not edit it during the run, so ask for it in your prompt.
 - After the run you hand in a demo video and answer a questionnaire. They are due 24 hours
-  after your run's 168 hours end. You hand them in on the website, not through Goal Cup Proxy.
+  after your run's 168 hours end. You hand them in on the website,
+  [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup), not through Goal Cup Proxy.
 - Without a network at the deadline, Goal Cup Proxy stops the run once 168 hours have passed on the
   machine's own clock, which keeps counting while the machine sleeps.
 - 24 hours after the end, the server closes the run. A run whose last upload has not arrived by
@@ -345,15 +376,22 @@ is "keep going". Use it when the agent has stopped and you want it to carry on.
 Every message you type into the harness is recorded. Any other message (an answer, a hint, an
 approval, a correction) is seen at review, and it may remove the run at review.
 
-One thing is not a message to the agent, and it is allowed: the harness's own start-up dialog.
-Claude Code asks, at the start of each run, whether you trust the folder. The dialog appears once
-`goalcup start` has opened the harness. Answer it before you type your prompt (section 5), and
-again if it comes back after `goalcup continue`. Do not answer a question the agent asks or an
-approval the agent needs.
+One thing is not a message to the agent, and it is allowed: the harness's own setup screens
+before you type your prompt (section 5), such as a sign-in or Claude Code's folder-trust question.
+You may answer them again when `goalcup continue` opens the harness. Do not answer a question the
+agent asks or an approval the agent needs. If the harness asks you to sign in again during the
+run, contact support before you answer.
 
 Goal Cup Proxy itself never types to the agent, never says "keep going" for you, and never restarts
-it by itself. Your agent may ask how much time is left with `goalcup time-left` (you can run it too);
-`goalcup seal` works only from a terminal of your own, never inside the agent's session.
+it by itself. Your agent may ask how much time is left with `goalcup time-left`. You can run it
+in your own terminal too. `goalcup seal` works only from a terminal of your own, never inside the
+agent's session (section 8).
+
+**No side channels.** During the run, neither you nor anyone helping you may change anything the
+agent can read: files, tasks, GitHub issues, messages, documents, email, databases, websites,
+forms, dashboards, environment values and the like. A message that reaches the agent by another
+way (a thread tool, a remote control, a chat bridge) counts as a human message. The agent may keep
+its own notes, issues and other state. Leave them alone until the run ends.
 
 An agent that stops early and stays idle until the deadline is allowed. The idle time is in the
 record.
@@ -406,4 +444,4 @@ the server together afterwards. It is not for participants: use `--practice` to 
 ## Help
 
 Write to goalcup@agentcommunity.org. Say which command you ran, and paste the `goalcup status`
-output and the entry id from `goalcup entries`. Never paste your GitHub token.
+output and the run id it shows. Never paste your GitHub token.
