@@ -7,7 +7,7 @@
 # connectors/codex-cli/harness.toml (connectors/hermes-cli adds a `configure` command). Headless is
 # option B below (example: crates/goalcup-protocol/tests/fixtures/headless-connectors/hermes-cli).
 # Field limits: docs/CONNECTOR-SCHEMA.md. Allowed values: docs/HARNESS-ONBOARDING.md, "Do I need a core change?".
-# No argument, goal flag, env key or value, host or auth host may name the tracker
+# No argument, goal flag, env key or value, host or auth host may name Goal Cup
 # (docs/CONNECTOR-SCHEMA.md, "Cross-field rules", rule 10).
 
 schema_version = 1                      # always 1
@@ -24,7 +24,7 @@ display_name = "<HARNESS NAME>"         # 1 to 40 printable ASCII characters, as
 [capture]
 # A) Chat mode (the default): the harness opens in the participant's terminal and the participant
 # types the prompt. No goal slot, identity source "none". The sign-in must live in the
-# harness's own config home: the tracer never passes an API key (D61).
+# harness's own config home: Goal Cup Proxy never passes an API key (D61).
 interactive = true
 continuation = "chat: the participant types the prompt and may type keep going"
 # The argv WITHOUT the program; may be empty. Templates allowed in values: {workspace}. No
@@ -55,7 +55,7 @@ resume_args = ["<RESUME-FLAG>"]
 # auth_hosts = ["<AUTH_HOST>"]
 # Where the harness saves the model service the participant picks (D62): a file in its config
 # home (.yaml, .yml, .json or .toml) and the dotted key of the service's URL. Facts sheet
-# section 6 says where. The tracer reads that one value at each start and continue and records
+# section 6 says where. Goal Cup Proxy reads that one value at each start and continue and records
 # that host only; every other host stays an opaque tunnel. The default for any harness whose
 # model service is the participant's choice. Needs config_home = "shared"; the file and key may
 # not name a key file or a key (auth, credential, secret, token, key, env).
@@ -127,12 +127,12 @@ skills_dir = "skills"
 [capture.ca]
 # One or two CA variables the harness reads (facts sheet section 6); no core change needed:
 # - its own variable, ending _CA_CERTIFICATE, _CA_CERTIFICATES, _CA_CERT, _CA_CERTS, _CA_BUNDLE
-#   or _CA_FILE (NODE_EXTRA_CA_CERTS for Node and Bun). It gets the proxy CA alone.
+#   or _CA_FILE (NODE_EXTRA_CA_CERTS for Node and Bun). It gets the recording proxy CA alone.
 #   mode "extend": the variable ADDS to the harness's roots.
-#   mode "replace": the variable REPLACES them, so the harness trusts only the proxy (fails closed).
+#   mode "replace": the variable REPLACES them, so the harness trusts only the recording proxy (fails closed).
 # - only if it has none: SSL_CERT_FILE / REQUESTS_CA_BUNDLE, with mode "extend". Tool children read
-#   these too, so they get the system roots plus the proxy CA, and a connection the harness makes
-#   past the proxy is not recorded (docs/CHEAT-CHECKLIST.md). Prefer the harness's own variable.
+#   these too, so they get the system roots plus the recording proxy CA, and a connection the harness makes
+#   past the recording proxy is not recorded (docs/CHEAT-CHECKLIST.md). Prefer the harness's own variable.
 env = ["<CA_VARIABLE>"]
 mode = "<extend|replace>"
 
@@ -142,7 +142,7 @@ mode = "<extend|replace>"
 # otherwise the native root must be {run_home}/... or a per-run {config_home}/...:
 source = "none"
 # Headless may instead use one of these:
-# 2) The tracker mints the id and passes it in args via {session_id}:
+# 2) Goal Cup Proxy mints the id and passes it in args via {session_id}:
 # source = "preassigned"
 # binding = "at_launch"
 # 3) The harness prints a JSON line on stdout before any model text:

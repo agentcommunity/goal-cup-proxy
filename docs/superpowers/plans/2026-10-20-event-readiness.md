@@ -173,7 +173,7 @@ in user text. Terms ID `goal-cup-tracer-2026-10-15` stays (opaque; nobody re-acc
 
 | Step | What | Risk | When |
 |---|---|---|---|
-| 1 | User-facing text | low | right after WP-A to WP-E merge |
+| 1 | User-facing text | low | done 21 Oct |
 | 2 | Code and comments; `tracer_version` to `proxy_version`, server accepts both | low | same PR |
 | 3 | Connector comments; regenerate pins | low | same PR |
 | 4 | Repo rename `goal-cup-proxy`; test old install and release URLs | medium | next release |

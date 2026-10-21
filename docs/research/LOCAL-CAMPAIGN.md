@@ -12,14 +12,14 @@ not prove: other platforms, other harness versions, model behaviour, or particip
 ## Rules for every agent in the campaign
 
 - Staging only. Production is refused by the scripts; never work around that.
-- The tracer records and never manages the agent. Type the cell's prompt once. Never type "keep
+- Goal Cup Proxy records and never manages the agent. Type the cell's prompt once. Never type "keep
   going", never restart a harness to fill time, never edit a workspace during a run.
 - Secrets are files, never arguments, environment values, logs or chat. Never print or copy a
   harness login (`auth.json`, `.credentials.json`, `.env`, Keychain). Never write `~/.codex`,
   `~/.claude`, `~/.hermes` or app-wide config.
 - Cheapest settings for every test: Codex `gpt-5.6-luna` at effort `low` (or `minimal` if the
   installed Codex accepts it), never `gpt-6-astra`; Claude Code `haiku` with thinking off. The
-  scripts set these in the tracker home before each run and fail the run if a turn used another
+  scripts set these in the Goal Cup Proxy harness home before each run and fail the run if a turn used another
   model. A cell that needs a stronger model says so in its config and is approved by the owner.
 - Raw traces, logs and result packets stay outside the repository. Only aggregates go back to the
   cloud agent or into Git.

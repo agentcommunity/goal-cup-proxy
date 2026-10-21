@@ -24,7 +24,7 @@ does.
   bytes; audit spans are absolute source offsets in that stream, not base64 or JSON offsets.
 - Segment boundaries are arbitrary (at most `MAX_SEGMENT_BYTES` each): mid-line, mid-JSON,
   mid-SSE event. Never assume one event per segment.
-- The proxy (`crates/goalcup-cli/src/proxy/http.rs`) submits **decoded** body bytes: chunked
+- The recording proxy (`crates/goalcup-cli/src/proxy/http.rs`) submits **decoded** body bytes: chunked
   framing removed and at most one `gzip`, `x-gzip` or `deflate` coding inflated. Any other
   coding records an `UnsupportedEncoding` gap and no body bytes. A decode failure keeps the
   decoded prefix and ends `DecodeError`. EOF inside a body ends the stream `Interrupted`. No

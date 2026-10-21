@@ -20,30 +20,30 @@ consistent, not that the participant followed the rules.
   acknowledgement per stored chunk, under a key pinned in the verifier. A rewrite of acknowledged
   records no longer matches them. The window is the part of the chain not yet acknowledged.
 - **The agent can read the run credential.** The per-run browser approval returns a credential
-  for that run alone. It is stored at mode 0600 under the tracer's configuration directory
+  for that run alone. It is stored at mode 0600 under Goal Cup Proxy's configuration directory
   (`runs/<run id>/credential`) and never in the harness's environment or argv. The harness runs
   as the participant and can read any file they can. With it an agent could upload to that run
   only. Bounded by: the server binds every chunk to the run's chain position, and a verify job
   re-runs `goalcup-verify` over the stored chain every hour and at seal.
-- **An unlimited agent can reach the tracer's own state (D52).** The shipped connectors do not
+- **An unlimited agent can reach Goal Cup Proxy's own state (D52).** The shipped connectors do not
   sandbox the agent. A tool command runs with the participant's full access and network. It can
   read `control.json` and call the daemon's loopback control API, rewrite its own session file,
   write `config.toml` or `settings.json` into the shared Codex or Claude Code config home (later
   runs load it, a base URL included), read and write the real `~/.codex` and `~/.claude`, and reach
   the network with a tool that ignores `HTTPS_PROXY`, so a second model called that way is not
-  recorded. Bounded by: the wire leg records every model call that goes through the proxy, the
+  recorded. Bounded by: the wire leg records every model call that goes through the recording proxy, the
   chain and seal are the daemon's, and a tampered session file or home shows as a disagreement
   between the legs.
-- **A shared CA row does not fail closed (WP12).** A connector that trusts the proxy through
+- **A shared CA row does not fail closed (WP12).** A connector that trusts the recording proxy through
   `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` (`mode = "extend"`) hands that variable the system's
-  roots plus the proxy CA, because every tool child reads it too. So if the harness itself skips
+  roots plus the recording proxy CA, because every tool child reads it too. So if the harness itself skips
   `HTTPS_PROXY` for a connection, that connection verifies against the real roots and nothing
-  records it. A harness's own variable gets the proxy CA alone, and a replace-mode one (Hermes,
+  records it. A harness's own variable gets the recording proxy CA alone, and a replace-mode one (Hermes,
   D41) makes such a connection fail. No shipped connector names a shared row. Bounded by: a
   connector names a shared row only when the harness has no CA variable of its own
   (CONNECTOR-SCHEMA, reviewer checklist); the wire leg records every model call that goes
-  through the proxy; and the research report's `analysis.cross_leg` notes
-  `native_activity_without_wire_streams` when the session file shows model work the proxy did not
+  through the recording proxy; and the research report's `analysis.cross_leg` notes
+  `native_activity_without_wire_streams` when the session file shows model work the recording proxy did not
   record.
 - **Amp's native leg is a metadata log, not a transcript (owner ruling, 16 Oct 2026).** Amp keeps
   the conversation on `ampcode.com`. The `amp-cli` connector records Amp's per-thread log
@@ -59,12 +59,12 @@ consistent, not that the participant followed the rules.
   `assistance.evidence: none_observed` means no positive human-authorship evidence, not "the
   participant typed nothing". Hidden server-side prompts are not reconstructed. The trust is not
   fail-closed either: Amp (a Bun
-  binary) reads `NODE_EXTRA_CA_CERTS`, which adds the proxy CA to the system roots (`mode =
-  "extend"`), so a connection Amp made past the proxy would still verify, and nothing records it.
+  binary) reads `NODE_EXTRA_CA_CERTS`, which adds the recording proxy CA to the system roots (`mode =
+  "extend"`), so a connection Amp made past the recording proxy would still verify, and nothing records it.
   Bounded by: the hash chain, the seal and the server's signed acknowledgements; the child
   environment, built from nothing with `HTTPS_PROXY` (in the live probe every Amp request used the
-  proxy, and with no login a dead proxy left Amp unable to reach `ampcode.com` at all); the wire
-  bytes, which arrive over TLS that the proxy checks against the real host, so the agent cannot
+  recording proxy, and with no login a dead recording proxy left Amp unable to reach `ampcode.com` at all); the wire
+  bytes, which arrive over TLS that the recording proxy checks against the real host, so the agent cannot
   write them as it can write a local file; WebSocket message-index holes and `Loss` frames; the
   recorded build digests (D53); and the metadata log's tool events and frame counts, which a later
   decoder can compare with the wire. The pinned macOS practice on 17 Oct passed capture and
@@ -75,7 +75,7 @@ consistent, not that the participant followed the rules.
   writes a session file and calls no model). Bounded by: the recorded build digests (D53) and the
   judges comparing the native session's model turns with the wire leg's model calls. The research
   report's `analysis.cross_leg` notes `native_activity_without_wire_streams` when the session file
-  shows model work and the proxy recorded no wire stream. `Launch.harness_version` is what the
+  shows model work and the recording proxy recorded no wire stream. `Launch.harness_version` is what the
   harness printed for `version_args`: reported, not proven.
 - **The launch is not inode-bound execution.** The CLI resolves `program` on `PATH`, refuses a
   symlink or a non-regular file, and reads none of its bytes. A same-UID path replacement or an
@@ -149,10 +149,10 @@ consistent, not that the participant followed the rules.
     count and reference, never the value. A flagged trace passes through, flagged, and is cleaned
     before anyone else gets it (research export, clean-up 14). Raw R2 objects under the 180-day
     lock cannot be rewritten, so the participant rotating their login is what closes the exposure.
-  - **The agent can read the harness's own login.** Its login files sit in the tracker's home
+  - **The agent can read the harness's own login.** Its login files sit in the home Goal Cup Proxy keeps
     for that harness: Codex `auth.json`, Hermes `.env` and `auth.json`, Amp `secrets.json`, and
     Claude Code's credential store. The agent can also read the participant's real `~/.codex`,
-    `~/.claude` and Keychain. The tracer cannot block this without blocking the harness: tools run
+    `~/.claude` and Keychain. Goal Cup Proxy cannot block this without blocking the harness: tools run
     as the same user, as children of the harness, and the harness must read and refresh its login
     all run. A file the agent prints goes upstream whole and is redacted when a rule names its
     shape. If the model echoes it, the reply stream records it raw (H-29). Bounded by: the
@@ -187,8 +187,8 @@ consistent, not that the participant followed the rules.
   An invalid UTF-8 byte reads as `0` when the rules match, so it no longer ends a key.
 - **The proxy credential reaches the provider, not the trace (H8).** The harness's
   `HTTPS_PROXY=http://goalcup:<32 hex>@127.0.0.1:<port>` holds a per-run secret. It is the only
-  place the tracer hands that secret to the harness. An agent that runs `env`, or a harness that
-  uploads its environment, sends it to the provider: the tracer records traffic and never
+  place Goal Cup Proxy hands that secret to the harness. An agent that runs `env`, or a harness that
+  uploads its environment, sends it to the provider: Goal Cup Proxy records traffic and never
   rewrites it. The daemon knows the secret's exact value (D60) and removes it from every recorded
   body and metadata string: raw, every byte percent-encoded or `\u`-escaped, and inside base64 at
   any alignment in both alphabets, each with one line break allowed between any two characters
@@ -198,7 +198,7 @@ consistent, not that the participant followed the rules.
   `proxy_credential` (`goalcup:<secret>`, percent-encoded once, the Basic token) stays for a
   reader without the secret. **Not caught:** a double percent-encoding or any other transform of
   the value; base64 with `/` written as `\/`; three levels of escaping; two breaks in one gap; a
-  fragment of the secret. Bounded by: the proxy listens on loopback only, and the secret ends
+  fragment of the secret. Bounded by: the recording proxy listens on loopback only, and the secret ends
   with the run.
 - **Codex identifiers left in the trace (TR1 #15).** The Codex connector removes `credits`, the
   installation id, `safety_identifier` and the `x-codex-turn-state` token, as measured on 0.153.0
@@ -210,22 +210,22 @@ consistent, not that the participant followed the rules.
   payload, so one stall can lose up to about 2.1 MiB. `seal.json` sits outside the reservation, so
   a failed seal write reads `incomplete` with no further policy.
 
-## Provider keys (D61): what the tracer does not hold
+## Provider keys (D61): what Goal Cup Proxy does not hold
 
-The tracer never sees, forwards or stores a participant's provider key. A harness keeps its key
-in its own home, from its own login. So there is no key-fragment scan and no `key-scan.txt`: the
-tracer has no key to scan for. What keeps a key out of a trace is the daemon's redaction of what
+Goal Cup Proxy never sees, forwards or stores a participant's provider key. A harness keeps its key
+in its own home, from its own login. So there is no key-fragment scan and no `key-scan.txt`:
+Goal Cup Proxy has no key to scan for. What keeps a key out of a trace is the daemon's redaction of what
 the harness records (the shared rules and `masked_key`), and these shapes it does not see.
 
-- **Hermes reads the participant's key from its own `$HERMES_HOME/.env`**, which the tracer never
+- **Hermes reads the participant's key from its own `$HERMES_HOME/.env`**, which Goal Cup Proxy never
   reads. A key printed raw or JSON-escaped is removed when a shared rule names its shape
   (`openai_key` for `sk-…`, `generic_secret_assignment` for `NAME_KEY=…`; `hermes_offline_key.rs`
   pins it through the trace, the upload chunks and the baseline). **Not caught:** a key the agent
   encodes before printing it (`base64`, hex, any transform), and a key of a shape no shared rule
-  names, because the tracer never knows the value to derive the forms from. The base64 of a `.env`
+  names, because Goal Cup Proxy never knows the value to derive the forms from. The base64 of a `.env`
   printed into the session reaches the trace and the upload as base64 text.
 - **The harness's home is the participant's.** A key the harness stores there is not read by
-  the tracer. An agent that prints that file into its session is recorded through the same
+  Goal Cup Proxy. An agent that prints that file into its session is recorded through the same
   redaction, no more.
 - **"Stays local" is checked by local signal only.** A goal file under Git, `Library/Mobile
   Documents`, `Library/CloudStorage` or a folder named Dropbox, OneDrive, Google Drive or iCloud

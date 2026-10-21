@@ -7,7 +7,7 @@ the "literal ENOSPC on a disposable volume" item of T25.
 
 **Short answer:** today a full disk silently ends the recording. The first `ENOSPC` on a chain
 append latches the daemon's chain writer for good: no `StorageFull` gap is written, the chain
-keeps a torn last line, the agent keeps running and its traffic keeps flowing through the proxy
+keeps a torn last line, the agent keeps running and its traffic keeps flowing through the recording proxy
 unrecorded, nothing resumes when the space comes back, the entry can be neither sealed nor
 continued, and the verifier answers exit 2 (`torn_tail`). The 3 GiB reserve does not stop any of
 this. It hands its blocks back to the volume, the agent's own writes take them, and the chain gets
@@ -83,7 +83,7 @@ The filler was set to 0 free at t=74.9. Measured in `uploads-working`:
 - **No gap.** `gap_count` stayed 0 throughout, and the trace has no `StorageFull` record.
 - **The agent kept running and its traffic kept flowing.** The workload finished 498 echo
   exchanges by the failure and 1,496 by its end at t=228. So about 1,000 exchanges (150 s of
-  traffic) went through the proxy unrecorded and unmarked. Its own native-file writer died with
+  traffic) went through the recording proxy unrecorded and unmarked. Its own native-file writer died with
   `OSError: [Errno 28]`, as an agent's own writes do on a full disk.
 - **The participant was not told while the disk stayed full.** `state.json` is rewritten through a
   new file, so it froze at its last good write. For 60 s at zero free, `goalcup status` kept

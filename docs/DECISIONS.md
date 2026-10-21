@@ -10,7 +10,7 @@ retained for references; some have been superseded or retired.
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
-The tracer never sets or changes a harness's model base URL, in any harness or milestone.
+Goal Cup Proxy never sets or changes a harness's model base URL, in any harness or milestone.
 Subscription auth would break, and the harness must talk to its real provider.
 
 A **process-scoped forward proxy** is allowed. It listens on loopback and is reached only through
@@ -46,7 +46,7 @@ It is recovered (status and seal only) and routes nothing.
 
 ## D5. The agent must never see its own evidence.
 
-Capture is scoped to folders the tracer created. `artifact_root` (the traces) and
+Capture is scoped to folders Goal Cup Proxy created. `artifact_root` (the traces) and
 `workspace_parent` may not contain each other, so an agent that lists its workspace's parent never
 sees the run's evidence. `config.rs` checks this twice: on the spelled paths and on the resolved ones.
 
@@ -58,12 +58,12 @@ fresh. The participant types the first prompt in chat mode; a headless harness t
 ## D9. Gap policy.
 
 Loss is stated, never hidden. A gap is a chained record with a reason. A trace with a gap is
-incomplete and never clean. The tracer's job is to keep recording and to say what it lost.
+incomplete and never clean. Goal Cup Proxy's job is to keep recording and to say what it lost.
 
 ## D10. One harness per entry.
 
 Subagents of the same harness are allowed. Running another harness as a subagent is not: the event
-compares harnesses. The rule is checked by reviewing the recorded traffic. The tracer never stops a
+compares harnesses. The rule is checked by reviewing the recorded traffic. Goal Cup Proxy never stops a
 second harness and never reads one as an error. A provider hostname or a missing decoder alone does
 not prove a second harness: record the unknown identity and say it is unknown.
 
@@ -74,7 +74,7 @@ clone of the participant's repository it records a commit and an uncommitted dig
 
 ## D12. Versions.
 
-Superseded by D53. The tracer records the harness build that ran and refuses none.
+Superseded by D53. Goal Cup Proxy records the harness build that ran and refuses none.
 
 ## D14. Redaction happens at capture.
 
@@ -122,19 +122,19 @@ stated, not hidden. Full contract and per-platform windows: [TERMINATION](TERMIN
 
 ## D36. Two-tier redaction on the wire leg, and a harness-agnostic recorder.
 
-1. The harness's credential is never stored. The proxy strips credential headers by name and never
+1. The harness's credential is never stored. The recording proxy strips credential headers by name and never
    decrypts sign-in or token-refresh hosts.
 2. Body content is redacted best effort, locally, before disk. A participant's own file contents
    and tool results go to a private trace. Raw traces are never published.
 3. Decoded is raw. Transport compression is undone on the tee, and the decoded body is what is
    redacted, hashed and stored. A body that cannot be decoded is stored as it arrived and gapped.
-4. The recorder is harness-agnostic. The proxy does transport work only: terminate declared hosts,
+4. The recorder is harness-agnostic. The recording proxy does transport work only: terminate declared hosts,
    undo encodings, strip credentials. It never parses a message format. Decoders live in the
    verifier and are per provider protocol, not per harness. A missing decoder does not stop capture.
 
 ## D37. Autonomous runs, research evidence and open contributions.
 
-1. The experiment is an agent working without human help. The tracer never supplies continuation,
+1. The experiment is an agent working without human help. Goal Cup Proxy never supplies continuation,
    encouragement or input. A harness's own autonomous continuation is allowed when set before
    launch and recorded. Human help ends the unassisted interval; capture continues, labelled.
 2. Research traces are a primary output. Local capture does transport, scoping, privacy,
@@ -180,7 +180,7 @@ cheapest-model clause is superseded by D52.
   drain-first order: a manual seal must let the launcher observe harness exit and close its
   proxy producer, rather than spend the drain share waiting on a producer whose harness is live.
   Stalled producers still expire with explicit loss; D22 and D30's authority limits are unchanged.
-- **Spawn gate.** A capture launch must not leave a live harness that the tracer never durably
+- **Spawn gate.** A capture launch must not leave a live harness that Goal Cup Proxy never durably
   recorded. The child waits before `exec` until the daemon has registered it.
 - **Disk reservation.** One 3 GiB reserve file for each run (`RUN_RESERVE_BYTES`), held by the run host, reused all week
   and released after the last upload. A chain is quota-only (`CHAIN_QUOTA_BYTES`, 1 TiB logical).
@@ -193,8 +193,8 @@ in its home.*
 
 ## D41. **(M2)** Hermes reference row: model, CA trust, key-fingerprint and key-fragment rules.
 
-- **CA trust.** `HERMES_CA_BUNDLE` replaces Hermes's roots with the tracer's proxy CA. That fails
-  closed: Hermes trusts only the proxy, and the proxy verifies the real upstream. `SSL_CERT_FILE`
+- **CA trust.** `HERMES_CA_BUNDLE` replaces Hermes's roots with the recording proxy's CA. That fails
+  closed: Hermes trusts only the recording proxy, and the recording proxy verifies the real upstream. `SSL_CERT_FILE`
   stays refused. D43 generalises this to any connector.
 - **Key fingerprint.** The private `auth.json` is pre-seeded so that Hermes never seeds its
   credential pool from the env key or writes `secret_fingerprint`.
@@ -205,8 +205,8 @@ in its home.*
 - **Isolation.** Every Hermes call, version probes included, uses a private `HOME` and
   `HERMES_HOME`. The model clause is superseded by D52.
 
-*Superseded in part by D61: Hermes's home is the participant's own and is not seeded, and the
-tracer holds no key, so no run is scanned for one. The `masked_key` rule stays.*
+*Superseded in part by D61: Hermes's home is the participant's own and is not seeded, and
+Goal Cup Proxy holds no key, so no run is scanned for one. The `masked_key` rule stays.*
 
 ## D42. Open source: data-only harnesses, open harness PRs.
 
@@ -228,9 +228,9 @@ The contract is `connectors/<id>/harness.toml`, schema 1.
 3. *(Amended by WP12.)* A CA variable's name is connector data, held to a closed shape: a name
    ending `_CA_CERTIFICATE`, `_CA_CERTIFICATES`, `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or
    `_CA_FILE`, under the shared env-name rules, or one of the two shared rows `SSL_CERT_FILE` and
-   `REQUESTS_CA_BUNDLE`. A harness's own variable is handed the proxy CA alone, in either mode;
-   a replace-mode one means the harness trusts only the proxy, which fails closed (D41). The
-   shared rows are read by every tool child, so they are handed the system's roots plus the proxy
+   `REQUESTS_CA_BUNDLE`. A harness's own variable is handed the recording proxy CA alone, in either mode;
+   a replace-mode one means the harness trusts only the recording proxy, which fails closed (D41). The
+   shared rows are read by every tool child, so they are handed the system's roots plus the recording proxy
    CA, built for each run from the OS trust store, and take `mode = "extend"` only. That gives up
    failing closed for that harness (CHEAT-CHECKLIST), so a connector names a shared row only when
    the harness has no CA variable of its own. `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
@@ -290,8 +290,8 @@ the V1 cadence keys were deleted before release, and `DaemonConfig` refuses them
 seam, under the shared grammar (20 to 256 bytes of `[A-Za-z0-9_-]`). It is never a manifest value.
 D41's key-fragment scan applies. This admits a name only; it admits no Amp connector.
 
-*Superseded by D61/D60: the child-credential list and seam are gone (D61). The one secret the
-tracer hands a harness is its own proxy credential (D60).*
+*Superseded by D61/D60: the child-credential list and seam are gone (D61). The one secret
+Goal Cup Proxy hands a harness is the recording proxy's credential (D60).*
 
 ## D50. **(M2)** Amend D43 ruling 3 for `stdout_json` identity. *(Superseded by D61.)*
 
@@ -326,11 +326,11 @@ Reconsider if a connector PR is ever merged without code-owner review.
 ## D52. The shipped connectors set no model, effort, sandbox, permission or MCP limit.
 
 A participant's harness runs as they would run it: model free, network on, nothing limited. A
-shipped connector keeps only what capture needs: the isolated config home, the proxy and CA
+shipped connector keeps only what capture needs: the isolated config home, the recording proxy and CA
 variables, the session file, and self-update off. "Model free" means the vendor default, not a
 choice the participant can make through the connector.
 
-A tool command therefore runs with the participant's full access. It can reach the tracer's control
+A tool command therefore runs with the participant's full access. It can reach Goal Cup Proxy's control
 file, its own session file, the shared config homes and the real `~/.codex` and `~/.claude`, and
 use a tool that ignores `HTTPS_PROXY`. Traffic to an unlisted host is tunnelled and noted
 ([CHEAT-CHECKLIST](CHEAT-CHECKLIST.md)). D57 adds that connectors run chat mode and set no
@@ -342,12 +342,12 @@ them: both present and well-formed, or both absent.
 
 `Launch` has one optional field, `harness_build`: `program_sha256` (the program file the launcher
 resolved), `image_sha256` (the running executable image, read by the daemon at the launch post) and
-`platform`. The tracer pins no build. `[capture.executable]` names only `program` and optionally
+`platform`. Goal Cup Proxy pins no build. `[capture.executable]` names only `program` and optionally
 `version_args`. `Launch.harness_version` is what the harness printed, or `unreported`. The
 connector-directory pin stays.
 
 Trade: v0.5.0 froze v5, and every record denies unknown fields, so a v0.5.0 verifier reports
-`record_malformed` for a trace with `harness_build`. The tracer and the server ship their own
+`record_malformed` for a trace with `harness_build`. Goal Cup Proxy and the server ship their own
 verifier. Matching builds against a list belongs to the server. Digests cover the registered pid,
 not a native binary a wrapper spawns. Any further post-tag field means v6.
 
@@ -397,7 +397,7 @@ is not empty, is refused.
   64 MiB and one deadline covers every call.
 - **Time.** `LOCAL_CAPTURE_FINISH_BUDGET` is 180 s; the commit reserve stays 2 s. For a clone the
   drain share (the daemon's ingest drain and the launcher's proxy stop) ends 30 s before the
-  deadline, so Git always gets time. A real Codex run showed the proxy stop had not: it waited for
+  deadline, so Git always gets time. A real Codex run showed the recording proxy stop had not: it waited for
   a connection the harness held open until the reserve, and the Git read ran out of time. The
   Hermes marker wait (CONTRACTS C6 para 3) ends one second before the reserve and keeps no floor.
 
@@ -432,7 +432,7 @@ per entry, ever) is 65 536. `MAX_LIVE_PRODUCERS` (128) bounds producers live at 
 refuses a handshake while 128 are unsettled, and the sink answers a fresh epoch `Pending` at the
 same count. Goal-stream bounds and the native adapter's retry budget stay at 128. A Recovery
 naming a predecessor the chain never recorded supersedes every wire producer of the entry, so
-lineage walks stay linear. The proxy's `MAX_CONNECTION_FAILURES` (10 in a row) still ends the wire
+lineage walks stay linear. The recording proxy's `MAX_CONNECTION_FAILURES` (10 in a row) still ends the wire
 leg. A verifier built before this entry flags a trace with more than 128 producers.
 
 ## D59. `NODE_USE_ENV_PROXY` and a shared run home.
@@ -449,7 +449,7 @@ leg. A verifier built before this entry flags a trace with more than 128 produce
 
 ## D60. The daemon redacts the run's own secret by exact value.
 
-16 Oct 2026. The tracer hands a harness one secret of its own: the per-run proxy credential in
+16 Oct 2026. Goal Cup Proxy hands a harness one secret of its own: the per-run proxy credential in
 `HTTPS_PROXY` (H8). It never sees, forwards or stores a participant's provider key (D61); the
 harness keeps that in its own home. The launcher makes the credential before the capture create and
 passes it to the daemon in `run_secrets` (control API v9), in memory only: never a file, a log,
@@ -466,9 +466,9 @@ the longest wrapped form (10 746 bytes) fits `MAX_HELD_BYTES`. The marker is
 (`spikes/redact.py`). There is no upload-side check: the daemon is the one place a body is redacted,
 and the secret is loopback-only and dead once the run ends.
 
-## D61. Hermes runs in chat mode from its own home; the tracer forwards no key.
+## D61. Hermes runs in chat mode from its own home; Goal Cup Proxy forwards no key.
 
-16 Oct 2026, owner ruling. The tracer never sees, forwards or stores a participant's provider key.
+16 Oct 2026, owner ruling. Goal Cup Proxy never sees, forwards or stores a participant's provider key.
 Hermes runs however the participant set it up, as Codex does (D39, D57).
 
 - **Chat mode.** `hermes chat` opens Hermes's classic REPL (`--tui` is not passed; a
@@ -481,7 +481,7 @@ Hermes runs however the participant set it up, as Codex does (D39, D57).
   model in `config.yaml` and the key in `.env`. Hermes loads `.env` itself; no launch passes it.
 - **Identity.** `none`, with the native source `sessions/session_*.json` and `since_run_start`:
   the only identity an interactive profile takes (D57). The banner prints `Session: <id>` on the
-  terminal, which the tracer does not read. Runs on the shared home are serialized, so every
+  terminal, which Goal Cup Proxy does not read. Runs on the shared home are serialized, so every
   snapshot new or written since the start is the run's. A `request_dump_*` file is never matched.
 - **`capture.configure` (schema 1, additive).** A chat-mode connector may list up to 4 commands
   of its own program (each 1 to 16 arguments of at most 256 bytes, held to the `args` rules, no
@@ -508,7 +508,7 @@ Hermes runs however the participant set it up, as Codex does (D39, D57).
     Hermes compacts stays the participant's.
 - **What it gives up.** No key, so no key scan (D41) for Hermes. The daemon's shape rules still
   remove a key printed raw or JSON-escaped; a key the agent encodes (`base64`, hex) is not
-  matched, because the tracer never knows its value (CHEAT-CHECKLIST). Hermes's own defaults now
+  matched, because Goal Cup Proxy never knows its value (CHEAT-CHECKLIST). Hermes's own defaults now
   apply where the seed turned them off: title generation (an auxiliary model call), compression
   (each compaction now starts a new snapshot file, above), the `tirith` scanner download and the
   remote model catalogue. Model traffic is recorded for the `providers` rows only (DeepSeek) while
@@ -528,10 +528,10 @@ Hermes runs however the participant set it up, as Codex does (D39, D57).
 
 This supersedes D40's Hermes clause, D41's seed and key-scan clauses, D43 ruling 2, D49 and D50.
 
-## D62. The tracer records the model service the harness's own config names.
+## D62. Goal Cup Proxy records the model service the harness's own config names.
 
 16 Oct 2026, owner ruling, for Hermes and every later harness: no provider list, and no tracking
-of what a harness offers. The participant picks the model service in the harness; the tracer
+of what a harness offers. The participant picks the model service in the harness; Goal Cup Proxy
 records that service and nothing else.
 
 - **The field.** `capture.model_host_from = { file = "<path in config_home>", key = "<dotted
@@ -549,9 +549,9 @@ records that service and nothing else.
   `serde_json` and `toml`, which the binary already links. Only `host:port` is ever logged
   (`model service: <host>:<port> (<key> in <file>)`); a userinfo, the path and the query are not.
   The file's name and the key may not name `auth`, `credential(s)`, `secret(s)`, `token(s)`,
-  `key(s)`, `api_key` or `env`: the tracer reads an address, never a key file or a key.
+  `key(s)`, `api_key` or `env`: Goal Cup Proxy reads an address, never a key file or a key.
 - **Refused at start.** A missing value, a non-URL, plain `http` (only `HTTPS_PROXY` is set, so it
-  would bypass the recorder), a loopback name, an address literal, a single-label name, a tracker
+  would bypass the recorder), a loopback name, an address literal, a single-label name, a Goal Cup
   host or an authentication host: "`<display name>` is set to use `<scheme>://<host>:<port>`,
   which Goal Cup cannot record: `<reason>`. Goal Cup records only an https model service that is not on
   this computer. Run goalcup prep --harness `<id>`, choose such a service there, then run the
@@ -569,7 +569,7 @@ records that service and nothing else.
   token refresh (above), pending a test-round run. `providers = ["deepseek"]` is removed: with `HERMES_CA_BUNDLE` in replace mode
   any service the participant picks other than a listed one failed its TLS handshake, and a listed
   one the participant does not use was only probed at start. `[capture.ca]` stays in replace
-  mode: the approved host is decrypted by the proxy, so Hermes trusts it through the proxy CA.
+  mode: the approved host is decrypted by the recording proxy, so Hermes trusts it through the recording proxy CA.
 - **The default.** The connector template and HARNESS-ONBOARDING make the field the default for
   any harness whose model service is the participant's choice; the facts sheet asks where the
   harness saves it. `providers.toml` stays for a harness that can reach one fixed service.
@@ -628,11 +628,11 @@ call ended the run's upload for good. A server that must end a run says `stop` i
 
 *Superseded in part by D65: the disk watch no longer stops a run; it pauses the agent.*
 
-## D65. On a nearly full disk the tracer pauses the agent and resumes it by itself.
+## D65. On a nearly full disk Goal Cup Proxy pauses the agent and resumes it by itself.
 
-21 Oct 2026, owner ruling (event readiness plan, WP-C): when the disk is about to fill, the tracer
+21 Oct 2026, owner ruling (event readiness plan, WP-C): when the disk is about to fill, Goal Cup Proxy
 pauses the agent so that nothing happens unrecorded, and resumes it by itself when space returns.
-This is the one exception to the hard rule "the tracer records and never manages the agent"
+This is the one exception to the hard rule "Goal Cup Proxy records and never manages the agent"
 (`AGENTS.md`).
 
 - **Freeze, not prompt.** The watch tick (every 30 s) sends `SIGSTOP` to the harness when less
@@ -642,8 +642,8 @@ This is the one exception to the hard rule "the tracer records and never manages
   some disk space; it resumes by itself. If your agent seems stuck afterwards, type keep going."
   `goalcup status` keeps it as a `PROBLEM:` line, and the run's `state.json` has
   `disk.disk_paused`, until the agent resumes.
-- **Best effort.** The processes paused are the ones the termination code reaches: the root the
-  tracer spawned and its descendants in a `ps` walk (twice, so a child forked during the first
+- **Best effort.** The processes paused are the ones the termination code reaches: the root process
+  Goal Cup Proxy spawned and its descendants in a `ps` walk (twice, so a child forked during the first
   pass is caught), and the harness's own process group when it has one. A process that left the
   tree (detached, daemonized, or reparented to `goalcup start` by the Linux subreaper) may escape
   and keep running.

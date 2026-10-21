@@ -1,12 +1,12 @@
 # Architecture
 
-How do the parts of the tracer fit, and where is each guarantee tested? For contributors and
+How do the parts of Goal Cup Proxy fit, and where is each guarantee tested? For contributors and
 their agents. Wire formats are in [CONTRACTS](CONTRACTS.md); rules that bind the code are in
 [DECISIONS](DECISIONS.md). Section 12 lists the terms. Use them exactly.
 
-## 1. What the tracer is for
+## 1. What Goal Cup Proxy is for
 
-The tracer preserves evidence of running agent work for research across harnesses and operating
+Goal Cup Proxy preserves evidence of running agent work for research across harnesses and operating
 systems. It records declared native session artifacts and model traffic, seals them into a hash
 chain, and leaves interpretation to versioned decoders. Goal Cup's one-prompt, 168-hour contest
 uses this evidence for review and adds upload, deadline and participant rules.
@@ -19,7 +19,7 @@ must be measured. These are targets, not assertions of universal capture. Platfo
 the [README](../README.md#platforms): native Windows is planned; WSL2 is a Linux path awaiting
 real Windows-machine validation.
 
-The tracer guarantees:
+Goal Cup Proxy guarantees:
 
 1. **Bounded capture.** The harness's declared native artifacts and model traffic for the run.
    Detected capture loss is a gap in the chain, never an invented record. Activity outside the
@@ -60,7 +60,7 @@ TypeScript).
 | `goalcup start` | Preflight; creates the entry; runs the recording proxy in process; gates and launches the harness; seals when it exits; uploads | [commands/start.rs](../crates/goalcup-cli/src/commands/start.rs) |
 | `goalcup login`, `prep`, `continue`, `upload` | Device-flow login; machine and repository readiness; next segment of a run; finish an upload | [commands/](../crates/goalcup-cli/src/commands/), [account/](../crates/goalcup-cli/src/account/), [upload/](../crates/goalcup-cli/src/upload/) |
 | `goalcup seal`, `status`, `entries`, `doctor` | End a run early; read status; list runs; check the machine | [commands/](../crates/goalcup-cli/src/commands/) |
-| Proxy | Loopback CONNECT proxy. Relays bytes unchanged; tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
+| Recording proxy | Loopback CONNECT proxy. Relays bytes unchanged; tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
 | Daemon | Control API on loopback; ingest; per-producer redaction; chain append; native-file capture; finish; termination | [runtime/capture/](../crates/goalcup-daemon/src/runtime/capture/mod.rs) |
 | Verifier | Integrity reader and research report. Six built-in decoders: native `codex-native` and `claude-code-native`; wire `openai-responses`, `anthropic-messages`, `openai-chat-completions`, and `amp-thread-jsonrpc` | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
 | Upload server | Checks the run credential, stores chunks in R2, signs receipts and acknowledgements, sends the run emails | [server/worker](../server/worker/README.md), [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DESIGN.md) |
@@ -81,7 +81,7 @@ The manifest says, for one harness:
 
 - how to launch it: program, argv template, environment, chat mode (`interactive = true`) or
   headless (`goal_flag`), `resume_args`;
-- which hosts the proxy decrypts (`[[capture.hosts]]`, each with a `protocol_hint`) and which CA
+- which hosts the recording proxy decrypts (`[[capture.hosts]]`, each with a `protocol_hint`) and which CA
   variable the harness reads;
 - which session files to read (`[[capture.native]]`: root, glob, `append_only` or `snapshot`,
   `since_run_start`) and how the session is identified (`[capture.identity]`);
@@ -90,7 +90,7 @@ The manifest says, for one harness:
   redaction patterns.
 
 Shared modules do the rest: the loader and its trust tables (`harness.rs`, `capture_policy.rs`), the
-launcher, the native-file reader, the proxy, the redactor and the decoders. A harness whose wire or
+launcher, the native-file reader, the recording proxy, the redactor and the decoders. A harness whose wire or
 session format no decoder reads is still recorded. It is *capture-only* and decoded later when a
 decoder is added.
 
@@ -99,7 +99,7 @@ decoder is added.
   match. The CLI and the daemon each load the connector and must agree on the digest before an
   entry is created (D46). The pin stops a connector from smuggling in a base URL. Review is the
   control against a malicious merge ([SECURITY](../SECURITY.md), D51).
-- **Builds are recorded, not pinned.** The tracer runs the harness that `program` resolves to on
+- **Builds are recorded, not pinned.** Goal Cup Proxy runs the harness that `program` resolves to on
   `PATH` and records `Launch.harness_build` (program digest, running-image digest, platform) and
   the version the harness prints (D53).
 - **Discovery.** `$GOALCUP_CONNECTORS_DIR`, else `../share/goalcup/connectors` or
@@ -109,7 +109,7 @@ decoder is added.
   home (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) under `<config>/capture-homes/<id>`; runs on one are
   serialized by a lock (D39). Claude Code's run home links the macOS Keychains directory. Hermes
   shares one `HERMES_HOME` the same way; the participant's own Hermes setup keeps its provider and
-  key there, and the tracer passes it none (D61). Amp instead keeps one isolated shared `HOME`
+  key there, and Goal Cup Proxy passes it none (D61). Amp instead keeps one isolated shared `HOME`
   across serialized runs. Other run homes are fresh, according to the connector.
 - **Contract kit.** Four synthetic cases (`controlled-workload`, `synthetic-preassigned`,
   `synthetic-stderr-token` and `synthetic-stdout-json`) under `crates/goalcup-cli/tests/fixtures/harness-kit/` test the
@@ -139,7 +139,7 @@ CLI phases are in `commands/start.rs` (`prepare`, `create_and_gate`, `register_a
    allocated. On the server path: approve the run in the browser, clone the repository, open the run.
 2. **Create.** The daemon compares connector digests (D46) and then writes `baseline.json` and the
    seq-0 `Baseline`. The chain is quota-only. The run host holds one disk reservation per run
-   (D40 as amended). The proxy starts and the goal marker is recorded.
+   (D40 as amended). The recording proxy starts and the goal marker is recorded.
 3. **Spawn gate.** The harness parks before `exec`. After the daemon durably registers it, the CLI
    re-opens the resolved program path with `O_NOFOLLOW|O_NONBLOCK`, requires a regular file and
    releases the harness. No binary bytes are read. No execution is bound to an inode.
@@ -149,7 +149,7 @@ CLI phases are in `commands/start.rs` (`prepare`, `create_and_gate`, `register_a
    the connector's grace, SIGKILL, sweep and reconfirm run with wire and native capture still live.
    This runs outside the capture budget ([TERMINATION](TERMINATION.md)); both the drain-share
    boundary and final deadline move by actual termination time. The launcher sees the child exit
-   and stops its proxy; competing finishes share one terminal.
+   and stops its recording proxy; competing finishes share one terminal.
 6. **Finish capture.** Close admission, drain the existing producers, persist explicit loss,
    stop the owner, read the workspace state (Git for a clone, a file walk otherwise), then write
    `LocalFinish` plus `seal.json`. A refused finish writes no terminal and retains its termination
@@ -195,9 +195,9 @@ exit judges the record, not the run (D45). Research output: `goalcup-verify --re
 verifies only under a key in `SERVER_PUBLIC_KEYS` (the production Worker's) or one passed with
 `--dev-key`; the report then says `key_source: pinned` or `supplied`.
 
-## 8. The proxy
+## 8. The recording proxy
 
-- **CONNECT on loopback**, authenticated by a per-launch credential in the proxy URL. The
+- **CONNECT on loopback**, authenticated by a per-launch credential in the recording proxy URL. The
   credential is never forwarded ([connect.rs](../crates/goalcup-cli/src/proxy/connect.rs)).
 - **TLS only for declared hosts** whose SNI matches. Authentication hosts, other hosts and
   mismatched ClientHellos tunnel opaquely. Upstream TLS is always validated. The CA is
@@ -228,7 +228,7 @@ At most `MAX_HELD_BYTES` (16 KiB) of undecided bytes are held per stream. Past t
 **fails closed**: everything from the earliest undecided byte is replaced up to the next safe
 terminator. Below the bound, output equals whole-stream redaction whatever the chunking. A
 connector rule is a typed form with its own recognizer, never a regex. Redaction is best effort. The residuals are
-in the [checklist](CHEAT-CHECKLIST.md). The proxy also strips credential headers by name.
+in the [checklist](CHEAT-CHECKLIST.md). The recording proxy also strips credential headers by name.
 
 ## 10. Upload and the server
 
@@ -245,8 +245,8 @@ agent and seals. Details: [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DE
 
 ## 11. Not here
 
-Deliberately not built: durable ingest replay, automatic proxy restart, torn-tail repair, a PTY or
-input relay, continuous workspace hashing, tracker-injected reminders, cross-harness linking and
+Deliberately not built: durable ingest replay, automatic recording proxy restart, torn-tail repair, a PTY or
+input relay, continuous workspace hashing, reminders injected by Goal Cup Proxy, cross-harness linking and
 native Windows. Operating the binaries: [OPERATING](OPERATING.md).
 
 ## 12. Terms
@@ -267,7 +267,7 @@ native Windows. Operating the binaries: [OPERATING](OPERATING.md).
 - **shared capture home**: `<config>/capture-homes/<connector>`, the isolated config home that all
   runs of one connector use (D39).
 - **native leg / wire leg**: section 5.
-- **producer, epoch, stream**: a producer sends capture frames (the proxy, the native adapter). An
+- **producer, epoch, stream**: a producer sends capture frames (the recording proxy, the native adapter). An
   epoch is one admitted lifetime of a producer; a restarted producer is a new epoch. A stream is one
   payload sequence in an epoch. Stream zero carries `Connection`, `Recovery` and `Loss`.
 - **capture-only**: bytes recorded and not decoded, because no decoder accepts the stream or the

@@ -9,7 +9,7 @@ Organizer steps (deploy, test runs, bad days) are in [OPERATING](OPERATING.md).
 
 1. **Keep every trace.** A bad hour for the participant's network or for the server loses nothing.
 2. **Own the clock.** The server stamps the official start, sets the deadline 168 hours later, and
-   tells the tracer to stop. The participant's clock cannot extend a run.
+   tells Goal Cup Proxy to stop. The participant's clock cannot extend a run.
 3. **Tell the participant** when a run goes quiet, goes idle, has a recording problem, is paused
    because the disk is almost full, or has ended.
 
@@ -27,7 +27,7 @@ Recording on the participant's machine never waits on the network. The daemon ha
 | GitHub API | Checks `repo_url` at open. Reads the repository's head commit at the deadline. |
 | Website (another repo) | Owns the database schema and migrations, sign-up, terms, the approval page, and the member's address for mail. |
 
-This repository owns the tracer and the Worker. The Worker's SQL
+This repository owns Goal Cup Proxy and the Worker. The Worker's SQL
 ([sql/goal-cup-tracer-upload.sql](../server/worker/sql/goal-cup-tracer-upload.sql)) is a copy of the
 website's migration; the website repo is the authority. The Worker connects with a Supabase secret
 key whose role can run the `goal_cup_upload_*` functions and nothing else. Row-level security is on
@@ -36,7 +36,7 @@ for every table. Production and staging each have their own key and role.
 ## The run, step by step
 
 1. **Sign in.** `goalcup login` and every `goalcup start` use the device flow: the Worker issues a
-   device code and a short user code, the member approves on the website, and the tracer picks up
+   device code and a short user code, the member approves on the website, and Goal Cup Proxy picks up
    the result. Approval needs the current terms accepted. The server stores only the SHA-256 of the
    codes and the credential.
 2. **Run credential.** A competition or practice approval yields a credential (`gcr_` and 64 hex).
@@ -49,18 +49,18 @@ for every table. Production and staging each have their own key and role.
    mints `run_id` and `entry_id`. One account has one main run: a new competition start replaces the
    old one, which then ends at the new start. Only competition replaces: practice and organizer test
    runs replace nothing and are never replaced, so an operator can run several test runs at once.
-4. **Receipt.** Once the daemon has the entry and its baseline, the tracer asks for a signed start
+4. **Receipt.** Once the daemon has the entry and its baseline, Goal Cup Proxy asks for a signed start
    receipt over the entry's facts and chain head.
-5. **Record.** Every 5 minutes the tracer sends a heartbeat `(seq, head)`. The server stamps its
-   receive time, which commits the tracer to that chain position before the bytes arrive. Chunks go
+5. **Record.** Every 5 minutes Goal Cup Proxy sends a heartbeat `(seq, head)`. The server stamps its
+   receive time, which commits Goal Cup Proxy to that chain position before the bytes arrive. Chunks go
    every 30 minutes, or sooner at 256 MiB of chain; each is acknowledged with a signature.
 6. **Segments.** If the agent dies, `goalcup continue` adds a segment to the same run: new
    `entry_id`, own chain, own receipt, same deadline. Only the machine that started the run can do
    it, with the saved credential.
 7. **End.** At `ends_at` (the deadline, or the start of a replacing run) the heartbeat answer says
-   `stop`. The tracer stops the agent, seals, sends a final heartbeat with the chain end and the
+   `stop`. Goal Cup Proxy stops the agent, seals, sends a final heartbeat with the chain end and the
    workspace commit, and uploads up to that end for at most one hour. The server accepts nothing past
-   the committed end. Without a network the tracer stops on its own clock.
+   the committed end. Without a network Goal Cup Proxy stops on its own clock.
 8. **Close.** 24 hours after `ends_at` the server closes the run: `sealed` if the last entry is
    sealed, otherwise `incomplete`. It then answers `410`. There is no grace period and no late window.
 9. **Commit at the deadline.** The cron reads the head commit of the participant's repository once the
@@ -88,13 +88,13 @@ only as a Worker secret. The verifier pins the public key (`SERVER_PUBLIC_KEYS` 
 ## What the server stores about a person
 
 - Hashes of the codes and credential. Never the plain values.
-- The machine facts the tracer sends at open (operating system, architecture, CPUs, memory, disk,
+- The machine facts Goal Cup Proxy sends at open (operating system, architecture, CPUs, memory, disk,
   WSL2, container, mains power). No host name, user name or serial number.
 - The IP address and country of the open call and the latest pair from each `continue` and heartbeat.
-- The heartbeat vitals: free disk space on the machine, and the memory, CPU time and open files of the
-  tracer's own processes. Nothing about other processes.
+- The heartbeat vitals: free disk space on the machine, and the memory, CPU time and open files of
+  Goal Cup Proxy's own processes. Nothing about other processes.
 - None of this is in an answer, a key, a log or a public page.
-- The Worker does not redact traces. The tracer removes secrets on the participant's machine before
+- The Worker does not redact traces. Goal Cup Proxy removes secrets on the participant's machine before
   anything is written or uploaded. Raw traces are never public.
 
 ## Limits and switches
@@ -105,19 +105,19 @@ only as a Worker secret. The verifier pins the public key (`SERVER_PUBLIC_KEYS` 
   under `RATE_LIMIT_KEY`. Over a limit is `429` with `Retry-After`. A deployment without the limiter
   answers every device call `500 misconfigured`.
 - **Maintenance switch:** `MAINTENANCE=on` answers every call `503 maintenance` with `Retry-After`
-  and stops the cron. Tracers back off and lose nothing.
+  and stops the cron. Clients back off and lose nothing.
 - **Sizes:** a chunk is at most 32 MiB compressed; each seal document at most 16 MiB; other bodies at
   most 64 KiB.
 - **Per-run size limit:** a run may hold at most `RUN_MAX_COMPRESSED_BYTES` (64 GiB) of compressed
   chunks in R2, over all its entries. The database counts `stored_bytes` (each committed chunk's
   `Content-Length`) and `chunk_count` per entry in the same atomic step that commits the chunk, and
   every run answer carries the run's totals. The chunk upload checks the total plus the new chunk
-  before it reads or stores the body: over the limit is `413 quota_exceeded`, nothing stored. The
-  tracer keeps its data and retries, so raising the variable (a deploy) resumes the upload. The check
+  before it reads or stores the body: over the limit is `413 quota_exceeded`, nothing stored.
+  Goal Cup Proxy keeps its data and retries, so raising the variable (a deploy) resumes the upload. The check
   reads the total of a moment ago, so concurrent uploads to several entries of one run can pass it by
   one chunk each. The operators see Worker log lines `quota-half` and `quota-full` when a committed
   chunk takes a run to 50% or 100% of the limit, and `quota-exceeded` on each refusal (repeated at
-  the tracer's retry pace). These are log lines, not emails: the notice outbox mails the run's member,
+  Goal Cup Proxy's retry pace). These are log lines, not emails: the notice outbox mails the run's member,
   and an operator email would need a new notice kind and recipient rule in the website's database.
 
 ## Notices

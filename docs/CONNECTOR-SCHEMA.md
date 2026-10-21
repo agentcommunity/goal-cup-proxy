@@ -278,7 +278,7 @@ must be empty, and the native `root` must be `{run_home}/...`: anything else wou
 harness never reads, admitted to record nothing.
 
 That run `HOME` is fresh each run, so a login made before the run is lost. `run_home = "shared"`
-keeps it instead (D59): one empty directory per connector, made by the tracker and kept across
+keeps it instead (D59): one empty directory per connector, made by Goal Cup Proxy and kept across
 runs, held to the rules of a shared config home. Runs on it are serialized; the daemon refuses it
 at the participant's `HOME`, at a `real_dirs` path or anywhere but directly under
 `<config_dir>/capture-homes`; the baseline lists it in place of the config home; a missing
@@ -288,7 +288,7 @@ identity `none` needs `since_run_start = true`. It is refused with
 
 ## Credential and CA
 
-The tracer never sees, forwards or stores a participant's provider key (D61). A
+Goal Cup Proxy never sees, forwards or stores a participant's provider key (D61). A
 `[capture.credential]` table, in the base profile or in a `[capture.platform.<key>]` override, is
 refused with "a connector may not pass a provider key; the harness keeps its own login in its
 home". A harness that reads its key from an environment variable only is set up with its own
@@ -311,14 +311,14 @@ The launch points each name at a file made for the run:
 
 | Name | Mode | The file | The harness then trusts |
 |---|---|---|---|
-| own variable | `extend` | the recording proxy's CA alone | its own roots plus the proxy (`NODE_EXTRA_CA_CERTS`, `CODEX_CA_CERTIFICATE`) |
-| own variable | `replace` | the recording proxy's CA alone | the proxy only, so it fails closed (`HERMES_CA_BUNDLE`, D41) |
-| shared row | `extend` only | the system's trusted roots plus the proxy's CA | the real roots plus the proxy |
+| own variable | `extend` | the recording proxy's CA alone | its own roots plus the recording proxy (`NODE_EXTRA_CA_CERTS`, `CODEX_CA_CERTIFICATE`) |
+| own variable | `replace` | the recording proxy's CA alone | the recording proxy only, so it fails closed (`HERMES_CA_BUNDLE`, D41) |
+| shared row | `extend` only | the system's trusted roots plus the recording proxy's CA | the real roots plus the recording proxy |
 
 A `replace` variable fails closed: if the harness skips `HTTPS_PROXY` and connects straight to its
 provider, the handshake fails, so no model call goes unrecorded. **A shared row gives that up.**
 Its file must hold the real roots, or every tool child's TLS would break, so a connection the
-harness makes past the proxy still verifies and is not recorded
+harness makes past the recording proxy still verifies and is not recorded
 ([CHEAT-CHECKLIST](CHEAT-CHECKLIST.md#anchoring-and-the-agents-reach)). So a builder names a shared
 row only when the harness has no CA variable of its own. When the harness has a harness-specific
 variable that replaces its roots, name that one with `mode = "replace"`. A shared row is never
@@ -326,13 +326,13 @@ named in a `replace` profile.
 
 The shared-row file is built when the run starts from the OS trust store (macOS: the System Roots
 keychain; Linux: the distribution bundle, such as `/etc/ssl/certs/ca-certificates.crt`). It holds
-certificates only, the proxy CA first, and is written with mode 0600 into the run's private `ca/`
+certificates only, the recording proxy CA first, and is written with mode 0600 into the run's private `ca/`
 directory. A start with no readable trust store is refused. Apple's `/usr/bin/python3` links
 LibreSSL, which ignores `SSL_CERT_FILE`; a Python harness from Homebrew, python.org or uv honours
 it.
 
 Each name is also held to the shared environment-name rules (no provider, git, npm, OpenSSL or
-tracker namespace, no credential or proxy word). `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
+Goal Cup namespace, no credential or proxy word). `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
 `NODE_TLS_REJECT_UNAUTHORIZED` are refused in every field. A CA variable is refused in
 `capture.env` and `capture.home.env`: `capture.ca` is the one field that sets it. A new mode or a
 new name shape is a core policy and DECISIONS change.
@@ -436,7 +436,7 @@ with `capture.model_host_from` may list none: its model host comes from the harn
 each start.
 
 A model provider's host row is written once, in the shared provider table
-`crates/goalcup-protocol/providers.toml`, which is compiled into the tracer. A connector names
+`crates/goalcup-protocol/providers.toml`, which is compiled into `goalcup`. A connector names
 rows there with `capture.providers = ["anthropic"]`. The loader appends each named row to
 `capture.hosts`, after the connector's own rows, and every host rule below applies to it. An
 unknown or repeated name is refused, and so is a host that the connector also writes itself. A new
@@ -483,8 +483,8 @@ in the harness, and the harness saves its address in its own config. There is no
   path and the query are never logged or recorded.
 - **Refused at start, and not ready at prep.** A missing file or key, a value that is not an
   `http` or `https` URL, plain `http` (only `HTTPS_PROXY` is set, so it would pass around the
-  recorder), a loopback name, an address literal, a single-label name, a host that names the
-  tracker, and an authentication host. The refusal names the value (`<scheme>://<host>:<port>`
+  recorder), a loopback name, an address literal, a single-label name, a host that names
+  Goal Cup, and an authentication host. The refusal names the value (`<scheme>://<host>:<port>`
   only), the reason and the way to change it: "`<display name>` is set to use `<value>`, which Goal
   Cup cannot record: `<reason>`. Goal Cup records only an https model service that is not on this
   computer. Run goalcup prep --harness `<id>`, choose such a service there, then run the command
@@ -495,7 +495,7 @@ in the harness, and the harness saves its address in its own config. There is no
 - **Schema rules.** `file` is a relative path of at most 4 components with a `.yaml`, `.yml`,
   `.json` or `.toml` extension. `key` is 1–8 names of `[A-Za-z0-9_-]` (1–64 bytes each) joined
   with `.`. No `.`, `-` or `_` separated part of the file's name or of the key may be `auth`,
-  `credential(s)`, `secret(s)`, `token(s)`, `key(s)`, `api_key` or `env`, in any case: the tracer
+  `credential(s)`, `secret(s)`, `token(s)`, `key(s)`, `api_key` or `env`, in any case: Goal Cup Proxy
   reads a service address, never a key file or a key.
 - **A switch mid-run.** A service the participant switches to inside a running session is not
   intercepted until the next segment. The participant guide says: exit the harness and run
@@ -564,7 +564,7 @@ JSON field, not a header: use `json_field` with the header name, which the field
 `header_prefix` only matches `name: value` text.
 
 The shared set already covers what every harness holds: provider keys, tokens, e-mail addresses,
-and the tracer's own proxy credential (`proxy_credential`, the secret in the launch's
+and the recording proxy's credential (`proxy_credential`, the secret in the launch's
 `HTTPS_PROXY`). A connector never names those. On top of the patterns, the daemon redacts the
 exact value of the run's proxy credential in every form `goalcup_protocol::run_secret::encoded_forms`
 derives, as `<redacted:run_secret>` (D60).
@@ -604,7 +604,7 @@ In addition to the local rules above, all of these apply:
    scoped path.
 9. A native hint is allowed only on `append_only`; a prefix path cannot be `/`.
 10. A manifest is delivery-agnostic: no argument, resume argument, goal flag, environment key/value, host or auth
-    host may name Goal Cup, its reserved environment namespace or a tracker host. There is no
+    host may name Goal Cup, its reserved environment namespace or a Goal Cup host. There is no
     schema field for a server, upload or delivery credential.
 11. `run_home = "shared"` is refused with `capture.home.env` (D59).
 
@@ -654,7 +654,7 @@ hand-merging hashes.
 
 A `capture.providers` row lives in `providers.toml`, outside `connectors/<id>/`, so the directory
 digest does not cover it. The effective host set of a pinned connector is its digest plus the
-tracer build's provider table, which is compiled in and changes only in a reviewed core PR.
+`goalcup` build's provider table, which is compiled in and changes only in a reviewed core PR.
 
 Schema evolution and pin evolution are separate. A new optional field whose absence preserves
 current behaviour, a widened bound, a new closed value or a newly admitted cross-field pair may

@@ -1,6 +1,6 @@
 # Add a harness
 
-The one guide for adding a coding-agent harness to the tracer. It is for a harness team and for
+The one guide for adding a coding-agent harness to Goal Cup Proxy. It is for a harness team and for
 the coding agent that team uses. Every step has a command, its expected output and a stop rule.
 Three other documents complete it:
 
@@ -69,7 +69,7 @@ goalcup start --harness <id>
 
 Do not log this fresh config into the server for a local smoke. In prep, sign into the harness in
 its isolated home and exit normally; server/GitHub/practice `[todo]` steps are expected locally.
-In start, type a small task, let the harness respond, then exit normally. The tracer seals the run.
+In start, type a small task, let the harness respond, then exit normally. Goal Cup Proxy seals the run.
 A pinned connector needs no `--dev`. Keep the config/trace for diagnosis. In another terminal with
 the same config, `goalcup status` shows progress and `goalcup seal` ends the run early.
 
@@ -106,22 +106,22 @@ Headless connectors still use the synthetic checks, but real `start` needs `--go
 Prep and continue currently support chat mode only; use the measured isolated setup in the
 headless harness's facts sheet, with no provider-key handoff or improvised app-wide config.
 
-## What the tracer does
+## What Goal Cup Proxy does
 
-The tracer starts one harness for a participant and records two things:
+Goal Cup Proxy starts one harness for a participant and records two things:
 
 - the declared native session artifacts the harness writes for that run, which may contain a
   transcript or only metadata (as with Amp);
 - its model traffic, through a local proxy set by `HTTPS_PROXY` for that one process only. The
-  proxy certificate is trusted through the harness's CA variable (for example
+  recording proxy certificate is trusted through the harness's CA variable (for example
   `NODE_EXTRA_CA_CERTS` or `SSL_CERT_FILE`), set for that process and its children only.
 
-At the end the tracer seals both into one hash-linked trace. `goalcup-verify --capture-integrity
+At the end Goal Cup Proxy seals both into one hash-linked trace. `goalcup-verify --capture-integrity
 <trace>` checks it.
 
-The tracer never sets a model base URL, never writes app-wide config (`~/.claude`, `~/.codex`,
+Goal Cup Proxy never sets a model base URL, never writes app-wide config (`~/.claude`, `~/.codex`,
 `~/.hermes`), and never prompts the agent. Harness homes are isolated from the user's normal
-stores; a connector may keep its private home across serialized runs. The harness's own sign-in/setup stores its login there. The tracer never
+stores; a connector may keep its private home across serialized runs. The harness's own sign-in/setup stores its login there. Goal Cup Proxy never
 sees, forwards or stores a provider key (D61). Sign-in hosts are tunnelled and not recorded.
 
 A harness is data. A contribution has no `.rs` file:
@@ -149,7 +149,7 @@ CA modes and CA-name shape, the redaction forms, and the identity carriers and n
 
 <a id="row-0"></a>
 
-## Check first: what the tracer cannot capture
+## Check first: what Goal Cup Proxy cannot capture
 
 Read this before you build anything. If your harness matches an item under "Cannot be captured",
 stop and send the facts sheet alone (status `facts only`). A facts sheet is a complete
@@ -161,9 +161,9 @@ Cannot be captured:
 |---|---|---|
 | No local native artifact at all (sessions kept only on a server) | Schema 1 needs exactly one declared native source row | A core capability for wire-only connectors |
 | A database session store (SQLite, LevelDB) | `native.form` is `append_only` or `snapshot` only | A read-only snapshot native form |
-| HTTP/2-only or gRPC model traffic | The proxy speaks HTTP/1.1 and WebSocket upgrades; an `h2`-only client cannot connect | An `h2` proxy path and a decoder for its framing |
-| A local or loopback model | The proxy never sees loopback traffic. A connector that names a loopback or single-label host is refused | A loopback relay the tracer records |
-| A desktop or IDE app | The tracer starts one CLI from argv | Not planned |
+| HTTP/2-only or gRPC model traffic | The recording proxy speaks HTTP/1.1 and WebSocket upgrades; an `h2`-only client cannot connect | An `h2` proxy path and a decoder for its framing |
+| A local or loopback model | The recording proxy never sees loopback traffic. A connector that names a loopback or single-label host is refused | A loopback relay Goal Cup Proxy records |
+| A desktop or IDE app | Goal Cup Proxy starts one CLI from argv | Not planned |
 
 Known gaps. The connector works, but the record is partial. Write each one in the facts sheet:
 
@@ -241,13 +241,13 @@ is the harness executable. Run every command from the repository root.
    sign-in is kept without an environment key (section 5, row 14). Ask where the harness saves the
    model service the participant picks (section 6): the config file and the key of its URL. That
    is `capture.model_host_from`, the default for any harness whose model service is the
-   participant's choice (D62): the tracer records that one host and keeps no provider list. A
+   participant's choice (D62): Goal Cup Proxy records that one host and keeps no provider list. A
    fixed `[[capture.hosts]]` row is only for a harness that can reach one service.
 
    Stop on an unknown in section 4, 5 or 6, or in the macOS column of section 3.
 3. **Do I need a core change?** Walk every row of [the table below](#do-i-need-a-core-change).
    Stop on any "core change" row.
-4. **Record how to get the version.** Builds are recorded, not pinned (D53): the tracer hashes
+4. **Record how to get the version.** Builds are recorded, not pinned (D53): Goal Cup Proxy hashes
    what `program` resolves to and records the digests. Find the file the CLI will run and the
    version command:
    ```sh
@@ -364,7 +364,7 @@ Exactly these, which `git status --short` must confirm:
 
 In the description paste the last line of steps 9 and 10, name anything restored or not run, say
 which parts an agent wrote, and say that a person read the whole diff. Claim only what passed. The
-kit shows that the tracer works with a stand-in shaped like the harness. It does not show that
+kit shows that Goal Cup Proxy works with a stand-in shaped like the harness. It does not show that
 the real harness ran. A maintainer replies within 7 days and runs the checks again on a Mac.
 
 ## When something fails
@@ -393,7 +393,7 @@ moves). Never spell around a rule.
 
 | # | Rule | Data-only fits when | Otherwise |
 |---|---|---|---|
-| 1 | Provider key | the harness's own login stores it in its home; the tracer passes none (D61) | not possible: see row 14 |
+| 1 | Provider key | the harness's own login stores it in its home; Goal Cup Proxy passes none (D61) | not possible: see row 14 |
 | 2 | (retired by D61) | | |
 | 3 | (retired by D61) | | |
 | 4 | Identity carrier | `none`, `preassigned`, `stdout_json` or `stderr_line` | core change |
@@ -414,12 +414,12 @@ is a trust statement about the participant's machine, so the two modes and the C
 core; the CA variable's name is connector data. A redaction regex runs inside the signed
 daemon.
 
-1. **Provider key.** The tracer never sees, forwards or stores a participant's provider key
+1. **Provider key.** Goal Cup Proxy never sees, forwards or stores a participant's provider key
    (D61): `[capture.credential]` is refused. The harness's own login keeps the key in its home.
 4. **Identity carrier.** Four ways exist, each with its binding:
    - `none` (no binding): no id; the native root is private to the run, or the native row sets
      `since_run_start`.
-   - `preassigned` + `at_launch`: the harness accepts an id flag. The tracer mints the id and puts
+   - `preassigned` + `at_launch`: the harness accepts an id flag. Goal Cup Proxy mints the id and puts
      it in `args` as `{session_id}`.
    - `stdout_json` + `at_launch`: the harness prints a JSON line on stdout, before any model text,
      with a field that marks it (`match_field`, `match_value`) and one that holds the id
@@ -438,12 +438,12 @@ daemon.
    "keychain_link"`), or uses `run_home = "shared"`.
 6. **XDG.** Every `XDG_*` name is refused in `capture.env` and as `home.env`. The launch
    environment starts empty, so the harness uses `$HOME`, the private run home.
-7. **CA variable.** Prefer the harness's own variable. It is handed the proxy CA alone:
+7. **CA variable.** Prefer the harness's own variable. It is handed the recording proxy CA alone:
    `mode = "extend"` when it adds to the harness's roots, `mode = "replace"` when it replaces
-   them. A replace-mode variable fails closed: a connection that skips the proxy does not
+   them. A replace-mode variable fails closed: a connection that skips the recording proxy does not
    verify. Name `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` (`mode = "extend"`) only when the harness
    has no variable of its own. Tool children read those too, so the run hands them the system's
-   roots plus the proxy CA, and a direct connection by the harness then succeeds unrecorded
+   roots plus the recording proxy CA, and a direct connection by the harness then succeeds unrecorded
    ([CHEAT-CHECKLIST](CHEAT-CHECKLIST.md#anchoring-and-the-agents-reach)). `SSL_CERT_DIR`,
    `CURL_CA_BUNDLE` and `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. See
    [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#credential-and-ca).

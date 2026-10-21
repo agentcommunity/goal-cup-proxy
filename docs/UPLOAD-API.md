@@ -1,8 +1,8 @@
 # Upload API, version 1
 
-The exact wire contract between the tracer (`goalcup`) and the upload server. How the server is
+The exact wire contract between Goal Cup Proxy (`goalcup`) and the upload server. How the server is
 built, and why, is in [SERVER-DESIGN](SERVER-DESIGN.md). Three things speak this contract and must
-agree byte for byte: the tracer (`crates/goalcup-cli/src/upload/`), the stand-in server the tests run
+agree byte for byte: Goal Cup Proxy (`crates/goalcup-cli/src/upload/`), the stand-in server the tests run
 (`crates/goalcup-cli/tests/common/upload_server/`), and the Worker (`server/worker/`).
 
 A rule change touches all of them: the Worker (`server/worker/src/`), its local database
@@ -25,10 +25,10 @@ missing). It is not in CI.
 - Identifiers: `run_id` is `r` and 16 lowercase hex digits; `entry_id` is `e` and 16 lowercase
   hex digits (the shape the daemon mints for a local-only run); hashes are 64 lowercase hex
   digits.
-- An error is a status code and `{"error": "<code>", "message": "<one sentence>"}`. The tracer
+- An error is a status code and `{"error": "<code>", "message": "<one sentence>"}`. Goal Cup Proxy
   shows the message. Codes:
 
-  | Status | `error` | Meaning | Tracer does |
+  | Status | `error` | Meaning | `goalcup` does |
   |---|---|---|---|
   | 400 | `malformed` | A field or header is missing or has the wrong shape. | during a run and its wrap-up: keeps its data, retries with backoff (D64); `goalcup upload` reports |
   | 401 | `unauthorized` | No credential, or not one the server knows, or it has expired. | during a run and its wrap-up: keeps recording, retries (D64); `goalcup upload` gives up: `goalcup login` again |
@@ -36,15 +36,15 @@ missing). It is not in CI.
   | 404 | `not_found` | No such run for this credential, or not this run's entry. | during a run and its wrap-up: retries (D64); `goalcup upload` gives up, reports |
   | 409 | `conflict` | The request does not continue where the server is (offset, `prev`, seq), the credential already opened a run, `previous_entry_id` is not the run's latest entry, or a seal comes before the final heartbeat. | chunk: re-reads the position (`GET`), then continues |
   | 410 | `closed` | The run is abandoned, or closed 24 hours after it ended; the entry is sealed; the request goes past what the final heartbeat committed; or the run is over and cannot be continued. A device request has expired or was already picked up. | during a run and its wrap-up: retries (D64); `goalcup upload` gives up, reports; a refused `continue` marks the run over |
-  | 413 | `too_large` | A body over its cap. | retries with backoff, reports (a tracer bug) |
+  | 413 | `too_large` | A body over its cap. | retries with backoff, reports (a `goalcup` bug) |
   | 413 | `quota_exceeded` | The chunk would take the run past the server's per-run size limit. Nothing was stored. | keeps its data, retries with backoff |
   | 422 | `digest_mismatch` | The body's SHA-256 is not `Goalcup-Sha256`. Nothing was stored. | retries with backoff |
   | 429 | `rate_limited` | Too many calls. `Retry-After` says when. | retries with backoff |
-  | 503 | `maintenance` | The server asks every tracer to wait. `Retry-After` says when. | retries with backoff |
+  | 503 | `maintenance` | The server asks every client to wait. `Retry-After` says when. | retries with backoff |
   | 503 | `awaiting_final` | The run is over (`ends_at`), and the entry's final heartbeat has not arrived. | sends it, then retries |
 
   During a run, no error stops the run or ends its upload (D64, owner 21 Oct 2026): only a
-  heartbeat answer with `stop: true`, or the tracer's own count, stops it. After 3 refusals in a
+  heartbeat answer with `stop: true`, or Goal Cup Proxy's own count, stops it. After 3 refusals in a
   row of one status the participant sees one line that recording continues and nothing is lost.
   Any other 5xx, and any network failure, is retried with backoff. Backoff starts at 60 s,
   doubles to at most 15 min, with up to 25 % random jitter, and never waits less than a
@@ -52,8 +52,8 @@ missing). It is not in CI.
 
 ## Sign in and the run credential
 
-A participant has no password and pastes no token. The tracer asks for a code, the participant
-approves it on the website in a browser, and the tracer picks up a run credential once. Only the
+A participant has no password and pastes no token. Goal Cup Proxy asks for a code, the participant
+approves it on the website in a browser, and Goal Cup Proxy picks up a run credential once. Only the
 SHA-256 of the device code, the user code and the credential is stored on the server. The device
 code is only ever in a request body, never in a URL or a log.
 
@@ -61,10 +61,12 @@ code is only ever in a request body, never in a URL or a log.
 
 ```json
 {"purpose": "login" | "run", "mode": "competition" | "practice" | "test",
- "connector_id": "codex-cli", "tracer_version": "<tracer version>"}
+ "connector_id": "codex-cli", "proxy_version": "<goalcup version>"}
 ```
 
-All four fields are required. `200`:
+All four fields are required. `proxy_version` (at most 64 characters) may also come under its old
+name `tracer_version`, as releases before the rename send it; when both are sent they must be equal
+(else `400 malformed`). The same holds in the open and continue calls. `200`:
 
 ```json
 {"device_code": "<64 hex>", "user_code": "BCDF-GHJK",
@@ -75,14 +77,14 @@ All four fields are required. `200`:
 
 `user_code` is 8 letters from `BCDFGHJKLMNPQRSTVWXZ`, shown as `XXXX-XXXX`; the website accepts it in
 any case, with or without the dash. `interval` is the seconds between polls, `expires_in` the
-seconds a request lives, counted from its creation, whatever its state. The tracer shows the
+seconds a request lives, counted from its creation, whatever its state. Goal Cup Proxy shows the
 participant `verification_uri_complete` and opens it when it can.
 
 Both device calls are rate-limited. Starts count per client address, an IPv6 client by its /64
 (production: 120 a minute). Polls count per device code (production: 30 a minute), so participants
 behind one venue or campus NAT never share a poll limit; a per-address cap of 1200 polls a minute
 only stops abuse. Over a limit is `429 rate_limited` with `Retry-After` set to the seconds left in
-the minute (1-60). One tracer's normal use (one start, a poll every 5 seconds) stays far below it.
+the minute (1-60). One client's normal use (one start, a poll every 5 seconds) stays far below it.
 
 **Test runs (`"mode": "test"`).** An organizer's own test run. Only accounts on the server's
 allowlist of test operators can approve one or open one (anyone else: the website refuses the
@@ -114,7 +116,7 @@ An approved request answers `200` to the first poll only; every later poll is `4
 A credential stands for one member and one `mode`, the mode of the request that made it. It is
 unbound until `POST /v1/runs` opens a run with it; that call binds it to the run. From then on
 it may call only that run's paths, and `POST /v1/runs` with it again is the repeat described
-there. The tracer keeps it in a file readable by the participant only, never in the harness's
+there. Goal Cup Proxy keeps it in a file readable by the participant only, never in the harness's
 environment, in a command line or in a URL.
 
 A credential expires at `approved_at + 1 hour` while it is unbound, and at the run's
@@ -136,7 +138,7 @@ Called by `goalcup start` after its local checks and before anything is created 
 ```json
 {"connector_id": "codex-cli", "manifest_sha256": "<hex>", "connector_dir_sha256": "<hex>",
  "workspace": "/abs/path/run-.../workspace", "session_id": "<uuid>",
- "harness_version": "0.153.0", "tracer_version": "<tracer version>",
+ "harness_version": "0.153.0", "proxy_version": "<goalcup version>",
  "repo_url": "https://github.com/<owner>/<repo>",
  "machine": {"os": "macOS", "cpus": 8, "ac_power": true}}
 ```
@@ -147,7 +149,7 @@ segment 0.
 
 `seconds_left` is the time left, on the server's clock: whole seconds from the server's now to
 `deadline_at`, rounded up, and `0` once `deadline_at` has come (never negative). The open, the
-continue and every heartbeat answer carry it. **The server is the clock:** the tracer counts the
+continue and every heartbeat answer carry it. **The server is the clock:** Goal Cup Proxy counts the
 run down from the last `seconds_left` it was given. It never reads the machine's own date to decide
 when to stop the agent (see "When a run ends"). It counts to `deadline_at`, not `ends_at`: a run that a later start
 replaced learns it from `stop`.
@@ -211,7 +213,7 @@ entry sent), `chain_head` (from this request), and the run's `started_at` = `off
 
 `{"reason": "<text, at most 500 characters>"}`. Accepted only while no chunk has been stored:
 `200 {"status": "abandoned"}`, and `200` again for a repeat. A run with stored chunks is `409`; a
-sealed run is `410`. The tracer sends a fixed sentence, never a local path. Used when `goalcup start` fails
+sealed run is `410`. Goal Cup Proxy sends a fixed sentence, never a local path. Used when `goalcup start` fails
 after the run opened and before the harness launched (a daemon refusal, a full disk), so no run is
 left open holding nothing.
 
@@ -265,7 +267,7 @@ kept). Storage is create-only.
 committed chunks (each chunk's `Content-Length`) and their number, over all the run's entries. A
 chunk that would take that total past the server's limit (`RUN_MAX_COMPRESSED_BYTES`, 64 GiB of
 compressed chunks) is `413 quota_exceeded`, before the body is read; nothing is stored and the
-position does not move. The tracer keeps its data and retries the same chunk with backoff, so when
+position does not move. Goal Cup Proxy keeps its data and retries the same chunk with backoff, so when
 the organizers raise the limit the upload resumes where it stopped. A retry of a chunk the server
 already holds is answered as usual, whatever the limit. Uploads to several entries of one run at
 the same moment can pass the limit by at most one chunk each.
@@ -309,12 +311,12 @@ Every 5 minutes while the run records, and once more, `final`, when it has ended
 ```
 
 `seq` and `head` are the last whole record of the local `chain.jsonl` and `offset_local` the bytes
-up to the end of it. The server stamps its own receive time on them, which commits the tracer to
+up to the end of it. The server stamps its own receive time on them, which commits Goal Cup Proxy to
 that chain position before the bytes arrive. `repo_head` is the 40-hex commit the run's workspace
 repository had checked out when the run ended (final heartbeat only; `null` when there is none).
 
-Two optional fields may be added: `"recording": "ok" | "gaps" | "failed" | "unknown"` (how the
-tracer sees its own recording) and `"model_requests": <u64>` (model calls seen so far, cumulative,
+Two optional fields may be added: `"recording": "ok" | "gaps" | "failed" | "unknown"` (how
+Goal Cup Proxy sees its own recording) and `"model_requests": <u64>` (model calls seen so far, cumulative,
 at most 2^53 - 1). A heartbeat without them is as before, and `null` means absent, as for
 `repo_head`. The first `gaps` or `failed` flags the run, once. `model_requests` is counted per
 entry, because a continued process counts from zero: the first value an entry reports, and any
@@ -324,7 +326,7 @@ heartbeat time (whichever entry sent it), and the server keeps the connection's 
 country on the heartbeat and as the run's latest pair, as for the open call. The notices that follow
 from these are under "What the server does on its own".
 
-A third optional field, `vitals`, says how the tracer itself is doing:
+A third optional field, `vitals`, says how Goal Cup Proxy itself is doing:
 
 ```json
 "vitals": {"disk_free_bytes": 21474836480, "disk_short": false, "agent_paused": null,
@@ -334,11 +336,11 @@ A third optional field, `vitals`, says how the tracer itself is doing:
 | Field | Type | Meaning |
 |---|---|---|
 | `disk_free_bytes` | u64 | Free space on the disk that holds the run's files |
-| `disk_short` | bool | The tracer considers that space short |
-| `agent_paused` | `"disk"` or `null` | `"disk"`: the tracer has paused the agent because the disk is almost full, and resumes it by itself once there is space again |
-| `rss_bytes`, `cpu_ms`, `open_files` | u64 | Resident memory, CPU time used so far, and open files of the tracer's own processes |
+| `disk_short` | bool | Goal Cup Proxy considers that space short |
+| `agent_paused` | `"disk"` or `null` | `"disk"`: Goal Cup Proxy has paused the agent because the disk is almost full, and resumes it by itself once there is space again |
+| `rss_bytes`, `cpu_ms`, `open_files` | u64 | Resident memory, CPU time used so far, and open files of Goal Cup Proxy's own processes |
 
-**Scope.** The vitals cover only the tracer's own processes plus the machine-wide free disk space.
+**Scope.** The vitals cover only Goal Cup Proxy's own processes plus the machine-wide free disk space.
 They never describe other processes, the agent's work, file names or paths. The server keeps them on
 the heartbeat and as the run's latest vitals; they are in no answer, key or log, and are not public.
 
@@ -355,7 +357,7 @@ ends it. A heartbeat without `vitals` neither starts nor ends one. A pause that 
 
 `200`: `{"stop": <bool>, "deadline_at": "…", "seconds_left": <u64>, "reason": "deadline" | "replaced" | null}`.
 `seconds_left` is the time left (see the open call). `stop` is
-`true` once the server's clock is at or past `ends_at`: **the run is over**. The tracer then stops
+`true` once the server's clock is at or past `ends_at`: **the run is over**. Goal Cup Proxy then stops
 the agent at once, seals, and sends the final heartbeat. `reason` says why: `"replaced"` when a
 later start replaced the run, `"deadline"` when `deadline_at` came, `null` while `stop` is `false`.
 
@@ -370,10 +372,10 @@ A run ends at `ends_at` = `min(deadline_at, replaced_at)`: at its deadline, or w
 later competition start replaced it. At `ends_at` the run is over, in whatever state the agent is
 in. There is no grace period and no late window.
 
-- **Only two things stop a run:** a heartbeat answer with `stop: true`, or the tracer's own
+- **Only two things stop a run:** a heartbeat answer with `stop: true`, or Goal Cup Proxy's own
   count below. No error answer does (D64).
 - **The server says stop.** Every heartbeat answered at or after `ends_at` carries `stop: true` and
-  the `reason`. The tracer stops recording at once. Without a network it stops on its own count:
+  the `reason`. Goal Cup Proxy stops recording at once. Without a network it stops on its own count:
   the `seconds_left` of the last answer it had (the open, the continue or a heartbeat), counted
   from just before that call on a clock that keeps running while the machine sleeps (so it ends
   early by the call's round trip, and never more than a second late: the server counts its clock in
@@ -387,14 +389,14 @@ in. There is no grace period and no late window.
   clock restarts, and on a machine that gives a boot id the count says nothing then (it also
   says nothing when it was stored with no boot id, as on any machine that gives none), so those
   commands hold the server's `deadline_at` against the machine's date. `goalcup continue` itself
-  always asks the server. An answer from an older server has no `seconds_left`; the tracer then counts
+  always asks the server. An answer from an older server has no `seconds_left`; Goal Cup Proxy then counts
   `deadline_at − official_start` from when the run opened, and for a continued segment
   `deadline_at` less the machine's date.
 - **The wrap-up upload has no time limit, but it can only complete each entry's chain up to its
   committed end.** After `ends_at`, a chunk is accepted only once the entry's final heartbeat has
   committed `(seq, head)`, and only if its `Goalcup-Last-Seq` is at most that `seq` (and the chunk
   ending at that `seq` has that `head`); anything else is `410 closed`. Before the final heartbeat
-  arrives, a chunk after `ends_at` is `503 awaiting_final` with `Retry-After`, so a tracer still
+  arrives, a chunk after `ends_at` is `503 awaiting_final` with `Retry-After`, so a client still
   uploading asks again after it has sent its final heartbeat. The seal needs the committed end too
   (see the seal call). Every entry of the run, not only the current one, is accepted, so an older
   segment finishes its wrap-up.
@@ -419,7 +421,7 @@ calls address the entry they name.
 ```json
 {"previous_entry_id": "e…", "connector_id": "…", "manifest_sha256": "<hex>",
  "connector_dir_sha256": "<hex>", "workspace": "…", "session_id": "…",
- "harness_version": "…", "tracer_version": "…"}
+ "harness_version": "…", "proxy_version": "…"}
 ```
 
 `201 {"entry_id", "segment", "official_start", "deadline_at", "seconds_left"}`: the new entry, and
@@ -438,18 +440,18 @@ The previous entry is not sealed or closed by this; it may still upload its wrap
 A cron runs every 5 minutes. It does four things, in this order, and a step that fails is logged
 and does not stop the next: it closes runs that are over (so a run's status is final without any
 call naming it), it records the GitHub commit at each deadline, it queues the run emails in an
-outbox, and it sends them. A tracer sees none of this. Each outbox row is sent once through Resend
+outbox, and it sends them. A client sees none of this. Each outbox row is sent once through Resend
 (`server/worker/src/mail.ts`); the database writes the email, picks the member's address and checks
 suppression. A staging Worker is never given an address by the database and sends every email to
 its test address. (While the maintenance switch is on the
-cron does nothing, since no tracer can send a heartbeat.)
+cron does nothing, since no client can send a heartbeat.)
 
 **The commit at the deadline.** For a competition run that reached its deadline (not a replaced run,
 not practice), the server asks GitHub for the head commit of `repo_url`
 (`GET /repos/{owner}/{repo}/commits/HEAD`, 8 seconds, at most 50 runs per tick, oldest first) and
 keeps the sha, with the time it was asked (`final_commit_at`). It is asked on the first tick at or
 after `ends_at`, not at that instant, so it may include pushes made in the minutes after the
-deadline; the final heartbeat's `repo_head` is the tracer's own account. GitHub saying the
+deadline; the final heartbeat's `repo_head` is Goal Cup Proxy's own account. GitHub saying the
 repository does not exist or is empty (`404`, `409`) is kept as "no commit". Any other answer, or
 none, keeps nothing and the next tick asks again. Runs that ended more than 48 hours ago and are
 closed are not asked.
@@ -468,13 +470,13 @@ the subject.
 | `ended` | the run reached its deadline (a replaced run is not the main run and has none) and the commit was recorded, or an hour has passed without it | run |
 | `disk_full` | a heartbeat's vitals started a disk pause (`agent_paused: "disk"`) and no `disk_full` was owed for the run in the 6 hours before | start of that pause |
 
-The last model request is unset until a heartbeat first reports `model_requests`, so a tracer that
+The last model request is unset until a heartbeat first reports `model_requests`, so a client that
 never reports gets no idle email; once set, it moves whenever any entry's count first appears or
 grows (a continue's new process reporting 2 after the old one reached 50 counts). A run that comes back
 and goes quiet again gets a new `silence`; a new model request starts a new idle period. The
 `ended` payload holds the end time, the commit (or none) and the repository.
 
-`disk_full` tells the member that the tracer paused the agent because the disk is almost full, that
+`disk_full` tells the member that Goal Cup Proxy paused the agent because the disk is almost full, that
 the agent resumes by itself once disk space is freed, and to type "keep going" if it still seems
 stuck. The cron queues it within one tick of the pause starting, even if the pause has ended by then
 or the run is silent; its payload holds the time the pause started. The 6-hour limit is kept where

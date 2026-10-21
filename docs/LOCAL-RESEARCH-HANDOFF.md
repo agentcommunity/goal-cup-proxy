@@ -31,7 +31,7 @@ private; server export cleaning is still unfinished.
 
 ## 0. Inventory and prepare locally
 
-Start in this tracer checkout. Use absolute paths once terminals change directory:
+Start in this Goal Cup Proxy checkout. Use absolute paths once terminals change directory:
 
 ```sh
 export TRACER_REPO="$(git rev-parse --show-toplevel)"
@@ -46,7 +46,7 @@ mkdir -p "$GOALCUP_CONFIG_DIR" "$RESEARCH_WORK_ROOT" "$RESEARCH_LAUNCH_ROOT" "$R
 Use an existing dedicated logged-in test home if one is already available; do not clone its auth
 into a second home. Record paths privately. The work and launch folders must be outside Git
 repositories and evidence must remain outside the measured workspace. Artifact storage needs
-APFS, ext4, or XFS with the tracer's required disk reservation; overlay/tmpfs is refused. WSL2
+APFS, ext4, or XFS with Goal Cup Proxy's required disk reservation; overlay/tmpfs is refused. WSL2
 paths must be inside Linux, not `/mnt/c`. Keep the machine awake and allow the exact rebuilt
 binary in any per-app firewall.
 
@@ -54,7 +54,7 @@ Check `git status`, `rustup show`, `cargo --version`, `codex --version`, `python
 availability of `node`, `npm`, `zstd`, `psql`, and `curl`. Check `codex --help`, `codex features
 list`, and, if supported, `codex debug models --bundled`. Those commands require no paid model
 turn. Record the exact native Codex executable on PATH; avoid accidentally measuring an old
-wrapper or another checkout's tracer binary. The connector records builds rather than pinning
+wrapper or another checkout's `goalcup` binary. The connector records builds rather than pinning
 the harness version.
 
 Build fresh binaries before testing. Fetch locked dependencies once if needed, then:
@@ -92,7 +92,7 @@ Inspect prep's actual output: it also reports practice readiness. The server sta
 valid prepared repository/work-root state; do not forge it. If prep requests a short practice,
 complete that separately, with a small useful prompt and the same Luna settings.
 
-Prep opens Codex in the tracer-owned home. Exit that setup session before editing its config.
+Prep opens Codex in the home Goal Cup Proxy owns. Exit that setup session before editing its config.
 The persistent path is `$GOALCUP_CONFIG_DIR/capture-homes/codex-cli/config.toml`. Merge these
 participant-owned settings there, preserving unrelated tables and avoiding duplicate keys:
 
@@ -170,7 +170,7 @@ goalcup seal ENTRY_ID
 
 Let the original `start` process finish its bounded wrap-up. If needed, run `goalcup upload
 ENTRY_ID` afterward. A manual seal verifies a bounded research run; it does not demonstrate the
-server-deadline stop. Do not force-kill the tracer as the normal stopping mechanism.
+server-deadline stop. Do not force-kill Goal Cup Proxy as the normal stopping mechanism.
 If you seal early, cancel the still-waiting watchdog and collect its exit status. Read the sealed
 termination outcome and check known workload child/server processes; a successful seal command
 does not imply `Confirmed` process-tree termination.

@@ -1,6 +1,6 @@
 # TODO
 
-The single tracker. Done means: the fast gate passes, one reviewer reads the PR once, and README or
+The single task list. Done means: the fast gate passes, one reviewer reads the PR once, and README or
 this file is updated if behaviour changed ([AGENTS.md](AGENTS.md)). Ticket IDs below (F-04, H-20,
 ...) are names only. [CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md) uses the same names.
 
@@ -98,7 +98,7 @@ Owner decisions of 16 Oct 2026:
   storage intact). The owner approves terminal prompts.
 - The program version comes from one place and updates everywhere automatically (WP2).
 - Install works on macOS, Linux and WSL2 with one command; Homebrew is not the main path (WP2).
-- Time: the server is the clock. Every heartbeat answer carries the time left; the tracer counts
+- Time: the server is the clock. Every heartbeat answer carries the time left; Goal Cup Proxy counts
   down from that and never trusts the machine's own date (WP11).
 - A harness is a plug-in module: its folder carries every harness-specific setting, and tests and
   release discover it. No harness name by hand anywhere else (WP5, WP12).
@@ -106,7 +106,7 @@ Owner decisions of 16 Oct 2026:
   It is not a current compatibility or review policy; follow `AGENTS.md`, `CONTRIBUTING.md` and
   the current release checklist below.
 - Demo and questionnaire: due 24 hours after each run's 168 hours end (a later start gets a later
-  due time). They go through the website portal, not the tracer; the website may close it leniently.
+  due time). They go through the website portal, not Goal Cup Proxy; the website may close it leniently.
 - Harnesses: 15+ expected, Hermes Agent among them. All shipped connectors go to participants.
   Harnesses can still be added until the last release (6 Nov 12:00 UTC): the builder sends a
   practice-run verifier report, and the organizers run a 1-hour test run before it ships
@@ -118,12 +118,12 @@ Owner decisions of 16 Oct 2026:
   accounts, repo and host identifiers) before any research group gets it. Researchers never get
   access to our database or R2; each group gets a cleaned export through custom, narrow access
   (clean-up 14). The design doc is kept privately; it is built after the event.
-- No keyed runs: the tracer never sees, forwards or stores a provider key (D61). Every harness,
+- No keyed runs: Goal Cup Proxy never sees, forwards or stores a provider key (D61). Every harness,
   Hermes included, keeps its own login in its home, and every run uploads under the same rules.
   #208 redacts the run's own proxy credential by exact value; #214 runs Hermes in chat mode from
   its own home; #215 removes the key-forwarding mechanism.
-- Amp's native source is its metadata log, labelled as such. Logged-in macOS chat through the
-  tracer completed on 17 Oct with zero capture gaps. #206's pinned macOS staging practice also
+- Amp's native source is its metadata log, labelled as such. Logged-in macOS chat through
+  Goal Cup Proxy completed on 17 Oct with zero capture gaps. #206's pinned macOS staging practice also
   passed capture/seal/upload matching; process-tree termination remains `Unresolved` (below).
   Amp's native metadata and HTTP setup remain capture-only. The separately versioned thread
   decoder now interprets complete WebSocket conversation snapshots; hidden provider requests remain unobserved.
@@ -322,12 +322,12 @@ Status (16 Oct): done (#166).
 ### WP11: The server is the clock
 Status (16 Oct): done (#163, plus #175 for status and reserve).
 - Today: the server stamps `official_start` and `deadline_at` at open, and each heartbeat answer
-  says `stop` and repeats `deadline_at` (`server/worker/src/runs.ts:93-97`). Offline, the tracer
+  says `stop` and repeats `deadline_at` (`server/worker/src/runs.ts:93-97`). Offline, Goal Cup Proxy
   counts the run's length on a clock that keeps running while the machine sleeps
   (`cli/src/upload/uploader.rs` `LocalDeadline`). The weak spot: a continued segment
   (`LocalDeadline::until`) subtracts the machine's own date, which the participant can change.
 - Change: every heartbeat answer (and the open and continue answers) adds `seconds_left`, computed on
-  the server. On each answer the tracer resets its countdown to `seconds_left` on the continuous
+  the server. On each answer Goal Cup Proxy resets its countdown to `seconds_left` on the continuous
   clock. It never reads the machine's date for the deadline. During an outage it keeps counting
   down from the last answer; when the server comes back its answer wins.
 - Accept: a stand-in test where the machine's date jumps a day back mid-run still stops on time;
@@ -385,18 +385,18 @@ UTC. Every change passes `gate.sh fast`; Worker changes also pass `npm test`; ev
 Run these in parallel worktrees, two writers never on the same files. Items 3 and 7 are WP12.
 Anything not done by 4 Nov moves to after the event.
 
-Status (16 Oct): 3, 4, 7 and 9 done (WP12). 10 done (#183, #184); the Anthropic port to the shared tracker waits until after the event. 11 and 12 done. 1, 2 and 5 wait until after the event.
+Status (16 Oct): 3, 4, 7 and 9 done (WP12). 10 done (#183, #184); the Anthropic port to the shared `Tracker` waits until after the event. 11 and 12 done. 1, 2 and 5 wait until after the event.
 
 1. **Run lifecycle module.** Add a persisted `enum StopReason` that falls back to the old strings, and `run/lifecycle.rs` `phase()`, read by status, reserve and finish. Add `HarnessState::Exited.code`. Move `RunMode` to `run/`. Rename the wire field `reserve_bytes` to `chain_quota_bytes` with an alias. [C4-F1, F10, F11]
 2. **Split `start.rs` and `uploader.rs`.** `commands/start/` plus `crate::shared_home`, and `uploader.rs` in five parts, keeping `pub use`. After the move: an Undo guard, `StartCx`, `SealArgs`, `TestDoors` and shared helpers. [C4-F2, F3, F8, F9, F12]
 3. **Redaction rules from manifest data.** Typed `{json_field, value}` and `{header_prefix}` forms. Delete `EXTRA_PATTERN_SOURCES`, `EXTRA_SHAPES` and `BILLING_PREFIX`. Merge `RedactionPattern` into `ExtraPattern`. Re-pin. [C2-F1, C3-F8, C1-F6]
-4. **CA env registry from data.** A generic `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` row backed by a file of system roots plus the proxy CA. `{config_home}` and `{run_home}` env tokens. A shared table of provider hosts. [C3-F7, F9, F13]
+4. **CA env registry from data.** A generic `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` row backed by a file of system roots plus the recording proxy CA. `{config_home}` and `{run_home}` env tokens. A shared table of provider hosts. [C3-F7, F9, F13]
 5. **libc → `goalcup-platform` (prep for native Windows).** Move process and clock out of protocol. Send signals from one place, with the `ProcessOs` seam kept. Adopt or delete `readcap`. Add `create_private_file`, the `machine::*` limits, SIGINT in `terminal`, and the `AsFd` API. Move `terminate/*`. Drop the BSD arms. [C1-F1, F2, F4, F7–F10, F14; C2-F12, F14]
 6. **`crates/goalcup-testkit`.** It holds the wait, copy_tree, paths, TableLock and proc helpers and the shared and spike fixtures. Add a `protocol::testkit` for record builders. Merge the standalone binaries into `it`. Tier by binary and require nextest. Give the stand-in a clock `advance`. Keep one `FakeGithub`. [T1-F6, F8–F14; T3-F11; T2-F13]
 7. **A contract test per connector.** A static half in `it/connector_contract.rs` and a dynamic half in `full/` with one manifest-driven stand-in. Then give Hermes- and Amp-named tests shape names, move engine tests to fixture connectors, and delete the test-only identity wrappers (`launch.rs:1498,1533,1572`, `capture_tee.rs:174,223,317`). [T2-§6, F11; T1-F4; T3-F13; C3-F5]
 8. **Shared CLI↔Worker contract.** A `test/contract/cases.json` table run against both the stand-in and the Worker. Run the rule cases against Postgres loaded with the production SQL. Then drop one copy of the rules. Use one source for the run length. The DB picks the event by its window, and `EVENT_ID` goes. Add the Worker module seams. [T3-F1, F2; T2-F6; C6-09, 12, 14, 02]
 9. **Restructure the goldens.** One shared deny-probe or policy table, with only per-connector differences in each file. The digest literal becomes a bool that says it matches the pin. Move the golden, kit and doctor tests into `it` and delete verifier `full`. [C3-F10, T3-F6, T1-F1]
-10. **One file per verifier decoder format.** `native/{mod,codex,claude_code}.rs` with a `NativeFormat` trait. Put Anthropic on the shared tracker. Split `apply` per record kind. Remove the signed-finalization and legacy-seal paths. Report the undecoded inventory, trim the decoder prose, and add a real chat-completions fixture and per-connector sample replay. [C5-F7–F13, T3-F12]
+10. **One file per verifier decoder format.** `native/{mod,codex,claude_code}.rs` with a `NativeFormat` trait. Put Anthropic on the shared `Tracker`. Split `apply` per record kind. Remove the signed-finalization and legacy-seal paths. Report the undecoded inventory, trim the decoder prose, and add a real chat-completions fixture and per-connector sample replay. [C5-F7–F13, T3-F12]
 11. **Observability and judging.** `scripts/fetch-run.sh` rebuilds a trace from the DB chunk index; needed before judging. Add `first_failure`, `entry_id` and `profile_id` to the report. Add `cycles` and `reopen_failed` to `DaemonHealth`. [C5-F2, F3a, F4; C2-F5]
 12. **Control vocabulary at the next `CONTROL_API_VERSION`.** Drop `WorkspaceInfo`, `status_cache_path`, `[event]`, `/v0/entries/current`, the V1 registry fields, the unproduced `HealthState` variants (add `serde(other)`), `status_url` and the mock arming. The mock defaults to a capture status, and the legacy branch at `status.rs:266-370` goes with its six tests. [C1-F11, F13; C2-F3, F7, F9; C4; T2-F5]
 13. **Product decisions.** Should the server hold the admitted connector digests (no release per harness)? Does headless capture stay or freeze? [C3-F3, F12]

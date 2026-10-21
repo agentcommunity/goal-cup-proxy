@@ -1,7 +1,7 @@
 # Operating Goal Cup
 
 Part 1 is the runbook for organizers: where things run, how to deploy, test runs, the matrix, and what
-to do on a bad day. Part 2 is the reference for running the tracer binaries (build, daemon, CLI exit
+to do on a bad day. Part 2 is the reference for running the Goal Cup Proxy binaries (build, daemon, CLI exit
 codes, verifier, pins). The short path for a developer (build, gate, install, one capture) is in the
 [README](../README.md). The server's design is in [SERVER-DESIGN](SERVER-DESIGN.md) and its wire
 contract in [UPLOAD-API](UPLOAD-API.md).
@@ -12,9 +12,9 @@ names secrets only.
 ## Contents
 
 - Part 1, organizers: [Where things run](#where-things-run), [Dates and checklist](#dates-and-checklist),
-  [Deploy](#deploy), [Test runs](#test-runs), [Releasing the tracer](#releasing-the-tracer),
+  [Deploy](#deploy), [Test runs](#test-runs), [Releasing Goal Cup Proxy](#releasing-goal-cup-proxy),
   [The matrix](#the-matrix), [Edge cases by hand](#edge-cases-by-hand), [Bad days](#bad-days)
-- Part 2, the tracer: [Building and verifying](#building-and-verifying),
+- Part 2, Goal Cup Proxy: [Building and verifying](#building-and-verifying),
   [Installing the participant binaries](#installing-the-participant-binaries),
   [Running the daemon](#running-the-daemon), [Running a capture with the CLI](#running-a-capture-with-the-cli),
   [Running the verifier](#running-the-verifier), [Pinning connectors](#pinning-connectors),
@@ -122,7 +122,7 @@ sh scripts/delete-test-runs.sh --older-than '7 days' --yes   # only runs older t
   `goalcup-traces/traces/test/` and `goalcup-traces-staging/traces/test-staging/`, and stops if it finds a
   key outside them.
 
-## Releasing the tracer
+## Releasing Goal Cup Proxy
 
 A `v*` tag that equals the workspace version builds four tarballs, `SHA256SUMS` and `install.sh`
 (participants install with it). Steps and layout are in [packaging/README.md](../packaging/README.md).
@@ -147,7 +147,7 @@ scripts/matrix.sh --check-copy <config-dir> [run-id]
 It makes a temporary configuration directory, work folder and `HOME`, runs `goalcup login` and
 `goalcup start --practice` in them, waits for the run to end, and deletes the temporary directory. It reads
 the connector's `harness.toml` to tell the two kinds apart. A chat-mode connector (`interactive = true`) runs
-under a pseudo-terminal into which the script types one prompt; the tracer stops it at the practice deadline
+under a pseudo-terminal into which the script types one prompt; Goal Cup Proxy stops it at the practice deadline
 (10 minutes). A headless connector (like `hermes-cli`) runs with `--goal-file` holding `MATRIX_PROMPT`, with
 nothing typed; it ends when the harness does, and the script then waits for the server's deadline before it
 asks for the server's copy. `--timeout` is one budget for both waits together. A connector id that is not one of
@@ -162,7 +162,7 @@ It prints the log path and one row:
 stderr and in the log. PASS means:
 
 1. both approvals (the login, then the run) were given, the run opened, and the harness was up;
-2. the run ended: a chat-mode run at its deadline (the tracer's `deadline:` line, which it writes to the
+2. the run ended: a chat-mode run at its deadline (Goal Cup Proxy's `deadline:` line, which it writes to the
    run's `host.log`, not the terminal, so the script reads both), a headless run at its deadline or with
    `harness exited: exit code 0.`; and `uploaded: … and the seal` in both;
 3. `goalcup-verify --capture-integrity <trace>` exited 0 with `integrity: valid` and `anchor: signed`;
@@ -175,7 +175,7 @@ to equal the local chain the verifier just checked: `offset` equal to the bytes 
 `validated_head`, `final` to the last record, `status: sealed` and `stop: true` (for a headless run, once the server's deadline
 has passed: the script polls until then, within what is left of `--timeout`). The server stores a chunk
 only if its SHA-256 matches, at the offset, previous hash and sequence it holds, and signs an
-acknowledgement the verifier checks. Equal positions therefore mean the server holds the chain the tracer
+acknowledgement the verifier checks. Equal positions therefore mean the server holds the chain Goal Cup Proxy
 sent, in order. It does not prove the stored bytes; only the verify job (not built) would.
 
 A server whose signing key this build does not pin (a local Worker, staging) fails the first verification
@@ -192,7 +192,7 @@ invocation (`key_source: "supplied"`).
 - `goalcup` is started with `GOALCUP_NO_BROWSER=1`, so it opens no browser page per approval. (That variable
   is a switch of the shipped `goalcup`: set it and `goalcup login` and `goalcup start` print the address and
   code and open nothing.)
-- No provider key is passed: a harness signs in with its own login, kept in its tracker home (D61).
+- No provider key is passed: a harness signs in with its own login, kept in its home under Goal Cup Proxy (D61).
 - With no key file, it prints the approval address and code and waits while you approve in a browser.
 - It approves at most one device code per phase and stops looking for codes once the harness is up.
 - It never reads or writes the real goalcup configuration directory, `~/.codex`, `~/.claude` or `~/.hermes`.
@@ -217,7 +217,7 @@ invocation (`key_source: "supplied"`).
 
 **Connectors.** `m2-fake-tui` is a connector the script writes around the test suite's fake terminal UI
 (`crates/goalcup-cli/tests/fixtures/m2-fake-tui.sh`), admitted with `--dev`: no harness, no model, no
-login. A PASS proves the tracker, daemon, pseudo-terminal handling, server and verifier, and nothing about a
+login. A PASS proves the CLI, daemon, pseudo-terminal handling, server and verifier, and nothing about a
 real harness. A shipped connector id (`codex-cli`, `claude-code-cli`) runs that harness for real. It needs the
 harness installed and logged in inside a prepared configuration directory of its own:
 `GOALCUP_CONFIG_DIR=<dir> goalcup prep`, then `MATRIX_CONFIG_DIR=<dir> sh scripts/matrix.sh codex-cli <url>`.
@@ -239,7 +239,7 @@ two that need no harness.
 **Linux, real harness, in Docker.** `scripts/linux-matrix.sh` runs the matrix for `codex-cli` in a
 container on a Mac. It builds the Linux binaries from the checkout, installs the harness
 at the version the connector's first line names, and keeps the configuration directory, the harness's
-tracker home and the work folder on a Docker volume of the connector's own (`goalcup-linux-matrix-<id>`),
+home and the work folder on a Docker volume of the connector's own (`goalcup-linux-matrix-<id>`),
 so one sign-in serves every later run. Once per volume, in a terminal:
 `GOALCUP_TEST_APPROVAL_KEY_FILE=<key file> sh scripts/linux-matrix.sh login codex-cli`. The login is
 approved with the key; then `goalcup prep` opens Codex in the container, and you choose "Sign in with
@@ -248,7 +248,7 @@ Device Code", finish it in the Mac's browser, and type `/exit`. After that, unat
 Key files are mounted read-only and only their container path is passed. The member is the synthetic
 test member unless `GOALCUP_TEST_MEMBER_ID` says otherwise, and the server is staging. The script takes
 the heavy-run lock itself (never run it inside the lock: it refuses when `GOALCUP_HEAVY_LOCK_HELD=1` and
-gives up after 30 minutes), with `--cpus=6`. Codex's tracker home is set to `gpt-5.6-luna` at low
+gives up after 30 minutes), with `--cpus=6`. Codex's harness home is set to `gpt-5.6-luna` at low
 reasoning effort before each run; the run fails unless every Codex turn it recorded says exactly that.
 The harness can read the checkout and the key files, so run it from a clean checkout. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
 It also installs `claude-code-cli` (set to `haiku` with thinking off, checked after the run), `amp-cli`
@@ -260,10 +260,10 @@ on a host. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `sc
 **`--check-copy`.** For a run you made by hand, verifies every entry of the run locally and compares each
 with the server's position, using the run's credential from the configuration directory. It starts and
 changes nothing, and works on a run that is still recording. Entries still uploading may differ until they
-catch up: run it again. A segment the tracker closed from the tail of its chain (after a reboot or a kill)
+catch up: run it again. A segment Goal Cup Proxy closed from the tail of its chain (after a reboot or a kill)
 verifies with exit 1, incomplete coverage, and is reported on its line.
 
-**Recorded rows.** A row from the fake connector proves the tracker, server and verifier on that platform
+**Recorded rows.** A row from the fake connector proves the CLI, server and verifier on that platform
 and says nothing about a harness.
 
 | Row | Server | Notes |
@@ -285,20 +285,20 @@ Each case is a run you start yourself and break on purpose, to find what goes wr
 - *Fake ok* means the fake harness (`m2-fake-tui`, through a `--dev` start on a prepared directory with
   `GOALCUP_CONNECTORS_DIR` set) is enough. *Real harness* means it is not, because the fake makes no model
   calls and writes no native session format the verifier decodes.
-- A case passes when the tracer did what "Expect" says and `--check-copy` exits 0. File any failure with the
+- A case passes when Goal Cup Proxy did what "Expect" says and `--check-copy` exits 0. File any failure with the
   exact `goalcup status` text, the log and the run id.
 
 | # | Case | Do | Expect | Fail if |
 |---|---|---|---|---|
 | 1 | 30 minutes offline (fake ok; real for provider-outage lines) | Test run. Network off for 35 minutes (macOS `networksetup -setairportpower en0 off`; Linux `nmcli networking off` or `ip link set <if> down`), then on. | Recording continues. After 15 minutes `PROBLEM: the server has not heard from this run for about 15 min (…). Check the network.` After 30 minutes without an acknowledged upload, `PROBLEM: nothing was uploaded for N min (…). Nothing is lost; it waits on this computer. Check the network.` Back online the uploader retries (60 s, doubling to 15 min) and catches up; both lines go away. | The run stops, recording reports gaps the outage does not explain, or the server is still behind 25 minutes after the network returned. |
-| 2 | Laptop sleep (fake ok) | Test run. Sleep 30 minutes (`pmset sleepnow`, or lid; Linux `systemctl suspend`). | The tracker holds a sleep lock (`PROBLEM: this computer may go to sleep (…). Keep it on mains power with the lid open.` if it cannot). After wake: heartbeats resume within 5 minutes, the uploader catches up, and the deadline counts through the sleep (a deadline that passed while asleep stops the run at wake). | The tracer exits or hangs, `status` calls the recording healthy while the verifier reports a gap, or the server stays behind. |
+| 2 | Laptop sleep (fake ok) | Test run. Sleep 30 minutes (`pmset sleepnow`, or lid; Linux `systemctl suspend`). | Goal Cup Proxy holds a sleep lock (`PROBLEM: this computer may go to sleep (…). Keep it on mains power with the lid open.` if it cannot). After wake: heartbeats resume within 5 minutes, the uploader catches up, and the deadline counts through the sleep (a deadline that passed while asleep stops the run at wake). | Goal Cup Proxy exits or hangs, `status` calls the recording healthy while the verifier reports a gap, or the server stays behind. |
 | 3 | Agent killed, then `continue` (fake ok; a practice run works inside its 10 minutes) | Type the prompt, then kill the harness process, not `goalcup`. | `goalcup start` prints `harness exited: ended by signal 9.` under `Details for support`, then `<harness> has exited (…).` and `Your run is still open until <time>.` with `To go on, run: goalcup continue <run id>`. It uploads until caught up (`Upload done.`) and exits 0. `status` shows `PROBLEM: <harness> has exited (…). Your run is still open until <time>. To go on, run: goalcup continue <run id>`, and its last line is `Next: run goalcup continue <run id>`. `goalcup continue` prints `Your run goes on. No approval is needed: this computer kept the approval for this run.`, asks no approval, reopens the last session (the prompt made one; with no message sent it opens a new session and says so), adds a second entry, and leaves the deadline where it was. `--check-copy` shows two entries, the first with `final`. | `continue` asks for approval, the deadline moves, or an entry's server position differs. |
 | 4 | Disk nearly full (fake ok; needs a small volume) | A volume of about 5 GiB for the configuration directory and its `-artifacts` and `-runs` siblings (macOS `hdiutil create -size 5g -fs APFS -volname gcsmall /tmp/gcsmall.dmg`; Linux a loop-mounted ext4 or XFS image). Test run, type the prompt, fill the volume to under 1 GiB free beyond the reservation, wait a minute, then free it to over 3 GiB. | First `PROBLEM: only N of disk is free. Free some space.` Under 1 GiB, within one watch tick (30 s), the terminal says `The disk is almost full, so your agent is paused. …` and the harness and its children are stopped (`ps -o stat` shows `T`); `goalcup status` has that `PROBLEM:` line and `state.json` has `"disk_paused": true`. Over 3 GiB the agent resumes within a tick by itself, the line goes and `disk_paused` is `false`. The run never stops for the disk (D65). Fill again and let the run's deadline come while paused: the agent is continued first and then ends within its grace. | The run stops for the disk; the agent is not paused, or not resumed; the chain is torn (`goalcup-verify` exit 2). |
 | 5 | Reboot, then `continue` (fake ok) | Restart the machine during a test run (also a hard power-off, on a separate run). | Nothing runs after reboot. `goalcup continue` closes the segment the dead daemon left (one `IngestLost` gap, no repair of a torn tail), sends what it can, asks for the next segment and reopens the harness. The first segment verifies with exit 1 (a torn tail is exit 2 and must be named); the second is clean. | `continue` is refused with the run open and the deadline ahead, or the first entry's server position is not the closed chain's. |
-| 6 | Tokens run out (real harness) | Start with an account whose model quota is spent, and type the prompt. | The harness reports its own error and idles. The tracker keeps recording without a `PROBLEM` line. `model_requests` stops growing, so a competition run gets `idle_3h` and `idle_6h` mails (never a practice or test run). Typing "keep going" later is allowed. | The tracker stops, treats the idle agent as a recording failure, or sends the harness anything. |
+| 6 | Tokens run out (real harness) | Start with an account whose model quota is spent, and type the prompt. | The harness reports its own error and idles. Goal Cup Proxy keeps recording without a `PROBLEM` line. `model_requests` stops growing, so a competition run gets `idle_3h` and `idle_6h` mails (never a practice or test run). Typing "keep going" later is allowed. | Goal Cup Proxy stops, treats the idle agent as a recording failure, or sends the harness anything. |
 | 7 | Window closed, then `continue` (fake ok; a practice run works) | Close the terminal window with the harness running. | The harness and `goalcup start` end; `pgrep -f goalcup` shows no `goalcup start`. In a new window `status` names the exited agent; `goalcup continue` opens the next segment as in case 3. | A process of the old run survives, or the first segment cannot be sealed or sent. |
-| 8 | A human message other than "keep going" (real harness) | Practice or test run. After the prompt type `please also add tests`, then `keep going`. | The tracker prints and blocks nothing. `goalcup-verify --research-json <trace> --output /tmp/report.ndjson` gives a summary with `assistance.evidence: observed` and `positive_native_markers` of at least 1. | The message is missing from the trace, the report says `none_observed`, or the tracker interfered. |
-| 9 | The deadline stop (fake ok; this is the matrix script) | `sh scripts/matrix.sh m2-fake-tui <server>`. | The tracer stops the harness at the deadline (the technical line `deadline: …` under `Details for support`, then `Time is up. <harness> was stopped.`), seals, sends the final heartbeat, uploads the rest and the seal (`Uploading the rest of the run…`, then `Your run is sealed and uploaded.`), and prints `harness termination: Confirmed`. The server shows `status: sealed`, `stop: true`, `final` = the last record. | The row says FAIL. |
+| 8 | A human message other than "keep going" (real harness) | Practice or test run. After the prompt type `please also add tests`, then `keep going`. | Goal Cup Proxy prints and blocks nothing. `goalcup-verify --research-json <trace> --output /tmp/report.ndjson` gives a summary with `assistance.evidence: observed` and `positive_native_markers` of at least 1. | The message is missing from the trace, the report says `none_observed`, or Goal Cup Proxy interfered. |
+| 9 | The deadline stop (fake ok; this is the matrix script) | `sh scripts/matrix.sh m2-fake-tui <server>`. | Goal Cup Proxy stops the harness at the deadline (the technical line `deadline: …` under `Details for support`, then `Time is up. <harness> was stopped.`), seals, sends the final heartbeat, uploads the rest and the seal (`Uploading the rest of the run…`, then `Your run is sealed and uploaded.`), and prints `harness termination: Confirmed`. The server shows `status: sealed`, `stop: true`, `final` = the last record. | The row says FAIL. |
 | 10 | A second start replaces the first (fake ok) | Two configuration directories `a` and `b`, same member, a server with an open competition event (staging's dry-run event; runs are 168 hours, so end the second with `goalcup seal`). Start in `a`, then in `b`. | Within one heartbeat (5 minutes) `a` prints `This run was replaced by a newer run on your account. <harness> was stopped.` and `Only the newer run counts.`, stops its agent, seals and sends its final heartbeat. `GET` for the first run has `ends_at` = the second run's `official_start`, and a chunk past the first run's committed end is `410`. Two practice starts replace nothing. | The first run records on past 5 minutes after the second opened, or both stay open. |
 
 **The long runs.** Two 8-hour runs, one on macOS and one on Linux, on staging with a real harness and an
@@ -307,17 +307,17 @@ organizer test run: start, leave, and at the end `goalcup seal`, then `--check-c
 ## Bad days
 
 Recording on the participant's machine never waits on the server, so a server problem costs upload time,
-not data. The deadline stays on the server's clock; no switch moves it, and tracers also stop on their own
-clocks. No error answer stops a run or ends its upload, whatever its status (D64): only a `200` heartbeat
-answer with `stop` does, or the tracer's own count to the deadline. Fix the server and the runs catch up.
+not data. The deadline stays on the server's clock; no switch moves it, and each `goalcup` client also stops on
+its own clock. No error answer stops a run or ends its upload, whatever its status (D64): only a `200` heartbeat
+answer with `stop` does, or Goal Cup Proxy's own count to the deadline. Fix the server and the runs catch up.
 
 | Symptom | Do |
 |---|---|
 | A bad deploy, or anything you cannot explain | Switch maintenance on with `npx wrangler deploy --var MAINTENANCE:on` from a clean checkout of the commit that is live now ([steps](../server/worker/README.md#maintenance-on-and-off)); do not edit `wrangler.toml`. Every call answers `503 maintenance` with `Retry-After` (default 300 s), tracers back off, and the cron pauses. Any deploy during maintenance must repeat `--var MAINTENANCE:on`, or maintenance ends. Then fix the cause or `npx wrangler rollback <version-id>`, and switch it off by a deploy without the flag. It blocks new starts too: there is no separate pause. |
 | A deploy answers runs `401`, `404` (a lost route), `410`, `413` or anything else it should not | Runs keep recording and ask again with backoff; none stops (D64). After three refusals of one status in a row a participant's terminal and `goalcup status` say `PROBLEM: the server refuses this run's uploads (HTTP <status>). …` and that nothing is lost. Roll back (`npx wrangler rollback <version-id>`) or hotfix; the line clears and the uploads catch up by themselves. Uploads still unsent when a run's wrap-up ended go with `goalcup upload`. |
-| Supabase is down or read-only | The Worker answers `502 upstream_error`; tracers retry for as long as the run lasts. Nothing is lost. Optionally switch maintenance on for a clean `503`. Check again when Supabase is back; the cron catches up. |
+| Supabase is down or read-only | The Worker answers `502 upstream_error`; `goalcup` retries for as long as the run lasts. Nothing is lost. Optionally switch maintenance on for a clean `503`. Check again when Supabase is back; the cron catches up. |
 | R2 is down | Chunk puts answer `502`; same as above. A retried chunk is safe. |
-| GitHub is down or rate-limits | Opens answer `502` (the tracer retries). The cron retries the deadline commit each tick for 48 hours; the `ended` mail waits an hour for the commit, then goes without it. Check that `GITHUB_TOKEN` is valid. |
+| GitHub is down or rate-limits | Opens answer `502` (Goal Cup Proxy retries). The cron retries the deadline commit each tick for 48 hours; the `ended` mail waits an hour for the commit, then goes without it. Check that `GITHUB_TOKEN` is valid. |
 | Many `429` on the device flow (a venue sharing one address) | Raise `DEVICE_START_PER_MINUTE`, `DEVICE_POLL_PER_MINUTE` or `DEVICE_TOKEN_PER_MINUTE` in `wrangler.toml` and deploy. Every device call answers `500 misconfigured` if the `DEVICE_LIMITER` binding or `RATE_LIMIT_KEY` is missing. |
 | `500 misconfigured` on any call | Read `npx wrangler tail`; the detail is in the log, never in the answer. Usual causes: a missing secret, `APPROVAL_URL`, a test-only variable set in production. |
 | A participant cannot approve a run | The website needs the current terms accepted (`403` or a message on the approval page). A start outside the window is `403` too. |
@@ -328,7 +328,7 @@ answer with `stop` does, or the tracer's own count to the deadline. Fix the serv
 | The signing key may be compromised | Add the new public key to `SERVER_PUBLIC_KEYS` in `crates/goalcup-verifier/src/lib.rs` (keep the old one so existing acknowledgements still verify), release the verifier, then `wrangler secret put RECEIPT_SIGNING_KEY` with a seed made offline. Avoid rotating mid-event unless the key leaked. |
 | A secret leaked (Supabase, Resend, GitHub, Cloudflare) | Revoke it at its provider, create a new one, `wrangler secret put` it, deploy. Treat the old value as public. |
 
-# Part 2: the tracer
+# Part 2: Goal Cup Proxy
 
 ## Building and verifying
 
@@ -400,7 +400,7 @@ immediate child directories with a regular `harness.toml`, validates every schem
 declared id.
 
 `$GOALCUP_CONFIG_DIR` overrides the configuration directory for the CLI and the daemon it starts, which is
-how a second, isolated tracker runs on one machine (a test, a development build beside an installed one).
+how a second, isolated copy of Goal Cup Proxy runs on one machine (a test, a development build beside an installed one).
 The default is `~/Library/Application Support/goalcup` on macOS and `$XDG_CONFIG_HOME/goalcup` (else
 `~/.config/goalcup`) elsewhere.
 
@@ -476,7 +476,7 @@ not in the trace.
 | Exit | Meaning |
 |---|---|
 | 0 | Done. |
-| 1 | Refused, and you can fix it: no daemon to ask or none could be started, a tracker still busy, an entry already sealed, a mistyped command, a failed preflight check. On Linux also a sealed run that left a process running. |
+| 1 | Refused, and you can fix it: no daemon to ask or none could be started, a run still busy, an entry already sealed, a mistyped command, a failed preflight check. On Linux also a sealed run that left a process running. |
 | 2 | Never this binary's. It is "invalid evidence", and only `goalcup-verify` leaves under it. |
 | 3 | The CLI could not do its job: a file it could not read, an answer it could not parse. |
 
@@ -665,7 +665,7 @@ More than 128 distinct codes end with `findings_omitted:<n>`.
 
 | Code | Exit | Meaning |
 |---|---|---|
-| `gap_recorded` | 1 | The tracer recorded a gap (lost bytes or an unavailable source). Gaps stay recorded. |
+| `gap_recorded` | 1 | Goal Cup Proxy recorded a gap (lost bytes or an unavailable source). Gaps stay recorded. |
 | `producer_recovered` | 1 | A producer was replaced after a loss. |
 | `producer_unclosed` | 1 | A producer never closed. Its tail is unknown. |
 | `recovery_names_unrecorded_producer` | - | A recovery named a producer that left no record. The recovery already gives exit 1. |

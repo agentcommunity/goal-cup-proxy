@@ -3,9 +3,9 @@
 One public page per harness, `docs/harnesses/<connector-id>.md`. It says where that harness keeps
 its sessions, config and logins on each OS, how it authenticates, and which hosts it calls.
 
-A connector describes only what the tracer does today. The sheet records the rest: what to
-check when the tracer gains a platform or a new way to capture, without asking each team again.
-A sheet is also a complete contribution on its own. A harness that does not fit the tracer yet
+A connector describes only what Goal Cup Proxy does today. The sheet records the rest: what to
+check when Goal Cup Proxy gains a platform or a new way to capture, without asking each team again.
+A sheet is also a complete contribution on its own. A harness that does not fit Goal Cup Proxy yet
 sends its sheet with status `facts only`, and the sheet shows what to build.
 
 The sheets so far: [codex-cli](codex-cli.md) (the worked example), [claude-code-cli](claude-code-cli.md),
@@ -37,7 +37,7 @@ The `Status:` line takes one of three values:
 - **core ready, connector pending**: no row of the core-change table in
   [HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md#do-i-need-a-core-change) needs a core change, but no
   connector exists yet.
-- **facts only**: the tracer needs a core change first, or a key fact is unknown.
+- **facts only**: Goal Cup Proxy needs a core change first, or a key fact is unknown.
 
 Section 8, "Things Goal Cup cannot isolate", lives only in the sheet. A connector PR links the
 sheet in its description and does not repeat it.

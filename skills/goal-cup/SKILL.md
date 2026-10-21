@@ -1,13 +1,13 @@
 ---
 name: goal-cup
-description: This session is a /goal Cup run. What the tracer records, and what the participant may type.
+description: This session is a /goal Cup run. What Goal Cup Proxy records, and what the participant may type.
 ---
 
 # /goal Cup
 
-This session is a /goal Cup run, recorded by the Goal Cup tracer (`goalcup`).
+This session is a /goal Cup run, recorded by Goal Cup Proxy (`goalcup`).
 
-**What the tracer records.** Everything this harness sends to its model provider and everything
+**What Goal Cup Proxy records.** Everything this harness sends to its model provider and everything
 it receives, the harness's own session files, and the commits in the run's repository. The record
 is sealed when the run ends and uploaded to the Goal Cup server.
 
