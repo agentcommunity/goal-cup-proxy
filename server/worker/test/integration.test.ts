@@ -706,7 +706,11 @@ describe("a run still unsealed 24 hours after it ends is closed as incomplete", 
     await sleepUntil(alice.deadline_at);
     assert.equal((await api.call("GET", `/v1/runs/${alice.run_id}`, { token: ALICE })).body.status, "open");
 
-    await sleep(3300); // the server clock counts whole seconds, and "past" is strictly past
+    // The three opens can straddle a second on the server's clock, so bob's or carol's run can end
+    // a second after alice's. Wait until the last of them is past its close: the server clock
+    // counts whole seconds, and "past" is strictly past.
+    const lastDeadline = Math.max(...[alice, bob, carol].map((r) => Date.parse(r.deadline_at)));
+    await sleep(Math.max(0, lastDeadline + 3700 - Date.now()));
     const g = await api.call("GET", `/v1/runs/${alice.run_id}`, { token: ALICE });
     assert.equal(g.status, 200);
     assert.equal(g.body.status, "incomplete");
