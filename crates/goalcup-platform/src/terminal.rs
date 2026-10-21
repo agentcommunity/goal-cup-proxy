@@ -293,6 +293,7 @@ pub fn wait_resuming(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::CommandExt as _;
 
     /// Signal dispositions belong to the process, not to a test thread. Plain `cargo test` runs
     /// the tests of this module as threads of one process, so a test that installs or reads
@@ -425,6 +426,7 @@ mod tests {
         let child = std::process::Command::new("/bin/sh")
             .args(["-c", "kill -STOP $$; kill -STOP $$; exit 7"])
             .stdin(std::process::Stdio::null())
+            .process_group(0)
             .spawn()
             .unwrap();
         let mut stops = Vec::new();
@@ -439,6 +441,10 @@ mod tests {
 
     /// A stop the caller does not continue (the disk pause, D65) holds until someone else
     /// continues the child; the wait goes on meanwhile.
+    ///
+    /// Both stop tests give the child its own process group: `wait_resuming` continues the whole
+    /// group, and under plain `cargo test` the test threads share one, so the other test would
+    /// continue this child too.
     #[test]
     #[allow(
         clippy::zombie_processes,
@@ -448,6 +454,7 @@ mod tests {
         let child = std::process::Command::new("/bin/sh")
             .args(["-c", "kill -STOP $$; exit 7"])
             .stdin(std::process::Stdio::null())
+            .process_group(0)
             .spawn()
             .unwrap();
         let pid = child.id() as libc::pid_t;
