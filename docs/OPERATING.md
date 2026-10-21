@@ -149,7 +149,12 @@ It makes a temporary configuration directory, work folder and `HOME`, runs `goal
 connector runs in chat mode under a pseudo-terminal into which the script types one prompt; Goal Cup Proxy
 stops it at the practice deadline (10 minutes). `--test --duration SECONDS` runs an organizer test run
 instead and seals it SECONDS after the prompt, so a bounded test of any length needs no practice deadline.
-`--timeout` is one budget for the whole wait. A connector id that is not the fake needs its
+`--timeout` is one budget for the whole wait. A test start (`--test`) asks GitHub, with the token in
+the configuration directory's `github.json`, whether the repository is empty, so `--test` needs a
+real token there (practice starts skip that check, and the script's own configuration gets a
+placeholder). `scripts/kit_settle.py settle` writes it from the file named in
+`MATRIX_GITHUB_TOKEN_FILE`; the token must not be able to push to the practice repository. A
+connector id that is not the fake needs its
 `harness.toml` to be found (see Connectors below), or the row FAILs and says so.
 It prints the log path and one row:
 
@@ -251,8 +256,10 @@ reasoning effort before each run; the run fails unless every Codex turn it recor
 The harness can read the checkout and the key files, so run it from a clean checkout. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
 It also installs `claude-code-cli` (set to `haiku` with thinking off, checked after the run), `amp-cli`
 and `hermes-cli`. For long runs in parallel: `linux-matrix.sh build` once, then
-`LINUX_MATRIX_CELL=<cell> LINUX_MATRIX_PREBUILT=1 sh scripts/linux-matrix.sh run <id> -- --test --duration <s>`
-gives each cell its own volume, sign-in and container. `matrix.sh --test --duration <s>` does the same
+`LINUX_MATRIX_CELL=<cell> LINUX_MATRIX_PREBUILT=1 MATRIX_GITHUB_TOKEN_FILE=<token file> sh scripts/linux-matrix.sh run <id> -- --test --duration <s>`
+gives each cell its own volume, sign-in and container; `--test` is refused without
+`MATRIX_GITHUB_TOKEN_FILE`, which is mounted read-only like the key and written into the volume's
+`github.json`. `matrix.sh --test --duration <s>` does the same
 on a host. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
 
 **`--check-copy`.** For a run you made by hand, verifies every entry of the run locally and compares each

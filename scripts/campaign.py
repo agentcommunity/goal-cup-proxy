@@ -23,6 +23,12 @@ and writes, per cell, under DIR/<cell>/:
 and DIR/summary.json plus DIR/summary.md over all cells. `evaluate DIR` recomputes the pass lines
 from the files (also for cells still running), so a supervising agent can poll it.
 
+Every cell is held to the owner's cheapest-model rules (scripts/kit_settle.py): Codex
+gpt-5.6-luna at `codex_effort` (default low), Claude Code haiku with thinking off. A docker cell's
+container applies and checks them (linux-matrix.sh); for a host cell this script does, in its
+config_dir's tracker homes before the run, and checks the run's turns after it: a turn on another
+model, or none found, fails the cell.
+
 Drills. Docker: `network_cut` disconnects the container from each of its networks and reconnects
 it after `seconds`; `pause` is `docker pause` then `docker unpause` (a stand-in for sleep). A
 drill is always undone (try/finally; on Ctrl-C too). Host: the campaign never runs a privileged
@@ -31,7 +37,13 @@ machine, then `DRILL-END ... do: <undo>` after `seconds`, and records both. `not
 
 Secrets. The approval key is only ever a FILE whose path goes to the child scripts in
 GOALCUP_TEST_APPROVAL_KEY_FILE. This script never opens it, and the path is never in an argument.
-Production (ingest.agentcommunity.org) is refused.
+The same holds for the GitHub token (`defaults.github_token_file`, MATRIX_GITHUB_TOKEN_FILE to the
+children): every cell is a test run, and a test start asks GitHub, with that token, whether the
+repository is empty. scripts/kit_settle.py writes it into the cell's github.json: in the container
+for a docker cell, from here after `login` and before each `run` for a host cell (so a token
+rotated later is picked up). It must not be able to push to the practice repository: one agent
+push there makes every later test start refuse it. Production (ingest.agentcommunity.org) is
+refused.
 
 Before website migration 20261021100000 a test run replaces an earlier test run of the same
 operator, so cells that can run at the same time must have distinct `test_member_id`s; `check` and
@@ -61,6 +73,8 @@ REPO = HERE.parent
 STAGING = "https://goalcup-ingest-staging.b-9a5.workers.dev"
 PRODUCTION_HOST = "ingest.agentcommunity.org"
 KEY_ENV = "GOALCUP_TEST_APPROVAL_KEY_FILE"
+TOKEN_ENV = "MATRIX_GITHUB_TOKEN_FILE"
+KIT = HERE / "kit_settle.py"
 CELL_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 CONNECTOR_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 MEMBER_ID = re.compile(r"[A-Za-z0-9_-]+")
@@ -188,10 +202,10 @@ def read_json(path):
 
 
 def child_env(extra):
-    """The parent's environment without any approval-key variable, plus `extra` (a None value
-    removes that variable)."""
+    """The parent's environment without any approval-key or token-file variable, plus `extra`
+    (a None value removes that variable)."""
     env = {k: v for k, v in os.environ.items()
-           if k not in ("GOALCUP_TEST_APPROVAL_KEY", KEY_ENV)}
+           if k not in ("GOALCUP_TEST_APPROVAL_KEY", KEY_ENV, TOKEN_ENV)}
     for k, v in extra.items():
         if v is None:
             env.pop(k, None)
@@ -248,6 +262,7 @@ def normalize_config(doc, base, source="<config>"):
         "name": str(doc.get("name") or Path(source).stem),
         "server": str(defaults.get("server") or STAGING).rstrip("/"),
         "approval_key_file": _abs(base, defaults.get("approval_key_file") or os.environ.get(KEY_ENV)),
+        "github_token_file": _abs(base, defaults.get("github_token_file")),
         "sample_every_s": defaults.get("sample_every_s"),
         "matrix_timeout_slack_s": defaults.get("matrix_timeout_slack_s"),
         "goalcup": defaults.get("goalcup"),
@@ -301,6 +316,16 @@ def validate(cfg, cells, parallel):
         errors.append("the approval key file must be an absolute path without : or ,")
     elif not (os.path.isfile(key) and os.access(key, os.R_OK)):
         errors.append("the approval key file is not a regular file this user can read")
+    # Every cell is a test run, and a test start asks GitHub, with this token, whether the
+    # repository is empty.
+    token = cfg.get("github_token_file")
+    if not token:
+        errors.append("no GitHub token file: set defaults.github_token_file (a test start asks "
+                      "GitHub, with that token, whether the repository is empty)")
+    elif not os.path.isabs(token) or ":" in token or "," in token:
+        errors.append("the GitHub token file must be an absolute path without : or ,")
+    elif not (os.path.isfile(token) and os.access(token, os.R_OK)):
+        errors.append("the GitHub token file is not a regular file this user can read")
     for name in ("sample_every_s",):
         v = cfg.get(name)
         if not isinstance(v, int) or isinstance(v, bool) or v < 1:
@@ -338,9 +363,6 @@ def validate(cfg, cells, parallel):
         eff = cell.get("codex_effort")
         if eff is not None and eff not in EFFORTS:
             errors.append(f"{tag}: codex_effort must be one of {', '.join(EFFORTS)}")
-        elif eff is not None and where == "host":
-            warnings.append(f"{tag}: codex_effort is not applied to a host cell (its config_dir's "
-                            "Codex home sets the effort)")
         if where == "host":
             cd = cell.get("config_dir")
             if not cd:
@@ -443,6 +465,8 @@ def run_command(cfg, cell, cell_dir):
     if slack:
         extra = ["--timeout", str(d + int(slack))]
     env = {KEY_ENV: cfg["approval_key_file"], "GOALCUP_TEST_MEMBER_ID": cell["test_member_id"]}
+    if cell["where"] == "docker":
+        env[TOKEN_ENV] = cfg["github_token_file"]
     if cell.get("prompt_file"):
         env["MATRIX_PROMPT_FILE"] = cell["prompt_file"]
         env["MATRIX_PROMPT"] = None  # matrix.sh refuses both
@@ -466,6 +490,23 @@ def run_command(cfg, cell, cell_dir):
                 "--test", "--duration", str(d)] + extra + [
                 "--log", str(Path(cell_dir) / "matrix.log")]
     return argv, env
+
+
+def settle_command(cfg, cell):
+    """(argv, env) of scripts/kit_settle.py for a host cell: its prep.json and github.json, the
+    token's path only in env."""
+    cd = cell["config_dir"]
+    argv = [sys.executable, str(KIT), "settle", cd, os.path.join(cd, "work")]
+    if os.environ.get("MATRIX_REPO_URL"):
+        argv.append(os.environ["MATRIX_REPO_URL"])
+    return argv, child_env({TOKEN_ENV: cfg["github_token_file"]})
+
+
+def kit_command(cell, *args):
+    """scripts/kit_settle.py home-config or model-check for a host cell: the owner's cheapest-model
+    rules, as linux-matrix.sh applies them in a container (codex_effort, default low)."""
+    return [sys.executable, str(KIT), args[0], cell["config_dir"], cell["connector"], *args[1:],
+            cell.get("codex_effort") or "low"]
 
 
 def sampler_command(cfg, cell, cell_dir):
@@ -1048,8 +1089,14 @@ class CellRun:
     def _run(self):
         camp, cell = self.camp, self.cell
         argv, extra = run_command(camp.cfg, cell, self.dir)
+        marker = self.dir / "run-start"
         if cell["where"] == "docker":
             (self.dir / "logs").mkdir(exist_ok=True)
+        else:
+            self._settle()
+            self._kit("home-config")
+            # What the harness writes from here on is this run's (model-check reads the mtimes).
+            marker.touch()
         self.start_mono = camp.clock.monotonic()
         self.start_utc = camp.clock.utcnow()
         self.set_state(state="running", start_utc=utc(self.start_utc))
@@ -1068,11 +1115,46 @@ class CellRun:
         sampler_thread.start()
         rc = self.proc.wait()
         reader.join(timeout=10)
+        if cell["where"] == "host" and not camp.stopping.is_set():
+            self._model_check(marker)
         self.stop.set()
         drill_thread.join(timeout=120)
         sampler_thread.join(timeout=30)
         self.stop_sampler()
         self.write_result(exit_code=rc, interrupted=camp.stopping.is_set())
+
+    def _settle(self):
+        """A host cell's prep.json and github.json, before its run (a docker cell settles in its
+        container). A refusal ends the cell before anything starts."""
+        argv, env = settle_command(self.camp.cfg, self.cell)
+        rc, out = self.camp.runner.run(argv, env=env, timeout=60)
+        for line in out.splitlines():
+            self.logline(line, own=True)
+        self.event("settle", exit_code=rc)
+        if rc != 0:
+            raise RuntimeError(f"settle exited {rc}: {(out.strip().splitlines() or [''])[-1]}")
+
+    def _kit(self, *args):
+        """One scripts/kit_settle.py home-config or model-check for a host cell; (rc, last line).
+        home-config refused ends the cell before anything starts."""
+        rc, out = self.camp.runner.run(kit_command(self.cell, *args), env=child_env({}),
+                                       timeout=120)
+        lines = out.strip().splitlines()
+        for line in lines:
+            self.logline(line, own=True)
+        self.event(args[0], exit_code=rc)
+        last = lines[-1].removeprefix("kit: ") if lines else f"exit {rc}"
+        if rc != 0 and args[0] == "home-config":
+            raise RuntimeError(f"home-config exited {rc}: {last}")
+        return rc, last
+
+    def _model_check(self, marker):
+        """After a host cell's run, as linux-matrix.sh does in a container: a turn on another
+        model (or none found) fails the cell."""
+        rc, last = self._kit("model-check", str(marker))
+        if rc != 0:
+            self.final_row = f"FAIL owner rule: {last}"
+            self.logline(f"FAIL owner rule: {last}", own=True)
 
     def _read(self):
         for raw in self.proc.stdout:
@@ -1506,8 +1588,9 @@ def cmd_check(args, runner, say=print):
 def cmd_build(args, runner):
     cfg = load_config(args.config)
     errors, _ = validate(cfg, cfg["cells"], 1)
-    # Build comes before the sign-ins, and a host cell's configuration directory is made by its login.
-    errors = [e for e in errors if "does not exist" not in e]
+    # Build comes before the sign-ins, and a host cell's configuration directory is made by its
+    # login. A build needs no token either.
+    errors = [e for e in errors if "does not exist" not in e and "GitHub token" not in e]
     if errors:
         for m in errors:
             print(f"error {m}", file=sys.stderr)
@@ -1533,7 +1616,8 @@ def cmd_login(args, runner):
             print(f"error {m}", file=sys.stderr)
         return 2
     if cell["where"] == "docker":
-        env = child_env({KEY_ENV: cfg["approval_key_file"], "LINUX_MATRIX_CELL": cell["id"],
+        env = child_env({KEY_ENV: cfg["approval_key_file"], TOKEN_ENV: cfg["github_token_file"],
+                         "LINUX_MATRIX_CELL": cell["id"],
                          "LINUX_MATRIX_PREBUILT": "1", "LINUX_MATRIX_SERVER": cfg["server"],
                          "GOALCUP_TEST_MEMBER_ID": cell["test_member_id"],
                          "LINUX_MATRIX_CODEX_EFFORT": cell.get("codex_effort")})
@@ -1547,7 +1631,13 @@ def cmd_login(args, runner):
     rc = runner.interactive([goalcup, "login", "--server", cfg["server"]], env=env)
     if rc != 0:
         return rc
-    return runner.interactive([goalcup, "prep", "--harness", cell["connector"]], env=env)
+    rc = runner.interactive([goalcup, "prep", "--harness", cell["connector"]], env=env)
+    if rc != 0:
+        return rc
+    argv, env = settle_command(cfg, cell)
+    rc, out = runner.run(argv, env=env, timeout=60)
+    print(out, end="")
+    return rc
 
 
 def default_out(cfg, clock):

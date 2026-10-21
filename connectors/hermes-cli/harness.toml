@@ -49,6 +49,10 @@ model_host_from = { file = "config.yaml", key = "model.base_url" }
 
 [capture.executable]
 program = "hermes"
+# `hermes --version` prints `Hermes Agent v0.19.0 (2026.7.20)` in under a second with a fresh
+# HOME (measured 22 Oct 2026; it writes only `.hermes/.update_check` and logs there, which the
+# probe home discards).
+version_args = ["--version"]
 
 [capture.env]
 TERMINAL_HOME_MODE = "profile"

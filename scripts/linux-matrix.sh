@@ -33,8 +33,8 @@
 #         run sealed after two hours; the member must be a test operator). Prints the matrix row
 #         last, and exits with matrix.sh's status.
 #
-# Owner rules kept here, applied to the tracker home before every login and run (never ~/.codex
-# or ~/.claude, which are not touched):
+# Owner rules (scripts/kit_settle.py, which campaign.py applies to host cells too), applied to the
+# tracker home before every login and run (never ~/.codex or ~/.claude, which are not touched):
 #   codex-cli        config.toml gets `model = "gpt-5.6-luna"` (never gpt-6-astra) and
 #                    `model_reasoning_effort` = LINUX_MATRIX_CODEX_EFFORT. After the run, every
 #                    turn of the run's new Codex sessions must say gpt-5.6-luna at that effort.
@@ -51,6 +51,12 @@
 # Environment. A secret is only ever a FILE, mounted read-only; its path goes to the one command
 # that reads it, and its value is never in an argument, a `-e`, a log or this script's output.
 #   GOALCUP_TEST_APPROVAL_KEY_FILE  the server's test approval key (login and run).
+#   MATRIX_GITHUB_TOKEN_FILE        a GitHub token for the practice repository (login and run;
+#                                   needed for `-- --test`): a test start asks GitHub, with it,
+#                                   whether the repository is empty. Mounted read-only and
+#                                   written into the volume's github.json (scripts/kit_settle.py).
+#                                   It must not be able to push to that repository: one agent
+#                                   push there makes every later test start refuse it.
 #   GOALCUP_TEST_MEMBER_ID          the member approved as
 #                                   (default 00000000-0000-4000-8000-0000000c0de1).
 #   LINUX_MATRIX_SERVER             default https://goalcup-ingest-staging.b-9a5.workers.dev;
@@ -92,9 +98,9 @@
 # The script has no drill of its own: an orchestrator acts on the named container from outside.
 #
 # What the harness can read. It runs as the same user as the script's own steps, so it can read
-# the mounted key files (/run/goalcup/*, read-only; staging's test key) and the whole checkout at
-# /src, untracked files included. Run it from a clean checkout, never one holding secrets (a
-# Worker .dev.vars, for example).
+# the mounted key files (/run/goalcup/*, read-only; staging's test key and the kit's GitHub token)
+# and the whole checkout at /src, untracked files included. Run it from a clean checkout, never
+# one holding secrets (a Worker .dev.vars, for example).
 #
 # Needs: Docker (no privileged container), `cargo fetch --locked` run on this machine first (the
 # container builds --offline from its registry), and network.
@@ -104,13 +110,17 @@ set -u
 
 STAGING=https://goalcup-ingest-staging.b-9a5.workers.dev
 SYNTHETIC_MEMBER=00000000-0000-4000-8000-0000000c0de1
+# The owner's models, for the words this script prints (scripts/kit_settle.py holds the rules).
 LUNA=gpt-5.6-luna
 CLAUDE_MODEL=haiku
 # Paths inside the container.
 VOL=/vol
 CFG=$VOL/cfg
 KEY_IN=/run/goalcup/approval-key
+TOKEN_IN=/run/goalcup/github-token
 PROMPT_IN=/run/goalcup/prompt
+# The settle helper beside this script (/src/scripts in the container).
+KIT=$(dirname "$0")/kit_settle.py
 # matrix.sh's settings this script passes on when they are set.
 PASS_ENV="MATRIX_PROMPT MATRIX_PROMPT_DELAY MATRIX_SUBMIT_DELAY MATRIX_PRE_PROMPT_KEYS MATRIX_PRE_PROMPT_DELAY MATRIX_REPO_URL"
 
@@ -143,114 +153,11 @@ codex_effort() {
 # ------------------------------------------------------------------ inside the container
 # These run as `dev` in the container, called by the host half below.
 
-# Whether the installed codex lists `minimal` for the Luna model: `codex debug models --bundled`,
-# read as JSON; the object that names the model (slug, id, model or name) must hold "minimal"
-# somewhere. Anything else (no such command, another format) is a no.
-codex_accepts_minimal() {
-    command -v codex >/dev/null 2>&1 || return 1
-    models=$(mktemp) || return 1
-    if ! codex debug models --bundled >"$models" 2>/dev/null; then
-        rm -f "$models"
-        return 1
-    fi
-    python3 - "$models" "$LUNA" <<'PY'
-import json, sys
-
-try:
-    doc = json.load(open(sys.argv[1]))
-except ValueError:
-    sys.exit(1)
-
-def objects(o):
-    if isinstance(o, dict):
-        yield o
-        for v in o.values():
-            yield from objects(v)
-    elif isinstance(o, list):
-        for v in o:
-            yield from objects(v)
-
-def strings(o):
-    if isinstance(o, str):
-        yield o
-    elif isinstance(o, dict):
-        for k, v in o.items():
-            yield k
-            yield from strings(v)
-    elif isinstance(o, list):
-        for v in o:
-            yield from strings(v)
-
-named = [o for o in objects(doc) if any(o.get(k) == sys.argv[2] for k in ("slug", "id", "model", "name"))]
-sys.exit(0 if any("minimal" in set(strings(o)) for o in named) else 1)
-PY
-    ok=$?
-    rm -f "$models"
-    return $ok
-}
-
-# The tracker home's config for a harness that has a model rule.
+# The tracker home's config for a harness that has a model rule (scripts/kit_settle.py
+# home-config; minimal only if the installed codex lists it for the Luna model).
 inner_home_config() { # connector
-    case $1 in
-    codex-cli)
-        effort=$(codex_effort) || fail "LINUX_MATRIX_CODEX_EFFORT must be low or minimal"
-        if [ "$effort" = minimal ] && ! codex_accepts_minimal; then
-            fail "LINUX_MATRIX_CODEX_EFFORT=minimal: the installed codex does not list minimal for $LUNA (codex debug models --bundled); use low"
-        fi
-        home=$CFG/capture-homes/codex-cli
-        mkdir -p "$home" && chmod 700 "$CFG/capture-homes" "$home" || fail "codex home"
-        python3 - "$home/config.toml" "$LUNA" "$effort" <<'PY' || fail "codex config"
-import os, re, sys
-
-path, model, effort = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    lines = open(path).read().splitlines()
-except FileNotFoundError:
-    lines = []
-# Top-level keys come before the first table; drop ours there and put them first.
-kept, top = [], True
-for line in lines:
-    if line.lstrip().startswith("["):
-        top = False
-    if top and re.match(r"\s*(model|model_reasoning_effort)\s*=", line):
-        continue
-    kept.append(line)
-text = "\n".join([f'model = "{model}"', f'model_reasoning_effort = "{effort}"'] + kept) + "\n"
-fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, "w") as f:
-    f.write(text)
-os.replace(path + ".new", path)
-PY
-        echo "linux-matrix: codex home config: model $LUNA, reasoning effort $effort"
-        ;;
-    claude-code-cli)
-        home=$CFG/capture-homes/claude-code-cli
-        mkdir -p "$home" && chmod 700 "$CFG/capture-homes" "$home" || fail "claude home"
-        python3 - "$home/settings.json" "$CLAUDE_MODEL" <<'PY' || fail "claude settings.json (left as it was)"
-import json, os, sys
-
-path, model = sys.argv[1], sys.argv[2]
-try:
-    with open(path) as f:
-        doc = json.load(f)
-except FileNotFoundError:
-    doc = {}
-except ValueError:
-    sys.exit(f"linux-matrix: {path} is not JSON; not overwritten")
-if not isinstance(doc, dict):
-    sys.exit(f"linux-matrix: {path} is not a JSON object; not overwritten")
-doc["model"] = model
-doc["alwaysThinkingEnabled"] = False
-fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-with os.fdopen(fd, "w") as f:
-    json.dump(doc, f, indent=2)
-    f.write("\n")
-os.chmod(path + ".new", 0o600)
-os.replace(path + ".new", path)
-PY
-        echo "linux-matrix: claude home settings: model $CLAUDE_MODEL, thinking off"
-        ;;
-    esac
+    effort=$(codex_effort) || fail "LINUX_MATRIX_CODEX_EFFORT must be low or minimal"
+    python3 "$KIT" home-config "$CFG" "$1" "$effort" || fail "home config of $1 (left as it was)"
 }
 
 # The names (never the contents) of the files in a connector's tracker home and its run home,
@@ -328,37 +235,13 @@ print("yes" if prep.get("harness") == sys.argv[2] and prep.get("home_ready") els
 PY
 }
 
-# After prep: the repository and work folder a practice run needs, as matrix.sh settles them for
-# its own configuration. The token is format-valid and fake: a practice clone is anonymous and
-# installs no push helper, so it is never sent anywhere. prep's own repository step is left as
-# `todo` on purpose; with a repository set it would ask for a real token.
+# After prep: the repository and work folder a run needs (scripts/kit_settle.py settle): the
+# practice repository, unless prep recorded a full-flow one, and github.json with the token from
+# MATRIX_GITHUB_TOKEN_FILE (the mounted file), which a test start sends to GitHub to ask whether
+# the repository is empty. prep's own repository step is left as `todo` on purpose.
 inner_settle() {
     mkdir -p "$VOL/work" || fail "work folder"
-    python3 - "$CFG" "$VOL/work" "${MATRIX_REPO_URL:-https://github.com/agentcommunity/goalcup-matrix-empty}" <<'PY' || fail "settle prep.json"
-import json, os, sys
-
-cfg, work, repo = sys.argv[1:4]
-
-def write(name, doc):
-    path = os.path.join(cfg, name)
-    fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(doc, f, indent=2)
-        f.write("\n")
-    os.replace(path + ".new", path)
-
-prep = json.load(open(os.path.join(cfg, "prep.json")))
-prep["repo_url"] = prep.get("repo_url") or repo
-prep["work_root"] = prep.get("work_root") or work
-write("prep.json", prep)
-gh = os.path.join(cfg, "github.json")
-try:
-    same = json.load(open(gh)).get("repo_url") == prep["repo_url"]
-except (OSError, ValueError):
-    same = False
-if not same:
-    write("github.json", {"repo_url": prep["repo_url"], "token": "ghp_matrixfaketoken00000000000000000000"})
-PY
+    python3 "$KIT" settle "$CFG" "$VOL/work" ${MATRIX_REPO_URL:+"$MATRIX_REPO_URL"} || fail "settle prep.json and github.json"
 }
 
 # The rule the run is held to, in words.
@@ -369,80 +252,12 @@ rule_of() { # connector
     esac
 }
 
-# The run's models, from what the harness itself wrote since the marker. A connector without a
-# rule passes.
-#   codex-cli: each turn's model and effort, from the rollouts' `turn_context` lines
-#     (spikes/codex-app/fixtures). Every turn must say gpt-5.6-luna at the configured effort.
-#   claude-code-cli: each `assistant` line's message.model in the transcripts under projects/
-#     (subagents included). Each must contain "haiku"; `<synthetic>` is no model call.
-# Finding nothing fails too: the rule cannot be confirmed.
+# The run's models, from what the harness itself wrote since the marker (scripts/kit_settle.py
+# model-check). A connector without a rule passes; finding nothing fails: the rule cannot be
+# confirmed.
 inner_model_check() { # connector marker
-    case $1 in
-    codex-cli)
-        effort=$(codex_effort) || fail "LINUX_MATRIX_CODEX_EFFORT must be low or minimal"
-        python3 - "$CFG/capture-homes/codex-cli/sessions" "$2" "$LUNA" "$effort" <<'PY'
-import json, os, sys
-
-root, marker, want, effort = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-since = os.stat(marker).st_mtime
-turns = []
-for d, _, files in os.walk(root):
-    for f in files:
-        path = os.path.join(d, f)
-        if not (f.startswith("rollout-") and f.endswith(".jsonl")) or os.stat(path).st_mtime < since:
-            continue
-        for line in open(path, errors="replace"):
-            try:
-                o = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(o, dict) and o.get("type") == "turn_context":
-                ctx = o.get("payload") or {}
-                turns.append((ctx.get("model"), ctx.get("effort")))
-seen = sorted({f"{m} at effort {e}" for m, e in turns})
-print("linux-matrix: Codex turns of this run: " + (", ".join(seen) if seen else "none found"))
-if not turns:
-    print("linux-matrix: the model could not be confirmed (no Codex turn in the run's sessions)")
-    sys.exit(1)
-sys.exit(0 if all(m == want and e == effort for m, e in turns) else 1)
-PY
-        ;;
-    claude-code-cli)
-        python3 - "$CFG/capture-homes/claude-code-cli/projects" "$2" "$CLAUDE_MODEL" <<'PY'
-import json, os, sys
-from collections import Counter
-
-root, marker, want = sys.argv[1], sys.argv[2], sys.argv[3]
-since = os.stat(marker).st_mtime
-models, synthetic = Counter(), 0
-for d, _, files in os.walk(root):
-    for f in files:
-        path = os.path.join(d, f)
-        if not f.endswith(".jsonl") or os.stat(path).st_mtime < since:
-            continue
-        for line in open(path, errors="replace"):
-            try:
-                o = json.loads(line)
-            except ValueError:
-                continue
-            if not (isinstance(o, dict) and o.get("type") == "assistant"):
-                continue
-            m = (o.get("message") or {}).get("model") if isinstance(o.get("message"), dict) else None
-            if m == "<synthetic>":
-                synthetic += 1
-                continue
-            models[m if isinstance(m, str) else repr(m)] += 1
-seen = ", ".join(f"{m} x{n}" for m, n in sorted(models.items()))
-print("linux-matrix: Claude assistant messages of this run: " + (seen or "none found")
-      + (f" (and {synthetic} <synthetic>)" if synthetic else ""))
-if not models:
-    print("linux-matrix: the model could not be confirmed (no Claude assistant message in the run's transcripts)")
-    sys.exit(1)
-sys.exit(0 if all(want in m for m in models) else 1)
-PY
-        ;;
-    *) return 0 ;;
-    esac
+    effort=$(codex_effort) || fail "LINUX_MATRIX_CODEX_EFFORT must be low or minimal"
+    python3 "$KIT" model-check "$CFG" "$1" "$2" "$effort"
 }
 
 inner_run() { # connector [matrix.sh options]
@@ -608,6 +423,8 @@ fi
     fail "GOALCUP_TEST_APPROVAL_KEY in the environment is refused: give the file as GOALCUP_TEST_APPROVAL_KEY_FILE"
 keyfile=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
 unset GOALCUP_TEST_APPROVAL_KEY_FILE
+tokenfile=${MATRIX_GITHUB_TOKEN_FILE:-}
+unset MATRIX_GITHUB_TOKEN_FILE
 mounted_file() { # path what
     case $1 in /*) ;; *) fail "$2 is given as an absolute path" ;; esac
     case $1 in *:* | *,*) fail "the path of $2 may not hold : or ," ;; esac
@@ -618,6 +435,14 @@ if [ "$action" != build ]; then
     [ -n "$keyfile" ] || fail "GOALCUP_TEST_APPROVAL_KEY_FILE is needed (the login and the run are approved with it)"
     mounted_file "$keyfile" "a secret file"
     set -- -v "$keyfile:$KEY_IN:ro"
+    if [ -n "$tokenfile" ]; then
+        mounted_file "$tokenfile" "MATRIX_GITHUB_TOKEN_FILE"
+        set -- "$@" -v "$tokenfile:$TOKEN_IN:ro"
+    else
+        case " $extra " in
+        *" --test "*) fail "MATRIX_GITHUB_TOKEN_FILE is needed for --test (a test start asks GitHub, with that token, whether the repository is empty)" ;;
+        esac
+    fi
     promptfile=${MATRIX_PROMPT_FILE:-}
     if [ -n "$promptfile" ]; then
         [ -z "${MATRIX_PROMPT:-}" ] || fail "set MATRIX_PROMPT or MATRIX_PROMPT_FILE, not both"
@@ -787,6 +612,7 @@ if [ "$action" = run ]; then
     fi
     set -- -e GOALCUP_TEST_APPROVAL_KEY_FILE=$KEY_IN
     [ -z "${MATRIX_PROMPT_FILE:-}" ] || set -- "$@" -e MATRIX_PROMPT_FILE=$PROMPT_IN
+    [ -z "$tokenfile" ] || set -- "$@" -e MATRIX_GITHUB_TOKEN_FILE=$TOKEN_IN
     # $extra holds checked words only (options and digits), so it splits as meant.
     docker exec -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" $extra &
     run_job=$!
@@ -795,6 +621,9 @@ if [ "$action" = run ]; then
 fi
 
 loginlog=$logdir/login-$h${cell:+-$cell}-$(date -u +%Y%m%dT%H%M%SZ).log
+# The settle step reads the token from the mounted file, when there is one.
+token_env=""
+[ -z "$tokenfile" ] || token_env="-e MATRIX_GITHUB_TOKEN_FILE=$TOKEN_IN"
 # Where the harness keeps its login: file names only, on the terminal and in the login log.
 record_home_files() {
     docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-files "$h" | tee -a "$loginlog"
@@ -802,7 +631,7 @@ record_home_files() {
 
 step "login" -e GOALCUP_TEST_APPROVAL_KEY_FILE=$KEY_IN "$name" sh /src/scripts/linux-matrix.sh inner-login "$h"
 if [ "$(docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-ready "$h")" = yes ]; then
-    step "settle" "$name" sh /src/scripts/linux-matrix.sh inner-settle
+    step "settle" $token_env "$name" sh /src/scripts/linux-matrix.sh inner-settle
     record_home_files
     echo "linux-matrix: signed in ($h on volume $volume; prep recorded it before)"
     exit 0
@@ -810,7 +639,7 @@ fi
 unlock
 if ! [ -t 0 ] || ! [ -t 1 ]; then
     echo "linux-matrix: OWNER STEP: in a terminal, from $PWD, run:"
-    echo "  GOALCUP_TEST_APPROVAL_KEY_FILE=$keyfile${cell:+ LINUX_MATRIX_CELL=$cell}$([ "$prebuilt" = 1 ] && echo " LINUX_MATRIX_PREBUILT=1") sh scripts/linux-matrix.sh login $h"
+    echo "  GOALCUP_TEST_APPROVAL_KEY_FILE=$keyfile${tokenfile:+ MATRIX_GITHUB_TOKEN_FILE=$tokenfile}${cell:+ LINUX_MATRIX_CELL=$cell}$([ "$prebuilt" = 1 ] && echo " LINUX_MATRIX_PREBUILT=1") sh scripts/linux-matrix.sh login $h"
     exit 3
 fi
 case $h in
@@ -824,7 +653,8 @@ home its runs use (CLAUDE_CONFIG_DIR). Nothing is recorded.
      back into the terminal. (No browser opens from the container.)
   3. If it asks whether to trust the folder, choose Yes. Keep the model it has (haiku, set by
      this script). Type no task. Type /exit and press Enter.
-Then goalcup prep lists its steps. "[todo] github" and "[todo] practice" are expected here.
+Then goalcup prep lists its steps. "[todo] github" and "[todo] practice" are expected here:
+this script then settles the practice repository, with the token from MATRIX_GITHUB_TOKEN_FILE.
 Where Claude Code keeps its login on Linux is not measured: the file names are listed after.
 EOF
     ;;
@@ -837,7 +667,8 @@ its runs use. Nothing is recorded.
      the container.)
   2. Open the address it shows in your Mac's browser, sign in, and enter the code it shows.
   3. If it offers another model, keep $LUNA. Type no task. Type /exit and press Enter.
-Then goalcup prep lists its steps. "[todo] github" and "[todo] practice" are expected here.
+Then goalcup prep lists its steps. "[todo] github" and "[todo] practice" are expected here:
+this script then settles the practice repository, with the token from MATRIX_GITHUB_TOKEN_FILE.
 EOF
     ;;
 *)
@@ -846,13 +677,14 @@ linux-matrix: the owner's step. Prep lists its steps, then says "Press Enter to 
 Ctrl-C to stop." Press Enter. $h then opens inside the Linux container, in the tracker home
 its runs use. Nothing is recorded. Sign in the way it offers (open any address it prints in your
 Mac's browser; no browser opens from the container). Type no task, then exit it the way it says.
-Then goalcup prep lists its steps. "[todo] github" and "[todo] practice" are expected here.
+Then goalcup prep lists its steps. "[todo] github" and "[todo] practice" are expected here:
+this script then settles the practice repository, with the token from MATRIX_GITHUB_TOKEN_FILE.
 EOF
     ;;
 esac
 docker exec -it -u dev -e TERM=xterm-256color "$name" sh -c "cd $VOL/home && goalcup prep --harness $h --work-root $VOL/work"
 [ "$(docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-ready "$h")" = yes ] ||
     fail "prep did not record the sign-in ($h must exit with /exit, status 0); run login again"
-docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-settle || fail "settle"
+docker exec -u dev $token_env "$name" sh /src/scripts/linux-matrix.sh inner-settle || fail "settle"
 record_home_files
 echo "linux-matrix: signed in ($h on volume $volume)"

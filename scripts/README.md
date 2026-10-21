@@ -27,6 +27,7 @@ details and the options.
 | `linux-harness-smoke.sh` | No-login smoke of the measured Linux Codex and Claude Code builds. | developer | Linux CI (`LINUX_CHECK_HARNESSES=1`) |
 | `campaign.py` | Runs many long test cells in parallel, with drills, and writes reports ([local campaign](../docs/research/LOCAL-CAMPAIGN.md)). | organizer | by hand |
 | `campaign.example.json` | An example campaign config for `campaign.py`. | organizer | `campaign.py` |
+| `kit_settle.py` | Settles a test cell's `prep.json` and `github.json` (the kit's GitHub token), the cheapest-model rules and the run's model check. | organizer | `linux-matrix.sh`; `campaign.py` |
 | `t25-disk-full.sh` | Measures what a run does on a really full disk (needs `sudo` and a loop image). | developer | by hand |
 | `research-measure.py` | Sizes, counts, quiet gaps and compression of a trace's chain files; aggregates only. | researcher, organizer | by hand |
 | `research-sample.py` | One CSV row of soak measurements per interval (disk, chain, ACK lag, processes). | organizer | by hand; `campaign.py` |
