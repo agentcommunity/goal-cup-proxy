@@ -416,7 +416,10 @@ START_LAUNCHED=0
 print_row() {
   [ "$ROW_PRINTED" = 0 ] || return 0
   ROW_PRINTED=1
-  hv=$(printf '%s' "$HV" | tr -s ' \t' '__')
+  # The version line up to its version number: "codex-cli 0.156.1" stays whole, Amp's
+  # "0.0.x (released <date>, 4d ago)" keeps 0.0.x, so the row does not change from day to day.
+  hv=$(printf '%s\n' "$HV" | head -n 1 |
+    awk '{ o = ""; for (i = 1; i <= NF; i++) { o = o (i > 1 ? "_" : "") $i; if ($i ~ /^[0-9]/) break }; print o }')
   [ -n "$hv" ] || hv=unreported
   if [ "$RESULT" != PASS ] && [ -n "$FAIL_REASON" ]; then
     log "FAIL: $FAIL_REASON"

@@ -714,7 +714,8 @@ class CampaignRun(Base):
                          {"lin": "PASS", "mac": "FAIL"})
         md = (out / "summary.md").read_text()
         self.assertIn("| lin | docker | codex-cli | PASS |", md)
-        self.assertIn("2026-10-23T08:00:00Z | hello", (out / "mac" / "run.log").read_text())
+        # (Stamped when it was read: the second cell starts START_SPACING_S after the first.)
+        self.assertRegex((out / "mac" / "run.log").read_text(), r"2026-10-23T08:00:\d\dZ \| hello")
         # The docker cell: linux-matrix with the cell's name, its sampler inside the container.
         run_argv = next(c for c in runner.calls if "linux-matrix.sh" in " ".join(c))
         self.assertEqual(run_argv[2:9], ["run", "codex-cli", "--", "--test", "--duration", "3600",
@@ -824,6 +825,25 @@ class CampaignRun(Base):
         camp, _ = self.make(cells, runner, parallel=2)
         camp.run()
         self.assertLessEqual(peak[0], 2)
+        self.assertEqual([r.result["verdict"] for r in camp.runs], ["PASS"] * 4)
+
+    def test_cells_start_at_least_thirty_seconds_apart(self):
+        runner = FakeRunner()
+        clock = FakeClock()
+        starts = []
+
+        def make_proc(argv):
+            starts.append(clock.monotonic())
+            return FakeProc(["linux-matrix: x linux-x86_64 0 PASS 2026-10-23"])
+        runner.make_proc = make_proc
+        cells = [self.docker_cell(f"c{i}", f"m{i}") for i in range(3)]
+        cells.append(self.host_cell("h", "m9"))
+        camp, _ = self.make(cells, runner, clock=clock, parallel=4)
+        camp.run()
+        self.assertEqual(len(starts), 4)
+        starts.sort()
+        gaps = [b - a for a, b in zip(starts, starts[1:])]
+        self.assertTrue(all(g >= campaign.START_SPACING_S for g in gaps), gaps)
         self.assertEqual([r.result["verdict"] for r in camp.runs], ["PASS"] * 4)
 
     def test_no_secret_value_or_key_path_in_argv_logs_or_files(self):
@@ -967,7 +987,7 @@ class CampaignRun(Base):
                 camp, _ = self.make([self.host_cell("mac", "m1")], runner)
                 camp.run()
                 res = json.loads((self.root / "out" / "mac" / "result.json").read_text())
-                self.assertEqual(res["final_row"], f"codex-cli darwin-arm64 0.1_beta {result} 2026-10-23")
+                self.assertEqual(res["final_row"], f"codex-cli darwin-arm64 0.1 {result} 2026-10-23")
                 self.assertEqual(res["verdict"], verdict)
 
     def test_a_linux_matrix_fail_after_the_row_is_the_final_row(self):

@@ -80,7 +80,8 @@ test = "--test" in args
 
 run_dir = cfg / "runs" / "r1"
 trace = cfg / "artifacts" / ENTRY / "trace"
-chain = b'{"body":{"harness_version":"stub-harness 9.9.9"}}\n'
+chain = (json.dumps({"body": {"harness_version":
+                             os.environ.get("STUB_HV", "stub-harness 9.9.9")}}) + "\n").encode()
 
 def write_run():
     # A test run's record is written before the harness starts, as goalcup start does it.
@@ -263,6 +264,7 @@ class World:
 
 
 DURATION = 4
+AMP_VERSION = "0.0.1792209635-g24a9fe (released 2026-10-17T04:00:35.000Z, 4d ago)"
 MULTILINE = "Build the thing.\n\n  Then\ttest it.\n"
 TYPED = "Build the thing. Then test it."
 TEST = ("--test", "--duration", str(DURATION))
@@ -285,6 +287,7 @@ SCENARIOS = {
     "test_seal_slow": ("stubchat", {"STUB_STOP": "0", "STUB_SEAL_SLEEP": "10"},
                        ("--test", "--duration", "4", "--timeout", "14"), True),
     "prompt_control": ("stubchat", {}, (), False, "go\x1b[Bnow\n"),
+    "amp_version": ("stubchat", {"STUB_HV": AMP_VERSION}),
     "bracketed": ("stubchat", {"STUB_BRACKETED": "1",
                                "STUB_PROMPT": "\x1b[200~" + PROMPT + "\x1b[201~"}),
 }
@@ -335,6 +338,12 @@ class MatrixTests(unittest.TestCase):
         chunks = json.loads(w.seen("start.stdin_chunks"))
         self.assertEqual(chunks[0][1], "\x1b[200~" + PROMPT + "\x1b[201~")
         self.assertEqual(chunks[1][1], "\r")
+
+    def test_the_row_keeps_the_version_line_up_to_its_version_number(self) -> None:
+        w = self.worlds["amp_version"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertRegex(w.run.stdout,
+                         r"(?m)^stubchat \S+ 0\.0\.1792209635-g24a9fe PASS \d{4}-\d\d-\d\d$")
 
     def test_a_tui_without_bracketed_paste_gets_the_raw_keys(self) -> None:
         w = self.worlds["chat"]
