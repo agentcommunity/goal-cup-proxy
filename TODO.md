@@ -173,11 +173,17 @@ Status (21 Oct, branch `smart/zen-gates-d9tmbh`, not yet released):
 - WP-D done in the Worker, plus parallel test runs (test runs no longer replace each other). Both
   need the website migrations in `server/worker/sql/pending/`, applied before that Worker deploys.
   Check the website approval page wording for test runs.
-- WP-E docs done (H-29 widened, login guidance, StorageFull rule). The verifier scan is open.
+- WP-E docs done (H-29 widened, login guidance, StorageFull rule). The verifier scan moves to the
+  post-event export step (owner, 21 Oct): flagged traces are cleaned before anyone gets them.
 - WP-F kit done: `scripts/campaign.py`, `matrix.sh --test --duration`, `linux-matrix.sh` cells,
   `research-measure.py`, `research-sample.py`, `research-staging.py`;
   [local campaign](docs/research/LOCAL-CAMPAIGN.md). Not yet run against real Docker or staging.
-- Open: WP-C (after T25), WP-E scan, WP-G, WP-H rename.
+- WP-G done: E02 cross-check ported with unique bodies and a start-anchored match.
+- T25 measured (docs/research/t25-disk-full.md): a full disk silently ends recording today.
+- WP-C, small version (owner, 21 Oct): pause the agent below 1 GiB free, resume above 3 GiB (D65),
+  no disk stop verdict, vitals in heartbeats and status, cleanup of sent parts after a run. The
+  daemon recorder-hold rework is dropped: the pause comes first.
+- Open: WP-H rename.
 
 ### WP0: Measure
 Status (17 Oct): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging
