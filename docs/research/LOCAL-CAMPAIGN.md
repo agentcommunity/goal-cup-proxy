@@ -127,12 +127,16 @@ WP-C stopped silently instead ([T25](t25-disk-full.md)).
 
 ```sh
 python3 scripts/research-measure.py "$TRACE_DIR" --json > "$RESULTS/measure-<run>.json"
-python3 scripts/research-staging.py --event test-staging --json   # dry runs: --event goalcup-dryrun-staging > "$RESULTS/staging.json"
+# test runs; for dry runs use --event goalcup-dryrun-staging
+python3 scripts/research-staging.py --event test-staging --json \
+  --database-url-file "$SECRETS/staging-db-url" --cloudflare-token-file "$SECRETS/r2-read-token" \
+  > "$RESULTS/staging.json"
 ```
 
 `research-measure.py` reads private chain files and prints only sizes, counts, quiet gaps and
 compression ratios. `research-staging.py` reads staging Supabase and R2 read-only
-(`DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` from the environment) and prints
+(the database URL and an R2 read token from files you name, `chmod 600`; `CLOUDFLARE_ACCOUNT_ID`
+from the environment) and prints
 compression ratio, chunk sizes, ACK lag and heartbeat health. Both outputs are safe to paste back.
 Also run `gitleaks detect --no-git --source <decoded text dir>` over decoded reports of existing
 traces (WP-E urgency), and report counts only.
