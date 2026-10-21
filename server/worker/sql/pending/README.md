@@ -6,8 +6,11 @@ section of the mirror `../goal-cup-tracer-upload.sql`, byte for byte, so the Wor
 test (`test/supabase.test.ts`) already checks the Worker against it.
 
 Copy each file into the website repo's `supabase/migrations/`, unchanged and with the same name,
-and merge it there. Apply it to staging first, then to production: the lead agent applies, the
-owner approves. All are additive: functions, columns and one widened CHECK constraint, no row
+and merge it there. Staging and production share ONE database, so applying a file applies it to
+both at once: there is no "staging first" for SQL. First run the files on a throwaway Postgres
+loaded with the mirror; then the lead agent applies them once, the owner approves. The old-signature
+wrappers keep the live production Worker working. Then deploy and test the staging Worker, then
+production. All are additive: functions, columns and one widened CHECK constraint, no row
 changes. Apply them, in name order, before deploying the Worker that needs them (it calls the new
 `goal_cup_upload_commit_chunk`, `goal_cup_upload_heartbeat` and `goal_cup_upload_record_final_commit`
 overloads); the Worker that is live keeps working on them. Then regenerate the mirror from the
