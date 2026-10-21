@@ -5,11 +5,12 @@
 //! `tests/fixtures/harness-golden/`. The daemon and the verifier render their own halves in their
 //! `harness_contract_golden` tests, into the same directory.
 //!
-//! * One file per connector, `<id>.json`: the capture profile as declared, whether the folder's
-//!   digest matches its pin, the resolved capture plan (program, argv with the goal placement,
-//!   environment, process group, kill fields), the stream decision and its pipes, the per-run
-//!   home tree where there is one, the CA variables, the registered process handle, the redaction patterns, and the argv and environment probes whose verdict
-//!   for this connector differs from the shared policy.
+//! * One file per connector, `<id>.json`: whether the folder's digest matches its pin, the
+//!   resolved capture plan (program, argv with the goal placement, environment, process group,
+//!   kill fields), the stream decision and its pipes, the per-run home tree where there is one,
+//!   the CA variables, the redaction patterns, and the argv and environment probes whose verdict
+//!   for this connector differs from the shared policy. The declared manifest is not echoed: the
+//!   pin covers it. The registered process handle is checked against the plan, not pinned.
 //! * Shared files, which no connector changes: `policy.json` (the generic argv and environment
 //!   deny verdicts over fixed probe lists and the CA-variable rules) and `identity-grammar.json`
 //!   (the stdout JSON tee and the stderr marker grammar over fixture streams).
@@ -197,8 +198,8 @@ fn declared(id: &str) -> Subject {
 }
 
 /// A copy of `c` without its `capture.platform` table: the plan is the base recipe on every
-/// platform, so the golden bytes are the same wherever it runs. The declared overrides are in
-/// `capture_profile`.
+/// platform, so the golden bytes are the same wherever it runs. The declared overrides, like
+/// every other declared field, are pinned by the folder's digest.
 fn base_recipe(c: &HarnessConnector) -> HarnessConnector {
     let mut c = c.clone();
     c.loaded.manifest.capture.platform.clear();
@@ -504,75 +505,6 @@ fn connector_streams_json(p: &CaptureSpec) -> Value {
     })
 }
 
-/// The capture profile as declared: what the launch, the identity and the native binding read.
-fn profile_json(p: &CaptureSpec) -> Value {
-    let mut out = serde_json::Map::new();
-    out.insert("args".into(), json!(p.args));
-    out.insert("auth_hosts".into(), json!(p.auth_hosts));
-    out.insert("ca_env".into(), json!(p.ca.env));
-    out.insert("config_home".into(), json!(p.home.config_home.as_str()));
-    out.insert("continuation".into(), json!(p.continuation));
-    out.insert("env".into(), json!(p.env));
-    out.insert(
-        "executable".into(),
-        json!({"version_args": p.executable.version_args}),
-    );
-    if let Some(goal_flag) = &p.goal_flag {
-        out.insert("goal_flag".into(), json!(goal_flag));
-    }
-    if !p.platform.is_empty() {
-        out.insert(
-            "platform".into(),
-            json!(
-                p.platform
-                    .iter()
-                    .map(|(key, over)| (key.as_str(), json!({"env": over.env}),))
-                    .collect::<BTreeMap<_, _>>()
-            ),
-        );
-    }
-    out.insert("home".into(), json!(p.home.run_home.as_str()));
-    let id = &p.identity;
-    out.insert(
-        "identity".into(),
-        json!({
-            "source": id.source.as_str(),
-            "binding": id.binding.map(|b| b.as_str()),
-            "grammar": id.grammar.map(|g| g.as_str()),
-            "match_field": id.match_field,
-            "match_value": id.match_value,
-            "id_field": id.id_field,
-            "prefix": id.prefix,
-        }),
-    );
-    out.insert("interactive".into(), json!(p.interactive));
-    out.insert("resume_args".into(), json!(p.resume_args));
-    out.insert("configure".into(), json!(p.configure));
-    out.insert("skills_dir".into(), json!(p.home.skills_dir));
-    out.insert("providers".into(), json!(p.providers));
-    if let Some(from) = &p.model_host_from {
-        out.insert(
-            "model_host_from".into(),
-            json!({"file": from.file, "key": from.key}),
-        );
-    }
-    out.insert(
-        "hosts".into(),
-        json!(
-            p.hosts
-                .iter()
-                .map(|h| json!({
-                    "host": h.host,
-                    "evidence_paths": h.evidence_paths,
-                    "prefix_paths": h.prefix_paths,
-                    "protocol_hint": h.protocol_hint,
-                }))
-                .collect::<Vec<_>>()
-        ),
-    );
-    Value::Object(out)
-}
-
 /// Each CA variable the profile names, the profile's mode, the file the launch hands it, and the
 /// value the plan gives it (the proxy CA's path for a harness's own variable).
 fn ca_json(l: &s::Layout, p: &CaptureSpec, plan: &LaunchPlan) -> Value {
@@ -701,15 +633,6 @@ fn env_differences(m: &HarnessManifest, origin: Origin) -> Vec<Value> {
         .collect()
 }
 
-fn termination_json(m: &HarnessManifest) -> Value {
-    let termination = m.termination();
-    json!({
-        "strategy": termination.strategy().as_str(),
-        "native_binary": termination.native_binary,
-        "grace_seconds": termination.grace_seconds(),
-    })
-}
-
 /// Everything `<id>.json` pins for the connector `dc`, as loaded from its directory.
 fn connector_golden(dc: &HarnessConnector) -> Value {
     let id = dc.loaded.manifest.id.as_str();
@@ -757,17 +680,20 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
     let _ = child.kill();
     let _ = child.wait();
     let h = registered.expect("a live child registers");
-    let handle_json = json!({
-        "strategy": serde_json::to_value(h.strategy).unwrap(),
-        "native_binary": h.native_binary,
-        "grace_seconds": h.grace_seconds,
-        "pgid_is_pid": h.pgid == Some(h.pid),
-        "native_pid_found": h.native_pid.is_some(),
-        "has_process_start": h.process_start.is_some(),
-        "program": norm(&l, &program),
-        "argv": h.argv.iter().map(|a| norm(&l, a)).collect::<Vec<_>>(),
-        "env_keys": h.env_keys.iter().filter(|k| *k != "FAKE_HOLD").collect::<Vec<_>>(),
-    });
+    assert_eq!(
+        json!({
+            "strategy": h.strategy,
+            "native_binary": h.native_binary,
+            "grace_seconds": h.grace_seconds,
+        }),
+        serde_json::to_value(&plan.kill).unwrap(),
+        "{id}: the registered handle carries the plan's kill fields"
+    );
+    assert_eq!(norm(&l, &program), norm(&l, &plan.program), "{id}");
+    assert!(
+        h.process_start.is_some(),
+        "{id}: the handle records the start"
+    );
 
     // The per-run home, when the profile asks for one.
     let home = match dp.home.config_home.as_str() {
@@ -818,16 +744,11 @@ fn connector_golden(dc: &HarnessConnector) -> Value {
             "dir_digest_matches_its_pin": goalcup_protocol::pins::connector_dir_is_pinned(id, &dc.loaded.connector_dir_sha256),
             "files_dir": files,
         },
-        "capture_profile": profile_json(dp),
         "plan": plan_json(&l, &plan),
         "goal_placement_for_an_option_shaped_goal": placement,
         "streams": connector_streams_json(dp),
         "home": home,
         "ca": ca_json(&l, dp, &plan),
-        "termination": {
-            "kill": termination_json(m),
-            "registered_handle": handle_json,
-        },
         "argv_differs_from_policy": argv_differences(m, origin),
         "env_differs_from_policy": env_differences(m, origin),
         "redaction": {

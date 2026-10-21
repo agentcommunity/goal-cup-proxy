@@ -603,6 +603,75 @@ pub fn checked_frame_len(prefix: [u8; 4], limit: usize) -> Result<usize, Capture
     Ok(len)
 }
 
+/// Longest entry ID in an ingest handshake, and in the receiver's grant for that entry.
+pub const MAX_INGEST_ENTRY_ID_BYTES: usize = 256;
+
+/// The first item of every ingest connection, before any [`IngestMessage`]. Fields serialize in
+/// the order `entry_id`, `producer`, `token`; unknown fields are refused; `Debug` never shows
+/// the token. The sender encodes it with [`encode_ingest_handshake`] and the receiver decodes
+/// it with [`decode_ingest_handshake`], so both sides share one definition of the bytes.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IngestHandshake {
+    pub entry_id: String,
+    pub producer: String,
+    pub token: String,
+}
+
+impl std::fmt::Debug for IngestHandshake {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IngestHandshake")
+            .field("entry_id", &self.entry_id)
+            .field("producer", &self.producer)
+            .field("token", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Whether `value` is an ingest entry ID: 1 to [`MAX_INGEST_ENTRY_ID_BYTES`] bytes without
+/// control characters.
+pub fn is_ingest_entry_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_INGEST_ENTRY_ID_BYTES
+        && !value.bytes().any(|b| b.is_ascii_control())
+}
+
+/// The framed handshake (`u32` big-endian length plus compact JSON), or `None` over
+/// [`MAX_HANDSHAKE_BYTES`]. JSON never shortens a string, so an over-limit raw length is
+/// refused before anything is serialized. Only the size is checked here; the receiver's
+/// [`decode_ingest_handshake`] judges the fields.
+pub fn encode_ingest_handshake(entry_id: &str, producer: &str, token: &str) -> Option<Vec<u8>> {
+    if entry_id.len() + producer.len() + token.len() > MAX_HANDSHAKE_BYTES {
+        return None;
+    }
+    let body = serde_json::to_vec(&IngestHandshake {
+        entry_id: entry_id.to_string(),
+        producer: producer.to_string(),
+        token: token.to_string(),
+    })
+    .ok()?;
+    if body.len() > MAX_HANDSHAKE_BYTES {
+        return None;
+    }
+    let mut framed = Vec::with_capacity(4 + body.len());
+    framed.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    framed.extend_from_slice(&body);
+    Some(framed)
+}
+
+/// Decode one handshake body (the bytes after its prefix): unknown fields refused, then an
+/// ingest entry ID, a capture ID as the producer and a token that is not empty, or `None`.
+pub fn decode_ingest_handshake(body: &[u8]) -> Option<IngestHandshake> {
+    if body.len() > MAX_HANDSHAKE_BYTES {
+        return None;
+    }
+    let handshake: IngestHandshake = serde_json::from_slice(body).ok()?;
+    let valid = is_ingest_entry_id(&handshake.entry_id)
+        && is_capture_id(&handshake.producer)
+        && !handshake.token.is_empty();
+    valid.then_some(handshake)
+}
+
 /// `u32` big-endian length plus compact JSON of a validated message. The message is
 /// validated first, so a value over any bound is refused before it is serialized.
 pub fn encode_ingest_message(message: &IngestMessage) -> Result<Vec<u8>, CaptureLimitError> {
@@ -633,4 +702,76 @@ pub fn decode_ingest_message(body: &[u8]) -> Result<IngestMessage, CaptureLimitE
         serde_json::from_slice(body).map_err(|_| CaptureLimitError::Malformed)?;
     message.validate()?;
     Ok(message)
+}
+
+#[cfg(test)]
+mod handshake_tests {
+    use super::*;
+
+    const PRODUCER: &str = "0123456789abcdef0123456789abcdef";
+
+    /// The handshake line of the shared golden `tests/fixtures/m2-ingest/golden-stream.hex`.
+    fn golden_framed_handshake() -> Vec<u8> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/m2-ingest/golden-stream.hex"
+        );
+        let text = std::fs::read_to_string(path).unwrap();
+        hex::decode(text.lines().next().unwrap().trim()).unwrap()
+    }
+
+    #[test]
+    fn the_handshake_codec_is_byte_exact_with_the_shared_golden() {
+        let framed = golden_framed_handshake();
+        let len = checked_frame_len(framed[..4].try_into().unwrap(), MAX_HANDSHAKE_BYTES).unwrap();
+        assert_eq!(
+            framed.len(),
+            4 + len,
+            "the first golden line is the handshake"
+        );
+        let handshake = decode_ingest_handshake(&framed[4..]).expect("the golden decodes");
+        assert_eq!(handshake.entry_id, "entry-m2-0001");
+        assert_eq!(handshake.producer, "7a3f9c21d4e58b06a1c2d3e4f5061728");
+        assert_eq!(
+            encode_ingest_handshake(&handshake.entry_id, &handshake.producer, &handshake.token),
+            Some(framed),
+            "fields in order entry_id, producer, token; compact JSON behind a length"
+        );
+        assert!(!format!("{handshake:?}").contains(&handshake.token));
+    }
+
+    #[test]
+    fn the_handshake_decoder_refuses_unknown_fields_and_bad_values() {
+        let ok = br#"{"entry_id":"e","producer":"7a3f9c21d4e58b06a1c2d3e4f5061728","token":"t"}"#;
+        assert!(decode_ingest_handshake(ok).is_some());
+        let bad: [&[u8]; 6] = [
+            br#"{"entry_id":"e","producer":"7a3f9c21d4e58b06a1c2d3e4f5061728","token":"t","x":1}"#,
+            br#"{"entry_id":"e","producer":"7A3F9C21D4E58B06A1C2D3E4F5061728","token":"t"}"#,
+            br#"{"entry_id":"","producer":"7a3f9c21d4e58b06a1c2d3e4f5061728","token":"t"}"#,
+            br#"{"entry_id":"e\u0001","producer":"7a3f9c21d4e58b06a1c2d3e4f5061728","token":"t"}"#,
+            br#"{"entry_id":"e","producer":"7a3f9c21d4e58b06a1c2d3e4f5061728","token":""}"#,
+            br#"{"entry_id":"e","producer":"7a3f9c21d4e58b06a1c2d3e4f5061728"}"#,
+        ];
+        for body in bad {
+            assert!(
+                decode_ingest_handshake(body).is_none(),
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    #[test]
+    fn the_handshake_over_the_limit_is_refused_before_and_after_escaping() {
+        let fixed = r#"{"entry_id":"e","producer":"","token":""}"#.len() + PRODUCER.len();
+        let fits = MAX_HANDSHAKE_BYTES - fixed;
+        let exact = encode_ingest_handshake("e", PRODUCER, &"x".repeat(fits)).unwrap();
+        assert_eq!(exact.len(), 4 + MAX_HANDSHAKE_BYTES);
+        assert!(decode_ingest_handshake(&exact[4..]).is_some());
+        assert!(encode_ingest_handshake("e", PRODUCER, &"x".repeat(fits + 1)).is_none());
+        // Raw input far over the limit is refused before serialization.
+        assert!(encode_ingest_handshake("e", PRODUCER, &"x".repeat(64 * 1024)).is_none());
+        // Short raw input that JSON escaping pushes over the limit.
+        assert!(encode_ingest_handshake("e", PRODUCER, &"\u{1}".repeat(300)).is_none());
+    }
 }

@@ -13,8 +13,8 @@
 //! The shared golden `crates/goalcup-protocol/tests/fixtures/m2-ingest/golden-stream.{json,hex}`
 //! fixes the bytes: every item is a big-endian `u32` body length followed by compact JSON.
 //! The first item is the handshake `{"entry_id","producer","token"}` of at most
-//! [`MAX_HANDSHAKE_BYTES`], decoded here by a private struct that rejects unknown fields and
-//! never prints its token. Every later item is an [`IngestMessage`], decoded by the
+//! [`MAX_HANDSHAKE_BYTES`], decoded by the protocol's [`decode_ingest_handshake`], which
+//! rejects unknown fields and never prints its token. Every later item is an [`IngestMessage`], decoded by the
 //! protocol's [`decode_ingest_message`] after [`checked_frame_len`] has refused an over-limit
 //! prefix, so no body byte of an over-limit item is ever read or allocated. The receiver
 //! never writes a byte: there is no ACK, no rejection frame and no replay. A refusal is a
@@ -125,11 +125,10 @@
 use crate::control::constant_time_eq;
 use goalcup_protocol::capture::{
     CaptureFrame, CaptureLimitError, CaptureSink, CaptureTime, EpochAdmission, FrameEvent,
-    GapReason, IngestMessage, MAX_HANDSHAKE_BYTES, MAX_INGEST_FRAME_BYTES, MAX_LIVE_PRODUCERS,
-    MAX_OPEN_STREAMS, MAX_PRODUCERS, SubmitResult, checked_frame_len, decode_ingest_message,
-    is_capture_id,
+    GapReason, IngestHandshake, IngestMessage, MAX_HANDSHAKE_BYTES, MAX_INGEST_ENTRY_ID_BYTES,
+    MAX_INGEST_FRAME_BYTES, MAX_LIVE_PRODUCERS, MAX_OPEN_STREAMS, MAX_PRODUCERS, SubmitResult,
+    checked_frame_len, decode_ingest_handshake, decode_ingest_message, is_ingest_entry_id,
 };
-use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
 use std::net::SocketAddr;
@@ -151,8 +150,6 @@ pub(crate) const DEFAULT_CLOSE_GRACE: Duration = Duration::from_secs(2);
 /// How long a listener dropped without [`IngestListener::shutdown`] lets its tasks settle
 /// before aborting them.
 pub(crate) const DROP_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
-/// Longest entry ID accepted by [`IngestListener::authorize`] and in a handshake.
-pub(crate) const MAX_ENTRY_ID_BYTES: usize = 256;
 
 const ADMISSION_POLL_FIRST: Duration = Duration::from_millis(5);
 const ADMISSION_POLL_MAX: Duration = Duration::from_millis(100);
@@ -268,7 +265,7 @@ pub enum IngestError {
     NotLoopback,
     #[error("ingest listener I/O: {0}")]
     Io(#[from] std::io::Error),
-    #[error("an entry ID is 1 to {MAX_ENTRY_ID_BYTES} bytes without control characters")]
+    #[error("an entry ID is 1 to {MAX_INGEST_ENTRY_ID_BYTES} bytes without control characters")]
     InvalidEntryId,
     #[error("an ingest secret is 32 to 256 printable ASCII bytes without quote or backslash")]
     InvalidSecret,
@@ -440,43 +437,6 @@ pub struct DrainReport {
 }
 
 // -------------------------------------------------------------------------------------------
-// Handshake: a private codec, byte-exact against the shared golden.
-// -------------------------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-#[cfg_attr(test, derive(serde::Serialize))]
-#[serde(deny_unknown_fields)]
-struct Handshake {
-    entry_id: String,
-    producer: String,
-    token: String,
-}
-
-impl fmt::Debug for Handshake {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Handshake")
-            .field("entry_id", &self.entry_id)
-            .field("producer", &self.producer)
-            .field("token", &"<redacted>")
-            .finish()
-    }
-}
-
-fn decode_handshake(body: &[u8]) -> Option<Handshake> {
-    let handshake: Handshake = serde_json::from_slice(body).ok()?;
-    let valid = valid_entry_id(&handshake.entry_id)
-        && is_capture_id(&handshake.producer)
-        && !handshake.token.is_empty();
-    valid.then_some(handshake)
-}
-
-fn valid_entry_id(entry_id: &str) -> bool {
-    !entry_id.is_empty()
-        && entry_id.len() <= MAX_ENTRY_ID_BYTES
-        && !entry_id.bytes().any(|b| b.is_ascii_control())
-}
-
-// -------------------------------------------------------------------------------------------
 // Listener.
 // -------------------------------------------------------------------------------------------
 
@@ -552,7 +512,7 @@ impl IngestListener {
         if *self.shared.shutdown.borrow() {
             return Err(IngestError::ShutDown);
         }
-        if !valid_entry_id(&grant.entry_id) {
+        if !is_ingest_entry_id(&grant.entry_id) {
             return Err(IngestError::InvalidEntryId);
         }
         if grant.prior_producers > MAX_PRODUCERS {
@@ -693,7 +653,7 @@ impl ListenerShared {
     /// Entry, token, then a fresh producer ID within budget, which is consumed here.
     fn authenticate(
         &self,
-        handshake: Handshake,
+        handshake: IngestHandshake,
     ) -> Option<(Arc<EntryShared>, String, watch::Receiver<bool>)> {
         let entry = lock(&self.entries).get(&handshake.entry_id).cloned()?;
         if !constant_time_eq(handshake.token.as_bytes(), entry.secret.expose().as_bytes()) {
@@ -723,7 +683,7 @@ async fn serve(mut stream: TcpStream, shared: Arc<ListenerShared>, permit: Owned
             return;
         }
         Ok(Err(_)) => None,
-        Ok(Ok(())) => decode_handshake(&buf).and_then(|h| shared.authenticate(h)),
+        Ok(Ok(())) => decode_ingest_handshake(&buf).and_then(|h| shared.authenticate(h)),
     };
     let Some((entry, producer, stop)) = authenticated else {
         shared.refused.fetch_add(1, Ordering::Relaxed);
@@ -1392,57 +1352,5 @@ fn check(state: &EntryState, id: &str, frame: &CaptureFrame) -> Result<Step, Los
         FrameEvent::Gap { .. } if p.open.contains_key(&stream) => Ok(Step::Gap(stream)),
         FrameEvent::End { .. } if p.open.contains_key(&stream) => Ok(Step::End(stream)),
         FrameEvent::Gap { .. } | FrameEvent::End { .. } => Err(LossCause::StreamState),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn golden_handshake_body() -> Vec<u8> {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../goalcup-protocol/tests/fixtures/m2-ingest/golden-stream.hex"
-        );
-        let text = std::fs::read_to_string(path).unwrap();
-        let first_line = text.lines().next().unwrap();
-        let framed = hex::decode(first_line.trim()).unwrap();
-        let len = checked_frame_len(framed[..4].try_into().unwrap(), MAX_HANDSHAKE_BYTES).unwrap();
-        assert_eq!(
-            framed.len(),
-            4 + len,
-            "the first golden line is exactly the handshake"
-        );
-        framed[4..].to_vec()
-    }
-
-    #[test]
-    fn private_handshake_codec_is_byte_exact_with_the_shared_golden() {
-        let body = golden_handshake_body();
-        let handshake = decode_handshake(&body).expect("the golden handshake decodes");
-        assert_eq!(handshake.entry_id, "entry-m2-0001");
-        assert_eq!(handshake.producer, "7a3f9c21d4e58b06a1c2d3e4f5061728");
-        assert_eq!(
-            serde_json::to_vec(&handshake).unwrap(),
-            body,
-            "fields in order entry_id, producer, token; compact JSON"
-        );
-        assert!(!format!("{handshake:?}").contains(&handshake.token));
-    }
-
-    #[test]
-    fn handshake_refuses_unknown_fields_and_bad_ids() {
-        let ok = br#"{"entry_id":"e","producer":"7a3f9c21d4e58b06a1c2d3e4f5061728","token":"t"}"#;
-        assert!(decode_handshake(ok).is_some());
-        let bad: [&[u8]; 5] = [
-            br#"{"entry_id":"e","producer":"7a3f9c21d4e58b06a1c2d3e4f5061728","token":"t","x":1}"#,
-            br#"{"entry_id":"e","producer":"7A3F9C21D4E58B06A1C2D3E4F5061728","token":"t"}"#,
-            br#"{"entry_id":"","producer":"7a3f9c21d4e58b06a1c2d3e4f5061728","token":"t"}"#,
-            br#"{"entry_id":"e","producer":"7a3f9c21d4e58b06a1c2d3e4f5061728","token":""}"#,
-            br#"{"entry_id":"e","producer":"7a3f9c21d4e58b06a1c2d3e4f5061728"}"#,
-        ];
-        for body in bad {
-            assert!(decode_handshake(body).is_none());
-        }
     }
 }

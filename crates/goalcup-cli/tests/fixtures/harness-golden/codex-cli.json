@@ -8,73 +8,6 @@
       "value_in_plan": "<TMP>/proxy-ca.pem"
     }
   ],
-  "capture_profile": {
-    "args": [
-      "-c",
-      "check_for_update_on_startup=false",
-      "-c",
-      "projects={{ \"{workspace}\" = {{ trust_level = \"trusted\" }} }}",
-      "-C",
-      "{workspace}"
-    ],
-    "auth_hosts": [
-      "auth.openai.com"
-    ],
-    "ca_env": [
-      "CODEX_CA_CERTIFICATE"
-    ],
-    "config_home": "shared",
-    "configure": [],
-    "continuation": "chat: the participant types the prompt and may type keep going",
-    "env": {
-      "NODE_USE_ENV_PROXY": "1",
-      "SHELL": "/bin/zsh"
-    },
-    "executable": {
-      "version_args": [
-        "--version"
-      ]
-    },
-    "home": "empty",
-    "hosts": [
-      {
-        "evidence_paths": [
-          "/backend-api/codex/responses"
-        ],
-        "host": "chatgpt.com",
-        "prefix_paths": [],
-        "protocol_hint": "openai-responses"
-      }
-    ],
-    "identity": {
-      "binding": null,
-      "grammar": null,
-      "id_field": null,
-      "match_field": null,
-      "match_value": null,
-      "prefix": null,
-      "source": "none"
-    },
-    "interactive": true,
-    "platform": {
-      "linux-aarch64": {
-        "env": {
-          "SHELL": "/bin/bash"
-        }
-      },
-      "linux-x86_64": {
-        "env": {
-          "SHELL": "/bin/bash"
-        }
-      }
-    },
-    "providers": [],
-    "resume_args": [
-      "resume",
-      "--last"
-    ],
-    "skills_dir": "skills"
-  },
   "connector": {
     "dir_digest_matches_its_pin": true,
     "files_dir": [],
@@ -172,47 +105,6 @@
     "pipes": {
       "stderr": false,
       "stdout": false
-    }
-  },
-  "termination": {
-    "kill": {
-      "grace_seconds": 10,
-      "native_binary": "codex",
-      "strategy": "native_pid"
-    },
-    "registered_handle": {
-      "argv": [
-        "-c",
-        "check_for_update_on_startup=false",
-        "-c",
-        "projects={ \"<TMP>/workspace\" = { trust_level = \"trusted\" } }",
-        "-C",
-        "<TMP>/workspace"
-      ],
-      "env_keys": [
-        "CODEX_CA_CERTIFICATE",
-        "CODEX_HOME",
-        "GOALCUP_IN_HARNESS",
-        "GOALCUP_TIME_LEFT_FILE",
-        "HOME",
-        "HTTPS_PROXY",
-        "LOGNAME",
-        "NODE_USE_ENV_PROXY",
-        "NO_PROXY",
-        "PATH",
-        "SHELL",
-        "TMPDIR",
-        "USER",
-        "https_proxy",
-        "no_proxy"
-      ],
-      "grace_seconds": 10,
-      "has_process_start": true,
-      "native_binary": "codex",
-      "native_pid_found": false,
-      "pgid_is_pid": false,
-      "program": "<TMP>/bin/fake-harness",
-      "strategy": "native_pid"
     }
   }
 }

@@ -1305,49 +1305,8 @@ fn claude_shape_bash_tool_orphaned_child_dies_late() {
     }
 }
 
-/// The same Bash-tool shape, but the grandchild ignores SIGTERM — a server
-/// the tool started that traps it. `sh` dies on its SIGTERM and orphans the ignorer alive.
-///
-/// Ignored: its first line, `!observed_gone`, assumes the orphan survives the call; it
-/// does not — it is SIGKILLed by its recorded identity, nothing of ours is alive, and
-/// `observed_gone` is the correct answer.
-/// `claude_shape_bash_tool_orphaned_ignorer_is_killed` below asserts that behaviour.
-#[test]
-#[ignore = "F7 closed: this scenario's `!observed_gone` line asserts the orphan survives; it is SIGKILLed now — see claude_shape_bash_tool_orphaned_ignorer_is_killed"]
-fn claude_shape_bash_tool_orphaned_child_ignores_term() {
-    for platform in [Platform::Macos, Platform::Linux] {
-        let tree = node(
-            ROOT,
-            "claude",
-            false,
-            OnTerm::DiesAfterPolls(1),
-            vec![node(
-                101,
-                "sh",
-                false,
-                OnTerm::DiesAfterPolls(0),
-                vec![leaf(102, "sleep", false, OnTerm::Ignores)],
-            )],
-        );
-        let sim = Sim::new(platform, tree, vec![]);
-        let handle = sim.handle(None, None);
-        let report = run(&sim, &handle).expect("a live claude tree terminates");
-        let w = sim.world();
-        assert!(!report.observed_gone, "I1: {platform:?}: {report:?}");
-        let unnamed: Vec<u32> = w
-            .alive_born()
-            .into_iter()
-            .filter(|pid| !report.still_alive.contains(pid))
-            .collect();
-        assert!(
-            unnamed.is_empty() && report.killed == vec![102],
-            "F7 {platform:?}: the orphan must be SIGKILLed or named.\n\
-             alive-and-unnamed={unnamed:?}\n{report:?}\n{}",
-            w.describe()
-        );
-    }
-}
-
+/// The same Bash-tool shape, but the grandchild ignores SIGTERM: a server the tool started
+/// that traps it. `sh` dies on its SIGTERM and orphans the ignorer alive (F7).
 /// The orphaned SIGTERM-ignorer is chosen for SIGKILL by its recorded
 /// identity — the phase-A gate follows it out of the lineage — and the signal is authorised
 /// by that identity too, so it dies, is named in `killed`, and the tree is observed gone.
@@ -1495,32 +1454,8 @@ fn f8_orphaned_member_clears_phase_a_gate() {
 }
 
 /// The root exits at poll 1 of its own accord. `codex`, already signalled, forks a
-/// replacement at poll 2 and exits at poll 3.
+/// replacement at poll 2 and exits at poll 3 (F8).
 ///
-/// Ignored: the escapee is adopted from the live `codex` under a `Closed` anchor,
-/// SIGKILLed by its own identity, and `observed_gone` is the correct answer with nothing of
-/// ours alive, so this scenario's `!observed_gone` line does not hold.
-/// `fork_after_root_self_exit_is_adopted_from_the_live_member`
-/// asserts that behaviour on both platforms.
-#[test]
-#[ignore = "F8 closed: this scenario asserted the witness's fail-closed refusal over an escapee that is now adopted and killed — see fork_after_root_self_exit_is_adopted_from_the_live_member"]
-fn macos_witness_refuses_fork_after_root_self_exit() {
-    let sim = Sim::new(
-        Platform::Macos,
-        root_self_exit_then_fork_tree(),
-        vec![(1, Event::Exit { pid: ROOT })],
-    );
-    let handle = sim.handle(None, Some("codex"));
-    let report = run(&sim, &handle).expect("a live tree terminates");
-    let w = sim.world();
-    assert!(
-        !report.observed_gone,
-        "I1: observed_gone over the escapee {:?}\n{report:?}\n{}",
-        w.alive_born(),
-        w.describe()
-    );
-}
-
 /// On Linux, with no fork witness. The fork at poll 2 happens while `codex` is
 /// alive and identity-verified, so a walk from `codex` names pid 102, even with the anchor
 /// `Closed` by the root's own exit; the walk runs and the escapee dies.

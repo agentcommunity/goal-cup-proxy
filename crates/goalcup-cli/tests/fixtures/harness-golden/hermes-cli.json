@@ -129,58 +129,6 @@
       "value_in_plan": "<TMP>/proxy-ca.pem"
     }
   ],
-  "capture_profile": {
-    "args": [
-      "chat"
-    ],
-    "auth_hosts": [],
-    "ca_env": [
-      "HERMES_CA_BUNDLE"
-    ],
-    "config_home": "shared",
-    "configure": [
-      [
-        "config",
-        "set",
-        "sessions.write_json_snapshots",
-        "true"
-      ],
-      [
-        "config",
-        "set",
-        "compression.in_place",
-        "false"
-      ]
-    ],
-    "continuation": "chat: the participant types the prompt and may type keep going",
-    "env": {
-      "TERMINAL_HOME_MODE": "profile"
-    },
-    "executable": {
-      "version_args": []
-    },
-    "home": "empty",
-    "hosts": [],
-    "identity": {
-      "binding": null,
-      "grammar": null,
-      "id_field": null,
-      "match_field": null,
-      "match_value": null,
-      "prefix": null,
-      "source": "none"
-    },
-    "interactive": true,
-    "model_host_from": {
-      "file": "config.yaml",
-      "key": "model.base_url"
-    },
-    "providers": [],
-    "resume_args": [
-      "--continue"
-    ],
-    "skills_dir": null
-  },
   "connector": {
     "dir_digest_matches_its_pin": true,
     "files_dir": [],
@@ -247,41 +195,6 @@
     "pipes": {
       "stderr": false,
       "stdout": false
-    }
-  },
-  "termination": {
-    "kill": {
-      "grace_seconds": 10,
-      "native_binary": null,
-      "strategy": "process_group"
-    },
-    "registered_handle": {
-      "argv": [
-        "chat"
-      ],
-      "env_keys": [
-        "GOALCUP_IN_HARNESS",
-        "GOALCUP_TIME_LEFT_FILE",
-        "HERMES_CA_BUNDLE",
-        "HERMES_HOME",
-        "HOME",
-        "HTTPS_PROXY",
-        "LOGNAME",
-        "NO_PROXY",
-        "PATH",
-        "TERMINAL_HOME_MODE",
-        "TMPDIR",
-        "USER",
-        "https_proxy",
-        "no_proxy"
-      ],
-      "grace_seconds": 10,
-      "has_process_start": true,
-      "native_binary": null,
-      "native_pid_found": false,
-      "pgid_is_pid": false,
-      "program": "<TMP>/bin/fake-harness",
-      "strategy": "process_group"
     }
   }
 }

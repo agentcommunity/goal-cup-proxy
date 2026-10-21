@@ -8,53 +8,6 @@
       "value_in_plan": "<TMP>/proxy-ca.pem"
     }
   ],
-  "capture_profile": {
-    "args": [
-      "/synthetic/workload.py",
-      "/synthetic/config.json",
-      "--"
-    ],
-    "auth_hosts": [
-      "auth.e00.localhost"
-    ],
-    "ca_env": [
-      "NODE_EXTRA_CA_CERTS"
-    ],
-    "config_home": "shared",
-    "configure": [],
-    "continuation": "none: one fixed traffic plan, no input after the goal",
-    "env": {},
-    "executable": {
-      "version_args": []
-    },
-    "home": "empty",
-    "hosts": [
-      {
-        "evidence_paths": [
-          "/v1/echo",
-          "/v1/sse",
-          "/v1/ws",
-          "/v1/bulk"
-        ],
-        "host": "api.e00.localhost",
-        "prefix_paths": [],
-        "protocol_hint": "e00-controlled"
-      }
-    ],
-    "identity": {
-      "binding": null,
-      "grammar": null,
-      "id_field": null,
-      "match_field": null,
-      "match_value": null,
-      "prefix": null,
-      "source": "none"
-    },
-    "interactive": false,
-    "providers": [],
-    "resume_args": [],
-    "skills_dir": null
-  },
   "connector": {
     "dir_digest_matches_its_pin": false,
     "files_dir": [],
@@ -122,43 +75,6 @@
     "pipes": {
       "stderr": false,
       "stdout": false
-    }
-  },
-  "termination": {
-    "kill": {
-      "grace_seconds": 10,
-      "native_binary": null,
-      "strategy": "process_group"
-    },
-    "registered_handle": {
-      "argv": [
-        "/synthetic/workload.py",
-        "/synthetic/config.json",
-        "--",
-        "<goal>"
-      ],
-      "env_keys": [
-        "GOALCUP_IN_HARNESS",
-        "GOALCUP_TIME_LEFT_FILE",
-        "HOME",
-        "HTTPS_PROXY",
-        "LOGNAME",
-        "NODE_EXTRA_CA_CERTS",
-        "NO_PROXY",
-        "PATH",
-        "TMPDIR",
-        "USER",
-        "WORKLOAD_HOME",
-        "https_proxy",
-        "no_proxy"
-      ],
-      "grace_seconds": 10,
-      "has_process_start": true,
-      "native_binary": null,
-      "native_pid_found": false,
-      "pgid_is_pid": false,
-      "program": "<TMP>/bin/fake-harness",
-      "strategy": "process_group"
     }
   }
 }
