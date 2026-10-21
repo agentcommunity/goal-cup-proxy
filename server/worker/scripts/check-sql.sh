@@ -19,6 +19,11 @@ set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 sql=$here/sql
 mirror=$sql/goal-cup-tracer-upload.sql
+# The postmaster refuses to start on macOS when the locale is empty or unknown ("postmaster became
+# multithreaded during startup ... Set the LC_ALL environment variable to a valid locale"); the
+# database is --no-locale anyway.
+LC_ALL=C
+export LC_ALL
 port=54329
 
 if [ -z "${PG_BIN:-}" ]; then

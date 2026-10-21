@@ -978,6 +978,15 @@ class Commands(Base):
         self.assertEqual(runner.calls[0][2:], ["build", "codex-cli"])
         self.assertNotIn(campaign.KEY_ENV, runner.envs[0])  # a build needs no key
 
+    def test_build_comes_before_the_host_cells_sign_in(self):
+        # LOCAL-CAMPAIGN orders build, then login; login makes a host cell's config_dir.
+        path = self.write([{"id": "lin", "where": "docker", "test_member_id": "m1"},
+                           {"id": "mac", "where": "host", "test_member_id": "m2",
+                            "config_dir": str(self.root / "not-yet")}])
+        runner = FakeRunner()
+        self.assertEqual(campaign.main(["build", path], runner=runner), 0)
+        self.assertEqual(runner.calls[0][2:], ["build", "codex-cli"])
+
     def test_run_refuses_shared_member_before_starting_anything(self):
         path = self.write([{"id": "a", "where": "docker", "test_member_id": "m1"},
                            {"id": "b", "where": "docker", "test_member_id": "m1"}])

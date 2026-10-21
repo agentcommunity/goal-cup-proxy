@@ -1506,6 +1506,8 @@ def cmd_check(args, runner, say=print):
 def cmd_build(args, runner):
     cfg = load_config(args.config)
     errors, _ = validate(cfg, cfg["cells"], 1)
+    # Build comes before the sign-ins, and a host cell's configuration directory is made by its login.
+    errors = [e for e in errors if "does not exist" not in e]
     if errors:
         for m in errors:
             print(f"error {m}", file=sys.stderr)

@@ -312,6 +312,13 @@ fn a_run_holds_one_reserve_file_and_releases_it_at_the_end() {
                 )
             })
             .collect();
+        // The reserve is a floor for the reserve plus the chain on disk (run/reserve.rs), so it
+        // shrinks as the chain grows. Read after `held`: the chain only grows meanwhile.
+        let footprint: u64 = goalcup_cli::upload::prune::parts_now(&rig.trace(&entry_id))
+            .unwrap_or_default()
+            .iter()
+            .map(|part| part.len)
+            .sum();
         let record = goalcup_cli::run::read(&rig.cfg, &entry_id);
         // Ending the run through the daemon ends the harness.
         let mut sealed = Vec::new();
@@ -323,15 +330,19 @@ fn a_run_holds_one_reserve_file_and_releases_it_at_the_end() {
             &mut sealed,
         )
         .unwrap();
-        (joined(start), held, record)
+        (joined(start), (held, footprint), record)
     });
+    let (held, footprint) = held;
     let (result, out) = started;
     result.unwrap_or_else(|e| panic!("{e}\n{out}"));
     let entry_id = client.created().entry_id;
     // One file, named for the run (a local run's id is its entry's), holding its blocks.
     assert_eq!(held.len(), 1, "{held:?}");
     assert_eq!(held[0].0, entry_id);
-    assert!(held[0].1 >= RESERVE, "{held:?}");
+    assert!(
+        held[0].1 + footprint >= RESERVE,
+        "{held:?} + chain {footprint}"
+    );
     // The record the run left: no server, no deadline, the entry and its trace folder.
     let record = record.expect("a run record while the run records");
     assert_eq!(record.run_id, entry_id);
