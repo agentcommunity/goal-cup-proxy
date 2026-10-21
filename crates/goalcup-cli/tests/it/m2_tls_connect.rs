@@ -9,8 +9,8 @@
 //!
 //! `fixtures/m2-tls/openssl-clienthello-*.hex` are ClientHellos an OpenSSL 3.6.4 client
 //! (Python `ssl`) sent to a loopback socket, one with SNI `localhost` and one with none. They
-//! are an oracle for SNI parsing from a TLS implementation other than the rustls the proxy
-//! and the other tests use. They hold only random bytes, ephemeral public keys and the name
+//! are an oracle for SNI parsing from a TLS implementation other than the rustls the recording
+//! proxy and the other tests use. They hold only random bytes, ephemeral public keys and the name
 //! `localhost`.
 
 use crate::common::m2_tls_support;
@@ -110,7 +110,7 @@ fn assert_absent(what: &str, haystack: &[u8], sentinels: &[&str]) {
     }
 }
 
-/// Connects a real TLS client through the proxy to `target`, trusting only `ca`.
+/// Connects a real TLS client through the recording proxy to `target`, trusting only `ca`.
 async fn tls_through(
     proxy: std::net::SocketAddr,
     target: &str,
@@ -536,8 +536,8 @@ async fn auth_and_non_capture_hosts_are_opaque_tunnels() {
 
     // An authentication host, even with a ClientHello naming an approved host, is still an
     // unchanged tunnel whose content is never read. It is reported as `SniMismatch`, a
-    // fail-open tunnel the proxy chains as a loss: an approved host's traffic must not leave
-    // uncaptured through an authentication host.
+    // fail-open tunnel the recording proxy chains as a loss: an approved host's traffic must not
+    // leave uncaptured through an authentication host.
     let recorder = Recorder::start(reply.clone()).await;
     let proxy = serve_one(config.clone()).await;
     let target = format!("localhost:{}", recorder.addr.port());
@@ -698,7 +698,7 @@ async fn fragmented_client_hello_decides_by_sni() {
     assert_eq!(
         flight,
         [0x16, 0x03, 0x03],
-        "a TLS handshake record from the proxy"
+        "a TLS handshake record from the recording proxy"
     );
     drop(tcp);
     assert_eq!(
@@ -774,7 +774,7 @@ async fn http1_alpn_policy_is_explicit() {
     assert_eq!(upstream.next_seen().await.handshake, Ok(()));
     upstream.shutdown().await;
 
-    // An upstream that speaks only h2 refuses the proxy's http/1.1-only offer.
+    // An upstream that speaks only h2 refuses the recording proxy's http/1.1-only offer.
     let (chain, key) = pki.leaf(&["localhost"]);
     let mut h2_only = TlsUpstream::start(chain, key, &[H2]).await;
     let proxy = serve_one(config).await;

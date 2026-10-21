@@ -3,7 +3,7 @@
 # repeating the row; the loader appends each named row to the connector's `capture.hosts`, and
 # every host rule then applies to it as to a row the connector wrote itself.
 #
-# This file is compiled into the tracer (`harness::provider_hosts`), so a row is a reviewed core
+# This file is compiled into goalcup (`harness::provider_hosts`), so a row is a reviewed core
 # change, like a pin. A row names a provider's public API host, the request paths that carry
 # model turns, and the decoder hint for that wire format. Add a row only from a measured run.
 #

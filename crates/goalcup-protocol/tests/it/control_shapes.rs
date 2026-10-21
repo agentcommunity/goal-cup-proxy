@@ -693,8 +693,8 @@ fn a_finish_may_take_three_minutes() {
 
 /// A real Codex run held a connection open at its deadline, and the launcher's proxy stop waited
 /// for it until the reserve, so the seal's Git read had a fraction of a second and the run read
-/// `seal_git_unreadable`. The proxy's wait ends the Git floor before the reserve does, as the
-/// daemon's ingest drain does (D56); a budget too short to hold both keeps the reserve alone.
+/// `seal_git_unreadable`. The recording proxy's wait ends the Git floor before the reserve does, as
+/// the daemon's ingest drain does (D56); a budget too short to hold both keeps the reserve alone.
 #[test]
 fn the_proxy_drain_share_leaves_the_git_floor() {
     use goalcup_protocol::control::{

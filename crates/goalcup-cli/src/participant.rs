@@ -441,10 +441,10 @@ pub enum Ending<'a> {
         how: &'a str,
         /// The run's end ([`end_words`]).
         until: String,
-        /// The tracer stopped the harness because the disk is almost full.
+        /// Goal Cup Proxy stopped the harness because the disk is almost full.
         disk_stop: bool,
     },
-    /// The tracer stopped the harness at the run's deadline.
+    /// Goal Cup Proxy stopped the harness at the run's deadline.
     TimeUp { practice: bool },
     /// A newer run on the account replaced this one.
     Replaced,

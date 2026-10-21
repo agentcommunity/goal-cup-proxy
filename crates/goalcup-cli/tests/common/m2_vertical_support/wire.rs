@@ -1,6 +1,6 @@
 //! Minimal, bounded HTTP/1.1 and WebSocket (RFC 6455) framing shared by the controlled
 //! endpoint and the traffic generator — the two *peers* of the recorder under test. Nothing here is on
-//! the recorder's path: the proxy under test relays and captures with its own production
+//! the recorder's path: the recording proxy under test relays and captures with its own production
 //! parsers, and these helpers only produce and consume the traffic it relays.
 
 use std::io;

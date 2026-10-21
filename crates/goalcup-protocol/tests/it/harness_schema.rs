@@ -585,7 +585,7 @@ fn with_credential_named(t: &mut Table, name: &str) {
         );
 }
 
-/// The words every `[capture.credential]` refusal carries (D61): the tracer never sees,
+/// The words every `[capture.credential]` refusal carries (D61): goalcup never sees,
 /// forwards or stores a participant's provider key.
 const NO_KEY: &[&str] = &["capture.credential", "may not pass a provider key"];
 
@@ -860,7 +860,7 @@ fn a_ca_variable_is_data_held_to_the_ca_shape_and_the_shared_rules() {
         admitted(&t, PINNED);
     }
     // A shared row is handed the system's roots too, so it cannot be a `replace` profile's
-    // name: that profile trusts the proxy alone and fails closed (D41).
+    // name: that profile trusts the recording proxy alone and fails closed (D41).
     for names in [
         &["SSL_CERT_FILE"][..],
         &["REQUESTS_CA_BUNDLE"],
@@ -1084,7 +1084,8 @@ fn shell_is_admitted_only_as_a_known_shell() {
 
 #[test]
 fn node_use_env_proxy_is_admitted_only_as_1() {
-    // D59: it names no endpoint; it makes a Node harness honour the proxy the launch pins.
+    // D59: it names no endpoint; it makes a Node harness honour the recording proxy the launch
+    // pins.
     let mut t = codex();
     set(&mut t, &["capture", "env"], "NODE_USE_ENV_PROXY", "1");
     admitted(&t, PINNED);
@@ -1641,7 +1642,7 @@ fn a_retired_pin_key_is_refused_with_its_own_sentence() {
             (over, format!("capture.platform.linux-x86_64.{key}")),
         ] {
             let sentence = format!(
-                "`{key}` is no longer a connector field (D53): the tracer records the build \
+                "`{key}` is no longer a connector field (D53): Goal Cup Proxy records the build \
                  that runs instead of pinning one; delete the line."
             );
             for origin in [PINNED, DEV] {
@@ -1801,7 +1802,7 @@ fn args_and_continuation_have_bounds() {
 #[test]
 fn template_tokens_are_closed_and_braces_are_literal_only_doubled() {
     // Review R7 I-3: nothing supplies `{port}`, so a recipe naming it would validate and then
-    // fail at launch, after the proxy is up.
+    // fail at launch, after the recording proxy is up.
     for bad in [
         "{port}",
         "{home}",

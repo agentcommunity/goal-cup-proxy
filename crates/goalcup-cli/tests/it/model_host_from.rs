@@ -4,8 +4,8 @@
 //!
 //! Fixture connectors only: the rig's headless `m2-fake` and chat-mode `m2-fake-tui`, each with
 //! its `[[capture.hosts]]` row taken out and `model_host_from` put in. The stand-in model hosts
-//! are `*.example.test` names that the proxy connects to a local upstream through a test build's
-//! address table, so nothing leaves this machine.
+//! are `*.example.test` names that the recording proxy connects to a local upstream through a test
+//! build's address table, so nothing leaves this machine.
 
 use crate::common::m2_cli_support::{CHAT_ID, FAKE_ID, Hooked, Launcher, Rig, Upstream};
 use crate::common::support;
@@ -84,8 +84,8 @@ fn headless_run(steps: impl FnOnce(&Upstream) -> String) -> (Rig, String, Vec<Ca
     (rig, out, records)
 }
 
-/// A request through the proxy the harness was given, to `url`, trusting `ca` (a variable or a
-/// file), with its HTTP status in `$M2_FAKE_OUT/<name>`.
+/// A request through the recording proxy the harness was given, to `url`, trusting `ca` (a variable
+/// or a file), with its HTTP status in `$M2_FAKE_OUT/<name>`.
 fn curl(url: &str, ca: &str, name: &str) -> String {
     format!(
         "curl -sS --http1.1 --max-time 10 --noproxy '' --proxy \"$HTTPS_PROXY\" --cacert {ca} \
@@ -134,7 +134,7 @@ fn the_model_host_from_the_harness_config_is_recorded() {
     assert_eq!(
         rig.harness_file("curl.err").unwrap_or_default(),
         "",
-        "the harness trusted the proxy's leaf for the model host"
+        "the harness trusted the recording proxy's leaf for the model host"
     );
     assert_eq!(rig.harness_file("model.status").as_deref(), Some("200"));
     assert!(
@@ -148,8 +148,8 @@ fn the_model_host_from_the_harness_config_is_recorded() {
     );
 }
 
-/// A CONNECT to any other host is relayed as a tunnel the proxy never opens: the harness sees
-/// the upstream's own certificate, the tunnel is counted in `proxy admission:`, and the chain
+/// A CONNECT to any other host is relayed as a tunnel the recording proxy never opens: the harness
+/// sees the upstream's own certificate, the tunnel is counted in `proxy admission:`, and the chain
 /// holds no record of it.
 #[test]
 fn other_hosts_stay_opaque_tunnels() {

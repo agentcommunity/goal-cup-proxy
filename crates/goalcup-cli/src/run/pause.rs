@@ -1,4 +1,4 @@
-//! The agent's pause on a nearly full disk (D65), the one exception to "the tracer records and
+//! The agent's pause on a nearly full disk (D65), the one exception to "goalcup records and
 //! never manages the agent".
 //!
 //! Below [`DiskPolicy::pause_below`] free beyond the reservation the watch tick freezes the

@@ -1,6 +1,6 @@
 //! A run's own exact secret value on the streaming redactor (D60).
 //!
-//! The launcher hands the daemon the run's proxy credential, the one secret the tracer gives a
+//! The launcher hands the daemon the run's proxy credential, the one secret goalcup gives a
 //! harness. Every form of it (`goalcup_protocol::run_secret::encoded_forms`), with the line breaks
 //! a wrapped or escaped copy carries, is removed from every recorded body, wherever the stream is
 //! cut into pushes, and equal to the whole-record oracle `Redactor::for_run`. Every value here is

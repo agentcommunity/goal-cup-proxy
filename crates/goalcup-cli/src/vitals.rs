@@ -1,4 +1,4 @@
-//! What a run's heartbeats say of the disk and of the tracer's own processes (their `vitals`,
+//! What a run's heartbeats say of the disk and of goalcup's own processes (their `vitals`,
 //! `docs/UPLOAD-API.md`), and where `goalcup status` finds the last of it.
 //!
 //! The processes are this `goalcup` (which hosts the recording proxy) and each daemon it
@@ -49,7 +49,7 @@ pub(crate) fn note_daemon(pid: u32) {
 }
 
 /// This process, and each daemon it started that is still that same process.
-fn tracer_pids() -> Vec<u32> {
+fn own_pids() -> Vec<u32> {
     use goalcup_protocol::process::{ProcessInstanceStatus, process_instance_status};
     let daemons = DAEMONS.lock().unwrap_or_else(PoisonError::into_inner);
     std::iter::once(std::process::id())
@@ -65,7 +65,7 @@ fn tracer_pids() -> Vec<u32> {
         .collect()
 }
 
-/// Whether the run's `state.json` says the tracer has paused the agent for the disk.
+/// Whether the run's `state.json` says goalcup has paused the agent for the disk.
 // The watch tick sets `disk.disk_paused` (D65). Read from the file so a heartbeat never waits on
 // the state lock; a state without the field is not paused.
 pub fn paused_for_disk(run_dir: &Path) -> bool {
@@ -122,7 +122,7 @@ impl Probe {
         let held = crate::run::read_state(&self.run_dir)
             .filter(|state| state.disk != crate::run::DiskState::default())
             .map(|state| state.disk.reserve_bytes);
-        let usages: Vec<ProcessUsage> = tracer_pids()
+        let usages: Vec<ProcessUsage> = own_pids()
             .into_iter()
             .map(|pid| self.reader.usage(pid))
             .collect();

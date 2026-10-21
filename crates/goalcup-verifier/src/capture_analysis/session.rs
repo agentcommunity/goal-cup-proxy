@@ -175,7 +175,7 @@ pub struct ObservationCounts {
     pub kept: u64,
     /// Observations the sink dropped as over its size bound ([`Disposition::OverBudget`]).
     pub over_budget: u64,
-    /// Kept `model_request` observations of wire streams: model calls the proxy recorded.
+    /// Kept `model_request` observations of wire streams: model calls the recording proxy recorded.
     pub wire_model_requests: u64,
     /// Kept native-stream observations of model activity: a `model` that is not a switch, a
     /// `tool_call` or a `usage`. A session file that names model work has some; a harness may

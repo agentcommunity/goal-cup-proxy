@@ -116,7 +116,8 @@ struct CreateBody<'a> {
     purpose: &'a str,
     mode: &'a str,
     connector_id: &'a str,
-    tracer_version: &'a str,
+    #[serde(flatten)]
+    proxy_version: crate::upload::api::ProxyVersion,
 }
 
 /// The answer to `POST /v1/device`. No `Debug`: it holds the device code.
@@ -180,7 +181,7 @@ pub fn approve(
                 purpose: purpose_name,
                 mode,
                 connector_id,
-                tracer_version: crate::CLI_VERSION,
+                proxy_version: crate::upload::api::ProxyVersion::current(),
             }),
         )
         .map_err(|e| match e {
@@ -365,5 +366,24 @@ fn finish(answer: Polled, asked: Purpose<'_>) -> Result<Approved, CliError> {
             Ok(Approved::Run(credential))
         }
         _ => Err(bad_answer("an approval for something else than was asked")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `POST /v1/device` names this build's version under both names, with the same value.
+    #[test]
+    fn the_device_ask_sends_the_version_under_both_names() {
+        let body = serde_json::to_value(CreateBody {
+            purpose: "run",
+            mode: "practice",
+            connector_id: "c",
+            proxy_version: crate::upload::api::ProxyVersion::current(),
+        })
+        .unwrap();
+        assert_eq!(body["proxy_version"], crate::CLI_VERSION);
+        assert_eq!(body["tracer_version"], crate::CLI_VERSION);
     }
 }

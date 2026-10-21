@@ -99,8 +99,8 @@ impl Wrangler {
         Wrangler { child, url }
     }
 
-    /// Approve (or deny) the next approval code the tracer's opener is handed, from a thread of
-    /// its own, as `member-1` through the Worker's test-only approval route. The tracer's
+    /// Approve (or deny) the next approval code goalcup's opener is handed, from a thread of
+    /// its own, as `member-1` through the Worker's test-only approval route. Goal Cup Proxy's
     /// `goalcup start` waits for the approval a participant gives in the browser; this is that
     /// participant. Joined when the test has no more starts to approve.
     fn decide_next(&self, approve: bool) -> std::thread::JoinHandle<()> {
@@ -135,7 +135,7 @@ impl Wrangler {
     }
 }
 
-/// The approval codes the tracer's opener was handed (the `code=` of the address it would open).
+/// The approval codes goalcup's opener was handed (the `code=` of the address it would open).
 ///
 /// Process-wide: this file relies on nextest running each test in its own process. Under plain
 /// `cargo test`, which runs them as threads of one process, two tests would take each other's
@@ -399,9 +399,9 @@ fn upload_worker_a_denied_approval_starts_nothing() {
     assert!(rig.clones().is_empty());
 }
 
-/// The Worker ends a run at its deadline: its heartbeat answer says stop, the tracer stops the
+/// The Worker ends a run at its deadline: its heartbeat answer says stop, goalcup stops the
 /// agent at once and seals, commits the end in a final heartbeat, and uploads up to it. The
-/// tracer's own clock and the Worker's answer reach the deadline in the same second, so either
+/// goalcup clock and the Worker's answer reach the deadline in the same second, so either
 /// may be the one that stops the run; what the test holds is on the Worker's side: the end it
 /// committed is the last record, and the entry is sealed.
 #[test]

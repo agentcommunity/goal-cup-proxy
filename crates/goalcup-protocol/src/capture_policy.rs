@@ -44,14 +44,14 @@ pub(crate) const MAX_GOAL_FLAG_BYTES: usize = 32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CaMode {
-    /// Measured to add the proxy's CA to the harness's roots. A harness's own variable is
-    /// handed the proxy's CA alone. A [`SHARED_CA_ENV`] row is declared `extend` too: it
+    /// Measured to add the recording proxy's CA to the harness's roots. A harness's own variable is
+    /// handed the recording proxy's CA alone. A [`SHARED_CA_ENV`] row is declared `extend` too: it
     /// replaces the roots of whatever reads it, so it is handed the system's roots plus the
-    /// proxy's CA, and the resulting trust is the same as an extending variable's.
+    /// recording proxy's CA, and the resulting trust is the same as an extending variable's.
     Extend,
-    /// Names a file that REPLACES the harness's provider-client roots with the proxy's CA.
-    /// That fails closed (the harness then trusts only the proxy, which verifies the real
-    /// upstream), but it is a different trust statement, so a manifest must declare it.
+    /// Names a file that REPLACES the harness's provider-client roots with the recording proxy's
+    /// CA. That fails closed (the harness then trusts only the recording proxy, which verifies the
+    /// real upstream), but it is a different trust statement, so a manifest must declare it.
     Replace,
 }
 
@@ -62,10 +62,10 @@ impl CaMode {
 
 /// The CA variables every tool child reads too (OpenSSL's, and Python `requests`'). They replace
 /// the roots of whatever reads them, so the launch hands them a file of the system's roots plus
-/// the proxy's CA, and a profile names them only with `mode = "extend"` (the resulting trust is
-/// the real roots plus the proxy). That gives up failing closed: a connection the harness makes
-/// past the proxy still verifies, and nothing records it (CHEAT-CHECKLIST). A harness with a
-/// replace-mode variable of its own names that instead.
+/// the recording proxy's CA, and a profile names them only with `mode = "extend"` (the resulting
+/// trust is the real roots plus the recording proxy). That gives up failing closed: a connection
+/// the harness makes past the recording proxy still verifies, and nothing records it
+/// (CHEAT-CHECKLIST). A harness with a replace-mode variable of its own names that instead.
 pub const SHARED_CA_ENV: &[&str] = &["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"];
 
 /// How a harness's own CA variable ends (D43, closed). The name itself is connector data
@@ -423,7 +423,8 @@ fn env_name_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
         return Some("redirects an endpoint (D1)");
     }
     // The one proxy name admitted (D59), in `capture.env` only, its value held to `1` by
-    // [`env_value_denied`]: it names no endpoint, it makes Node honour the proxy the launch pins.
+    // [`env_value_denied`]: it names no endpoint, it makes Node honour the recording proxy the
+    // launch pins.
     let node_env_proxy = ctx == EnvContext::CaptureEnv && upper == NODE_USE_ENV_PROXY;
     if (upper.ends_with("_PROXY") || upper == "PROXY") && !node_env_proxy {
         return Some("is a proxy variable, which the capture launch pins itself");
@@ -996,7 +997,7 @@ pub fn goal_flag_denied(flag: &str) -> Option<&'static str> {
 
 /// A configured host: lowercase ASCII letters, digits and hyphens in dot-separated labels
 /// of 1–63 bytes, not starting or ending with a hyphen, at most 253 bytes, with no scheme,
-/// port, userinfo, wildcard or trailing dot, and not an IPv4 literal. The same rule the
+/// port, userinfo, wildcard or trailing dot, and not an IPv4 literal. The same rule the recording
 /// proxy's `goalcup_cli::proxy::tls::is_config_host` applies to what it is handed.
 pub fn is_capture_host(host: &str) -> bool {
     !host.is_empty()

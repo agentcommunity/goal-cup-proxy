@@ -386,8 +386,8 @@ pub(crate) const CAPTURE_IDENTITY_ENV: [&str; 3] = ["USER", "LOGNAME", "TMPDIR"]
 /// [`CAPTURE_IDENTITY_ENV`]: the harness runs in their terminal with their tools, so it gets
 /// their `PATH` (an npm harness is a `#!/usr/bin/env node` script, and the agent runs Homebrew,
 /// cargo and the rest), their terminal type and colours, their language, and their shell. Every
-/// `LC_*` variable is carried too. Nothing else: no proxy, no base URL, no credential, none of the
-/// tracer's own secrets. A connector's `[capture.env]` still wins (its `SHELL`, for one), and
+/// `LC_*` variable is carried too. Nothing else: no proxy, no base URL, no credential, none of
+/// goalcup's own secrets. A connector's `[capture.env]` still wins (its `SHELL`, for one), and
 /// the launch's own pins (`HOME`, the home variable, the loopback proxy, the CA) win over both.
 /// A headless launch carries none of these.
 pub const CHAT_PASSTHROUGH_ENV: [&str; 5] = ["PATH", "TERM", "COLORTERM", "LANG", "SHELL"];
@@ -619,14 +619,14 @@ pub struct CaptureLaunch<'a> {
     pub run_home: &'a Path,
     /// The isolated harness home `launch.home_env` points at (the profile's `config_home`).
     pub config_home: &'a Path,
-    /// `http://goalcup:<credential>@<127.0.0.1|[::1]|localhost>:<port>`, the proxy this launch
-    /// records through ([`crate::proxy::connect::ProxyCredential::proxy_url`]'s shape).
+    /// `http://goalcup:<credential>@<127.0.0.1|[::1]|localhost>:<port>`, the recording proxy this
+    /// launch records through ([`crate::proxy::connect::ProxyCredential::proxy_url`]'s shape).
     pub proxy_url: &'a str,
-    /// The proxy's per-launch CA certificate, handed to each of the profile's own `ca.env`
-    /// variables, in either mode.
+    /// The recording proxy's per-launch CA certificate, handed to each of the profile's own
+    /// `ca.env` variables, in either mode.
     pub ca_certificate: &'a Path,
-    /// The system's roots plus the proxy's CA ([`crate::ca_bundle::bundle_for`]), handed to
-    /// each [`SHARED_CA_ENV`](goalcup_protocol::capture_policy::SHARED_CA_ENV) row the profile
+    /// The system's roots plus the recording proxy's CA ([`crate::ca_bundle::bundle_for`]), handed
+    /// to each [`SHARED_CA_ENV`](goalcup_protocol::capture_policy::SHARED_CA_ENV) row the profile
     /// names. `None` when it names none; a launch that needs it and has none is refused.
     pub ca_bundle: Option<&'a Path>,
     /// The tracker's own environment. Only [`CAPTURE_IDENTITY_ENV`] is read from it, and for a
@@ -794,7 +794,7 @@ struct Inputs<'a> {
     executable: &'a ResolvedExecutable,
     run_home: &'a Path,
     config_home: &'a Path,
-    /// The loopback proxy URL, the proxy's CA certificate and the roots-plus-proxy bundle
+    /// The loopback proxy URL, the recording proxy's CA certificate and the roots-plus-proxy bundle
     /// handed to the harness; `None` for a launch that records nothing and so has no proxy to
     /// name.
     proxy: Option<(&'a str, &'a Path, Option<&'a Path>)>,
@@ -952,8 +952,9 @@ fn build_launch(
         for key in ["NO_PROXY", "no_proxy"] {
             env.insert(key.into(), CAPTURE_NO_PROXY.into());
         }
-        // A harness's own variable trusts the proxy alone (a replace-mode one so fails closed,
-        // D41); a shared row, which tool children read too, gets the system's roots as well.
+        // A harness's own variable trusts the recording proxy alone (a replace-mode one so fails
+        // closed, D41); a shared row, which tool children read too, gets the system's roots as
+        // well.
         for key in &profile.ca.env {
             let file = match crate::ca_bundle::handed_file(key) {
                 crate::ca_bundle::HandedFile::ProxyCa => ca_certificate,

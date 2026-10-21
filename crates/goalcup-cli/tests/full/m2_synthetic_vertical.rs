@@ -439,7 +439,7 @@ fn native_partial_line_survives_local_finish() {
 #[ignore = "real processes and sockets; run by name with --ignored"]
 fn clean_producer_close_and_unexpected_eof_differ() {
     let _lock = TableLock::acquire();
-    // A launcher that ends with its harness: the proxy's producer closes in order.
+    // A launcher that ends with its harness: the recording proxy's producer closes in order.
     let v = Vertical::new("plain", json!({}));
     let mut start = v.start(RESERVE);
     let entry = v.entry_id();
@@ -502,7 +502,7 @@ fn clean_producer_close_and_unexpected_eof_differ() {
         v.events()
             .iter()
             .any(|e| e["start"].as_f64().is_some_and(|t| t > killed_at) && e["ok"] == false),
-        "the proxy is gone with the launcher"
+        "the recording proxy is gone with the launcher"
     );
     let live = v.status(&entry).payload.capture.unwrap();
     assert_eq!(
@@ -742,7 +742,7 @@ fn standalone_seal_stops_live_stream_before_draining_its_producer() {
             |r| matches!(r, CaptureRecord::ProducerClosed { producer, .. } if *producer == wire)
         ),
         1,
-        "the proxy closes its producer after the harness stops"
+        "the recording proxy closes its producer after the harness stops"
     );
     assert_eq!(
         after.count(|r| matches!(

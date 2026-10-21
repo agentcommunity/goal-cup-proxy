@@ -7,7 +7,7 @@ display_name = "Hermes"
 
 [capture]
 # hermes chat -Q --provider deepseek --query=<goal>. The model is Hermes's own default (owner
-# direction, 2026-10-14). The tracer passes no key (D61): Hermes reads its own login.
+# direction, 2026-10-14). Goal Cup Proxy passes no key (D61): Hermes reads its own login.
 args = ["chat", "-Q", "--provider", "deepseek"]
 goal_flag = "--query"
 # Hermes's own switches (HERMES_SAFE_MODE, HERMES_IGNORE_USER_CONFIG) would silently stop the

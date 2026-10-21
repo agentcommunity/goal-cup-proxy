@@ -368,7 +368,8 @@ fn run_connector_case(id: &str, synthetic: Option<&str>) -> ConnectorRun {
     );
     assert!(!argv.contains(KEY), "{id}: the key is in no argument");
     // `goalcup start` hands each CA variable the file its row names (D41): a harness's own
-    // variable the proxy's CA alone, a shared row the proxy's CA and the system's roots.
+    // variable the recording proxy's CA alone, a shared row the recording proxy's CA and the
+    // system's roots.
     for name in &c.ca.env {
         let file = std::fs::read(out.join(format!("ca-{name}")))
             .unwrap_or_else(|e| panic!("{id}: the file `{name}` names: {e}"));

@@ -2,10 +2,11 @@
 //! validation.
 //!
 //! [`IngestListener`] accepts loopback TCP connections from capture producers (the sender
-//! inside the proxy), authenticates each against a per-entry, launch-scoped [`IngestSecret`],
-//! checks every frame's framing integrity, and hands each admitted [`CaptureFrame`] to the
-//! entry's supplied [`CaptureSink`] (the entry owner). It never hashes, redacts or persists a
-//! byte and never interprets one (D3): what the sink does with a frame is the sink's.
+//! inside the recording proxy), authenticates each against a per-entry, launch-scoped
+//! [`IngestSecret`], checks every frame's framing integrity, and hands each admitted
+//! [`CaptureFrame`] to the entry's supplied [`CaptureSink`] (the entry owner). It never hashes,
+//! redacts or persists a byte and never interprets one (D3): what the sink does with a frame is the
+//! sink's.
 //!
 //! # Wire
 //!
@@ -109,8 +110,8 @@
 //! # Credential bootstrap
 //!
 //! The secret is per launch and per entry, never the daemon-wide control token. The create
-//! response returns it with [`IngestListener::local_addr`] and the entry id, and the proxy
-//! holds it in memory only: never argv, environment, disk, logs or retained metadata.
+//! response returns it with [`IngestListener::local_addr`] and the entry id, and the recording
+//! proxy holds it in memory only: never argv, environment, disk, logs or retained metadata.
 //!
 //! # Conformance note for senders
 //!

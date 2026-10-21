@@ -1,7 +1,7 @@
 //! Support for `m2_cli_lifecycle.rs`: a real in-process daemon over a development capture
 //! connector whose harness is `fixtures/m2-fake-harness.sh`, a client that can lose or refuse
 //! one call, a loopback relay in front of the daemon's ingest endpoint, and a TLS upstream
-//! the proxy can be told to trust.
+//! the recording proxy can be told to trust.
 //!
 //! Every wait is bounded; every child the fake harness becomes is ended by its own owner.
 //!
@@ -53,7 +53,8 @@ pub const CHAT_CONFIGURE_ID: &str = "m2-fake-tui-configure";
 pub const PREP_REPO: &str = "https://github.com/goal-cup/demo";
 pub const FAKE_GITHUB_TOKEN: &str = "github_pat_FAKE0123456789abcdefghijkl";
 
-/// The exact path the fake connector records on `localhost`, the host the proxy intercepts.
+/// The exact path the fake connector records on `localhost`, the host the recording proxy
+/// intercepts.
 pub const EVIDENCE_PATH: &str = "/v1/responses";
 
 /// One test's world: a daemon, its configuration directory (also the CLI's), a development
@@ -1134,7 +1135,8 @@ pub struct Book {
     pub seal_report: Option<CaptureFinishReport>,
     /// Every status answer's `sealed_at`, in order.
     pub sealed_seen: Vec<bool>,
-    /// Put a file where the proxy's CA certificate goes, before the proxy starts.
+    /// Put a file where the recording proxy's CA certificate goes, before the recording proxy
+    /// starts.
     pub occupy_ca_file: bool,
     /// Run once, when the daemon is asked to create the entry (after the run opened on the
     /// server and before anything can fail): a test's way to take the server away at that point.
@@ -1489,8 +1491,8 @@ impl Drop for Back {
 // A TLS upstream for `localhost`.
 // ---------------------------------------------------------------------------------------
 
-/// Answers every request on `localhost:<port>` with `200 ok` and closes. The proxy trusts it
-/// only through [`Upstream::roots`].
+/// Answers every request on `localhost:<port>` with `200 ok` and closes. The recording proxy trusts
+/// it only through [`Upstream::roots`].
 pub struct Upstream {
     pub port: u16,
     root: rustls::pki_types::CertificateDer<'static>,
@@ -1506,7 +1508,7 @@ impl Upstream {
     }
 
     /// An upstream whose certificate names `names` instead of `localhost`: a stand-in for a
-    /// real provider host, reached through the proxy's test address table
+    /// real provider host, reached through the recording proxy's test address table
     /// (`proxy::connect::resolve_for_test`).
     pub fn start_named(runtime: &tokio::runtime::Runtime, names: &[&str]) -> Upstream {
         Upstream::serve(runtime, false, None, names)
@@ -1520,8 +1522,8 @@ impl Upstream {
     }
 
     /// [`Upstream::start_holding`] that also writes `held` once it has read a request's head.
-    /// The proxy opens a request's record before it forwards the head, so from then on the
-    /// request is in flight and recorded. A harness that waits for the file
+    /// The recording proxy opens a request's record before it forwards the head, so from then on
+    /// the request is in flight and recorded. A harness that waits for the file
     /// ([`Upstream::wait_held`]) ends with its request held open, not still being sent.
     pub fn start_holding_marked(runtime: &tokio::runtime::Runtime, held: &Path) -> Upstream {
         Upstream::serve(runtime, true, Some(held.to_path_buf()), &["localhost"])
@@ -1600,7 +1602,7 @@ impl Upstream {
         self.root_pem.clone()
     }
 
-    /// Shell lines that post `bytes` bytes of `a` through the proxy, in one request.
+    /// Shell lines that post `bytes` bytes of `a` through the recording proxy, in one request.
     pub fn curl_bytes(&self, bytes: usize) -> String {
         format!(
             "head -c {bytes} /dev/zero | tr '\\0' a > \"$M2_FAKE_OUT/body\"\n{}",
@@ -1608,20 +1610,20 @@ impl Upstream {
         )
     }
 
-    /// One shell line that posts `body` through the proxy the harness was given.
+    /// One shell line that posts `body` through the recording proxy the harness was given.
     pub fn curl(&self, body: &str) -> String {
         self.post(&format!("--data '{body}'"), 10, "")
     }
 
-    /// One shell line that posts `body` through the proxy in the background and waits up to
-    /// five minutes for the answer, so the connection stays open while the harness runs.
+    /// One shell line that posts `body` through the recording proxy in the background and waits up
+    /// to five minutes for the answer, so the connection stays open while the harness runs.
     pub fn curl_waiting(&self, body: &str) -> String {
         self.post(&format!("--data '{body}'"), 300, " &")
     }
 
     /// Shell lines that wait, up to 30 s, for this upstream to hold a request
     /// ([`Upstream::start_holding_marked`]). A harness that ends without them can end before its
-    /// background request has even reached the proxy, and then nothing was held open.
+    /// background request has even reached the recording proxy, and then nothing was held open.
     pub fn wait_held(&self) -> String {
         let held = self.held.as_ref().expect("an upstream started marked");
         let held = held.display().to_string();
@@ -1640,7 +1642,7 @@ impl Upstream {
     }
 
     /// One shell line that reaches the upstream through a CONNECT to `localhost` whose TLS
-    /// names another host: the proxy relays it unread (a fail-open tunnel) and counts it.
+    /// names another host: the recording proxy relays it unread (a fail-open tunnel) and counts it.
     pub fn curl_misnamed(&self) -> String {
         format!(
             "curl -sS --http1.1 --max-time 10 --noproxy '' --proxy \"$HTTPS_PROXY\" \

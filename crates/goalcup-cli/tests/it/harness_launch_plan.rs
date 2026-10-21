@@ -442,9 +442,9 @@ fn handed_ca_files(
     (files, proxy.certificate_der().to_vec(), bundle.is_some())
 }
 
-/// A connector that trusts the proxy through `SSL_CERT_FILE` needs no CA variable of its own and
-/// no Rust row (WP12): `goalcup start` hands that shared row the proxy CA first and then the
-/// system's roots, and in the same profile still hands the harness's own variable the proxy CA
+/// A connector that trusts the recording proxy through `SSL_CERT_FILE` needs no CA variable of its
+/// own and no Rust row (WP12): `goalcup start` hands that shared row the proxy CA first and then
+/// the system's roots, and in the same profile still hands the harness's own variable the proxy CA
 /// alone. Env values that name the run's two homes render to them.
 #[test]
 fn a_shared_ca_row_gets_the_roots_and_an_own_variable_beside_it_does_not() {

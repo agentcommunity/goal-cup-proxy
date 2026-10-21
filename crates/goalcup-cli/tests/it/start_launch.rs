@@ -689,7 +689,7 @@ mod chat {
     /// A chat-mode harness gets the participant's terminal and tools: their PATH (the fake
     /// harness is a `#!/usr/bin/env node` script, and the `node` it finds is only on that PATH),
     /// their TERM, COLORTERM, LANG and LC_*; the connector's own SHELL wins over theirs. It gets
-    /// none of their proxy, base-URL or credential variables, and none of the tracer's own: its
+    /// none of their proxy, base-URL or credential variables, and none of goalcup's own: its
     /// proxy is the run's loopback recorder.
     #[test]
     fn the_harness_gets_the_participants_terminal_and_tools_and_nothing_else() {
@@ -778,7 +778,7 @@ mod chat {
         }
         assert!(
             !env.keys().any(|k| k.starts_with("GOALCUP_")),
-            "the tracer's own variables reached the harness: {env:?}"
+            "goalcup's own variables reached the harness: {env:?}"
         );
     }
 

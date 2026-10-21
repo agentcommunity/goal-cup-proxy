@@ -63,7 +63,7 @@ mod server_runs {
         Policy::from_test_spec("200,25,100,400,10000,268435456,3000").unwrap()
     }
 
-    /// The credential a run saved, read from its file: the tracer's own type never gives the
+    /// The credential a run saved, read from its file: goalcup's own type never gives the
     /// value out, and a test needs it to look for it elsewhere.
     fn saved_secret(cfg: &Path, run_id: &str) -> String {
         let path = goalcup_cli::account::credential::credential_path(&goalcup_cli::run::run_dir(
@@ -803,7 +803,8 @@ mod server_runs {
         let client = Hooked::new(&http, &rig);
         {
             let mut book = client.book();
-            // The proxy cannot write its CA file, and the server goes away as the daemon is asked.
+            // The recording proxy cannot write its CA file, and the server goes away as the daemon
+            // is asked.
             book.occupy_ca_file = true;
             let away = server.clone();
             book.on_create = Some(Box::new(move || away.set_maintenance(true)));

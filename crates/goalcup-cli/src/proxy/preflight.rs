@@ -1,4 +1,4 @@
-//! The `goalcup start` connectivity preflight: before the entry, the proxy or the harness
+//! The `goalcup start` connectivity preflight: before the entry, the recording proxy or the harness
 //! exists, one bounded TCP connect to each provider host the profile intercepts.
 //!
 //! A run whose provider is unreachable from the start would otherwise record a harness that
@@ -7,11 +7,11 @@
 //! LuLu, endpoint security) holding the connections of a freshly built, unsigned `goalcup`
 //! until someone answers its prompt; the refusal names this binary's path for that reason.
 //!
-//! The probe is the proxy's own upstream connect ([`super::connect`]): it resolves, cycles the
-//! addresses and retries inside [`PREFLIGHT_BUDGET`], every host at once. It sends nothing over
-//! the connection and closes it. A loopback host (`localhost`, a `.localhost` name, a loopback
-//! literal) has no network path to check and is skipped. Nothing here is said to the harness,
-//! which does not exist yet.
+//! The probe is the recording proxy's own upstream connect ([`super::connect`]): it resolves,
+//! cycles the addresses and retries inside [`PREFLIGHT_BUDGET`], every host at once. It sends
+//! nothing over the connection and closes it. A loopback host (`localhost`, a `.localhost` name, a
+//! loopback literal) has no network path to check and is skipped. Nothing here is said to the
+//! harness, which does not exist yet.
 
 use super::connect::{ConnectFailureKind, DEFAULT_CONNECT_ATTEMPT_TIMEOUT, Retry, connect_host};
 use std::path::PathBuf;
@@ -134,8 +134,8 @@ fn probe_endpoints(endpoints: Vec<(String, u16)>, budget: Duration) -> Result<()
         budget,
         binary: std::env::current_exe().ok(),
     };
-    // A runtime of its own, gone before the proxy's is built. One that cannot be built is not
-    // a reason to refuse here: the proxy's own start would refuse it a moment later.
+    // A runtime of its own, gone before the recording proxy's is built. One that cannot be built is
+    // not a reason to refuse here: the recording proxy's own start would refuse it a moment later.
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

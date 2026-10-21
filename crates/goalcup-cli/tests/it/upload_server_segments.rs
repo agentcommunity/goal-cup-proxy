@@ -1,7 +1,7 @@
 //! The stand-in's run lifecycle against `UPLOAD-API.md`: one main run per account (a later start
 //! replaces the earlier), practice runs, the start window, `continue` and its segments, and the
 //! close 24 hours after a run ends. The Worker's own tests (`server/worker/test/lifecycle.test.ts`
-//! and `segments.test.ts`) hold the same rules, so the tracer's tests can trust this stand-in.
+//! and `segments.test.ts`) hold the same rules, so goalcup's tests can trust this stand-in.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -228,7 +228,7 @@ impl Rig {
                 "workspace": "/tmp/run-1/two",
                 "session_id": session,
                 "harness_version": "9",
-                "tracer_version": "0.2.0",
+                "proxy_version": "0.2.0",
             })),
             b"",
         )
@@ -866,6 +866,32 @@ fn machine_must_be_a_flat_object_of_at_most_4_kib() {
     ] {
         is_error(&open(bad), 400, "malformed");
     }
+}
+
+/// An open names the client's version as `proxy_version`, as `tracer_version` (its name before
+/// the rename to Goal Cup Proxy), or as both when they agree, as the Worker reads it.
+#[test]
+fn an_open_reads_the_version_under_either_name() {
+    let rig = Rig::new();
+    let open = |names: &[(&str, &str)]| {
+        let mut body = Rig::open_body("s1");
+        body.as_object_mut().unwrap().remove("tracer_version");
+        for (name, value) in names {
+            body[*name] = json!(value);
+        }
+        rig.open_with(&rig.server.mint_credential("member-1"), &body, &[])
+    };
+    assert_eq!(open(&[("proxy_version", "0.1.0")]).status, 201);
+    assert_eq!(
+        open(&[("proxy_version", "0.1.0"), ("tracer_version", "0.1.0")]).status,
+        201
+    );
+    is_error(
+        &open(&[("proxy_version", "0.1.0"), ("tracer_version", "0.0.9")]),
+        400,
+        "malformed",
+    );
+    is_error(&open(&[]), 400, "malformed");
 }
 
 #[test]

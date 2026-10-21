@@ -1156,7 +1156,7 @@ fn prep_opens_a_harness_that_needs_its_interpreter_with_the_participants_environ
     }
     assert!(
         !env.lines().any(|l| l.starts_with("GOALCUP_")),
-        "the tracer's own variables reached the harness:\n{env}"
+        "goalcup's own variables reached the harness:\n{env}"
     );
 }
 

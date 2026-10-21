@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredChunk {
     pub offset: u64,
-    /// The uncompressed length the tracer declared (`Goalcup-Length`).
+    /// The uncompressed length goalcup declared (`Goalcup-Length`).
     pub length: u64,
     /// SHA-256 of the stored (compressed) body.
     pub sha256: String,
@@ -45,10 +45,10 @@ pub struct StoredHeartbeat {
     pub offset_local: u64,
     pub final_: bool,
     pub repo_head: Option<String>,
-    /// How the tracer reported its recording (`ok`, `gaps`, `failed`, `unknown`), if it said.
+    /// How goalcup reported its recording (`ok`, `gaps`, `failed`, `unknown`), if it said.
     #[serde(default)]
     pub recording: Option<String>,
-    /// Model calls seen so far, cumulative, if the tracer said.
+    /// Model calls seen so far, cumulative, if goalcup said.
     #[serde(default)]
     pub model_requests: Option<u64>,
     /// The heartbeat's `vitals` object as sent, if it had one.
@@ -85,7 +85,7 @@ pub struct DeviceRequest {
     pub purpose: String,
     pub mode: String,
     pub connector_id: String,
-    pub tracer_version: String,
+    pub proxy_version: String,
 }
 
 /// A device request the stand-in holds (in memory only: a restart forgets pending ones).
@@ -164,7 +164,7 @@ pub struct EntryRecord {
     pub connector_dir_sha256: String,
     pub workspace: String,
     pub harness_version: String,
-    pub tracer_version: String,
+    pub proxy_version: String,
     pub receipt: Option<StartReceipt>,
     pub chunks: Vec<StoredChunk>,
     /// `(seal_json, baseline_json)`, verbatim.

@@ -84,7 +84,7 @@ impl Drop for OpenFiles {
 #[test]
 fn the_proxy_and_the_admitted_producer_precede_the_spawn_and_the_goal_is_one_argument() {
     let _lock = table_lock::TableLock::acquire();
-    // launchd's default, which leaves the proxy about 120 connections.
+    // launchd's default, which leaves the recording proxy about 120 connections.
     let (soft, hard) = open_files();
     let _restore = OpenFiles(soft);
     let launchd = libc::rlimit {
@@ -212,7 +212,7 @@ fn the_proxy_and_the_admitted_producer_precede_the_spawn_and_the_goal_is_one_arg
     let proxy_url = env
         .lines()
         .find_map(|l| l.strip_prefix("HTTPS_PROXY="))
-        .expect("the harness is pointed at the proxy");
+        .expect("the harness is pointed at the recording proxy");
     let credential = proxy_url
         .split_once('@')
         .and_then(|(userinfo, _)| userinfo.rsplit_once(':'))
@@ -273,7 +273,7 @@ fn local_pilot_never_requests_receipt() {
     assert_eq!(
         launch_clock,
         Some(created.producer_id),
-        "the launch is observed on the clock the proxy's first producer stamps its frames with"
+        "the launch is on the clock the recording proxy's first producer stamps its frames with"
     );
     assert_eq!(report.anchor, AnchorState::LocalOnly);
     assert!(report.sealed, "{:?}", report.findings);
@@ -816,9 +816,9 @@ fn an_altered_pinned_id_under_an_alias_is_exit_one_before_any_start_write() {
     assert_aliased_shipped_connector_refuses_before_start_writes(true);
 }
 
-/// The proxy fails to start two ways, each before the goal is sent: its sender never finds
-/// the ingest endpoint (a closed port, so the start deadline passes), or its CA certificate has
-/// nowhere to go (a file already sits where it is written).
+/// The recording proxy fails to start two ways, each before the goal is sent: its sender never
+/// finds the ingest endpoint (a closed port, so the start deadline passes), or its CA certificate
+/// has nowhere to go (a file already sits where it is written).
 #[test]
 fn a_proxy_that_cannot_start_refuses_before_the_goal_and_leaves_nothing() {
     let _lock = table_lock::TableLock::acquire();
@@ -836,7 +836,7 @@ fn a_proxy_that_cannot_start_refuses_before_the_goal_and_leaves_nothing() {
         let (result, out) = std::thread::scope(|s| {
             joined(rig.start(s, &client, rig.options(&goal, RESERVE), None))
         });
-        let error = result.expect_err("the proxy never started");
+        let error = result.expect_err("the recording proxy never started");
         assert!(format!("{error}").contains(said), "{error}\n{out}");
         assert_eq!(
             client.names(),
@@ -1353,7 +1353,7 @@ fn the_seal_carries_the_proxys_counters_into_the_chain() {
     result.unwrap_or_else(|e| panic!("{e}\n{out}"));
     let counters = client.book().seals[0]
         .proxy
-        .expect("the launcher's seal has the proxy's report");
+        .expect("the launcher's seal has the recording proxy's report");
     assert_eq!(counters.tunneled_fail_open, 1, "{counters:?}");
     let (report, records) = rig.read_trace(&client.created().entry_id);
     assert!(
@@ -1371,9 +1371,10 @@ fn the_seal_carries_the_proxys_counters_into_the_chain() {
 }
 
 /// H-16. The launcher's seal request never reaches the daemon (a refused connection, the same
-/// path as a busy daemon whose retries run out), so the proxy's counters are lost with it. The
-/// fail-open tunnel is nevertheless in the chain, because the proxy chained it when it began,
-/// and a later standalone seal (which carries no counters) commits an incomplete run.
+/// path as a busy daemon whose retries run out), so the recording proxy's counters are lost with
+/// it. The fail-open tunnel is nevertheless in the chain, because the recording proxy chained it
+/// when it began, and a later standalone seal (which carries no counters) commits an incomplete
+/// run.
 #[test]
 fn a_seal_that_never_reaches_the_daemon_keeps_the_proxys_loss() {
     use goalcup_cli::CliError;
@@ -1419,7 +1420,7 @@ fn a_seal_that_never_reaches_the_daemon_keeps_the_proxys_loss() {
     );
     assert!(
         out.contains("fail_open=1"),
-        "the proxy counted the tunnel: {out}"
+        "the recording proxy counted the tunnel: {out}"
     );
 
     // The standalone seal that follows any refusal sends no counters.
@@ -1577,12 +1578,13 @@ fn a_blocked_evidence_queue_does_not_outlast_the_one_finish_deadline() {
 }
 
 /// D56: a connection that outlives the harness (here a request nobody answers, held by a
-/// process the harness left behind) must not spend the Git read's floor. The proxy stop waits
-/// for it only until the drain share, which ends `GIT_READ_FLOOR` and the commit reserve before
-/// the deadline, so the seal is asked with at least that much left. With the old bound (the
+/// process the harness left behind) must not spend the Git read's floor. The recording proxy stop
+/// waits for it only until the drain share, which ends `GIT_READ_FLOOR` and the commit reserve
+/// before the deadline, so the seal is asked with at least that much left. With the old bound (the
 /// budget less the reserve) the stop ran to the end and the request stated about 2 s.
 /// The harness ends only once the upstream holds the request: a harness that ended at once
-/// could finish before its background `curl` reached the proxy (seen on a loaded Linux host).
+/// could finish before its background `curl` reached the recording proxy (seen on a loaded Linux
+/// host).
 #[test]
 fn a_connection_held_open_at_the_finish_leaves_the_seal_the_git_floor() {
     use goalcup_protocol::control::{FINISH_COMMIT_RESERVE, GIT_READ_FLOOR};
@@ -1621,7 +1623,8 @@ fn a_connection_held_open_at_the_finish_leaves_the_seal_the_git_floor() {
         rig.harness_file("curl.err")
     );
 
-    // The request went out through the proxy and was never answered: it was open at the stop.
+    // The request went out through the recording proxy and was never answered: it was open at the
+    // stop.
     let (_, records) = rig.read_trace(&client.created().entry_id);
     let opened = |wanted: CaptureSource| {
         records

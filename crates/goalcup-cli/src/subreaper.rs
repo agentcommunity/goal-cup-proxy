@@ -22,8 +22,8 @@
 //!   `Command`s a capture run spawns are the daemon, the gated harness (whose spawn thread is
 //!   joined at its release), and the `/bin/ps` runs of `launch.rs` and `released_child.rs`, which
 //!   are `.output()`-waited on this same thread before the root's `wait`. No other thread (the
-//!   tees, the proxy, the daemon's reaper) spawns anything. The start filter keeps anything this
-//!   process inherited across its own `exec` out as well.
+//!   tees, the recording proxy, the daemon's reaper) spawns anything. The start filter keeps
+//!   anything this process inherited across its own `exec` out as well.
 //! - Threads: `/proc` lists thread-group leaders only, and this process's own threads are not
 //!   its children.
 //!

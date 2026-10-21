@@ -3246,7 +3246,7 @@ async fn an_old_symlink_in_the_session_root_is_no_loss() {
     );
 }
 
-/// The counterpart: a symlink made during the run is a matched entry the tracer will not
+/// The counterpart: a symlink made during the run is a matched entry goalcup will not
 /// follow, recorded once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_new_symlink_in_the_session_root_is_one_loss() {

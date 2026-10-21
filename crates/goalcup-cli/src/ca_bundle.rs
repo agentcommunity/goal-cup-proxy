@@ -3,8 +3,8 @@
 //!
 //! A shared variable replaces the roots of whatever reads it, the harness's tool children
 //! included. The proxy CA alone would break every TLS connection that does not go through the
-//! proxy. So the file starts with the proxy CA and then holds the roots the machine already
-//! trusts, read when the run starts:
+//! recording proxy. So the file starts with the proxy CA and then holds the roots the machine
+//! already trusts, read when the run starts:
 //!
 //! * macOS: the System Roots keychain, exported by `/usr/bin/security find-certificate -a -p`;
 //! * Linux: the first distribution bundle in [`LINUX_BUNDLES`] that holds a certificate.
@@ -15,8 +15,8 @@
 //! directory, next to the proxy CA.
 //!
 //! A harness's own CA variable, in either mode, is handed the proxy CA alone and never this file
-//! ([`handed_file`]). A replace-mode one so fails closed: a connection that skips the proxy does
-//! not verify (D41).
+//! ([`handed_file`]). A replace-mode one so fails closed: a connection that skips the recording
+//! proxy does not verify (D41).
 
 use crate::CliError;
 use base64::Engine as _;
@@ -161,7 +161,7 @@ fn pem_block(der: &[u8]) -> String {
 }
 
 /// The bundle text: the proxy CA, then every root certificate in `roots_source`. `Err` when the
-/// source holds no root certificate, since the file would then trust the proxy alone.
+/// source holds no root certificate, since the file would then trust the recording proxy alone.
 pub fn bundle_pem(roots_source: &[u8], proxy_ca_der: &[u8]) -> Result<String, String> {
     let roots = certificates(roots_source);
     if roots.is_empty() {
@@ -179,9 +179,9 @@ pub fn bundle_pem(roots_source: &[u8], proxy_ca_der: &[u8]) -> Result<String, St
 pub fn write_bundle(dir: &Path, proxy_ca_der: &[u8]) -> Result<PathBuf, CliError> {
     let refused = |why: String| {
         CliError::Refused(format!(
-            "the harness trusts the proxy through a CA variable its tool children read too, so \
-             the run hands it the system's roots plus the recording proxy's CA, and {why}. \
-             Nothing is launched."
+            "the harness trusts the recording proxy through a CA variable its tool children read \
+             too, so the run hands it the system's roots plus the recording proxy's CA, and \
+             {why}. Nothing is launched."
         ))
     };
     let pem = system_roots_source()

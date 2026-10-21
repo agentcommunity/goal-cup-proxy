@@ -54,8 +54,8 @@ pub const STATUS_DOMAIN: &[u8] = b"goalcup-status-v1\0";
 /// `start_signal_seen` and `refused`, and every `HealthState` but `online`, `sealed` and
 /// `sealing_recovery_needed`. The CLI and the daemon ship together, so a pair from two
 /// releases is refused rather than bridged.
-/// V9 adds `run_secrets` to the capture create: the run's own exact secret values (the proxy
-/// credential), which the daemon redacts from every recorded body (D60).
+/// V9 adds `run_secrets` to the capture create: the run's own exact secret values (the recording
+/// proxy credential), which the daemon redacts from every recorded body (D60).
 pub const CONTROL_API_VERSION: u32 = 9;
 
 pub const ROUTE_ENTRIES: &str = "/v0/entries";
@@ -639,7 +639,7 @@ pub struct CaptureWorkspaceInfo {
     /// This entry's launch-scoped ingest credential, held in memory only: never argv,
     /// environment, disk or logs.
     pub ingest_secret: String,
-    /// The fresh producer ID the proxy's first ingest epoch uses.
+    /// The fresh producer ID the recording proxy's first ingest epoch uses.
     pub producer_id: String,
     /// The run key every status document of this entry is signed with; the caller pins it
     /// and verifies against it with [`SignedStatus::verify_with`].
@@ -716,11 +716,11 @@ pub struct CaptureLaunchRequest {
 /// The loopback proxy's raw health counters at stop. The daemon records one stream-less
 /// gap per non-zero counter except `sink_refusals`, whose losses are already chained.
 ///
-/// Since H-16 this is a confirmatory second copy, not the only carrier: the proxy chains each of
-/// these losses as a stream-zero `Loss` frame when it happens, so a request that never reaches
-/// the daemon, or loses a race to a standalone seal, no longer hides them. A handled request
-/// therefore adds daemon-clocked gaps for losses already chained on the producer's clock; gap
-/// counts count loss records, not losses.
+/// Since H-16 this is a confirmatory second copy, not the only carrier: the recording proxy chains
+/// each of these losses as a stream-zero `Loss` frame when it happens, so a request that never
+/// reaches the daemon, or loses a race to a standalone seal, no longer hides them. A handled
+/// request therefore adds daemon-clocked gaps for losses already chained on the producer's clock;
+/// gap counts count loss records, not losses.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyCounters {
@@ -767,7 +767,7 @@ pub fn proxy_drain_share(budget: Duration) -> Duration {
 }
 
 /// `POST /v0/entries/{id}/seal` for a v5 entry. `proxy` is `None` when no proxy report
-/// exists, because the launcher that ran the proxy is gone.
+/// exists, because the launcher that ran the recording proxy is gone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureSealRequest {
@@ -1030,8 +1030,8 @@ pub trait DaemonClient {
     ) -> Result<(), ControlError> {
         Err(capture_unsupported())
     }
-    /// Finish a v5 entry locally, posting the proxy's counters. `read_timeout` is how long
-    /// the caller waits for the answer: its remaining budget, the termination allowance and
+    /// Finish a v5 entry locally, posting the recording proxy's counters. `read_timeout` is how
+    /// long the caller waits for the answer: its remaining budget, the termination allowance and
     /// the connect slack (CONTRACTS.md, C6 local finish budget ¶6).
     fn seal_capture(
         &self,

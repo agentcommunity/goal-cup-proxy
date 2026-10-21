@@ -540,7 +540,8 @@ pub fn emitter(sink: &Arc<RecordingSink>) -> Arc<CaptureEmitter> {
     Arc::new(CaptureEmitter::new(INITIAL.to_string(), sink.clone()))
 }
 
-/// What the proxy does before it calls the relay: the connection's `Open` and `UpgradedWebSocket`.
+/// What the recording proxy does before it calls the relay: the connection's `Open` and
+/// `UpgradedWebSocket`.
 pub fn announce(emitter: &CaptureEmitter, connection: &str) {
     let open = ConnectionEvent::Open {
         alpn: Some("http/1.1".to_string()),

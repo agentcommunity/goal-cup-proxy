@@ -409,7 +409,8 @@ impl Vertical {
     }
 
     /// The controlled endpoint's own request counters: what reached the upstream, counted
-    /// outside the workload, the proxy and the recorder. Only the crash campaign reads it.
+    /// outside the workload, the recording proxy and the recorder. Only the crash campaign reads
+    /// it.
     pub fn endpoint_counters(&self) -> endpoint::EndpointCounters {
         self.endpoint.as_ref().expect("the endpoint").counters()
     }
@@ -715,7 +716,7 @@ impl Chain {
             .collect()
     }
 
-    /// The producer of the proxy's first captured request: the launch's first wire epoch.
+    /// The producer of the recording proxy's first captured request: the launch's first wire epoch.
     pub fn first_wire_producer(&self) -> String {
         self.records()
             .find_map(|r| match r {

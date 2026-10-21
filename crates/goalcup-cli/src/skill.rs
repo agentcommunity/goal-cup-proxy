@@ -2,7 +2,7 @@
 //!
 //! The text is `skills/goal-cup/SKILL.md` at the repository root, embedded in the binary: one
 //! file, no path looked up at run time, and so no way for a participant's install to hand the
-//! harness a different one. It tells the agent what the tracer records and that the participant
+//! harness a different one. It tells the agent what goalcup records and that the participant
 //! may type only "keep going" after the first prompt.
 //!
 //! [`install`] replaces `<config_home>/<skills_dir>/goal-cup/` and nothing else in the harness's

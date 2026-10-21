@@ -22,11 +22,11 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-/// Every way the proxy relays something it does not capture, and the one [`GapReason`] each is
-/// written as in the stream (H-16; CONTRACTS.md, "Proxy loss in the stream (H-16)"). The reasons are the
-/// protocol's closed set; several losses share one, and the emitter sends each reason once per
-/// emitter, so losses that map to the same reason leave one `Loss` between them. That collapse is
-/// written here and nowhere else.
+/// Every way the recording proxy relays something it does not capture, and the one [`GapReason`]
+/// each is written as in the stream (H-16; CONTRACTS.md, "Proxy loss in the stream (H-16)"). The
+/// reasons are the protocol's closed set; several losses share one, and the emitter sends each
+/// reason once per emitter, so losses that map to the same reason leave one `Loss` between them.
+/// That collapse is written here and nowhere else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProxyLoss {
     /// A tunnel to an approved host that its ClientHello did not name, relayed unchanged. Not a
@@ -188,7 +188,8 @@ struct EmitterState {
     consumed: usize,
     /// Reasons whose [`FrameEvent::Loss`] a live epoch queued. Each reason is sent once per
     /// emitter, across epochs: a later loss of the same reason is already explained by it. At
-    /// most one entry per reason, so at most the number of `GapReason` values the proxy uses.
+    /// most one entry per reason, so at most the number of `GapReason` values the recording proxy
+    /// uses.
     lost_reasons: Vec<GapReason>,
 }
 
@@ -253,7 +254,7 @@ pub struct CaptureEmitter {
     /// See [`CaptureEmitter::opaque_fallbacks`]; outside the lock for the same reason.
     opaque_fallbacks: AtomicU64,
     /// See [`CaptureEmitter::record_model_request`]; shared, so the run's heartbeat can read it
-    /// without asking the proxy.
+    /// without asking the recording proxy.
     model_requests: Arc<AtomicU64>,
 }
 
@@ -325,7 +326,7 @@ impl CaptureEmitter {
         self.model_requests.load(Ordering::SeqCst)
     }
 
-    /// The counter itself, for a reader that outlives the proxy's handle.
+    /// The counter itself, for a reader that outlives the recording proxy's handle.
     pub fn model_requests_counter(&self) -> Arc<AtomicU64> {
         self.model_requests.clone()
     }
@@ -341,8 +342,8 @@ impl CaptureEmitter {
         let _ = self.proxy_loss(observed, ProxyLoss::OpaqueFallback);
     }
 
-    /// Record one of the proxy's own losses: [`CaptureEmitter::loss`] with the reason that loss
-    /// is written as.
+    /// Record one of the recording proxy's own losses: [`CaptureEmitter::loss`] with the reason
+    /// that loss is written as.
     pub(crate) fn proxy_loss(&self, observed: CaptureTime, loss: ProxyLoss) -> SubmitResult {
         self.loss(observed, loss.gap_reason())
     }

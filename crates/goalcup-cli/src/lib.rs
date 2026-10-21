@@ -57,9 +57,9 @@ pub mod server;
 /// The goal-cup skill a chat-mode harness finds in its home (D57).
 pub mod skill;
 pub mod subreaper;
-/// The disk and the tracer's own processes, as the heartbeats and `goalcup status` report them.
-pub mod tracer_vitals;
 pub mod upload;
+/// The disk and goalcup's own processes, as the heartbeats and `goalcup status` report them.
+pub mod vitals;
 /// The WSL version and Windows-drive checks of `prep`, `start` and `continue`.
 pub mod wsl_gate;
 

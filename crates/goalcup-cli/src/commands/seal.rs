@@ -191,8 +191,8 @@ pub(crate) fn seal_locally(
 /// again).
 ///
 /// The first attempt is within `first_deadline`, the one local-finish budget its caller took
-/// (and shared with the proxy's stop and the tees); each later attempt has a whole budget of its
-/// own, and follows a daemon restarted since the one before.
+/// (and shared with the recording proxy's stop and the tees); each later attempt has a whole budget
+/// of its own, and follows a daemon restarted since the one before.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn seal_locally_until(
     client: &dyn DaemonClient,

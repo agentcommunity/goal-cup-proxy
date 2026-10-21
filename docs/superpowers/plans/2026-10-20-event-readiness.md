@@ -174,8 +174,8 @@ in user text. Terms ID `goal-cup-tracer-2026-10-15` stays (opaque; nobody re-acc
 | Step | What | Risk | When |
 |---|---|---|---|
 | 1 | User-facing text | low | done 21 Oct |
-| 2 | Code and comments; `tracer_version` to `proxy_version`, server accepts both | low | same PR |
-| 3 | Connector comments; regenerate pins | low | same PR |
+| 2 | Code and comments; `tracer_version` to `proxy_version`, server accepts both | low | done 21 Oct (client sends both names) |
+| 3 | Connector comments; regenerate pins | low | done 21 Oct |
 | 4 | Repo rename `goal-cup-proxy`; test old install and release URLs | medium | next release |
 | 5 | DB schema rename with a Worker deploy in one window | medium | with the 26 Oct point release |
 

@@ -52,7 +52,7 @@ real_dirs = [
 ]
 
 # Bun reads NODE_EXTRA_CA_CERTS. It ADDS the proxy CA to the system roots, so this is not
-# fail-closed (D41): a connection Amp made past the proxy would still verify, unrecorded
+# fail-closed (D41): a connection Amp made past the recording proxy would still verify, unrecorded
 # (docs/CHEAT-CHECKLIST.md, "Amp's native leg is a metadata log").
 [capture.ca]
 env = ["NODE_EXTRA_CA_CERTS"]
@@ -78,7 +78,7 @@ form = "append_only"
 protocol_hint = "amp-thread-metadata-no-transcript"
 since_run_start = true
 
-# The npm `.bin/amp` is a link to the native executable, which is the process the tracer starts.
+# The npm `.bin/amp` is a link to the native executable, which is the process goalcup starts.
 [capture.termination]
 strategy = "process_group"
 grace_seconds = 10

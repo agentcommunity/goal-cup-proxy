@@ -1205,9 +1205,9 @@ fn loss_reasons(sink: &RecordingSink) -> Vec<GapReason> {
         .collect()
 }
 
-/// The proxy's own losses and the one reason each is chained as (H-16). A fail-open tunnel and an
-/// opaque fallback share a reason, so between them the emitter chains one `Loss`; that collapse
-/// is the documented one, not an accident of two call sites.
+/// The recording proxy's own losses and the one reason each is chained as (H-16). A fail-open
+/// tunnel and an opaque fallback share a reason, so between them the emitter chains one `Loss`;
+/// that collapse is the documented one, not an accident of two call sites.
 #[test]
 fn each_proxy_loss_is_chained_as_its_one_documented_reason() {
     assert_eq!(

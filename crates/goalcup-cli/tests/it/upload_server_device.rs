@@ -1,6 +1,6 @@
 //! The stand-in's device flow and run credential against `UPLOAD-API.md` ("Sign in and the run
-//! credential"), over real loopback HTTP. The Worker's own tests hold the same rules, so the
-//! tracer's tests can trust this stand-in for them.
+//! credential"), over real loopback HTTP. The Worker's own tests hold the same rules, so
+//! goalcup's tests can trust this stand-in for them.
 
 use std::time::Duration;
 
@@ -172,7 +172,7 @@ fn a_device_request_is_approved_at_once_and_picked_up_once() {
         ("run", "competition")
     );
     assert_eq!(requests[0].connector_id, "codex-cli");
-    assert_eq!(requests[0].tracer_version, "0.1.0");
+    assert_eq!(requests[0].proxy_version, "0.1.0");
     assert!(rig.server.calls().iter().all(|c| !c.contains(code)));
     assert!(
         rig.server
@@ -240,9 +240,36 @@ fn bad_device_requests_are_400() {
             "malformed",
         );
     }
-    // The Worker's caps: 128 characters of connector_id, 64 of tracer_version.
-    for (field, len) in [("connector_id", 128), ("tracer_version", 64)] {
+    // The version under its name since the rename to Goal Cup Proxy, under its old one, or
+    // under both when they agree.
+    let named = |names: &[(&str, &str)]| {
+        let mut body = json!({"purpose": "run", "mode": "practice", "connector_id": "c"});
+        for (name, value) in names {
+            body[*name] = json!(value);
+        }
+        rig.send("POST", "/v1/device", None, Some(&body))
+    };
+    assert_eq!(named(&[("proxy_version", "t")]).status, 200);
+    assert_eq!(
+        named(&[("proxy_version", "t"), ("tracer_version", "t")]).status,
+        200
+    );
+    is_error(
+        &named(&[("proxy_version", "t"), ("tracer_version", "u")]),
+        400,
+        "malformed",
+    );
+    is_error(&named(&[]), 400, "malformed");
+    // The Worker's caps: 128 characters of connector_id, 64 of the version.
+    for (field, len) in [
+        ("connector_id", 128),
+        ("tracer_version", 64),
+        ("proxy_version", 64),
+    ] {
         let mut body = good.clone();
+        if field == "proxy_version" {
+            body.as_object_mut().unwrap().remove("tracer_version");
+        }
         body[field] = json!("x".repeat(len));
         assert_eq!(
             rig.send("POST", "/v1/device", None, Some(&body)).status,

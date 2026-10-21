@@ -2,8 +2,8 @@
 //! `m2_tls_connect` through their support modules), all loopback-only and independent of the
 //! code under test.
 //!
-//! - [`TestPki`]: an rcgen CA independent of the proxy's own CA code, for synthetic upstream
-//!   servers.
+//! - [`TestPki`]: an rcgen CA independent of the recording proxy's own CA code, for synthetic
+//!   upstream servers.
 //! - A rustls client configuration offering `http/1.1`, and byte helpers over any stream.
 //! - RFC 6455 upgrade bytes, written here independently of the relay.
 //!
@@ -220,7 +220,8 @@ pub fn ws_upgrade_request(path: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-/// RFC 6455 section 4.2.2, written out here so the test oracle is not the proxy's own function.
+/// RFC 6455 section 4.2.2, written out here so the test oracle is not the recording proxy's own
+/// function.
 fn derive_accept_key(key: &[u8]) -> String {
     use base64::Engine as _;
     use sha1::{Digest, Sha1};

@@ -473,7 +473,7 @@ pub(crate) fn age_words(secs: u64) -> String {
 }
 
 /// What the threads of one run tell each other: the recording as the last tick saw it, the
-/// proxy's count of model requests, and how the upload is doing. Cloning shares it.
+/// recording proxy's count of model requests, and how the upload is doing. Cloning shares it.
 #[derive(Debug, Clone)]
 pub struct Vitals {
     recording: Arc<AtomicU8>,
@@ -481,8 +481,8 @@ pub struct Vitals {
     upload: Arc<Mutex<UploadVital>>,
     /// The uploader's count of what is left of the run, each time it is set.
     time_left: Arc<Mutex<Option<TimeLeft>>>,
-    /// What the heartbeats say of the disk and the tracer's own processes; `None` says nothing.
-    probe: Option<crate::tracer_vitals::Probe>,
+    /// What the heartbeats say of the disk and goalcup's own processes; `None` says nothing.
+    probe: Option<crate::vitals::Probe>,
 }
 
 #[derive(Debug, Default)]
@@ -520,7 +520,7 @@ impl Default for Vitals {
 }
 
 impl Vitals {
-    /// Vitals that read model requests from `counter` (the proxy's).
+    /// Vitals that read model requests from `counter` (the recording proxy's).
     pub fn counting(counter: Arc<AtomicU64>) -> Vitals {
         Vitals {
             recording: Arc::new(AtomicU8::new(Recording::Unknown as u8)),
@@ -532,14 +532,14 @@ impl Vitals {
     }
 
     /// These vitals, with the heartbeats' `vitals` read by `probe`.
-    pub fn probing(mut self, probe: crate::tracer_vitals::Probe) -> Vitals {
+    pub fn probing(mut self, probe: crate::vitals::Probe) -> Vitals {
         self.probe = Some(probe);
         self
     }
 
     /// The heartbeat's `vitals`, read now; `None` without a probe.
     pub fn heartbeat_vitals(&self) -> Option<crate::upload::api::HeartbeatVitals> {
-        self.probe.as_ref().map(crate::tracer_vitals::Probe::read)
+        self.probe.as_ref().map(crate::vitals::Probe::read)
     }
 
     pub fn recording(&self) -> Recording {

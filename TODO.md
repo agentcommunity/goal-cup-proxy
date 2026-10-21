@@ -183,7 +183,7 @@ Status (21 Oct, branch `smart/zen-gates-d9tmbh`, not yet released):
 - WP-C, small version (owner, 21 Oct): pause the agent below 1 GiB free, resume above 3 GiB (D65),
   no disk stop verdict, vitals in heartbeats and status, cleanup of sent parts after a run. The
   daemon recorder-hold rework is dropped: the pause comes first.
-- Open: WP-H rename.
+- WP-H steps 1 to 3 done (Goal Cup Proxy; the client sends proxy_version and tracer_version). Open: step 4 repo rename (owner, on GitHub), step 5 schema rename.
 
 ### WP0: Measure
 Status (17 Oct): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging

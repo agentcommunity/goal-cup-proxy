@@ -283,7 +283,8 @@ impl Drop for ProxyRun {
     }
 }
 
-/// A `Proxy-Authorization` value, encoded with the `base64` crate (independent of the proxy).
+/// A `Proxy-Authorization` value, encoded with the `base64` crate (independent of the recording
+/// proxy).
 pub fn basic(user: &str, secret: &str) -> String {
     use base64::Engine as _;
     format!(
@@ -438,9 +439,10 @@ pub struct ShimPlan {
 }
 
 /// Runs a real rustls client whose transport is a duplex; a shim task between that duplex
-/// and the proxy socket sends the CONNECT head in pieces, glues the first ClientHello bytes
-/// onto its last piece, sends the rest (optionally re-fragmented), strips the proxy's `200`
-/// head, then relays both ways. Returns the client's handshake result and the shim task.
+/// and the recording proxy socket sends the CONNECT head in pieces, glues the first ClientHello
+/// bytes onto its last piece, sends the rest (optionally re-fragmented), strips the recording
+/// proxy's `200` head, then relays both ways. Returns the client's handshake result and the shim
+/// task.
 pub async fn tls_via_shim(
     proxy: SocketAddr,
     plan: ShimPlan,

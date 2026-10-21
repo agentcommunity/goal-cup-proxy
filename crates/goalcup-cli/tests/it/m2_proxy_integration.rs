@@ -1,8 +1,8 @@
-//! The proxy root composed from the real leaves — admission and the per-launch CA,
+//! The recording proxy root composed from the real leaves — admission and the per-launch CA,
 //! `relay_http`, `relay_websocket` — over a real loopback listener, real TLS on both legs, and
 //! a bounded direct `CaptureSink` whose worker validates what it retains.
 //!
-//! Every client trusts only what it must: an intercepted client trusts only the proxy's
+//! Every client trusts only what it must: an intercepted client trusts only the recording proxy's
 //! per-launch CA, and a tunnelled one only the synthetic upstream's test CA. Nothing here is
 //! mocked between the listener and the sink, and nothing leaves loopback.
 
@@ -129,7 +129,7 @@ async fn startup_admits_configured_producer_before_emitter() {
     let handle = within("start", starting)
         .await
         .unwrap()
-        .expect("the proxy starts once admitted");
+        .expect("the recording proxy starts once admitted");
     assert_eq!(handle.producer(), PRODUCER);
     assert_eq!(handle.health().producers_admitted, 1);
 
@@ -1148,7 +1148,7 @@ async fn stop_with_active_stream_and_blocked_sink_meets_one_deadline() {
         "{report:?}"
     );
     assert_eq!(report.transport_failures(), 0);
-    // Every socket the proxy held is gone.
+    // Every socket the recording proxy held is gone.
     for (what, ended) in [
         ("client", read_to_end(&mut client).await),
         ("upstream", read_to_end(&mut up).await),
@@ -1302,7 +1302,7 @@ async fn connection_local_tls_error_keeps_listener_and_other_identities() {
     e.shutdown().await.unwrap();
     let _ = read_to_end(&mut e_up).await;
 
-    // C fails the harness-facing handshake: its client does not trust the proxy's CA.
+    // C fails the harness-facing handshake: its client does not trust the recording proxy's CA.
     let tcp = connect_via(rig.addr, &format!("localhost:{port}")).await;
     assert!(try_tls_over(tcp, &[pki.root()], "localhost").await.is_err());
     let _c_up = upstream.accept().await;
@@ -1538,8 +1538,8 @@ async fn start_accepts_more_tasks_than_capture_connections() {
     }
 }
 
-/// The harness's subprocesses share the proxy, so intercepted connections can outnumber the
-/// emitter's connection table. One past it is relayed uncaptured and counted; it neither
+/// The harness's subprocesses share the recording proxy, so intercepted connections can outnumber
+/// the emitter's connection table. One past it is relayed uncaptured and counted; it neither
 /// refuses the agent nor ends capture for the connections in the table.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn intercepted_connections_past_the_capture_table_fail_open() {
@@ -1620,7 +1620,7 @@ async fn intercepted_connections_past_the_capture_table_fail_open() {
 }
 
 /// Exhausting the open-stream bound ends capture inside the emitter, where the sink never
-/// sees it; the proxy's health still counts it as a refusal.
+/// sees it; the recording proxy's health still counts it as a refusal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn local_stream_limit_refusal_is_counted() {
     allow_descriptors(4096);
@@ -1783,7 +1783,7 @@ async fn start_refuses_invalid_configuration_before_touching_the_sink() {
 
 #[test]
 fn stop_never_closes_the_producer_past_a_stuck_task() {
-    // The proxy gets its own runtime: the sink below blocks one of its workers inside
+    // The recording proxy gets its own runtime: the sink below blocks one of its workers inside
     // `try_submit`, which can starve that runtime's own timers; the owner stops it from here.
     let proxy_rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -2442,7 +2442,8 @@ async fn an_upstream_outage_is_one_window_closed_by_the_next_reach() {
     assert_eq!(open.recovered, None);
 
     // The provider host is back: the next tunnel to it closes the window when it is decided,
-    // which is once the client's first bytes arrive (the proxy reads the server name in them).
+    // which is once the client's first bytes arrive (the recording proxy reads the server name in
+    // them).
     let upstream = Upstream::start(&pki, &["localhost"]).await;
     let mut tunnel = connect_via(rig.addr, &format!("localhost:{}", upstream.addr.port())).await;
     tunnel.write_all(b"not a ClientHello").await.unwrap();

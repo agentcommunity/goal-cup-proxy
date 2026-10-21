@@ -448,7 +448,7 @@ mod retries {
         /// newer start replaced.
         stop_reason: Arc<Mutex<Option<Option<String>>>>,
         /// How many final heartbeats still have their answer lost: the stand-in stores them,
-        /// and the tracer is answered `503`.
+        /// and goalcup is answered `503`.
         lose_finals: Arc<Mutex<u32>>,
         /// Seconds added to every `official_start` and `deadline_at` the server answers: how the
         /// server's times look from a machine whose date is this far behind the server's.
@@ -687,7 +687,7 @@ mod retries {
                 workspace: "/nowhere".into(),
                 session_id: "00000000-0000-4000-8000-000000000001".into(),
                 harness_version: "1".into(),
-                tracer_version: "0.1.0".into(),
+                proxy_version: "0.1.0".into(),
                 repo_url: "https://github.com/goal-cup/demo".into(),
                 machine: None,
             };
@@ -1139,7 +1139,7 @@ mod retries {
                 .then_some(())
         };
         wait_for("a heartbeat saying gaps and 7", || said("gaps", 7));
-        // What the tick and the proxy learn later is what the next heartbeat says.
+        // What the tick and the recording proxy learn later is what the next heartbeat says.
         vitals.set_recording(Recording::Ok);
         counter.store(10, Ordering::SeqCst);
         wait_for("a heartbeat saying ok and 10", || said("ok", 10));
@@ -1149,7 +1149,7 @@ mod retries {
     /// A machine that answers 20 GiB free, and memory and CPU time but no open files.
     struct Partial;
 
-    impl goalcup_cli::tracer_vitals::Reader for Partial {
+    impl goalcup_cli::vitals::Reader for Partial {
         fn disk_free(&self, _near: &std::path::Path) -> Option<u64> {
             Some(20 << 30)
         }
@@ -1178,7 +1178,7 @@ mod retries {
             disk_paused: false,
         };
         StateKeeper::begin(&run_dir, state);
-        let probe = goalcup_cli::tracer_vitals::Probe::reading(
+        let probe = goalcup_cli::vitals::Probe::reading(
             &run_dir,
             std::path::Path::new(&run.record.trace_dir),
             Arc::new(Partial),
@@ -1282,7 +1282,7 @@ mod retries {
             workspace: "/nowhere".into(),
             session_id: "00000000-0000-4000-8000-000000000002".into(),
             harness_version: "1".into(),
-            tracer_version: "0.1.0".into(),
+            proxy_version: "0.1.0".into(),
         };
         let segment = match continue_run(&client, &run.record.run_id, &request).unwrap() {
             Continued::Segment(segment) => segment,

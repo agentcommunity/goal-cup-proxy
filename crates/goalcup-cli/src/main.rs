@@ -525,8 +525,8 @@ fn continue_run(run: Option<String>) -> Result<(), CliError> {
     )
 }
 
-/// A test build's one extra input to `goalcup start`: a PEM file of certificates the proxy
-/// trusts upstream beside the public roots, so a synthetic local upstream can be reached. A
+/// A test build's one extra input to `goalcup start`: a PEM file of certificates the recording
+/// proxy trusts upstream beside the public roots, so a synthetic local upstream can be reached. A
 /// shipped build compiles none of this.
 #[cfg(feature = "test-support")]
 const TEST_UPSTREAM_ROOTS: &str = "GOALCUP_TEST_UPSTREAM_ROOTS";

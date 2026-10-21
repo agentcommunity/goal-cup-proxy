@@ -21,7 +21,7 @@ fn log_in(rig: &Rig, url: &str) {
 }
 
 /// The credential a run saved in its own directory, for a test to hand the stand-in. Reading
-/// the file is how a test gets at it: the tracer's own type never gives the value out.
+/// the file is how a test gets at it: goalcup's own type never gives the value out.
 fn saved_credential(rig: &Rig, run_id: &str) -> String {
     let path = goalcup_cli::account::credential::credential_path(&goalcup_cli::run::run_dir(
         &rig.cfg, run_id,
@@ -141,7 +141,7 @@ fn a_start_that_fails_before_the_launch_gives_the_run_back() {
     let goal = rig.goal(GOAL);
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
-    // The proxy cannot write its CA file, after the daemon made the entry.
+    // The recording proxy cannot write its CA file, after the daemon made the entry.
     client.book().occupy_ca_file = true;
     let opts = rig.options(&goal, RESERVE);
     let (result, out) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
@@ -248,7 +248,7 @@ fn a_run_left_open_by_a_killed_start_is_given_back_by_the_next() {
         workspace: "/nowhere/workspace".into(),
         session_id: "00000000-0000-4000-8000-000000000001".into(),
         harness_version: "1".into(),
-        tracer_version: "0.1.0".into(),
+        proxy_version: "0.1.0".into(),
         repo_url: REPO.into(),
         machine: None,
     };
@@ -739,7 +739,7 @@ fn beating_policy() -> goalcup_cli::upload::uploader::Policy {
         .unwrap()
 }
 
-/// At the deadline the server says stop: the tracer stops the agent there and then (the fake
+/// At the deadline the server says stop: goalcup stops the agent there and then (the fake
 /// harness would otherwise sleep a minute), seals, commits the chain's end in a final
 /// heartbeat, and uploads up to it.
 #[test]
@@ -804,10 +804,11 @@ fn the_server_stops_the_run_at_its_deadline() {
     assert_fully_uploaded(&rig, &server, &run_id, &outcome.entry_id);
 }
 
-/// At the deadline the harness can still hold a connection open through the proxy (a model's
-/// long streaming answer, a kept-alive WebSocket), and that connection does not end while the
-/// harness runs. The stop does not wait for it: the harness is asked to stop within seconds of
-/// the deadline, not after the proxy's whole drain share (a Codex chat run was asked 176 s late).
+/// At the deadline the harness can still hold a connection open through the recording proxy (a
+/// model's long streaming answer, a kept-alive WebSocket), and that connection does not end while
+/// the harness runs. The stop does not wait for it: the harness is asked to stop within seconds of
+/// the deadline, not after the recording proxy's whole drain share (a Codex chat run was asked 176
+/// s late).
 #[test]
 fn a_connection_held_open_at_the_deadline_does_not_delay_the_stop() {
     use goalcup_protocol::capture::{
@@ -830,7 +831,8 @@ fn a_connection_held_open_at_the_deadline_does_not_delay_the_stop() {
     });
     let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
     assert!(out.contains("deadline: "), "{out}");
-    // The request went out through the proxy and was never answered: it was open at the stop.
+    // The request went out through the recording proxy and was never answered: it was open at the
+    // stop.
     let (_, records) = rig.read_trace(&outcome.entry_id);
     let opened = |wanted: CaptureSource| {
         records
@@ -878,7 +880,7 @@ fn a_connection_held_open_at_the_deadline_does_not_delay_the_stop() {
     );
 }
 
-/// With the server out of reach, the tracer stops on its own count of the run's length; the
+/// With the server out of reach, goalcup stops on its own count of the run's length; the
 /// final heartbeat and the rest go later with `goalcup upload`, and the server takes them up to
 /// the committed end although its deadline has passed.
 #[test]
@@ -1555,7 +1557,7 @@ mod segments {
                 workspace: "/nowhere/workspace".into(),
                 session_id: "00000000-0000-4000-8000-000000000002".into(),
                 harness_version: "1".into(),
-                tracer_version: "0.1.0".into(),
+                proxy_version: "0.1.0".into(),
                 repo_url: REPO.into(),
                 machine: None,
             },
@@ -1849,7 +1851,7 @@ mod segments {
                 workspace: record.workspace.display().to_string(),
                 session_id: "00000000-0000-4000-8000-0000000000aa".into(),
                 harness_version: "1".into(),
-                tracer_version: "0.1.0".into(),
+                proxy_version: "0.1.0".into(),
             },
         )
         .unwrap();

@@ -742,8 +742,8 @@ fn trace_of(cfg: &std::path::Path, entry_id: &str) -> PathBuf {
     cfg.join("traces").join(entry_id)
 }
 
-/// Write the run's state as a tracer that stopped at `updated_at` left it: the keeper stamps
-/// the time of every write, so the file is edited after.
+/// Write the run's state as a goalcup process that stopped at `updated_at` left it: the keeper
+/// stamps the time of every write, so the file is edited after.
 fn leave_state_at(cfg: &std::path::Path, entry_id: &str, updated_at: u64) {
     let file = goalcup_cli::run::run_dir(cfg, entry_id).join(goalcup_cli::run::STATE_FILE_NAME);
     let mut json: serde_json::Value =
@@ -777,7 +777,7 @@ fn participant_block(text: &str) -> &str {
         .unwrap()
 }
 
-/// `goalcup status` shows the free disk, what the tracer's own processes use and a pause for the
+/// `goalcup status` shows the free disk, what goalcup's own processes use and a pause for the
 /// disk on one line, and under `--json` beside the signed document, which still verifies.
 #[test]
 fn status_shows_the_disk_and_what_goalcup_uses() {
@@ -796,7 +796,7 @@ fn status_shows_the_disk_and_what_goalcup_uses() {
     };
     run_with_state(&cfg, &info.entry_id, state);
     let dir = run_dir(&cfg, &info.entry_id);
-    // What the last heartbeat read of the tracer's processes.
+    // What the last heartbeat read of goalcup's processes.
     let heartbeat = HeartbeatVitals {
         rss_bytes: Some(80 << 20),
         cpu_ms: Some(125_000),
@@ -804,7 +804,7 @@ fn status_shows_the_disk_and_what_goalcup_uses() {
         ..HeartbeatVitals::default()
     };
     std::fs::write(
-        dir.join(goalcup_cli::tracer_vitals::VITALS_FILE_NAME),
+        dir.join(goalcup_cli::vitals::VITALS_FILE_NAME),
         serde_json::to_vec(&heartbeat).unwrap(),
     )
     .unwrap();
@@ -1330,7 +1330,7 @@ fn status_header_names_the_harness_the_mode_and_the_end() {
 }
 
 /// What `goalcup status` says once a run is over: sealed, uploaded, being finished, or left
-/// unfinished by a tracer that stopped. The Next line is the action each state needs.
+/// unfinished by a goalcup process that stopped. The Next line is the action each state needs.
 #[test]
 fn status_names_the_next_action_for_every_state_of_a_run_that_is_over() {
     use goalcup_cli::run::{HarnessState, RunState};
@@ -1340,7 +1340,7 @@ fn status_names_the_next_action_for_every_state_of_a_run_that_is_over() {
     let cfg = support::cfg_with_entry(tmp.path(), &info);
     let server = Some("https://server.example");
     let over = Some("2020-01-01T00:00:00Z");
-    // The run's time is up and its tracer ended the agent for it.
+    // The run's time is up and its goalcup process ended the agent for it.
     let state = |ended: bool, updated_at: u64| {
         let mut state = RunState::launched(&info.entry_id, Ok(()));
         state.harness = HarnessState::Exited {
@@ -1398,7 +1398,7 @@ fn status_names_the_next_action_for_every_state_of_a_run_that_is_over() {
     assert!(next_of(&text).contains("nothing to do"), "{text}");
     std::fs::remove_file(spool.join(format!("{}.sent", info.entry_id))).unwrap();
 
-    // Time is up and the tracer is still finishing the run: wait.
+    // Time is up and goalcup is still finishing the run: wait.
     run_with_state_on(&cfg, &info.entry_id, state(false, fresh), server, over);
     let text = said(&cfg);
     assert!(participant_block(&text).contains("finishing"), "{text}");

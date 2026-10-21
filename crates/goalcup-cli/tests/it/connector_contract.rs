@@ -73,7 +73,7 @@ fn every_connector_declares_a_display_name_that_passes_validation() {
     }
 }
 
-/// D61: the tracer never sees, passes or stores a participant's provider key. No connector
+/// D61: goalcup never sees, passes or stores a participant's provider key. No connector
 /// declares `[capture.credential]`: each harness keeps the login the participant gave it in its
 /// own home, and the launch hands it none.
 #[test]
@@ -199,8 +199,8 @@ fn every_connector_sets_no_model_base_url_and_names_its_kill_target() {
     }
 }
 
-/// Every host a connector names is one the recording proxy accepts, and the proxy can mint
-/// its per-launch CA for the set.
+/// Every host a connector names is one the recording proxy accepts, and the recording proxy can
+/// mint its per-launch CA for the set.
 #[test]
 fn every_capture_host_is_one_the_proxy_accepts() {
     use goalcup_cli::proxy::tls::{ProxyCa, is_config_host};
@@ -607,7 +607,7 @@ fn handed_ca_files(c: &HarnessConnector, root: &Path) -> (BTreeMap<String, Vec<V
 
 /// Which file `goalcup start` hands each CA variable (D41, WP12): a harness's own variable, in
 /// either mode, gets a file holding the proxy CA and nothing else, so a replace-mode harness
-/// fails closed on a connection that skips the proxy; a shared row (`SSL_CERT_FILE`,
+/// fails closed on a connection that skips the recording proxy; a shared row (`SSL_CERT_FILE`,
 /// `REQUESTS_CA_BUNDLE`) gets the proxy CA first and then the system's roots.
 #[test]
 fn every_connector_hands_each_ca_variable_the_file_its_row_names() {

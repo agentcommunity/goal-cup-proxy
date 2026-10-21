@@ -180,8 +180,8 @@ pub fn start_with(
     )
 }
 
-/// [`start_with`] with the proxy trusting `roots` upstream instead of the public web roots,
-/// so a test can stand up a TLS upstream of its own. A shipped build has no such door.
+/// [`start_with`] with the recording proxy trusting `roots` upstream instead of the public web
+/// roots, so a test can stand up a TLS upstream of its own. A shipped build has no such door.
 #[cfg(feature = "test-support")]
 pub fn start_with_upstream_roots(
     client: &(dyn DaemonClient + Sync),
@@ -367,7 +367,7 @@ fn say(out: &mut dyn std::io::Write, line: &str) -> Result<(), CliError> {
 
 // ------------------------------------------------------------------ v5 local capture
 
-/// Bounds the proxy's start (the sender's admission of its first producer included), and
+/// Bounds the recording proxy's start (the sender's admission of its first producer included), and
 /// separately the read of the entry's own admission counts that follows it.
 const CAPTURE_STARTUP: Duration = Duration::from_secs(5);
 
@@ -1190,10 +1190,11 @@ fn recording_of(
 /// A v5 local capture run.
 ///
 /// The order is the daemon's: the disk is checked, the entry is created (its chain is quota-only),
-/// the run's one reservation is taken (a refusal abandons the entry), the proxy starts in this process and its sender hands the daemon a producer, the entry's own
+/// the run's one reservation is taken (a refusal abandons the entry), the recording proxy starts in this process and its sender hands the daemon a producer, the entry's own
 /// status must show that producer admitted, the goal is recorded once, and only then is the
 /// harness spawned; its process is registered before its launch is recorded. When it exits
-/// the proxy stops, the seal carries the proxy's counters, and the sender drains.
+/// the recording proxy stops, the seal carries the recording proxy's counters, and the sender
+/// drains.
 ///
 /// Every failure before the spawn abandons the entry, which removes its chain and
 /// still-empty workspace, releases the run's reservation, and removes this run's directory. From the spawn on nothing is
@@ -1512,7 +1513,7 @@ fn prepare(
         model_host,
         ..
     } = *cx;
-    // The rulebook the proxy's host rules and the launch come from, through the one door.
+    // The rulebook the recording proxy's host rules and the launch come from, through the one door.
     let pin = crate::preflight::harness_pin_gate(c, opts.dev);
     match pin.level {
         Level::Fail => {
@@ -1533,8 +1534,8 @@ fn prepare(
     }
     let executable = crate::launch::capture_executable(c, profile, env)?;
     // The provider hosts, and the model service's own port, answer a TCP connect before
-    // anything is created (the proxy module's preflight; it names a firewall holding this binary
-    // when they do not).
+    // anything is created (the recording proxy module's preflight; it names a firewall holding this
+    // binary when they do not).
     if !offline_upstreams_for_test(env) {
         crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
             .and_then(|()| {
@@ -1606,9 +1607,9 @@ fn claim_shared_home(cx: &CaptureRun<'_>, prep: &mut CapturePrep) -> Result<(), 
     Ok(())
 }
 
-/// Phase two, the abandon window: the run directory, the entry, the proxy, the recorded goal and
-/// the parked child. Up to the fork a failure unmakes everything made here; the fork ends the
-/// window.
+/// Phase two, the abandon window: the run directory, the entry, the recording proxy, the recorded
+/// goal and the parked child. Up to the fork a failure unmakes everything made here; the fork ends
+/// the window.
 fn create_and_gate<'a>(
     cx: &CaptureRun<'a>,
     roots: UpstreamRoots,
@@ -1748,9 +1749,9 @@ fn create_and_gate<'a>(
             give_back.give();
         }
     };
-    // The proxy's credential is made now, before the entry, so that the daemon is told it: the
-    // harness holds it in `HTTPS_PROXY`, and the daemon redacts it by exact value from everything
-    // it records (D60). It goes to the daemon in memory only.
+    // The recording proxy's credential is made now, before the entry, so that the daemon is told
+    // it: the harness holds it in `HTTPS_PROXY`, and the daemon redacts it by exact value from
+    // everything it records (D60). It goes to the daemon in memory only.
     let credential = ProxyCredential::generate();
     let run_secrets = match RunSecret::new(credential.expose_secret().as_bytes()) {
         Some(secret) => vec![secret],
@@ -1862,8 +1863,8 @@ fn create_and_gate<'a>(
         raise_open_file_limit(out)?;
         let proxied = Proxied::start(&info, profile, cx.model_host, &run, roots, credential)?;
         // A shared CA variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) gets the system's roots
-        // plus the proxy's CA, so tool children keep their real trust; a harness's own variable
-        // gets the proxy's CA alone (the launch picks per name).
+        // plus the recording proxy's CA, so tool children keep their real trust; a harness's own
+        // variable gets the recording proxy's CA alone (the launch picks per name).
         let ca_bundle =
             crate::ca_bundle::bundle_for(profile, &run.ca, proxied.proxy.ca_certificate_der())?;
         admitted(client, &info)?;
@@ -2158,8 +2159,8 @@ fn register_and_release<'a>(
     // The harness owns every Ctrl-C from here (it shares the terminal), and the launch record
     // and the seal below must not give up on their first `busy` because of one.
     crate::arming::close_window();
-    // Observed on this process's monotonic clock, the one the proxy's first producer stamps
-    // its frames with under its own ID.
+    // Observed on this process's monotonic clock, the one the recording proxy's first producer
+    // stamps its frames with under its own ID.
     let mut spawned_at = crate::proxy::metadata::capture_time();
     spawned_at.clock_id = forked.info.producer_id.clone();
     let stdout_rule = match prep.streams.stdout.clone() {
@@ -2256,7 +2257,7 @@ fn run_harness<'a>(
         LaunchScope::FromStdout => tees.scope().and_then(|receiver| {
             crate::launch::wait_native_scope(&mut child, receiver, scope_deadline)
         }),
-        // A `stderr_line` scope is read after the proxy stops, and sent with the seal.
+        // A `stderr_line` scope is read after the recording proxy stops, and sent with the seal.
         LaunchScope::AtFinish | LaunchScope::None => None,
     };
     let launch = CaptureLaunchRequest {
@@ -2324,9 +2325,9 @@ fn run_harness<'a>(
         Some(proxied) => crate::run::Vitals::counting(proxied.proxy.model_requests()),
         None => crate::run::Vitals::default(),
     };
-    // A run on a server reports its disk and the tracer's own processes in its heartbeats.
+    // A run on a server reports its disk and goalcup's own processes in its heartbeats.
     let vitals = match forked.upload.as_ref() {
-        Some(start) => vitals.probing(crate::tracer_vitals::Probe::new(
+        Some(start) => vitals.probing(crate::vitals::Probe::new(
             &crate::run::run_dir(forked.cfg, &forked.record.run_id),
             Path::new(&start.record.trace_dir),
         )),
@@ -2362,8 +2363,8 @@ fn run_harness<'a>(
         }
     });
     // At the run's deadline the uploader says stop: this command finishes the run there and
-    // then, as it would once the harness exits (the proxy stopped, then the seal), except that
-    // the daemon's seal ends the harness, given its grace. That ends the wait below. What the
+    // then, as it would once the harness exits (the recording proxy stopped, then the seal), except
+    // that the daemon's seal ends the harness, given its grace. That ends the wait below. What the
     // finish said is printed once the wait is over.
     type Early = (Result<CaptureFinishReport, CliError>, Vec<u8>);
     let early = std::sync::Mutex::new(None::<Early>);
@@ -2544,8 +2545,8 @@ fn run_harness<'a>(
     })
 }
 
-/// Phase five: stop the proxy and seal within the one finish budget, let the tees drain, and say
-/// what became of the run.
+/// Phase five: stop the recording proxy and seal within the one finish budget, let the tees drain,
+/// and say what became of the run.
 fn finish_run(
     exited: Exited<'_>,
     draining: Vec<crate::upload::uploader::Draining>,
@@ -2920,7 +2921,7 @@ fn beside_goal(goal_file: &Path) -> PathBuf {
 }
 
 /// This run's own directory, made beside the goal file: `workspace/` (the daemon makes it),
-/// `home/` (the harness's `HOME`) and `ca/` (the proxy's CA certificate).
+/// `home/` (the harness's `HOME`) and `ca/` (the recording proxy's CA certificate).
 ///
 /// A run on a server has its workspace elsewhere: a clone of the participant's repository in
 /// their work folder, `<work_root>/goalcup-<16 hex digits>`, **a random name of its own**, never
@@ -3066,9 +3067,9 @@ fn fresh_uuid() -> String {
     )
 }
 
-/// Raise the soft open-file limit toward the hard one, far enough for the proxy's connection
-/// bound: launchd starts a process at 256, and at two descriptors a connection the proxy
-/// would stop accepting near 120.
+/// Raise the soft open-file limit toward the hard one, far enough for the recording proxy's
+/// connection bound: launchd starts a process at 256, and at two descriptors a connection the
+/// recording proxy would stop accepting near 120.
 #[cfg(unix)]
 fn raise_open_file_limit(out: &mut dyn std::io::Write) -> Result<(), CliError> {
     let mut limit = libc::rlimit {
@@ -3092,8 +3093,8 @@ fn raise_open_file_limit(out: &mut dyn std::io::Write) -> Result<(), CliError> {
         say(
             out,
             &format!(
-                "  (the open-file limit stays at {}, so the proxy may refuse connections past \
-                 about half of it)",
+                "  (the open-file limit stays at {}, so the recording proxy may refuse \
+                 connections past about half of it)",
                 limit.rlim_cur
             ),
         )?;
@@ -3104,7 +3105,7 @@ fn raise_open_file_limit(out: &mut dyn std::io::Write) -> Result<(), CliError> {
 /// The recording proxy and its IPC sender, on one runtime thread in this process. When this
 /// process dies they die with it, and the daemon reads the open producer as an unknown tail.
 ///
-/// The fields drop in order: the proxy's tasks, then the sender's, then the runtime.
+/// The fields drop in order: the recording proxy's tasks, then the sender's, then the runtime.
 struct Proxied {
     proxy: ProxyHandle,
     sink: Arc<IngestSink>,
@@ -3180,8 +3181,8 @@ impl Proxied {
     }
 }
 
-/// The profile's hosts as the proxy's host rules: exact paths, then prefixes, each with the
-/// host's protocol hint.
+/// The profile's hosts as the recording proxy's host rules: exact paths, then prefixes, each with
+/// the host's protocol hint.
 fn approved_hosts(
     profile: &CaptureSpec,
     model_host: Option<&crate::model_host::ModelHost>,
@@ -3214,8 +3215,8 @@ fn approved_hosts(
         .collect()
 }
 
-/// Wait, within [`CAPTURE_STARTUP`], for the entry's own status to show the proxy's producer
-/// admitted: one producer consumed and none refused. A started proxy is not that proof.
+/// Wait, within [`CAPTURE_STARTUP`], for the entry's own status to show the recording proxy's
+/// producer admitted: one producer consumed and none refused. A started proxy is not that proof.
 fn admitted(
     client: &(dyn DaemonClient + Sync),
     info: &CaptureWorkspaceInfo,
@@ -3230,7 +3231,7 @@ fn admitted(
             (Some(1), Some(0)) => return Ok(()),
             (_, Some(refused)) if refused > 0 => {
                 return Err(CliError::Refused(format!(
-                    "the tracker did not admit the proxy's capture producer ({refused} \
+                    "the tracker did not admit the recording proxy's capture producer ({refused} \
                      refused), so nothing would be recorded and the harness is not launched."
                 )));
             }
@@ -3238,8 +3239,8 @@ fn admitted(
         }
         if std::time::Instant::now() >= until {
             return Err(CliError::Refused(format!(
-                "the tracker did not show the proxy's capture producer admitted within {}s, so \
-                 the harness is not launched.",
+                "the tracker did not show the recording proxy's capture producer admitted within \
+                 {}s, so the harness is not launched.",
                 CAPTURE_STARTUP.as_secs()
             )));
         }
@@ -3309,45 +3310,46 @@ fn proxy_admission_line(
     line
 }
 
-/// How long the proxy's stop waits for connections to end on their own when the run is stopped
-/// while the harness still runs (its deadline, the server's stop, a full disk, a replacement).
-/// They do not end then: a model's streaming answer or a kept-alive WebSocket stays open as long
-/// as the harness does. So the stop cuts them almost at once (each open stream recorded
-/// `Interrupted`), and the seal, which ends the harness, follows within seconds instead of after
-/// the whole drain share.
+/// How long the recording proxy's stop waits for connections to end on their own when the run is
+/// stopped while the harness still runs (its deadline, the server's stop, a full disk, a
+/// replacement). They do not end then: a model's streaming answer or a kept-alive WebSocket stays
+/// open as long as the harness does. So the stop cuts them almost at once (each open stream
+/// recorded `Interrupted`), and the seal, which ends the harness, follows within seconds instead of
+/// after the whole drain share.
 const RUNNING_HARNESS_PROXY_DRAIN: Duration = Duration::from_secs(2);
 
 /// How long the sender may take to end its connection, before the seal, when the harness still
-/// runs and the proxy could not queue its producer's close. Without it the daemon's ingest drain
-/// would wait for a producer still live until its drain share ends; a closed connection is a
-/// settled (lost) producer, an honest tail-loss gap, and the drain returns.
+/// runs and the recording proxy could not queue its producer's close. Without it the daemon's
+/// ingest drain would wait for a producer still live until its drain share ends; a closed
+/// connection is a settled (lost) producer, an honest tail-loss gap, and the drain returns.
 const RUNNING_HARNESS_SINK_SHUTDOWN: Duration = Duration::from_secs(1);
 
-/// Stop the proxy, seal with its counters, then let the sender drain, and say how the run
+/// Stop the recording proxy, seal with its counters, then let the sender drain, and say how the run
 /// ended, all within `deadline` (the one local-finish budget, taken by the caller immediately
 /// before this call); nothing here waits on the harness.
 ///
 /// A seal that did not take (the daemon busy, restarting, or past its budget) is asked again with
 /// growing waits until `wrap_up` has run out ([`crate::retry::retry_capture_seal_until`]): the
-/// proxy is stopped once, and each later ask has a whole local-finish budget of its own. A
-/// `WrapUp::one_attempt()` asks once.
+/// recording proxy is stopped once, and each later ask has a whole local-finish budget of its own.
+/// A `WrapUp::one_attempt()` asks once.
 ///
-/// The one deadline of a capture run's finish is `finish_budget()` (`LOCAL_CAPTURE_FINISH_BUDGET`), taken when the
-/// harness has exited and immediately before the proxy's stop: nothing runs between the two. The
-/// proxy's stop gets its drain share (the budget less `FINISH_COMMIT_RESERVE` and `GIT_READ_FLOOR`), the daemon's seal
-/// its own request's remainder, and the sender's drain and the scoped stdout what is left of the
-/// same deadline (CONTRACTS.md, "C6 local finish budget (H-10 4a)").
+/// The one deadline of a capture run's finish is `finish_budget()` (`LOCAL_CAPTURE_FINISH_BUDGET`),
+/// taken when the harness has exited and immediately before the recording proxy's stop: nothing
+/// runs between the two. The recording proxy's stop gets its drain share (the budget less
+/// `FINISH_COMMIT_RESERVE` and `GIT_READ_FLOOR`), the daemon's seal its own request's remainder,
+/// and the sender's drain and the scoped stdout what is left of the same deadline (CONTRACTS.md,
+/// "C6 local finish budget (H-10 4a)").
 ///
-/// A `stderr_line` child's session identity is read between the two: after the proxy has stopped and
-/// before the seal is sent, by [`crate::capture_tee::marker_wait_end`]'s deadline, which leaves
-/// the daemon's native read its share of the drain. The identity, if exactly one distinct one was
-/// printed, rides on the seal request; any other answer sends none.
+/// A `stderr_line` child's session identity is read between the two: after the recording proxy
+/// has stopped and before the seal is sent, by [`crate::capture_tee::marker_wait_end`]'s
+/// deadline, which leaves the daemon's native read its share of the drain. The identity, if
+/// exactly one distinct one was printed, rides on the seal request; any other answer sends none.
 ///
 /// `harness_running` is true when the run is stopped while the harness still runs (its
-/// deadline, the server's stop, a full disk, a replacement): the proxy's stop then waits
+/// deadline, the server's stop, a full disk, a replacement): the recording proxy's stop then waits
 /// [`RUNNING_HARNESS_PROXY_DRAIN`] at most, because the harness's open connections would not end
-/// before the seal ends the harness. If the proxy could not queue its producer's close, the
-/// sender is ended too before the seal ([`RUNNING_HARNESS_SINK_SHUTDOWN`]).
+/// before the seal ends the harness. If the recording proxy could not queue its producer's close,
+/// the sender is ended too before the seal ([`RUNNING_HARNESS_SINK_SHUTDOWN`]).
 #[allow(clippy::too_many_arguments)]
 fn finish(
     client: &(dyn DaemonClient + Sync),
@@ -3375,9 +3377,9 @@ fn finish(
         runtime.block_on(proxy.stop())
     };
     pause_at("capture-finish-proxy-stopped");
-    // A producer the proxy did not close stays live in the daemon's ingest drain until its share
-    // ends. With the harness still running, the sender's connection is ended now instead (the
-    // shutdown cut by the bound aborts it), so the seal is not held. The later shutdown below
+    // A producer the recording proxy did not close stays live in the daemon's ingest drain until
+    // its share ends. With the harness still running, the sender's connection is ended now instead
+    // (the shutdown cut by the bound aborts it), so the seal is not held. The later shutdown below
     // then reports from what it finds.
     if harness_running && stopped.producer_close != crate::proxy::ProducerClose::Queued {
         runtime.block_on(async {
@@ -3399,7 +3401,7 @@ fn finish(
         unterminated: stopped.unterminated as u64,
         sink_refusals: h.sink_refusals,
     };
-    // The marker wait is after the proxy's stop and ends before the drain share does.
+    // The marker wait is after the recording proxy's stop and ends before the drain share does.
     let native_scope = marked.and_then(|tee| {
         match tee.marker_until(crate::capture_tee::marker_wait_end(deadline)) {
             ScopeMarker::One(id) => Some(id),
@@ -3827,7 +3829,7 @@ impl Uploading {
             workspace: run.workspace.display().to_string(),
             session_id: session_id.to_string(),
             harness_version: harness_version.to_string(),
-            tracer_version: crate::CLI_VERSION.to_string(),
+            proxy_version: crate::upload::api::ProxyVersion::current(),
             repo_url: String::new(),
             machine: None,
         };
@@ -3936,7 +3938,7 @@ impl Uploading {
                 workspace: carried.workspace.clone(),
                 session_id: carried.session_id.clone(),
                 harness_version: carried.harness_version.clone(),
-                tracer_version: carried.tracer_version.clone(),
+                proxy_version: carried.proxy_version.clone(),
             };
             match crate::upload::continue_run(&self.server, run_id, &request)? {
                 Continued::Segment(segment) => break segment,

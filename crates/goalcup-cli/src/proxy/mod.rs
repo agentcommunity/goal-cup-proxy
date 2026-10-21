@@ -36,7 +36,7 @@
 //! Refused admissions and failures emit nothing, and an authentication host or a host that is
 //! not approved stays opaque: a tunnel's bytes are never inspected. They are counted in
 //! [`ProxyHealth`], where failed upstream connects are also coalesced into outage windows
-//! ([`outage`]) that `goalcup start` reports at finish; the frozen v5 chain has no record for them. What the proxy relays but does not capture is a different matter: each such
+//! ([`outage`]) that `goalcup start` reports at finish; the frozen v5 chain has no record for them. What the recording proxy relays but does not capture is a different matter: each such
 //! loss is also submitted as a stream-zero `Loss` frame ([`api::CaptureEmitter::loss`]) at the
 //! moment it happens, inside the connection task, so the producer's own stream carries it
 //! before any `Close` can attest the stream complete: a fail-open tunnel when it is decided
@@ -56,8 +56,8 @@
 //! [`start`] consumes the pre-bound listener, the credential and the sink. The CA signing key
 //! lives only inside `start`: every approved host's leaf is issued there and the key is
 //! dropped before `start` returns. Only the CA **certificate** survives, as a new 0600 file in
-//! [`ProxyConfig::ca_dir`]. The proxy never removes that file after a successful start; its
-//! owner removes it with the scoped home (a relaunch into the same directory must, because
+//! [`ProxyConfig::ca_dir`]. The recording proxy never removes that file after a successful start;
+//! its owner removes it with the scoped home (a relaunch into the same directory must, because
 //! the file is created new). A failed start removes the file it created.
 //!
 //! Dropping a [`ProxyHandle`] without [`ProxyHandle::stop`] aborts the accept loop and every
@@ -124,7 +124,7 @@ const OVER_CAPACITY_RESPONSE: &[u8] =
 /// any [`CaptureSink`], already constructed by the caller for `producer`.
 pub struct ProxyConfig {
     /// A listener the caller already bound to a loopback address (for example
-    /// `127.0.0.1:0`). Connections wait in its backlog until the
+    /// `127.0.0.1:0`). Connections wait in its backlog until the recording
     /// proxy is ready; none is accepted before the initial producer is admitted.
     pub listener: std::net::TcpListener,
     /// A private directory (the harness's scoped home) the per-launch CA certificate is
@@ -135,7 +135,8 @@ pub struct ProxyConfig {
     /// Hosts that always stay opaque tunnels, whatever else matches them.
     pub auth_hosts: Vec<String>,
     /// The secret a client must present on CONNECT. Derive the harness's proxy URL
-    /// ([`ProxyCredential::proxy_url`]) before moving it in: the proxy never hands it back.
+    /// ([`ProxyCredential::proxy_url`]) before moving it in: the recording proxy never hands it
+    /// back.
     pub credential: ProxyCredential,
     /// Trust anchors for upstream TLS: [`tls::UpstreamRoots::webpki`] in production.
     pub upstream_roots: tls::UpstreamRoots,
@@ -180,9 +181,9 @@ impl std::fmt::Debug for ProxyConfig {
 /// Why [`start`] returned no proxy. Fixed text: no host, path, credential or sink detail.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StartError {
-    #[error("the proxy listener is not bound to a loopback address")]
+    #[error("the recording proxy listener is not bound to a loopback address")]
     NotLoopback,
-    #[error("the proxy listener cannot be served ({0:?})")]
+    #[error("the recording proxy listener cannot be served ({0:?})")]
     Listener(io::ErrorKind),
     #[error("the initial producer ID is not 32 lowercase hex characters")]
     InvalidProducer,
@@ -200,8 +201,8 @@ pub enum StartError {
     StartupDeadline,
 }
 
-/// Starts the proxy. Returns only once the listener is being served, the CA certificate is
-/// written, and the sink admitted a producer `Ready`; no frame is submitted before that.
+/// Starts the recording proxy. Returns only once the listener is being served, the CA certificate
+/// is written, and the sink admitted a producer `Ready`; no frame is submitted before that.
 ///
 /// Initial admission polls [`CaptureSink::try_begin_epoch`] without blocking: `Pending`
 /// keeps the same ID for the next poll, `RetryFresh` retires it and proposes a fresh one
@@ -355,7 +356,7 @@ impl std::fmt::Debug for ProxyHandle {
 }
 
 impl ProxyHandle {
-    /// The address the proxy serves: the pre-bound listener's.
+    /// The address the recording proxy serves: the pre-bound listener's.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
@@ -378,8 +379,8 @@ impl ProxyHandle {
         &self.producer
     }
 
-    /// The proxy's count of model requests ([`ProxyHealth::model_requests`]), shared: it keeps
-    /// its last value when the proxy stops.
+    /// The recording proxy's count of model requests ([`ProxyHealth::model_requests`]), shared: it
+    /// keeps its last value when the recording proxy stops.
     pub fn model_requests(&self) -> Arc<std::sync::atomic::AtomicU64> {
         self.shared.emitter.model_requests_counter()
     }
@@ -389,7 +390,8 @@ impl ProxyHandle {
         self.shared.health()
     }
 
-    /// Stops the proxy inside the one [`ProxyConfig::shutdown_deadline`], measured from now.
+    /// Stops the recording proxy inside the one [`ProxyConfig::shutdown_deadline`], measured from
+    /// now.
     ///
     /// 1. Stop accepting; the listener is closed.
     /// 2. Let every connection end on its own until the cut, `deadline - min(deadline / 4,
@@ -499,7 +501,7 @@ pub enum ProducerClose {
 
 /// What [`ProxyHandle::stop`] observed. Three independent questions, answered separately:
 /// did the shutdown drain normally ([`Self::is_clean_drain`]), did this proxy see capture
-/// loss ([`Self::capture_loss`]), and did connections or the proxy itself fail
+/// loss ([`Self::capture_loss`]), and did connections or the recording proxy itself fail
 /// ([`Self::transport_failures`]). A run is fully clean only when all three say so. The
 /// sink/receiver remains the authority on sticky gaps: the retained chain holds each loss.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -904,7 +906,7 @@ async fn reap_all(tasks: &mut JoinSet<()>, counters: &Counters) {
     }
 }
 
-/// One live connection task's share of the proxy; counted in `active` for as long as the
+/// One live connection task's share of the recording proxy; counted in `active` for as long as the
 /// task's future exists, however it ends (completion, cancellation or panic).
 struct Active(Arc<Shared>);
 

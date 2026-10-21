@@ -22,7 +22,7 @@ wait after the traffic) and `max_s` (the bound on either, default 60). Modes:
                  boundary both ways, across two native writes 300 ms apart, and once in a
                  request cut off inside the secret
 - fail-open      one echo (so the producer records a wire exchange), then a CONNECT to the
-                 approved API host whose first bytes are not a TLS ClientHello: the proxy
+                 approved API host whose first bytes are not a TLS ClientHello: the recording proxy
                  tunnels it uncaptured (fail-open) and the workload reads until EOF
 - stream         16 KiB echoes every 100 ms and 8 KiB WS messages every 200 ms on
                  connections kept open, one native line a second, until `release` or `max_s`

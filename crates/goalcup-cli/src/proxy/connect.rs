@@ -29,8 +29,8 @@
 //! The proxy credential authorizes this local listener only. It arrives as
 //! `Proxy-Authorization: Basic base64("goalcup:<secret>")` on the CONNECT request — what a
 //! client sends for the proxy URL [`ProxyCredential::proxy_url`] returns — and is compared in
-//! constant time. The CONNECT head is never forwarded upstream, so the proxy never sends the
-//! credential to a provider. The harness can: an agent that runs `env` puts `HTTPS_PROXY` in a
+//! constant time. The CONNECT head is never forwarded upstream, so the recording proxy never sends
+//! the credential to a provider. The harness can: an agent that runs `env` puts `HTTPS_PROXY` in a
 //! request body. The daemon's shared `proxy_credential` redaction rule removes it from the
 //! trace, not from the traffic. It is never logged, hashed or retained: `Debug` impls redact it,
 //! and no outcome or error formats the request line, the target text, a header or the
@@ -414,8 +414,9 @@ pub async fn admit<S: AsyncIo + 'static>(inbound: S, config: &AdmissionConfig) -
 
 /// [`admit`], calling `on_tunnel` with the reason at the moment a tunnel is decided, before the
 /// first byte of it is relayed. The tunnel runs inside this future until both directions close,
-/// so a caller that must act when an uncaptured relay *begins* (the proxy chains it as a loss)
-/// cannot wait for the return value: a task cancelled or panicking mid-tunnel never gets there.
+/// so a caller that must act when an uncaptured relay *begins* (the recording proxy chains it as a
+/// loss) cannot wait for the return value: a task cancelled or panicking mid-tunnel never gets
+/// there.
 pub(crate) async fn admit_observed<S: AsyncIo + 'static>(
     inbound: S,
     config: &AdmissionConfig,

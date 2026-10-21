@@ -7,7 +7,7 @@
 //! harness homes.
 //!
 //! Every case runs with an invented provider key ([`KIT_PROVIDER_KEY`]) in `goalcup start`'s own
-//! environment, as a participant's shell might export one. The tracer never hands one to the
+//! environment, as a participant's shell might export one. Goal Cup Proxy never hands one to the
 //! harness (D61), so the runner checks that no fragment of it is in the sealed trace, the run
 //! directory or the launcher's forwarded stdout and stderr.
 

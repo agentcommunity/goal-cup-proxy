@@ -405,8 +405,8 @@ pub struct CaptureSpec {
     pub argv_guard: Option<ArgvGuard>,
     #[serde(default)]
     pub termination: Option<TerminationSpec>,
-    /// The hosts the proxy terminates TLS for. After loading this also holds the row of each
-    /// [`Self::providers`] name, appended in order.
+    /// The hosts the recording proxy terminates TLS for. After loading this also holds the row of
+    /// each [`Self::providers`] name, appended in order.
     #[serde(default)]
     pub hosts: Vec<HostSpec>,
     /// Names in the shared provider table ([`provider_hosts`]): a model provider's host row,
@@ -429,7 +429,7 @@ pub struct CaptureSpec {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ExecutableSpec {
-    /// A bare name resolved on `PATH`. Whatever build it names runs: the tracer records that
+    /// A bare name resolved on `PATH`. Whatever build it names runs: goalcup records that
     /// build's digests (`Launch.harness_build`, D53) and pins none.
     pub program: String,
     /// The arguments that make the program print its version on the first line of stdout
@@ -539,9 +539,10 @@ pub struct CaSpec {
     /// [`SHARED_CA_ENV`]: crate::capture_policy::SHARED_CA_ENV
     /// [`CA_ENV_SUFFIXES`]: crate::capture_policy::CA_ENV_SUFFIXES
     pub env: Vec<String>,
-    /// `extend` or `replace` ([`CaMode`]). A harness's own variable is handed the proxy's CA
-    /// alone in either mode. A [`SHARED_CA_ENV`] row takes `extend` and is handed the system's
-    /// roots plus the proxy's CA, so a `replace` profile never names one and stays fail-closed.
+    /// `extend` or `replace` ([`CaMode`]). A harness's own variable is handed the recording proxy's
+    /// CA alone in either mode. A [`SHARED_CA_ENV`] row takes `extend` and is handed the system's
+    /// roots plus the recording proxy's CA, so a `replace` profile never names one and stays
+    /// fail-closed.
     ///
     /// [`SHARED_CA_ENV`]: crate::capture_policy::SHARED_CA_ENV
     pub mode: CaMode,
@@ -700,7 +701,7 @@ impl TerminationSpec {
     }
 }
 
-/// `[[capture.hosts]]`: one host the proxy intercepts, and the request paths it records.
+/// `[[capture.hosts]]`: one host the recording proxy intercepts, and the request paths it records.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
@@ -716,7 +717,7 @@ pub struct HostSpec {
 }
 
 /// `capture.model_host_from`: the one value in the harness's own config that names its model
-/// service, as a URL (D62). The tracer reads only this key, at start and at each continue.
+/// service, as a URL (D62). Goal Cup Proxy reads only this key, at start and at each continue.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
@@ -735,7 +736,7 @@ pub const MODEL_HOST_FILE_EXTENSIONS: &[&str] = &["yaml", "yml", "json", "toml"]
 pub const MAX_MODEL_HOST_KEY_PARTS: usize = 8;
 
 /// Words that no `.`, `-` or `_` separated part of the model-host file's name, and no part of
-/// its key, may be (any case): the tracer reads a service address, never a key file or a key.
+/// its key, may be (any case): goalcup reads a service address, never a key file or a key.
 const MODEL_HOST_DENIED_WORDS: &[&str] = &[
     "auth",
     "credential",
@@ -1122,7 +1123,7 @@ impl HarnessManifest {
     }
 }
 
-/// The keys the executable pin used to need, refused by name (D53): the tracer records the
+/// The keys the executable pin used to need, refused by name (D53): goalcup records the
 /// build that runs, so a manifest that still pins one is told to drop the line, not that it is
 /// from a newer schema.
 const RETIRED_PIN_KEYS: &[&str] = &["sha256", "version"];
@@ -1150,8 +1151,8 @@ fn refuse_retired_pin_keys(table: &toml::Table) -> Result<(), ProtocolError> {
                 return Err(refuse(
                     format!("{at}.{retired}"),
                     format!(
-                        "`{retired}` is no longer a connector field (D53): the tracer records the \
-                         build that runs instead of pinning one; delete the line."
+                        "`{retired}` is no longer a connector field (D53): Goal Cup Proxy records \
+                         the build that runs instead of pinning one; delete the line."
                     ),
                 ));
             }
@@ -1161,7 +1162,7 @@ fn refuse_retired_pin_keys(table: &toml::Table) -> Result<(), ProtocolError> {
 }
 
 /// What a `[capture.credential]` table is told (D61). The table once named a provider key the
-/// launcher read from its own environment and handed to the harness; the tracer no longer
+/// launcher read from its own environment and handed to the harness; goalcup no longer
 /// sees, forwards or stores one, so the table is refused by name rather than as a newer
 /// schema's field.
 pub const CREDENTIAL_REFUSAL: &str =
@@ -1916,7 +1917,7 @@ impl HarnessManifest {
         if ca.env.is_empty() || ca.env.len() > 2 {
             return Err(refuse(
                 "capture.ca.env",
-                "must name 1 or 2 CA variables, or the harness could not trust the proxy",
+                "must name 1 or 2 CA variables, or the harness could not trust the recording proxy",
             ));
         }
         if let Some(d) = has_duplicate(ca.env.iter().map(String::as_str)) {
@@ -2207,7 +2208,7 @@ impl HarnessManifest {
     }
 
     /// `capture.model_host_from` (D62): a YAML, JSON or TOML file in the shared config home, and a
-    /// dotted key. Neither may name a key file or a key: the tracer reads a service address only.
+    /// dotted key. Neither may name a key file or a key: goalcup reads a service address only.
     fn check_model_host_from(&self) -> Result<(), ProtocolError> {
         let c = &self.capture;
         let Some(from) = &c.model_host_from else {
@@ -2272,8 +2273,8 @@ impl HarnessManifest {
                 return Err(refuse(
                     field,
                     format!(
-                        "`{text}` names `{word}`: the tracer reads the model service's address \
-                         from the harness's config, never a key file or a key"
+                        "`{text}` names `{word}`: Goal Cup Proxy reads the model service's \
+                         address from the harness's config, never a key file or a key"
                     ),
                 ));
             }

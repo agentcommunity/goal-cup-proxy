@@ -13,7 +13,7 @@
 //! - [`Rig`]: the real proxy (`goalcup_cli::proxy::start`) over a pre-bound loopback listener,
 //!   a direct sink and a private CA directory.
 //! - Clients: an authenticated CONNECT and a rustls client that trusts exactly the roots it
-//!   is given (the proxy's per-launch CA for interception).
+//!   is given (the recording proxy's per-launch CA for interception).
 //! - An oracle over retained frames that re-checks the frame rules without relying on the
 //!   emitter.
 //!
@@ -67,7 +67,7 @@ pub fn count(haystack: &[u8], needle: &[u8]) -> usize {
 // The direct sink.
 // ---------------------------------------------------------------------------------------
 
-/// One call the proxy made on the sink, in call order.
+/// One call the recording proxy made on the sink, in call order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Call {
     Begin {
@@ -209,7 +209,8 @@ impl DirectSink {
     }
 
     /// While on, `try_submit` blocks inside the call: a sink that breaks the submission contract's
-    /// promise of never waiting. Only for proving the proxy never invents a drain around it.
+    /// promise of never waiting. Only for proving the recording proxy never invents a drain around
+    /// it.
     pub fn stall_submits(&self, stall: bool) {
         lock(&self.shared).stall_submits = stall;
         self.shared.1.notify_all();
@@ -754,7 +755,7 @@ impl Drop for Upstream {
 }
 
 // ---------------------------------------------------------------------------------------
-// The proxy under test.
+// The recording proxy under test.
 // ---------------------------------------------------------------------------------------
 
 pub fn policy(paths: &[(&str, bool, Option<&str>)]) -> CapturePolicy {
@@ -1197,8 +1198,8 @@ pub fn trace(retained: &[Retained]) -> String {
 // The one capture clock.
 // ---------------------------------------------------------------------------------------
 
-/// Opens a window on the proxy's one process clock, `proxy::metadata::capture_time()`: its
-/// start lies strictly after that clock's zero, so an observation stamped zero, or read from
+/// Opens a window on the recording proxy's one process clock, `proxy::metadata::capture_time()`:
+/// its start lies strictly after that clock's zero, so an observation stamped zero, or read from
 /// another monotonic base started later, falls outside it.
 pub fn clock_start() -> u64 {
     let _ = goalcup_cli::proxy::metadata::capture_time();
@@ -1211,8 +1212,8 @@ pub fn clock_now() -> u64 {
     goalcup_cli::proxy::metadata::capture_time().mono_ns
 }
 
-/// Every retained frame was observed on the proxy's process clock inside `[start, end]`, and,
-/// per physical connection, in causal order: the root's `Open` (stamped before the relay
+/// Every retained frame was observed on the recording proxy's process clock inside `[start, end]`,
+/// and, per physical connection, in causal order: the root's `Open` (stamped before the relay
 /// starts) precedes every observation of that connection's streams; the root's
 /// `UpgradedWebSocket` (stamped after `relay_http` returned, before `relay_websocket`) follows
 /// every HTTP observation and precedes every WebSocket one; and the root's `Close` (stamped

@@ -4,7 +4,7 @@
 # from nothing, stdin is /dev/null and it stays in the launcher's process group.
 #
 # It records what it was started with under $M2_FAKE_OUT: its pid, its argv (one argument per
-# line), its whole environment and what stdin held. It then says whether the proxy
+# line), its whole environment and what stdin held. It then says whether the recording proxy
 # HTTPS_PROXY names was already accepting connections, runs $M2_FAKE_OUT/steps.sh when the
 # test wrote one, and ends there when the test-owned file $M2_FAKE_OUT/stop exists. Otherwise
 # it waits on one `sleep` (its pid in $M2_FAKE_OUT/sleeper) and expects the tracker to end it;

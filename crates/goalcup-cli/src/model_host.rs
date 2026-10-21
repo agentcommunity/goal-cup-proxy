@@ -2,9 +2,9 @@
 //!
 //! The participant picks the model service in the harness, and the harness saves its address
 //! in its own config. `goalcup start` and each `goalcup continue` read that one value, before
-//! anything is created, and the proxy intercepts its host for that run beside the profile's
-//! `hosts`. Every other host stays an opaque tunnel, counted and never opened. There is no
-//! provider list: whatever service the participant set up is the one recorded.
+//! anything is created, and the recording proxy intercepts its host for that run beside the
+//! profile's `hosts`. Every other host stays an opaque tunnel, counted and never opened. There is
+//! no provider list: whatever service the participant set up is the one recorded.
 //!
 //! The reader is small on purpose. It opens one file (no symlink, at most
 //! [`MAX_CONFIG_BYTES`]) in the shared config home, finds one dotted key in it and keeps only
@@ -13,7 +13,7 @@
 //! line is written. YAML is read by the block-mapping lookup below (no YAML crate); JSON and
 //! TOML by the parsers this binary already links.
 //!
-//! A value the tracer cannot record (missing, not a URL, plain `http`, loopback, an address
+//! A value goalcup cannot record (missing, not a URL, plain `http`, loopback, an address
 //! literal, an authentication host) is refused with the reason and the way to change it
 //! ([`crate::participant::cannot_record_model_service`]); `goalcup prep` makes the same check
 //! and keeps the home not ready until the harness names a service that can be recorded. What is
@@ -69,7 +69,7 @@ impl ModelHost {
         format!("model service: {} ({})", self.authority(), self.from)
     }
 
-    /// The proxy's host rule: each [`WIRE_PATHS`] entry under the base path (and under
+    /// The recording proxy's host rule: each [`WIRE_PATHS`] entry under the base path (and under
     /// `<base>/v1`, where an SDK adds the version itself) with its hint, then every other path
     /// under the base with none.
     pub fn approved(&self) -> ApprovedHost {

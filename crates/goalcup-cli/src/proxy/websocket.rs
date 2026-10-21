@@ -992,7 +992,7 @@ impl Drop for Capture<'_> {
     }
 }
 
-/// The relay's one clock read: the proxy's shared process-wide clock,
+/// The relay's one clock read: the recording proxy's shared process-wide clock,
 /// so HTTP and WebSocket frames of one producer compare on one monotonic base. The emitter
 /// stamps `clock_id` with its producer.
 fn now() -> CaptureTime {

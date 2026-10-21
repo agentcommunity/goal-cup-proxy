@@ -19,7 +19,7 @@ args = [
   "-c", 'projects={{ "{workspace}" = {{ trust_level = "trusted" }} }}',
   "-C", "{workspace}",
 ]
-# `goalcup continue`: reopen the most recent session in the tracer's home. Not yet measured
+# `goalcup continue`: reopen the most recent session in goalcup's home. Not yet measured
 # against a logged-in home (docs/harnesses/codex-cli.md, section 10).
 resume_args = ["resume", "--last"]
 

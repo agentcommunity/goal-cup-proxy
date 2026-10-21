@@ -1620,9 +1620,9 @@ fn unknown_protocol_is_integrity_valid_analysis_unavailable() {
     }
 }
 
-/// D53: builds are recorded, not pinned, so a session file that names model work while the proxy
-/// recorded no wire stream at all is noted for judges: a harness that bypassed the proxy, or a
-/// fake. The note never changes the exit code.
+/// D53: builds are recorded, not pinned, so a session file that names model work while the
+/// recording proxy recorded no wire stream at all is noted for judges: a harness that bypassed the
+/// recording proxy, or a fake. The note never changes the exit code.
 #[test]
 fn a_session_with_model_work_and_no_wire_stream_is_noted_not_failed() {
     let trace = make_report_trace(GOAL_TEXT, &codex_records(), Some(confirmed()));
@@ -1704,7 +1704,7 @@ fn native_and_wire_counts_remain_distinct() {
     for key in keys(&rest) {
         assert!(!key.contains("total") && !key.contains("model"), "{key}");
     }
-    // The native session names model work and the proxy recorded model calls.
+    // The native session names model work and the recording proxy recorded model calls.
     assert_eq!(cross_leg["state"], "consistent", "{cross_leg:#}");
     assert_eq!(cross_leg["wire_model_requests"], 2);
     assert!(cross_leg["wire_streams"].as_u64().unwrap() > 0);

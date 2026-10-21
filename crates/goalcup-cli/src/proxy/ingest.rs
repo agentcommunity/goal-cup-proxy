@@ -162,8 +162,8 @@ pub struct SinkConfig {
 impl SinkConfig {
     /// `endpoint` is the daemon's loopback ingest listener; `entry_id` and `secret` authorize
     /// this launch's fresh producers for that one entry; `producer` is the initial producer ID
-    /// (32 lowercase hex), the same one the caller hands the proxy; `shutdown_deadline` is the
-    /// one bound on [`IngestSink::shutdown`]. Reconnects follow [`RECONNECT_DELAYS`].
+    /// (32 lowercase hex), the same one the caller hands the recording proxy; `shutdown_deadline`
+    /// is the one bound on [`IngestSink::shutdown`]. Reconnects follow [`RECONNECT_DELAYS`].
     pub fn new(
         endpoint: SocketAddr,
         entry_id: String,
@@ -675,7 +675,7 @@ impl Shared {
     }
 }
 
-/// The IPC capture sink. Share it with the proxy as `Arc<dyn CaptureSink>`; keep one
+/// The IPC capture sink. Share it with the recording proxy as `Arc<dyn CaptureSink>`; keep one
 /// `Arc<IngestSink>` to call [`IngestSink::shutdown`].
 pub struct IngestSink {
     shared: Arc<Shared>,
@@ -694,8 +694,8 @@ impl fmt::Debug for IngestSink {
 
 /// Builds the sink and starts its one background task, whose first attempt connects for the
 /// configured initial producer at once. Must run inside a Tokio runtime; performs no I/O
-/// itself. The caller then polls `try_begin_epoch(producer)` until `Ready` (the proxy's startup
-/// does) before its first frame.
+/// itself. The caller then polls `try_begin_epoch(producer)` until `Ready` (the recording proxy's
+/// startup does) before its first frame.
 pub fn connect_sink(config: SinkConfig) -> Result<Arc<IngestSink>, SinkConfigError> {
     let SinkConfig {
         endpoint,
@@ -1173,9 +1173,9 @@ mod tests {
 
     const PRODUCER: &str = "0123456789abcdef0123456789abcdef";
 
-    /// The sink's own count of spent IDs is the one accurate producer budget (the proxy's startup
-    /// proposes IDs before the emitter exists): a fresh proposal is admitted while fewer than
-    /// `MAX_PRODUCERS` IDs are spent, and refused for good once that many are.
+    /// The sink's own count of spent IDs is the one accurate producer budget (the recording proxy's
+    /// startup proposes IDs before the emitter exists): a fresh proposal is admitted while fewer
+    /// than `MAX_PRODUCERS` IDs are spent, and refused for good once that many are.
     #[test]
     fn the_producer_budget_stops_at_max_producers() {
         let id = |n: usize| format!("{n:032x}");

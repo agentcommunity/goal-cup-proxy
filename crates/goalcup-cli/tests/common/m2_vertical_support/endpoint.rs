@@ -1,11 +1,11 @@
 //! The controlled TLS upstream: one loopback listener serving an API
 //! host (HTTP echo, SSE stream, WebSocket echo/stream, an unknown binary protocol, bulk
-//! transfer) and an authentication host (always an opaque tunnel at the proxy).
+//! transfer) and an authentication host (always an opaque tunnel at the recording proxy).
 //!
 //! Both names resolve to loopback (`*.localhost`), so the real proxy reaches this endpoint by
 //! its ordinary CONNECT-target resolution: no library change and no resolver override. The
-//! endpoint has its own CA; the proxy is told to trust it as its *upstream* roots, exactly as
-//! production trusts the public roots.
+//! endpoint has its own CA; the recording proxy is told to trust it as its *upstream* roots,
+//! exactly as production trusts the public roots.
 //!
 //! The endpoint counts decoded payload bytes and messages on its own, independently of the
 //! recorder. Those counters are bounded observations about traffic, never captured evidence.
@@ -680,7 +680,8 @@ async fn websocket<S: AsyncRead + AsyncWrite + Unpin>(
     }
 }
 
-/// RFC 6455 section 4.2.2: the controlled endpoint answers a handshake without the proxy's code.
+/// RFC 6455 section 4.2.2: the controlled endpoint answers a handshake without the recording
+/// proxy's code.
 fn derive_accept_key(key: &[u8]) -> String {
     use base64::Engine as _;
     use sha1::{Digest, Sha1};

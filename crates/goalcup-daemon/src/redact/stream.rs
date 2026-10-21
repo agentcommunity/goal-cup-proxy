@@ -557,7 +557,7 @@ static SHAPES: [Shape; 23] = [
         32,
         None,
     ),
-    // The tracer's proxy credential: fixed-length forms, like `aws_access_key`, so a
+    // The recording proxy's credential: fixed-length forms, like `aws_access_key`, so a
     // candidate is held for at most 54 units and ends the unit after its last.
     prefixed(
         "proxy_credential",

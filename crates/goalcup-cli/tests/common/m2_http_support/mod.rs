@@ -202,8 +202,9 @@ pub struct Harness {
     pub emitter: Arc<CaptureEmitter>,
 }
 
-/// Admit the initial producer, as the proxy does before constructing the emitter, and report
-/// the physical connection open, as the proxy does before handing the pair to `relay_http`.
+/// Admit the initial producer, as the recording proxy does before constructing the emitter, and
+/// report the physical connection open, as the recording proxy does before handing the pair to
+/// `relay_http`.
 pub fn emitter_for(sink: Arc<dyn CaptureSink>) -> Arc<CaptureEmitter> {
     assert_eq!(sink.try_begin_epoch(PRODUCER), EpochAdmission::Ready);
     let emitter = Arc::new(CaptureEmitter::new(PRODUCER.to_string(), sink));

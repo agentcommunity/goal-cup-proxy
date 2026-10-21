@@ -2997,9 +2997,10 @@ async fn t15_integration_example() {
         IngestConfig::new(monotonic_clock("daemon-clock")),
     )
     .unwrap();
-    // The proxy receives this address, the entry ID and the secret through its descriptor.
+    // The recording proxy receives this address, the entry ID and the secret through its
+    // descriptor.
     let addr = listener.local_addr();
-    // The entry owner's sink; the secret goes to the proxy through a private descriptor.
+    // The entry owner's sink; the secret goes to the recording proxy through a private descriptor.
     let sink = RecordingSink::new(64);
     let secret = IngestSecret::generate();
     let entry = listener

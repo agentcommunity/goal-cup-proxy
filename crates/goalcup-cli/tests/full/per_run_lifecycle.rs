@@ -78,7 +78,7 @@ fn session_id(rig: &Rig) -> String {
 }
 
 /// End to end: the launcher reads the identity off stderr after the harness exits, stops the
-/// proxy first, carries the identity on the finish request, and the run ends with its own
+/// recording proxy first, carries the identity on the finish request, and the run ends with its own
 /// session snapshot captured and no gap. The child saw the private homes and the loopback
 /// proxy. A provider key exported in the launcher's own environment never reaches it (D61), and
 /// is in nothing this machine kept.
@@ -151,7 +151,7 @@ fn a_per_run_run_ends_with_its_snapshot_captured() {
             .any(|l| l.starts_with("HTTPS_PROXY=http://goalcup:") && l.contains("@127.0.0.1:")),
         "{env}"
     );
-    // `goalcup start` hands the harness's own CA variable the proxy's CA alone (D41), in
+    // `goalcup start` hands the harness's own CA variable the recording proxy's CA alone (D41), in
     // replace mode too: one certificate, never the roots file a shared row gets.
     assert!(env.lines().any(|l| l.starts_with("PERRUN_CA_BUNDLE=")));
     let handed = rig

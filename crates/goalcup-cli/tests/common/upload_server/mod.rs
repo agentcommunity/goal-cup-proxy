@@ -1,6 +1,6 @@
 //! A local stand-in for the Goal Cup upload server, for tests only.
 //!
-//! It implements `UPLOAD-API.md` (version 1) over loopback HTTP so the Rust tests of the tracer's
+//! It implements `UPLOAD-API.md` (version 1) over loopback HTTP so the Rust tests of goalcup's
 //! uploader run without Cloudflare. A TypeScript Worker implements the same contract; where the
 //! two ever disagree the contract file decides, and a test here is the cheap way to find out.
 //!
@@ -29,7 +29,7 @@
 //!
 //! What the Worker does on its own (the 5-minute cron: closing runs, the commit at the deadline
 //! and the run emails, see "What the server does on its own" in `UPLOAD-API.md`) is not built here;
-//! nothing in the tracer reads it. The heartbeat's `recording` and `model_requests` are kept on
+//! nothing in goalcup reads it. The heartbeat's `recording` and `model_requests` are kept on
 //! the heartbeat record (`heartbeats_of`); they flag nothing and queue nothing. A run's status
 //! follows the same close rule as the Worker's, but is worked out when it is asked for, not
 //! written by a cron.
@@ -65,7 +65,7 @@ use state::{RunStatus, Shared};
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
     /// `(token, member)` pairs: pasted member tokens the server still accepts, member-scoped,
-    /// for the tracer's old login. Legacy: removed with the pasted token (T5).
+    /// for goalcup's old login. Legacy: removed with the pasted token (T5).
     pub tokens: Vec<(String, String)>,
     /// The member the stand-in approves device requests as; a login request's handle.
     pub device_member: String,
@@ -174,7 +174,7 @@ impl UploadServer {
                 // Shutting the runtime down cancels every connection task still alive, so a
                 // pooled keep-alive connection cannot outlive `stop` and keep answering. A plain
                 // drop would also wait for a blocking task still reading a chunk body, which
-                // holds `stop` until the tracer's own timeout ends the request; a server that
+                // holds `stop` until goalcup's own timeout ends the request; a server that
                 // goes away does not wait for its clients.
                 rt.shutdown_timeout(std::time::Duration::from_millis(100));
             })
@@ -236,7 +236,7 @@ impl UploadServer {
     }
 
     /// The next chunk PUT is stored and committed, then the connection is cut without a reply:
-    /// the tracer sees a transport error for a chunk the server holds, and its retry must be
+    /// goalcup sees a transport error for a chunk the server holds, and its retry must be
     /// answered from the stored acknowledgement.
     pub fn drop_next_chunk_reply(&self) {
         self.shared.drop_replies.store(1, Ordering::SeqCst);
@@ -443,7 +443,7 @@ impl UploadServer {
             .flatten()
     }
 
-    /// `open`, `sealed`, `incomplete` or `abandoned`. For the tracer's tests a run whose current
+    /// `open`, `sealed`, `incomplete` or `abandoned`. For goalcup's tests a run whose current
     /// entry is sealed reads `sealed` here even before the run's end; the API's own `status`
     /// (`GET /v1/runs/{id}`) says `open` until then, so that the run can still be continued.
     pub fn status(&self, run_id: &str) -> Option<String> {

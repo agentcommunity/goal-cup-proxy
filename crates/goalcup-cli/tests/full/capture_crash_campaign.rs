@@ -5,9 +5,9 @@
 //!
 //! The faults are real processes and real operating-system conditions, nothing else:
 //!
-//! - the crash is `kill -9` of the one daemon the test spawned, while the proxy in `goalcup
-//!   start` and the workload keep running; the restart is a second real `goalcup-daemon` over
-//!   the same private registry;
+//! - the crash is `kill -9` of the one daemon the test spawned, while the recording proxy in
+//!   `goalcup start` and the workload keep running; the restart is a second real
+//!   `goalcup-daemon` over the same private registry;
 //! - the torn tail is a real partial append: the daemon child runs under an `RLIMIT_FSIZE`
 //!   (`capture_crash_support::Daemon::spawn`), so the production writer's own `write` is cut
 //!   short by the kernel mid-line and the next one fails. No byte of the chain is written by
@@ -149,8 +149,8 @@ fn run_directories(v: &Vertical) -> usize {
         .count()
 }
 
-/// What the upstream endpoint, counting outside the workload, the proxy and the recorder, saw:
-/// every echo request and every WebSocket message exactly as many times as the workload sent
+/// What the upstream endpoint, counting outside the workload, the recording proxy and the recorder,
+/// saw: every echo request and every WebSocket message exactly as many times as the workload sent
 /// it. A request the relay replayed would be counted twice here.
 fn assert_upstream_saw_each_once(v: &Vertical, row: &mut Row) {
     let counters = v.endpoint_counters();
@@ -1385,7 +1385,8 @@ fn a_standalone_seal_that_commits_first_keeps_the_proxys_loss() {
     let entry = v.entry_id();
     gate_reached(&pause, "capture-finish-proxy-stopped");
 
-    // The harness has exited and the proxy has stopped; nothing has asked the daemon to seal.
+    // The harness has exited and the recording proxy has stopped; nothing has asked the daemon to
+    // seal.
     let out = seal_observed(&v, &entry, &mut row, "standalone_seal");
     assert!(out.contains("finished locally"), "{out}");
 
@@ -1399,7 +1400,7 @@ fn a_standalone_seal_that_commits_first_keeps_the_proxys_loss() {
     assert!(exit.success(), "{}\n{}", exit, start.output());
     assert!(
         start.output().contains("fail_open=1"),
-        "the proxy counted the tunnel: {}",
+        "the recording proxy counted the tunnel: {}",
         start.output()
     );
 

@@ -833,7 +833,7 @@ fn only_the_user_code_is_printed() {
     assert_eq!(asked[0].purpose, "run");
     assert_eq!(asked[0].mode, "practice");
     assert_eq!(asked[0].connector_id, "codex-cli");
-    assert_eq!(asked[0].tracer_version, goalcup_cli::CLI_VERSION);
+    assert_eq!(asked[0].proxy_version, goalcup_cli::CLI_VERSION);
 }
 
 #[test]

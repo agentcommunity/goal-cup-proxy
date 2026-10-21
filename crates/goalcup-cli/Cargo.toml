@@ -58,7 +58,7 @@ ed25519-dalek = { workspace = true, optional = true }
 # The M2 recording proxy (`src/proxy/`). The shared seam
 # (`proxy::api`) needs tokio's `AsyncRead`/`AsyncWrite` and the relay leaves need `io-util`
 # and `sync`; `net`, `time`, `rt-multi-thread` and `macros` come from the workspace line.
-# Still no `fs`: the proxy never touches a participant's disk through tokio.
+# Still no `fs`: the recording proxy never touches a participant's disk through tokio.
 tokio = { workspace = true, features = ["io-util", "sync"] }
 # TLS termination toward the harness and upstream TLS toward the provider (ring provider
 # only), the per-launch CA and leaf certificates, and the upstream validation roots.

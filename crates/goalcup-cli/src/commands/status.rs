@@ -195,18 +195,17 @@ fn local_facts(cfg: &Path, record: &EntryRecord) -> Option<crate::upload::api::H
 }
 
 /// The run's vitals in the heartbeats' shape: the free disk as the watch tick last measured it,
-/// whether the agent is paused for it, and what the tracer's own processes used at the last
+/// whether the agent is paused for it, and what goalcup's own processes used at the last
 /// heartbeat (none for a run with no server).
 fn local_vitals(
     run_dir: &Path,
     state: &crate::run::RunState,
 ) -> crate::upload::api::HeartbeatVitals {
-    let mut vitals = crate::tracer_vitals::last(run_dir).unwrap_or_default();
+    let mut vitals = crate::vitals::last(run_dir).unwrap_or_default();
     if state.disk != crate::run::DiskState::default() {
         vitals.disk_free_bytes = Some(state.disk.free_bytes);
     }
-    vitals.agent_paused =
-        crate::tracer_vitals::paused_for_disk(run_dir).then(|| "disk".to_string());
+    vitals.agent_paused = crate::vitals::paused_for_disk(run_dir).then(|| "disk".to_string());
     vitals
 }
 

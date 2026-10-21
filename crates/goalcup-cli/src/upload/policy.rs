@@ -278,7 +278,7 @@ impl ServerError {
 }
 
 /// The wait before asking again: from `min`, doubling per consecutive failure to `max`, plus
-/// up to a quarter more at random so a fleet of tracers does not ask in step, and never
+/// up to a quarter more at random so a fleet of clients does not ask in step, and never
 /// less than what the server asked for.
 pub fn backoff(policy: &Policy, failures: u32, retry_after: Option<Duration>) -> Duration {
     use rand::Rng;

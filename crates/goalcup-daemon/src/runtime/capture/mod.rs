@@ -36,7 +36,7 @@
 //! Both budget boundaries move by the actual termination time, which is outside the budget.
 //! It then closes admission, lets existing wire producers drain until the end of the drain
 //! share, stops the owner (native finish, remaining producers cut as losses, flush, sync),
-//! chains the proxy's counters as gaps, seals the
+//! chains the recording proxy's counters as gaps, seals the
 //! workspace (a clone's Git state or why it could not be read, else the walk; D56), and calls `write_local_finish` once. The
 //! drain share expiring is the existing cut-with-a-gap, never a refusal. A stage that waits on a permit, the
 //! entry's lock or the owner, or that is about to begin with less than [`FINISH_RESPONSE_MARGIN`]
@@ -66,7 +66,7 @@
 //! admission-side stand-in `!named`; it equals the writer's and reader's "unrecorded" while the
 //! writer retains what the sink admitted, and where it does not the writer's `lost_producers`
 //! keeps the chain valid. A named predecessor that is not wire in the writer (a payload `Open` after
-//! a `Loss`, no `Connection`) is not reachable from the proxy's single lineage.
+//! a `Loss`, no `Connection`) is not reachable from the recording proxy's single lineage.
 //!
 //! A daemon restart reopens every other entry for status and seal only: no producer is admitted
 //! again, and the gap count is read back from the chain, so gap history outlives the daemon. A
@@ -1266,7 +1266,7 @@ impl CaptureEntry {
             harness_version: request.harness_version.clone(),
             recorder_revision: DAEMON_VERSION.to_string(),
             continuation: request.continuation.clone(),
-            // The tracer no longer registers a tool allowance (D52); the v5 fields stay in the
+            // Goal Cup Proxy no longer registers a tool allowance (D52); the v5 fields stay in the
             // record shape so traces that carry them still verify.
             allowed_tool_rule: None,
             process_handoff_digest: None,
