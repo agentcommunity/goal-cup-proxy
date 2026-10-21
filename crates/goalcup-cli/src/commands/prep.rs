@@ -212,7 +212,7 @@ impl Doors for Here {
         env: &BTreeMap<String, String>,
         go: &mut dyn FnMut() -> Result<bool, CliError>,
     ) -> Result<Option<bool>, CliError> {
-        use crate::commands::start::{WorkspaceAt, claim_home_for_prep};
+        use crate::home::{WorkspaceAt, claim_home_for_prep};
         let profile = &connector.loaded.manifest.capture;
         // The home every run of this connector keeps (its config home, D39, or its run
         // `HOME`, D59), held so no run is recording in it while the participant is signed in
@@ -230,7 +230,7 @@ impl Doors for Here {
         // `HOME` is the home itself, used as it is and never removed.
         let beside = cfg.join("prep-launch");
         crate::config::create_private_dir(&beside)?;
-        let run = crate::commands::start::RunDir::create(
+        let run = crate::home::RunDir::create(
             &beside,
             profile.home.run_home,
             home.is_run_home.then_some(home.dir.as_path()),
@@ -623,7 +623,7 @@ fn home_step(
     let human = |state, say: String| step(STEP_HARNESS_HOME, state, true, say);
     // The home the runs keep: its config home (D39) or its run `HOME` (D59). A connector whose
     // homes are all made fresh for each run has none to set up.
-    let Some(home) = crate::commands::start::prep_home_leaf(cfg, connector) else {
+    let Some(home) = crate::home::prep_home_leaf(cfg, connector) else {
         return Ok(step(
             STEP_HARNESS_HOME,
             State::Ok,

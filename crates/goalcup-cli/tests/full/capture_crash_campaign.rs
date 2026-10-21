@@ -929,7 +929,7 @@ fn capture_recovery_emits_no_assistance() {
 
 // `goalcup start` forks its capture child and parks it before `exec` until the daemon has the
 // child's registration durably (D40). The rows below hold the launcher at the gate's three
-// points (`commands/start.rs::pause_at`, `test-support` builds only) and break one thing at
+// points (`commands/start/mod.rs::pause_at`, `test-support` builds only) and break one thing at
 // each. The one fact every "never execs" row reads is the workload's own `out/pid`, which it
 // writes as the first thing it does and which a parked child cannot have written.
 

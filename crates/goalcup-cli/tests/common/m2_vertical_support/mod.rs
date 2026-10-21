@@ -215,7 +215,7 @@ impl Vertical {
     }
 
     /// [`Vertical::start`] with `GOALCUP_TEST_PAUSE_DIR` naming `pause_dir`: the launcher holds
-    /// at each point whose `<point>.arm` file is there (see `commands/start.rs::pause_at`).
+    /// at each point whose `<point>.arm` file is there (see `commands/start/mod.rs::pause_at`).
     pub fn start_paused(&self, reserve: u64, pause_dir: &Path) -> Launcher {
         self.start_with(disk_spec(reserve), Some(pause_dir))
     }

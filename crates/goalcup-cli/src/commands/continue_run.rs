@@ -27,12 +27,14 @@
 //! run does ([`super::start`]).
 
 use crate::CliError;
+use crate::commands::say;
 use crate::commands::start::{
-    Continuing, SleepLockFn, StartOptions, continue_preflight, continue_segment,
-    lock_home_for_continue, refuse_wsl, run_folder_for_continue,
+    Continuing, SleepLockFn, StartOptions, continue_preflight, continue_segment, refuse_wsl,
+    run_folder_for_continue,
 };
 use crate::connector::HarnessConnector;
 use crate::entries::{EntryRecord, read_entry};
+use crate::home::lock_home_for_continue;
 use crate::retry::retry_busy;
 use crate::run::reserve::{DiskPolicy, artifact_root, held_by_another, reserve_path};
 use crate::run::{HarnessState, RunRecord};
@@ -394,14 +396,6 @@ fn log_line(cfg: &Path, entry_id: &str, line: &str) {
     if let Ok(mut file) = crate::host_log::open_append(&log) {
         let _ = std::io::Write::write_all(&mut file, format!("goalcup: {line}\n").as_bytes());
     }
-}
-
-/// One line to the participant, or the write error naming the stream.
-fn say(out: &mut dyn std::io::Write, line: &str) -> Result<(), CliError> {
-    writeln!(out, "{line}").map_err(|source| CliError::Io {
-        path: "stdout".to_string(),
-        source,
-    })
 }
 
 #[cfg(test)]

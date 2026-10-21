@@ -15,3 +15,13 @@ pub mod start;
 pub mod status;
 pub mod time_left;
 pub mod upload;
+
+use crate::CliError;
+
+/// One line to the participant, or the write error naming the stream.
+pub(crate) fn say(out: &mut dyn std::io::Write, line: &str) -> Result<(), CliError> {
+    writeln!(out, "{line}").map_err(|source| CliError::Io {
+        path: "stdout".to_string(),
+        source,
+    })
+}

@@ -38,6 +38,8 @@ pub mod connector;
 pub mod daemon;
 pub mod entries;
 pub mod harness_version;
+/// The harness homes runs share (D39, D59) and a run's own directory.
+pub(crate) mod home;
 /// Where `goalcup start` says things while a chat-mode harness owns the terminal (D57).
 pub mod host_log;
 pub mod launch;

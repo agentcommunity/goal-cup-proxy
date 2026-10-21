@@ -1061,7 +1061,7 @@ fn the_capture_seal_carries_its_remaining_budget_and_its_own_read_timeout() {
 /// below the gated definition, and nothing in it reads the environment variable.
 #[test]
 fn pause_points_exist_only_under_test_support() {
-    let source = include_str!("../../src/commands/start.rs");
+    let source = include_str!("../../src/commands/start/mod.rs");
     let gated = "#[cfg(feature = \"test-support\")]\nfn pause_at(point: &'static str) {";
     let shipped = "#[cfg(not(feature = \"test-support\"))]\n#[inline(always)]\nfn pause_at(_point: &'static str) {}";
     let (before, rest) = source
@@ -1084,7 +1084,10 @@ fn pause_points_exist_only_under_test_support() {
         "no other code reads the pause directory"
     );
     // The one use is a call of the one function, unconditional.
-    assert!(source.contains("pause_at(\"capture-finish-started\")"));
+    assert!(
+        include_str!("../../src/commands/start/finish.rs")
+            .contains("pause_at(\"capture-finish-started\")")
+    );
 }
 
 /// The only places this crate starts a process are the launch module's one command builder
@@ -1165,7 +1168,11 @@ fn the_only_command_site_is_the_launch_builder() {
 /// of the one function that launches a capture run and of the launch module's spawners.
 #[test]
 fn capture_children_spawn_only_through_the_gate() {
-    let start = include_str!("../../src/commands/start.rs");
+    let start = concat!(
+        include_str!("../../src/commands/start/mod.rs"),
+        include_str!("../../src/commands/start/phases.rs"),
+        include_str!("../../src/commands/start/finish.rs"),
+    );
     // The capture launch is its phase functions, which run in the order they are written:
     // `capture` through `finish_run`, up to the words for a harness's end.
     let (_, rest) = start

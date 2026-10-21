@@ -10,7 +10,7 @@
 //! (whose pid cannot have been recycled) and on that child's native descendant bound by its
 //! creation identity. It never touches an entry, a seal or a trace; `goalcup_daemon::terminate`
 //! remains the only terminator of a recorded run. Other code in this crate also signals
-//! processes (the abandon path in `commands/start.rs`, the version probe, the Linux subreaper
+//! processes (the abandon path in `commands/start/phases.rs`, the version probe, the Linux subreaper
 //! sweep); `tests/it/process_handoff.rs` (`this_crate_never_terminates_anything`) exempts each
 //! file by name and gives its reason.
 //!

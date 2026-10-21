@@ -57,7 +57,7 @@ TypeScript).
 
 | Part | Does | Code |
 |---|---|---|
-| `goalcup start` | Preflight; creates the entry; runs the recording proxy in process; gates and launches the harness; seals when it exits; uploads | [commands/start.rs](../crates/goalcup-cli/src/commands/start.rs) |
+| `goalcup start` | Preflight; creates the entry; runs the recording proxy in process; gates and launches the harness; seals when it exits; uploads | [commands/start/](../crates/goalcup-cli/src/commands/start/) |
 | `goalcup login`, `prep`, `continue`, `upload` | Device-flow login; machine and repository readiness; next segment of a run; finish an upload | [commands/](../crates/goalcup-cli/src/commands/), [account/](../crates/goalcup-cli/src/account/), [upload/](../crates/goalcup-cli/src/upload/) |
 | `goalcup seal`, `status`, `entries`, `doctor` | End a run early; read status; list runs; check the machine | [commands/](../crates/goalcup-cli/src/commands/) |
 | Recording proxy | Loopback CONNECT proxy. Relays bytes unchanged; tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
@@ -130,7 +130,7 @@ Neither leg erases a gap in the other.
 
 ## 6. Entry lifecycle
 
-CLI phases are in `commands/start.rs` (`prepare`, `create_and_gate`, `register_and_release`,
+CLI phases are in `commands/start/phases.rs` (`prepare`, `create_and_gate`, `register_and_release`,
 `run_harness`, `finish_and_scan`). Daemon finish stages are in
 [finish.rs](../crates/goalcup-daemon/src/runtime/capture/finish.rs).
 

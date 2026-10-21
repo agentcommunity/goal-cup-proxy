@@ -23,6 +23,7 @@
 //! still busy when that is spent.
 
 use crate::CliError;
+use crate::commands::say;
 use crate::entries::read_entry;
 use crate::retry::{BUSY_ATTEMPTS, retry_busy, retry_capture_seal, retry_capture_seal_until};
 use crate::upload::policy::WrapUp;
@@ -582,14 +583,6 @@ fn wire_words<T: serde::Serialize>(value: &T) -> String {
         Ok(serde_json::Value::String(word)) => word.replace('_', " "),
         _ => "unspecified".to_string(),
     }
-}
-
-/// One line to the participant, or the write error naming the stream.
-fn say(out: &mut dyn std::io::Write, line: &str) -> Result<(), CliError> {
-    writeln!(out, "{line}").map_err(|source| CliError::Io {
-        path: "stdout".to_string(),
-        source,
-    })
 }
 
 #[cfg(test)]
