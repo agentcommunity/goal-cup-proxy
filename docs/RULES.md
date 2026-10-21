@@ -298,7 +298,8 @@ disclosure and no-side-channel rules.
 may be a laptop, a desktop, or a remote server or cloud sandbox you control (or one the organizers
 provide), reached over SSH. It needs a supported disk type (APFS, ext4 or XFS) and a supported system.
 Harness modes where the agent itself runs in a vendor's cloud (Claude Code on the web, Codex cloud,
-Cursor cloud agents) and CI runners are not eligible, because they leave no local trace.
+Cursor cloud agents, Amp orbs and Amp's remote executors) and CI runners are not eligible, because
+they leave no local trace. Amp's Claude Code mode starts a second harness and is not allowed either.
 
 **Remote computers as tools.** Your agent may use other computers as tools: deploy to a server, run a
 database, call an API. Only its own commands and their results are recorded, not what happens on the
