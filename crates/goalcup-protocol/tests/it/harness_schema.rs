@@ -789,7 +789,7 @@ fn a_ca_variable_is_data_held_to_the_ca_shape_and_the_shared_rules() {
         ("OPENAI_CA_CERTS", "model provider"),
         ("GIT_SSL_CA_FILE", "configures git"),
         ("OPENSSL_CA_FILE", "OpenSSL"),
-        ("GOALCUP_CA_BUNDLE", "tracker"),
+        ("GOALCUP_CA_BUNDLE", "Goal Cup Proxy"),
         ("NPM_CONFIG_CA_FILE", "npm"),
         ("AUTH_CA_CERT", "credential"),
     ] {
@@ -849,7 +849,7 @@ fn server_upload_and_goalcup_names_are_refused() {
     for key in ["GOALCUP_SERVER", "goalcup_upload_url", "GOALCUP_"] {
         let mut t = codex();
         set(&mut t, &["capture", "env"], key, "x");
-        refused(&t, PINNED, &["capture.env", "tracker"]);
+        refused(&t, PINNED, &["capture.env", "Goal Cup Proxy"]);
     }
     // `goalcup` in an arg, an env value, a host, an auth host.
     let mut t = codex();
@@ -865,7 +865,7 @@ fn server_upload_and_goalcup_names_are_refused() {
     refused(&t, PINNED, &["capture.env", "delivery-agnostic"]);
     let mut t = codex();
     set(&mut t, &["capture", "hosts"], "host", "api.goalcup.example");
-    refused(&t, PINNED, &["tracker's own host"]);
+    refused(&t, PINNED, &["Goal Cup Proxy's own host"]);
     let mut t = codex();
     set(
         &mut t,
@@ -873,7 +873,11 @@ fn server_upload_and_goalcup_names_are_refused() {
         "auth_hosts",
         strings(&["auth.goalcup.example"]),
     );
-    refused(&t, PINNED, &["capture.auth_hosts", "tracker's own host"]);
+    refused(
+        &t,
+        PINNED,
+        &["capture.auth_hosts", "Goal Cup Proxy's own host"],
+    );
     // A loopback host is already not a capture host.
     let mut t = codex();
     set(&mut t, &["capture", "hosts"], "host", "127.0.0.1");
@@ -2878,7 +2882,6 @@ fn an_override_with_any_other_field_is_refused() {
         ("home", Value::Table(Table::new())),
         ("hosts", Value::Array(vec![])),
         ("auth_hosts", strings(&["evil.example"])),
-        ("goal_flag", "--goal".into()),
         ("ca", Value::Table(Table::new())),
         ("executable", Value::Table(Table::new())),
         ("version_args", strings(&["--version"])),
@@ -3320,6 +3323,23 @@ fn a_headless_manifest_is_refused_as_chat_mode_only() {
     let mut t = chat();
     set(&mut t, &["capture"], "goal_flag", "--prompt");
     refused(&t, PINNED, &["capture.goal_flag", CHAT_MODE_ONLY]);
+    // Nor in a platform override, which may change only env entries.
+    for (key, value) in [
+        ("interactive", Value::from(false)),
+        ("goal_flag", "--goal".into()),
+        ("identity", Value::Table(Table::new())),
+    ] {
+        let mut t = with_platform(codex(), "linux-x86_64", &[]);
+        set(&mut t, &["capture", "platform", "linux-x86_64"], key, value);
+        refused(
+            &t,
+            PINNED,
+            &[
+                &format!("capture.platform.linux-x86_64.{key}"),
+                CHAT_MODE_ONLY,
+            ],
+        );
+    }
     // A session identity, by its source and by each of its fields.
     for source in ["preassigned", "stdout_json", "stderr_line"] {
         let mut t = chat();
@@ -3537,7 +3557,7 @@ fn a_configure_command_is_held_to_the_argument_rules() {
         ),
         (
             commands(&[&["set", "goalcup"]]),
-            &["capture.configure", "tracker"],
+            &["capture.configure", "Goal Cup Proxy"],
         ),
     ];
     for (value, needles) in cases {
@@ -3735,4 +3755,32 @@ fn a_model_host_from_is_held_to_its_rules() {
         PINNED,
         &["capture.model_host_from", "config_home"],
     );
+}
+
+/// The native pattern matcher the launcher and the daemon share. A `*` in the pattern is a
+/// wildcard even where the name holds a literal `*` at the same place: `*ab` matches `*b`.
+#[test]
+fn a_native_glob_star_is_a_wildcard_against_any_name() {
+    use goalcup_protocol::harness::glob_matches;
+    for (name, pattern) in [
+        ("*ab", "*b"),
+        ("*ab", "*"),
+        ("*ab", "?ab"),
+        ("ab", "*b"),
+        ("b", "*b"),
+        ("rollout-1-x.jsonl", "rollout-*.jsonl"),
+        ("abcb", "a*b"),
+        ("", "*"),
+    ] {
+        assert!(glob_matches(name, pattern), "{name:?} ~ {pattern:?}");
+    }
+    for (name, pattern) in [
+        ("*ab", "*c"),
+        ("ab", "?"),
+        ("abc", "a*b"),
+        ("", "?"),
+        ("rollout.json", "rollout-*.jsonl"),
+    ] {
+        assert!(!glob_matches(name, pattern), "{name:?} !~ {pattern:?}");
+    }
 }

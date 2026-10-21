@@ -282,7 +282,7 @@ mod live {
     }
 
     /// What one created, goal-recorded and launched entry shows.
-    async fn entry(rig: &Rig, id: &str, scope: Option<&str>) -> Value {
+    async fn entry(rig: &Rig, id: &str) -> Value {
         // The controlled workload's native store lives under the run's own HOME.
         std::fs::create_dir_all(rig.run_home().join("native")).unwrap();
         let info = rig.created_at_its_home(id).await;
@@ -291,9 +291,7 @@ mod live {
             .native_binary_for_process(&info.entry_id)
             .unwrap();
         let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
-        let mut request = launch_request(&goal);
-        request.native_scope = scope.map(str::to_string);
-        let launched = rig.launch(&info.entry_id, &request).await;
+        let launched = rig.launch(&info.entry_id, &launch_request(&goal)).await;
         assert_eq!(launched.status(), 204, "{}", launched.body());
         let records = rig.records(&info.entry_id);
         let launch = records
@@ -333,7 +331,6 @@ mod live {
             })
             .collect();
         json!({
-            "native_scope_in_launch_request": scope,
             "native_binary_admitted_into_the_process_handoff": native_binary,
             "launch_profile_id": launch.0,
             "launch_profile_digest_is_sha256_of_harness_toml":
@@ -357,9 +354,6 @@ mod live {
         let Some(native) = harness.capture.native.first() else {
             return json!([]);
         };
-        // Chat mode names no session (identity `none`): the launch carries a placeholder scope,
-        // which the daemon ignores.
-        let (session, launch_scope) = ("unused", Some("unused"));
         let path = dir.path().to_path_buf();
         let rig = Rig::start_with(move |config| config.connectors_dir = path).await;
         let config_home = rig.root.join("config-home");
@@ -370,21 +364,19 @@ mod live {
                 .replace("{config_home}", config_home.to_str().unwrap())
                 .replace("{run_home}", rig.run_home_for(id).to_str().unwrap()),
         )
-        .join(
-            native
-                .pattern
-                .replace("{id}", session)
-                .replace('*', "unknown"),
-        );
+        .join(native.pattern.replace('*', "unknown"));
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         let info = rig.created_at_its_home(id).await;
         // Written after the create, so a `since_run_start` source (which reads from the create
         // time, in whole seconds) never misses it at a second boundary.
         std::fs::write(&file, b"{\"type\":\"native\"}\n").unwrap();
         let goal = rig.goal_accepted(&info.entry_id, b"say hi").await;
-        let mut request = launch_request(&goal);
-        request.native_scope = launch_scope.map(str::to_string);
-        assert_eq!(rig.launch(&info.entry_id, &request).await.status(), 204);
+        assert_eq!(
+            rig.launch(&info.entry_id, &launch_request(&goal))
+                .await
+                .status(),
+            204
+        );
         let opened = |records: &[CaptureRecord]| {
             records.iter().any(|r| {
                 matches!(
@@ -427,8 +419,7 @@ mod live {
             .map(String::as_str)
             .chain([CONTROLLED])
         {
-            let with_scope = entry(&rig, id, Some("test-session")).await;
-            let without_scope = entry(&rig, id, None).await;
+            let launched = entry(&rig, id).await;
             let native_streams = native_opens(id).await;
             let name = format!("{id}.daemon.json");
             checked += 1;
@@ -436,8 +427,7 @@ mod live {
                 &name,
                 &json!({
                     "connector": id,
-                    "launched_with_a_native_scope": with_scope,
-                    "launched_without_a_native_scope": without_scope,
+                    "launched": launched,
                     "native_streams_opened": native_streams,
                 }),
             ));

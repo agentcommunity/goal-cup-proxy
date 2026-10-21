@@ -1186,7 +1186,6 @@ impl<'a> Hooked<'a> {
         let request = CaptureSealRequest {
             proxy: None,
             remaining_finish_ms: u64::try_from(goalcup_cli::finish_budget().as_millis()).ok(),
-            native_scope: None,
         };
         let report = self
             .inner
@@ -1230,7 +1229,7 @@ impl DaemonClient for Hooked<'_> {
         self.inner.entries()
     }
 
-    fn seal(&self, entry_id: &str) -> Result<control::SealResponse, ControlError> {
+    fn seal(&self, entry_id: &str) -> Result<goalcup_protocol::seal::SealManifest, ControlError> {
         self.note("seal");
         self.inner.seal(entry_id)
     }

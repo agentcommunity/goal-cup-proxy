@@ -28,7 +28,7 @@ pub struct MachineFacts {
     pub disk_total_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_free_bytes: Option<u64>,
-    /// True only on WSL2 (WSL1 cannot run the tracker, so a run never reports it).
+    /// True only on WSL2 (WSL1 cannot run Goal Cup Proxy, so a run never reports it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wsl: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -256,8 +256,9 @@ pub fn windows_host_filesystem(path: &Path) -> Option<String> {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn statfs_type(path: &Path) -> Option<u64> {
+/// `statfs(2)` of `path`, or `None` when the call fails.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn statfs(path: &Path) -> Option<libc::statfs> {
     let c = CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
     // SAFETY: `c` is NUL-terminated and `stat` is a writable statfs for the call.
@@ -265,12 +266,17 @@ fn statfs_type(path: &Path) -> Option<u64> {
         return None;
     }
     // SAFETY: statfs returned 0, so it filled the struct.
-    let stat = unsafe { stat.assume_init() };
-    // `f_type` is signed or unsigned and 32 or 64 bits wide by target; the magic numbers fit 32.
-    Some(u64::from(stat.f_type as u32))
+    Some(unsafe { stat.assume_init() })
 }
 
-/// The refusal for a machine that WSL cannot run the tracker on.
+/// The Linux `statfs` magic number of the filesystem `path` is on.
+#[cfg(target_os = "linux")]
+fn statfs_type(path: &Path) -> Option<u64> {
+    // `f_type` is signed or unsigned and 32 or 64 bits wide by target; the magic numbers fit 32.
+    statfs(path).map(|stat| u64::from(stat.f_type as u32))
+}
+
+/// The refusal for a machine that WSL cannot run Goal Cup Proxy on.
 const WSL1_REFUSAL: &str = "WSL1 cannot run Goal Cup: convert this distribution to WSL2 with \
                             `wsl --set-version <distro> 2`";
 
@@ -314,9 +320,11 @@ pub fn wsl_check(folders: &[(&str, &Path)]) -> Result<(), String> {
     wsl_check_with(wsl_version(), folders, &windows_host_filesystem)
 }
 
-/// The name to say for a filesystem type a run's folders cannot be on: btrfs, ZFS, NFS, tmpfs,
-/// overlayfs and FUSE. A run keeps its traces on APFS, ext4 or XFS only. `name` is a type name as
-/// `/proc/self/mountinfo` or macOS `statfs` writes it; `None` for any other type.
+/// The name to say for a filesystem type a run's folders cannot be on: btrfs, ZFS, NFS, SMB,
+/// tmpfs, overlayfs and FUSE. A run keeps its traces on APFS, ext4 or XFS only. `name` is a type
+/// name as macOS `statfs` writes it in `f_fstypename`, or as a mount table spells it; `None` for
+/// any other type. On Linux, [`unsupported_filesystem`] reads the `statfs` magic number instead
+/// ([`unsupported_magic`]).
 #[doc(hidden)]
 pub fn unsupported_fstype(name: &str) -> Option<&'static str> {
     let name = name.to_ascii_lowercase();
@@ -324,6 +332,8 @@ pub fn unsupported_fstype(name: &str) -> Option<&'static str> {
         "btrfs" => Some("btrfs"),
         "zfs" => Some("ZFS"),
         "nfs" | "nfs4" => Some("NFS"),
+        // `cifs` and `smb3` on Linux; `smbfs` on macOS.
+        "cifs" | "smb3" | "smbfs" => Some("SMB"),
         "tmpfs" => Some("tmpfs"),
         "overlay" | "overlayfs" => Some("overlayfs"),
         // `fuse`, `fuseblk`, `fuse.sshfs` on Linux; `macfuse`, `osxfuse` on macOS.
@@ -339,6 +349,8 @@ pub fn unsupported_magic(f_type: u64) -> Option<&'static str> {
         0x9123_683E => Some("btrfs"),
         0x2FC1_2FC1 => Some("ZFS"),
         0x6969 => Some("NFS"),
+        // CIFS, SMB2 and the old SMB.
+        0xFF53_4D42 | 0xFE53_4D42 | 0x517B => Some("SMB"),
         0x0102_1994 => Some("tmpfs"),
         0x794C_7630 => Some("overlayfs"),
         0x6573_5546 => Some("FUSE"),
@@ -357,14 +369,7 @@ pub fn unsupported_filesystem(path: &Path) -> Option<&'static str> {
     }
     #[cfg(target_os = "macos")]
     {
-        let c = CString::new(existing.as_os_str().as_bytes()).ok()?;
-        let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
-        // SAFETY: `c` is NUL-terminated and `stat` is a writable statfs for the call.
-        if unsafe { libc::statfs(c.as_ptr(), stat.as_mut_ptr()) } != 0 {
-            return None;
-        }
-        // SAFETY: statfs returned 0, so it filled the struct.
-        let stat = unsafe { stat.assume_init() };
+        let stat = statfs(&existing)?;
         // SAFETY: `f_fstypename` is a NUL-terminated name inside the struct.
         let name = unsafe { std::ffi::CStr::from_ptr(stat.f_fstypename.as_ptr()) };
         unsupported_fstype(&name.to_string_lossy())

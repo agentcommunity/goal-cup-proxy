@@ -785,8 +785,10 @@ fn adversarial_long_inputs_never_expose_an_oracle_span(shard: &Shard) {
     }
     assert!(
         failures.is_empty(),
-        "{} of {seeds} seeds:\n{}",
+        "{}: {} of its {} seeds:\n{}",
+        shard.label(),
         failures.len(),
+        shard.taken(),
         failures.join("\n")
     );
 }

@@ -1,6 +1,13 @@
 //! [`HarnessManifest::validate`] and the rules it runs, in their fixed order.
 
-use super::*;
+use super::parse::refuse;
+use super::schema::{
+    CHAT_MODE_ONLY, CONFIGURE_DENIED_KEYS, ConfigHome, HarnessManifest, MAX_CONFIGURE_ARG_BYTES,
+    MAX_CONFIGURE_ARGS, MAX_CONFIGURE_COMMANDS, MAX_MODEL_HOST_KEY_PARTS, MODEL_HOST_DENIED_WORDS,
+    MODEL_HOST_FILE_EXTENSIONS, NativeForm, Origin, PlatformKey, RunHome, Strategy,
+    display_name_problem, first_screen_problem,
+};
+use super::{MIGRATION_SENTENCE, SUPPORTED_SCHEMA_VERSIONS};
 use crate::ProtocolError;
 use crate::capture_policy::{
     EnvContext, MAX_CAPTURE_ARG_BYTES, MAX_CAPTURE_ARGS, MAX_CAPTURE_ENV,
@@ -12,17 +19,13 @@ use crate::capture_policy::{
 };
 use crate::hints::valid_hint;
 
-// ---------------------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------------------
-
 /// Template variables an `args` element may use.
 const ARG_TOKENS: &[&str] = &["workspace"];
 
 /// Template variables a `capture.env` value may use: the argument tokens, and the two homes the
 /// launch makes for the run (`{config_home}`, the isolated harness home, and `{run_home}`, the
 /// private `HOME`), so a harness with a second state variable can point it inside them. Each
-/// renders to a tracker-made private path; the value rule still refuses a value that starts
+/// renders to a private path Goal Cup Proxy makes; the value rule still refuses a value that starts
 /// with `/` or `~` or holds `..`, so a value cannot leave them.
 const ENV_TOKENS: &[&str] = &["workspace", "config_home", "run_home"];
 
@@ -119,20 +122,22 @@ fn relative_path_problem(path: &str, max: usize) -> Option<String> {
     None
 }
 
-/// A single-component glob matcher: `*` any run (including none), `?` one character. The
-/// matcher of a `[[capture.native]]` pattern's components.
+/// A single-component glob matcher: `*` any run (including none), `?` one character, anything
+/// else itself. The one matcher of a `[[capture.native]]` pattern's components: the launcher's
+/// precheck and the daemon's capture both call it. A `*` in the pattern is always a wildcard,
+/// even against a name that holds a literal `*`.
 pub fn glob_matches(name: &str, pattern: &str) -> bool {
     let name: Vec<char> = name.chars().collect();
     let pattern: Vec<char> = pattern.chars().collect();
     let (mut i, mut j) = (0usize, 0usize);
     let (mut star, mut matched) = (None, 0usize);
     while i < name.len() {
-        if j < pattern.len() && (pattern[j] == '?' || pattern[j] == name[i]) {
-            i += 1;
-            j += 1;
-        } else if j < pattern.len() && pattern[j] == '*' {
+        if j < pattern.len() && pattern[j] == '*' {
             star = Some(j);
             matched = i;
+            j += 1;
+        } else if j < pattern.len() && (pattern[j] == '?' || pattern[j] == name[i]) {
+            i += 1;
             j += 1;
         } else if let Some(position) = star {
             j = position + 1;
@@ -1012,7 +1017,7 @@ impl HarnessManifest {
         Ok(())
     }
 
-    /// The delivery-agnostic rule (F7): a harness never names the tracker, a server or an
+    /// The delivery-agnostic rule (F7): a harness never names Goal Cup Proxy, a server or an
     /// upload. Schema 1 has no field for one, and `deny_unknown_fields` keeps it that way.
     fn check_delivery_agnostic(&self) -> Result<(), ProtocolError> {
         let c = &self.capture;
@@ -1020,7 +1025,7 @@ impl HarnessManifest {
             if mentions_goalcup(a) {
                 return Err(refuse(
                     field,
-                    format!("`{a}` names the tracker: a harness is delivery-agnostic"),
+                    format!("`{a}` names Goal Cup Proxy: a harness is delivery-agnostic"),
                 ));
             }
         }
@@ -1028,7 +1033,7 @@ impl HarnessManifest {
             if k.to_ascii_uppercase().starts_with("GOALCUP_") || mentions_goalcup(v) {
                 return Err(refuse(
                     "capture.env",
-                    format!("`{k}` names the tracker: a harness is delivery-agnostic"),
+                    format!("`{k}` names Goal Cup Proxy: a harness is delivery-agnostic"),
                 ));
             }
         }
@@ -1045,7 +1050,9 @@ impl HarnessManifest {
             if mentions_goalcup(host) || is_tracker_host(host) {
                 return Err(refuse(
                     field,
-                    format!("`{host}` is the tracker's own host: a harness is delivery-agnostic"),
+                    format!(
+                        "`{host}` is Goal Cup Proxy's own host: a harness is delivery-agnostic"
+                    ),
                 ));
             }
         }
@@ -1171,7 +1178,7 @@ impl HarnessManifest {
                         "capture.native.pattern",
                         format!(
                             "`{}` under `{}` matches the seed `{}`{coincide}: a native source \
-                             may not read a file the tracker seeds",
+                             may not read a file Goal Cup Proxy seeds",
                             native.pattern, native.root, s.file
                         ),
                     ));

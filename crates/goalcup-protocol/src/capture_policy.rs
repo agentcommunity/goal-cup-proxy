@@ -259,7 +259,7 @@ pub const INJECTION_PREFIXES: &[(&str, &str)] = &[
     ),
     (
         "GOALCUP_",
-        "is the tracker's own namespace, and a harness is delivery-agnostic",
+        "is Goal Cup Proxy's own namespace, and a harness is delivery-agnostic",
     ),
     (
         "OPENSSL_",

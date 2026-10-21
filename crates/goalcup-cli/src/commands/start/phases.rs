@@ -779,7 +779,6 @@ pub(super) fn run_harness<'a>(
         spawned_at,
         harness_version,
         continuation: cx.profile.continuation.clone(),
-        native_scope: None,
     };
     // A launch the daemon did not record leaves the trace incomplete; it never stops the run,
     // unless the entry is sealed: then the harness has no entry to run on (D40). A `Conflict`

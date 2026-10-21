@@ -16,8 +16,9 @@
 //! 5. **machine**: mains power, free space for a run's reservation, the server's and the
 //!    provider's hosts reachable, `git` on `PATH`, under WSL the WSL2 version and a work folder,
 //!    artifact root and configuration folder that are not on a Windows-host filesystem, the
-//!    same three folders on APFS, ext4 or XFS (not btrfs, ZFS, NFS, tmpfs, overlayfs or FUSE),
-//!    and a sleep lock the machine can take (one it cannot take is said, and is never a `todo`).
+//!    same three folders on APFS, ext4 or XFS (not btrfs, ZFS, NFS, SMB, tmpfs, overlayfs or
+//!    FUSE), and a sleep lock the machine can take (one it cannot take is said, and is never a
+//!    `todo`).
 //! 6. **practice**: a practice run of this harness whose every entry was sealed and uploaded.
 //!    Prep never starts a run: it says `goalcup start --practice` and stops.
 //!

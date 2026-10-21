@@ -1040,7 +1040,6 @@ fn a_retried_launch_appends_one_launch_record() {
         spawned_at: clock()(),
         harness_version: "0.153.0".to_string(),
         continuation: "exec".to_string(),
-        native_scope: None,
     };
     // The row update after the first append fails, so the row does not say `Started`:
     // the retry marks the row again and appends nothing.
@@ -1452,7 +1451,6 @@ fn the_budget_splits_into_a_drain_share_and_a_commit_reserve() {
     let request = |ms| CaptureSealRequest {
         proxy: None,
         remaining_finish_ms: ms,
-        native_scope: None,
     };
     // Zero is refused before anything starts.
     assert!(matches!(
@@ -1677,7 +1675,6 @@ fn schema_native_plan_copies_label_hint_form_and_root() {
             .replace("{run_home}", "/run")
             .replace("{config_home}", "/config");
         assert_eq!(source.root, Path::new(&root), "{at}");
-        assert_eq!(source.scope_id, None, "{at}");
         let form = match native.form {
             goalcup_protocol::harness::NativeForm::AppendOnly => NativeStoreForm::AppendOnly,
             goalcup_protocol::harness::NativeForm::Snapshot => NativeStoreForm::Snapshot,
@@ -1916,7 +1913,6 @@ fn a_native_file_past_max_files_is_one_streamless_gap_until_the_count_grows() {
                 pattern: "*.jsonl".into(),
                 form: NativeStoreForm::AppendOnly,
                 hint: None,
-                scope_id: None,
                 modified_since: None,
             }],
             limits: NativeCaptureLimits {

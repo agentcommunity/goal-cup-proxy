@@ -77,7 +77,7 @@ push, notice wording). Apply it **before** deploying the Worker that needs it.
       never share or copy a login between cells). Cheapest settings are set by the scripts:
       Codex `gpt-5.6-luna` at `low`, Claude Code `haiku`, thinking off.
 - [ ] Sandbox for participants: run `goalcup doctor` in one sandbox and send the output. goalcup refuses
-      overlayfs, btrfs, ZFS, NFS, tmpfs and FUSE; a container sandbox may need an ext4 or XFS volume.
+      overlayfs, btrfs, ZFS, NFS, SMB, tmpfs and FUSE; a container sandbox may need an ext4 or XFS volume.
 
 ## 6. Measure what the cloud could not
 

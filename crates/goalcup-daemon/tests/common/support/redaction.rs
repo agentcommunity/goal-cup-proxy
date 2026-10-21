@@ -241,6 +241,7 @@ pub struct Shard {
     part: usize,
     parts: usize,
     next: std::cell::Cell<usize>,
+    taken: std::cell::Cell<usize>,
 }
 
 impl Shard {
@@ -250,6 +251,7 @@ impl Shard {
             part,
             parts,
             next: std::cell::Cell::new(0),
+            taken: std::cell::Cell::new(0),
         }
     }
 
@@ -257,11 +259,25 @@ impl Shard {
     pub fn mine(&self) -> bool {
         let case = self.next.get();
         self.next.set(case + 1);
-        case % self.parts == self.part
+        let mine = case % self.parts == self.part;
+        if mine {
+            self.taken.set(self.taken.get() + 1);
+        }
+        mine
     }
 
     pub fn parts(&self) -> usize {
         self.parts
+    }
+
+    /// How many cases this part has taken so far: what its own aggregates are over.
+    pub fn taken(&self) -> usize {
+        self.taken.get()
+    }
+
+    /// `part k of n`, one-based, for a message about this part's cases.
+    pub fn label(&self) -> String {
+        format!("part {} of {}", self.part + 1, self.parts)
     }
 
     /// The first part, which also runs a loop's checks over all its cases (that the

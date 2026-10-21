@@ -565,7 +565,6 @@ fn launched_capture(
                 spawned_at: goalcup_cli::proxy::metadata::capture_time(),
                 harness_version: "0.153.0".to_string(),
                 continuation: "exec: no input after the goal".to_string(),
-                native_scope: None,
             },
         )
         .unwrap();
@@ -658,7 +657,6 @@ fn a_shipped_chat_profile_capture_records_and_seals_valid() {
             &control::CaptureSealRequest {
                 proxy: Some(control::ProxyCounters::default()),
                 remaining_finish_ms: Some(10_000),
-                native_scope: None,
             },
             std::time::Duration::from_secs(30),
         )
@@ -696,7 +694,6 @@ fn a_capture_reopened_under_its_live_run_seals_with_the_loss_chained() {
             &control::CaptureSealRequest {
                 proxy: Some(control::ProxyCounters::default()),
                 remaining_finish_ms: Some(10_000),
-                native_scope: None,
             },
             std::time::Duration::from_secs(30),
         )

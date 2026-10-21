@@ -3271,6 +3271,10 @@ mod tests {
     /// `check` on its one body, so nextest runs the slow bodies in parallel. A body's name is
     /// its test's with `-` for `_`. `check` refuses a list of tests that is not its list of
     /// bodies, so a body cannot go unchecked.
+    ///
+    /// Not merged with the integration tests' `shards!` (`tests/common/support/redaction.rs`):
+    /// that one splits a seeded loop into numbered parts and lives in the test crates, which a
+    /// unit-test module cannot reach; this one names one test per body.
     macro_rules! per_body {
         ($check:ident: $($body:ident),+ $(,)?) => {
             mod $check {

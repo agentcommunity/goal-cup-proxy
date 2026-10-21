@@ -1,4 +1,7 @@
-# Hermes Agent 0.19.0, capture only (D40, D41). Facts: docs/harnesses/hermes-cli.md.
+# FROZEN LOADER INPUT, not a recipe. A copy of `connectors/hermes-cli` as it shipped before
+# chat mode, converted to chat mode, that tests read so they keep their subject when the
+# shipped connector changes. Only tests load it, and it tracks no harness release: the
+# launch recipe is `connectors/hermes-cli/harness.toml`.
 schema_version = 1
 id = "hermes-cli"
 

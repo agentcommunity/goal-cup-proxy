@@ -301,8 +301,8 @@ leaves its mark.
 - `POST /v0/entries/{id}/capture/launch`: records the `Launch` (answers `204`). The daemon fills
   `profile_id`, `profile_digest` and `recorder_revision` from the create call. No argv and no goal
   digest are recorded.
-- `POST /v0/entries/{id}/seal` (`CaptureSealRequest`): the finish. It carries `proxy` counters,
-  `remaining_finish_ms` and `native_scope` (below).
+- `POST /v0/entries/{id}/seal` (`CaptureSealRequest`): the finish. It carries `proxy` counters
+  and `remaining_finish_ms` (below).
 - `POST /v0/entries/{id}/abandon`: before the launch and before any process handoff it removes the
   entry's ingest grant, reservation, row, artifacts and empty workspace. Afterwards it is refused
   ("seal it").
@@ -415,10 +415,8 @@ reports `seal_write_failed`, and the status is `Failed`, never `Sealed`.
 - ¶8 *Skew.* An old CLI on a new daemon gets the full budget. A new CLI on an older daemon is
   refused `malformed` before any finish step (exit 3). Nothing is finished or signalled on a
   skewed refusal.
-- ¶9 *Native scope.* The scope of a family that learns it at the end of its turn rides only on a
-  capture finish request (`CaptureSealRequest.native_scope`). It is installed only inside a
-  finish, at stage 5, while `finishing` is set, after the committed-finish answer and before the
-  owner is told to stop. A scope on any other family's finish is ignored.
+- ¶9 *Native scope.* None: chat mode names no session, so neither the launch nor the finish
+  request carries a scope (removed at control API version 10).
 - ¶10 *Evidence.* The real-binary repro rows run debug, test-feature builds of the shipped binaries
   (`pause_at` needs `test-support`); the two test-only holds are observed through seams in
   `runtime/capture/` and not in a real binary. The owner's post-stop work on a full queue was
@@ -584,7 +582,7 @@ wins over this text.
   `Host` is refused `401` with code `unauthorized` and a fixed body that quotes nothing it was sent,
   on a public route and on a bearer route alike. This closes DNS rebinding. A client that builds its
   URL from `control.json` sends a matching `Host`.
-- **Control API version.** `CONTROL_API_VERSION` is 9. `goalcup` and `goalcup-daemon` ship
+- **Control API version.** `CONTROL_API_VERSION` is 10. `goalcup` and `goalcup-daemon` ship
   together in one release, so a pair from two releases is refused, never bridged: the CLI refuses a
   `control.json` of another version and an answer whose `x-goalcup-control-version` header differs,
   and the daemon answers a request that names another version `426 unsupported`. Version 5 added the

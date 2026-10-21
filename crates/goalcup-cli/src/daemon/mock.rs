@@ -38,8 +38,8 @@ use goalcup_protocol::capture_status::{
 use goalcup_protocol::control::{
     self, ArmingState, CaptureFinishReport, CaptureGoalRequest, CaptureLaunchRequest,
     CaptureSealError, CaptureSealRequest, CaptureWorkspaceInfo, CaptureWorkspaceRequest,
-    ControlError, DaemonClient, DaemonHealth, EntrySummary, LocalSealOutcome, SealResponse,
-    SignedStatus, StatusPayload,
+    ControlError, DaemonClient, DaemonHealth, EntrySummary, LocalSealOutcome, SignedStatus,
+    StatusPayload,
 };
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
@@ -166,7 +166,6 @@ impl MockDaemonClient {
             buffer_gap_at: None,
             files_capped: 0,
             harness_unverified: false,
-            finalization: None,
             capture: Some(recording()),
             producers_consumed: Some(1),
             admissions_refused: Some(0),
@@ -513,7 +512,7 @@ impl DaemonClient for MockDaemonClient {
     /// while `status` keeps answering for it. The capture daemon lists sealed rows too; the
     /// mock keeps the eviction so `goalcup entries` is shown pointing a reader at `goalcup
     /// status <id>` either way.
-    fn seal(&self, entry_id: &str) -> Result<SealResponse, ControlError> {
+    fn seal(&self, entry_id: &str) -> Result<SealManifest, ControlError> {
         let Ok(mut state) = self.state.lock() else {
             return Err(poisoned());
         };
@@ -526,7 +525,7 @@ impl DaemonClient for MockDaemonClient {
         }
         state.sealed = true;
         state.entries.retain(|e| e.entry_id != entry_id);
-        Ok(SealResponse::Legacy(state.seal.clone()))
+        Ok(state.seal.clone())
     }
 
     fn register_process(

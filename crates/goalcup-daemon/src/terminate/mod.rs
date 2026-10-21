@@ -127,7 +127,7 @@ pub struct TerminationReport {
     ///
     /// True only when the escalation ran from first signal to last sweep under a root this
     /// daemon re-authenticated at every step, the whole owned set was enumerated within the
-    /// caller's walk cap, and the final authenticated snapshot found none of `targeted`
+    /// walk cap (`MAX_TARGETED`), and the final authenticated snapshot found none of `targeted`
     /// alive. Every fail-closed return below — a refused identity, an absent root, a lost
     /// root mid-chase — sets it `false`, because none of those took a final sweep worth the
     /// name.
@@ -139,7 +139,7 @@ pub struct TerminationReport {
     /// needs the stronger claim reads `all_gone`; a caller recording what was *observed*
     /// reads this.
     pub observed_gone: bool,
-    /// The caller's walk cap refused a target, so the set this report names is not the
+    /// The walk cap (`MAX_TARGETED`) refused a target, so the set this report names is not the
     /// whole owned set and no sweep over it can speak for the tree.
     ///
     /// Distinct from `harness_unverified`, which says the daemon lost the root's identity.
@@ -179,40 +179,27 @@ pub struct TerminationReport {
 /// Never reaps: the daemon is not the harness's parent, and a test that owns a `Child`
 /// calls `wait()` itself. A pid whose process has exited but not been reaped is gone as far
 /// as this module is concerned — [`goalcup_protocol::process::is_alive`] rules on that, once, for both halves.
+///
+/// The owned-set walk stops at `MAX_TARGETED` processes. Hitting it is recorded, never hidden:
+/// `walk_cap_exceeded` says the enumeration was incomplete, which is why no sweep afterwards
+/// may call the tree gone.
 pub fn terminate(handle: &ProcessHandle) -> Result<TerminationReport, ProcessError> {
-    terminate_with(handle, MAX_TARGETED, &LiveOs)
+    terminate_with(handle, &LiveOs)
 }
 
-/// [`terminate`], with the owned-set walk bounded by the caller's own budget.
+/// [`terminate`], against whichever operating system `os` is.
 ///
-/// The V4 finalization intent carries `limits.process_walk`, a number the participant's
-/// start receipt was signed over, and a seal that walked further than the profile it was
-/// judged by would be reporting on a set the rules never admitted. The cap is clamped into
-/// `1..=MAX_TARGETED`: a caller may tighten this module's ceiling and may never raise it.
-///
-/// Hitting the cap is recorded, never hidden. `walk_cap_exceeded` says the enumeration was
-/// incomplete, which is why no sweep afterwards may call the tree gone.
-pub(crate) fn terminate_within(
-    handle: &ProcessHandle,
-    walk_cap: usize,
-) -> Result<TerminationReport, ProcessError> {
-    terminate_with(handle, walk_cap, &LiveOs)
-}
-
-/// `terminate_within`, against whichever operating system `os` is.
-///
-/// This is the whole algorithm; [`terminate`] and `terminate_within` are it with
-/// [`LiveOs`]. The seam exists because two of the module's confirmed defects cannot be
-/// provoked by any real fixture — `/bin/ps` is spawned by absolute path, so nothing a shell
-/// script does can make it fail to spawn — and because the ground truth a verification is
-/// judged against is what a tree forked, not what a snapshot happened to show.
+/// This is the whole algorithm; [`terminate`] is it with [`LiveOs`]. The seam exists because
+/// two of the module's confirmed defects cannot be provoked by any real fixture — `/bin/ps` is
+/// spawned by absolute path, so nothing a shell script does can make it fail to spawn — and
+/// because the ground truth a verification is judged against is what a tree forked, not what a
+/// snapshot happened to show.
 pub fn terminate_with(
     handle: &ProcessHandle,
-    walk_cap: usize,
     os: &dyn ProcessOs,
 ) -> Result<TerminationReport, ProcessError> {
     let started = os.now();
-    let cap = walk_cap.clamp(1, MAX_TARGETED);
+    let cap = MAX_TARGETED;
 
     // A low root is more dangerous than a low direct target: walking from pid 1 discovers
     // much of the machine before the per-target guard can filter anything. Refuse before

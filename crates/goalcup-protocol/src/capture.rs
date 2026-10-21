@@ -636,27 +636,47 @@ pub fn is_ingest_entry_id(value: &str) -> bool {
         && !value.bytes().any(|b| b.is_ascii_control())
 }
 
-/// The framed handshake (`u32` big-endian length plus compact JSON), or `None` over
-/// [`MAX_HANDSHAKE_BYTES`]. JSON never shortens a string, so an over-limit raw length is
-/// refused before anything is serialized. Only the size is checked here; the receiver's
-/// [`decode_ingest_handshake`] judges the fields.
-pub fn encode_ingest_handshake(entry_id: &str, producer: &str, token: &str) -> Option<Vec<u8>> {
-    if entry_id.len() + producer.len() + token.len() > MAX_HANDSHAKE_BYTES {
-        return None;
+/// The framed handshake (`u32` big-endian length plus compact JSON). The fields are held to
+/// the rules [`decode_ingest_handshake`] applies (an ingest entry ID, a capture ID as the
+/// producer, a token that is not empty), and the body to [`MAX_HANDSHAKE_BYTES`]. JSON never
+/// shortens a string, so an over-limit raw length is refused before anything is serialized.
+pub fn encode_ingest_handshake(
+    entry_id: &str,
+    producer: &str,
+    token: &str,
+) -> Result<Vec<u8>, CaptureLimitError> {
+    let too_large = |len| CaptureLimitError::FrameTooLarge {
+        len,
+        limit: MAX_HANDSHAKE_BYTES,
+    };
+    // The size first, as the decoder reads it first.
+    let raw = entry_id.len() + producer.len() + token.len();
+    if raw > MAX_HANDSHAKE_BYTES {
+        return Err(too_large(raw));
+    }
+    if !is_ingest_entry_id(entry_id) {
+        return Err(invalid(
+            "entry_id",
+            "must be 1-256 bytes with no control byte",
+        ));
+    }
+    check_id("producer", producer)?;
+    if token.is_empty() {
+        return Err(invalid("token", "must not be empty"));
     }
     let body = serde_json::to_vec(&IngestHandshake {
         entry_id: entry_id.to_string(),
         producer: producer.to_string(),
         token: token.to_string(),
     })
-    .ok()?;
+    .map_err(|_| CaptureLimitError::Malformed)?;
     if body.len() > MAX_HANDSHAKE_BYTES {
-        return None;
+        return Err(too_large(body.len()));
     }
     let mut framed = Vec::with_capacity(4 + body.len());
     framed.extend_from_slice(&(body.len() as u32).to_be_bytes());
     framed.extend_from_slice(&body);
-    Some(framed)
+    Ok(framed)
 }
 
 /// Decode one handshake body (the bytes after its prefix): unknown fields refused, then an
@@ -733,7 +753,8 @@ mod handshake_tests {
         assert_eq!(handshake.entry_id, "entry-m2-0001");
         assert_eq!(handshake.producer, "7a3f9c21d4e58b06a1c2d3e4f5061728");
         assert_eq!(
-            encode_ingest_handshake(&handshake.entry_id, &handshake.producer, &handshake.token),
+            encode_ingest_handshake(&handshake.entry_id, &handshake.producer, &handshake.token)
+                .ok(),
             Some(framed),
             "fields in order entry_id, producer, token; compact JSON behind a length"
         );
@@ -768,10 +789,41 @@ mod handshake_tests {
         let exact = encode_ingest_handshake("e", PRODUCER, &"x".repeat(fits)).unwrap();
         assert_eq!(exact.len(), 4 + MAX_HANDSHAKE_BYTES);
         assert!(decode_ingest_handshake(&exact[4..]).is_some());
-        assert!(encode_ingest_handshake("e", PRODUCER, &"x".repeat(fits + 1)).is_none());
+        let too_large = |token: &str| {
+            matches!(
+                encode_ingest_handshake("e", PRODUCER, token),
+                Err(CaptureLimitError::FrameTooLarge {
+                    limit: MAX_HANDSHAKE_BYTES,
+                    ..
+                })
+            )
+        };
+        assert!(too_large(&"x".repeat(fits + 1)));
         // Raw input far over the limit is refused before serialization.
-        assert!(encode_ingest_handshake("e", PRODUCER, &"x".repeat(64 * 1024)).is_none());
+        assert!(too_large(&"x".repeat(64 * 1024)));
         // Short raw input that JSON escaping pushes over the limit.
-        assert!(encode_ingest_handshake("e", PRODUCER, &"\u{1}".repeat(300)).is_none());
+        assert!(too_large(&"\u{1}".repeat(300)));
+    }
+
+    /// The encoder refuses every field the decoder would, so a sender never writes a handshake
+    /// its receiver refuses.
+    #[test]
+    fn the_handshake_encoder_refuses_what_the_decoder_refuses() {
+        for (entry_id, producer, token, field) in [
+            ("", PRODUCER, "t", "entry_id"),
+            ("e\u{1}", PRODUCER, "t", "entry_id"),
+            ("e", "7A3F9C21D4E58B06A1C2D3E4F5061728", "t", "producer"),
+            ("e", "short", "t", "producer"),
+            ("e", PRODUCER, "", "token"),
+        ] {
+            match encode_ingest_handshake(entry_id, producer, token) {
+                Err(CaptureLimitError::Invalid { field: said, .. }) => {
+                    assert_eq!(said, field, "{entry_id:?} {producer:?} {token:?}")
+                }
+                other => panic!("{entry_id:?} {producer:?} {token:?}: {other:?}"),
+            }
+        }
+        let framed = encode_ingest_handshake("e", PRODUCER, "t").unwrap();
+        assert!(decode_ingest_handshake(&framed[4..]).is_some());
     }
 }

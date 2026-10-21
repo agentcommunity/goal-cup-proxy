@@ -89,7 +89,6 @@ pub fn build_payload(inputs: &StatusInputs) -> StatusPayload {
         buffer_gap_at: None,
         files_capped: 0,
         harness_unverified: false,
-        finalization: None,
         capture: Some(inputs.capture.clone()),
         // The receiver's admission counts; the caller sets them when it holds them.
         producers_consumed: None,

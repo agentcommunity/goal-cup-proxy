@@ -1,5 +1,7 @@
-//! The entry's schema-driven native source. Chat mode names no session (`identity.source =
-//! "none"`), so the one source is read from the launch on, with no scope to bind.
+//! The entry's native-store plan: its one schema-declared source, the roots it resolves to and
+//! the isolation they are held to. Chat mode names no session (`identity.source = "none"`), so
+//! there is no scope to bind: the store is read from the entry's create on, and a
+//! `since_run_start` source reads only files changed at or after the run's start (D57).
 
 use super::*;
 use goalcup_protocol::harness::RunHome;
@@ -56,7 +58,6 @@ pub(super) fn native_plan(
         pattern: native.pattern.clone(),
         form,
         hint,
-        scope_id: None,
         modified_since,
     }])
 }

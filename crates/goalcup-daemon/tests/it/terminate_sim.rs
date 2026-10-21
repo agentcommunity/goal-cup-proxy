@@ -28,8 +28,6 @@ use std::time::{Duration, Instant};
 
 /// The registered root in every scenario.
 const ROOT: u32 = 100;
-/// The module's own ceiling; the sim never approaches it.
-const WALK_CAP: usize = 4_096;
 /// The poll interval the module sleeps between sweeps, so a scenario can count in polls.
 const POLL: Duration = Duration::from_millis(50);
 
@@ -935,7 +933,7 @@ fn sorted(v: &[u32]) -> Vec<u32> {
 }
 
 fn run(sim: &Sim, handle: &ProcessHandle) -> Result<TerminationReport, ProcessError> {
-    terminate_with(handle, WALK_CAP, sim)
+    terminate_with(handle, sim)
 }
 
 // ─── Green: the sim and the seam agree with process_kill on the ordinary cases ──────────
@@ -1925,7 +1923,7 @@ fn a_root_that_exits_between_the_guards_reads_after_a_signal_is_a_closed_anchor_
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::ExitsAfterKills { after_kills: 1 });
-        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let report = terminate_with(&handle, &os).expect("the chase completes");
         let w = sim.world();
         assert!(
             os.fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -1955,8 +1953,8 @@ fn a_root_that_exits_between_the_guards_reads_before_any_signal_is_absent_not_re
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::ExitsAfterKills { after_kills: 0 });
-        let report = terminate_with(&handle, WALK_CAP, &os)
-            .expect("an exited root is an absent root, not a refusal");
+        let report =
+            terminate_with(&handle, &os).expect("an exited root is an absent root, not a refusal");
         let w = sim.world();
         assert!(
             report.harness_unverified && !report.all_gone && !report.observed_gone,
@@ -1978,8 +1976,7 @@ fn a_different_creation_identity_at_the_root_is_still_refused_as_recycled() {
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::Stranger);
-        let err = terminate_with(&handle, WALK_CAP, &os)
-            .expect_err("a recycled pid has no safe termination");
+        let err = terminate_with(&handle, &os).expect_err("a recycled pid has no safe termination");
         assert!(err.to_string().contains("recycled"), "{platform:?}: {err}");
         assert!(sim.world().kills.is_empty(), "{platform:?}");
     }
@@ -1993,7 +1990,7 @@ fn an_unreadable_creation_identity_on_a_live_root_is_still_refused() {
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::UnreadableWhileLive);
-        let err = terminate_with(&handle, WALK_CAP, &os)
+        let err = terminate_with(&handle, &os)
             .expect_err("a live root with no readable identity is not signalled");
         assert!(err.to_string().contains("recycled"), "{platform:?}: {err}");
         assert!(sim.world().kills.is_empty(), "{platform:?}");
@@ -2011,7 +2008,7 @@ fn a_root_whose_argv_is_gone_because_it_is_exiting_after_a_signal_is_not_a_loss(
         // After the worker's signal. The measured case was the root's own SIGTERM; both reach
         // the guard through `sweep_anchor`, and this root exits once its worker is signalled.
         let os = RacingRoot::new(&sim, RootRead::ArgvGoneThenExits { after_kills: 1 });
-        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let report = terminate_with(&handle, &os).expect("the chase completes");
         let w = sim.world();
         assert!(
             os.fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -2043,7 +2040,7 @@ fn a_root_still_exiting_at_the_guards_second_read_is_not_a_loss() {
                 live_reads: 3,
             },
         );
-        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let report = terminate_with(&handle, &os).expect("the chase completes");
         let w = sim.world();
         assert!(
             os.fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -2067,7 +2064,7 @@ fn a_live_root_with_no_readable_argv_is_still_a_loss() {
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::ArgvGoneWhileLive { after_kills: 1 });
-        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let report = terminate_with(&handle, &os).expect("the chase completes");
         let w = sim.world();
         assert!(
             os.fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -2095,8 +2092,8 @@ fn a_live_root_running_another_program_is_still_refused() {
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::RenamedWhileLive);
-        let report = terminate_with(&handle, WALK_CAP, &os)
-            .expect("a renamed root is reported, not an error");
+        let report =
+            terminate_with(&handle, &os).expect("a renamed root is reported, not an error");
         // `guard_degraded` is what only the renamed-argv report sets for a handle with an
         // argv; an absent root's report would pass every other assertion here.
         assert!(
@@ -2118,7 +2115,7 @@ fn a_live_root_renamed_after_a_signal_is_still_a_loss() {
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::RenamedAfterKills { after_kills: 1 });
-        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let report = terminate_with(&handle, &os).expect("the chase completes");
         let w = sim.world();
         assert!(
             os.fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -2155,7 +2152,7 @@ fn a_live_root_identity_lost_at_any_read_boundary_never_reports_observed_gone() 
             let sim = Sim::new(platform, tree, vec![]);
             let handle = sim.handle(None, None);
             let os = RacingRoot::new(&sim, RootRead::UnreadableAfterReads { after_reads });
-            let result = terminate_with(&handle, WALK_CAP, &os);
+            let result = terminate_with(&handle, &os);
             if !os.fired.load(std::sync::atomic::Ordering::SeqCst) {
                 continue;
             }

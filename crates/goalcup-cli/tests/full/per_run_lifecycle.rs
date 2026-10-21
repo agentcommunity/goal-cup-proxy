@@ -97,7 +97,6 @@ fn a_per_run_run_ends_with_its_snapshot_captured() {
     let id = session_id(&rig);
     let seals = client.book().seals.clone();
     assert_eq!(seals.len(), 1);
-    assert_eq!(seals[0].native_scope, None);
     assert!(seals[0].remaining_finish_ms.is_some());
 
     let (report, records) = rig.read_trace(&entry);

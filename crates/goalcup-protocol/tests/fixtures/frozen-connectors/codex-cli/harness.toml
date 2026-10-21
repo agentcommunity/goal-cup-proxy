@@ -1,4 +1,7 @@
-# Codex CLI 0.153.0, capture profile (T14; D38, D39). Recipe: docs/qualification/m2/launch-recipes.md §8.
+# FROZEN LOADER INPUT, not a recipe. A copy of `connectors/codex-cli` as it shipped before
+# chat mode, converted to chat mode, that tests read so they keep their subject when the
+# shipped connector changes. Only tests load it, and it tracks no harness release: the
+# launch recipe is `connectors/codex-cli/harness.toml`.
 schema_version = 1
 id = "codex-cli"
 

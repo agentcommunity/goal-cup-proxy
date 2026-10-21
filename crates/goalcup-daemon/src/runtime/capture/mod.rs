@@ -141,14 +141,14 @@ use std::time::{Duration, Instant};
 mod finish;
 mod harness;
 mod harness_build;
-mod native_scope;
+mod native_plan;
 mod owner;
 mod sink;
 mod writer;
 
 use self::finish::*;
 pub(crate) use self::harness::{ProfileDigests, capture_harness};
-use self::native_scope::*;
+use self::native_plan::*;
 use self::owner::*;
 use self::sink::*;
 use self::writer::*;
@@ -189,9 +189,10 @@ pub(crate) struct CaptureEntry {
     run: Mutex<CaptureRun>,
     owner: Arc<OwnerControl>,
     thread: Mutex<Option<JoinHandle<()>>>,
-    /// Set by every finish attempt before it closes admission; nothing clears it. It is the
-    /// "a finish has begun" signal a late native-scope bind is refused on (CONTRACTS.md, C6 local
-    /// finish budget ¶9), and it is true for an attempt that expired as well as for one that sealed.
+    /// Test seam: set by every finish attempt before it closes admission, an attempt that expired
+    /// as well as one that sealed, and never cleared. A test reads it
+    /// ([`super::Daemon::capture_finishing`]) to know a finish has begun.
+    #[cfg(any(test, feature = "test-hooks"))]
     finishing: AtomicBool,
     /// What an expired finish left for the next one to chain; see [`ExpiredFinish`].
     expired: Mutex<Option<ExpiredFinish>>,
@@ -1084,6 +1085,7 @@ impl CaptureEntry {
             run: Mutex::new(CaptureRun { entry, goal }),
             owner: Arc::new(OwnerControl::default()),
             thread: Mutex::new(None),
+            #[cfg(any(test, feature = "test-hooks"))]
             finishing: AtomicBool::new(false),
             expired: Mutex::new(None),
             opened: std::time::Instant::now(),

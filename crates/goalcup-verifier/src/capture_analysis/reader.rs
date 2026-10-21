@@ -123,8 +123,7 @@ pub enum CaptureTerminalKind {
 }
 
 /// The verified terminal record of a trace: a local finish, with its full `CaptureTime`. The
-/// fields stay optional so the report keeps its JSON shape; the signed finalization that left
-/// them empty left with the D54 amendment of 21 Oct 2026.
+/// local finish fields are optional in the report's JSON shape (D54).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaptureTerminalFacts {
     pub seq: u64,
@@ -1030,8 +1029,8 @@ impl<'k> Scan<'k> {
     /// Bind the validated terminal to what it claims. A local finish binds its fixed
     /// `seal.json`, with no receipt prerequisite. The V1 seal terminal, which the phase replay
     /// still admits, ends no v5 capture chain: no v5 writer produces one, so a v5 chain that
-    /// ends in one is invalid. A signed-mode cutoff or finalization body no longer decodes at
-    /// all, so a chain carrying one stops at it as `record_malformed` (D54).
+    /// ends in one is invalid. A signed-mode cutoff or finalization body does not decode, so a
+    /// chain carrying one stops at it as `record_malformed` (D54).
     fn bind_terminal(&mut self, root: &TraceDir) -> io::Result<()> {
         // A pruned chain may have lost the link a receipt witnessed.
         if let Some(receipt) = &self.receipt

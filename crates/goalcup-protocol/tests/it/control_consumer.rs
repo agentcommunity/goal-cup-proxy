@@ -5,8 +5,7 @@
 use goalcup_protocol::control::{
     ArmingState, CONTROL_API_VERSION, CaptureWorkspaceInfo, ControlError, DaemonClient,
     DaemonHealth, EntrySummary, ROUTE_ENTRIES, ROUTE_HEALTH, STALE_AFTER_SECONDS, SUFFIX_ABANDON,
-    SUFFIX_PROCESS, SUFFIX_SEAL, SUFFIX_STATUS, SealResponse, SignedStatus, entry_route,
-    is_public_route,
+    SUFFIX_PROCESS, SUFFIX_SEAL, SUFFIX_STATUS, SignedStatus, entry_route, is_public_route,
 };
 use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
 
@@ -15,7 +14,7 @@ use goalcup_protocol::process::{ProcessHandle, ProcessRegistration};
 fn the_trait_methods(c: &dyn DaemonClient, h: &ProcessHandle) {
     let _: Result<SignedStatus, ControlError> = c.status("e1");
     let _: Result<Vec<EntrySummary>, ControlError> = c.entries();
-    let _: Result<SealResponse, ControlError> = c.seal("e1");
+    let _: Result<goalcup_protocol::seal::SealManifest, ControlError> = c.seal("e1");
     let registration = ProcessRegistration {
         generation: 1,
         handle: h.clone(),
@@ -34,7 +33,7 @@ fn the_cli_reads_but_never_writes(info: &CaptureWorkspaceInfo) {
 
 #[test]
 fn the_routes_and_the_suffixes_are_the_ones_this_plan_calls() {
-    assert_eq!(CONTROL_API_VERSION, 9);
+    assert_eq!(CONTROL_API_VERSION, 10);
     assert_eq!(ROUTE_ENTRIES, "/v0/entries");
     assert_eq!(ROUTE_HEALTH, "/v0/health");
     assert_eq!(STALE_AFTER_SECONDS, 120);

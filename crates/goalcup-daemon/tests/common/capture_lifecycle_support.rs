@@ -171,14 +171,12 @@ impl Rig {
             &CaptureSealRequest {
                 proxy,
                 remaining_finish_ms: None,
-                native_scope: None,
             },
         )
         .await
     }
 
-    /// `POST .../seal` with `request` as it stands: the remaining budget and the native scope
-    /// included.
+    /// `POST .../seal` with `request` as it stands, its remaining budget included.
     pub async fn seal_with(&self, entry_id: &str, request: &CaptureSealRequest) -> Response {
         self.client
             .post_body(&entry_route(entry_id, SUFFIX_SEAL), request)
@@ -311,7 +309,6 @@ pub fn launch_request(goal_stream: &StreamKey) -> CaptureLaunchRequest {
         },
         harness_version: "0.153.0".to_string(),
         continuation: "exec: no input after the goal".to_string(),
-        native_scope: Some("test-session".into()),
     }
 }
 

@@ -1,8 +1,8 @@
 use ed25519_dalek::SigningKey;
 use goalcup_protocol::control::{
     ArmingState, CONTROL_API_VERSION, ControlError, CycleErrors, DaemonHealth, EntrySummary,
-    ROUTE_ENTRIES, ROUTE_HEALTH, STALE_AFTER_SECONDS, SignedStatus, StatusPayload,
-    WorkspaceFinalizationStatusV1, entry_route, is_public_route,
+    ROUTE_ENTRIES, ROUTE_HEALTH, STALE_AFTER_SECONDS, SignedStatus, StatusPayload, entry_route,
+    is_public_route,
 };
 use goalcup_protocol::events::HealthState;
 use goalcup_protocol::manifest::KillStrategy;
@@ -32,91 +32,10 @@ fn payload() -> StatusPayload {
         buffer_gap_at: None,
         files_capped: 0,
         harness_unverified: false,
-        finalization: None,
         capture: None,
         producers_consumed: None,
         admissions_refused: None,
     }
-}
-
-#[test]
-fn signed_status_adds_an_exact_optional_workspace_finalization_projection() {
-    use goalcup_protocol::provenance::{
-        PreCutoffDrainFailureV1, PreCutoffDrainOutcomeV1, Rfc3339Utc, TerminationOutcomeV1,
-    };
-    use goalcup_protocol::submission::{SubmissionFailureV1, SubmissionOutcomeV1};
-
-    let legacy = payload();
-    let legacy_wire = serde_json::to_value(&legacy).unwrap();
-    assert!(
-        legacy_wire.get("finalization").is_none(),
-        "an ordinary V1-V3 status must keep its historical wire shape",
-    );
-    assert_eq!(
-        serde_json::from_value::<StatusPayload>(legacy_wire)
-            .unwrap()
-            .finalization,
-        None,
-        "an old signed status decodes without inventing finalization state",
-    );
-
-    let checked_at = Rfc3339Utc::try_from("2026-09-14T00:00:03Z").unwrap();
-    let cases = [
-        (
-            WorkspaceFinalizationStatusV1::Finishing {},
-            serde_json::json!({ "state": "finishing" }),
-        ),
-        (
-            WorkspaceFinalizationStatusV1::Incomplete {
-                pre_cutoff_drain: Some(PreCutoffDrainOutcomeV1::Degraded {
-                    reason: PreCutoffDrainFailureV1::RestartStateAmbiguous,
-                }),
-                termination: None,
-                submission: Some(SubmissionOutcomeV1::Incomplete {
-                    reason: SubmissionFailureV1::RecoveryAmbiguous,
-                }),
-            },
-            serde_json::json!({
-                "state": "incomplete",
-                "pre_cutoff_drain": { "degraded": { "reason": "restart_state_ambiguous" } },
-                "termination": null,
-                "submission": { "incomplete": { "reason": "recovery_ambiguous" } }
-            }),
-        ),
-        (
-            WorkspaceFinalizationStatusV1::Terminal {
-                pre_cutoff_drain: PreCutoffDrainOutcomeV1::Complete,
-                termination: TerminationOutcomeV1::AlreadyStopped {
-                    checked_at: checked_at.clone(),
-                },
-                submission: SubmissionOutcomeV1::Incomplete {
-                    reason: SubmissionFailureV1::ReadbackFailed,
-                },
-            },
-            serde_json::json!({
-                "state": "terminal",
-                "pre_cutoff_drain": "complete",
-                "termination": { "already_stopped": { "checked_at": "2026-09-14T00:00:03Z" } },
-                "submission": { "incomplete": { "reason": "readback_failed" } }
-            }),
-        ),
-    ];
-
-    for (status, expected) in cases {
-        let actual = serde_json::to_value(&status).unwrap();
-        assert_eq!(actual, expected);
-        assert_eq!(
-            serde_json::from_value::<WorkspaceFinalizationStatusV1>(actual).unwrap(),
-            status,
-        );
-    }
-
-    let mut unknown = serde_json::json!({ "state": "finishing" });
-    unknown["guessed_live_workspace"] = serde_json::json!(true);
-    assert!(
-        serde_json::from_value::<WorkspaceFinalizationStatusV1>(unknown).is_err(),
-        "status cannot silently accept a live/path-derived finalization fact",
-    );
 }
 
 #[test]
@@ -455,10 +374,10 @@ fn the_remaining_types_round_trip() {
         serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap()
     );
     assert_eq!(
-        CONTROL_API_VERSION, 9,
-        "v9 added the run's exact secret values to a capture create; v8 removed the V1 \
-         vocabulary nothing produced; v7 added the server-issued entry id and the chain head \
-         and trace directory a capture create answers",
+        CONTROL_API_VERSION, 10,
+        "v10 removed the seal's workspace arm, the status finalization and the native scope; v9 \
+         added the run's exact secret values to a capture create; v8 removed the V1 vocabulary \
+         nothing produced",
     );
 }
 
@@ -604,77 +523,6 @@ fn format_z_is_the_inverse_of_parse_z_including_over_a_leap_day() {
     }
 }
 
-/// The seal response is an additive control shape. Historical daemons returned a bare
-/// `SealManifest`, so the response must remain untagged while the V4 workspace response
-/// carries only daemon-owned terminal facts. A caller cannot mistake an unknown V4 field
-/// for a legacy manifest and silently reopen the live workspace.
-#[test]
-fn seal_response_preserves_legacy_bytes_and_closes_the_workspace_shape() {
-    use goalcup_protocol::control::{FinishReportV1, SealResponse};
-    use goalcup_protocol::provenance::{Rfc3339Utc, TerminationFailureV1, TerminationOutcomeV1};
-    use goalcup_protocol::seal::SealManifest;
-    use goalcup_protocol::submission::{SubmissionFailureV1, SubmissionOutcomeV1};
-
-    let legacy_json = serde_json::json!({
-        "entry_id": "legacy-entry",
-        "sealed_at": "2026-09-11T00:00:00Z",
-        "workspace": "/private/tmp/legacy",
-        "files": [],
-        "excluded": [".git"]
-    });
-    let decoded: SealResponse = serde_json::from_value(legacy_json.clone()).unwrap();
-    assert_eq!(
-        decoded,
-        SealResponse::Legacy(serde_json::from_value::<SealManifest>(legacy_json.clone()).unwrap())
-    );
-    assert_eq!(serde_json::to_value(decoded).unwrap(), legacy_json);
-
-    let workspace = SealResponse::Workspace(FinishReportV1 {
-        entry_id: "entry-v4".to_string(),
-        trace_dir: "/private/var/goalcup/artifacts/entry-v4/trace".to_string(),
-        termination: TerminationOutcomeV1::Unresolved {
-            requested_at: Rfc3339Utc::try_from("2026-09-14T00:00:02Z").unwrap(),
-            stopped_waiting_at: Rfc3339Utc::try_from("2026-09-14T00:00:03Z").unwrap(),
-            reason: TerminationFailureV1::ConfirmationTimedOut,
-        },
-        submission: SubmissionOutcomeV1::Incomplete {
-            reason: SubmissionFailureV1::RecoveryAmbiguous,
-        },
-    });
-    let workspace_json = serde_json::to_value(&workspace).unwrap();
-    assert_eq!(
-        workspace_json,
-        serde_json::json!({
-            "entry_id": "entry-v4",
-            "trace_dir": "/private/var/goalcup/artifacts/entry-v4/trace",
-            "termination": {
-                "unresolved": {
-                    "requested_at": "2026-09-14T00:00:02Z",
-                    "stopped_waiting_at": "2026-09-14T00:00:03Z",
-                    "reason": "confirmation_timed_out"
-                }
-            },
-            "submission": {
-                "incomplete": { "reason": "recovery_ambiguous" }
-            }
-        })
-    );
-    assert_eq!(
-        serde_json::from_value::<SealResponse>(workspace_json.clone()).unwrap(),
-        workspace
-    );
-
-    let mut future = workspace_json;
-    future
-        .as_object_mut()
-        .unwrap()
-        .insert("future_required_fact".to_string(), serde_json::json!(true));
-    assert!(
-        serde_json::from_value::<SealResponse>(future).is_err(),
-        "an unknown workspace response must not downgrade to the legacy arm"
-    );
-}
-
 // ---------------------------------------------------------------- H-10 4a: one finish budget
 
 /// The finish gets minutes, not 10 seconds (D56): a stated remainder of 170 s is granted whole
@@ -686,7 +534,6 @@ fn a_finish_may_take_three_minutes() {
     let request = CaptureSealRequest {
         proxy: None,
         remaining_finish_ms: Some(170_000),
-        native_scope: None,
     };
     assert_eq!(request.remaining_finish(), Duration::from_secs(170));
 }
@@ -752,7 +599,6 @@ fn capture_seal_request_remaining_defaults_clamps_and_refuses_zero() {
     let some = CaptureSealRequest {
         proxy: None,
         remaining_finish_ms: Some(1_500),
-        native_scope: None,
     };
     assert_eq!(
         serde_json::to_string(&some).unwrap(),
@@ -764,13 +610,11 @@ fn capture_seal_request_remaining_defaults_clamps_and_refuses_zero() {
     let large = CaptureSealRequest {
         proxy: None,
         remaining_finish_ms: Some(u64::MAX),
-        native_scope: None,
     };
     assert_eq!(large.remaining_finish(), LOCAL_CAPTURE_FINISH_BUDGET);
     let zero = CaptureSealRequest {
         proxy: None,
         remaining_finish_ms: Some(0),
-        native_scope: None,
     };
     assert_eq!(zero.remaining_finish(), Duration::ZERO);
 
@@ -778,33 +622,6 @@ fn capture_seal_request_remaining_defaults_clamps_and_refuses_zero() {
     assert!(
         serde_json::from_str::<CaptureSealRequest>(r#"{"proxy":null,"remaining_finish_s":3}"#)
             .is_err()
-    );
-}
-
-/// Hermes lane B, S7: the late native scope rides on the finish request. Absent, the body is
-/// exactly an older CLI's; present, it is carried verbatim; and it is a declared field, so a
-/// daemon that predates it refuses the whole request as malformed rather than finishing without it.
-#[test]
-fn capture_seal_request_carries_a_late_native_scope_only_when_there_is_one() {
-    use goalcup_protocol::control::CaptureSealRequest;
-
-    let old: CaptureSealRequest = serde_json::from_str(r#"{"proxy":null}"#).unwrap();
-    assert_eq!(old.native_scope, None);
-    assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"proxy":null}"#);
-
-    let with = CaptureSealRequest {
-        proxy: None,
-        remaining_finish_ms: Some(3_000),
-        native_scope: Some("20260930_141500_a1b2c3".to_string()),
-    };
-    let text = serde_json::to_string(&with).unwrap();
-    assert_eq!(
-        text,
-        r#"{"proxy":null,"remaining_finish_ms":3000,"native_scope":"20260930_141500_a1b2c3"}"#
-    );
-    assert_eq!(
-        serde_json::from_str::<CaptureSealRequest>(&text).unwrap(),
-        with
     );
 }
 

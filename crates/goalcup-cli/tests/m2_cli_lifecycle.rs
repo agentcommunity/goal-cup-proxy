@@ -1309,7 +1309,6 @@ fn a_seal_that_never_reaches_the_daemon_keeps_the_proxys_loss() {
         &CaptureSealRequest {
             proxy: None,
             remaining_finish_ms: None,
-            native_scope: None,
         },
         Duration::from_secs(60),
     )

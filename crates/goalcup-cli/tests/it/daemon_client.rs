@@ -720,9 +720,7 @@ fn the_mocks_remaining_hooks_do_what_the_tasks_that_call_them_expect() {
 
     // The seal, once, and the mirror that disagrees with the workspace.
     m.make_sealed_manifest_differ_on("README.md");
-    let control::SealResponse::Legacy(sealed) = m.seal(&info.entry_id).unwrap() else {
-        panic!("the legacy mock seal must return the historical manifest arm");
-    };
+    let sealed = m.seal(&info.entry_id).unwrap();
     assert!(sealed.files.iter().any(|f| f.path == "README.md"));
     assert!(
         matches!(m.seal(&info.entry_id), Err(ControlError::Conflict(_))),
@@ -751,7 +749,6 @@ fn capture_request(remaining_ms: u64) -> control::CaptureSealRequest {
     control::CaptureSealRequest {
         proxy: None,
         remaining_finish_ms: Some(remaining_ms),
-        native_scope: None,
     }
 }
 

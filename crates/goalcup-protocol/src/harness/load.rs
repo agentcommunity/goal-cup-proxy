@@ -1,17 +1,15 @@
 //! The loader: one connector directory read, hashed and parsed in one walk, and the `Dev`
 //! guard against a pinned directory.
 
-use super::*;
+use super::MAX_SEED_BYTES;
+use super::parse::refuse;
+use super::schema::{HarnessManifest, Origin, SeedMode};
 use crate::ProtocolError;
 use crate::capture_policy::seed_content_problem;
 use crate::connector_dir::hash_connector_dir_listing;
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-
-// ---------------------------------------------------------------------------------------
-// The loader
-// ---------------------------------------------------------------------------------------
 
 /// A connector directory, loaded: the harness manifest, the exact bytes of `harness.toml` that
 /// went into the directory digest, the seed bytes the same walk read, and the digest.

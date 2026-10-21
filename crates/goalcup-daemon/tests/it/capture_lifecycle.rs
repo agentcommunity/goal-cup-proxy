@@ -442,15 +442,13 @@ fn gaps_after_launch(records: &[CaptureRecord]) -> Vec<GapReason> {
 }
 
 /// A launch records no gap for the one native store: chat mode names no session, so the store
-/// is read from the create on, and a scope on the request is ignored.
+/// is read from the create on.
 #[tokio::test]
 async fn a_launch_marks_no_store_unread() {
     let (rig, _native, _connectors) = native_rig().await;
     let info = rig.created("capture-dev").await;
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
-    let mut request = launch_request(&goal);
-    request.native_scope = Some("../foreign".into());
-    let launched = rig.launch(&info.entry_id, &request).await;
+    let launched = rig.launch(&info.entry_id, &launch_request(&goal)).await;
     assert_eq!(launched.status(), 204, "{}", launched.body());
     assert_eq!(gaps_after_launch(&rig.records(&info.entry_id)), vec![]);
     let capture = rig.status(&info.entry_id).await.payload.capture.unwrap();
@@ -2653,10 +2651,7 @@ async fn a_restart_after_parts_were_deleted_keeps_appending() {
         .set_chain_part_limits_for_test(1, std::time::Duration::from_secs(3600));
     let info = rig.created("codex-cli").await;
     let goal = rig.goal_accepted(&info.entry_id, b"write hello.txt").await;
-    let mut launch = launch_request(&goal);
-    // This fixture isolates reopen behavior: no native producer is bound.
-    launch.native_scope = None;
-    let launched = rig.launch(&info.entry_id, &launch).await;
+    let launched = rig.launch(&info.entry_id, &launch_request(&goal)).await;
     assert_eq!(launched.status(), 204, "{}", launched.body());
     // Exchanges further apart than the owner's flush cadence, so each lands in its own part.
     let wired = info.clone();

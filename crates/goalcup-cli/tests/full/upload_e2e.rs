@@ -2025,7 +2025,6 @@ mod segments {
                 &CaptureSealRequest {
                     proxy: None,
                     remaining_finish_ms: Some(10_000),
-                    native_scope: None,
                 },
                 std::time::Duration::from_secs(20),
             )

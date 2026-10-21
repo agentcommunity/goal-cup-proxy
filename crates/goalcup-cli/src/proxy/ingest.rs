@@ -230,6 +230,8 @@ pub enum SinkConfigError {
     InvalidProducer,
     #[error("the ingest handshake would exceed its {limit}-byte limit")]
     HandshakeTooLarge { limit: usize },
+    #[error("the entry ID is not an ingest entry ID (1 to 256 bytes, no control byte)")]
+    InvalidEntryId,
     #[error("the shutdown deadline or a reconnect delay is zero")]
     InvalidTiming,
     #[error("the capture sink needs a running Tokio runtime")]
@@ -676,10 +678,15 @@ pub fn connect_sink(config: SinkConfig) -> Result<Arc<IngestSink>, SinkConfigErr
         return Err(SinkConfigError::InvalidProducer);
     }
     // Every producer ID has the same length, so one encoding bounds every epoch's handshake.
-    if encode_ingest_handshake(&entry_id, &producer, secret.expose()).is_none() {
-        return Err(SinkConfigError::HandshakeTooLarge {
-            limit: MAX_HANDSHAKE_BYTES,
-        });
+    match encode_ingest_handshake(&entry_id, &producer, secret.expose()) {
+        Ok(_) => {}
+        Err(CaptureLimitError::FrameTooLarge { .. }) => {
+            return Err(SinkConfigError::HandshakeTooLarge {
+                limit: MAX_HANDSHAKE_BYTES,
+            });
+        }
+        // The producer and the secret were checked above: what is left is the entry ID.
+        Err(_) => return Err(SinkConfigError::InvalidEntryId),
     }
     if shutdown_deadline.is_zero() || reconnect_delays.iter().any(Duration::is_zero) {
         return Err(SinkConfigError::InvalidTiming);
@@ -933,8 +940,7 @@ impl Writer {
             }
         };
         let _ = stream.set_nodelay(true);
-        let Some(handshake) =
-            encode_ingest_handshake(&self.entry_id, producer, self.secret.expose())
+        let Ok(handshake) = encode_ingest_handshake(&self.entry_id, producer, self.secret.expose())
         else {
             // Bounded at construction for every 32-hex ID; kept terminal, never retried.
             self.shared.lock().latch_terminal(GapReason::LimitExceeded);

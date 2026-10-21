@@ -367,7 +367,6 @@ pub(crate) fn seal_locally_until(
             let request = CaptureSealRequest {
                 proxy,
                 remaining_finish_ms: Some(u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)),
-                native_scope: None,
             };
             waited = crate::daemon::capture_seal_read_timeout(remaining, termination_allowance);
             // A daemon restarted since the caller's client was built is at another port or

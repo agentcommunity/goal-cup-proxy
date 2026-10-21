@@ -77,11 +77,8 @@ impl Envelope {
 }
 
 /// Closed by design at the three bodies a protocol-v5 chain may carry: the daemon interprets
-/// nothing (D3). The pre-v5 bodies (leg-1 and leg-2 records, health, heartbeats, home seeding,
-/// repository observations and the rest) left the protocol with D54: no writer has produced
-/// them since D48, and a v5 chain never admitted them. The signed-mode `cutoff_reached_v1` and
-/// `finalization_v1` bodies left with the D54 amendment of 21 Oct 2026: no product writer ever
-/// produced either, and a v5 line carrying one now reads as `record_malformed`.
+/// nothing (D3). Any other body, a pre-v5 one or a signed-mode `cutoff_reached_v1` or
+/// `finalization_v1`, reads as `record_malformed` on a v5 line (D54).
 ///
 /// **Variants are additive.** An adjacently tagged enum serialises each variant on its own, so
 /// adding or removing a variant changes no other variant's bytes; every v5 chain hashes exactly

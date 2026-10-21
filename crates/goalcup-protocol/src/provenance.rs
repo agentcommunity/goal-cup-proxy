@@ -1,11 +1,9 @@
-//! The provenance primitives a v5 chain still carries: the lowercase SHA-256 digest, the
-//! canonical UTC timestamp, the run-key spelling, and the termination outcome a local finish
-//! records, with the pre-cutoff drain outcome the status document can still name.
+//! The provenance primitives a v5 chain carries: the lowercase SHA-256 digest, the canonical
+//! UTC timestamp, the run-key spelling, and the termination outcome a local finish records
+//! (D54).
 //!
 //! These types validate and bind declarations. They do not inspect a repository or read
-//! captured objects. The signed-mode cutoff and finalization, and the Git and publisher
-//! vocabulary they named, left the protocol with the D54 amendment of 21 Oct 2026: no product
-//! writer ever produced them.
+//! captured objects.
 
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -129,23 +127,6 @@ pub fn canonical_run_public_key(value: &str) -> Result<String, ProvenanceError> 
         return Err(ProvenanceError::PublicKeyMalformed);
     }
     Ok(hex::encode(bytes))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PreCutoffDrainFailureV1 {
-    AdmissionStateUnavailable,
-    WriterUnavailable,
-    WriterWatermarkAmbiguous,
-    ChainSyncFailed,
-    RestartStateAmbiguous,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum PreCutoffDrainOutcomeV1 {
-    Complete,
-    Degraded { reason: PreCutoffDrainFailureV1 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

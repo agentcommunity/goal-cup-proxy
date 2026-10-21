@@ -393,6 +393,40 @@ fn reopened_local_finish_stays_terminal() {
     ));
 }
 
+/// `seal.json` written again after a failed write is the manifest the local finish binds and
+/// no other, on the export that chained it and on one resumed from disk.
+#[test]
+fn a_rewritten_seal_must_be_the_manifest_the_local_finish_binds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut export = capture_export(tmp.path());
+    export
+        .write_local_finish(&manifest(), at(900), "participant_stop", confirmed())
+        .unwrap();
+    let seal = tmp.path().join(SEAL_FILE);
+    let bound = std::fs::read(&seal).unwrap();
+    let mut other = manifest();
+    other.files[0].sha256 = "ff".repeat(32);
+
+    std::fs::remove_file(&seal).unwrap();
+    assert!(matches!(
+        export.rewrite_local_finish_seal(&other),
+        Err(ExportError::SealManifestMismatch)
+    ));
+    assert!(!seal.exists(), "a refused manifest writes nothing");
+    export.rewrite_local_finish_seal(&manifest()).unwrap();
+    assert_eq!(std::fs::read(&seal).unwrap(), bound);
+    drop(export);
+
+    std::fs::remove_file(&seal).unwrap();
+    let mut resumed = TraceExport::resume(tmp.path()).unwrap();
+    assert!(matches!(
+        resumed.rewrite_local_finish_seal(&other),
+        Err(ExportError::SealManifestMismatch)
+    ));
+    resumed.rewrite_local_finish_seal(&manifest()).unwrap();
+    assert_eq!(std::fs::read(&seal).unwrap(), bound);
+}
+
 #[test]
 fn local_finish_manifest_mismatch_is_invalid() {
     let tmp = tempfile::tempdir().unwrap();

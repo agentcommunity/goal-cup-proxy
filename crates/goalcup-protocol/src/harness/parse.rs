@@ -1,13 +1,10 @@
 //! Parsing `harness.toml`: the schema dispatch, the refusals read from the generic table
-//! (retired pin keys, the credential table, the removed headless mode) and the strict
+//! (retired pin keys, the credential table, headless mode) and the strict
 //! deserialization.
 
-use super::*;
+use super::schema::{CHAT_MODE_ONLY, HEADLESS_IDENTITY_SOURCES, HarnessManifest};
+use super::{MIGRATION_SENTENCE, NEWER_SENTENCE, SUPPORTED_SCHEMA_VERSIONS};
 use crate::ProtocolError;
-
-// ---------------------------------------------------------------------------------------
-// Parsing
-// ---------------------------------------------------------------------------------------
 
 /// One refusal of `harness.toml`.
 pub(super) fn refuse(field: impl Into<String>, reason: impl Into<String>) -> ProtocolError {
@@ -165,10 +162,7 @@ fn refuse_credential_table(table: &toml::Table) -> Result<(), ProtocolError> {
     Ok(())
 }
 
-/// The `capture.identity.source` values of the removed headless mode.
-const HEADLESS_IDENTITY_SOURCES: &[&str] = &["preassigned", "stdout_json", "stderr_line"];
-
-/// The `[capture.identity]` keys of the removed headless sources.
+/// The `[capture.identity]` keys of the headless sources.
 const HEADLESS_IDENTITY_KEYS: &[&str] = &[
     "binding",
     "match_field",
@@ -179,14 +173,35 @@ const HEADLESS_IDENTITY_KEYS: &[&str] = &[
     "wait_seconds",
 ];
 
-/// Refuse a manifest written for the removed headless mode ([`CHAT_MODE_ONLY`]), read from the
-/// generic table before the strict deserialization would call its fields a newer schema's:
+/// The `[capture]` keys a `[capture.platform.<key>]` override might carry for headless mode.
+/// An override may change only env entries; these are told [`CHAT_MODE_ONLY`] rather than
+/// called a newer schema's.
+const HEADLESS_OVERRIDE_KEYS: &[&str] = &["interactive", "goal_flag", "identity"];
+
+/// Refuse a manifest written for headless mode ([`CHAT_MODE_ONLY`]), read from the generic
+/// table before the strict deserialization would call its fields a newer schema's:
 /// `capture.interactive` absent or not `true`, a `capture.goal_flag`, a headless identity source,
-/// or an identity field beyond `source`.
+/// an identity field beyond `source`, or any of those in a `[capture.platform.<key>]` override.
 fn refuse_headless(table: &toml::Table) -> Result<(), ProtocolError> {
     let Some(capture) = table.get("capture").and_then(toml::Value::as_table) else {
         return Ok(());
     };
+    if let Some(platforms) = capture.get("platform").and_then(toml::Value::as_table) {
+        for (key, value) in platforms {
+            let Some(over) = value.as_table() else {
+                continue;
+            };
+            if let Some(field) = HEADLESS_OVERRIDE_KEYS
+                .iter()
+                .find(|k| over.contains_key(**k))
+            {
+                return Err(refuse(
+                    format!("capture.platform.{key}.{field}"),
+                    CHAT_MODE_ONLY,
+                ));
+            }
+        }
+    }
     if capture.get("interactive") != Some(&toml::Value::Boolean(true)) {
         return Err(refuse("capture.interactive", CHAT_MODE_ONLY));
     }
@@ -197,7 +212,9 @@ fn refuse_headless(table: &toml::Table) -> Result<(), ProtocolError> {
         return Ok(());
     };
     if let Some(source) = identity.get("source").and_then(toml::Value::as_str)
-        && HEADLESS_IDENTITY_SOURCES.contains(&source)
+        && HEADLESS_IDENTITY_SOURCES
+            .iter()
+            .any(|(value, _)| *value == source)
     {
         return Err(refuse("capture.identity.source", CHAT_MODE_ONLY));
     }

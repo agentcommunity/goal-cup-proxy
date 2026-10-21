@@ -7,10 +7,8 @@
 //! refusal table names. The trust tables it checks against are in [`crate::capture_policy`]; a
 //! manifest can only be checked against them, never widen them.
 //!
-//! "Schema 1" is this file's format; the V1 manifest was the legacy `manifest.toml`, whose V1
-//! path D48 removed and whose last shipped copies OS-29 deleted. The loader refuses one. The
-//! CLI and the daemon load a connector through [`load_dir`], the one loader all three callers
-//! share.
+//! "Schema 1" is this file's format. A connector carries no `manifest.toml` (D48), and the
+//! loader refuses one. Every caller loads a connector through [`load_dir`], the one loader.
 //!
 //! # Parsing
 //!
@@ -18,8 +16,8 @@
 //!    (`SUPPORTED_SCHEMA_VERSIONS`). The executable pin's retired keys (`sha256`, `version`) are
 //!    refused here with their own sentence (D53), before the strict deserialization would call
 //!    them a newer schema's, and so is a `[capture.credential]` table (D61). So is every trace of
-//!    the removed headless mode ([`CHAT_MODE_ONLY`]): `interactive` other than `true`,
-//!    `goal_flag`, and the identity fields beyond `source = "none"`.
+//!    headless mode ([`CHAT_MODE_ONLY`]): `interactive` other than `true`, `goal_flag`, and the
+//!    identity fields beyond `source = "none"`, in the base recipe or a platform override.
 //! 2. It is then deserialized with `deny_unknown_fields` everywhere. An unknown key, and an
 //!    unknown value of a closed-set field, are refused with one sentence ([`NEWER_SENTENCE`]):
 //!    serde's own "unknown variant" text never reaches the user.
@@ -40,10 +38,22 @@ mod load;
 mod parse;
 mod schema;
 
-pub use check::*;
-pub use load::*;
-pub use parse::*;
-pub use schema::*;
+pub use check::glob_matches;
+pub use load::{
+    LoadedConnector, LoadedSeed, discover_connector_dirs, load_dir, load_dir_resolving_origin,
+    load_discovered_dir,
+};
+pub use parse::CREDENTIAL_REFUSAL;
+pub use schema::{
+    ArgvGuard, CAPTURE_HOMES_DIR, CHAT_MODE_ONLY, CONFIGURE_DENIED_KEYS, CaSpec, CaptureSpec,
+    ConfigHome, ExecutableSpec, ExtraPattern, FieldValue, HarnessManifest, HomeSpec, HostSpec,
+    IdentitySource, IdentitySpec, MAX_CONFIGURE_ARG_BYTES, MAX_CONFIGURE_ARGS,
+    MAX_CONFIGURE_COMMANDS, MAX_DISPLAY_NAME_CHARS, MAX_FIRST_SCREEN_CHARS,
+    MAX_MODEL_HOST_KEY_PARTS, MAX_REDACTION_NAME_BYTES, MODEL_HOST_FILE_EXTENSIONS, ModelHostFrom,
+    NativeForm, NativeSpec, Origin, ParticipantSpec, PlatformKey, PlatformOverride, RedactionRule,
+    RedactionSpec, RunHome, SeedFile, SeedMode, Strategy, TerminationSpec, display_name_problem,
+    first_screen_problem, provider_hosts,
+};
 
 /// The schema versions this build reads. Reader policy: these only.
 pub(crate) const SUPPORTED_SCHEMA_VERSIONS: &[u32] = &[1];

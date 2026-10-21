@@ -1,7 +1,8 @@
 //! The typed manifest: the closed-set values, the `harness.toml` structs and the redaction
 //! rule forms.
 
-use super::*;
+use super::NEWER_SENTENCE;
+use super::parse::refuse;
 use crate::ProtocolError;
 use crate::capture_policy::{CaMode, has_duplicate};
 use serde::Deserialize;
@@ -123,23 +124,27 @@ impl<'de> Deserialize<'de> for CaMode {
     }
 }
 
-/// What a manifest written for the removed headless mode is told (21 Oct 2026). Every harness
-/// runs in its chat mode in the participant's terminal (D57): the participant types the prompt,
-/// the launch names no session, and the sessions are the files the native source finds.
+/// What a manifest written for headless mode is told. Every harness runs in its chat mode in
+/// the participant's terminal (D57): the participant types the prompt, the launch names no
+/// session, and the sessions are the files the native source finds.
 pub const CHAT_MODE_ONLY: &str = "chat mode only: Goal Cup Proxy runs every harness in its chat \
      mode (`interactive = true`, `identity.source = \"none\"`), where the participant types the \
      prompt; headless mode, with its goal slot and session identities, was removed";
+
+/// The `capture.identity.source` values of headless mode, each told [`CHAT_MODE_ONLY`]: the
+/// one list the typed decode and the generic-table refusal both read.
+pub(super) const HEADLESS_IDENTITY_SOURCES: &[(&str, &str)] = &[
+    ("preassigned", CHAT_MODE_ONLY),
+    ("stdout_json", CHAT_MODE_ONLY),
+    ("stderr_line", CHAT_MODE_ONLY),
+];
 
 closed_enum! {
     /// Where the run's session identity comes from. Chat mode names none: the sessions are the
     /// files the native source finds. The headless sources are refused by name, here and
     /// before deserialization.
     IdentitySource, "capture.identity.source",
-        special: &[
-            ("preassigned", CHAT_MODE_ONLY),
-            ("stdout_json", CHAT_MODE_ONLY),
-            ("stderr_line", CHAT_MODE_ONLY),
-        ];
+        special: HEADLESS_IDENTITY_SOURCES;
     /// The harness has no session identity the launch names.
     None = "none",
 }

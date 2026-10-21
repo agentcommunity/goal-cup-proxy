@@ -700,10 +700,9 @@ fn regenerate_the_corpus() {
     );
 
     // `signed-receipt-ack-finalization`, `signed-receipt-key-agrees` and
-    // `signed-receipt-key-mismatch` end in a signed-mode cutoff and finalization. Their writer
-    // left with the D54 amendment of 21 Oct 2026, so this generator no longer writes them: their
-    // committed bytes are frozen reader inputs, and regenerating leaves the three directories
-    // exactly as they are.
+    // `signed-receipt-key-mismatch` end in a signed-mode cutoff and finalization, which no
+    // writer produces (D54). This generator does not write them: their committed bytes are
+    // frozen reader inputs, and regenerating leaves the three directories exactly as they are.
 
     // A torn tail: a real trace plus the front of a line that never got its newline.
     let dir = case("torn-tail", plain(), false);

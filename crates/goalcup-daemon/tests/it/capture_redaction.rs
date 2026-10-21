@@ -1345,10 +1345,17 @@ fn adversarial_long_inputs_never_expose_a_whole_record_secret(shard: &Shard) {
         spans += legacy(&input).1.len();
         failures.extend(never_less(&format!("seed {seed}"), &input, &mut rng));
     }
-    assert!(spans > 0);
+    // A part that took no seed (fewer seeds than parts) has nothing to have found.
+    let taken = shard.taken();
+    assert!(
+        taken == 0 || spans > 0,
+        "{}: {taken} seeds drew no secret span",
+        shard.label()
+    );
     assert!(
         failures.is_empty(),
-        "{} of {seeds} seeds:\n{}",
+        "{}: {} of its {taken} seeds:\n{}",
+        shard.label(),
         failures.len(),
         failures.join("\n")
     );
@@ -1429,8 +1436,10 @@ fn seeded_long_inputs_never_expose_a_whole_record_secret(shard: &Shard) {
     }
     assert!(
         failures.is_empty(),
-        "{} of {seeds} seeds:\n{}",
+        "{}: {} of its {} seeds:\n{}",
+        shard.label(),
         failures.len(),
+        shard.taken(),
         failures.join("\n")
     );
 }

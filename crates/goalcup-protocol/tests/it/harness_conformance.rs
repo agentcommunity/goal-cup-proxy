@@ -70,7 +70,7 @@ fn check_dir(dir: &Path) -> Result<(), String> {
     let text = String::from_utf8(loaded.harness_toml.clone()).map_err(|e| e.to_string())?;
     for line in text.lines().filter(|l| !l.trim_start().starts_with('#')) {
         if mentions_goalcup(line) {
-            return Err(format!("{}: `{line}` names the tracker (F7)", m.id));
+            return Err(format!("{}: `{line}` names Goal Cup Proxy (F7)", m.id));
         }
     }
 

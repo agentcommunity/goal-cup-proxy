@@ -165,6 +165,9 @@ fn the_filesystems_a_run_cannot_keep_records_on_are_named_by_type_and_by_magic()
         ("btrfs", "btrfs"),
         ("zfs", "ZFS"),
         ("nfs4", "NFS"),
+        ("cifs", "SMB"),
+        ("smb3", "SMB"),
+        ("smbfs", "SMB"),
         ("tmpfs", "tmpfs"),
         ("overlay", "overlayfs"),
         ("fuse.sshfs", "FUSE"),
@@ -177,6 +180,9 @@ fn the_filesystems_a_run_cannot_keep_records_on_are_named_by_type_and_by_magic()
     }
     assert_eq!(unsupported_magic(0x9123_683E), Some("btrfs"));
     assert_eq!(unsupported_magic(0x794C_7630), Some("overlayfs"));
+    for smb in [0xFF53_4D42, 0xFE53_4D42, 0x517B] {
+        assert_eq!(unsupported_magic(smb), Some("SMB"), "{smb:#x}");
+    }
     // ext4 and XFS.
     for magic in [0xEF53, 0x5846_5342] {
         assert_eq!(unsupported_magic(magic), None, "{magic:#x}");

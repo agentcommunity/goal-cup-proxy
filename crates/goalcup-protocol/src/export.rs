@@ -19,11 +19,11 @@
 //!
 //! **Some writers here are test-only builders, on purpose.** The capture runtime writes
 //! a trace with `write_baseline_for_protocol`, `append_chain` and `write_local_finish`.
-//! The V1 writers — `write_receipt` and `write_seal_for_protocol` — lost their daemon caller
-//! in D48. They are compiled only under `test` or the `test-hooks` feature, because the
+//! The V1 writers — `write_receipt` and `write_seal_for_protocol` — have no daemon caller
+//! (D48). They are compiled only under `test` or the `test-hooks` feature, because the
 //! protocol and verifier tests build receipt-bearing and sealed fixture traces with them; a
-//! production build does not carry them. The signed-mode cutoff and finalization writers left
-//! with the D54 amendment of 21 Oct 2026.
+//! production build does not carry them. There is no signed-mode cutoff or finalization
+//! writer (D54).
 
 use crate::ProtocolError;
 use crate::ack::AckCheckpoint;
@@ -191,6 +191,8 @@ pub enum ExportError {
     FixedDocumentExists { name: &'static str },
     #[error("the chain does not end in a local finish, so it has no seal.json to write again")]
     NoLocalFinish,
+    #[error("the seal manifest is not the one the chain's local finish binds")]
+    SealManifestMismatch,
     #[error(
         "a {kind} is chained by write_{kind} and by nothing else: append_chain does not take \
          one, because the position and once-only rules that make a {kind} mean anything are \
@@ -295,6 +297,7 @@ fn resumed_phase_after(phase: &ExportPhase, env: &Envelope) -> Result<ExportPhas
                     seq: env.link.seq,
                     link: env.link.clone(),
                     kind: TerminalKind::LocalFinish,
+                    seal_manifest_sha256: Some(seal_manifest_sha256.clone()),
                 }),
                 ExportPhase::Terminal { seq, .. } => {
                     Err(format!("a local finish follows terminal seq {seq}"))
@@ -306,6 +309,7 @@ fn resumed_phase_after(phase: &ExportPhase, env: &Envelope) -> Result<ExportPhas
                 seq: env.link.seq,
                 link: env.link.clone(),
                 kind: TerminalKind::LegacySeal,
+                seal_manifest_sha256: None,
             }),
             ExportPhase::Terminal { seq, .. } => {
                 Err(format!("a legacy seal follows terminal seq {seq}"))
@@ -532,7 +536,9 @@ impl ChainPhaseReplay {
     /// The terminal that closed the chain, or `None` for an unsealed chain.
     pub fn terminal(&self) -> Option<ChainTerminal> {
         match &self.phase {
-            ExportPhase::Terminal { seq, link, kind } => Some(ChainTerminal {
+            ExportPhase::Terminal {
+                seq, link, kind, ..
+            } => Some(ChainTerminal {
                 seq: *seq,
                 hash: link.hash.clone(),
                 kind: *kind,
@@ -769,6 +775,8 @@ enum ExportPhase {
         seq: u64,
         link: Link,
         kind: TerminalKind,
+        /// The `seal.json` digest a local finish binds; `None` for a legacy seal.
+        seal_manifest_sha256: Option<String>,
     },
 }
 
@@ -1337,6 +1345,7 @@ impl TraceExport {
         let canonical = manifest.clone().sorted();
         validate_phase_inputs(&canonical.entry_id, &observed.wall)?;
         let bytes = to_json("seal", &canonical)?;
+        let seal_manifest_sha256 = hex::encode(Sha256::digest(&bytes));
         let mut env = Envelope {
             protocol_version: M2_PROTOCOL_VERSION,
             entry_id: canonical.entry_id.clone(),
@@ -1352,7 +1361,7 @@ impl TraceExport {
                     observed,
                     reason: reason.to_string(),
                     termination,
-                    seal_manifest_sha256: hex::encode(Sha256::digest(&bytes)),
+                    seal_manifest_sha256: seal_manifest_sha256.clone(),
                 },
             },
             redaction: None,
@@ -1362,6 +1371,7 @@ impl TraceExport {
             seq: link.seq,
             link: link.clone(),
             kind: TerminalKind::LocalFinish,
+            seal_manifest_sha256: Some(seal_manifest_sha256),
         };
         self.sync_capture()?;
         let path = self.write_fixed(FixedTraceDocument::Seal, &bytes)?;
@@ -1370,23 +1380,26 @@ impl TraceExport {
     }
 
     /// Write `seal.json` again for the local finish this chain already ends in, after the first
-    /// write failed (a full disk). `manifest` is the one that finish chained, so the bytes are the
-    /// ones its terminal binds. A file the failed write left behind (empty, or cut short of these
+    /// write failed (a full disk). `manifest` must be the one that finish chained: its bytes are
+    /// checked against the digest the terminal binds, and any other manifest is refused before
+    /// anything is written. A file the failed write left behind (empty, or cut short of these
     /// bytes) is replaced; a whole copy is kept; anything else is refused and left as it is.
     pub fn rewrite_local_finish_seal(
         &mut self,
         manifest: &SealManifest,
     ) -> Result<PathBuf, ExportError> {
-        if !matches!(
-            self.phase,
-            ExportPhase::Terminal {
-                kind: TerminalKind::LocalFinish,
-                ..
-            }
-        ) {
+        let ExportPhase::Terminal {
+            kind: TerminalKind::LocalFinish,
+            seal_manifest_sha256: Some(bound),
+            ..
+        } = &self.phase
+        else {
             return Err(ExportError::NoLocalFinish);
-        }
+        };
         let bytes = to_json("seal", &manifest.clone().sorted())?;
+        if hex::encode(Sha256::digest(&bytes)) != *bound {
+            return Err(ExportError::SealManifestMismatch);
+        }
         if let Some(file) = self.root.read_fixed(FixedTraceDocument::Seal)? {
             let mut there = Vec::new();
             file.take(bytes.len() as u64 + 1)
@@ -1535,6 +1548,7 @@ impl TraceExport {
             seq: link.seq,
             link: link.clone(),
             kind: TerminalKind::LegacySeal,
+            seal_manifest_sha256: None,
         };
         let path = self.write_fixed(FixedTraceDocument::Seal, &bytes)?;
         Ok((path, link))

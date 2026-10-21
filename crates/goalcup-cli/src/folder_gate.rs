@@ -63,8 +63,8 @@ impl Host {
     }
 
     /// `Ok` unless a folder is on a filesystem a run cannot keep its traces on (btrfs, ZFS, NFS,
-    /// tmpfs, overlayfs or FUSE; see [`machine::unsupported_fstype`]), on any machine, WSL or
-    /// not. The `Err` says each such folder and how to move it, with no full stop at the end.
+    /// SMB, tmpfs, overlayfs or FUSE; see [`machine::unsupported_fstype`]), on any machine, WSL
+    /// or not. The `Err` says each such folder and how to move it, with no full stop at the end.
     pub fn check_filesystems(&self, folders: &[(&str, &Path)]) -> Result<(), String> {
         let refused: Vec<String> = folders
             .iter()
