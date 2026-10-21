@@ -2423,7 +2423,6 @@ fn run_harness<'a>(
             keeper.update(|state| state.stopped = Some(reason.to_string()));
             let label = if reason == crate::run::watch::DISK_STOP_REASON
                 || reason == crate::upload::uploader::REPLACED_REASON
-                || crate::upload::uploader::refused_run(reason)
             {
                 "stopped"
             } else {
@@ -2640,7 +2639,6 @@ fn finish_run(
         }),
         (true, false, true, _) if ended_by_stop => Some(match stopped {
             Some(crate::upload::uploader::REPLACED_REASON) => Ending::Replaced,
-            Some(why) if crate::upload::uploader::refused_run(why) => Ending::Closed,
             _ => Ending::TimeUp {
                 practice: record.practice,
             },

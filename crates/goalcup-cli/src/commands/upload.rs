@@ -162,7 +162,7 @@ fn upload_entry(
             &spool,
         ) {
             Ok(uploader) => break uploader,
-            Err(error) if !error.ends_upload() => {
+            Err(error) if !error.ends_manual_upload() => {
                 failures += 1;
                 let wait = crate::upload::uploader::backoff(
                     &policy,

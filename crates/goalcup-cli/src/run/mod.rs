@@ -149,9 +149,28 @@ pub struct UploadState {
     pub last_ok_at: Option<u64>,
     /// The uploader's last failure, in a sentence; `None` while it works.
     pub problem: Option<String>,
-    /// The uploader gave up on the run (a refusal that asking again does not cure).
+    /// The uploader gave up on the run. Only an older build's uploader did; a run's own upload
+    /// never gives up now (D64).
     #[serde(default)]
     pub stopped: bool,
+    /// The server has refused this run's calls with this status [`REFUSALS_SAID_AFTER`] times in
+    /// a row (a `4xx`, such as a bad deploy's `401`, `404` or `410`): recording goes on, and the
+    /// calls are asked again until it answers normally, which clears it.
+    #[serde(default)]
+    pub refused: Option<u16>,
+}
+
+/// How many refusals in a row, of the same status, the run says once in the terminal and
+/// `goalcup status` keeps as a problem until the server answers normally again.
+pub const REFUSALS_SAID_AFTER: u32 = 3;
+
+/// Which of the run's calls the server answered: the upload's (its position, chunks, the final
+/// heartbeat and the seal) or the ordinary heartbeats. Each counts its refusals on its own, so a
+/// heartbeat that works does not hide chunks that keep being refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+    Upload = 0,
+    Heartbeat = 1,
 }
 
 /// The run's heartbeats to the server, as far as the participant needs to know.
@@ -360,6 +379,13 @@ impl RunState {
             Recording::Failed => lines.push(participant::problem_recording_failed(who.run_id)),
             Recording::Ok | Recording::Unknown => {}
         }
+        // The server keeps refusing the run's calls (a bad deploy): the run goes on recording
+        // and asking, and the participant is told nothing is lost (D64).
+        if let Some(status) = self.upload.refused
+            && !self.ended
+        {
+            lines.push(participant::problem_server_refuses(status));
+        }
         if let Some(why) = &self.upload.problem {
             // A run that is over is told what became of its upload; one that records is told
             // only once the failure has lasted.
@@ -444,6 +470,23 @@ struct UploadVital {
     /// Heartbeats in a row that failed, and why the last one did.
     heartbeat_failures: u32,
     heartbeat_last: Option<String>,
+    /// Per [`Channel`]: the status the server last refused that channel's call with, and how
+    /// many times in a row it did. `None` once it answers normally.
+    refusals: [Option<(u16, u32)>; 2],
+    /// The refusal now standing has been said in the terminal.
+    refusal_said: bool,
+}
+
+impl UploadVital {
+    /// The status the server has refused one channel's calls with [`REFUSALS_SAID_AFTER`] times
+    /// in a row, the upload's first.
+    fn refused(&self) -> Option<u16> {
+        self.refusals
+            .iter()
+            .flatten()
+            .find(|(_, times)| *times >= REFUSALS_SAID_AFTER)
+            .map(|(status, _)| *status)
+    }
 }
 
 impl Default for Vitals {
@@ -545,6 +588,38 @@ impl Vitals {
     pub fn upload_problem(&self) -> (Option<String>, bool) {
         let upload = self.upload();
         (upload.problem.clone(), upload.stopped)
+    }
+
+    /// The server refused a call of `channel` with `status` (a `4xx`). Answers `true` exactly
+    /// once per standing refusal: when one channel has had [`REFUSALS_SAID_AFTER`] refusals of
+    /// the same status in a row, and it is not said already. The caller says it then.
+    pub fn server_refused(&self, channel: Channel, status: u16) -> bool {
+        let mut upload = self.upload();
+        let slot = &mut upload.refusals[channel as usize];
+        *slot = match *slot {
+            Some((same, times)) if same == status => Some((same, times.saturating_add(1))),
+            _ => Some((status, 1)),
+        };
+        let standing = upload.refused().is_some();
+        let say = standing && !upload.refusal_said;
+        upload.refusal_said = standing;
+        say
+    }
+
+    /// The server answered a call of `channel` normally: that channel's run of refusals is
+    /// over. A call that failed some other way (no answer, a `5xx`) leaves the run as it is.
+    pub fn server_answered(&self, channel: Channel) {
+        let mut upload = self.upload();
+        upload.refusals[channel as usize] = None;
+        if upload.refused().is_none() {
+            upload.refusal_said = false;
+        }
+    }
+
+    /// The status the server keeps refusing the run's calls with, once it has
+    /// [`REFUSALS_SAID_AFTER`] times in a row; `None` while it answers.
+    pub fn server_refusing(&self) -> Option<u16> {
+        self.upload().refused()
     }
 }
 
@@ -1263,5 +1338,36 @@ mod tests {
         assert_eq!(vitals.heartbeat_trouble().failures, 2);
         vitals.heartbeat_ok();
         assert_eq!(vitals.heartbeat_trouble(), HeartbeatState::default());
+    }
+
+    /// D64: three refusals of one status in a row are said once and named until the server
+    /// answers that channel normally; another status starts the count again, and one channel
+    /// answering does not hide the other's refusals.
+    #[test]
+    fn a_refusal_is_named_after_three_in_a_row_said_once_and_cleared_by_an_answer() {
+        let vitals = Vitals::default();
+        assert!(!vitals.server_refused(Channel::Upload, 401));
+        assert!(!vitals.server_refused(Channel::Upload, 401));
+        assert_eq!(vitals.server_refusing(), None, "two are a blip");
+        assert!(vitals.server_refused(Channel::Upload, 401), "said at three");
+        assert_eq!(vitals.server_refusing(), Some(401));
+        assert!(
+            !vitals.server_refused(Channel::Upload, 401),
+            "and only once"
+        );
+        // The heartbeats working does not clear what the chunks meet.
+        vitals.server_answered(Channel::Heartbeat);
+        assert_eq!(vitals.server_refusing(), Some(401));
+        vitals.server_answered(Channel::Upload);
+        assert_eq!(vitals.server_refusing(), None);
+        // A different status in between starts the count again; a new episode is said again.
+        for status in [404, 410, 404, 404] {
+            assert!(
+                !vitals.server_refused(Channel::Heartbeat, status),
+                "{status}"
+            );
+        }
+        assert!(vitals.server_refused(Channel::Heartbeat, 404));
+        assert_eq!(vitals.server_refusing(), Some(404));
     }
 }

@@ -448,8 +448,6 @@ pub enum Ending<'a> {
     TimeUp { practice: bool },
     /// A newer run on the account replaced this one.
     Replaced,
-    /// The server closed the run (it refused its heartbeat).
-    Closed,
     /// The harness exited after the run's time was up.
     Over { how: &'a str },
     /// The harness exited, and it cannot be restarted in the same run (it runs headless).
@@ -502,7 +500,6 @@ pub fn ending_block(harness: &str, ending: &Ending<'_>) -> Vec<String> {
             ));
             lines.push("Only the newer run counts.".to_string());
         }
-        Ending::Closed => lines.push(format!("The server closed this run. {h} was stopped.")),
         Ending::Over { how } => lines.push(format!(
             "{h} has exited ({how}). Your run is over: its time is up."
         )),
@@ -555,9 +552,6 @@ pub fn after_upload(ending: &Ending<'_>, all_sent: bool, server_closed: bool) ->
                 lines.push(unsent.to_string());
             }
         }
-        Ending::Closed => lines.push(format!(
-            "{NOTHING_MORE} If you did not expect this, write to {SUPPORT_ADDRESS}."
-        )),
         Ending::Replaced | Ending::Over { .. } | Ending::NoRestart { .. } => {
             lines.push(if all_sent {
                 format!("{UPLOAD_DONE} {NOTHING_MORE}")
@@ -868,6 +862,15 @@ pub fn problem_upload(ago: &str, why: &str, over: bool) -> String {
              Check the network."
         )
     }
+}
+
+/// The server keeps refusing the run's calls with `status` (D64): a server-side fault the
+/// organisers fix. The run records on and asks again by itself; the participant does nothing.
+pub fn problem_server_refuses(status: u16) -> String {
+    format!(
+        "the server refuses this run's uploads (HTTP {status}). Recording continues on this \
+         computer and nothing is lost; it is sent once the server takes it again. Nothing to do."
+    )
 }
 
 /// `failures` heartbeats in a row failed; one is sent every [`Policy::heartbeat`] (five minutes).
@@ -1388,7 +1391,6 @@ mod tests {
             Ending::TimeUp { practice: false },
             Ending::TimeUp { practice: true },
             Ending::Replaced,
-            Ending::Closed,
             Ending::Over { how: "exit code 0" },
             Ending::NoRestart {
                 how: "exit code 0",
@@ -1413,7 +1415,7 @@ mod tests {
                         || last_line.starts_with("Next: goalcup prep"),
                     "{ending:?}: {text}"
                 );
-                if !all_sent && ending != Ending::Closed {
+                if !all_sent {
                     assert!(text.contains("goalcup upload"), "{ending:?}: {text}");
                 }
             }

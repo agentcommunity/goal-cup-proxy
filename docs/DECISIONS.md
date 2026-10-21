@@ -595,3 +595,33 @@ run-key mismatch case keeps its earlier `record_field_invalid` precedence. Dynam
 use coherent profile claims and cover matching tuples, each contradiction and legacy absence.
 No record schema, canonical bytes, receipt signature domain, server API or local-only verdict
 changes.
+
+## D64. No server error stops a run or ends its upload.
+
+21 Oct 2026, owner ruling (event readiness plan, WP-A, invariant I1): "the server should REALLY not
+fail; the run should continue and we hotfix the server." Only two things stop a run: a heartbeat
+answer that says `stop` (its deadline, or `reason: "replaced"` for a run a newer start replaced),
+and the run's own count to its deadline (`LocalDeadline`, WP11). The participant can still end the
+agent, and the disk watch still stops it on a nearly full disk with the run left open, as before.
+
+- **Every other answer is asked again.** Any status (`401`, `404`, `410`, `413`, any `5xx`), a
+  timeout or no connection: the run keeps recording on the participant's machine, and the
+  uploader and the heartbeats ask again with the existing backoff (60 s doubling to 15 min, with
+  jitter, never under `Retry-After`). The Worker's error code is not read for this, and a route a
+  bad deploy lost answers `404` like any other refusal. So does a local chain that does not
+  continue the server's copy, and an acknowledgement that does not verify: the server's position
+  is read again before the next try, since a fixed server may say otherwise.
+- **The wrap-up** after the stop asks the same way until it runs out (`Policy::wrap_up`); what is
+  left is sent later by `goalcup upload`.
+- **`goalcup upload`**, run by hand with a person waiting, still gives up on `401`, `404` and `410`
+  and on those two disagreements, and says why (`ServerError::ends_manual_upload`).
+- **Said, not silent.** Three refusals in a row of one status (a `4xx` other than `429`) on the
+  upload's calls or on the heartbeats are said once in the terminal and kept as a `PROBLEM:` line
+  in `goalcup status`: the server refuses the run's uploads, recording continues on this computer,
+  nothing is lost. An answer that works clears it.
+- **Measured.** `host.log` gets one line per stored chunk with its chain bytes and compressed
+  bytes; never content or keys.
+
+This supersedes the earlier behaviour, which no decision recorded: a heartbeat answered `401` or
+`410` stopped the run ("the server closed this run"), and a `401`, `404` or `410` to any upload
+call ended the run's upload for good. A server that must end a run says `stop` in a `200` answer.

@@ -179,6 +179,7 @@ pub fn watch_beside(watch: Watch) -> Watching {
                     let recording = recording_within(RECORDING_WAIT, &done, beat.ask.clone());
                     beat.vitals.set_recording(recording);
                     let (problem, stopped) = beat.vitals.upload_problem();
+                    let refused = beat.vitals.server_refusing();
                     let last_ok_at = uploads.iter().map(|last| last.load(Ordering::SeqCst)).max();
                     let disk = tick.disk();
                     let heartbeat = beat.vitals.heartbeat_trouble();
@@ -193,6 +194,7 @@ pub fn watch_beside(watch: Watch) -> Watching {
                             last_ok_at,
                             problem,
                             stopped,
+                            refused,
                         };
                         state.disk = disk;
                     });

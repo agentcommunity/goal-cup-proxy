@@ -173,6 +173,16 @@ pub fn say(line: &str) {
     say_raw(&format!("goalcup: {line}"));
 }
 
+/// One `goalcup: <line>` in `host.log` only, while a log is open, and never on the terminal: a
+/// measurement for whoever reads the log later (one line per uploaded chunk), too frequent and
+/// too technical for the participant. With no log open (a headless run, `goalcup upload`) it
+/// goes nowhere.
+pub fn log_only(line: &str) {
+    if let Some(log) = sink().log.as_mut() {
+        let _ = writeln!(log, "goalcup: {line}");
+    }
+}
+
 /// [`say`] for a line that already names who says it.
 pub fn say_raw(line: &str) {
     let mut sink = sink();

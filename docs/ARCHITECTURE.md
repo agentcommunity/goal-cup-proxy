@@ -233,7 +233,8 @@ in the [checklist](CHEAT-CHECKLIST.md). The proxy also strips credential headers
 ## 10. Upload and the server
 
 `goalcup start` uploads the chain to the Worker in compressed chunks while the run records and
-keeps the server's acknowledgement of each in `acks.jsonl`. Recording never waits on the network.
+keeps the server's acknowledgement of each in `acks.jsonl`. Recording never waits on the network,
+and no server error stops the run or ends its upload (D64).
 The server issues the entry id, the official start and the deadline, signs a start receipt (stored
 as `receipt.json`) and signs an acknowledgement per stored chunk. Parts the server acknowledged
 are pruned locally two hours later, or at once when the parts alone pass the 3 GiB reservation or

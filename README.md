@@ -226,7 +226,10 @@ in [OPERATING](docs/OPERATING.md#running-the-daemon).
 - **The server.** `goalcup login` approves the tracer in the browser. `goalcup start` then asks for
   approval of each run, clones the participant's repository, opens the run on the server and keeps
   the server's start receipt as `receipt.json`. While the run records, the CLI uploads the chain in
-  chunks and sends heartbeats. Recording never waits on the network. After the stop it seals and
+  chunks and sends heartbeats. Recording never waits on the network, and no server error stops the
+  run or ends its upload, whatever the status: it is asked again with backoff, and a refusal that
+  repeats is a `PROBLEM:` line in `goalcup status` (D64). Only a heartbeat answer that says `stop`
+  or the run's own count to its deadline stops it. After the stop it seals and
   uploads the rest for a bounded wrap-up; `goalcup upload` finishes the job later. With no entry id it sends the unsent entries of the newest run; `goalcup upload <entry>` sends one entry. The
   deadline is 168 hours after the server's official start, on the server's clock: at the deadline
   the CLI stops the agent and seals. Wire contract: [docs/UPLOAD-API.md](docs/UPLOAD-API.md).

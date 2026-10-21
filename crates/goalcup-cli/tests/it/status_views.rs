@@ -782,6 +782,7 @@ fn status_puts_every_problem_first() {
         last_ok_at: Some(now - 40 * 60),
         problem: Some("the server answered 503".to_string()),
         stopped: false,
+        refused: None,
     };
     state.disk = DiskState {
         free_bytes: 3 << 30,
@@ -1012,6 +1013,39 @@ fn status_names_heartbeats_that_keep_failing() {
     run_with_state(&cfg, &info.entry_id, state);
     let text = status_text(&m, &cfg, &info.entry_id, false);
     assert!(problem_lines(&text).is_empty(), "{text}");
+}
+
+/// D64: a server that keeps refusing the run's calls is one problem line, naming the status,
+/// while the run records; none once the server answers again or the run has ended.
+#[test]
+fn status_names_a_server_that_keeps_refusing_the_run() {
+    use goalcup_cli::run::{HarnessState, Recording, RunState, now_unix};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.updated_at = now_unix();
+    state.recording = Recording::Ok;
+    state.harness = HarnessState::Running;
+    state.upload.refused = Some(401);
+    run_with_state(&cfg, &info.entry_id, state.clone());
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    let problems = problem_lines(&text);
+    assert_eq!(problems.len(), 1, "{text}");
+    assert!(problems[0].contains("401"), "{text}");
+
+    for cleared in [false, true] {
+        let mut state = state.clone();
+        if cleared {
+            state.upload.refused = None;
+        } else {
+            state.ended = true;
+        }
+        run_with_state(&cfg, &info.entry_id, state);
+        let text = status_text(&m, &cfg, &info.entry_id, false);
+        assert!(problem_lines(&text).is_empty(), "{text}");
+    }
 }
 
 /// Start a practice run P, then a competition run C, then continue P: P's new segment is the

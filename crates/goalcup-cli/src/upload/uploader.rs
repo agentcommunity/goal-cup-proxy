@@ -17,19 +17,22 @@
 //!   minutes; the first interval after the opening chunk is a random share of it, so that
 //!   runs started together do not send together), or sooner once [`Policy::eager_bytes`] of
 //!   chain is waiting, and everything at the end.
-//! - **Failures:** one failed attempt never ends an upload. No answer, a server error, a rate
-//!   limit, the maintenance switch, a rejected chunk (`400`, `413`, `422`) or any other answer
-//!   is asked again after a backoff that starts at a minute and doubles to fifteen, with
-//!   jitter, never sooner than the server's `Retry-After`. A `409` means the server is
-//!   somewhere else: its position is read again and the upload continues from there. Only
-//!   `401`, `404` and `410` ([`ServerError::ends_upload`]: the token, the run, or the run's
-//!   being closed) stop the uploader and say why, and so do a local chain that does not
-//!   continue the server's copy and an acknowledgement that does not verify; the run goes on
-//!   recording. A local error (the disk full, a part briefly missing, `acks.jsonl` not
-//!   writable) is this machine's trouble of the moment, not the server's verdict: it is said
-//!   and asked again after the same backoff. After the stop the same asking goes on for the wrap-up ([`Policy::wrap_up`],
-//!   an hour, counted through machine sleep): the final heartbeat, the rest of the chain and
-//!   the seal. What is still unsent then is `goalcup upload`'s.
+//! - **Failures:** no failure ends a run's upload, and none stops the run (D64). No answer, a
+//!   server error, a rate limit, the maintenance switch, a rejected chunk (`400`, `413`, `422`),
+//!   `401`, `404`, `410` or any other answer is asked again after a backoff that starts at a
+//!   minute and doubles to fifteen, with jitter, never sooner than the server's `Retry-After`:
+//!   a bad deploy is fixed on the server, and the run must still be recording when it is. A
+//!   `409` means the server is somewhere else: its position is read again and the upload
+//!   continues from there. A local chain that does not continue the server's copy, and an
+//!   acknowledgement that does not verify, are asked again the same way, the server's position
+//!   read again first. A local error (the disk full, a part briefly missing, `acks.jsonl` not
+//!   writable) is this machine's trouble of the moment: it is said and asked again after the
+//!   same backoff. A `4xx` that repeats [`crate::run::REFUSALS_SAID_AFTER`] times is said once
+//!   and kept for `goalcup status` until the server answers normally. After the stop the same
+//!   asking goes on for the wrap-up ([`Policy::wrap_up`], an hour, counted through machine
+//!   sleep): the final heartbeat, the rest of the chain and the seal. What is still unsent then
+//!   is `goalcup upload`'s. Only that command, run by hand, gives up on `401`, `404` and `410`
+//!   and on the two disagreements above ([`ServerError::ends_manual_upload`]), and says why.
 //! - **Acknowledgements:** each one is checked (this entry, the chunk's last `seq` and head,
 //!   a signature under the start receipt's key) and appended to the trace's `acks.jsonl`,
 //!   where `goalcup-verify` reads it.
@@ -162,8 +165,8 @@ pub fn build_chunk(
     if pos.offset < first.start {
         return Err(CliError::Refused(format!(
             "the server holds {} bytes of this entry's chain, but the first {} bytes were \
-             already deleted from this machine, so the bytes in between cannot be sent. Nothing \
-             more is uploaded for this run; ask the organisers.",
+             already deleted from this machine, so the bytes in between cannot be sent. The two \
+             copies disagree; ask the organisers.",
             pos.offset, first.start
         )));
     }
@@ -224,8 +227,7 @@ pub fn build_chunk(
         if link.seq != seq || link.prev != head {
             return Err(CliError::Refused(format!(
                 "{} does not continue where the server's copy ends (seq {seq}): its record at \
-                 byte {} is seq {}. The local chain and the server's copy differ; nothing more \
-                 is uploaded for this run.",
+                 byte {} is seq {}. The local chain and the server's copy differ.",
                 chain.display(),
                 pos.offset + length,
                 link.seq
@@ -398,6 +400,13 @@ pub struct Uploader {
     owed_ack: Option<(AckCheckpoint, u64, String)>,
     /// Whether the run's final heartbeat has been sent (see [`EndedGate`]).
     ended: EndedGate,
+    /// A run's own upload (beside `goalcup start` or `goalcup continue`): nothing ends it, every
+    /// failure is asked again (D64). Unset for `goalcup upload`, which gives up on an answer
+    /// asking again does not cure ([`ServerError::ends_manual_upload`]) and says why.
+    persist: bool,
+    /// The server's position is read again before the next chunk is built: a run's upload met a
+    /// disagreement with the server's copy, which a fixed server may have cured.
+    reread_first: bool,
 }
 
 /// Set as soon as the first final heartbeat has been sent, whatever came of it (a lost answer
@@ -443,6 +452,8 @@ impl Uploader {
             close_unsealed: false,
             owed_ack: None,
             ended: EndedGate::default(),
+            persist: false,
+            reread_first: false,
         };
         uploader.adopt_server_ack(&position);
         uploader.adopt_verified_offset(&position);
@@ -537,8 +548,21 @@ impl Uploader {
     }
 
     /// Send every complete line, chunk by chunk, once, within the wrap-up `until` if one is
-    /// given.
+    /// given. A run's own upload never stops (D64): what would end `goalcup upload` is asked
+    /// again, and the server's position is read again before the next try.
     fn attempt(&mut self, until: Option<WrapUp>) -> Attempt {
+        match self.send_waiting(until) {
+            Attempt::Stop(why) if self.persist => {
+                self.reread_first = true;
+                Attempt::Retry(None, why)
+            }
+            other => other,
+        }
+    }
+
+    /// [`Self::attempt`], as `goalcup upload` has it: [`Attempt::Stop`] on an answer asking
+    /// again does not cure.
+    fn send_waiting(&mut self, until: Option<WrapUp>) -> Attempt {
         loop {
             // A background upload stops between chunks once the run must stop.
             if until.is_none() && self.halt.as_ref().is_some_and(|h| h.load(Ordering::SeqCst)) {
@@ -551,6 +575,16 @@ impl Uploader {
             // An acknowledgement the last chunk left unwritten is written first.
             if let Some(retry) = self.write_owed_ack() {
                 return retry;
+            }
+            // After a disagreement, where the server is now: a fixed server may say otherwise.
+            if self.reread_first {
+                match self.reread_position(false) {
+                    Ok(()) => {
+                        self.note_answered();
+                        self.reread_first = false;
+                    }
+                    Err(error) => return self.failed(error),
+                }
             }
             let built = self
                 .parts()
@@ -578,6 +612,12 @@ impl Uploader {
             let _ = std::fs::remove_file(&chunk.spool);
             match sent {
                 Ok(answer) => {
+                    self.note_answered();
+                    // Sizes only, for measuring the upload later: no content, no key.
+                    crate::host_log::log_only(&format!(
+                        "upload: chunk at byte {} stored: {} bytes of chain, {} bytes compressed",
+                        chunk.offset, chunk.length, chunk.compressed
+                    ));
                     let kept = self.keep_ack(&answer.ack, Some(chunk.last_seq), &chunk.head);
                     let owed = match kept {
                         Ok(()) => None,
@@ -602,7 +642,7 @@ impl Uploader {
                     }
                 }
                 // The server is somewhere else: read where, and go on from there.
-                Err(error) if error.is_conflict() => match self.reread() {
+                Err(error) if error.is_conflict() => match self.reread_position(true) {
                     Ok(()) => continue,
                     Err(error) => return self.failed(error),
                 },
@@ -612,10 +652,12 @@ impl Uploader {
     }
 
     fn failed(&self, error: ServerError) -> Attempt {
+        self.note_refused(&error);
         // Past the deadline the server takes nothing before the final heartbeat, which only a
         // sealed run sends. Beside a recording run the stop is on its way, so this waits; for
         // `goalcup upload` of a run that was never sealed it is the end of the road.
         if self.halt.is_none()
+            && !self.persist
             && matches!(&error, ServerError::Status { code, .. } if code == "awaiting_final")
         {
             return Attempt::Stop(format!(
@@ -624,7 +666,7 @@ impl Uploader {
                 self.record.entry_id
             ));
         }
-        if error.ends_upload() {
+        if self.gives_up(&error) {
             Attempt::Stop(error.to_string())
         } else {
             Attempt::Retry(
@@ -634,15 +676,36 @@ impl Uploader {
         }
     }
 
-    /// Read the server's position again after a `409`. A position behind ours is taken as
-    /// given (the chunk builder re-checks every link); one past what is on disk waits.
-    fn reread(&mut self) -> Result<(), ServerError> {
+    /// Whether this upload ends on `error`: only `goalcup upload` ever does (D64).
+    fn gives_up(&self, error: &ServerError) -> bool {
+        !self.persist && error.ends_manual_upload()
+    }
+
+    /// The server answered one of this upload's calls normally: for the run's status, its run
+    /// of refusals, if any, is over.
+    fn note_answered(&self) {
+        if let Some(vitals) = &self.vitals {
+            vitals.server_answered(crate::run::Channel::Upload);
+        }
+    }
+
+    /// The server failed one of this upload's calls: a refusal (`4xx`) is counted for the run's
+    /// status, and said once when it has repeated ([`crate::run::REFUSALS_SAID_AFTER`]).
+    fn note_refused(&self, error: &ServerError) {
+        note_refusal(self.vitals.as_ref(), error);
+    }
+
+    /// Read the server's position again. After a `409` (`must_move`) a position that has not
+    /// moved is a conflict asking again cannot cure; after a disagreement it is taken as it is.
+    /// A position behind ours is taken as given (the chunk builder re-checks every link); one
+    /// past what is on disk waits.
+    fn reread_position(&mut self, must_move: bool) -> Result<(), ServerError> {
         let position: RunPosition =
             self.server
                 .json("GET", &position_path(&self.record), None::<&()>)?;
         self.adopt_server_ack(&position);
         let moved = Position::from(&position);
-        if moved == self.pos {
+        if must_move && moved == self.pos {
             // A conflict that is not about where the server is cannot be cured by asking.
             return Err(ServerError::Status {
                 status: 409,
@@ -728,7 +791,8 @@ impl Uploader {
     }
 
     /// The final heartbeat: commit the sealed chain's last record as the run's end, asking
-    /// again after each failure that does not end the upload, within the wrap-up `until`. A
+    /// again after each failure that does not end the upload (for a run's own upload, every
+    /// failure: D64), within the wrap-up `until`. A
     /// chain that cannot be read just now is a failure of that kind too: it is read again after
     /// the same backoff, not taken for a chain with no whole record.
     fn commit_end(
@@ -764,14 +828,20 @@ impl Uploader {
                 }
                 match beat {
                     Beat::Empty => return Err("the chain holds no whole record".to_string()),
-                    Beat::Answer(Ok(_)) => return Ok(()),
-                    Beat::Answer(Err(error)) if error.ends_upload() => {
+                    Beat::Answer(Ok(_)) => {
+                        self.note_answered();
+                        return Ok(());
+                    }
+                    Beat::Answer(Err(error)) if self.gives_up(&error) => {
                         return Err(error.to_string());
                     }
-                    Beat::Answer(Err(error)) => (
-                        error.retry_after().map(Duration::from_secs),
-                        format!("the final heartbeat was not stored ({error})"),
-                    ),
+                    Beat::Answer(Err(error)) => {
+                        self.note_refused(&error);
+                        (
+                            error.retry_after().map(Duration::from_secs),
+                            format!("the final heartbeat was not stored ({error})"),
+                        )
+                    }
                     Beat::Unreadable(error) => (
                         None,
                         format!("the final heartbeat could not read the chain ({error})"),
@@ -1118,33 +1188,11 @@ pub fn stop_reason(answer: &HeartbeatAnswer) -> Option<String> {
     })
 }
 
-/// What the run is told when the server refuses its heartbeat for good (`401`, or `410`): the
-/// reason starts with this, which `goalcup start` words its stop by ([`refused_run`]).
-pub const HEARTBEAT_REFUSED: &str = "the server refused the run's heartbeat";
-
-/// Whether `reason` (as sent on the run's stop channel) is the server's refusal of the run's
-/// heartbeat.
-pub fn refused_run(reason: &str) -> bool {
-    reason.starts_with(HEARTBEAT_REFUSED)
-}
-
-/// The sentence that stops the run when a heartbeat is answered `401` (the token is no longer
-/// accepted) or `410` (the run is closed): what every other call ends the upload for, so the run
-/// stops here too. Any other failure is asked again at the next beat.
-fn heartbeat_refusal(error: &ServerError) -> Option<String> {
-    matches!(
-        error,
-        ServerError::Status {
-            status: 401 | 410,
-            ..
-        }
-    )
-    .then(|| format!("{HEARTBEAT_REFUSED} ({error}), so this run can no longer be uploaded"))
-}
-
 /// One ordinary heartbeat, counted in `vitals` and said when it fails; `Some` is why the run
-/// must stop. Nothing is sent once the final heartbeat has been sent (`ended`), and none is in
-/// flight while it goes: the lock is held for the call.
+/// must stop, and only an answer that says `stop` gives one ([`stop_reason`]). A failure of any
+/// kind, every status included, is asked again at the next beat (D64): the run's own count
+/// ([`LocalDeadline`]) still stops it at its deadline. Nothing is sent once the final heartbeat
+/// has been sent (`ended`), and none is in flight while it goes: the lock is held for the call.
 fn ordinary_beat(
     server: &ServerClient,
     record: &UploadRecord,
@@ -1171,6 +1219,7 @@ fn ordinary_beat(
     match heartbeat(server, record, false, None, Some(vitals), HEARTBEAT_TIMEOUT) {
         Beat::Answer(Ok(answer)) => {
             vitals.heartbeat_ok();
+            vitals.server_answered(crate::run::Channel::Heartbeat);
             LocalDeadline::heard(count, &answer, asked);
             if let Some(count) = count {
                 vitals.set_time_left(count.time_left());
@@ -1178,11 +1227,16 @@ fn ordinary_beat(
             stop_reason(&answer)
         }
         Beat::Answer(Err(error)) => {
-            let refusal = heartbeat_refusal(&error);
-            if refusal.is_none() {
-                failed(error.to_string());
+            if let Some(status) = error.refusal_status()
+                && vitals.server_refused(crate::run::Channel::Heartbeat, status)
+            {
+                crate::host_log::say(&format!(
+                    "heartbeat: {}",
+                    crate::participant::problem_server_refuses(status)
+                ));
             }
-            refusal
+            failed(error.to_string());
+            None
         }
         Beat::Unreadable(error) => {
             failed(format!("the chain could not be read ({error})"));
@@ -1332,11 +1386,13 @@ impl Uploader {
             };
             match self.seal(&documents, timeout) {
                 Ok(run_ended) => {
+                    self.note_answered();
                     self.mark_ok();
                     self.note_sent();
                     return caught_up(true, None, run_ended);
                 }
-                Err(error) if !error.ends_upload() => {
+                Err(error) if !self.gives_up(&error) => {
+                    self.note_refused(&error);
                     failures += 1;
                     let wait = backoff(
                         &self.policy,
@@ -1661,8 +1717,8 @@ impl Running {
         self.acked_offset.clone()
     }
 
-    /// The run is sealed: send the rest and the seal, asking again after every failure that
-    /// does not end the upload, until `wrap_up` has run out, and say how it went. Returns by
+    /// The run is sealed: send the rest and the seal, asking again after every failure,
+    /// whatever the answer (D64), until `wrap_up` has run out, and say how it went. Returns by
     /// then (and a short grace) whatever the server does: an upload still under way is left
     /// to `goalcup upload`.
     ///
@@ -1710,9 +1766,73 @@ pub struct Draining {
     report: std::sync::mpsc::Receiver<Report>,
 }
 
+/// A run's own uploader for `record` (D64): the server's position asked for again after every
+/// failure, whatever the answer, until `until` has run out, when `Err` is the report. Each wait
+/// is said, prefixed `label`; a refusal is counted in `vitals` when there are any.
+#[allow(clippy::too_many_arguments)]
+fn resume_for_run(
+    server: &ServerClient,
+    record: &UploadRecord,
+    key: &str,
+    policy: Policy,
+    spool_dir: &Path,
+    until: WrapUp,
+    vitals: Option<&Vitals>,
+    label: &str,
+) -> Result<Uploader, Report> {
+    let mut failures = 0u32;
+    loop {
+        match Uploader::resume(
+            server.clone(),
+            record.clone(),
+            key.to_string(),
+            policy,
+            spool_dir,
+        ) {
+            Ok(mut up) => {
+                up.persist = true;
+                up.vitals = vitals.cloned();
+                up.note_answered();
+                return Ok(up);
+            }
+            Err(error) => {
+                note_refusal(vitals, &error);
+                failures += 1;
+                let wait = backoff(
+                    &policy,
+                    failures,
+                    error.retry_after().map(Duration::from_secs),
+                );
+                if past(Some(until), wait) {
+                    return Err(Report::not(ran_out(Some(&error.to_string())), 0));
+                }
+                crate::host_log::say(&format!(
+                    "{label}: {error}; trying again in {}s",
+                    wait.as_secs().max(1)
+                ));
+                std::thread::sleep(wait);
+            }
+        }
+    }
+}
+
+/// A failed call of a run's upload: a refusal (`4xx`) is counted in `vitals` for the run's
+/// status, and said once when it has repeated ([`crate::run::REFUSALS_SAID_AFTER`]). Nothing
+/// without `vitals` (`goalcup upload`, an earlier segment's drain).
+fn note_refusal(vitals: Option<&Vitals>, error: &ServerError) {
+    if let (Some(vitals), Some(status)) = (vitals, error.refusal_status())
+        && vitals.server_refused(crate::run::Channel::Upload, status)
+    {
+        crate::host_log::say(&format!(
+            "upload: {}",
+            crate::participant::problem_server_refuses(status)
+        ));
+    }
+}
+
 /// Close `record`'s entry on the server on a thread of its own: its final heartbeat, the rest of
-/// its chain and (when it is [`Closing::Sealed`]) its seal, asking again after every failure
-/// that does not end the upload, until `wrap_up` has run out. It holds the entry's upload lock
+/// its chain and (when it is [`Closing::Sealed`]) its seal, asking again after every failure,
+/// whatever the answer (D64), until `wrap_up` has run out. It holds the entry's upload lock
 /// ([`lock_entry`]) until it is done, so a refusal here means another goalcup uploads the entry.
 pub fn drain(
     server: ServerClient,
@@ -1734,39 +1854,23 @@ pub fn drain(
         .spawn(move || {
             let _lock = lock;
             let mut say = crate::host_log::say;
-            let mut failures = 0u32;
-            let ended = loop {
-                match Uploader::resume(
-                    server.clone(),
-                    record.clone(),
-                    receipt_key.clone(),
-                    policy,
-                    &spool_dir,
-                ) {
-                    Ok(mut up) => {
-                        up.share(&shared.0, &shared.1);
-                        up.close_unsealed = closing == Closing::FromTail;
-                        break up.finish(Some(wrap_up), &mut say);
-                    }
-                    Err(error) if !error.ends_upload() => {
-                        failures += 1;
-                        let wait = backoff(
-                            &policy,
-                            failures,
-                            error.retry_after().map(Duration::from_secs),
-                        );
-                        if past(Some(wrap_up), wait) {
-                            break Report::not(ran_out(Some(&error.to_string())), 0);
-                        }
-                        say(&format!(
-                            "upload of entry {}: {error}; trying again in {}s",
-                            record.entry_id,
-                            wait.as_secs().max(1)
-                        ));
-                        std::thread::sleep(wait);
-                    }
-                    Err(error) => break Report::not(error.to_string(), 0),
+            let label = format!("upload of entry {}", record.entry_id);
+            let ended = match resume_for_run(
+                &server,
+                &record,
+                &receipt_key,
+                policy,
+                &spool_dir,
+                wrap_up,
+                None,
+                &label,
+            ) {
+                Ok(mut up) => {
+                    up.share(&shared.0, &shared.1);
+                    up.close_unsealed = closing == Closing::FromTail;
+                    up.finish(Some(wrap_up), &mut say)
                 }
+                Err(report) => report,
             };
             let _ = reported.send(ended);
         })
@@ -1851,6 +1955,9 @@ impl Draining {
     }
 }
 
+/// The upload thread beside a recording run. Nothing ends it but the run's end (D64): every
+/// failure, whatever the server answered, is asked again after a backoff, and the run goes on
+/// recording meanwhile. The finish then sends the rest within the wrap-up.
 fn run(
     server: ServerClient,
     record: UploadRecord,
@@ -1869,14 +1976,13 @@ fn run(
     } = beside;
     let mut say = crate::host_log::say;
     let mut uploader: Option<Uploader> = None;
-    let mut stopped: Option<String> = None;
     let mut failures = 0u32;
     let mut wait_until = Instant::now();
     let mut next_due = Instant::now();
     let mut cadence = Cadence::new(&policy);
     loop {
         let now = Instant::now();
-        if !over.load(Ordering::SeqCst) && stopped.is_none() && now >= wait_until {
+        if !over.load(Ordering::SeqCst) && now >= wait_until {
             if uploader.is_none() {
                 match Uploader::resume(
                     server.clone(),
@@ -1886,13 +1992,16 @@ fn run(
                     spool_dir,
                 ) {
                     Ok(mut resumed) => {
+                        resumed.persist = true;
                         resumed.halt = Some(over.clone());
                         resumed.share(&shared.0, &shared.1);
                         resumed.vitals = Some(vitals.clone());
                         resumed.ended = ended.clone();
+                        resumed.note_answered();
                         uploader = Some(resumed);
                     }
-                    Err(error) if !error.ends_upload() => {
+                    Err(error) => {
+                        note_refusal(Some(&vitals), &error);
                         failures += 1;
                         let wait = backoff(
                             &policy,
@@ -1906,18 +2015,10 @@ fn run(
                         vitals.upload_failed(&error.to_string());
                         wait_until = now + wait;
                     }
-                    Err(error) => {
-                        say(&format!(
-                            "upload stopped: {error}. The run goes on recording on this machine."
-                        ));
-                        vitals.upload_stopped(&error.to_string());
-                        stopped = Some(error.to_string());
-                    }
                 }
             }
             // Nothing waiting is an upload with nothing to complain of.
             if let Some(up) = uploader.as_ref()
-                && stopped.is_none()
                 && up.waiting() == 0
                 // An acknowledgement still to be written is trouble, not an idle upload.
                 && up.owed_ack.is_none()
@@ -1928,33 +2029,30 @@ fn run(
             if let Some(up) = uploader.as_mut()
                 && (now >= next_due || up.waiting() >= policy.eager_bytes)
             {
-                match up.attempt(None) {
+                let retry = match up.attempt(None) {
                     Attempt::CaughtUp => {
                         failures = 0;
                         next_due = cadence.next_due(now);
                         vitals.upload_ok();
+                        None
                     }
-                    Attempt::Retry(after, why) => {
-                        failures += 1;
-                        let wait = backoff(&policy, failures, after);
-                        say(&format!(
-                            "upload: {why}; trying again in {}s",
-                            wait.as_secs().max(1)
-                        ));
-                        if why != STOPPING {
-                            vitals.upload_failed(&why);
-                        }
-                        wait_until = now + wait;
-                    }
-                    Attempt::Stop(why) => {
-                        say(&format!(
-                            "upload stopped: {why}. The run goes on recording on this machine."
-                        ));
-                        vitals.upload_stopped(&why);
-                        stopped = Some(why);
-                    }
+                    Attempt::Retry(after, why) => Some((after, why)),
+                    // A run's upload asks again instead (`persist`); never the end of it.
+                    Attempt::Stop(why) => Some((None, why)),
                     // Only a finish has a wrap-up to run out; a background attempt has none.
-                    Attempt::RanOut => {}
+                    Attempt::RanOut => None,
+                };
+                if let Some((after, why)) = retry {
+                    failures += 1;
+                    let wait = backoff(&policy, failures, after);
+                    say(&format!(
+                        "upload: {why}; trying again in {}s",
+                        wait.as_secs().max(1)
+                    ));
+                    if why != STOPPING {
+                        vitals.upload_failed(&why);
+                    }
+                    wait_until = now + wait;
                 }
             }
         }
@@ -1966,19 +2064,25 @@ fn run(
                 return Report::not("the run ended before its upload finished", offset());
             }
             Ok(wrap_up) => {
-                if let Some(why) = stopped {
-                    return Report::not(why, offset());
-                }
                 let mut up = match uploader {
                     Some(up) => up,
-                    None => match Uploader::resume(server, record, key, policy, spool_dir) {
+                    // Never reached during the run: asked again through the wrap-up.
+                    None => match resume_for_run(
+                        &server,
+                        &record,
+                        &key,
+                        policy,
+                        spool_dir,
+                        wrap_up,
+                        Some(&vitals),
+                        "upload",
+                    ) {
                         Ok(mut up) => {
                             up.share(&shared.0, &shared.1);
-                            up.vitals = Some(vitals.clone());
                             up.ended = ended.clone();
                             up
                         }
-                        Err(error) => return Report::not(error.to_string(), 0),
+                        Err(report) => return report,
                     },
                 };
                 return up.finish(Some(wrap_up), &mut say);
