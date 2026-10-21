@@ -779,6 +779,7 @@ fn status_shows_the_disk_and_what_goalcup_uses() {
         free_bytes: 20 << 30,
         reserve_bytes: 3 << 30,
         low: false,
+        disk_paused: false,
     };
     run_with_state(&cfg, &info.entry_id, state);
     let dir = run_dir(&cfg, &info.entry_id);

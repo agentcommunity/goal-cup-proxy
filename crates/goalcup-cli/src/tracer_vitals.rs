@@ -66,8 +66,8 @@ fn tracer_pids() -> Vec<u32> {
 }
 
 /// Whether the run's `state.json` says the tracer has paused the agent for the disk.
-// TODO(D65): read `RunState.disk.disk_paused` once the disk pause adds it; until then the
-// field is read from the file, and a state without it is not paused.
+// The watch tick sets `disk.disk_paused` (D65). Read from the file so a heartbeat never waits on
+// the state lock; a state without the field is not paused.
 pub fn paused_for_disk(run_dir: &Path) -> bool {
     std::fs::read(run_dir.join(crate::run::STATE_FILE_NAME))
         .ok()

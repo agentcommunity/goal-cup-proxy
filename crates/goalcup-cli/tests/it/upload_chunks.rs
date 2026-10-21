@@ -1175,6 +1175,7 @@ mod retries {
             free_bytes: 20 << 30,
             reserve_bytes: 3 << 30,
             low: false,
+            disk_paused: false,
         };
         StateKeeper::begin(&run_dir, state);
         let probe = goalcup_cli::tracer_vitals::Probe::reading(
