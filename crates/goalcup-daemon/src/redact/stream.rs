@@ -3267,11 +3267,46 @@ mod tests {
         assert_eq!(one_stream(&r).key.stream, 1);
     }
 
+    /// `per_body!(check: a, b_c)`: the tests `check::a` and `check::b_c`, each running
+    /// `check` on its one body, so nextest runs the slow bodies in parallel. A body's name is
+    /// its test's with `-` for `_`. `check` refuses a list of tests that is not its list of
+    /// bodies, so a body cannot go unchecked.
+    macro_rules! per_body {
+        ($check:ident: $($body:ident),+ $(,)?) => {
+            mod $check {
+                const BODIES: &[&str] = &[$(stringify!($body)),+];
+                $(
+                    #[test]
+                    fn $body() {
+                        super::$check(stringify!($body), BODIES);
+                    }
+                )+
+            }
+        };
+    }
+
+    /// The body of `bodies` that `test` names (in `per_body!` form), after checking that
+    /// `tests` names each body once, in order.
+    fn the_body<'a>(
+        bodies: Vec<(&'a str, Vec<u8>, Vec<u8>)>,
+        test: &str,
+        tests: &[&str],
+    ) -> (&'a str, Vec<u8>, Vec<u8>) {
+        let names: Vec<String> = bodies.iter().map(|b| b.0.replace('-', "_")).collect();
+        assert_eq!(names, tests, "one test per body");
+        bodies
+            .into_iter()
+            .find(|b| b.0.replace('-', "_") == test)
+            .unwrap()
+    }
+
+    per_body!(held_state_stays_bounded: pem, local_part, json_key, json_value, bearer_spaces,
+        jwt_segments, quotes, pem_header);
+
     /// `long_private_key_does_not_grow_pending_buffer`, measured from the inside: whatever
     /// a long candidate is — a key body, a local part, a JSON key, a whitespace run — the
     /// held bytes, candidates and unsent segment stay within their bounds after every push.
-    #[test]
-    fn held_state_stays_bounded() {
+    fn held_state_stays_bounded(test: &str, tests: &[&str]) {
         let producer = "11111111111111111111111111111111";
         let bodies: Vec<(&str, Vec<u8>, Vec<u8>)> = vec![
             (
@@ -3303,54 +3338,53 @@ mod tests {
                 b"RSA PRIVATE ".to_vec(),
             ),
         ];
-        for (name, lead, unit) in bodies {
-            let mut r = StreamRedactor::new();
-            r.push(open_frame(producer)).unwrap();
-            let mut offset = 0u64;
-            let mut data = lead;
-            for (seq, round) in (1u64..).zip(0..24) {
-                while data.len() < MAX_SEGMENT_BYTES - unit.len() {
-                    data.extend_from_slice(&unit);
-                }
-                let frame = CaptureFrame {
-                    stream: StreamKey {
-                        producer: producer.into(),
-                        stream: 1,
-                    },
-                    seq,
-                    observed: CaptureTime {
-                        wall: "2026-09-27T10:00:00Z".into(),
-                        mono_ns: seq,
-                        clock_id: producer.into(),
-                    },
-                    event: FrameEvent::Bytes {
-                        offset,
-                        data: std::mem::take(&mut data),
-                    },
-                };
-                offset += match &frame.event {
-                    FrameEvent::Bytes { data, .. } => data.len() as u64,
-                    _ => 0,
-                };
-                r.push(frame).unwrap();
-                let state = one_stream(&r);
-                assert!(
-                    state.scanner.held_bytes() <= MAX_HELD_BYTES + 3,
-                    "{name} round {round}: {} bytes held",
-                    state.scanner.held_bytes()
-                );
-                assert!(
-                    state.scanner.candidates.len() <= MAX_CANDIDATES,
-                    "{name}: candidates"
-                );
-                assert!(
-                    state
-                        .segment
-                        .as_ref()
-                        .is_none_or(|s| s.data.len() <= MAX_SEGMENT_BYTES),
-                    "{name}: unsent segment"
-                );
+        let (name, lead, unit) = the_body(bodies, test, tests);
+        let mut r = StreamRedactor::new();
+        r.push(open_frame(producer)).unwrap();
+        let mut offset = 0u64;
+        let mut data = lead;
+        for (seq, round) in (1u64..).zip(0..24) {
+            while data.len() < MAX_SEGMENT_BYTES - unit.len() {
+                data.extend_from_slice(&unit);
             }
+            let frame = CaptureFrame {
+                stream: StreamKey {
+                    producer: producer.into(),
+                    stream: 1,
+                },
+                seq,
+                observed: CaptureTime {
+                    wall: "2026-09-27T10:00:00Z".into(),
+                    mono_ns: seq,
+                    clock_id: producer.into(),
+                },
+                event: FrameEvent::Bytes {
+                    offset,
+                    data: std::mem::take(&mut data),
+                },
+            };
+            offset += match &frame.event {
+                FrameEvent::Bytes { data, .. } => data.len() as u64,
+                _ => 0,
+            };
+            r.push(frame).unwrap();
+            let state = one_stream(&r);
+            assert!(
+                state.scanner.held_bytes() <= MAX_HELD_BYTES + 3,
+                "{name} round {round}: {} bytes held",
+                state.scanner.held_bytes()
+            );
+            assert!(
+                state.scanner.candidates.len() <= MAX_CANDIDATES,
+                "{name}: candidates"
+            );
+            assert!(
+                state
+                    .segment
+                    .as_ref()
+                    .is_none_or(|s| s.data.len() <= MAX_SEGMENT_BYTES),
+                "{name}: unsent segment"
+            );
         }
     }
 
@@ -3780,11 +3814,13 @@ mod tests {
         }
     }
 
+    per_body!(extra_held_state_stays_bounded: object, string, bare, quoted, key_spaces,
+        colon_spaces, header_name, header_value, header_spaces);
+
     /// The hold bound for the connector rules: however long an object, a string, a bare
     /// value, a header name or value, or the whitespace around a colon runs, the held
     /// bytes, candidates and unsent segment stay within their bounds after every push.
-    #[test]
-    fn extra_held_state_stays_bounded() {
+    fn extra_held_state_stays_bounded(test: &str, tests: &[&str]) {
         let producer = "11111111111111111111111111111111";
         let bodies: Vec<(&str, Vec<u8>, Vec<u8>)> = vec![
             (
@@ -3833,61 +3869,60 @@ mod tests {
                 b" \r\n".to_vec(),
             ),
         ];
-        for (name, lead, unit) in bodies {
-            let mut r = StreamRedactor::with_extra_patterns(&shipped_extra_patterns())
-                .expect("shipped patterns");
-            r.push(open_frame(producer)).unwrap();
-            let mut offset = 0u64;
-            let mut data = lead;
-            for (seq, round) in (1u64..).zip(0..24) {
-                while data.len() < MAX_SEGMENT_BYTES - unit.len() {
-                    data.extend_from_slice(&unit);
-                }
-                let len = data.len() as u64;
-                let frame = CaptureFrame {
-                    stream: StreamKey {
-                        producer: producer.into(),
-                        stream: 1,
-                    },
-                    seq,
-                    observed: CaptureTime {
-                        wall: "2026-09-28T10:00:00Z".into(),
-                        mono_ns: seq,
-                        clock_id: producer.into(),
-                    },
-                    event: FrameEvent::Bytes {
-                        offset,
-                        data: std::mem::take(&mut data),
-                    },
-                };
-                offset += len;
-                r.push(frame).unwrap();
-                let state = one_stream(&r);
-                assert!(
-                    state.scanner.held_bytes() <= MAX_HELD_BYTES + 3,
-                    "{name} round {round}: {} bytes held",
-                    state.scanner.held_bytes()
-                );
-                assert!(
-                    state.scanner.candidates.len() <= MAX_CANDIDATES,
-                    "{name}: candidates"
-                );
-                assert!(
-                    state
-                        .scanner
-                        .redacting
-                        .as_ref()
-                        .is_none_or(|red| red.live.len() <= MAX_CANDIDATES),
-                    "{name}: followed candidates"
-                );
-                assert!(
-                    state
-                        .segment
-                        .as_ref()
-                        .is_none_or(|s| s.data.len() <= MAX_SEGMENT_BYTES),
-                    "{name}: unsent segment"
-                );
+        let (name, lead, unit) = the_body(bodies, test, tests);
+        let mut r = StreamRedactor::with_extra_patterns(&shipped_extra_patterns())
+            .expect("shipped patterns");
+        r.push(open_frame(producer)).unwrap();
+        let mut offset = 0u64;
+        let mut data = lead;
+        for (seq, round) in (1u64..).zip(0..24) {
+            while data.len() < MAX_SEGMENT_BYTES - unit.len() {
+                data.extend_from_slice(&unit);
             }
+            let len = data.len() as u64;
+            let frame = CaptureFrame {
+                stream: StreamKey {
+                    producer: producer.into(),
+                    stream: 1,
+                },
+                seq,
+                observed: CaptureTime {
+                    wall: "2026-09-28T10:00:00Z".into(),
+                    mono_ns: seq,
+                    clock_id: producer.into(),
+                },
+                event: FrameEvent::Bytes {
+                    offset,
+                    data: std::mem::take(&mut data),
+                },
+            };
+            offset += len;
+            r.push(frame).unwrap();
+            let state = one_stream(&r);
+            assert!(
+                state.scanner.held_bytes() <= MAX_HELD_BYTES + 3,
+                "{name} round {round}: {} bytes held",
+                state.scanner.held_bytes()
+            );
+            assert!(
+                state.scanner.candidates.len() <= MAX_CANDIDATES,
+                "{name}: candidates"
+            );
+            assert!(
+                state
+                    .scanner
+                    .redacting
+                    .as_ref()
+                    .is_none_or(|red| red.live.len() <= MAX_CANDIDATES),
+                "{name}: followed candidates"
+            );
+            assert!(
+                state
+                    .segment
+                    .as_ref()
+                    .is_none_or(|s| s.data.len() <= MAX_SEGMENT_BYTES),
+                "{name}: unsent segment"
+            );
         }
     }
 }

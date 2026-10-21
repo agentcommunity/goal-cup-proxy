@@ -165,6 +165,10 @@ fn never_less(name: &str, input: &[u8], rng: &mut Rng) -> Option<String> {
     None
 }
 
+fn reaches_every_kind(seen: &std::collections::BTreeSet<String>) -> bool {
+    EXTRA_KINDS.iter().all(|kind| seen.contains(*kind))
+}
+
 fn kinds_of(spans: &[RedactionAuditSpan]) -> std::collections::BTreeSet<String> {
     spans.iter().map(|s| s.kind.clone()).collect()
 }
@@ -220,8 +224,8 @@ fn corpus() -> Vec<u8> {
 
 // ── below the hold: exactly the oracle ───────────────────────────────────────────────
 
-#[test]
-fn every_split_point_matches_the_oracle_with_extra_patterns() {
+shards!(every_split_point_matches_the_oracle_with_extra_patterns, 6);
+fn every_split_point_matches_the_oracle_with_extra_patterns(shard: &Shard) {
     let input = corpus();
     let (want_bytes, want_spans) = legacy(&input);
     let kinds = kinds_of(&want_spans);
@@ -236,6 +240,9 @@ fn every_split_point_matches_the_oracle_with_extra_patterns() {
         "the corpus stays below the hold"
     );
     for split in 0..=input.len() {
+        if !shard.mine() {
+            continue;
+        }
         let mut p = Producer::with_redactor(P1, redactor());
         let mut records = p.open(1, CaptureSource::WireRequest);
         records.extend(p.bytes(1, &input[..split]));
@@ -248,6 +255,9 @@ fn every_split_point_matches_the_oracle_with_extra_patterns() {
             bytes, want_bytes,
             "retained bytes differ when split at {split}"
         );
+    }
+    if !shard.mine() {
+        return;
     }
     let (bytes, spans) = retained(&stream_through(redactor(), &input, &[1], 5));
     assert_eq!(
@@ -423,18 +433,30 @@ fn random_input(rng: &mut Rng, parts: usize) -> Vec<u8> {
     out
 }
 
-#[test]
-fn seeded_random_chunking_matches_the_oracle_with_extra_patterns() {
+shards!(
+    seeded_random_chunking_matches_the_oracle_with_extra_patterns,
+    8
+);
+fn seeded_random_chunking_matches_the_oracle_with_extra_patterns(shard: &Shard) {
     let seeds: u64 = std::env::var("T04B_FUZZ_SEEDS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1500);
     let mut seen = std::collections::BTreeSet::new();
+    // Each seed draws its input and chunkings from its own generator. The first part also
+    // reads the oracle of other parts' seeds, until the generator has reached every rule.
     for seed in 1..=seeds {
+        let mine = shard.mine();
+        if !mine && !(shard.first() && !reaches_every_kind(&seen)) {
+            continue;
+        }
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
         let input = random_input(&mut rng, 24);
         let (want_bytes, want_spans) = legacy(&input);
         seen.extend(kinds_of(&want_spans));
+        if !mine {
+            continue;
+        }
         for chunking in 0..3 {
             let chunks = match chunking {
                 0 => vec![1],
@@ -452,8 +474,10 @@ fn seeded_random_chunking_matches_the_oracle_with_extra_patterns() {
             );
         }
     }
-    for kind in EXTRA_KINDS {
-        assert!(seen.contains(kind), "the generator reaches {kind}");
+    if shard.first() {
+        for kind in EXTRA_KINDS {
+            assert!(seen.contains(kind), "the generator reaches {kind}");
+        }
     }
 }
 
@@ -732,22 +756,32 @@ fn adversarial_input(rng: &mut Rng) -> Vec<u8> {
     input
 }
 
-#[test]
-fn adversarial_long_inputs_never_expose_an_oracle_span() {
+shards!(adversarial_long_inputs_never_expose_an_oracle_span, 4);
+fn adversarial_long_inputs_never_expose_an_oracle_span(shard: &Shard) {
     let seeds: u64 = std::env::var("T04B_ADVERSARIAL_SEEDS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(40);
     let mut failures = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
+    // As in the seeded test above: one generator per seed, and the first part reads other
+    // parts' oracles until the generator has reached every rule.
     for seed in 1..=seeds {
+        let mine = shard.mine();
+        if !mine && !(shard.first() && !reaches_every_kind(&seen)) {
+            continue;
+        }
         let mut rng = Rng(seed.wrapping_mul(0xA076_1D64_78BD_642F) | 1);
         let input = adversarial_input(&mut rng);
         seen.extend(kinds_of(&legacy(&input).1));
-        failures.extend(never_less(&format!("seed {seed}"), &input, &mut rng));
+        if mine {
+            failures.extend(never_less(&format!("seed {seed}"), &input, &mut rng));
+        }
     }
-    for kind in EXTRA_KINDS {
-        assert!(seen.contains(kind), "the generator reaches {kind}");
+    if shard.first() {
+        for kind in EXTRA_KINDS {
+            assert!(seen.contains(kind), "the generator reaches {kind}");
+        }
     }
     assert!(
         failures.is_empty(),
@@ -852,8 +886,8 @@ fn covers(spans: &[RedactionAuditSpan], range: std::ops::Range<u64>) -> bool {
         .all(|b| spans.iter().any(|s| s.start <= b && b < s.end))
 }
 
-#[test]
-fn cuts_at_every_offset_never_release_a_held_connector_value() {
+shards!(cuts_at_every_offset_never_release_a_held_connector_value, 4);
+fn cuts_at_every_offset_never_release_a_held_connector_value(shard: &Shard) {
     for (name, input, value) in cut_cases() {
         let (complete_bytes, complete_spans) =
             retained(&stream_through(redactor(), &input, &[3], 1));
@@ -867,6 +901,9 @@ fn cuts_at_every_offset_never_release_a_held_connector_value() {
             "{name}: the oracle redacts the value"
         );
         for k in 0..=input.len() {
+            if !shard.mine() {
+                continue;
+            }
             let (_, prefix_spans) = legacy(&input[..k]);
             // The delivered part of the value, when the cut falls inside or after it.
             let delivered = value.start as u64..(value.end.min(k)) as u64;

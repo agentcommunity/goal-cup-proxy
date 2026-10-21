@@ -714,9 +714,14 @@ fn every_immediate_kit_directory_must_be_complete() {
     assert!(result.is_err(), "an incomplete case was silently skipped");
 }
 
+/// Each kit case runs to completion once. Without `--dev` it is refused before its stand-in
+/// spawns; with it, the same staged case spawns, seals and matches its expectations. The
+/// `synthetic-stdout-json` run also shows the home paths it declares created with private
+/// modes.
 #[test]
-fn every_kit_case_requires_the_dev_door() {
+fn every_kit_case_seals_and_matches_expectations() {
     with_real_home_guard(|| {
+        let mut modes_checked = false;
         for case in cases() {
             let staged = Staged::new(&case);
             let refused = staged.start(false);
@@ -732,24 +737,15 @@ fn every_kit_case_requires_the_dev_door() {
                 "{} spawned without --dev",
                 case.name
             );
-            let completed = staged.complete();
-            assert!(
-                completed.staged.marker.is_file(),
-                "{}: {}",
-                case.name,
-                completed.output
-            );
-        }
-    });
-}
-
-#[test]
-fn every_kit_case_seals_and_matches_expectations() {
-    with_real_home_guard(|| {
-        for case in cases() {
-            let run = Staged::new(&case).complete();
+            let run = staged.complete();
+            assert!(run.staged.marker.is_file(), "{}: {}", case.name, run.output);
+            if case.name == "synthetic-stdout-json" {
+                assert_private_home_modes(&run, &case);
+                modes_checked = true;
+            }
             assert_completed(&run);
         }
+        assert!(modes_checked, "the synthetic-stdout-json case ran");
     });
 }
 
@@ -779,57 +775,51 @@ fn a_denied_argv_is_refused_before_spawn() {
     );
 }
 
-#[test]
-fn nested_duplicate_and_implicit_home_paths_are_created_with_private_modes() {
-    with_real_home_guard(|| {
-        let case = cases()
-            .into_iter()
-            .find(|case| case.name == "synthetic-stdout-json")
-            .expect("the stdout-json case");
-        let run = Staged::new(&case).complete();
-        let run_dir = run.staged.world.run_dir().expect("one run directory");
-        let home = run_dir.join("stdout-home");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let seed = case.expect.seed_path.as_ref().expect("the nested seed");
+/// Nested, duplicate and implicit home paths are created with private modes: the nested seed
+/// is 0400 with its bytes, every implicit parent of it and every declared directory 0700.
+fn assert_private_home_modes(run: &Completed, case: &Case) {
+    let run_dir = run.staged.world.run_dir().expect("one run directory");
+    let home = run_dir.join("stdout-home");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let seed = case.expect.seed_path.as_ref().expect("the nested seed");
+        assert_eq!(
+            std::fs::metadata(home.join(seed))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o400
+        );
+        assert_eq!(
+            std::fs::read(home.join(seed)).unwrap(),
+            b"{\"network\":\"offline\",\"updates\":false}\n"
+        );
+        let mut parent = Path::new(seed).parent();
+        while let Some(relative) = parent.filter(|path| !path.as_os_str().is_empty()) {
             assert_eq!(
-                std::fs::metadata(home.join(seed))
+                std::fs::metadata(home.join(relative))
                     .unwrap()
                     .permissions()
                     .mode()
                     & 0o777,
-                0o400
+                0o700,
+                "implicit seed parent {}",
+                relative.display()
             );
-            assert_eq!(
-                std::fs::read(home.join(seed)).unwrap(),
-                b"{\"network\":\"offline\",\"updates\":false}\n"
-            );
-            let mut parent = Path::new(seed).parent();
-            while let Some(relative) = parent.filter(|path| !path.as_os_str().is_empty()) {
-                assert_eq!(
-                    std::fs::metadata(home.join(relative))
-                        .unwrap()
-                        .permissions()
-                        .mode()
-                        & 0o777,
-                    0o700,
-                    "implicit seed parent {}",
-                    relative.display()
-                );
-                parent = relative.parent();
-            }
-            for dir in &case.expect.dirs {
-                assert_eq!(
-                    std::fs::metadata(home.join(dir))
-                        .unwrap()
-                        .permissions()
-                        .mode()
-                        & 0o777,
-                    0o700,
-                    "{dir}"
-                );
-            }
+            parent = relative.parent();
         }
-    });
+        for dir in &case.expect.dirs {
+            assert_eq!(
+                std::fs::metadata(home.join(dir))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700,
+                "{dir}"
+            );
+        }
+    }
 }

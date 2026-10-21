@@ -231,3 +231,75 @@ pub fn uncovered(
     }
     missing
 }
+
+/// One part of a slow loop split across several tests, so nextest runs the parts in parallel.
+/// The loop asks [`Shard::mine`] once per case, in the same order in every part, and skips the
+/// work of a case that is not its own. A skipped case still draws from any generator the case
+/// draws from, so every part sees the cases the unsplit loop saw. Part `k` of `n` takes every
+/// `n`th case from the `k`th, so the parts together check every case exactly once.
+pub struct Shard {
+    part: usize,
+    parts: usize,
+    next: std::cell::Cell<usize>,
+}
+
+impl Shard {
+    pub fn new(part: usize, parts: usize) -> Self {
+        assert!(part < parts, "part {part} of {parts}");
+        Shard {
+            part,
+            parts,
+            next: std::cell::Cell::new(0),
+        }
+    }
+
+    /// Whether the loop's next case is this part's.
+    pub fn mine(&self) -> bool {
+        let case = self.next.get();
+        self.next.set(case + 1);
+        case % self.parts == self.part
+    }
+
+    pub fn parts(&self) -> usize {
+        self.parts
+    }
+
+    /// The first part, which also runs a loop's checks over all its cases (that the
+    /// generator reaches every rule, say).
+    pub fn first(&self) -> bool {
+        self.part == 0
+    }
+}
+
+/// `shards!(check, n)`: the tests `check::part_1` to `check::part_n`, each running
+/// `check(&Shard)` for its part. `check` keeps the name the unsplit test had, so a filter on
+/// that name selects every part.
+// Only the `it` binary splits a loop; the others compile this file too.
+#[allow(unused_macros)]
+macro_rules! shards {
+    ($check:ident, 2) => { shards!(@ $check: part_1 part_2); };
+    ($check:ident, 3) => { shards!(@ $check: part_1 part_2 part_3); };
+    ($check:ident, 4) => { shards!(@ $check: part_1 part_2 part_3 part_4); };
+    ($check:ident, 6) => { shards!(@ $check: part_1 part_2 part_3 part_4 part_5 part_6); };
+    ($check:ident, 8) => {
+        shards!(@ $check: part_1 part_2 part_3 part_4 part_5 part_6 part_7 part_8);
+    };
+    ($check:ident, 12) => {
+        shards!(@ $check: part_1 part_2 part_3 part_4 part_5 part_6 part_7 part_8 part_9
+            part_10 part_11 part_12);
+    };
+    (@ $check:ident: $($part:ident)+) => {
+        mod $check {
+            const PARTS: &[&str] = &[$(stringify!($part)),+];
+            $(
+                #[test]
+                fn $part() {
+                    let part = PARTS.iter().position(|p| *p == stringify!($part)).unwrap();
+                    super::$check(&$crate::common::redaction::Shard::new(part, PARTS.len()));
+                }
+            )+
+        }
+    };
+}
+#[allow(unused_imports)]
+pub(crate) use shards;

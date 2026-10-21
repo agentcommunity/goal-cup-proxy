@@ -34,8 +34,7 @@ debug = false
 # The regex engine and its search helpers, optimised in dev and test builds. The daemon's
 # redactor runs every byte through `regex::bytes`, and unoptimised they made the seeded
 # redaction tests 4 to 9 times slower: on a 4-vCPU x86_64 runner two of them passed nextest's
-# 180 s limit. Debug assertions and overflow checks stay on; the workspace's own crates stay
-# unoptimised.
+# 180 s limit. Debug assertions and overflow checks stay on.
 [profile.dev.package.regex]
 opt-level = 3
 
@@ -50,6 +49,15 @@ opt-level = 3
 
 [profile.dev.package.memchr]
 opt-level = 3
+
+# The daemon itself (its library, binaries and tests) at opt-level 1, debug assertions and
+# overflow checks still on: the redaction suites use about 30% less CPU and the daemon's
+# library tests half. Measured on 4 vCPUs (21 Oct, after a daemon change): the fast gate's
+# build and nextest steps took 364 s at 0, 295 s at 1 and 326 s at 2 (2 runs the tests fastest,
+# but compiles the daemon's large test binary much slower). The other workspace crates stay
+# unoptimised.
+[profile.dev.package.goalcup-daemon]
+opt-level = 1
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
