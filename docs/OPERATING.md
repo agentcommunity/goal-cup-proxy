@@ -517,7 +517,9 @@ part that disappears before it is opened produces an I/O error and no usable rep
 not skip or re-enumerate missing parts. A chain whose initial parts were already pruned remains
 incomplete (`chain_pruned_locally`). During a run, a part the server acknowledged is pruned two
 hours later, or at once when the run's parts pass its 3 GiB reservation or the disk has under 5 GiB
-free beyond it. Avoid analyzing a local trace while upload pruning can change it; retrieve a
+free beyond it. Once an entry is sealed and the server has acknowledged all of it and its seal,
+the end of the run's wrap-up, `goalcup upload` and `goalcup status` delete every part but the last
+at once (`seal.json`, `baseline.json` and `acks.jsonl` stay). Avoid analyzing a local trace while upload pruning can change it; retrieve a
 complete sealed copy when needed.
 
 ### Judging a run from the server's copy

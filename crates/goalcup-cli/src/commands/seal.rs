@@ -258,13 +258,21 @@ pub(crate) fn report_local_finish(
             out,
             &format!("entry {entry_id}: finished locally; {terminal} and seal.json binds it."),
         )?,
-        LocalSealOutcome::SealWriteFailed => say(
-            out,
-            &format!(
-                "entry {entry_id}: finished locally, but seal.json could not be written \
-                 ({terminal}), so the trace reads incomplete."
-            ),
-        )?,
+        LocalSealOutcome::SealWriteFailed => {
+            // With its terminal chained, the tracker writes seal.json again on the next seal.
+            let again = if finish.terminal_seq.is_some() {
+                format!(" Once there is disk space, run `goalcup seal {entry_id}` again.")
+            } else {
+                String::new()
+            };
+            say(
+                out,
+                &format!(
+                    "entry {entry_id}: finished locally, but seal.json could not be written \
+                     ({terminal}), so the trace reads incomplete.{again}"
+                ),
+            )?
+        }
     }
     // A run opened on an upload server carries its signed start receipt in the trace.
     let receipt =

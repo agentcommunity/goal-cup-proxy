@@ -344,8 +344,28 @@ impl Daemon {
                 None => Err(capture.expire(FinishStage::RunLock, None, None)),
             };
         };
-        if let Some(done) = run.finished() {
-            return Ok(done.clone());
+        if let Some(done) = run.finished().cloned() {
+            // A finish whose `seal.json` could not be written (a full disk) writes it again,
+            // when this daemon still holds the manifest its terminal binds.
+            let chained = lock(&capture.chained_finish).clone();
+            if done.seal == LocalSealOutcome::SealWriteFailed
+                && let Some(mut chained) = chained
+                && let Some(manifest) = chained.manifest.take()
+                && lock(&capture.writer)
+                    .export
+                    .rewrite_local_finish_seal(&manifest)
+                    .is_ok()
+            {
+                chained.seal_written = true;
+                let sealed_at = chained.sealed_at.clone();
+                *lock(&capture.chained_finish) = Some(chained);
+                let report = CaptureFinishReport {
+                    seal: LocalSealOutcome::SealWritten,
+                    ..done
+                };
+                return self.commit_finish(capture, run, report, sealed_at);
+            }
+            return Ok(done);
         }
         let entry_id = run.entry.entry_id.clone();
         // The terminal is already chained (its registry write failed, or a daemon died between
@@ -498,6 +518,7 @@ impl Daemon {
                     termination: termination.clone(),
                     sealed_at: sealed_at.clone(),
                     seal_written: true,
+                    manifest: None,
                 });
                 (LocalSealOutcome::SealWritten, Some(link.seq))
             }
@@ -507,14 +528,15 @@ impl Daemon {
                     .head()
                     .map(|(seq, _)| seq)
                     .filter(|seq| Some(*seq) != before);
-                // A terminal chained without its `seal.json`: a retry commits the failure and
-                // appends nothing after it.
+                // A terminal chained without its `seal.json`: a retry commits the failure,
+                // appends nothing after it, and writes `seal.json` again from this manifest.
                 if let Some(seq) = terminal_seq {
                     *lock(&capture.chained_finish) = Some(super::ChainedFinish {
                         seq,
                         termination: termination.clone(),
                         sealed_at: sealed_at.clone(),
                         seal_written: false,
+                        manifest: Some(manifest.clone()),
                     });
                 }
                 (LocalSealOutcome::SealWriteFailed, terminal_seq)

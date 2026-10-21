@@ -580,6 +580,8 @@ pub enum Phase {
     AgentExited,
     /// The run's time is up and goalcup is finishing it.
     Finishing,
+    /// The run is over and its host finished, but its `seal.json` was never written.
+    NotSealed,
     /// The run is sealed; part of it is not uploaded.
     Sealed,
     /// The run is sealed and all of it is uploaded.
@@ -692,6 +694,9 @@ pub fn status_header(h: &StatusHeader<'_>) -> Vec<String> {
             "the run has ended, goalcup is finishing the run".to_string()
         }
         (Some(Phase::Finishing), _) => "time is up, goalcup is finishing the run".to_string(),
+        (Some(Phase::NotSealed), _) => {
+            "finished, but not sealed (seal.json was not written)".to_string()
+        }
         (Some(Phase::Sealed), None) => "sealed on this computer".to_string(),
         (Some(Phase::Sealed), Some(_)) => "sealed, not all of it is uploaded yet".to_string(),
         (Some(Phase::Uploaded), _) => "sealed and uploaded".to_string(),
@@ -873,15 +878,9 @@ pub fn problem_server_refuses(status: u16) -> String {
     )
 }
 
-/// `failures` heartbeats in a row failed; one is sent every [`Policy::heartbeat`] (five minutes).
-///
-/// [`Policy::heartbeat`]: crate::upload::policy::Policy
-pub fn problem_heartbeats(failures: u32, why: &str) -> String {
-    let cadence_min = crate::upload::policy::Policy::default().heartbeat.as_secs() / 60;
-    format!(
-        "the server has not heard from this run for about {} min ({why}). Check the network.",
-        u64::from(failures) * cadence_min
-    )
+/// Heartbeats keep failing; `silent` is how long the heartbeats have been failing, in words ([`crate::run::age_words`]).
+pub fn problem_heartbeats(silent: &str, why: &str) -> String {
+    format!("the server has not heard from this run for about {silent} ({why}). Check the network.")
 }
 
 /// The one `goalcup status` line about this computer: free disk, what goalcup's own processes
@@ -1039,6 +1038,14 @@ pub fn upload_not_sealed() -> String {
     "Run goalcup upload again once the run has ended. What exists so far is uploaded; the run is \
      not sealed yet."
         .to_string()
+}
+
+/// The upload finished, and the run's host finished without writing the entry's `seal.json`.
+pub fn upload_seal_missing(entry_id: &str) -> String {
+    format!(
+        "The run is not sealed: its seal.json could not be written. Once there is disk space, run \
+         goalcup seal {entry_id} again, then goalcup upload."
+    )
 }
 
 /// The first lines of `goalcup entries`.
@@ -1657,7 +1664,7 @@ mod tests {
         );
         assert!(problem_upload("40 min", "503", true).ends_with("goalcup upload"));
         assert!(problem_upload("40 min", "503", false).contains("Check the network"));
-        assert!(problem_heartbeats(3, "503").contains("15 min"));
+        assert!(problem_heartbeats("15 min", "503").contains("15 min"));
         assert!(problem_disk("3.2 GiB").contains("Free some space"));
         assert!(problem_sleep("no inhibitor").contains("power"));
         assert!(problem_recording_failed("r1").contains(SUPPORT_ADDRESS));

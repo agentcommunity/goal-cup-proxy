@@ -184,6 +184,11 @@ pub struct HeartbeatState {
     /// Why the last one failed, in a sentence.
     #[serde(default)]
     pub last_failure: Option<String>,
+    /// The unix second the first of these failures came: how long the server has not heard
+    /// the run is counted from it, never from the count (heartbeats are not always minutes
+    /// apart).
+    #[serde(default)]
+    pub failing_since: Option<u64>,
 }
 
 /// How many heartbeats in a row must fail before `goalcup status` calls it a problem: three,
@@ -412,10 +417,12 @@ impl RunState {
             && !self.ended
             && let Some(why) = &self.heartbeat.last_failure
         {
-            lines.push(participant::problem_heartbeats(
-                self.heartbeat.failures,
-                why,
-            ));
+            // A state an older build wrote has no start: the count at the usual cadence.
+            let silent = self.heartbeat.failing_since.map_or_else(
+                || u64::from(self.heartbeat.failures) * HEARTBEAT_EVERY_SECS,
+                |since| now.saturating_sub(since),
+            );
+            lines.push(participant::problem_heartbeats(&age_words(silent), why));
         }
         // A paused agent's line says what to do about the disk, so the low-space line is not
         // said beside it.
@@ -448,6 +455,9 @@ impl RunState {
         lines
     }
 }
+
+/// The usual time between two heartbeats.
+const HEARTBEAT_EVERY_SECS: u64 = 5 * 60;
 
 /// How many watch periods without a write make a run's state stale.
 pub const STATE_STALE_AFTER_TICKS: u64 = 3;
@@ -482,6 +492,7 @@ struct UploadVital {
     /// Heartbeats in a row that failed, and why the last one did.
     heartbeat_failures: u32,
     heartbeat_last: Option<String>,
+    heartbeat_failing_since: Option<u64>,
     /// Per [`Channel`]: the status the server last refused that channel's call with, and how
     /// many times in a row it did. `None` once it answers normally.
     refusals: [Option<(u16, u32)>; 2],
@@ -589,6 +600,7 @@ impl Vitals {
         let mut upload = self.upload();
         upload.heartbeat_failures = upload.heartbeat_failures.saturating_add(1);
         upload.heartbeat_last = Some(why.to_string());
+        upload.heartbeat_failing_since.get_or_insert_with(now_unix);
         upload.heartbeat_failures
     }
 
@@ -597,6 +609,7 @@ impl Vitals {
         let mut upload = self.upload();
         upload.heartbeat_failures = 0;
         upload.heartbeat_last = None;
+        upload.heartbeat_failing_since = None;
     }
 
     /// How the heartbeats are doing: the failures in a row, and why the last one failed.
@@ -605,6 +618,7 @@ impl Vitals {
         HeartbeatState {
             failures: upload.heartbeat_failures,
             last_failure: upload.heartbeat_last.clone(),
+            failing_since: upload.heartbeat_failing_since,
         }
     }
 
@@ -1102,6 +1116,7 @@ mod tests {
         state.heartbeat = HeartbeatState {
             failures: HEARTBEATS_FAILING_AFTER,
             last_failure: Some("the server answered HTTP 503".to_string()),
+            ..HeartbeatState::default()
         };
         state.disk = DiskState {
             free_bytes: 3 << 30,
@@ -1373,18 +1388,32 @@ mod tests {
         assert_eq!(vitals.heartbeat_trouble(), HeartbeatState::default());
         assert_eq!(vitals.heartbeat_failed("503"), 1);
         assert_eq!(vitals.heartbeat_failed("timeout"), 2);
-        assert_eq!(
-            vitals.heartbeat_trouble(),
-            HeartbeatState {
-                failures: 2,
-                last_failure: Some("timeout".to_string())
-            }
-        );
+        let trouble = vitals.heartbeat_trouble();
+        assert_eq!(trouble.failures, 2);
+        assert_eq!(trouble.last_failure.as_deref(), Some("timeout"));
+        assert!(trouble.failing_since.is_some());
         // The upload's own trouble is a separate count.
         vitals.upload_ok();
         assert_eq!(vitals.heartbeat_trouble().failures, 2);
         vitals.heartbeat_ok();
         assert_eq!(vitals.heartbeat_trouble(), HeartbeatState::default());
+    }
+
+    /// How long the server has not heard the run is the time since the first failure, however
+    /// many heartbeats failed in it: half an hour of beats ten seconds apart is 30 min, not 900.
+    #[test]
+    fn heartbeat_silence_is_counted_in_time_not_in_failures() {
+        let now = 1_000_000;
+        let mut state = RunState::launched("e1", Ok(()));
+        state.updated_at = now;
+        state.heartbeat = HeartbeatState {
+            failures: 180,
+            last_failure: Some("no answer".to_string()),
+            failing_since: Some(now - 30 * 60),
+        };
+        let lines = state.problems(now, Advice::Cannot, &who());
+        let line = lines.iter().find(|l| l.contains("not heard")).unwrap();
+        assert!(line.contains("about 30 min"), "{line}");
     }
 
     /// D64: three refusals of one status in a row are said once and named until the server

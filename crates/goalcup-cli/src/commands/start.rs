@@ -2780,6 +2780,9 @@ fn finish_run(
         }
         None => {}
     }
+    // Last of the wrap-up: the chain parts the server acknowledged of every entry that is sealed
+    // and sent go from this machine (the last part, the seal and the acknowledgements stay).
+    crate::upload::prune::clean_finished_runs(cfg);
     finished?;
     if let Some(refusal) = left_running {
         return Err(refusal);

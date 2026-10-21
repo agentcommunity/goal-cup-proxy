@@ -53,6 +53,7 @@ pub fn upload_newest_with(
             &crate::run::reserve::artifact_root(cfg),
             crate::run::now_unix(),
         );
+        crate::upload::prune::clean_finished_runs(cfg);
         let _ = writeln!(out, "{}", participant::upload_nothing_left(&run_id));
         return Ok(());
     }
@@ -73,6 +74,8 @@ pub fn upload_newest_with(
             }
         }
     }
+    // What is sealed and sent, of this run or an older one, need not stay on this machine.
+    crate::upload::prune::clean_finished_runs(cfg);
     if first_error.is_none()
         && let Some(sent) = last
     {
@@ -82,20 +85,24 @@ pub fn upload_newest_with(
 }
 
 /// How far one part of a run got.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Sent {
     /// All of it is on the server, with its seal.
     Sealed,
     /// All of it so far is on the server; the run is not sealed yet.
     NotSealedYet,
+    /// All of it is on the server, and the run's host has finished without sealing this entry
+    /// (its `seal.json` could not be written): only `goalcup seal` can seal it now.
+    SealMissing(String),
 }
 
 impl Sent {
     /// The plain line for the end of an upload, the next action first.
-    fn plain(self) -> String {
+    fn plain(&self) -> String {
         match self {
             Sent::Sealed => participant::upload_finished(),
             Sent::NotSealedYet => participant::upload_not_sealed(),
+            Sent::SealMissing(entry_id) => participant::upload_seal_missing(entry_id),
         }
     }
 }
@@ -108,8 +115,10 @@ pub fn upload_with(
     policy: Policy,
     out: &mut dyn std::io::Write,
 ) -> Result<(), CliError> {
-    let sent = upload_entry(cfg, entry_id, policy, out)?;
-    let _ = writeln!(out, "{}", sent.plain());
+    let sent = upload_entry(cfg, entry_id, policy, out);
+    // What is sealed and sent, of this run or an older one, need not stay on this machine.
+    crate::upload::prune::clean_finished_runs(cfg);
+    let _ = writeln!(out, "{}", sent?.plain());
     Ok(())
 }
 
@@ -211,12 +220,25 @@ fn upload_entry(
             why: None,
             ..
         } => {
-            say(&format!(
-                "uploaded: {} bytes of entry {entry_id}, acknowledged. The run is not sealed yet; \
-                 run this again once it is.",
-                report.offset
-            ));
-            Sent::NotSealedYet
+            // The host that seals this entry has finished: if it left no seal, none is coming.
+            let host_done = crate::run::read_state(&run_dir)
+                .is_some_and(|state| state.ended && state.entry_id == entry_id);
+            if host_done && !crate::upload::prune::is_sealed(Path::new(&record.trace_dir), entry_id)
+            {
+                say(&format!(
+                    "uploaded: {} bytes of entry {entry_id}, acknowledged. Its seal.json was not \
+                     written, so the run is not sealed.",
+                    report.offset
+                ));
+                Sent::SealMissing(entry_id.to_string())
+            } else {
+                say(&format!(
+                    "uploaded: {} bytes of entry {entry_id}, acknowledged. The run is not sealed \
+                     yet; run this again once it is.",
+                    report.offset
+                ));
+                Sent::NotSealedYet
+            }
         }
         crate::upload::uploader::Report { why, .. } => {
             return Err(CliError::Refused(participant::upload_incomplete(

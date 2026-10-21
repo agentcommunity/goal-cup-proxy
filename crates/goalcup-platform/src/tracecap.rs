@@ -256,6 +256,12 @@ impl TraceDir {
         self.inner.entry_exists(document.name())
     }
 
+    /// Remove one fixed document, a regular file reached by its own name without following a
+    /// link. Missing is fine.
+    pub fn remove_fixed(&self, document: FixedDocument) -> Result<(), TraceCapError> {
+        self.inner.remove_regular(document.name())
+    }
+
     pub fn read_fixed(
         &self,
         document: FixedDocument,

@@ -19,6 +19,7 @@ use goalcup_protocol::control::{
     SUFFIX_CAPTURE_GOAL, SUFFIX_SEAL, SUFFIX_STATUS, SignedStatus, entry_route,
 };
 use goalcup_protocol::envelope::EventBody;
+use goalcup_protocol::events::HealthState;
 use goalcup_protocol::provenance::TerminationOutcomeV1;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -2345,7 +2346,7 @@ async fn a_failed_local_finish_is_reported_and_never_reads_finished() {
     let again: CaptureFinishReport = rig.seal(&info.entry_id, None).await.json().unwrap();
     assert_eq!(
         again, report,
-        "the failure is answered again, never retried"
+        "the failure is answered again: a seal.json that is not ours is never written over"
     );
 
     let failed = |status: SignedStatus| {
@@ -2361,6 +2362,48 @@ async fn a_failed_local_finish_is_reported_and_never_reads_finished() {
     failed(rig.status(&info.entry_id).await);
     let rig = rig.restart().await;
     failed(rig.status(&info.entry_id).await);
+}
+
+/// A `seal.json` the finish could not write (a full disk leaves an empty file at its name) is
+/// written by the next seal, from the manifest the terminal binds, and the entry reads sealed.
+#[tokio::test]
+async fn a_seal_json_the_finish_could_not_write_is_written_by_the_next_seal() {
+    let rig = Rig::start().await;
+    let info = rig.created("codex-cli").await;
+    let seal = rig.trace_dir(&info.entry_id).join("seal.json");
+    std::fs::write(&seal, b"").unwrap();
+    let first: CaptureFinishReport = rig.seal(&info.entry_id, None).await.json().unwrap();
+    assert_eq!(first.seal, LocalSealOutcome::SealWriteFailed);
+    let chain = rig.trace_dir(&info.entry_id).join("chain.jsonl");
+    let closed = std::fs::read(&chain).unwrap();
+    let health = |rig: &Rig| {
+        let entries = rig.daemon.entries().unwrap();
+        let entry = entries
+            .iter()
+            .find(|e| e.entry_id == info.entry_id)
+            .unwrap();
+        entry.health
+    };
+    assert_ne!(
+        health(&rig),
+        HealthState::Sealed,
+        "no seal.json, not sealed"
+    );
+
+    let again: CaptureFinishReport = rig.seal(&info.entry_id, None).await.json().unwrap();
+    assert_eq!(again.seal, LocalSealOutcome::SealWritten);
+    assert_eq!(again.terminal_seq, first.terminal_seq);
+    assert_eq!(
+        std::fs::read(&chain).unwrap(),
+        closed,
+        "nothing after the terminal"
+    );
+    let manifest: goalcup_protocol::seal::SealManifest =
+        serde_json::from_slice(&std::fs::read(&seal).unwrap()).unwrap();
+    assert_eq!(manifest.entry_id, info.entry_id);
+    let status = rig.status(&info.entry_id).await;
+    assert_eq!(status.payload.capture.unwrap().run, RunState::Sealed);
+    assert_eq!(health(&rig), HealthState::Sealed);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

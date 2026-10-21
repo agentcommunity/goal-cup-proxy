@@ -190,6 +190,8 @@ pub enum ExportError {
     AcksExist,
     #[error("{name} already exists: fixed trace documents are absent-only")]
     FixedDocumentExists { name: &'static str },
+    #[error("the chain does not end in a local finish, so it has no seal.json to write again")]
+    NoLocalFinish,
     #[error(
         "a {kind} is chained by write_{kind} and by nothing else: append_chain does not take \
          one, because the position and once-only rules that make a {kind} mean anything are \
@@ -1567,6 +1569,45 @@ impl TraceExport {
         let path = self.write_fixed(FixedTraceDocument::Seal, &bytes)?;
         self.sync_capture()?;
         Ok((path, link))
+    }
+
+    /// Write `seal.json` again for the local finish this chain already ends in, after the first
+    /// write failed (a full disk). `manifest` is the one that finish chained, so the bytes are the
+    /// ones its terminal binds. A file the failed write left behind (empty, or cut short of these
+    /// bytes) is replaced; a whole copy is kept; anything else is refused and left as it is.
+    pub fn rewrite_local_finish_seal(
+        &mut self,
+        manifest: &SealManifest,
+    ) -> Result<PathBuf, ExportError> {
+        if !matches!(
+            self.phase,
+            ExportPhase::Terminal {
+                kind: TerminalKind::LocalFinish,
+                ..
+            }
+        ) {
+            return Err(ExportError::NoLocalFinish);
+        }
+        let bytes = to_json("seal", &manifest.clone().sorted())?;
+        if let Some(file) = self.root.read_fixed(FixedTraceDocument::Seal)? {
+            let mut there = Vec::new();
+            file.take(bytes.len() as u64 + 1)
+                .read_to_end(&mut there)
+                .map_err(|source| ExportError::Io {
+                    path: self.root.display.join(SEAL_FILE).display().to_string(),
+                    source,
+                })?;
+            if there == bytes {
+                return Ok(self.root.display.join(SEAL_FILE));
+            }
+            if !bytes.starts_with(&there) {
+                return Err(ExportError::FixedDocumentExists { name: SEAL_FILE });
+            }
+            self.root.dir.remove_fixed(FixedDocument::Seal)?;
+        }
+        let path = self.write_fixed(FixedTraceDocument::Seal, &bytes)?;
+        self.root.dir.sync()?;
+        Ok(path)
     }
 
     #[cfg(any(test, feature = "test-hooks"))]

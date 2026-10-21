@@ -881,7 +881,11 @@ impl Daemon {
             .map(|capture| {
                 let run = capture.lock();
                 let (gate, health) = match (run.finished(), run.launched()) {
-                    (Some(_), _) => (ArmingState::Started, HealthState::Sealed),
+                    (Some(done), _) if done.seal == LocalSealOutcome::SealWritten => {
+                        (ArmingState::Started, HealthState::Sealed)
+                    }
+                    // Finished without its `seal.json`: not sealed, and it needs attention.
+                    (Some(_), _) => (ArmingState::Started, HealthState::SealingRecoveryNeeded),
                     (None, true) => (ArmingState::Started, HealthState::Online),
                     (None, false) => (ArmingState::Armed, HealthState::Online),
                 };
@@ -1048,6 +1052,7 @@ impl ChainFacts {
                     // Until `seal.json` is read back and binds the terminal: see `bind_seal`.
                     sealed_at: envelope.recorded_at.clone(),
                     seal_written: false,
+                    manifest: None,
                 });
                 self.seal_digest = Some(seal_manifest_sha256.clone());
             }
@@ -1066,6 +1071,9 @@ pub(super) struct ChainedFinish {
     pub(super) sealed_at: String,
     /// Whether its `seal.json` is written and binds it; a finish without one is a failed seal.
     pub(super) seal_written: bool,
+    /// The manifest the terminal binds, kept while its `seal.json` is not written, so that the
+    /// next finish writes it again. This daemon's memory only: a restarted one has none.
+    pub(super) manifest: Option<SealManifest>,
 }
 
 /// Sign a v5 entry's status with `capture` as its capture projection and the receiver's

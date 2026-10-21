@@ -100,6 +100,8 @@ pub fn status_in(
         &crate::run::reserve::artifact_root(cfg),
         crate::run::now_unix(),
     );
+    // What is sealed and sent need not stay on this machine: its acknowledged parts go.
+    crate::upload::prune::clean_finished_runs(cfg);
     // First of everything, before the daemon is even asked: where the run is and what to do
     // about anything wrong with it. A `--json` caller gets the document.
     let mut run_id = None;
@@ -315,13 +317,20 @@ fn run_report(
     let exited = matches!(state.harness, crate::run::HarnessState::Exited { .. });
     // Done: its time is up, or the agent left a run nothing can restart.
     let done = over || (state.ended && exited && advice == crate::run::Advice::Cannot);
+    // Sealed only with a valid `seal.json`: a host can finish without having written one.
+    let sealed = run
+        .entries
+        .last()
+        .is_some_and(|e| crate::upload::prune::is_sealed(&e.trace_dir, &e.entry_id));
     let phase = if done {
         if !state.ended {
             participant::Phase::Finishing
         } else if all_sent {
             participant::Phase::Uploaded
-        } else {
+        } else if sealed {
             participant::Phase::Sealed
+        } else {
+            participant::Phase::NotSealed
         }
     } else if exited {
         participant::Phase::AgentExited
@@ -383,6 +392,7 @@ fn run_report(
         // Time is up and the state is moving: goalcup is finishing the run. If nothing writes it
         // any more (the computer restarted, the process was killed), nobody will: seal it here.
         participant::Phase::Finishing if stale => participant::Next::Seal { upload: on_server },
+        participant::Phase::NotSealed => participant::Next::Seal { upload: on_server },
         participant::Phase::Finishing => participant::Next::Wait,
         participant::Phase::Sealed if on_server => participant::Next::Upload,
         participant::Phase::Sealed => participant::Next::Nothing,

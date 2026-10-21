@@ -700,6 +700,14 @@ fn run_with_state_on(
     deadline_at: Option<&str>,
 ) {
     use goalcup_cli::run::{EntryRef, RunRecord, StateKeeper, run_dir, write};
+    // The entry's trace holds a valid seal.json: a run whose host finished is sealed.
+    let trace_dir = trace_of(cfg, entry_id);
+    std::fs::create_dir_all(&trace_dir).unwrap();
+    let seal = serde_json::json!({
+        "entry_id": entry_id, "sealed_at": "2026-10-21T00:00:00Z", "workspace": "/w",
+        "files": [], "excluded": [],
+    });
+    std::fs::write(trace_dir.join("seal.json"), seal.to_string()).unwrap();
     write(
         cfg,
         &RunRecord {
@@ -713,7 +721,7 @@ fn run_with_state_on(
             deadline_at: deadline_at.map(str::to_string),
             entries: vec![EntryRef {
                 entry_id: entry_id.to_string(),
-                trace_dir: PathBuf::from("/t"),
+                trace_dir,
             }],
         },
     )
@@ -727,6 +735,11 @@ fn run_with_state_on(
         goalcup_cli::account::credential::store(&run_dir(cfg, entry_id), &credential).unwrap();
     }
     StateKeeper::begin(&run_dir(cfg, entry_id), state);
+}
+
+/// The trace directory [`run_with_state_on`] gives the entry.
+fn trace_of(cfg: &std::path::Path, entry_id: &str) -> PathBuf {
+    cfg.join("traces").join(entry_id)
 }
 
 /// Write the run's state as a tracer that stopped at `updated_at` left it: the keeper stamps
@@ -1050,6 +1063,7 @@ fn status_names_heartbeats_that_keep_failing() {
     state.heartbeat = HeartbeatState {
         failures: HEARTBEATS_FAILING_AFTER - 1,
         last_failure: Some("the server answered HTTP 503".to_string()),
+        ..HeartbeatState::default()
     };
     run_with_state(&cfg, &info.entry_id, state.clone());
     let text = status_text(&m, &cfg, &info.entry_id, false);
@@ -1417,6 +1431,43 @@ fn status_names_the_next_action_for_every_state_of_a_run_that_is_over() {
         "{text}"
     );
     assert!(next_of(&text).contains("nothing to do"), "{text}");
+}
+
+/// T25: a run whose host finished without writing seal.json (a full disk) is not called sealed,
+/// and the next action is to seal it, then upload.
+#[test]
+fn status_calls_a_run_sealed_only_when_its_seal_json_is_there() {
+    use goalcup_cli::run::{HarnessState, RunState};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.harness = HarnessState::Exited {
+        status: "signal 15".to_string(),
+    };
+    state.stopped =
+        Some("the server says the run is over (its deadline was 2020-01-01T00:00:00Z)".into());
+    state.ended = true;
+    let server = Some("https://server.example");
+    let over = Some("2020-01-01T00:00:00Z");
+    run_with_state_on(&cfg, &info.entry_id, state, server, over);
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(
+        participant_block(&text).contains("sealed, not all"),
+        "{text}"
+    );
+
+    std::fs::remove_file(trace_of(&cfg, &info.entry_id).join("seal.json")).unwrap();
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    let block = participant_block(&text);
+    assert!(block.contains("not sealed"), "{text}");
+    assert!(!block.contains("sealed, not all"), "{text}");
+    let next = block.lines().find(|l| l.starts_with("Next:")).unwrap();
+    assert!(
+        next.contains("goalcup seal") && next.ends_with("goalcup upload"),
+        "{text}"
+    );
 }
 
 /// A run a newer run replaced did not end at its deadline, and the header does not say it did.
