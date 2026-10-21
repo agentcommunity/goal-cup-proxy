@@ -1656,8 +1656,16 @@ def cmd_login(args, runner):
     if rc != 0:
         return rc
     rc = runner.interactive([goalcup, "prep", "--harness", cell["connector"]], env=env)
+    # prep exits 1 while any of its steps is still to do, which a kit cell always has (no push
+    # helper, a practice repository): what this login needs is the harness home signed in.
+    prep = read_json(os.path.join(cell["config_dir"], "prep.json")) or {}
+    if not (prep.get("harness") == cell["connector"] and prep.get("home_ready") is True):
+        print(f"error cell {cell['id']}: goalcup prep (exit {rc}) did not record the "
+              f"{cell['connector']} home as signed in (prep.json home_ready)", file=sys.stderr)
+        return rc or 1
     if rc != 0:
-        return rc
+        print(f"note  cell {cell['id']}: goalcup prep exited {rc} with steps still to do; the "
+              f"{cell['connector']} home is signed in, so the kit settles the rest")
     argv, env = settle_command(cfg, cell)
     rc, out = runner.run(argv, env=env, timeout=60)
     print(out, end="")
