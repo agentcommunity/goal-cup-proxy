@@ -16,12 +16,19 @@ trigger), plus the auth host.
 Schedule (`full`): six 300 s phases, dense/sparse alternating (D S D S D S), 1800 s in all.
 - Dense, per 1 s tick, 128 KiB of selected decoded payload counted in both directions:
   HTTP/SSE half: one 16 KiB echo (16 KiB up + 16 KiB down) and one SSE response of 8 events
-  x 4096 B (32 KiB down); WS half: two 16 KiB client text messages (4 KiB frames, a ping after
-  the first frame) echoed by the endpoint in 4 KiB frames (64 KiB).
-- Sparse: sixteen interleaved SSE streams (offsets 0.625 s apart), each receiving one 256-byte
-  event every 10 s: 3 requests x 10 events per phase and stream.
+  x 4088 B plus one 64-byte tag event (32 KiB down); WS half: two 16 KiB client text messages
+  (4 KiB frames, a ping after the first frame) echoed by the endpoint in 4 KiB frames (64 KiB).
+- Sparse: sixteen interleaved SSE streams (offsets 0.625 s apart), each receiving one 240-byte
+  event every 10 s: 3 requests x 10 events per phase and stream, and after the last event of a
+  request one tag event, so a request is still 10 x 256 B.
+- Unique content (F-16): every echo body and WS message starts with its own tag (lane, tick,
+  message). Every SSE request carries a unique tag body (56 B dense, 152 B sparse; outside the
+  counted payload) and asks the endpoint (`x-e00-split-at`) to send it back as the response's
+  last event, split across two chunks. So every request, response and WS message has its own
+  sha256, and the cross-check (`early-crosscheck.py`) can tell which one is missing.
 - Native: 4 KiB/s for the whole run, four 1024-byte JSONL lines per second.
-- Exact logical payload: 117 964 800 + 368 640 + 7 372 800 = 125 706 240 B = 119.8828125 MiB.
+- Exact logical payload: 117 964 800 + 368 640 + 7 372 800 = 125 706 240 B = 119.8828125 MiB
+  (the tags are inside it: the SSE event sizes shrank to make room).
 - Stall trigger at 720 s (minute 12, inside the second dense phase): one empty
   `POST /v1/bulk?size=0` on its own connection (0 payload bytes).
 - Renewal: echo connections every 10 requests, SSE every 15, WS sessions every 30 ticks, and
@@ -58,9 +65,11 @@ SCHEDULES = {
     "smoke": {"phase_s": 30, "phases": "DSDSDS", "stall_at_s": 72},
 }
 ECHO_BYTES = 16384
-SSE_EVENTS, SSE_SIZE, SSE_INTERVAL_MS = 8, 4072, 100  # 8 x (24 + 4072) = 32768
+SSE_EVENTS, SSE_SIZE, SSE_INTERVAL_MS = 8, 4064, 100  # 8 x (24 + 4064) + (6 + 56 + 2) = 32768
+SSE_TAG_BYTES = 56  # the dense SSE request body, echoed back as the last event
 WS_MESSAGES, WS_BYTES, WS_FRAG = 2, 16384, 4096
-SPARSE_STREAMS, SPARSE_SIZE, SPARSE_EVERY_S = 16, 232, 10  # 24 + 232 = 256 B per event
+SPARSE_STREAMS, SPARSE_SIZE, SPARSE_EVERY_S = 16, 216, 10  # 24 + 216 = 240 B per event
+SPARSE_SHARE = 256  # bytes per sparse event once the request's tag event is shared out
 NATIVE_LINES, NATIVE_LINE_BYTES = 4, 1024
 RENEW_ECHO, RENEW_SSE, RENEW_WS = 10, 15, 30
 SENTINEL_EVERY, SENTINEL_AT = 60, 30  # dense ticks 30, 90, 150, ...
@@ -115,6 +124,40 @@ def with_sentinel(body, at, i):
     return body[:at - 1] + b" " + s + b" " + body[at + len(s) + 1:]
 
 
+def tagged(body, tag):
+    """`body` with its first bytes replaced by `tag`; same length."""
+    if len(tag) > len(body):
+        raise ValueError("tag longer than body")
+    return tag + body[len(tag):]
+
+
+def tag_event_len(n):
+    """The endpoint's echo of an `n`-byte request body: `data: <body>\n\n`."""
+    return len(b"data: ") + n + len(b"\n\n")
+
+
+def sparse_tag_bytes(events):
+    """The sparse request tag that brings a request of `events` events to `events` x 256 B."""
+    return events * (SPARSE_SHARE - sse_event_len(0, SPARSE_SIZE)) - tag_event_len(0)
+
+
+def echo_body(k):
+    return tagged(filler(10_000_000 + k, ECHO_BYTES), b"e02 echo %07d " % k)
+
+
+def ws_payload(k, m):
+    return tagged(filler(20_000_000 + k * WS_MESSAGES + m, WS_BYTES), b"e02 ws %07d %d " % (k, m))
+
+
+def sse_tag(k):
+    return tagged(filler(40_000_000 + k, SSE_TAG_BYTES), b"e02 sse %07d " % k)
+
+
+def sparse_tag(j, ph, r, events):
+    return tagged(filler(50_000_000 + (ph * SPARSE_STREAMS + j) * 100 + r, sparse_tag_bytes(events)),
+                  b"e02 sparse %02d %d %d " % (j, ph, r))
+
+
 def plan(name):
     sch = SCHEDULES[name]
     p, phases = sch["phase_s"], sch["phases"]
@@ -123,7 +166,8 @@ def plan(name):
     events_per_req = min(10, p // SPARSE_EVERY_S)
     reqs_per_phase = (p // SPARSE_EVERY_S) // events_per_req
     sparse_event = sse_event_len(0, SPARSE_SIZE)
-    dense_sse = SSE_EVENTS * sse_event_len(0, SSE_SIZE)
+    sparse_request = events_per_req * sparse_event + tag_event_len(sparse_tag_bytes(events_per_req))
+    dense_sse = SSE_EVENTS * sse_event_len(0, SSE_SIZE) + tag_event_len(SSE_TAG_BYTES)
     dense_tick = 2 * ECHO_BYTES + dense_sse + 2 * WS_MESSAGES * WS_BYTES
     duration = p * len(phases)
     out = {
@@ -132,13 +176,16 @@ def plan(name):
         "dense": {"ticks": dense_ticks, "bytes_per_tick": dense_tick,
                   "echo_up": ECHO_BYTES, "echo_down": ECHO_BYTES, "sse_down": dense_sse,
                   "sse_events": SSE_EVENTS, "sse_size_param": SSE_SIZE,
+                  "sse_tag_bytes": SSE_TAG_BYTES, "sse_tag_event_bytes": tag_event_len(SSE_TAG_BYTES),
                   "ws_messages_each_way": WS_MESSAGES, "ws_message_bytes": WS_BYTES,
                   "ws_frag": WS_FRAG, "bytes": dense_ticks * dense_tick},
         "sparse": {"streams": SPARSE_STREAMS, "phases": sparse_phases,
                    "requests_per_phase": reqs_per_phase, "events_per_request": events_per_req,
                    "event_bytes": sparse_event, "event_every_s": SPARSE_EVERY_S,
-                   "bytes": sparse_phases * SPARSE_STREAMS * reqs_per_phase * events_per_req
-                   * sparse_event},
+                   "tag_bytes": sparse_tag_bytes(events_per_req),
+                   "tag_event_bytes": tag_event_len(sparse_tag_bytes(events_per_req)),
+                   "request_bytes": sparse_request,
+                   "bytes": sparse_phases * SPARSE_STREAMS * reqs_per_phase * sparse_request},
         "native": {"lines_per_s": NATIVE_LINES, "line_bytes": NATIVE_LINE_BYTES,
                    "bytes": duration * NATIVE_LINES * NATIVE_LINE_BYTES},
         "sentinels": {"echo": len(sentinel_ticks(dense_ticks)), "ws": len(sentinel_ticks(dense_ticks)),
@@ -148,7 +195,13 @@ def plan(name):
                    "sse_exchanges": dense_ticks + sparse_phases * SPARSE_STREAMS * reqs_per_phase,
                    "ws_client_messages": dense_ticks * WS_MESSAGES,
                    "ws_server_messages": dense_ticks * WS_MESSAGES,
-                   "bulk_exchanges": 1, "auth_requests": 1},
+                   "bulk_exchanges": 1, "auth_requests": 1,
+                   # Events the endpoint sends, each request's tag event included.
+                   "sse_events": dense_ticks * (SSE_EVENTS + 1)
+                   + sparse_phases * SPARSE_STREAMS * reqs_per_phase * (events_per_req + 1)},
+        # The SSE request tags go up and are not counted in the payload above.
+        "sse_tag_up_bytes": dense_ticks * SSE_TAG_BYTES
+        + sparse_phases * SPARSE_STREAMS * reqs_per_phase * sparse_tag_bytes(events_per_req),
     }
     out["total_bytes"] = out["dense"]["bytes"] + out["sparse"]["bytes"] + out["native"]["bytes"]
     out["total_mib"] = out["total_bytes"] / 1048576
@@ -365,10 +418,11 @@ class Load:
         return n, self.proxy.connect(target[0], target[1], ca)
 
     def request(self, conn, method, target, body=b"", close=False, chunks=None, on_chunk=None,
-                host=None):
+                host=None, headers=()):
         host = host or self.api
         head = ["%s %s HTTP/1.1" % (method, target), "host: %s:%d" % host,
                 "x-e00-test-id: %s" % self.test_id, "content-type: text/plain"]
+        head += ["%s: %s" % kv for kv in headers]
         if chunks is not None:
             head.append("transfer-encoding: chunked")
         else:
@@ -410,7 +464,7 @@ class Load:
             self.wait_until(t)
             start = self.now()
             late.append(round(start - t, 3))
-            body = filler(10_000_000 + k, ECHO_BYTES)
+            body = echo_body(k)
             sent_chunks = None
             s_on = k % SENTINEL_EVERY == SENTINEL_AT
             if s_on:
@@ -446,24 +500,27 @@ class Load:
 
     def lane_sse(self):
         conn, cn, used, late = None, None, 0, []
-        want = SSE_EVENTS * sse_event_len(0, SSE_SIZE)
+        want = self.plan["dense"]["sse_down"]
         target = "/v1/sse?events=%d&size=%d&interval_ms=%d" % (SSE_EVENTS, SSE_SIZE, SSE_INTERVAL_MS)
         for k, t, _ph, last in self.dense_ticks():
             self.wait_until(t)
             start = self.now()
             late.append(round(start - t, 3))
+            body = sse_tag(k)
             try:
                 if conn is None:
                     cn, conn = self.new_conn(self.api, self.proxy_ca)
                     used = 0
                 used += 1
                 close = used == RENEW_SSE or last
-                status, resp = self.request(conn, "POST", target, close=close)
-                ok = status == 200 and len(resp) == want and sse_ok(resp, SSE_EVENTS, SSE_SIZE)
+                status, resp = self.request(conn, "POST", target, body, close=close,
+                                            headers=[("x-e00-split-at", str(len(body) // 2))])
+                ok = status == 200 and len(resp) == want and sse_ok(resp, SSE_EVENTS, SSE_SIZE,
+                                                                    tail=body)
                 self.record(lane="sse", path="/v1/sse", tick=k, conn=cn, sched_s=t,
                             start_s=round(start, 3), end_s=round(self.now(), 3), ok=ok,
-                            sentinel=False, req_len=0, req_sha256=sha(b""),
-                            resp_len=len(resp), resp_sha256=sha(resp))
+                            sentinel=False, req_len=len(body), req_sha256=sha(body),
+                            resp_len=len(resp), resp_sha256=sha(resp), sse_events=SSE_EVENTS + 1)
                 if close:
                     conn.close()
                     conn = None
@@ -471,8 +528,8 @@ class Load:
                 self.error("sse tick %d" % k, e)
                 self.record(lane="sse", path="/v1/sse", tick=k, conn=cn, sched_s=t,
                             start_s=round(start, 3), end_s=round(self.now(), 3), ok=False,
-                            sentinel=False, req_len=0, req_sha256=sha(b""), resp_len=None,
-                            resp_sha256=None)
+                            sentinel=False, req_len=len(body), req_sha256=sha(body),
+                            resp_len=None, resp_sha256=None, sse_events=None)
                 if conn:
                     conn.close()
                 conn = None
@@ -525,7 +582,7 @@ class Load:
                     used = 0
                 used += 1
                 for m in range(WS_MESSAGES):
-                    payload = filler(20_000_000 + k * WS_MESSAGES + m, WS_BYTES)
+                    payload = ws_payload(k, m)
                     s_on = m == 0 and k % SENTINEL_EVERY == SENTINEL_AT
                     if s_on:
                         payload = with_sentinel(payload, WS_FRAG - 20, k)
@@ -557,7 +614,7 @@ class Load:
     def lane_sparse(self, j):
         p = self.plan["phase_s"]
         sp = self.plan["sparse"]
-        want = sp["events_per_request"] * sse_event_len(0, SPARSE_SIZE)
+        want = sp["request_bytes"]
         target = "/v1/sse?events=%d&size=%d&interval_ms=%d" % (
             sp["events_per_request"], SPARSE_SIZE, SPARSE_EVERY_S * 1000)
         for ph, kind in enumerate(self.plan["phases"]):
@@ -569,18 +626,21 @@ class Load:
             for r in range(sp["requests_per_phase"]):
                 start = self.now()
                 arrivals = []
+                body = sparse_tag(j, ph, r, sp["events_per_request"])
                 try:
                     if conn is None:
                         cn, conn = self.new_conn(self.api, self.proxy_ca)
                     close = r == sp["requests_per_phase"] - 1
-                    status, resp = self.request(conn, "POST", target, close=close,
-                                                on_chunk=lambda _d: arrivals.append(self.now()))
+                    status, resp = self.request(conn, "POST", target, body, close=close,
+                                                on_chunk=lambda _d: arrivals.append(self.now()),
+                                                headers=[("x-e00-split-at", str(len(body) // 2))])
                     ok = status == 200 and len(resp) == want and sse_ok(
-                        resp, sp["events_per_request"], SPARSE_SIZE)
+                        resp, sp["events_per_request"], SPARSE_SIZE, tail=body)
                     self.record(lane="sparse", path="/v1/sse", stream=j, phase=ph, req=r,
                                 conn=cn, sched_s=round(t, 3), start_s=round(start, 3),
-                                end_s=round(self.now(), 3), ok=ok, sentinel=False, req_len=0,
-                                req_sha256=sha(b""), resp_len=len(resp), resp_sha256=sha(resp),
+                                end_s=round(self.now(), 3), ok=ok, sentinel=False,
+                                req_len=len(body), req_sha256=sha(body), resp_len=len(resp),
+                                resp_sha256=sha(resp), sse_events=sp["events_per_request"] + 1,
                                 first_event_s=round(arrivals[0], 3) if arrivals else None)
                     if close:
                         conn.close()
@@ -589,8 +649,9 @@ class Load:
                     self.error("sparse %d phase %d req %d" % (j, ph, r), e)
                     self.record(lane="sparse", path="/v1/sse", stream=j, phase=ph, req=r,
                                 conn=cn, sched_s=round(t, 3), start_s=round(start, 3),
-                                end_s=round(self.now(), 3), ok=False, sentinel=False, req_len=0,
-                                req_sha256=sha(b""), resp_len=None, resp_sha256=None)
+                                end_s=round(self.now(), 3), ok=False, sentinel=False,
+                                req_len=len(body), req_sha256=sha(body), resp_len=None,
+                                resp_sha256=None, sse_events=None)
                     if conn:
                         conn.close()
                     conn = None
@@ -714,9 +775,13 @@ class Load:
         }
 
 
-def sse_ok(body, events, size):
-    want = b"".join(b'data: {"i":%d,"pad":"' % i + b"." * size + b'"}\n\n' for i in range(events))
-    if len(body) != len(want):
+def sse_ok(body, events, size, tail=None):
+    """`events` endpoint events of `size` pad bytes, then, when `tail` is given, the endpoint's
+    echo of the request body (`data: <tail>\n\n`) and nothing else."""
+    want = sum(sse_event_len(i, size) for i in range(events))
+    if tail is not None:
+        want += tag_event_len(len(tail))
+    if len(body) != want:
         return False
     pos = 0
     for i in range(events):
@@ -727,7 +792,7 @@ def sse_ok(body, events, size):
         if not re.fullmatch(rb"[a-z ]+", pad) or body[pos + len(head) + size:pos + len(head) + size + 4] != b'"}\n\n':
             return False
         pos += len(head) + size + 4
-    return True
+    return tail is None or body[pos:] == b"data: " + tail + b"\n\n"
 
 
 def native_line(s, j, sentinel_index=None):
@@ -759,8 +824,12 @@ def selfcheck():
     check("dense tick 128 KiB", full["dense"]["bytes_per_tick"] == 131072)
     check("dense half split", 2 * ECHO_BYTES + full["dense"]["sse_down"] == 65536
           == 2 * WS_MESSAGES * WS_BYTES)
-    check("sparse event 256 B", full["sparse"]["event_bytes"] == 256
-          and all(sse_event_len(i, SPARSE_SIZE) == 256 for i in range(10)))
+    check("sparse event 240 B", full["sparse"]["event_bytes"] == 240
+          and all(sse_event_len(i, SPARSE_SIZE) == 240 for i in range(10)))
+    check("sparse request 10 x 256 B", full["sparse"]["request_bytes"] == 2560
+          == 10 * 240 + tag_event_len(full["sparse"]["tag_bytes"]))
+    check("smoke sparse request 3 x 256 B", plan("smoke")["sparse"]["request_bytes"] == 768)
+    check("full sse events", full["counts"]["sse_events"] == 900 * 9 + 144 * 11)
     check("sparse 30 events per phase", full["sparse"]["requests_per_phase"]
           * full["sparse"]["events_per_request"] == 30)
     check("stall inside the second dense phase", full["phases"][full["stall_at_s"] // 300] == "D"
@@ -773,10 +842,32 @@ def selfcheck():
           and smoke["native"]["bytes"] == 180 * 4096)
     # The endpoint's SSE event, built independently of sse_event_len.
     ev = b'data: {"i":7,"pad":"' + b"a" * SSE_SIZE + b'"}\n\n'
-    check("sse event formula", len(ev) == sse_event_len(7, SSE_SIZE) == 4096)
-    check("sse validator", sse_ok(b"".join(b'data: {"i":%d,"pad":"' % i + b"ab c" * 58
-                                           + b'"}\n\n' for i in range(10)), 10, 232)
-          and not sse_ok(b"x" * 2560, 10, 232))
+    check("sse event formula", len(ev) == sse_event_len(7, SSE_SIZE) == 4088)
+    tag = sse_tag(7)
+    check("dense sse 32 KiB with its tag", 8 * len(ev) + len(b"data: " + tag + b"\n\n") == 32768
+          and len(tag) == SSE_TAG_BYTES)
+    events = b"".join(b'data: {"i":%d,"pad":"' % i + b"ab c" * 58 + b'"}\n\n' for i in range(10))
+    check("sse validator", sse_ok(events, 10, 232) and not sse_ok(b"x" * 2560, 10, 232))
+    check("sse validator tail", sse_ok(events + b"data: " + tag + b"\n\n", 10, 232, tail=tag)
+          and not sse_ok(events + b"data: " + sse_tag(8) + b"\n\n", 10, 232, tail=tag)
+          and not sse_ok(events, 10, 232, tail=tag))
+    # F-16: every body has its own digest, so a lost one is identifiable by sha256 alone.
+    ticks = full["dense"]["ticks"]
+    sp = full["sparse"]
+    sparse_tags = [sparse_tag(j, ph, r, sp["events_per_request"])
+                   for ph, kind in enumerate(full["phases"]) if kind == "S"
+                   for j in range(SPARSE_STREAMS) for r in range(sp["requests_per_phase"])]
+    check("sparse tags unique and sized", len(set(sparse_tags)) == len(sparse_tags) == 144
+          and all(len(x) == sp["tag_bytes"] == 152 for x in sparse_tags))
+    dense_tags = [sse_tag(k) for k in range(ticks)]
+    check("dense sse tags unique", len(set(dense_tags)) == ticks
+          and not set(dense_tags) & set(sparse_tags))
+    check("echo bodies unique", len({sha(echo_body(k)) for k in range(ticks)}) == ticks)
+    check("ws payloads unique", len({sha(ws_payload(k, m)) for k in range(ticks)
+                                     for m in range(WS_MESSAGES)}) == ticks * WS_MESSAGES)
+    check("tags are filler-safe", all(b"\n" not in x and re.fullmatch(rb"[a-z0-9 ]+", x)
+                                      for x in dense_tags[:3] + sparse_tags[:3]
+                                      + [echo_body(1)[:40], ws_payload(1, 1)[:40]]))
     # Filler: nothing a redactor would take for a secret.
     runs = re.findall(rb"[A-Za-z0-9_-]+", POOL)
     check("filler words short", max(len(r) for r in runs) <= 9 and b"@" not in POOL)
@@ -784,10 +875,10 @@ def selfcheck():
     # Sentinel shape and placement.
     s = sentinel(30)
     check("sentinel matches anthropic_key", re.fullmatch(rb"sk-ant-[A-Za-z0-9_\-]{20,}", s) is not None)
-    b = with_sentinel(filler(1, ECHO_BYTES), 8001, 30)
+    b = with_sentinel(echo_body(30), 8001, 30)
     check("echo sentinel keeps size", len(b) == ECHO_BYTES and b[8001:8001 + len(s)] == s)
     check("echo chunk split inside sentinel", 8001 < 8011 < 8001 + len(s))
-    w = with_sentinel(filler(2, WS_BYTES), WS_FRAG - 20, 30)
+    w = with_sentinel(ws_payload(30, 0), WS_FRAG - 20, 30)
     check("ws sentinel straddles a frame", len(w) == WS_BYTES
           and w.index(s) < WS_FRAG < w.index(s) + len(s))
     nl = native_line(45, 0, sentinel_index=45)
