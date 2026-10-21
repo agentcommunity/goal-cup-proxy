@@ -620,7 +620,8 @@ fn torn_tail_is_preserved_and_nonresumable() {
     // CLI ladder rung 1: refused, the daemon has no status for that entry.
     assert_eq!(st.code(), Some(1), "{out}{err}");
     assert!(err.contains("no status for that entry"), "{err}");
-    let (st, out, err) = leaves_trace_unchanged(&trace, "seal", || cli(&v, &["seal", &entry]));
+    let (st, out, err) =
+        leaves_trace_unchanged(&trace, "seal", || cli(&v, &["seal", "--yes", &entry]));
     row.note("seal_exit", st.code());
     row.note("seal_stderr", err.clone());
     // CLI ladder rung 1 (H-15): a safe refusal. The daemon holds the row as a capture but has no
@@ -629,7 +630,7 @@ fn torn_tail_is_preserved_and_nonresumable() {
     // with "malformed control response".
     assert_eq!(st.code(), Some(1), "{out}{err}");
     assert!(
-        err.contains(&format!("Entry {entry} cannot be sealed")),
+        err.contains(&format!("Part {entry} cannot be sealed")),
         "{err}"
     );
     assert!(err.contains("torn or unreadable"), "{err}");

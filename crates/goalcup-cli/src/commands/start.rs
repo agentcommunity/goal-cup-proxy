@@ -1543,7 +1543,11 @@ fn prepare(
                     model_host.map(|m| (m.host.as_str(), m.port)),
                 )
             })
-            .map_err(|unreachable| CliError::Refused(unreachable.to_string()))?;
+            .map_err(|unreachable| {
+                CliError::Refused(
+                    unreachable.refusal(cx.continuing.map(|c| c.record.run_id.as_str())),
+                )
+            })?;
     }
     // A per-run home is made inside the run directory below. A run directory beside a goal file
     // inside a Git work tree is refused before anything is created: it would hold what the

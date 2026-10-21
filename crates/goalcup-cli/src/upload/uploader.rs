@@ -361,7 +361,7 @@ pub fn lock_entry(spool_dir: &Path, entry_id: &str) -> Result<std::fs::File, Cli
         Ok(()) => {}
         Err(std::fs::TryLockError::WouldBlock) => {
             return Err(CliError::Refused(format!(
-                "entry {entry_id} is being uploaded by another goalcup: its `goalcup start` is \
+                "part {entry_id} is being uploaded by another goalcup: its `goalcup start` is \
                  still running, or another `goalcup upload` is. Run this again once it ends."
             )));
         }

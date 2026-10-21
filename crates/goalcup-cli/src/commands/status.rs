@@ -120,8 +120,8 @@ pub fn status_in(
             &record.entry_id,
             "signature did not verify".to_string(),
             format!(
-                "the status document for entry {} did not verify against the run key \
-                 this machine pinned when the entry was created, so nothing in it has \
+                "the status document for part {} did not verify against the run key \
+                 this machine pinned when the part was created, so nothing in it has \
                  been shown. The status route is unauthenticated by ruling: something \
                  other than the daemon that opened this run may be answering on the \
                  control port, and a deadline printed off that document would be its \
@@ -138,11 +138,11 @@ pub fn status_in(
             json,
             &record.entry_id,
             format!(
-                "the document that came back is for entry {}",
+                "the document that came back is for part {}",
                 document.payload.entry_id
             ),
             format!(
-                "entry {} was asked for and the daemon answered with a document for entry \
+                "part {} was asked for and the daemon answered with a document for part \
                  {}, so nothing in it has been shown. It carries a good signature — the run \
                  key this machine pinned signs every document of this run — and it is still \
                  about a different run than the one the question was about.",
@@ -321,8 +321,12 @@ fn run_report(
         .entries
         .last()
         .is_some_and(|e| crate::upload::prune::is_sealed(&e.trace_dir, &e.entry_id));
+    let stale = state.is_stale(now);
+    // A host that died after its seal left nothing to finish: what is left is the upload, and
+    // `goalcup seal` is not asked for again (it would be asked for ever).
+    let host_finished = state.ended || (stale && sealed);
     let phase = if done {
-        if !state.ended {
+        if !host_finished {
             participant::Phase::Finishing
         } else if all_sent {
             participant::Phase::Uploaded
@@ -352,12 +356,11 @@ fn run_report(
         .upload
         .last_ok_at
         .map(|last_ok| now.saturating_sub(last_ok));
-    let stale = state.is_stale(now);
     let upload = if !on_server {
         participant::UploadNow::NotUsed
     } else if phase == participant::Phase::Uploaded {
         participant::UploadNow::Done
-    } else if state.ended && !all_sent {
+    } else if host_finished && !all_sent {
         // Nothing is sending now: the host is done, and what is left waits for `goalcup upload`
         // (or, for an open run, for `goalcup continue`).
         participant::UploadNow::Unfinished
@@ -435,7 +438,7 @@ const NEW_RUN_SECS: u64 = 5 * 60;
 
 /// The harness's display name from its connector, or the connector id when the connector cannot
 /// be loaded here.
-fn harness_name(connectors: Option<&Path>, connector_id: &str, dev: bool) -> String {
+pub(crate) fn harness_name(connectors: Option<&Path>, connector_id: &str, dev: bool) -> String {
     connectors
         .and_then(|dir| crate::connector::load_harness(dir, connector_id, dev).ok())
         .map_or_else(
@@ -479,7 +482,7 @@ fn refuse(
             &format!("{}\n", serde_json::to_string_pretty(&document)?),
         )?;
     } else {
-        put(out, &format!("entry {entry_id}: {headline}\n"))?;
+        put(out, &format!("part {entry_id}: {headline}\n"))?;
     }
     Err(CliError::Refused(said))
 }
@@ -521,7 +524,7 @@ pub fn render_status(s: &SignedStatus, now: &str) -> String {
     let detail = plain(&p.detail);
     let workspace = plain(&p.workspace);
     let mut lines: Vec<String> = Vec::new();
-    lines.push(format!("entry {} ({})", p.entry_id, p.connector_id));
+    lines.push(format!("part {} ({})", p.entry_id, p.connector_id));
 
     // First, before anything a reader might act on: whether anything has published a
     // document for this entry lately.
@@ -612,7 +615,7 @@ fn freshness(s: &SignedStatus, now: &str) -> String {
     let age = asked - cached;
     if age > STALE_AFTER_SECONDS {
         return format!(
-            "  offline: nothing has published a status for this entry in {age}s, and a \
+            "  offline: nothing has published a status for this part in {age}s, and a \
              running daemon publishes one at least every {STALE_AFTER_SECONDS}s. What \
              follows is the last document there was ({}).",
             plain(&s.cached_at)

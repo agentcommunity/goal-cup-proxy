@@ -41,7 +41,7 @@ class ResearchWatchTest(unittest.TestCase):
         self.assertEqual(sleep.call_count, 2)
         self.assertTrue(all(0 < call.args[0] <= 0.5 for call in sleep.call_args_list))
         args, options = runner.call_args
-        self.assertEqual(args, (["/binary path/goalcup", "seal", ENTRY],))
+        self.assertEqual(args, (["/binary path/goalcup", "seal", "--yes", ENTRY],))
         self.assertEqual(options["env"]["GOALCUP_CONFIG_DIR"], self.config)
         self.assertEqual(options["env"]["WATCH_TEST"], "preserved")
         self.assertEqual(options["timeout"], 300)

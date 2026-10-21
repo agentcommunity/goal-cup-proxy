@@ -1,14 +1,20 @@
-//! `goalcup time-left` — how much of the run is left, for the agent to ask (D66).
+//! `goalcup time-left`: how much of the run is left, for the agent to ask (D66), and for the
+//! participant in their own terminal.
 //!
-//! The agent asks; Goal Cup Proxy never tells it anything unasked. The command reads only the
-//! file the launch names in [`FILE_ENV`], which the run's watch tick writes from the server's
-//! count ([`crate::run::time_left::keep_file`]), so it works from inside the harness, where the
-//! configuration directory cannot be found. It asks no server and no daemon.
+//! The agent asks; Goal Cup Proxy never tells it anything unasked. Inside the harness the
+//! command reads only the file the launch names in [`FILE_ENV`], which the run's watch tick
+//! writes from the server's count ([`crate::run::time_left::keep_file`]), so it works there,
+//! where the configuration directory cannot be found. It asks no server and no daemon.
+//!
+//! In a person's own terminal there is no such file: the newest open run's state on this
+//! computer is read instead, the way `goalcup status` counts its time left
+//! ([`time_left_of_open_run`]).
 
 use crate::CliError;
-use crate::run::time_left::{FILE_ENV, PUSH_OFTEN, sentence};
+use crate::run::time_left::{FILE_ENV, PUSH_OFTEN, left_line, sentence};
 use std::ffi::OsStr;
 use std::io::Read;
+use std::path::Path;
 
 /// The most of the file read: three short lines.
 const MAX_BYTES: u64 = 4096;
@@ -35,8 +41,81 @@ pub fn time_left_with(
                 "the time left is unknown right now (no fresh ${FILE_ENV} file). {PUSH_OFTEN}"
             ))
         })?;
+    put(out, &line)
+}
+
+/// Print the time left of the newest run on this computer that is still open (on a server, and
+/// not over), counted as `goalcup status` counts it, in the line [`time_left_with`] prints. No
+/// open run is a refusal (exit 1).
+pub fn time_left_of_open_run(
+    cfg: &Path,
+    now: u64,
+    out: &mut dyn std::io::Write,
+) -> Result<(), CliError> {
+    let mut runs = crate::run::all(cfg);
+    runs.sort_by_key(|run| std::cmp::Reverse(run.started_at_unix));
+    let line = runs
+        .into_iter()
+        .filter(|run| run.server_url.is_some())
+        .find_map(|run| {
+            let state = crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id));
+            if crate::run::is_over(&run, state.as_ref(), now) {
+                return None;
+            }
+            let left = crate::participant::seconds_left(
+                state.as_ref().and_then(|state| state.time_left.as_ref()),
+                run.deadline_at.as_deref(),
+                now,
+            )?;
+            let deadline = run
+                .deadline_at
+                .as_deref()
+                .and_then(goalcup_protocol::control::parse_z);
+            Some(left_line(left, deadline))
+        })
+        .ok_or_else(|| {
+            CliError::Refused(
+                "Run goalcup status to see your runs. No run is open on this computer, so there \
+                 is no time left to show."
+                    .to_string(),
+            )
+        })?;
+    put(out, &line)
+}
+
+fn put(out: &mut dyn std::io::Write, line: &str) -> Result<(), CliError> {
     writeln!(out, "{line}").map_err(|source| CliError::Io {
         path: "stdout".into(),
         source,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// In a person's own terminal (no time-left file) the newest open run's state answers, in
+    /// the line the agent gets; with no open run it says so and exits 1.
+    #[test]
+    fn without_the_file_the_newest_open_run_says_its_time_left() {
+        let cfg = tempfile::tempdir().unwrap();
+        let none = time_left_of_open_run(cfg.path(), 1_000, &mut Vec::new()).unwrap_err();
+        assert_eq!(none.exit_code(), 1);
+        assert!(none.to_string().contains("No run is open"), "{none}");
+
+        let now = crate::run::now_unix();
+        let deadline = now + 2 * 3600 + 30 * 60 + 30;
+        crate::run::tests_support::continuable_run(cfg.path(), "run-open", "part-1", deadline);
+        // The state holds no count: the server's deadline against this machine's date.
+        let mut out = Vec::new();
+        time_left_of_open_run(cfg.path(), now, &mut out).unwrap();
+        let said = String::from_utf8(out).unwrap();
+        assert!(said.starts_with("About 2 h 30 min left"), "{said}");
+        assert!(said.contains(PUSH_OFTEN), "{said}");
+
+        // A run that is over is not the one asked about.
+        let over = tempfile::tempdir().unwrap();
+        crate::run::tests_support::continuable_run(over.path(), "run-over", "part-2", now - 1);
+        assert!(time_left_of_open_run(over.path(), now, &mut Vec::new()).is_err());
+    }
 }

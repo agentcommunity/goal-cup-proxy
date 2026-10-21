@@ -287,11 +287,17 @@ impl Vertical {
         serde_json::from_str(&out).unwrap()
     }
 
-    /// `goalcup seal ENTRY`: its exit, what it printed and how long it took.
+    /// `goalcup seal --yes ENTRY`: its exit, what it printed with the technical lines it kept in
+    /// the run's `host.log` after it, and how long it took.
     pub fn seal(&self, entry: &str) -> (ExitStatus, String, Duration) {
         let began = Instant::now();
-        let (status, out) = self.run("seal", &["seal", entry]);
-        (status, out, began.elapsed())
+        let (status, mut out) = self.run("seal", &["seal", "--yes", entry]);
+        let took = began.elapsed();
+        // A local run's id is its entry's.
+        let log =
+            goalcup_cli::run::run_dir(&self.cfg, entry).join(goalcup_cli::host_log::HOST_LOG_NAME);
+        out.push_str(&std::fs::read_to_string(log).unwrap_or_default());
+        (status, out, took)
     }
 
     /// `goalcup-verify --capture-integrity TRACE`: its exit and its report.

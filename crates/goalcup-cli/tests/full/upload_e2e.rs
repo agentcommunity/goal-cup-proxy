@@ -1459,7 +1459,7 @@ mod segments {
         let status = second.wait();
         let shown = second.shown();
         assert!(status.success(), "{status:?}\n{shown}");
-        assert!(shown.contains("incomplete segment"), "{shown}");
+        assert!(shown.contains("ended without a clean seal"), "{shown}");
 
         let entries = server.entry_ids(&run_id);
         assert_eq!(entries.len(), 2, "{entries:?}");

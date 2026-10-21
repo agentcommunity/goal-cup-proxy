@@ -439,7 +439,7 @@ cleanup() {
     # go on for 168 hours: seal that entry (and only it) first, best effort and bounded.
     if [ "$TEST" = 1 ] && [ -n "$SEAL_ENTRY" ] && [ -z "$SEAL_ASKED_AT" ]; then
       log "the test run's entry $SEAL_ENTRY was not sealed; sealing it now (best effort, at most 120s)"
-      run_bounded seal 120 "seal $SEAL_ENTRY"
+      run_bounded seal 120 "seal --yes $SEAL_ENTRY"
       log "goalcup seal $SEAL_ENTRY on the way out: exit $?"
       log_file "goalcup seal (output)" "$ROOT/seal.out"
       log_file "goalcup seal (stderr)" "$ROOT/seal.err"
@@ -676,7 +676,7 @@ PY
 request_seal() { # why
   SEAL_ASKED_AT=$(date +%s)
   say "goalcup seal $SEAL_ENTRY: $1"
-  write_wrapper "$ROOT/seal-wrapper.sh" seal "seal $SEAL_ENTRY"
+  write_wrapper "$ROOT/seal-wrapper.sh" seal "seal --yes $SEAL_ENTRY"
   rm -f "$ROOT/seal.rc"
   ( ( (sh "$ROOT/seal-wrapper.sh" >"$ROOT/seal.out" 2>"$ROOT/seal.err" </dev/null); echo $? >"$ROOT/seal.rc") 2>/dev/null & )
 }

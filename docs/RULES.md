@@ -100,7 +100,8 @@ The latest possible run ends 192 hours after the window opens.
 - The agent may run `goalcup time-left` to ask how much time the run has left (D66). It is an answer
   the agent asks for; Goal Cup Proxy never sends it anything.
 - `goalcup seal` refuses to run inside the agent's session, so the agent cannot stop itself. You may
-  run `goalcup seal` yourself from another terminal. It stops the agent and ends the current part.
+  run `goalcup seal` yourself from another terminal. It asks first, then stops the agent and ends the
+  current part.
   It does not end the run: the run stays open until its deadline, and `goalcup continue` goes on
   with it. When the agent's work is done, you need no extra step.
 - **Harness setup before the first prompt is yours.** This holds for every harness. Anything the

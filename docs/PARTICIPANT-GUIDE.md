@@ -289,7 +289,7 @@ that has not started a run, `goalcup status` says `no run has been started from 
 |---|---|---|
 | `goalcup has not updated this run for …. The computer may have slept or restarted.` | The `goalcup start` process is not running: the machine rebooted or slept, or the process was killed. | The line ends with the fix. Most often it is `To go on, run: goalcup continue <run id>`. |
 | `the recording has gaps` or `the recording failed` | Part of the record is missing. The server is told and the run is flagged for review. | Leave the run going. If it says to write to support, name the run id it gives. |
-| `nothing was uploaded for … Nothing is lost; it waits on this computer. Check the network.` | Uploads have been failing for half an hour or more. Nothing recorded is lost: it waits on the disk. | Check the network. What is left goes up by itself the next time you run any `goalcup` command. To send it yourself, run `goalcup upload`. |
+| `nothing was uploaded for … Nothing is lost; it waits on this computer. Check the network: …` | Uploads have been failing for half an hour or more. Nothing recorded is lost: it waits on the disk. | Check the network, and that no firewall such as Little Snitch is holding goalcup. After the run, `goalcup upload` sends what is left of your newest run. `goalcup upload <part-id>` sends one part. |
 | `the server has not heard from this run for about … min` | The server has not heard from the run for about a quarter of an hour. | Check the network. |
 | `only … of disk is free. Free some space.` | Less than 5 GiB is free beyond the run's reservation. | Free space outside your run's folders. Never delete anything the agent made. Under 1 GiB Goal Cup Proxy pauses your agent (the line below). |
 | `The disk is almost full, so your agent is paused. Free some disk space; it resumes by itself. If your agent seems stuck afterwards, type keep going.` | Less than 1 GiB is free beyond the run's reservation, so Goal Cup Proxy froze the agent: nothing happens unrecorded. The run never stops for the disk. | Free space outside your run's folders. Never delete anything the agent made. Above 3 GiB free the agent resumes by itself. If it then seems stuck, type `keep going`. |
@@ -385,7 +385,7 @@ run, contact support before you answer.
 Goal Cup Proxy itself never types to the agent, never says "keep going" for you, and never restarts
 it by itself. Your agent may ask how much time is left with `goalcup time-left`. You can run it
 in your own terminal too. `goalcup seal` works only from a terminal of your own, never inside the
-agent's session (section 8).
+agent's session. It asks before it stops the agent, and your run stays open (section 8).
 
 **No side channels.** During the run, neither you nor anyone helping you may change anything the
 agent can read: files, tasks, GitHub issues, messages, documents, email, databases, websites,

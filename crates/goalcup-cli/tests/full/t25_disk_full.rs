@@ -835,7 +835,7 @@ fn t25_enospc_with_uploads_working() {
     w.release_workload();
     cont.finish(&w.log, Duration::from_secs(300));
     w.status_text();
-    w.goalcup_cmd("goalcup seal", &["seal"]);
+    w.goalcup_cmd("goalcup seal", &["seal", "--yes"]);
     w.status_text();
     w.goalcup_cmd("goalcup upload", &["upload"]);
     w.status_text();
@@ -1035,7 +1035,7 @@ fn t25_enospc_chat_run_then_continue() {
     );
     status_text("goalcup status (after continue)");
     let mut seal = goalcup();
-    seal.arg("seal");
+    seal.args(["seal", "--yes"]);
     run_recorded(&log, "goalcup seal", seal);
     status_text("goalcup status (after seal)");
     for run in server.run_ids() {
@@ -1097,7 +1097,7 @@ fn t25_stop_verdict_local_run() {
     w.status_text();
     w.release_workload();
     cont.finish(&w.log, Duration::from_secs(300));
-    w.goalcup_cmd("goalcup seal", &["seal"]);
+    w.goalcup_cmd("goalcup seal", &["seal", "--yes"]);
     w.status_text();
     for e in w.entries() {
         w.snapshot("final", &e);
@@ -1165,7 +1165,7 @@ fn t25_stop_verdict_server_down() {
     w.status_text();
     w.release_workload();
     cont.finish(&w.log, Duration::from_secs(300));
-    w.goalcup_cmd("goalcup seal", &["seal"]);
+    w.goalcup_cmd("goalcup seal", &["seal", "--yes"]);
     w.status_text();
     for e in w.entries() {
         w.snapshot("final", &e);

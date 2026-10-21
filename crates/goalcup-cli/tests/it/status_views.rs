@@ -240,7 +240,10 @@ fn entries_lists_one_line_per_entry_json_is_an_array_and_a_sealed_entry_leaves_t
     );
     // The way to a run comes first, and the states are in words, not wire names.
     assert!(
-        text.lines().next().unwrap().contains("goalcup status <id>"),
+        text.lines()
+            .next()
+            .unwrap()
+            .contains("goalcup status <part-id>"),
         "{text}"
     );
     assert!(!text.contains("online"), "{text}");
@@ -1405,10 +1408,16 @@ fn status_names_the_next_action_for_every_state_of_a_run_that_is_over() {
     assert!(next_of(&text).contains("wait"), "{text}");
     assert!(problem_lines(&text).is_empty(), "{text}");
 
-    // Time is up and nothing writes the state any more (the computer restarted): waiting never
-    // helps. The run is sealed by hand, then sent.
+    // Time is up and nothing writes the state any more (the computer restarted) after its part
+    // was sealed: no seal is asked for again, only the upload.
     run_with_state_on(&cfg, &info.entry_id, state(false, 1), server, over);
     leave_state_at(&cfg, &info.entry_id, 1);
+    let text = said(&cfg);
+    assert_eq!(next_of(&text), "Next: run goalcup upload", "{text}");
+    assert!(!text.contains("goalcup seal"), "{text}");
+
+    // The same before its part was sealed: waiting never helps. It is sealed by hand, then sent.
+    std::fs::remove_file(trace_of(&cfg, &info.entry_id).join("seal.json")).unwrap();
     let text = said(&cfg);
     assert!(
         participant_block(&text).contains("stopped before it finished"),
@@ -1732,7 +1741,7 @@ fn upload_with_no_id_picks_the_newest_runs_unsent_entries() {
     let error = unsent_of_newest_run(cfg).unwrap_err();
     assert!(error.to_string().contains("is local"), "{error}");
     assert!(
-        error.to_string().contains("goalcup upload <entry>"),
+        error.to_string().contains("goalcup upload <part-id>"),
         "{error}"
     );
 }

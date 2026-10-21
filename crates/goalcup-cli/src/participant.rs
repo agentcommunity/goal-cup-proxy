@@ -532,7 +532,7 @@ pub fn after_upload(ending: &Ending<'_>, all_sent: bool, server_closed: bool) ->
         Ending::Open { .. } => lines.push(if all_sent {
             format!("{UPLOAD_DONE} Nothing more to do in this terminal.")
         } else {
-            format!("Part of the run is not uploaded yet; {CONTINUE_HINT} sends it.")
+            unsent.to_string()
         }),
         Ending::TimeUp { practice } => {
             if all_sent {
@@ -559,6 +559,71 @@ pub fn after_upload(ending: &Ending<'_>, all_sent: bool, server_closed: bool) ->
                 unsent.to_string()
             })
         }
+    }
+    lines
+}
+
+// ------------------------------------------------------------------------------------ seal
+
+/// What `goalcup seal` asks before it stops the agent. `until` is the run's end ([`end_words`])
+/// while the run stays open.
+pub fn seal_question(harness: &str, until: Option<&str>) -> String {
+    match until {
+        Some(until) => format!(
+            "This stops {harness} now. Your run stays open until {until}. Type yes to stop it."
+        ),
+        None => format!("This stops {harness} now. Type yes to stop it."),
+    }
+}
+
+/// The answer to [`seal_question`] was not yes.
+pub fn seal_not_confirmed() -> String {
+    "Nothing was stopped: the answer was not yes. To stop it without this question: goalcup \
+     seal --yes"
+        .to_string()
+}
+
+/// The facts of what `goalcup seal` says once it is done.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealDone<'a> {
+    pub harness: &'a str,
+    pub part_id: &'a str,
+    /// The part's seal was written.
+    pub sealed: bool,
+    /// The run and its end, when `goalcup continue` can start the next part.
+    pub go_on: Option<(&'a str, &'a str)>,
+    /// The run's end while it stays open (it may still be unable to go on).
+    pub open_until: Option<&'a str>,
+    /// The log the technical lines went to.
+    pub details: Option<&'a Path>,
+}
+
+/// What `goalcup seal` says once the agent is stopped: plain words, the next step last.
+pub fn seal_done(d: &SealDone<'_>) -> Vec<String> {
+    let h = d.harness;
+    let mut lines = vec![if d.sealed {
+        format!("{h} was stopped, and this part of your run is sealed.")
+    } else {
+        format!(
+            "{h} was stopped, but this part of your run could not be sealed: the disk may be \
+             full. Free some space, then run: goalcup seal {}",
+            d.part_id
+        )
+    }];
+    if let Some(log) = d.details {
+        lines.push(format!("Details for support are in {}.", log.display()));
+    }
+    match (d.go_on, d.open_until) {
+        (Some((run_id, until)), _) => {
+            lines.push(format!("{STILL_OPEN} {until}."));
+            lines.push(format!(
+                "To go on: {CONTINUE_HINT} {run_id}. If your work is done, nothing else is needed."
+            ));
+        }
+        (None, Some(until)) => {
+            lines.push(format!("The run ends by itself at {until}. {NOTHING_MORE}"))
+        }
+        (None, None) => lines.push(NOTHING_MORE.to_string()),
     }
     lines
 }
@@ -694,9 +759,7 @@ pub fn status_header(h: &StatusHeader<'_>) -> Vec<String> {
             "the run has ended, goalcup is finishing the run".to_string()
         }
         (Some(Phase::Finishing), _) => "time is up, goalcup is finishing the run".to_string(),
-        (Some(Phase::NotSealed), _) => {
-            "finished, but not sealed (seal.json was not written)".to_string()
-        }
+        (Some(Phase::NotSealed), _) => "finished, but not sealed".to_string(),
         (Some(Phase::Sealed), None) => "sealed on this computer".to_string(),
         (Some(Phase::Sealed), Some(_)) => "sealed, not all of it is uploaded yet".to_string(),
         (Some(Phase::Uploaded), _) => "sealed and uploaded".to_string(),
@@ -832,8 +895,11 @@ pub struct Who<'a> {
 pub fn problem_state_stale(silent: &str, restart: Restart<'_>) -> String {
     let fix = match restart {
         Restart::Continue { run_id } => format!("To go on, run: {CONTINUE_HINT} {run_id}"),
-        Restart::Over => "The run is over, so it cannot be continued. To finish it, run: goalcup seal, then goalcup upload"
-            .to_string(),
+        // What finishes it (a seal, an upload, or nothing) is the Next line's to say: only status
+        // knows whether this part is sealed already.
+        Restart::Over => {
+            "The run is over, so it cannot be continued. Do what the Next line says.".to_string()
+        }
         Restart::Cannot => "This run cannot be continued.".to_string(),
     };
     format!(
@@ -853,18 +919,22 @@ pub fn problem_recording_failed(run_id: &str) -> String {
     format!("the recording failed. Write to {SUPPORT_ADDRESS} and name run {run_id}.")
 }
 
+/// What a network problem line adds: the network, or a firewall holding goalcup's connections.
+pub const CHECK_NETWORK: &str =
+    "Check the network: it may be down, or a firewall such as Little Snitch is holding goalcup.";
+
 /// The upload is behind. `over`: the run is sealed or the upload gave up, so the fix is the
 /// command; otherwise goalcup is still trying.
 pub fn problem_upload(ago: &str, why: &str, over: bool) -> String {
     if over {
         format!(
             "part of the run is not uploaded (last upload {ago} ago: {why}). Nothing is lost; it \
-             waits on this computer. Check the network, then run: goalcup upload"
+             waits on this computer. {CHECK_NETWORK} Then run: goalcup upload"
         )
     } else {
         format!(
             "nothing was uploaded for {ago} ({why}). Nothing is lost; it waits on this computer. \
-             Check the network."
+             {CHECK_NETWORK}"
         )
     }
 }
@@ -880,7 +950,7 @@ pub fn problem_server_refuses(status: u16) -> String {
 
 /// Heartbeats keep failing; `silent` is how long the heartbeats have been failing, in words ([`crate::run::age_words`]).
 pub fn problem_heartbeats(silent: &str, why: &str) -> String {
-    format!("the server has not heard from this run for about {silent} ({why}). Check the network.")
+    format!("the server has not heard from this run for about {silent} ({why}). {CHECK_NETWORK}")
 }
 
 /// The one `goalcup status` line about this computer: free disk, what goalcup's own processes
@@ -970,14 +1040,15 @@ pub fn agent_finished(harness: &str, over: bool) -> String {
 /// `goalcup upload` when there is no run on this computer.
 pub fn upload_no_run() -> String {
     "Run goalcup start first: no run has been started from this machine, so there is nothing to \
-     upload. To send a run by name: goalcup upload <entry>."
+     upload. To send one part by its id: goalcup upload <part-id>."
         .to_string()
 }
 
 /// `goalcup upload` when the newest run was never opened on the server.
 pub fn upload_local_run(run_id: &str) -> String {
     format!(
-        "Name another run: goalcup upload <entry>. Nothing to upload: the newest run ({run_id}) \
+        "Name a part of another run: goalcup upload <part-id>. Nothing to upload: the newest run \
+         ({run_id}) \
          is local, so it was recorded on this computer only and never opened on the server."
     )
 }
@@ -987,10 +1058,10 @@ pub fn upload_nothing_left(run_id: &str) -> String {
     format!("Nothing left to send: run {run_id} is fully uploaded. {NOTHING_MORE}")
 }
 
-/// An entry id that this computer did not open on a server.
+/// A part id that this computer did not open on a server.
 pub fn upload_not_opened(entry_id: &str) -> String {
     format!(
-        "Name a run that was started on this computer: goalcup upload <entry>. Part {entry_id} \
+        "Name a part of a run started on this computer: goalcup upload <part-id>. Part {entry_id} \
          was never opened on the server from here, so there is nothing to upload."
     )
 }
@@ -1033,18 +1104,19 @@ pub fn upload_finished() -> String {
     format!("Uploaded the rest of your run. {NOTHING_MORE}")
 }
 
-/// The upload finished, and the run is not sealed yet.
+/// The upload finished, and the part is still recording: its own goalcup sends the rest.
 pub fn upload_not_sealed() -> String {
-    "Run goalcup upload again once the run has ended. What exists so far is uploaded; the run is \
-     not sealed yet."
+    "Nothing to do: this part of the run is still recording, and what exists so far is uploaded. \
+     The rest goes up by itself."
         .to_string()
 }
 
-/// The upload finished, and the run's host finished without writing the entry's `seal.json`.
+/// The upload finished, and nothing records the part any more, but it was never sealed (its
+/// goalcup stopped first, or its seal could not be written): only `goalcup seal` seals it.
 pub fn upload_seal_missing(entry_id: &str) -> String {
     format!(
-        "The run is not sealed: its seal.json could not be written. Once there is disk space, run \
-         goalcup seal {entry_id} again, then goalcup upload."
+        "Run goalcup seal {entry_id}, then goalcup upload. This part of the run is uploaded, but \
+         it was not sealed. If the disk is full, free some space first."
     )
 }
 
@@ -1057,13 +1129,13 @@ pub fn entries_intro(none: bool) -> Vec<String> {
             "To show the newest run you started here, even a finished one: goalcup status"
                 .to_string(),
             String::new(),
-            "Runs on this computer:".to_string(),
+            "Parts of runs on this computer:".to_string(),
         ]
     } else {
         vec![
-            "To show one run in full, run: goalcup status <id>".to_string(),
+            "To show one part in full, run: goalcup status <part-id>".to_string(),
             String::new(),
-            "Runs on this computer (id, harness, state, folder):".to_string(),
+            "Parts of runs on this computer (part id, harness, state, folder):".to_string(),
         ]
     }
 }
@@ -1079,15 +1151,17 @@ pub fn entries_intro(none: bool) -> Vec<String> {
 /// account is open on this computer, so a new start would replace it. A practice or test start
 /// never replaces a competition run, and does not say so.
 pub fn home_busy(harness: &str, replaces_competition_run: bool) -> String {
-    let replaces = if replaces_competition_run {
-        " (this replaces your current competition run)"
+    // A start that would replace the open competition run is never advised: it ends that run.
+    let instead = if replaces_competition_run {
+        "Do not start again: a new start replaces your current competition run.".to_string()
     } else {
-        ""
+        format!(
+            "To start a new run instead: exit {harness} there first, then run goalcup start again."
+        )
     };
     format!(
         "Your run is already going in another terminal. Nothing to do here: {harness} is already \
-         recording on this computer. To see it: goalcup status. To start a new run instead: exit \
-         {harness} there first, then run goalcup start again{replaces}. Nothing was created."
+         recording on this computer. To see it: goalcup status. {instead} Nothing was created."
     )
 }
 
@@ -1145,11 +1219,12 @@ pub fn needs_goal_file(harness: &str, id: &str) -> String {
     )
 }
 
-/// `goalcup continue` of a headless harness's run.
+/// `goalcup continue` of a headless harness's run. A new start is not advised: it would replace
+/// the run, which is still open.
 pub fn cannot_continue_headless(harness: &str) -> String {
     format!(
-        "Start a new run instead. {harness} runs headless: it was given one goal and has no \
-         session to pick up, so its run cannot be continued. Nothing was changed."
+        "Nothing to continue. {harness} runs headless: it was given one goal and has no session \
+         to pick up, so its run cannot be continued. The run ends by itself. Nothing was changed."
     )
 }
 
@@ -1190,7 +1265,7 @@ pub fn last_part_closing(run_id: &str) -> String {
 pub fn continued_elsewhere(run_id: &str, latest: &str, ours: &str) -> String {
     format!(
         "Continue this run only on the computer that started it. The server's latest part of run \
-         {run_id} (entry {latest}) is not the one this computer ended last (entry {ours}), so it \
+         {run_id} (part {latest}) is not the one this computer ended last (part {ours}), so it \
          was continued from somewhere else. Nothing was started."
     )
 }
@@ -1409,7 +1484,7 @@ mod tests {
         assert!(
             after_upload(&open, false, false)
                 .join(" ")
-                .contains(CONTINUE_HINT)
+                .ends_with("goalcup upload")
         );
         let closed = after_upload(&open, true, true).join(" ");
         assert!(closed.contains("cannot be continued"), "{closed}");
@@ -1626,7 +1701,7 @@ mod tests {
         for said in &refusals {
             let first = said.split(' ').next().unwrap();
             assert!(
-                ["Run", "Name", "Check"].contains(&first),
+                ["Run", "Name", "Check", "Nothing"].contains(&first),
                 "next action first: {said}"
             );
         }
@@ -1638,8 +1713,66 @@ mod tests {
         assert!(upload_finished().contains(NOTHING_MORE));
         assert!(upload_nothing_left("r1").contains("r1"));
         // Entries: the way to reach one run comes first.
-        assert!(entries_intro(false)[0].contains("goalcup status <id>"));
+        assert!(entries_intro(false)[0].contains("goalcup status <part-id>"));
         assert!(entries_intro(true)[0].contains("goalcup start"));
+    }
+
+    /// Whatever is left to upload is sent with one command, `goalcup upload`, never with
+    /// `goalcup continue`; a seal is asked for only when the part needs one, and then the
+    /// upload after it.
+    #[test]
+    fn a_leftover_upload_has_one_command() {
+        let open = Ending::Open {
+            run_id: "r1",
+            how: "exit code 1",
+            until: "Sat 14 Nov, 10:12 UTC".into(),
+            disk_stop: false,
+        };
+        let mut said = vec![
+            status_next(&Next::Upload),
+            problem_upload("40 min", "503", true),
+        ];
+        for ending in [
+            open,
+            Ending::TimeUp { practice: false },
+            Ending::Replaced,
+            Ending::Over { how: "exit code 0" },
+        ] {
+            said.extend(after_upload(&ending, false, false));
+            said.extend(after_upload(&ending, false, true));
+        }
+        for line in said.iter().filter(|line| line.contains("upload")) {
+            assert!(line.ends_with("goalcup upload"), "{line}");
+            assert!(!line.contains(CONTINUE_HINT), "{line}");
+        }
+        let seal = upload_seal_missing("p1");
+        assert!(
+            seal.starts_with("Run goalcup seal p1, then goalcup upload."),
+            "{seal}"
+        );
+        // A part still recording needs neither: its own goalcup sends the rest.
+        let recording = upload_not_sealed();
+        assert!(!recording.contains("goalcup "), "{recording}");
+        // The stale-state line leaves the command to the Next line, which knows whether a seal
+        // is needed.
+        assert!(!problem_state_stale("2 h", Restart::Over).contains("goalcup seal"));
+    }
+
+    /// A network problem line names a firewall too, and a refusal while a run is open never
+    /// advises a start, which would replace the run.
+    #[test]
+    fn network_lines_name_a_firewall_and_no_start_is_advised_while_a_run_is_open() {
+        for line in [
+            problem_upload("40 min", "503", false),
+            problem_upload("40 min", "503", true),
+            problem_heartbeats("15 min", "timed out"),
+        ] {
+            assert!(line.contains("Little Snitch"), "{line}");
+        }
+        for open in [home_busy("A", true), cannot_continue_headless("A")] {
+            assert!(!open.contains("run goalcup start"), "{open}");
+            assert!(!open.starts_with("Start"), "{open}");
+        }
     }
 
     #[test]

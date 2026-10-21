@@ -160,9 +160,9 @@ enum Command {
     /// Show how your run is doing: recording state, health, storage and any gaps. Run it in a
     /// second terminal while the agent works.
     Status {
-        /// The entry id (`goalcup entries` lists them). Defaults to the newest run started on
-        /// this machine.
-        #[arg(value_name = "ENTRY")]
+        /// One part of a run (`goalcup entries` lists the parts). Defaults to the newest run
+        /// started on this machine.
+        #[arg(value_name = "part-id")]
         entry: Option<String>,
         /// Print the signed status document as JSON, and nothing else.
         #[arg(long)]
@@ -171,9 +171,10 @@ enum Command {
     /// Show how much time your run has left. Your agent may run it too; goalcup never tells
     /// the agent anything by itself.
     ///
-    /// It reads the count the running `goalcup start` keeps from the server, and works inside
-    /// the agent's session. When that count is missing or older than five minutes, it says the
-    /// time is unknown right now and exits 1.
+    /// Inside the agent's session it reads the count the running `goalcup start` keeps from the
+    /// server; when that count is missing or older than five minutes, it says the time is
+    /// unknown right now and exits 1. In your own terminal it reads the newest open run on this
+    /// computer, as `goalcup status` does.
     #[command(name = "time-left")]
     TimeLeft,
     /// Start your agent again, when it stopped before the run's time was up.
@@ -185,34 +186,37 @@ enum Command {
     /// continue a run only on the computer that started it.
     Continue {
         /// The run to continue. Defaults to the newest run started on this machine.
-        #[arg(value_name = "RUN_ID")]
+        #[arg(value_name = "run-id")]
         run: Option<String>,
     },
-    /// Send the rest of a run to the Goal Cup server, when `goalcup start` could not: the
-    /// network was down, the laptop slept, or the process was stopped. Safe to run again.
+    /// Send what is not uploaded yet to the Goal Cup server: the network was down, the laptop
+    /// slept, or goalcup was stopped. Safe to run again. Every goalcup command also tries this
+    /// by itself for a few seconds.
     Upload {
-        /// The entry id (`goalcup entries` lists them). Defaults to every entry of the newest run
-        /// started on this machine that is not yet sent.
-        #[arg(value_name = "ENTRY")]
+        /// One part of a run (`goalcup entries` lists the parts). Defaults to every part of the
+        /// newest run started on this machine that is not yet sent.
+        #[arg(value_name = "part-id")]
         entry: Option<String>,
     },
-    /// List the recorded parts (entries) of your runs on this computer, sealed ones included.
+    /// List the recorded parts of your runs on this computer, sealed ones included. A part is
+    /// one unbroken stretch of recording; each `goalcup continue` starts a new one.
     Entries {
         /// Print the list as one JSON array.
         #[arg(long)]
         json: bool,
     },
-    /// End a run early: stop the agent, seal the record, and print where the trace is.
+    /// Stop your agent now, and seal this part of your run.
     ///
-    /// `goalcup start` seals on its own when the agent exits, so this is only for stopping a
-    /// run before then. goalcup records through a small background program, `goalcup-daemon`
-    /// (beside this binary). It exits once every run is sealed. `status` and `entries` start
-    /// it again to answer; it stays up while a run whose daemon died is unsealed, until you run
-    /// `goalcup seal`.
+    /// Your run stays open until its end time: `goalcup continue` starts its next part. You do
+    /// not need this when the agent exits by itself, or when the run's time is up. It asks
+    /// before it stops anything. The details go to the run's host.log.
     Seal {
-        /// The entry id. Defaults to the newest run started on this machine.
-        #[arg(value_name = "ENTRY")]
+        /// One part of a run. Defaults to the newest run started on this machine.
+        #[arg(value_name = "part-id")]
         entry: Option<String>,
+        /// Do not ask: stop the agent at once.
+        #[arg(long)]
+        yes: bool,
     },
     /// Check that goalcup can record on this computer and that each agent is installed. Not one
     /// of the steps above: use it when something does not work.
@@ -273,6 +277,7 @@ fn main() -> ExitCode {
 }
 
 fn run(command: Command) -> Result<u8, CliError> {
+    send_leftovers(&command);
     match command {
         Command::Start {
             harness,
@@ -300,14 +305,9 @@ fn run(command: Command) -> Result<u8, CliError> {
         .map(|()| 0),
         Command::Continue { run } => continue_run(run).map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),
-        Command::TimeLeft => commands::time_left::time_left_with(
-            std::env::var_os(goalcup_cli::run::time_left::FILE_ENV).as_deref(),
-            goalcup_cli::run::now_unix(),
-            &mut std::io::stdout(),
-        )
-        .map(|()| 0),
+        Command::TimeLeft => time_left().map(|()| 0),
         Command::Entries { json } => entries(json).map(|()| 0),
-        Command::Seal { entry } => seal(entry).map(|()| 0),
+        Command::Seal { entry, yes } => seal(entry, yes).map(|()| 0),
         Command::Doctor { json, harness } => {
             doctor(commands::doctor::DoctorOptions { json, harness })
         }
@@ -344,6 +344,55 @@ fn run(command: Command) -> Result<u8, CliError> {
                 None => commands::upload::upload_newest_with(&cfg, policy, out),
             }
             .map(|()| 0)
+        }
+    }
+}
+
+/// Before a participant's command: send the finished parts of runs on this computer that are
+/// not on the server yet, waiting a few seconds at most ([`commands::upload::send_leftovers`]).
+/// Never inside the agent's session, and never for `doctor`, `seal` (after its seal instead) or
+/// the credential helper. The run a command sends itself is left to it: the newest run for
+/// `upload`, the named part's run for `upload <part-id>`, the run `continue` goes on with.
+fn send_leftovers(command: &Command) {
+    if std::env::var_os(goalcup_cli::launch::IN_HARNESS_ENV).is_some_and(|v| !v.is_empty()) {
+        return;
+    }
+    let Ok(cfg) = goalcup_cli::config::config_dir() else {
+        return;
+    };
+    let skip = match command {
+        Command::Doctor { .. } | Command::GitCredential { .. } | Command::Seal { .. } => return,
+        Command::TimeLeft if std::env::var_os(goalcup_cli::run::time_left::FILE_ENV).is_some() => {
+            return;
+        }
+        Command::Upload { entry: None } => goalcup_cli::run::newest(&cfg).ok().flatten(),
+        Command::Upload { entry: Some(part) } => {
+            goalcup_cli::run::of_entry(&cfg, part).ok().flatten()
+        }
+        Command::Continue { run: Some(run) } => goalcup_cli::run::read(&cfg, run).ok(),
+        Command::Continue { run: None } => goalcup_cli::run::newest(&cfg).ok().flatten(),
+        _ => None,
+    };
+    send_leftovers_skipping(&cfg, skip.as_ref().map(|run| run.run_id.as_str()));
+}
+
+/// [`send_leftovers`] for every run but `skip`.
+fn send_leftovers_skipping(cfg: &std::path::Path, skip: Option<&str>) {
+    if let Ok(policy) = upload_policy() {
+        commands::upload::send_leftovers(cfg, policy, skip, commands::upload::LEFTOVERS_WAIT);
+    }
+}
+
+/// `goalcup time-left`: inside the agent's session, the file the launch names; in a person's own
+/// terminal, the newest open run on this computer.
+fn time_left() -> Result<(), CliError> {
+    let now = goalcup_cli::run::now_unix();
+    let out = &mut std::io::stdout();
+    match std::env::var_os(goalcup_cli::run::time_left::FILE_ENV) {
+        Some(file) => commands::time_left::time_left_with(Some(&file), now, out),
+        None => {
+            let cfg = goalcup_cli::config::config_dir()?;
+            commands::time_left::time_left_of_open_run(&cfg, now, out)
         }
     }
 }
@@ -625,7 +674,7 @@ fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
 /// name. A run that outlived its daemon (a crash, a reboot) is why this starts one from
 /// `<cfg>/daemon.toml` when none answers: that daemon reopens the run for status and seal. It
 /// never writes the file: with no configuration, no daemon was ever started from here.
-fn seal(entry: Option<String>) -> Result<(), CliError> {
+fn seal(entry: Option<String>, yes: bool) -> Result<(), CliError> {
     commands::seal::refuse_inside_harness(
         std::env::var_os(goalcup_cli::launch::IN_HARNESS_ENV).as_deref(),
     )?;
@@ -633,13 +682,18 @@ fn seal(entry: Option<String>) -> Result<(), CliError> {
     let connectors = goalcup_cli::config::connectors_dir()?;
     let client = ensure_daemon(&cfg, goalcup_cli::daemon::MissingConfig::Refuse)?;
     let entry_id = resolve_entry(&cfg, entry)?;
-    commands::seal::seal_with(
+    commands::seal::seal_for_person(
         &client,
         &connectors,
         &cfg,
         &entry_id,
+        yes,
+        &mut std::io::stdin().lock(),
         &mut std::io::stdout(),
-    )
+    )?;
+    // The part just sealed goes up by itself, as the leftovers of any command do.
+    send_leftovers_skipping(&cfg, None);
+    Ok(())
 }
 
 /// The entry named on the command line, or the newest run this machine started.
@@ -655,7 +709,7 @@ fn resolve_entry(cfg: &std::path::Path, entry: Option<String>) -> Result<String,
                 CliError::Refused(format!(
                     "no run has been started from this machine: there is no record under {}. \
                      Only a run started here can be sealed here, because the workspace to \
-                     scan and the tracker's own file list are in that record.",
+                     scan and goalcup's own file list are in that record.",
                     goalcup_cli::entries::entries_dir(cfg).display()
                 ))
             }),

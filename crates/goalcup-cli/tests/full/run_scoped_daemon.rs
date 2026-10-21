@@ -341,7 +341,7 @@ fn status_after_a_mid_run_crash_reopens_the_run_keeps_its_daemon_up_and_seal_add
     );
 
     let output = goalcup(&rig, &cli())
-        .args(["seal", entry.as_str()])
+        .args(["seal", "--yes", entry.as_str()])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", said(&output));
@@ -606,7 +606,7 @@ fn status_and_seal_while_a_run_is_open_use_its_daemon() {
     let daemon = the_daemon(&rig);
 
     let output = goalcup(&rig, &cli())
-        .args(["seal", entry.as_str()])
+        .args(["seal", "--yes", entry.as_str()])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", said(&output));

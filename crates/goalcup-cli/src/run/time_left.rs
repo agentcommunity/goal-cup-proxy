@@ -140,13 +140,21 @@ pub fn sentence(text: &str, now: u64) -> Option<String> {
     if now.abs_diff(as_of) > STALE_AFTER_SECONDS {
         return None;
     }
+    Some(left_line(
+        seconds,
+        value("deadline_at").and_then(goalcup_protocol::control::parse_z),
+    ))
+}
+
+/// The line `goalcup time-left` prints: `seconds` left, and the run's deadline (unix seconds)
+/// when it is known.
+pub fn left_line(seconds: u64, deadline: Option<u64>) -> String {
     let left = match (seconds / 3600, seconds % 3600 / 60) {
         (0, 0) => "Less than a minute left".to_string(),
         (0, minutes) => format!("About {minutes} min left"),
         (hours, minutes) => format!("About {hours} h {minutes} min left"),
     };
-    let stops = value("deadline_at")
-        .and_then(goalcup_protocol::control::parse_z)
+    let stops = deadline
         .and_then(|deadline| {
             let z = goalcup_protocol::control::format_z(deadline);
             Some(format!(
@@ -156,7 +164,7 @@ pub fn sentence(text: &str, now: u64) -> Option<String> {
             ))
         })
         .unwrap_or_default();
-    Some(format!("{left}{stops}. {PUSH_OFTEN}"))
+    format!("{left}{stops}. {PUSH_OFTEN}")
 }
 
 /// The advice every `goalcup time-left` line ends with.

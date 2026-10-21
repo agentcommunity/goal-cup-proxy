@@ -83,7 +83,8 @@ browser approval; a run on the server asks for one at each `goalcup start`, and 
 asks once ([why](docs/PARTICIPANT-GUIDE.md#2-log-in-goalcup-login)). There is no daemon to
 install: `goalcup start` starts `goalcup-daemon` for the run. The shipped harnesses (Codex CLI,
 Claude Code, Hermes, Amp) run in chat mode and refuse `--goal-file`. From another terminal with
-the same `GOALCUP_CONFIG_DIR`, `goalcup status` shows the run and `goalcup seal` ends it early.
+the same `GOALCUP_CONFIG_DIR`, `goalcup status` shows the run and `goalcup seal` stops its agent and seals that part (it asks
+first; `--yes` skips the question; the run itself stays open).
 Only one run per harness can record at a time.
 
 A run on the server needs `goalcup login`, `goalcup prep` and a practice run first
@@ -235,7 +236,7 @@ in [OPERATING](docs/OPERATING.md#running-the-daemon).
   run or ends its upload, whatever the status: it is asked again with backoff, and a refusal that
   repeats is a `PROBLEM:` line in `goalcup status` (D64). Only a heartbeat answer that says `stop`
   or the run's own count to its deadline stops it. After the stop it seals and
-  uploads the rest for a bounded wrap-up; `goalcup upload` finishes the job later. With no entry id it sends the unsent entries of the newest run; `goalcup upload <entry>` sends one entry. The
+  uploads the rest for a bounded wrap-up; `goalcup upload` finishes the job later. With no part id it sends the unsent parts of the newest run; `goalcup upload <part-id>` sends one part. Every other participant command first tries, for at most a few seconds, to send the sealed parts not yet uploaded. The
   deadline is 168 hours after the server's official start, on the server's clock: at the deadline
   the CLI stops the agent and seals. Wire contract: [docs/UPLOAD-API.md](docs/UPLOAD-API.md).
   Server code: [server/worker](server/worker/README.md).
