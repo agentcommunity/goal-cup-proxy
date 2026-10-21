@@ -105,7 +105,8 @@ An organizer test run is a full-length run in the test event. Use it for the lon
   the server you mean to use. Use staging for experiments:
   `goalcup login --server https://goalcup-ingest-staging.b-9a5.workers.dev`, in a configuration directory of
   its own (`GOALCUP_CONFIG_DIR`).
-- A test run replaces only an earlier test run of the same operator. It never touches a competition run.
+- Test runs replace nothing and are never replaced (owner, 21 Oct 2026), so one operator can run several
+  in parallel. A test run never touches a competition run. Needs website migration 20261021100000.
   It is left out of public numbers. Its emails go to the operator, marked `[TEST]`.
 - Delete every test run, rows and R2 objects, in one go:
 

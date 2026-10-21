@@ -738,3 +738,39 @@ describe("test-only clocks are refused outside the local backend", () => {
     assertError(r, 500, "misconfigured");
   });
 });
+
+describe("the per-run size limit against wrangler dev", { concurrency: false }, () => {
+  // Chunk bodies do not depend on the entry id, so the limit can be set before the run exists:
+  // the first chunk fits, the second would pass it by one byte.
+  const size1 = makeChunk("e0000000000000000", 0, 5, GENESIS, "q1").body.length;
+  const size2 = makeChunk("e0000000000000000", 5, 5, GENESIS, "q2").body.length;
+  let worker: RunningWorker;
+  let api: Client;
+  let token = "";
+  let runId = "";
+  let entryId = "";
+  before(async () => {
+    worker = await startWorker({ EVENT_ID: "practice", TEST_APPROVAL_KEY: APPROVAL_KEY, RUN_MAX_COMPRESSED_BYTES: String(size1 + size2 - 1) });
+    api = new Client(worker.url);
+    token = await credentialFor(api, "erin");
+    const r = await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "erin-1" }) });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    ({ run_id: runId, entry_id: entryId } = r.body);
+  });
+  after(async () => {
+    await worker?.stop();
+  });
+
+  test("the chunk that would pass the limit is 413 quota_exceeded and nothing of it reaches R2", async () => {
+    const c1 = makeChunk(entryId, 0, 5, GENESIS, "q1");
+    const c2 = makeChunk(entryId, 5, 5, c1.head, "q2");
+    const put = (c: typeof c1, offset: number) => api.call("PUT", `/v1/runs/${runId}/chunks/${offset}`, { token, body: c.body, headers: c.headers });
+    assert.equal((await put(c1, 0)).status, 200);
+    assertError(await put(c2, c1.length), 413, "quota_exceeded");
+    const keys = r2Objects(worker.stateDir).filter((o) => o.key.startsWith("traces/"));
+    assert.deepEqual(keys.map((o) => o.sha256), [sha256(c1.body)]);
+    const p = (await api.call("GET", `/v1/runs/${runId}`, { token })).body;
+    assert.equal(p.offset, c1.length);
+    assert.equal(p.next_seq, 5);
+  });
+});

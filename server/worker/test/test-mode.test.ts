@@ -37,14 +37,40 @@ test("a test run never replaces the account's competition run", async () => {
   assert.equal(held.replaced_at, null);
 });
 
-test("a test run replaces the account's previous test run (the same mode replaces the same mode)", async () => {
+test("two test runs of one operator both stay open (only competition replaces; owner, 21 Oct 2026)", async () => {
   rig = inProcess("2026-11-06T10:00:00Z", { TEST_EVENT_ID: "test" });
-  const t1 = await rig.api.call("POST", "/v1/runs", { token: await credentialFor(rig.api, "op-1", "test"), json: openBody({ session_id: "t1" }) });
-  assert.equal(t1.status, 201);
-  const t2 = await rig.api.call("POST", "/v1/runs", { token: await credentialFor(rig.api, "op-1", "test"), json: openBody({ session_id: "t2" }) });
-  assert.equal(t2.status, 201);
-  const first = (await rig.db().getRun("op-1", (t1.body as { run_id: string }).run_id, null))!.run;
-  const second = (await rig.db().getRun("op-1", (t2.body as { run_id: string }).run_id, null))!.run;
-  assert.notEqual(first.replaced_at, null);
-  assert.equal(second.replaced_at, null);
+  const runs: { token: string; run_id: string; entry_id: string }[] = [];
+  for (const session of ["t1", "t2"]) {
+    const token = await credentialFor(rig.api, "op-1", "test");
+    const res = await rig.api.call("POST", "/v1/runs", { token, json: openBody({ session_id: session }) });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    runs.push({ token, ...(res.body as { run_id: string; entry_id: string }) });
+    rig.after(60);
+  }
+  for (const r of runs) {
+    assert.equal((await rig.db().getRun("op-1", r.run_id, null))!.run.replaced_at, null);
+    const hb = await rig.api.call("POST", `/v1/runs/${r.run_id}/heartbeat`, {
+      token: r.token,
+      json: { entry_id: r.entry_id, seq: 0, head: "0".repeat(64), offset_local: 0, final: false, repo_head: null },
+    });
+    assert.equal(hb.status, 200, JSON.stringify(hb.body));
+    assert.equal((hb.body as { stop: boolean }).stop, false);
+  }
+});
+
+test("a competition run still replaces the account's competition run, and leaves its test runs open", async () => {
+  rig = inProcess("2026-11-06T10:00:00Z", { TEST_EVENT_ID: "test" });
+  const open = async (mode: "competition" | "test", session: string) => {
+    const res = await rig!.api.call("POST", "/v1/runs", { token: await credentialFor(rig!.api, "op-1", mode), json: openBody({ session_id: session }) });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    rig!.after(60);
+    return (res.body as { run_id: string }).run_id;
+  };
+  const c1 = await open("competition", "c1");
+  const t1 = await open("test", "t1");
+  const c2 = await open("competition", "c2");
+  const run = async (id: string) => (await rig!.db().getRun("op-1", id, null))!.run;
+  assert.equal((await run(c1)).replaced_at, (await run(c2)).official_start);
+  assert.equal((await run(c2)).replaced_at, null);
+  assert.equal((await run(t1)).replaced_at, null);
 });

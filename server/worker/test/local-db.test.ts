@@ -127,6 +127,23 @@ test("opening a competition run replaces the account's latest one at that instan
   assert.equal((await db.getRun("m1", id("r", 3), null))?.run.replaced_at, null);
 });
 
+test("test runs replace nothing and are never replaced: an operator's test runs stay open side by side", async () => {
+  const db = LocalDb.create(asR2(new FakeBucket()));
+  const [t1, t2, comp, t3, comp2] = [
+    await credential(db, "m1", "test"), await credential(db, "m1", "test"), await credential(db), await credential(db, "m1", "test"), await credential(db),
+  ];
+  const test_ = { mode: "test" as const, event_id: "test" };
+  await db.openRun(openArgs(1, "t1", START, DEADLINE, t1, test_));
+  await db.openRun(openArgs(2, "t2", "2026-11-06T09:10:00Z", "2026-11-13T09:10:00Z", t2, test_));
+  await db.openRun(openArgs(3, "c1", "2026-11-06T09:20:00Z", "2026-11-13T09:20:00Z", comp));
+  await db.openRun(openArgs(4, "t3", "2026-11-06T09:30:00Z", "2026-11-13T09:30:00Z", t3, test_));
+  for (const n of [1, 2, 3, 4]) assert.equal((await db.getRun("m1", id("r", n), null))?.run.replaced_at, null, `run ${n}`);
+  // A competition start replaces the competition run only.
+  await db.openRun(openArgs(5, "c2", "2026-11-06T09:40:00Z", "2026-11-13T09:40:00Z", comp2));
+  assert.equal((await db.getRun("m1", id("r", 3), null))?.run.replaced_at, "2026-11-06T09:40:00Z");
+  for (const n of [1, 2, 4, 5]) assert.equal((await db.getRun("m1", id("r", n), null))?.run.replaced_at, null, `run ${n}`);
+});
+
 test("a practice run replaces nothing and is never replaced", async () => {
   const db = LocalDb.create(asR2(new FakeBucket()));
   const [comp, p1, p2, comp2] = [await credential(db), await credential(db, "m1", "practice"), await credential(db, "m1", "practice"), await credential(db)];
@@ -216,9 +233,10 @@ const hb = (seq: number, head: string, final: boolean, entry = E1) => ({
   member_id: "m1", run_id: R1, entry_id: entry, seq, head, offset_local: 10, final, repo_head: null, at: DEADLINE,
   recording: null, model_requests: null, client_ip: null, client_country: null,
 });
-const chunk = (first: number, last: number, prev: string, head: string, offset: number, entry = E1) => ({
+const chunk = (first: number, last: number, prev: string, head: string, offset: number, entry = E1, stored_bytes = 7) => ({
   member_id: "m1",
   run_id: R1,
+  stored_bytes,
   chunk: {
     entry_id: entry, offset, length: 10, sha256: "1".repeat(64), first_seq: first, last_seq: last, prev, head, r2_key: "k",
     received_at: "2026-11-06T09:30:00Z", ack: { entry_id: entry, seq: last, hash: head, acked_at: "t", server_signature: "s" },
@@ -341,6 +359,28 @@ test("continue adds a segment after the current entry, with its own chain; the o
   assert.equal((await db.getChunk("m1", R1, E2, 0))?.last_seq, 5);
   assert.equal((await db.getChunk("m1", R1, E1, 10))?.last_seq, 3);
   assert.equal(await db.getChunk("m1", R1, E2, 10), null);
+});
+
+test("stored_bytes and chunk_count add up per committed chunk, over every entry of the run, and a refused commit adds nothing", async () => {
+  const db = await mk();
+  const totals = async () => {
+    const run = (await db.getRun("m1", R1, null))!.run;
+    return [run.stored_bytes, run.chunk_count];
+  };
+  assert.deepEqual(await totals(), [0, 0]);
+  assert.equal(await db.commitChunk(chunk(0, 1, G, "1".repeat(64), 0, E1, 1000)), "committed");
+  assert.deepEqual(await totals(), [1000, 1]);
+  assert.equal(await db.commitChunk(chunk(0, 1, G, "1".repeat(64), 0, E1, 1000)), "conflict"); // the same chunk again: not counted twice
+  assert.equal(await db.commitChunk(chunk(2, 3, "1".repeat(64), "3".repeat(64), 10, E1, 2500)), "committed");
+  assert.deepEqual(await totals(), [3500, 2]);
+  // A second entry counts towards the same run.
+  const E2 = id("e", 2);
+  assert.equal((await db.continueRun(contArgs(E2, E1, "s2", "2026-11-06T10:00:00Z"))).kind, "created");
+  assert.equal(await db.commitChunk(chunk(0, 0, G, "9".repeat(64), 0, E2, 500)), "committed");
+  assert.deepEqual(await totals(), [4000, 3]);
+  // An entry that is not this run's takes nothing, and adds nothing.
+  assert.equal(await db.commitChunk(chunk(9, 9, "x".repeat(64), "y".repeat(64), 99, id("e", 7), 999)), "not_found");
+  assert.deepEqual(await totals(), [4000, 3]);
 });
 
 test("continue: the same call again is existing, a stale previous is a conflict, an ended run is closed", async () => {

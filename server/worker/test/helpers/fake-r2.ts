@@ -1,5 +1,7 @@
 // Just enough of an R2 bucket for LocalDb: get/put/delete with the conditional puts it uses, and list.
 
+import { createHash } from "node:crypto";
+
 interface Stored {
   text: string;
   etag: string;
@@ -16,13 +18,26 @@ export class FakeBucket {
     return o === undefined ? null : { etag: o.etag, json: async () => JSON.parse(o.text) as unknown };
   }
 
-  async put(key: string, value: string, opts?: { onlyIf?: { etagMatches?: string; etagDoesNotMatch?: string } }) {
+  /**
+   * A string (LocalDb's state), or a stream (a chunk body, as the Worker's upload sends it): read in
+   * full, and refused like R2 refuses it when `sha256` is given and does not match.
+   */
+  async put(key: string, value: string | ReadableStream<Uint8Array>, opts?: { onlyIf?: { etagMatches?: string; etagDoesNotMatch?: string }; sha256?: string }) {
     const cur = this.map.get(key);
     const c = opts?.onlyIf;
     if (c?.etagDoesNotMatch === "*" && cur !== undefined) return null;
     if (c?.etagMatches !== undefined && cur?.etag !== c.etagMatches) return null;
+    let text: string;
+    if (typeof value === "string") text = value;
+    else {
+      const bytes = new Uint8Array(await new Response(value).arrayBuffer());
+      if (opts?.sha256 !== undefined && createHash("sha256").update(bytes).digest("hex") !== opts.sha256) {
+        throw new Error("put: (10037) The SHA-256 checksum you specified did not match what we received.");
+      }
+      text = Buffer.from(bytes).toString("base64");
+    }
     const etag = `etag-${++this.#n}`;
-    this.map.set(key, { text: value, etag });
+    this.map.set(key, { text, etag });
     return { etag };
   }
 

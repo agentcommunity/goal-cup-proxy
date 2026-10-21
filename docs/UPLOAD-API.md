@@ -37,6 +37,7 @@ missing). It is not in CI.
   | 409 | `conflict` | The request does not continue where the server is (offset, `prev`, seq), the credential already opened a run, `previous_entry_id` is not the run's latest entry, or a seal comes before the final heartbeat. | chunk: re-reads the position (`GET`), then continues |
   | 410 | `closed` | The run is abandoned, or closed 24 hours after it ended; the entry is sealed; the request goes past what the final heartbeat committed; or the run is over and cannot be continued. A device request has expired or was already picked up. | stops, reports |
   | 413 | `too_large` | A body over its cap. | stops, reports (a tracer bug) |
+  | 413 | `quota_exceeded` | The chunk would take the run past the server's per-run size limit. Nothing was stored. | keeps its data, retries with backoff |
   | 422 | `digest_mismatch` | The body's SHA-256 is not `Goalcup-Sha256`. Nothing was stored. | retries with backoff |
   | 429 | `rate_limited` | Too many calls. `Retry-After` says when. | retries with backoff |
   | 503 | `maintenance` | The server asks every tracer to wait. `Retry-After` says when. | retries with backoff |
@@ -84,9 +85,10 @@ the minute (1-60). One tracer's normal use (one start, a poll every 5 seconds) s
 allowlist of test operators can approve one or open one (anyone else: the website refuses the
 approval; an open is `403`). A test run belongs to the server's test event (production `test`,
 R2 prefix `traces/test/`, never locked; staging `test-staging`), lasts that event's run hours
-(168 by default), and its emails go to the operator with `[TEST]` before the subject. The same mode
-replaces the same mode: a new test run replaces the operator's open test run, never a competition
-run, and a competition run never replaces a test run. Test runs are left out of every live number and
+(168 by default), and its emails go to the operator with `[TEST]` before the subject. A test run
+replaces nothing and is never replaced, so one operator may have several test runs open at once
+(since 21 Oct 2026; before, a new test run replaced the operator's open test run). Only a
+competition run replaces anything, and only the account's open competition run. Test runs are left out of every live number and
 research report, and `server/worker/scripts/delete-test-runs.sh` deletes all of them (rows and
 R2 objects) in one go.
 
@@ -165,7 +167,8 @@ else is `400`.
 **One main run per account.** A competition start by the account replaces its other open competition
 run: that run gets `replaced_at` = this run's `official_start`, in the same step, and ends then
 (`ends_at`, below). A replaced run keeps its credential and goes on taking its wrap-up (below). A
-practice run replaces nothing and is never replaced; an account may have any number of practice runs.
+practice run or a test run replaces nothing and is never replaced; an account may have any number of
+practice runs, and an operator any number of test runs.
 
 **The start window.** A competition run can be started only inside the event's start window (its
 edges are inside). Before it opens the answer is `403` ("The start window has not opened yet.");
@@ -251,8 +254,18 @@ Before the body is read the server refuses a bad token, an entry that is not thi
 run that is closed, an entry that is sealed, a `Content-Length` over the cap and a missing or
 malformed header. It then requires
 `offset` = its `offset`, `Goalcup-Prev` = its `head` and `Goalcup-First-Seq` = its `next_seq`
-(`409` otherwise), streams the body into storage while hashing it, and keeps it only if the hash
-is `Goalcup-Sha256` (`422` otherwise, nothing kept). Storage is create-only.
+(`409` otherwise), and checks the run's size limit (below). Then it streams the body into storage
+while hashing it, and keeps it only if the hash is `Goalcup-Sha256` (`422` otherwise, nothing
+kept). Storage is create-only.
+
+**The per-run size limit.** The server counts what each run holds: the compressed bytes of its
+committed chunks (each chunk's `Content-Length`) and their number, over all the run's entries. A
+chunk that would take that total past the server's limit (`RUN_MAX_COMPRESSED_BYTES`, 64 GiB of
+compressed chunks) is `413 quota_exceeded`, before the body is read; nothing is stored and the
+position does not move. The tracer keeps its data and retries the same chunk with backoff, so when
+the organizers raise the limit the upload resumes where it stopped. A retry of a chunk the server
+already holds is answered as usual, whatever the limit. Uploads to several entries of one run at
+the same moment can pass the limit by at most one chunk each.
 
 `200`: `{"ack": <AckCheckpoint>, "offset": <new offset>, "next_seq": <last_seq + 1>, "head": "<hex>"}`.
 The acknowledgement is the verifier's existing format (`crates/goalcup-protocol/src/ack.rs`):

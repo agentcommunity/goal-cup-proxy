@@ -33,8 +33,10 @@ Secrets. The approval key is only ever a FILE whose path goes to the child scrip
 GOALCUP_TEST_APPROVAL_KEY_FILE. This script never opens it, and the path is never in an argument.
 Production (ingest.agentcommunity.org) is refused.
 
-A test run replaces an earlier test run of the same operator, so cells that can run at the same
-time must have distinct `test_member_id`s; `check` and `run` refuse otherwise.
+Before website migration 20261021100000 a test run replaces an earlier test run of the same
+operator, so cells that can run at the same time must have distinct `test_member_id`s; `check` and
+`run` refuse otherwise. Once the server has it, set `"test_runs_parallel": true` in `defaults` and
+cells may share a member.
 """
 
 import argparse
@@ -87,6 +89,7 @@ DEFAULTS = {
     "matrix_timeout_slack_s": 3600,
     "goalcup": "goalcup",
     "drills": [],
+    "test_runs_parallel": False,
 }
 
 
@@ -234,6 +237,7 @@ def normalize_config(doc, base, source="<config>"):
         "matrix_timeout_slack_s": defaults.get("matrix_timeout_slack_s"),
         "goalcup": defaults.get("goalcup"),
         "bin_dir": _abs(base, defaults.get("bin_dir")),
+        "test_runs_parallel": defaults.get("test_runs_parallel") is True,
         "cells": [],
     }
     cell_keys = ("where", "connector", "duration_s", "test_member_id", "prompt_file", "config_dir",
@@ -339,7 +343,7 @@ def validate(cfg, cells, parallel):
                     errors.append(f"{tag}: volume {vol} is also cell {volumes[vol]}'s")
                 volumes[vol] = cid
         errors.extend(f"{tag}: {e}" for e in validate_drills(cell["drills"], d))
-    if min(parallel, len(cells)) > 1:
+    if min(parallel, len(cells)) > 1 and not cfg.get("test_runs_parallel"):
         for member, ids in members.items():
             if len(ids) > 1:
                 errors.append(

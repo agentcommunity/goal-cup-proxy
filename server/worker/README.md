@@ -60,6 +60,7 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
 | `src/context.ts`, `env.ts`, `errors.ts`, `util.ts` | Configuration, bindings, error types, helpers |
 | `sql/goal-cup-tracer-upload.sql` | Copy of the website's migration that `db-supabase.ts` calls. The website repo is the authority. |
+| `sql/pending/` | Migrations written here first, not yet in the website repo nor applied (its README says how to land them) |
 | `scripts/delete-test-runs.sh` | Deletes all organizer test runs, rows and R2 objects ([OPERATING](../../docs/OPERATING.md#test-runs)) |
 | `test/` | `sign.test.ts` (the signing vectors shared with the Rust crate), `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
 
@@ -74,6 +75,7 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `TEST_EVENT_ID` | none | Event that organizer test runs (mode `test`) belong to. Unset: the server opens no test run (`403`). |
 | `RUN_HOURS` | `168` | A competition run's `deadline_at` = `official_start` + this many hours. |
 | `PRACTICE_RUN_MINUTES` | `10` | A practice run's length. |
+| `RUN_MAX_COMPRESSED_BYTES` | `68719476736` (64 GiB) | The most compressed chunk bytes one run may hold in R2, over all its entries. A chunk that would pass it is `413 quota_exceeded`, nothing stored; the tracer retries, so raising it (a deploy) resumes the upload. Log lines `quota-half`, `quota-full`, `quota-exceeded <run_id>`. |
 | `DB_BACKEND` | `supabase` | `supabase` (production) or `local` (`wrangler dev` and tests only). Never set `local` in the deployed `wrangler.toml`. |
 | `APPROVAL_URL` | in `wrangler.toml` | The website page where a member approves a device request, without a query string. `verification_uri_complete` adds `?code=<user code>`. |
 | `STAGING` | off | `on` marks a staging deployment: the only place besides `DB_BACKEND=local` where `TEST_APPROVAL_KEY` may be set. Set only in `[env.staging.vars]`. |
@@ -110,11 +112,14 @@ Without `routes = []`, a staging deploy would move `ingest.agentcommunity.org` t
   33,554,432, `Content-Type` and all seven `Goalcup-*` headers are well formed, and the maintenance
   switch is off.
 - **Then:** offset, `prev` and first sequence must continue exactly where the entry stands (`409`).
+- **Then the run's size limit:** the run's `stored_bytes` plus this chunk's `Content-Length` must stay
+  within `RUN_MAX_COMPRESSED_BYTES` (`413 quota_exceeded`, body unread, nothing stored).
 - **Storage:** the body is piped (never buffered) into R2 with a create-only put, and R2 checks the
   SHA-256 (`422 digest_mismatch`, nothing stored). If the name already exists, an earlier attempt stored
   it but its database step failed, and the upload continues from there.
-- **Then one atomic database step** advances offset, sequence and head and records the chunk and its
-  ack, only if they still match what was checked. A request that loses a race is answered from the
+- **Then one atomic database step** advances offset, sequence and head, records the chunk and its
+  ack, and adds the chunk's compressed size and one chunk to the entry's `stored_bytes` and
+  `chunk_count`, only if they still match what was checked. A request that loses a race is answered from the
   stored chunk if it was a retry, otherwise `409`.
 - **Not checked here, by design:** whether the bytes are a valid chain.
 

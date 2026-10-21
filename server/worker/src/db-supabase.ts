@@ -52,6 +52,11 @@ const isObject: Check = (v) => typeof v === "object" && v !== null && !Array.isA
 const text: Check = (v) => typeof v === "string";
 const uint: Check = (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 const hex64: Check = isHex64;
+/** A field a database without the latest migration does not send yet; when sent it must pass `check`. */
+const optional =
+  (check: Check): Check =>
+  (v) =>
+    v === undefined || check(v);
 const nullable =
   (check: Check): Check =>
   (v) =>
@@ -75,6 +80,10 @@ const RUN_SHAPE: Record<string, Check> = {
   first_entry_id: isEntryId,
   current_entry_id: isEntryId,
   current_sealed_at: nullable(isTime),
+  // Website migration 20261021110000 adds these. Before it they are absent, and chunks.ts refuses
+  // uploads (502, retried) instead of letting a run past the size limit; every other call still works.
+  stored_bytes: optional(uint),
+  chunk_count: optional(uint),
 };
 const TICK_SHAPE: Record<string, Check> = {
   ...RUN_SHAPE,
@@ -329,7 +338,7 @@ export class SupabaseDb implements Db {
   }
 
   async commitChunk(a: CommitChunkArgs): Promise<CommitChunkResult> {
-    const v = await this.#rpc("upload_commit_chunk", { p_member_id: a.member_id, p_run_id: a.run_id, p_chunk: a.chunk });
+    const v = await this.#rpc("upload_commit_chunk", { p_member_id: a.member_id, p_run_id: a.run_id, p_chunk: a.chunk, p_stored_bytes: a.stored_bytes });
     return this.#word("upload_commit_chunk", v, ["committed", "conflict", "beyond_final", "closed", "not_found"] as const);
   }
 

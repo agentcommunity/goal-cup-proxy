@@ -82,7 +82,7 @@ export interface RunRow {
   status: RunStatus;
   official_start: string;
   deadline_at: string;
-  /** Set when a later competition start by the account replaced this run: the run ends then. */
+  /** Set when a later competition start by the account replaced this competition run: the run ends then. */
   replaced_at: string | null;
   repo_url: string;
   /** The entry of segment 0, the one `POST /v1/runs` made. */
@@ -91,6 +91,14 @@ export interface RunRow {
   current_entry_id: string;
   /** When that entry was sealed, or null. */
   current_sealed_at: string | null;
+  /**
+   * What the run holds in R2 so far, over all its entries: the compressed bytes (each committed
+   * chunk's Content-Length) and the number of committed chunks. The per-run size limit
+   * (RUN_MAX_COMPRESSED_BYTES) is checked against `stored_bytes`. Undefined only when the
+   * database predates the counters (website migration 20261021110000 not applied yet).
+   */
+  stored_bytes?: number;
+  chunk_count?: number;
 }
 
 /** One segment of a run: its own chain, receipt and seal. Segment 0 is made by `POST /v1/runs`. */
@@ -213,6 +221,8 @@ export interface CommitChunkArgs {
   member_id: string;
   run_id: string;
   chunk: ChunkRecord;
+  /** The compressed bytes this chunk put in R2 (its Content-Length): added to the entry's `stored_bytes` with the chunk. */
+  stored_bytes: number;
 }
 /**
  * `conflict`: offset, prev or first_seq no longer match the entry (someone advanced it first).
@@ -370,7 +380,8 @@ export interface Db {
   /**
    * Open a run (segment 0) for the account and bind the credential to it, in one atomic step.
    * A competition run replaces the account's other open competition run (`replaced_at` = this
-   * run's `official_start`), a test run the account's open test run; a practice run replaces nothing.
+   * run's `official_start`). Only competition replaces: a test run or a practice run replaces
+   * nothing and is never replaced, so an operator's test runs can run side by side (owner, 21 Oct 2026).
    */
   openRun(args: OpenRunArgs): Promise<OpenRunResult>;
   /** Add the next segment. See `ContinueRunResult`. */
@@ -405,7 +416,10 @@ export interface Db {
   getChunk(memberId: string, runId: string, entryId: string, offset: number): Promise<ChunkRecord | null>;
   storeReceipt(memberId: string, runId: string, entryId: string, chainHead: string, receipt: StartReceipt): Promise<StoreReceiptResult>;
   abandonRun(memberId: string, runId: string, reason: string, at: string): Promise<AbandonResult>;
-  /** Advance the chunk's entry past `chunk` and record the chunk and its ack, only if the entry still stands where the chunk expects. */
+  /**
+   * Advance the chunk's entry past `chunk` and record the chunk and its ack, only if the entry still
+   * stands where the chunk expects; in the same step add `stored_bytes` and one chunk to the entry's counters.
+   */
   commitChunk(args: CommitChunkArgs): Promise<CommitChunkResult>;
   /** Seal the entry. A repeat with the same hashes is `already_sealed`; different hashes once sealed are `conflict`. */
   sealRun(args: SealArgs): Promise<SealResult>;

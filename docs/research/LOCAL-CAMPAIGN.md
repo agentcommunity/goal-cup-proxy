@@ -30,11 +30,12 @@ not prove: other platforms, other harness versions, model behaviour, or particip
 1. **Build tools.** `cargo fetch --locked`, Docker running, `python3`, `curl`, `zstd`, `psql`.
 2. **Staging test key.** The staging `TEST_APPROVAL_KEY` in a file only you can read
    (`chmod 600`). Its path goes in `GOALCUP_TEST_APPROVAL_KEY_FILE`.
-3. **One test member per parallel cell.** A test run replaces the earlier test run of the same
-   operator, so cells that run at the same time need different members. Staging ships two
-   synthetic members (`...0c0de1`, `...0c0de2`). For more, add synthetic ids to both lists (the
-   database is shared with production; synthetic members have no account and production cannot
-   approve them):
+3. **Test members.** Until website migration `20261021100000` is on staging, a test run replaces
+   the earlier test run of the same operator, so parallel cells need different members. Staging
+   ships two synthetic members (`...0c0de1`, `...0c0de2`). Once the migration is applied, test runs
+   no longer replace each other: set `"test_runs_parallel": true` in the campaign `defaults` and
+   cells may share one member. To add synthetic members anyway (the database is shared with
+   production; synthetic members have no account and production cannot approve them):
 
    ```sql
    insert into goal_cup_tracer.test_members (member_id, note) values

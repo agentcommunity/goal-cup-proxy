@@ -5,8 +5,11 @@
 //   2. a retry of a chunk already stored: answer with the stored ack, body unread (before the
 //      run state is looked at, so a retry is answered whatever has happened since)
 //   3. offset / prev / first_seq must continue exactly where the entry stands (409 otherwise)
+//   3b. the run's size limit: the run's stored bytes plus this chunk's Content-Length must stay
+//      within RUN_MAX_COMPRESSED_BYTES (413 quota_exceeded otherwise, body unread, nothing stored)
 //   4. stream the body into R2, create-only, with R2 checking the sha256 (422 if wrong)
-//   5. one atomic database step advances offset/head and records chunk + ack
+//   5. one atomic database step advances offset/head, records chunk + ack, and adds the chunk's
+//      compressed size to the entry's stored_bytes and one to its chunk_count
 //   6. sign and return the ack
 
 import type { Ctx } from "./context.ts";
@@ -65,6 +68,10 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   if (h.prev !== entry.head) throw conflict("Goalcup-Prev is not the head the server holds.");
   if (h.firstSeq !== entry.next_seq) throw conflict(`Goalcup-First-Seq is ${h.firstSeq} but the server expects ${entry.next_seq}.`);
 
+  // 3b. The run's size limit, before a byte of the body is read or stored. A retry of a chunk the
+  //     server holds was answered above, so it is never refused here.
+  checkQuota(ctx, run, contentLength);
+
   // 4. Stream into R2.
   const key = chunkKey(run, entry, offset, h.sha256);
   await storeBody(ctx, request, contentLength, key, h.sha256);
@@ -85,9 +92,10 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
     received_at: receivedAt,
     ack,
   };
-  const result = await ctx.db.commitChunk({ member_id: member, run_id: runId, chunk });
+  const result = await ctx.db.commitChunk({ member_id: member, run_id: runId, chunk, stored_bytes: contentLength });
   switch (result) {
     case "committed":
+      noteQuota(ctx, run, contentLength);
       return storedAnswer(chunk);
     case "conflict": {
       // Someone moved the run between our check and our commit. If that someone was a retry of
@@ -103,6 +111,42 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
     case "not_found":
       throw notFound("That entry does not belong to this run.");
   }
+}
+
+/**
+ * 413 quota_exceeded when this chunk would take the run past RUN_MAX_COMPRESSED_BYTES. The tracer
+ * keeps its data and retries, so raising the variable resumes the upload where it stopped.
+ * The check reads the run's total as it was a moment ago, so concurrent uploads to several entries
+ * of one run can pass it by at most one chunk (32 MiB) each.
+ */
+function checkQuota(ctx: Ctx, run: RunRow, contentLength: number): void {
+  if (run.stored_bytes === undefined) {
+    // The database does not count stored bytes yet (website migration 20261021110000 missing): do
+    // not let a run past a limit nobody can see. 502 is retried; the tracer keeps the data.
+    console.error(`quota-unknown ${run.run_id}: the database sends no stored_bytes; apply the size-limit migration`);
+    throw new ApiError(502, "upstream_error", "The database cannot say how much this run holds right now.");
+  }
+  const max = ctx.cfg.runMaxCompressedBytes;
+  if (run.stored_bytes + contentLength <= max) return;
+  // One line per refusal for the operators (Workers Logs). The tracer retries with backoff, so a
+  // run at its limit repeats this line every few minutes until the limit is raised or the run ends.
+  console.error(`quota-exceeded ${run.run_id} stored=${run.stored_bytes} chunk=${contentLength} max=${max}`);
+  throw new ApiError(
+    413,
+    "quota_exceeded",
+    `This run holds ${run.stored_bytes} compressed bytes; this chunk would pass the server's limit of ${max} per run. ` +
+      "Nothing was stored. Keep the data: the upload resumes when the organizers raise the limit.",
+  );
+}
+
+/** A log line for the operators when a committed chunk takes the run to half its limit, or to all of it. */
+function noteQuota(ctx: Ctx, run: RunRow, contentLength: number): void {
+  if (run.stored_bytes === undefined) return;
+  const max = ctx.cfg.runMaxCompressedBytes;
+  const before = run.stored_bytes;
+  const after = before + contentLength;
+  if (before < max && after >= max) console.warn(`quota-full ${run.run_id} stored=${after} max=${max}`);
+  else if (2 * before < max && 2 * after >= max) console.warn(`quota-half ${run.run_id} stored=${after} max=${max}`);
 }
 
 /** Past the committed end: it ends after the final seq, or ends at it with another head. */

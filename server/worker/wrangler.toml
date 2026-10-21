@@ -47,6 +47,10 @@ TEST_EVENT_ID = "test"
 RUN_HOURS = "168"
 # A practice run lasts this many minutes. Practice has no start window and never replaces a run.
 PRACTICE_RUN_MINUTES = "10"
+# Per-run size limit: the most compressed bytes one run may hold in R2, over all its entries
+# (64 GiB; owner, WP-D). Over it a chunk is 413 quota_exceeded and nothing is stored; the tracer
+# keeps its data and retries, so raising this (a deploy) resumes the upload.
+RUN_MAX_COMPRESSED_BYTES = "68719476736"
 # Production default. `local` exists for `wrangler dev` and tests only (see README).
 DB_BACKEND = "supabase"
 # Check with the GitHub API that repo_url is a public repository. "on" in production;
@@ -137,6 +141,7 @@ PRACTICE_EVENT_ID = "goalcup-practice-staging"
 TEST_EVENT_ID = "test-staging"
 RUN_HOURS = "168"
 PRACTICE_RUN_MINUTES = "10"
+RUN_MAX_COMPRESSED_BYTES = "68719476736"
 DB_BACKEND = "supabase"
 GITHUB_CHECK = "on"
 # The website's approval page (agentcommunity.org; it signs the member in with the site's session).

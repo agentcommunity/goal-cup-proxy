@@ -6,7 +6,10 @@ import { SupabaseDb } from "./db-supabase.ts";
 import type { Env } from "./env.ts";
 import { ApiError } from "./errors.ts";
 import { Signer } from "./sign.ts";
-import { isTime } from "./util.ts";
+import { isTime, parseSafeUint } from "./util.ts";
+
+/** The default per-run size limit: 64 GiB of compressed chunks (owner, WP-D). */
+export const DEFAULT_RUN_MAX_COMPRESSED_BYTES = 68_719_476_736;
 
 export interface Config {
   /** The event of competition runs, and of practice runs. */
@@ -20,6 +23,8 @@ export interface Config {
   practiceRunSeconds: number;
   /** A run is closed this long after it ends. 24 h, or CLOSE_AFTER_SECONDS (local backend only). */
   closeAfterSeconds: number;
+  /** The most compressed bytes one run may hold in R2 (RUN_MAX_COMPRESSED_BYTES). */
+  runMaxCompressedBytes: number;
   /** The competition start window (local backend only); undefined: the database's, or always open. */
   startWindow: { opens: string | null; closes: string | null } | undefined;
   githubCheck: boolean;
@@ -39,6 +44,14 @@ function positiveNumber(name: string, raw: string | undefined, fallback: number,
   if (raw === undefined || raw === "") return fallback;
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0 || n > max) throw misconfigured(`${name} must be a positive number of ${unit}.`);
+  return n;
+}
+
+/** RUN_MAX_COMPRESSED_BYTES: a positive whole number of bytes, or the default when unset. */
+function byteLimit(raw: string | undefined): number {
+  if (raw === undefined || raw === "") return DEFAULT_RUN_MAX_COMPRESSED_BYTES;
+  const n = parseSafeUint(raw);
+  if (n === null || n === 0) throw misconfigured("RUN_MAX_COMPRESSED_BYTES must be a positive whole number of bytes.");
   return n;
 }
 
@@ -99,6 +112,7 @@ export function readConfig(env: Env): Config {
     runSeconds: testOnlySeconds(env, "RUN_SECONDS") ?? positiveNumber("RUN_HOURS", env.RUN_HOURS, 168, "hours", 24 * 365) * 3600,
     practiceRunSeconds: positiveNumber("PRACTICE_RUN_MINUTES", env.PRACTICE_RUN_MINUTES, 10, "minutes", 24 * 60) * 60,
     closeAfterSeconds: testOnlySeconds(env, "CLOSE_AFTER_SECONDS") ?? CLOSE_AFTER_SECONDS,
+    runMaxCompressedBytes: byteLimit(env.RUN_MAX_COMPRESSED_BYTES),
     startWindow: opens === null && closes === null ? undefined : { opens, closes },
     githubCheck: env.GITHUB_CHECK === "on",
   };

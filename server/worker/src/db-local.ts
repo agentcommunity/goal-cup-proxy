@@ -5,7 +5,7 @@
 // Layout:
 //   state/runs/{run_id}.json     the run and its entries, with receipts and chunks (a few hundred bytes each)
 //   state/open/{member}.json     {"run_id": …}: the member's latest competition run, the one a new start replaces
-//   state/open/{member}.test.json  the same for the member's test runs (the same mode replaces the same mode)
+//                                (only competition replaces; test and practice runs have no slot)
 //   state/devices/{sha256}.json  a device request, by the hash of its device code
 //   state/usercodes/{sha256}.json  {"device_sha256": …}: the request a user code belongs to
 //   state/credentials/{sha256}.json  a run credential, by its own hash
@@ -35,7 +35,6 @@ import type {
   NoticeArgs,
   OpenRunArgs,
   OpenRunResult,
-  RunMode,
   RunRow,
   RunStatus,
   SealArgs,
@@ -51,6 +50,9 @@ interface StoredEntry extends EntryRow {
   harness_version: string;
   tracer_version: string;
   chunks: ChunkRecord[];
+  /** Compressed bytes the entry's committed chunks hold in R2, and how many chunks (absent in a state file from before). */
+  stored_bytes?: number;
+  chunk_count?: number;
   /** The highest `model_requests` a heartbeat of this entry has sent; null until one does. */
   model_requests?: number | null;
   final_repo_head: string | null;
@@ -67,7 +69,7 @@ interface StoredEntry extends EntryRow {
 }
 
 /** The run and its entries (lowest segment first); `current_*` are worked out when it is read. */
-interface StoredRun extends Omit<RunRow, "first_entry_id" | "current_entry_id" | "current_sealed_at"> {
+interface StoredRun extends Omit<RunRow, "first_entry_id" | "current_entry_id" | "current_sealed_at" | "stored_bytes" | "chunk_count"> {
   machine: MachineFacts | null;
   client_ip: string | null;
   client_country: string | null;
@@ -158,7 +160,7 @@ export class LocalDb implements Db {
   // ---- plumbing --------------------------------------------------------------------------
 
   #runKey = (runId: string) => `state/runs/${runId}.json`;
-  #openKey = (member: string, mode: RunMode) => `state/open/${encodeURIComponent(member)}${mode === "test" ? ".test" : ""}.json`;
+  #openKey = (member: string) => `state/open/${encodeURIComponent(member)}.json`;
 
   async #readRun(runId: string): Promise<{ run: StoredRun; etag: string } | null> {
     const obj = await this.#bucket.get(this.#runKey(runId));
@@ -315,22 +317,22 @@ export class LocalDb implements Db {
   /**
    * Store a new run. A competition run first marks the account's latest competition run replaced,
    * then takes the account's slot with a conditional put; if someone else took it meanwhile, go
-   * round again (that run is replaced in turn). A test run does the same with the account's test
-   * slot: the same mode replaces the same mode, and practice replaces nothing.
+   * round again (that run is replaced in turn). Only competition replaces: a test run or a practice
+   * run is just stored, so an operator's test runs run side by side (owner, 21 Oct 2026).
    */
   async #keep(run: StoredRun): Promise<void> {
     const create = { onlyIf: { etagDoesNotMatch: "*" } };
-    if (run.mode === "practice") {
+    if (run.mode !== "competition") {
       await this.#bucket.put(this.#runKey(run.run_id), JSON.stringify(run), create);
       return;
     }
-    const openKey = this.#openKey(run.member_id, run.mode);
+    const openKey = this.#openKey(run.member_id);
     for (let i = 0; i < MAX_CAS_TRIES; i++) {
       const marker = await this.#bucket.get(openKey);
       if (marker !== null) {
         const heldId = ((await marker.json()) as { run_id: string }).run_id;
         await this.#updateRun<null>(heldId, run.member_id, null, (held) =>
-          held.mode === run.mode && held.status === "open" && held.replaced_at === null
+          held.mode === "competition" && held.status === "open" && held.replaced_at === null
             ? { next: { ...held, replaced_at: held.official_start > run.official_start ? held.official_start : run.official_start }, answer: null }
             : { answer: null },
         );
@@ -518,7 +520,16 @@ export class LocalDb implements Db {
       }
       // The point of the whole function: advance only if the entry still stands where the caller saw it.
       if (entry.offset !== c.offset || entry.head !== c.prev || entry.next_seq !== c.first_seq) return { answer: "conflict" };
-      const next = { ...entry, offset: c.offset + c.length, next_seq: c.last_seq + 1, head: c.head, last_ack: c.ack, chunks: [...entry.chunks, c] };
+      const next = {
+        ...entry,
+        offset: c.offset + c.length,
+        next_seq: c.last_seq + 1,
+        head: c.head,
+        last_ack: c.ack,
+        chunks: [...entry.chunks, c],
+        stored_bytes: (entry.stored_bytes ?? 0) + Math.max(0, a.stored_bytes),
+        chunk_count: (entry.chunk_count ?? 0) + 1,
+      };
       return { next: withEntry(run, next), answer: "committed" };
     });
   }
@@ -588,6 +599,8 @@ const newEntry = (
   baseline_sha256: null,
   sealed_at: null,
   chunks: [],
+  stored_bytes: 0,
+  chunk_count: 0,
   final_repo_head: null,
   last_heartbeat: null,
   heartbeat_count: 0,
@@ -603,7 +616,14 @@ function toRun(r: StoredRun): RunRow {
     ...row
   } = r;
   const cur = currentOf(r);
-  return { ...row, first_entry_id: r.entries[0]!.entry_id, current_entry_id: cur.entry_id, current_sealed_at: cur.sealed_at };
+  return {
+    ...row,
+    first_entry_id: r.entries[0]!.entry_id,
+    current_entry_id: cur.entry_id,
+    current_sealed_at: cur.sealed_at,
+    stored_bytes: r.entries.reduce((sum, e) => sum + (e.stored_bytes ?? 0), 0),
+    chunk_count: r.entries.reduce((sum, e) => sum + (e.chunk_count ?? 0), 0),
+  };
 }
 
 /** A run as the cron reads it. */
@@ -620,6 +640,10 @@ function toTick(r: StoredRun): TickRun {
 
 /** The public shape of an entry: drop the bookkeeping that only the local store keeps. */
 function toEntry(e: StoredEntry): EntryRow {
-  const { harness_version: _h, tracer_version: _t, chunks: _c, final_repo_head: _f, last_heartbeat: _l, heartbeat_count: _n, model_requests: _m, ...row } = e;
+  const {
+    harness_version: _h, tracer_version: _t, chunks: _c, final_repo_head: _f, last_heartbeat: _l, heartbeat_count: _n, model_requests: _m,
+    stored_bytes: _b, chunk_count: _k,
+    ...row
+  } = e;
   return row;
 }

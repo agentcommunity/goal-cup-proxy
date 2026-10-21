@@ -190,6 +190,11 @@ class ConfigValidation(Base):
         errs = self.errors(cfg, parallel=2)
         self.assertTrue(any("share test_member_id" in e for e in errs), errs)
 
+    def test_shared_member_allowed_in_parallel_once_test_runs_do_not_replace(self):
+        cfg = self.config([self.docker_cell("a", "m1"), self.docker_cell("b", "m1")],
+                          test_runs_parallel=True)
+        self.assertEqual(self.errors(cfg, parallel=2), [])
+
     def test_shared_member_allowed_one_at_a_time(self):
         cfg = self.config([self.docker_cell("a", "m1"), self.docker_cell("b", "m1")])
         self.assertEqual(self.errors(cfg, parallel=1), [])

@@ -61,7 +61,7 @@ export function rig(vars: Record<string, string> = WINDOW, start = T0, cf?: Reco
       entry_id: entry, offset: 0, length: 10, sha256: "1".repeat(64), first_seq: 0, last_seq: 4, prev: GENESIS, head, r2_key: "k",
       received_at: T0, ack: { entry_id: entry, seq: 4, hash: head, acked_at: T0, server_signature: "s" },
     };
-    assert.equal(await p.db().commitChunk({ member_id: member, run_id: run, chunk }), "committed");
+    assert.equal(await p.db().commitChunk({ member_id: member, run_id: run, chunk, stored_bytes: 10 }), "committed");
     return head;
   };
   /** Commit the end of an entry that `hold` filled. */

@@ -15,6 +15,12 @@ export interface Env {
   /** Practice run length in minutes (default 10). */
   PRACTICE_RUN_MINUTES?: string;
   /**
+   * The most compressed bytes one run may hold in R2, over all its entries (default 68719476736,
+   * 64 GiB). A chunk that would take the run past it is refused with 413 quota_exceeded and nothing
+   * is stored; the tracer keeps the data and retries, so raising this resumes the upload.
+   */
+  RUN_MAX_COMPRESSED_BYTES?: string;
+  /**
    * Tests only, DB_BACKEND=local only: run length in seconds; seconds after a run ends until it is
    * closed (default 24 h); and the competition start window (RFC 3339, `2026-11-06T09:00:00Z`;
    * an unset edge is open). In production the window is the event's row in the database.

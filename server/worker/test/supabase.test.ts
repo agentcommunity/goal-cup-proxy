@@ -218,12 +218,29 @@ test("abandonRun -> upload_abandon_run", async () => {
   assert.deepEqual(calls[0], { fn: "upload_abandon_run", args: { p_member_id: "m", p_run_id: "r1", p_reason: "why", p_at: "t" } });
 });
 
-test("commitChunk -> upload_commit_chunk(p_chunk)", async () => {
+test("commitChunk -> upload_commit_chunk(p_chunk, p_stored_bytes)", async () => {
   const calls = stub("committed", "conflict", "beyond_final", "closed", "not_found");
   for (const want of ["committed", "conflict", "beyond_final", "closed", "not_found"]) {
-    assert.equal(await db().commitChunk({ member_id: "m", run_id: "r1", chunk }), want);
+    assert.equal(await db().commitChunk({ member_id: "m", run_id: "r1", chunk, stored_bytes: 4321 }), want);
   }
-  assert.deepEqual(calls[0], { fn: "upload_commit_chunk", args: { p_member_id: "m", p_run_id: "r1", p_chunk: chunk } });
+  assert.deepEqual(calls[0], { fn: "upload_commit_chunk", args: { p_member_id: "m", p_run_id: "r1", p_chunk: chunk, p_stored_bytes: 4321 } });
+});
+
+test("a run's stored_bytes and chunk_count come through when the database sends them, are checked, and may be absent", async () => {
+  const counted = { ...run, stored_bytes: 68_719_476_736, chunk_count: 2048 };
+  stub({ run: counted, entry }, { run, entry });
+  assert.deepEqual(await db().getRun("m", "r1", null), { run: counted, entry });
+  assert.equal((await db().getRun("m", "r1", null))!.run.stored_bytes, undefined); // a database before 20261021110000
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    for (const bad of [{ stored_bytes: -1 }, { stored_bytes: "12" }, { chunk_count: 1.5 }, { stored_bytes: null }]) {
+      stub({ run: { ...run, ...bad }, entry });
+      await assert.rejects(db().getRun("m", "r1", null), (e) => e instanceof ApiError && e.status === 502, JSON.stringify(bad));
+    }
+  } finally {
+    console.error = quiet;
+  }
 });
 
 test("sealRun -> upload_seal_run, with the run's status after it", async () => {

@@ -51,6 +51,7 @@ test("config defaults and validation", () => {
     runSeconds: 168 * 3600,
     practiceRunSeconds: 600,
     closeAfterSeconds: 86400,
+    runMaxCompressedBytes: 68_719_476_736,
     startWindow: undefined,
     githubCheck: false,
   });
@@ -64,6 +65,10 @@ test("config defaults and validation", () => {
   assert.throws(() => readConfig({ ...baseEnv, EVENT_ID: "../x" }), ApiError);
   assert.throws(() => readConfig({ ...baseEnv, RUN_HOURS: "0" }), ApiError);
   assert.throws(() => readConfig({ ...baseEnv, RUN_HOURS: "abc" }), ApiError);
+  assert.equal(readConfig({ ...baseEnv, RUN_MAX_COMPRESSED_BYTES: "1048576" }).runMaxCompressedBytes, 1_048_576);
+  for (const bad of ["0", "-1", "1.5", "64GiB", "1e9", "99999999999999999"]) {
+    assert.throws(() => readConfig({ ...baseEnv, RUN_MAX_COMPRESSED_BYTES: bad }), (e) => e instanceof ApiError && e.code === "misconfigured", bad);
+  }
 });
 
 test("RUN_SECONDS, CLOSE_AFTER_SECONDS and the start window are honoured only with the local backend", () => {
@@ -226,6 +231,12 @@ test("the 5-minute cron runs in production and in staging; staging is a Worker o
   assert.notEqual(tables["env.staging.vars"]!.EVENT_ID, tables.vars!.EVENT_ID);
   assert.notEqual(tables["env.staging.vars"]!.PRACTICE_EVENT_ID, tables.vars!.PRACTICE_EVENT_ID);
   assert.notEqual(tables["env.staging.r2_buckets"]!.bucket_name, tables.r2_buckets!.bucket_name);
+});
+
+test("the per-run size limit is 64 GiB of compressed chunks in production and in staging", () => {
+  const tables = wranglerTables();
+  assert.equal(tables.vars!.RUN_MAX_COMPRESSED_BYTES, "68719476736");
+  assert.equal(tables["env.staging.vars"]!.RUN_MAX_COMPRESSED_BYTES, "68719476736"); // not inherited by an environment
 });
 
 test("production and staging both bind the device limiter; staging's limits are low enough to see a 429", () => {
