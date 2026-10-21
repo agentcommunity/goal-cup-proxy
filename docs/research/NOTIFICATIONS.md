@@ -101,7 +101,7 @@ maintenance, an unreadable marker, and a healthy server with one silent run).
   do" or "run `goalcup upload` before Z" (row 10).
 - **Disk paused email:** says where to free space, and not to delete the agent's work (row 6).
 - The words are a new pending migration,
-  `server/worker/sql/pending/20261021140000_goal_cup_tracer_notice_text.sql`. It replaces only
+  `server/worker/sql/pending/20261021100000_goal_cup_tracer_event_readiness.sql`. It replaces only
   `notice_text`. It works in either order with the Worker.
 - `docs/UPLOAD-API.md`, "What the server does on its own", describes the rule and the payload.
 

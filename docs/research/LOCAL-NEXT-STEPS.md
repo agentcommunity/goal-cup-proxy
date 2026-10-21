@@ -33,19 +33,15 @@ and the [local campaign](LOCAL-CAMPAIGN.md).
 
 ## 3. Database migrations (website repo): one shared database
 
-Five files in `server/worker/sql/pending/`, in this order. Apply **before** deploying the Worker
-that needs them, or chunk uploads (size limit) and vitals heartbeats answer 502 until they land.
+One file in `server/worker/sql/pending/`: `20261021100000_goal_cup_tracer_event_readiness.sql`
+(the five changes of 21 Oct merged: parallel test runs, size limit, vitals and disk email, judged
+push, notice wording). Apply it **before** deploying the Worker that needs it.
 
-- [ ] `20261021100000_goal_cup_tracer_test_runs_parallel.sql` (test runs no longer replace)
-- [ ] `20261021110000_goal_cup_tracer_run_size_limit.sql` (stored bytes, 64 GiB cap)
-- [ ] `20261021120000_goal_cup_tracer_vitals_disk_notice.sql` (vitals, `disk_full` email)
-- [ ] `20261021130000_goal_cup_tracer_final_push.sql` (judged push before the deadline)
-- [ ] `20261021140000_goal_cup_tracer_notice_text.sql` (silence, disk and ended email wording)
+- [ ] Run `sh server/worker/scripts/check-sql.sh` first: it applies the mirror and the file on a
+      throwaway Postgres in one transaction and smoke-tests the functions.
 - [ ] Staging and production share ONE database: applying a file applies it to both at once.
       There is no "staging first" for SQL. The old-signature wrappers keep the live production
       Worker working.
-- [ ] First run all five on a throwaway Postgres loaded with the mirror (Docker `postgres:16`, stub
-      `auth.users`), in order, inside one transaction.
 - [ ] Copy each into the website repo `supabase/migrations/`; the lead agent applies them once,
       the owner approves. Regenerate the mirror (command in its header) and check it matches.
 - [ ] Then deploy the staging Worker and test it; then the production Worker with the 26 Oct
