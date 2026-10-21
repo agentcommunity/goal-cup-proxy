@@ -65,13 +65,12 @@ the agent calls, GitHub, an API call, running out of time) and the owner's decis
    report only.
 4. **`GOALCUP.md` as the write-up.** Ask agents (through the participant's prompt or the skill) to keep a
    `GOALCUP.md` explaining the project. It is judged at the same final push as the code and can be the
-   written material for the hackathon. Owner decision: required or recommended.
+   written material for the hackathon. Owner decision (21 Oct): required; the agent keeps it up to date (RULES, Submission).
 5. **A clear end screen.** When the run ends, the terminal shows one short block: the deadline passed,
    the judged commit (once known), and "nothing else to do".
 
 ## Open decisions
 
-- `GOALCUP.md`: required, or recommended?
 - Hermes and Amp: measure a skills folder, or ask participants to mention `goalcup time-left` in their
   prompt?
 - Ideas 1, 2 and 3: build before 4 Nov, or after the event?

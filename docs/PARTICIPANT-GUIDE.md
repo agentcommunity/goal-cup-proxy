@@ -332,9 +332,9 @@ question. You may answer them. If it asks you to sign in again, contact support 
 now: it is still your one prompt. Run `goalcup continue` from the same kind of folder as
 `goalcup start` (section 5), in a terminal you will leave open.
 
-After you switch the harness to another model service (for example with `/model`), exit the
-harness and run `goalcup continue`: Goal Cup Proxy records the service the harness's settings name
-when it starts.
+Choose your model and model service in prep, before the run. Typing a harness command such as
+`/model` after your prompt is typing like any other message: Goal Cup Proxy records it and it is
+reviewed. Nothing is blocked.
 
 A run can be continued only on the machine that started it. Goal Cup Proxy never restarts the agent
 on its own.

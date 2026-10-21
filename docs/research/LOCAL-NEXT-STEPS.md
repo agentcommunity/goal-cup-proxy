@@ -120,7 +120,6 @@ push, notice wording). Apply it **before** deploying the Worker that needs it.
 - Prep's filesystem check fails on overlayfs and btrfs, but the run itself never refused them (only
   the 3 GiB reservation decides). Warn instead of fail? Test one sandbox with `goalcup doctor` and a
   practice run first.
-- Mid-run `/model` switch: the guide accepts it, RULES says only "keep going". Allow or forbid?
 - Remote machines: RULES says remote servers are not eligible, but the guide gives SSH advice and
   a provided cloud sandbox is planned. Is a machine or VM you control, running `goalcup` on it,
   eligible? ([B5](PARTICIPANT-REVIEW-2026-10-21.md))
@@ -129,7 +128,6 @@ push, notice wording). Apply it **before** deploying the Worker that needs it.
 - Finish ideas in [HOW-A-RUN-ENDS](HOW-A-RUN-ENDS.md): judged-commit email, freezing the judged
   commit, hours-worked fact. Before 4 Nov or after?
 
-- `GOALCUP.md` in the final version: required, or optional?
 - Hermes and Amp time-left reach: the guide now tells their users to mention `goalcup time-left`
   in their prompt. Also measure a skills folder for them, or leave it at that?
 - Who reviews `StorageFull` gaps (RULES says judges never see raw traces)?

@@ -22,5 +22,9 @@ reply; none will come.
 official start. Run `goalcup time-left` to see how much time is left. Push your work often:
 work not pushed when the run stops is not judged.
 
+**GOALCUP.md.** Keep a `GOALCUP.md` at the repository root that explains the project: what it
+is, how to run it, what works and what does not yet. Update it as you work and push it with your
+code. The version in the last push before the deadline is the one that is read.
+
 **One harness.** Subagents of this harness are fine. Starting a different harness from this session
 is not allowed; the run would be disqualified.

@@ -93,7 +93,9 @@ The latest possible run ends 192 hours after the window opens.
   allowed. Hidden context is not, and there is nowhere to hide it.
 - **After the first prompt, the only human message permitted is "keep going".** Goal Cup Proxy records
   every message a human sends to the agent, by any channel, so the review can see it. Any other human
-  message is reviewed, and it may remove the run at review.
+  message is reviewed, and it may remove the run at review. Harness commands typed after the prompt
+  (for example `/model` to switch model) count as typing: they are recorded and reviewed, never
+  blocked. Choose your model in prep.
 - The review works out who said each message from what the model saw and how the harness structures its
   messages. That is a detection, not a proof. An organizer reviews a message it cannot explain.
 - Goal Cup Proxy never sends anything to the agent, and never relays, edits or blocks your input: no
@@ -322,6 +324,11 @@ Source inclusion, event qualification and actual platform measurements remain di
   changes, in the sealed record.
 - The MIT License must exist in the submitted repository. The result must be a fresh, usable or
   executable product.
+- **`GOALCUP.md` is required.** The submitted repository has a `GOALCUP.md` at its root that
+  explains the project: what it is, how to run it, what works and what does not yet. The agent keeps
+  it up to date as it works; judges read the version in the judged push, and it can be your written
+  material. Ask for it in your prompt: the goal-cup skill tells Codex and Claude Code, but not every
+  harness gets that skill.
 - **Demo video and questionnaire.** You hand in a demo video and answer a questionnaire after the run.
   They are due 24 hours after your own run's 168 hours end, so a later start gets a later due time.
   You hand them in on the website, not through Goal Cup Proxy. Nothing is added to your repository for
