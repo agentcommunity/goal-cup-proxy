@@ -141,7 +141,8 @@ Worker). The details and the glossary (run, part, segment, chain file, seal, rec
 | Linux, x86_64 | Reservation tests and a no-login harness smoke pass on a hosted runner. Full suites not measured. |
 | Windows | Use WSL2 (below). Real-machine validation is pending. Native Windows is planned. |
 
-The trace folder must be on APFS, ext4 or XFS; `goalcup prep` checks this. On Linux, install the
+The trace folder must be on APFS, ext4 or XFS: `goalcup prep` fails its step otherwise, and
+`start` and `continue` warn. On Linux, install the
 harness as a native binary first on `PATH` (not an npm wrapper). On a machine with no browser, set
 `GOALCUP_NO_BROWSER=1`: `login` and `start` print the approval address instead. Known issues:
 [TODO](TODO.md#known-issues).
