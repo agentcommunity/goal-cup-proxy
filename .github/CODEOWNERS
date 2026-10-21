@@ -15,6 +15,7 @@
 /crates/goalcup-protocol/pins/                      @nembal
 /crates/goalcup-protocol/src/pins.rs                @nembal
 /crates/goalcup-protocol/src/harness.rs             @nembal
+/crates/goalcup-protocol/src/harness/                 @nembal
 /crates/goalcup-protocol/src/capture_policy.rs      @nembal
 /crates/goalcup-protocol/src/hints.rs               @nembal
 /crates/goalcup-protocol/src/capture.rs             @nembal
