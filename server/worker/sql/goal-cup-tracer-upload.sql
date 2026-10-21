@@ -2434,22 +2434,6 @@ REVOKE ALL ON FUNCTION public.goal_cup_upload_claim_notices(integer, text) FROM 
 -- Spec: docs/specs/2026-10-20-goal-cup-data-flows-design.md (A, F); plan:
 -- docs/plans/2026-10-21-goal-cup-signup-data-flows.md (Task 2).
 --
---   * events.requires_signup (new, default false): the start gate. True for goalcup-cup-2026 and for the new
---     staging rehearsal event goalcup-cup-staging; no other event. The open_run gate and device_request (a later
---     migration) read it; requires_signup = false is the start-gate kill switch and leaves sign-ups open.
---   * events.signup_open (new, default false): sign-ups are taken. True ONLY for goalcup-cup-staging here.
---     goalcup-cup-2026 stays false: production sign-ups open together with the 23 Oct terms version, in
---     20261021090400_goal_cup_terms_2026_10_23.sql (spec: sign-up opens only with the new terms version).
---     goal_cup_signup reads it (and needs the start window not yet closed; it is not bounded below by
---     start_window_opens). signup_open = false closes sign-ups and leaves the start gate on.
---   * goal_cup_tracer.signups: one active sign-up per member and event (the operator), numbered per event.
---     operator_erased_at is set by account erasure (20261021090200): the entry then names no person.
---   * goal_cup_tracer.teammates: the people an operator lists, by lower-cased and trimmed email. An email
---     is listed at most once per event. Plus-aliases are not merged: matching is exact.
---   * goal_cup_tracer.is_frozen / email_in_use / normalized_team: helpers for this and later migrations; never granted.
---   * public.goal_cup_current_terms(), public.goal_cup_signup_status(event) and public.goal_cup_signup(...): the
---     website's sign-up page (server, service-role client, the signed-in member as p_actor_id). service_role only.
---
 -- Locking: goal_cup_signup takes pg_advisory_xact_lock(hashtext('goal_cup_signup:' || event_id)) before
 -- anything else. Every write that enforces a rule across signups and teammates takes the same lock first, so
 -- the checks below see a stable picture and a collision returns 'email_taken' / 'already_signed_up'. The
@@ -2463,7 +2447,9 @@ REVOKE ALL ON FUNCTION public.goal_cup_upload_claim_notices(integer, text) FROM 
 
 -- ---- events ---------------------------------------------------------------------------------------
 
--- Two switches, set independently: requires_signup gates the official start, signup_open takes sign-ups.
+-- Two switches, set independently. requires_signup gates the official start (open_run and device_request, 20261021090200);
+-- false is the start-gate kill switch and leaves sign-ups open. signup_open takes sign-ups (goal_cup_signup, until the
+-- start window closes; not bounded below by start_window_opens); false closes sign-ups and leaves the gate on.
 ALTER TABLE goal_cup_tracer.events ADD COLUMN requires_signup boolean NOT NULL DEFAULT false;
 ALTER TABLE goal_cup_tracer.events ADD COLUMN signup_open boolean NOT NULL DEFAULT false;
 
@@ -2481,6 +2467,7 @@ ON CONFLICT (id) DO NOTHING;
 
 -- ---- tables ---------------------------------------------------------------------------------------
 
+-- One active sign-up per member and event (the operator), numbered per event.
 -- member_id is the operator's auth.users id, with no foreign key (the same convention as runs).
 -- org_verified means "came from the operator's own ORGANIZATION registration", not a verified identity.
 -- operator_erased_at: the operator's account was erased (goal_cup_erase_member). An entry with a cup run then stays
@@ -2508,7 +2495,8 @@ CREATE UNIQUE INDEX goal_cup_tracer_signups_one_active ON goal_cup_tracer.signup
   WHERE withdrawn_at IS NULL;
 CREATE INDEX goal_cup_tracer_signups_member ON goal_cup_tracer.signups (member_id);
 
--- event_id is copied from the sign-up (the composite key keeps it equal) for the per-event uniqueness rule.
+-- The people an operator lists, by lower-cased and trimmed email, at most once per event. Plus-aliases are not merged:
+-- matching is exact. event_id is copied from the sign-up (the composite key keeps it equal) for that rule.
 CREATE TABLE goal_cup_tracer.teammates (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   signup_id        uuid NOT NULL,
@@ -2802,18 +2790,11 @@ BEGIN
 END $$;
 
 -- ======================== 20261021090100_goal_cup_signup_team.sql ========================
--- Goal Cup Edition 01 sign-up: managing the team, the entry view, withdrawal and teammate removal.
+-- Goal Cup Edition 01 sign-up: the entry view, the operator's edits, withdrawal, the teammates' own choices, teammate
+-- removal, and the state of one sign-up for the email follow-up.
 --
 -- Spec: docs/specs/2026-10-20-goal-cup-data-flows-design.md (B, C); plan:
--- docs/plans/2026-10-21-goal-cup-signup-data-flows.md (Task 3).
---
---   * public.goal_cup_my_entry: the entry page for an operator or a linked teammate.
---   * public.goal_cup_teammates_set / goal_cup_signup_update / goal_cup_signup_withdraw: the operator's edits.
---   * public.goal_cup_teammate_show_name: a linked teammate's own opt-in to show their name.
---   * public.goal_cup_teammate_leave: a linked teammate leaves the team, until the official start.
---   * public.goal_cup_teammate_preview / goal_cup_teammate_remove: the "Remove me" page. They take no actor: the
---     website verifies the HMAC-signed removal token first.
---   * goal_cup_tracer.current_cup_run / operator_name: helpers; never granted.
+-- docs/plans/2026-10-21-goal-cup-signup-data-flows.md (Tasks 3 and 5).
 --
 -- Every id from a form is checked against p_actor_id here. A sign-up the actor does not operate, or one that does
 -- not exist, is 'not_operator' either way, so existence does not leak.
@@ -2830,8 +2811,7 @@ END $$;
 -- the edition, so a listed person cannot start the entry again as an operator). events is never locked FOR UPDATE.
 -- There is no unique_violation handler: the advisory lock makes a collision 'email_taken'.
 --
--- Additive: new functions only (the shared team validation, goal_cup_tracer.normalized_team, is in the previous
--- migration).
+-- Additive: new functions only.
 --
 -- Apply: as docs/admin/GOAL-CUP-SIGNUP-RUNBOOK.md says (one transaction after SET lock_timeout = '5s'); then pnpm db:check.
 
@@ -2893,62 +2873,51 @@ DECLARE
   v_self       teammates;
   v_role       text;
   v_run        runs;
-  v_team       jsonb;
 BEGIN
   SELECT u.email, u.email_confirmed_at IS NOT NULL INTO v_email, v_confirmed FROM auth.users u WHERE u.id = p_actor_id;
 
+  -- The actor's own sign-up: the active one, else the latest withdrawn one. All of them share one operator and event,
+  -- so one cup run (current_cup_run) decides whether a withdrawal is final (is_frozen).
   SELECT * INTO v_signup FROM signups
-   WHERE event_id = p_event_id AND member_id = p_actor_id AND withdrawn_at IS NULL;
-  IF NOT FOUND THEN
-    SELECT * INTO v_signup FROM signups
-     WHERE event_id = p_event_id AND member_id = p_actor_id AND withdrawn_at IS NOT NULL AND is_frozen(id)
-     ORDER BY withdrawn_at DESC, created_at DESC, id DESC
-     LIMIT 1;
-  END IF;
+   WHERE event_id = p_event_id AND member_id = p_actor_id
+   ORDER BY withdrawn_at DESC NULLS FIRST, created_at DESC, id DESC
+   LIMIT 1;
   IF FOUND THEN
+    v_run := current_cup_run(p_actor_id, p_event_id);
+    IF v_signup.withdrawn_at IS NULL OR v_run.id IS NOT NULL THEN v_role := 'operator'; END IF;
+  END IF;
+
+  IF v_role IS NULL AND v_confirmed THEN
+    SELECT * INTO v_self FROM teammates
+     WHERE event_id = p_event_id AND email_normalized = lower(btrim(v_email));
+    IF FOUND THEN
+      SELECT * INTO v_signup FROM signups WHERE id = v_self.signup_id;
+      v_run := current_cup_run(v_signup.member_id, p_event_id);
+      v_role := 'teammate';
+    END IF;
+  END IF;
+
+  IF v_role IS NULL THEN
+    IF v_signup.id IS NULL THEN RETURN jsonb_build_object('result', 'none', 'email', v_email); END IF;
     v_role := 'operator';
-  ELSE
-    IF v_confirmed THEN
-      SELECT * INTO v_self FROM teammates
-       WHERE event_id = p_event_id AND email_normalized = lower(btrim(v_email));
-      IF FOUND THEN
-        SELECT * INTO v_signup FROM signups WHERE id = v_self.signup_id;
-        v_role := 'teammate';
-      END IF;
-    END IF;
-    IF v_role IS NULL THEN
-      SELECT * INTO v_signup FROM signups
-       WHERE event_id = p_event_id AND member_id = p_actor_id
-       ORDER BY withdrawn_at DESC, created_at DESC, id DESC
-       LIMIT 1;
-      IF NOT FOUND THEN RETURN jsonb_build_object('result', 'none', 'email', v_email); END IF;
-      v_role := 'operator';
-    END IF;
   END IF;
-
-  IF v_role = 'operator' THEN
-    SELECT coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'email', t.email_normalized,
-                                                 'role', t.role_label, 'show_name', t.show_name)
-                              ORDER BY t.created_at, t.name, t.id), '[]'::jsonb)
-      INTO v_team FROM teammates t WHERE t.signup_id = v_signup.id;
-  ELSE
-    SELECT coalesce(jsonb_agg(jsonb_build_object('name', t.name, 'role', t.role_label, 'show_name', t.show_name)
-                              ORDER BY t.created_at, t.name, t.id), '[]'::jsonb)
-      INTO v_team FROM teammates t WHERE t.signup_id = v_signup.id;
-  END IF;
-
-  v_run := current_cup_run(v_signup.member_id, v_signup.event_id);
 
   RETURN jsonb_build_object(
     'result', 'ok',
     'role', v_role,
-    'frozen', is_frozen(v_signup.id),
+    'frozen', v_run.id IS NOT NULL,
     'signup', jsonb_build_object(
       'id', v_signup.id, 'entry_no', v_signup.entry_no, 'name', v_signup.name, 'org_name', v_signup.org_name,
       'org_verified', v_signup.org_verified, 'anonymous', v_signup.anonymous,
       'research_opt_in', v_signup.research_opt_in, 'withdrawn_at', fmt_time(v_signup.withdrawn_at)),
     'operator_name', operator_name(v_signup.id),
-    'teammates', v_team,
+    'teammates', (
+      SELECT coalesce(jsonb_agg(
+               jsonb_build_object('name', t.name, 'role', t.role_label, 'show_name', t.show_name)
+               || CASE WHEN v_role = 'operator' THEN jsonb_build_object('id', t.id, 'email', t.email_normalized)
+                       ELSE '{}'::jsonb END
+               ORDER BY t.created_at, t.name, t.id), '[]'::jsonb)
+        FROM teammates t WHERE t.signup_id = v_signup.id),
     'run', CASE WHEN v_run.id IS NULL THEN NULL ELSE jsonb_build_object(
       'status', v_run.status, 'official_start', fmt_time(v_run.official_start),
       'deadline_at', fmt_time(v_run.deadline_at), 'final_commit', v_run.final_commit) END,
@@ -3124,12 +3093,12 @@ BEGIN
   SELECT lower(btrim(u.email)) INTO v_email FROM auth.users u WHERE u.id = p_actor_id AND u.email_confirmed_at IS NOT NULL;
   IF v_email IS NULL THEN RETURN 'not_listed'; END IF;
 
+  -- Under the event lock the listing cannot change (every teammates write takes it), so one read serves; the final
+  -- statement locks the row.
   PERFORM pg_advisory_xact_lock(hashtext('goal_cup_signup:' || p_event_id));
-  SELECT signup_id INTO v_signup_id FROM teammates WHERE event_id = p_event_id AND email_normalized = v_email;
+  SELECT id, signup_id INTO v_teammate, v_signup_id FROM teammates WHERE event_id = p_event_id AND email_normalized = v_email;
   IF NOT FOUND THEN RETURN 'not_listed'; END IF;
   PERFORM 1 FROM signups WHERE id = v_signup_id FOR UPDATE;
-  SELECT id INTO v_teammate FROM teammates WHERE event_id = p_event_id AND email_normalized = v_email FOR UPDATE;
-  IF NOT FOUND THEN RETURN 'not_listed'; END IF;
 
   IF is_frozen(v_signup_id) THEN RETURN 'frozen'; END IF;
 
@@ -3153,18 +3122,21 @@ BEGIN
   SELECT lower(btrim(u.email)) INTO v_email FROM auth.users u WHERE u.id = p_actor_id AND u.email_confirmed_at IS NOT NULL;
   IF v_email IS NULL THEN RETURN 'not_listed'; END IF;
 
+  -- Under the event lock the listing cannot change (every teammates write takes it), so one read serves; the final
+  -- statement locks the row.
   PERFORM pg_advisory_xact_lock(hashtext('goal_cup_signup:' || p_event_id));
-  SELECT signup_id INTO v_signup_id FROM teammates WHERE event_id = p_event_id AND email_normalized = v_email;
+  SELECT id, signup_id INTO v_teammate, v_signup_id FROM teammates WHERE event_id = p_event_id AND email_normalized = v_email;
   IF NOT FOUND THEN RETURN 'not_listed'; END IF;
   PERFORM 1 FROM signups WHERE id = v_signup_id FOR UPDATE;
-  SELECT id INTO v_teammate FROM teammates WHERE event_id = p_event_id AND email_normalized = v_email FOR UPDATE;
-  IF NOT FOUND THEN RETURN 'not_listed'; END IF;
 
   IF is_frozen(v_signup_id) THEN RETURN 'frozen'; END IF;
 
   DELETE FROM teammates WHERE id = v_teammate;
   RETURN 'ok';
 END $$;
+
+-- The "Remove me" page: goal_cup_teammate_preview and goal_cup_teammate_remove take no actor; the website verifies the
+-- HMAC-signed removal token first.
 
 -- What the "Remove me" page shows. {"result":"ok","name","entry_name","operator_name","frozen"} or
 -- {"result":"not_found"}. No emails.
@@ -3195,18 +3167,35 @@ BEGIN
   SELECT event_id INTO v_event_id FROM teammates WHERE id = p_teammate_id;
   IF NOT FOUND THEN RETURN 'not_found'; END IF;
 
+  -- Read again under the event lock: the row may have gone while this call waited. Every teammates write takes that
+  -- lock, so the row stays until the final statement, which locks it.
   PERFORM pg_advisory_xact_lock(hashtext('goal_cup_signup:' || v_event_id));
   SELECT signup_id INTO v_signup_id FROM teammates WHERE id = p_teammate_id;
   IF NOT FOUND THEN RETURN 'not_found'; END IF;
   PERFORM 1 FROM signups WHERE id = v_signup_id FOR UPDATE;
-  PERFORM 1 FROM teammates WHERE id = p_teammate_id FOR UPDATE;
-  IF NOT FOUND THEN RETURN 'not_found'; END IF;
 
   IF is_frozen(v_signup_id) THEN RETURN 'frozen'; END IF;
 
   DELETE FROM teammates WHERE id = p_teammate_id;
   RETURN 'ok';
 END $$;
+
+-- The state of one sign-up, for the email follow-up, which calls it at send time to re-check that a mail is still
+-- wanted: 'withdrawn' (withdrawn_at is set; wins over 'started', as a withdrawal after the start is final), else
+-- 'started' (is_frozen: the operator has a competition run in the event, a replaced one included), else 'active'.
+-- NULL for no such sign-up or a NULL id; the follow-up treats NULL as "do not send". It only reads and takes no lock,
+-- so a state read never waits on a start or a withdrawal.
+CREATE FUNCTION public.goal_cup_signup_state(p_signup_id uuid) RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+AS $$
+  SELECT CASE
+           WHEN s.withdrawn_at IS NOT NULL THEN 'withdrawn'
+           WHEN is_frozen(s.id) THEN 'started'
+           ELSE 'active'
+         END
+    FROM signups s
+   WHERE s.id = p_signup_id
+$$;
 
 -- ---- privileges ---------------------------------------------------------------------------------------
 -- Supabase grants EXECUTE on new functions to PUBLIC, anon and authenticated; revoke all three explicitly
@@ -3221,7 +3210,8 @@ REVOKE ALL ON FUNCTION
   public.goal_cup_teammate_show_name(uuid, text, boolean),
   public.goal_cup_teammate_leave(uuid, text),
   public.goal_cup_teammate_preview(uuid),
-  public.goal_cup_teammate_remove(uuid)
+  public.goal_cup_teammate_remove(uuid),
+  public.goal_cup_signup_state(uuid)
 FROM PUBLIC, anon, authenticated;
 
 GRANT EXECUTE ON FUNCTION
@@ -3232,7 +3222,8 @@ GRANT EXECUTE ON FUNCTION
   public.goal_cup_teammate_show_name(uuid, text, boolean),
   public.goal_cup_teammate_leave(uuid, text),
   public.goal_cup_teammate_preview(uuid),
-  public.goal_cup_teammate_remove(uuid)
+  public.goal_cup_teammate_remove(uuid),
+  public.goal_cup_signup_state(uuid)
 TO service_role;
 
 -- ======================== 20261021090200_goal_cup_signup_gate.sql ========================
@@ -3241,27 +3232,9 @@ TO service_role;
 -- Spec: docs/specs/2026-10-20-goal-cup-data-flows-design.md (database rules 1-5 and 9, H); plan:
 -- docs/plans/2026-10-21-goal-cup-signup-data-flows.md (Task 4).
 --
--- Replaces three live functions from their latest bodies, with the same argument lists (a new argument would add a
--- PUBLIC-executable overload), and adds one:
---   * public.goal_cup_upload_open_run (latest body: 20261015170000_goal_cup_tracer_test_replaces_test.sql). A
---     competition run in an event with requires_signup needs the operator's active sign-up. Without one it answers
---     {"result":"forbidden","message":"Sign up for Goal Cup at agentcommunity.org/goalcup before your official start."}
---     (the Worker passes a forbidden message through as its 403). Practice, dry run and test events are not gated.
---     requires_signup = false is the start-gate kill switch (sign-ups stay open); signup_open = false closes sign-ups
---     (goal_cup_signup) and leaves this gate on. The sign-up row is read FOR SHARE before the replacement UPDATE of
---     runs and held to the end of the transaction: a withdrawal (FOR UPDATE) that committed first makes the start
---     forbidden, and a withdrawal that comes second waits for the start and then succeeds (final for the edition).
---   * public.goal_cup_device_request (latest body: 20261016130000_goal_cup_tracer_device_request_replaces.sql). Four
---     new keys, always present: signup_required, signed_up, operator_name, signup_event_id. signup_required follows
---     requires_signup (the start gate), not signup_open.
---   * public.goal_cup_erase_member (latest body: 20261015150000_goal_cup_tracer_production.sql). The hackathon
---     submission is not the membership (owner decision 2026-10-21): an entry whose operator has a cup run stays active
---     (repo, prompt, videos and research choice unchanged) but anonymous (signups.anonymous = true: public pages show
---     "Entry NNN", no team, company or personal name) and names no person any more (signups.operator_erased_at); an
---     entry without one is withdrawn and loses its teammate rows. Every teammate row listing the member's verified email is deleted.
---     Four new keys report it: signups_withdrawn, signups_kept, entry_teammates, teammate_listings.
---   * goal_cup_tracer.seed_staging_signup(member, name) (new): a sign-up on goalcup-cup-staging for a staging test
---     member, whom the real sign-up cannot serve (no account). service_role only.
+-- Replaces public.goal_cup_upload_open_run, goal_cup_device_request and goal_cup_erase_member from their latest
+-- bodies, with the same argument lists (a new argument would add a PUBLIC-executable overload), and adds
+-- goal_cup_tracer.seed_staging_signup. Each section below says what changed.
 --
 -- Locking (spec database rule 1): erasure takes the event advisory lock of every event that takes sign-ups or gates
 -- starts, or holds any sign-up, in one fixed order (by id) before any row, so it waits for a sign-up in flight and two
@@ -3276,7 +3249,9 @@ TO service_role;
 
 -- ---- open_run: the sign-up gate ---------------------------------------------------------------------------
 -- Unchanged from 20261015170000 except the gate, placed after the credential checks (so a retried start of a run
--- that already exists still answers 'existing') and before the first write.
+-- that already exists still answers 'existing') and before the first write. Only a competition run in an event with
+-- requires_signup is gated (practice, dry run and test are not); the Worker passes the forbidden message through as
+-- its 403.
 CREATE OR REPLACE FUNCTION public.goal_cup_upload_open_run(
   p_member_id text, p_event_id text, p_mode text, p_run_id text, p_entry_id text,
   p_official_start text, p_deadline_at text,
@@ -3459,8 +3434,9 @@ END $$;
 --     or shows the person's name any more, not a registration that outlived the account, and never an email.
 --     member_id stays, like runs.member_id.
 --   * signups_kept: the member's active sign-ups whose operator has a cup run in the event (is_frozen) stay active as
---     submissions, made anonymous (anonymous = true) so public pages show only "Entry NNN"; research_opt_in is
---     unchanged. The rows keep name, org_name and the frozen team list, which the anonymous flag keeps off public pages.
+--     submissions, made anonymous (anonymous = true) so public pages show only "Entry NNN"; the repo, prompt, videos
+--     and research_opt_in are unchanged. The rows keep name, org_name and the frozen team list, which the anonymous
+--     flag keeps off public pages.
 --   * signups_withdrawn: the member's other active sign-ups (no cup run) are withdrawn, as before. The rows stay: an
 --     entry number is never reused.
 --   * entry_teammates: the teammate rows deleted from the member's own sign-ups without a cup run, which frees those
@@ -3626,43 +3602,6 @@ TO service_role;
 REVOKE ALL ON FUNCTION goal_cup_tracer.seed_staging_signup(uuid, text)
 FROM PUBLIC, anon, authenticated, goal_cup_ingest_staging, goal_cup_ingest_production;
 GRANT EXECUTE ON FUNCTION goal_cup_tracer.seed_staging_signup(uuid, text) TO service_role;
-
--- ======================== 20261021090300_goal_cup_signup_state.sql ========================
--- Goal Cup Edition 01 sign-up: the state of one sign-up, for the email follow-up.
---
--- Spec: docs/specs/2026-10-20-goal-cup-data-flows-design.md; plan: docs/plans/2026-10-21-goal-cup-signup-data-flows.md
--- (Task 5).
---
--- Adds one function:
---   * public.goal_cup_signup_state(p_signup_id uuid) RETURNS text. The email follow-up calls it at send time to
---     re-check that a mail is still wanted. It answers:
---       'withdrawn'  the sign-up has withdrawn_at set (wins over 'started': a withdrawal after the start is final),
---       'started'    otherwise, and goal_cup_tracer.is_frozen(p_signup_id): the operator has a competition run in the
---                    sign-up's event, a replaced run included,
---       'active'     otherwise,
---       NULL         no such sign-up (or a NULL id). The follow-up treats NULL as "do not send".
---     It only reads; it takes no lock, so a state read never waits on a start or a withdrawal.
---
--- service_role only, like the other goal_cup_* functions. No table, column or row changes.
---
--- Apply: as docs/admin/GOAL-CUP-SIGNUP-RUNBOOK.md says (one transaction after SET lock_timeout = '5s'); then pnpm db:check.
-
-CREATE FUNCTION public.goal_cup_signup_state(p_signup_id uuid) RETURNS text
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
-AS $$
-  SELECT CASE
-           WHEN s.withdrawn_at IS NOT NULL THEN 'withdrawn'
-           WHEN is_frozen(s.id) THEN 'started'
-           ELSE 'active'
-         END
-    FROM signups s
-   WHERE s.id = p_signup_id
-$$;
-
--- Supabase grants EXECUTE on new functions to PUBLIC, anon and authenticated; revoke all three explicitly
--- (docs/SUPABASE.md, "SECURITY DEFINER grants").
-REVOKE ALL ON FUNCTION public.goal_cup_signup_state(uuid) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.goal_cup_signup_state(uuid) TO service_role;
 
 -- ======================== 20261021090400_goal_cup_terms_2026_10_23.sql ========================
 -- Goal Cup Edition 01: the terms version for the 23 Oct rules and privacy texts.
