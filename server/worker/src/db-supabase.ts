@@ -162,7 +162,7 @@ export class SupabaseDb implements Db {
     this.#key = key;
   }
 
-  /** Call one function. Any failure becomes a 502, which the tracer retries with backoff. */
+  /** Call one function. Any failure becomes a 502, which goalcup retries with backoff. */
   async #rpc(fn: string, args: Record<string, unknown>): Promise<unknown> {
     let res: Response;
     try {

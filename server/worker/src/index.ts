@@ -73,7 +73,7 @@ async function handle(request: Request, env: Env): Promise<Response> {
   if (env.MAINTENANCE === "on") {
     const secs = Number(env.MAINTENANCE_RETRY_AFTER);
     const retryAfter = Number.isInteger(secs) && secs > 0 ? secs : 300;
-    throw new ApiError(503, "maintenance", "The server asks every tracer to wait; try again later.", {
+    throw new ApiError(503, "maintenance", "The server asks every Goal Cup Proxy to wait; try again later.", {
       "retry-after": String(retryAfter),
     });
   }

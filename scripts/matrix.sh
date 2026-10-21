@@ -10,7 +10,7 @@
 # The run is the real thing: `goalcup login`, `goalcup start --practice` (the device-flow
 # approval, the clone of the matrix repository, the harness), the end of the run, the seal and
 # the upload. A chat-mode connector (`interactive = true`) runs under a pseudo-terminal, gets one
-# typed prompt, and is stopped by the tracer at the practice deadline. A headless connector (not
+# typed prompt, and is stopped by goalcup at the practice deadline. A headless connector (not
 # `interactive`, like hermes-cli) runs with `--goal-file`, gets its goal from MATRIX_PROMPT in
 # that file, types nothing, and ends when the harness does; the script then waits for the
 # server's deadline before it asks for the server's copy. Then it checks:
@@ -721,7 +721,7 @@ finish_test_seal() {
       if resolve_entry; then
         request_seal "goalcup start ended before the prompt was submitted"
       fi
-      fail "goalcup start ended before the prompt was submitted; the tracer's last words: $(last_line "$ROOT/start.out")" || return 1
+      fail "goalcup start ended before the prompt was submitted; goalcup's last words: $(last_line "$ROOT/start.out")" || return 1
     fi
     log "the harness ended $(($(date +%s) - SUBMIT_AT))s after the prompt was submitted, before the duration (${DURATION}s)"
     request_seal "the harness ended before the duration"
@@ -972,7 +972,7 @@ PY
   # ---- what the run left (the newest run record this start wrote)
   RUN_JSON=$(fresh_runs | head -1)
   [ -n "$RUN_JSON" ] ||
-    fail "no run record under $CFG/runs; the tracer's last words: $(last_line "$ROOT/start.txt")" || return 1
+    fail "no run record under $CFG/runs; goalcup's last words: $(last_line "$ROOT/start.txt")" || return 1
   RUN_DIR=$(dirname "$RUN_JSON")
   RUN_ID=$(py_get "$RUN_JSON" run_id)
   TRACE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["trace_dir"])' "$RUN_JSON")
@@ -1007,7 +1007,7 @@ PY
     log "harness version: $HV"
   fi
 
-  # The tracer's own words about how the run ended. A chat-mode run's `deadline:` line goes to the
+  # goalcup's own words about how the run ended. A chat-mode run's `deadline:` line goes to the
   # run's host.log (the terminal belongs to the harness), a headless run's to the terminal, and
   # `harness exited:` and `uploaded:` to the terminal in both: so both files are read.
   { cat "$ROOT/start.txt"; [ ! -f "$RUN_DIR/host.log" ] || tr -d '\r' <"$RUN_DIR/host.log"; } >"$ROOT/ended.txt"
@@ -1021,7 +1021,7 @@ PY
       fail "the run record's last entry $ENTRY_ID is not the entry that was sealed, $SEAL_ENTRY" || return 1
     if [ "$MODE" = headless ] && [ "$EARLY" = 1 ]; then
       exited=$(grep '^harness exited:' "$ROOT/ended.txt" | tail -1 | cut -c1-200)
-      [ -n "$exited" ] || exited="no harness-exited line; the tracer's last words: $(last_line "$ROOT/start.txt")"
+      [ -n "$exited" ] || exited="no harness-exited line; goalcup's last words: $(last_line "$ROOT/start.txt")"
       [ "$exited" = "harness exited: exit code 0." ] ||
         fail "the headless harness did not finish its goal: $exited" || return 1
     fi
@@ -1044,7 +1044,7 @@ PY
     # own with exit code 0; any other exit is a harness that did not do its job.
     if ! grep -q '^deadline:' "$ROOT/ended.txt"; then
       exited=$(grep '^harness exited:' "$ROOT/ended.txt" | tail -1 | cut -c1-200)
-      [ -n "$exited" ] || exited="no harness-exited line; the tracer's last words: $(last_line "$ROOT/start.txt")"
+      [ -n "$exited" ] || exited="no harness-exited line; goalcup's last words: $(last_line "$ROOT/start.txt")"
       [ "$exited" = "harness exited: exit code 0." ] ||
         fail "the headless harness did not finish its goal: $exited" || return 1
       # Over on the harness's side, open on the server's until its deadline (the practice length).
@@ -1057,11 +1057,11 @@ PY
     fi
   else
     grep -q '^deadline:' "$ROOT/ended.txt" ||
-      fail "the run did not end at its deadline (no 'deadline:' line in the terminal output or host.log); the tracer's last words: $(last_line "$ROOT/ended.txt")" || return 1
+      fail "the run did not end at its deadline (no 'deadline:' line in the terminal output or host.log); goalcup's last words: $(last_line "$ROOT/ended.txt")" || return 1
   fi
   if [ "$TEST" = 0 ]; then
     grep -q '^uploaded:.*the seal' "$ROOT/ended.txt" ||
-      fail "the tracer did not report the upload finished with the seal (no 'uploaded: ... and the seal' line)" || return 1
+      fail "goalcup did not report the upload finished with the seal (no 'uploaded: ... and the seal' line)" || return 1
   fi
   if [ "$CONNECTOR" = "$FAKE_ID" ]; then
     grep -q 'tui: noted' "$ROOT/start.txt" || fail "the typed prompt never reached the harness" || return 1
@@ -1409,7 +1409,7 @@ EOF
 
 if [ -n "$CHECK_CFG" ]; then run_check; else run_matrix; fi
 if [ "$RESULT" != PASS ] && [ -n "${RUN_DIR:-}" ] && [ -f "$RUN_DIR/host.log" ]; then
-  log_file "host.log (the tracer's messages during the run)" "$RUN_DIR/host.log"
+  log_file "host.log (goalcup's messages during the run)" "$RUN_DIR/host.log"
 fi
 [ "$RESULT" = PASS ]
 exit $?

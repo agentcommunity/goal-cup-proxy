@@ -245,7 +245,7 @@ test("production and staging both bind the device limiter; staging's limits are 
   assert.equal(tables["env.staging.durable_objects.bindings"]!.name, "DEVICE_LIMITER"); // not inherited by an environment
   assert.equal(tables.migrations!.new_sqlite_classes, '["DeviceLimiter"]');
   assert.ok(!/^\s*\[\[(env\.staging\.)?ratelimits\]\]/m.test(WRANGLER)); // the binding that never tripped is gone
-  assert.ok(Number(tables.vars!.DEVICE_POLL_PER_MINUTE) >= 24); // one tracer polls its code 12 times a minute
+  assert.ok(Number(tables.vars!.DEVICE_POLL_PER_MINUTE) >= 24); // one goalcup polls its code 12 times a minute
   assert.ok(Number(tables.vars!.DEVICE_START_PER_MINUTE) >= 120); // a venue or campus NAT starts many sign-ins
   assert.ok(Number(tables.vars!.DEVICE_TOKEN_PER_MINUTE) >= 1200); // per address: an abuse cap only
   assert.ok(Number(tables["env.staging.vars"]!.DEVICE_START_PER_MINUTE) <= 10);

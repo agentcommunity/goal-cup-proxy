@@ -146,7 +146,7 @@ export interface ChunkRecord {
   ack: Ack;
 }
 
-/** The facts about the machine the tracer sends: a flat object of strings, numbers, booleans and nulls. */
+/** The facts about the machine goalcup sends: a flat object of strings, numbers, booleans and nulls. */
 export type MachineFacts = Record<string, string | number | boolean | null>;
 
 export interface OpenRunArgs {
@@ -231,13 +231,13 @@ export interface CommitChunkArgs {
  */
 export type CommitChunkResult = "committed" | "conflict" | "beyond_final" | "closed" | "not_found";
 
-/** How the tracer says its own recording is going. */
+/** How goalcup says its own recording is going. */
 export type RecordingState = "ok" | "gaps" | "failed" | "unknown";
 
 /**
- * What a heartbeat may say about the tracer's own processes and the machine's free disk, and
- * nothing else (docs/UPLOAD-API.md, heartbeat). Every field is optional; a field the tracer sent
- * as null is left out. `agent_paused: "disk"`: the tracer has paused the agent because the disk is
+ * What a heartbeat may say about goalcup's own processes and the machine's free disk, and
+ * nothing else (docs/UPLOAD-API.md, heartbeat). Every field is optional; a field goalcup sent
+ * as null is left out. `agent_paused: "disk"`: goalcup has paused the agent because the disk is
  * almost full; vitals without it say the agent is not paused.
  */
 export interface Vitals {

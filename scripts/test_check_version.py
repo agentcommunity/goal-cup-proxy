@@ -100,11 +100,19 @@ class CheckVersionTests(unittest.TestCase):
         found = self.findings()
         self.assertTrue(any("tracer_version" in f for f in found), found)
 
+    def test_a_proxy_version_field_or_the_product_name_with_the_version_is_flagged(self) -> None:
+        self.write("crates/c/src/lib.rs", 'let v = Req { proxy_version: "0.2.0" };\n')
+        self.write("docs/GUIDE.md", "Goal Cup Proxy 0.6.0 is out. The recording proxy since v0.3.1.\n")
+        found = self.findings()
+        self.assertTrue(any("proxy_version" in f for f in found), found)
+        self.assertIn("docs/GUIDE.md:1: writes the current version 0.6.0", found)
+        self.assertIn("docs/GUIDE.md:1: writes the release tag v0.3.1", found)
+
     def test_a_tarball_name_with_the_current_version_is_flagged(self) -> None:
         self.write("docs/GUIDE.md", "Download goalcup-0.6.0-aarch64-apple-darwin.tar.gz.\n")
         self.assertEqual(len(self.findings()), 1)
 
-    def test_the_same_digits_outside_the_tracers_context_are_not_flagged(self) -> None:
+    def test_the_same_digits_outside_goalcups_context_are_not_flagged(self) -> None:
         self.write("docs/GUIDE.md", "The fake harness `matrix-fake-tui 0.6.0` and Node v22.18.0.\n")
         self.write("crates/c/src/lib.rs", '// /opt/homebrew/Cellar/goalcup/0.6.0/bin/goalcup\n')
         self.assertEqual(self.findings(), [])

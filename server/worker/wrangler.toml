@@ -48,7 +48,7 @@ RUN_HOURS = "168"
 # A practice run lasts this many minutes. Practice has no start window and never replaces a run.
 PRACTICE_RUN_MINUTES = "10"
 # Per-run size limit: the most compressed bytes one run may hold in R2, over all its entries
-# (64 GiB; owner, WP-D). Over it a chunk is 413 quota_exceeded and nothing is stored; the tracer
+# (64 GiB; owner, WP-D). Over it a chunk is 413 quota_exceeded and nothing is stored; goalcup
 # keeps its data and retries, so raising this (a deploy) resumes the upload.
 RUN_MAX_COMPRESSED_BYTES = "68719476736"
 # Production default. `local` exists for `wrangler dev` and tests only (see README).
@@ -57,14 +57,14 @@ DB_BACKEND = "supabase"
 # `npm run dev` and the tests turn it off so they need no network.
 GITHUB_CHECK = "on"
 # The website's page where a member approves a device request (no query string).
-# The tracer opens it with `?code=<user code>`.
+# goalcup opens it with `?code=<user code>`.
 APPROVAL_URL = "https://agentcommunity.org/goalcup/approve"
 # Never commit "on". Switch it on with `wrangler deploy --var MAINTENANCE:on`: see README "Maintenance on and off".
 MAINTENANCE = "off"
 MAINTENANCE_RETRY_AFTER = "300"
 # Sender of the run emails (src/mail.ts); mail stays off until the RESEND_API_KEY secret is set.
 NOTICE_FROM = "Agent Community <updates@member.agentcommunity.org>"
-# Device-flow limits, calls a minute (src/ratelimit.ts). One tracer starts once and polls its own
+# Device-flow limits, calls a minute (src/ratelimit.ts). One goalcup starts once and polls its own
 # code 12 times a minute. Starts are per client address, generous for a venue or campus NAT; polls
 # are per device code, so a NAT does not share them; the per-address poll cap is an abuse guard.
 DEVICE_START_PER_MINUTE = "120"

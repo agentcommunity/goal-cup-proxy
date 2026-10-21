@@ -14,6 +14,7 @@ import {
   hexField,
   isEntryId,
   newId,
+  proxyVersionField,
   readBodyCapped,
   sha256Hex,
   strField,
@@ -92,8 +93,8 @@ export function requireOpen(ctx: Ctx, run: RunRow, entry: EntryRow): void {
 
 /**
  * Whole seconds from the server's clock now to the run's `deadline_at`, rounded up, and 0 once it
- * has come. The tracer counts down from this and never from its own machine's date (WP11), so it
- * is on every answer that tells the tracer about the deadline: open, continue and heartbeat.
+ * has come. goalcup counts down from this and never from its own machine's date (WP11), so it
+ * is on every answer that tells goalcup about the deadline: open, continue and heartbeat.
  */
 export function secondsLeft(run: { deadline_at: string }, now: Date): number {
   return Math.max(0, Math.ceil((Date.parse(run.deadline_at) - now.getTime()) / 1000));
@@ -123,7 +124,7 @@ function connectorFields(b: Record<string, unknown>) {
     workspace: strField(b, "workspace", 4096),
     session_id,
     harness_version: strField(b, "harness_version", 64),
-    tracer_version: strField(b, "tracer_version", 64),
+    tracer_version: proxyVersionField(b),
   };
 }
 
@@ -245,7 +246,7 @@ export function githubHeaders(env: Env): Record<string, string> {
   return headers;
 }
 
-/** GitHub says the repository exists and is public. Failures to ask are 502, so the tracer retries. */
+/** GitHub says the repository exists and is public. Failures to ask are 502, so goalcup retries. */
 async function requirePublicGithubRepo(ctx: Ctx, repoUrl: string): Promise<void> {
   const path = repoUrl.slice("https://github.com/".length); // owner/repo, shape already checked
   const headers = githubHeaders(ctx.env);
@@ -350,7 +351,7 @@ export async function getPosition(ctx: Ctx, member: string, runId: string, reque
   });
 }
 
-/** Seconds a tracer is told to wait when it must send its final heartbeat first. */
+/** Seconds goalcup is told to wait when it must send its final heartbeat first. */
 export const FINAL_RETRY_AFTER = 60;
 
 // ---- POST /v1/runs/{id}/heartbeat ---------------------------------------------------------
@@ -414,7 +415,7 @@ const VITAL_COUNTS = ["disk_free_bytes", "rss_bytes", "cpu_ms", "open_files"] as
 
 /**
  * `vitals`, if sent: an object of the known fields, each optional, null meaning absent. Keys the
- * server does not know are dropped (a newer tracer may send more); a known field of the wrong
+ * server does not know are dropped (a newer goalcup may send more); a known field of the wrong
  * type is 400, like any other field. Only the known fields, nulls left out, go further.
  */
 function vitalsField(b: Record<string, unknown>): Vitals | null {

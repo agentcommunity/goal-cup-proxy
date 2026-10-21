@@ -341,7 +341,7 @@ class MatrixTests(unittest.TestCase):
         w = self.worlds["chat"]
         self.assertEqual(w.run.returncode, 0, w.said())
         self.assertEqual(w.seen("start.argv"), "start\n--harness\nstubchat\n--practice")
-        # The `deadline:` line is in the run's host.log only, as the tracer has it in chat mode;
+        # The `deadline:` line is in the run's host.log only, as goalcup has it in chat mode;
         # the row passes on it.
         terminal = next(w.tmpdir.rglob("start.out")).read_text()
         self.assertNotIn("deadline:", terminal)

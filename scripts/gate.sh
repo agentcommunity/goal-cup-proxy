@@ -78,7 +78,7 @@ if cargo nextest --version >/dev/null 2>&1; then
         # release check runs them by name. The other ignored tests are not selected.
         step cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only \
             -E 'test(/^(m2_synthetic_vertical|capture_failure_campaign)::/)'
-        # The real upload Worker against the tracer (a rule change there touches the Worker, its
+        # The real upload Worker against goalcup (a rule change there touches the Worker, its
         # local database, the SQL proposal and the Rust stand-in: docs/UPLOAD-API.md).
         step cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only \
             -E 'test(/upload_worker/)'

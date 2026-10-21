@@ -77,7 +77,7 @@ test("polls count per device code: many codes behind one address each keep their
       await limitDeviceCode(env, code(p));
     }
   }
-  // One code polled far faster than a tracer does is refused, and only that code.
+  // One code polled far faster than goalcup does is refused, and only that code.
   for (let i = 12; i < 30; i++) await limitDeviceCode(env, code(0));
   await assert.rejects(limitDeviceCode(env, code(0)), limited);
   await limitDeviceCode(env, code(99));

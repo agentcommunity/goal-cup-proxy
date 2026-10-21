@@ -36,6 +36,17 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
   };
   const poll = (device_code: string) => api.call("POST", "/v1/device/token", { json: { device_code } });
 
+  test("proxy_version or tracer_version names Goal Cup Proxy's version; two that differ are 400", async () => {
+    for (const over of [{ tracer_version: undefined, proxy_version: "0.7.0" }, { proxy_version: undefined, tracer_version: "0.6.0" }, { proxy_version: "0.7.0", tracer_version: "0.7.0" }]) {
+      const d = await api.call("POST", "/v1/device", { json: deviceBody(over) });
+      assert.equal(d.status, 200, JSON.stringify(d.body));
+      deviceCodes.push(d.body.device_code);
+    }
+    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: "0.7.0", tracer_version: "0.6.0" }) }), 400, "malformed");
+    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: undefined }) }), 400, "malformed");
+    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ tracer_version: undefined, proxy_version: "x".repeat(65) }) }), 400, "malformed");
+  });
+
   test("pending, approve, pickup once, then 410", async () => {
     const before = Date.now();
     const d = await api.call("POST", "/v1/device", { json: deviceBody() });

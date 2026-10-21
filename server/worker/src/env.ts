@@ -17,7 +17,7 @@ export interface Env {
   /**
    * The most compressed bytes one run may hold in R2, over all its entries (default 68719476736,
    * 64 GiB). A chunk that would take the run past it is refused with 413 quota_exceeded and nothing
-   * is stored; the tracer keeps the data and retries, so raising this resumes the upload.
+   * is stored; goalcup keeps the data and retries, so raising this resumes the upload.
    */
   RUN_MAX_COMPRESSED_BYTES?: string;
   /**

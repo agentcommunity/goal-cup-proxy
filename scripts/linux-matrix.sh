@@ -45,7 +45,7 @@
 #                    own `<synthetic>` messages (no model call) are counted apart, not judged.
 # A message with another model, or none found at all, fails the run.
 #
-# The tracer never hands a harness a provider key (D61): a harness signs in with its own login,
+# goalcup never hands a harness a provider key (D61): a harness signs in with its own login,
 # kept in its tracker home, as Codex does.
 #
 # Environment. A secret is only ever a FILE, mounted read-only; its path goes to the one command

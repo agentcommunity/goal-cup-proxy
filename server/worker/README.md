@@ -33,7 +33,7 @@ Try it by hand against `npm run dev`. A credential comes from the device flow; t
 
 ```sh
 curl -s -XPOST localhost:8787/v1/device -H 'content-type: application/json' \
-  -d '{"purpose":"run","mode":"practice","connector_id":"codex-cli","tracer_version":"x.y.z"}'
+  -d '{"purpose":"run","mode":"practice","connector_id":"codex-cli","proxy_version":"x.y.z"}'
 # -> device_code, user_code. Approve the user code as a member, then pick up the credential:
 curl -s -XPOST localhost:8787/v1/device/approve -H 'authorization: Bearer dev-approval-key' \
   -H 'content-type: application/json' -d '{"user_code":"<user_code>","member_id":"member1","approve":true}'
@@ -75,11 +75,11 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `TEST_EVENT_ID` | none | Event that organizer test runs (mode `test`) belong to. Unset: the server opens no test run (`403`). |
 | `RUN_HOURS` | `168` | A competition run's `deadline_at` = `official_start` + this many hours. |
 | `PRACTICE_RUN_MINUTES` | `10` | A practice run's length. |
-| `RUN_MAX_COMPRESSED_BYTES` | `68719476736` (64 GiB) | The most compressed chunk bytes one run may hold in R2, over all its entries. A chunk that would pass it is `413 quota_exceeded`, nothing stored; the tracer retries, so raising it (a deploy) resumes the upload. Log lines `quota-half`, `quota-full`, `quota-exceeded <run_id>`. |
+| `RUN_MAX_COMPRESSED_BYTES` | `68719476736` (64 GiB) | The most compressed chunk bytes one run may hold in R2, over all its entries. A chunk that would pass it is `413 quota_exceeded`, nothing stored; goalcup retries, so raising it (a deploy) resumes the upload. Log lines `quota-half`, `quota-full`, `quota-exceeded <run_id>`. |
 | `DB_BACKEND` | `supabase` | `supabase` (production) or `local` (`wrangler dev` and tests only). Never set `local` in the deployed `wrangler.toml`. |
 | `APPROVAL_URL` | in `wrangler.toml` | The website page where a member approves a device request, without a query string. `verification_uri_complete` adds `?code=<user code>`. |
 | `STAGING` | off | `on` marks a staging deployment: the only place besides `DB_BACKEND=local` where `TEST_APPROVAL_KEY` may be set. Set only in `[env.staging.vars]`. |
-| `GITHUB_CHECK` | off | `on` makes `POST /v1/runs` ask GitHub that `repo_url` is a public repository (`wrangler.toml` sets `on`; `npm run dev` and the tests turn it off). A missing or private repository is `400`; GitHub unreachable or rate-limiting is `502`, which the tracer retries. |
+| `GITHUB_CHECK` | off | `on` makes `POST /v1/runs` ask GitHub that `repo_url` is a public repository (`wrangler.toml` sets `on`; `npm run dev` and the tests turn it off). A missing or private repository is `400`; GitHub unreachable or rate-limiting is `502`, which goalcup retries. |
 | `MAINTENANCE`, `MAINTENANCE_RETRY_AFTER` | off, `300` | `on` makes every call answer `503 maintenance` with that `Retry-After`, before authentication and before any body is read. The cron does nothing while it is on. |
 | `DEVICE_START_PER_MINUTE`, `DEVICE_POLL_PER_MINUTE`, `DEVICE_TOKEN_PER_MINUTE` | `120`, `30`, `1200` | Device-flow limits: starts per client address, polls per device code, polls per client address (abuse cap). |
 | `NOTICE_FROM` | none | Sender of the run emails. Needed once `RESEND_API_KEY` is set. |
@@ -170,7 +170,7 @@ production (no `--env`) must show no new deployment.
 ### Maintenance on and off
 
 Maintenance makes every call (except `GET /v1/health`) answer `503 maintenance` with `Retry-After`, before
-authentication. Tracers back off and keep recording. The cron does nothing while it is on. Run deadlines do
+authentication. goalcup clients back off and keep recording. The cron does nothing while it is on. Run deadlines do
 not move.
 
 There is one way to switch it on: `npx wrangler deploy --var MAINTENANCE:on`, from a clean checkout of
@@ -267,7 +267,7 @@ checkout (`agentCommunity_PAGE`), not in `server/worker`.
 6. Look at the rows: `psql "$DATABASE_URL_REMOTE" -X -c "select id, mode, start_window_opens,
    start_window_closes from goal_cup_tracer.events where staging = false order by id"`.
 7. Mirror the migration into this repository. Set `F` to the full path of
-   `server/worker/sql/goal-cup-tracer-upload.sql` in a tracer worktree, and run the regeneration command in
+   `server/worker/sql/goal-cup-tracer-upload.sql` in a goal-cup-tracer worktree, and run the regeneration command in
    the header of that file (the lines above `REGEN-END`) from the root of the website checkout at its
    `main`. Read `git diff` of the mirror: the only new part must be your migration. Commit it and open a pull
    request here.
@@ -362,7 +362,7 @@ or on production. Treat both as open. When you run one, write the date and the r
   picked up in time is lost.
 - Database or storage failures are `502 upstream_error`, and misconfiguration is `500 misconfigured`
   (one generic sentence for every cause; the detail, which may hold configuration, goes to the Worker's
-  log only). The tracer retries any 5xx.
+  log only). goalcup retries any 5xx.
 - A run that is over is closed the first time any call names it. The cron does the same for runs
   nobody looks at.
 

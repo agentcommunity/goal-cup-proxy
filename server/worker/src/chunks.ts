@@ -99,7 +99,7 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
       return storedAnswer(chunk);
     case "conflict": {
       // Someone moved the run between our check and our commit. If that someone was a retry of
-      // this very chunk, its ack is the answer; otherwise the tracer must re-read the position.
+      // this very chunk, its ack is the answer; otherwise goalcup must re-read the position.
       const stored = await ctx.db.getChunk(member, runId, entry.entry_id, offset);
       if (stored !== null && stored.length === h.length && stored.head === h.head) return storedAnswer(stored);
       throw conflict("The run moved while this chunk was being stored; read the position again.");
@@ -114,7 +114,7 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
 }
 
 /**
- * 413 quota_exceeded when this chunk would take the run past RUN_MAX_COMPRESSED_BYTES. The tracer
+ * 413 quota_exceeded when this chunk would take the run past RUN_MAX_COMPRESSED_BYTES. goalcup
  * keeps its data and retries, so raising the variable resumes the upload where it stopped.
  * The check reads the run's total as it was a moment ago, so concurrent uploads to several entries
  * of one run can pass it by at most one chunk (32 MiB) each.
@@ -122,13 +122,13 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
 function checkQuota(ctx: Ctx, run: RunRow, contentLength: number): void {
   if (run.stored_bytes === undefined) {
     // The database does not count stored bytes yet (website migration 20261021110000 missing): do
-    // not let a run past a limit nobody can see. 502 is retried; the tracer keeps the data.
+    // not let a run past a limit nobody can see. 502 is retried; goalcup keeps the data.
     console.error(`quota-unknown ${run.run_id}: the database sends no stored_bytes; apply the size-limit migration`);
     throw new ApiError(502, "upstream_error", "The database cannot say how much this run holds right now.");
   }
   const max = ctx.cfg.runMaxCompressedBytes;
   if (run.stored_bytes + contentLength <= max) return;
-  // One line per refusal for the operators (Workers Logs). The tracer retries with backoff, so a
+  // One line per refusal for the operators (Workers Logs). goalcup retries with backoff, so a
   // run at its limit repeats this line every few minutes until the limit is raised or the run ends.
   console.error(`quota-exceeded ${run.run_id} stored=${run.stored_bytes} chunk=${contentLength} max=${max}`);
   throw new ApiError(

@@ -110,7 +110,7 @@ function owed(run: TickRun, now: Date): { kind: NoticeKind; key: string; payload
     notices.push({ kind: "silence", key: heard, payload: { last_heartbeat_at: run.last_heartbeat_at } });
   } else if (run.last_heartbeat_at !== null && run.last_model_request_at !== null) {
     // The run is beating, so its agent is what is quiet. (A run that has never reported
-    // model_requests is not judged: the tracer may not send them.)
+    // model_requests is not judged: goalcup may not send them.)
     for (const hours of IDLE_HOURS) {
       if (run.last_model_request_at < earlier(now, hours * 3600)) {
         notices.push({ kind: hours === 3 ? "idle_3h" : "idle_6h", key: run.last_model_request_at, payload: { hours, since: run.last_model_request_at } });
@@ -136,7 +136,7 @@ export async function queueNotices(ctx: Ctx, now: Date): Promise<number> {
 
 /** One cron tick. Each step is on its own: one that fails is logged and the others still run. */
 export async function runTick(env: Env): Promise<void> {
-  // While the maintenance switch is on tracers cannot beat, so silence would be false news.
+  // While the maintenance switch is on no goalcup can beat, so silence would be false news.
   if (env.MAINTENANCE === "on") return;
   let ctx: Ctx;
   try {

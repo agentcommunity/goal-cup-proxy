@@ -185,18 +185,19 @@ AS $$
 $$;
 
 -- The email for one notice: {subject, text}. The website owns this copy. Same as before, plus disk_full.
+-- The product is named Goal Cup Proxy (goalcup) in the footer and the recording and disk_full emails.
 CREATE OR REPLACE FUNCTION goal_cup_tracer.notice_text(p_kind text, p_payload jsonb, p_run_id text) RETURNS jsonb
 LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp
 AS $$
   SELECT jsonb_build_object('subject', s.subject, 'text', s.body || E'\n\nRun ' || p_run_id ||
-    E'.\nYou get this email because you started a Goal Cup run with the goalcup tracer.\n-- Agent Community, https://agentcommunity.org/goalcup\n')
+    E'.\nYou get this email because you started a Goal Cup run with Goal Cup Proxy (goalcup).\n-- Agent Community, https://agentcommunity.org/goalcup\n')
   FROM (SELECT
     CASE p_kind
       WHEN 'started'   THEN 'Goal Cup: your agent started'
       WHEN 'silence'   THEN 'Goal Cup: your run stopped'
       WHEN 'idle_3h'   THEN 'Goal Cup: no model calls for 3 hours'
       WHEN 'idle_6h'   THEN 'Goal Cup: no model calls for 6 hours'
-      WHEN 'recording' THEN 'Goal Cup: the tracer reports a recording problem'
+      WHEN 'recording' THEN 'Goal Cup: Goal Cup Proxy reports a recording problem'
       WHEN 'ended'     THEN 'Goal Cup: your agent finished'
       WHEN 'disk_full' THEN 'Goal Cup: your agent is paused, the disk is almost full'
     END AS subject,
@@ -216,14 +217,14 @@ AS $$
         'Your agent made no model calls for 6 hours (since ' || coalesce(p_payload->>'since', '?') ||
         E' UTC): is it finished, out of tokens, or offline?'
       WHEN 'recording' THEN
-        'The tracer reports a recording problem (' || coalesce(p_payload->>'recording', 'unknown') ||
+        'Goal Cup Proxy reports a recording problem (' || coalesce(p_payload->>'recording', 'unknown') ||
         E'). Run `goalcup status` on the machine that started the run.'
       WHEN 'ended' THEN
         'Your agent finished at ' || coalesce(p_payload->>'ends_at', '?') || E' (UTC).\n\n' ||
         CASE WHEN p_payload->>'commit' IS NULL THEN 'No commit was recorded for ' || coalesce(p_payload->>'repo_url', 'your repository') || '.'
              ELSE 'The commit we recorded is ' || (p_payload->>'commit') || ' in ' || coalesce(p_payload->>'repo_url', 'your repository') || '.' END
       WHEN 'disk_full' THEN
-        'The tracer paused your agent at ' || coalesce(p_payload->>'since', '?') ||
+        'Goal Cup Proxy paused your agent at ' || coalesce(p_payload->>'since', '?') ||
         E' (UTC) because the disk of the machine running it is almost full.\n\n' ||
         'Free some disk space on that machine: the agent resumes by itself. ' ||
         'If it still seems stuck after that, type "keep going" in the agent.'
