@@ -6,8 +6,8 @@
 --   F=<tracer>/server/worker/sql/goal-cup-tracer-upload.sql; { sed '/^-- REGEN-END/q' "$F"; for m in supabase/migrations/*goal_cup*.sql; do printf '\n-- ======================== %s ========================\n' "${m##*/}"; cat "$m"; done; } > "$F.new" && mv "$F.new" "$F"
 -- Change a migration there first, then regenerate here. Applied to the Agent Community Supabase
 -- project on 2026-10-15 (20261016120000: applied before this copy of it merged).
--- The 2026-10-21 sign-up migrations (20261021090000_goal_cup_signups through
--- 20261021090400_goal_cup_terms_2026_10_23) are NOT yet applied to production. Neither is
+-- The 2026-10-21 sign-up migrations (20261021120000_goal_cup_signups through
+-- 20261021120400_goal_cup_terms_2026_10_23) are NOT yet applied to production. Neither is
 -- 20261017150200_goal_cup_notices_via_email_queue (website main; it changes only goal_cup_upload_claim_notices
 -- and needs the website's email_queue and email_tracking tables, which this copy does not create).
 -- REGEN-END
@@ -2428,7 +2428,7 @@ END $$;
 -- finish_notice stays unchanged for an older Worker with an outstanding claim.
 REVOKE ALL ON FUNCTION public.goal_cup_upload_claim_notices(integer, text) FROM PUBLIC, anon, authenticated;
 
--- ======================== 20261021090000_goal_cup_signups.sql ========================
+-- ======================== 20261021120000_goal_cup_signups.sql ========================
 -- Goal Cup Edition 01 sign-up: who enters the cup, and with which team.
 --
 -- Spec: docs/specs/2026-10-20-goal-cup-data-flows-design.md (A, F); plan:
@@ -2447,14 +2447,14 @@ REVOKE ALL ON FUNCTION public.goal_cup_upload_claim_notices(integer, text) FROM 
 
 -- ---- events ---------------------------------------------------------------------------------------
 
--- Two switches, set independently. requires_signup gates the official start (open_run and device_request, 20261021090200);
+-- Two switches, set independently. requires_signup gates the official start (open_run and device_request, 20261021120200);
 -- false is the start-gate kill switch and leaves sign-ups open. signup_open takes sign-ups (goal_cup_signup, until the
 -- start window closes; not bounded below by start_window_opens); false closes sign-ups and leaves the gate on.
 ALTER TABLE goal_cup_tracer.events ADD COLUMN requires_signup boolean NOT NULL DEFAULT false;
 ALTER TABLE goal_cup_tracer.events ADD COLUMN signup_open boolean NOT NULL DEFAULT false;
 
 -- The cup's start gate is on from now, but its sign-ups stay closed (signup_open keeps its default false) until the
--- terms migration 20261021090400 opens them.
+-- terms migration 20261021120400 opens them.
 UPDATE goal_cup_tracer.events SET requires_signup = true
  WHERE id = 'goalcup-cup-2026' AND mode = 'competition' AND staging = false;
 
@@ -2789,7 +2789,7 @@ BEGIN
   END IF;
 END $$;
 
--- ======================== 20261021090100_goal_cup_signup_team.sql ========================
+-- ======================== 20261021120100_goal_cup_signup_team.sql ========================
 -- Goal Cup Edition 01 sign-up: the entry view, the operator's edits, withdrawal, the teammates' own choices, teammate
 -- removal, and the state of one sign-up for the email follow-up.
 --
@@ -3227,7 +3227,7 @@ GRANT EXECUTE ON FUNCTION
   public.goal_cup_signup_state(uuid)
 TO service_role;
 
--- ======================== 20261021090200_goal_cup_signup_gate.sql ========================
+-- ======================== 20261021120200_goal_cup_signup_gate.sql ========================
 -- Goal Cup Edition 01 sign-up: the gate on the official start, the approval page, account erasure and the staging seed.
 --
 -- Spec: docs/specs/2026-10-20-goal-cup-data-flows-design.md (database rules 1-5 and 9, H); plan:
@@ -3320,7 +3320,7 @@ BEGIN
     RETURN jsonb_build_object('result', 'conflict');
   END IF;
 
-  -- The sign-up gate (20261021090200): an official start in an event that requires a sign-up needs the operator's
+  -- The sign-up gate (20261021120200): an official start in an event that requires a sign-up needs the operator's
   -- active sign-up. FOR SHARE holds the row until this transaction ends, so a withdrawal (FOR UPDATE) cannot commit
   -- in between; a start that waited on a withdrawal re-reads the row, finds it withdrawn and is refused. Nothing has
   -- been written yet, so the refusal leaves no trace.
@@ -3604,7 +3604,7 @@ REVOKE ALL ON FUNCTION goal_cup_tracer.seed_staging_signup(uuid, text)
 FROM PUBLIC, anon, authenticated, goal_cup_ingest_staging, goal_cup_ingest_production;
 GRANT EXECUTE ON FUNCTION goal_cup_tracer.seed_staging_signup(uuid, text) TO service_role;
 
--- ======================== 20261021090400_goal_cup_terms_2026_10_23.sql ========================
+-- ======================== 20261021120400_goal_cup_terms_2026_10_23.sql ========================
 -- Goal Cup Edition 01: the terms version for the 23 Oct rules and privacy texts.
 --
 -- Spec: docs/specs/2026-10-20-goal-cup-data-flows-design.md; plan: docs/plans/2026-10-21-goal-cup-signup-data-flows.md
@@ -3618,8 +3618,8 @@ GRANT EXECUTE ON FUNCTION goal_cup_tracer.seed_staging_signup(uuid, text) TO ser
 -- Rules/privacy text hash: TBD at apply time (owner)
 --
 -- Opens production sign-ups: sign-up opens only with the new terms version (spec), so this migration also sets
--- events.signup_open = true for goalcup-cup-2026, which 20261021090000 left false. Every sign-up therefore records the
--- 23 Oct terms. goalcup-cup-staging has been open since 090000. To close sign-ups again later, set signup_open = false.
+-- events.signup_open = true for goalcup-cup-2026, which 20261021120000 left false. Every sign-up therefore records the
+-- 23 Oct terms. goalcup-cup-staging has been open since 120000. To close sign-ups again later, set signup_open = false.
 --
 -- Replaces goal_cup_tracer.current_terms_version() from 20261015120000_goal_cup_tracer_upload.sql (~line 225) with the
 -- same attributes (LANGUAGE sql IMMUTABLE, SET search_path = pg_catalog, pg_temp); only the returned value changes.

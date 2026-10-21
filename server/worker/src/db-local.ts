@@ -112,7 +112,7 @@ export interface LocalOptions {
 
 const BEFORE_WINDOW = "The start window has not opened yet.";
 const AFTER_WINDOW = "after the start window you can only `goalcup continue` your run";
-/** The database's words (goal_cup_upload_open_run, 20261021090200). */
+/** The database's words (goal_cup_upload_open_run, 20261021120200). */
 const SIGNUP_REQUIRED = "Sign up for Goal Cup at agentcommunity.org/goalcup before your official start.";
 
 const entryOf = (run: StoredRun, entryId: string): StoredEntry | undefined => run.entries.find((e) => e.entry_id === entryId);
