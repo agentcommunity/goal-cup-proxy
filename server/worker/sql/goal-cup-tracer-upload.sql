@@ -3255,9 +3255,10 @@ TO service_role;
 --     new keys, always present: signup_required, signed_up, operator_name, signup_event_id. signup_required follows
 --     requires_signup (the start gate), not signup_open.
 --   * public.goal_cup_erase_member (latest body: 20261015150000_goal_cup_tracer_production.sql). The hackathon
---     submission is not the membership (owner decision 2026-10-21): an entry whose operator has a cup run stays active,
---     with its name, organization and team, and names no person any more (signups.operator_erased_at); an entry without
---     one is withdrawn and loses its teammate rows. Every teammate row listing the member's verified email is deleted.
+--     submission is not the membership (owner decision 2026-10-21): an entry whose operator has a cup run stays active
+--     (repo, prompt, videos and research choice unchanged) but anonymous (signups.anonymous = true: public pages show
+--     "Entry NNN", no team, company or personal name) and names no person any more (signups.operator_erased_at); an
+--     entry without one is withdrawn and loses its teammate rows. Every teammate row listing the member's verified email is deleted.
 --     Four new keys report it: signups_withdrawn, signups_kept, entry_teammates, teammate_listings.
 --   * goal_cup_tracer.seed_staging_signup(member, name) (new): a sign-up on goalcup-cup-staging for a staging test
 --     member, whom the real sign-up cannot serve (no account). service_role only.
@@ -3455,10 +3456,11 @@ END $$;
 -- From 20261015150000, with (spec H as changed by the owner on 2026-10-21: the hackathon submission is not the
 -- membership):
 --   * every sign-up of the member gets operator_erased_at, so operator_name() answers NULL for it: no entry resolves
---     or shows the person's name any more, not a registration that outlived the account, and never an email. The
---     entry name and organization stay. member_id stays, like runs.member_id.
+--     or shows the person's name any more, not a registration that outlived the account, and never an email.
+--     member_id stays, like runs.member_id.
 --   * signups_kept: the member's active sign-ups whose operator has a cup run in the event (is_frozen) stay active as
---     submissions, with their name, organization and frozen team list.
+--     submissions, made anonymous (anonymous = true) so public pages show only "Entry NNN"; research_opt_in is
+--     unchanged. The rows keep name, org_name and the frozen team list, which the anonymous flag keeps off public pages.
 --   * signups_withdrawn: the member's other active sign-ups (no cup run) are withdrawn, as before. The rows stay: an
 --     entry number is never reused.
 --   * entry_teammates: the teammate rows deleted from the member's own sign-ups without a cup run, which frees those
@@ -3534,7 +3536,7 @@ BEGIN
   -- The sign-up rows first (this waits on open_run's FOR SHARE), so the is_frozen reads below see a committed start.
   PERFORM 1 FROM signups WHERE member_id = p_actor_id AND event_id = ANY (v_locked) FOR UPDATE;
 
-  UPDATE signups s SET operator_erased_at = now(), updated_at = now()
+  UPDATE signups s SET operator_erased_at = now(), anonymous = true, updated_at = now()
    WHERE s.member_id = p_actor_id AND s.event_id = ANY (v_locked) AND s.operator_erased_at IS NULL
      AND s.withdrawn_at IS NULL AND is_frozen(s.id);
   GET DIAGNOSTICS v_kept = ROW_COUNT;
