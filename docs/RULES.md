@@ -12,7 +12,8 @@ prompt as the first message; after it, the only message you may type is "keep go
 records the harness's model traffic through a recording proxy on your machine, set for the harness process only, and the harness's session files.
 It uploads the record to the Goal Cup server while the run goes on. It never changes a model base URL
 or any app-wide trust or config, never sends the agent a message, and never restarts it on its own.
-Secrets are removed on your machine before anything is written or uploaded. Raw records stay private.
+Secrets are removed on your machine before anything is written or uploaded, with one known gap
+([your logins](#tracker-auth-and-privacy)). Raw records stay private.
 
 ## The idea
 
@@ -217,6 +218,16 @@ disclosure and no-side-channel rules.
   `~/Library/Keychains`, for your subscription login. Hermes uses one such home too, set up by its
   own wizard when `goalcup prep` opens it. The tracker never sees, forwards or stores your provider
   key: each harness keeps its own login in its home.
+- **Your agent can read your logins, and one recording gap remains.** The harness must read and
+  refresh its own login all run, and its tools run as your user. So the tracker cannot stop your
+  agent reading the harness's login files in the tracker's home (Codex `auth.json`, Hermes `.env`
+  and `auth.json`, Amp `secrets.json`, Claude Code's credential store), or your own `~/.codex`,
+  `~/.claude` and Keychain. The harness's login header is never stored. But a key the model
+  repeats in its reply is recorded as it streams, in small pieces that redaction does not match
+  yet. A trace in which the verifier finds secret-shaped text is not rejected: it is flagged, and
+  it is cleaned before anyone else gets it. An uploaded raw record cannot be rewritten. So use a
+  login or account you can revoke, keep no unrelated secrets in the workspace or your home folder,
+  and log out of the harness or rotate its login after the event.
 - **What the evidence covers.** Every token your agent saw is captured. Every byte a tool produced is
   not: several harnesses truncate large tool output before writing it, and on some the untruncated
   bytes exist nowhere on disk. A few internal model calls, such as title generators and follow-up
@@ -224,6 +235,8 @@ disclosure and no-side-channel rules.
   [CHEAT-CHECKLIST](CHEAT-CHECKLIST.md) lists what a verifier `pass` does not cover.
 - Tracker downtime while the agent kept working is reviewed, not automatically penalized. Downtime
   while nothing happened is an outage.
+- **A full disk is a red flag.** When the disk fills, the record shows a `StorageFull` gap. It means
+  something was off. Judges decide each such gap case by case.
 - The server is authoritative for the start window, the official start, the deadline and the stop.
   Without a network at the deadline, the tracker stops the run once the run's length has passed on the
   machine's own clock.

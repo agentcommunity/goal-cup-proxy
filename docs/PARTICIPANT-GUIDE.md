@@ -95,8 +95,9 @@ line names the first step that needs you.
    connectors. Choose one, for example `goalcup prep --harness codex-cli`; the current source
    also has `claude-code-cli`, `hermes-cli` and `amp-cli`. Prep remembers your choice.
 3. **harness_home.** Prep opens the harness once, in the home the tracer keeps for it. This is
-   never your own `~/.claude` or `~/.codex`. Sign in there, and add the settings, MCP servers and
-   skills you want your agent to have. Then exit the harness normally. Your runs use this home.
+   never your own `~/.claude` or `~/.codex`. Sign in there, with a login or account you can
+   revoke (section 11 says why), and add the settings, MCP servers and skills you want your agent
+   to have. Then exit the harness normally. Your runs use this home.
    Nothing is recorded while prep has it open. Prep first lists these steps and says `Press Enter
    to open <harness>, or Ctrl-C to stop.` It opens the harness only after you press Enter.
 4. **github.** Create a new repository on GitHub: public and empty (create it without a README,
@@ -231,6 +232,8 @@ The run lasts a week. For all of it:
   (section 8).
 - **Over SSH, start the run inside `tmux`** (or `screen`), so a dropped connection does not close
   the terminal.
+- **Keep disk space free.** If the disk fills, the record shows a gap marked `StorageFull`. That
+  is a red flag: something was off. The judges decide each such gap case by case.
 
 The server emails you about your run: when it starts; when it has heard nothing from the tracer
 for 20 minutes; when your agent has made no model calls for 3 hours, and again at 6 hours; when
@@ -371,9 +374,20 @@ The tracer records your run, and only your run:
 
 It records no host name, no user name and no serial number. It does not look at your other
 programs, your browser, other terminals or your files outside the run. Passwords, keys and tokens
-are removed on your machine before anything is written. The server also keeps the IP address and
-country of each connection from the tracer; they are stored on the server only, never in the
-record, and never made public.
+are removed on your machine before anything is written, with one known gap (below). The server
+also keeps the IP address and country of each connection from the tracer; they are stored on the
+server only, never in the record, and never made public.
+
+**Your logins.** Your agent runs as you, so it can read the harness's login files and your own
+`~/.codex`, `~/.claude` and Keychain. The tracer cannot stop that without stopping the harness,
+which must read its login all run. The harness's login header is never stored. But if the model
+repeats a key in its reply, the reply is recorded as it streams, in small pieces, and the tracer
+cannot remove the key from those pieces yet. Such a trace is flagged and cleaned before anyone
+else gets it, but the raw upload cannot be changed. So:
+
+- sign the harness in with a login or account you can revoke;
+- keep no secrets that have nothing to do with the run in the workspace or your home folder;
+- after the event, log out of the harness or rotate its login.
 
 Raw records stay private and are never published.
 

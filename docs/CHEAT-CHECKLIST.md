@@ -127,13 +127,37 @@ consistent, not that the participant followed the rules.
   with a letter other than `e`/`E` (a key in raw text whose quotes do not pair). So a key
   streamed as many SSE text deltas loses every delta's text and the JSON between the deltas
   stays. What still leaks:
-  - **A `BEGIN` line split across two strings (H-29).** It is no `BEGIN` to the rule, and nothing
-    of the key is redacted. Model output arrives token by token, so this is the common case for a
-    key the model prints. Measured on 216 synthetic SSE streams (Anthropic, chat-completions and
-    Responses shapes; RSA-2048 and EC sizes; complete and cut off; 24 cuts, or 2-6 byte tokens):
-    the 108 whose `BEGIN` line was split all leak 16-character runs of the body; the 108 with the
-    `BEGIN` line whole, `END` split or not, leak none. A key the agent reads reaches the
-    next request as one whole string, which is redacted; the hole is the model's own echo.
+  - **Any key the model echoes in its reply stream (H-29).** The model streams its reply in small
+    pieces, with JSON framing between them. Every rule needs the secret as one contiguous run of
+    bytes. So a key split across two pieces matches no rule, and the wire response leg records it
+    raw. This holds for every key shape, not only PEM. Reproduced with `spikes/redact.py`, which
+    tests pin equal to the daemon: a split PEM `BEGIN`, `sk-ant-`, `sk-`, `AKIA` and `ghp_` are
+    all stored raw, with zero redactions. Even a whole `sk-ant-api03-AbCd` with the rest in the
+    next delta leaks, because the rule needs 20 or more contiguous characters
+    (`crates/goalcup-daemon/src/redact.rs:197-198`). Model output arrives token by token, so this
+    is the common case for a key the model prints. For PEM, measured on 216 synthetic SSE streams
+    (Anthropic, chat-completions and Responses shapes; RSA-2048 and EC sizes; complete and cut
+    off; 24 cuts, or 2-6 byte tokens): the 108 whose `BEGIN` line was split all leak 16-character
+    runs of the body; the 108 with the `BEGIN` line whole, `END` split or not, leak none. The same
+    text is redacted in the native transcript and in the next request's history, where it arrives
+    as one whole string; the hole is the model's own echo. The harness's own login header is
+    never stored: headers are skipped unread (`crates/goalcup-cli/src/proxy/http.rs:726`, pinned
+    by `crates/goalcup-cli/tests/it/m2_http_relay.rs:662`). This is a known gap in promise P1
+    until the stream-aware redactor (it joins the text inside each SSE or WebSocket event before
+    matching) lands after the event. For the event, the owner chose the cheap path (WP-E, 20 and
+    21 Oct): a verifier scan of the decoded, joined reply text flags secret-shaped text by kind,
+    count and reference, never the value. A flagged trace passes through, flagged, and is cleaned
+    before anyone else gets it (research export, clean-up 14). Raw R2 objects under the 180-day
+    lock cannot be rewritten, so the participant rotating their login is what closes the exposure.
+  - **The agent can read the harness's own login.** Its login files sit in the tracker's home
+    for that harness: Codex `auth.json`, Hermes `.env` and `auth.json`, Amp `secrets.json`, and
+    Claude Code's credential store. The agent can also read the participant's real `~/.codex`,
+    `~/.claude` and Keychain. The tracer cannot block this without blocking the harness: tools run
+    as the same user, as children of the harness, and the harness must read and refresh its login
+    all run. A file the agent prints goes upstream whole and is redacted when a rule names its
+    shape. If the model echoes it, the reply stream records it raw (H-29). Bounded by: the
+    participant guidance (use a login or account you can revoke, keep no unrelated secrets in the
+    workspace or home, log out or rotate the harness login after the event) and the H-29 scan.
     A key streamed as small SSE deltas spans 5-20 times its length in the stream (about 90
     bytes of framing per delta), so even with its `BEGIN` line whole, its tail past 15 872
     bytes still leaks: measured, an RSA-2048 key in 2-6 character deltas puts its `END` 52 KB

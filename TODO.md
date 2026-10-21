@@ -161,6 +161,10 @@ its source report, e.g. [C4-F4]; the reports are kept outside the repo (maintain
 `crates/goalcup-cli/`, and the same for the other crates. One PR per package; `sh scripts/gate.sh
 fast` before every commit.
 
+The [event readiness plan](docs/superpowers/plans/2026-10-20-event-readiness.md) (20 Oct) sets the
+work from 20 Oct to 6 Nov: invariants, work packages WP-A to WP-H, the test ladder and the owner
+decisions.
+
 ### WP0: Measure
 Status (17 Oct): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging
 practice runs: deadline stop, seal, matching uploaded server position and zero-gap research
@@ -417,15 +421,38 @@ These look odd but are right. Do not "fix" them.
   last whole record and starts a new one. The torn segment says it is incomplete.
 - **H-10 residual:** a CLI crash after release plus a raced manual seal can leave a harness running
   on a sealed entry.
-- **F-16 / E02:** the cross-check matcher that scored the early unattended run failed 2 of 6. Replace
-  it (start-anchored match) before an eight-hour result is scored.
+- **F-16 / E02 (solved as research; fix is WP-G):** the old matcher is a test-harness script, not
+  judging logic. It lives in the old repo (`agentcommunity/goal-cup`, branch
+  `m2/v05-timezoner-ledger-final`: `spikes/m2-first-release/e02/early-crosscheck.py` and
+  `docs/qualification/m2-early-unattended.md`). It checks the synthetic load against the sealed
+  chain in 6 checks. "2 of 6" means 2 of those checks failed. The data was fine. Every load body was
+  identical, so after one real loss each later item took its neighbour's stream, and the miss
+  showed outside the gap window. Fix: give each load body unique content and match start-anchored
+  ("the Open must fall within a short time after the item's start"). Port it next to
+  `early-load.py`, with the "identical body lost" mutant as a test. Needed before the eight-hour
+  synthetic qualification. See [WP-G](docs/superpowers/plans/2026-10-20-event-readiness.md#wp-g-f-16-matcher-i2-evidence-s).
 - **F-07:** a base64url run of 16 KiB or more redacts the rest of a one-line JSON body. Measured
   false on the pilot path. Re-measure on the eight-hour chain.
-- **H-29:** a PEM `BEGIN` line split across two SSE text deltas is not matched, so a key the model
-  streams token by token is recorded raw (108 of 108 synthetic split-BEGIN streams leak; 0 of 108
-  with the `BEGIN` line whole). Pre-dates H-20. Fixing it needs a `BEGIN` matcher that skips the
-  JSON between deltas, in the regex, the stream recognizer and `spikes/redact.py`; see
-  [CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md) "Redaction residuals".
+- **H-29 (known gap in promise P1; cheap path is WP-E):** a key the model echoes in its reply stream is
+  recorded raw on the wire response leg. Every key shape, not only PEM. The model streams its reply
+  in small pieces, with JSON framing between them. Every redaction rule needs the secret as one
+  contiguous run of bytes, so no rule sees it. Reproduced with `spikes/redact.py`, which tests pin
+  equal to the daemon: a split PEM `BEGIN`, `sk-ant-`, `sk-`, `AKIA` and `ghp_` are all stored raw,
+  with zero redactions. Even a whole `sk-ant-api03-AbCd` with the rest in the next delta leaks,
+  because the rule needs 20 or more contiguous characters (`crates/goalcup-daemon/src/redact.rs:197-198`).
+  The same text is redacted in the native transcript and in the next request's history. Only the
+  reply stream leaks. The harness's own login header is never stored: headers are skipped unread
+  (`crates/goalcup-cli/src/proxy/http.rs:726`; pinned by
+  `crates/goalcup-cli/tests/it/m2_http_relay.rs:662`). The agent can read the harness's login files
+  and print them, so the model can echo them too (see
+  [CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md) "Redaction residuals").
+  Owner decisions (20 and 21 Oct): for the event, the cheap path. The verifier scans the decoded,
+  joined reply text and flags secret-shaped text by kind, count and reference, never the value. A
+  flagged trace passes through, flagged, and is cleaned before anyone else gets it (research
+  export, clean-up 14). After the event: a stream-aware redactor that joins the text inside each
+  SSE or WebSocket event before matching. P1 has this known gap until that redactor lands. Raw R2
+  objects under the 180-day lock cannot be rewritten, so participants rotating their login is what
+  closes the exposure.
 - **H-28 (before any research access; clean-up 14):** Anthropic usage objects pass through the private research
   observations. Allowlist token fields and strip plan, credit and billing data (D26) before anything
   is published or read from R2.
