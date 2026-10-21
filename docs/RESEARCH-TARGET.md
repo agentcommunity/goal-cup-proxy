@@ -4,7 +4,8 @@ Goal Cup Proxy is a research instrument for running coding agents across harness
 systems. Preserve useful source evidence, make it flow reliably to private research output, and
 state what was not observed. Goal Cup's contest is one use of that evidence. This target records
 the maintainer's direction from the 18 October 2026 review; it is not a claim that all of it works
-today. Start execution with the [local handoff](LOCAL-RESEARCH-HANDOFF.md).
+today. Start execution with [local next steps](research/LOCAL-NEXT-STEPS.md); the 18 Oct
+[local handoff](LOCAL-RESEARCH-HANDOFF.md) shows the method.
 
 ## Agreed scope
 

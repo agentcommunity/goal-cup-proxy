@@ -18,16 +18,16 @@ Three other documents complete it:
 2. Follow [the steps](#steps): fill the [facts template](../skills/adding-a-capture-harness/templates/harness-facts.md),
    then the [chat-mode connector template](../skills/adding-a-capture-harness/templates/connector-harness.toml).
    Use the existing schema; no Rust code belongs in an ordinary connector PR.
-3. Regenerate pins and the connector's goldens. A chat connector needs no separate kit case;
-   headless connectors do. [Test it](#test-a-connector), then review and open the PR.
+3. Regenerate pins and the connector's goldens. A connector needs no test or kit case of its own.
+   [Test it](#test-a-connector), then review and open the PR.
 4. A passing stand-in check is synthetic evidence. [Real practice and event qualification](#getting-a-harness-into-the-event)
    are separate. A connector can capture an unfamiliar format before it has a semantic decoder.
 
 The [research target](RESEARCH-TARGET.md) defines the coverage to establish with a real harness.
 Check context-visible tool calls/results and subagent conversations separately. Full independent
 tool-output/spill capture is not required. Reuse shared wire decoders where the protocol fits;
-native formats may need their own decoder. Record unmeasured coverage explicitly. The
-[local research handoff](LOCAL-RESEARCH-HANDOFF.md) gives the current validation sequence.
+native formats may need their own decoder. Record unmeasured coverage explicitly.
+[Local next steps](research/LOCAL-NEXT-STEPS.md) gives the current validation sequence.
 The [coverage matrix](research/coverage-matrix.md) records measured examples and limits; the
 [harness-neutral replay helper](research/replay-comparison.md) compares local and retrieved
 traces after the separate stored-byte fetch.
@@ -102,10 +102,6 @@ and `goalcup upload <entry>` if delivery is pending, verify the resulting trace,
 acknowledgement through the terminal. Run prep again to check its practice step. See
 [event qualification](#getting-a-harness-into-the-event) for the contributor report and organizer run.
 
-Headless connectors still use the synthetic checks, but real `start` needs `--goal-file <path>`.
-Prep and continue currently support chat mode only; use the measured isolated setup in the
-headless harness's facts sheet, with no provider-key handoff or improvised app-wide config.
-
 ## What Goal Cup Proxy does
 
 Goal Cup Proxy starts one harness for a participant and records two things:
@@ -128,8 +124,7 @@ A harness is data. A contribution has no `.rs` file:
 
 - `connectors/<id>/harness.toml` and its seed files (`files/**`);
 - one line in `crates/goalcup-protocol/pins/connector-dirs.txt`;
-- the regenerated golden files, and one harness-kit case for a headless connector (a chat-mode
-  connector needs none);
+- the regenerated golden files;
 - the facts sheet `docs/harnesses/<id>.md`.
 
 No test is written for a new connector. The connector contract runs for every folder under
@@ -139,7 +134,7 @@ against the connector's own `argv_guard`, the launch environment, the CA files, 
 placement and the per-run home, and checks that the connector's own home variable, reserved
 prefixes and guarded options are refused. Its dynamic half
 (`crates/goalcup-cli/tests/full/connector_contract.rs`) runs the connector once through the real
-binaries with one stand-in, in chat mode or headless, and checks the argv, the environment, the
+binaries with one stand-in, in chat mode, and checks the argv, the environment, the
 recorded session file and the sealed trace.
 
 Arguments, the goal flag, the model name and `capture.env` are data. Generic rules shared by all
@@ -164,6 +159,7 @@ Cannot be captured:
 | HTTP/2-only or gRPC model traffic | The recording proxy speaks HTTP/1.1 and WebSocket upgrades; an `h2`-only client cannot connect | An `h2` proxy path and a decoder for its framing |
 | A local or loopback model | The recording proxy never sees loopback traffic. A connector that names a loopback or single-label host is refused | A loopback relay Goal Cup Proxy records |
 | A desktop or IDE app | Goal Cup Proxy starts one CLI from argv | Not planned |
+| No chat mode in a terminal (one-shot or headless only) | Goal Cup Proxy runs every harness in chat mode, where the participant types the prompt (D57) | Not planned |
 
 Known gaps. The connector works, but the record is partial. Write each one in the facts sheet:
 
@@ -226,7 +222,7 @@ is the harness executable. Run every command from the repository root.
 
    | Facts sheet section | Lands in `harness.toml` |
    |---|---|
-   | 1. Run one prompt, in chat mode first | `interactive`, `[capture].args`, `resume_args`, `continuation` (headless: `goal_flag` or a trailing `--`) |
+   | 1. Run one prompt, in chat mode first | `interactive`, `[capture].args`, `resume_args`, `continuation` |
    | 2. Install and version | `[capture.executable]` |
    | 3. Where it keeps things | `[capture.home]`, `[[capture.native]].root` |
    | 4. Session format and identity | `[[capture.native]]` `pattern` and `form`, `[capture.identity]` |
@@ -235,8 +231,7 @@ is the harness executable. Run every command from the repository root.
    | 7. Process model | `[capture.termination]`, `[capture.argv_guard]` |
    | 8. Things Goal Cup cannot isolate | nothing; it stays in the sheet |
 
-   Start in chat mode: section 1 describes the harness's own chat in a terminal, and headless only
-   if chat mode cannot work. Ask early for the two facts that most often need a core change: the
+   Section 1 describes the harness's own chat in a terminal. Ask early for the two facts that most often need a core change: the
    CA variable the harness honours (section 6, [row 7](#do-i-need-a-core-change)), and how a chat
    sign-in is kept without an environment key (section 5, row 14). Ask where the harness saves the
    model service the participant picks (section 6): the config file and the key of its URL. That
@@ -264,25 +259,22 @@ is the harness executable. Run every command from the repository root.
    mkdir -p connectors/<id>
    cp skills/adding-a-capture-harness/templates/connector-harness.toml connectors/<id>/harness.toml
    ```
-   Replace every `<PLACEHOLDER>` and delete unused options. The template is chat mode:
-   - **Chat mode** (`interactive = true`, the default): the harness opens in the participant's
-     terminal and the participant types the prompt. No goal slot, identity `none`,
-     and `since_run_start = true` on the native row. Claude Code and Codex use it. The sign-in
-     must last across runs, so pick the home by one question, "does the harness have a variable
-     that moves its config?":
-     - **Yes** (like `CODEX_HOME`): set `home.env`, `config_home = "shared"`, `run_home = "empty"`
-       (or `"keychain_link"`), a `{config_home}/...` native root, and `skills_dir` if the harness
-       reads skills.
-     - **No**: leave out `home.env` and `skills_dir`, set `run_home = "shared"` and
-       `config_home = "per_run"`, and use a `{run_home}/...` native root. With `run_home =
-       "empty"` the private `HOME` is fresh each run and the sign-in is lost every run.
+   Replace every `<PLACEHOLDER>` and delete unused options. The template is chat mode
+   (`interactive = true`), the only mode: the harness opens in the participant's terminal and the
+   participant types the prompt. No goal slot, identity `none`, and `since_run_start = true` on the
+   native row. Every shipped connector uses it. [What a chat connector writes](CONNECTOR-SCHEMA.md#what-a-chat-connector-writes)
+   lists every field on one screen. The sign-in must last across runs, so pick the home by one
+   question, "does the harness have a variable that moves its config?":
+   - **Yes** (like `CODEX_HOME`): set `home.env`, `config_home = "shared"`, `run_home = "empty"`
+     (or `"keychain_link"`), a `{config_home}/...` native root, and `skills_dir` if the harness
+     reads skills.
+   - **No** (like Amp): leave out `home.env` and `skills_dir`, set `run_home = "shared"` and
+     `config_home = "per_run"`, and use a `{run_home}/...` native root. With `run_home =
+     "empty"` the private `HOME` is fresh each run and the sign-in is lost every run.
 
-     A Node harness keeps `NODE_USE_ENV_PROXY = "1"` in `capture.env` (D59): without it Node's
-     HTTP client ignores `HTTPS_PROXY` and the run records no model traffic. The kit cannot see
-     that, and step 9 catches it only for a `node` script on `PATH`.
-   - **Headless** (option B in the template): the goal is the last argument after `--`, or
-     `goal_flag` carries it as `--flag=<goal>`. No shipped connector uses it now; Hermes did
-     until D61.
+   A Node harness keeps `NODE_USE_ENV_PROXY = "1"` in `capture.env` (D59): without it Node's
+   HTTP client ignores `HTTPS_PROXY` and the run records no model traffic. The kit cannot see
+   that, and step 9 catches it only for a `node` script on `PATH`.
 
    The closest complete example is [connectors/codex-cli](../connectors/codex-cli/harness.toml)
    (chat mode). [connectors/hermes-cli](../connectors/hermes-cli/harness.toml) is chat mode too,
@@ -310,35 +302,15 @@ is the harness executable. Run every command from the repository root.
    change: the shared goldens name no connector. On Linux the daemon command writes no
    `<id>.daemon.json`: it is macOS-only, so say so in the PR. Any other changed golden did not
    change because of your connector: run `git checkout -- <file>` and name it in the PR. Set the variable per command, never `export` it.
-8. **Add the kit case (headless only).** A chat-mode connector needs no case of its own: the
-   connector contract runs every connector through one stand-in that reads its `harness.toml`
-   (the program, `args`, the native root and pattern, `skills_dir`, the CA variables, the
-   identity). Skip to step 9.
-   For a headless connector:
-   ```sh
-   k=crates/goalcup-cli/tests/fixtures/harness-kit/<id>
-   mkdir -p $k && cp skills/adding-a-capture-harness/templates/kit-case/* $k/
-   ```
-   Follow the comments in the three files. The case mirrors the connector's home, identity and
-   native shape with a Python stand-in. It uses id `kit-<id>` and copies any seeds into
-   `$k/files/`. Read the closest baseline case beside it: `controlled-workload`,
-   `synthetic-preassigned`, `synthetic-stderr-token` or `synthetic-stdout-json`. The kit puts an
-   invented provider key in `goalcup start`'s environment and checks that no fragment of it
-   reaches the trace, the run directory or the output. `native_path` is relative to the native
-   root; `native_decoy_path` is a suffix under the run directory and includes the root's last
-   directory. Check:
-   ```sh
-   grep -nE '^[^#]*<[^>]+>' $k/harness.toml $k/expect.toml
-   grep -hE '^(BODY|wire_request) = b?"' $k/stand-in.py $k/expect.toml | cut -d\" -f2 | uniq -c
-   ```
-   Expect no output from the first. Expect one line from the second: `2`, then the body. In
-   `stand-in.py` only the EDIT block must be free of `<`.
+8. **No kit case.** A connector needs no test or kit case of its own: the connector contract
+   runs every connector through one stand-in that reads its `harness.toml` (the program, `args`,
+   the native root and pattern, `skills_dir`, the CA variables, the identity). Go to step 9.
 9. **Run the connector check.** `sh scripts/check-connector.sh <id>`. It runs files, pins, schema,
    both goldens, and the kit with the connector contract (both halves), on macOS and on Linux. Expect the last line `check-connector: <id>: 6
    passed, 0 failed, 0 skipped` on macOS, and `6 passed, 0 failed, 1 skipped` on Linux (the
    daemon's live goldens). A kit or contract failure prints only `FAIL kit` in the summary. Read
    the Rust assertion above it: it names the connector, `left` is what the run captured and
-   `right` is what `expect.toml` (or, for the contract, the connector's `harness.toml`) predicts.
+   `right` is what the connector's `harness.toml` predicts.
    Fix the field that the `right` side came from.
 10. **Run the gate.** `sh scripts/gate.sh fast`. Expect the last line `gate fast: PASS in <N>s`.
 11. **Review your own diff** against the [reviewer checklist](#reviewing-a-connector-pr).
@@ -359,7 +331,6 @@ Exactly these, which `git status --short` must confirm:
 - `connectors/<id>/` (the `harness.toml` and `files/**` seeds);
 - the one new line in `crates/goalcup-protocol/pins/connector-dirs.txt`;
 - the golden JSON from step 7;
-- the kit case from step 8 (headless only);
 - `docs/harnesses/<id>.md`.
 
 In the description paste the last line of steps 9 and 10, name anything restored or not run, say
@@ -375,8 +346,6 @@ the real harness ran. A maintainer replies within 7 days and runs the checks aga
 | `declares id ..., which is not the folder name` | `id` must equal the folder name |
 | The pin test fails after an edit | Run step 6 again and commit what it writes |
 | A golden mismatch | Step 7, then read the JSON diff |
-| A kit case is refused for a pinned id | The kit id must be `kit-<id>`, not `<id>` |
-| `stand-in.py: replace the placeholder in <NAME>` | The EDIT block in `stand-in.py` |
 
 <a id="do-i-need-a-core-change"></a>
 
@@ -391,12 +360,12 @@ in [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md). Check [row 0](#row-0) first.
 connector until a maintainer lands the change (with a [DECISIONS](DECISIONS.md) entry when policy
 moves). Never spell around a rule.
 
+Row numbers stay fixed so other pages can cite them; retired rows are left out.
+
 | # | Rule | Data-only fits when | Otherwise |
 |---|---|---|---|
 | 1 | Provider key | the harness's own login stores it in its home; Goal Cup Proxy passes none (D61) | not possible: see row 14 |
-| 2 | (retired by D61) | | |
-| 3 | (retired by D61) | | |
-| 4 | Identity carrier | `none`, `preassigned`, `stdout_json` or `stderr_line` | core change |
+| 4 | Session identity | `none`: this run's session files are found without an id (a per-run root, or `since_run_start`) | core change |
 | 5 | Home variable | `home.env` is `<WORD>_HOME` or `<WORD>_CONFIG_DIR`, or is left out | core change |
 | 6 | XDG | the harness falls back to `$HOME` and needs no XDG variable | core change |
 | 7 | CA variable | the harness honours its own variable ending `_CA_CERTIFICATE`, `_CA_CERTIFICATES`, `_CA_CERT`, `_CA_CERTS`, `_CA_BUNDLE` or `_CA_FILE`, or else `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` | core change |
@@ -416,20 +385,10 @@ daemon.
 
 1. **Provider key.** Goal Cup Proxy never sees, forwards or stores a participant's provider key
    (D61): `[capture.credential]` is refused. The harness's own login keeps the key in its home.
-4. **Identity carrier.** Four ways exist, each with its binding:
-   - `none` (no binding): no id; the native root is private to the run, or the native row sets
-     `since_run_start`.
-   - `preassigned` + `at_launch`: the harness accepts an id flag. Goal Cup Proxy mints the id and puts
-     it in `args` as `{session_id}`.
-   - `stdout_json` + `at_launch`: the harness prints a JSON line on stdout, before any model text,
-     with a field that marks it (`match_field`, `match_value`) and one that holds the id
-     (`id_field`).
-   - `stderr_line` + `deferred`: the harness prints a stderr line that is exactly `<prefix><id>`.
-     The id is a `token` (`[A-Za-z0-9_-]{1,128}`) or `timestamp-hex`.
-
-   A session id in plain text on stdout (`session: abc`) is not supported. Map it to one of the four
-   if the harness can: an id flag, a JSON event mode, the same line on stderr, or no id when the
-   session files land under the per-run home anyway.
+4. **Session identity.** A chat connector takes `source = "none"`: Goal Cup Proxy reads no session
+   id. The native root is private to the run, or the native row sets `since_run_start`, so every
+   session file new or written since the start is this run's. Runs on a shared home are
+   serialized, so that is safe (D57).
 5. **Home variable.** `^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$`. Other tools' variables (`CARGO_HOME`,
    `NPM_*`) are refused. A harness with no such variable leaves `home.env` out. It then keeps its
    state under the private run `HOME`, so its native `root` is `{run_home}/...`, `config_home` is
@@ -458,8 +417,7 @@ daemon.
     it in the sheet and open an issue.
 12. **Other refusals.** Examples: `NO_PAGER` (the `PAGER` suffix rule), a variable that loads code
     (`PYTHONBREAKPOINT`), an absolute path in `args`, an argument that turns certificate
-    verification off or names a command, hook or server, a `goal_flag` with the word `exec`,
-    `file`, `run` or `config` (`--execute` is fine), a host that is `localhost`, `*.localhost`,
+    verification off or names a command, hook or server, a host that is `localhost`, `*.localhost`,
     single-label or numeric, and a redaction row that is a regex rather than a typed form. In
     `capture.env`: any `*_HOME`, `*_CONFIG_DIR` or `*_CONFIG_HOME` name (the harness's own goes in
     `capture.home.env`) and any name under the connector's `reserved_env_prefixes`.
@@ -508,8 +466,8 @@ It does not make a careless seed safe. A code owner reads every field and every 
 8. **Home and secrets.** A private `HOME` every time. `shared` is justified and serialized.
    Per-run seeds hold no credential, URL or user data, and use safe modes. The connector passes
    no API key (D61).
-9. **Identity.** The source matches the measured carrier. The `stderr_line` grammar is exact.
-   `stdout_json` start fields come before model text, and model text inside events is escaped.
+9. **Identity.** `source = "none"`, and the native row reads only this run's files (a per-run
+   root, or `since_run_start` on a shared home).
 10. **Pin, goldens, kit.** Re-run `sh scripts/pin-manifests.sh` and confirm one pin-line diff.
     Confirm the golden diff only adds the new connector. Run the kit and the connector contract
     after a workspace build. A
@@ -519,13 +477,13 @@ What each manifest field must establish:
 
 | Field | The reviewer must establish |
 |---|---|
-| `capture.args`, executable | headless argv or chat mode, goal placement, entry point, version |
+| `capture.args`, executable | chat-mode argv and `resume_args`, entry point, version |
 | `capture.home`, `env` | private HOME and config home, real state dirs, seed contents and modes |
 | `capture.ca` | variable names and process scope; no secret value; no app-wide trust; the CA variable and its mode cite a source or a measurement in the facts sheet, and an own-name variable is not one that tool children also read |
 | `capture.model_host_from` | the file and key the harness saves the participant's model service in; a config file, never a key file |
 | `capture.hosts`, `auth_hosts` | provider host, narrow evidence paths, protocol hint |
 | `capture.native` | one local native artifact source, its form, root, pattern and scope; say whether it is a transcript or metadata, and exclude request dumps and credential stores |
-| `capture.identity` | the measured carrier, its grammar and fields, and its binding to that store |
+| `capture.identity` | `none`, and how the native row keeps to this run's files |
 | `redaction.extra_patterns` | plan, billing, quota and key-fragment coverage |
 
 ## Claims

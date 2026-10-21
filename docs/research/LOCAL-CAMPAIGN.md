@@ -119,8 +119,9 @@ quota, and one browser sign-in per new cell.
 
 A drill is always undone, even when the campaign is stopped (Ctrl-C reconnects and unpauses).
 Host drills print `DRILL-NOW cell=... kind=... do: ...`; the supervisor does it and notes the time.
-The disk-full expectation in OPERATING case 4 (the run stops) is the behaviour before WP-C. Until
-WP-C lands, record what happens (T25); after it, the agent must keep running with a visible gap.
+For the disk-full drill, OPERATING case 4 is the pass line: below 1 GiB free the agent is paused,
+above 3 GiB it resumes by itself, and the run never stops for the disk (D65, WP-C). The run before
+WP-C stopped silently instead ([T25](t25-disk-full.md)).
 
 ## WP-0 measurements (no paid run)
 
@@ -129,7 +130,7 @@ python3 scripts/research-measure.py "$TRACE_DIR" --json > "$RESULTS/measure-<run
 python3 scripts/research-staging.py --event test-staging --json   # dry runs: --event goalcup-dryrun-staging > "$RESULTS/staging.json"
 ```
 
-`research-measure.py` reads private chain parts and prints only sizes, counts, quiet gaps and
+`research-measure.py` reads private chain files and prints only sizes, counts, quiet gaps and
 compression ratios. `research-staging.py` reads staging Supabase and R2 read-only
 (`DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` from the environment) and prints
 compression ratio, chunk sizes, ACK lag and heartbeat health. Both outputs are safe to paste back.

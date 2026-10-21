@@ -1,5 +1,11 @@
 # Local research validation handoff
 
+**Status: history (18 Oct 2026).** This handoff drove the 18 and 19 Oct Codex runs, recorded in
+the [October archive](archive/TODO-2026-10.md#research-baseline-runs-18-to-19-oct). For current
+work, read [local next steps](research/LOCAL-NEXT-STEPS.md) and the
+[local campaign](research/LOCAL-CAMPAIGN.md). The method below (bounded run, seal, retrieve,
+decode, review) still applies.
+
 Read [the target](RESEARCH-TARGET.md) and [AGENTS.md](../AGENTS.md) first. This is an execution
 handoff for a local agent with a terminal, Codex login, and organizer staging access. The cloud
 prepared documents, a workload, and retrieval tests; it did not launch a paid run, deploy a
@@ -122,8 +128,11 @@ once into the measured harness, not into the supervising agent's own instruction
 
 ## 2. Run for up to 30 minutes, with no continuation injection
 
-Normal `--practice` runs last ten minutes. `matrix.sh --timeout` only changes waiting time.
-For this experiment, use an organizer `--test` run with a manual local cutoff:
+Normal `--practice` runs last ten minutes. The matrix can run a bounded test:
+`scripts/matrix.sh <connector> <server-url> --test --duration 1500` runs an organizer test run and
+seals it 1500 seconds after the prompt ([OPERATING](OPERATING.md#the-matrix)). On a host it sets
+no model (unlike `linux-matrix.sh`), so set the harness home to Luna/high first. By hand, use an
+organizer `--test` run with a manual local cutoff:
 
 ```sh
 cd "$RESEARCH_LAUNCH_ROOT"
@@ -224,7 +233,7 @@ goalcup-verify --research-json "$REBUILT_ENTRY" --dev-key "$STAGING_PUBLIC_KEY" 
 
 The output must end in `.ndjson` and must not already exist; use a new name for each replay.
 Set these paths explicitly under the private result folder. Reconcile complete local and rebuilt
-validated record count, bytes, and head. Rotation produces ordered chain parts; do not hash only
+validated record count, bytes, and head. Rotation produces ordered chain files; do not hash only
 the first local file or concatenate filenames lexically. Local pruning may make the local report
 incomplete while the complete server reconstruction verifies. Compare replayed observations
 under identical verifier/options; explain intentional capture/report bounds rather than treating

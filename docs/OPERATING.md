@@ -140,18 +140,17 @@ connector in one command and prints one row. Run it before each release, for eac
 each platform (macOS arm64 and x86_64, Linux x86_64 and arm64, WSL2).
 
 ```
-scripts/matrix.sh <connector> <server-url> [--keep] [--log FILE] [--timeout SECONDS]
+scripts/matrix.sh <connector> <server-url> [--keep] [--log FILE] [--timeout SECONDS] [--test --duration SECONDS]
 scripts/matrix.sh --check-copy <config-dir> [run-id]
 ```
 
 It makes a temporary configuration directory, work folder and `HOME`, runs `goalcup login` and
-`goalcup start --practice` in them, waits for the run to end, and deletes the temporary directory. It reads
-the connector's `harness.toml` to tell the two kinds apart. A chat-mode connector (`interactive = true`) runs
-under a pseudo-terminal into which the script types one prompt; Goal Cup Proxy stops it at the practice deadline
-(10 minutes). A headless connector (like `hermes-cli`) runs with `--goal-file` holding `MATRIX_PROMPT`, with
-nothing typed; it ends when the harness does, and the script then waits for the server's deadline before it
-asks for the server's copy. `--timeout` is one budget for both waits together. A connector id that is not one of
-the two fakes needs its `harness.toml` to be found (see Connectors below), or the row FAILs and says so.
+`goalcup start --practice` in them, waits for the run to end, and deletes the temporary directory. The
+connector runs in chat mode under a pseudo-terminal into which the script types one prompt; Goal Cup Proxy
+stops it at the practice deadline (10 minutes). `--test --duration SECONDS` runs an organizer test run
+instead and seals it SECONDS after the prompt, so a bounded test of any length needs no practice deadline.
+`--timeout` is one budget for the whole wait. A connector id that is not the fake needs its
+`harness.toml` to be found (see Connectors below), or the row FAILs and says so.
 It prints the log path and one row:
 
 ```
@@ -162,9 +161,9 @@ It prints the log path and one row:
 stderr and in the log. PASS means:
 
 1. both approvals (the login, then the run) were given, the run opened, and the harness was up;
-2. the run ended: a chat-mode run at its deadline (Goal Cup Proxy's `deadline:` line, which it writes to the
-   run's `host.log`, not the terminal, so the script reads both), a headless run at its deadline or with
-   `harness exited: exit code 0.`; and `uploaded: … and the seal` in both;
+2. the run ended at its deadline (Goal Cup Proxy's `deadline:` line, which it writes to the run's
+   `host.log`, not the terminal, so the script reads both), or at the script's seal for `--test`; and
+   `uploaded: … and the seal`;
 3. `goalcup-verify --capture-integrity <trace>` exited 0 with `integrity: valid` and `anchor: signed`;
 4. the server's copy agrees with the local chain.
 
@@ -172,8 +171,8 @@ stderr and in the log. PASS means:
 download it. It asks `GET /v1/runs/{id}?entry_id=…` with the run's own credential and requires the answer
 to equal the local chain the verifier just checked: `offset` equal to the bytes of `chain.jsonl`,
 `next_seq` to the record count, `head` and the last acknowledgement's `hash` to the verifier's
-`validated_head`, `final` to the last record, `status: sealed` and `stop: true` (for a headless run, once the server's deadline
-has passed: the script polls until then, within what is left of `--timeout`). The server stores a chunk
+`validated_head`, `final` to the last record, `status: sealed` and `stop: true` (for `--test`, `stop`
+is not required: the server's deadline has not come). The server stores a chunk
 only if its SHA-256 matches, at the offset, previous hash and sequence it holds, and signs an
 acknowledgement the verifier checks. Equal positions therefore mean the server holds the chain Goal Cup Proxy
 sent, in order. It does not prove the stored bytes; only the verify job (not built) would.
@@ -229,8 +228,7 @@ swallow the prompt can be answered first with `MATRIX_PRE_PROMPT_KEYS` (a `print
 created or one you trust?" in every new workspace and selects "No, exit" first, so
 `MATRIX_PRE_PROMPT_KEYS='\033[B\r'` (Down, Enter) answers "Yes, I trust this folder". In real-harness mode a
 PASS does not prove the prompt was submitted; check the session in the kept directory (`--keep`) or the
-trace. `m2-fake-tui` (chat) and `m2-fake-headless` (headless, a fake that exits at once with code 0) are the
-two that need no harness.
+trace. `m2-fake-tui` is the one connector that needs no harness.
 
 **Other environment.** `MATRIX_REPO_URL` (default: the public empty repository
 `https://github.com/agentcommunity/goalcup-matrix-empty`), `MATRIX_BIN_DIR`, `--keep`, `--timeout`
@@ -378,10 +376,9 @@ the root, or the PR template. Every run runs `test_ci_scope.py`, `test_check_lin
 Keep it small. Do not add branches, jobs, a build matrix, or the daemon and CLI suites: they spawn process
 trees that hang or kill a 2-core runner. Those suites run on Linux in Docker with `scripts/linux-check.sh`.
 `.github/workflows/linux-x86_64.yml` is manual only; it runs that script on an x86_64 runner with
-`LINUX_CHECK_HARNESSES=1`, which ends with `scripts/linux-harness-smoke.sh`. That script drives each
-connector the way its manifest says: a headless connector gets `--goal-file`; a chat-mode connector
-(`[capture] interactive = true`, as `codex-cli` and `claude-code-cli` are) gets a terminal of its own,
-one typed prompt, then a hangup, and the run still seals. A green `ci` run proves
+`LINUX_CHECK_HARNESSES=1`, which ends with `scripts/linux-harness-smoke.sh`. That script gives each
+chat-mode connector (`codex-cli`, `claude-code-cli`) a terminal of its own, one typed prompt, then a
+hangup, and the run still seals. A green `ci` run proves
 nothing about macOS.
 
 ## Installing the participant binaries
@@ -405,8 +402,8 @@ The default is `~/Library/Application Support/goalcup` on macOS and `$XDG_CONFIG
 `~/.config/goalcup`) elsewhere.
 
 `$GOALCUP_NO_BROWSER` set to any non-empty value makes `goalcup login` and `goalcup start` open no browser. The
-approval address and code are printed as always, with a line saying a browser did not open. It is for a headless
-or remote machine and for scripts that approve another way (`scripts/matrix.sh` sets it).
+approval address and code are printed as always, with a line saying a browser did not open. It is for a machine
+with no screen, a remote machine, and for scripts that approve another way (`scripts/matrix.sh` sets it).
 
 ## Running the daemon
 
@@ -451,8 +448,7 @@ works while a daemon holds the lock. It never prints the bearer.
 ## Running a capture with the CLI
 
 ```
-goalcup start --harness <id> [--practice | --test]   # chat mode: opens the harness in this terminal
-goalcup start --harness <id> --goal-file <PATH>      # a headless harness: launches, waits, seals, prints `verify:`
+goalcup start --harness <id> [--practice | --test]   # opens the harness in chat mode in this terminal
 goalcup status | entries | seal | continue | upload <entry>
 goalcup-verify --capture-integrity <trace-dir>       # the line `start` printed
 ```
@@ -511,12 +507,12 @@ signer) gives `receipt_key_not_accepted` or `ack_signature_unverified`. `--dev-k
 key for one run, and the report records `key_source: "supplied"` so a development run is never mistaken for a
 production one.
 
-Use a sealed, immutable trace directory for repeatable analysis. The reader opens rotated chain parts
-as it enumerates them: a part already open remains readable if it is later unlinked, but a later
-part that disappears before it is opened produces an I/O error and no usable report. The reader does
-not skip or re-enumerate missing parts. A chain whose initial parts were already pruned remains
-incomplete (`chain_pruned_locally`). During a run, a part the server acknowledged is pruned two
-hours later, or at once when the run's parts pass its 3 GiB reservation or the disk has under 5 GiB
+Use a sealed, immutable trace directory for repeatable analysis. The reader opens the rotated chain files
+as it enumerates them: a chain file already open remains readable if it is later unlinked, but a later
+one that disappears before it is opened produces an I/O error and no usable report. The reader does
+not skip or re-enumerate missing chain files. A chain whose first chain files were already pruned remains
+incomplete (`chain_pruned_locally`). During a run, a chain file the server acknowledged is pruned two
+hours later, or at once when the run's chain files pass its 3 GiB reservation or the disk has under 5 GiB
 free beyond it. Once an entry is sealed and the server has acknowledged all of it and its seal,
 the end of the run's wrap-up, `goalcup upload` and `goalcup status` delete every part but the last
 at once (`seal.json`, `baseline.json` and `acks.jsonl` stay). Avoid analyzing a local trace while upload pruning can change it; retrieve a
@@ -619,8 +615,8 @@ More than 128 distinct codes end with `findings_omitted:<n>`.
 | `link_hash_mismatch` | 2 | A line's hash is not the hash of its content. The line was edited. |
 | `chain_phase_invalid` | 2 | A record is out of order: after the terminal, a second baseline, a signed terminal with no cutoff, or a chain that ends in the V1 seal (no v5 writer produces one). |
 | `entry_id_mismatch` | 2 | A line names another entry than the first line. |
-| `chain_part_missing` | 2 | A part file is missing between two others, or part names do not join up. |
-| `chain_pruned_locally` | 1 | The first parts of the chain were removed on this machine. Verify the server copy. |
+| `chain_part_missing` | 2 | A chain file is missing between two others, or chain file names do not join up. |
+| `chain_pruned_locally` | 1 | The first chain files were removed on this machine. Verify the server copy. |
 | `chain_unsealed` | 1 | The chain has no terminal record. The run did not finish, or the machine died first. |
 
 **Receipt, cutoff and acknowledgements**

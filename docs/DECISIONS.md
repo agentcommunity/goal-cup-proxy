@@ -8,6 +8,38 @@ superseded or retired is retained to explain history and references; follow the 
 Entries are short on purpose. The code and its tests are the detail. D1 to D26 are older decisions
 retained for references; some have been superseded or retired.
 
+## Status
+
+Where each entry stands on 21 Oct 2026. "Current" means follow it as written. "Partly superseded"
+means some clauses are replaced; the entry names which. Read the replacing entry for those clauses.
+Update this table in the same PR as any entry it lists.
+
+| D | Status | Replaced by |
+|---|---|---|
+| D1 to D5 | current | |
+| D7 | superseded | D37, D57 |
+| D9, D10, D11 | current | D11's clone case is D56 |
+| D12 | superseded | D53 |
+| D14, D16, D22 | current | D14's rule detail is D36 |
+| D23 | retired | `connectors/` and RULES |
+| D24 | current | |
+| D25 | partly superseded | D66 (the agent may ask for the time left) |
+| D26, D30, D36, D37 | current | |
+| D38 | partly superseded | D52 (the cheapest-model clause) |
+| D39 | partly superseded | D57 (chat mode; the headless launch clause is being removed) |
+| D40 | partly superseded | D61 (the Hermes clause), D56 (the 180 s budget) |
+| D41 | partly superseded | D43 (CA rule), D52 (model clause), D61 (seed and key scan) |
+| D42 | current | |
+| D43 | partly superseded | D61 (ruling 2); ruling 3 amended by WP12 |
+| D44 to D48 | current | |
+| D49 | superseded | D60, D61 |
+| D50 | superseded | D61 |
+| D51 to D60 | current | |
+| D61 | partly superseded | D62 (model traffic for listed providers only) |
+| D62, D63 | current | |
+| D64 | partly superseded | D65 (the disk watch pauses, never stops) |
+| D65, D66 | current | |
+
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
 Goal Cup Proxy never sets or changes a harness's model base URL, in any harness or milestone.

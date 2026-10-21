@@ -296,7 +296,7 @@ that has not started a run, `goalcup status` says `no run has been started from 
 | `this computer may go to sleep (…)` | Goal Cup Proxy could not keep the machine awake. Under WSL2 this line is always there, because Windows decides. | Keep it on mains power with the lid open, or turn sleep off yourself (WSL2: the Windows power setting above). |
 | `Claude Code has exited (…). Your run is still open until … To go on, run: goalcup continue <run id>` | The agent ended before the deadline: it crashed, you closed the window, or it quit. | Run the command it names. |
 | `Claude Code has exited (…) and the run is over. Nothing to continue.` | The agent left on its own, and the run's time has passed since. | Nothing. |
-| `Claude Code has exited (…) and this run cannot be continued.` | The agent left, and this run cannot be restarted: it is not on the server, its harness runs headless, or this machine has no credential for it. | Nothing to restart. |
+| `Claude Code has exited (…) and this run cannot be continued.` | The agent left, and this run cannot be restarted: it is not on the server, or this machine has no credential for it. | Nothing to restart. |
 
 (Goal Cup Proxy writes the harness's own name where this table says Claude Code.)
 

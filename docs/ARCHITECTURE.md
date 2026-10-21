@@ -79,8 +79,8 @@ test data, and no `.rs` file ([CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md),
 
 The manifest says, for one harness:
 
-- how to launch it: program, argv template, environment, chat mode (`interactive = true`) or
-  headless (`goal_flag`), `resume_args`;
+- how to launch it: program, argv template, environment, chat mode (`interactive = true`),
+  `resume_args`;
 - which hosts the recording proxy decrypts (`[[capture.hosts]]`, each with a `protocol_hint`) and which CA
   variable the harness reads;
 - which session files to read (`[[capture.native]]`: root, glob, `append_only` or `snapshot`,
@@ -111,10 +111,9 @@ decoder is added.
   shares one `HERMES_HOME` the same way; the participant's own Hermes setup keeps its provider and
   key there, and Goal Cup Proxy passes it none (D61). Amp instead keeps one isolated shared `HOME`
   across serialized runs. Other run homes are fresh, according to the connector.
-- **Contract kit.** Four synthetic cases (`controlled-workload`, `synthetic-preassigned`,
-  `synthetic-stderr-token` and `synthetic-stdout-json`) under `crates/goalcup-cli/tests/fixtures/harness-kit/` test the
-  shared modules with stand-ins. A headless connector adds a case; chat connectors use the
-  manifest-driven shared stand-in. A passing kit says "synthetic
+- **Contract kit.** Synthetic cases under `crates/goalcup-cli/tests/fixtures/harness-kit/` test the
+  shared modules with stand-ins. Every connector runs through the manifest-driven shared stand-in
+  (the connector contract), so a new connector adds no case. A passing kit says "synthetic
   tested", not "works with the real harness".
 
 ## 5. The two legs
@@ -168,7 +167,7 @@ launched and handed nothing off is abandoned after `UNLAUNCHED_LIMIT` (15 minute
 
 | Concept | What it is |
 |---|---|
-| Chain | `chain.jsonl`: append-only, hash-linked, byte-canonical v5 envelopes, one writer per entry ([writer.rs](../crates/goalcup-daemon/src/runtime/capture/writer.rs)). Long runs rotate into part files `chain.<start>.jsonl` at 256 MiB or 30 minutes (D55) |
+| Chain | `chain.jsonl`: append-only, hash-linked, byte-canonical v5 envelopes, one writer per entry ([writer.rs](../crates/goalcup-daemon/src/runtime/capture/writer.rs)). Long runs rotate into chain files `chain.<start>.jsonl` at 256 MiB or 30 minutes (D55) |
 | Envelope bodies | `Baseline`, `Seal`, `CutoffReachedV1`, `FinalizationV1`, `Capture` |
 | Capture records | `Open`, `Segment` (redacted, base64), `End`, `Gap`, `Connection`, `Recovery`, `ProducerClosed`, `Launch`, `Assistance`, `LocalFinish` ([capture.rs](../crates/goalcup-protocol/src/capture.rs)) |
 | Gap | A chained statement of loss with a `GapReason`. A trace with a gap is incomplete, never clean |
@@ -251,9 +250,24 @@ native Windows. Operating the binaries: [OPERATING](OPERATING.md).
 
 ## 12. Terms
 
-- **run**: one participant's contest run on the server. It can have several segments.
-- **entry**: one segment of a run: one harness, one workspace, one chain. `goalcup continue` makes
-  the next entry. (A chain `Segment` record is a different thing: a body of captured bytes.)
+This is the one glossary for the repository. Other docs link here. Use the words exactly.
+
+**Runs and their pieces.** One concept, one name per audience:
+
+| Concept | Participants say | Code and protocol say | What it is |
+|---|---|---|---|
+| The 168-hour attempt | run | run (`run_id`) | One participant's contest run on the server. It has one or more parts. |
+| One unbroken stretch of recording | part | segment, stored as an entry (`entry_id`) | One harness, one workspace, one chain. `goalcup continue` starts the next one. |
+| One file of a long chain | (not shown) | chain file | `chain.jsonl`, then `chain.<start>.jsonl` after each rotation at 256 MiB or 30 minutes (D55). Joined in order, they are one chain. |
+
+"Segment" and "entry" name the same thing; new text says segment, and existing field names
+(`entry_id`, `goalcup entries`) stay. A chain `Segment` record is a different thing: a body of
+captured bytes. D55 and the finding codes `chain_part_missing` and `chain_pruned_locally` call
+chain files "parts"; read that as chain files.
+
+- **seal**: ending a segment: stop the harness, finish capture, write `LocalFinish` and `seal.json`.
+- **receipt**: the server's signed start receipt for one segment: its facts and chain head, with its start and deadline.
+- **ack** (acknowledgement): the server's signed note that it stored the chain up to one record.
 - **harness**: the coding agent program (Codex CLI, Claude Code, Hermes).
 - **connector**: `connectors/<id>/`, the pinned directory that says how to launch and capture one
   harness. Its identity is `connector_dir_sha256`. The loader is `harness::load_dir`.
@@ -276,7 +290,6 @@ native Windows. Operating the binaries: [OPERATING](OPERATING.md).
   accepts into observations. Trait `DecoderV1`; `DecoderRegistry::builtin()` lists six.
   `protocol_hint` is open, grammar-checked metadata that tells the registry which decoders to offer.
 - **gap, Loss, Recovery**: section 7.
-- **seal**: ending an entry: finish, terminate owned processes, write `LocalFinish` and `seal.json`.
 - **finish budget**: the one capture budget (180 s), split into a drain share and a 2 s commit
   reserve. Termination is outside it.
 - **spawn gate**: the harness waits before `exec` until the daemon has durably registered it.
@@ -309,6 +322,6 @@ Paths are under `crates/`.
 | Every connector folder: the connector contract | `goalcup-cli/tests/it/connector_contract.rs` (static), `goalcup-cli/tests/full/connector_contract.rs` (one run each) |
 | Crash, torn tail, restart | `goalcup-cli/tests/full/capture_crash_campaign.rs` |
 | Whole vertical on a synthetic workload | `goalcup-cli/tests/full/m2_synthetic_vertical.rs` |
-| Four contract-kit cases | `goalcup-cli/tests/it/harness_contract_kit.rs` |
+| Contract-kit cases | `goalcup-cli/tests/it/harness_contract_kit.rs` |
 | Research report | `goalcup-verifier/tests/it/m2_research_report.rs` |
 | Upload against the real Worker | `goalcup-cli/tests/full/upload_worker.rs`, `server/worker/test` |

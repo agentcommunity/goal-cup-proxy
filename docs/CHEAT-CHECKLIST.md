@@ -3,7 +3,8 @@
 Read this before you trust a verifier Pass or claim that a new check closes something. It lists
 the blind spots this build accepts, and what bounds each. Anything that behaves worse than stated
 here is a bug. Add a row when a review accepts a gap instead of fixing it. Open work on these rows
-is in [TODO](../TODO.md#known-issues) under the ticket IDs (H-xx, F-xx) used here.
+is in [TODO](../TODO.md#known-issues) under the ticket IDs (H-xx, F-xx) used here. Finished work
+packages such as WP12 are in the [October archive](archive/TODO-2026-10.md).
 
 A verifier exit 0 alone is not a capture claim. A capture claim needs native and wire records for
 the real harness ([ARCHITECTURE](ARCHITECTURE.md)). Exit 0 means the record is complete and

@@ -3,9 +3,9 @@
 # Replace every <PLACEHOLDER>. Delete the options you do not use. Comment lines are optional
 # (they are pinned bytes too); keep one first-line provenance comment like the shipped ones:
 # <Harness name> <VERSION>, capture only. Facts: docs/harnesses/<HARNESS_ID>.md.
-# This template is chat mode (D57), the product's mode: the closest complete example is
-# connectors/codex-cli/harness.toml (connectors/hermes-cli adds a `configure` command). Headless is
-# option B below (example: crates/goalcup-protocol/tests/fixtures/headless-connectors/hermes-cli).
+# This template is chat mode (D57), the only mode: the closest complete example is
+# connectors/codex-cli/harness.toml (connectors/hermes-cli adds a `configure` command).
+# One-screen field list: docs/CONNECTOR-SCHEMA.md, "What a chat connector writes".
 # Field limits: docs/CONNECTOR-SCHEMA.md. Allowed values: docs/HARNESS-ONBOARDING.md, "Do I need a core change?".
 # No argument, goal flag, env key or value, host or auth host may name Goal Cup
 # (docs/CONNECTOR-SCHEMA.md, "Cross-field rules", rule 10).
@@ -22,9 +22,9 @@ display_name = "<HARNESS NAME>"         # 1 to 40 printable ASCII characters, as
 # first_screen = "<HARNESS NAME> may ask <QUESTION>. Choose <ANSWER>."
 
 [capture]
-# A) Chat mode (the default): the harness opens in the participant's terminal and the participant
-# types the prompt. No goal slot, identity source "none". The sign-in must live in the
-# harness's own config home: Goal Cup Proxy never passes an API key (D61).
+# Chat mode: the harness opens in the participant's terminal and the participant types the
+# prompt. No goal slot, identity source "none". The sign-in must live in the harness's own
+# config home: Goal Cup Proxy never passes an API key (D61).
 interactive = true
 continuation = "chat: the participant types the prompt and may type keep going"
 # The argv WITHOUT the program; may be empty. Templates allowed in values: {workspace}. No
@@ -44,13 +44,6 @@ resume_args = ["<RESUME-FLAG>"]
 # run twice. Chat mode only. At most 4 commands of 1 to 16 arguments; the args rules apply; no
 # {template}. Their output goes to a log, never the terminal. Delete if the harness needs none.
 # configure = [["config", "set", "<sessions.save_transcripts>", "true"]]
-#
-# B) Headless instead (one goal, no terminal): delete the four values above and use
-#   args = ["<SUBCOMMAND>", "<FLAG>", "--"]   # argv WITHOUT the program and WITHOUT the goal
-# with ONE goal placement: end args with "--" (the goal is the next single argument), or set
-#   goal_flag = "--<LONG-OPTION>"           # the goal is --flag=<goal>; args must NOT end in "--"
-#   continuation = "none: <HOW ONE HEADLESS TURN RUNS>"
-# {session_id} is allowed in values only with identity "preassigned".
 # Sign-in/token-refresh hosts, tunnelled opaquely and never recorded. Delete if none.
 # auth_hosts = ["<AUTH_HOST>"]
 # Where the harness saves the model service the participant picks (D62): a file in its config
@@ -105,16 +98,15 @@ SHELL = "/bin/bash"
 #     here: a fresh HOME each run loses the participant's sign-in every run.
 # C2 cannot use model_host_from: that field needs a shared config home plus home.env.
 # A participant-selected model service without such a home relocator is facts-only for now.
-# Headless: config_home "per_run" (needed for seeds and dirs; no provider-key handoff).
 [capture.home]
 run_home = "empty"                      # "empty", "keychain_link" (macOS keychain only) or "shared" (C2)
-config_home = "shared"                  # C1 chat mode; "per_run" for C2 and headless
+config_home = "shared"                  # C1; "per_run" for C2
 env = "<HARNESS>_HOME"                  # own home var: ^[A-Z][A-Z0-9]*_(HOME|CONFIG_DIR)$
 real_dirs = ["{user_home}/.<harness>"]  # the participant's real state dirs (never written)
 # Where the harness reads its skills, below the config home: the goal-cup skill is put in
 # <skills_dir>/goal-cup/ before each launch. Delete if the harness has no skills folder.
 skills_dir = "skills"
-# per_run only (headless):
+# config_home "per_run" only; no shipped connector uses these:
 # per_run_dir = "<harness>-home"        # folder name below the run home
 # dirs = []                             # relative dirs created mode 0700
 # Seeds: files copied from connectors/<HARNESS_ID>/files/<file> into the config home.
@@ -137,35 +129,20 @@ env = ["<CA_VARIABLE>"]
 mode = "<extend|replace>"
 
 [capture.identity]
-# Exactly one block. The four admitted pairs are the whole list. Chat mode takes 1).
-# 1) No session id. With a shared config home the native row sets since_run_start = true;
-# otherwise the native root must be {run_home}/... or a per-run {config_home}/...:
+# Chat mode reads no session id. With a shared config home the native row sets
+# since_run_start = true; otherwise the native root must be {run_home}/... or a per-run
+# {config_home}/...:
 source = "none"
-# Headless may instead use one of these:
-# 2) Goal Cup Proxy mints the id and passes it in args via {session_id}:
-# source = "preassigned"
-# binding = "at_launch"
-# 3) The harness prints a JSON line on stdout before any model text:
-# source = "stdout_json"
-# binding = "at_launch"
-# match_field = "<type>"                # dot path to a field that marks the start event
-# match_value = "<session.started>"     # its value
-# id_field = "<session.id>"             # dot path to the session id
-# 4) The harness prints "<prefix><id>" on stderr:
-# source = "stderr_line"
-# binding = "deferred"
-# prefix = "<session_id: >"             # 1-32 printable ASCII bytes
-# grammar = "<token|timestamp-hex>"     # token: [A-Za-z0-9_-]{1,128}
 
 # Exactly one local native artifact source (transcript or metadata). Never a request dump, credential or seed file.
 [[capture.native]]
 name = "<session>"                      # label in the chain; [A-Za-z0-9._-]{1,64}
 root = "{config_home}/<sessions>"       # {config_home} (C1) or {run_home} (C2), plus relative parts
-pattern = "<*/*.jsonl>"                 # globs below root, no **; {id} exactly once unless identity is "none"
+pattern = "<*/*.jsonl>"                 # globs below root, no **, no {id}
 form = "<append_only|snapshot>"         # JSONL appended in place, or a file rewritten whole
 # protocol_hint = "<harness-jsonl>"     # append_only only; an unknown hint means capture-only
-# The run's sessions are every matching file new or written since the run started (chat mode on
-# a shared home: no id is known at launch). Delete for a per-run root or an {id} pattern.
+# The run's sessions are every matching file new or written since the run started (on a shared
+# home no id is known at launch). Delete only for a per-run root.
 since_run_start = true
 
 # Only if the harness pre-scans argv for options it acts on (see the Hermes connector).

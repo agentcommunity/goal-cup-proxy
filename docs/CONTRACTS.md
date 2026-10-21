@@ -557,11 +557,9 @@ delivery-agnostic: it cannot name a server, upload or Goal Cup credential, and i
 any consumer only as frozen v5 records plus `Launch.connector_dir_sha256`. Subscription auth stays
 in the harness's isolated home and is not Goal Cup Proxy's.
 
-### Migrating from manifest.toml
+<a id="migrating-from-manifesttoml"></a>
 
-The daemon and CLI load `harness.toml` through the shared schema-1 loader, and nothing else. The
-loader refuses a leftover `manifest.toml`. `family`, `tier`, `tested_version_range` and
-`capture_only` are not harness schema fields.
+### Schema bumps
 
 No schema bump has happened. The [schema evolution rule](CONNECTOR-SCHEMA.md#pin-evolution) says
 which widening stays schema 1 and which incompatible change creates schema 2. A schema-bump PR

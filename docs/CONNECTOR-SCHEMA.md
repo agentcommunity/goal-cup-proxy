@@ -4,6 +4,35 @@ What may `connectors/<id>/harness.toml` contain? This is the public field and va
 reference for harness authors and reviewers. The procedure for adding a harness is
 [HARNESS-ONBOARDING](HARNESS-ONBOARDING.md).
 
+## What a chat connector writes
+
+Every shipped connector runs its harness in chat mode (D57), and a new one does too. This is all
+a chat connector writes. The [template](../skills/adding-a-capture-harness/templates/connector-harness.toml)
+has each line with its comment. The full reference below has every rule.
+
+| Field | What to write | Example |
+|---|---|---|
+| `schema_version`, `id` | `1`, and the folder name | `id = "codex-cli"` |
+| `[participant]` | `display_name`; `first_screen` only if the harness asks something first | `display_name = "Codex"` |
+| `capture.interactive`, `continuation` | `true`, and the fixed chat sentence | `continuation = "chat: the participant types the prompt and may type keep going"` |
+| `capture.args`, `resume_args` | Options to open the chat (often none), and how to reopen the last session | `args = []`, `resume_args = ["--continue"]` |
+| `[capture.executable]` | The program name on `PATH`, and its version option | `program = "claude"`, `version_args = ["--version"]` |
+| `[capture.env]` and `[capture.platform.<key>.env]` | `SHELL`, `NODE_USE_ENV_PROXY = "1"` for a Node harness, the self-update switch; `SHELL = "/bin/bash"` on Linux | `DISABLE_AUTOUPDATER = "1"` |
+| `[capture.home]` | `run_home`, `config_home`, the harness's home variable, its real folders, `skills_dir` | `config_home = "shared"`, `env = "CODEX_HOME"` |
+| `[capture.ca]` | The CA variable the harness reads, and `extend` or `replace` | `env = ["NODE_EXTRA_CA_CERTS"]`, `mode = "extend"` |
+| `[capture.identity]` | Always `source = "none"` | `source = "none"` |
+| `[[capture.native]]` | The session files: `name`, `root`, `pattern`, `form`, `protocol_hint`, `since_run_start = true` | `root = "{config_home}/sessions"` |
+| Model host | `model_host_from` when the participant picks the service; else `providers` or one `[[capture.hosts]]` row | `model_host_from = { file = "config.yaml", key = "model.base_url" }` |
+| `capture.auth_hosts` | Sign-in hosts, tunnelled and never recorded | `auth_hosts = ["auth.openai.com"]` |
+| `[capture.termination]` | `process_group`, or `native_pid` for an npm wrapper; a grace in seconds | `strategy = "process_group"`, `grace_seconds = 10` |
+| `[redaction]` | Optional: plan, quota and billing fields the harness sends | `{ kind = "codex_plan_type", json_field = "plan_type", value = "string" }` |
+
+Only when needed: `capture.configure` (a setting with no environment variable, as Hermes has),
+`capture.argv_guard` and `capture.reserved_env_prefixes` (a harness that scans its own options or
+has a safe-mode variable). A chat connector never writes `goal_flag`, an identity `binding` or
+selector, or `[capture.credential]`. Seeds (`capture.home.seed`) are allowed but no shipped
+connector uses them.
+
 The executable authority is
 [`harness.rs`](../crates/goalcup-protocol/src/harness.rs). Its
 [`capture_policy.rs`](../crates/goalcup-protocol/src/capture_policy.rs) trust tables,
@@ -53,9 +82,9 @@ optional field or table is absent.
 | `capture` | required table | The complete launch-and-capture profile below. |
 | `participant` | optional, default absent | `[participant]`: the harness's display name and first-screen hint for messages to the participant; see below. |
 | `redaction` | optional, default absent | Connector-selected rows from the core redaction mirror. |
-| `capture.args` | required | 1–64 strings (0–64 with `interactive`); each at most 4096 bytes and without control characters. |
-| `capture.goal_flag` | optional, default absent | One long option, at most 32 bytes, matching `--[a-z][a-z0-9-]*`; no `=` or value. Refused with `interactive`. |
-| `capture.interactive` | optional, default `false` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57); see below. |
+| `capture.args` | required | 0–64 strings in chat mode; each at most 4096 bytes and without control characters. |
+| `capture.goal_flag` | headless only (see below) | One long option, at most 32 bytes, matching `--[a-z][a-z0-9-]*`; no `=` or value. Refused with `interactive`. |
+| `capture.interactive` | write `true` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57). The default `false` is headless (see below). |
 | `capture.resume_args` | optional, default `[]` | Strings appended after `capture.args` when a run is continued and already has a file in one of its `[[capture.native]]` stores; otherwise the harness opens the normal way. Each is held to every `args` rule, and `args` and `resume_args` together hold at most 64. |
 | `capture.configure` | optional, default `[]` | `interactive` only. At most 4 commands, each 1–16 arguments of 1–256 bytes. Each argument is held to every `args` rule and takes no template (`{` and `}` are refused). See [Configure commands](#configure-commands). |
 | `capture.continuation` | required | Non-blank, one line, 1–512 bytes; declarative provenance for unattended continuation. |
@@ -75,16 +104,17 @@ optional field or table is absent.
 | `capture.providers` | optional, default `[]` | Unique names from the shared provider table; each adds that provider's host row. See below. |
 | `capture.model_host_from` | optional, default absent | `{ file = "<path>", key = "<dotted key>" }`: where the harness's own config names its model service. Requires `config_home = "shared"`. See [The model host from the harness's config](#the-model-host-from-the-harnesss-config). |
 
-The goal has exactly one slot: either `capture.args` ends in the literal `--` and the goal is the
-next single argument, or `capture.goal_flag` is present and carries the goal as
-`--flag=<goal>`, never both. Every argument, every `resume_args` entry and `goal_flag` passes the
-core deny policy and the optional argument guard.
-
 With `interactive = true` (D57) there is no goal slot: the participant types the prompt in the
-harness. The profile then takes no `goal_flag`, its `args` need not end in `--` and may be
-empty, and its `identity.source` must be `none`. With `false`, the default, every
-rule above holds unchanged. `resume_args` parses in either recipe, but `goalcup continue`
-currently supports chat mode only and appends it after `args`; headless continuation is unsupported.
+harness. The profile takes no `goal_flag`, its `args` may be empty, and its `identity.source` must
+be `none`. Every argument and every `resume_args` entry passes the core deny policy and the
+optional argument guard. `goalcup continue` appends `resume_args` after `args`.
+
+**Headless (core only, being removed).** Headless mode (`interactive = false`) gives the harness
+one goal as an argument (after a trailing `--`, or as `--flag=<goal>` through `goal_flag`) and allows the
+`preassigned`, `stdout_json` and `stderr_line` identity sources. No shipped connector uses it, the
+participant tools (`prep`, `continue`) do not support it, and it is being removed from the code
+(simplification plan, A1). Do not write a headless connector. The rules for its fields stay below
+only while the code still reads them.
 
 ### Configure commands
 
@@ -341,7 +371,7 @@ new name shape is a core policy and DECISIONS change.
 
 | Field | Required/default | Contract |
 |---|---|---|
-| `capture.identity.source` | required | Closed values: `preassigned`, `stdout_json`, `stderr_line`, `none`. An `interactive` profile takes `none` only. |
+| `capture.identity.source` | required | Write `none`: an `interactive` profile takes `none` only. `preassigned`, `stdout_json` and `stderr_line` are headless only. |
 | `capture.identity.binding` | required except for `none` | Closed values: `at_launch`, `deferred`. |
 | `capture.identity.match_field` | `stdout_json` only; required there | Dot path of 1–4 nonempty `[A-Za-z0-9_]+` segments. |
 | `capture.identity.match_value` | `stdout_json` only; required there | 1–64 bytes, no control character. |
@@ -478,9 +508,8 @@ in the harness, and the harness saves its address in its own config. There is no
   hints; every other path under the base is recorded with no hint. A host the connector also lists
   in `capture.hosts` keeps that row. Every other host stays an opaque tunnel, counted in
   `proxy admission:` and never opened.
-- **What is logged.** Only `model service: <host>:<port> (<key> in <file>)`: in the start's output
-  for a headless run, in the run's `host.log` for a chat-mode one. A userinfo (`user:pass@`), the
-  path and the query are never logged or recorded.
+- **What is logged.** Only `model service: <host>:<port> (<key> in <file>)`, in the run's
+  `host.log`. A userinfo (`user:pass@`), the path and the query are never logged or recorded.
 - **Refused at start, and not ready at prep.** A missing file or key, a value that is not an
   `http` or `https` URL, plain `http` (only `HTTPS_PROXY` is set, so it would pass around the
   recorder), a loopback name, an address literal, a single-label name, a host that names
@@ -671,11 +700,11 @@ directory with its pin.
 - [`connectors/hermes-cli/harness.toml`](../connectors/hermes-cli/harness.toml): chat mode with a
   `configure` command, its model host read from its own `config.yaml` (`model_host_from`, no
   `hosts`), a `snapshot` native source read from the run's start, an argv guard and a reserved
-  prefix. Its headless form, with `stderr_line` identity, is frozen at
-  [`headless-connectors/hermes-cli`](../crates/goalcup-protocol/tests/fixtures/headless-connectors/hermes-cli/harness.toml)
-  for the tests of that recipe.
+  prefix.
 - [`connectors/codex-cli/harness.toml`](../connectors/codex-cli/harness.toml): chat mode
   (`interactive`), shared config home, `since_run_start`, `native_pid` termination, extra
   redaction patterns and per-platform env.
 - [`connectors/claude-code-cli/harness.toml`](../connectors/claude-code-cli/harness.toml): chat
   mode with a `keychain_link` run home.
+- [`connectors/amp-cli/harness.toml`](../connectors/amp-cli/harness.toml): chat mode with a
+  shared run home and no home variable (`run_home = "shared"`, a `{run_home}` native root).
