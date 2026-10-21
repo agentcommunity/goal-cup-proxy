@@ -120,9 +120,6 @@ push, notice wording). Apply it **before** deploying the Worker that needs it.
 - Prep's filesystem check fails on overlayfs and btrfs, but the run itself never refused them (only
   the 3 GiB reservation decides). Warn instead of fail? Test one sandbox with `goalcup doctor` and a
   practice run first.
-- Remote machines: RULES says remote servers are not eligible, but the guide gives SSH advice and
-  a provided cloud sandbox is planned. Is a machine or VM you control, running `goalcup` on it,
-  eligible? ([B5](PARTICIPANT-REVIEW-2026-10-21.md))
 - Dry runs: RULES opens a dry-run window, but no doc says what a dry run is (a practice run, or a
   full-length run that does not count?). Define it. ([B9](PARTICIPANT-REVIEW-2026-10-21.md))
 - Finish ideas in [HOW-A-RUN-ENDS](HOW-A-RUN-ENDS.md): judged-commit email, freezing the judged

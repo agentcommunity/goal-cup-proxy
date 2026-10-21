@@ -527,8 +527,8 @@ last heartbeat, so a silence that outlasts our trouble is mailed once, after it.
 in the last 10 minutes. When only one run is open and it goes quiet, no heartbeat reaches the server,
 every tick starts the stretch again, and its silence is never mailed, however long it lasts. From
 the server a lone quiet run looks the same as a server nobody can reach. This matters most at the
-start of the event and for a test run on its own. Whether to change the rule is an owner decision
-that is still pending; until then the behaviour stays as described.
+start of the event and for a test run on its own. The owner accepted this (21 Oct 2026): a lone
+run's record still uploads normally within the run's 168 hours plus the 24-hour close window.
 
 The words of each email are in the database (`goal_cup_tracer.notice_text`, owned by the website);
 `docs/research/NOTIFICATIONS.md` lists every message a participant gets, by email and in the

@@ -294,8 +294,20 @@ disclosure and no-side-channel rules.
 
 ## Harness support
 
-Cloud and remote execution modes (Claude Code on the web, Codex cloud, Cursor cloud agents, CI runners,
-remote servers) are not eligible, because they leave no local trace.
+**Where the run happens.** Goal Cup Proxy and the harness run on the same machine, and that machine
+may be a laptop, a desktop, or a remote server or cloud sandbox you control (or one the organizers
+provide), reached over SSH. It needs a supported disk type (APFS, ext4 or XFS) and a supported system.
+Harness modes where the agent itself runs in a vendor's cloud (Claude Code on the web, Codex cloud,
+Cursor cloud agents) and CI runners are not eligible, because they leave no local trace.
+
+**Remote computers as tools.** Your agent may use other computers as tools: deploy to a server, run a
+database, call an API. Only its own commands and their results are recorded, not what happens on the
+far side.
+
+**Other agents.** Your agent may not hand its work to another AI agent outside its own harness: an
+agent running on another machine, a hosted coding agent, or a different harness it starts (a sub
+harness rather than a subagent). Goal Cup Proxy cannot block this. If the review finds that such an
+outside agent did work that ended up in your code, the run is banned.
 
 Every connector shipped with the participant build is available to participants. Run
 `goalcup doctor --harness all` for that build's roster; the source [facts index](harnesses/README.md)

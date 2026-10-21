@@ -77,7 +77,8 @@ different jobs:
 `goalcup continue` asks for no approval: it restarts a run you already approved.
 
 If you have no account yet, or have not signed up for the Goal Cup, the website sends you through
-that first. On a machine with no browser (a remote server), set `GOALCUP_NO_BROWSER=1`.
+that first. A remote server or cloud sandbox you control is fine (RULES, "Where the run happens"); run
+everything there over SSH. On a machine with no browser, set `GOALCUP_NO_BROWSER=1`.
 `goalcup` then prints the address and the code and opens nothing: open the address on any device.
 
 ## 3. Get ready: `goalcup prep`
@@ -405,8 +406,9 @@ An agent that stops early and stays idle until the deadline is allowed. The idle
 record.
 
 Your agent may start subagents of its own harness. It must not start a different harness (a Codex
-agent starting Claude Code, say). Goal Cup Proxy cannot record the second harness, and the run is
-disqualified.
+agent starting Claude Code, say), and it must not hand work to an AI agent outside its harness, on
+this machine or another. Goal Cup Proxy cannot record those; if the review finds that such an
+outside agent did work that ended up in your code, the run is banned.
 
 Your prompt becomes public at the latest at the end of the event. Until then it stays private.
 
