@@ -69,7 +69,7 @@ SCANNED_FILES = {
 # entry); only the current version (rule 4) and version fields (rule 6) are checked there.
 SOURCE_PREFIXES = ("crates/", "server/worker/src/")
 # Excluded from the scan even under a scanned prefix.
-EXCLUDED_PREFIXES = ("docs/harnesses/", "docs/research/")
+EXCLUDED_PREFIXES = ("docs/harnesses/", "docs/research/", "docs/archive/")
 EXCLUDED_PARTS = ("/tests/", "/fixtures/")
 # This script names versions to look for them. Script tests (scripts/test_*.py) build made-up
 # releases, like the tests under crates/.
