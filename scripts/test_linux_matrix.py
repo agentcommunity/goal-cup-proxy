@@ -500,6 +500,54 @@ class ContainerHalfTests(unittest.TestCase):
         doc = json.loads((self.homes / "claude-code-cli/settings.json").read_text())
         self.assertEqual(doc, {"model": "haiku", "alwaysThinkingEnabled": False})
 
+    def test_claude_fullscreen_offer_is_answered_not_now_keeping_other_state(self) -> None:
+        home = self.homes / "claude-code-cli"
+        home.mkdir(parents=True)
+        (home / ".claude.json").write_text(json.dumps({
+            "hasCompletedOnboarding": True, "fullscreenUpsellSeenCount": 1,
+            "projects": {"/w": {"hasTrustDialogAccepted": False}}}))
+        run = self.inner("inner-home-config", "claude-code-cli")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        doc = json.loads((home / ".claude.json").read_text())
+        self.assertEqual(doc, {"hasCompletedOnboarding": True, "fullscreenUpsellSeenCount": 3,
+                               "projects": {"/w": {"hasTrustDialogAccepted": False}}})
+        self.assertEqual(stat.S_IMODE((home / ".claude.json").stat().st_mode), 0o600)
+        # No renderer is chosen.
+        self.assertNotIn("tui", json.loads((home / "settings.json").read_text()))
+
+    def test_claude_fullscreen_offer_state_is_written_when_there_is_none(self) -> None:
+        run = self.inner("inner-home-config", "claude-code-cli")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        doc = json.loads((self.homes / "claude-code-cli/.claude.json").read_text())
+        self.assertEqual(doc, {"fullscreenUpsellSeenCount": 3})
+
+    def test_amp_session_gets_low_mode_and_no_welcome_and_login_files_are_not_read(self) -> None:
+        amp = self.homes / "amp-cli.run-home/.local/share/amp"
+        amp.mkdir(parents=True)
+        (amp / "session.json").write_text(json.dumps({
+            "agentMode": "smart", "launchCount": 4, "neoWelcomeDismissed": False}))
+        for name in ("accounts.json", "secrets.json"):
+            (amp / name).write_text("{}")
+            (amp / name).chmod(0)  # unreadable: a read would fail the call
+        try:
+            run = self.inner("inner-home-config", "amp-cli")
+        finally:
+            for name in ("accounts.json", "secrets.json"):
+                (amp / name).chmod(0o600)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        doc = json.loads((amp / "session.json").read_text())
+        self.assertEqual(doc, {"agentMode": "low", "launchCount": 4, "neoWelcomeDismissed": True})
+        for name in ("accounts.json", "secrets.json"):
+            self.assertEqual((amp / name).read_text(), "{}")
+
+    def test_amp_session_is_written_in_a_fresh_run_home(self) -> None:
+        run = self.inner("inner-home-config", "amp-cli")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        path = self.homes / "amp-cli.run-home/.local/share/amp/session.json"
+        self.assertEqual(json.loads(path.read_text()),
+                         {"agentMode": "low", "neoWelcomeDismissed": True})
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
     def test_claude_settings_that_are_not_json_are_left_alone_and_fail(self) -> None:
         home = self.homes / "claude-code-cli"
         home.mkdir(parents=True)
