@@ -373,7 +373,9 @@ The tracer records your run, and only your run:
   it is on mains power.
 
 It records no host name, no user name and no serial number. It does not look at your other
-programs, your browser, other terminals or your files outside the run. Passwords, keys and tokens
+programs, your browser, other terminals or your files outside the run. Its heartbeats report the
+free disk space and the memory, CPU time and open files of the tracer's own processes, and
+nothing about any other process. Passwords, keys and tokens
 are removed on your machine before anything is written, with one known gap (below). The server
 also keeps the IP address and country of each connection from the tracer; they are stored on the
 server only, never in the record, and never made public.

@@ -51,6 +51,9 @@ pub struct StoredHeartbeat {
     /// Model calls seen so far, cumulative, if the tracer said.
     #[serde(default)]
     pub model_requests: Option<u64>,
+    /// The heartbeat's `vitals` object as sent, if it had one.
+    #[serde(default)]
+    pub vitals: Option<serde_json::Value>,
     /// The server's clock when it received the heartbeat (RFC 3339, to the second).
     pub received_at: String,
 }

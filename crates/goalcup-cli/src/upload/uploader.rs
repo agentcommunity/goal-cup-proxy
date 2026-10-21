@@ -1148,6 +1148,7 @@ fn heartbeat(
         repo_head,
         recording: vitals.map(|vitals| vitals.recording().wire().to_string()),
         model_requests: vitals.map(Vitals::model_requests),
+        vitals: vitals.and_then(Vitals::heartbeat_vitals),
     };
     Beat::Answer(server.json_timed(
         "POST",

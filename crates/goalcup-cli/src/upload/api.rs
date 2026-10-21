@@ -143,6 +143,33 @@ pub struct HeartbeatRequest {
     /// Model requests seen so far, cumulative. Left out with `recording`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_requests: Option<u64>,
+    /// The disk and the tracer's own processes. Left out with `recording`, and by a run that
+    /// has nothing to read them from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vitals: Option<HeartbeatVitals>,
+}
+
+/// The `vitals` of a heartbeat (`docs/UPLOAD-API.md`). A number that could not be read is left
+/// out, never guessed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeartbeatVitals {
+    /// Free bytes on the volume of the run's files (beyond the run's reservation, which is a
+    /// file there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_free_bytes: Option<u64>,
+    /// [`crate::run::reserve::short_of_disk`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_short: Option<bool>,
+    /// `"disk"` while the tracer has paused the agent for a nearly full disk, else `null`.
+    #[serde(default)]
+    pub agent_paused: Option<String>,
+    /// Summed over this `goalcup` process (with its recording proxy) and the daemon it started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rss_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_files: Option<u64>,
 }
 
 /// The answer to a heartbeat.

@@ -561,6 +561,129 @@ fn disk_space(path: &Path) -> Option<(u64, u64)> {
     Some((total, free))
 }
 
+/// What one process uses, each field `None` when it could not be read.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessUsage {
+    pub rss_bytes: Option<u64>,
+    /// User plus system CPU time so far, in milliseconds.
+    pub cpu_ms: Option<u64>,
+    pub open_files: Option<u64>,
+}
+
+/// The resident memory, CPU time and open files of process `pid`, read from `/proc` (Linux) or
+/// `proc_pidinfo` (macOS), never from a command. Only a process of this user can be read.
+#[cfg(target_os = "linux")]
+pub fn process_usage(pid: u32) -> ProcessUsage {
+    let read = |what: &str| std::fs::read_to_string(format!("/proc/{pid}/{what}")).ok();
+    let rss_bytes = read("status").and_then(|status| {
+        let kib = status
+            .lines()
+            .find_map(|line| line.strip_prefix("VmRSS:"))?;
+        let kib: u64 = kib.trim().strip_suffix("kB")?.trim().parse().ok()?;
+        kib.checked_mul(1024)
+    });
+    let cpu_ms = read("stat").and_then(|stat| {
+        // Field 2 may hold spaces: count from after its last `)`. `state` is field 3, `utime`
+        // and `stime` (in clock ticks) fields 14 and 15.
+        let mut fields = stat.get(stat.rfind(')')? + 2..)?.split_whitespace();
+        let utime: u64 = fields.nth(11)?.parse().ok()?;
+        let stime: u64 = fields.next()?.parse().ok()?;
+        // SAFETY: `sysconf` takes an integer and touches no memory.
+        let hz = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) }).ok()?;
+        (hz > 0).then(|| utime.saturating_add(stime).saturating_mul(1000) / hz)
+    });
+    let open_files = std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .ok()
+        .map(|dir| {
+            let listed = dir.count() as u64;
+            // Listing our own descriptors holds one open for the listing.
+            if pid == std::process::id() {
+                listed.saturating_sub(1)
+            } else {
+                listed
+            }
+        });
+    ProcessUsage {
+        rss_bytes,
+        cpu_ms,
+        open_files,
+    }
+}
+
+/// See the Linux [`process_usage`].
+#[cfg(target_os = "macos")]
+pub fn process_usage(pid: u32) -> ProcessUsage {
+    let Ok(pid) = libc::c_int::try_from(pid) else {
+        return ProcessUsage::default();
+    };
+    // SAFETY: an all-zero `proc_taskinfo` is a valid value for the call to overwrite.
+    let mut task: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+    // SAFETY: `task` is a valid, exclusively borrowed local of exactly `size` bytes, and
+    // `proc_pidinfo` does not keep the pointer.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTASKINFO,
+            0,
+            (&mut task as *mut libc::proc_taskinfo).cast(),
+            size,
+        )
+    };
+    let task = (read == size).then_some(task);
+    let cpu_ms = task.and_then(|task| {
+        // CPU times are in Mach time units, nanoseconds only once scaled by the timebase.
+        let (numer, denom) = mach_timebase()?;
+        let ticks = u128::from(task.pti_total_user) + u128::from(task.pti_total_system);
+        u64::try_from(ticks * u128::from(numer) / u128::from(denom) / 1_000_000).ok()
+    });
+    let fd_size = std::mem::size_of::<libc::proc_fdinfo>();
+    // SAFETY: a null buffer asks only for the size the list needs.
+    let needed =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+    let open_files = usize::try_from(needed)
+        .ok()
+        .filter(|&needed| needed > 0)
+        .and_then(|needed| {
+            let mut list: Vec<libc::proc_fdinfo> = Vec::with_capacity(needed / fd_size + 16);
+            let bytes = libc::c_int::try_from(list.capacity() * fd_size).ok()?;
+            // SAFETY: `list` has room for `bytes` bytes; the call writes whole entries into it
+            // and answers how many bytes it wrote. Nothing reads the entries.
+            let wrote = unsafe {
+                libc::proc_pidinfo(
+                    pid,
+                    libc::PROC_PIDLISTFDS,
+                    0,
+                    list.as_mut_ptr().cast(),
+                    bytes,
+                )
+            };
+            let wrote = usize::try_from(wrote).ok().filter(|&wrote| wrote > 0)?;
+            Some((wrote / fd_size) as u64)
+        });
+    ProcessUsage {
+        rss_bytes: task.map(|task| task.pti_resident_size),
+        cpu_ms,
+        open_files,
+    }
+}
+
+/// The Mach timebase as `(numer, denom)`.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn mach_timebase() -> Option<(u32, u32)> {
+    let mut info = libc::mach_timebase_info { numer: 0, denom: 0 };
+    // SAFETY: `info` is a valid out pointer for the one struct the call writes.
+    let rc = unsafe { libc::mach_timebase_info(&mut info) };
+    (rc == 0 && info.numer > 0 && info.denom > 0).then_some((info.numer, info.denom))
+}
+
+/// Elsewhere nothing is read.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn process_usage(_pid: u32) -> ProcessUsage {
+    ProcessUsage::default()
+}
+
 /// The first executable called `name` on `PATH`.
 pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
@@ -577,6 +700,20 @@ pub(crate) fn is_executable(p: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This process's own memory, CPU time and open files read, each plausible.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_process_of_this_user_is_read() {
+        let usage = process_usage(std::process::id());
+        assert!(
+            usage.rss_bytes.is_some_and(|rss| rss > 1 << 20),
+            "{usage:?}"
+        );
+        assert!(usage.cpu_ms.is_some(), "{usage:?}");
+        // stdin, stdout and stderr at least.
+        assert!(usage.open_files.is_some_and(|n| n >= 3), "{usage:?}");
+    }
 
     /// One machine in the opener table: what it is, what is on its `PATH`, and the opener it
     /// must get, with the arguments before the URL.

@@ -461,6 +461,8 @@ pub struct Vitals {
     upload: Arc<Mutex<UploadVital>>,
     /// The uploader's count of what is left of the run, each time it is set.
     time_left: Arc<Mutex<Option<TimeLeft>>>,
+    /// What the heartbeats say of the disk and the tracer's own processes; `None` says nothing.
+    probe: Option<crate::tracer_vitals::Probe>,
 }
 
 #[derive(Debug, Default)]
@@ -504,7 +506,19 @@ impl Vitals {
             model_requests: counter,
             upload: Arc::default(),
             time_left: Arc::default(),
+            probe: None,
         }
+    }
+
+    /// These vitals, with the heartbeats' `vitals` read by `probe`.
+    pub fn probing(mut self, probe: crate::tracer_vitals::Probe) -> Vitals {
+        self.probe = Some(probe);
+        self
+    }
+
+    /// The heartbeat's `vitals`, read now; `None` without a probe.
+    pub fn heartbeat_vitals(&self) -> Option<crate::upload::api::HeartbeatVitals> {
+        self.probe.as_ref().map(crate::tracer_vitals::Probe::read)
     }
 
     pub fn recording(&self) -> Recording {

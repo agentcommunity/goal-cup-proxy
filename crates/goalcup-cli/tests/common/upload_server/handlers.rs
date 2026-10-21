@@ -1169,6 +1169,8 @@ struct HeartbeatRequest {
     recording: Option<String>,
     #[serde(default)]
     model_requests: Option<u64>,
+    #[serde(default)]
+    vitals: Option<serde_json::Value>,
 }
 
 async fn heartbeat(
@@ -1266,6 +1268,7 @@ async fn heartbeat(
         repo_head: req.repo_head,
         recording: req.recording,
         model_requests: req.model_requests,
+        vitals: req.vitals,
         received_at: now_z(),
     });
     s.persist(run);

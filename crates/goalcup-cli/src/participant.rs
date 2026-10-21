@@ -884,6 +884,34 @@ pub fn problem_heartbeats(failures: u32, why: &str) -> String {
     )
 }
 
+/// The one `goalcup status` line about this computer: free disk, what goalcup's own processes
+/// use (`vitals`), and whether goalcup paused the agent for the disk. `None` when nothing of it
+/// is known.
+pub fn this_computer(vitals: &crate::upload::api::HeartbeatVitals) -> Option<String> {
+    let human = crate::run::reserve::human;
+    let mut parts = Vec::new();
+    if let Some(free) = vitals.disk_free_bytes {
+        parts.push(format!("{} of disk free", human(free)));
+    }
+    match (vitals.rss_bytes, vitals.cpu_ms) {
+        (Some(rss), Some(cpu_ms)) => parts.push(format!(
+            "goalcup uses {} of memory, {} of CPU time so far",
+            human(rss),
+            crate::run::age_words(cpu_ms / 1000)
+        )),
+        (Some(rss), None) => parts.push(format!("goalcup uses {} of memory", human(rss))),
+        (None, Some(cpu_ms)) => parts.push(format!(
+            "goalcup used {} of CPU time so far",
+            crate::run::age_words(cpu_ms / 1000)
+        )),
+        (None, None) => {}
+    }
+    if vitals.agent_paused.is_some() {
+        parts.push("agent paused for disk".to_string());
+    }
+    (!parts.is_empty()).then(|| format!("  This computer: {}.", parts.join("; ")))
+}
+
 pub fn problem_disk(free: &str) -> String {
     format!("only {free} of disk is free. Free some space.")
 }

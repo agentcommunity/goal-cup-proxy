@@ -50,7 +50,8 @@
 //! capture's, so that is the capture block with its states, the daemon's sentence, storage, gaps
 //! and admissions. Staleness is [`goalcup_protocol::control::STALE_AFTER_SECONDS`], the one
 //! threshold every reader of the status document uses, and `now` is a parameter so the rendering
-//! is deterministic. `--json` prints the signed document alone.
+//! is deterministic. `--json` prints the signed document, with this machine's own facts
+//! beside it under `local`, outside what is signed.
 
 use crate::CliError;
 use crate::entries::{self, EntryRecord};
@@ -100,7 +101,7 @@ pub fn status_in(
         crate::run::now_unix(),
     );
     // First of everything, before the daemon is even asked: where the run is and what to do
-    // about anything wrong with it. A `--json` caller gets the document alone.
+    // about anything wrong with it. A `--json` caller gets the document.
     let mut run_id = None;
     if !json {
         let (report, run) = run_report(cfg, connectors, &record, now);
@@ -148,13 +149,15 @@ pub fn status_in(
         );
     }
     if json {
-        // The document as the daemon signed it, byte for byte, so a participant can hand it
+        // The document as the daemon signed it, field for field, so a participant can hand it
         // to an organiser and it still verifies. It is reached only once both checks above
         // have passed, so a `--json` caller never has to decide whether to trust it.
-        put(
-            out,
-            &format!("{}\n", serde_json::to_string_pretty(&document)?),
-        )?;
+        // Beside it, outside what is signed, `local`: this machine's own facts.
+        let shown = WithLocal {
+            document: &document,
+            local: local_facts(cfg, &record),
+        };
+        put(out, &format!("{}\n", serde_json::to_string_pretty(&shown)?))?;
     } else {
         // The technical block follows the participant block, under its own heading.
         if let Some(run_id) = &run_id {
@@ -166,6 +169,43 @@ pub fn status_in(
         put(out, &render_status(&document, now))?;
     }
     Ok(())
+}
+
+/// The key of `goalcup status --json` beside the signed document that holds this machine's own
+/// facts ([`local_vitals`]). It is not signed: it comes from the run's files, not the daemon.
+pub const LOCAL_KEY: &str = "local";
+
+/// The signed document, its fields as they are, and [`LOCAL_KEY`] after them.
+#[derive(serde::Serialize)]
+struct WithLocal<'a> {
+    #[serde(flatten)]
+    document: &'a SignedStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    local: Option<crate::upload::api::HeartbeatVitals>,
+}
+
+/// [`local_vitals`] for the run of `record`; `None` when this machine has no state for it.
+fn local_facts(cfg: &Path, record: &EntryRecord) -> Option<crate::upload::api::HeartbeatVitals> {
+    let run = crate::run::of_entry(cfg, &record.entry_id).ok().flatten()?;
+    let run_dir = crate::run::run_dir(cfg, &run.run_id);
+    let state = crate::run::read_state(&run_dir)?;
+    Some(local_vitals(&run_dir, &state))
+}
+
+/// The run's vitals in the heartbeats' shape: the free disk as the watch tick last measured it,
+/// whether the agent is paused for it, and what the tracer's own processes used at the last
+/// heartbeat (none for a run with no server).
+fn local_vitals(
+    run_dir: &Path,
+    state: &crate::run::RunState,
+) -> crate::upload::api::HeartbeatVitals {
+    let mut vitals = crate::tracer_vitals::last(run_dir).unwrap_or_default();
+    if state.disk != crate::run::DiskState::default() {
+        vitals.disk_free_bytes = Some(state.disk.free_bytes);
+    }
+    vitals.agent_paused =
+        crate::tracer_vitals::paused_for_disk(run_dir).then(|| "disk".to_string());
+    vitals
 }
 
 /// The first line of the run section of an organizer test run (`goalcup start --test`).
@@ -347,7 +387,7 @@ fn run_report(
         participant::Phase::Sealed if on_server => participant::Next::Upload,
         participant::Phase::Sealed => participant::Next::Nothing,
     };
-    let header = participant::status_header(&participant::StatusHeader {
+    let mut header = participant::status_header(&participant::StatusHeader {
         harness: &name,
         mode,
         phase: Some(phase),
@@ -359,6 +399,15 @@ fn run_report(
         early,
         young: false,
     });
+    // While goalcup records: the disk, and what its own processes use.
+    if !state.ended
+        && let Some(line) = participant::this_computer(&local_vitals(
+            &crate::run::run_dir(cfg, &run.run_id),
+            &state,
+        ))
+    {
+        header.push(line);
+    }
     let problems: String = problems
         .iter()
         .map(|problem| format!("{} {problem}\n", participant::PROBLEM))

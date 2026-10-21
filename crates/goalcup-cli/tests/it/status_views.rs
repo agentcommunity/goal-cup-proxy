@@ -764,6 +764,63 @@ fn participant_block(text: &str) -> &str {
         .unwrap()
 }
 
+/// `goalcup status` shows the free disk, what the tracer's own processes use and a pause for the
+/// disk on one line, and under `--json` beside the signed document, which still verifies.
+#[test]
+fn status_shows_the_disk_and_what_goalcup_uses() {
+    use goalcup_cli::run::{DiskState, RunState, run_dir};
+    use goalcup_cli::upload::api::HeartbeatVitals;
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.disk = DiskState {
+        free_bytes: 20 << 30,
+        reserve_bytes: 3 << 30,
+        low: false,
+    };
+    run_with_state(&cfg, &info.entry_id, state);
+    let dir = run_dir(&cfg, &info.entry_id);
+    // What the last heartbeat read of the tracer's processes.
+    let heartbeat = HeartbeatVitals {
+        rss_bytes: Some(80 << 20),
+        cpu_ms: Some(125_000),
+        open_files: Some(40),
+        ..HeartbeatVitals::default()
+    };
+    std::fs::write(
+        dir.join(goalcup_cli::tracer_vitals::VITALS_FILE_NAME),
+        serde_json::to_vec(&heartbeat).unwrap(),
+    )
+    .unwrap();
+    // The disk pause says so in the state (D65).
+    let file = dir.join(goalcup_cli::run::STATE_FILE_NAME);
+    let mut raw: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    raw["disk"]["disk_paused"] = true.into();
+    std::fs::write(&file, serde_json::to_vec(&raw).unwrap()).unwrap();
+
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    let line = participant_block(&text)
+        .lines()
+        .find(|line| line.contains("This computer"))
+        .unwrap_or_else(|| panic!("{text}"));
+    for said in ["20 GiB", "80 MiB", "2 min", "paused for disk"] {
+        assert!(line.contains(said), "{said}: {line}");
+    }
+
+    let json = status_text(&m, &cfg, &info.entry_id, true);
+    let doc: control::SignedStatus = serde_json::from_str(&json).unwrap();
+    doc.verify_with(&info.run_public_key).unwrap();
+    let raw: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let local = &raw[goalcup_cli::commands::status::LOCAL_KEY];
+    assert_eq!(local["disk_free_bytes"], 20u64 << 30, "{json}");
+    assert_eq!(local["agent_paused"], "disk", "{json}");
+    assert_eq!(local["rss_bytes"], 80u64 << 20, "{json}");
+    assert_eq!(local["cpu_ms"], 125_000, "{json}");
+}
+
 #[test]
 fn status_puts_every_problem_first() {
     use goalcup_cli::run::{DiskState, HarnessState, Recording, RunState, UploadState, now_unix};

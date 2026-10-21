@@ -1146,6 +1146,71 @@ mod retries {
         drop(running);
     }
 
+    /// A machine that answers 20 GiB free, and memory and CPU time but no open files.
+    struct Partial;
+
+    impl goalcup_cli::tracer_vitals::Reader for Partial {
+        fn disk_free(&self, _near: &std::path::Path) -> Option<u64> {
+            Some(20 << 30)
+        }
+
+        fn usage(&self, _pid: u32) -> goalcup_platform::machine::ProcessUsage {
+            goalcup_platform::machine::ProcessUsage {
+                rss_bytes: Some(80 << 20),
+                cpu_ms: Some(4_000),
+                open_files: None,
+            }
+        }
+    }
+
+    /// The heartbeat carries `vitals`: what the reader could read, and nothing it could not;
+    /// `agent_paused` is `"disk"` once the run's state says the agent is paused for the disk.
+    #[test]
+    fn the_heartbeat_carries_the_vitals_it_could_read() {
+        use goalcup_cli::run::{DiskState, RunState, StateKeeper};
+        let run = Run::new(Box::new(|_| None));
+        let run_dir = run.spool.parent().unwrap().join("runs").join("r");
+        let mut state = RunState::launched(&run.record.entry_id, Ok(()));
+        state.disk = DiskState {
+            free_bytes: 20 << 30,
+            reserve_bytes: 3 << 30,
+            low: false,
+        };
+        StateKeeper::begin(&run_dir, state);
+        let probe = goalcup_cli::tracer_vitals::Probe::reading(
+            &run_dir,
+            std::path::Path::new(&run.record.trace_dir),
+            Arc::new(Partial),
+        );
+        let (running, _stopped) = start_beating(&run, Vitals::default().probing(probe));
+        let id = run.record.run_id.clone();
+        let vitals_said = |paused: serde_json::Value| {
+            run.server
+                .heartbeats(&id)
+                .into_iter()
+                .filter_map(|h| h.vitals)
+                .find(|v| v["agent_paused"] == paused)
+        };
+        let vitals = wait_for("a heartbeat with vitals", || {
+            vitals_said(serde_json::Value::Null)
+        });
+        assert_eq!(vitals["disk_free_bytes"], 20u64 << 30, "{vitals}");
+        assert_eq!(vitals["disk_short"], false, "{vitals}");
+        assert_eq!(vitals["rss_bytes"], 80u64 << 20, "{vitals}");
+        assert_eq!(vitals["cpu_ms"], 4_000, "{vitals}");
+        assert!(vitals.get("open_files").is_none(), "{vitals}");
+        // The disk pause writes `disk.disk_paused` into the run's state (D65).
+        let path = run_dir.join(goalcup_cli::run::STATE_FILE_NAME);
+        let mut raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        raw["disk"]["disk_paused"] = true.into();
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        wait_for("a heartbeat saying the agent is paused", || {
+            vitals_said("disk".into())
+        });
+        drop(running);
+    }
+
     #[test]
     fn a_replaced_answer_stops_the_run_with_its_reason() {
         let run = Run::new(Box::new(|_| None));

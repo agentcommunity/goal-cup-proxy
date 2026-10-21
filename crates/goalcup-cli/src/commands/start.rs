@@ -2324,6 +2324,14 @@ fn run_harness<'a>(
         Some(proxied) => crate::run::Vitals::counting(proxied.proxy.model_requests()),
         None => crate::run::Vitals::default(),
     };
+    // A run on a server reports its disk and the tracer's own processes in its heartbeats.
+    let vitals = match forked.upload.as_ref() {
+        Some(start) => vitals.probing(crate::tracer_vitals::Probe::new(
+            &crate::run::run_dir(forked.cfg, &forked.record.run_id),
+            Path::new(&start.record.trace_dir),
+        )),
+        None => vitals,
+    };
 
     // The run's one stop channel: the uploader's deadline or heartbeat stop and the watch's disk
     // stop both send on it, and the wait for the harness receives from it.
