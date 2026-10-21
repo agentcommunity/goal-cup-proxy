@@ -15,7 +15,9 @@ day works through). This page is the plan and the order; those are the reference
 - **Secrets are files, `chmod 600`,** never arguments, environment values, logs, chat or Git. Never
   print or copy a harness login (`auth.json`, `.credentials.json`, `.env`, `accounts.json`,
   `secrets.json`, Keychain). Never write `~/.codex`, `~/.claude`, `~/.hermes`, `~/.local/share/amp` or
-  app-wide config. Never set a model base URL.
+  app-wide config. Goal Cup never sets a model base URL on a harness (the only wire path is the
+  recording proxy). Hermes's own `config.yaml` does need `model.base_url`, its provider's address
+  (D62): `goalcup prep` asks for it in Hermes's setup, and that is the participant's setting, not ours.
 - **Cheapest models.** Codex `gpt-5.6-luna` at `low`; Claude Code `haiku`, thinking off; Hermes on
   the cheapest provider model the owner's key allows (DeepSeek flash was used before); Amp in its
   cheapest mode the owner approves. A run on a stronger model needs the owner's yes.
@@ -45,8 +47,8 @@ day works through). This page is the plan and the order; those are the reference
    b. Copy `server/worker/sql/pending/20261021100000_goal_cup_tracer_event_readiness.sql` into the
       website repo `supabase/migrations/`.
    c. Apply it once. Regenerate the mirror and check it matches.
-   d. `wrangler secret put GITHUB_TOKEN --env staging` (a token that can read the test
-      test repositories, see "Repositories").
+   d. `wrangler secret put GITHUB_TOKEN --env staging` (any token that can call GitHub's API; the
+      test repositories are public, so it needs no private access, see "Repositories").
    e. Deploy the staging Worker from this branch; keep `npx wrangler tail --env staging` open in a
       terminal the owner can see.
    f. Set `"test_runs_parallel": true` in every campaign config (test runs no longer replace each
@@ -64,10 +66,12 @@ the cells first, then sign in.
 | Docker on the Mac (Linux) | `where: docker`, one volume per cell | codex-cli, claude-code-cli, amp-cli, hermes-cli |
 | Windows: WSL2 host | Goal Cup Proxy installed inside WSL2 Ubuntu, `where: host` | codex-cli, claude-code-cli (amp-cli and hermes-cli if time allows) |
 
-- **Windows.** WSL2 is the supported path (README). Docker Desktop on Windows runs the same Linux
-  containers as Docker on the Mac, so it adds little; skip it unless a WSL2 host cell fails in a
-  way Docker might isolate. Native Windows is not supported. The Windows machine needs its own
-  local agent (or SSH into WSL2) running this page's WSL2 cells, pushing to the same branch.
+- **Windows.** WSL2 is the supported path (README). It needs a Windows machine; without one, skip
+  the WSL2 row and its cells and record "WSL2: not run (no Windows machine)" in the results.
+  Docker Desktop on Windows runs the same Linux containers as Docker on the Mac, so it adds little;
+  skip it unless a WSL2 host cell fails in a way Docker might isolate. Native Windows is not
+  supported. The Windows machine needs its own local agent (or SSH into WSL2) running this page's
+  WSL2 cells, pushing to the same branch.
 - **Hermes.** The owner's API key is a file in the local repo. Put it into the cell's Hermes home
   `.env` by copying the file, never by echoing it (see [hermes-cli](../harnesses/hermes-cli.md),
   "The participant's own setup"). Set the provider and the cheapest model in that home's
@@ -83,26 +87,29 @@ the cells first, then sign in.
 
 Two kinds of cells:
 
-- **Infrastructure cells** (most of them): test runs on the anonymous practice clone of the empty
-  public `agentcommunity/goalcup-matrix-empty`, with
-  [campaign-workload.txt](campaign-workload.txt) (commit locally, never push). The repository stays
-  empty, so every such run may use it.
+- **Infrastructure cells** (most of them): test runs on the empty public
+  `agentcommunity/goalcup-matrix-empty`, with [campaign-workload.txt](campaign-workload.txt)
+  (commit locally, never push). A test start sends the kit's GitHub token
+  (`defaults.github_token_file`, LOCAL-CAMPAIGN "Cells") to GitHub to ask whether the repository is
+  empty. The repository stays empty, so every such run may use it. That token must not be able to
+  push to it: one agent push there would make every later test start refuse the repository.
 - **Full-flow cells**: the agent pushes to a real repository, so the judged-commit path is tested
   end to end. A competition or test start refuses a repository that is not empty, so **each
-  full-flow run needs its own new empty repository**. The orchestrator creates them as private
-  repositories under one test owner (`gh repo create <owner>/gc-test-<cell>-<n> --private`, no
-  README, no licence), and lists them in the results file. The owner creates **one** fine-grained
-  token for that test owner's repositories (Contents read and write), saved as a file. For each
-  full-flow cell, run `goalcup prep --repo <url>` in the cell's config (host: with
-  `GOALCUP_CONFIG_DIR`; Docker: inside the cell's container) and paste the token when asked. The
-  kit keeps a prep'd repository and its token (it writes its fake practice token only when no
-  repository is set). Use [campaign-build-workload.txt](campaign-build-workload.txt): it pushes
+  full-flow run needs its own new empty repository**. The orchestrator creates them as public
+  repositories under one test owner (`gh repo create <owner>/gc-test-<cell>-<n> --public`, no
+  README, no licence: `prep`, the clone and the Worker all refuse a private one), and lists them
+  in the results file. The owner creates **one** fine-grained token for that test owner's
+  repositories (Contents read and write), saved as a file. For each full-flow cell, run
+  `goalcup prep --repo <url>` in the cell's config (host: with `GOALCUP_CONFIG_DIR`; Docker:
+  inside the cell's container) and paste the token when asked. The kit keeps a prep'd repository
+  and its token as they are (scripts/kit_settle.py); otherwise it settles the practice repository
+  with the kit's token. Use [campaign-build-workload.txt](campaign-build-workload.txt): it pushes
   after each step, keeps `GOALCUP.md`, calls `goalcup time-left` and uses subagents.
   The kit was built for the practice repository and has not yet run a prep'd one: watch the first
   full-flow smoke closely (10 minutes, one cell) before starting more.
   Check afterwards: staging's judged commit equals GitHub's last push before the deadline. The
-  staging Worker's `GITHUB_TOKEN` must be able to read these private repositories; if it cannot,
-  the judged commit falls back and is flagged, which is worth seeing once on purpose too.
+  repositories are public, so the staging Worker's `GITHUB_TOKEN` needs no access to them beyond
+  GitHub's API.
 - **Optional, for fun and realism**: a cell whose prompt asks the cheap agent to write a Goal Cup
   Proxy connector for another harness, following `skills/adding-a-capture-harness` (it clones this
   public repository into its workspace first). A good long, multi-file task.

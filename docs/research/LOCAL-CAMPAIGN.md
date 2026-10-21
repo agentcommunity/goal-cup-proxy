@@ -30,6 +30,11 @@ not prove: other platforms, other harness versions, model behaviour, or particip
 1. **Build tools.** `cargo fetch --locked`, Docker running, `python3`, `curl`, `zstd`, `psql`.
 2. **Staging test key.** The staging `TEST_APPROVAL_KEY` in a file only you can read
    (`chmod 600`). Its path goes in `GOALCUP_TEST_APPROVAL_KEY_FILE`.
+   **Kit GitHub token.** Every cell is a test run, and a test start asks GitHub, with the token in
+   the cell's `github.json`, whether the repository is empty. Put one GitHub token in a file only
+   you can read (`chmod 600`); its path goes in `defaults.github_token_file` ("Cells"). It must not
+   be able to push to the practice repository: one agent push there would make every later test
+   start refuse it. A fine-grained token with read-only access to public repositories is enough.
 3. **Test members.** Until website migration `20261021100000` is on staging, a test run replaces
    the earlier test run of the same operator, so parallel cells need different members. Staging
    ships two synthetic members (`...0c0de1`, `...0c0de2`). Once the migration is applied, test runs
@@ -50,20 +55,24 @@ not prove: other platforms, other harness versions, model behaviour, or particip
 
 4. **A disposable empty public repository** for practice clones (default
    `agentcommunity/goalcup-matrix-empty`).
-5. **Build once.** `python3 scripts/campaign.py build CONFIG` builds the Linux image and binaries
-   one time. Runs never build, so cells can run side by side. On the Mac, `cargo build --offline
+5. **Build once,** before the logins (a build needs neither a host cell's `config_dir`, which its
+   login makes, nor the token). `python3 scripts/campaign.py build CONFIG` builds the Linux image
+   and binaries one time. Runs never build, so cells can run side by side. On the Mac, `cargo build --offline
    --workspace` and put `target/debug` first on `PATH`; allow the rebuilt `goalcup` in Little Snitch.
 
 ## Cells
 
 A cell is one harness, on one machine kind, for one duration, with one test member and its own
-login. Copy `scripts/campaign.example.json` and edit it: the key file path, host `config_dir`s and
-members. The default prompt is [campaign-workload.txt](campaign-workload.txt): a cheap, many-step
+login. Copy `scripts/campaign.example.json` and edit it: the key file path, the GitHub token file
+path (`github_token_file`), host `config_dir`s and members. `scripts/kit_settle.py` writes that
+token into each cell's `github.json` (0600) with the practice repository: in the container for a
+Docker cell (linux-matrix.sh mounts the file read-only), after `login` and before every `run` for a
+host cell, so a token rotated later is picked up. The default prompt is [campaign-workload.txt](campaign-workload.txt): a cheap, many-step
 coding task that stays in the workspace and stops on its own. An agent that finishes early and idles
 is still a valid infrastructure run; note the idle time in the report. Codex effort `minimal` is
 refused unless the installed Codex lists it for Luna; use `low` until that is checked. `python3 scripts/campaign.py check CONFIG`
 refuses duplicate members among parallel cells, shared config directories, production, and an
-unreadable key file.
+unreadable key or token file.
 
 Suggested first campaign:
 
@@ -82,8 +91,7 @@ API-key provider the owner approves.
 The default workload never pushes. A **full-flow cell** tests pushes and the judged commit: give
 it a new empty repository of its own (a test start refuses one that is not empty), run
 `goalcup prep --repo <url>` in the cell's config with a real token before the run (the kit keeps
-a prep'd repository and token, and writes its fake practice token only when none is set), and
-use [campaign-build-workload.txt](campaign-build-workload.txt). The
+a prep'd repository and its token as they are), and use [campaign-build-workload.txt](campaign-build-workload.txt). The
 [local test day](LOCAL-TEST-DAY.md) plans a day of such cells across every surface.
 
 ## Logins: one per cell

@@ -653,7 +653,8 @@ home its runs use (CLAUDE_CONFIG_DIR). Nothing is recorded.
      back into the terminal. (No browser opens from the container.)
   3. If it asks whether to trust the folder, choose Yes. Keep the model it has (haiku, set by
      this script). Type no task. Type /exit and press Enter.
-Then goalcup prep lists its steps. "[todo] github" and "[todo] practice" are expected here.
+Then goalcup prep lists its steps. "[todo] github" and "[todo] practice" are expected here:
+this script then settles the practice repository, with the token from MATRIX_GITHUB_TOKEN_FILE.
 Where Claude Code keeps its login on Linux is not measured: the file names are listed after.
 EOF
     ;;
@@ -666,7 +667,8 @@ its runs use. Nothing is recorded.
      the container.)
   2. Open the address it shows in your Mac's browser, sign in, and enter the code it shows.
   3. If it offers another model, keep $LUNA. Type no task. Type /exit and press Enter.
-Then goalcup prep lists its steps. "[todo] github" and "[todo] practice" are expected here.
+Then goalcup prep lists its steps. "[todo] github" and "[todo] practice" are expected here:
+this script then settles the practice repository, with the token from MATRIX_GITHUB_TOKEN_FILE.
 EOF
     ;;
 *)
@@ -675,7 +677,8 @@ linux-matrix: the owner's step. Prep lists its steps, then says "Press Enter to 
 Ctrl-C to stop." Press Enter. $h then opens inside the Linux container, in the tracker home
 its runs use. Nothing is recorded. Sign in the way it offers (open any address it prints in your
 Mac's browser; no browser opens from the container). Type no task, then exit it the way it says.
-Then goalcup prep lists its steps. "[todo] github" and "[todo] practice" are expected here.
+Then goalcup prep lists its steps. "[todo] github" and "[todo] practice" are expected here:
+this script then settles the practice repository, with the token from MATRIX_GITHUB_TOKEN_FILE.
 EOF
     ;;
 esac
