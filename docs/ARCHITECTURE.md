@@ -203,8 +203,9 @@ verifies only under a key in `SERVER_PUBLIC_KEYS` (the production Worker's) or o
 - **TLS only for declared hosts** whose SNI matches. Authentication hosts, other hosts and
   mismatched ClientHellos tunnel opaquely. Upstream TLS is always validated. The CA is
   name-constrained to the approved hosts and its key never leaves memory ([tls.rs](../crates/goalcup-cli/src/proxy/tls.rs)).
-- **HTTP/1.1 and WebSocket only** (no HTTP/2). One gzip or deflate coding and
-  `permessage-deflate` are undone. Any other coding is an `UnsupportedEncoding` gap.
+- **HTTP/1.1 and WebSocket only** (no HTTP/2). One gzip, deflate, brotli or zstd
+  coding and `permessage-deflate` are undone. Any other coding is an `UnsupportedEncoding` gap,
+  named in `host.log`.
 - **No header is recorded.** Bytes are forwarded unchanged. Only selected bodies and allowlisted
   metadata become frames ([metadata.rs](../crates/goalcup-cli/src/proxy/metadata.rs)).
 - **Capture is a side channel.** A refused frame stops capture, never the relay. Each loss is

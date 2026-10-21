@@ -177,8 +177,10 @@ next finish commits that terminal to the registry (`SealWritten` when `seal.json
 
 - The recording proxy (`goalcup_cli::proxy`) relays HTTP/1.1 and WebSocket. It sets no base URL and changes
   upstream TLS validation not at all.
-- The relay captures **decoded** bodies: chunked framing removed, at most one `gzip`, `x-gzip` or
-  `deflate` coding inflated. Any other coding records an `UnsupportedEncoding` gap and no body.
+- The relay captures **decoded** bodies: chunked framing removed, at most one `gzip`, `x-gzip`,
+  `deflate`, `br` or `zstd` coding undone (zstd windows up to 8 MiB, RFC 9659). Any other coding,
+  or more than one, records an `UnsupportedEncoding` gap and no body; the `Gap` record stays as v5
+  froze it, and the run's `host.log` names the codings (as tokens, at most four).
   A decode failure keeps the decoded prefix and ends the stream `DecodeError`. End-of-file inside a
   body ends it `Interrupted`.
 - Authentication hosts, and hosts that are not approved, are opaque tunnels and record nothing. The

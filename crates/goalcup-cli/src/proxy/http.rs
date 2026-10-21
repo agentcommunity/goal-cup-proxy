@@ -17,8 +17,9 @@
 //! [`goalcup_protocol::capture::WireIdentity`] of this physical connection and a per-connection
 //! exchange counter (starting at one), with `message_index: None`. Informational (1xx) heads
 //! are forwarded but open no stream. `Bytes` are emitted per read, at decoded offsets, after
-//! removing chunked framing and at most one `gzip`/`x-gzip`/`deflate` coding; any other coding
-//! records a named `UnsupportedEncoding` gap and no body bytes. A decode failure keeps the
+//! removing chunked framing and at most one `gzip`/`x-gzip`/`deflate`/`br`/`zstd` coding; any
+//! other coding records a named `UnsupportedEncoding` gap and no body bytes, and `host.log`
+//! names the codings ([`unsupported_codings_line`]). A decode failure keeps the
 //! decoded prefix, records `DecodeFailed` and ends `DecodeError`; no encoded byte is ever
 //! submitted as captured content. EOF inside a body ends the stream `Interrupted` and the relay
 //! returns `UnexpectedEof`.
@@ -41,12 +42,16 @@
 //! then ends, and a relay that ends cleanly after it returns [`HttpOutcome::Opaque`].
 //!
 //! No header value, query, cookie or credential is retained, logged or put in an error: the
-//! parsed heads keep only framing fields, and errors carry fixed text.
+//! parsed heads keep only framing fields, and errors carry fixed text. The one exception is the
+//! content-coding tokens of a body left undecoded, sanitized and bounded, in `host.log` only.
 
 use crate::proxy::api::{
     BoxIo, CaptureEmitter, CapturePolicy, HttpOutcome, RelayContext, RelayPair, Upgrade,
 };
 use crate::proxy::metadata::{self, ExchangeMeta, SafeTarget};
+use brotli_decompressor::{
+    Allocator, BrotliDecompressStream, BrotliResult, BrotliState, SliceWrapper, SliceWrapperMut,
+};
 use flate2::{Crc, Decompress, FlushDecompress, Status};
 use goalcup_protocol::capture::{
     CaptureMeta, CaptureSource, CaptureTime, EndReason, FrameEvent, GapReason,
@@ -88,6 +93,13 @@ const INFLATE_OUT_BYTES: usize = 32 * 1024;
 const MAX_DECODED_PER_READ: usize = MAX_CAPTURE_QUEUE_BYTES;
 /// The largest gzip member header (extra field, name and comment included).
 const MAX_GZIP_HEADER_BYTES: usize = 64 * 1024;
+/// The largest zstd window accepted, as a power of two: 8 MiB, the most an HTTP `zstd`
+/// content coding may use (RFC 9659 section 3). A larger frame is a decode failure.
+const ZSTD_WINDOW_LOG_MAX: u32 = 23;
+/// What `host.log` says of an undecoded body's codings: at most this many tokens, each cut to
+/// [`MAX_LOGGED_CODING_BYTES`].
+const MAX_LOGGED_CODINGS: usize = 4;
+const MAX_LOGGED_CODING_BYTES: usize = 32;
 
 /// Relay one intercepted HTTP/1.1 connection until both sides are done, or until an accepted
 /// WebSocket upgrade hands the connection to the WebSocket relay.
@@ -1273,6 +1285,9 @@ impl<'e> BodyCapture<'e> {
         };
         if unsupported {
             this.gap(GapReason::UnsupportedEncoding, at);
+            // The trace's `Gap` record has no room for the coding (v5 is frozen), so the run's
+            // log says which coding it was: the next unknown one is diagnosable.
+            crate::host_log::log_only(&unsupported_codings_line(codings));
         }
         this
     }
@@ -1429,6 +1444,8 @@ enum DecoderKind {
     Identity,
     Gzip(Box<Gzip>),
     Deflate(Box<Deflate>),
+    Brotli(Box<Brotli>),
+    Zstd(Box<Zstd>),
 }
 
 impl Decoder {
@@ -1446,6 +1463,8 @@ impl Decoder {
             (None, _) => DecoderKind::Identity,
             (Some("gzip" | "x-gzip"), None) => DecoderKind::Gzip(Box::default()),
             (Some("deflate"), None) => DecoderKind::Deflate(Box::default()),
+            (Some("br"), None) => DecoderKind::Brotli(Box::default()),
+            (Some("zstd"), None) => DecoderKind::Zstd(Box::new(Zstd::new()?)),
             _ => return None,
         };
         Some(Decoder { kind, fed: false })
@@ -1464,6 +1483,8 @@ impl Decoder {
             }
             DecoderKind::Gzip(gzip) => gzip.feed(input, &mut budget, emit),
             DecoderKind::Deflate(deflate) => deflate.feed(input, &mut budget, emit),
+            DecoderKind::Brotli(brotli) => brotli.feed(input, &mut budget, emit),
+            DecoderKind::Zstd(zstd) => zstd.feed(input, &mut budget, emit),
         }
     }
 
@@ -1474,6 +1495,8 @@ impl Decoder {
                 DecoderKind::Identity => true,
                 DecoderKind::Gzip(gzip) => gzip.complete(),
                 DecoderKind::Deflate(deflate) => deflate.ended,
+                DecoderKind::Brotli(brotli) => brotli.ended,
+                DecoderKind::Zstd(zstd) => zstd.frame_done,
             };
         if complete {
             Ok(())
@@ -1738,9 +1761,231 @@ impl Deflate {
     }
 }
 
+/// Count `produced` decoded bytes against the read's budget and hand them to capture.
+/// Answers whether capture still wants output.
+fn emit_decoded(
+    produced: &[u8],
+    budget: &mut usize,
+    emit: &mut Emit<'_>,
+) -> Result<bool, DecodeError> {
+    if produced.is_empty() {
+        return Ok(true);
+    }
+    *budget = budget
+        .checked_sub(produced.len())
+        .ok_or(DecodeError::Budget)?;
+    Ok(emit(produced))
+}
+
+/// HTTP `br` (RFC 7932), decoded to the standard's 16 MiB window at most (no large-window
+/// extension). One stream; bytes after its end are a decode failure.
+struct Brotli {
+    state: BrotliState<BrotliHeap, BrotliHeap, BrotliHeap>,
+    ended: bool,
+    out: Vec<u8>,
+}
+
+/// The brotli decoder's memory: zeroed boxed slices from the global allocator, freed on drop.
+#[derive(Default)]
+struct BrotliHeap;
+
+struct BrotliCells<T>(Box<[T]>);
+
+impl<T> Default for BrotliCells<T> {
+    fn default() -> Self {
+        BrotliCells(Box::default())
+    }
+}
+
+impl<T> SliceWrapper<T> for BrotliCells<T> {
+    fn slice(&self) -> &[T] {
+        &self.0
+    }
+}
+
+impl<T> SliceWrapperMut<T> for BrotliCells<T> {
+    fn slice_mut(&mut self) -> &mut [T] {
+        &mut self.0
+    }
+}
+
+impl<T: Clone + Default> Allocator<T> for BrotliHeap {
+    type AllocatedMemory = BrotliCells<T>;
+
+    fn alloc_cell(&mut self, len: usize) -> BrotliCells<T> {
+        BrotliCells(vec![T::default(); len].into_boxed_slice())
+    }
+
+    fn free_cell(&mut self, _cells: BrotliCells<T>) {}
+}
+
+impl Default for Brotli {
+    fn default() -> Self {
+        Brotli {
+            state: BrotliState::new_strict(BrotliHeap, BrotliHeap, BrotliHeap),
+            ended: false,
+            out: vec![0; INFLATE_OUT_BYTES],
+        }
+    }
+}
+
+impl Brotli {
+    fn feed(
+        &mut self,
+        input: &[u8],
+        budget: &mut usize,
+        emit: &mut Emit<'_>,
+    ) -> Result<(), DecodeError> {
+        if self.ended {
+            return if input.is_empty() {
+                Ok(())
+            } else {
+                Err(DecodeError::Invalid)
+            };
+        }
+        let (mut available_in, mut input_offset) = (input.len(), 0);
+        loop {
+            let (mut available_out, mut output_offset, mut total_out) = (self.out.len(), 0, 0);
+            let result = BrotliDecompressStream(
+                &mut available_in,
+                &mut input_offset,
+                input,
+                &mut available_out,
+                &mut output_offset,
+                &mut self.out,
+                &mut total_out,
+                &mut self.state,
+            );
+            // Emitted before the result is looked at: output decoded before corruption is kept.
+            if !emit_decoded(&self.out[..output_offset], budget, emit)? {
+                return Ok(());
+            }
+            match result {
+                BrotliResult::NeedsMoreOutput => {}
+                BrotliResult::NeedsMoreInput => return Ok(()),
+                BrotliResult::ResultSuccess => {
+                    self.ended = true;
+                    return if available_in == 0 {
+                        Ok(())
+                    } else {
+                        Err(DecodeError::Invalid)
+                    };
+                }
+                BrotliResult::ResultFailure => return Err(DecodeError::Invalid),
+            }
+        }
+    }
+}
+
+/// HTTP `zstd` (RFC 8878 frames, RFC 9659 window limit), one frame or several in a row. The
+/// body is complete when its last frame is.
+struct Zstd {
+    z: zstd::stream::raw::Decoder<'static>,
+    frame_done: bool,
+    out: Vec<u8>,
+}
+
+impl Zstd {
+    fn new() -> Option<Self> {
+        let mut z = zstd::stream::raw::Decoder::new().ok()?;
+        z.set_parameter(zstd::stream::raw::DParameter::WindowLogMax(
+            ZSTD_WINDOW_LOG_MAX,
+        ))
+        .ok()?;
+        Some(Zstd {
+            z,
+            frame_done: false,
+            out: vec![0; INFLATE_OUT_BYTES],
+        })
+    }
+
+    fn feed(
+        &mut self,
+        input: &[u8],
+        budget: &mut usize,
+        emit: &mut Emit<'_>,
+    ) -> Result<(), DecodeError> {
+        use zstd::stream::raw::{InBuffer, Operation, OutBuffer};
+        let mut source = InBuffer::around(input);
+        loop {
+            let before = source.pos();
+            let mut sink = OutBuffer::around(&mut self.out[..]);
+            let result = self.z.run(&mut source, &mut sink);
+            let produced = sink.pos();
+            if !emit_decoded(&self.out[..produced], budget, emit)? {
+                return Ok(());
+            }
+            // Zero: a frame just ended and everything it decoded was flushed.
+            self.frame_done = result.map_err(|_| DecodeError::Invalid)? == 0;
+            let rest = source.pos() < input.len();
+            if !rest && produced < self.out.len() {
+                return Ok(());
+            }
+            if rest && produced == 0 && source.pos() == before {
+                return Err(DecodeError::Invalid);
+            }
+        }
+    }
+}
+
+/// The `host.log` line for a body whose codings are not decoded: each coding as a token (any
+/// other byte is `?`), at most [`MAX_LOGGED_CODINGS`] of them, each cut to
+/// [`MAX_LOGGED_CODING_BYTES`]. A coding name is not a secret, but it is still header text.
+fn unsupported_codings_line(codings: &[String]) -> String {
+    let named: Vec<String> = codings
+        .iter()
+        .take(MAX_LOGGED_CODINGS)
+        .map(|coding| {
+            coding
+                .bytes()
+                .take(MAX_LOGGED_CODING_BYTES)
+                .map(|b| {
+                    if b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b) {
+                        char::from(b)
+                    } else {
+                        '?'
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let more = codings.len().saturating_sub(MAX_LOGGED_CODINGS);
+    let more = if more > 0 {
+        format!(" and {more} more")
+    } else {
+        String::new()
+    };
+    format!(
+        "proxy: a body coded {}{more} is not decoded (unsupported_encoding gap)",
+        named.join(", ")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An undecoded body's log line names its codings, bounded and as tokens only.
+    #[test]
+    fn the_log_line_for_an_undecoded_body_names_its_codings() {
+        let line = unsupported_codings_line(&["gzip".into(), "br".into()]);
+        assert!(line.contains("gzip, br"), "{line}");
+        assert!(line.contains("unsupported_encoding"), "{line}");
+
+        let line = unsupported_codings_line(&["x\u{1b}[2J".into()]);
+        assert!(line.contains("x??2J") && !line.contains('\u{1b}'), "{line}");
+
+        let many: Vec<String> = (0..10)
+            .map(|i| format!("c{i}{}", "z".repeat(100)))
+            .collect();
+        let line = unsupported_codings_line(&many);
+        assert!(line.contains("c3") && !line.contains("c4"), "{line}");
+        assert!(line.contains("and 6 more"), "{line}");
+        assert!(
+            !line.contains(&"z".repeat(MAX_LOGGED_CODING_BYTES)),
+            "{line}"
+        );
+    }
 
     /// The worked example in RFC 6455 section 1.3.
     #[test]
