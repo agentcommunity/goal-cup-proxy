@@ -50,7 +50,9 @@
 #                              becomes one space, because a newline typed into a TUI submits (or
 #                              splits) the prompt early. Control characters other than tab and
 #                              newline are refused. A long prompt reaches the TUI as a paste; give
-#                              it time with MATRIX_SUBMIT_DELAY before the Enter.
+#                              it time with MATRIX_SUBMIT_DELAY before the Enter. A harness that
+#                              has switched bracketed paste on (ESC[?2004h before the prompt) gets
+#                              the prompt wrapped in ESC[200~ ... ESC[201~.
 #   MATRIX_PROMPT_DELAY        seconds between "the harness is up" and the prompt (fake: 1,
 #                              any other connector: 30).
 #   MATRIX_SUBMIT_DELAY        seconds between the typed prompt and the Enter that submits it
@@ -887,7 +889,12 @@ PY
     printf '$PRE_KEYS'; : > $(shq "$ROOT/prekeys-sent")
   fi
   if [ -f $(shq "$ROOT/send") ] && [ ! -f $(shq "$ROOT/sent") ]; then
-    printf '%s' $(shq "$PROMPT"); sleep $SUBMIT_DELAY; printf '$PROMPT_ENTER'; : > $(shq "$ROOT/sent")
+    if [ -f $(shq "$ROOT/paste") ]; then
+      printf '\033[200~%s\033[201~' $(shq "$PROMPT")
+    else
+      printf '%s' $(shq "$PROMPT")
+    fi
+    sleep $SUBMIT_DELAY; printf '$PROMPT_ENTER'; : > $(shq "$ROOT/sent")
   fi
   sleep 1
   done"
@@ -913,6 +920,12 @@ PY
       fi
       if [ ! -f "$ROOT/send" ] && [ $((now - READY_AT)) -ge "$DELAY" ]; then
         if [ -z "$PRE_KEYS" ] || { [ -f "$ROOT/prekeys-sent" ] && [ $((now - PRE_AT)) -ge 2 ]; }; then
+          # A harness that has switched bracketed paste on gets the prompt as one paste, so a
+          # pty that splits a long write cannot turn it into keys and the Enter stays a submit.
+          if grep -qF "$(printf '\033[?2004h')" "$ROOT/start.out" 2>/dev/null; then
+            : >"$ROOT/paste"
+            log "the harness has bracketed paste on: the prompt goes as one bracketed paste"
+          fi
           : >"$ROOT/send"
         fi
       fi

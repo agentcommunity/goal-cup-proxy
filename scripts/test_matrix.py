@@ -100,6 +100,9 @@ if test:
 
 # setraw flushes pending input: finish that transition before the feeder sees ready.
 tty.setraw(0)
+if os.environ.get("STUB_BRACKETED") == "1":
+    # A TUI that switches bracketed paste on, as Codex, Claude Code and Amp do.
+    sys.stdout.write("\x1b[?2004h")
 print("Recording in chat mode: stub starts now in this terminal.", flush=True)
 chunks, t0 = [], time.time()
 while time.time() - t0 < 30:
@@ -282,6 +285,8 @@ SCENARIOS = {
     "test_seal_slow": ("stubchat", {"STUB_STOP": "0", "STUB_SEAL_SLEEP": "10"},
                        ("--test", "--duration", "4", "--timeout", "14"), True),
     "prompt_control": ("stubchat", {}, (), False, "go\x1b[Bnow\n"),
+    "bracketed": ("stubchat", {"STUB_BRACKETED": "1",
+                               "STUB_PROMPT": "\x1b[200~" + PROMPT + "\x1b[201~"}),
 }
 
 
@@ -323,6 +328,19 @@ class MatrixTests(unittest.TestCase):
         # The text arrives without its Enter, and the Enter comes on its own (a read of its own).
         self.assertEqual(text[1], PROMPT)
         self.assertEqual(enter[1], "\r")
+
+    def test_a_tui_with_bracketed_paste_on_gets_the_prompt_as_one_paste(self) -> None:
+        w = self.worlds["bracketed"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        chunks = json.loads(w.seen("start.stdin_chunks"))
+        self.assertEqual(chunks[0][1], "\x1b[200~" + PROMPT + "\x1b[201~")
+        self.assertEqual(chunks[1][1], "\r")
+
+    def test_a_tui_without_bracketed_paste_gets_the_raw_keys(self) -> None:
+        w = self.worlds["chat"]
+        chunks = json.loads(w.seen("start.stdin_chunks"))
+        self.assertEqual(chunks[1][1], PROMPT)
+        self.assertNotIn("\x1b[200~", "".join(c[1] for c in chunks))
 
     def test_a_test_run_is_sealed_after_its_duration_from_the_submitted_prompt(self) -> None:
         w = self.worlds["test_chat"]
