@@ -86,6 +86,8 @@ const t = (seconds: number) => new Date(Date.parse(T0) + seconds * 1000).toISOSt
 const MIN = 60;
 const HOURS = 3600;
 /** The first time GitHub is asked about a run that ends at `deadline`. */
+/** When a run that ends at `deadline` closes: 24 hours later. */
+const closes = (deadline: string) => new Date(Date.parse(deadline) + 24 * HOURS * 1000).toISOString().replace(".000Z", "Z");
 const settled = (deadline: string) => new Date(Date.parse(deadline) + GITHUB_SETTLE * 1000).toISOString().replace(".000Z", "Z");
 
 lifecycle("opening a competition run queues one started notice", async (r) => {
@@ -98,40 +100,153 @@ lifecycle("opening a competition run queues one started notice", async (r) => {
   assert.deepEqual(kinds(r), ["started"]); // once
 });
 
+/**
+ * Keep the server well up to `iso`: a tick every 5 minutes, and one at `iso`, each just after a
+ * heartbeat of the companion run (`other`), so heartbeats are seen reaching the server. Without
+ * `other` no run beats.
+ */
+async function steady(r: Rig, iso: string, other?: () => Promise<unknown>) {
+  const target = Date.parse(iso);
+  while (Date.now() + 5 * MIN * 1000 < target) {
+    r.after(5 * MIN);
+    await other?.();
+    await r.tick();
+  }
+  r.at(iso);
+  await other?.();
+  await r.tick();
+}
+/** Another member's run that beats whenever the returned function is called. */
+async function companion(r: Rig): Promise<() => Promise<unknown>> {
+  const token = await r.cred("bob");
+  const run = await r.start(token, "b1");
+  return () => r.beat(token, run.run_id, run.entry_id);
+}
+
 lifecycle("20 minutes of silence queues one notice; a second silence another", async (r) => {
   const token = await r.cred("alice");
   const run = await r.start(token, "s1");
+  const other = await companion(r);
   assert.equal((await r.beat(token, run.run_id, run.entry_id)).status, 200); // 09:00:00
-  r.at(t(19 * MIN + 59));
-  await r.tick();
-  assert.deepEqual(kinds(r), ["started"]);
+  await other();
+  await r.tick(); // the server's well stretch starts at 09:00
+  await steady(r, t(19 * MIN + 59), other);
+  assert.deepEqual(kinds(r, run.run_id), ["started"]);
 
-  r.at(t(20 * MIN + 1)); // 20 minutes and 1 second since the last heartbeat
-  await r.tick();
-  assert.deepEqual(kinds(r), ["silence", "started"]);
+  await steady(r, t(20 * MIN + 1), other); // 20 minutes and 1 second since the last heartbeat
+  assert.deepEqual(kinds(r, run.run_id), ["silence", "started"]);
   assert.deepEqual(only(r, "silence")[0]!.dedupe_key, T0);
   assert.deepEqual(only(r, "silence")[0]!.payload, { last_heartbeat_at: T0 });
-  r.at(t(25 * MIN + 1));
-  await r.tick();
+  await steady(r, t(25 * MIN + 1), other);
   assert.equal(only(r, "silence").length, 1, "the same silence is mailed once");
 
   // The run comes back for a while, then goes quiet again: another silence, another notice.
   const back = t(35 * MIN + 1);
-  r.at(back);
+  await steady(r, back, other);
   await r.beat(token, run.run_id, run.entry_id);
-  r.at(t(40 * MIN + 1));
-  await r.tick();
+  await steady(r, t(40 * MIN + 1), other);
   assert.equal(only(r, "silence").length, 1);
-  r.at(t(55 * MIN + 2));
-  await r.tick();
+  await steady(r, t(55 * MIN + 2), other);
   assert.deepEqual(only(r, "silence").map((n) => n.dedupe_key), [T0, back]);
+  assert.deepEqual(kinds(r).filter((k) => k === "silence").length, 2, "the companion, which beats, is never silent");
 });
 
 lifecycle("silence counts from the start when no heartbeat ever came", async (r) => {
   const run = await r.start(await r.cred("alice"), "s1");
-  r.after(20 * MIN + 1);
+  const other = await companion(r);
+  await other();
   await r.tick();
+  await steady(r, t(20 * MIN + 1), other);
   assert.deepEqual(only(r, "silence").map((n) => [n.run_id, n.dedupe_key, n.payload]), [[run.run_id, T0, { last_heartbeat_at: null }]]);
+});
+
+lifecycle("no silence email while the server missed its ticks; one when it has been well for 20 minutes", async (r) => {
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  const other = await companion(r);
+  await r.beat(token, run.run_id, run.entry_id); // 09:00, and never again
+  await other();
+  await r.tick();
+  await steady(r, t(10 * MIN), other);
+  // No tick from 09:10 to 09:40 (the server's own trouble). The first tick after it is not well.
+  r.at(t(40 * MIN));
+  await other();
+  await r.tick();
+  assert.deepEqual(only(r, "silence"), [], "silent for 40 minutes, but the server was not well");
+  await steady(r, t(60 * MIN), other);
+  assert.deepEqual(only(r, "silence"), [], "the server has been well for exactly 20 minutes: not more");
+  await steady(r, t(65 * MIN), other);
+  assert.deepEqual(only(r, "silence").map((n) => [n.run_id, n.dedupe_key]), [[run.run_id, T0]]);
+});
+
+lifecycle("no silence email while no run's heartbeat reaches the server, though the cron ticks", async (r) => {
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  const other = await companion(r);
+  await r.beat(token, run.run_id, run.entry_id);
+  await other();
+  await r.tick();
+  await steady(r, t(60 * MIN)); // every 5 minutes, and no heartbeat from either run
+  assert.deepEqual(only(r, "silence"), [], "a whole fleet gone quiet at once is our trouble, not theirs");
+  // The companion's heartbeats get through again; alice's do not. Once the server has been well for
+  // 20 minutes (since 10:00, its last tick with no heartbeat), alice is mailed, and only alice.
+  await steady(r, t(80 * MIN), other);
+  assert.deepEqual(only(r, "silence"), []);
+  await steady(r, t(85 * MIN), other);
+  assert.deepEqual(only(r, "silence").map((n) => [n.run_id, n.dedupe_key]), [[run.run_id, T0]]);
+});
+
+lifecycle("a run alone gets no silence email: the server cannot tell its silence from its own", async (r) => {
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  await r.beat(token, run.run_id, run.entry_id);
+  await r.tick();
+  await steady(r, t(2 * HOURS));
+  assert.deepEqual(kinds(r), ["started"]);
+});
+
+lifecycle("the maintenance switch starts the server's well stretch again, even for one tick", async (r) => {
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  const other = await companion(r);
+  await r.beat(token, run.run_id, run.entry_id);
+  await other();
+  await r.tick();
+  await steady(r, t(10 * MIN), other);
+  r.at(t(15 * MIN));
+  await runTick({ ...r.env, MAINTENANCE: "on" });
+  assert.equal(r.bucket.map.has("cron/health.json"), false);
+  await steady(r, t(40 * MIN), other); // well again from 09:20
+  assert.deepEqual(only(r, "silence"), []);
+  await steady(r, t(45 * MIN), other);
+  assert.deepEqual(only(r, "silence").map((n) => n.run_id), [run.run_id]);
+});
+
+lifecycle("a health marker that cannot be read counts as trouble: no silence email", async (r) => {
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  const other = await companion(r);
+  await r.beat(token, run.run_id, run.entry_id);
+  await other();
+  await r.tick();
+  await steady(r, t(25 * MIN), other);
+  const silences = only(r, "silence").length;
+  assert.equal(silences, 1);
+  // A second silence, while the marker is garbage at every tick: never mailed.
+  await r.beat(token, run.run_id, run.entry_id);
+  const back = Date.now();
+  while (Date.now() < back + 40 * MIN * 1000) {
+    r.after(5 * MIN);
+    r.bucket.map.set("cron/health.json", { text: "{not json", etag: "x" });
+    await other();
+    const log = mock.method(console, "error", () => {});
+    try {
+      await r.tick();
+    } finally {
+      log.mock.restore();
+    }
+  }
+  assert.equal(only(r, "silence").length, silences);
 });
 
 lifecycle("three and six hours without model_requests growth queue one idle notice each", async (r) => {
@@ -180,10 +295,12 @@ lifecycle("three and six hours without model_requests growth queue one idle noti
 lifecycle("a silent run is silent, not idle", async (r) => {
   const token = await r.cred("alice");
   const run = await r.start(token, "s1");
-  await r.beat(token, run.run_id, run.entry_id);
-  r.at(t(4 * HOURS)); // no heartbeat for 4 hours, and no model call either
+  const other = await companion(r);
+  await r.beat(token, run.run_id, run.entry_id, { model_requests: 3 });
+  await other();
   await r.tick();
-  assert.deepEqual(kinds(r), ["silence", "started"]);
+  await steady(r, t(4 * HOURS), other); // no heartbeat for 4 hours, and no model call either
+  assert.deepEqual(kinds(r, run.run_id), ["silence", "started"]);
 });
 
 lifecycle("a flagged run queues one recording notice", async (r) => {
@@ -412,7 +529,7 @@ lifecycle("the end queues one ended notice with the commit", async (r) => {
   assert.equal(calls.length, 0, "nothing is asked of GitHub before the end has settled");
   r.at(settled(run.deadline_at));
   await r.tick();
-  assert.deepEqual(only(r, "ended").map((n) => [n.dedupe_key, n.payload]), [["", { ends_at: run.deadline_at, commit: SHA, repo_url: REPO }]]);
+  assert.deepEqual(only(r, "ended").map((n) => [n.dedupe_key, n.payload]), [["", { ends_at: run.deadline_at, commit: SHA, repo_url: REPO, uploaded: false, closes_at: closes(run.deadline_at) }]]);
   assert.deepEqual(calls.map((c) => c.url), ASKED);
   assert.ok(calls.every((c) => c.headers.authorization === "Bearer tok"));
   r.after(5 * MIN);
@@ -516,13 +633,24 @@ lifecycle("the ended notice goes out an hour after the end even when GitHub neve
   assert.equal(only(r, "ended").length, 0);
   r.after(5 * MIN);
   await r.tick();
-  assert.deepEqual(only(r, "ended").map((n) => n.payload), [{ ends_at: run.deadline_at, commit: null, repo_url: REPO }]);
+  assert.deepEqual(only(r, "ended").map((n) => n.payload), [{ ends_at: run.deadline_at, commit: null, repo_url: REPO, uploaded: false, closes_at: closes(run.deadline_at) }]);
   // GitHub comes back: the commit is recorded, but the notice was already sent once.
   stubGithub(pushed(SHA));
   r.after(5 * MIN);
   await r.tick();
   assert.equal(r.storedRun(run.run_id).final_commit, SHA);
   assert.equal(only(r, "ended").length, 1);
+}, HOUR);
+
+lifecycle("the ended notice of a run the server holds sealed says it is all in", async (r) => {
+  stubGithub(pushed(SHA));
+  const token = await r.cred("alice");
+  const run = await r.start(token, "s1");
+  await r.finish(token, run.run_id, run.entry_id, await r.hold("alice", run.run_id, run.entry_id));
+  assert.equal((await r.seal(token, run.run_id, run.entry_id)).status, 200);
+  r.at(settled(run.deadline_at));
+  await r.tick();
+  assert.deepEqual(only(r, "ended").map((n) => [n.payload.uploaded, n.payload.closes_at]), [[true, closes(run.deadline_at)]]);
 }, HOUR);
 
 lifecycle("the deadline commit is recorded once and retried after a GitHub failure", async (r) => {
@@ -604,10 +732,11 @@ lifecycle("queueNotices counts the notices it queued, and a repeat queues none",
   assert.equal(await queueNotices(ctx, new Date(T0)), 0);
   // Two ticks at once queue each notice once.
   r.after(21 * MIN);
+  await r.start(await r.cred("bob"), "s2");
   const now = new Date(t(21 * MIN));
   const [x, y] = await Promise.all([queueNotices(ctx, now), queueNotices(ctx, now)]);
-  assert.equal(x + y, 1);
-  assert.deepEqual(kinds(r), ["recording", "silence", "started"]);
+  assert.equal(x + y, 1); // bob's started (alice is silent, but 21 minutes without a tick is the server's trouble)
+  assert.deepEqual(kinds(r), ["recording", "started", "started"]);
 });
 
 lifecycle("the cron closes a run that is over, so its status is final without anyone calling", async (r) => {

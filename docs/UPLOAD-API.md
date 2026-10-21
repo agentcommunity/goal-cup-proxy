@@ -444,7 +444,7 @@ outbox, and it sends them. A client sees none of this. Each outbox row is sent o
 (`server/worker/src/mail.ts`); the database writes the email, picks the member's address and checks
 suppression. A staging Worker is never given an address by the database and sends every email to
 its test address. (While the maintenance switch is on the
-cron does nothing, since no client can send a heartbeat.)
+cron does nothing but delete its health marker, since no client can send a heartbeat.)
 
 **The judged commit.** For a competition run that reached its deadline (not a replaced run, not
 practice), the judged version is the last push to the repository's default branch that GitHub
@@ -480,22 +480,41 @@ the subject.
 | Kind | Queued when | Once per |
 |---|---|---|
 | `started` | a competition run is open (before its end) | run |
-| `silence` | the run's last heartbeat (or its start, if none yet) is more than 20 minutes old | last heartbeat time |
+| `silence` | the run's last heartbeat (or its start, if none yet) is more than 20 minutes old, and the server itself has been well for more than 20 minutes (see "The server's health") | last heartbeat time |
 | `idle_3h` | the run is beating (last heartbeat within 20 minutes), has reported `model_requests` at least once, and its last model request is more than 3 hours old | last model request |
 | `idle_6h` | the same, 6 hours | last model request |
 | `recording` | a heartbeat has flagged the run (`gaps` or `failed`) | run |
-| `ended` | the run reached its deadline (a replaced run is not the main run and has none) and the judged commit was recorded, or an hour has passed without it | run |
+| `ended` | the run reached its deadline (a replaced run is not the main run and has none) and the judged commit was recorded, or an hour has passed without it. Its payload says whether the run is sealed on the server (`uploaded`) and when it closes (`closes_at`, the end + 24 hours); if it is not sealed, the email says to run `goalcup upload` before then | run |
 | `disk_full` | a heartbeat's vitals started a disk pause (`agent_paused: "disk"`) and no `disk_full` was owed for the run in the 6 hours before | start of that pause |
 
 The last model request is unset until a heartbeat first reports `model_requests`, so a client that
 never reports gets no idle email; once set, it moves whenever any entry's count first appears or
 grows (a continue's new process reporting 2 after the old one reached 50 counts). A run that comes back
 and goes quiet again gets a new `silence`; a new model request starts a new idle period. The
-`ended` payload holds the end time, the commit (or none) and the repository.
+`ended` payload holds the end time, the commit (or none), the repository, `uploaded` and `closes_at`.
 
-`disk_full` tells the member that Goal Cup Proxy paused the agent because the disk is almost full, that
-the agent resumes by itself once disk space is freed, and to type "keep going" if it still seems
-stuck. The cron queues it within one tick of the pause starting, even if the pause has ended by then
+**The server's health.** A silence the server's own trouble may explain is never mailed. The cron
+keeps a small marker in the bucket (`cron/health.json`: the last tick, and since when the server
+has been well). A tick is well when the tick before it ran at most 11 minutes earlier (so at most
+one 5-minute tick was missed) and some run's heartbeat, of any mode, reached the server in the last
+10 minutes. Anything else starts the well stretch again at that tick: two ticks in a row that were missed or
+that the database failed (the marker is written only after the database answered), the maintenance switch
+(it deletes the marker), no heartbeat from any run, or a marker that cannot be read or written. A
+`silence` is queued only once both the run's last heartbeat and the start of the well stretch are
+more than 20 minutes old. So during our trouble no one is mailed, and after it every run has 20
+minutes to come back (Goal Cup Proxy's retries are at most about 15 minutes apart, D64). The key is still the
+last heartbeat, so a silence that outlasts our trouble is mailed once, after it. The limit: a run
+that is the only one beating cannot be told apart from a server nobody reaches, so a lone run gets
+no `silence`.
+
+The words of each email are in the database (`goal_cup_tracer.notice_text`, owned by the website);
+`docs/research/NOTIFICATIONS.md` lists every message a participant gets, by email and in the
+terminal, with its trigger and the one thing to do. `silence` never says the run stopped (the
+server cannot know) and never advises `goalcup start` (a new start replaces the run).
+
+`disk_full` tells the member that Goal Cup Proxy paused the agent because the disk is almost full, to
+free space outside the run's folder without deleting anything the agent made, that the agent resumes
+by itself, and to type "keep going" if it still seems stuck. The cron queues it within one tick of the pause starting, even if the pause has ended by then
 or the run is silent; its payload holds the time the pause started. The 6-hour limit is kept where
 the heartbeat is stored, so a disk that fills and frees in a loop mails at most once in 6 hours.
 

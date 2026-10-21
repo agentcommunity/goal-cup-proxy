@@ -1,7 +1,7 @@
 // The Worker's bindings, variables and secrets. See README.md for what each one is.
 
 export interface Env {
-  /** R2 bucket: raw chunks under traces/…; (local backend only) state under state/…. */
+  /** R2 bucket: raw chunks under traces/…; the cron's health marker at cron/health.json (src/notices.ts); (local backend only) state under state/…. */
   TRACES: R2Bucket;
 
   /** Event that new competition runs belong to, e.g. "cup". */

@@ -26,3 +26,9 @@ website repo (command in its header) and delete this folder.
   branch that GitHub timestamped at or before `ends_at` (owner, 21 Oct 2026): `runs.final_pushed_at`,
   `final_branch`, `final_late_push`, `final_force_push`, `final_head_fallback`, and
   `goal_cup_upload_record_final_commit(…, p_pushed_at, p_branch, p_late_push, p_force_push, p_head_fallback)`.
+- `20261021140000_goal_cup_tracer_notice_text.sql`: new words for three run emails
+  (docs/research/NOTIFICATIONS.md): `silence` no longer says "Your run stopped", says to run
+  `goalcup status` and never `goalcup start`; `ended` says to run `goalcup upload` before the close
+  when part of the run has not arrived (payload `uploaded`, `closes_at`); `disk_full` says to free
+  space outside the run's folder and delete nothing the agent made. Only `notice_text` changes;
+  either order with the Worker.
