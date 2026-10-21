@@ -160,10 +160,8 @@ UTC. Every change passes `gate.sh fast`; Worker changes also pass `npm test`; ev
   install script runs them without it.
 - Full registration and team system.
 - New harnesses: builders bring them ([HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md)).
-- Speed up the two P1 redaction tests that each run over 30 s
-  (`capture_redaction::a_masked_key_around_the_hold_bound_is_never_retained`,
-  `capture_redaction_extra::seeded_random_chunking_matches_the_oracle_with_extra_patterns`). They
-  floor the fast gate.
+- Done 21 Oct: the slow P1 redaction tests are split into parallel parts (slowest part about 9 s)
+  and the daemon builds at opt-level 1 in test builds.
 
 ## Larger clean-ups (parallel agents, before the feature stop where safe)
 
