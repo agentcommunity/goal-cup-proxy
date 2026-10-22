@@ -69,7 +69,13 @@ token into each cell's `github.json` (0600) with the practice repository: in the
 Docker cell (linux-matrix.sh mounts the file read-only), after `login` and before every `run` for a
 host cell, so a token rotated later is picked up. The default prompt is [campaign-workload.txt](campaign-workload.txt): a cheap, many-step
 coding task that stays in the workspace and stops on its own. An agent that finishes early and idles
-is still a valid infrastructure run; note the idle time in the report. Codex effort `minimal` is
+is still a valid infrastructure run; note the idle time in the report. Cells of an hour or more use
+[campaign-long-workload.txt](campaign-long-workload.txt) instead: the same steps, then items from
+its own TODO.md until the deadline, and `goalcup time-left` every hour into TIME.md (the short
+workload ends in about 5 minutes with a cheap model, so a 2-hour cell would idle for 115 and a drill
+on an idle chain proves little). A long Hermes cell also needs `agent.max_turns` raised in Hermes's
+own `config.yaml` (default 90; Hermes stopped there after about 7 minutes on 22 Oct), see
+[hermes-cli.md](../harnesses/hermes-cli.md#9-quirks-and-open-questions). Codex effort `minimal` is
 refused unless the installed Codex lists it for Luna; use `low` until that is checked. `python3 scripts/campaign.py check CONFIG`
 refuses duplicate members among parallel cells, shared config directories, production, and an
 unreadable key or token file.
