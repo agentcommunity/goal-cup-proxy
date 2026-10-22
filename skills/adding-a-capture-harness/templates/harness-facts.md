@@ -66,3 +66,9 @@ Subprocesses, tools, subagents; what happens on SIGTERM / Ctrl-C; exit codes.
 Machine-wide or managed settings, server-side state, anything outside a per-run HOME.
 
 ## 9. Quirks and open questions
+
+## Run without permission prompts
+The setting in the harness's own config that stops its permission prompts, the file and key it
+lives in, and the values that mean so (source or measurement). It becomes
+`[[participant.no_prompts]]` and the harness's section in docs/HARNESS-SETUP.md. Goal Cup
+recommends it and never sets it (D67). "None needed" is a fact too: say how you know.

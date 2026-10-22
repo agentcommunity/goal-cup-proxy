@@ -1,10 +1,16 @@
 # Add a harness
 
-The one guide for adding a coding-agent harness to Goal Cup Proxy. It is for a harness team and for
-the coding agent that team uses. Every step has a command, its expected output and a stop rule.
-Three other documents complete it:
+**For contributors.** The one guide for adding a coding-agent harness to Goal Cup Proxy, any
+harness, not only the ones that ship. It is for a harness team and for the coding agent that team
+uses. Every step has a command, its expected output and a stop rule. To set up a harness that
+already ships for your own run, read [HARNESS-SETUP](HARNESS-SETUP.md) instead: that page is for
+participants. The contributor skill
+([adding-a-capture-harness](../skills/adding-a-capture-harness/SKILL.md)) points here and holds no
+steps of its own. Three other documents complete it:
 
 - [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md): every `harness.toml` field and the rule that refuses it.
+  Its first section, [the connector contract](CONNECTOR-SCHEMA.md#the-connector-contract), is what
+  your connector may rely on and what core changes will not break.
 - [docs/harnesses](harnesses/README.md): one facts sheet per harness.
 - [writing-a-decoder](../skills/adding-a-capture-harness/writing-a-decoder.md): a separate
   verifier change. A connector needs no decoder.
@@ -139,7 +145,7 @@ recorded session file and the sealed trace.
 
 Arguments, the goal flag, the model name and `capture.env` are data. Generic rules shared by all
 connectors check them. Three lists stay in core code, because each is a security boundary: the
-CA modes and CA-name shape, the redaction forms, and the identity carriers and native forms. A new entry in one of them is a separate core change (see
+CA modes and CA-name shape, the redaction forms, and the native forms. A new entry in one of them is a separate core change (see
 [Do I need a core change?](#do-i-need-a-core-change)).
 
 <a id="row-0"></a>
@@ -272,6 +278,15 @@ is the harness executable. Run every command from the repository root.
      `config_home = "per_run"`, and use a `{run_home}/...` native root. With `run_home =
      "empty"` the private `HOME` is fresh each run and the sign-in is lost every run.
 
+   Fill `[participant]` too. `display_name` is required. `setup_section` names the harness's
+   section in [HARNESS-SETUP](HARNESS-SETUP.md), the participant's setup guide. In the same PR,
+   add to that guide a row in "Where the settings live", a `### <Harness name>` section under
+   "Your harness" with the settings a 168-hour run needs (from the facts sheet's "Run without
+   permission prompts" section), a `### <Harness name>: the time-left tool` section, and a row
+   in each numbered table you have a fact for. List the permission setting as `[[participant.no_prompts]]` and where the
+   harness keeps its MCP servers as `[participant.time_left_tool]`. Goal Cup recommends both and
+   writes neither (D67).
+
    A Node harness keeps `NODE_USE_ENV_PROXY = "1"` in `capture.env` (D59): without it Node's
    HTTP client ignores `HTTPS_PROXY` and the run records no model traffic. The kit cannot see
    that, and step 9 catches it only for a `node` script on `PATH`.
@@ -331,7 +346,8 @@ Exactly these, which `git status --short` must confirm:
 - `connectors/<id>/` (the `harness.toml` and `files/**` seeds);
 - the one new line in `crates/goalcup-protocol/pins/connector-dirs.txt`;
 - the golden JSON from step 7;
-- `docs/harnesses/<id>.md`.
+- `docs/harnesses/<id>.md`;
+- the harness's section in `docs/HARNESS-SETUP.md` (step 5), named by `setup_section`.
 
 In the description paste the last line of steps 9 and 10, name anything restored or not run, say
 which parts an agent wrote, and say that a person read the whole diff. Claim only what passed. The
@@ -504,7 +520,10 @@ qualification.
 
 ## Getting a harness into the event
 
-A harness can join until the last release, **6 Nov 2026 12:00 UTC**. After a connector PR merges:
+A harness can join until the last release, **6 Nov 2026 12:00 UTC**. A connector runs without
+`--dev` only when a release pins it. Before that it runs only with `--dev`, which marks the run a
+development run ([pinned, or `--dev` only](CONNECTOR-SCHEMA.md#pinned-or---dev-only)), so the PR
+must merge in time for that release. After a connector PR merges:
 
 1. Follow the [server practice setup](#test-a-connector): login to the approved server, complete
    prep, then explicitly run `goalcup start --harness <id> --practice`. Verify the sealed trace

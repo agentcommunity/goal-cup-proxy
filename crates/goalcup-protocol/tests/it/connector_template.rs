@@ -13,6 +13,7 @@ use std::path::Path;
 const FILLED: &[(&str, &str)] = &[
     ("<HARNESS_ID>", "template-check-cli"),
     ("<HARNESS NAME>", "Template Check"),
+    ("<harness-name>", "template-check"),
     ("<RESUME-FLAG>", "--continue"),
     ("<config.yaml>", "config.yaml"),
     ("<model.base_url>", "model.base_url"),

@@ -1,5 +1,9 @@
 # Set up your harness for a 168-hour run
 
+**For participants.** This page is about a harness that Goal Cup already ships. To add a harness
+that is not here, see [Add a harness](HARNESS-ONBOARDING.md), the contributors' guide: its
+connector PR adds the harness's section to this page.
+
 During your run you may type only "keep going" ([RULES](RULES.md#one-prompt-then-only-keep-going)).
 So your harness must work for 168 hours without you. This page tells you which harness settings
 to set before the start, and where they go.
