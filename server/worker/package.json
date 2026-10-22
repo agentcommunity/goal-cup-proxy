@@ -13,7 +13,7 @@
     "test": "npm run typecheck && node --test --test-timeout=120000 \"test/**/*.test.ts\""
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20261013.1",
+    "@cloudflare/workers-types": "5.20261019.1",
     "@types/node": "24.19.2",
     "typescript": "5.9.3",
     "wrangler": "4.149.0"
