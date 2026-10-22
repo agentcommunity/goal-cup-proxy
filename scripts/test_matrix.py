@@ -87,14 +87,26 @@ def write_run():
     # A test run's record is written before the harness starts, as goalcup start does it.
     trace.mkdir(parents=True)
     run_dir.mkdir(parents=True)
-    (trace / "chain.jsonl").write_bytes(chain)
+    note("start.env", json.dumps(sorted(k for k in os.environ
+                                        if k in ("DATABASE_URL", "CLOUDFLARE_ACCOUNT_ID",
+                                                 "CLOUDFLARE_API_TOKEN"))))
+    if os.environ.get("STUB_PRUNED") == "1":
+        # A long run: the acknowledged first part was pruned here; only the tail part is left.
+        full = chain + b'{"body":{"n":1}}\n' + b'{"body":{"n":2}}\n'
+        (out / "full_chain.jsonl").write_bytes(full)
+        tail = len(chain)
+        (trace / ("chain.%020d.jsonl" % tail)).write_bytes(full[tail:])
+        note("chain.size", str(len(full)))
+    else:
+        (trace / "chain.jsonl").write_bytes(chain)
     (run_dir / "credential").write_text(json.dumps({"credential": "c"}))
     (run_dir / "run.json").write_text(json.dumps({
         "run_id": "r1", "server_url": "http://localhost:8787", "test": test,
         "connector_id": args[args.index("--harness") + 1],
         "entries": [{"entry_id": ENTRY, "trace_dir": str(trace)}],
     }))
-    note("chain.size", str(len(chain)))
+    if os.environ.get("STUB_PRUNED") != "1":
+        note("chain.size", str(len(chain)))
 
 if test:
     write_run()
@@ -162,6 +174,27 @@ print(json.dumps({"integrity": "valid", "anchor": "signed", "validated_records":
                   "validated_bytes": size, "validated_head": "a" * 64, "sealed": True}))
 '''
 
+# fetch-run.sh's arguments; rebuilds the entry's copy from what the goalcup stub wrote (STUB_FETCH_BAD:
+# one byte of the tail differs) and notes which credentials reached its environment.
+FETCH = r'''#!/bin/sh
+exec python3 - "$@" <<'PY'
+import json, os, sys
+from pathlib import Path
+out = Path(os.environ["STUB_OUT"])
+args = sys.argv[1:]
+(out / "fetch.argv").write_text("\n".join(args))
+(out / "fetch.env").write_text(json.dumps({k: os.environ.get(k) for k in
+    ("DATABASE_URL", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN")}))
+entry, outdir = args[-2], Path(args[-1])
+full = (out / "full_chain.jsonl").read_bytes()
+if os.environ.get("STUB_FETCH_BAD") == "1":
+    full = full[:-3] + b"X" + full[-2:]
+(outdir / entry).mkdir(parents=True)
+(outdir / entry / "chain.jsonl").write_bytes(full)
+print(outdir / entry)
+PY
+'''
+
 CURL = r'''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
@@ -217,6 +250,7 @@ class World:
         executable(self.bin / "goalcup-verify", VERIFY)
         executable(self.bin / "goalcup-daemon", "#!/bin/sh\nexit 0\n")
         executable(self.bin / "curl", CURL)
+        executable(self.bin / "fake-fetch.sh", FETCH)
         self.connectors = self.root / "connectors"
         (self.connectors / "stubchat").mkdir(parents=True)
         (self.connectors / "stubchat" / "harness.toml").write_text(CHAT.format(id="stubchat"))
@@ -248,7 +282,7 @@ class World:
             if value is None:
                 environment.pop(key, None)
             else:
-                environment[key] = value
+                environment[key] = value.replace("{bin}", str(self.bin))
         log = self.root / "matrix.log"
         # A test run is left to its default budget (the duration plus 1800 s) unless it names one.
         budget = () if "--test" in args else ("--timeout", "60")
@@ -279,6 +313,8 @@ class World:
 
 
 DURATION = 4
+DB_URL = "postgres://reader:db-secret-never-shown@db.invalid/postgres"
+CF_TOKEN = "cf-token-never-shown"
 AMP_VERSION = "0.0.1792209635-g24a9fe (released 2026-10-17T04:00:35.000Z, 4d ago)"
 MULTILINE = "Build the thing.\n\n  Then\ttest it.\n"
 TYPED = "Build the thing. Then test it."
@@ -306,6 +342,19 @@ SCENARIOS = {
     "silent": ("stubchat", {"STUB_WORK": "none"}),
     "bracketed": ("stubchat", {"STUB_BRACKETED": "1",
                                "STUB_PROMPT": "\x1b[200~" + PROMPT + "\x1b[201~"}),
+    # Long runs: the trace holds only the tail part (pruned), and the server copy is fetched.
+    "pruned_unfetched": ("stubchat", {"STUB_PRUNED": "1", "DATABASE_URL": None,
+                                      "CLOUDFLARE_API_TOKEN": None}),
+    "pruned_files": ("stubchat", {"STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
+                                  "MATRIX_FETCH_INDEX": "/index.json",
+                                  "MATRIX_FETCH_STORE": "/bucket-mirror"}),
+    "pruned_env": ("stubchat", {"STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
+                                "DATABASE_URL": DB_URL, "CLOUDFLARE_ACCOUNT_ID": "acct",
+                                "CLOUDFLARE_API_TOKEN": CF_TOKEN}),
+    "pruned_bad_tail": ("stubchat", {"STUB_PRUNED": "1", "STUB_FETCH_BAD": "1",
+                                     "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
+                                     "MATRIX_FETCH_INDEX": "/index.json",
+                                     "MATRIX_FETCH_STORE": "/bucket-mirror"}),
 }
 
 
@@ -442,6 +491,45 @@ class MatrixTests(unittest.TestCase):
         self.assertIn("is still running; waiting for it", w.log)
         self.assertIn("on the way out: exit 0", w.log)
         self.assertEqual(w.seen("seal.argv"), "seal\n--yes\ne0123456789abcdef")
+
+    def test_a_long_run_without_its_server_copy_is_not_verified_and_not_a_pass(self) -> None:
+        w = self.worlds["pruned_unfetched"]
+        self.assertEqual(w.run.returncode, 4, w.said())
+        self.assertIn("NOT VERIFIED: long run, server copy not fetched", w.run.stderr)
+        self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ NOT-VERIFIED \d{4}-")
+        self.assertNotRegex(w.run.stdout, r"(?m) (PASS|FAIL) ")
+        self.assertFalse(w.has("fetch.argv"))
+
+    def test_a_long_run_is_verified_against_its_fetched_server_copy(self) -> None:
+        w = self.worlds["pruned_files"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ stub-harness_9\.9\.9 PASS ")
+        argv = w.seen("fetch.argv").split("\n")
+        self.assertEqual(argv[:6], ["--bucket", "goalcup-traces-staging", "--index", "/index.json",
+                                    "--store", "/bucket-mirror"])
+        self.assertEqual(argv[6], "e0123456789abcdef")
+        # The verifier and the agent-work check judged the copy, and the tail matched it.
+        self.assertIn("servercopy/e0123456789abcdef", w.seen("research.argv"))
+        self.assertRegex(w.log, r"ok +local chain\.\d{20}\.jsonl")
+        self.assertIn("ends where the server copy ends", w.log)
+
+    def test_fetch_credentials_reach_only_the_fetch(self) -> None:
+        w = self.worlds["pruned_env"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        got = json.loads(w.seen("fetch.env"))
+        self.assertEqual(got, {"DATABASE_URL": DB_URL, "CLOUDFLARE_ACCOUNT_ID": "acct",
+                               "CLOUDFLARE_API_TOKEN": CF_TOKEN})
+        self.assertEqual(json.loads(w.seen("start.env")), [])
+        self.assertNotIn("--index", w.seen("fetch.argv"))
+        for secret in ("db-secret-never-shown", CF_TOKEN):
+            self.assertNotIn(secret, w.everything_matrix_wrote())
+            self.assertNotIn(secret, w.seen("fetch.argv"))
+
+    def test_a_local_tail_that_differs_from_the_server_copy_fails(self) -> None:
+        w = self.worlds["pruned_bad_tail"]
+        self.assertEqual(w.run.returncode, 1, w.said())
+        self.assertIn("not the server copy's tail", w.run.stderr)
+        self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ FAIL ")
 
     def test_a_bad_command_line_names_the_problem_in_one_line(self) -> None:
         for args in (("stubchat",), ("--frob", "a", "b"), ("a", "b", "c"), ("a", "b", "--log")):

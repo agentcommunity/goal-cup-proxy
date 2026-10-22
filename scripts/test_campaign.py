@@ -996,7 +996,8 @@ class CampaignRun(Base):
         return lines
 
     def test_a_host_cell_passes_on_the_real_matrix_sh_output(self):
-        for result, rc, verdict in (("PASS", 0, "PASS"), ("FAIL", 1, "FAIL")):
+        for result, rc, verdict in (("PASS", 0, "PASS"), ("FAIL", 1, "FAIL"),
+                                    ("NOT-VERIFIED", 4, "NOT-VERIFIED")):
             with self.subTest(result=result):
                 runner = FakeRunner()
                 lines = ["matrix: something"] + self.matrix_sh_tail(result)
@@ -1006,6 +1007,10 @@ class CampaignRun(Base):
                 res = json.loads((self.root / "out" / "mac" / "result.json").read_text())
                 self.assertEqual(res["final_row"], f"codex-cli darwin-arm64 0.1 {result} 2026-10-23")
                 self.assertEqual(res["verdict"], verdict)
+                run_pass = next(l for l in res["pass_lines"] if l["name"] == "run_pass")
+                # A long run whose server copy was not fetched is neither a pass nor a fail.
+                self.assertEqual(run_pass["status"], {"PASS": "pass", "FAIL": "fail"}.get(
+                    result, campaign.INSUFFICIENT))
 
     def test_a_linux_matrix_fail_after_the_row_is_the_final_row(self):
         runner = FakeRunner()

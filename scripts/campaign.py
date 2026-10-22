@@ -101,7 +101,8 @@ INSUFFICIENT = "insufficient data"
 CAMPAIGN_TAG = "[campaign]"
 # The matrix row (scripts/matrix.sh print_row): connector, platform-arch, harness version, result,
 # date. matrix.sh prints `log: <path>` after it, and linux-matrix.sh prefixes it.
-MATRIX_ROW = re.compile(r"^\S+ \S+-\S+ \S+ (PASS|FAIL) \d{4}-\d\d-\d\d$")
+# NOT-VERIFIED: a long run whose server copy the matrix could not fetch (not a PASS, not a FAIL).
+MATRIX_ROW = re.compile(r"^\S+ \S+-\S+ \S+ (PASS|FAIL|NOT-VERIFIED) \d{4}-\d\d-\d\d$")
 EARLY_STOP = re.compile(
     r"was stopped: |replaced by a newer run|harness exited|has exited \(|linux-matrix: FAIL")
 
@@ -874,13 +875,17 @@ def evaluate_lines(info, samples_path, run_log=None):
     note = f"{len(s['times'])} samples in {samples_path}" if samples_path else "no sampler file"
     # 1. The run ended PASS.
     row = info.get("final_row")
+    detail = f"exit code {info.get('exit_code')}"
     if running:
         st = "running"
+    elif info.get("verdict") == "NOT-VERIFIED":
+        st = INSUFFICIENT
+        detail += ("; NOT VERIFIED: long run, server copy not fetched (give the matrix "
+                   "MATRIX_FETCH_INDEX/MATRIX_FETCH_STORE or the read-only credentials)")
     else:
         st = "pass" if info.get("verdict") == "PASS" else "fail"
     lines.append({"name": "run_pass", "value": row, "unit": "matrix row",
-                  "threshold": "exit 0 and a PASS row", "status": st,
-                  "detail": f"exit code {info.get('exit_code')}"})
+                  "threshold": "exit 0 and a PASS row", "status": st, "detail": detail})
     # 2. No stop before the duration (a drill-caused stop is still a FAIL): a stop line in the
     # log, a sample with upload_stopped=1 or ended=1 before start + duration, or a short run.
     markers = []
@@ -1269,6 +1274,8 @@ class CellRun:
         m = MATRIX_ROW.match(row or "")
         ok_row = bool(m) and m.group(1) == "PASS"
         verdict = "PASS" if exit_code == 0 and ok_row and not interrupted and not error else "FAIL"
+        if m and m.group(1) == "NOT-VERIFIED" and not interrupted and not error:
+            verdict = "NOT-VERIFIED"
         info = {
             "cell": cell["id"], "connector": cell["connector"], "where": cell["where"],
             "test_member_id": cell["test_member_id"], "duration_s": cell["duration_s"],

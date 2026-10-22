@@ -159,7 +159,7 @@ connector id that is not the fake needs its
 It prints the log path and one row:
 
 ```
-<connector> <os>-<arch> <harness_version> PASS|FAIL <date>
+<connector> <os>-<arch> <harness_version> PASS|FAIL|NOT-VERIFIED <date>
 ```
 
 `<os>` is `macos`, `linux` or `wsl2`; `<arch>` is `arm64` or `x86_64`. A FAIL names its first reason on
@@ -184,6 +184,19 @@ is not required: the server's deadline has not come). The server stores a chunk
 only if its SHA-256 matches, at the offset, previous hash and sequence it holds, and signs an
 acknowledgement the verifier checks. Equal positions therefore mean the server holds the chain Goal Cup Proxy
 sent, in order. It does not prove the stored bytes; only the verify job (not built) would.
+
+**A long run.** After about 30 minutes Goal Cup Proxy deletes acknowledged chain parts on this machine
+(by design), so a long run's trace holds `chain.<offset>.jsonl` parts and no `chain.jsonl`. The script
+then rebuilds the server's copy with `scripts/fetch-run.sh` (read only) and runs checks 3 to 5 on that
+copy, plus one: each local part is byte for byte the copy's bytes at its offset, and the last one ends
+where the copy ends. Give it `MATRIX_FETCH_INDEX` (the chunk index as a file) or `DATABASE_URL` (a
+read-only role), and `MATRIX_FETCH_STORE` (a bucket mirror) or `CLOUDFLARE_ACCOUNT_ID` with
+`CLOUDFLARE_API_TOKEN` (an R2 read-only token); `MATRIX_FETCH_BUCKET` overrides the bucket
+(`goalcup-traces-staging` unless the server is production). Only `fetch-run.sh` gets the credentials.
+Without them the row is `NOT-VERIFIED` (`NOT VERIFIED: long run, server copy not fetched`, exit 4): not a
+PASS, and not a FAIL of the run. `--check-copy` does the same for each pruned entry. In a Docker cell
+(`linux-matrix.sh`) nothing passes these through yet, so a long Docker cell is `NOT-VERIFIED`; fetch and
+verify its copy from the host.
 
 A server whose signing key this build does not pin (a local Worker, staging) fails the first verification
 with `receipt_key_not_accepted`. The script then verifies again with `--dev-key` set to

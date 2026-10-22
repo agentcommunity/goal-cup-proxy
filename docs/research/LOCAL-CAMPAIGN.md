@@ -124,6 +124,9 @@ python3 scripts/campaign.py status "$OUT"      # poll; what the supervisor reads
 python3 scripts/campaign.py evaluate "$OUT"    # recompute pass lines from the samples
 ```
 
+A cell of 30 minutes or more is a long run: its matrix row is judged on the server's copy, which the
+matrix fetches only when the campaign's environment holds the read-only fetch settings
+([OPERATING, A long run](../OPERATING.md#the-matrix)); otherwise the row is `NOT-VERIFIED`.
 Each cell writes `run.log`, `samples.csv` and `result.json` under `$OUT/<cell>/`; the campaign writes
 `summary.json` and `summary.md`. Parallel limit: CPU (each Docker cell takes up to 6), subscription
 quota, and one browser sign-in per new cell.
