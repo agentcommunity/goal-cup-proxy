@@ -134,7 +134,30 @@ class LinuxMatrixTests(unittest.TestCase):
         run = self.run_script("run", "codex-cli")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         [docker_run] = self.docker_lines("run")
-        self.assertIn("-e MATRIX_BIN_DIR=/target/debug", docker_run)
+        self.assertIn("-e MATRIX_BIN_DIR=/vol/home/.local/bin ", docker_run)
+
+    def test_the_binaries_are_installed_in_the_dev_users_local_bin_as_a_participant_has_them(self) -> None:
+        for prebuilt in ("0", "1"):
+            for action in ("run", "login"):
+                with self.subTest(prebuilt=prebuilt, action=action):
+                    self.log.write_text("")
+                    run = self.run_script(action, "codex-cli", LINUX_MATRIX_PREBUILT=prebuilt)
+                    self.assertIn(run.returncode, (0, 3), run.stdout + run.stderr)
+                    [docker_run] = self.docker_lines("run")
+                    path = docker_run.split(" -e PATH=")[1].split()[0].split(":")
+                    self.assertEqual(path[0], "/vol/home/.local/bin")
+                    self.assertNotIn("/target/debug", path)
+                    execs = self.docker_lines("exec")
+                    [install] = [i for i, x in enumerate(execs) if "install -m 0755" in x]
+                    for binary in ("goalcup", "goalcup-daemon", "goalcup-verify"):
+                        self.assertIn(f"/target/debug/{binary} ", execs[install])
+                    self.assertIn("-u dev ", execs[install])
+                    self.assertTrue(execs[install].rstrip().endswith(" /vol/home/.local/bin/"))
+                    # Installed after the build and before anything runs goalcup.
+                    built = [i for i, x in enumerate(execs) if "cargo build" in x]
+                    self.assertTrue(all(i < install for i in built))
+                    first_use = [i for i, x in enumerate(execs) if " inner-" in x]
+                    self.assertTrue(first_use and install < min(first_use))
 
     def test_a_key_in_the_environment_is_refused_before_docker_runs(self) -> None:
         run = self.run_script("run", "codex-cli", GOALCUP_TEST_APPROVAL_KEY=SENTINEL)
