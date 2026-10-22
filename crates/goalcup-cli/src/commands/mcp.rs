@@ -117,6 +117,8 @@ fn answer(
 }
 
 /// `initialize`: the client's protocol version when this server answers as it, else the newest.
+/// It carries no `instructions`: Goal Cup does not prompt the agent, and the tool's description
+/// says what it does.
 fn initialize(params: Option<&Value>) -> Value {
     let asked = params
         .and_then(|p| p.get("protocolVersion"))
@@ -129,9 +131,6 @@ fn initialize(params: Option<&Value>) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": SERVER_NAME, "version": crate::CLI_VERSION },
-        "instructions": format!(
-            "Call `{TOOL}` to see how much time this /goal Cup run has left."
-        ),
     })
 }
 
@@ -288,6 +287,8 @@ mod tests {
         assert_eq!(r["serverInfo"]["name"], SERVER_NAME);
         assert_eq!(r["serverInfo"]["version"], crate::CLI_VERSION);
         assert!(r["capabilities"]["tools"].is_object(), "{r}");
+        // Goal Cup never prompts the agent: no instructions ride on the handshake.
+        assert!(r.get("instructions").is_none(), "{r}");
         // A version this server does not know is answered with its newest.
         let other = exchange(
             &[
