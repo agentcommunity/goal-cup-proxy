@@ -47,8 +47,15 @@ pub enum UploadNow {
     NotUsed,
     /// Nothing has been sent yet.
     NotYet,
-    /// It works; `ago` is the seconds since the last send.
+    /// It works and every record written is acknowledged; `ago` is the seconds since the last
+    /// send.
     UpToDate { ago: Option<u64> },
+    /// It works, and records wait for the next timed send; `waiting` is how many (`None`: not
+    /// known), `ago` the seconds since the last send.
+    Sending {
+        ago: Option<u64>,
+        waiting: Option<u64>,
+    },
     /// It fails now; goalcup keeps trying.
     Retrying { ago: Option<u64> },
     /// goalcup gave up on it.
@@ -165,6 +172,7 @@ pub fn status_header(h: &StatusHeader<'_>) -> Vec<String> {
             UploadNow::UpToDate { ago: Some(ago) } =>
                 format!("up to date (last sent {} ago)", crate::run::age_words(ago)),
             UploadNow::UpToDate { ago: None } => "up to date".to_string(),
+            UploadNow::Sending { ago, waiting } => sending_words(ago, waiting),
             UploadNow::Retrying { ago: Some(ago) } => format!(
                 "not up to date, goalcup keeps trying (last sent {} ago)",
                 crate::run::age_words(ago)
@@ -182,6 +190,29 @@ pub fn status_header(h: &StatusHeader<'_>) -> Vec<String> {
         n => format!("  Problems: {n}, below."),
     });
     lines
+}
+
+/// The upload while records wait for the next timed send: `working, sent every 30 minutes
+/// (last sent 16 min ago; 3201 records wait for the next send)`.
+fn sending_words(ago: Option<u64>, waiting: Option<u64>) -> String {
+    let every = crate::upload::uploader::Policy::default()
+        .interval
+        .as_secs()
+        / 60;
+    let mut said = Vec::new();
+    if let Some(ago) = ago {
+        said.push(format!("last sent {} ago", crate::run::age_words(ago)));
+    }
+    match waiting {
+        Some(1) => said.push("1 record waits for the next send".to_string()),
+        Some(n) => said.push(format!("{n} records wait for the next send")),
+        None => {}
+    }
+    let mut text = format!("working, sent every {every} minutes");
+    if !said.is_empty() {
+        text.push_str(&format!(" ({})", said.join("; ")));
+    }
+    text
 }
 
 /// What `goalcup status` tells the participant to do.

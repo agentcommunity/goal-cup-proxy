@@ -283,7 +283,8 @@ inner_run() { # connector [matrix.sh options]
     row=$(grep "^$h " "$TMPDIR/matrix.$$.out" | tail -n 1)
     if ! inner_model_check "$h" "$marker" >"$TMPDIR/model.$$.out" 2>&1; then
         # A run that broke the owner rule never shows a PASS row: matrix.sh's row says FAIL.
-        sed "s/^\($h [^ ]* [^ ]*\) PASS \([0-9-]*\)\$/\1 FAIL \2/" "$TMPDIR/matrix.$$.out"
+        sed -e "s/^\($h [^ ]* [^ ]*\) PASS \([0-9-]*\)\$/\1 FAIL \2/" \
+            -e "s/^\($h [^ ]* [^ ]*\) NOT-VERIFIED \([0-9-]*\)\$/\1 FAIL \2/" "$TMPDIR/matrix.$$.out"
         cat "$TMPDIR/model.$$.out"
         echo "linux-matrix: FAIL owner rule: $(rule_of "$h")"
         exit 1

@@ -57,7 +57,7 @@ use crate::CliError;
 use crate::entries::{self, EntryRecord};
 use crate::participant;
 use crate::retry::retry_busy;
-use goalcup_protocol::capture::M2Status;
+use goalcup_protocol::capture::{AnchorState, DeliveryState, M2Status};
 use goalcup_protocol::control::{
     DaemonClient, STALE_AFTER_SECONDS, SignedStatus, StatusPayload, parse_z,
 };
@@ -365,7 +365,16 @@ fn run_report(
     } else if state.upload.problem.is_some() {
         participant::UploadNow::Retrying { ago }
     } else if ago.is_some() {
-        participant::UploadNow::UpToDate { ago }
+        // "Up to date" only when every record written is acknowledged; uploads run on a timer,
+        // so between sends records wait, and that is said.
+        match run
+            .entries
+            .last()
+            .and_then(|e| records_waiting(&e.trace_dir))
+        {
+            Some(0) => participant::UploadNow::UpToDate { ago },
+            waiting => participant::UploadNow::Sending { ago, waiting },
+        }
     } else {
         participant::UploadNow::NotYet
     };
@@ -538,6 +547,18 @@ pub fn render_status(s: &SignedStatus, now: &str) -> String {
     lines.join("\n") + "\n"
 }
 
+/// How many records of the trace at `trace_dir` are written and not yet acknowledged by the
+/// server: the last record's `seq` minus the last acknowledgement's. `None` when either cannot be
+/// read; a trace with records and no acknowledgement counts them all.
+fn records_waiting(dir: &Path) -> Option<u64> {
+    let parts = goalcup_protocol::export::chain_parts(dir).ok()?;
+    let (_, last, _) = crate::upload::uploader::local_end(&parts)?;
+    match crate::upload::uploader::last_ack(&dir.join(goalcup_protocol::export::ACKS_FILE)) {
+        Some((acked, _)) => Some(last.saturating_sub(acked)),
+        None => Some(last + 1),
+    }
+}
+
 /// The capture block of a v5 status, in the wire's own words.
 fn capture_lines(p: &StatusPayload, c: &M2Status, detail: &str, workspace: &str) -> Vec<String> {
     let storage = &c.storage;
@@ -550,15 +571,19 @@ fn capture_lines(p: &StatusPayload, c: &M2Status, detail: &str, workspace: &str)
     } else {
         "; byte accounting unavailable"
     };
+    // The recorder never knows the upload (D3): its delivery and anchor stay `local_only` for
+    // every run, which read as "nothing uploaded" beside the Upload line that knows. They are
+    // said only when they say something else; `--json` keeps them as signed.
+    let mut wire = vec![format!("run {}", wire_word(&c.run))];
+    if c.delivery != DeliveryState::LocalOnly {
+        wire.push(format!("delivery {}", wire_word(&c.delivery)));
+    }
+    if c.anchor != AnchorState::LocalOnly {
+        wire.push(format!("anchor {}", wire_word(&c.anchor)));
+    }
+    wire.push(format!("analysis {}", wire_word(&c.analysis)));
     let mut lines = vec![
-        format!(
-            "  capture: {} — run {}, delivery {}, anchor {}, analysis {}",
-            wire_word(&c.capture),
-            wire_word(&c.run),
-            wire_word(&c.delivery),
-            wire_word(&c.anchor),
-            wire_word(&c.analysis)
-        ),
+        format!("  capture: {} — {}", wire_word(&c.capture), wire.join(", ")),
         format!("  {detail}"),
         format!("  workspace: {workspace}"),
         format!(

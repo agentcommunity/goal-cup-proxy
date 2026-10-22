@@ -497,40 +497,54 @@ class PassLines(Base):
         rows[1]["chain_bytes"] = gib + 5
         self.assertEqual(self.line(self.evaluate(rows), "chain_bytes_max")["status"], "pass")
 
-    def cut(self, end_s):
-        return {"kind": "network_cut", "seconds": 600, "status": "done",
+    def cut(self, end_s, kind="network_cut"):
+        return {"kind": kind, "seconds": 600, "status": "done",
                 "started_utc": self.stamp(end_s - 600), "ended_utc": self.stamp(end_s)}
 
-    def ack(self, rows, end_s=3000):
-        rows = [{"utc": self.stamp(t), "ack_lag_seq": lag, "ack_age_s": age}
-                for t, lag, age in rows]
-        return self.line(self.evaluate(rows, drills=[self.cut(end_s)]), "ack_recovery")
+    def ack(self, rows, end_s=3000, kind="network_cut"):
+        """rows: (t, chain_last_seq, acked_seq), sampled every 5 minutes like a campaign."""
+        rows = [{"utc": self.stamp(t), "chain_last_seq": last, "acked_seq": acked}
+                for t, last, acked in rows]
+        return self.line(self.evaluate(rows, drills=[self.cut(end_s, kind)]), "ack_recovery")
 
-    def test_ack_recovers_when_every_record_is_acknowledged(self):
-        line = self.ack([(2900, 50, 700), (3000, 80, 800), (3300, 90, 1100), (3900, 0, 5),
-                         (6000, 0, 3)])
+    def test_ack_covering_the_pre_drill_tail_within_35_minutes_passes(self):
+        # Last sample before the end: record 500. The timed upload covers it 30 min later.
+        line = self.ack([(2700, 480, 100), (3000, 500, 100), (3300, 520, 100),
+                         (4800, 700, 100), (4800 + 300, 760, 520)])
         self.assertEqual(line["status"], "pass")
-        self.assertEqual(line["value"], 900)
-        self.assertIn("ack_lag_seq == 0", line["rule"])
+        self.assertEqual(line["value"], 2100)
+        self.assertEqual(line["per_drill"][0]["target_seq"], 500)
+        self.assertEqual(line["per_drill"][0]["acked_seq"], 520)
 
-    def test_ack_recovers_on_fresh_acks_with_a_shrinking_backlog(self):
-        line = self.ack([(3000, 80, 800), (3600, 40, 30), (6000, 3, 10)])
+    def test_a_pause_is_judged_like_a_cut(self):
+        line = self.ack([(2900, 50, 10), (3200, 60, 50)], kind="pause")
         self.assertEqual(line["status"], "pass")
-        self.assertEqual(line["value"], 600)
+        self.assertEqual(line["per_drill"][0]["kind"], "pause")
 
-    def test_fresh_acks_with_a_growing_backlog_are_not_recovery(self):
-        line = self.ack([(3000, 80, 800), (3600, 90, 30), (4200, 120, 30), (4800, 150, 30),
-                         (5400, 170, 20)])
-        self.assertEqual(line["status"], "fail")
+    def test_an_ack_that_stops_short_of_the_tail_fails(self):
+        rows = [(2900, 500, 100)] + [(3000 + i * 300, 500 + i * 10, 499) for i in range(9)]
+        self.assertEqual(self.ack(rows)["status"], "fail")
 
-    def test_ack_never_recovers_fails(self):
-        line = self.ack([(3000 + i * 300, 100 + i, 600 + i * 300) for i in range(8)])
-        self.assertEqual(line["status"], "fail")
+    def test_an_ack_after_35_minutes_fails(self):
+        rows = [(2900, 500, 100)] + [(3000 + i * 300, 500, 100) for i in range(8)]
+        rows.append((3000 + 36 * 60, 500, 500))
+        self.assertEqual(self.ack(rows)["status"], "fail")
+
+    def test_no_sample_before_the_end_uses_the_first_after(self):
+        line = self.ack([(3100, 40, 10), (3400, 45, 40), (3700, 50, 45)])
+        self.assertEqual(line["per_drill"][0]["target_seq"], 40)
+        self.assertEqual(line["status"], "pass")
+
+    def test_acked_seq_is_derived_from_the_lag_when_missing(self):
+        rows = [{"utc": self.stamp(2900), "chain_last_seq": 50, "ack_lag_seq": 40},
+                {"utc": self.stamp(3200), "chain_last_seq": 60, "ack_lag_seq": 5}]
+        line = self.line(self.evaluate(rows, drills=[self.cut(3000)]), "ack_recovery")
+        self.assertEqual(line["status"], "pass")
 
     def test_ack_window_not_observed_is_insufficient(self):
-        line = self.ack([(3000, 100, 900), (3300, 120, 1200)])
+        line = self.ack([(2900, 100, 10), (3300, 120, 10)])
         self.assertEqual(line["status"], campaign.INSUFFICIENT)
-        rows = [{"utc": self.stamp(0), "ack_lag_seq": 0, "ack_age_s": 1}]
+        rows = [{"utc": self.stamp(0), "chain_last_seq": 1, "acked_seq": 1}]
         none = self.line(self.evaluate(rows), "ack_recovery")
         self.assertEqual(none["status"], "not applicable")
 
@@ -658,7 +672,7 @@ class RealSamplerIntegration(Base):
         self.assertEqual(lines["chain_bytes_max"]["entry_bytes_max"], chain_size)
         self.assertIsNotNone(lines["chain_bytes_max"]["min_free_disk_bytes"])
         self.assertEqual(lines["ack_recovery"]["status"], "pass")
-        self.assertEqual(lines["ack_recovery"]["per_cut"][0]["ack_lag_seq"], 0)
+        self.assertEqual(lines["ack_recovery"]["per_drill"][0]["acked_seq"], 6)
         self.assertEqual(lines["no_early_stop"]["status"], "fail")
         self.assertTrue(lines["no_early_stop"]["early_stop_samples"][0]["ended"])
         self.assertEqual(res["upload"]["samples"], 4)
@@ -982,7 +996,8 @@ class CampaignRun(Base):
         return lines
 
     def test_a_host_cell_passes_on_the_real_matrix_sh_output(self):
-        for result, rc, verdict in (("PASS", 0, "PASS"), ("FAIL", 1, "FAIL")):
+        for result, rc, verdict in (("PASS", 0, "PASS"), ("FAIL", 1, "FAIL"),
+                                    ("NOT-VERIFIED", 4, "NOT-VERIFIED")):
             with self.subTest(result=result):
                 runner = FakeRunner()
                 lines = ["matrix: something"] + self.matrix_sh_tail(result)
@@ -992,6 +1007,10 @@ class CampaignRun(Base):
                 res = json.loads((self.root / "out" / "mac" / "result.json").read_text())
                 self.assertEqual(res["final_row"], f"codex-cli darwin-arm64 0.1 {result} 2026-10-23")
                 self.assertEqual(res["verdict"], verdict)
+                run_pass = next(l for l in res["pass_lines"] if l["name"] == "run_pass")
+                # A long run whose server copy was not fetched is neither a pass nor a fail.
+                self.assertEqual(run_pass["status"], {"PASS": "pass", "FAIL": "fail"}.get(
+                    result, campaign.INSUFFICIENT))
 
     def test_a_linux_matrix_fail_after_the_row_is_the_final_row(self):
         runner = FakeRunner()

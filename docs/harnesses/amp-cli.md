@@ -32,9 +32,10 @@ The original report predated the thread decoder (`analysis: unavailable`, cross-
 ### Stored-byte replay and bounded decoding (19 Oct 2026)
 
 The pinned practice was retrieved from staging storage and replayed without another harness
-launch. The `amp-thread-jsonrpc` decoder version `1` reads complete server `message_added`
-snapshots: assistant text and model-facing tool calls, context-visible tool results, and supplied
-model/usage snapshots. It labels these as application/thread evidence. It does not expose the
+launch. The `amp-thread-jsonrpc` decoder version `2` reads complete server `message_added`
+snapshots: assistant text and model-facing tool calls, context-visible tool results (a `Task`
+subagent's answer too), and supplied model/usage snapshots; a subagent's snapshots carry the
+parent `Task` call as `parent_tool_use_id`. It labels these as application/thread evidence. It does not expose the
 server's exact provider request or hidden system/inference context, and it emits no wire human
 marker or provider finish outcome. Deltas, user send/echo, tool leases, executor progress/results,
 settings, RPC results and literal ping/pong remain source-referenced unknowns. Repeated complete
@@ -171,7 +172,7 @@ Skills are scanned from the cwd and every ancestor up to `/`; Amp also loads ski
 4. What are the token grammar and length for `AMP_API_KEY`, and does a rejected or revoked key get echoed in output, logs or files?
 5. What is `.legacy-state-owner.json` `identityKey` derived from, and is there a setting that stops it being written?
 6. What are the user config, data and log locations on Windows, and the full macOS managed-settings path?
-7. Do subagents (`Task`, `oracle`, `librarian`) run inside the same thread actor and stream over the same WebSocket?
+7. Do `oracle` and `librarian` subagents stream over the same WebSocket? (`Task` subagents do, measured 22 Oct: their events carry `parentToolUseId`/`parentToolCallId`, which decoder `amp-thread-jsonrpc` v2 keeps as `parent_tool_use_id`.)
 8. Does the update check run in execute mode without `AMP_SKIP_UPDATE_CHECK=1`? What does an npm-installed binary do on `amp update`?
 9. Does `--mode` accept the Claude Code external agent in execute mode, with what key?
 10. What else does `AMP_HOME` change?

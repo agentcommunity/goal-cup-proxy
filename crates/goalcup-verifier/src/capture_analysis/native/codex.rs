@@ -1,7 +1,17 @@
 //! The Codex rollout-JSONL format (`codex-jsonl`).
 //!
-//! Decoder version 2: measured on Codex CLI 0.153.0 CLI/exec rollouts and a 0.156.1
-//! native child containing inherited context. Decoder version is independent of harness version.
+//! Decoder version 3: measured on Codex CLI 0.153.0 CLI/exec rollouts, a 0.156.1 native child
+//! containing inherited context, and a 0.156.1 parent with two `spawn_agent` children (22 Oct).
+//! Decoder version is independent of harness version.
+//!
+//! **Messages and items (version 3).** An assistant `response_item.message` is a
+//! `model_response` (`role`, `phase`, the content item types; no text). `event_msg.item_completed`
+//! with a `CollabAgentToolCall` item is the `tool_call` it names (`spawn_agent`), with its status,
+//! the child's model and effort, and `receiver_thread_ids`: the children's own session ids, which
+//! their streams carry as `native_context.session_id`, so a child's records are attributed to the
+//! call that spawned it. The other completed items (`AgentMessage`, `UserMessage`, `Reasoning`,
+//! `CommandExecution`, `FileChange`) repeat what a `response_item` of the same stream already
+//! says: each is an `unknown` with reason `duplicate_view`, never a second fact.
 //!
 //! **Authorship.** The first `session_meta` fixes source authority for this stream, even
 //! when malformed or ambiguous. A `cli`/`vscode` source with no child/fork indicators allows
@@ -46,7 +56,7 @@ pub struct CodexStream {
 impl NativeFormat for Codex {
     const HINT: &'static str = "codex-jsonl";
     const ID: &'static str = "codex-native";
-    const VERSION: &'static str = "2";
+    const VERSION: &'static str = "3";
     type Stream = CodexStream;
 
     fn lost_context(stream: &mut CodexStream) {
@@ -172,6 +182,27 @@ fn response_item(v: &Value, stream: &mut CodexStream, out: &mut NativeOut<'_>) {
     match item_type {
         "message" => {
             let role = payload.get("role").and_then(Value::as_str).unwrap_or("");
+            if role == "assistant" {
+                let mut fields = json!({"role": "assistant", "item_type": "message"});
+                if let Some(phase) = payload.get("phase").and_then(token) {
+                    fields["phase"] = json!(phase);
+                }
+                let types: Vec<&str> = payload
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .map(|blocks| {
+                        blocks
+                            .iter()
+                            .filter_map(|b| b.get("type").and_then(token))
+                            .take(MAX_LISTED_TYPES)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                fields["content_types"] = json!(types);
+                let id = payload.get("id").and_then(context_id).map(String::from);
+                out.kind(kinds::MODEL_RESPONSE, id, fields);
+                return;
+            }
             // The demonstrated positive marker (module doc): not role alone, not a text
             // prefix. `content_item_kinds` is the record's own account of what kind of
             // content this is; only "user.text" is real human-typed input.
@@ -281,6 +312,7 @@ fn event_msg(v: &Value, out: &mut NativeOut<'_>) {
                 out.unrecognized(Some("event_msg.thread_settings_applied"));
             }
         }
+        Some("item_completed") => item_completed(payload, out),
         Some("task_complete") => {
             // A turn's own observed completion, never a claim that the wider task succeeded.
             let turn_id = payload
@@ -301,5 +333,66 @@ fn event_msg(v: &Value, out: &mut NativeOut<'_>) {
             out.kind(kinds::OUTCOME, turn_id, fields);
         }
         other => out.unrecognized(other.map(|t| format!("event_msg.{t}")).as_deref()),
+    }
+}
+
+/// At most this many content item types or receiver ids are listed.
+const MAX_LISTED_TYPES: usize = 16;
+
+/// A short supplied word (a type, phase, status, tool or model name): ASCII letters, digits and
+/// `._-`, at most 64 bytes. Anything else is not kept.
+fn token(value: &Value) -> Option<&str> {
+    value.as_str().filter(|s| {
+        !s.is_empty()
+            && s.len() <= 64
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    })
+}
+
+/// `event_msg.item_completed`: a subagent spawn is the tool call it names; the item kinds a
+/// `response_item` of the same stream already carries are a recognised duplicate view.
+fn item_completed(payload: &Value, out: &mut NativeOut<'_>) {
+    let item = payload.get("item");
+    let item_type = item.and_then(|i| i.get("type")).and_then(token);
+    match item_type {
+        Some("CollabAgentToolCall") => {
+            let item = item.unwrap_or(&Value::Null);
+            let mut fields = json!({"item_type": "CollabAgentToolCall", "via": "item_completed"});
+            for (key, name) in [
+                ("tool", "name"),
+                ("status", "status"),
+                ("model", "model"),
+                ("reasoning_effort", "reasoning_effort"),
+            ] {
+                if let Some(value) = item.get(key).and_then(token) {
+                    fields[name] = json!(value);
+                }
+            }
+            let receivers: Vec<&str> = item
+                .get("receiver_thread_ids")
+                .and_then(Value::as_array)
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(context_id)
+                        .take(MAX_LISTED_TYPES)
+                        .collect()
+                })
+                .unwrap_or_default();
+            fields["receiver_thread_ids"] = json!(receivers);
+            let id = item.get("id").and_then(context_id).map(String::from);
+            out.kind(kinds::TOOL_CALL, id, fields);
+        }
+        Some(
+            kind @ ("AgentMessage" | "UserMessage" | "Reasoning" | "CommandExecution"
+            | "FileChange"),
+        ) => out.unknown(
+            "duplicate_view",
+            Some((
+                "record_type",
+                Value::String(format!("event_msg.item_completed.{kind}")),
+            )),
+        ),
+        _ => out.unrecognized(Some("event_msg.item_completed")),
     }
 }

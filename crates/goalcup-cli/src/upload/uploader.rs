@@ -50,7 +50,7 @@ pub use finish::Report;
 pub use heartbeat::{EndedGate, LocalDeadline, REPLACED_REASON, stop_reason};
 pub use lifecycle::{Closing, DrainHandles, Draining, Running, begin, drain, finish_advice};
 pub use local::{
-    is_sent, local_end, local_link_before, lock_entry, lock_path, note_repo_head,
+    is_sent, last_ack, local_end, local_link_before, lock_entry, lock_path, note_repo_head,
     note_repo_head_unless_noted, repo_head,
 };
 pub use session::Uploader;

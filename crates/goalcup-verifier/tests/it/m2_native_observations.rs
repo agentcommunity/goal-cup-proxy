@@ -287,7 +287,7 @@ fn codex_tool_and_usage_keep_native_references() {
     assert_eq!(cumulative.fields["total_token_usage"]["output_tokens"], 127);
 
     assert_eq!(summary.decoder_id, "codex-native");
-    assert_eq!(summary.decoder_version, "2");
+    assert_eq!(summary.decoder_version, "3");
     assert!(!summary.incomplete);
 }
 
@@ -406,10 +406,12 @@ fn unknown_native_type_is_counted_without_source_loss() {
     records.push(end_native(PRODUCER, STREAM, EndReason::Complete));
     let (obs, summary) = collect(codex, &records);
 
+    // The completed UserMessage item repeats the response_item before it: recognised, counted
+    // once as a source-referenced unknown, never a second fact.
     let unknown = find(&obs, |o| {
-        o.kind == "unknown" && o.fields["record_type"] == "event_msg.item_completed"
+        o.kind == "unknown" && o.fields["record_type"] == "event_msg.item_completed.UserMessage"
     });
-    assert_eq!(unknown.fields["reason"], "unrecognized");
+    assert_eq!(unknown.fields["reason"], "duplicate_view");
     assert_eq!(unknown.source.stream.producer, PRODUCER);
     assert_eq!(unknown.source.stream.stream, STREAM);
     assert!(summary.unknown_records >= 1);
@@ -1540,4 +1542,69 @@ fn codex_unreadable_first_header_cannot_be_replaced_by_a_later_cli_header() {
             "every record remains source-referenced"
         );
     }
+}
+
+/// Synthetic rows shaped like a 22 Oct Codex 0.156.1 rollout with two `spawn_agent` children.
+#[test]
+fn codex_assistant_messages_and_spawn_agent_are_decoded_and_children_attributed() {
+    let parent = json!({"type":"session_meta","payload":{"id":"thread-parent","source":"cli"}});
+    let assistant = json!({"type":"response_item","payload":{"type":"message","id":"msg-a",
+        "role":"assistant","phase":"final_answer",
+        "content":[{"type":"output_text","text":"not projected"}],
+        "internal_chat_message_metadata_passthrough":{"content_item_kinds":["unknown"]}}});
+    let spawn = json!({"type":"event_msg","payload":{"type":"item_completed",
+        "thread_id":"thread-parent","turn_id":"turn-1","item":{"type":"CollabAgentToolCall",
+        "id":"call-spawn","tool":"spawn_agent","status":"completed",
+        "sender_thread_id":"thread-parent","receiver_thread_ids":["thread-child"],
+        "prompt":"not projected","model":"child-model","reasoning_effort":"low",
+        "agents_states":{"thread-child":"pending_init"}}}});
+    let echo = json!({"type":"event_msg","payload":{"type":"item_completed",
+        "item":{"type":"AgentMessage","id":"msg-a","content":[{"type":"Text","text":"x"}]}}});
+    let future = json!({"type":"event_msg","payload":{"type":"item_completed",
+        "item":{"type":"SomethingNew","id":"z"}}});
+    let child = json!({"type":"session_meta","payload":{"id":"thread-child",
+        "parent_thread_id":"thread-parent","thread_source":"subagent",
+        "source":{"subagent":{"thread_spawn":{"parent_thread_id":"thread-parent","depth":1}}}}});
+    let child_turn = json!({"type":"turn_context","payload":{"model":"child-model"}});
+    let mut records = codex_rows(&[parent, assistant, spawn, echo, future], 1);
+    records.extend(codex_rows(&[child, child_turn], 2));
+    let (obs, _summary) = collect(codex, &records);
+
+    let reply = find(&obs, |o| o.kind == "model_response");
+    assert_eq!(reply.fields["role"], "assistant");
+    assert_eq!(reply.fields["phase"], "final_answer");
+    assert_eq!(reply.fields["content_types"], json!(["output_text"]));
+    assert_eq!(reply.supplied_id.as_deref(), Some("msg-a"));
+    assert!(reply.fields.get("text").is_none(), "no text is projected");
+
+    let call = find(&obs, |o| o.kind == "tool_call");
+    assert_eq!(call.fields["name"], "spawn_agent");
+    assert_eq!(call.fields["status"], "completed");
+    assert_eq!(call.fields["model"], "child-model");
+    assert_eq!(call.fields["reasoning_effort"], "low");
+    assert_eq!(call.supplied_id.as_deref(), Some("call-spawn"));
+    assert!(call.fields.get("prompt").is_none());
+    // The child's stream names itself with the id the call names: its records are attributed.
+    let receiver = call.fields["receiver_thread_ids"][0].as_str().unwrap();
+    let child_model = find(&obs, |o| o.kind == "model" && o.source.stream.stream == 2);
+    assert_eq!(child_model.fields["native_context"]["session_id"], receiver);
+    assert_eq!(
+        child_model.fields["native_context"]["parent_session_id"],
+        "thread-parent"
+    );
+
+    // The completed AgentMessage repeats the response item: recognised, never a second fact.
+    let dup = find(&obs, |o| {
+        o.kind == "unknown" && o.fields["reason"] == "duplicate_view"
+    });
+    assert_eq!(
+        dup.fields["record_type"],
+        "event_msg.item_completed.AgentMessage"
+    );
+    assert_eq!(obs.iter().filter(|o| o.kind == "model_response").count(), 1);
+    // An item kind nobody has seen stays unrecognised.
+    let unknown = find(&obs, |o| {
+        o.kind == "unknown" && o.fields["record_type"] == "event_msg.item_completed"
+    });
+    assert_eq!(unknown.fields["reason"], "unrecognized");
 }

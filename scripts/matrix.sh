@@ -5,7 +5,7 @@
 # One practice run (or, with --test, one organizer test run sealed after --duration) of one
 # connector against one upload server, start to finish, and one result row:
 #
-#     <connector> <os>-<arch> <harness_version> PASS|FAIL <date>
+#     <connector> <os>-<arch> <harness_version> PASS|FAIL|NOT-VERIFIED <date>
 #
 # The run is the real thing: `goalcup login`, `goalcup start --practice` (the device-flow
 # approval, the clone of the matrix repository, the harness), the end of the run, the seal and
@@ -26,6 +26,15 @@
 # The upload API has no call that returns the stored chain, so (2) is a comparison of the
 # server's position with the local chain, not a download. docs/OPERATING.md, "The matrix", says
 # why that is enough and what it does not prove.
+#
+# A long run (about 30 minutes or more) prunes its acknowledged chain parts on this machine, so its
+# trace holds `chain.<offset>.jsonl` parts and no chain.jsonl, and the local verifier says
+# chain_pruned_locally. Then the checks run on the server's copy, rebuilt by scripts/fetch-run.sh
+# (read only), plus one more: every local part is byte for byte the copy's bytes at its offset, and
+# the last one ends where the copy ends. The fetch needs MATRIX_FETCH_INDEX or DATABASE_URL, and
+# MATRIX_FETCH_STORE or CLOUDFLARE_ACCOUNT_ID with CLOUDFLARE_API_TOKEN (below). Without them the
+# row says NOT-VERIFIED ("NOT VERIFIED: long run, server copy not fetched"), exit 4: not a PASS,
+# and not a FAIL of the run.
 #
 # <connector> is `m2-fake-tui` (a connector this script writes for itself around the test
 # suite's fake TUI, admitted with --dev; no harness, no login, no model) or the id of a shipped
@@ -77,6 +86,18 @@
 #   MATRIX_SERVER_KEY          the server's Ed25519 public key (64 hex), for goalcup-verify
 #                              --dev-key. Default: the key in the run's receipt.
 #   MATRIX_BIN_DIR             where goalcup, goalcup-daemon and goalcup-verify are.
+#   MATRIX_FETCH_INDEX         for a long run: the chunk index fetch-run.sh --index reads (the JSON
+#                              its query returns), instead of DATABASE_URL.
+#   MATRIX_FETCH_STORE         for a long run: a mirror of the bucket (fetch-run.sh --store),
+#                              instead of CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN.
+#   DATABASE_URL, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
+#                              read-only credentials for fetch-run.sh, as it documents. They leave
+#                              this script's environment at once: only fetch-run.sh gets them, in
+#                              its environment, never on a command line.
+#   MATRIX_FETCH_BUCKET        the R2 bucket (default goalcup-traces for production,
+#                              goalcup-traces-staging otherwise).
+#   MATRIX_FETCH_TIMEOUT       seconds the fetch may take (default 1800).
+#   MATRIX_FETCH_SCRIPT        another fetch script with fetch-run.sh's arguments (tests).
 #
 # Options:
 #   --allow-production   permit https://ingest.agentcommunity.org. Tests never use it.
@@ -221,6 +242,17 @@ if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
   echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE must name a regular file this user can read" >&2
   exit 2
 fi
+# The read-only credentials of the long-run fetch leave the environment too: goalcup, the daemon
+# and the harness never inherit them; only fetch-run.sh gets them (fetch_copy).
+FETCH_DB=${DATABASE_URL:-}
+FETCH_CF_ACCOUNT=${CLOUDFLARE_ACCOUNT_ID:-}
+FETCH_CF_TOKEN=${CLOUDFLARE_API_TOKEN:-}
+unset DATABASE_URL CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN
+FETCH_INDEX=${MATRIX_FETCH_INDEX:-}
+FETCH_STORE=${MATRIX_FETCH_STORE:-}
+FETCH_SCRIPT=${MATRIX_FETCH_SCRIPT:-$HERE/fetch-run.sh}
+FETCH_TIMEOUT=${MATRIX_FETCH_TIMEOUT:-1800}
+case $FETCH_TIMEOUT in '' | *[!0-9]*) echo "matrix: MATRIX_FETCH_TIMEOUT is a number of seconds" >&2; exit 2 ;; esac
 PRE_KEYS=${MATRIX_PRE_PROMPT_KEYS:-}
 case $PRE_KEYS in
   *\'* | *%* | *\$* | *\`*)
@@ -425,7 +457,10 @@ print_row() {
   hv=$(printf '%s\n' "$HV" | head -n 1 |
     awk '{ o = ""; for (i = 1; i <= NF; i++) { o = o (i > 1 ? "_" : "") $i; if ($i ~ /^[0-9]/) break }; print o }')
   [ -n "$hv" ] || hv=unreported
-  if [ "$RESULT" != PASS ] && [ -n "$FAIL_REASON" ]; then
+  if [ "$RESULT" = NOT-VERIFIED ]; then
+    log "$FAIL_REASON"
+    printf 'matrix: %s\n' "$FAIL_REASON" >&3
+  elif [ "$RESULT" != PASS ] && [ -n "$FAIL_REASON" ]; then
     log "FAIL: $FAIL_REASON"
     printf 'matrix: FAIL: %s\n' "$FAIL_REASON" >&3
   fi
@@ -978,33 +1013,13 @@ PY
   TRACE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["trace_dir"])' "$RUN_JSON")
   ENTRY_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["entry_id"])' "$RUN_JSON")
   log "run $RUN_ID, entry $ENTRY_ID, trace $TRACE"
+  # Read before the end-of-run checks, so a FAIL row still names the harness version. A long
+  # run's first records are pruned on this machine: its version is read from the server's copy.
+  PRUNED=0
   if [ -f "$TRACE/chain.jsonl" ]; then
-    # Read before the end-of-run checks, so a FAIL row still names the harness version.
-    HV=$(python3 - "$TRACE/chain.jsonl" <<'PY'
-import json, sys
-def find(o):
-    if isinstance(o, dict):
-        if isinstance(o.get("harness_version"), str):
-            return o["harness_version"]
-        for v in o.values():
-            r = find(v)
-            if r:
-                return r
-    elif isinstance(o, list):
-        for v in o:
-            r = find(v)
-            if r:
-                return r
-    return None
-for line in open(sys.argv[1]):
-    r = find(json.loads(line))
-    if r:
-        print(r.splitlines()[0][:64])
-        break
-PY
-    )
-    [ -n "$HV" ] || HV=unreported
-    log "harness version: $HV"
+    read_hv "$TRACE/chain.jsonl"
+  elif ls "$TRACE"/chain.[0-9]*.jsonl >/dev/null 2>&1; then
+    PRUNED=1
   fi
 
   # goalcup's own words about how the run ended. The `deadline:` line goes to the run's host.log
@@ -1044,17 +1059,60 @@ PY
   if [ "$CONNECTOR" = "$FAKE_ID" ]; then
     grep -q 'tui: noted' "$ROOT/start.txt" || fail "the typed prompt never reached the harness" || return 1
   fi
-  [ -f "$TRACE/chain.jsonl" ] || fail "no chain.jsonl in the trace" || return 1
-
-  # ---- 1. the local verifier, 2. the server's copy
-  verify_trace "$TRACE" || return 1
-  if [ "$IS_FAKE" = 0 ]; then
-    agent_worked "$TRACE" || return 1
+  JUDGED=$TRACE
+  if [ "$PRUNED" = 1 ]; then
+    # A long run: its acknowledged parts were pruned here (by design); the server's copy is judged.
+    log "the trace holds chain parts and no chain.jsonl: a long run, pruned on this machine; the checks run on the server's copy"
+    if ! fetch_configured; then
+      RESULT=NOT-VERIFIED
+      FAIL_REASON="NOT VERIFIED: long run, server copy not fetched (give MATRIX_FETCH_INDEX or DATABASE_URL, and MATRIX_FETCH_STORE or CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, to rebuild it with scripts/fetch-run.sh)"
+      return 1
+    fi
+    fetch_copy "$ENTRY_ID" || return 1
+    JUDGED=$ROOT/servercopy/$ENTRY_ID
+    [ "$HV" != unreported ] || read_hv "$JUDGED/chain.jsonl"
+    same_tail "$TRACE" "$JUDGED/chain.jsonl" || return 1
   fi
-  compare_copy "$RUN_ID" "$ENTRY_ID" "$TRACE" "$RUN_DIR/credential" "$STRICT" || return 1
+  [ -f "$JUDGED/chain.jsonl" ] || fail "no chain.jsonl in the trace" || return 1
+
+  # ---- 1. the verifier, 2. the server's copy
+  verify_trace "$JUDGED" || return 1
+  if [ "$IS_FAKE" = 0 ]; then
+    agent_worked "$JUDGED" || return 1
+  fi
+  compare_copy "$RUN_ID" "$ENTRY_ID" "$JUDGED" "$RUN_DIR/credential" "$STRICT" || return 1
 
   RESULT=PASS
   return 0
+}
+
+# The harness version the chain at $1 names first ("unreported" when none does), into HV.
+read_hv() { # chain.jsonl
+  HV=$(python3 - "$1" <<'PY'
+import json, sys
+def find(o):
+    if isinstance(o, dict):
+        if isinstance(o.get("harness_version"), str):
+            return o["harness_version"]
+        for v in o.values():
+            r = find(v)
+            if r:
+                return r
+    elif isinstance(o, list):
+        for v in o:
+            r = find(v)
+            if r:
+                return r
+    return None
+for line in open(sys.argv[1]):
+    r = find(json.loads(line))
+    if r:
+        print(r.splitlines()[0][:64])
+        break
+PY
+  )
+  [ -n "$HV" ] || HV=unreported
+  log "harness version: $HV"
 }
 
 # The agent answered: the research report (under the same key as verify_trace) holds a usage
@@ -1113,6 +1171,90 @@ PY
       fail "the agent never answered the prompt (no model output in the trace: ${worked:-unreadable report})" || return 1 ;;
   esac
   return 0
+}
+
+# Whether a long run's server copy can be fetched: an index (file or database) and the objects
+# (a bucket mirror or R2).
+fetch_configured() {
+  { [ -n "$FETCH_INDEX" ] || [ -n "$FETCH_DB" ]; } &&
+    { [ -n "$FETCH_STORE" ] || { [ -n "$FETCH_CF_ACCOUNT" ] && [ -n "$FETCH_CF_TOKEN" ]; }; }
+}
+
+# Rebuild the server's copy of one entry into $ROOT/servercopy/<entry> with fetch-run.sh (read
+# only), bounded by MATRIX_FETCH_TIMEOUT. The credentials reach it in its environment only.
+fetch_copy() { # entry
+  fc_entry=$1
+  fc_bucket=${MATRIX_FETCH_BUCKET:-}
+  if [ -z "$fc_bucket" ]; then
+    case $SERVER_LC in
+      "https://$PRODUCTION_HOST" | "https://$PRODUCTION_HOST"/*) fc_bucket=goalcup-traces ;;
+      *) fc_bucket=goalcup-traces-staging ;;
+    esac
+  fi
+  set -- --bucket "$fc_bucket"
+  [ -z "$FETCH_INDEX" ] || set -- "$@" --index "$FETCH_INDEX"
+  [ -z "$FETCH_STORE" ] || set -- "$@" --store "$FETCH_STORE"
+  set -- "$@" "$fc_entry" "$ROOT/servercopy"
+  log "rebuilding the server's copy of entry $fc_entry: fetch-run.sh $* (index: ${FETCH_INDEX:-the database, read only}; objects: ${FETCH_STORE:-R2, read only}; at most ${FETCH_TIMEOUT}s)"
+  rm -rf "$ROOT/servercopy"
+  mkdir -p "$ROOT/servercopy" || fail "cannot make $ROOT/servercopy" || return 1
+  (
+    if [ -n "$FETCH_DB" ]; then DATABASE_URL=$FETCH_DB; export DATABASE_URL; fi
+    if [ -n "$FETCH_CF_ACCOUNT" ]; then CLOUDFLARE_ACCOUNT_ID=$FETCH_CF_ACCOUNT; export CLOUDFLARE_ACCOUNT_ID; fi
+    if [ -n "$FETCH_CF_TOKEN" ]; then CLOUDFLARE_API_TOKEN=$FETCH_CF_TOKEN; export CLOUDFLARE_API_TOKEN; fi
+    exec sh "$FETCH_SCRIPT" "$@"
+  ) >"$ROOT/fetch.out" 2>"$ROOT/fetch.err" </dev/null &
+  fc_pid=$!
+  fc_start=$(date +%s)
+  while kill -0 "$fc_pid" 2>/dev/null; do
+    if [ $(($(date +%s) - fc_start)) -ge "$FETCH_TIMEOUT" ]; then
+      kill -TERM "$fc_pid" 2>/dev/null
+      wait "$fc_pid" 2>/dev/null
+      fail "fetch-run.sh did not finish within ${FETCH_TIMEOUT}s" || return 1
+    fi
+    sleep 1
+  done
+  wait "$fc_pid"
+  fc_rc=$?
+  log_file "fetch-run.sh (output)" "$ROOT/fetch.out"
+  log_file "fetch-run.sh (stderr)" "$ROOT/fetch.err"
+  [ "$fc_rc" = 0 ] || fail "fetch-run.sh exited $fc_rc: $(last_line "$ROOT/fetch.err")" || return 1
+  [ -f "$ROOT/servercopy/$fc_entry/chain.jsonl" ] ||
+    fail "fetch-run.sh left no chain.jsonl for entry $fc_entry" || return 1
+}
+
+# Every chain part left on this machine is byte for byte the server copy's bytes at its offset,
+# and the last one ends where the copy ends.
+same_tail() { # trace copy_chain
+  python3 - "$1" "$2" >"$ROOT/tail.out" 2>&1 <<'PY'
+import os, re, sys
+trace, copy = sys.argv[1], sys.argv[2]
+parts = []
+for name in os.listdir(trace):
+    m = re.fullmatch(r"chain\.(\d{20})\.jsonl", name)
+    if m:
+        parts.append((int(m.group(1)), name))
+parts.sort()
+size = os.path.getsize(copy)
+ok = bool(parts)
+end = None
+with open(copy, "rb") as c:
+    for start, name in parts:
+        with open(os.path.join(trace, name), "rb") as f:
+            data = f.read()
+        c.seek(start)
+        good = c.read(len(data)) == data
+        ok = ok and good
+        end = start + len(data)
+        print(("ok    " if good else "FAIL  ") + f"local {name} ({len(data)} bytes) = server copy bytes {start}..{end}")
+good = end == size
+ok = ok and good
+print(("ok    " if good else "FAIL  ") + f"the last local part ends where the server copy ends: local={end} server={size}")
+sys.exit(0 if ok else 1)
+PY
+  st_rc=$?
+  log_file "local chain parts against the server's copy" "$ROOT/tail.out"
+  [ "$st_rc" = 0 ] || fail "the local chain parts are not the server copy's tail (see the comparison in the log)" || return 1
 }
 
 # The local verifier on one trace: exit 0, integrity valid, and the anchor signed by the server's
@@ -1229,6 +1371,7 @@ run_check() {
   ROOT=$(mktemp -d "${TMPDIR:-/tmp}/goalcup-matrix.XXXXXX") || fail "cannot make a temporary directory" || return 1
   log "check-copy of run $RUN_ID on $SERVER, configuration $CFG"
   ok=1
+  unverified=0
   n=0
   # One "entry_id=trace_dir" per line, read a line at a time so a path may hold spaces. (fd 4, so
   # nothing run inside the loop can read the list from standard input.)
@@ -1239,7 +1382,20 @@ for e in json.load(open(sys.argv[1]))["entries"]:
     entry=${pair%%=*}
     trace=${pair#*=}
     say "entry $entry (segment $n)"
-    if [ ! -f "$trace/chain.jsonl" ]; then
+    if [ ! -f "$trace/chain.jsonl" ] && ls "$trace"/chain.[0-9]*.jsonl >/dev/null 2>&1; then
+      # A long run's entry, pruned on this machine: its server copy is judged, if it can be fetched.
+      if ! fetch_configured; then
+        say "entry $entry: NOT VERIFIED: long run, server copy not fetched"
+        unverified=1
+      elif fetch_copy "$entry" && same_tail "$trace" "$ROOT/servercopy/$entry/chain.jsonl" &&
+        verify_trace "$ROOT/servercopy/$entry" 1 &&
+        compare_copy "$RUN_ID" "$entry" "$ROOT/servercopy/$entry" "$RUN_DIR/credential" 0; then
+        say "entry $entry: pruned here; the server's copy verifies (verifier exit $VRC${VERIFY_NOTE:+, incomplete coverage}), matches its position, and ends with the local parts"
+      else
+        say "entry $entry: $FAIL_REASON"
+        ok=0
+      fi
+    elif [ ! -f "$trace/chain.jsonl" ]; then
       FAIL_REASON="entry $entry has no local chain at $trace"
       ok=0
     elif ! verify_trace "$trace" 1 || ! compare_copy "$RUN_ID" "$entry" "$trace" "$RUN_DIR/credential" 0; then
@@ -1252,6 +1408,11 @@ for e in json.load(open(sys.argv[1]))["entries"]:
   done 4<"$ROOT/entries.txt"
   [ "$n" -gt 0 ] || fail "run $RUN_ID has no entries" || return 1
   [ "$ok" = 1 ] || return 1
+  if [ "$unverified" = 1 ]; then
+    RESULT=NOT-VERIFIED
+    FAIL_REASON="NOT VERIFIED: long run, server copy not fetched"
+    return 1
+  fi
   RESULT=PASS
 }
 
@@ -1364,5 +1525,8 @@ if [ -n "$CHECK_CFG" ]; then run_check; else run_matrix; fi
 if [ "$RESULT" != PASS ] && [ -n "${RUN_DIR:-}" ] && [ -f "$RUN_DIR/host.log" ]; then
   log_file "host.log (goalcup's messages during the run)" "$RUN_DIR/host.log"
 fi
-[ "$RESULT" = PASS ]
-exit $?
+case $RESULT in
+  PASS) exit 0 ;;
+  NOT-VERIFIED) exit 4 ;;
+  *) exit 1 ;;
+esac
