@@ -503,7 +503,7 @@ impl Uploading {
         crate::upload::keep_run(cfg, &record, &receipt)?;
         let line = match opened.segment {
             Some(segment) => format!(
-                "run {} continued on {}: segment {segment}, deadline {}",
+                "run {} continued on {}: part {segment}, deadline {}",
                 record.run_id, record.server_url, record.deadline_at
             ),
             None => format!(
