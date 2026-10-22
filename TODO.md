@@ -152,6 +152,10 @@ Status (22 Oct, same branch, [local test day](docs/research/results/2026-10-22-l
   the database, written by the cron to R2. Needs the owner's answers in #241 (the group of 5, the dry
   run), then website migration `20261022100000` (`server/worker/sql/pending/`) applied, then a Worker
   deploy, before the 4 Nov feature stop.
+- Live stats step (c) built, not live: the cron's GitHub reader fills the `github` block of
+  `live.json` (commits, owner's PRs, lines, repositories counted; `GITHUB_STATS=on`). Needs the owner's
+  answers (show lines at all? whose PRs count?), then website migration `20261023100000` applied
+  after `20261022100000`, then a Worker deploy.
 
 ### WP0: Measure
 Status (17 Oct, with 22 Oct notes in the list below): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging

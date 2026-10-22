@@ -72,6 +72,13 @@ export interface Env {
 
   /** "on" checks with the GitHub API that repo_url is public. Anything else: no check. */
   GITHUB_CHECK?: string;
+  /**
+   * "on" lets the cron read the competition runs' public repositories for the live totals' `github`
+   * block (src/live-github.ts). Anything else: not read, and the block stays null. It needs
+   * GITHUB_TOKEN outside local tests.
+   */
+  GITHUB_STATS?: string;
+  /** Secret: a GitHub token that can read public repositories, nothing more. */
   GITHUB_TOKEN?: string;
 
   /**

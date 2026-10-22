@@ -406,6 +406,23 @@ test("liveSnapshot -> upload_live_snapshot(p_event_id, p_at); null for an event 
   }
 });
 
+test("githubDue -> upload_github_due, rows checked; recordGithub -> upload_record_github(p_run_id, p_github, p_at, p_next_at)", async () => {
+  const due = { run_id: "r0000000000000001", repo_url: "https://github.com/a/b", official_start: T, ends_at: "2026-11-13T09:00:00Z", final_commit: null };
+  const reading = { commits: 3, prs_opened: null, lines_added: 10, lines_removed: 0, final: false };
+  const calls = stub([due], true, [{ ...due, final_commit: "main" }]);
+  assert.deepEqual(await db().githubDue("cup", T, 20), [due]);
+  assert.equal(await db().recordGithub("r0000000000000001", reading, T, "2026-11-06T10:00:00Z"), true);
+  assert.deepEqual(calls[0], { fn: "upload_github_due", args: { p_event_id: "cup", p_at: T, p_limit: 20 } });
+  assert.deepEqual(calls[1], { fn: "upload_record_github", args: { p_run_id: "r0000000000000001", p_github: reading, p_at: T, p_next_at: "2026-11-06T10:00:00Z" } });
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    await assert.rejects(db().githubDue("cup", T, 20), (e) => e instanceof ApiError && e.status === 502); // a final_commit that is not a sha
+  } finally {
+    console.error = quiet;
+  }
+});
+
 test("closeRun -> upload_close_run", async () => {
   const calls = stub("open", "sealed", "incomplete", null);
   assert.equal(await db().closeRun("m", "r1", "t"), "open");

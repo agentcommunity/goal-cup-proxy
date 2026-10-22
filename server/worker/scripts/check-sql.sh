@@ -11,7 +11,8 @@
 #      the mirror is regenerated from the website repo once that file merges there);
 #   5. applies each pending file, in name order, with the production command
 #      (psql -X -1 -v ON_ERROR_STOP=1 -f);
-#   6. smoke-calls the new and the old-signature functions, then stops and deletes everything.
+#   6. smoke-calls the new and the old-signature functions (the live snapshot and the GitHub reader's
+#      too, and the snapshot at event scale), then stops and deletes everything.
 #
 #   sh server/worker/scripts/check-sql.sh
 #
@@ -336,6 +337,116 @@ BEGIN
 END $$;
 SQL
 
+# The GitHub reader's numbers (20261023100000): the work list, one reading, the github block.
+pg -1 <<'SQL'
+DO $$
+DECLARE
+  t0  constant timestamptz := '2026-11-09T12:00:00Z';
+  r   jsonb;
+  k   text;
+  ok  boolean;
+  id  text;
+BEGIN
+  INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, run_hours, staging)
+  VALUES ('gh-cup', 'competition', '2026-11-07T00:00:00Z', '2026-11-08T00:00:00Z', 168, false);
+  -- Runs 1 to 6 are main competition runs; run 6 names run 1's repository (other case). Run 7 is a
+  -- test run, 8 a staging run, 9 replaced, 10 abandoned, 11 not started yet.
+  FOR i IN 1..11 LOOP
+    id := 'r00000000000b00' || lpad(to_hex(i), 2, '0');
+    INSERT INTO goal_cup_tracer.runs (id, event_id, member_id, mode, official_start, deadline_at, replaced_at, status,
+                                      repo_url, staging)
+    VALUES (id, 'gh-cup', ('00000000-0000-4000-8000-0000000001' || lpad(to_hex(i), 2, '0'))::uuid,
+            CASE WHEN i = 7 THEN 'test' ELSE 'competition' END,
+            CASE WHEN i = 11 THEN t0 + interval '1 hour' ELSE t0 - interval '2 days' END, t0 + interval '5 days',
+            CASE WHEN i = 9 THEN t0 - interval '1 day' END, CASE WHEN i = 10 THEN 'abandoned' ELSE 'open' END,
+            CASE WHEN i = 6 THEN 'https://github.com/Secret1/Repo' ELSE 'https://github.com/secret' || i || '/repo' END, i = 8);
+  END LOOP;
+
+  r := public.goal_cup_upload_github_due('gh-cup', t0::text, 20);
+  ASSERT (SELECT array_agg(x ->> 'run_id' ORDER BY x ->> 'run_id') FROM jsonb_array_elements(r) x)
+         = (SELECT array_agg('r00000000000b00' || lpad(to_hex(i), 2, '0')) FROM generate_series(1, 6) i), 'due: ' || r::text;
+  ASSERT r -> 0 = jsonb_build_object('run_id', 'r00000000000b0001', 'repo_url', 'https://github.com/secret1/repo',
+           'official_start', '2026-11-07T12:00:00Z', 'ends_at', '2026-11-14T12:00:00Z', 'final_commit', NULL), 'due row: ' || r::text;
+  ASSERT jsonb_array_length(public.goal_cup_upload_github_due('gh-cup', t0::text, 2)) = 2, 'limit 2';
+  ASSERT jsonb_array_length(public.goal_cup_upload_github_due('gh-cup', t0::text, 0)) = 1, 'limit at least 1';
+  ASSERT public.goal_cup_upload_github_due('no-such-event', t0::text, 20) = '[]'::jsonb, 'unknown event';
+
+  -- Not a competition run of this deployment: false, nothing stored.
+  ASSERT NOT public.goal_cup_upload_record_github('r00000000000b0007', '{"commits": 1, "final": false}', t0::text, t0::text), 'test run';
+  ASSERT NOT public.goal_cup_upload_record_github('r00000000000b0008', '{"commits": 1, "final": false}', t0::text, t0::text), 'staging run';
+  ASSERT NOT EXISTS (SELECT 1 FROM goal_cup_tracer.run_github), 'stored a refused reading';
+
+  -- Runs 1 to 4 read at t0, 5 and 6 a minute later; each due again in an hour.
+  FOR i IN 1..6 LOOP
+    ok := public.goal_cup_upload_record_github('r00000000000b00' || lpad(to_hex(i), 2, '0'),
+            jsonb_build_object('commits', CASE WHEN i = 6 THEN 1000 ELSE 10 END, 'prs_opened', 2, 'lines_added', 1234,
+                               'lines_removed', 99, 'final', false),
+            (t0 + CASE WHEN i >= 5 THEN interval '1 minute' ELSE interval '0' END)::text, (t0 + interval '1 hour')::text);
+    ASSERT ok, 'record ' || i;
+  END LOOP;
+  ASSERT public.goal_cup_upload_github_due('gh-cup', (t0 + interval '2 minutes')::text, 20) = '[]'::jsonb, 'read runs are not due';
+
+  -- Four repositories at t0: the block is null. A minute later five (run 6 counts run 1's repository
+  -- once, its newest reading): 4 x 10 + 1000 commits; lines floored to 100.
+  r := public.goal_cup_upload_live_snapshot('gh-cup', t0::text);
+  ASSERT r -> 'github' = 'null'::jsonb, 'under 5: ' || r::text;
+  r := public.goal_cup_upload_live_snapshot('gh-cup', (t0 + interval '1 minute')::text);
+  ASSERT r -> 'github' = '{"as_of": "2026-11-09T12:01:00Z", "repos": 5, "commits": 1040, "prs_opened": 10,
+                           "lines_added": 6100, "lines_removed": 400}'::jsonb, 'github: ' || r::text;
+  FOREACH k IN ARRAY ARRAY['r000000', 'ecret', 'github.com', '00000000-'] LOOP
+    ASSERT position(k IN r::text) = 0, 'the snapshot holds ' || k || ': ' || r::text;
+  END LOOP;
+
+  -- A null keeps the stored number, and a reading with no number keeps read_at.
+  ASSERT public.goal_cup_upload_record_github('r00000000000b0002', '{"commits": null, "lines_added": 5, "final": false}',
+           (t0 + interval '1 hour')::text, (t0 + interval '2 hours')::text), 'record 2 again';
+  ASSERT (SELECT (commits, lines_added, read_at) = (10::bigint, 5::bigint, t0 + interval '1 hour')
+            FROM goal_cup_tracer.run_github WHERE run_id = 'r00000000000b0002'), 'a null replaced a number';
+  ASSERT public.goal_cup_upload_record_github('r00000000000b0003', '{"final": false}',
+           (t0 + interval '1 hour')::text, (t0 + interval '2 hours')::text), 'record 3 again';
+  ASSERT (SELECT (commits, read_at) = (10::bigint, t0) FROM goal_cup_tracer.run_github WHERE run_id = 'r00000000000b0003'), 'read_at moved';
+
+  -- The last reading: after it the row never changes and the run is never due again.
+  ASSERT public.goal_cup_upload_record_github('r00000000000b0004', '{"commits": 11, "final": true}', (t0 + interval '1 hour')::text, NULL), 'final';
+  ASSERT NOT public.goal_cup_upload_record_github('r00000000000b0004', '{"commits": 99, "final": false}', (t0 + interval '2 hours')::text,
+           (t0 + interval '3 hours')::text), 'a reading after the last';
+  ASSERT (SELECT commits = 11 AND final AND due_at IS NULL FROM goal_cup_tracer.run_github WHERE run_id = 'r00000000000b0004'), 'final row changed';
+  r := public.goal_cup_upload_github_due('gh-cup', (t0 + interval '3 hours')::text, 20);
+  ASSERT NOT r @> '[{"run_id": "r00000000000b0004"}]' AND r @> '[{"run_id": "r00000000000b0005"}]', 'due after the last: ' || r::text;
+
+  -- Anything but whole numbers of at least 0 and the known keys raises.
+  FOREACH k IN ARRAY ARRAY['{"commits": -1, "final": false}', '{"commits": 1.5, "final": false}', '{"commits": "7", "final": false}',
+                           '{"commits": 1e300, "final": false}', '{"commits": 1, "author": "x", "final": false}', '{"commits": 1}',
+                           '{"commits": 1, "final": "yes"}', '[1]'] LOOP
+    ok := NULL;
+    BEGIN
+      ok := public.goal_cup_upload_record_github('r00000000000b0005', k::jsonb, t0::text, t0::text);
+    EXCEPTION WHEN raise_exception THEN
+      ok := false;
+    END;
+    ASSERT ok = false, 'record_github took ' || k;
+  END LOOP;
+  BEGIN
+    ok := public.goal_cup_upload_record_github('r00000000000b0005', '{"final": false}', t0::text, NULL);
+  EXCEPTION WHEN raise_exception THEN
+    ok := false;
+  END;
+  ASSERT ok = false, 'a reading that is not the last without p_next_at';
+
+  FOREACH k IN ARRAY ARRAY['public.goal_cup_upload_github_due(text, text, integer)',
+                           'public.goal_cup_upload_record_github(text, jsonb, text, text)'] LOOP
+    ASSERT has_function_privilege('goal_cup_ingest_staging', k, 'EXECUTE'), 'staging Worker cannot call ' || k;
+    ASSERT has_function_privilege('goal_cup_ingest_production', k, 'EXECUTE'), 'production Worker cannot call ' || k;
+    ASSERT has_function_privilege('service_role', k, 'EXECUTE'), 'service_role cannot call ' || k;
+    ASSERT NOT has_function_privilege('anon', k, 'EXECUTE'), 'anon can call ' || k;
+    ASSERT NOT has_function_privilege('authenticated', k, 'EXECUTE'), 'authenticated can call ' || k;
+    ASSERT NOT has_function_privilege('public', k, 'EXECUTE'), 'PUBLIC can call ' || k;
+  END LOOP;
+  ASSERT NOT has_table_privilege('anon', 'goal_cup_tracer.run_github', 'SELECT')
+     AND NOT has_table_privilege('authenticated', 'goal_cup_tracer.run_github', 'SELECT'), 'run_github is readable';
+END $$;
+SQL
+
 # The live snapshot at event scale: 400 runs x 2016 heartbeats (a full week, every 5 minutes). The
 # call must stay cheap on the shared database: under 1 second (best of 3), and no sort or hash over
 # all heartbeats spilling to disk (temp_file_limit makes any spill over 8 MB an error).
@@ -345,7 +456,10 @@ VALUES ('live-scale', 'competition', '2026-11-07T00:00:00Z', '2026-11-08T00:00:0
 INSERT INTO goal_cup_tracer.runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url, staging,
                                   last_heartbeat_at, last_model_request_at)
 SELECT 'r' || lpad(to_hex(1000 + i), 16, '0'), 'live-scale', gen_random_uuid(), 'competition', '2026-11-07T00:00:00Z',
-       '2026-11-14T00:00:00Z', 'x', false, '2026-11-13T23:55:00Z', '2026-11-13T23:55:00Z'
+       '2026-11-14T00:00:00Z', 'https://github.com/o' || i || '/e', false, '2026-11-13T23:55:00Z', '2026-11-13T23:55:00Z'
+  FROM generate_series(1, 400) i;
+INSERT INTO goal_cup_tracer.run_github (run_id, commits, prs_opened, lines_added, lines_removed, read_at, due_at)
+SELECT 'r' || lpad(to_hex(1000 + i), 16, '0'), 120, 4, 30000, 2000, '2026-11-13T23:00:00Z', '2026-11-14T00:00:00Z'
   FROM generate_series(1, 400) i;
 INSERT INTO goal_cup_tracer.entries (id, run_id, segment, connector_id, manifest_sha256, connector_dir_sha256, workspace,
                                      session_id, harness_version, tracer_version, model_requests, stored_bytes)
@@ -356,7 +470,7 @@ INSERT INTO goal_cup_tracer.heartbeats (run_id, entry_id, received_at, seq, head
 SELECT 'r' || lpad(to_hex(1000 + i), 16, '0'), 'e' || lpad(to_hex(1000 + i), 16, '0'),
        '2026-11-07T00:00:00Z'::timestamptz + j * interval '5 minutes', j, 'z', 0, false, j * 3
   FROM generate_series(1, 400) i, generate_series(0, 2015) j;
-ANALYZE goal_cup_tracer.runs, goal_cup_tracer.entries, goal_cup_tracer.heartbeats;
+ANALYZE goal_cup_tracer.runs, goal_cup_tracer.entries, goal_cup_tracer.heartbeats, goal_cup_tracer.run_github;
 SET work_mem = '4MB';
 SET temp_file_limit = '8MB';
 DO $$
@@ -372,6 +486,7 @@ BEGIN
   END LOOP;
   ASSERT (r -> 'entries' ->> 'started')::int = 400, 'scale: ' || r::text;
   ASSERT (r -> 'work' ->> 'model_calls_last_hour')::int = 400 * 36, 'scale last hour: ' || r::text;
+  ASSERT (r -> 'github' ->> 'repos')::int = 400 AND (r -> 'github' ->> 'commits')::int = 400 * 120, 'scale github: ' || r::text;
   RAISE NOTICE 'check-sql: live snapshot at 400 runs x 2016 heartbeats: best of 3 %', best;
   ASSERT best < interval '1 second', 'the live snapshot took ' || best || ' at event scale';
 END $$;

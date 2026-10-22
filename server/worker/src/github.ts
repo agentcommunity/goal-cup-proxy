@@ -34,14 +34,27 @@ export const ACTIVITY_PAGES = 5;
 const SHA = /^[0-9a-f]{40}$/;
 const ZERO_SHA = "0".repeat(40);
 
-type GithubAnswer = { status: number; body: unknown; next: string | null } | null;
+/**
+ * GitHub's answer: status, JSON body (null if none), the Link header's next page and last page
+ * number, and what its rate-limit headers say (null when absent): calls left, the limit they belong
+ * to (`core`, `search`), and whether the answer asks the caller to wait (`retry-after`).
+ */
+export type GithubAnswer = {
+  status: number;
+  body: unknown;
+  next: string | null;
+  lastPage: number | null;
+  remaining: number | null;
+  resource: string | null;
+  retryAfter: boolean;
+} | null;
 
 /**
- * One GET to the GitHub API: status, JSON body (null if none) and the Link header's next page; null
- * when GitHub could not be reached. Anything but a 200 is logged with the rate limit GitHub says is
- * left, and its body is cancelled unread.
+ * One GET to the GitHub API (see `GithubAnswer`); null when GitHub could not be reached. Anything
+ * but a 200 is logged with the rate limit GitHub says is left (except 202, "still computing", which
+ * the statistics endpoints answer as a matter of course), and its body is cancelled unread.
  */
-async function githubGet(ctx: Ctx, url: string): Promise<GithubAnswer> {
+export async function githubGet(ctx: Ctx, url: string): Promise<GithubAnswer> {
   const where = new URL(url).pathname;
   let res: Response;
   try {
@@ -50,11 +63,21 @@ async function githubGet(ctx: Ctx, url: string): Promise<GithubAnswer> {
     console.warn(`github-unreachable ${where}: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   }
-  const next = /<(https:\/\/api\.github\.com\/[^>]+)>;\s*rel="next"/.exec(res.headers.get("link") ?? "")?.[1] ?? null;
+  const link = res.headers.get("link") ?? "";
+  const next = /<(https:\/\/api\.github\.com\/[^>]+)>;\s*rel="next"/.exec(link)?.[1] ?? null;
+  const last = /<https:\/\/api\.github\.com\/[^>]*[?&]page=(\d{1,9})[^>]*>;\s*rel="last"/.exec(link)?.[1];
+  const left = res.headers.get("x-ratelimit-remaining");
+  const meta = {
+    next,
+    lastPage: last === undefined ? null : Number(last),
+    remaining: left !== null && /^\d{1,9}$/.test(left) ? Number(left) : null,
+    resource: res.headers.get("x-ratelimit-resource"),
+    retryAfter: res.headers.has("retry-after"),
+  };
   if (res.status !== 200) {
-    console.warn(`github-status ${res.status} ${where} ratelimit-remaining=${res.headers.get("x-ratelimit-remaining") ?? "-"}`);
+    if (res.status !== 202) console.warn(`github-status ${res.status} ${where} ratelimit-remaining=${left ?? "-"}`);
     await res.body?.cancel().catch(() => {});
-    return { status: res.status, body: null, next };
+    return { status: res.status, body: null, ...meta };
   }
   let body: unknown = null;
   try {
@@ -62,11 +85,11 @@ async function githubGet(ctx: Ctx, url: string): Promise<GithubAnswer> {
   } catch {
     body = null;
   }
-  return { status: res.status, body, next };
+  return { status: res.status, body, ...meta };
 }
 
 /** `body[key]` when the body is a JSON object that has that key; undefined otherwise. */
-function prop(body: unknown, key: string): unknown {
+export function prop(body: unknown, key: string): unknown {
   return typeof body === "object" && body !== null && !Array.isArray(body) && Object.hasOwn(body, key) ? Reflect.get(body, key) : undefined;
 }
 

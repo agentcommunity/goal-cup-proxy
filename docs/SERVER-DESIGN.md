@@ -169,13 +169,24 @@ folds into `other`, and call and byte totals are rounded down so two snapshots c
 to read one run. Nothing per run or per member is in it. Contract:
 [UPLOAD-API](UPLOAD-API.md#get-v1livejson--public-community-totals).
 
+The `github` block (website migration 20261023100000, `GITHUB_STATS=on`) adds commits, pull
+requests and lines from the entries' public repositories. The GitHub reader is one more cron step,
+after the snapshot and on its own: at most 20 runs a tick, three cheap calls each (the commit count
+from the `Link` header, a search count of the owner's pull requests, `code_frequency`), about
+hourly per run, and one last reading after the end, counted up to the judged commit, after which the
+run is never read again. It stops for the tick on a rate limit, on an unreachable GitHub, or when
+fewer than 1,000 calls are left in the hour, so the judged commits and the start check keep their
+share of the token. The database stores numbers only, one row per run (`run_github`), and the
+snapshot sums them per repository with the same group of 5; lines are floored to 100. Details:
+[UPLOAD-API](UPLOAD-API.md#the-github-numbers).
+
 ## Not built
 
 - The verify job that reassembles stored chunks and runs `goalcup-verify` over them. Until it exists,
   nothing downloads the stored chain; `scripts/matrix.sh --check-copy` compares positions instead.
 - The rest of the live stats design: working hours (it needs a stored counter), survival and the
-  hourly strip, tokens and tool calls from the traces (the verify job), GitHub numbers, uptime and
-  outage windows, the daily copies. Their fields in `live.json` are `null`.
+  hourly strip, tokens and tool calls from the traces (the verify job), uptime and outage windows,
+  the daily copies. Their fields in `live.json` are `null`.
 - A separate organizer pause on new starts (`MAINTENANCE` stops everything).
 - A second pinned signing key for rotation.
 - Teams, and more than one main run per account.

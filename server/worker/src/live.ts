@@ -6,7 +6,7 @@
 // might add later (or a mistake that put a run id in it) is never published: only the keys below exist.
 
 import type { Ctx } from "./context.ts";
-import { LIVE_MIN_GROUP, type LiveNumber, type LiveSnapshot } from "./db.ts";
+import { LIVE_MIN_GROUP, type LiveGithub, type LiveNumber, type LiveSnapshot } from "./db.ts";
 import { ApiError } from "./errors.ts";
 import { formatTime, isTime } from "./util.ts";
 
@@ -43,6 +43,30 @@ function runCount(v: unknown, what: string): LiveNumber {
   const n = num(v, what);
   if (n !== null && n > 0 && n < LIVE_MIN_GROUP) throw new Error(`${what} is ${n}, under the group size`);
   return n;
+}
+
+/** A count of lines, or null: floored to a multiple of 100 where it is made (the SQL, `LocalDb`). */
+function hundreds(v: unknown, what: string): LiveNumber {
+  const n = num(v, what);
+  if (n !== null && n % 100 !== 0) throw new Error(`${what} is not floored to 100`);
+  return n;
+}
+
+/** The `github` block (src/live-github.ts reads GitHub, the database sums): null, or every key below, from at least LIVE_MIN_GROUP repositories. */
+function githubBlock(v: unknown): LiveGithub | null {
+  if (v === null || v === undefined) return null;
+  const g = obj(v);
+  if (!isTime(g.as_of)) throw new Error("github.as_of");
+  const repos = runCount(g.repos, "github.repos");
+  if (repos === null || repos < LIVE_MIN_GROUP) throw new Error("github.repos is under the group size");
+  return {
+    as_of: g.as_of,
+    repos,
+    commits: num(g.commits ?? null, "github.commits"),
+    prs_opened: num(g.prs_opened ?? null, "github.prs_opened"),
+    lines_added: hundreds(g.lines_added ?? null, "github.lines_added"),
+    lines_removed: hundreds(g.lines_removed ?? null, "github.lines_removed"),
+  };
 }
 
 /**
@@ -92,7 +116,7 @@ export function publicSnapshot(raw: unknown, eventId: string): LiveSnapshot {
     survival: null,
     hourly: null,
     trace: null,
-    github: null,
+    github: githubBlock(d.github),
     server: null,
   };
 }

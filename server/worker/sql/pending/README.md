@@ -12,6 +12,15 @@ These migrations were written in this repository first, because the website repo
   test (`test/supabase.test.ts`) reads it after the mirror too. Not applied anywhere. It adds one
   read-only function, `public.goal_cup_upload_live_snapshot(p_event_id, p_at)`, with the Worker
   roles' grants; no table, column or row changes. Land it with the same steps as below.
+- `20261023100000_goal_cup_tracer_live_github.sql` (the GitHub numbers of the live totals) is NOT in
+  the mirror yet either, for the same reason, and is applied after `20261022100000`. Not applied
+  anywhere. It adds the table `goal_cup_tracer.run_github` (one row per run, numbers only), the
+  functions `public.goal_cup_upload_github_due` and `public.goal_cup_upload_record_github` with the
+  Worker roles' grants, and replaces `goal_cup_upload_live_snapshot` (`CREATE OR REPLACE`) to fill its
+  `github` block. It replaces the function in a new file rather than editing `20261022100000`,
+  because that file may be applied (step a) before this one lands, and an edit to an applied file
+  never reaches the database; `check-sql.sh` allows it because the mirror does not hold the function
+  yet. Land it with the same steps as below.
 
 `20261021100000_goal_cup_tracer_event_readiness.sql` holds five changes in one file, one
 transaction (its header has the detail):
@@ -47,6 +56,8 @@ is no "staging first" for SQL. The order:
    `goal_cup_upload_commit_chunk`, `goal_cup_upload_heartbeat` and
    `goal_cup_upload_record_final_commit` overloads, so it needs the migration first. (For the live
    totals: the new Worker calls `goal_cup_upload_live_snapshot`; without it the cron logs
-   `live-snapshot-failed` and `GET /v1/live.json` answers `404 not_ready`, nothing else.)
+   `live-snapshot-failed` and `GET /v1/live.json` answers `404 not_ready`, nothing else. For the
+   GitHub numbers: without `20261023100000` the cron logs `github-stats-failed` and the `github`
+   block stays `null`, nothing else.)
 5. Regenerate the mirror from the website repo (command in its header) and delete each file it now
    holds from this folder; delete the folder when it is empty.

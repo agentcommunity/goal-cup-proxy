@@ -10,6 +10,7 @@
 //   state/usercodes/{sha256}.json  {"device_sha256": …}: the request a user code belongs to
 //   state/credentials/{sha256}.json  a run credential, by its own hash
 //   state/notices/{run_id}.{kind}.{key}.json  a queued notice (the outbox); `key` is the dedupe key, URL-encoded, "-" when empty
+//   state/github/{run_id}.json   the GitHub reader's numbers for a run (`StoredGithub`, the database's run_github row)
 //
 // The cron's live snapshot (`liveSnapshot`) reads all of it and writes nothing.
 //
@@ -30,8 +31,11 @@ import type {
   DevicePoll,
   EntryRow,
   FinalCommitDetail,
+  GithubDue,
+  GithubReading,
   HeartbeatArgs,
   HeartbeatResult,
+  LiveGithub,
   LiveNumber,
   LiveSnapshot,
   MachineFacts,
@@ -128,6 +132,18 @@ interface StoredDevice extends CreateDeviceArgs {
 }
 
 const MAX_CAS_TRIES = 10;
+
+/** The GitHub reader's numbers for one run: numbers only, no URL, name or sha. */
+interface StoredGithub {
+  commits: number | null;
+  prs_opened: number | null;
+  lines_added: number | null;
+  lines_removed: number | null;
+  read_at: string | null;
+  due_at: string | null;
+  final: boolean;
+}
+const GITHUB_NUMBERS = ["commits", "prs_opened", "lines_added", "lines_removed"] as const;
 
 /** What `wrangler dev` and the tests can set; production's equivalents are in the database. */
 export interface LocalOptions {
@@ -465,7 +481,7 @@ export class LocalDb implements Db {
     return runs.sort((x, y) => (x.official_start + x.run_id).localeCompare(y.official_start + y.run_id)).map(toTick);
   }
 
-  /** Twin of public.goal_cup_upload_live_snapshot (sql/pending/20261022100000_goal_cup_tracer_live_stats.sql): change both together. */
+  /** Twin of public.goal_cup_upload_live_snapshot (sql/pending/20261022100000_goal_cup_tracer_live_stats.sql, its github block in 20261023100000): change both together. */
   async liveSnapshot(eventId: string, now: string): Promise<Omit<LiveSnapshot, "server"> | null> {
     const kind = this.#events?.[eventId];
     if (kind === undefined) return null; // not an event of this deployment
@@ -533,6 +549,32 @@ export class LocalDb implements Db {
     }
 
     const notices = (await this.#all<LocalNotice>("state/notices/")).filter((n) => n.created_at <= now && runs.some((r) => r.run_id === n.run_id));
+
+    // GitHub: the newest reading of each repository of a main run, read at or before now.
+    const readings = new Map<string, StoredGithub>();
+    for (const r of runs.filter((r) => !isReplaced(r))) {
+      const g = await this.#github(r.run_id);
+      if (g === null || g.read_at === null || g.read_at > now) continue;
+      const repo = r.repo_url.toLowerCase();
+      const had = readings.get(repo);
+      if (had === undefined || had.read_at! < g.read_at) readings.set(repo, g);
+    }
+    const read = [...readings.values()];
+    const githubSum = (key: (typeof GITHUB_NUMBERS)[number], floorTo = 1): LiveNumber => {
+      const fed = read.filter((g) => g[key] !== null);
+      return k(Math.floor(fed.reduce((sum, g) => sum + g[key]!, 0) / floorTo) * floorTo, fed.length);
+    };
+    const github: LiveGithub | null =
+      read.length < LIVE_MIN_GROUP
+        ? null
+        : {
+            as_of: read.map((g) => g.read_at!).sort().at(-1)!,
+            repos: read.length,
+            commits: githubSum("commits"),
+            prs_opened: githubSum("prs_opened"),
+            lines_added: githubSum("lines_added", 100),
+            lines_removed: githubSum("lines_removed", 100),
+          };
     const noticeCount = (kind: NoticeKind) => {
       const of = notices.filter((n) => n.kind === kind);
       return k(of.length, new Set(of.map((n) => n.run_id)).size);
@@ -572,8 +614,64 @@ export class LocalDb implements Db {
       survival: null,
       hourly: null,
       trace: null,
-      github: null,
+      github,
     };
+  }
+
+  #githubKey = (runId: string) => `state/github/${runId}.json`;
+
+  async #github(runId: string): Promise<StoredGithub | null> {
+    return ((await (await this.#bucket.get(this.#githubKey(runId)))?.json()) as StoredGithub | undefined) ?? null;
+  }
+
+  /** Twin of public.goal_cup_upload_github_due (sql/pending/20261023100000_goal_cup_tracer_live_github.sql). */
+  async githubDue(eventId: string, now: string, limit: number): Promise<GithubDue[]> {
+    const runs = (await this.#all<StoredRun>("state/runs/")).filter(
+      (r) => r.event_id === eventId && r.mode === "competition" && r.status !== "abandoned" && !isReplaced(r) && r.official_start <= now,
+    );
+    const due: (GithubDue & { due: string })[] = [];
+    for (const r of runs) {
+      const g = await this.#github(r.run_id);
+      if (g?.final === true) continue;
+      const at = g?.due_at ?? r.official_start;
+      if (at > now) continue;
+      due.push({ run_id: r.run_id, repo_url: r.repo_url, official_start: r.official_start, ends_at: r.deadline_at, final_commit: r.final_commit ?? null, due: at });
+    }
+    due.sort((x, y) => x.due.localeCompare(y.due) || x.run_id.localeCompare(y.run_id));
+    return due.slice(0, Math.max(1, Math.min(limit, 100))).map(({ due: _, ...d }) => d);
+  }
+
+  /** Twin of public.goal_cup_upload_record_github: the same checks, the same answers. */
+  async recordGithub(runId: string, reading: GithubReading, at: string, nextAt: string | null): Promise<boolean> {
+    const keys = Object.keys(reading).filter((key) => key !== "final" && !(GITHUB_NUMBERS as readonly string[]).includes(key));
+    if (keys.length > 0) throw new Error(`record_github: unknown key ${keys[0]}`);
+    if (typeof reading.final !== "boolean") throw new Error("record_github: final is not true or false");
+    for (const key of GITHUB_NUMBERS) {
+      const n = reading[key];
+      if (n !== null && !(Number.isSafeInteger(n) && n >= 0)) throw new Error(`record_github: ${key} is not a whole number of at least 0`);
+    }
+    if (!reading.final && nextAt === null) throw new Error("record_github: a reading that is not the last needs p_next_at");
+    const run = await this.#readRun(runId);
+    if (run === null || run.run.mode !== "competition") return false;
+    const read = GITHUB_NUMBERS.some((key) => reading[key] !== null);
+    const key = this.#githubKey(runId);
+    for (let i = 0; i < MAX_CAS_TRIES; i++) {
+      const obj = await this.#bucket.get(key);
+      const cur = obj === null ? null : ((await obj.json()) as StoredGithub);
+      if (cur?.final === true) return false;
+      const next: StoredGithub = {
+        commits: reading.commits ?? cur?.commits ?? null,
+        prs_opened: reading.prs_opened ?? cur?.prs_opened ?? null,
+        lines_added: reading.lines_added ?? cur?.lines_added ?? null,
+        lines_removed: reading.lines_removed ?? cur?.lines_removed ?? null,
+        read_at: read ? at : (cur?.read_at ?? null),
+        due_at: reading.final ? null : nextAt,
+        final: reading.final,
+      };
+      const put = await this.#bucket.put(key, JSON.stringify(next), { onlyIf: obj === null ? { etagDoesNotMatch: "*" } : { etagMatches: obj.etag } });
+      if (put !== null) return true;
+    }
+    throw new Error("local state is too contended; try again");
   }
 
   async queueNotices(notices: NoticeArgs[]): Promise<number> {

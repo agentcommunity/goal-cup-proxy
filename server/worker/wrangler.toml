@@ -56,6 +56,9 @@ DB_BACKEND = "supabase"
 # Check with the GitHub API that repo_url is a public repository. "on" in production;
 # `npm run dev` and the tests turn it off so they need no network.
 GITHUB_CHECK = "on"
+# Read the competition runs' public repositories for the live totals' github block (src/live-github.ts):
+# commits, pull requests and lines, about hourly per run, with GITHUB_TOKEN. Anything but "on": not read.
+GITHUB_STATS = "on"
 # The website's page where a member approves a device request (no query string).
 # goalcup opens it with `?code=<user code>`.
 APPROVAL_URL = "https://agentcommunity.org/goalcup/approve"
@@ -76,7 +79,8 @@ DEVICE_TOKEN_PER_MINUTE = "1200"
 #   SUPABASE_URL         https://<project>.supabase.co
 #   SUPABASE_KEY         a Supabase secret API key whose role may only execute public.goal_cup_upload_*
 #   RESEND_API_KEY       optional: switches the run emails on (the website's Resend account)
-#   GITHUB_TOKEN         read-only; required in production and staging (the cron's judged-commit reads; it warns without it)
+#   GITHUB_TOKEN         read-only, public repositories only; required in production and staging (the cron's
+#                        judged-commit reads, and the live totals' GitHub reader; both warn without it)
 #   RATE_LIMIT_KEY       random, at least 32 characters: HMAC key of the rate-limit keys (src/ratelimit.ts)
 #   TEST_APPROVAL_KEY    never in production. Staging only (with STAGING = "on"): switches on
 #                        POST /v1/device/approve, which approves a device request as any member.
@@ -144,6 +148,7 @@ PRACTICE_RUN_MINUTES = "10"
 RUN_MAX_COMPRESSED_BYTES = "68719476736"
 DB_BACKEND = "supabase"
 GITHUB_CHECK = "on"
+GITHUB_STATS = "on"
 # The website's approval page (agentcommunity.org; it signs the member in with the site's session).
 APPROVAL_URL = "https://agentcommunity.org/goalcup/approve"
 MAINTENANCE = "off"

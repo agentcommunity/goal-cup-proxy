@@ -106,6 +106,18 @@ CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy --env staging # staging
   adds one read-only function, so the live Worker is not affected. Then deploy staging, check
   `GET /v1/live.json` after the next tick, then production. A Worker deployed before the migration
   logs `live-snapshot-failed` each tick and answers `404 not_ready`; nothing else changes.
+- The live totals' GitHub numbers need website migration
+  `20261023100000_goal_cup_tracer_live_github.sql`, applied after `20261022100000` and the same way.
+  It adds one table (`goal_cup_tracer.run_github`, numbers only) and two functions, and replaces the
+  live snapshot function; the live Worker is not affected. `wrangler.toml` sets `GITHUB_STATS = "on"`
+  for both deployments; a Worker deployed before the migration logs `github-stats-failed` each tick
+  and the `github` block stays `null`, nothing else changes. To switch the reader off without a code
+  change, deploy with `--var GITHUB_STATS:off`.
+- `GITHUB_TOKEN` needs public read access and nothing more: a fine-grained token with "Public
+  repositories (read-only)" and no account or repository permissions, or a classic token with no
+  scopes. Never one that can push. The judged commits, the start check and the GitHub numbers all use
+  it; the reader leaves 1,000 calls an hour for the other two. Log lines: `github-stats: stopped for
+  this tick: …` (a rate limit or an unreachable GitHub; it resumes next tick), `github-stats-failed: …`.
 
 ## Test runs
 
@@ -356,7 +368,7 @@ answer with `stop` does, or Goal Cup Proxy's own count to the deadline. Fix the 
 | A deploy answers runs `401`, `404` (a lost route), `410`, `413` or anything else it should not | Runs keep recording and ask again with backoff; none stops (D64). After three refusals of one status in a row a participant's terminal and `goalcup status` say `PROBLEM: the server refuses this run's uploads (HTTP <status>). …` and that nothing is lost. Roll back (`npx wrangler rollback <version-id>`) or hotfix; the line clears and the uploads catch up by themselves. Uploads still unsent when a run's wrap-up ended go with `goalcup upload`. |
 | Supabase is down or read-only | The Worker answers `502 upstream_error`; `goalcup` retries for as long as the run lasts. Nothing is lost. Optionally switch maintenance on for a clean `503`. Check again when Supabase is back; the cron catches up. |
 | R2 is down | Chunk puts answer `502`; same as above. A retried chunk is safe. |
-| GitHub is down or rate-limits | Opens answer `502` (Goal Cup Proxy retries). The cron retries the judged commit (the last push to the default branch at or before `ends_at`, from GitHub's activity API) each tick for 48 hours; the `ended` mail waits an hour for it, then goes without it. A repository `404` is retried for an hour before it is kept as `none`; an activity API that fails for an hour falls back to the branch's last commit dated before `ends_at`, then to `commits/HEAD`; any other GitHub error after the hour records `none`. All of these are flagged `final_head_fallback`: check those runs by hand (commit dates can be set by the agent, and the head may include late pushes). Check that `GITHUB_TOKEN` is set and valid: the cron logs `WARNING: GITHUB_TOKEN is not set` without it. |
+| GitHub is down or rate-limits | Opens answer `502` (Goal Cup Proxy retries). The cron retries the judged commit (the last push to the default branch at or before `ends_at`, from GitHub's activity API) each tick for 48 hours; the `ended` mail waits an hour for it, then goes without it. A repository `404` is retried for an hour before it is kept as `none`; an activity API that fails for an hour falls back to the branch's last commit dated before `ends_at`, then to `commits/HEAD`; any other GitHub error after the hour records `none`. All of these are flagged `final_head_fallback`: check those runs by hand (commit dates can be set by the agent, and the head may include late pushes). Check that `GITHUB_TOKEN` is set and valid: the cron logs `WARNING: GITHUB_TOKEN is not set` without it. The live totals' GitHub reader stops for the tick on a rate limit and keeps the last numbers; switch it off with `--var GITHUB_STATS:off` if it competes with the judged commits. |
 | Many `429` on the device flow (a venue sharing one address) | Raise `DEVICE_START_PER_MINUTE`, `DEVICE_POLL_PER_MINUTE` or `DEVICE_TOKEN_PER_MINUTE` in `wrangler.toml` and deploy. Every device call answers `500 misconfigured` if the `DEVICE_LIMITER` binding or `RATE_LIMIT_KEY` is missing. |
 | `500 misconfigured` on any call | Read `npx wrangler tail`; the detail is in the log, never in the answer. Usual causes: a missing secret, `APPROVAL_URL`, a test-only variable set in production. |
 | A participant cannot approve a run | The website needs the current terms accepted (`403` or a message on the approval page). A start outside the window is `403` too. |

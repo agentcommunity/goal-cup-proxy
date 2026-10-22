@@ -1,8 +1,9 @@
 // What the server does on its own, every 5 minutes (the `scheduled` export; wrangler.toml has the
 // cron): close runs that are over, record the judged GitHub commit (src/github.ts) of each run that reached its
 // deadline, queue the run emails into the outbox, send them (src/mail.ts: each queued row once, through Resend; the
-// database writes the email and picks the address, and gives a staging Worker none), and write the public live
-// totals (src/live.ts). Contract: docs/UPLOAD-API.md, "What the server does on its own".
+// database writes the email and picks the address, and gives a staging Worker none), write the public live
+// totals (src/live.ts), and read a few public repositories for them (src/live-github.ts). Contract:
+// docs/UPLOAD-API.md, "What the server does on its own".
 //
 // A silence email goes out only when the server itself was well for the whole silence (`noteTick`).
 //
@@ -13,6 +14,7 @@ import { type Ctx, makeCtx } from "./context.ts";
 import { type NoticeKind, type TickRun, endsAt, isReplaced, statusAt } from "./db.ts";
 import type { Env } from "./env.ts";
 import { writeLiveSnapshot } from "./live.ts";
+import { readGithubStats } from "./live-github.ts";
 import { sendNotices } from "./mail.ts";
 import { GITHUB_SETTLE, judgedCommit } from "./github.ts";
 import { addSeconds, formatTime, isTime } from "./util.ts";
@@ -191,7 +193,8 @@ export async function queueNotices(ctx: Ctx, now: Date): Promise<number> {
 
 /**
  * One cron tick. Each step is on its own: one that fails is logged and the others still run. The
- * last step writes the public live totals (src/live.ts).
+ * last two write the public live totals (src/live.ts) and read GitHub for the next ones
+ * (src/live-github.ts).
  */
 export async function runTick(env: Env): Promise<void> {
   // While the maintenance switch is on no goalcup can beat, so silence would be false news. The
@@ -212,8 +215,16 @@ export async function runTick(env: Env): Promise<void> {
     return;
   }
   const now = ctx.now();
-  // The live snapshot comes last, so the notices never wait on it (it logs its own failure).
-  const steps = [["closeRuns", closeRuns], ["recordFinalCommits", recordFinalCommits], ["queueNotices", queueNotices], ["sendNotices", sendNotices], ["liveSnapshot", writeLiveSnapshot]] as const;
+  // The live totals come last, so the notices never wait on them (each logs its own failure). The
+  // GitHub reader is after the snapshot: a slow GitHub never delays it; its numbers show next tick.
+  const steps = [
+    ["closeRuns", closeRuns],
+    ["recordFinalCommits", recordFinalCommits],
+    ["queueNotices", queueNotices],
+    ["sendNotices", sendNotices],
+    ["liveSnapshot", writeLiveSnapshot],
+    ["githubStats", readGithubStats],
+  ] as const;
   for (const [name, step] of steps) {
     try {
       await step(ctx, now);

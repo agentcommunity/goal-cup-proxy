@@ -27,6 +27,8 @@ import type {
   DevicePoll,
   EntryRow,
   FinalCommitDetail,
+  GithubDue,
+  GithubReading,
   HeartbeatArgs,
   HeartbeatResult,
   LiveSnapshot,
@@ -117,6 +119,13 @@ const NOTICE_SHAPE: Record<string, Check> = {
   to: nullable(text),
   subject: text,
   text: text,
+};
+const GITHUB_DUE_SHAPE: Record<string, Check> = {
+  run_id: RUN_SHAPE.run_id!,
+  repo_url: text,
+  official_start: isTime,
+  ends_at: isTime,
+  final_commit: TICK_SHAPE.final_commit!,
 };
 const CHUNK_SHAPE: Record<string, Check> = {
   entry_id: isEntryId,
@@ -424,6 +433,21 @@ export class SupabaseDb implements Db {
       throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
     }
     return v as unknown as Omit<LiveSnapshot, "server">;
+  }
+
+  async githubDue(eventId: string, now: string, limit: number): Promise<GithubDue[]> {
+    // Website migration 20261023100000 (sql/pending).
+    const v = await this.#rpc("upload_github_due", { p_event_id: eventId, p_at: now, p_limit: limit });
+    if (!Array.isArray(v)) {
+      console.error(`supabase upload_github_due: expected a list of runs`);
+      throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
+    }
+    return v.map((row) => this.#row<GithubDue>("upload_github_due", row, "run", GITHUB_DUE_SHAPE));
+  }
+
+  async recordGithub(runId: string, reading: GithubReading, at: string, nextAt: string | null): Promise<boolean> {
+    const v = await this.#rpc("upload_record_github", { p_run_id: runId, p_github: reading, p_at: at, p_next_at: nextAt });
+    return this.#flag("upload_record_github", v);
   }
 
   async sealRun(a: SealArgs): Promise<SealResult> {

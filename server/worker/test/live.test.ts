@@ -217,6 +217,12 @@ test("a field the database adds is never published; a count of 1 to 4, a harness
   assert.throws(() => publicSnapshot({ ...good, harnesses: [{ id: "codex-cli", started: 6, running: 3 }] }, "cup"));
   assert.throws(() => publicSnapshot({ ...good, entries: { ...good.entries, quiet: 2 } }, "cup"));
   assert.throws(() => publicSnapshot({ ...good, harnesses: [{ id: "Robert'); DROP", started: 6, running: 6 }] }, "cup"));
+  // The github block: extra keys dropped; fewer than 5 repositories, or lines not floored to 100, refused.
+  const github = { as_of: T0, repos: 6, commits: 40, prs_opened: null, lines_added: 1200, lines_removed: 0, repo_urls: ["https://github.com/a/b"] };
+  const { repo_urls: _, ...published } = github;
+  assert.deepEqual(publicSnapshot({ ...good, github }, "cup").github, published);
+  assert.throws(() => publicSnapshot({ ...good, github: { ...github, repos: 4 } }, "cup"));
+  assert.throws(() => publicSnapshot({ ...good, github: { ...github, lines_added: 1234 } }, "cup"));
 });
 
 test("the GET never calls the database", async () => {
