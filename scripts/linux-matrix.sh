@@ -83,7 +83,7 @@
 #                                   fails before the harness opens.
 #   MATRIX_PROMPT_FILE              a prompt file for matrix.sh (absolute path), mounted read-only.
 #   MATRIX_PROMPT, MATRIX_PROMPT_DELAY, MATRIX_SUBMIT_DELAY, MATRIX_PRE_PROMPT_KEYS,
-#   MATRIX_PRE_PROMPT_DELAY, MATRIX_REPO_URL
+#   MATRIX_PRE_PROMPT_DELAY, MATRIX_REPO_URL, MATRIX_EXPECT_FILES
 #                                   passed to matrix.sh when set (see its header). For
 #                                   claude-code-cli MATRIX_PRE_PROMPT_KEYS defaults to '\033[B\r',
 #                                   the answer to its "do you trust this folder" question in every
@@ -126,7 +126,7 @@ PROMPT_IN=/run/goalcup/prompt
 # The settle helper beside this script (/src/scripts in the container).
 KIT=$(dirname "$0")/kit_settle.py
 # matrix.sh's settings this script passes on when they are set.
-PASS_ENV="MATRIX_PROMPT MATRIX_PROMPT_DELAY MATRIX_SUBMIT_DELAY MATRIX_PRE_PROMPT_KEYS MATRIX_PRE_PROMPT_DELAY MATRIX_REPO_URL"
+PASS_ENV="MATRIX_PROMPT MATRIX_PROMPT_DELAY MATRIX_SUBMIT_DELAY MATRIX_PRE_PROMPT_KEYS MATRIX_PRE_PROMPT_DELAY MATRIX_REPO_URL MATRIX_EXPECT_FILES"
 
 fail() {
     echo "linux-matrix: FAIL $*"

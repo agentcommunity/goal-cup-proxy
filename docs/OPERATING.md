@@ -172,7 +172,11 @@ stderr and in the log. PASS means:
 3. `goalcup-verify --capture-integrity <trace>` exited 0 with `integrity: valid` and `anchor: signed`;
 4. for a real harness, the agent worked: `goalcup-verify --research-json <trace>` shows a usage
    observation with output or completion tokens above 0, or a decoded assistant message (else the
-   row FAILs with "the agent never answered the prompt");
+   row FAILs with "the agent never answered the prompt"), and its workspace changed: in the run
+   record's `workspace` (the clone), `git status --porcelain --untracked-files=all` is not empty or
+   a commit was made since the run started (a run that only named its session, or stalled at a
+   permission prompt, FAILs with "the agent changed nothing in its workspace"). The default prompt
+   asks for one file; `MATRIX_EXPECT_FILES=0` drops this for a custom prompt that writes nothing;
 5. the server's copy agrees with the local chain.
 
 **The server copy.** The upload API has no call that returns the stored chain, so the script does not

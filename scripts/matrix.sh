@@ -21,7 +21,11 @@
 #   3. for a real harness, the agent worked: `goalcup-verify --research-json` on the trace shows
 #      at least one model exchange that carries output (a usage observation with output or
 #      completion tokens above 0, or a decoded assistant message). A prompt swallowed by a
-#      first-run dialog or split into keys leaves none, and the row FAILs.
+#      first-run dialog or split into keys leaves none, and the row FAILs. And the workspace
+#      changed: in the run record's `workspace` (the clone), `git status --porcelain
+#      --untracked-files=all` is not empty, or a commit (on any ref, pushed or not) was made since
+#      the run started. A run that only named its session, or stalled at a permission prompt,
+#      changes nothing and FAILs. MATRIX_EXPECT_FILES=0 skips this for a prompt that writes nothing.
 #
 # The upload API has no call that returns the stored chain, so (2) is a comparison of the
 # server's position with the local chain, not a download. docs/OPERATING.md, "The matrix", says
@@ -56,7 +60,8 @@
 #   GOALCUP_TEST_MEMBER_ID     the member the test approval approves as (default: member1).
 #   MATRIX_REPO_URL            the empty public repository (default:
 #                              https://github.com/agentcommunity/goalcup-matrix-empty).
-#   MATRIX_PROMPT              what is typed into the harness (default: a one-line greeting).
+#   MATRIX_PROMPT              what is typed into the harness (default: one line asking for a
+#                              file matrix-ok.txt holding "ok").
 #   MATRIX_PROMPT_FILE         a regular file holding the prompt instead (UTF-8; long workloads).
 #                              Not together with MATRIX_PROMPT. The harness gets
 #                              it typed on ONE line: every run of white space, newlines included,
@@ -80,6 +85,8 @@
 #   MATRIX_PRE_PROMPT_DELAY    seconds between "the harness is up" and those keys (default 5; the
 #                              prompt follows two seconds after them, or at MATRIX_PROMPT_DELAY
 #                              if that is later).
+#   MATRIX_EXPECT_FILES        1 (default): a real harness's run must change its workspace (check
+#                              3); 0: a custom prompt that writes nothing, the model check only.
 #   MATRIX_CONFIG_DIR          a prepared goalcup configuration directory for a real harness
 #                              (made with `GOALCUP_CONFIG_DIR=<dir> goalcup prep`, its logins in
 #                              place). Never the platform default. Left in place afterwards.
@@ -261,6 +268,14 @@ case $PRE_KEYS in
     ;;
 esac
 PRE_DELAY=${MATRIX_PRE_PROMPT_DELAY:-5}
+EXPECT_FILES=${MATRIX_EXPECT_FILES:-1}
+case $EXPECT_FILES in
+  0 | 1) ;;
+  *)
+    echo "matrix: MATRIX_EXPECT_FILES is 0 or 1" >&2
+    exit 2
+    ;;
+esac
 SUBMIT_DELAY=${MATRIX_SUBMIT_DELAY:-2}
 case $SUBMIT_DELAY in
   *[!0-9]* | "")
@@ -866,7 +881,8 @@ run_matrix() {
   fi
   MATRIX_TERM=${MATRIX_TERM:-$([ "$CONNECTOR" = "$FAKE_ID" ] && echo dumb || echo xterm-256color)}
   read_manifest || return 1
-  PROMPT=${MATRIX_PROMPT:-"Goal Cup matrix check: reply with the single word ok."}
+  # The default writes one file, so that check 3 sees the workspace change.
+  PROMPT=${MATRIX_PROMPT:-"Goal Cup matrix check: create a file named matrix-ok.txt in this folder holding the single word ok, then reply with the single word ok."}
   if [ -n "$PROMPT_FILE" ]; then
     PROMPT=$(python3 - "$PROMPT_FILE" 2>"$ROOT/prompt.err" <<'PY'
 import sys
@@ -1079,6 +1095,11 @@ PY
   verify_trace "$JUDGED" || return 1
   if [ "$IS_FAKE" = 0 ]; then
     agent_worked "$JUDGED" || return 1
+    if [ "$EXPECT_FILES" = 1 ]; then
+      workspace_changed "$RUN_JSON" || return 1
+    else
+      log "MATRIX_EXPECT_FILES=0: the workspace is not required to change"
+    fi
   fi
   compare_copy "$RUN_ID" "$ENTRY_ID" "$JUDGED" "$RUN_DIR/credential" "$STRICT" || return 1
 
@@ -1169,6 +1190,44 @@ PY
   case $worked in
     "0 usage observations with output, 0 assistant messages" | "")
       fail "the agent never answered the prompt (no model output in the trace: ${worked:-unreadable report})" || return 1 ;;
+  esac
+  return 0
+}
+
+# The agent changed its workspace (the run record's `workspace`, the clone): `git status` shows a
+# changed or new path (untracked files included), or a commit on any ref was made since the run
+# started (committer time at or after the record's `started_at_unix`; a pushed commit counts too).
+# A model call alone (a title, an answer that stalled at a permission prompt) is not work.
+workspace_changed() { # run.json
+  worked=$(python3 - "$1" 2>"$ROOT/workspace.err" <<'PY'
+import json, os, subprocess, sys
+
+rec = json.load(open(sys.argv[1]))
+ws, start = rec.get("workspace"), rec.get("started_at_unix")
+if not isinstance(ws, str) or not ws or not isinstance(start, int):
+    sys.exit("the run record names no workspace or start time")
+if not os.path.isdir(ws):
+    sys.exit(f"the workspace {ws} is gone")
+
+
+def git(*args):
+    out = subprocess.run(["git", "-C", ws, *args], capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit(f"git {args[0]} in {ws}: {(out.stderr.strip().splitlines() or ['failed'])[-1]}")
+    return out.stdout
+
+
+changed = [l for l in git("status", "--porcelain", "--untracked-files=all").splitlines() if l.strip()]
+# An empty clone has no commit and no ref: then git log --all lists nothing.
+times = [int(t) for t in git("log", "--all", "--format=%ct").split()]
+new = sum(1 for t in times if t >= start)
+print(f"{len(changed)} changed paths, {new} new commits in {ws}")
+PY
+  ) || fail "the workspace could not be read: $(last_line "$ROOT/workspace.err")" || return 1
+  log "workspace: $worked"
+  case $worked in
+    "0 changed paths, 0 new commits in "*)
+      fail "the agent changed nothing in its workspace (${worked#0 changed paths, 0 new commits in }: git status clean, no commit since the start; MATRIX_EXPECT_FILES=0 for a prompt that writes nothing)" || return 1 ;;
   esac
   return 0
 }

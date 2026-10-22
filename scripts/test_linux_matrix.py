@@ -418,10 +418,11 @@ class LinuxMatrixTests(unittest.TestCase):
 
     def test_matrix_settings_that_are_set_are_passed_on(self) -> None:
         run = self.run_script("run", "claude-code-cli", MATRIX_SUBMIT_DELAY="5",
-                              MATRIX_PRE_PROMPT_KEYS="")
+                              MATRIX_PRE_PROMPT_KEYS="", MATRIX_EXPECT_FILES="0")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         [docker_run] = self.docker_lines("run")
         self.assertIn("-e MATRIX_SUBMIT_DELAY=5 ", docker_run)
+        self.assertIn("-e MATRIX_EXPECT_FILES=0 ", docker_run)
         # Set but empty still travels: it overrides the Claude trust-dialog default.
         self.assertIn("-e MATRIX_PRE_PROMPT_KEYS= ", docker_run)
         self.assertNotIn("MATRIX_PROMPT_DELAY", docker_run)
