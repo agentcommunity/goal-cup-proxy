@@ -111,6 +111,14 @@ impl Rig {
         rig
     }
 
+    /// [`Rig::chat`] with **no daemon running**, as [`Rig::run_scoped`]: the binary starts a
+    /// real `goalcup-daemon` process, which a test can kill like any other.
+    pub fn chat_run_scoped() -> Rig {
+        let rig = Rig::build(true, Some(2), false, false);
+        write_chat_connector(&rig.connectors, &rig.root.join("bin"), &rig.out);
+        rig
+    }
+
     /// [`Rig::chat`] with [`CHAT_ID`] the only connector: `goalcup prep` picks the one there is.
     pub fn chat_only() -> Rig {
         let rig = Rig::chat();
@@ -214,6 +222,11 @@ impl Rig {
                 let mut command = std::process::Command::new(goalcup);
                 command.arg("continue");
                 command.args(run);
+                command
+            }
+            Launcher::Args(args) => {
+                let mut command = std::process::Command::new(goalcup);
+                command.args(args);
                 command
             }
             Launcher::Shell => {
@@ -828,6 +841,8 @@ pub enum Launcher {
     Continue { run: Option<String> },
     /// A shell is, as in a participant's window.
     Shell,
+    /// `goalcup <args>`, as typed in another terminal (`seal --yes`, `status`).
+    Args(Vec<String>),
 }
 
 /// `goalcup start` running on a pseudo-terminal of its own ([`Rig::start_on_pty`]): the test

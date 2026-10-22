@@ -102,6 +102,10 @@ WP1 to WP9, WP11 and WP12 are done; their checklists and ticket IDs are in the
 package; `sh scripts/gate.sh fast` before every commit.
 
 Status (21 Oct, branch `smart/zen-gates-d9tmbh`, not yet released):
+- Restarts across session limits (cloud brief item 6): design and a two-stop test in
+  [restarts](docs/research/RESTARTS-DESIGN.md). Open: the owner's three rules questions there
+  (platform caps, what a participant may do around a restart, a new machine), and the host
+  catching SIGTERM to send its backlog before a graceful stop.
 - WP-A done (D64): no server error stops a run or ends its upload. Follow-up: a `410` answer to
   `continue` still marks the run over; a bad deploy of that route would refuse continues.
 - WP-B part 1 done: acknowledged parts are deleted at once when the disk is short. The quiet-time
