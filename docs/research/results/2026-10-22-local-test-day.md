@@ -115,6 +115,34 @@ owner's decision D67 (Goal Cup recommends a no-prompt setup; participants config
 Every harness now has a capture with real agent work on both surfaces (Mac: codex, claude, amp,
 hermes; Docker: codex, claude, hermes, and amp in the 120-minute cell).
 
+### Round 2: eight 120-minute cells (22 Oct 01:57 to 04:10 UTC, long workload, Docker drills)
+
+Server copies fetched and verified for all eight: **7 valid with 0 gaps**; mac-amp incomplete with 2
+gaps that are most likely a false loss in our proxy (a client that closes before its TLS greeting is
+counted as fail-open; [plan v10](2026-10-22-fix-plan-v10.md)).
+
+| Cell | Result | Notes |
+|---|---|---|
+| lx-codex | ran to deadline, 20 MB | network cut: ACK covered the pre-cut tail 12 min after the cut; `goalcup: not found` inside Codex (fixed in v5, proven below) |
+| mac-codex | ran to deadline, 24 MB | **v4 proven on macOS** (no prompts, 8 commits); **K10 proven** (stop Confirmed); no leak (CLI spike = extra short-lived goalcup processes) |
+| lx-claude | no work | stalled at the first token refresh (the v6 bug); pause drill recovered in 9 min |
+| mac-claude | no work | auto-mode dialog took the prompt (the v7 bug) |
+| lx-amp | 70 commits, 44 MB | pause drill: ACK caught up 2 min after unpause |
+| mac-amp | 68 commits, 38 MB | 2 fail-open gaps (plan v10) |
+| lx-hermes | 32 commits, 239 MB | network cut and pause recovered; agent finished in 20 min |
+| mac-hermes | 105 commits, **1.19 GB** | the long workload held ~110 of 120 min; busy Hermes writes ~600 MB/h raw (~5-7 GB compressed per 168 h) |
+
+All daemons' memory and open files flat; uploads on the 30-minute timer; every drill recovered inside
+the 35-minute line.
+
+### Proof cells on the final code (22 Oct 04:04 to 04:18 UTC, 10-minute practice)
+
+| Cell | Proves | Result |
+|---|---|---|
+| mac-claude | v6 (token refresh at start), v7 (auto-mode offer) | **PASS**: no refresh error, no dialog, 14 commits, 0 gaps |
+| lx-claude | v6, v7 in Docker | **PASS**: 16 commits, 0 gaps, new `<connector>.goalcup.lock` in use |
+| lx-codex | v5 (`goalcup time-left` inside Codex's login shell) | **PASS**: time-left answered, seal refused |
+
 ### WP-0 measurements (`scripts/research-measure.py`, no paid run)
 
 On today's six 120-minute server copies and the five 18-19 Oct Codex traces on disk (no 18-19 Oct
@@ -144,9 +172,9 @@ larger.
 | [v2](2026-10-22-fix-plan-v2.md) | **brotli/zstd replies decoded** (every Claude run had gaps); macOS exiting-root stop; bracketed paste; "agent worked" check; Claude/Amp first-run state; spaced starts | yes: Claude 0 gaps Mac and Docker |
 | [v3](2026-10-22-fix-plan-v3.md) | long runs verified on their server copy; drill pass lines for the 30-minute upload; honest upload status; long workload; subagent attribution (Amp, Codex) | server copies verified by hand; matrix path not run |
 | [v4](2026-10-22-fix-plan-v4.md) | no permission prompts in test cells; "agent worked" = workspace changed; Docker fetch settings; **D67** (participants set up their own harness) | yes: Docker Codex and Claude work |
-| [v5](2026-10-22-fix-plan-v5.md) | Goal Cup's run home restores the PATH it handed the harness (Codex login shell on Linux lost `goalcup` and the participant's tools); skill backstop; kit installs goalcup like install.sh; two flaky tests | probe in a Debian container |
-| [v6](2026-10-22-fix-plan-v6.md) | **Goal Cup's home lock collided with Claude Code's token-refresh lock**: a start or continue with an expired token stalled | unit tests only |
-| [v7](2026-10-22-fix-plan-v7.md) | kit settles Claude Code's auto-mode offer | unit test only |
+| [v5](2026-10-22-fix-plan-v5.md) | Goal Cup's run home restores the PATH it handed the harness (Codex login shell on Linux lost `goalcup` and the participant's tools); skill backstop; kit installs goalcup like install.sh; two flaky tests | **yes**: Docker Codex answers time-left |
+| [v6](2026-10-22-fix-plan-v6.md) | **Goal Cup's home lock collided with Claude Code's token-refresh lock**: a start or continue with an expired token stalled | **yes**: Mac and Docker Claude work after a refresh |
+| [v7](2026-10-22-fix-plan-v7.md) | kit settles Claude Code's auto-mode offer | **yes** |
 | [v8](2026-10-22-fix-plan-v8.md) | [`docs/HARNESS-SETUP.md`](../../HARNESS-SETUP.md); `goalcup prep` links to it | links and tests |
 | [v9](2026-10-22-fix-plan-v9.md) | `goalcup mcp`: time-left as an MCP tool the agent calls (owner-approved); prep prints the snippet | Claude Code registered it ("Connected"); no run called it yet |
 
@@ -159,10 +187,10 @@ high-severity defect; six small findings are being fixed on `fix/review`.
 In priority order. Evidence is aggregates; raw traces stay on the owner's Mac. Findings list (local):
 `~/goalcup-campaign/FINDINGS.md` on the owner's Mac.
 
-1. **Prove v5, v6, v7 and v9 in live cells.** Rerun mac-claude and lx-claude with an expired token
-   (v6: must start working without anyone typing; v7: no auto-mode dialog), a Docker Codex cell
-   (v5: `goalcup time-left` answers inside Codex), and one cell per harness with the `goalcup mcp`
-   tool configured from prep's snippet (v9; Codex/Amp/Hermes "not measured").
+1. **Plan v10** (`fix/v10`): a client that closes before its TLS greeting must not count as a loss
+   (mac-amp's 2 gaps). Merge if its gate passes, then a 2-hour Amp cell must show 0 gaps. **v9 live
+   check**: one cell per harness with the `goalcup mcp` tool configured from prep's snippet
+   (Codex/Amp/Hermes "not measured"). v5, v6, v7 and K10 are proven live.
 2. **The competition path has never run.** Needs the owner's fine-grained token
    (`~/.goalcup-secrets/gc-test-token`, nembal/gc-test-* repos, public): test runs via
    `campaign.py` with drills, full-flow cells (pushes, `GOALCUP.md`, judged commit equals GitHub's
