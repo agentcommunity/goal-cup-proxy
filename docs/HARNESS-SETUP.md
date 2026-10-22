@@ -98,6 +98,13 @@ Amp needs no setting to run without permission prompts.
 
 ### Hermes
 
+**Install Hermes 0.19.0 from PyPI:** `uv tool install hermes-agent==0.19.0`. Newer Hermes
+releases (0.21.1 and later) no longer write the session file Goal Cup records, so Goal Cup could
+record only the model traffic, not Hermes's own side of the run. Hermes's own installer
+(`curl … install.sh | bash`) installs the newest release, so do not use it for Goal Cup. Check
+with `hermes --version`; it should print `Hermes Agent v0.19.0`
+([facts sheet](harnesses/hermes-cli.md)).
+
 Add these keys to `hermes-cli/config.yaml`:
 
 ```yaml
