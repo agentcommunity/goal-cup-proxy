@@ -77,9 +77,13 @@ fn file_identity(metadata: &std::fs::Metadata) -> FileIdentity {
 /// that both refresh the subscription token fail with `refresh_token_reused` and log the
 /// participant out of that home. A second start is refused plainly, before anything is made.
 ///
-/// An exclusive `flock` on `<capture-homes>/<connector>.lock`, beside the home rather than in
-/// it, so the harness never sees it. The descriptor is close-on-exec (std's default), so the
-/// harness never inherits the lock either.
+/// An exclusive `flock` on `<capture-homes>/<connector>.goalcup.lock`, beside the home rather
+/// than in it, so the harness never sees it. The descriptor is close-on-exec (std's default), so
+/// the harness never inherits the lock either.
+///
+/// Not `<connector>.lock`: that is `<home> + ".lock"`, the very path Claude Code's token refresh
+/// locks (proper-lockfile, `mkdir`, a lock younger than 60 s is busy). Goal Cup's file there,
+/// rewritten at every start and continue, made a refresh due at the start fail (fix plan v6).
 ///
 /// `name` is the harness's display name, for the refusal. `replaces`: this start is a competition
 /// start that would replace an open competition run, which the refusal then says.
@@ -98,16 +102,57 @@ pub(crate) fn lock_shared_home(
     }
 }
 
-/// `<capture-homes>/<connector>.lock`, beside the shared home.
+/// `<capture-homes>/<connector>.goalcup.lock`, beside the shared home. A name no harness uses:
+/// the run home's leaf is `<connector>.run-home`, and a harness's own lock beside its home is
+/// `<connector>.lock`.
 fn home_lock_path(config_home: &Path, connector: &str) -> PathBuf {
+    config_home
+        .parent()
+        .expect("a capture-home parent")
+        .join(format!("{connector}.goalcup.lock"))
+}
+
+/// `<capture-homes>/<connector>.lock`, the lock a goalcup before fix plan v6 takes. Only looked
+/// at, never made or written (it is Claude Code's refresh lock path). Remove with
+/// [`old_home_lock_busy`] in a later release.
+fn old_home_lock_path(config_home: &Path, connector: &str) -> PathBuf {
     config_home
         .parent()
         .expect("a capture-home parent")
         .join(format!("{connector}.lock"))
 }
 
+/// Upgrade safety: a run of an older goalcup holds the old-name lock on this home. The file is
+/// opened read-only if it is there, flock-tested and closed at once: never created, written or
+/// held. Anything that is not a regular file there (a harness's lock directory) is no goalcup's.
+#[cfg(unix)]
+fn old_home_lock_busy(config_home: &Path, connector: &str) -> Result<bool, CliError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = old_home_lock_path(config_home, connector);
+    let Ok(file) = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+    else {
+        // Absent, or nothing an older goalcup (which opens it the same no-follow way) could hold.
+        return Ok(false);
+    };
+    if !file.metadata().is_ok_and(|m| m.is_file()) {
+        return Ok(false);
+    }
+    match file.try_lock() {
+        Ok(()) => Ok(false),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+        Err(std::fs::TryLockError::Error(source)) => Err(CliError::Io {
+            path: path.display().to_string(),
+            source,
+        }),
+    }
+}
+
 /// [`lock_shared_home`]'s attempt: the lock, or the lock file's path when another process holds
-/// it (so that the holder can be named, [`home_holder`]).
+/// it (so that the holder can be named, [`home_holder`]). A run of an older goalcup holding the
+/// old-name lock ([`old_home_lock_busy`]) holds the home too, and its file is the one named.
 #[cfg(unix)]
 fn try_lock_shared_home(
     config_home: &Path,
@@ -136,6 +181,10 @@ fn try_lock_shared_home(
                 source,
             });
         }
+    }
+    // Checked while the new lock is held, so a second new start is refused by that one.
+    if old_home_lock_busy(config_home, connector)? {
+        return Ok(Err(old_home_lock_path(config_home, connector)));
     }
     Ok(Ok(file))
 }
@@ -197,7 +246,7 @@ pub(crate) fn lock_home_for_continue(
 }
 
 /// Which home of a connector is kept across runs, and so serialized under its one
-/// `<capture-homes>/<id>.lock`: its config home (D39, `config_home = "shared"`), at
+/// `<capture-homes>/<id>.goalcup.lock`: its config home (D39, `config_home = "shared"`), at
 /// `<cfg>/capture-homes/<id>`, or its run `HOME` (D59, `run_home = "shared"`), at
 /// `<cfg>/capture-homes/<id>.run-home`. The schema never admits both. The `bool` is whether it
 /// is the run `HOME`. `None`: every home is made per run.
@@ -239,8 +288,8 @@ pub(crate) struct PrepHome {
 }
 
 /// Claim the home `goalcup prep` opens the harness in ([`prep_home_leaf`]): the one every run of
-/// the connector shares, made if there is none, under the `<id>.lock` a run takes. `None` for a
-/// connector with no kept home. Judged as a run judges it.
+/// the connector shares, made if there is none, under the `<id>.goalcup.lock` a run takes. `None`
+/// for a connector with no kept home. Judged as a run judges it.
 pub(crate) fn claim_home_for_prep(
     cfg: &Path,
     connector: &HarnessConnector,
@@ -738,5 +787,65 @@ mod tests {
         drop(first);
         lock_shared_home(&home, "some-cli", "Some", false)
             .expect("free again once the first run ends");
+    }
+
+    /// Fix plan v6: Claude Code locks its token refresh by making the directory `<home>.lock`
+    /// (proper-lockfile). While a run holds the home and has noted itself, that still succeeds,
+    /// and the run's own lock still keeps a second run out.
+    #[test]
+    fn the_harness_can_take_its_home_lock_while_a_run_holds_the_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("claude-code-cli");
+        std::fs::create_dir(&home).unwrap();
+        let first = lock_shared_home(&home, "claude-code-cli", "Claude Code", false)
+            .expect("the first run takes the home");
+        note_home_holder(&first, "run_0123456789abcdef");
+
+        std::fs::create_dir(tmp.path().join("claude-code-cli.lock"))
+            .expect("the harness's own lock beside its home is free");
+        let refused = lock_shared_home(&home, "claude-code-cli", "Claude Code", false)
+            .expect_err("a second run is still refused");
+        assert!(matches!(refused, CliError::Refused(_)), "{refused}");
+    }
+
+    /// Upgrade safety: a run of an older goalcup holds `<connector>.lock`. A new start on the
+    /// same home is refused while it does, and the old file is neither changed nor kept locked.
+    #[test]
+    fn a_run_of_an_older_goalcup_holding_the_old_lock_keeps_the_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("some-cli");
+        let old_path = tmp.path().join("some-cli.lock");
+        // What an older goalcup holds: its own open file, flocked.
+        let old = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&old_path)
+            .unwrap();
+        std::fs::write(&old_path, "run_0123456789abcdef").unwrap();
+        old.try_lock().unwrap();
+        let before = std::fs::metadata(&old_path).unwrap();
+
+        let refused = lock_shared_home(&home, "some-cli", "Some", false)
+            .expect_err("the older run still holds the home");
+        assert!(matches!(refused, CliError::Refused(_)), "{refused}");
+        assert_eq!(
+            try_lock_shared_home(&home, "some-cli").unwrap().err(),
+            Some(old_path.clone()),
+            "the older run's file is the one that names it"
+        );
+        let after = std::fs::metadata(&old_path).unwrap();
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after.modified().unwrap(), before.modified().unwrap());
+
+        drop(old);
+        let taken = lock_shared_home(&home, "some-cli", "Some", false)
+            .expect("free once the older run ends");
+        // The new start holds no lock on the old file.
+        let probe = std::fs::File::open(&old_path).unwrap();
+        probe.try_lock().expect("the old file is not held");
+        drop(probe);
+        drop(taken);
     }
 }

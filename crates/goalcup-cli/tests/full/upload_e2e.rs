@@ -1221,10 +1221,10 @@ mod segments {
         run.wait_shown("tui: ready");
         run.type_line("hello");
         run.wait_shown("tui: noted hello");
-        let lock = rig
-            .cfg
-            .join("capture-homes")
-            .join(format!("{}.lock", crate::common::m2_cli_support::CHAT_ID));
+        let lock = rig.cfg.join("capture-homes").join(format!(
+            "{}.goalcup.lock",
+            crate::common::m2_cli_support::CHAT_ID
+        ));
         assert!(
             !lock_is_free(&lock),
             "the run holds the home while it records"

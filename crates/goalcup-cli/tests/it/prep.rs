@@ -1468,22 +1468,24 @@ fn a_failing_configure_command_keeps_the_home_not_ready_and_launches_nothing() {
 
 // ------------------------------------------------------------------ a home someone else holds
 
-/// Take the flock `goalcup start` and `goalcup prep` take on `<cfg>/capture-homes/<id>.lock`,
-/// as another process: the lock is on this open file, so the prep (a process of its own) is
-/// refused. `holder`, when given, is the run id a recording run writes into the file.
+/// Take the flock `goalcup start` and `goalcup prep` take on
+/// `<cfg>/capture-homes/<id>.goalcup.lock`, as another process: the lock is on this open file, so
+/// the prep (a process of its own) is refused. `holder`, when given, is the run id a recording run
+/// writes into the file.
 fn hold_home_lock(rig: &Rig, id: &str, holder: Option<&str>) -> std::fs::File {
     use std::os::fd::AsRawFd;
     let homes = rig.cfg.join("capture-homes");
     std::fs::create_dir_all(&homes).unwrap();
+    let path = homes.join(format!("{id}.goalcup.lock"));
     let lock = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(true)
-        .open(homes.join(format!("{id}.lock")))
+        .open(&path)
         .unwrap();
     if let Some(run) = holder {
-        std::fs::write(homes.join(format!("{id}.lock")), run).unwrap();
+        std::fs::write(&path, run).unwrap();
     }
     // SAFETY: `lock` owns a live descriptor; `flock` reads nothing else.
     let taken = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
