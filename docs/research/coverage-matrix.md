@@ -1,6 +1,7 @@
 # Research validation coverage
 
-Status: 19 October 2026. These are measured cells, not a statement that every shipped harness
+Status: 22 October 2026. The first table is the 19 October batch; the 22 October local test day is
+in its own table below it. These are measured cells, not a statement that every shipped harness
 has completed research validation. Raw recordings, account identifiers and detailed source
 references remain private. The [research target](../RESEARCH-TARGET.md) defines acceptance;
 the [local handoff](../LOCAL-RESEARCH-HANDOFF.md) defines the experiment limits.
@@ -8,6 +9,8 @@ the [local handoff](../LOCAL-RESEARCH-HANDOFF.md) defines the experiment limits.
 Capture integrity, useful model activity, stored-byte retrieval and decoding are separate
 results. A lifecycle PASS or signed upload ACK establishes neither a model reply nor retrieval.
 A valid report with capture-only streams establishes neither transcript decoding nor coverage.
+
+**19 October batch**
 
 | Harness | Measured platform/version | Activity evidence | Wire / native interpretation | Actual stored-byte replay | Child coverage |
 |---|---|---|---|---|---|
@@ -27,12 +30,62 @@ Staging signatures were checked with a supplied staging public key retained with
 packets. Reports preserve `key_source: supplied` and `server_key_unpinned`; this is not a claim
 of production-key anchoring.
 
-No fresh Linux, WSL2 or native Windows research run is claimed. Claude inference remains deferred.
+No fresh Linux, WSL2 or native Windows research run was claimed in the 19 October batch. Claude
+inference was deferred then; the 22 October table below changes that for Claude Code. WSL2 and
+native Windows have still not run.
 Earlier error and incomplete samples are retained. The Hermes row was initially mistaken for
 an invalid-key smoke; reviewing this exact retrieved capture found four HTTP 200 responses,
 including complete SSE and JSON replies. That correction is source evidence, not an inference
 from upload success. Decoder versions belong to each generated
 report, alongside the verifier build; old reports are historical unless explicitly regenerated.
+
+## 22 October local test day
+
+Staging only, on the owner's Mac (arm64) and Docker on it. "Linux" below means Docker on the Mac,
+not a real Linux host. Source and aggregates: the [results](results/2026-10-22-local-test-day.md).
+Each run signed in once; the cheapest model settings were used (Codex gpt-5.6-luna at low, Claude
+Code haiku with thinking off, Amp mode low, Hermes DeepSeek deepseek-v4-flash). "Server copy equal"
+means the stored upload equals the local chain. Raw traces stay private.
+
+| Harness | Platform / version | Run | Integrity and server copy | Agent work and notes |
+|---|---|---|---|---|
+| Claude Code | macOS / 2.1.299 | 10 min practice | Before brotli decoding: incomplete, 2 gaps (replies not decoded). After: valid, 0 gaps, server copy equal | Before: a start-up dialog took the prompt, no work. After: 3 commits, 25 tests, time-left answered, seal refused |
+| Claude Code | Linux / 2.1.283 | 10 min practice | Before: incomplete, 2 gaps. After brotli decoding: 0 gaps, server copy equal | First rerun: no answer (a permission prompt nobody could answer). After the no-prompt kit settings: 58 tool uses, 6 commits, haiku only, time-left answered, seal refused |
+| Codex CLI | macOS / 0.156.1 | 10 min practice | PASS, valid, server copy equal | Worked, 0 commits: the default sandbox makes `.git` read-only and Codex waited 8.7 of 10 minutes for an approval |
+| Codex CLI | macOS / 0.156.1 | 120 min, subagents, no git | Valid, 0 gaps; 14,720 records / 16.4 MB | 2 subagent rollouts, attributed; no approval stall without git |
+| Codex CLI | Linux / 0.153.0 | 10 min practice | PASS, valid, server copy equal | First run did no work (prompt split by the pty). After fixes: sandbox cannot start in Docker; after the no-prompt settings, 2 commits, every turn gpt-5.6-luna low. `goalcup time-left` was `not found` in Codex's login shell; fixed (plan v5), not rerun |
+| Amp CLI | macOS / 0.0.1792209635-g24a9fe | 10 min practice | PASS, valid, server copy equal | 19 commits, time-left answered, seal refused |
+| Amp CLI | macOS / same | 120 min, subagents | Valid, 0 gaps; 11,740 records / 9.9 MB | Subagents ran on the parent thread with `parentToolUseId`, on claude-opus-5-5 while the thread was in mode low |
+| Amp CLI | Linux / same | 10 min practice | PASS, valid, server copy equal, but no agent work (welcome screens took the prompt) | Welcome state set in the kit afterwards |
+| Amp CLI | Linux / same | 120 min, build task, network cut 10 min | Valid, 0 gaps; 21,115 records / 20.9 MB | Prompt received; the acknowledgement covered the pre-cut tail 9.4 minutes after the cut |
+| Hermes CLI | macOS / 0.19.0 | 10 min practice | PASS, valid, server copy equal | Worked, time-left answered, seal refused |
+| Hermes CLI | macOS / 0.19.0 | 120 min, subagents | Valid, 0 gaps; 2,751 records / 55.9 MB | 2 `delegate_task` children, on the wire only, unattributed |
+| Hermes CLI | macOS, 9 GiB APFS image / 0.19.0 | 120 min, build task, D65 disk drill | Valid, 0 gaps; 2,176 records / 52.1 MB | D65 PASS: paused below 1 GiB within 35 s, resumed above 3 GiB within 24 s; a pause held through the deadline and the run still sealed |
+| Hermes CLI | Linux / 0.19.0 | 10 min practice | PASS, valid, server copy equal | 44 tests, time-left answered, seal refused |
+| Hermes CLI | Linux / 0.19.0 | 120 min, build task, network cut 10 min, pause 20 min | Valid, 0 gaps; 2,650 records / 73.5 MB | Heartbeat failures 1 to 2 during the cut, 0 after; run state survived the pause; agent idle after about 7 minutes |
+
+What the table adds and what it does not:
+
+- Claude Code now has a captured, valid, gap-free run with real model replies on both surfaces.
+  The fix was brotli (and zstd) decoding in the recording proxy: `api.anthropic.com` answers
+  `content-encoding: br`, and each undecoded reply had been an `unsupported_encoding` gap.
+  In a second round (about 02:00 UTC) both Claude Code cells stalled, on an expired login
+  refresh and on an auto-mode dialog; both are fixed in the product or kit and not rerun.
+- Every long run reached its deadline, sealed and uploaded, and the local tail part equals the
+  server copy's tail. After about 30 minutes acknowledged parts are pruned locally by design, so
+  the server copies were rebuilt with `scripts/fetch-run.sh` and verified instead. Daemon and CLI
+  memory and open files stayed flat. All of this is 2-hour evidence; agents finished their
+  workloads in 5 to 7 minutes and idled, so it does not show busy-run growth.
+- Decoding, retrieval and child coverage were not regenerated for these runs in the results file.
+  Subagent attribution is a decoder change (89703603: Amp `parentToolUseId` and `Task` results,
+  Codex messages and `spawn_agent`), not a measured replay of the 22 October copies. Hermes
+  children stay wire-only until a native decoder exists.
+- Size, measured by `scripts/research-measure.py` on the 120-minute server copies and five 18 to 19
+  October Codex traces: Codex 8.2 MB/h, Amp 4.9 to 10.4 MB/h, Hermes 26 to 37 MB/h (over 95% wire).
+  Linear 168 h projections: about 1.4 GB, 0.8 to 1.75 GB and 4.4 to 6.2 GB; about 130 MB, 80 to 170
+  MB and 225 to 445 MB with zstd. They come from idle 2-hour runs, so a busy run can be larger.
+- Not run on 22 October: WSL2 and native Windows (no Windows machine), test runs, full-flow cells
+  and the judged-commit check (no GitHub token), runs beyond 2 hours, a real Linux host, x86_64.
 
 ## Bounded Codex result
 
@@ -81,7 +134,8 @@ are model requests but no decoded model response. This establishes reproducible 
 not a successful Claude run or new inference.
 
 Phase 3 real-harness interruption/endurance measurements remain open until the shorter path and
-its reporting are reviewed. No further paid run is justified merely to fill time.
+its reporting are reviewed. No further paid run is justified merely to fill time. On 22 October the
+2-hour step ran with network cut, pause and disk drills (table above); 8-hour and 24-hour runs did not.
 
 
 ## Controlled upload-outage check

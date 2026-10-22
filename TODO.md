@@ -30,6 +30,8 @@ decoding and child coverage for each measured harness/platform cell.
 
 The 18 and 19 Oct baseline runs (Codex Luna/high, a native child probe, Hermes and Amp
 replays) are recorded in the [October archive](docs/archive/TODO-2026-10.md#research-baseline-runs-18-to-19-oct).
+The 22 Oct local test day (Mac and Docker, four harnesses, staging) is in the
+[results](docs/research/results/2026-10-22-local-test-day.md) and the coverage matrix.
 
 ## Dates (UTC)
 
@@ -111,7 +113,8 @@ Status (21 Oct, branch `smart/zen-gates-d9tmbh`, not yet released):
   post-event export step (owner, 21 Oct): flagged traces are cleaned before anyone gets them.
 - WP-F kit done: `scripts/campaign.py`, `matrix.sh --test --duration`, `linux-matrix.sh` cells,
   `research-measure.py`, `research-sample.py`, `research-staging.py`;
-  [local campaign](docs/research/LOCAL-CAMPAIGN.md). Not yet run against real Docker or staging.
+  [local campaign](docs/research/LOCAL-CAMPAIGN.md). Run on 22 Oct against Docker and staging (see
+  the 22 Oct status below). Test-run and full-flow cells wait for the owner's GitHub token.
 - WP-G done: E02 cross-check ported with unique bodies and a start-anchored match.
 - T25 measured ([t25-disk-full](docs/research/t25-disk-full.md)): before WP-C, a full disk silently
   ended the recording.
@@ -123,16 +126,44 @@ Status (21 Oct, branch `smart/zen-gates-d9tmbh`, not yet released):
   Worker's clock fixed; the root-only and full-tier tests pass as a normal user; the SQL file, script
   tests, release package and CLI smoke pass. Left for the owner's machines: [local next steps](docs/research/LOCAL-NEXT-STEPS.md).
 
+Status (22 Oct, same branch, [local test day](docs/research/results/2026-10-22-local-test-day.md)):
+- Mac `gate.sh full` passed 2230 of 2231; the one failing test asserted the wrong thing and is
+  fixed. `check-sql.sh` passes on Postgres 17.9. The event-readiness migration is applied once to
+  the shared database (owner approved; `pnpm db:check` passed). The website branch
+  `goalcup/event-readiness-migration` is committed, not pushed: its pre-push hook needs the
+  owner's `SERGIO_OWNER_CHECKOUT` and `SERGIO_OWNER_PIN`. The staging Worker is deployed from this
+  branch, with `PRACTICE_RUN_MINUTES=120` until the next normal deploy.
+- Eight 10-minute staging practice smokes and six 120-minute cells (Codex, Amp, Hermes on the Mac
+  and in Docker; network cut, pause, D65 disk drills). Every long run reached its deadline, sealed
+  and uploaded; server copies valid with 0 gaps; daemon and CLI memory and open files flat. D65
+  passed on a 9 GiB APFS image.
+- Claude Code now has clean captures on the Mac (2.1.299) and in Docker (2.1.283), 0 gaps: the
+  recording proxy decodes brotli and zstd replies (fix plan v2 K5). Every harness has a capture
+  with real agent work on both surfaces.
+- Fix plans v1 to v8 are merged (kit token file, bracketed paste, "agent worked" means the
+  workspace changed, no-prompt settings (D67), long-run verification on the server copy, honest
+  `goalcup status` upload line, run HOME PATH for login shells, Goal Cup's home lock off Claude
+  Code's refresh lock, harness setup guide linked from `prep`). Plan v9 (`goalcup mcp`, a
+  `time_left` tool) is a draft for owner review, not merged.
+- Not run: test runs, full-flow cells and the judged-commit check (no GitHub token yet); WSL2 (no
+  Windows machine); fix plans v5 to v7 are not rerun; 8 h and 24 h steps. See
+  [local next steps](docs/research/LOCAL-NEXT-STEPS.md#open-since-22-oct).
+
 ### WP0: Measure
-Status (17 Oct): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging
+Status (17 Oct, with 22 Oct notes in the list below): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging
 practice runs: deadline stop, seal, matching uploaded server position and zero-gap research
 reports. Hermes native snapshots remain undecoded. Amp's pinned macOS task, capture and delivery
 passed with zero gaps (#206); its trace does not confirm process-tree termination. Left:
 - Claude (haiku) reached its weekly quota after the folder-trust dialog. Retry when quota returns;
   preserve the incomplete-stop trace and its gaps rather than count it as a successful task.
+  (22 Oct: retried. Mac 2.1.299 and Docker 2.1.283 passed with 0 gaps and real work after brotli
+  decoding. The incomplete traces are kept.)
 - Linux Amp and Claude task runs remain unmeasured; no Linux Amp login or capture claim.
+  (22 Oct: measured in Docker on the Mac: Amp in a 120-minute cell, Claude Code in a 10-minute
+  cell. Not a real Linux host.)
 - Then: the 8-hour runs on macOS and Linux, Intel Mac, x86_64 Linux and WSL2, and the edge cases in
   [OPERATING](docs/OPERATING.md). The matrix is `scripts/matrix.sh` (Linux: `scripts/linux-matrix.sh`, #198).
+  (22 Oct: 2-hour cells ran; 8-hour runs, Intel Mac, x86_64 Linux and WSL2 did not.)
 
 The 16 Oct WP0 findings list (27 small bugs, all fixed or kept by design) is in the
 [October archive](docs/archive/TODO-2026-10.md#wp0-findings-16-oct).
@@ -211,7 +242,12 @@ These look odd but are right. Do not "fix" them.
 
 - WP0: the owner completed Linux Codex sign-in and Amp's private-home macOS sign-in. A rebuilt
   Mac binary may need a new Little Snitch approval. Claude remains deferred until quota returns;
-  Linux Amp task coverage is still outstanding.
+  Linux Amp task coverage is still outstanding. (22 Oct: Claude Code and Linux Amp ran; see the
+  22 Oct status.)
+- The fine-grained GitHub token for the `gc-test-*` repositories. Until it exists, no test run,
+  full-flow cell or judged-commit check runs.
+- Fix plan v9 (`goalcup mcp`, a read-only `time_left` tool): approve, change or drop.
+- A Windows machine or VM for the WSL2 cells.
 
 ## Known issues
 
@@ -220,9 +256,13 @@ These look odd but are right. Do not "fix" them.
   `Unresolved(ProcessAuthorityUnavailable)`, with no remaining targeted process and
   `observed_gone = false`. Investigate the authority-loss cause during longer tests; do not
   claim `Confirmed` process-tree termination. [Measured facts](docs/harnesses/amp-cli.md#pinned-staging-practice-17-oct-2026).
+  22 Oct: the same verdict on mac-amp and mac-codex. Cause found: a root caught in its 30 to 45 ms
+  exiting window was refused as recycled. Fixed in fix plan v2 K10 (merged); not remeasured on the Mac.
 
 - **T25 (measure, dry run):** fault coverage still open: a live-receiver TCP close, and RSS growth
   over a long run. The literal ENOSPC is measured ([t25-disk-full](docs/research/t25-disk-full.md)).
+  22 Oct: daemon and CLI memory and open files stayed flat over six 120-minute cells. Longer runs
+  are still open.
 - **F-04:** a torn tail is kept and never repaired. `goalcup continue` closes such a segment at its
   last whole record and starts a new one. The torn segment says it is incomplete.
 - **H-10 residual:** a CLI crash after release plus a raced manual seal can leave a harness running
@@ -266,4 +306,6 @@ These look odd but are right. Do not "fix" them.
   (run 38775727986). Not proven: termination of a fork-and-leave wrapper against a real harness
   ([TERMINATION](docs/TERMINATION.md)), a logged-in harness capture on Linux (where each harness
   keeps its login there is not checked), the end-to-end suites on x86_64, a real Linux host, and
-  long runs.
+  long runs. 22 Oct: logged-in Codex, Claude Code, Amp and Hermes captures ran in Docker on the Mac,
+  Claude Code's login location was checked, and 2-hour runs passed. A real Linux host, x86_64 and
+  runs beyond 2 hours are still unproven.
