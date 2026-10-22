@@ -569,8 +569,10 @@ pub(crate) const LOGIN_PROFILE_HEADER: &str = "# Written by Goal Cup: the PATH t
      harness, which a login shell's /etc/profile resets.";
 
 /// Write `<run_home>/.profile`, which puts back the `PATH` the launch hands the harness
-/// ([`crate::launch::harness_path`]), unless a `.profile` is there already (a shared run home's
-/// own, D59), which is kept as it is.
+/// ([`crate::launch::harness_path`]). A `.profile` already there that Goal Cup wrote (its first
+/// line is [`LOGIN_PROFILE_HEADER`]: an earlier run on this shared home, D59) is replaced, so this
+/// run's `PATH` wins; it is written beside and renamed over, which never follows a link. Any other
+/// `.profile` (the participant's own, or a link) is kept as it is.
 ///
 /// A harness that runs its commands in a login shell (Codex's `/bin/sh -lc`) has them run
 /// `/etc/profile`, which on Debian and Ubuntu sets `PATH` outright; the participant's own
@@ -580,32 +582,68 @@ pub(crate) const LOGIN_PROFILE_HEADER: &str = "# Written by Goal Cup: the PATH t
 /// the home has no `.bash_profile`, which an empty run home never has.
 pub(crate) fn write_login_profile(run_home: &Path, path: &str) -> Result<(), CliError> {
     let file = run_home.join(".profile");
+    let body = format!(
+        "{LOGIN_PROFILE_HEADER}\nexport PATH={}\n",
+        shell_single_quoted(path)
+    );
+    let io = |at: &Path| {
+        let at = at.display().to_string();
+        move |source| CliError::Io { path: at, source }
+    };
+    match write_new(&file, &body) {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        written => return written.map_err(io(&file)),
+    }
+    if !written_by_goal_cup(&file) {
+        return Ok(());
+    }
+    let temp = run_home.join(format!(".profile.goalcup-{}", std::process::id()));
+    let _ = std::fs::remove_file(&temp);
+    let replaced = write_new(&temp, &body)
+        .map_err(io(&temp))
+        .and_then(|()| std::fs::rename(&temp, &file).map_err(io(&file)));
+    if replaced.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    replaced
+}
+
+/// Write `body` to a new file at `file` (mode 0600). `create_new` never follows or replaces
+/// anything already there, a link included.
+fn write_new(file: &Path, body: &str) -> std::io::Result<()> {
     let mut options = std::fs::OpenOptions::new();
-    // `create_new` never follows or replaces anything already there, a link included.
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut out = match options.open(&file) {
-        Ok(out) => out,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
-        Err(source) => {
-            return Err(CliError::Io {
-                path: file.display().to_string(),
-                source,
-            });
-        }
+    let mut out = options.open(file)?;
+    std::io::Write::write_all(&mut out, body.as_bytes())
+}
+
+/// Whether `file` is a regular file (not a link) whose first line is [`LOGIN_PROFILE_HEADER`].
+fn written_by_goal_cup(file: &Path) -> bool {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let Ok(opened) = options.open(file) else {
+        return false;
     };
-    let body = format!(
-        "{LOGIN_PROFILE_HEADER}\nexport PATH={}\n",
-        shell_single_quoted(path)
-    );
-    std::io::Write::write_all(&mut out, body.as_bytes()).map_err(|source| CliError::Io {
-        path: file.display().to_string(),
-        source,
-    })
+    if !opened.metadata().is_ok_and(|m| m.is_file()) {
+        return false;
+    }
+    let mut head = Vec::new();
+    let limit = LOGIN_PROFILE_HEADER.len() as u64 + 1;
+    if opened.take(limit).read_to_end(&mut head).is_err() {
+        return false;
+    }
+    head.strip_suffix(b"\n") == Some(LOGIN_PROFILE_HEADER.as_bytes())
 }
 
 /// `value` as one POSIX shell word: single quotes, each `'` written `'\''`.
@@ -758,6 +796,52 @@ mod tests {
             std::fs::read(run.home.join(".profile")).unwrap(),
             b"# the participant's own\n"
         );
+    }
+
+    /// Two runs on one shared home with different `PATH`s: the `.profile` Goal Cup wrote for the
+    /// first is replaced, so the second run's `PATH` wins; a link there is kept, not written
+    /// through.
+    #[test]
+    fn the_second_run_on_a_shared_home_gets_its_own_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shared = tmp.path().join("shared-home");
+        std::fs::create_dir_all(&shared).unwrap();
+        let profile = shared.join(".profile");
+        let path_of = |home: &Path| {
+            let out = sh_in(home, "-c", r#". "$HOME/.profile"; printf %s "$PATH""#);
+            String::from_utf8(out.stdout).unwrap()
+        };
+        for (n, path) in ["/opt/first/bin:/usr/bin", "/opt/second/bin:/usr/bin"]
+            .into_iter()
+            .enumerate()
+        {
+            let beside = tmp.path().join(format!("beside-{n}"));
+            std::fs::create_dir_all(&beside).unwrap();
+            let env = BTreeMap::from([("PATH".to_string(), path.to_string())]);
+            let run = RunDir::create(
+                &beside,
+                RunHome::Shared,
+                Some(&shared),
+                &env,
+                WorkspaceAt::InRunDir,
+            )
+            .unwrap();
+            assert_eq!(path_of(&run.home), path);
+        }
+        let left: Vec<_> = std::fs::read_dir(&shared)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(left, [std::ffi::OsString::from(".profile")], "no temp left");
+
+        // A link to a Goal Cup profile is not ours to replace: kept, its target untouched.
+        let target = tmp.path().join("elsewhere");
+        std::fs::rename(&profile, &target).unwrap();
+        let before = std::fs::read(&target).unwrap();
+        std::os::unix::fs::symlink(&target, &profile).unwrap();
+        write_login_profile(&shared, "/opt/third/bin").unwrap();
+        assert!(std::fs::symlink_metadata(&profile).unwrap().is_symlink());
+        assert_eq!(std::fs::read(&target).unwrap(), before);
     }
 
     /// #11: two runs on one shared harness home. The second is refused plainly while the first
