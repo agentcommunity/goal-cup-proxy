@@ -72,7 +72,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/goalcup-verifier/src/capture_analysis/registry.rs",
-        "Codex CLI 0.153.0 CLI/exec rollouts and 0.156.1 native child with inherited context",
+        "Codex CLI 0.153.0 CLI/exec rollouts, 0.156.1 native child with inherited context, and a 0.156.1 parent with two spawn_agent children",
         "evidence note: the harness build this decoder was measured against",
     ),
     (
@@ -97,7 +97,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/goalcup-verifier/src/capture_analysis/registry.rs",
-        "one retrieved/replayed macOS Amp 0.0.1792209635-g24a9fe thread WebSocket sample",
+        "two retrieved/replayed macOS Amp 0.0.1792209635-g24a9fe thread WebSocket samples, one with Task subagents",
         "evidence note: the harness build this decoder was measured against",
     ),
 ];
