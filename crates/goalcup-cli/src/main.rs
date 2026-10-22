@@ -313,7 +313,7 @@ fn run(command: Command) -> Result<u8, CliError> {
         Command::Mcp => commands::mcp::serve(
             &mut std::io::stdin().lock(),
             &mut std::io::stdout().lock(),
-            &mut || commands::time_left::answer(goalcup_cli::run::now_unix()),
+            &mut || commands::time_left::mcp_answer(goalcup_cli::run::now_unix()),
         )
         .map(|()| 0),
         Command::Entries { json } => entries(json).map(|()| 0),

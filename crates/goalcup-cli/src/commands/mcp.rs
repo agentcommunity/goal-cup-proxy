@@ -4,7 +4,8 @@
 //! line. It answers `initialize`, `ping`, `tools/list` and `tools/call`, takes every notification
 //! (`notifications/initialized` among them) without an answer, and stops at the end of its input
 //! with exit 0. Its one tool, [`TOOL`], takes no arguments and returns the line
-//! `goalcup time-left` prints ([`super::time_left::answer`]), so the two cannot differ.
+//! `goalcup time-left` prints from the time-left file ([`super::time_left::mcp_answer`]); with no
+//! file it says the time is unknown, since inside the harness there is no run to look up.
 //!
 //! The harness starts it by absolute path, so the agent's `PATH` does not matter. It only reads:
 //! it writes no file, opens no port, asks no server, and cannot seal, stop or continue anything
@@ -116,6 +117,8 @@ fn answer(
 }
 
 /// `initialize`: the client's protocol version when this server answers as it, else the newest.
+/// It carries no `instructions`: Goal Cup does not prompt the agent, and the tool's description
+/// says what it does.
 fn initialize(params: Option<&Value>) -> Value {
     let asked = params
         .and_then(|p| p.get("protocolVersion"))
@@ -128,9 +131,6 @@ fn initialize(params: Option<&Value>) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": SERVER_NAME, "version": crate::CLI_VERSION },
-        "instructions": format!(
-            "Call `{TOOL}` to see how much time this /goal Cup run has left."
-        ),
     })
 }
 
@@ -287,6 +287,8 @@ mod tests {
         assert_eq!(r["serverInfo"]["name"], SERVER_NAME);
         assert_eq!(r["serverInfo"]["version"], crate::CLI_VERSION);
         assert!(r["capabilities"]["tools"].is_object(), "{r}");
+        // Goal Cup never prompts the agent: no instructions ride on the handshake.
+        assert!(r.get("instructions").is_none(), "{r}");
         // A version this server does not know is answered with its newest.
         let other = exchange(
             &[

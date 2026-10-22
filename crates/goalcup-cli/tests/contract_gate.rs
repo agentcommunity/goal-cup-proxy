@@ -576,8 +576,8 @@ fn tree(dir: &std::path::Path) -> Vec<(std::path::PathBuf, u64)> {
 }
 
 /// `goalcup mcp` (fix plan v9): its `time_left` tool returns exactly what `goalcup time-left`
-/// prints, for a running run, a practice run, a run at its end, a stale or missing file and no
-/// run at all, and writes nothing (it runs in a read-only folder). The end of its input ends it
+/// prints from the file, for a running run, a practice run, a run at its end and a stale or
+/// missing file; with no file named it says the time is unknown; it writes nothing (it runs in a read-only folder). The end of its input ends it
 /// with exit 0.
 #[test]
 fn goalcup_mcp_time_left_answers_what_goalcup_time_left_prints_and_writes_nothing() {
@@ -636,10 +636,13 @@ fn goalcup_mcp_time_left_answers_what_goalcup_time_left_prints_and_writes_nothin
         .map(|(name, _)| Some(ro.join(name)))
         .chain([Some(ro.join("missing")), None])
         .collect();
+    let missing = ro.join("missing");
     for file in &cases {
         let mut cli = goalcup();
         cli.arg("time-left");
-        with_env(&mut cli, file.as_deref());
+        // The server runs only inside the harness, where no run can be looked up: with no file
+        // it answers what `goalcup time-left` prints for a missing one, never "No run is open".
+        with_env(&mut cli, Some(file.as_deref().unwrap_or(&missing)));
         let printed = cli.output().unwrap();
         let (expected, is_error) = match printed.status.code() {
             Some(0) => (String::from_utf8(printed.stdout).unwrap(), false),
@@ -682,6 +685,7 @@ fn goalcup_mcp_time_left_answers_what_goalcup_time_left_prints_and_writes_nothin
         let result = &replies[2]["result"];
         assert_eq!(result["content"][0]["text"], expected, "{file:?}");
         assert_eq!(result["isError"], is_error, "{file:?}");
+        assert!(!expected.contains("No run is open"), "{file:?}: {expected}");
     }
     let after = tree(&ro);
     read_only(0o700);

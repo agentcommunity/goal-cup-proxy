@@ -367,11 +367,7 @@ fn run_report(
     } else if ago.is_some() {
         // "Up to date" only when every record written is acknowledged; uploads run on a timer,
         // so between sends records wait, and that is said.
-        match run
-            .entries
-            .last()
-            .and_then(|e| records_waiting(&e.trace_dir))
-        {
+        match records_waiting_in(&run.entries) {
             Some(0) => participant::UploadNow::UpToDate { ago },
             waiting => participant::UploadNow::Sending { ago, waiting },
         }
@@ -547,6 +543,15 @@ pub fn render_status(s: &SignedStatus, now: &str) -> String {
     lines.join("\n") + "\n"
 }
 
+/// How many records of all the run's `entries` (every segment, not only the last) are written
+/// and not yet acknowledged. `None` for no entries, or when any entry's count cannot be read.
+fn records_waiting_in(entries: &[crate::run::EntryRef]) -> Option<u64> {
+    if entries.is_empty() {
+        return None;
+    }
+    entries.iter().map(|e| records_waiting(&e.trace_dir)).sum()
+}
+
 /// How many records of the trace at `trace_dir` are written and not yet acknowledged by the
 /// server: the last record's `seq` minus the last acknowledgement's. `None` when either cannot be
 /// read; a trace with records and no acknowledgement counts them all.
@@ -689,4 +694,55 @@ pub(crate) fn put(out: &mut dyn Write, text: &str) -> Result<(), CliError> {
             path: "standard output".to_string(),
             source,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A trace of `records` records whose last acknowledgement is `acked` (none for `None`).
+    fn entry(root: &Path, id: &str, records: u64, acked: Option<u64>) -> crate::run::EntryRef {
+        let trace_dir = root.join(id);
+        std::fs::create_dir_all(&trace_dir).unwrap();
+        let chain: String = (0..records)
+            .map(|seq| format!("{{\"seq\":{seq},\"prev\":\"p\",\"hash\":\"h{seq}\"}}\n"))
+            .collect();
+        std::fs::write(trace_dir.join(goalcup_protocol::export::CHAIN_FILE), chain).unwrap();
+        if let Some(seq) = acked {
+            let ack = serde_json::json!({
+                "entry_id": id, "seq": seq, "hash": format!("h{seq}"),
+                "acked_at": "2026-10-22T00:00:00Z", "server_signature": "00",
+            });
+            std::fs::write(
+                trace_dir.join(goalcup_protocol::export::ACKS_FILE),
+                format!("{ack}\n"),
+            )
+            .unwrap();
+        }
+        crate::run::EntryRef {
+            entry_id: id.to_string(),
+            trace_dir,
+        }
+    }
+
+    /// Records an earlier segment wrote and the server has not acknowledged still wait, even
+    /// when the last segment is all sent: status is not "up to date" until every entry is.
+    #[test]
+    fn records_waiting_counts_every_entry_not_only_the_last() {
+        let root = tempfile::tempdir().unwrap();
+        let earlier = entry(root.path(), "e-1", 5, Some(2));
+        let last = entry(root.path(), "e-2", 3, Some(2));
+        assert_eq!(records_waiting(&last.trace_dir), Some(0));
+        assert_eq!(
+            records_waiting_in(&[earlier.clone(), last.clone()]),
+            Some(2)
+        );
+        let unsent = entry(root.path(), "e-3", 4, None);
+        assert_eq!(
+            records_waiting_in(&[earlier, last.clone(), unsent]),
+            Some(6)
+        );
+        assert_eq!(records_waiting_in(std::slice::from_ref(&last)), Some(0));
+        assert_eq!(records_waiting_in(&[]), None);
+    }
 }

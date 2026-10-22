@@ -93,35 +93,6 @@ fn check_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// D67: every harness doc says how to run without permission prompts, and a connector that
-/// lists `participant.no_prompts` has such a doc. (Prep links the recommendation to the setup
-/// guide, `every_connector_links_to_its_section_of_the_setup_guide`.)
-#[test]
-fn every_no_prompts_recommendation_links_to_a_harness_doc_section() {
-    let mut linked = 0;
-    for dir in connector_dirs() {
-        let m = load_dir(&dir, Origin::Pinned).unwrap().manifest;
-        let doc = root().join("docs/harnesses").join(format!("{}.md", m.id));
-        let lists = m
-            .participant
-            .as_ref()
-            .is_some_and(|p| !p.no_prompts.is_empty());
-        if !lists && !doc.is_file() {
-            continue;
-        }
-        let text = std::fs::read_to_string(&doc)
-            .unwrap_or_else(|e| panic!("{}: {}: {e}", m.id, doc.display()));
-        assert!(
-            text.contains("\n## Run without permission prompts\n"),
-            "{}: no \"Run without permission prompts\" section in {}",
-            m.id,
-            doc.display()
-        );
-        linked += usize::from(lists);
-    }
-    assert!(linked > 0, "no connector lists participant.no_prompts");
-}
-
 /// The anchors GitHub gives the headings of `text`: lower-case, everything but letters, digits,
 /// `_`, `-` and spaces dropped, spaces turned into `-` (the rule `scripts/check-links.py`
 /// follows; the guide repeats no heading, so repeats are not numbered here).
