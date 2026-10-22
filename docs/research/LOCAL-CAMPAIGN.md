@@ -187,7 +187,9 @@ pass-line results.
 
 - No stop before the cell's duration except the planned seal.
 - Zero unexplained gaps; every drill gap explained by its drill.
-- ACK lag back under 2 minutes within 25 minutes after a network cut ends.
+- After a network cut or a pause ends, an acknowledgement covering the last record written before
+  its end arrives within 35 minutes (uploads run on a 30-minute timer, plus a margin; samples every
+  5 minutes, `sample_every_s: 300`, are enough to judge it).
 - RSS slope under 1 MiB per hour after the first hour; open files flat.
 - Local chain on disk under 2 GiB beyond the reserve in steady state.
 - Server copy equals the local chain (`--check-copy`, and `fetch-run.sh` for one cell per stage).

@@ -93,8 +93,10 @@ MIN_POINTS = 3
 MIN_SPAN_S = 1800
 CHAIN_BYTES_MAX = 2 * 1024 ** 3
 RESERVE_NOTE = "the recorder's 1 GiB disk reserve is kept on top of this and is not counted"
-ACK_LAG_OK_S = 120
-ACK_RECOVERY_WINDOW_S = 25 * 60
+# Uploads run on a 30-minute timer (crates/goalcup-cli/src/upload/policy.rs), so recovery after a
+# drill is judged against that timer plus a margin, never against a lag of seconds.
+ACK_RECOVERY_WINDOW_S = 35 * 60
+ACK_DRILL_KINDS = ("network_cut", "pause")
 INSUFFICIENT = "insufficient data"
 CAMPAIGN_TAG = "[campaign]"
 # The matrix row (scripts/matrix.sh print_row): connector, platform-arch, harness version, result,
@@ -106,7 +108,7 @@ EARLY_STOP = re.compile(
 DEFAULTS = {
     "server": STAGING,
     "duration_s": 7200,
-    "sample_every_s": 600,
+    "sample_every_s": 300,
     "matrix_timeout_slack_s": 3600,
     "goalcup": "goalcup",
     "drills": [],
@@ -782,9 +784,12 @@ def series_from_samples(rows):
             v = _num(row.get(col))
             if v is not None:
                 out[kind].append((ts, v))
-        lag, age = _num(row.get("ack_lag_seq")), _num(row.get("ack_age_s"))
-        if lag is not None or age is not None:
-            out["ack"].append((ts, lag, age))
+        last, acked = _num(row.get("chain_last_seq")), _num(row.get("acked_seq"))
+        lag = _num(row.get("ack_lag_seq"))
+        if acked is None and last is not None and lag is not None:
+            acked = last - lag
+        if last is not None or acked is not None:
+            out["ack"].append((ts, last, acked))
         out["flags"].append({
             "t": ts, "utc": row.get("utc"),
             "upload_stopped": _num(row.get("upload_stopped")) == 1,
@@ -929,69 +934,73 @@ def evaluate_lines(info, samples_path, run_log=None):
                           min_free_disk_bytes=int(min(v for _, v in s["free"])) if s["free"] else None))
     else:
         lines.append(dict(base, value=None, status=INSUFFICIENT))
-    # 6. ACK lag recovers after every network cut.
+    # 6. An ACK covers the pre-drill tail after every network cut and pause.
     lines.append(ack_line(info.get("drills") or [], s["ack"], s["times"]))
     for line in lines:
         line.setdefault("samples", note)
     return lines
 
 
-ACK_RULE = (f"recovered at the first sample at or after the cut's end where ack_lag_seq == 0 "
-            f"(every record on disk acknowledged), or where ack_age_s <= {ACK_LAG_OK_S} with "
-            "ack_lag_seq not above the previous sample's (ACKs arriving and the backlog not "
-            f"growing); it must come within {ACK_RECOVERY_WINDOW_S // 60} min of the cut's end. "
-            "ack_lag_seq counts records, not seconds")
+ACK_RULE = ("target: chain_last_seq of the last sample at or before the drill's end (the last "
+            "record written before it ended; the first sample after the end when none came before, "
+            "which is stricter). Recovered at the first sample after the end whose acked_seq >= "
+            f"target; it must come within {ACK_RECOVERY_WINDOW_S // 60} min of the end (the "
+            "30-minute upload timer plus a margin). Seqs count records, not seconds")
 
 
 def upload_facts_for(samples_path):
     return upload_facts(series_from_samples(read_samples(samples_path) if samples_path else []))
 
 
-def ack_recovered(prev, cur):
-    _, lag, age = cur
-    if lag is not None and lag == 0:
-        return True
-    if age is None or age > ACK_LAG_OK_S or lag is None:
-        return False
-    prev_lag = prev[1] if prev is not None else None
-    return prev_lag is not None and lag <= prev_lag
+def ack_target(ack, end):
+    """chain_last_seq of the last sample at or before `end`; else of the first one after it."""
+    before = [a for a in ack if a[0] <= end and a[1] is not None]
+    if before:
+        return before[-1][1]
+    return next((a[1] for a in ack if a[0] > end and a[1] is not None), None)
+
+
+def ack_recovered(target, cur):
+    return target is not None and cur[2] is not None and cur[2] >= target
 
 
 def ack_line(drills, ack, times):
-    cuts = [d for d in drills if d.get("kind") == "network_cut"
+    ends = [d for d in drills if d.get("kind") in ACK_DRILL_KINDS
             and d.get("status") not in ("skipped", "pending")]
     base = {"name": "ack_recovery", "unit": "s", "rule": ACK_RULE,
-            "threshold": f"recovered within {ACK_RECOVERY_WINDOW_S // 60} min after each "
-                         "network cut ends"}
-    if not cuts:
-        return dict(base, value=None, status="not applicable", per_cut=[],
-                    detail="no network_cut drill ran")
+            "threshold": f"an ACK covering the last record written before each network cut or "
+                         f"pause ended arrives within {ACK_RECOVERY_WINDOW_S // 60} min"}
+    if not ends:
+        return dict(base, value=None, status="not applicable", per_drill=[],
+                    detail="no network_cut or pause drill ran")
     last = times[-1] if times else None
     per = []
-    for d in cuts:
+    for d in ends:
         end = parse_time(d.get("ended_utc") or "")
         if end is None:
             start = parse_time(d.get("started_utc") or d.get("planned_utc") or "")
             end = start + timedelta(seconds=d.get("seconds", 0)) if start else None
         if end is None:
-            per.append({"cut_end_utc": None, "status": INSUFFICIENT})
+            per.append({"kind": d["kind"], "drill_end_utc": None, "status": INSUFFICIENT})
             continue
         e = end.timestamp()
-        found, prev, in_window = None, None, 0
+        target = ack_target(ack, e)
+        found, in_window = None, 0
         for cur in ack:
-            if cur[0] >= e:
-                if cur[0] > e + ACK_RECOVERY_WINDOW_S:
-                    break
-                in_window += 1
-                if ack_recovered(prev, cur):
-                    found = cur
-                    break
-            prev = cur
-        rec = {"cut_end_utc": utc(end), "samples_in_window": in_window}
+            if cur[0] < e:
+                continue
+            if cur[0] > e + ACK_RECOVERY_WINDOW_S:
+                break
+            in_window += 1
+            if ack_recovered(target, cur):
+                found = cur
+                break
+        rec = {"kind": d["kind"], "drill_end_utc": utc(end), "target_seq": target,
+               "samples_in_window": in_window}
         if found:
             rec.update(status="pass", recovered_after_s=round(found[0] - e, 1),
-                       ack_lag_seq=found[1], ack_age_s=found[2])
-        elif last is None or last < e + ACK_RECOVERY_WINDOW_S:
+                       acked_seq=found[2], chain_last_seq=found[1])
+        elif target is None or last is None or last < e + ACK_RECOVERY_WINDOW_S:
             rec.update(status=INSUFFICIENT)
         else:
             rec.update(status="fail")
@@ -1001,8 +1010,8 @@ def ack_line(drills, ack, times):
     statuses = [p["status"] for p in per]
     status = "fail" if "fail" in statuses else (INSUFFICIENT if INSUFFICIENT in statuses else "pass")
     worst = max((p.get("recovered_after_s", 0) for p in per if p["status"] == "pass"), default=None)
-    return dict(base, value=worst, status=status, per_cut=per,
-                detail="value: the slowest recovery, seconds after the cut ended")
+    return dict(base, value=worst, status=status, per_drill=per,
+                detail="value: the slowest recovery, seconds after the drill ended")
 
 
 def overall(lines):

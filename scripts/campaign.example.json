@@ -6,7 +6,7 @@
     "github_token_file": "/Users/you/.goalcup-secrets/kit-github-token",
     "connector": "codex-cli",
     "duration_s": 7200,
-    "sample_every_s": 600,
+    "sample_every_s": 300,
     "matrix_timeout_slack_s": 3600,
     "prompt_file": "../docs/research/campaign-workload.txt",
     "goalcup": "goalcup"
