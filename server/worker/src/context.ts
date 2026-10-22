@@ -1,6 +1,6 @@
 // Per-request context: parsed configuration, the database, the signer.
 
-import { CLOSE_AFTER_SECONDS, type Db } from "./db.ts";
+import { CLOSE_AFTER_SECONDS, type Db, type StartWindow } from "./db.ts";
 import { LocalDb } from "./db-local.ts";
 import { SupabaseDb } from "./db-supabase.ts";
 import type { Env } from "./env.ts";
@@ -12,8 +12,12 @@ import { isTime, parseSafeUint } from "./util.ts";
 export const DEFAULT_RUN_MAX_COMPRESSED_BYTES = 68_719_476_736;
 
 export interface Config {
-  /** The event of competition runs, and of practice runs. */
-  eventId: string;
+  /**
+   * The events a new competition run may belong to, in order (EVENT_ID, 1 to 4 ids). A start goes
+   * to the first one whose start window (in the database) contains it. A run keeps its event.
+   */
+  eventIds: string[];
+  /** The event of practice runs. */
   practiceEventId: string;
   /** The event of organizer test runs (TEST_EVENT_ID); undefined: no test runs here. */
   testEventId: string | undefined;
@@ -25,8 +29,8 @@ export interface Config {
   closeAfterSeconds: number;
   /** The most compressed bytes one run may hold in R2 (RUN_MAX_COMPRESSED_BYTES). */
   runMaxCompressedBytes: number;
-  /** The competition start window (local backend only); undefined: the database's, or always open. */
-  startWindow: { opens: string | null; closes: string | null } | undefined;
+  /** Each competition event's start window, by id (local backend only); undefined: the database's, or always open. */
+  startWindows: Record<string, StartWindow> | undefined;
   githubCheck: boolean;
 }
 
@@ -72,11 +76,38 @@ const testOnlySeconds = (env: Env, name: "RUN_SECONDS" | "CLOSE_AFTER_SECONDS"):
   return raw === undefined ? undefined : positiveNumber(name, raw, 0, "seconds", 365 * 24 * 3600);
 };
 
-function testOnlyTime(env: Env, name: "START_WINDOW_OPENS" | "START_WINDOW_CLOSES"): string | null {
+/**
+ * One edge of the start window for each event in `eventIds`, in order. One time is every event's
+ * edge; a comma-separated list gives one per event (an empty item is an open edge).
+ */
+function testOnlyTimes(env: Env, name: "START_WINDOW_OPENS" | "START_WINDOW_CLOSES", eventIds: string[]): Array<string | null> {
   const raw = testOnly(env, name);
-  if (raw === undefined) return null;
-  if (!isTime(raw)) throw misconfigured(`${name} must be an RFC 3339 time like 2026-11-06T09:00:00Z.`);
-  return raw;
+  if (raw === undefined) return eventIds.map(() => null);
+  const items = raw.split(",");
+  if (items.length !== 1 && items.length !== eventIds.length) throw misconfigured(`${name} must be one time, or one per EVENT_ID event.`);
+  for (const item of items) {
+    if (item !== "" && !isTime(item)) throw misconfigured(`${name} must be an RFC 3339 time like 2026-11-06T09:00:00Z.`);
+  }
+  return eventIds.map((_, i) => {
+    const item = items.length === 1 ? items[0]! : items[i]!;
+    return item === "" ? null : item;
+  });
+}
+
+/** The event id becomes part of every R2 key, so it is restricted to a safe alphabet. */
+const EVENT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+/** EVENT_ID lists at most this many events: the dry run and the cup need two. */
+const MAX_EVENT_IDS = 4;
+
+/** EVENT_ID: one event id, or up to 4 different ones separated by commas, in the order to try. */
+function eventIds(raw: unknown): string[] {
+  const ids = typeof raw === "string" ? raw.split(",") : [];
+  if (ids.length === 0 || ids.length > MAX_EVENT_IDS || !ids.every((id) => EVENT_ID_PATTERN.test(id)) || new Set(ids).size !== ids.length) {
+    throw misconfigured(
+      `EVENT_ID must be one event id, or up to ${MAX_EVENT_IDS} different ids separated by commas (no spaces); each is lowercase letters, digits and dashes.`,
+    );
+  }
+  return ids;
 }
 
 /**
@@ -93,27 +124,25 @@ function checkTestApprovalKey(env: Env): void {
 
 export function readConfig(env: Env): Config {
   checkTestApprovalKey(env);
-  // The event id becomes part of every R2 key, so it is restricted to a safe alphabet.
-  if (typeof env.EVENT_ID !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(env.EVENT_ID)) {
-    throw misconfigured("EVENT_ID must be lowercase letters, digits and dashes.");
-  }
-  if (typeof env.PRACTICE_EVENT_ID !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(env.PRACTICE_EVENT_ID)) {
+  const ids = eventIds(env.EVENT_ID);
+  if (typeof env.PRACTICE_EVENT_ID !== "string" || !EVENT_ID_PATTERN.test(env.PRACTICE_EVENT_ID)) {
     throw misconfigured("PRACTICE_EVENT_ID must be lowercase letters, digits and dashes.");
   }
-  if (env.TEST_EVENT_ID !== undefined && !/^[a-z0-9][a-z0-9-]{0,63}$/.test(env.TEST_EVENT_ID)) {
+  if (env.TEST_EVENT_ID !== undefined && !EVENT_ID_PATTERN.test(env.TEST_EVENT_ID)) {
     throw misconfigured("TEST_EVENT_ID must be lowercase letters, digits and dashes.");
   }
-  const opens = testOnlyTime(env, "START_WINDOW_OPENS");
-  const closes = testOnlyTime(env, "START_WINDOW_CLOSES");
+  const opens = testOnlyTimes(env, "START_WINDOW_OPENS", ids);
+  const closes = testOnlyTimes(env, "START_WINDOW_CLOSES", ids);
+  const windowed = [...opens, ...closes].some((t) => t !== null);
   return {
-    eventId: env.EVENT_ID,
+    eventIds: ids,
     practiceEventId: env.PRACTICE_EVENT_ID,
     testEventId: env.TEST_EVENT_ID === "" ? undefined : env.TEST_EVENT_ID,
     runSeconds: testOnlySeconds(env, "RUN_SECONDS") ?? positiveNumber("RUN_HOURS", env.RUN_HOURS, 168, "hours", 24 * 365) * 3600,
     practiceRunSeconds: positiveNumber("PRACTICE_RUN_MINUTES", env.PRACTICE_RUN_MINUTES, 10, "minutes", 24 * 60) * 60,
     closeAfterSeconds: testOnlySeconds(env, "CLOSE_AFTER_SECONDS") ?? CLOSE_AFTER_SECONDS,
     runMaxCompressedBytes: byteLimit(env.RUN_MAX_COMPRESSED_BYTES),
-    startWindow: opens === null && closes === null ? undefined : { opens, closes },
+    startWindows: windowed ? Object.fromEntries(ids.map((id, i) => [id, { opens: opens[i]!, closes: closes[i]! }])) : undefined,
     githubCheck: env.GITHUB_CHECK === "on",
   };
 }
@@ -139,7 +168,7 @@ export async function getDb(env: Env): Promise<Db> {
     if (backend === "supabase") return new SupabaseDb(env.SUPABASE_URL, env.SUPABASE_KEY);
     if (backend === "local") {
       const cfg = readConfig(env);
-      return LocalDb.create(env.TRACES, { closeAfterSeconds: cfg.closeAfterSeconds, startWindow: cfg.startWindow });
+      return LocalDb.create(env.TRACES, { closeAfterSeconds: cfg.closeAfterSeconds, startWindows: cfg.startWindows });
     }
   } catch (e) {
     // The detail goes to the Worker's log only: a caller without a credential gets this answer too,

@@ -174,14 +174,29 @@ export interface OpenRunArgs {
 }
 
 /**
+ * The database's two answers for a competition start outside the event's start window
+ * (goal_cup_upload_open_run, sql/). It checks the window before it writes anything, so a start
+ * refused for the window leaves no trace and the Worker may try the next event in EVENT_ID.
+ */
+export const BEFORE_WINDOW = "The start window has not opened yet.";
+export const AFTER_WINDOW = "after the start window you can only `goalcup continue` your run";
+
+/** A competition start window (RFC 3339); both edges are inside it, and an unset edge is open. */
+export interface StartWindow {
+  opens: string | null;
+  closes: string | null;
+}
+
+/**
  * `existing`: the credential already opened a run whose first entry has this `session_id` (a retry
  * that raced the original); that run and entry. `conflict`: the credential is unknown or opened
- * another run; nothing was created. `forbidden`: terms not accepted, or outside the start window.
+ * another run; nothing was created. `forbidden`: terms not accepted, or outside the start window;
+ * `window` says which side of the window, and is absent for any other refusal.
  */
 export type OpenRunResult =
   | ({ kind: "created" | "existing" } & RunAndEntry)
   | { kind: "conflict" }
-  | { kind: "forbidden"; message: string };
+  | { kind: "forbidden"; message: string; window?: "before" | "after" };
 
 export interface ContinueRunArgs {
   member_id: string;

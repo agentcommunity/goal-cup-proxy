@@ -3,7 +3,7 @@
 
 import type { Auth } from "./auth.ts";
 import type { Ctx } from "./context.ts";
-import { type EntryRow, type MachineFacts, type RecordingState, type RunRow, type Vitals, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
+import { type EntryRow, type MachineFacts, type OpenRunResult, type RecordingState, type RunRow, type Vitals, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
 import { githubHeaders } from "./github.ts";
 import {
@@ -170,11 +170,14 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
   const practice = auth.mode === "practice";
   // A test run belongs to the test event; the database sets its length from that event's run_hours.
   if (auth.mode === "test" && ctx.cfg.testEventId === undefined) throw new ApiError(403, "forbidden", "This server opens no test runs.");
-  const event_id = auth.mode === "test" ? ctx.cfg.testEventId! : practice ? ctx.cfg.practiceEventId : ctx.cfg.eventId;
+  // A competition start goes to the first EVENT_ID event whose start window contains it. The
+  // database is the judge: it refuses a start outside the event's window before it writes anything,
+  // so on such a refusal the next event is tried. If none takes it, the last event's refusal is the
+  // answer. Everything after the start reads the run's own event_id, never EVENT_ID.
+  const events = auth.mode === "test" ? [ctx.cfg.testEventId!] : practice ? [ctx.cfg.practiceEventId] : ctx.cfg.eventIds;
   const deadline_at = formatTime(addSeconds(now, practice ? ctx.cfg.practiceRunSeconds : ctx.cfg.runSeconds));
-  const result = await ctx.db.openRun({
+  const args = {
     member_id: auth.member,
-    event_id,
     mode: auth.mode,
     run_id: newId("r"),
     entry_id: newId("e"),
@@ -186,7 +189,13 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
     ...clientFacts(request),
     credential: auth.credential,
     credential_expires_at: boundCredentialExpiry(deadline_at),
-  });
+  };
+  let result: OpenRunResult | undefined;
+  for (const event_id of events) {
+    result = await ctx.db.openRun({ ...args, event_id });
+    if (result.kind !== "forbidden" || result.window === undefined) break;
+  }
+  if (result === undefined) throw new ApiError(500, "misconfigured", "No event is configured for this run.");
   if (result.kind === "conflict") throw conflict(OPENED_ALREADY);
   if (result.kind === "forbidden") throw new ApiError(403, "forbidden", result.message);
   return json(result.kind === "created" ? 201 : 200, runView(ctx, result.run, result.entry));

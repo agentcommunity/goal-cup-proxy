@@ -6,6 +6,10 @@
 
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import type { Ctx } from "../src/context.ts";
+import type { OpenRunArgs, OpenRunResult } from "../src/db.ts";
+import { ApiError } from "../src/errors.ts";
+import { openRun } from "../src/runs.ts";
 import { Signer } from "../src/sign.ts";
 import type { StartReceipt } from "../src/sign.ts";
 import { GENESIS, openBody, sha256, verifyReceipt } from "./helpers/client.ts";
@@ -520,5 +524,75 @@ describe("facts about the machine and the connection", () => {
     } finally {
       r.stop();
     }
+  });
+});
+
+describe("EVENT_ID lists the dry run and the cup: a start goes to the first event whose window is open", () => {
+  // The production windows: the dry run 23 Oct to 6 Nov 00:00, the cup 7 Nov 00:00 to 8 Nov 00:00 (UTC).
+  const TWO_EVENTS = {
+    EVENT_ID: "dry,cup",
+    START_WINDOW_OPENS: "2026-10-23T00:00:00Z,2026-11-07T00:00:00Z",
+    START_WINDOW_CLOSES: "2026-11-06T00:00:00Z,2026-11-08T00:00:00Z",
+  };
+  const NOT_YET = "The start window has not opened yet.";
+  const AFTER = "after the start window you can only `goalcup continue` your run";
+
+  lifecycle("each start lands in the event whose window holds it; with none open, the last event's refusal", async (r) => {
+    const cases: Array<[string, string]> = [
+      ["2026-10-22T23:59:59Z", NOT_YET],
+      ["2026-10-23T00:00:00Z", "dry"],
+      ["2026-11-06T00:00:00Z", "dry"],
+      ["2026-11-06T00:00:01Z", NOT_YET], // between the two windows: the cup has not opened
+      ["2026-11-06T23:59:59Z", NOT_YET],
+      ["2026-11-07T00:00:00Z", "cup"],
+      ["2026-11-08T00:00:00Z", "cup"],
+      ["2026-11-08T00:00:01Z", AFTER],
+    ];
+    for (const [i, [at, want]] of cases.entries()) {
+      r.at(at);
+      const res = await r.open(await r.cred(`m${i}`), `s${i}`);
+      if (want === "dry" || want === "cup") {
+        assert.equal(res.status, 201, `${at}: ${JSON.stringify(res.body)}`);
+        assert.equal(r.storedRun(res.body.run_id as string).event_id, want, at);
+      } else {
+        assertError(res, 403, "forbidden");
+        assert.equal(res.body.message, want, at);
+      }
+    }
+  }, TWO_EVENTS, "2026-10-22T23:59:59Z");
+
+  lifecycle("a dry run started before the cup keeps the dry-run event after the cup opens", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    assert.equal(r.storedRun(a.run_id).event_id, "dry");
+    r.at("2026-11-07T01:00:00Z"); // the cup window is open now
+    const c = await r.cont(alice, a.run_id, a.entry_id, "s-two");
+    assert.equal(c.status, 201, JSON.stringify(c.body));
+    const entry = c.body.entry_id as string;
+    assert.equal((await r.beat(alice, a.run_id, entry)).body.stop, false);
+    const head = await r.hold("alice", a.run_id, entry);
+    await r.finish(alice, a.run_id, entry, head);
+    assert.equal((await r.seal(alice, a.run_id, entry)).status, 200);
+    assert.equal(r.storedRun(a.run_id).event_id, "dry");
+    const docs = [...r.bucket.map.keys()].filter((k) => k.startsWith("traces/"));
+    assert.ok(docs.length > 0 && docs.every((k) => k.startsWith(`traces/dry/${a.run_id}/${entry}/`)), docs.join(" "));
+  }, TWO_EVENTS, "2026-11-05T12:00:00Z");
+
+  test("any other refusal is the answer: the next event is not tried", async () => {
+    const tried: string[] = [];
+    const ctx = {
+      cfg: { eventIds: ["dry", "cup"], githubCheck: false, runSeconds: 3600, practiceRunSeconds: 600 },
+      db: {
+        openRun: async (a: OpenRunArgs): Promise<OpenRunResult> => {
+          tried.push(a.event_id);
+          return { kind: "forbidden", message: "Accept the Goal Cup terms on the website first." };
+        },
+      },
+      now: () => new Date("2026-11-07T01:00:00Z"),
+    } as unknown as Ctx;
+    const auth = { member: "alice", credential: "c".repeat(64), run_id: null, mode: "competition" } as const;
+    const request = new Request("https://w/v1/runs", { method: "POST", body: JSON.stringify(openBody()) });
+    await assert.rejects(openRun(ctx, auth, request), (e) => e instanceof ApiError && e.status === 403 && e.message === "Accept the Goal Cup terms on the website first.");
+    assert.deepEqual(tried, ["dry"]);
   });
 });

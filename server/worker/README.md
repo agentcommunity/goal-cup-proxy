@@ -72,7 +72,7 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 
 | Name | Default | Meaning |
 |---|---|---|
-| `EVENT_ID` | none (required) | Event that new competition runs belong to. Lowercase letters, digits, dashes. It becomes part of every R2 key. |
+| `EVENT_ID` | none (required) | Event that new competition runs belong to. Lowercase letters, digits, dashes. It becomes part of every R2 key. Or up to 4 ids separated by commas: a start goes to the first one whose start window holds it ([EVENT_ID](#event_id-the-dry-run-then-the-cup)). |
 | `PRACTICE_EVENT_ID` | none (required) | Event that practice runs belong to. |
 | `TEST_EVENT_ID` | none | Event that organizer test runs (mode `test`) belong to. Unset: the server opens no test run (`403`). |
 | `RUN_HOURS` | `168` | A competition run's `deadline_at` = `official_start` + this many hours. |
@@ -86,7 +86,7 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `DEVICE_START_PER_MINUTE`, `DEVICE_POLL_PER_MINUTE`, `DEVICE_TOKEN_PER_MINUTE` | `120`, `30`, `1200` | Device-flow limits: starts per client address, polls per device code, polls per client address (abuse cap). |
 | `NOTICE_FROM` | none | Sender of the run emails. Needed once `RESEND_API_KEY` is set. |
 | `NOTICE_RECIPIENT_OVERRIDE` | none | Send every run email to this one address instead of the member. A staging Worker refuses to send without it. |
-| `RUN_SECONDS`, `CLOSE_AFTER_SECONDS`, `START_WINDOW_OPENS`, `START_WINDOW_CLOSES` | none | **Tests only, honoured only with `DB_BACKEND=local`** (anywhere else the Worker answers `500 misconfigured`). Run length in seconds, seconds until a finished run closes (production: 24 hours, fixed), and the competition start window (RFC 3339; an unset edge is open). In production the window is the event's row in the database. |
+| `RUN_SECONDS`, `CLOSE_AFTER_SECONDS`, `START_WINDOW_OPENS`, `START_WINDOW_CLOSES` | none | **Tests only, honoured only with `DB_BACKEND=local`** (anywhere else the Worker answers `500 misconfigured`). Run length in seconds, seconds until a finished run closes (production: 24 hours, fixed), and the competition start window (RFC 3339; an unset edge is open; one time is every `EVENT_ID` event's edge, a comma-separated list gives one per event in order). In production the window is the event's row in the database. |
 
 Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 
@@ -140,7 +140,7 @@ commit. It installs the pinned wrangler. Check that `npx wrangler --version` pri
 
 [Deploy checks](#deploy-checks) · [Maintenance](#maintenance-on-and-off) · [Rollback](#rollback) ·
 [Logs](#logs) · [Change a start window](#change-a-start-window) · [Add a test operator](#add-a-test-operator) ·
-[Clean up test runs](#clean-up-test-runs) · [EVENT_ID switch](#event_id-switch-6-nov-2026-with-the-last-release)
+[Clean up test runs](#clean-up-test-runs) · [EVENT_ID](#event_id-the-dry-run-then-the-cup)
 
 ### Deploy checks
 
@@ -180,7 +180,7 @@ There is one way to switch it on: `npx wrangler deploy --var MAINTENANCE:on`, fr
 The flag ships exactly the code that is live, so no new code reaches production during an incident.
 This path does not run `npm test`, because the code is already live.
 
-**While maintenance is on, add `--var MAINTENANCE:on` to every deploy** (a hotfix, the EVENT_ID switch, any
+**While maintenance is on, add `--var MAINTENANCE:on` to every deploy** (a hotfix, an EVENT_ID change, any
 other). A deploy without it ends maintenance silently. A rollback to a version that was deployed without
 maintenance ends it too. After any deploy, run the state check below.
 
@@ -251,8 +251,8 @@ cannot find a good version, switch maintenance on and ask the owner.
 ### Change a start window
 
 A start window is a row of `goal_cup_tracer.events` in the website's database. The Worker reads it on each
-open. A window change needs no Worker deploy. (A change of `EVENT_ID` does: see the
-[EVENT_ID switch](#event_id-switch-6-nov-2026-with-the-last-release).) Steps 1 to 6 run in the website
+open. A window change needs no Worker deploy. (A change of `EVENT_ID` does: see
+[EVENT_ID](#event_id-the-dry-run-then-the-cup).) Steps 1 to 6 run in the website
 checkout (`agentCommunity_PAGE`), not in `server/worker`.
 
 1. Add a migration in `supabase/migrations/` with `goal_cup_tracer` in its file name. It holds an
@@ -303,33 +303,62 @@ environment. `DATABASE_URL` is the website database URL: set it from `DATABASE_U
 
 More on test runs: [OPERATING](../../docs/OPERATING.md#test-runs).
 
-## EVENT_ID switch: 6 Nov 2026, with the last release
+## EVENT_ID: the dry run, then the cup
 
-Production `EVENT_ID` stays `goalcup-dryrun-2026` until then. The start windows are database rows
-(website migration `20261016120000_goal_cup_tracer_event_windows.sql`): the dry run closes
-6 Nov 00:00 UTC and the cup opens 7 Nov 00:00 UTC, so any time on 6 Nov is safe. If the switch is
-missed, every cup start on 7 Nov is refused ("after the start window ..."): competition starts read
-the dry-run row, which closed 6 Nov 00:00 UTC.
+`EVENT_ID` is one event id, or up to 4 ids separated by commas, with no spaces and no repeats. A new
+competition start goes to the first listed event whose start window holds it. The windows are database rows
+(website migration `20261016120000_goal_cup_tracer_event_windows.sql`): the dry run is open 23 Oct to
+6 Nov 00:00 UTC, the cup 7 Nov 00:00 to 8 Nov 00:00 UTC. Both edges are inside a window.
 
-1. On a branch, set `EVENT_ID = "goalcup-cup-2026"` in `wrangler.toml` `[vars]` (not
-   `[env.staging.vars]`). Open a PR and merge it to main.
-2. On main at that merge commit: `npm test` (in `server/worker`).
-3. From main only, at that merge commit: run `npm ci`, then the maintenance state check. Run
-   `npx wrangler deployments list` (before). Run `SHA=$(git rev-parse --short HEAD)`, then
-   `npx wrangler deploy --tag "$SHA" --message "$SHA"` (production: top level, no `--env`). If maintenance
-   is on, add `--var MAINTENANCE:on`, or the deploy ends it. Run `npx wrangler deployments list` (after).
-   Check that `ingest.agentcommunity.org` still routes to `goalcup-ingest`
-   ([Deploy checks](#deploy-checks), rule 3). Every later production deploy is from main, so it keeps the cup
-   (a 7 Nov hotfix too).
+The database decides, not the Worker's clock. The Worker calls `goal_cup_upload_open_run` for the first
+listed event. If the answer is one of the two window refusals ("The start window has not opened yet." or
+"after the start window ..."), it calls again with the next event. The function checks the window before it
+writes anything, so a refused call leaves no trace (`test/supabase.test.ts` checks this in the SQL mirror).
+Any other refusal (terms, sign-up, an unknown event) is the answer at once. If no listed window holds the
+start, the answer is the last event's refusal: "The start window has not opened yet." until the cup opens,
+"after the start window ..." once it has closed. With one id, the Worker works as before.
+
+A run keeps the event it started in. Continue, chunks, heartbeats, the seal, the emails and the cron all
+read the run's own `event_id`, never `EVENT_ID`. A dry run that is still going on 7 Nov stays in the dry run,
+and its files stay under `traces/goalcup-dryrun-2026/`. (A cup start by the same account replaces it, as any
+later competition start does.)
+
+### The one-line change: owner decision
+
+Production still has `EVENT_ID = "goalcup-dryrun-2026"`. With only that id, the cup needs a timed switch on
+6 Nov ([below](#if-event_id-stays-one-id-the-6-nov-switch)). To drop the switch, change one line in
+`wrangler.toml` `[vars]` (not `[env.staging.vars]`):
+
+    EVENT_ID = "goalcup-dryrun-2026,goalcup-cup-2026"
+
+This is not timed: ship it with any release before 6 Nov.
+
+1. Check the rows in the website database: `select id, mode, staging, start_window_opens,
+   start_window_closes from goal_cup_tracer.events where id in ('goalcup-dryrun-2026', 'goalcup-cup-2026');`
+   Both have `staging` = false; the modes are `dry_run` and `competition`; the windows are the ones above.
+   A wrong second id would show only after the dry run closes, as "This event is not open for runs.".
+2. On a branch, change the line. Open a PR and merge it to main. On main at that merge commit: `npm test`.
+3. Deploy from main as in [Deploy checks](#deploy-checks): `npm ci`, the maintenance state check,
+   `npx wrangler deployments list` (before), `SHA=$(git rev-parse --short HEAD)`,
+   `npx wrangler deploy --tag "$SHA" --message "$SHA"` (production: no `--env`; add `--var MAINTENANCE:on`
+   if maintenance is on), `npx wrangler deployments list` (after), and check that
+   `ingest.agentcommunity.org` still routes to `goalcup-ingest`.
 4. Check the live Worker: `npx wrangler deployments status` names the live version, and
-   `npx wrangler versions view <version-id>` shows `EVENT_ID` = `goalcup-cup-2026` (or the dashboard:
-   goalcup-ingest, Settings, Variables).
-5. Open one practice run and one organizer test run against production; both start. Then
-   `sh scripts/delete-test-runs.sh --yes` ([Clean up test runs](#clean-up-test-runs)).
-6. A competition start now answers "The start window has not opened yet." (before the switch it
-   answered "after the start window ..."). After 7 Nov 00:00 UTC, `select distinct event_id from
-   goal_cup_tracer.runs where mode = 'competition' and official_start >= '2026-11-07'` shows only
-   `goalcup-cup-2026`, and the R2 prefix `traces/goalcup-cup-2026/` holds its chunks.
+   `npx wrangler versions view <version-id>` shows the two ids.
+5. During the dry run, a competition start still lands in `goalcup-dryrun-2026`. After 7 Nov 00:00 UTC,
+   `select event_id, count(*) from goal_cup_tracer.runs where mode = 'competition' and official_start >=
+   '2026-11-07' group by 1` shows only `goalcup-cup-2026`, and the R2 prefix `traces/goalcup-cup-2026/`
+   holds its chunks.
+
+Staging works the same way with its own ids (for example `goalcup-dryrun-staging` and a staging cup event).
+
+### If EVENT_ID stays one id: the 6 Nov switch
+
+On 6 Nov, with the last release, set `EVENT_ID = "goalcup-cup-2026"`. Any time on 6 Nov is safe: the dry run
+closed at 00:00 and the cup opens 7 Nov 00:00. Use steps 2 to 5 above; in step 4 the live version shows
+`goalcup-cup-2026`. If the switch is missed, every cup start
+on 7 Nov is refused ("after the start window ..."), because competition starts still read the dry-run row.
+Every later production deploy is from main, so it keeps the cup (a 7 Nov hotfix too).
 
 ## Before launch: what only real services can prove
 
@@ -345,7 +374,7 @@ or on production. Treat both as open. When you run one, write the date and the r
 - **Create-only puts** (`onlyIf: { etagDoesNotMatch: "*" }`) must refuse to overwrite on real R2,
   including under the bucket lock. Staging can prove the refusal. Staging has no bucket lock, so only
   production can prove the lock case, and only on the locked prefix `traces/goalcup-cup-2026/`, which holds
-  data only after the EVENT_ID switch. Test runs use `traces/test/`, which is never locked.
+  data only once cup runs start (7 Nov). Test runs use `traces/test/`, which is never locked.
 
 ## Decisions where the contract is silent
 

@@ -29,7 +29,7 @@ function ctxWith(githubCheck: boolean, token?: string, result: "created" | "conf
   const ctx = {
     env: { GITHUB_TOKEN: token },
     db,
-    cfg: { eventId: "cup", practiceEventId: "practice", runSeconds: 168 * 3600, practiceRunSeconds: 600, closeAfterSeconds: 86400, startWindow: undefined, githubCheck },
+    cfg: { eventIds: ["cup"], practiceEventId: "practice", runSeconds: 168 * 3600, practiceRunSeconds: 600, closeAfterSeconds: 86400, startWindows: undefined, githubCheck },
     now: () => new Date("2026-11-06T09:00:00Z"),
   } as unknown as Ctx;
   return { ctx, opened };

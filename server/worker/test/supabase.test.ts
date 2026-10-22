@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
-import { type ChunkRecord, type EntryRow, NOTICE_KINDS, type NoticeArgs, type OpenRunArgs, type RunRow, type TickRun } from "../src/db.ts";
+import { AFTER_WINDOW, BEFORE_WINDOW, type ChunkRecord, type EntryRow, NOTICE_KINDS, type NoticeArgs, type OpenRunArgs, type RunRow, type TickRun } from "../src/db.ts";
 import { SupabaseDb } from "../src/db-supabase.ts";
 import { ApiError } from "../src/errors.ts";
 import type { StartReceipt } from "../src/sign.ts";
@@ -110,6 +110,17 @@ const openArgs: OpenRunArgs = {
   manifest_sha256: "ms", connector_dir_sha256: "cd", workspace: "w", session_id: "sid", harness_version: "h", tracer_version: "t", repo_url: "u",
   machine: { os: "linux", cpus: 4 }, client_ip: "203.0.113.9", client_country: "DE", credential: H("c"), credential_expires_at: "x",
 };
+
+test("openRun marks the database's two start-window refusals, and only those, as window refusals", async () => {
+  stub(
+    { result: "forbidden", message: "The start window has not opened yet." },
+    { result: "forbidden", message: "after the start window you can only `goalcup continue` your run" },
+    { result: "forbidden", message: "Accept the Goal Cup terms on the website first." },
+  );
+  assert.deepEqual(await db().openRun(openArgs), { kind: "forbidden", message: "The start window has not opened yet.", window: "before" });
+  assert.deepEqual(await db().openRun(openArgs), { kind: "forbidden", message: "after the start window you can only `goalcup continue` your run", window: "after" });
+  assert.deepEqual(await db().openRun(openArgs), { kind: "forbidden", message: "Accept the Goal Cup terms on the website first." });
+});
 
 test("openRun -> upload_open_run with every p_ argument, binding the credential in the same call", async () => {
   const calls = stub({ result: "created", run, entry }, { result: "conflict" }, { result: "forbidden", message: "no" }, { result: "existing", run, entry });
@@ -564,4 +575,17 @@ test("every notice kind the Worker queues is allowed by the notices CHECK constr
   assert.deepEqual([...allowed].sort(), [...NOTICE_KINDS].sort());
   const text = lastFunctionBody("goal_cup_tracer.notice_text");
   for (const kind of NOTICE_KINDS) assert.equal(text.split(`WHEN '${kind}'`).length - 1, 2, `notice_text: ${kind} needs a subject and a body`);
+});
+
+test("upload_open_run refuses a start outside the window with the Worker's two messages, before it writes anything", () => {
+  // The Worker tries the next EVENT_ID event after a window refusal; that is safe only while the
+  // refusal leaves no trace, and it can tell a window refusal only by these exact messages.
+  const body = lastFunctionBody("public.goal_cup_upload_open_run");
+  const firstWrite = body.search(/\b(INSERT|UPDATE|DELETE)\b/);
+  assert.ok(firstWrite > 0, "the scan found no write in open_run");
+  for (const message of [BEFORE_WINDOW, AFTER_WINDOW]) {
+    const at = body.indexOf(`'${message}'`);
+    assert.ok(at > 0, `open_run has no '${message}'`);
+    assert.ok(at < firstWrite, `open_run writes before it refuses with '${message}'`);
+  }
 });

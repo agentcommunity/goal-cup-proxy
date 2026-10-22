@@ -28,7 +28,7 @@ names secrets only.
 |---|---|---|---|
 | Worker | `goalcup-ingest` at `https://ingest.agentcommunity.org` (custom domain, no workers.dev) | `goalcup-ingest-staging` at `https://goalcup-ingest-staging.b-9a5.workers.dev` | `npm run dev` at `http://localhost:8787` |
 | R2 bucket | `goalcup-traces` (lock on `traces/goalcup-cup-2026/` only) | `goalcup-traces-staging` (no lock) | simulated on disk |
-| Competition event | `EVENT_ID` in `wrangler.toml`: now `goalcup-dryrun-2026`, then `goalcup-cup-2026` | `goalcup-dryrun-staging` | any |
+| Competition event | `EVENT_ID` in `wrangler.toml`: now `goalcup-dryrun-2026`. Owner decision: the list `goalcup-dryrun-2026,goalcup-cup-2026`, where each start goes to the event whose window is open; else a switch to `goalcup-cup-2026` on 6 Nov | `goalcup-dryrun-staging` | any |
 | Practice event | `goalcup-practice` (always open, 10-minute runs) | `goalcup-practice-staging` | any |
 | Test event | `test` (prefix `traces/test/`, never locked) | `test-staging` | any |
 | Database | the website's Supabase project, schema `goal_cup_tracer` | the same project | JSON state in the simulated bucket |
@@ -50,7 +50,7 @@ All times UTC.
 | Release cut | Prepare the version PR if needed, merge under the `main` ruleset, run the full gate and separate `scripts/linux-check.sh` on merged `origin/main`, then tag that commit with `scripts/release.sh tag` |
 | 23 Oct to 6 Nov 00:00 | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
 | 4 Nov 00:00 | Feature stop: fixes only |
-| 6 Nov | `EVENT_ID` switch and last release (12:00). See [EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026-with-the-last-release). |
+| 6 Nov | Last release (12:00). If `EVENT_ID` names the dry run only, the `EVENT_ID` switch too. See [EVENT_ID](../server/worker/README.md#event_id-the-dry-run-then-the-cup). |
 | 7 Nov 00:00 | Start window opens. It lasts 24 hours. |
 | 8 Nov 00:00 | Start window closes |
 | 168 hours after each start | That run's deadline. The latest run ends 192 hours after the window opens. |
@@ -60,8 +60,9 @@ Before the window opens:
 1. The `goalcup-cup-2026` row in the website's `events` table has `start_window_opens` =
    `2026-11-07T00:00:00Z` and `start_window_closes` = `2026-11-08T00:00:00Z`. This is applied in
    production. The dry-run row closes on 6 Nov, 00:00.
-2. Do the `EVENT_ID` switch on 6 Nov. The steps are in
-   [server/worker/README.md](../server/worker/README.md#event_id-switch-6-nov-2026-with-the-last-release).
+2. The live production Worker's `EVENT_ID` names `goalcup-cup-2026`: either the list
+   `goalcup-dryrun-2026,goalcup-cup-2026` (no timed step), or the single id after the 6 Nov switch. The
+   steps are in [server/worker/README.md](../server/worker/README.md#event_id-the-dry-run-then-the-cup).
    Staging keeps its own event ids.
 3. Run the matrix on staging for each shipped connector ([The matrix](#the-matrix)).
 4. Confirm `GET https://ingest.agentcommunity.org/v1/health` answers `{"status":"ok"}`, then run one

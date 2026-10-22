@@ -35,9 +35,10 @@ preview_bucket_name = "goalcup-traces-staging"
 
 [vars]
 # Which event new competition runs belong to, and which one practice runs belong to (rows of
-# goal_cup_tracer.events). One deployment serves one of each: the dry run now. On 6 Nov, with the
-# last release, EVENT_ID becomes "goalcup-cup-2026" (README "EVENT_ID switch"). Not before: the
-# dry-run window closes 6 Nov 00:00 UTC and the cup window opens 7 Nov 00:00 UTC.
+# goal_cup_tracer.events). EVENT_ID may list up to 4 ids, comma-separated, no spaces: a start goes to
+# the first one whose start window (the database row) holds it, and a run keeps its event (README
+# "EVENT_ID: the dry run, then the cup"). Now the dry run only. To drop the 6 Nov switch, the owner sets
+# "goalcup-dryrun-2026,goalcup-cup-2026" (dry run 23 Oct to 6 Nov 00:00 UTC, cup 7 Nov 00:00 to 8 Nov 00:00 UTC).
 EVENT_ID = "goalcup-dryrun-2026"
 PRACTICE_EVENT_ID = "goalcup-practice"
 # Organizer test runs (mode "test"; allowlisted accounts only, enforced by the database). R2 prefix

@@ -4,7 +4,10 @@ export interface Env {
   /** R2 bucket: raw chunks under traces/…; the cron's health marker at cron/health.json (src/notices.ts); (local backend only) state under state/…. */
   TRACES: R2Bucket;
 
-  /** Event that new competition runs belong to, e.g. "cup". */
+  /**
+   * Event that new competition runs belong to, e.g. "cup"; or up to 4 ids separated by commas,
+   * e.g. "dryrun,cup": a start goes to the first one whose start window (in the database) holds it.
+   */
   EVENT_ID: string;
   /** Event that practice runs belong to, e.g. "practice". */
   PRACTICE_EVENT_ID: string;
@@ -23,7 +26,8 @@ export interface Env {
   /**
    * Tests only, DB_BACKEND=local only: run length in seconds; seconds after a run ends until it is
    * closed (default 24 h); and the competition start window (RFC 3339, `2026-11-06T09:00:00Z`;
-   * an unset edge is open). In production the window is the event's row in the database.
+   * an unset edge is open). One time is the edge of every EVENT_ID event; a comma-separated list
+   * gives one per event, in order. In production the window is the event's row in the database.
    */
   RUN_SECONDS?: string;
   CLOSE_AFTER_SECONDS?: string;

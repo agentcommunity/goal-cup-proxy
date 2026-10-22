@@ -40,7 +40,7 @@ import type {
   StoreReceiptResult,
   TickRun,
 } from "./db.ts";
-import { NOTICE_KINDS, NO_FINAL_DETAIL } from "./db.ts";
+import { AFTER_WINDOW, BEFORE_WINDOW, NOTICE_KINDS, NO_FINAL_DETAIL } from "./db.ts";
 import { ApiError } from "./errors.ts";
 import type { StartReceipt } from "./sign.ts";
 import { RUN_ID, isEntryId, isHex64, isTime } from "./util.ts";
@@ -277,7 +277,11 @@ export class SupabaseDb implements Db {
     })) as { result?: unknown; run?: unknown; entry?: unknown; message?: string } | null;
     const result = this.#word("upload_open_run", v?.result, ["created", "existing", "conflict", "forbidden"] as const);
     if (result === "conflict") return { kind: "conflict" };
-    if (result === "forbidden") return { kind: "forbidden", message: v?.message ?? "You may not start a run now." };
+    if (result === "forbidden") {
+      const message = v?.message ?? "You may not start a run now.";
+      const window = message === BEFORE_WINDOW ? "before" : message === AFTER_WINDOW ? "after" : undefined;
+      return window === undefined ? { kind: "forbidden", message } : { kind: "forbidden", message, window };
+    }
     return { kind: result, ...this.#pair("upload_open_run", v?.run, v?.entry) };
   }
 

@@ -40,11 +40,12 @@ import type {
   RunStatus,
   SealArgs,
   SealResult,
+  StartWindow,
   StoreReceiptResult,
   TickRun,
   Vitals,
 } from "./db.ts";
-import { CLOSE_AFTER_SECONDS, DISK_NOTICE_GAP_SECONDS, FIRST_SEQ, GENESIS, NO_FINAL_DETAIL, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
+import { AFTER_WINDOW, BEFORE_WINDOW, CLOSE_AFTER_SECONDS, DISK_NOTICE_GAP_SECONDS, FIRST_SEQ, GENESIS, NO_FINAL_DETAIL, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
 import type { StartReceipt } from "./sign.ts";
 import { addSeconds, formatTime, sha256Hex, toHex } from "./util.ts";
 
@@ -114,12 +115,12 @@ const MAX_CAS_TRIES = 10;
 export interface LocalOptions {
   /** Seconds after a run ends until it is closed (default 24 hours). Tests only. */
   closeAfterSeconds?: number;
-  /** The competition start window; an unset edge is open. Unset: always open. */
-  startWindow?: { opens: string | null; closes: string | null };
+  /**
+   * The competition start window of each event, by event id; an unset edge is open. An event not
+   * listed, or no map at all: always open.
+   */
+  startWindows?: Record<string, StartWindow>;
 }
-
-const BEFORE_WINDOW = "The start window has not opened yet.";
-const AFTER_WINDOW = "after the start window you can only `goalcup continue` your run";
 
 const entryOf = (run: StoredRun, entryId: string): StoredEntry | undefined => run.entries.find((e) => e.entry_id === entryId);
 const currentOf = (run: StoredRun): StoredEntry => run.entries[run.entries.length - 1]!;
@@ -158,12 +159,12 @@ function noticeId(key: string): number {
 export class LocalDb implements Db {
   readonly #bucket: R2Bucket;
   readonly #closeAfterSeconds: number;
-  readonly #window: LocalOptions["startWindow"];
+  readonly #windows: LocalOptions["startWindows"];
 
   private constructor(bucket: R2Bucket, options: LocalOptions) {
     this.#bucket = bucket;
     this.#closeAfterSeconds = options.closeAfterSeconds ?? CLOSE_AFTER_SECONDS;
-    this.#window = options.startWindow;
+    this.#windows = options.startWindows;
   }
 
   static create(bucket: R2Bucket, options: LocalOptions = {}): LocalDb {
@@ -278,10 +279,10 @@ export class LocalDb implements Db {
 
   async openRun(a: OpenRunArgs): Promise<OpenRunResult> {
     // Times are RFC 3339 to the second, so they compare as text.
-    const w = this.#window;
+    const w = this.#windows?.[a.event_id];
     if (a.mode === "competition" && w !== undefined) {
-      if (w.opens !== null && a.official_start < w.opens) return { kind: "forbidden", message: BEFORE_WINDOW };
-      if (w.closes !== null && a.official_start > w.closes) return { kind: "forbidden", message: AFTER_WINDOW };
+      if (w.opens !== null && a.official_start < w.opens) return { kind: "forbidden", message: BEFORE_WINDOW, window: "before" };
+      if (w.closes !== null && a.official_start > w.closes) return { kind: "forbidden", message: AFTER_WINDOW, window: "after" };
     }
     // The credential binds first, so one that cannot bind opens no run and leaves nothing behind.
     const bound = await this.#updateObject<Credential, string | null | true>(this.#credentialKey(a.credential), null, (cred) =>

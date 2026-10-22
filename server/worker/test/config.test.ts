@@ -45,14 +45,14 @@ test("an unknown backend is refused", async () => {
 
 test("config defaults and validation", () => {
   assert.deepEqual(readConfig(baseEnv), {
-    eventId: "cup",
+    eventIds: ["cup"],
     practiceEventId: "practice",
     testEventId: undefined,
     runSeconds: 168 * 3600,
     practiceRunSeconds: 600,
     closeAfterSeconds: 86400,
     runMaxCompressedBytes: 68_719_476_736,
-    startWindow: undefined,
+    startWindows: undefined,
     githubCheck: false,
   });
   assert.equal(readConfig({ ...baseEnv, RUN_HOURS: "2" }).runSeconds, 7200);
@@ -71,16 +71,38 @@ test("config defaults and validation", () => {
   }
 });
 
+test("EVENT_ID is one event id, or up to 4 different ids separated by commas, kept in order", () => {
+  assert.deepEqual(readConfig({ ...baseEnv, EVENT_ID: "goalcup-dryrun-2026" }).eventIds, ["goalcup-dryrun-2026"]);
+  assert.deepEqual(readConfig({ ...baseEnv, EVENT_ID: "goalcup-dryrun-2026,goalcup-cup-2026" }).eventIds, ["goalcup-dryrun-2026", "goalcup-cup-2026"]);
+  assert.deepEqual(readConfig({ ...baseEnv, EVENT_ID: "d,c,b,a" }).eventIds, ["d", "c", "b", "a"]);
+  for (const bad of ["", ",", "a,", ",a", "a,,b", "a, b", "a,a", "a,b,c,d,e", "a,B", "a,../x", "a;b"]) {
+    assert.throws(() => readConfig({ ...baseEnv, EVENT_ID: bad }), (e) => e instanceof ApiError && e.code === "misconfigured" && /EVENT_ID/.test(e.message), JSON.stringify(bad));
+  }
+  assert.throws(() => readConfig({ ...baseEnv, EVENT_ID: undefined as unknown as string }), (e) => e instanceof ApiError && e.code === "misconfigured");
+});
+
 test("RUN_SECONDS, CLOSE_AFTER_SECONDS and the start window are honoured only with the local backend", () => {
   const local = { ...baseEnv, DB_BACKEND: "local" };
   assert.equal(readConfig({ ...local, RUN_SECONDS: "3" }).runSeconds, 3);
   assert.equal(readConfig({ ...local, RUN_SECONDS: "3", RUN_HOURS: "1" }).runSeconds, 3);
   assert.equal(readConfig({ ...local, CLOSE_AFTER_SECONDS: "5" }).closeAfterSeconds, 5);
-  assert.deepEqual(readConfig({ ...local, START_WINDOW_CLOSES: "2026-11-06T10:00:00Z" }).startWindow, { opens: null, closes: "2026-11-06T10:00:00Z" });
-  assert.deepEqual(readConfig({ ...local, START_WINDOW_OPENS: "2026-11-06T08:00:00Z", START_WINDOW_CLOSES: "2026-11-06T10:00:00Z" }).startWindow, {
-    opens: "2026-11-06T08:00:00Z",
-    closes: "2026-11-06T10:00:00Z",
+  assert.deepEqual(readConfig({ ...local, START_WINDOW_CLOSES: "2026-11-06T10:00:00Z" }).startWindows, { cup: { opens: null, closes: "2026-11-06T10:00:00Z" } });
+  assert.deepEqual(readConfig({ ...local, START_WINDOW_OPENS: "2026-11-06T08:00:00Z", START_WINDOW_CLOSES: "2026-11-06T10:00:00Z" }).startWindows, {
+    cup: { opens: "2026-11-06T08:00:00Z", closes: "2026-11-06T10:00:00Z" },
   });
+  // With an EVENT_ID list, one time is every event's edge, and a list gives one per event ("" is open).
+  const two = { ...local, EVENT_ID: "dry,cup" };
+  assert.deepEqual(readConfig({ ...two, START_WINDOW_OPENS: "2026-11-06T08:00:00Z" }).startWindows, {
+    dry: { opens: "2026-11-06T08:00:00Z", closes: null },
+    cup: { opens: "2026-11-06T08:00:00Z", closes: null },
+  });
+  assert.deepEqual(readConfig({ ...two, START_WINDOW_OPENS: "2026-10-23T00:00:00Z,2026-11-07T00:00:00Z", START_WINDOW_CLOSES: ",2026-11-08T00:00:00Z" }).startWindows, {
+    dry: { opens: "2026-10-23T00:00:00Z", closes: null },
+    cup: { opens: "2026-11-07T00:00:00Z", closes: "2026-11-08T00:00:00Z" },
+  });
+  for (const bad of ["2026-10-23T00:00:00Z,2026-11-07T00:00:00Z,2026-11-08T00:00:00Z", "2026-10-23T00:00:00Z,soon"]) {
+    assert.throws(() => readConfig({ ...two, START_WINDOW_OPENS: bad }), (e) => e instanceof ApiError && e.code === "misconfigured", bad);
+  }
   assert.throws(() => readConfig({ ...local, START_WINDOW_OPENS: "tomorrow" }), (e) => e instanceof ApiError && e.code === "misconfigured");
   // On any other backend their presence is a mistake, so the Worker refuses rather than ignoring them.
   for (const name of ["RUN_SECONDS", "CLOSE_AFTER_SECONDS"] as const) {
