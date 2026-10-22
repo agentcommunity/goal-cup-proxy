@@ -15,7 +15,7 @@
 //!
 //! In this order, each step settled before the next: the run and its credential are found; every
 //! refusal that needs no server is made (the connector is a chat-mode one, the terminal is
-//! there, the harness and its pin are usable); the shared harness home is locked (another run
+//! there, the harness and its pin are usable, the run's clone is there); the shared harness home is locked (another run
 //! recording there is refused, by name) and the run's reserve is looked at (a host still
 //! holding it is refused); each earlier segment not yet sent is looked at, and anything the
 //! tracker's daemon answers other than "not held" or "not open" is a refusal; the segments the
@@ -157,6 +157,15 @@ pub fn continue_with(
     // 0. Every refusal that needs no server and changes nothing, before the home is locked and
     //    before any segment is sealed or sent.
     continue_preflight(cfg, &connector, previous_entry.dev, env)?;
+    // The next segment goes on in the run's clone (D4). A clone that is not there would be
+    // admitted as a new, empty workspace and made again, so the agent would go on in an empty
+    // folder with none of its work.
+    if !is_clone(&record.workspace) {
+        return Err(CliError::Refused(crate::participant::clone_missing(
+            &run_id,
+            &record.workspace,
+        )));
+    }
 
     // 1. Another run recording on the shared harness home is refused, by name, before anything
     //    is closed or changed. Its host holds the lock until it has sealed.
@@ -287,6 +296,13 @@ pub fn continue_with(
         out,
     )
     .map(|_| ())
+}
+
+/// Whether `workspace` is a clone: a directory with its own `.git` directory, neither of them a
+/// symbolic link. A run on a server always works in one.
+fn is_clone(workspace: &Path) -> bool {
+    let dir = |path: &Path| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir());
+    dir(workspace) && dir(&workspace.join(".git"))
 }
 
 /// Look at what the daemon says of an earlier segment, and change nothing. It is not held when

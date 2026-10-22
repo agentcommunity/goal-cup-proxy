@@ -37,7 +37,7 @@ pub use ending::{
 };
 pub use launch::{Launch, Opens, RUN_GOES_ON, launch_block};
 pub use refusals::{
-    cannot_record_model_service, continued_elsewhere, filesystem_warning, home_busy,
+    cannot_record_model_service, clone_missing, continued_elsewhere, filesystem_warning, home_busy,
     inside_work_folder, last_part_closing, local_only, needs_terminal, not_started_here,
     repository_not_empty, run_over, server_answer_unusable, still_recording,
     unsupported_filesystem,

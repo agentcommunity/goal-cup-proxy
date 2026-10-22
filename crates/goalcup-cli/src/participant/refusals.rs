@@ -136,6 +136,17 @@ pub fn run_over(run_id: &str) -> String {
     )
 }
 
+/// `goalcup continue` of a run whose clone is not where the run left it: moved, deleted, or on a
+/// disk that is not mounted. The agent's work is in that clone, so the next part needs it there.
+pub fn clone_missing(run_id: &str, workspace: &Path) -> String {
+    format!(
+        "Put the run's folder back at {} and run {CONTINUE_HINT} again. If it is lost, write to \
+         {SUPPORT_ADDRESS} and name run {run_id}. The agent goes on with its work in that folder, \
+         and it is not there. Nothing was changed.",
+        workspace.display()
+    )
+}
+
 /// `goalcup continue` while the last part's host still holds the run's reservation.
 pub fn last_part_closing(run_id: &str) -> String {
     format!(

@@ -344,8 +344,9 @@ Choose your model and model service in prep, before the run. Typing a harness co
 `/model` after your prompt is typing like any other message: Goal Cup Proxy records it and it is
 reviewed. Nothing is blocked.
 
-A run can be continued only on the machine that started it. Goal Cup Proxy never restarts the agent
-on its own.
+A run can be continued only on the machine that started it, with the run's folder (its clone in
+your work folder) where it was. If that folder is gone, `goalcup continue` names it and changes
+nothing. Goal Cup Proxy never restarts the agent on its own.
 
 **Stopping the agent yourself: `goalcup seal`.** Run it from another terminal, never inside the
 agent's session. It stops the agent and ends the current part. It does not end the run: the run
