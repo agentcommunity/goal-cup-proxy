@@ -56,7 +56,7 @@ pub fn seal_done(d: &SealDone<'_>) -> Vec<String> {
     } else {
         format!(
             "{h} was stopped, but this part of your run could not be sealed: the disk may be \
-             full. Free some space, then run: goalcup seal {}",
+             full. Free some space {FREE_OUTSIDE}, then run: goalcup seal {}",
             d.part_id
         )
     }];

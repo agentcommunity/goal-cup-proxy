@@ -81,7 +81,7 @@ pub fn upload_not_sealed() -> String {
 pub fn upload_seal_missing(entry_id: &str) -> String {
     format!(
         "Run goalcup seal {entry_id}, then goalcup upload. This part of the run is uploaded, but \
-         it was not sealed. If the disk is full, free some space first."
+         it was not sealed. If the disk is full, free some space first, {FREE_OUTSIDE}."
     )
 }
 

@@ -94,6 +94,10 @@ pub const NOT_STARTED_HERE: &str = "was not started on this computer";
 /// What a refusal says when the approval code must be asked for again.
 pub const RUN_AGAIN: &str = "Run the command again";
 
+/// Where to free disk space, and what never to delete: what the agent made is the run's work.
+pub const FREE_OUTSIDE: &str =
+    "outside your run's folders, and do not delete anything the agent made";
+
 /// Where a participant writes when something unexpected happened.
 pub const SUPPORT_ADDRESS: &str = "goalcup@agentcommunity.org";
 
