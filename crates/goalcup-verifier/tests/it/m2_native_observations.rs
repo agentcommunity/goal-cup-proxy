@@ -287,7 +287,7 @@ fn codex_tool_and_usage_keep_native_references() {
     assert_eq!(cumulative.fields["total_token_usage"]["output_tokens"], 127);
 
     assert_eq!(summary.decoder_id, "codex-native");
-    assert_eq!(summary.decoder_version, "3");
+    assert_eq!(summary.decoder_version, "4");
     assert!(!summary.incomplete);
 }
 
@@ -757,7 +757,7 @@ fn no_positive_human_marker_means_no_human_claim() {
     assert_eq!(
         codex_obs
             .iter()
-            .filter(|o| o.kind == "unknown" && o.fields["record_type"] == "response_item.message")
+            .filter(|o| o.kind == "unknown" && o.fields["reason"] == "unmarked_message")
             .count(),
         2
     );
@@ -1607,4 +1607,112 @@ fn codex_assistant_messages_and_spawn_agent_are_decoded_and_children_attributed(
         o.kind == "unknown" && o.fields["record_type"] == "event_msg.item_completed"
     });
     assert_eq!(unknown.fields["reason"], "unrecognized");
+}
+
+/// Version 4: the real 0.153.0 developer and environment-context records say what they are, and
+/// a synthetic subagent stream's role instructions do too, without text and never as human.
+#[test]
+fn codex_unmarked_user_and_developer_messages_say_what_they_are() {
+    let mut bytes = line_with_newline(CODEX_FIXTURE, 11); // session_meta, source=="cli"
+    bytes.extend(line_with_newline(CODEX_FIXTURE, 0)); // role=developer, four instruction kinds
+    bytes.extend(line_with_newline(CODEX_FIXTURE, 1)); // role=user, environment_context
+    let mut records = vec![open_native(PRODUCER, STREAM, "codex-jsonl")];
+    records.extend(segment_native(&bytes, &per_line_splits(&bytes)));
+    records.push(end_native(PRODUCER, STREAM, EndReason::Complete));
+    let (obs, summary) = collect(codex, &records);
+    assert!(!obs.iter().any(|o| o.kind == "human_message"));
+    let unmarked: Vec<_> = obs
+        .iter()
+        .filter(|o| o.kind == "unknown" && o.fields["reason"] == "unmarked_message")
+        .collect();
+    assert_eq!(unmarked.len(), 2);
+    let developer = unmarked[0];
+    assert_eq!(developer.fields["role"], "developer");
+    assert_eq!(developer.fields["record_type"], "response_item.message");
+    assert_eq!(
+        developer.fields["content_item_kinds"],
+        json!([
+            "host_skills.instructions",
+            "permissions.instructions",
+            "collaboration_mode.instructions",
+            "apps.instructions"
+        ])
+    );
+    assert_eq!(developer.fields["content_types"], json!(["input_text"]));
+    assert_eq!(
+        developer.supplied_id.as_deref(),
+        Some("msg_01a06614-c78e-7322-b044-d0fa07fef524")
+    );
+    assert_eq!(developer.fields["native_context"]["role"], "interactive");
+    let context = unmarked[1];
+    assert_eq!(context.fields["role"], "user");
+    assert_eq!(
+        context.fields["content_item_kinds"],
+        json!(["environments.environment_context"])
+    );
+    assert!(
+        unmarked.iter().all(|o| o.fields.get("text").is_none()),
+        "no text is projected"
+    );
+    assert_eq!(
+        summary.unknown_records, 3,
+        "the two messages and the session header"
+    );
+    assert!(!summary.incomplete);
+
+    // A child's role instructions are attributed to the child; a message with no metadata
+    // list says only its role; the lists are bounded and keep only short tokens.
+    let child = json!({"type":"session_meta","payload":{"id":"thread-child",
+        "parent_thread_id":"thread-parent","thread_source":"subagent",
+        "source":{"subagent":{"thread_spawn":{"parent_thread_id":"thread-parent"}}}}});
+    let role = json!({"type":"response_item","payload":{"type":"message","id":"msg-role",
+        "role":"developer","content":[{"type":"input_text","text":"not projected"}],
+        "internal_chat_message_metadata_passthrough":{"content_item_kinds":["multi_agent.role_instructions"]}}});
+    let bare = json!({"type":"response_item","payload":{"type":"message","role":"user",
+        "content":[{"type":"input_text","text":"not projected"}]}});
+    let many: Vec<Value> = (0..40)
+        .map(|i| json!(format!("kind.{i}")))
+        .chain([json!("has space"), json!(7)])
+        .collect();
+    let crowded = json!({"type":"response_item","payload":{"type":"message","role":"developer",
+        "content":[{"type":"input_text","text":"x"}],
+        "internal_chat_message_metadata_passthrough":{"content_item_kinds":many}}});
+    let marked_developer = json!({"type":"response_item","payload":{"type":"message",
+        "role":"developer","content":[{"type":"input_text","text":"x"}],
+        "internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}});
+    let records = codex_rows(&[child, role, bare, crowded, marked_developer], 2);
+    let (obs, _) = collect(codex, &records);
+    assert!(!obs.iter().any(|o| o.kind == "human_message"));
+    let role = find(&obs, |o| o.supplied_id.as_deref() == Some("msg-role"));
+    assert_eq!(role.fields["reason"], "unmarked_message");
+    assert_eq!(
+        role.fields["content_item_kinds"],
+        json!(["multi_agent.role_instructions"])
+    );
+    assert_eq!(role.fields["native_context"]["session_id"], "thread-child");
+    assert_eq!(role.fields["native_context"]["role"], "subagent");
+    let bare = find(&obs, |o| o.fields["role"] == "user");
+    assert_eq!(bare.fields["reason"], "unmarked_message");
+    assert!(bare.fields.get("content_item_kinds").is_none());
+    let crowded = find(&obs, |o| {
+        o.fields["reason"] == "unmarked_message"
+            && o.fields["content_item_kinds"]
+                .as_array()
+                .is_some_and(|k| k.len() > 1)
+    });
+    let kinds = crowded.fields["content_item_kinds"].as_array().unwrap();
+    assert_eq!(kinds.len(), 16, "bounded");
+    assert!(
+        kinds
+            .iter()
+            .all(|k| k.as_str().unwrap().starts_with("kind."))
+    );
+    // A developer message carrying the human marker is not a form the decoder knows.
+    assert_eq!(
+        obs.iter()
+            .filter(|o| o.fields["reason"] == "unrecognized"
+                && o.fields["record_type"] == "response_item.message")
+            .count(),
+        1
+    );
 }

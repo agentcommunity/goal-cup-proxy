@@ -364,7 +364,7 @@
   "registered_decoders_in_order": [
     {
       "decoder": "codex-native",
-      "decoder_version": "3"
+      "decoder_version": "4"
     },
     {
       "decoder": "claude-code-native",

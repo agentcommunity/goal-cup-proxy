@@ -179,6 +179,7 @@ Compressed rollouts: vendor docs say a background job compresses rollouts older 
 - Untrusted hook definitions are skipped silently, with exit 0 and no warning (measured, spike 2).
 - Hooks are discovered from the working directory, not the git root (measured).
 - Rollout file and directory names use local time, not UTC (measured).
+- Rollout `user` and `developer` messages without the `user.text` marker are the harness's own context (environment context, permissions, skill, plugin and multi-agent instructions, a model switch note; measured on 0.153.0). Decoder `codex-native` v4 reports each as `unknown` `unmarked_message` with its role and supplied `content_item_kinds`, never as human input and with no text (code).
 - Open: everything still marked "unknown" above for Linux and Windows (a logged-in run, the login location, the config-dir default); the managed-config path; the API-key path; the hosts for model lists, apps and updates; whether SIGTERM removes the writer lock.
 - The Linux facts come from the 2026-10-13 arm64 Docker run and the x86_64 runner smoke.
 
