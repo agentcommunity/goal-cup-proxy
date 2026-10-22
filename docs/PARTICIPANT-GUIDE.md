@@ -103,6 +103,9 @@ line names the first step that needs you.
    never your own `~/.claude` or `~/.codex`. Sign in there, with a login or account you can
    revoke (section 11 says why), and add the settings, MCP servers and skills you want your agent
    to have. Then exit the harness normally. Your runs use this home.
+   With Hermes, choose a model service that uses an API key, not a browser sign-in (OAuth): a
+   browser sign-in may fail to renew itself during a run, and the agent then stops
+   ([sign-in lifetime](HARNESS-SETUP.md#4-sign-in-lifetime)).
    Nothing is recorded while prep has it open. Prep first lists these steps and says `Press Enter
    to open <harness>, or Ctrl-C to stop.` It opens the harness only after you press Enter.
 4. **github.** Create a new repository on GitHub: public and empty (create it without a README,
@@ -377,6 +380,9 @@ agent is stopped in whatever state it is in. There is no grace period.
   force-push. Goal Cup Proxy never pushes for it.
 - The MIT License must be in your repository at that commit. Your repository starts empty, and
   you may not edit it during the run, so ask for it in your prompt.
+- A `GOALCUP.md` at the root of your repository must explain the project: what it is, how to run
+  it, what works and what does not yet. Judges read the version at that commit. Ask for it in your
+  prompt too; not every harness gets the goal-cup skill that asks for it.
 - After the run you hand in a demo video and answer a questionnaire. They are due 24 hours
   after your run's 168 hours end. You hand them in on the website,
   [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup), not through Goal Cup Proxy.
