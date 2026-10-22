@@ -100,7 +100,20 @@ usable pass line (plan v3 L2). Agents finished in 5 to 7 minutes and idled: Herm
 | lx-codex | hollow PASS, prompt never submitted | prompt delivered as one bracketed paste; Codex's sandbox cannot start in Docker (`bwrap: No permissions to create a new namespace`), Codex asks for escalation and waits: no work. |
 
 The new "agent worked" row check passed lx-claude and lx-codex on title or probe calls: too
-lenient; a stricter rule is under analysis.
+lenient. Root cause of both stalls: a harness permission prompt nobody may answer (Codex's
+sandbox escalation; Claude Code 2.1.283 falling back to manual mode without
+`skipDangerousModePermissionPrompt`). Fixed in [plan v4](2026-10-22-fix-plan-v4.md), with the
+owner's decision D67 (Goal Cup recommends a no-prompt setup; participants configure it).
+
+### Reruns after fix plan v4 (22 Oct 01:33 to 01:45 UTC)
+
+| Cell | Result |
+|---|---|
+| lx-codex | **PASS**: no approval prompts, 2 commits, workspace and agent-worked checks pass, integrity valid, server copy equal, every turn gpt-5.6-luna low. But Codex's shell in the Docker cell could not find `goalcup` (`goalcup: not found`), so `time-left` did not run there. |
+| lx-claude | **PASS**: no approval prompts, 58 tool uses, 6 commits, 0 gaps, server copy equal, every assistant message haiku, time-left answered, seal refused. |
+
+Every harness now has a capture with real agent work on both surfaces (Mac: codex, claude, amp,
+hermes; Docker: codex, claude, hermes, and amp in the 120-minute cell).
 
 ## Fixes made today
 
@@ -144,6 +157,10 @@ In priority order. Evidence is aggregates; raw traces stay on the owner's Mac.
    status` must stop saying "up to date" while records wait (L3), long cells need a long workload
    (L4), and the research report must attribute subagents (L5: Amp parent ids, Codex native
    message types and `spawn_agent`, Hermes children).
+8. **Codex cannot find `goalcup` in a Docker cell** (lx-codex v4 rerun): `goalcup time-left` and
+   `seal` answered `/bin/sh: 1: goalcup: not found`, while Claude Code in the same kind of cell
+   found it. Check Codex's `shell_environment_policy` and the PATH handed to the harness, and
+   whether a real Linux install (binary on the participant's PATH) has the same problem.
 7. **Amp cost**: Task subagents ran `claude-opus-5-5` while the thread's mode was `low`. Worth a
    line in the Amp participant notes and in the cheapest-settings rule.
 6. Still to run when the owner is back: the token, then test-run cells with drills via
