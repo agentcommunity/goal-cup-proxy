@@ -1593,6 +1593,60 @@ fn prep_points_the_harness_step_to_the_setup_guide() {
     assert!(harness["say"].as_str().unwrap().ends_with(&want), "{out}");
 }
 
+/// Fix plan v9: a connector that names where its MCP servers are listed gets, in prep's harness
+/// step, the lines that add `goalcup mcp` there, with this binary's absolute path and the file in
+/// the harness's Goal Cup home; prep writes nothing there, and the step stays ok.
+#[test]
+fn prep_prints_the_time_left_tool_lines_with_the_absolute_path_and_writes_nothing() {
+    let rig = Rig::chat_only();
+    let path = rig.connectors.join(CHAT_ID).join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap().replacen(
+        "[capture]\n",
+        "[participant]\ndisplay_name = \"Fake Agent\"\n\n\
+         [participant.time_left_tool]\nfile = \"config.toml\"\nkey = \"mcp_servers\"\n\
+         pass_env = \"env_vars\"\n\n[capture]\n",
+        1,
+    );
+    std::fs::write(&path, text).unwrap();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    all_but_the_harness(&rig);
+    let home = rig.cfg.join("capture-homes").join(CHAT_ID);
+    let file = home.join("config.toml");
+    let goalcup = env!("CARGO_BIN_EXE_goalcup");
+
+    for json_mode in [false, true] {
+        let mut args = vec!["--repo", REPO];
+        if json_mode {
+            args.push("--json");
+        }
+        let (_, out) = prep(&rig, &args, &facts);
+        let say = if json_mode {
+            let steps = json(&out);
+            let harness = steps.iter().find(|s| s["step"] == "harness").unwrap();
+            assert_eq!(harness["state"], "ok", "{out}");
+            harness["say"].as_str().unwrap().to_string()
+        } else {
+            assert!(line(&out, "harness").starts_with("[ok] harness:"), "{out}");
+            out.clone()
+        };
+        assert!(
+            say.contains(&format!("`mcp_servers` in {}", file.display())),
+            "{say}"
+        );
+        let lines: Vec<&str> = say.lines().map(str::trim).collect();
+        for want in [
+            "[mcp_servers.goalcup]".to_string(),
+            format!("command = {}", serde_json::to_string(goalcup).unwrap()),
+            "args = [\"mcp\"]".to_string(),
+            "env_vars = [\"GOALCUP_TIME_LEFT_FILE\"]".to_string(),
+        ] {
+            assert!(lines.contains(&want.as_str()), "{want} in:\n{say}");
+        }
+    }
+    assert!(!file.exists(), "prep wrote the harness's config");
+}
+
 /// D67: the chat connector lists two `participant.no_prompts` settings. Prep reads them in the
 /// harness's Goal Cup home and recommends each one that is not set, with the setup guide's
 /// link, in the harness home step; it never changes the step's state, the exit code or the files.

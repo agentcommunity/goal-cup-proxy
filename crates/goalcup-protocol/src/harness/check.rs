@@ -361,7 +361,33 @@ impl HarnessManifest {
         if let Some(why) = p.setup_section.as_deref().and_then(setup_section_problem) {
             return Err(refuse("participant.setup_section", why));
         }
+        self.check_time_left_tool(p)?;
         self.check_no_prompts(p)
+    }
+
+    /// `participant.time_left_tool` (fix plan v9): a config file and key held to the rules of a
+    /// value read from the harness's config, in a home the participant keeps (a shared config
+    /// home, or a shared run `HOME`). A harness whose homes are all made per run has nowhere to
+    /// keep the lines.
+    fn check_time_left_tool(&self, p: &ParticipantSpec) -> Result<(), ProtocolError> {
+        const FIELD: &str = "participant.time_left_tool";
+        let Some(tool) = &p.time_left_tool else {
+            return Ok(());
+        };
+        let home = &self.capture.home;
+        if home.config_home != ConfigHome::Shared && home.run_home != RunHome::Shared {
+            return Err(refuse(
+                FIELD,
+                "requires `capture.home.config_home = \"shared\"` or `capture.home.run_home = \
+                 \"shared\"`: the lines go in a home the participant keeps",
+            ));
+        }
+        config_value_problem(
+            FIELD,
+            &tool.file,
+            &tool.key,
+            "the lines go in the file that lists the harness's MCP servers, never a key file",
+        )
     }
 
     /// `participant.no_prompts` (D67): settings read from the shared config home like

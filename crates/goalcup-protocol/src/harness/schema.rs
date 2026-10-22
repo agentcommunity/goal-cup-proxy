@@ -266,6 +266,44 @@ pub struct ParticipantSpec {
     /// so core code names no harness. Held to [`setup_section_problem`].
     #[serde(default)]
     pub setup_section: Option<String>,
+    /// Where the participant adds Goal Cup's time-left tool, `goalcup mcp` (fix plan v9), in the
+    /// harness's own config. `goalcup prep` prints the lines with goalcup's absolute path filled
+    /// in. Goal Cup never writes them (D67).
+    #[serde(default)]
+    pub time_left_tool: Option<TimeLeftTool>,
+}
+
+/// `[participant.time_left_tool]` (fix plan v9): the harness's config file that lists its MCP
+/// servers, and how the harness hands a server `GOALCUP_TIME_LEFT_FILE`. The snippet's shape
+/// follows the file's extension (`.toml`, `.json`, `.yaml`/`.yml`), so core code names no harness.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct TimeLeftTool {
+    /// The config file, relative to the home `goalcup prep` opens the harness in (its shared
+    /// config home, else its shared run `HOME`). Held to the rules of `participant.no_prompts`.
+    pub file: String,
+    /// The key of the file's table of MCP servers. TOML reads it as dotted table names; in JSON
+    /// and YAML it is one top-level key, written as it is (`amp.mcpServers` is one JSON key).
+    pub key: String,
+    /// How the harness passes `GOALCUP_TIME_LEFT_FILE` to the server.
+    #[serde(default)]
+    pub pass_env: PassEnv,
+}
+
+/// How a harness hands an MCP server it starts the variables of its own environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum PassEnv {
+    /// The server gets the harness's whole environment: the snippet adds nothing.
+    #[default]
+    Inherited,
+    /// The server gets only variables named in an `env_vars` list: the snippet names it there.
+    EnvVars,
+    /// The server gets only the variables of an `env` map, whose values may be `${VAR}`: the
+    /// snippet maps it to `${GOALCUP_TIME_LEFT_FILE}`.
+    EnvTemplate,
 }
 
 /// The most characters a `participant.setup_section` may hold.

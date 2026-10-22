@@ -11,6 +11,14 @@ first_screen = "If Amp asks you to sign in, do it now, before you type your prom
 # Amp's section of docs/HARNESS-SETUP.md, which `goalcup prep` links to (fix plan v8).
 setup_section = "amp"
 
+# Fix plan v9: where the participant adds `goalcup mcp`, the time-left tool; prep prints the lines
+# and never writes them. `amp mcp add` writes the one key `amp.mcpServers` in this file of its
+# HOME (measured). Whether Amp hands the server its environment: not measured.
+[participant.time_left_tool]
+file = ".config/amp/settings.json"
+key = "amp.mcpServers"
+pass_env = "inherited"
+
 [capture]
 # `amp login` polls this host for the device code; tunnelled, never recorded.
 auth_hosts = ["authapi.ampcode.com"]

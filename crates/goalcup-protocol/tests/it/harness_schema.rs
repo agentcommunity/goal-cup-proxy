@@ -3850,6 +3850,69 @@ fn no_prompt_settings_are_held_to_their_rules() {
     refused(&per_run, PINNED, &["participant.no_prompts", "config_home"]);
 }
 
+/// `participant.time_left_tool` (fix plan v9): a config file and key held to the rules of a value
+/// read from the harness's config, a known way to pass the variable, and a home the participant
+/// keeps (a shared config home or a shared run `HOME`).
+#[test]
+fn a_time_left_tool_is_held_to_its_rules() {
+    use goalcup_protocol::harness::PassEnv;
+    fn with(file: &str, key: &str, pass_env: Option<&str>) -> Table {
+        let mut t = codex();
+        let mut tool = Table::new();
+        tool.insert("file".into(), Value::String(file.into()));
+        tool.insert("key".into(), Value::String(key.into()));
+        if let Some(pass_env) = pass_env {
+            tool.insert("pass_env".into(), Value::String(pass_env.into()));
+        }
+        let mut p = Table::new();
+        p.insert("display_name".into(), Value::String("Codex".into()));
+        p.insert("time_left_tool".into(), Value::Table(tool));
+        t.insert("participant".into(), Value::Table(p));
+        t
+    }
+    for (file, key, pass_env) in [
+        ("config.toml", "mcp_servers", Some("env_vars")),
+        (".claude.json", "mcpServers", Some("inherited")),
+        (".config/amp/settings.json", "amp.mcpServers", None),
+        ("config.yaml", "mcp_servers", Some("env_template")),
+    ] {
+        admitted(&with(file, key, pass_env), PINNED);
+    }
+    let tool = parsed(&with("config.toml", "mcp_servers", None))
+        .participant
+        .and_then(|p| p.time_left_tool)
+        .expect("a time_left_tool");
+    assert_eq!(tool.pass_env, PassEnv::Inherited);
+
+    for (table, needles) in [
+        (
+            with("auth.json", "mcpServers", None),
+            &["participant.time_left_tool.file", "`auth`"][..],
+        ),
+        (
+            with("config.ini", "mcp_servers", None),
+            &["participant.time_left_tool.file"],
+        ),
+        (
+            with("../config.toml", "mcp_servers", None),
+            &["participant.time_left_tool.file"],
+        ),
+        (
+            with("config.toml", "mcp servers", None),
+            &["participant.time_left_tool.key"],
+        ),
+        (
+            with("config.toml", "mcp_servers", Some("everything")),
+            &["participant.time_left_tool", "unknown variant `everything`"],
+        ),
+    ] {
+        refused(&table, PINNED, needles);
+    }
+    let mut per_run = with("config.toml", "mcp_servers", None);
+    set(&mut per_run, &["capture", "home"], "config_home", "per_run");
+    refused(&per_run, PINNED, &["participant.time_left_tool", "shared"]);
+}
+
 /// `participant.setup_section` (fix plan v8) goes into prep's link unchanged, so it is a heading
 /// anchor: 1 to 40 lower-case letters and digits joined by single `-`.
 #[test]

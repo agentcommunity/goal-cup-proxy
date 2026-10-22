@@ -12,6 +12,7 @@
 //! participant does, from `docs/HARNESS-SETUP.md` or the snippet `goalcup prep` prints.
 
 use crate::CliError;
+use goalcup_protocol::harness::{PassEnv, TimeLeftTool};
 use serde_json::{Value, json};
 use std::io::{BufRead, Read, Write};
 
@@ -189,6 +190,59 @@ fn skip_rest_of_line(input: &mut dyn BufRead) -> Result<(), CliError> {
     }
 }
 
+/// The lines that add this server to a harness's MCP servers, with `goalcup` (the absolute path of
+/// this binary) as its command: the connector's `participant.time_left_tool` names the file,
+/// whose extension gives the shape, the key of its server table, and how the harness hands the
+/// server `GOALCUP_TIME_LEFT_FILE` ([`PassEnv`]). `goalcup prep` prints them; nothing writes them.
+pub fn setup_lines(tool: &TimeLeftTool, goalcup: &str) -> String {
+    let q = |s: &str| serde_json::to_string(s).unwrap_or_default();
+    let var = crate::run::time_left::FILE_ENV;
+    let template = format!("${{{var}}}");
+    let extension = tool
+        .file
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    let key = &tool.key;
+    let (command, server) = (q(goalcup), SERVER_NAME);
+    match extension.as_str() {
+        "toml" => {
+            let mut lines = format!("[{key}.{server}]\ncommand = {command}\nargs = [\"mcp\"]");
+            match tool.pass_env {
+                PassEnv::EnvVars => lines.push_str(&format!("\nenv_vars = [{}]", q(var))),
+                PassEnv::EnvTemplate => lines.push_str(&format!(
+                    "\n\n[{key}.{server}.env]\n{var} = {}",
+                    q(&template)
+                )),
+                _ => {}
+            }
+            lines
+        }
+        "json" => {
+            let env = match tool.pass_env {
+                PassEnv::EnvVars => format!(",\n    \"env_vars\": [{}]", q(var)),
+                PassEnv::EnvTemplate => {
+                    format!(",\n    \"env\": {{ {}: {} }}", q(var), q(&template))
+                }
+                _ => String::new(),
+            };
+            format!(
+                "{}: {{\n  \"{server}\": {{\n    \"command\": {command},\n    \"args\": \
+                 [\"mcp\"]{env}\n  }}\n}}",
+                q(key)
+            )
+        }
+        _ => {
+            let env = match tool.pass_env {
+                PassEnv::EnvVars => format!("\n    env_vars: [{}]", q(var)),
+                PassEnv::EnvTemplate => format!("\n    env:\n      {var}: {}", q(&template)),
+                _ => String::new(),
+            };
+            format!("{key}:\n  {server}:\n    command: {command}\n    args: [\"mcp\"]{env}")
+        }
+    }
+}
+
 fn io(path: &str, source: std::io::Error) -> CliError {
     CliError::Io {
         path: path.to_string(),
@@ -325,6 +379,66 @@ mod tests {
         assert_eq!(replies.len(), 2, "{replies:?}");
         assert_eq!(replies[0]["error"]["code"], PARSE_ERROR);
         assert_eq!(replies[1]["id"], 1);
+    }
+
+    fn tool(file: &str, key: &str, pass_env: &str) -> TimeLeftTool {
+        serde_json::from_value(json!({ "file": file, "key": key, "pass_env": pass_env })).unwrap()
+    }
+
+    /// The setup lines are a well-formed fragment of the connector's file type, naming this
+    /// binary's absolute path (quoted as the format quotes it) with `mcp`, and handing the server
+    /// the time-left variable the way the connector says the harness passes it.
+    #[test]
+    fn the_setup_lines_parse_in_the_harness_file_type() {
+        let goalcup = "/opt/goal \"cup\"/bin/goalcup";
+        let var = crate::run::time_left::FILE_ENV;
+        let dir = tempfile::tempdir().unwrap();
+        let read = |name: &str, text: &str, key: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            crate::model_host::read_setting(&path, name, key)
+        };
+
+        let toml = setup_lines(&tool("config.toml", "mcp_servers", "env_vars"), goalcup);
+        let table: toml::Table = toml.parse().unwrap();
+        let server = &table["mcp_servers"]["goalcup"];
+        assert_eq!(server["command"].as_str(), Some(goalcup), "{toml}");
+        assert_eq!(server["args"], toml::Value::Array(vec!["mcp".into()]));
+        assert_eq!(server["env_vars"], toml::Value::Array(vec![var.into()]));
+
+        let yaml = setup_lines(&tool("config.yaml", "mcp_servers", "env_template"), goalcup);
+        assert_eq!(
+            read("config.yaml", &yaml, "mcp_servers.goalcup.command").as_deref(),
+            Some(goalcup),
+            "{yaml}"
+        );
+        assert_eq!(
+            read(
+                "config.yaml",
+                &yaml,
+                &format!("mcp_servers.goalcup.env.{var}")
+            ),
+            Some(format!("${{{var}}}")),
+            "{yaml}"
+        );
+
+        for (key, pass_env) in [("amp.mcpServers", "inherited"), ("mcpServers", "inherited")] {
+            let json_lines = setup_lines(&tool("settings.json", key, pass_env), goalcup);
+            let doc: Value = serde_json::from_str(&format!("{{{json_lines}}}")).unwrap();
+            assert_eq!(doc[key]["goalcup"]["command"], goalcup, "{json_lines}");
+            assert_eq!(doc[key]["goalcup"]["args"], json!(["mcp"]));
+            assert!(doc[key]["goalcup"].get("env").is_none(), "{json_lines}");
+        }
+        let with_env = setup_lines(&tool("s.json", "servers", "env_template"), goalcup);
+        let doc: Value = serde_json::from_str(&format!("{{{with_env}}}")).unwrap();
+        assert_eq!(doc["servers"]["goalcup"]["env"][var], format!("${{{var}}}"));
+
+        let toml_env = setup_lines(&tool("c.toml", "mcp_servers", "env_template"), goalcup);
+        let table: toml::Table = toml_env.parse().unwrap();
+        assert_eq!(
+            table["mcp_servers"]["goalcup"]["env"][var].as_str(),
+            Some(format!("${{{var}}}").as_str())
+        );
     }
 
     #[test]
