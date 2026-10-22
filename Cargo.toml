@@ -15,7 +15,7 @@ edition = "2024"
 # `sh scripts/release.sh prepare <x.y.z>` opens the version PR when needed; after it merges, run
 # the full gate on that `origin/main`, then use `sh scripts/release.sh tag <x.y.z>`. The gate fails
 # on any other hard-coded copy.
-version = "0.6.0"
+version = "0.6.1"
 license = "Apache-2.0"
 repository = "https://github.com/agentcommunity/goal-cup-tracer"
 homepage = "https://agentcommunity.org/goalcup"
