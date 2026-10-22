@@ -8,6 +8,13 @@
 //! binary, is `tests/full/connector_contract.rs`. Engine behaviour is tested elsewhere, on the
 //! fixture connectors under `tests/fixtures/connectors/`, so no rule here restates one
 //! connector's values: those are its `harness.toml`, pinned by digest, and its goldens.
+//!
+//! The rules that are a launch promise, not a fact about the pin or the docs, also run over the
+//! frozen schema-1 fixtures ([`support::schema_1_fixtures_dir`]): connectors for harnesses
+//! nobody ships, written against schema 1 as a contributor writes one and loaded through `--dev`.
+//! They pin the connector contract (docs/CONNECTOR-SCHEMA.md, "The connector contract"): a core
+//! change that would break a connector written today fails here, though no shipped connector
+//! uses the field it breaks.
 
 use crate::common::m2_profile_support as s;
 use crate::common::support;
@@ -35,6 +42,21 @@ use std::path::Path;
 /// The shipped connector `id`, loaded the way `goalcup start` loads it (no `--dev`).
 fn load(id: &str) -> HarnessConnector {
     support::connector(id)
+}
+
+/// Every connector the contract's launch rules judge: each shipped one, loaded as `goalcup start`
+/// loads it, then each frozen schema-1 fixture, loaded as `goalcup start --dev` loads it.
+fn contract_connectors() -> Vec<(String, HarnessConnector)> {
+    let shipped = shipped_connector_ids().into_iter().map(|id| {
+        let c = load(&id);
+        (id, c)
+    });
+    let fixtures = support::schema_1_fixture_ids().into_iter().map(|id| {
+        let c = goalcup_cli::connector::load_harness(&support::schema_1_fixtures_dir(), &id, true)
+            .unwrap_or_else(|e| panic!("the schema-1 fixture {id} no longer loads: {e}"));
+        (id, c)
+    });
+    shipped.chain(fixtures).collect()
 }
 
 /// The provider key the plan tests put in the participant's environment: synthetic.
@@ -168,6 +190,39 @@ fn assert_altered_is_refused(dir: &Path, id: &str) {
     }
 }
 
+/// The connector contract's load promise: a connector written against schema 1 today keeps
+/// loading, through `--dev` and under the strict rules a pinned connector is held to, with no
+/// Rust change. Unpinned, it runs only through `--dev`: without it the pin gate refuses, and with
+/// it the run is marked a development run.
+#[test]
+fn a_schema_1_connector_written_today_keeps_loading_and_runs_only_through_dev() {
+    let dir = support::schema_1_fixtures_dir();
+    for id in support::schema_1_fixture_ids() {
+        let dev = goalcup_cli::connector::load_harness(&dir, &id, true)
+            .unwrap_or_else(|e| panic!("{id} no longer loads through --dev: {e}"));
+        assert_eq!(dev.loaded.manifest.id, id, "the folder declares its own id");
+        assert_eq!(dev.loaded.manifest.schema_version, 1, "{id}");
+        let strict = goalcup_cli::connector::load_harness(&dir, &id, false)
+            .unwrap_or_else(|e| panic!("{id} no longer passes the pinned rules: {e}"));
+        assert_eq!(
+            strict.loaded.connector_dir_sha256, dev.loaded.connector_dir_sha256,
+            "{id}: one directory, one digest"
+        );
+        let gate = harness_pin_gate(&strict, false);
+        assert_eq!(
+            gate.level,
+            Level::Fail,
+            "{id}: an unpinned connector needs --dev"
+        );
+        let gate = harness_pin_gate(&dev, true);
+        assert_eq!(
+            gate.level,
+            Level::Warn,
+            "{id}: --dev admits it, and says so"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // The manifest's own facts.
 // ---------------------------------------------------------------------------------------
@@ -176,8 +231,8 @@ fn assert_altered_is_refused(dir: &Path, id: &str) {
 /// that is the session.
 #[test]
 fn every_connector_sets_no_model_base_url_and_names_its_kill_target() {
-    for id in shipped_connector_ids() {
-        let m = load(&id).loaded.manifest;
+    for (id, connector) in contract_connectors() {
+        let m = connector.loaded.manifest;
         let c = &m.capture;
         let mut env: Vec<&String> = c.env.keys().collect();
         env.extend(c.platform.values().flat_map(|p| p.env.keys()));
@@ -201,8 +256,8 @@ fn every_connector_sets_no_model_base_url_and_names_its_kill_target() {
 #[test]
 fn every_capture_host_is_one_the_proxy_accepts() {
     use goalcup_cli::proxy::tls::{ProxyCa, is_config_host};
-    for id in shipped_connector_ids() {
-        let c = load(&id).loaded.manifest.capture;
+    for (id, connector) in contract_connectors() {
+        let c = connector.loaded.manifest.capture;
         let mut approved: Vec<String> = c.hosts.iter().map(|h| h.host.clone()).collect();
         // A model host read from the harness's config (D62) joins them at each start.
         if c.model_host_from.is_some() {
@@ -230,8 +285,8 @@ fn refusal_with(m: &HarnessManifest, edit: impl FnOnce(&mut HarnessManifest)) ->
 /// list to extend (the #187 review: a fixed probe list never saw connector #4's own names).
 #[test]
 fn every_connector_refuses_its_own_home_variable_reserved_prefixes_and_guarded_options() {
-    for id in shipped_connector_ids() {
-        let m = load(&id).loaded.manifest;
+    for (id, connector) in contract_connectors() {
+        let m = connector.loaded.manifest;
         let c = &m.capture;
         // The control: the unedited manifest validates, so a refusal below is the edit's.
         assert_eq!(
@@ -291,8 +346,8 @@ fn own_guard_probes(m: &HarnessManifest) -> Vec<String> {
 /// chat-mode connector without them reopens its ordinary chat.
 #[test]
 fn every_connector_argv_passes_its_own_guard_and_the_shared_deny_list() {
-    for id in shipped_connector_ids() {
-        assert_connector_argv(&load(&id));
+    for (_, connector) in contract_connectors() {
+        assert_connector_argv(&connector);
     }
 }
 
@@ -334,8 +389,8 @@ fn connector_contract_accepts_chat_without_resume_args() {
 /// the files its native source finds, and no pattern scoped to one.
 #[test]
 fn every_connector_names_no_session_identity() {
-    for id in shipped_connector_ids() {
-        let capture = load(&id).loaded.manifest.capture;
+    for (id, connector) in contract_connectors() {
+        let capture = connector.loaded.manifest.capture;
         assert_eq!(capture.identity.source, IdentitySource::None, "{id}");
         for native in &capture.native {
             assert!(!native.pattern.contains("{id}"), "{id}");
@@ -383,8 +438,8 @@ fn hostile_parent(c: &goalcup_protocol::harness::CaptureSpec) -> BTreeMap<String
 /// the parent environment is left exactly as it was.
 #[test]
 fn every_connector_launch_environment_is_built_from_nothing() {
-    for id in shipped_connector_ids() {
-        assert_connector_launch_environment(&load(&id));
+    for (_, connector) in contract_connectors() {
+        assert_connector_launch_environment(&connector);
     }
 }
 
@@ -393,8 +448,8 @@ fn every_connector_launch_environment_is_built_from_nothing() {
 /// values for either do not reach the harness.
 #[test]
 fn every_connector_launch_names_the_time_left_file_and_the_harness_marker() {
-    for id in shipped_connector_ids() {
-        let c = load(&id);
+    for (id, connector) in contract_connectors() {
+        let c = connector;
         let l = s::Layout::new();
         let exe = s::fake_harness(&l.bin);
         let resolved = s::resolved(&exe);
@@ -522,8 +577,8 @@ fn connector_contract_accepts_home_env_templates() {
 /// then its `resume_args`.
 #[test]
 fn every_connector_places_no_goal() {
-    for id in shipped_connector_ids() {
-        let c = load(&id);
+    for (id, connector) in contract_connectors() {
+        let c = connector;
         let capture = &c.loaded.manifest.capture;
         let l = s::Layout::new();
         let vars = s::vars(&l);
@@ -592,10 +647,10 @@ fn handed_ca_files(c: &HarnessConnector, root: &Path) -> (BTreeMap<String, Vec<V
 /// `REQUESTS_CA_BUNDLE`) gets the proxy CA first and then the system's roots.
 #[test]
 fn every_connector_hands_each_ca_variable_the_file_its_row_names() {
-    for id in shipped_connector_ids() {
+    for (id, connector) in contract_connectors() {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
-        let (files, proxy) = handed_ca_files(&load(&id), &root);
+        let (files, proxy) = handed_ca_files(&connector, &root);
         assert!(
             !files.is_empty(),
             "{id}: the harness is pointed at the proxy CA"
@@ -625,8 +680,8 @@ fn every_connector_hands_each_ca_variable_the_file_its_row_names() {
 /// model base URL outside a comment.
 #[test]
 fn every_connector_home_is_exactly_what_its_manifest_declares() {
-    for id in shipped_connector_ids() {
-        let c = load(&id);
+    for (id, connector) in contract_connectors() {
+        let c = connector;
         let home = &c.loaded.manifest.capture.home;
         for seed in &c.loaded.seeds {
             let text = String::from_utf8_lossy(&seed.bytes).to_ascii_lowercase();

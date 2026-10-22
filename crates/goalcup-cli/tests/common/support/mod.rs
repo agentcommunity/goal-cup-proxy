@@ -82,6 +82,30 @@ pub fn fixture_connector(id: &str) -> goalcup_cli::connector::HarnessConnector {
     }
 }
 
+/// The frozen schema-1 contract fixtures: `tests/fixtures/schema-1-connectors/<id>/`, connectors
+/// written against schema 1 the way a contributor writes one, for harnesses nobody ships. The
+/// connector contract holds them to the same rules as a shipped connector, so a core change that
+/// would break a connector written today fails there (docs/CONNECTOR-SCHEMA.md, "The connector
+/// contract"). No build pins them: they load and run through `--dev`. Never edited to make a
+/// test pass.
+pub fn schema_1_fixtures_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/schema-1-connectors")
+}
+
+/// The id of every frozen schema-1 fixture ([`schema_1_fixtures_dir`]), sorted: its folder name,
+/// which is the id it declares.
+pub fn schema_1_fixture_ids() -> Vec<String> {
+    let dir = schema_1_fixtures_dir();
+    let mut ids: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .map(|entry| entry.expect("a directory entry").file_name())
+        .map(|name| name.into_string().expect("a UTF-8 folder name"))
+        .collect();
+    ids.sort();
+    assert!(ids.len() >= 2, "the schema-1 fixtures are there: {ids:?}");
+    ids
+}
+
 /// `tests/fixtures/connectors/<id>/` copied to `<root>/<folder>/` under the declared id `as_id`,
 /// so a test can edit a copy. Returns the copy's folder.
 pub fn copy_fixture_connector(id: &str, root: &Path, folder: &str, as_id: &str) -> PathBuf {

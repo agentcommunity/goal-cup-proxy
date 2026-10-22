@@ -1,0 +1,93 @@
+# FROZEN schema-1 contract fixture (docs/CONNECTOR-SCHEMA.md, "The connector contract").
+# A harness nobody ships, written on 22 Oct 2026 with the optional schema-1 fields a connector
+# may rely on: the model host read from its own config, a shared provider row, the participant
+# fields prep reads, a configure command, per-platform env, an env value naming a run home, a
+# reserved prefix, an argv guard, a native_pid kill and typed redaction rows. Its snapshot session
+# file and its CA variable are its own. The connector contract tests load it and run it with a
+# stand-in through `--dev`. Never edit this file to make a test pass: a core change that breaks
+# it breaks every connector written against schema 1, and needs the deprecation rule.
+schema_version = 1
+id = "schema1-optional"
+
+[participant]
+display_name = "Schema One Optional"
+first_screen = "If Schema One Optional asks to run setup, do it now, before you type your prompt."
+setup_section = "schema-one-optional"
+
+[participant.time_left_tool]
+file = "config.toml"
+key = "mcp_servers"
+pass_env = "env_vars"
+
+[[participant.no_prompts]]
+file = "config.toml"
+key = "approvals.mode"
+values = ["never", "off"]
+
+[capture]
+auth_hosts = ["auth.schema-one.example"]
+interactive = true
+continuation = "chat: the participant types the prompt and may type keep going"
+args = ["chat", "-C", "{workspace}"]
+resume_args = ["resume", "--last"]
+configure = [["config", "set", "sessions.write_snapshots", "true"]]
+reserved_env_prefixes = ["SCHEMAOPT_"]
+model_host_from = { file = "config.toml", key = "model.base_url" }
+providers = ["deepseek"]
+
+[capture.executable]
+program = "schema-one-optional"
+version_args = ["--version"]
+
+[capture.env]
+SHELL = "/bin/zsh"
+TERMINAL_HOME_MODE = "profile"
+STATE_DIR = "{config_home}/state"
+
+[capture.platform.linux-x86_64.env]
+SHELL = "/bin/bash"
+
+[capture.platform.linux-aarch64.env]
+SHELL = "/bin/bash"
+
+[capture.platform.macos-aarch64.env]
+TERMINAL_HOME_MODE = "login"
+
+[capture.home]
+run_home = "empty"
+config_home = "shared"
+env = "SCHEMAOPT_HOME"
+real_dirs = ["{user_home}/.schemaopt", "{user_home}/.cache/schemaopt"]
+
+[capture.ca]
+env = ["SCHEMAOPT_CA_BUNDLE"]
+mode = "replace"
+
+[capture.identity]
+source = "none"
+
+[[capture.native]]
+name = "session"
+root = "{config_home}/sessions"
+pattern = "session_*.json"
+form = "snapshot"
+since_run_start = true
+
+[capture.argv_guard]
+long = ["profile", "help"]
+short = ["p", "h"]
+short_with_value = ["p", "m"]
+long_abbreviations = true
+
+[capture.termination]
+strategy = "native_pid"
+native_binary = "schema-one-optional"
+grace_seconds = 15
+
+[redaction]
+extra_patterns = [
+  { kind = "schemaopt_plan_type", json_field = "plan_type", value = "string" },
+  { kind = "schemaopt_quota", json_field = "quota", value = "object" },
+  { kind = "schemaopt_credits", json_field = "credits_left", value = "scalar" },
+  { kind = "schemaopt_billing_header", header_prefix = "x-schemaopt-billing-" },
+]
