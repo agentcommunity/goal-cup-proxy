@@ -2,8 +2,9 @@
 """Behavioral tests for scripts/linux-matrix.sh, run against a stub `docker` on PATH.
 
 The stub logs its argv and succeeds (and answers `inner-home-ready` with `no`), so the script
-walks its host half; each test reads the logged docker lines. The Codex home config is tested by
-running the container half on a temporary configuration directory.
+walks its host half; each test reads the logged docker lines. It also logs each call as JSON: its
+argv as a list, and for a `-i` call what arrived on its standard input. The Codex home config is
+tested by running the container half on a temporary configuration directory.
 """
 
 from __future__ import annotations
@@ -27,6 +28,10 @@ DB_URL = "postgres://reader:db-secret-never-shown@db.invalid/postgres"
 CF_TOKEN = "cf-token-never-shown-0123456789"
 STUB = """#!/bin/sh
 echo "$*" >> "$STUB_LOG"
+python3 -c 'import json, sys; a = sys.argv[1:]; print(json.dumps({"argv": a, "stdin": sys.stdin.read() if "-i" in a else None}))' "$@" >> "$STUB_LOG.json"
+case "$*" in *inner-last-run*) echo "${STUB_RUN_ID:-r0123456789abcdef}" ;; esac
+case "$*" in *--judge-copy*) echo "codex-cli linux-x86_64 codex-cli_0.0.1 PASS 2026-10-22" ;; esac
+if [ -n "${STUB_RC:-}" ]; then case "$*" in *"${STUB_RC%%=*}"*) exit "${STUB_RC#*=}" ;; esac; fi
 case "$*" in "build "*) cat >> "$STUB_LOG.dockerfiles" ;; esac
 case "$*" in *inner-home-ready*) echo "${STUB_HOME_READY:-no}" ;; esac
 case "$*" in "ps -q "*) [ -z "${STUB_BUSY:-}" ] || echo "$STUB_BUSY" ;; esac
@@ -90,6 +95,42 @@ class LinuxMatrixTests(unittest.TestCase):
     def docker_lines(self, verb: str) -> list[str]:
         return [x for x in self.log.read_text().splitlines() if x.startswith(verb + " ")]
 
+    def calls(self) -> list[dict]:
+        """Every docker call, in order: {"argv": [...], "stdin": text or None}."""
+        path = Path(str(self.log) + ".json")
+        if not path.exists():
+            return []
+        return [json.loads(x) for x in path.read_text().splitlines()]
+
+    def cell_container(self) -> list[str]:
+        """The argv of the `docker run` that creates the cell's container (the harness runs in it)."""
+        [argv] = [c["argv"] for c in self.calls()
+                  if c["argv"][0] == "run" and c["argv"][-2:] == ["sleep", "infinity"]]
+        return argv
+
+    def exec_of(self, inner: str) -> dict:
+        [call] = [c for c in self.calls() if c["argv"][0] == "exec" and inner in c["argv"]]
+        return call
+
+    def secrets(self) -> dict[str, Path]:
+        """Every secret file a long run may be given, written here, with its value."""
+        db, cf = self.base / "db-url", self.base / "cf-token"
+        for path, value in ((db, DB_URL), (cf, CF_TOKEN)):
+            path.write_text(value + "\n")
+            path.chmod(0o600)
+        index = self.base / "index.json"
+        index.write_text("[]")
+        store = self.base / "mirror"
+        store.mkdir(exist_ok=True)
+        return {"key": self.key, "token": self.token, "db": db, "cf": cf, "index": index,
+                "store": store}
+
+    def long_run(self, **env: str) -> subprocess.CompletedProcess:
+        """A long test run whose matrix.sh says NOT-VERIFIED (exit 4) in the cell."""
+        return self.run_script("run", "codex-cli", "--", "--test", "--duration", "7200",
+                               MATRIX_GITHUB_TOKEN_FILE=str(self.token), STUB_RC="inner-run=4",
+                               **env)
+
     def assert_container_removed_last(self, pid: int) -> None:
         name = f"goalcup-linux-matrix-codex-cli-{pid}"
         [docker_run] = self.docker_lines("run")
@@ -102,23 +143,119 @@ class LinuxMatrixTests(unittest.TestCase):
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                 stdin=subprocess.DEVNULL)
 
-    def test_run_mounts_the_key_file_read_only_and_never_passes_its_value(self) -> None:
+    def test_the_run_container_is_staging_on_the_cells_volume_with_no_privilege(self) -> None:
         run = self.run_script("run", "codex-cli")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         [docker_run] = self.docker_lines("run")
-        self.assertIn(f"-v {self.key}:/run/goalcup/approval-key:ro", docker_run)
         self.assertIn("--cpus=", docker_run)
         self.assertIn("-v goalcup-linux-matrix-codex-cli:/vol", docker_run)
         self.assertIn("-e GOALCUP_TEST_MEMBER_ID=00000000-0000-4000-8000-0000000c0de1", docker_run)
         self.assertIn("-e LINUX_MATRIX_SERVER=https://goalcup-ingest-staging.", docker_run)
         self.assertNotIn("--privileged", docker_run)
-        # The key's path reaches the container only on the exec that runs the matrix.
-        self.assertNotIn("GOALCUP_TEST_APPROVAL_KEY_FILE", docker_run)
-        [inner] = [x for x in self.docker_lines("exec") if "inner-run codex-cli" in x]
-        self.assertIn("-e GOALCUP_TEST_APPROVAL_KEY_FILE=/run/goalcup/approval-key", inner)
-        everything = self.log.read_text() + run.stdout + run.stderr
-        self.assertNotIn(SENTINEL, everything)
         self.assertFalse(self.lock.exists(), "the heavy lock was left held")
+
+    def test_no_secret_is_ever_mounted_into_the_container_the_harness_runs_in(self) -> None:
+        # The harness runs in the cell's container as the same user as every step, with no
+        # sandbox: whatever is mounted there, it can read (P4 review H1, D5).
+        secrets = self.secrets()
+        values = (SENTINEL, TOKEN, DB_URL, CF_TOKEN)
+        for action, extra in (("run", ("--", "--test", "--duration", "7200")), ("login", ())):
+            with self.subTest(action=action):
+                self.log.write_text("")
+                Path(str(self.log) + ".json").write_text("")
+                run = self.run_script(
+                    action, "codex-cli", *extra, STUB_HOME_READY="yes",
+                    MATRIX_GITHUB_TOKEN_FILE=str(self.token),
+                    MATRIX_DATABASE_URL_FILE=str(secrets["db"]),
+                    MATRIX_CLOUDFLARE_TOKEN_FILE=str(secrets["cf"]), CLOUDFLARE_ACCOUNT_ID="acct1",
+                    MATRIX_FETCH_INDEX=str(secrets["index"]), MATRIX_FETCH_STORE=str(secrets["store"]))
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                argv = self.cell_container()
+                mounts = [argv[i + 1].split(":")[0] for i, a in enumerate(argv) if a == "-v"]
+                # Neither a secret nor a directory holding one.
+                for name, path in secrets.items():
+                    for m in mounts:
+                        if m.startswith("/"):
+                            self.assertNotIn(Path(m), [path, *path.parents], name)
+                # Neither a value nor a path of one reaches the container's argv or environment.
+                for value in values:
+                    self.assertNotIn(value, " ".join(argv))
+                for path in secrets.values():
+                    self.assertNotIn(str(path), " ".join(argv))
+                # No call carries a value in its argv, and none is printed.
+                for call in self.calls():
+                    for value in values:
+                        self.assertNotIn(value, " ".join(call["argv"]))
+                for value in values:
+                    self.assertNotIn(value, run.stdout + run.stderr)
+
+    def test_the_key_and_token_reach_only_the_steps_that_read_them_on_stdin(self) -> None:
+        run = self.run_script("run", "codex-cli", MATRIX_GITHUB_TOKEN_FILE=str(self.token))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(self.exec_of("inner-run")["stdin"], SENTINEL + "\n")
+        prepare = self.exec_of("inner-prepare")
+        self.assertEqual(prepare["stdin"], TOKEN + "\n")
+        self.assertEqual(prepare["argv"][-2:], ["codex-cli", "token"])
+        carriers = [c for c in self.calls() if c["stdin"] and (SENTINEL in c["stdin"]
+                                                               or TOKEN in c["stdin"])]
+        self.assertEqual(len(carriers), 2, carriers)
+
+    def test_a_long_run_is_judged_on_a_copy_fetched_after_the_run_in_a_container_of_its_own(self) -> None:
+        secrets = self.secrets()
+        for how, env, stdin, opts in (
+                ("credentials", {"MATRIX_DATABASE_URL_FILE": str(secrets["db"]),
+                                 "MATRIX_CLOUDFLARE_TOKEN_FILE": str(secrets["cf"]),
+                                 "CLOUDFLARE_ACCOUNT_ID": "acct1"},
+                 f"{DB_URL}\n{CF_TOKEN}\n", []),
+                ("index and mirror", {"MATRIX_FETCH_INDEX": str(secrets["index"]),
+                                      "MATRIX_FETCH_STORE": str(secrets["store"])},
+                 "\n\n", ["--index", "/run/goalcup/fetch-index",
+                            "--store", "/run/goalcup/fetch-store"])):
+            with self.subTest(how=how):
+                self.log.write_text("")
+                Path(str(self.log) + ".json").write_text("")
+                run = self.long_run(**env)
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                calls = self.calls()
+                order = [i for i, c in enumerate(calls) if "inner-run" in c["argv"]]
+                [fetch] = [i for i, c in enumerate(calls)
+                           if c["argv"][0] == "run" and "/src/scripts/fetch-run.sh" in " ".join(c["argv"])]
+                [judge] = [i for i, c in enumerate(calls) if "--judge-copy" in c["argv"]]
+                # After the harness's run has returned; judged after the fetch.
+                self.assertLess(order[0], fetch)
+                self.assertLess(fetch, judge)
+                argv = calls[fetch]["argv"]
+                # The credentials on its standard input only; nothing of the cell's mounted.
+                self.assertEqual(calls[fetch]["stdin"], stdin)
+                for value in (DB_URL, CF_TOKEN, SENTINEL, TOKEN):
+                    self.assertNotIn(value, " ".join(argv))
+                mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "-v"]
+                want = [f"{SCRIPT.parent.parent}:/src:ro"]
+                if opts:
+                    want += [f"{secrets['index']}:/run/goalcup/fetch-index:ro",
+                             f"{secrets['store']}:/run/goalcup/fetch-store:ro"]
+                self.assertEqual(mounts, want)
+                self.assertEqual(argv[argv.index("--bucket"):],
+                                 ["--bucket", "goalcup-traces-staging", *opts, "r0123456789abcdef"])
+                if not opts:
+                    self.assertIn("CLOUDFLARE_ACCOUNT_ID=acct1", argv)
+                # The judge gets the copy and no credential, in the cell's container.
+                jargv = calls[judge]["argv"]
+                self.assertIn("r0123456789abcdef", jargv)
+                self.assertTrue(any(a.startswith("MATRIX_SERVER_COPY=") for a in jargv))
+                self.assertIsNone(calls[judge]["stdin"])
+                self.assertEqual(run.stdout.rstrip().splitlines()[-1],
+                                 "linux-matrix: codex-cli linux-x86_64 codex-cli_0.0.1 PASS 2026-10-22")
+        # fetch-run.sh's tools are in the image.
+        dockerfile = Path(str(self.log) + ".dockerfiles").read_text()
+        self.assertIn("zstd", dockerfile)
+        self.assertIn("postgresql-client", dockerfile)
+
+    def test_a_long_run_without_fetch_settings_stays_not_verified(self) -> None:
+        run = self.long_run()
+        self.assertEqual(run.returncode, 4, run.stdout + run.stderr)
+        self.assertFalse(any("--judge-copy" in c["argv"] for c in self.calls()))
+        self.assertEqual(len(self.docker_lines("run")), 1)
 
     def test_the_build_installs_the_connectors_codex_version_from_npm(self) -> None:
         run = self.run_script("run", "codex-cli")
@@ -395,16 +532,6 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertTrue(inner.endswith("inner-run codex-cli --test --duration 7200 --keep"), inner)
         self.assertNotIn(SENTINEL, self.log.read_text() + run.stdout + run.stderr)
 
-    def test_the_token_file_is_mounted_read_only_and_never_passes_its_value(self) -> None:
-        run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "60",
-                              MATRIX_GITHUB_TOKEN_FILE=str(self.token))
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        [docker_run] = self.docker_lines("run")
-        self.assertIn(f"-v {self.token}:/run/goalcup/github-token:ro", docker_run)
-        [inner] = [x for x in self.docker_lines("exec") if "inner-run" in x]
-        self.assertIn("-e MATRIX_GITHUB_TOKEN_FILE=/run/goalcup/github-token", inner)
-        self.assertNotIn(TOKEN, self.log.read_text() + run.stdout + run.stderr)
-
     def test_a_test_run_without_the_token_file_is_refused_before_docker(self) -> None:
         run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "60")
         self.assertEqual(run.returncode, 1)
@@ -415,8 +542,9 @@ class LinuxMatrixTests(unittest.TestCase):
         run = self.run_script("login", "codex-cli", STUB_HOME_READY="yes",
                               MATRIX_GITHUB_TOKEN_FILE=str(self.token))
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        [settle] = [x for x in self.docker_lines("exec") if "inner-settle" in x]
-        self.assertIn("-e MATRIX_GITHUB_TOKEN_FILE=/run/goalcup/github-token", settle)
+        settle = self.exec_of("inner-settle")
+        self.assertEqual(settle["stdin"], TOKEN + "\n")
+        self.assertEqual(settle["argv"][-1], "token")
 
     def test_other_matrix_options_are_refused(self) -> None:
         for extra in (["--allow-production"], ["--log", "/x"], ["--duration", "2h"],
@@ -439,47 +567,10 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertIn("-e MATRIX_PROMPT_FILE=/run/goalcup/prompt", inner)
         self.assertNotIn("Build it.", self.log.read_text())
 
-    def test_the_fetch_index_and_store_are_mounted_read_only_for_a_long_run(self) -> None:
-        index = self.base / "index.json"
-        index.write_text("[]")
-        store = self.base / "mirror"
-        store.mkdir()
-        run = self.run_script("run", "codex-cli", MATRIX_FETCH_INDEX=str(index),
-                              MATRIX_FETCH_STORE=str(store), MATRIX_FETCH_BUCKET="goalcup-traces-staging")
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        [docker_run] = self.docker_lines("run")
-        self.assertIn(f"-v {index}:/run/goalcup/fetch-index:ro ", docker_run)
-        self.assertIn("-e MATRIX_FETCH_INDEX=/run/goalcup/fetch-index ", docker_run)
-        self.assertIn(f"-v {store}:/run/goalcup/fetch-store:ro ", docker_run)
-        self.assertIn("-e MATRIX_FETCH_STORE=/run/goalcup/fetch-store ", docker_run)
-        self.assertIn("-e MATRIX_FETCH_BUCKET=goalcup-traces-staging ", docker_run)
-        # fetch-run.sh's tools are in the image.
-        dockerfile = Path(str(self.log) + ".dockerfiles").read_text()
-        self.assertIn("zstd", dockerfile)
-        self.assertIn("postgresql-client", dockerfile)
-
-    def test_fetch_credentials_travel_as_files_never_as_values(self) -> None:
-        db, cf = self.base / "db-url", self.base / "cf-token"
-        for path, value in ((db, DB_URL), (cf, CF_TOKEN)):
-            path.write_text(value + "\n")
-            path.chmod(0o600)
-        run = self.run_script("run", "codex-cli", MATRIX_DATABASE_URL_FILE=str(db),
-                              MATRIX_CLOUDFLARE_TOKEN_FILE=str(cf), CLOUDFLARE_ACCOUNT_ID="acct1")
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        [docker_run] = self.docker_lines("run")
-        self.assertIn(f"-v {db}:/run/goalcup/database-url:ro ", docker_run)
-        self.assertIn("-e MATRIX_DATABASE_URL_FILE=/run/goalcup/database-url ", docker_run)
-        self.assertIn(f"-v {cf}:/run/goalcup/cloudflare-token:ro ", docker_run)
-        self.assertIn("-e MATRIX_CLOUDFLARE_TOKEN_FILE=/run/goalcup/cloudflare-token ", docker_run)
-        self.assertIn("-e CLOUDFLARE_ACCOUNT_ID=acct1 ", docker_run)
-        everything = self.log.read_text() + run.stdout + run.stderr
-        self.assertNotIn(DB_URL, everything)
-        self.assertNotIn(CF_TOKEN, everything)
-
     def test_fetch_credentials_in_the_environment_never_reach_the_container(self) -> None:
         run = self.run_script("run", "codex-cli", DATABASE_URL=DB_URL, CLOUDFLARE_API_TOKEN=CF_TOKEN)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertIn("DATABASE_URL in the environment is not passed into the container", run.stdout)
+        self.assertIn("DATABASE_URL in the environment is not used", run.stdout)
         everything = self.log.read_text() + run.stdout + run.stderr
         self.assertNotIn(DB_URL, everything)
         self.assertNotIn(CF_TOKEN, everything)
@@ -554,13 +645,15 @@ class ContainerHalfTests(unittest.TestCase):
         self.bin = self.base / "bin"
         self.bin.mkdir()
 
-    def inner(self, *args: str, **env: str) -> subprocess.CompletedProcess:
+    def inner(self, *args: str, stdin: str = "", **env: str) -> subprocess.CompletedProcess:
+        """The container half, with `stdin` on its standard input (a secret, as docker exec -i
+        gives it)."""
         environment = {k: v for k, v in os.environ.items()
                        if k not in ("LINUX_MATRIX_CODEX_EFFORT", "MATRIX_PRE_PROMPT_KEYS")}
         environment["PATH"] = f"{self.bin}:{os.environ['PATH']}"
         environment.update(env)
         return subprocess.run(["sh", str(self.script), *args], env=environment,
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, input=stdin)
 
     def codex_stub(self, efforts: list[str]) -> None:
         doc = {"models": [
@@ -741,7 +834,7 @@ class ContainerHalfTests(unittest.TestCase):
         (src / "scripts").mkdir()
         got = self.base / "matrix-got.json"
         (src / "scripts/matrix.sh").write_text(f"""#!/bin/sh
-python3 -c 'import json, os, sys; json.dump({{"argv": sys.argv[1:], "keys": os.environ.get("MATRIX_PRE_PROMPT_KEYS"), "cfg": os.environ.get("MATRIX_CONFIG_DIR"), "fetch": {{k: os.environ.get(k) for k in ("DATABASE_URL", "CLOUDFLARE_API_TOKEN", "MATRIX_DATABASE_URL_FILE", "MATRIX_CLOUDFLARE_TOKEN_FILE")}}}}, open("{got}", "w"))' "$@"
+python3 -c 'import json, os, sys; k = os.environ.get("GOALCUP_TEST_APPROVAL_KEY_FILE"); json.dump({{"argv": sys.argv[1:], "keys": os.environ.get("MATRIX_PRE_PROMPT_KEYS"), "cfg": os.environ.get("MATRIX_CONFIG_DIR"), "key_file": k, "key": open(k).read() if k else None, "key_mode": oct(os.stat(k).st_mode & 0o777) if k else None, "once": os.environ.get("MATRIX_APPROVAL_KEY_ONCE")}}, open("{got}", "w"))' "$@"
 d="$MATRIX_CONFIG_DIR/capture-homes/claude-code-cli/projects/-w"
 mkdir -p "$d"
 echo '{{"type":"assistant","message":{{"model":"{model}"}}}}' > "$d/s.jsonl"
@@ -755,7 +848,10 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
 
     def test_inner_run_passes_matrix_options_and_the_claude_trust_keys(self) -> None:
         got = self.inner_run_world()
+        prepare = self.inner("inner-prepare", "claude-code-cli", TMPDIR=str(self.base / "tmp"))
+        self.assertEqual(prepare.returncode, 0, prepare.stdout + prepare.stderr)
         run = self.inner("inner-run", "claude-code-cli", "--test", "--duration", "7200",
+                         stdin=SENTINEL + "\n",
                          TMPDIR=str(self.base / "tmp"), LINUX_MATRIX_SERVER="https://s.example")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         seen = json.loads(got.read_text())
@@ -769,47 +865,49 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
 
     def test_inner_run_that_broke_the_owner_rule_prints_no_pass_row(self) -> None:
         self.inner_run_world(model="claude-sonnet-4-5")
-        run = self.inner("inner-run", "claude-code-cli",
+        run = self.inner("inner-run", "claude-code-cli", stdin=SENTINEL,
                          TMPDIR=str(self.base / "tmp"), LINUX_MATRIX_SERVER="https://s.example")
         self.assertNotEqual(run.returncode, 0)
         self.assertNotIn("PASS", run.stdout)
         self.assertIn("claude-code-cli linux-x86_64 2.1.283 FAIL 2026-10-20", run.stdout)
         self.assertTrue(run.stdout.rstrip().splitlines()[-1].startswith("linux-matrix: FAIL owner rule"))
 
-    def test_inner_run_hands_the_fetch_credential_files_to_matrix_as_its_environment(self) -> None:
+    def test_inner_run_hands_the_key_to_matrix_as_a_private_file_off_the_volume_and_leaves_none(self) -> None:
         got = self.inner_run_world()
-        db, cf = self.base / "db-url", self.base / "cf-token"
-        db.write_text(DB_URL + "\n")
-        cf.write_text(CF_TOKEN + "\n")
-        run = self.inner("inner-run", "claude-code-cli", TMPDIR=str(self.base / "tmp"),
-                         LINUX_MATRIX_SERVER="https://s.example",
-                         MATRIX_DATABASE_URL_FILE=str(db), MATRIX_CLOUDFLARE_TOKEN_FILE=str(cf))
+        run = self.inner("inner-run", "claude-code-cli", stdin=SENTINEL + "\n",
+                         TMPDIR=str(self.base / "tmp"), LINUX_MATRIX_SERVER="https://s.example")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertEqual(json.loads(got.read_text())["fetch"], {
-            "DATABASE_URL": DB_URL, "CLOUDFLARE_API_TOKEN": CF_TOKEN,
-            "MATRIX_DATABASE_URL_FILE": None, "MATRIX_CLOUDFLARE_TOKEN_FILE": None})
-        self.assertNotIn(DB_URL, run.stdout + run.stderr)
-        self.assertNotIn(CF_TOKEN, run.stdout + run.stderr)
+        seen = json.loads(got.read_text())
+        self.assertEqual(seen["key"], SENTINEL + "\n")
+        self.assertEqual(seen["key_mode"], "0o600")
+        # matrix.sh removes it at the run's approval, before the harness can start.
+        self.assertEqual(seen["once"], "1")
+        key = Path(seen["key_file"])
+        self.assertNotIn(self.base / "vol", key.parents)
+        self.assertFalse(key.exists())
+        self.assertFalse(key.parent.exists())
+        self.assertNotIn(SENTINEL, run.stdout + run.stderr)
 
     def test_inner_run_keeps_trust_keys_that_were_set_even_empty(self) -> None:
         got = self.inner_run_world()
-        run = self.inner("inner-run", "claude-code-cli", MATRIX_PRE_PROMPT_KEYS="",
+        run = self.inner("inner-run", "claude-code-cli", MATRIX_PRE_PROMPT_KEYS="", stdin=SENTINEL,
                          TMPDIR=str(self.base / "tmp"), LINUX_MATRIX_SERVER="https://s.example")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(json.loads(got.read_text())["keys"], "")
 
-    def settle(self, **env: str) -> subprocess.CompletedProcess:
-        return self.inner("inner-settle", TMPDIR=str(self.base / "tmp"), **env)
+    def settle(self, token: str | None = None) -> subprocess.CompletedProcess:
+        """inner-settle, with the token on its standard input when one is given."""
+        if token is None:
+            return self.inner("inner-settle", TMPDIR=str(self.base / "tmp"))
+        return self.inner("inner-settle", "token", stdin=token, TMPDIR=str(self.base / "tmp"))
 
     def test_settle_writes_the_token_into_github_json_0600(self) -> None:
-        token = self.base / "github-token"
-        token.write_text(TOKEN + "\n")
         cfg = self.base / "vol/cfg"
         cfg.mkdir(parents=True)
         (cfg / "prep.json").write_text(json.dumps({"harness": "codex-cli", "home_ready": True}))
         (cfg / "github.json").write_text(json.dumps({"repo_url": PRACTICE,
                                                      "token": "ghp_matrixfaketoken00000000000000000000"}))
-        run = self.settle(MATRIX_GITHUB_TOKEN_FILE=str(token))
+        run = self.settle(TOKEN + "\n")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(json.loads((cfg / "github.json").read_text()),
                          {"repo_url": PRACTICE, "token": TOKEN})
@@ -822,8 +920,6 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
         self.assertNotIn(TOKEN, run.stdout + run.stderr)
 
     def test_settle_keeps_a_prepared_full_flow_repository(self) -> None:
-        token = self.base / "github-token"
-        token.write_text(TOKEN + "\n")
         cfg = self.base / "vol/cfg"
         cfg.mkdir(parents=True)
         prep = json.dumps({"harness": "codex-cli", "repo_url": "https://github.com/someone/entry",
@@ -832,7 +928,7 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
                          "token": "FAKE-participant-token-for-tests-0000"})
         (cfg / "prep.json").write_text(prep)
         (cfg / "github.json").write_text(gh)
-        run = self.settle(MATRIX_GITHUB_TOKEN_FILE=str(token))
+        run = self.settle(TOKEN + "\n")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual((cfg / "prep.json").read_text(), prep)
         self.assertEqual((cfg / "github.json").read_text(), gh)
@@ -859,12 +955,10 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
         self.assertEqual(json.loads((cfg / "github.json").read_text())["repo_url"], PRACTICE)
 
     def test_settle_refuses_a_token_file_without_a_token_and_never_prints_it(self) -> None:
-        token = self.base / "github-token"
-        token.write_text("not a token " + SENTINEL + "\n")
         cfg = self.base / "vol/cfg"
         cfg.mkdir(parents=True)
         (cfg / "prep.json").write_text(json.dumps({"harness": "codex-cli"}))
-        run = self.settle(MATRIX_GITHUB_TOKEN_FILE=str(token))
+        run = self.settle("not a token " + SENTINEL + "\n")
         self.assertNotEqual(run.returncode, 0)
         self.assertIn("FAIL settle", run.stdout)
         self.assertNotIn(SENTINEL, run.stdout + run.stderr)

@@ -1,6 +1,7 @@
 #!/bin/sh
 # scripts/matrix.sh <connector> <server-url> [options]
 # scripts/matrix.sh --check-copy <config-dir> [run-id]
+# scripts/matrix.sh --judge-copy <config-dir> [run-id]
 #
 # One practice run (or, with --test, one organizer test run sealed after --duration) of one
 # connector against one upload server, start to finish, and one result row:
@@ -57,6 +58,11 @@
 #                              variable out of its environment at once, so no child inherits the
 #                              path. A Docker run mounts
 #                              the file read-only (-v <file>:/run/key:ro) and never uses -e.
+#   MATRIX_APPROVAL_KEY_ONCE=1 the key file is a copy made for this one run, in a place the
+#                              harness could read (scripts/linux-matrix.sh). The script removes it
+#                              when it opens it for the run's approval, the last one, so it is gone
+#                              before the run is approved and the harness can start; on the way
+#                              out it is removed in any case. Never set it for a file of your own.
 #   GOALCUP_TEST_MEMBER_ID     the member the test approval approves as (default: member1).
 #   MATRIX_REPO_URL            the empty public repository (default:
 #                              https://github.com/agentcommunity/goalcup-matrix-empty).
@@ -105,6 +111,10 @@
 #                              goalcup-traces-staging otherwise).
 #   MATRIX_FETCH_TIMEOUT       seconds the fetch may take (default 1800).
 #   MATRIX_FETCH_SCRIPT        another fetch script with fetch-run.sh's arguments (tests).
+#   MATRIX_SERVER_COPY         a directory holding the server's copy already rebuilt by
+#                              fetch-run.sh (<entry>/chain.jsonl), used instead of a fetch: for
+#                              --judge-copy after a fetch that ran elsewhere (scripts/linux-matrix.sh
+#                              runs it in a container of its own, with no harness).
 #
 # Options:
 #   --allow-production   permit https://ingest.agentcommunity.org. Tests never use it.
@@ -137,6 +147,14 @@
 #                        in docs/OPERATING.md): every entry of RUN (default: the newest) in the
 #                        configuration directory DIR is verified locally and compared with the
 #                        server's position for it. Starts and approves nothing; read-only.
+#   --judge-copy DIR [RUN]
+#                        the end checks of a long run that already ran in DIR and got a
+#                        NOT-VERIFIED row because its server copy could not be fetched then: the
+#                        same checks the run makes on a fetched copy (the tail, the verifier,
+#                        the agent's work, the workspace, the server's position; strict, as for
+#                        the run's own mode), on the last entry of RUN (default: the newest), with
+#                        the copy from MATRIX_SERVER_COPY or a fetch now. Prints the run's row.
+#                        For a Docker cell, whose container never holds a fetch credential.
 #
 # Without GOALCUP_TEST_APPROVAL_KEY_FILE the script prints the approval address and code that goalcup
 # printed (nothing else) and waits while you approve, in a browser, as a member. There are two
@@ -175,6 +193,8 @@ CONNECTOR=""
 SERVER=""
 CHECK_CFG=""
 CHECK_RUN=""
+# check: --check-copy; judge: --judge-copy.
+CHECK_MODE=""
 ALLOW_PRODUCTION=0
 KEEP=0
 LOG=""
@@ -193,9 +213,12 @@ while [ $# -gt 0 ]; do
       DURATION=$2
       shift
       ;;
-    --check-copy)
-      [ $# -ge 2 ] || bad_usage "--check-copy needs a configuration directory"
+    --check-copy | --judge-copy)
+      [ $# -ge 2 ] || bad_usage "$1 needs a configuration directory"
+      [ -z "$CHECK_CFG" ] || bad_usage "--check-copy and --judge-copy go alone"
       CHECK_CFG=$2
+      CHECK_MODE=${1#--}
+      CHECK_MODE=${CHECK_MODE%-copy}
       shift
       case ${2:-} in "" | -*) ;; *)
         CHECK_RUN=$2
@@ -228,8 +251,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 if [ -n "$CHECK_CFG" ]; then
-  [ -z "$CONNECTOR" ] || bad_usage "--check-copy takes no connector or server"
-  CONNECTOR=check-copy
+  [ -z "$CONNECTOR" ] || bad_usage "--$CHECK_MODE-copy takes no connector or server"
+  CONNECTOR=$CHECK_MODE-copy
 else
   [ -n "$CONNECTOR" ] && [ -n "$SERVER" ] || bad_usage "a connector and a server are needed"
 fi
@@ -242,9 +265,13 @@ if [ -n "${GOALCUP_TEST_APPROVAL_KEY:-}" ]; then
   exit 2
 fi
 KEYFILE=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
+KEY_ONCE=${MATRIX_APPROVAL_KEY_ONCE:-0}
 # The path leaves the environment too, so goalcup, the daemon and the harness never inherit where
 # the key file is.
-unset GOALCUP_TEST_APPROVAL_KEY_FILE
+unset GOALCUP_TEST_APPROVAL_KEY_FILE MATRIX_APPROVAL_KEY_ONCE
+case $KEY_ONCE in 0 | 1) ;; *) echo "matrix: MATRIX_APPROVAL_KEY_ONCE is 0 or 1" >&2; exit 2 ;; esac
+# Which approval comes next: the login's, then the run's (the last one).
+APPROVING=login
 if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
   echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE must name a regular file this user can read" >&2
   exit 2
@@ -258,6 +285,7 @@ unset DATABASE_URL CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN
 FETCH_INDEX=${MATRIX_FETCH_INDEX:-}
 FETCH_STORE=${MATRIX_FETCH_STORE:-}
 FETCH_SCRIPT=${MATRIX_FETCH_SCRIPT:-$HERE/fetch-run.sh}
+SERVER_COPY=${MATRIX_SERVER_COPY:-}
 FETCH_TIMEOUT=${MATRIX_FETCH_TIMEOUT:-1800}
 case $FETCH_TIMEOUT in '' | *[!0-9]*) echo "matrix: MATRIX_FETCH_TIMEOUT is a number of seconds" >&2; exit 2 ;; esac
 PRE_KEYS=${MATRIX_PRE_PROMPT_KEYS:-}
@@ -315,7 +343,7 @@ esac
 # sealed by this script. Never one without the other: a test run left to the server lasts 168 h.
 if [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
   if [ -n "$CHECK_CFG" ]; then
-    echo "matrix: --test and --duration are not for --check-copy" >&2
+    echo "matrix: --test and --duration are not for --$CHECK_MODE-copy" >&2
     exit 2
   fi
   if [ "$TEST" != 1 ] || [ -z "$DURATION" ]; then
@@ -489,6 +517,7 @@ cleanup() {
   trap '' INT TERM HUP
   # The shell's own notices about the jobs it ends here go to the log, not the terminal.
   exec 2>>"$LOG"
+  if [ "$KEY_ONCE" = 1 ] && [ -n "$KEYFILE" ]; then rm -f "$KEYFILE" 2>/dev/null; fi
   if [ -n "$ROOT" ] && [ -d "$ROOT" ]; then {
     : >"$ROOT/done" 2>/dev/null
     # A test run that failed after its entry was found and before its seal was asked for would
@@ -593,9 +622,16 @@ scan_and_approve() {
   [ -n "$code" ] || return 0
   printf '%s\n' "$code" >>"$ROOT/seen.txt"
   if [ -n "$KEYFILE" ]; then
+    # A key file made for this run only (MATRIX_APPROVAL_KEY_ONCE=1) is removed as it is opened
+    # for the run's approval: gone before the approval is even sent, so before the harness starts.
+    # If it cannot be removed, no key is sent and the approval is refused.
     status=$({
+      exec 5<"$KEYFILE" || exit 1
+      if [ "$KEY_ONCE" = 1 ] && [ "$APPROVING" = run ]; then
+        rm -f "$KEYFILE" && [ ! -e "$KEYFILE" ] || exit 1
+      fi
       printf 'Authorization: Bearer '
-      tr -d '\n' <"$KEYFILE"
+      tr -d '\n' <&5
       printf '\n'
     } | http POST /v1/device/approve "$ROOT/approve.out" -H @- -H 'Content-Type: application/json' \
       -d "{\"user_code\":\"$code\",\"member_id\":\"$MEMBER\",\"approve\":true}")
@@ -934,6 +970,7 @@ PY
 
   # ---- start --practice (or --test)
   : >"$ROOT/seen.txt"
+  APPROVING=run
   WRAP="$ROOT/start-wrapper.sh"
   if [ "$TEST" = 1 ]; then RUN_FLAG=--test; else RUN_FLAG=--practice; fi
   START_ARGS="start --harness $CONNECTOR $DEV_FLAG $RUN_FLAG"
@@ -1075,6 +1112,13 @@ PY
   if [ "$CONNECTOR" = "$FAKE_ID" ]; then
     grep -q 'tui: noted' "$ROOT/start.txt" || fail "the typed prompt never reached the harness" || return 1
   fi
+  judge_run
+}
+
+# The end checks of a run that ended as it should: on its trace or, for a long run pruned on this
+# machine, on the server's copy. Needs RUN_JSON, RUN_DIR, RUN_ID, TRACE, ENTRY_ID, PRUNED, STRICT,
+# IS_FAKE and VERIFY. Sets RESULT=PASS, or NOT-VERIFIED for a long run whose copy is not to be had.
+judge_run() {
   JUDGED=$TRACE
   if [ "$PRUNED" = 1 ]; then
     # A long run: its acknowledged parts were pruned here (by design); the server's copy is judged.
@@ -1232,9 +1276,10 @@ PY
   return 0
 }
 
-# Whether a long run's server copy can be fetched: an index (file or database) and the objects
-# (a bucket mirror or R2).
+# Whether a long run's server copy can be had: one fetched already (MATRIX_SERVER_COPY), or an
+# index (file or database) and the objects (a bucket mirror or R2).
 fetch_configured() {
+  [ -n "$SERVER_COPY" ] && return 0
   { [ -n "$FETCH_INDEX" ] || [ -n "$FETCH_DB" ]; } &&
     { [ -n "$FETCH_STORE" ] || { [ -n "$FETCH_CF_ACCOUNT" ] && [ -n "$FETCH_CF_TOKEN" ]; }; }
 }
@@ -1243,6 +1288,15 @@ fetch_configured() {
 # only), bounded by MATRIX_FETCH_TIMEOUT. The credentials reach it in its environment only.
 fetch_copy() { # entry
   fc_entry=$1
+  if [ -n "$SERVER_COPY" ]; then
+    log "the server's copy of entry $fc_entry, rebuilt by fetch-run.sh before this check: $SERVER_COPY/$fc_entry"
+    [ -f "$SERVER_COPY/$fc_entry/chain.jsonl" ] ||
+      fail "MATRIX_SERVER_COPY holds no chain.jsonl for entry $fc_entry" || return 1
+    rm -rf "$ROOT/servercopy"
+    mkdir -p "$ROOT/servercopy" && cp -R "$SERVER_COPY/$fc_entry" "$ROOT/servercopy/" ||
+      fail "cannot copy the server copy of entry $fc_entry" || return 1
+    return 0
+  fi
   fc_bucket=${MATRIX_FETCH_BUCKET:-}
   if [ -z "$fc_bucket" ]; then
     case $SERVER_LC in
@@ -1475,6 +1529,45 @@ for e in json.load(open(sys.argv[1]))["entries"]:
   RESULT=PASS
 }
 
+# --judge-copy: the end checks a long run could not make when it ended (its row said NOT-VERIFIED,
+# its server copy not fetched), made now on the last entry of the run in the configuration
+# directory, exactly as the run makes them on a fetched copy. Nothing is started or approved.
+judge_copy() {
+  VERIFY=$(find_bin goalcup-verify)
+  [ -n "$VERIFY" ] || fail "goalcup-verify is needed (cargo build --workspace, or MATRIX_BIN_DIR)" || return 1
+  CFG=${CHECK_CFG%/}
+  if [ -n "$CHECK_RUN" ]; then
+    RUN_JSON="$CFG/runs/$CHECK_RUN/run.json"
+  else
+    RUN_JSON=$(ls -t "$CFG"/runs/*/run.json 2>/dev/null | head -1)
+  fi
+  [ -n "$RUN_JSON" ] && [ -f "$RUN_JSON" ] || fail "no run record under $CFG/runs" || return 1
+  RUN_DIR=$(dirname "$RUN_JSON")
+  RUN_ID=$(py_get "$RUN_JSON" run_id)
+  # The row names the run's connector, as the run's own row does.
+  CONNECTOR=$(py_get "$RUN_JSON" connector_id)
+  case $CONNECTOR in *[!A-Za-z0-9._-]* | "") CONNECTOR=judge-copy; fail "run $RUN_ID names no valid connector" || return 1 ;; esac
+  IS_FAKE=0
+  [ "$CONNECTOR" != "$FAKE_ID" ] || IS_FAKE=1
+  SERVER=$(py_get "$RUN_JSON" server_url)
+  [ -n "$SERVER" ] || fail "run $RUN_ID has no server (a local-only run has no server copy)" || return 1
+  validate_server
+  # A test run's end is the seal; a practice run's is the deadline (stop), as in the run.
+  if [ "$(py_get "$RUN_JSON" test)" = true ]; then STRICT=sealed; else STRICT=1; fi
+  TRACE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["trace_dir"])' "$RUN_JSON") ||
+    fail "run $RUN_ID has no entries" || return 1
+  ENTRY_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["entry_id"])' "$RUN_JSON")
+  ROOT=$(mktemp -d "${TMPDIR:-/tmp}/goalcup-matrix.XXXXXX") || fail "cannot make a temporary directory" || return 1
+  log "judge-copy of run $RUN_ID ($CONNECTOR, entry $ENTRY_ID, strict=$STRICT) on $SERVER, configuration $CFG"
+  PRUNED=0
+  if [ -f "$TRACE/chain.jsonl" ]; then
+    read_hv "$TRACE/chain.jsonl"
+  elif ls "$TRACE"/chain.[0-9]*.jsonl >/dev/null 2>&1; then
+    PRUNED=1
+  fi
+  judge_run
+}
+
 # The last non-empty line of a file, carriage returns removed, cut to 300 characters.
 last_line() { # file
   tr -d '\r' 2>/dev/null <"$1" | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-300
@@ -1580,7 +1673,11 @@ protocol_hint = "openai-responses"
 EOF
 }
 
-if [ -n "$CHECK_CFG" ]; then run_check; else run_matrix; fi
+case $CHECK_MODE in
+  check) run_check ;;
+  judge) judge_copy ;;
+  *) run_matrix ;;
+esac
 if [ "$RESULT" != PASS ] && [ -n "${RUN_DIR:-}" ] && [ -f "$RUN_DIR/host.log" ]; then
   log_file "host.log (goalcup's messages during the run)" "$RUN_DIR/host.log"
 fi

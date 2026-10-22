@@ -39,8 +39,20 @@ if args == ["--version"]:
     print("goalcup 0.0.0-stub")
     sys.exit(0)
 
+def approved(code, n):
+    # STUB_CODES=1: a device code to approve, as goalcup prints it; wait for the n-th approval,
+    # then note whether the key file (STUB_KEY_PATH) is still there.
+    if os.environ.get("STUB_CODES") != "1":
+        return
+    print("Open the address and check it shows the code %s." % code, flush=True)
+    t0 = time.time()
+    while not (out / ("approve.%d" % n)).exists() and time.time() - t0 < 30:
+        time.sleep(0.2)
+    note("key_after_approval.%d" % n, str(Path(os.environ["STUB_KEY_PATH"]).exists()))
+
 if args[0] == "login":
     note("login.no_browser", os.environ.get("GOALCUP_NO_BROWSER", "unset"))
+    approved("LOGN-CODE", 1)
     print("Logged in as member.")
     sys.exit(0)
 
@@ -132,6 +144,7 @@ def write_run():
     if os.environ.get("STUB_PRUNED") != "1":
         note("chain.size", str(len(chain)))
 
+approved("RUNN-CODE", 2)
 if test:
     write_run()
 
@@ -224,10 +237,12 @@ import json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
 out = Path(os.environ["STUB_OUT"])
-if "@-" in args:
-    sys.stdin.read()
+header = sys.stdin.read() if "@-" in args else ""
 target = args[args.index("-o") + 1]
 url = args[-1]
+if url.endswith("/v1/device/approve"):
+    n = len(list(out.glob("approve.*"))) + 1
+    (out / ("approve.%d" % n)).write_text(str(os.environ.get("STUB_KEY", "") in header))
 if "/v1/runs/" in url:
     size = int((out / "chain.size").read_text())
     body = {"offset": size, "next_seq": 1, "head": "a" * 64, "last_ack": {"hash": "a" * 64},
@@ -275,6 +290,8 @@ class World:
         executable(self.bin / "goalcup-daemon", "#!/bin/sh\nexit 0\n")
         executable(self.bin / "curl", CURL)
         executable(self.bin / "fake-fetch.sh", FETCH)
+        # A synthetic approval key, used by the scenarios that name it.
+        (self.bin / "approval-key").write_text(KEY + "\n")
         self.connectors = self.root / "connectors"
         (self.connectors / "stubchat").mkdir(parents=True)
         (self.connectors / "stubchat" / "harness.toml").write_text(CHAT.format(id="stubchat"))
@@ -337,6 +354,7 @@ class World:
 
 
 DURATION = 4
+KEY = "synthetic-approval-key-0123456789"
 DB_URL = "postgres://reader:db-secret-never-shown@db.invalid/postgres"
 CF_TOKEN = "cf-token-never-shown"
 AMP_VERSION = "0.0.1792209635-g24a9fe (released 2026-10-17T04:00:35.000Z, 4d ago)"
@@ -380,6 +398,18 @@ SCENARIOS = {
     "pruned_env": ("stubchat", {"STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
                                 "DATABASE_URL": DB_URL, "CLOUDFLARE_ACCOUNT_ID": "acct",
                                 "CLOUDFLARE_API_TOKEN": CF_TOKEN}),
+    # A long run left NOT-VERIFIED, judged afterwards with --judge-copy.
+    "pruned_judged": ("stubchat", {"STUB_PRUNED": "1", "DATABASE_URL": None,
+                                   "CLOUDFLARE_API_TOKEN": None}),
+    # Approvals with a key file: a copy made for the run (removed at the run's approval), and
+    # the owner's own file (never removed).
+    "key_once": ("stubchat", {"STUB_CODES": "1", "STUB_KEY": KEY,
+                              "GOALCUP_TEST_APPROVAL_KEY_FILE": "{bin}/approval-key",
+                              "STUB_KEY_PATH": "{bin}/approval-key",
+                              "MATRIX_APPROVAL_KEY_ONCE": "1"}),
+    "key_own": ("stubchat", {"STUB_CODES": "1", "STUB_KEY": KEY,
+                             "GOALCUP_TEST_APPROVAL_KEY_FILE": "{bin}/approval-key",
+                             "STUB_KEY_PATH": "{bin}/approval-key"}),
     "pruned_bad_tail": ("stubchat", {"STUB_PRUNED": "1", "STUB_FETCH_BAD": "1",
                                      "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
                                      "MATRIX_FETCH_INDEX": "/index.json",
@@ -577,6 +607,51 @@ class MatrixTests(unittest.TestCase):
             self.assertNotIn(secret, w.everything_matrix_wrote())
             self.assertNotIn(secret, w.seen("fetch.argv"))
 
+    def judge(self, w: World, copy: bytes) -> subprocess.CompletedProcess:
+        """matrix.sh --judge-copy on the run w kept, with `copy` as the server's copy."""
+        [cfg] = [p.parent for p in w.tmpdir.glob("goalcup-matrix.*/cfg/runs")]
+        servercopy = w.root / "servercopy"
+        (servercopy / "e0123456789abcdef").mkdir(parents=True, exist_ok=True)
+        (servercopy / "e0123456789abcdef/chain.jsonl").write_bytes(copy)
+        env = {"PATH": f"{w.bin}:{os.environ['PATH']}", "HOME": str(w.root),
+               "TMPDIR": str(w.tmpdir), "MATRIX_BIN_DIR": str(w.bin), "STUB_OUT": str(w.out),
+               "MATRIX_SERVER_COPY": str(servercopy)}
+        return subprocess.run(["sh", str(MATRIX), "--judge-copy", str(cfg), "r1",
+                               "--log", str(w.root / "judge.log")],
+                              env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              timeout=60)
+
+    def test_a_not_verified_long_run_is_judged_later_on_its_server_copy(self) -> None:
+        w = self.worlds["pruned_judged"]
+        self.assertEqual(w.run.returncode, 4, w.said())
+        full = (w.out / "full_chain.jsonl").read_bytes()
+        good = self.judge(w, full)
+        self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+        self.assertRegex(good.stdout, r"(?m)^stubchat \S+ stub-harness_9\.9\.9 PASS ")
+        # The run's own checks, on the copy: the agent's work was judged there.
+        self.assertIn("servercopy/e0123456789abcdef", w.seen("research.argv"))
+        bad = self.judge(w, full[:-3] + b"X" + full[-2:])
+        self.assertEqual(bad.returncode, 1, bad.stdout + bad.stderr)
+        self.assertIn("not the server copy's tail", bad.stderr)
+        self.assertRegex(bad.stdout, r"(?m)^stubchat \S+ \S+ FAIL ")
+
+    def test_a_key_file_made_for_the_run_is_gone_before_the_run_is_approved(self) -> None:
+        w = self.worlds["key_once"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        # Both approvals carried the key; the login's left it, the run's took it.
+        self.assertEqual([w.seen("approve.1"), w.seen("approve.2")], ["True", "True"])
+        self.assertEqual(w.seen("key_after_approval.1"), "True")
+        self.assertEqual(w.seen("key_after_approval.2"), "False")
+        self.assertFalse((w.bin / "approval-key").exists())
+        self.assertNotIn(KEY, w.everything_matrix_wrote())
+
+    def test_a_key_file_of_your_own_is_never_removed(self) -> None:
+        w = self.worlds["key_own"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertEqual([w.seen("approve.1"), w.seen("approve.2")], ["True", "True"])
+        self.assertEqual(w.seen("key_after_approval.2"), "True")
+        self.assertEqual((w.bin / "approval-key").read_text(), KEY + "\n")
+
     def test_a_local_tail_that_differs_from_the_server_copy_fails(self) -> None:
         w = self.worlds["pruned_bad_tail"]
         self.assertEqual(w.run.returncode, 1, w.said())
@@ -647,6 +722,7 @@ class MatrixArgumentTests(unittest.TestCase):
 
     def test_check_copy_takes_no_test_options(self) -> None:
         self.refuse("--check-copy", str(self.cfg), "--test", "--duration", "60")
+        self.refuse("--judge-copy", str(self.cfg), "--test", "--duration", "60")
 
     def test_prompt_and_prompt_file_are_not_both_given(self) -> None:
         f = self.root / "p.txt"
