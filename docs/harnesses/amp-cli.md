@@ -32,17 +32,18 @@ The original report predated the thread decoder (`analysis: unavailable`, cross-
 ### Stored-byte replay and bounded decoding (19 Oct 2026)
 
 The pinned practice was retrieved from staging storage and replayed without another harness
-launch. The `amp-thread-jsonrpc` decoder version `2` reads complete server `message_added`
+launch. The `amp-thread-jsonrpc` decoder version `3` reads complete server `message_added`
 snapshots: assistant text and model-facing tool calls, context-visible tool results (a `Task`
-subagent's answer too), and supplied model/usage snapshots; a subagent's snapshots carry the
+subagent's answer too, and a file edit's diff), and supplied model/usage snapshots; a subagent's snapshots carry the
 parent `Task` call as `parent_tool_use_id`. It labels these as application/thread evidence. It does not expose the
 server's exact provider request or hidden system/inference context, and it emits no wire human
 marker or provider finish outcome. Deltas, user send/echo, tool leases, executor progress/results,
 settings, RPC results and literal ping/pong remain source-referenced unknowns. Repeated complete
 snapshots remain separate source occurrences; there is no global deduplication.
 
-Measurement is this macOS version and sample only. Thinking blocks and complete-message batch
-arrays are supported through synthetic tests, not measured here. The native metadata hint
+Measurement is this macOS version and sample only. Thinking blocks, complete-message batch
+arrays and the `edit_file` result (`{diff, lineRange}`, a shape taken from public readers of Amp's
+thread files) are supported through synthetic tests, not measured here. The native metadata hint
 `amp-thread-metadata-no-transcript` remains capture-only; it is not a conversation transcript.
 See [report semantics](../research/m2-report-format.md) and the
 [coverage matrix](../research/coverage-matrix.md) for the qualified evidence cells.

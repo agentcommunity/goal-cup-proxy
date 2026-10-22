@@ -573,3 +573,42 @@ fn a_task_result_is_the_subagent_answer_with_its_tool_use_count() {
     ));
     assert_eq!(unknown_reasons(&obs), ["unsupported_tool_result"]);
 }
+/// Version 3. Synthetic: the `{diff, lineRange}` shape comes from public readers of Amp's thread
+/// files, not from a measured capture.
+#[test]
+fn an_edit_file_result_is_its_diff_with_the_line_range() {
+    let diff = "```diff\n@@ -1 +1 @@\n-old line\n+new line\n```";
+    let obs = decode_value(snapshot(
+        "user",
+        json!([{"type":"tool_result","toolUseID":"toolu_edit-1","run":{"status":"done",
+            "result":{"diff":diff,"lineRange":[3,7]}}}]),
+    ));
+    let results = kind(&obs, "tool_result");
+    assert_eq!(results.len(), 1, "{obs:#?}");
+    assert_eq!(results[0].fields["diff"], diff);
+    assert_eq!(results[0].fields["line_range"], json!([3, 7]));
+    assert_eq!(results[0].fields["call_id"], "toolu_edit-1");
+    assert!(results[0].fields.get("output").is_none());
+    // A long diff is cut and says so; a line range that is not two integers is not kept.
+    let obs = decode_value(snapshot(
+        "user",
+        json!([{"type":"tool_result","toolUseID":"t","run":{"status":"done",
+            "result":{"diff":"+".repeat(17000),"lineRange":[3,"x"]}}}]),
+    ));
+    let results = kind(&obs, "tool_result");
+    assert_eq!(results[0].fields["diff_truncated"], true);
+    assert_eq!(results[0].fields["diff_bytes"], 17000);
+    assert!(results[0].fields.get("line_range").is_none());
+    // An edit that is not done, or a result with no diff text, is still not a result.
+    for run in [
+        json!({"status":"in-progress","result":{"diff":diff}}),
+        json!({"status":"done","result":{"diff":{"not":"text"}}}),
+        json!({"status":"done","result":{"lineRange":[1,2]}}),
+    ] {
+        let obs = decode_value(snapshot(
+            "user",
+            json!([{"type":"tool_result","toolUseID":"t","run":run}]),
+        ));
+        assert_eq!(unknown_reasons(&obs), ["unsupported_tool_result"], "{run}");
+    }
+}

@@ -965,7 +965,7 @@ fn the_report_echoes_launch_keys_and_presents_connector_pin_provenance() {
     assert_eq!(summary["run"]["connector"], "Dev/unpinned");
     assert_eq!(
         hex::encode(Sha256::digest(unversioned(&bytes))),
-        "c84367bf2fa99bbbd86ac45949d68f9eb91898b9b4750f0eff7444df0ea9d3fa"
+        "1dc81c319c1e7733fc57dc54709df6b079feaaf886f7b6d2969e2fa7f396012b"
     );
 
     let (pinned_id, pinned_digest) = CONNECTOR_DIR_SHA256S[0];

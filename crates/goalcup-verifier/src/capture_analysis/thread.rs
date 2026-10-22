@@ -6,7 +6,8 @@
 //! `tool_result` blocks yield context-visible `tool_result`: `run.result.output`, or a `run.result`
 //! that is itself the text (a `Task` subagent's final answer, `create_file`), with the number of
 //! the subagent's own tool uses a `Task` run lists under `run.progress[].tool_uses` as
-//! `subagent_tool_uses`. Subagents share the parent's thread WebSocket: a snapshot whose
+//! `subagent_tool_uses`. A file edit's `run.result` is `{diff, lineRange}`: the diff the model
+//! sees as bounded text `diff`, and a two-integer `lineRange` as `line_range` (version 3). Subagents share the parent's thread WebSocket: a snapshot whose
 //! `params.parentToolUseId` (or `parentToolCallId`) names the parent's `Task` call carries it as
 //! `parent_tool_use_id` on every fact, so a subagent's messages are told from the parent's
 //! (version 2). Supplied `usage.model` and integer
@@ -30,6 +31,8 @@
 //! Oct) with `Task` subagents: their snapshots carry `params.parentToolUseId`, and the `Task`
 //! results a string `run.result` with `run.progress`. Thinking blocks,
 //! batch arrays containing complete messages, malformed/lost data and limit paths are synthetic.
+//! So is the `edit_file` result: its `{diff, lineRange}` shape comes from public readers of Amp's
+//! thread files (the same `messages` block format), not from a measured capture.
 
 use super::api::{DecoderFailure, DecoderSummary, DecoderV1, Observation, StreamOpen, kinds};
 use super::tracker::{Protocol, SseEnd, Tracker};
@@ -38,7 +41,7 @@ use goalcup_protocol::capture::{CaptureRecord, CaptureSource, StreamKey};
 use serde_json::{Map, Value};
 
 pub const DECODER_ID: &str = "amp-thread-jsonrpc";
-pub const DECODER_VERSION: &str = "2";
+pub const DECODER_VERSION: &str = "3";
 pub const PROTOCOL_HINT: &str = "amp-thread-jsonrpc";
 
 fn selects(source: CaptureSource, hint: Option<&str>) -> bool {
@@ -287,21 +290,33 @@ impl Record<'_, '_> {
                 (false, Some("tool_result")) => {
                     let run = block.get("run");
                     let result = run.and_then(|v| v.get("result"));
+                    let done =
+                        run.and_then(|v| v.get("status")).and_then(Value::as_str) == Some("done");
                     // `{output, exitCode}` for a shell; the text itself for a `Task` or a file
-                    // write.
+                    // write; `{diff, lineRange}` for a file edit (version 3).
                     let output = result
                         .and_then(|v| v.get("output"))
                         .and_then(Value::as_str)
                         .or_else(|| result.and_then(Value::as_str));
-                    let Some(output) = output.filter(|_| {
-                        run.and_then(|v| v.get("status")).and_then(Value::as_str) == Some("done")
-                    }) else {
+                    let diff = result.and_then(|v| v.get("diff")).and_then(Value::as_str);
+                    if !done || (output.is_none() && diff.is_none()) {
                         self.unknown("unsupported_tool_result", fields);
                         continue;
-                    };
+                    }
                     put_id(&mut fields, "call_id", block.get("toolUseID"));
                     fields.insert("status".into(), "done".into());
-                    put_text(&mut fields, "output", output);
+                    if let Some(output) = output {
+                        put_text(&mut fields, "output", output);
+                    } else if let Some(diff) = diff {
+                        put_text(&mut fields, "diff", diff);
+                        if let Some(range) = result
+                            .and_then(|v| v.get("lineRange"))
+                            .and_then(Value::as_array)
+                            .filter(|r| r.len() == 2 && r.iter().all(Value::is_u64))
+                        {
+                            fields.insert("line_range".into(), Value::Array(range.clone()));
+                        }
+                    }
                     if let Some(progress) = run
                         .and_then(|v| v.get("progress"))
                         .and_then(Value::as_array)

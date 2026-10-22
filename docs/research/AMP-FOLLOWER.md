@@ -17,8 +17,8 @@ ran `claude-opus-5-5` while the thread's mode was `low`: the mode does not gover
 ## 1. What we get today, without it
 
 - **Wire leg (the content).** Goal Cup Proxy records Amp's thread WebSocket. Decoder
-  `amp-thread-jsonrpc` v2 recovers assistant text, tool calls with input, tool results the model
-  saw, and model and usage. That is the same content the follower would write.
+  `amp-thread-jsonrpc` v3 recovers assistant text, tool calls with input, tool results the model
+  saw (a file edit's diff too), and model and usage. That is the same content the follower would write.
 - **Native leg (counts only).** Amp's own log `~/.cache/amp/logs/threads/T-*.log` has transport state,
   message types, frame sizes and tool runs, but almost no conversation text. We capture it, label it
   "metadata, no transcript", and leave the cross-leg check unchecked for Amp.

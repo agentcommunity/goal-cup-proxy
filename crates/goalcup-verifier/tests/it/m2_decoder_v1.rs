@@ -1062,7 +1062,7 @@ fn the_builtin_registry_lists_the_six_decoders_in_report_order() {
             ("openai-responses", "2"),
             ("anthropic-messages", "3"),
             ("openai-chat-completions", "2"),
-            ("amp-thread-jsonrpc", "2"),
+            ("amp-thread-jsonrpc", "3"),
         ]
     );
     assert!(DecoderRegistry::empty().ids().is_empty());

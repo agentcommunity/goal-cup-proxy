@@ -243,14 +243,17 @@ recorded here because they change a summary:
   `message_complete`, or incomplete tool input remain provider detail; gaps, dropped bytes,
   bounds, recovery, and unterminated streams still degrade analysis.
 
-`amp-thread-jsonrpc` version `2` reads only WebSocket client/server messages with that exact
+`amp-thread-jsonrpc` version `3` reads only WebSocket client/server messages with that exact
 hint. It interprets complete server `message_added.params.message` snapshots, with
 `scope: "application_thread"`: assistant text/thinking as `model_response`, assistant
 `tool_use` as `tool_call`, and user `tool_result.run.result.output` (or a `run.result` that is
 the text itself, as a `Task` subagent's answer is) as the context-visible `tool_result`, with
 `subagent_tool_uses` counting a `Task` run's `progress[].tool_uses`. A snapshot whose
 `params.parentToolUseId` (or `parentToolCallId`) names a parent `Task` call is a subagent's: every
-fact from it carries `parent_tool_use_id` (version 2). Model-facing tool names stay as supplied; executor names do not replace them.
+fact from it carries `parent_tool_use_id` (version 2). A file edit's `run.result` object
+`{diff, lineRange}` is a `tool_result` with the bounded text `diff` (no `output`) and, when
+`lineRange` is two integers, `line_range` (version 3; the shape comes from public readers of
+Amp's thread files and is synthetic-only until a capture measures it). Model-facing tool names stay as supplied; executor names do not replace them.
 Safe supplied `messageId`, `threadId`, block IDs and block indices identify each occurrence.
 Tool input is bounded serialized JSON; text/thinking and tool output use bounded text fields.
 A supplied assistant `usage.model` yields `model`; the integer `inputTokens`, `outputTokens`,
