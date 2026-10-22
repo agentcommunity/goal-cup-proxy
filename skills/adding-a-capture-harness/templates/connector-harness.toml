@@ -25,8 +25,9 @@ display_name = "<HARNESS NAME>"         # 1 to 40 printable ASCII characters, as
 # `### <Harness name>` section to that guide in the same PR (docs/HARNESS-ONBOARDING.md, step 5).
 setup_section = "<harness-name>"
 # Where the participant adds `goalcup mcp`, the time-left tool, in the harness's own config:
-# the file (relative to the shared config home), the key of its MCP server table, and how the
-# harness hands a server GOALCUP_TIME_LEFT_FILE: "inherited", "env_vars" or "env_template".
+# the file (relative to the shared config home, else the shared run HOME; one of the two is
+# needed), the key of its MCP server table, and how the harness hands a server
+# GOALCUP_TIME_LEFT_FILE: "inherited", "env_vars" or "env_template".
 # `goalcup prep` prints the lines; Goal Cup never writes them (D67). Delete if it has no MCP.
 # [participant.time_left_tool]
 # file = "<config.toml>"
