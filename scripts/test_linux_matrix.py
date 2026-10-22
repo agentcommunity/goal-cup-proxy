@@ -259,7 +259,9 @@ class LinuxMatrixTests(unittest.TestCase):
         home = cfg / "capture-homes/codex-cli"
         home.mkdir(parents=True)
         (home / "config.toml").write_text(
-            'model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n\n'
+            'model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n'
+            'approval_policy = "on-request"\nsandbox_mode = "workspace-write"\n'
+            'personality = "kept"\n\n'
             '[projects."/w"]\ntrust_level = "trusted"\nmodel = "kept-in-table"\n'
         )
         # The container half reads its fixed paths; point them at the temporary volume.
@@ -270,6 +272,12 @@ class LinuxMatrixTests(unittest.TestCase):
         text = (home / "config.toml").read_text()
         lines = text.splitlines()
         self.assertEqual(lines[:2], ['model = "gpt-5.6-luna"', 'model_reasoning_effort = "low"'])
+        # No permission prompt in a test cell: the container or test machine is the sandbox.
+        self.assertEqual(lines[2:4], ['approval_policy = "never"',
+                                      'sandbox_mode = "danger-full-access"'])
+        self.assertEqual(text.count("approval_policy"), 1)
+        self.assertEqual(text.count("sandbox_mode"), 1)
+        self.assertIn('personality = "kept"', text)
         self.assertNotIn("gpt-6-astra", text)
         self.assertIn('[projects."/w"]\ntrust_level = "trusted"\nmodel = "kept-in-table"', text)
         self.assertEqual(stat.S_IMODE((home / "config.toml").stat().st_mode), 0o600)
@@ -491,14 +499,39 @@ class ContainerHalfTests(unittest.TestCase):
         self.assertEqual(doc["model"], "haiku")
         self.assertIs(doc["alwaysThinkingEnabled"], False)
         self.assertEqual(doc["theme"], "dark")
-        self.assertEqual(doc["permissions"], {"allow": ["Bash(ls)"]})
+        self.assertEqual(doc["permissions"], {"allow": ["Bash(ls)"],
+                                              "defaultMode": "bypassPermissions"})
+        self.assertIs(doc["skipDangerousModePermissionPrompt"], True)
         self.assertEqual(stat.S_IMODE((home / "settings.json").stat().st_mode), 0o600)
 
     def test_claude_settings_are_written_when_there_are_none(self) -> None:
         run = self.inner("inner-home-config", "claude-code-cli")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         doc = json.loads((self.homes / "claude-code-cli/settings.json").read_text())
-        self.assertEqual(doc, {"model": "haiku", "alwaysThinkingEnabled": False})
+        self.assertEqual(doc, {"model": "haiku", "alwaysThinkingEnabled": False,
+                               "permissions": {"defaultMode": "bypassPermissions"},
+                               "skipDangerousModePermissionPrompt": True})
+
+    def test_claude_runs_without_permission_prompts_over_another_mode(self) -> None:
+        home = self.homes / "claude-code-cli"
+        home.mkdir(parents=True)
+        (home / "settings.json").write_text(json.dumps({
+            "permissions": {"defaultMode": "default", "deny": ["Bash(rm:*)"]},
+            "skipDangerousModePermissionPrompt": False}))
+        run = self.inner("inner-home-config", "claude-code-cli")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        doc = json.loads((home / "settings.json").read_text())
+        self.assertEqual(doc["permissions"], {"defaultMode": "bypassPermissions",
+                                              "deny": ["Bash(rm:*)"]})
+        self.assertIs(doc["skipDangerousModePermissionPrompt"], True)
+
+    def test_claude_permissions_that_are_not_an_object_are_left_alone_and_fail(self) -> None:
+        home = self.homes / "claude-code-cli"
+        home.mkdir(parents=True)
+        (home / "settings.json").write_text('{"permissions": ["x"]}')
+        run = self.inner("inner-home-config", "claude-code-cli")
+        self.assertNotEqual(run.returncode, 0)
+        self.assertEqual((home / "settings.json").read_text(), '{"permissions": ["x"]}')
 
     def test_claude_fullscreen_offer_is_answered_not_now_keeping_other_state(self) -> None:
         home = self.homes / "claude-code-cli"

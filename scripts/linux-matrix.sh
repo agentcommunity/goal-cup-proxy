@@ -44,6 +44,10 @@
 #                    the home's projects/, subagents included) must name a haiku model. Claude's
 #                    own `<synthetic>` messages (no model call) are counted apart, not judged.
 # A message with another model, or none found at all, fails the run.
+# No permission prompts (nobody may answer one; the container is the sandbox): codex-cli also gets
+# `approval_policy = "never"` and `sandbox_mode = "danger-full-access"`, claude-code-cli
+# `permissions.defaultMode = "bypassPermissions"` and `"skipDangerousModePermissionPrompt": true`.
+# A test-kit setting, like the cheapest model; Goal Cup never sets a participant's.
 #
 # goalcup never hands a harness a provider key (D61): a harness signs in with its own login,
 # kept in its tracker home, as Codex does.

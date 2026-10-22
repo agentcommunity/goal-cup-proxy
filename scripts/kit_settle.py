@@ -15,11 +15,17 @@ settle       prep.json gets `repo_url` (REPO_URL, default the empty practice rep
              kept, else a format-valid placeholder (never sent: a practice clone is anonymous) is
              written. A prep.json that names a prepared full-flow repository (another repository,
              with a github.json for it) is kept as it is, with its github.json.
-home-config  the owner's cheapest-model rules, in the connector's tracker home (never ~/.codex or
-             ~/.claude): codex-cli's config.toml gets `model = "gpt-5.6-luna"` and
-             `model_reasoning_effort` = EFFORT (low, the default, or minimal: only when the
-             installed codex lists minimal for that model); claude-code-cli's settings.json gets
-             `"model": "haiku"` and `"alwaysThinkingEnabled": false`, and its .claude.json
+home-config  the owner's cheapest-model rules and the kit's no-permission-prompt setting, in the
+             connector's tracker home (never ~/.codex or ~/.claude): codex-cli's config.toml gets
+             `model = "gpt-5.6-luna"`, `model_reasoning_effort` = EFFORT (low, the default, or
+             minimal: only when the installed codex lists minimal for that model),
+             `approval_policy = "never"` and `sandbox_mode = "danger-full-access"` (the container
+             or the owner's test machine is the sandbox); claude-code-cli's settings.json gets
+             `"model": "haiku"`, `"alwaysThinkingEnabled": false`,
+             `permissions.defaultMode = "bypassPermissions"` (other permission keys kept) and
+             `"skipDangerousModePermissionPrompt": true` (the one-time acceptance of the bypass
+             disclaimer, which Claude Code 2.1.283 and 2.1.299 read from the user settings; without
+             it the mode falls back to default), and its .claude.json
              `"fullscreenUpsellSeenCount": 3` (what answering "Not now" to "Try the new fullscreen
              renderer?" stores; the renderer is not changed). amp-cli's run home gets
              `"agentMode": "low"` and `"neoWelcomeDismissed": true` in
@@ -53,6 +59,13 @@ CLAUDE_MODEL = "haiku"
 # Claude Code (2.1.299) shows "Try the new fullscreen renderer?" until this count reaches 3;
 # "Not now" sets it to 3 and changes nothing else.
 CLAUDE_UPSELL_KEY, CLAUDE_UPSELL_SEEN = "fullscreenUpsellSeenCount", 3
+# A test cell runs without permission prompts (nobody may answer one): a test-kit setting, like
+# the cheapest model. Claude Code (2.1.283, 2.1.299) accepts default, acceptEdits,
+# bypassPermissions, plan, dontAsk and auto as permissions.defaultMode; bypassPermissions is
+# downgraded to default unless the user settings hold the disclaimer's acceptance.
+CLAUDE_MODE = "bypassPermissions"
+CLAUDE_BYPASS_ACCEPTED = "skipDangerousModePermissionPrompt"
+CODEX_NO_PROMPTS = (("approval_policy", "never"), ("sandbox_mode", "danger-full-access"))
 AMP_SESSION = {"agentMode": "low", "neoWelcomeDismissed": True}
 EFFORTS = ("low", "minimal")
 TAG = "kit:"
@@ -223,17 +236,25 @@ def home_config(cfg, connector, effort):
         for line in lines:
             if line.lstrip().startswith("["):
                 top = False
-            if top and re.match(r"\s*(model|model_reasoning_effort)\s*=", line):
+            if top and re.match(r"\s*(model|model_reasoning_effort|approval_policy|sandbox_mode)\s*=",
+                                line):
                 continue
             kept.append(line)
-        write_private(path, "\n".join([f'model = "{LUNA}"',
-                                       f'model_reasoning_effort = "{effort}"'] + kept) + "\n")
-        say(f"codex home config: model {LUNA}, reasoning effort {effort}")
+        ours = [f'model = "{LUNA}"', f'model_reasoning_effort = "{effort}"']
+        ours += [f'{k} = "{v}"' for k, v in CODEX_NO_PROMPTS]
+        write_private(path, "\n".join(ours + kept) + "\n")
+        say(f"codex home config: model {LUNA}, reasoning effort {effort}, no approval prompts, "
+            "no sandbox (the test machine or container is the sandbox)")
     elif connector == "claude-code-cli":
         path = os.path.join(home(cfg, connector), "settings.json")
         doc = read_object(path, {})
+        perms = doc.get("permissions")
+        if perms is not None and not isinstance(perms, dict):
+            raise Refused(f"{path}: permissions is not a JSON object; not overwritten")
         doc["model"] = CLAUDE_MODEL
         doc["alwaysThinkingEnabled"] = False
+        doc["permissions"] = {**(perms or {}), "defaultMode": CLAUDE_MODE}
+        doc[CLAUDE_BYPASS_ACCEPTED] = True
         state_path = os.path.join(home(cfg, connector), ".claude.json")
         state = read_object(state_path, {})
         write_json(path, doc)
@@ -241,8 +262,9 @@ def home_config(cfg, connector, effort):
         if not (isinstance(seen, int) and seen >= CLAUDE_UPSELL_SEEN):
             state[CLAUDE_UPSELL_KEY] = CLAUDE_UPSELL_SEEN
             write_json(state_path, state)
-        say(f"claude home settings: model {CLAUDE_MODEL}, thinking off, the fullscreen renderer "
-            "offer answered as \"Not now\"")
+        say(f"claude home settings: model {CLAUDE_MODEL}, thinking off, permission mode "
+            f"{CLAUDE_MODE} (disclaimer accepted), the fullscreen renderer offer answered as "
+            "\"Not now\"")
     elif connector == "amp-cli":
         # The run HOME (run_home = "shared"): <cfg>/capture-homes/amp-cli.run-home.
         run_home = home(cfg, connector + ".run-home")

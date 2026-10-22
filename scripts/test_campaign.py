@@ -960,14 +960,18 @@ class CampaignRun(Base):
         res = self.host_run(cell, lambda d: self.rollout(d, ("gpt-5.6-luna", "low")))
         self.assertEqual(res["verdict"], "PASS", res["final_row"])
         home = Path(cell["config_dir"]) / "capture-homes"
-        self.assertEqual((home / "codex-cli/config.toml").read_text().splitlines()[:2],
-                         ['model = "gpt-5.6-luna"', 'model_reasoning_effort = "low"'])
+        self.assertEqual((home / "codex-cli/config.toml").read_text().splitlines()[:4],
+                         ['model = "gpt-5.6-luna"', 'model_reasoning_effort = "low"',
+                          'approval_policy = "never"', 'sandbox_mode = "danger-full-access"'])
         cell = self.host_cell("mac-claude", "m2", connector="claude-code-cli")
         res = self.host_run(cell, lambda d: self.transcript(d, "claude-haiku-4-5"))
         self.assertEqual(res["verdict"], "PASS", res["final_row"])
         settings = json.loads((Path(cell["config_dir"]) /
                                "capture-homes/claude-code-cli/settings.json").read_text())
         self.assertEqual((settings["model"], settings["alwaysThinkingEnabled"]), ("haiku", False))
+        # A host cell runs without permission prompts too.
+        self.assertEqual(settings["permissions"]["defaultMode"], "bypassPermissions")
+        self.assertIs(settings["skipDangerousModePermissionPrompt"], True)
 
     def test_a_turn_on_another_model_fails_the_host_cell(self):
         cell = self.host_cell("mac-codex", "m1")

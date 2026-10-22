@@ -21,6 +21,13 @@ not prove: other platforms, other harness versions, model behaviour, or particip
   installed Codex accepts it), never `gpt-6-astra`; Claude Code `haiku` with thinking off. The
   scripts set these in the Goal Cup Proxy harness home before each run and fail the run if a turn used another
   model. A cell that needs a stronger model says so in its config and is approved by the owner.
+- No permission prompts in a test cell (nobody may answer one): the scripts also set Codex
+  `approval_policy = "never"` and `sandbox_mode = "danger-full-access"`, and Claude Code
+  `permissions.defaultMode = "bypassPermissions"` with `skipDangerousModePermissionPrompt`, in the
+  same home before each run. This is a test-kit setting, like the cheapest model; the container or
+  the owner's test machine is the sandbox. What participants set is their own choice, on Goal
+  Cup's recommendation ([results](results/2026-10-22-local-test-day.md),
+  [plan v4](results/2026-10-22-fix-plan-v4.md)).
 - Raw traces, logs and result packets stay outside the repository. Only aggregates go back to the
   cloud agent or into Git.
 - A failed cell is evidence. Keep its log and trace; do not rerun it to get a pass.
