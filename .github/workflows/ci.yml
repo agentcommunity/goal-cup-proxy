@@ -51,7 +51,7 @@ jobs:
     steps:
       # Build scripts and tests run PR code; keep the token out of .git/config. Full history so
       # the scope step can compare the event's two commits.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
