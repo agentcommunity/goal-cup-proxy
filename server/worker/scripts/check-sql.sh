@@ -106,6 +106,17 @@ for f in "$@"; do
     echo "check-sql: ${f##*/} is not in the mirror yet (applied after the mirror)"
   fi
 done
+# A pending file the mirror does not hold yet must not define a function the mirror already has: a
+# CREATE OR REPLACE there would change live behaviour unseen by the parity test's "last wins" rule.
+for f in "$@"; do
+  in_mirror "${f##*/}" && continue
+  for fn in $(sed -n 's/^CREATE \(OR REPLACE \)\{0,1\}FUNCTION \([a-z_.]*\)(.*/\2/p' "$f" | sort -u); do
+    if grep -q "FUNCTION $fn(" "$mirror"; then
+      echo "check-sql: ${f##*/} defines $fn, which the mirror already has: put it in the mirror" >&2
+      exit 1
+    fi
+  done
+done
 if ! cat "$tmp/base.sql" "$tmp/sections.sql" | cmp -s - "$mirror"; then
   echo "check-sql: the mirror's last sections are not the files in sql/pending/, byte for byte" >&2
   exit 1
@@ -264,9 +275,9 @@ DECLARE
 BEGIN
   INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, run_hours, staging)
   VALUES ('live-cup', 'competition', '2026-11-07T00:00:00Z', '2026-11-08T00:00:00Z', 168, false);
-  -- 6 competition runs (5 of one harness, 1 of another), 3 test, 2 practice and 1 staging run in
-  -- the same event. Each beat 70, 40 and 10 minutes ago, with 2, 2 (no new calls) and 10 model
-  -- calls; the others report far more, which must not show.
+  -- 6 competition runs (5 of one harness, 1 of another, which has stopped: its entry has its final
+  -- heartbeat), 3 test, 2 practice and 1 staging run in the same event. Each beat 70, 40 and 10
+  -- minutes ago, with 2, 2 and 10 model calls; the others report far more, which must not show.
   FOR i IN 1..12 LOOP
     id := 'r00000000000a00' || lpad(to_hex(i), 2, '0');
     INSERT INTO goal_cup_tracer.runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url, staging,
@@ -276,9 +287,11 @@ BEGIN
             t0 - interval '2 days', t0 + interval '5 days', 'https://github.com/secret/repo' || i, i = 12,
             t0 - interval '10 minutes', t0 - interval '2 hours');
     INSERT INTO goal_cup_tracer.entries (id, run_id, segment, connector_id, manifest_sha256, connector_dir_sha256,
-                                         workspace, session_id, harness_version, tracer_version, model_requests, stored_bytes)
+                                         workspace, session_id, harness_version, tracer_version, model_requests, stored_bytes,
+                                         final_seq, final_head)
     VALUES ('e' || substr(id, 2), id, 0, CASE WHEN i = 6 THEN 'odd-cli' ELSE 'claude-code-cli' END, z, z,
-            '/secret/workspace', 'secret-session', '1', '1', CASE WHEN i <= 6 THEN 10 ELSE 1000 END, CASE WHEN i <= 6 THEN 100 ELSE 99999 END);
+            '/secret/workspace', 'secret-session', '1', '1', CASE WHEN i <= 6 THEN 1234 ELSE 99999 END,
+            CASE WHEN i <= 6 THEN 3000000 ELSE 999999999 END, CASE WHEN i = 6 THEN 0 END, CASE WHEN i = 6 THEN z END);
     INSERT INTO goal_cup_tracer.heartbeats (run_id, entry_id, received_at, seq, head, offset_local, final, model_requests, client_ip)
     VALUES (id, 'e' || substr(id, 2), t0 - interval '70 minutes', 0, z, 0, false, CASE WHEN i <= 6 THEN 2 ELSE 500 END, '203.0.113.9'),
            (id, 'e' || substr(id, 2), t0 - interval '40 minutes', 0, z, 0, false, CASE WHEN i <= 6 THEN 2 ELSE 500 END, '203.0.113.9'),
@@ -295,11 +308,13 @@ BEGIN
   ASSERT r ->> 'schema_version' = '1' AND r ->> 'generated_at' = '2026-11-09T12:00:00Z', 'snapshot: ' || r::text;
   ASSERT r -> 'event' = '{"id": "live-cup", "kind": "competition", "start_window_opens": "2026-11-07T00:00:00Z",
                           "start_window_closes": "2026-11-08T00:00:00Z", "run_hours": 168}'::jsonb, 'event: ' || r::text;
-  ASSERT r -> 'entries' = '{"signed_up": null, "started": 6, "running": 6, "working": null, "quiet": null,
+  ASSERT r -> 'entries' = '{"signed_up": null, "started": 6, "running": 5, "working": null, "quiet": null,
                             "finished": null, "sealed": null, "incomplete": null}'::jsonb, 'entries: ' || r::text;
-  ASSERT r -> 'harnesses' = '[{"id": "claude-code-cli", "started": 5, "running": 5}]'::jsonb, 'harnesses: ' || r::text;
-  ASSERT r -> 'work' = '{"agent_hours": 1.5, "working_hours": 1.0, "model_calls": 60, "model_calls_last_hour": 48, "restarts": null,
-                         "data_bytes": 600}'::jsonb, 'work: ' || r::text;
+  -- "other" (1 run) is left out, so no harness shows its running count.
+  ASSERT r -> 'harnesses' = '[{"id": "claude-code-cli", "started": 5, "running": null}]'::jsonb, 'harnesses: ' || r::text;
+  -- 6 x 47 h 50 min from start to last heartbeat; 7404 calls floored to 100; 18,000,000 bytes floored to a MiB.
+  ASSERT r -> 'work' = '{"agent_hours": 287.0, "working_hours": null, "model_calls": 7400, "model_calls_last_hour": 48,
+                         "restarts": null, "data_bytes": 17825792}'::jsonb, 'work: ' || r::text;
   ASSERT r -> 'notices' = '{"silence": 5, "idle_3h": null, "idle_6h": null, "disk_full": null}'::jsonb, 'notices: ' || r::text;
   ASSERT r -> 'trace' = 'null'::jsonb AND r -> 'github' = 'null'::jsonb AND r -> 'survival' = 'null'::jsonb
          AND r -> 'hourly' = 'null'::jsonb, 'survival, hourly, trace, github: ' || r::text;
@@ -318,6 +333,47 @@ BEGIN
   ASSERT NOT has_function_privilege('anon', k, 'EXECUTE'), 'anon can call ' || k;
   ASSERT NOT has_function_privilege('authenticated', k, 'EXECUTE'), 'authenticated can call ' || k;
   ASSERT NOT has_function_privilege('public', k, 'EXECUTE'), 'PUBLIC can call ' || k;
+END $$;
+SQL
+
+# The live snapshot at event scale: 400 runs x 2016 heartbeats (a full week, every 5 minutes). The
+# call must stay cheap on the shared database: under 1 second (best of 3), and no sort or hash over
+# all heartbeats spilling to disk (temp_file_limit makes any spill over 8 MB an error).
+pg <<'SQL'
+INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, run_hours, staging)
+VALUES ('live-scale', 'competition', '2026-11-07T00:00:00Z', '2026-11-08T00:00:00Z', 168, false);
+INSERT INTO goal_cup_tracer.runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url, staging,
+                                  last_heartbeat_at, last_model_request_at)
+SELECT 'r' || lpad(to_hex(1000 + i), 16, '0'), 'live-scale', gen_random_uuid(), 'competition', '2026-11-07T00:00:00Z',
+       '2026-11-14T00:00:00Z', 'x', false, '2026-11-13T23:55:00Z', '2026-11-13T23:55:00Z'
+  FROM generate_series(1, 400) i;
+INSERT INTO goal_cup_tracer.entries (id, run_id, segment, connector_id, manifest_sha256, connector_dir_sha256, workspace,
+                                     session_id, harness_version, tracer_version, model_requests, stored_bytes)
+SELECT 'e' || lpad(to_hex(1000 + i), 16, '0'), 'r' || lpad(to_hex(1000 + i), 16, '0'), 0, 'cli-' || (i % 7), 'z', 'z', 'w',
+       's', '1', '1', 6045, 1000000
+  FROM generate_series(1, 400) i;
+INSERT INTO goal_cup_tracer.heartbeats (run_id, entry_id, received_at, seq, head, offset_local, final, model_requests)
+SELECT 'r' || lpad(to_hex(1000 + i), 16, '0'), 'e' || lpad(to_hex(1000 + i), 16, '0'),
+       '2026-11-07T00:00:00Z'::timestamptz + j * interval '5 minutes', j, 'z', 0, false, j * 3
+  FROM generate_series(1, 400) i, generate_series(0, 2015) j;
+ANALYZE goal_cup_tracer.runs, goal_cup_tracer.entries, goal_cup_tracer.heartbeats;
+SET work_mem = '4MB';
+SET temp_file_limit = '8MB';
+DO $$
+DECLARE
+  r    jsonb;
+  t    timestamptz;
+  best interval := interval '1 hour';
+BEGIN
+  FOR i IN 1..3 LOOP
+    t := clock_timestamp();
+    r := public.goal_cup_upload_live_snapshot('live-scale', '2026-11-13T23:58:00Z');
+    best := least(best, clock_timestamp() - t);
+  END LOOP;
+  ASSERT (r -> 'entries' ->> 'started')::int = 400, 'scale: ' || r::text;
+  ASSERT (r -> 'work' ->> 'model_calls_last_hour')::int = 400 * 36, 'scale last hour: ' || r::text;
+  RAISE NOTICE 'check-sql: live snapshot at 400 runs x 2016 heartbeats: best of 3 %', best;
+  ASSERT best < interval '1 second', 'the live snapshot took ' || best || ' at event scale';
 END $$;
 SQL
 echo "check-sql: smoke calls passed"
