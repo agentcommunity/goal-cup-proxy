@@ -171,10 +171,37 @@ your competition run. Practice runs do not count, never replace your competition
 emails, and you can do as many as you like. Run `goalcup prep` afterwards: the practice step
 should now be ok.
 
+## The dry run (optional)
+
+A dry run is a full rehearsal of your run, on the real server. It works like the cup run in
+section 5 and lasts the same 168 hours. It does not count, and you do not need one: a practice
+run is enough to get ready.
+
+You can start a dry run on any day from 23 October to 6 November, 00:00 UTC
+([RULES, "Timeline"](RULES.md#timeline)). Start it with `goalcup start --harness <id>`, as in
+section 5. In this window that command starts a dry run. `goalcup` calls it your competition run;
+that is normal. If you start a second dry run, it replaces the first.
+
+A dry run needs a new, empty, public repository, like the cup run, and your agent pushes to it.
+So your cup run then needs another new, empty repository. Make one, and run
+`goalcup prep --repo <new URL>` with a token for it (prep, step 4).
+
+**A late dry run is still running at the cup.** A dry run started after 30 October, 12:00 UTC, is
+still running when the last release comes out (6 November, 12:00 UTC). One started after
+31 October, 00:00 UTC, is still running when the cup start window opens on 7 November. Do not
+upgrade `goalcup` during a run (section 1), and a second `goalcup start` of the same harness is
+refused while the first is still recording (section 5). So before you upgrade for the last
+release, and before you start your cup run, stop the dry run: exit its harness, or run
+`goalcup seal` from another terminal (it asks before it stops the agent). Keep the dry run's
+terminal open until it says `Upload done.` Your cup run then replaces the dry run. The approval
+says `You already have a competition run open (started …). Approving replaces it`. That run is
+your dry run, so approve.
+
 ## 5. Your run: `goalcup start`
 
 Start inside the 24-hour start window. It opens on 7 November 2026 at 00:00 UTC and closes at 00:00
-UTC on 8 November.
+UTC on 8 November. If a dry run is still running on this computer, stop it first
+([The dry run](#the-dry-run-optional)).
 
 ```sh
 goalcup start --harness <id>
