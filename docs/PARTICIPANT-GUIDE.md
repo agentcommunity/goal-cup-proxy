@@ -178,9 +178,14 @@ section 5 and lasts the same 168 hours. It does not count, and you do not need o
 run is enough to get ready.
 
 You can start a dry run on any day from 23 October to 6 November, 00:00 UTC
-([RULES, "Timeline"](RULES.md#timeline)). Start it with `goalcup start --harness <id>`, as in
-section 5. In this window that command starts a dry run. `goalcup` calls it your competition run;
-that is normal. If you start a second dry run, it replaces the first.
+([RULES, "Timeline"](RULES.md#timeline)). During the dry run, the start window is open now, so
+you can run `goalcup start` right away. When prep says `Next: goalcup start --harness <id>, inside
+the start window.`, you do not need to wait for 7 November. Start it with
+`goalcup start --harness <id>`, as in section 5. In this window that command starts a dry run.
+The approval page says `Start a dry run`, but `goalcup` calls it your competition run in the
+terminal. That is because a dry run uses the same steps as the cup run. The server
+records it on the dry-run event, so it does not count for the cup. If you start a second dry run,
+it replaces the first.
 
 A dry run needs a new, empty, public repository, like the cup run, and your agent pushes to it.
 So your cup run then needs another new, empty repository. Make one, and run
@@ -207,10 +212,11 @@ UTC on 8 November. If a dry run is still running on this computer, stop it first
 goalcup start --harness <id>
 ```
 
-Run it from your home folder or another folder of your own: `goalcup start` makes a folder named
-`goalcup-` and a random name in the folder you run it from, for the harness's home during the
-run. Do not run it from any folder inside your work folder; Goal Cup Proxy refuses that. Under WSL2,
-do not run it from a Windows drive.
+Run it from your home folder or another folder of your own: `goalcup start` makes a run folder
+named `goalcup-` and a random name in the folder you run it from, for the harness's home during the
+run. This run folder is not your clone: the clone goes in your work folder (step 2). Do not run it
+from any folder inside your work folder; Goal Cup Proxy refuses that. Under WSL2, do not run it
+from a Windows drive.
 
 1. **Approve.** `goalcup` prints `Approve your competition run of Claude Code in your browser.`
    and the same line as above about the second approval, then opens your browser:
@@ -219,8 +225,10 @@ do not run it from a Windows drive.
    run open, it first says so (`You already have a competition run open (started …). Approving
    replaces it: that run stops, and only the new run counts.`). Each competition run is approved
    this way. `goalcup` prints `Approved.` when the approval arrives.
-2. **Clone.** It prints `Cloning your repository…` and clones your repository into your work
-   folder (`goalcup-` followed by a random name). That clone is the agent's workspace.
+2. **Clone.** It prints `Cloning your repository…` and clones your repository into a new folder
+   in your work folder (`goalcup-work` in your home folder, unless you chose another in prep).
+   This folder is also named `goalcup-` followed by a random name, but it is not the run folder
+   above. That clone is the agent's workspace.
 3. **Open the run.** It opens the run on the server. Your 168 hours start here, on the server's
    clock.
 4. **The harness opens in this terminal.** Before it does, goalcup prints a short block. It says
