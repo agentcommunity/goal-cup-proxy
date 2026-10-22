@@ -27,7 +27,9 @@ home-config  the owner's cheapest-model rules and the kit's no-permission-prompt
              disclaimer, which Claude Code 2.1.283 and 2.1.299 read from the user settings; without
              it the mode falls back to default), and its .claude.json
              `"fullscreenUpsellSeenCount": 3` (what answering "Not now" to "Try the new fullscreen
-             renderer?" stores; the renderer is not changed). amp-cli's run home gets
+             renderer?" stores; the renderer is not changed) and `"hasSeenAutoDefaultNudge": true`
+             (what answering "No, keep bypass permissions" to "Make auto mode your default
+             permission mode?" stores; the mode is not changed). amp-cli's run home gets
              `"agentMode": "low"` and `"neoWelcomeDismissed": true` in
              .local/share/amp/session.json (its login files are never read). Other keys kept.
 model-check  after the run: every Codex turn (rollouts' `turn_context`) of the sessions written
@@ -59,6 +61,10 @@ CLAUDE_MODEL = "haiku"
 # Claude Code (2.1.299) shows "Try the new fullscreen renderer?" until this count reaches 3;
 # "Not now" sets it to 3 and changes nothing else.
 CLAUDE_UPSELL_KEY, CLAUDE_UPSELL_SEEN = "fullscreenUpsellSeenCount", 3
+# Claude Code (2.1.283, 2.1.299) offers "Make auto mode your default permission mode?" when the
+# user settings name another defaultMode, until this key is true; "No, keep bypass permissions"
+# sets it to true and changes nothing else (fix plan v7, S1).
+CLAUDE_AUTO_NUDGE_SEEN = "hasSeenAutoDefaultNudge"
 # A test cell runs without permission prompts (nobody may answer one): a test-kit setting, like
 # the cheapest model. Claude Code (2.1.283, 2.1.299) accepts default, acceptEdits,
 # bypassPermissions, plan, dontAsk and auto as permissions.defaultMode; bypassPermissions is
@@ -261,10 +267,11 @@ def home_config(cfg, connector, effort):
         seen = state.get(CLAUDE_UPSELL_KEY)
         if not (isinstance(seen, int) and seen >= CLAUDE_UPSELL_SEEN):
             state[CLAUDE_UPSELL_KEY] = CLAUDE_UPSELL_SEEN
-            write_json(state_path, state)
+        state[CLAUDE_AUTO_NUDGE_SEEN] = True
+        write_json(state_path, state)
         say(f"claude home settings: model {CLAUDE_MODEL}, thinking off, permission mode "
             f"{CLAUDE_MODE} (disclaimer accepted), the fullscreen renderer offer answered as "
-            "\"Not now\"")
+            "\"Not now\", the auto-mode offer as \"No, keep bypass permissions\"")
     elif connector == "amp-cli":
         # The run HOME (run_home = "shared"): <cfg>/capture-homes/amp-cli.run-home.
         run_home = home(cfg, connector + ".run-home")

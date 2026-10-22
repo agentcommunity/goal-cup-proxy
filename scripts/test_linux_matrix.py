@@ -628,6 +628,7 @@ class ContainerHalfTests(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         doc = json.loads((home / ".claude.json").read_text())
         self.assertEqual(doc, {"hasCompletedOnboarding": True, "fullscreenUpsellSeenCount": 3,
+                               "hasSeenAutoDefaultNudge": True,
                                "projects": {"/w": {"hasTrustDialogAccepted": False}}})
         self.assertEqual(stat.S_IMODE((home / ".claude.json").stat().st_mode), 0o600)
         # No renderer is chosen.
@@ -637,7 +638,22 @@ class ContainerHalfTests(unittest.TestCase):
         run = self.inner("inner-home-config", "claude-code-cli")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         doc = json.loads((self.homes / "claude-code-cli/.claude.json").read_text())
-        self.assertEqual(doc, {"fullscreenUpsellSeenCount": 3})
+        self.assertEqual(doc, {"fullscreenUpsellSeenCount": 3, "hasSeenAutoDefaultNudge": True})
+
+    def test_claude_auto_mode_offer_is_answered_no_keeping_bypass_and_other_state(self) -> None:
+        home = self.homes / "claude-code-cli"
+        home.mkdir(parents=True)
+        (home / ".claude.json").write_text(json.dumps({
+            "hasCompletedOnboarding": True, "fullscreenUpsellSeenCount": 5,
+            "hasSeenAutoDefaultNudge": False, "projects": {"/w": {}}}))
+        run = self.inner("inner-home-config", "claude-code-cli")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        doc = json.loads((home / ".claude.json").read_text())
+        self.assertEqual(doc, {"hasCompletedOnboarding": True, "fullscreenUpsellSeenCount": 5,
+                               "hasSeenAutoDefaultNudge": True, "projects": {"/w": {}}})
+        # "No" keeps the mode: the settings still name bypassPermissions, not auto.
+        settings = json.loads((home / "settings.json").read_text())
+        self.assertEqual(settings["permissions"]["defaultMode"], "bypassPermissions")
 
     def test_amp_session_gets_low_mode_and_no_welcome_and_login_files_are_not_read(self) -> None:
         amp = self.homes / "amp-cli.run-home/.local/share/amp"
