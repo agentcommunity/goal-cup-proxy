@@ -248,11 +248,14 @@ These look odd but are right. Do not "fix" them.
   full-flow cell or judged-commit check runs.
 - Fix plan v9 (`goalcup mcp`, a read-only `time_left` tool): approve, change or drop.
 - A Windows machine or VM for the WSL2 cells.
-- Hermes's native leg: Hermes 0.21.1 (7 Sep) removed the automatic `session_*.json` snapshot the
-  connector reads, so a run on a current Hermes records no native file. Pin Hermes to 0.21.0 or
-  earlier for the event, accept a wire-only Hermes (native leg empty, like the deferred wire-only
-  core), or capture `state.db` (SQLite: a core capability, not schema 1)? A snapshot decoder is
-  planned only once this is decided ([facts](docs/harnesses/hermes-cli.md#4-session-format-and-identity)).
+- Hermes's native leg: Hermes 0.21.1 (7 Sep) removed the opt-in `session_*.json` snapshot the
+  connector reads (its `write_json_snapshots: true` is now ignored). Hermes's own installer puts
+  the latest stable release on the machine (`v0.22.4` on 22 Oct), so a participant who follows
+  Hermes's documentation records no native file. PyPI stops at 0.19.0, which still writes it.
+  Require 0.19.0 from PyPI (or 0.21.0 or earlier from a git tag) for the event, accept a
+  wire-only Hermes (native leg empty, like the deferred wire-only core), or capture `state.db`
+  (SQLite: a core capability, not schema 1)? A snapshot decoder is planned only once this is
+  decided ([facts](docs/harnesses/hermes-cli.md#4-session-format-and-identity)).
 
 ## Known issues
 
