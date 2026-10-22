@@ -115,6 +115,26 @@ owner's decision D67 (Goal Cup recommends a no-prompt setup; participants config
 Every harness now has a capture with real agent work on both surfaces (Mac: codex, claude, amp,
 hermes; Docker: codex, claude, hermes, and amp in the 120-minute cell).
 
+### WP-0 measurements (`scripts/research-measure.py`, no paid run)
+
+On today's six 120-minute server copies and the five 18-19 Oct Codex traces on disk (no 18-19 Oct
+Claude, Amp or Hermes trace exists locally). Rates are over the measured span; 168 h figures are
+linear **projections** from 2-hour runs whose agents idled after a few minutes, so a busy run can be
+larger.
+
+| Harness | Rate (2 h runs) | 168 h projection | zstd -3 ratio | Projected compressed |
+|---|---|---|---|---|
+| Codex | 8.2 MB/h | ~1.4 GB | 10.5x | ~130 MB |
+| Amp | 4.9-10.4 MB/h | ~0.8-1.75 GB | ~10x | ~80-170 MB |
+| Hermes | 26-37 MB/h | ~4.4-6.2 GB | 14-20x (52-57x with `--long=27`) | ~225-445 MB |
+
+- Hermes is 3-7 times the others: over 95% is wire, because chat-completions requests resend the
+  whole conversation each turn. The repeats sit far apart, so a long zstd window helps a lot.
+- Server size limit (`RUN_MAX_COMPRESSED_BYTES`, 64 GiB) is far away for every harness.
+- Local disk stays bounded: acknowledged parts are pruned after upload (seen in every long cell).
+- Short 18-19 Oct Codex runs wrote about 46 MB in 5-8 minutes, mostly connection open/end records
+  (about 17k each) at start-up; not a rate to project.
+
 ## Fixes made today
 
 - ea5c30f9: reserve test, campaign build order, check-sql locale.
