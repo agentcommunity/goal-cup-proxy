@@ -103,3 +103,31 @@ Headless (the recipe before D61, frozen at [`frozen-connectors/hermes-cli`](../.
 - Known gap, OAuth-login providers (traced from source, not measured; to be run in the test round): Nous Portal refreshes its token through `hermes_cli/auth.py:5780` `resolve_nous_runtime_credentials`, whose TLS context `_resolve_verify` (`auth.py:4593`) is built from `HERMES_CA_BUNDLE`, which holds the recording proxy CA alone. The refresh goes to the login host (`portal.nousresearch.com`), not the approved `model.base_url` host, so it tunnels with its real certificate and fails its handshake. Model calls then fail with an auth error once the token minted at prep has expired, and the start does not refuse. Codex-OAuth and xAI-OAuth refreshes follow the same pattern. So API-key services work, and OAuth-login services may not, until a test-round run measures it.
 - The first reference row passed capture integrity but its trace has not been re-decoded; the claim stays capture-only ([reference row, D41](../DECISIONS.md#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules)).
 - Open: every "unknown" above; the Linux and Windows `HERMES_HOME`; the update-check host; failure exit codes; whether the console script bytes are portable; whether `hermes profile use` inside the shared home redirects runs (the `active_profile` file is not guarded).
+
+## Run without permission prompts
+
+During a run you may type only "keep going" ([RULES](../RULES.md)), so a harness that stops to ask
+waits. Hermes 0.19.0 asks only before a shell command it deems dangerous: with the default
+`approvals.mode: smart`, a helper model approves the low-risk ones and the rest get a prompt with a
+60 s timeout (`hermes_cli/config.py:2667-2678`, source, not measured). Goal Cup recommends turning
+the prompt off and never sets it for you (D67). It goes in `config.yaml` in Hermes's Goal Cup home
+(`HERMES_HOME`, under `capture-homes/hermes-cli/` in your Goal Cup configuration folder;
+`goalcup prep` prints the full path when it is missing):
+
+```yaml
+approvals:
+  mode: "off"
+```
+
+- `approvals.mode` accepts `manual`, `smart` and `off` (`tools/approval.py:2436`). Quote `"off"`:
+  an unquoted `off` is YAML for false, which Hermes also takes as off (`tools/approval.py:2429-2438`).
+- `hermes chat --yolo` (or `HERMES_YOLO_MODE=1`, or `/yolo` in a session) does the same for one
+  session; the connector passes no such option. Hermes's own deny rules and blocklist still apply
+  (`tools/approval.py:338`).
+- File edits are not gated (only memory and skill writes are, `tools/write_approval.py`).
+- What we saw: the Hermes practice runs of the local test day (lx-hermes, mac-hermes) made their
+  commits with no approval stall.
+- `goalcup prep` reads `approvals.mode` and, while it is not off, adds the recommendation to its
+  harness home step. It never changes it and never fails for it.
+- Evidence: [local test day](../research/results/2026-10-22-local-test-day.md),
+  [plan v4](../research/results/2026-10-22-fix-plan-v4.md).

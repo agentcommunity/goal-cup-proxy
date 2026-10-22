@@ -168,7 +168,7 @@ Compressed rollouts: vendor docs say a background job compresses rollouts older 
 
 - **Shared home.** All runs share one isolated `CODEX_HOME` (D39), so runs must be serialized and the directory holds older runs' sessions.
 - **Account state on OpenAI's side.** Plugins, apps, connectors and memory summary arrive from the account and appear in the developer message (measured); rate-limit and plan data ride on every turn.
-- **No sandbox from Goal Cup.** The connector passes no sandbox, approval or model option (D52, D57). Codex runs with its own defaults and the participant's settings. The per-run `HOME` stops automatic loading of `~/.agents/skills` and shell startup files, not deliberate reads or writes.
+- **No sandbox from Goal Cup.** The connector passes no sandbox, approval or model option (D52, D57). Codex runs with its own defaults and the participant's settings; Goal Cup recommends some ([Run without permission prompts](#run-without-permission-prompts), D67). The per-run `HOME` stops automatic loading of `~/.agents/skills` and shell startup files, not deliberate reads or writes.
 - **Machine-wide or managed settings.** The connector seeds no `requirements.toml` in `CODEX_HOME`. A system-wide managed config location: unknown.
 - **A second Codex.** Another `CODEX_HOME`, an older global Homebrew copy, or the Codex desktop app can run beside the tracked one; the app shares `CODEX_HOME` (vendor docs; Goal Cup measured an app thread in 2026-09).
 
@@ -206,3 +206,32 @@ PENDING (need a logged-in home, which the owner must restore; nobody on our side
 - Whether `codex <args> resume --last` in Goal Cup Proxy's home reopens the same rollout file or starts a new one. The connector ships `resume_args = ["resume", "--last"]` on the plan's word, not on a measurement.
 - A model reply in chat mode through the recording proxy.
 - One 10-minute practice run of this connector on this Mac against staging.
+
+## Run without permission prompts
+
+During a run you may type only "keep going" ([RULES](../RULES.md)), so a Codex that stops to ask for
+an approval waits until the deadline. Goal Cup recommends these two settings and never sets them
+for you (D67). They go in `config.toml` in Codex's Goal Cup home (`CODEX_HOME`, under
+`capture-homes/codex-cli/` in your Goal Cup configuration folder; `goalcup prep` prints the full path
+when one is missing):
+
+```toml
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+```
+
+- `approval_policy = "never"`: Codex never asks; a command that fails is returned to the model
+  (`codex --help`, 0.156.1). Without it, Codex asks whenever its sandbox blocks a command.
+- `sandbox_mode = "danger-full-access"`: no sandbox. The default `workspace-write` sandbox makes
+  `.git` read-only: `git add` failed with `Operation not permitted` on `.git/index.lock`, and Codex
+  then asked and waited 8.7 of 10 minutes (mac-codex, local test day). In a Linux container the
+  sandbox cannot start at all (`bwrap: No permissions to create a new namespace`), so every command
+  needs an approval (lx-codex). With `never` alone, those commands fail instead and
+  the agent cannot commit.
+- Without a sandbox the agent's commands can change anything your user can. Run it on a machine
+  or in a container you are content to let it change.
+- `goalcup prep` reads both keys and, while one is not set this way, adds the recommendation to its
+  harness home step. It never changes them and never fails for them. The test kit
+  (`scripts/kit_settle.py`) sets both in its own cells.
+- Evidence: [local test day](../research/results/2026-10-22-local-test-day.md),
+  [plan v4](../research/results/2026-10-22-fix-plan-v4.md).

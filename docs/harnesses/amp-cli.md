@@ -207,3 +207,22 @@ Remaining measurements (the owner's private-home sign-in now works):
 - Long-run native log rotation/truncation. Two fresh starts were measured on 17 Oct: each selected only its own thread log.
 - An independent check for additional WebSockets outside `/actors/gateway/threadActor/`; all recorded upgrades in the local chat trial used that prefix.
 - Without `rg` on `PATH`: where Amp keeps the downloaded `rg`, and whether a second run downloads it again.
+
+## Run without permission prompts
+
+During a run you may type only "keep going" ([RULES](../RULES.md)), so a harness that stops to ask
+waits until the deadline. Amp, by default, runs tools and commands without asking (a string in the
+0.0.1792209635-g24a9fe binary; not measured as a prompt count). Goal Cup recommends leaving it so
+and never sets anything for you (D67):
+
+- Do not add `amp.permissions` rules that ask, in `~/.config/amp/settings.json` of Amp's Goal Cup
+  run home (`capture-homes/amp-cli.run-home/.config/amp/settings.json` in your Goal Cup
+  configuration folder).
+- Files on Amp's guarded list can still need an approval; `guardedFiles.allowlist` lists the ones
+  that may change without one. `--dangerously-allow-all` and the legacy `amp.dangerouslyAllowAll`
+  setting turn every check off (key names from the binary, not measured).
+- What we saw: the Mac Amp practice run of the local test day (mac-amp) made 19 commits with no
+  approval prompt.
+- The connector lists no setting for `goalcup prep` to read, so prep recommends nothing for Amp.
+- Evidence: [local test day](../research/results/2026-10-22-local-test-day.md),
+  [plan v4](../research/results/2026-10-22-fix-plan-v4.md).

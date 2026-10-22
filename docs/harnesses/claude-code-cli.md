@@ -121,3 +121,38 @@ PENDING (need a logged-in home, which the owner must restore; nobody on our side
 
 - A model reply in chat mode through the recording proxy.
 - One 10-minute practice run of this connector on this Mac against staging.
+
+## Run without permission prompts
+
+During a run you may type only "keep going" ([RULES](../RULES.md)), so a Claude Code that stops at
+"This command requires approval" waits until the deadline. Goal Cup recommends these two settings
+and never sets them for you (D67). They go in `settings.json` in Claude Code's Goal Cup home
+(`CLAUDE_CONFIG_DIR`, under `capture-homes/claude-code-cli/` in your Goal Cup configuration folder;
+`goalcup prep` prints the full path when one is missing), beside your other keys:
+
+```json
+{
+  "permissions": { "defaultMode": "bypassPermissions" },
+  "skipDangerousModePermissionPrompt": true
+}
+```
+
+- `permissions.defaultMode` accepts `default` (also written `manual`), `acceptEdits`,
+  `bypassPermissions`, `plan`, `dontAsk` and `auto` (the settings schema in the 2.1.299 bundle).
+  `bypassPermissions` asks for nothing.
+- `skipDangerousModePermissionPrompt` is the record that you accepted the bypass disclaimer once.
+  Without it in the user settings, Claude Code 2.1.283 and 2.1.299 start in `default` mode instead
+  ("Permission mode downgraded to default"), which asks. Accepting the disclaimer of
+  `claude --dangerously-skip-permissions` writes the same key, but into the home Claude Code was
+  started with (usually `~/.claude`), so set it in the Goal Cup home's file.
+- Claude Code refuses bypass mode as root (unless `IS_SANDBOX=1`); run it as a normal user.
+- What we saw: in Docker, Claude Code 2.1.283 switched itself from auto to manual permission mode,
+  answered the main turn, then waited at "This command requires approval" until the deadline
+  (lx-claude rerun, local test day). The Mac run on 2.1.299 stayed in auto mode.
+- Bypass mode lets the agent's commands change anything your user can. Run it on a machine or in a
+  container you are content to let it change.
+- `goalcup prep` reads both keys and, while one is not set this way, adds the recommendation to its
+  harness home step. It never changes them and never fails for them. The test kit
+  (`scripts/kit_settle.py`) sets both in its own cells.
+- Evidence: [local test day](../research/results/2026-10-22-local-test-day.md),
+  [plan v4](../research/results/2026-10-22-fix-plan-v4.md).

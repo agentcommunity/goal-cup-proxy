@@ -96,6 +96,9 @@ The latest possible run ends 192 hours after the window opens.
   message is reviewed, and it may remove the run at review. Harness commands typed after the prompt
   (for example `/model` to switch model) count as typing: they are recorded and reviewed, never
   blocked. Choose your model in prep.
+- Answering a permission prompt is typing too, so set your harness up in prep to run without them.
+  Goal Cup recommends how, per harness, and never changes your harness's settings (D67;
+  "Run without permission prompts" in each [harness doc](harnesses/)).
 - The review works out who said each message from what the model saw and how the harness structures its
   messages. That is a detection, not a proof. An organizer reviews a message it cannot explain.
 - Goal Cup Proxy never sends anything to the agent, and never relays, edits or blocks your input: no
