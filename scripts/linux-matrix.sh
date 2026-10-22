@@ -89,6 +89,18 @@
 #                                   the answer to its "do you trust this folder" question in every
 #                                   new workspace (measured on macOS); set it (even empty) to
 #                                   override.
+#   MATRIX_FETCH_INDEX, MATRIX_FETCH_STORE
+#                                   a long run's server copy, as on a host (matrix.sh rebuilds it
+#                                   with fetch-run.sh): the chunk index file and the bucket mirror
+#                                   directory (absolute paths), mounted read-only.
+#   MATRIX_DATABASE_URL_FILE, MATRIX_CLOUDFLARE_TOKEN_FILE
+#                                   or the read-only database URL and R2 token, each a file
+#                                   (absolute path) mounted read-only; matrix.sh in the container
+#                                   gets them as DATABASE_URL and CLOUDFLARE_API_TOKEN and hands them
+#                                   to fetch-run.sh alone. DATABASE_URL or CLOUDFLARE_API_TOKEN in
+#                                   this script's environment is never passed in. CLOUDFLARE_ACCOUNT_ID,
+#                                   MATRIX_FETCH_BUCKET and MATRIX_FETCH_TIMEOUT are passed on when
+#                                   set. The image holds zstd and psql for fetch-run.sh.
 #   LINUX_MATRIX_LOG_DIR            where matrix.sh's log lands on this machine
 #                                   (default $TMPDIR/goalcup-linux-matrix).
 #   GOALCUP_HEAVY_LOCK              the shared heavy-run lock (default /tmp/goalcup-heavy.lock).
@@ -102,7 +114,8 @@
 # The script has no drill of its own: an orchestrator acts on the named container from outside.
 #
 # What the harness can read. It runs as the same user as the script's own steps, so it can read
-# the mounted key files (/run/goalcup/*, read-only; staging's test key and the kit's GitHub token)
+# the mounted key files (/run/goalcup/*, read-only; staging's test key, the kit's GitHub token and
+# any fetch credential files, so give the fetch read-only ones)
 # and the whole checkout at /src, untracked files included. Run it from a clean checkout, never
 # one holding secrets (a Worker .dev.vars, for example).
 #
@@ -123,6 +136,10 @@ CFG=$VOL/cfg
 KEY_IN=/run/goalcup/approval-key
 TOKEN_IN=/run/goalcup/github-token
 PROMPT_IN=/run/goalcup/prompt
+FETCH_INDEX_IN=/run/goalcup/fetch-index
+FETCH_STORE_IN=/run/goalcup/fetch-store
+DB_IN=/run/goalcup/database-url
+CF_TOKEN_IN=/run/goalcup/cloudflare-token
 # The settle helper beside this script (/src/scripts in the container).
 KIT=$(dirname "$0")/kit_settle.py
 # matrix.sh's settings this script passes on when they are set.
@@ -273,6 +290,17 @@ inner_run() { # connector [matrix.sh options]
         fail "$h is not signed in on this volume: run scripts/linux-matrix.sh login $h first"
     inner_settle
     export MATRIX_CONFIG_DIR=$CFG
+    # The fetch credentials from their mounted files into matrix.sh's environment only (it takes
+    # them out of its own at once and gives them to fetch-run.sh alone); never an argument.
+    if [ -n "${MATRIX_DATABASE_URL_FILE:-}" ]; then
+        DATABASE_URL=$(cat "$MATRIX_DATABASE_URL_FILE") || fail "the database URL file is not readable in the container"
+        export DATABASE_URL
+    fi
+    if [ -n "${MATRIX_CLOUDFLARE_TOKEN_FILE:-}" ]; then
+        CLOUDFLARE_API_TOKEN=$(cat "$MATRIX_CLOUDFLARE_TOKEN_FILE") || fail "the Cloudflare token file is not readable in the container"
+        export CLOUDFLARE_API_TOKEN
+    fi
+    unset MATRIX_DATABASE_URL_FILE MATRIX_CLOUDFLARE_TOKEN_FILE
     # Claude Code asks whether it may trust each new workspace, "No, exit" selected: Down, Enter.
     if [ "$h" = claude-code-cli ] && [ -z "${MATRIX_PRE_PROMPT_KEYS+set}" ]; then
         MATRIX_PRE_PROMPT_KEYS='\033[B\r'
@@ -388,7 +416,7 @@ build_image() { # connector (after image_of)
     docker build -q -t "$img" - >/dev/null <<DOCKERFILE || fail "image $img"
 FROM rust:1.99
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    nodejs npm python3 python3-venv procps libnss-myhostname \
+    nodejs npm python3 python3-venv procps libnss-myhostname zstd postgresql-client \
  && rm -rf /var/lib/apt/lists/* \
  && sed -i 's/^hosts:.*/hosts:          files myhostname dns/' /etc/nsswitch.conf \
  && useradd -m -u 1000 dev
@@ -433,6 +461,17 @@ keyfile=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
 unset GOALCUP_TEST_APPROVAL_KEY_FILE
 tokenfile=${MATRIX_GITHUB_TOKEN_FILE:-}
 unset MATRIX_GITHUB_TOKEN_FILE
+dbfile=${MATRIX_DATABASE_URL_FILE:-}
+cftokenfile=${MATRIX_CLOUDFLARE_TOKEN_FILE:-}
+unset MATRIX_DATABASE_URL_FILE MATRIX_CLOUDFLARE_TOKEN_FILE
+# The fetch credentials as values never enter the container (a -e value is on docker's command
+# line): they are files. Said once, so a long cell is not silently left unverifiable.
+for v in DATABASE_URL CLOUDFLARE_API_TOKEN; do
+    eval "isset=\${$v:+set}"
+    [ -z "$isset" ] || [ "$action" = build ] ||
+        echo "linux-matrix: $v in the environment is not passed into the container; give it as a file (MATRIX_DATABASE_URL_FILE, MATRIX_CLOUDFLARE_TOKEN_FILE)"
+    unset "$v"
+done
 mounted_file() { # path what
     case $1 in /*) ;; *) fail "$2 is given as an absolute path" ;; esac
     case $1 in *:* | *,*) fail "the path of $2 may not hold : or ," ;; esac
@@ -460,6 +499,35 @@ if [ "$action" != build ]; then
     for v in $PASS_ENV; do
         eval "isset=\${$v+set}"
         [ -z "$isset" ] || eval "set -- \"\$@\" -e \"$v=\${$v}\""
+    done
+    # A long run's server copy (matrix.sh, fetch-run.sh): the index and the bucket mirror, or the
+    # read-only database URL and R2 token, each a file mounted read-only.
+    fetch_index=${MATRIX_FETCH_INDEX:-}
+    if [ -n "$fetch_index" ]; then
+        mounted_file "$fetch_index" "MATRIX_FETCH_INDEX"
+        set -- "$@" -v "$fetch_index:$FETCH_INDEX_IN:ro" -e "MATRIX_FETCH_INDEX=$FETCH_INDEX_IN"
+    fi
+    fetch_store=${MATRIX_FETCH_STORE:-}
+    if [ -n "$fetch_store" ]; then
+        case $fetch_store in /*) ;; *) fail "MATRIX_FETCH_STORE is given as an absolute path" ;; esac
+        case $fetch_store in *:* | *,*) fail "the path of MATRIX_FETCH_STORE may not hold : or ," ;; esac
+        [ -d "$fetch_store" ] && [ -r "$fetch_store" ] || fail "$fetch_store is not a directory this user can read"
+        set -- "$@" -v "$fetch_store:$FETCH_STORE_IN:ro" -e "MATRIX_FETCH_STORE=$FETCH_STORE_IN"
+    fi
+    # Only the paths in the container travel; inner-run reads the values into the environment of
+    # matrix.sh, which hands them to fetch-run.sh alone.
+    if [ -n "$dbfile" ]; then
+        mounted_file "$dbfile" "MATRIX_DATABASE_URL_FILE"
+        set -- "$@" -v "$dbfile:$DB_IN:ro" -e "MATRIX_DATABASE_URL_FILE=$DB_IN"
+    fi
+    if [ -n "$cftokenfile" ]; then
+        mounted_file "$cftokenfile" "MATRIX_CLOUDFLARE_TOKEN_FILE"
+        set -- "$@" -v "$cftokenfile:$CF_TOKEN_IN:ro" -e "MATRIX_CLOUDFLARE_TOKEN_FILE=$CF_TOKEN_IN"
+    fi
+    # The account id is no secret; the bucket and the fetch's time are settings.
+    for v in CLOUDFLARE_ACCOUNT_ID MATRIX_FETCH_BUCKET MATRIX_FETCH_TIMEOUT; do
+        eval "val=\${$v:-}"
+        [ -z "$val" ] || set -- "$@" -e "$v=$val"
     done
 fi
 

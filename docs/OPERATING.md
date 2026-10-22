@@ -198,9 +198,12 @@ read-only role), and `MATRIX_FETCH_STORE` (a bucket mirror) or `CLOUDFLARE_ACCOU
 `CLOUDFLARE_API_TOKEN` (an R2 read-only token); `MATRIX_FETCH_BUCKET` overrides the bucket
 (`goalcup-traces-staging` unless the server is production). Only `fetch-run.sh` gets the credentials.
 Without them the row is `NOT-VERIFIED` (`NOT VERIFIED: long run, server copy not fetched`, exit 4): not a
-PASS, and not a FAIL of the run. `--check-copy` does the same for each pruned entry. In a Docker cell
-(`linux-matrix.sh`) nothing passes these through yet, so a long Docker cell is `NOT-VERIFIED`; fetch and
-verify its copy from the host.
+PASS, and not a FAIL of the run. `--check-copy` does the same for each pruned entry. A Docker cell
+(`linux-matrix.sh`) is verified the same way: it mounts `MATRIX_FETCH_INDEX` and `MATRIX_FETCH_STORE`
+read-only, or takes the database URL and the R2 token as files (`MATRIX_DATABASE_URL_FILE`,
+`MATRIX_CLOUDFLARE_TOKEN_FILE`, mounted read-only, never a value on Docker's command line) and passes
+`CLOUDFLARE_ACCOUNT_ID`, `MATRIX_FETCH_BUCKET` and `MATRIX_FETCH_TIMEOUT` on; its image holds `zstd` and
+`psql`. `DATABASE_URL` or `CLOUDFLARE_API_TOKEN` in its own environment is not passed in.
 
 A server whose signing key this build does not pin (a local Worker, staging) fails the first verification
 with `receipt_key_not_accepted`. The script then verifies again with `--dev-key` set to
