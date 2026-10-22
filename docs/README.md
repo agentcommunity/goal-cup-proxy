@@ -57,6 +57,8 @@ You change the Rust code, the Worker or the scripts.
 - [TODO](../TODO.md): open work and known issues.
 - [Simplification plan](research/SIMPLIFICATION-2026-10-21.md): what to simplify before and after the event.
 - [Participant review](research/PARTICIPANT-REVIEW-2026-10-21.md): what three reviewers found walking the participant path.
+- [Vercel compatibility](research/VERCEL-COMPAT.md): Goal Cup Proxy on Vercel Sandbox and AI Gateway (desk research, test recipe).
+- [AI Gateway design](research/AI-GATEWAY-DESIGN.md): how Claude Code and Codex through AI Gateway would be recorded (for owner review).
 
 ## Researcher
 
