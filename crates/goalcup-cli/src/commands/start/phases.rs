@@ -824,7 +824,8 @@ pub(super) fn run_harness<'a>(
         launched,
     );
     let vitals = match forked.proxied.as_ref() {
-        Some(proxied) => crate::run::RunSignals::counting(proxied.proxy.model_requests()),
+        Some(proxied) => crate::run::RunSignals::counting(proxied.proxy.model_requests())
+            .recording_from(proxied.proxy.recorded_requests()),
         None => crate::run::RunSignals::default(),
     };
     // A run on a server reports its disk and goalcup's own processes in its heartbeats.
@@ -1119,6 +1120,7 @@ fn recording_of(
         return None;
     }
     Some(crate::run::watch::Heard {
+        answered: true,
         recording: crate::run::Recording::of_capture(status.payload.capture?.capture),
         native_files: status.payload.native_files_admitted,
     })

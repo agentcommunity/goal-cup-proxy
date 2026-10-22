@@ -247,9 +247,12 @@ leaves its mark.
   `sealing_recovery_needed`; a registry row an older build wrote with another word reads as
   `unknown`. `arming` is `armed` (not launched yet) or `started`. There is no `event` block: the
   round's dates are the upload server's, which owns the clock. `native_files_admitted` is how many
-  files a live entry's native source has admitted so far, a count and not a verdict; it is absent
-  when the daemon does not hold the native reader (a sealed or reopened entry). `goalcup start`
-  reads it to say early that a harness writes no session file while model calls are recorded.
+  files a live entry's native reader has admitted so far, a count and not a verdict; it is absent
+  while the reader is not admitted (not yet, lost, or finished) and when the daemon does not hold
+  it (a sealed or reopened entry). `goalcup start` reads it to say early that a harness writes no
+  session file while its model requests are recorded. `goalcup status --json` prints the signed
+  document unchanged, with two unsigned keys beside it: `local` (this machine's facts) and
+  `problems` (the `PROBLEM:` lines' sentences, left out when there are none).
 - Gap history is sticky across finish and upload. `assistance_observed = false` means no explicit
   intervention was recorded. It is never a finding of zero assistance.
 - `goalcup-verify --capture-integrity TRACE` reads protocol v5 only. Exit codes: 0 complete and

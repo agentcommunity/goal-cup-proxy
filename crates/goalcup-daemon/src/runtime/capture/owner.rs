@@ -19,6 +19,11 @@ pub(super) const NATIVE_EVERY: Duration = Duration::from_millis(100);
 /// records any growth left over.
 pub(super) const NATIVE_LOSS_EVERY: Duration = Duration::from_secs(60);
 
+/// The native file count while the native producer is not admitted (not yet, lost, or
+/// finished): the status then says nothing of it, since a reader that is not admitted has found
+/// nothing, and its loss is the recording's to report.
+pub(super) const NATIVE_NOT_ADMITTED: u64 = u64::MAX;
+
 /// Items taken per drain call.
 pub(super) const DRAIN_BATCH: usize = 256;
 
@@ -45,7 +50,8 @@ pub(super) struct Owner {
     native_lost_at: Option<Instant>,
     /// Where a producer's loss notes its cause; the gap records only that it was lost.
     cycles: Arc<CycleCounters>,
-    /// The native adapter's admitted files after its last poll, for the status document.
+    /// The native adapter's admitted files after its last poll, for the status document, or
+    /// [`NATIVE_NOT_ADMITTED`].
     native_files: Arc<AtomicU64>,
 }
 
@@ -75,7 +81,7 @@ impl Owner {
             native_lost: 0,
             native_lost_at: None,
             cycles: Arc::new(CycleCounters::default()),
-            native_files: Arc::default(),
+            native_files: Arc::new(AtomicU64::new(NATIVE_NOT_ADMITTED)),
         }
     }
 
@@ -163,8 +169,12 @@ impl Owner {
         let report = native.poll();
         // Deferred work polls again on the next pass.
         self.last_native = (!report.more_work).then(Instant::now);
-        self.native_files
-            .fetch_max(native.tracked_files() as u64, Ordering::Release);
+        let files = if native.admitted() {
+            native.tracked_files() as u64
+        } else {
+            NATIVE_NOT_ADMITTED
+        };
+        self.native_files.store(files, Ordering::Release);
         self.record_native_losses(false);
     }
 

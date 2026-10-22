@@ -295,7 +295,7 @@ fn run(command: Command) -> Result<u8, CliError> {
             dev,
             run_folder: std::env::current_dir().ok(),
             disk: disk_policy()?,
-            native_silence: goalcup_cli::run::NativeSilence::default(),
+            native_silence: native_silence()?,
             mode: if test {
                 goalcup_cli::account::device::RunMode::Test
             } else if practice {
@@ -433,6 +433,22 @@ const TEST_DISK_POLICY: &str = "GOALCUP_TEST_DISK";
 /// A test build's upload timing, so a test can see an hour's cadence in a second.
 #[cfg(feature = "test-support")]
 const TEST_UPLOAD_POLICY: &str = "GOALCUP_TEST_UPLOAD_POLICY";
+
+/// A test build's silent-native-leg thresholds, `requests,after_ms`, so a test sees in a second
+/// what a run says after ten minutes.
+#[cfg(feature = "test-support")]
+const TEST_NATIVE_SILENCE: &str = "GOALCUP_TEST_NATIVE_SILENCE";
+
+/// When the run says the harness writes no session file: the shipped thresholds, or in a test
+/// build the ones [`TEST_NATIVE_SILENCE`] names.
+fn native_silence() -> Result<goalcup_cli::run::NativeSilence, CliError> {
+    #[cfg(feature = "test-support")]
+    if let Ok(spec) = std::env::var(TEST_NATIVE_SILENCE) {
+        return goalcup_cli::run::NativeSilence::from_test_spec(&spec)
+            .ok_or_else(|| CliError::Refused(format!("{TEST_NATIVE_SILENCE} is malformed")));
+    }
+    Ok(goalcup_cli::run::NativeSilence::default())
+}
 
 /// What opens the approval address: the participant's browser, or nothing when `GOALCUP_NO_BROWSER`
 /// is set to a non-empty value (in every build) or, in a test build, [`TEST_NO_BROWSER`] is set
@@ -586,7 +602,7 @@ fn continue_run(run: Option<String>) -> Result<(), CliError> {
             run,
             run_folder: std::env::current_dir().ok(),
             disk: disk_policy()?,
-            native_silence: goalcup_cli::run::NativeSilence::default(),
+            native_silence: native_silence()?,
             upload_policy: upload_policy()?,
             sleep_lock: goalcup_platform::awake::hold,
         },

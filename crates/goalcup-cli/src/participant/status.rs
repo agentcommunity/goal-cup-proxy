@@ -410,19 +410,25 @@ pub fn disk_resumed_unread() -> &'static str {
      space, so your agent was resumed."
 }
 
-/// The native leg is silent: the recording proxy recorded `calls` model calls and `harness` has
-/// written no session file Goal Cup could record. The run goes on; `guide` is the harness's
-/// section of the setup guide. Said once on the terminal and kept by `goalcup status` until a
-/// session file is recorded.
-pub fn problem_native_silent(harness: &str, calls: u64, guide: &str) -> String {
-    let calls = match calls {
-        1 => "1 model call".to_string(),
-        n => format!("{n} model calls"),
+/// The words every silent-native-leg line carries, whatever the harness and the count. Tests and
+/// scripts look for them.
+pub const NATIVE_SILENT_MARK: &str = "session file yet";
+
+/// The native leg is silent: the recording proxy recorded `requests` requests to the model
+/// service and `harness` has written no session file Goal Cup could record. The run goes on;
+/// `guide` is the harness's section of the setup guide. Said once per start or continue (in
+/// `host.log` while the harness owns the terminal) and kept by `goalcup status` until a session
+/// file is recorded.
+pub fn problem_native_silent(harness: &str, requests: u64, guide: &str) -> String {
+    let requests = match requests {
+        1 => "1 request".to_string(),
+        n => format!("{n} requests"),
     };
     format!(
-        "Goal Cup has recorded {calls} but no {harness} session file yet. Your run is still \
-         recording the model traffic; keep the agent running. Check that {harness} is the \
-         supported version and set up as the guide says: {guide}"
+        "Goal Cup has recorded {requests} to the model service but no {harness} \
+         {NATIVE_SILENT_MARK}. Your run is still recording the model traffic; keep the agent \
+         running. Check that {harness} is the supported version and set up as the guide says: \
+         {guide}"
     )
 }
 

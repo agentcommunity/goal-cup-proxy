@@ -338,11 +338,11 @@ pub struct StatusPayload {
     /// admitted before it spawns anything. Absent from every legacy payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admissions_refused: Option<u64>,
-    /// How many files a live v5 entry's native source has admitted so far: a count, never a
+    /// How many files a live v5 entry's native reader has admitted so far: a count, never a
     /// verdict. `goalcup start` reads it to say early that the harness has written no session
-    /// file while model calls are recorded (D3: the judgement is the CLI's). Absent when the
-    /// daemon does not hold the entry's native reader (a sealed or reopened entry) and from
-    /// every legacy payload.
+    /// file while its model requests are recorded (D3: the judgement is the CLI's). Absent while
+    /// the reader is not admitted (not yet, lost, or finished), when the daemon does not hold it
+    /// (a sealed or reopened entry), and from every legacy payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_files_admitted: Option<u64>,
 }

@@ -112,7 +112,7 @@ pub struct StartOptions {
     /// The sizes of the run's disk reservation and how often it is watched. The shipped values
     /// ([`DiskPolicy::default`]); only a test build can name others.
     pub disk: DiskPolicy,
-    /// When the watch tick says the harness has written no session file while model calls are
+    /// When the watch tick says the harness has written no session file while model requests are
     /// recorded ([`crate::run::NativeSilence::default`] in every shipped build).
     pub native_silence: crate::run::NativeSilence,
     /// `--practice` / `--test`: a practice run, which the server keeps apart from the

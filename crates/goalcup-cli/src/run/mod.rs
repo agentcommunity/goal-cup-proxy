@@ -247,41 +247,54 @@ pub struct RunState {
     /// `state.json` an older build wrote.
     #[serde(default)]
     pub time_left: Option<TimeLeft>,
-    /// The native leg is silent: the recording proxy has recorded this many model calls and the
-    /// harness's native source has admitted no file, past [`NativeSilence`]. The tick sets it and
-    /// clears it once a file is admitted; it never stops or pauses anything. Absent from a
+    /// The native leg is silent: the recording proxy has recorded this many model requests and
+    /// the harness's native reader has taken no file, past [`NativeSilence`]. The tick sets it
+    /// and clears it once a file is taken; it never stops or pauses anything. Absent from a
     /// `state.json` an older build wrote.
     #[serde(default)]
     pub native_silent: Option<u64>,
 }
 
 /// When the watch tick calls a run's native leg silent: the recording proxy has recorded at
-/// least `calls` model requests, at least `after` has passed since the agent started, and the
-/// native source has admitted no file at all. A harness that writes no session file (a setting
-/// it ignores, a session folder it moved, the wrong home) then shows early, not when the
-/// verifier runs after the week (D2: the wire leg does not stand in for it).
+/// least `requests` requests to the connector's model endpoints, at least `after` has passed
+/// since the first of them, and the native reader, admitted, has taken no file at all. A harness
+/// that writes no session file (a setting it ignores, a session folder it moved, the wrong home)
+/// then shows early, not when the verifier runs after the week (D2: the wire leg does not stand
+/// in for it). The wait starts at the first recorded request because a harness writes its
+/// session at the first prompt, and the participant may take a while to type it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeSilence {
-    pub calls: u64,
+    pub requests: u64,
     pub after: std::time::Duration,
 }
 
 impl Default for NativeSilence {
-    /// Ten model calls and ten minutes: every shipped harness writes its session file well
-    /// before that.
+    /// Ten recorded model requests and ten minutes: every shipped harness writes its session
+    /// file well before that.
     fn default() -> Self {
         NativeSilence {
-            calls: 10,
+            requests: 10,
             after: std::time::Duration::from_secs(10 * 60),
         }
     }
 }
 
 impl NativeSilence {
-    /// Whether the native leg is silent after `calls` model requests, `since_start` after the
-    /// agent started, with `native_files` admitted.
-    pub fn holds(self, calls: u64, since_start: std::time::Duration, native_files: u64) -> bool {
-        native_files == 0 && calls >= self.calls && since_start >= self.after
+    /// Whether the native leg is silent after `requests` recorded model requests, `waited` since
+    /// the first of them, with `native_files` taken.
+    pub fn holds(self, requests: u64, waited: std::time::Duration, native_files: u64) -> bool {
+        native_files == 0 && requests >= self.requests && waited >= self.after
+    }
+
+    /// A test build's thresholds from `spec`: `requests,after_ms`. A shipped build has no such
+    /// door.
+    #[cfg(feature = "test-support")]
+    pub fn from_test_spec(spec: &str) -> Option<NativeSilence> {
+        let (requests, after_ms) = spec.split_once(',')?;
+        Some(NativeSilence {
+            requests: requests.trim().parse().ok()?,
+            after: std::time::Duration::from_millis(after_ms.trim().parse().ok()?),
+        })
     }
 }
 
@@ -527,6 +540,8 @@ pub(crate) fn age_words(secs: u64) -> String {
 pub struct RunSignals {
     recording: Arc<AtomicU8>,
     model_requests: Arc<AtomicU64>,
+    /// The recording proxy's count of requests it selected for capture (the model endpoints).
+    recorded_requests: Arc<AtomicU64>,
     upload: Arc<Mutex<UploadVital>>,
     /// The uploader's count of what is left of the run, each time it is set.
     time_left: Arc<Mutex<Option<TimeLeft>>>,
@@ -573,10 +588,17 @@ impl RunSignals {
         RunSignals {
             recording: Arc::new(AtomicU8::new(Recording::Unknown as u8)),
             model_requests: counter,
+            recorded_requests: Arc::default(),
             upload: Arc::default(),
             time_left: Arc::default(),
             probe: None,
         }
+    }
+
+    /// These signals, with recorded model requests read from `counter` (the recording proxy's).
+    pub fn recording_from(mut self, counter: Arc<AtomicU64>) -> RunSignals {
+        self.recorded_requests = counter;
+        self
     }
 
     /// These signals, with the heartbeats' `vitals` read by `probe`.
@@ -601,6 +623,11 @@ impl RunSignals {
     /// Model requests so far, cumulative.
     pub fn model_requests(&self) -> u64 {
         self.model_requests.load(Ordering::SeqCst)
+    }
+
+    /// Requests to the connector's model endpoints the recording proxy recorded so far.
+    pub fn recorded_requests(&self) -> u64 {
+        self.recorded_requests.load(Ordering::SeqCst)
     }
 
     /// The uploader set its count of what is left of the run.

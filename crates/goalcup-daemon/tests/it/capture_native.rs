@@ -2504,3 +2504,39 @@ fn a_finish_that_walked_a_whole_cycle_is_not_capped() {
     );
     sink.assert_clean();
 }
+
+/// The count the daemon's status reports as `native_files_admitted` is the files the reader took:
+/// none before the producer is admitted, and never a file from before the run, a refused
+/// symlink or a file past `max_files`.
+#[test]
+fn the_admitted_file_count_is_only_the_files_the_reader_took() {
+    let root = root();
+    root.write("sessions/rollout-old.jsonl", b"old\n");
+    fs::write(root.outside.join("elsewhere.jsonl"), b"x\n").unwrap();
+    let started = run_start();
+    for name in ["a", "b", "c"] {
+        root.write(&format!("sessions/rollout-{name}.jsonl"), b"new\n");
+    }
+    std::os::unix::fs::symlink(
+        root.outside.join("elsewhere.jsonl"),
+        root.path("sessions/rollout-link.jsonl"),
+    )
+    .unwrap();
+    let sink = CollectSink::new();
+    let mut capture = start(
+        vec![since(&root, started)],
+        NativeCaptureLimits {
+            max_files: 2,
+            ..NativeCaptureLimits::default()
+        },
+        &sink,
+    );
+    assert!(!capture.admitted());
+    assert_eq!(capture.tracked_files(), 0);
+    capture.poll();
+    assert!(capture.admitted());
+    assert_eq!(capture.tracked_files(), 2);
+    capture.finish(generous());
+    assert!(!capture.admitted(), "a finished reader is not admitted");
+    sink.assert_clean();
+}

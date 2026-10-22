@@ -44,9 +44,9 @@ pub use refusals::{
 };
 pub use seal::{SealDone, seal_done, seal_inside_harness, seal_not_confirmed, seal_question};
 pub use status::{
-    Agent, CHECK_NETWORK, End, Next, PROBLEM, Phase, Restart, STATUS_DETAILS, StatusHeader,
-    UploadNow, Who, agent_finished, disk_resumed, disk_resumed_unread, ends_line, no_run_yet,
-    problem_agent_exited, problem_disk, problem_disk_paused, problem_heartbeats,
+    Agent, CHECK_NETWORK, End, NATIVE_SILENT_MARK, Next, PROBLEM, Phase, Restart, STATUS_DETAILS,
+    StatusHeader, UploadNow, Who, agent_finished, disk_resumed, disk_resumed_unread, ends_line,
+    no_run_yet, problem_agent_exited, problem_disk, problem_disk_paused, problem_heartbeats,
     problem_native_silent, problem_recording_failed, problem_recording_gaps,
     problem_server_refuses, problem_sleep, problem_state_stale, problem_upload, status_header,
     status_next, this_computer,

@@ -508,7 +508,9 @@ impl Daemon {
             sink: capture.sink.clone(),
             prior_producers: 0,
         })?);
-        let native_files = native.as_ref().map(|_| Arc::new(AtomicU64::new(0)));
+        let native_files = native
+            .as_ref()
+            .map(|_| Arc::new(AtomicU64::new(owner::NATIVE_NOT_ADMITTED)));
         let mut owner = Owner::new(
             capture.sink.clone(),
             capture.writer.clone(),
@@ -1265,7 +1267,8 @@ impl CaptureEntry {
         let native_files = self
             .native_files
             .as_ref()
-            .map(|files| files.load(Ordering::Acquire));
+            .map(|files| files.load(Ordering::Acquire))
+            .filter(|files| *files != owner::NATIVE_NOT_ADMITTED);
         let run = self.lock();
         let snapshot = self.snapshot(run.finished(), run.launched());
         sign_capture_status(&run.entry, snapshot, admission, native_files, cycles)

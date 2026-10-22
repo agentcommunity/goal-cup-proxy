@@ -486,6 +486,10 @@ impl<'c> Direction<'c> {
                         && let Some(emitter) = self.counting
                     {
                         emitter.record_model_request();
+                        // A message on a WebSocket opened on an evidence path is recorded.
+                        if self.capture.is_some() {
+                            emitter.record_recorded_request();
+                        }
                     }
                 }
                 if let Some(capture) = &mut self.capture {

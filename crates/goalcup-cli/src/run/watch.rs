@@ -13,9 +13,9 @@
 //! [`Recording::Unknown`], never a failure), and writes the run's `state.json` ([`Beat`]).
 //! That is where the disk's low-space warning, the upload's trouble and the recording's gaps
 //! are said; `goalcup status` reads them back. It also keeps the run's time-left file, which
-//! the agent may read with `goalcup time-left` (D66), and says once, and keeps in the state,
-//! when the harness has written no session file while model calls are recorded
-//! ([`super::NativeSilence`]).
+//! the agent may read with `goalcup time-left` (D66), and says once per start or continue (in
+//! `host.log` while the harness owns the terminal), and keeps in the state, when the harness has
+//! written no session file while its model requests are recorded ([`super::NativeSilence`]).
 
 use super::pause::{AgentPause, Change};
 use super::reserve::{
@@ -40,11 +40,14 @@ const LOOK_EVERY: Duration = Duration::from_millis(100);
 /// is waited for this long and then read as not having answered.
 pub const RECORDING_WAIT: Duration = crate::daemon::CALL_TIMEOUT;
 
-/// What the daemon's status said to one tick.
+/// What the daemon's status said to one tick. The default is no answer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Heard {
+    /// A status came back, signed for the entry.
+    pub answered: bool,
     pub recording: Recording,
-    /// The files the entry's native source has admitted; `None` when the status does not say.
+    /// The files the entry's admitted native reader has taken; `None` when the status does not
+    /// say (no reader, or one that is not admitted).
     pub native_files: Option<u64>,
 }
 
@@ -169,7 +172,7 @@ pub fn watch_beside(watch: Watch) -> Watching {
         pause,
         tick: Tick::default(),
         pruner: Pruner::within(policy.reserve_bytes),
-        native: NativeTick::new(Instant::now()),
+        native: NativeTick::default(),
     };
     let thread = std::thread::Builder::new()
         .name("goalcup-disk-watch".into())
@@ -251,15 +254,15 @@ impl Ticker {
         let heard = recording_within(RECORDING_WAIT, done, beat.ask.clone());
         let recording = heard.recording;
         beat.vitals.set_recording(recording);
-        // Said on the terminal even while the harness owns it, once: the run goes on, but the
-        // evidence is weaker until the harness writes its session, and the participant can fix
-        // that only while the run lasts.
+        // Said once, the way every other line of the tick is: in `host.log` while the harness
+        // owns the terminal. `goalcup status` is where the participant reads it.
         let native = beat.native.as_ref().and_then(|watch| {
             self.native.see(
                 watch,
-                beat.vitals.model_requests(),
-                heard.native_files,
-                &mut crate::host_log::say_loud,
+                beat.vitals.recorded_requests(),
+                heard,
+                Instant::now(),
+                &mut crate::host_log::say,
             )
         });
         let problem = beat.vitals.upload_problem();
@@ -309,48 +312,57 @@ impl Ticker {
     }
 }
 
-/// What the tick keeps from one tick to the next about the native leg.
+/// What the tick keeps from one tick to the next about the native leg. It lives as long as one
+/// `goalcup start` or `goalcup continue`, so each of them says the line at most once.
+#[derive(Debug, Default)]
 struct NativeTick {
-    /// When the tick started: the agent is released just before.
-    started: Instant,
-    /// The native source has admitted a file: its leg is not silent, for good.
+    /// When the first recorded model request was seen: a harness writes its session at the
+    /// first prompt, so the wait starts there, not at the launch.
+    first_request: Option<Instant>,
+    /// The native reader has taken a file: its leg is not silent, for good.
     seen: bool,
     /// The silent native leg has been said.
     said: bool,
 }
 
 impl NativeTick {
-    fn new(started: Instant) -> NativeTick {
-        NativeTick {
-            started,
-            seen: false,
-            said: false,
-        }
-    }
-
-    /// Whether the native leg is silent now ([`super::NativeSilence`]), after `calls` model
-    /// requests with `native_files` admitted: `Some(Some(calls))` when it is, `Some(None)` when it
-    /// is not, and `None` when the daemon gave no count, which keeps what the state says. The
-    /// first time it is silent it goes to `say`, once.
+    /// Whether the native leg is silent at `now` ([`super::NativeSilence`]), after `requests`
+    /// recorded model requests, with `heard` the daemon's answer: `Some(Some(requests))` when
+    /// it is, `Some(None)` when it is not (or the daemon does not say, such as for a reader that
+    /// is not admitted, whose loss the recording lines already say), and `None` when the
+    /// daemon did not answer, which keeps what the state says. The first time it is silent it
+    /// goes to `say`, once.
     fn see(
         &mut self,
         watch: &NativeWatch,
-        calls: u64,
-        native_files: Option<u64>,
+        requests: u64,
+        heard: Heard,
+        now: Instant,
         say: &mut dyn FnMut(&str),
     ) -> Option<Option<u64>> {
-        let files = native_files?;
+        if requests > 0 && self.first_request.is_none() {
+            self.first_request = Some(now);
+        }
+        if !heard.answered {
+            return None;
+        }
+        let Some(files) = heard.native_files else {
+            return Some(None);
+        };
         self.seen |= files > 0;
-        let silent = !self.seen && watch.silence.holds(calls, self.started.elapsed(), files);
+        let waited = self
+            .first_request
+            .map_or(Duration::ZERO, |first| now.saturating_duration_since(first));
+        let silent = !self.seen && requests > 0 && watch.silence.holds(requests, waited, files);
         if silent && !self.said {
             self.said = true;
             say(&crate::participant::problem_native_silent(
                 &watch.harness,
-                calls,
+                requests,
                 &watch.guide,
             ));
         }
-        Some(silent.then_some(calls))
+        Some(silent.then_some(requests))
     }
 }
 
@@ -1199,6 +1211,7 @@ mod tests {
         let done = AtomicBool::new(false);
         let ask = |answer: fn() -> Option<Heard>| -> AskRecording { Arc::new(answer) };
         let said = |recording| Heard {
+            answered: true,
             recording,
             native_files: None,
         };
@@ -1251,30 +1264,64 @@ mod tests {
     fn a_silent_native_leg_is_said_once_and_cleared_by_a_session_file() {
         let watch = NativeWatch {
             silence: crate::run::NativeSilence {
-                calls: 3,
+                requests: 3,
                 after: Duration::from_secs(60),
             },
             harness: "Some Agent".to_string(),
             guide: "https://example.test/guide#some-agent".to_string(),
         };
+        let count = |files| Heard {
+            answered: true,
+            recording: Recording::Ok,
+            native_files: files,
+        };
         let mut said = Vec::new();
         let mut say = |line: &str| said.push(line.to_string());
-        // Too early, then too few calls: not silent.
-        let mut young = NativeTick::new(Instant::now());
-        assert_eq!(young.see(&watch, 9, Some(0), &mut say), Some(None));
-        let started = Instant::now() - Duration::from_secs(61);
-        let mut tick = NativeTick::new(started);
-        assert_eq!(tick.see(&watch, 2, Some(0), &mut say), Some(None));
-        // Past both: silent, with the calls so far, on every tick; said once.
-        assert_eq!(tick.see(&watch, 3, Some(0), &mut say), Some(Some(3)));
-        assert_eq!(tick.see(&watch, 7, Some(0), &mut say), Some(Some(7)));
-        // No count from the daemon keeps what the state says.
-        assert_eq!(tick.see(&watch, 8, None, &mut say), None);
+        let t0 = Instant::now();
+        let later = t0 + Duration::from_secs(61);
+        let mut tick = NativeTick::default();
+        // No recorded request yet: the wait has not begun, however long the agent idles.
+        assert_eq!(
+            tick.see(&watch, 0, count(Some(0)), later, &mut say),
+            Some(None)
+        );
+        // The first request starts the wait: too early, then too few requests.
+        assert_eq!(
+            tick.see(&watch, 5, count(Some(0)), t0, &mut say),
+            Some(None)
+        );
+        let mut few = NativeTick::default();
+        few.see(&watch, 1, count(Some(0)), t0, &mut say);
+        assert_eq!(
+            few.see(&watch, 2, count(Some(0)), later, &mut say),
+            Some(None)
+        );
+        // Past both: silent, with the requests so far, on every tick; said once.
+        assert_eq!(
+            tick.see(&watch, 6, count(Some(0)), later, &mut say),
+            Some(Some(6))
+        );
+        assert_eq!(
+            tick.see(&watch, 7, count(Some(0)), later, &mut say),
+            Some(Some(7))
+        );
+        // No answer keeps what the state says; an answer with no admitted reader clears it.
+        assert_eq!(tick.see(&watch, 8, Heard::default(), later, &mut say), None);
+        assert_eq!(
+            tick.see(&watch, 8, count(None), later, &mut say),
+            Some(None)
+        );
         // A session file clears it, and it does not come back.
-        assert_eq!(tick.see(&watch, 9, Some(1), &mut say), Some(None));
-        assert_eq!(tick.see(&watch, 20, Some(0), &mut say), Some(None));
+        assert_eq!(
+            tick.see(&watch, 9, count(Some(1)), later, &mut say),
+            Some(None)
+        );
+        assert_eq!(
+            tick.see(&watch, 20, count(Some(0)), later, &mut say),
+            Some(None)
+        );
         assert_eq!(said.len(), 1, "{said:?}");
-        assert!(said[0].contains("3 model calls"), "{said:?}");
+        assert!(said[0].contains("6 "), "{said:?}");
         assert!(said[0].contains("Some Agent"), "{said:?}");
         assert!(said[0].ends_with(&watch.guide), "{said:?}");
     }

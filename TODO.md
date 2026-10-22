@@ -295,10 +295,11 @@ These look odd but are right. Do not "fix" them.
 - **Silent native leg (found 22 Oct):** Hermes 0.21.1 ignores `sessions.write_json_snapshots` and
   writes no `session_*.json`, so a run on it records model calls on the wire and nothing native
   (D2: the wire does not stand in for it). A harness update that moves its session folder, or a
-  wrong config home, does the same. Now said early: after ten model calls and ten minutes with no
-  native file admitted, `goalcup start` says it once in the terminal and `goalcup status` keeps a
-  `PROBLEM:` line (and `--json` a `problems` entry) until a file is admitted; nothing stops. Open:
-  a Hermes 0.21 connector fix, or pinning the supported Hermes version in HARNESS-SETUP.
+  wrong config home, does the same. Now said early: ten minutes after the first recorded request to
+  the model service, with at least ten of them and no file taken by the admitted native reader,
+  `goalcup status` keeps a `PROBLEM:` line (and `--json` a `problems` entry) until a file is
+  taken, and `host.log` has it once per start or continue; nothing stops. Open: a Hermes 0.21
+  connector fix, or pinning the supported Hermes version in HARNESS-SETUP.
 - **T24:** the release tarballs are unsigned. They carry every connector since #164.
 - **H-26:** when a stop cannot be confirmed (`Unresolved`), record the final pushed Git commit as a
   "last known state" marker. Open question: which branch counts when the work is not on main.
