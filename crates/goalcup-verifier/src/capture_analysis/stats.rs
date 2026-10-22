@@ -26,6 +26,7 @@ use super::report::degraded;
 use super::session::{DecodeOutcome, DecodeSession};
 use super::{anthropic, chat, openai, thread};
 use crate::VerifyOptions;
+use goalcup_protocol::capture::CaptureRecord;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -36,9 +37,10 @@ use std::path::{Path, PathBuf};
 pub const RUN_STATS_SCHEMA_VERSION: u32 = 1;
 /// The most traces (segments) one run may name.
 pub const MAX_TRACES: usize = 128;
-/// The most ids one run keeps for de-dup, over every set. Past it, counting goes on without
-/// de-dup and `bounds.ids_over_budget` says so.
-pub const MAX_IDS: u64 = 4_000_000;
+/// The most ids one run keeps for de-dup, over every set (responses included). Past it,
+/// counting goes on without de-dup and `bounds.ids_over_budget` says so. A kept id costs at
+/// most about 100 bytes, so a run's sets stay near 100 MB at worst.
+pub const MAX_IDS: u64 = 1_000_000;
 /// Models listed; the rest are counted in `models_omitted`.
 const MAX_LISTED_MODELS: usize = 16;
 /// Distinct model names counted per source before new ones go to `models_omitted`.
@@ -186,16 +188,26 @@ fn key(parts: &[&str]) -> Key {
 }
 
 /// The run's id budget, shared by every set.
-#[derive(Default)]
 struct Budget {
     used: u64,
+    max: u64,
     over: bool,
+}
+
+impl Default for Budget {
+    fn default() -> Self {
+        Self {
+            used: 0,
+            max: MAX_IDS,
+            over: false,
+        }
+    }
 }
 
 impl Budget {
     /// Whether one more id may be kept; past the budget it records that de-dup stopped.
     fn take(&mut self) -> bool {
-        if self.used >= MAX_IDS {
+        if self.used >= self.max {
             self.over = true;
             return false;
         }
@@ -204,23 +216,29 @@ impl Budget {
     }
 }
 
+/// A set of ids and how many distinct ones it was given. Past the budget a new id is counted
+/// and not kept, so a later repeat of it counts again.
 #[derive(Default)]
-struct Ids(HashSet<Key>);
+struct Ids {
+    kept: HashSet<Key>,
+    count: u64,
+}
 
 impl Ids {
     /// Whether `key` is new. Past the budget every key is new: counting goes on, de-dup stops.
     fn insert(&mut self, key: Key, budget: &mut Budget) -> bool {
-        if self.0.contains(&key) {
+        if self.kept.contains(&key) {
             return false;
         }
         if budget.take() {
-            self.0.insert(key);
+            self.kept.insert(key);
         }
+        self.count = self.count.saturating_add(1);
         true
     }
 
     fn len(&self) -> u64 {
-        self.0.len() as u64
+        self.count
     }
 }
 
@@ -267,10 +285,11 @@ const REASONING: usize = 4;
 type Snapshot = [Option<u64>; 5];
 
 /// One response's counted usage: the field-wise maximum of its snapshots, so a cumulative
-/// snapshot and a repeated one both count once.
-#[derive(Default)]
+/// snapshot and a repeated one both count once. One response never states 4 billion tokens;
+/// a larger count saturates.
+#[derive(Default, Clone, Copy)]
 struct Counted {
-    counts: [u64; 5],
+    counts: [u32; 5],
     usage: bool,
 }
 
@@ -278,9 +297,12 @@ struct Counted {
 struct Tokens {
     responses: HashMap<Key, Counted>,
     totals: [u64; 5],
-    reasoning_stated: bool,
+    /// Which counts any counted snapshot stated: a count never stated is `null`, not 0.
+    stated: [bool; 5],
     /// Responses with usage.
     with_usage: u64,
+    /// Some usage is keyed by session (Codex), not by response: no response count exists.
+    per_session: bool,
 }
 
 impl Tokens {
@@ -293,9 +315,6 @@ impl Tokens {
 
     /// One snapshot of the response `key` (`None`: a response of its own).
     fn usage(&mut self, key: Option<Key>, snapshot: Snapshot, budget: &mut Budget) {
-        if snapshot[REASONING].is_some() {
-            self.reasoning_stated = true;
-        }
         let kept = match key {
             Some(key) if self.responses.contains_key(&key) => self.responses.get_mut(&key),
             Some(key) if budget.take() => Some(self.responses.entry(key).or_default()),
@@ -308,10 +327,14 @@ impl Tokens {
             self.with_usage = self.with_usage.saturating_add(1);
         }
         for (i, value) in snapshot.iter().enumerate() {
-            if let Some(value) = *value
-                && value > counted.counts[i]
-            {
-                self.totals[i] = self.totals[i].saturating_add(value - counted.counts[i]);
+            let Some(value) = *value else {
+                continue;
+            };
+            self.stated[i] = true;
+            let value = u32::try_from(value).unwrap_or(u32::MAX);
+            if value > counted.counts[i] {
+                self.totals[i] =
+                    self.totals[i].saturating_add(u64::from(value - counted.counts[i]));
                 counted.counts[i] = value;
             }
         }
@@ -326,15 +349,16 @@ impl Tokens {
     }
 
     fn document(&self, source: &str) -> Value {
+        let total = |i: usize| self.stated[i].then_some(self.totals[i]);
         json!({
             "source": source,
-            "responses": self.with_usage,
-            "responses_without_usage": self.without_usage(),
-            "input": self.totals[INPUT],
-            "cache_read": self.totals[CACHE_READ],
-            "cache_write": self.totals[CACHE_WRITE],
-            "output": self.totals[OUTPUT],
-            "reasoning": self.reasoning_stated.then_some(self.totals[REASONING]),
+            "responses": (!self.per_session).then_some(self.with_usage),
+            "responses_without_usage": (!self.per_session).then(|| self.without_usage()),
+            "input": total(INPUT),
+            "cache_read": total(CACHE_READ),
+            "cache_write": total(CACHE_WRITE),
+            "output": total(OUTPUT),
+            "reasoning": total(REASONING),
         })
     }
 }
@@ -351,7 +375,7 @@ fn snapshot(input: Option<u64>, cached: Option<u64>, rest: [Option<u64>; 3]) -> 
     ]
 }
 
-/// The normalized snapshot of a `usage` observation, and the key of the response it belongs to
+/// The normalized snapshot of a `usage` observation, and the id of the response it belongs to
 /// (`None` with `Some` snapshot: an id-less response of its own). `None` for a usage the
 /// rules do not count.
 fn usage_of(decoder: &str, o: &Observation) -> Option<(Option<String>, Snapshot)> {
@@ -360,22 +384,18 @@ fn usage_of(decoder: &str, o: &Observation) -> Option<(Option<String>, Snapshot)
         anthropic::DECODER_ID => {
             let usage = field(o, "usage")?;
             let get = |name: &str| count(usage.get(name));
+            let snapshot = [
+                get("input_tokens"),
+                get("cache_read_input_tokens"),
+                get("cache_creation_input_tokens"),
+                get("output_tokens"),
+                None,
+            ];
             match field_str(o, "scope") {
-                // Input and cache from the start; output from the last cumulative delta.
-                Some("message_start") => Some((
-                    id,
-                    [
-                        get("input_tokens"),
-                        get("cache_read_input_tokens"),
-                        get("cache_creation_input_tokens"),
-                        get("output_tokens"),
-                        None,
-                    ],
-                )),
-                // A delta without an id cannot be joined to its start: never a new response.
-                Some("message_delta") if id.is_some() => {
-                    Some((id, [None, None, None, get("output_tokens"), None]))
-                }
+                Some("message_start") => Some((id, snapshot)),
+                // Cumulative: whatever counts it carries are the message's so far. Without an
+                // id it cannot be joined to its start, so it is never a new response.
+                Some("message_delta") if id.is_some() => Some((id, snapshot)),
                 _ => None,
             }
         }
@@ -411,8 +431,9 @@ fn usage_of(decoder: &str, o: &Observation) -> Option<(Option<String>, Snapshot)
                 ),
             ))
         }
+        // Snapshots repeat: one with no id cannot be told from a repeat, and is not counted.
         thread::DECODER_ID => Some((
-            id,
+            Some(id?),
             [
                 count(field(o, "inputTokens")),
                 count(field(o, "cacheReadInputTokens")),
@@ -422,7 +443,7 @@ fn usage_of(decoder: &str, o: &Observation) -> Option<(Option<String>, Snapshot)
             ],
         )),
         ClaudeCode::ID => Some((
-            id,
+            Some(id?),
             [
                 count(field(o, "input_tokens")),
                 count(field(o, "cache_read_input_tokens")),
@@ -447,6 +468,33 @@ fn usage_of(decoder: &str, o: &Observation) -> Option<(Option<String>, Snapshot)
         _ => None,
     }
 }
+
+/// The key of the response (or model, or error) `id` names. A wire id is scoped to its producer
+/// and connection (falling back to its stream), and an Amp id to its thread too, so two servers
+/// that reuse short ids never share a key. A native id is not scoped: a session file written
+/// again after a `continue` repeats the same ids, which must count once.
+fn scoped_key(namespace: &str, decoder: &str, o: &Observation, id: &str) -> Key {
+    if leg(decoder) != Some(Leg::Wire) {
+        return key(&[namespace, decoder, id]);
+    }
+    let stream = o.source.stream.stream.to_string();
+    let connection = field(o, "wire")
+        .and_then(|wire| wire.get("connection"))
+        .and_then(Value::as_str)
+        .unwrap_or(&stream);
+    let thread = field_str(o, "thread_id").unwrap_or("");
+    key(&[
+        namespace,
+        decoder,
+        &o.source.stream.producer,
+        connection,
+        thread,
+        id,
+    ])
+}
+
+/// Claude Code's resume placeholder: no model call was made.
+const SYNTHETIC_MODEL: &str = "<synthetic>";
 
 /// A Codex observation's session: its own supplied session id, else its stream.
 fn codex_session(o: &Observation) -> String {
@@ -481,7 +529,9 @@ fn response_of<'a>(decoder: &str, o: &'a Observation) -> Option<&'a str> {
             field_str(o, "event") == Some("response.created")
         }
         (thread::DECODER_ID, kinds::MODEL_RESPONSE) => field_str(o, "role") == Some("assistant"),
-        (ClaudeCode::ID, kinds::MODEL) => field_str(o, "via") == Some("message"),
+        (ClaudeCode::ID, kinds::MODEL) => {
+            field_str(o, "via") == Some("message") && field_str(o, "model") != Some(SYNTHETIC_MODEL)
+        }
         _ => false,
     };
     response.then(|| supplied_id(o)).flatten()
@@ -498,7 +548,11 @@ fn response_model<'a>(decoder: &str, o: &'a Observation) -> Option<&'a str> {
         Codex::ID => field_str(o, "via") == Some("turn_context"),
         _ => false,
     };
-    if scoped { field_str(o, "model") } else { None }
+    if scoped {
+        field_str(o, "model").filter(|model| *model != SYNTHETIC_MODEL)
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -546,6 +600,8 @@ struct Side {
     tokens: Tokens,
     model_ids: Ids,
     models: Bounded,
+    /// Some model was counted per Codex turn, not per response.
+    models_per_turn: bool,
     error_ids: Ids,
     errors: Bounded,
     error_total: u64,
@@ -553,11 +609,17 @@ struct Side {
     subagents_without_id: u64,
 }
 
-/// A model name kept on the page: 1 to 64 bytes of printable ASCII.
+/// A model name kept on the page: 1 to 64 bytes of letters, digits and `._:/-`, not starting
+/// with `/` or `.` and with no `://`. A local server may report a file path or a URL as its
+/// model; those are counted in `models_omitted`, never shown.
 fn shown_model(name: &str) -> Option<&str> {
     (!name.is_empty()
         && name.len() <= MAX_MODEL_NAME_BYTES
-        && name.bytes().all(|b| b.is_ascii_graphic()))
+        && !name.starts_with(['/', '.'])
+        && !name.contains("://")
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:/-".contains(&b)))
     .then_some(name)
 }
 
@@ -603,6 +665,8 @@ pub struct RunStats {
     human_total: u64,
     keep_going: u64,
     human_other: u64,
+    /// Whether the first human message was "keep going" (`None`: there was none).
+    first_keep_going: Option<bool>,
 }
 
 impl RunStats {
@@ -647,7 +711,7 @@ impl RunStats {
         side.active = true;
         if let Some(id) = response_of(decoder, o) {
             side.tokens
-                .response(key(&["response", decoder, id]), budget);
+                .response(scoped_key("response", decoder, o, id), budget);
         }
         match o.kind.as_str() {
             kinds::USAGE if decoder == Codex::ID && codex_child(o) => {
@@ -655,17 +719,22 @@ impl RunStats {
             }
             kinds::USAGE => {
                 if let Some((id, snapshot)) = usage_of(decoder, o) {
-                    let key = id.map(|id| key(&["response", decoder, &id]));
+                    if decoder == Codex::ID {
+                        side.tokens.per_session = true;
+                    }
+                    let key = id.map(|id| scoped_key("response", decoder, o, &id));
                     side.tokens.usage(key, snapshot, budget);
                 }
             }
             kinds::MODEL => {
                 if let Some(model) = response_model(decoder, o) {
                     let new = supplied_id(o).is_none_or(|id| {
-                        side.model_ids.insert(key(&["model", decoder, id]), budget)
+                        side.model_ids
+                            .insert(scoped_key("model", decoder, o, id), budget)
                     });
                     if new {
                         side.models.add(shown_model(model), MAX_TRACKED_MODELS);
+                        side.models_per_turn |= decoder == Codex::ID;
                     }
                 }
             }
@@ -692,8 +761,10 @@ impl RunStats {
             Leg::Native => native,
             Leg::Wire => wire,
         };
-        let new = supplied_id(o)
-            .is_none_or(|id| side.error_ids.insert(key(&["error", decoder, id]), budget));
+        let new = supplied_id(o).is_none_or(|id| {
+            side.error_ids
+                .insert(scoped_key("error", decoder, o, id), budget)
+        });
         if !new {
             return;
         }
@@ -709,8 +780,11 @@ impl RunStats {
 
     fn tool_call(&mut self, leg: Leg, decoder: &str, o: &Observation) {
         self.note_marking(decoder);
+        // Codex names the call `spawn_agent` in its rollout, on the wire and in the completed
+        // `CollabAgentToolCall` item, all with one call id; its other collab tools (`wait`) are
+        // not spawns.
         let subagent = match decoder {
-            Codex::ID => field_str(o, "item_type") == Some("CollabAgentToolCall"),
+            Codex::ID | openai::DECODER_ID => field_str(o, "name") == Some("spawn_agent"),
             ClaudeCode::ID | anthropic::DECODER_ID | thread::DECODER_ID => {
                 matches!(field_str(o, "name"), Some("Task" | "Agent"))
             }
@@ -765,7 +839,8 @@ impl RunStats {
         }
     }
 
-    /// One per supplied id; the first is the prompt, the rest are "keep going" or other.
+    /// One per supplied id, sorted into "keep going" or other. Whether the first is the
+    /// prompt is decided from the launch, in [`Self::document`].
     fn human_message(&mut self, decoder: &str, o: &Observation) {
         let new = supplied_id(o).is_none_or(|id| {
             self.human_ids
@@ -775,10 +850,9 @@ impl RunStats {
             return;
         }
         self.human_total = self.human_total.saturating_add(1);
-        if self.human_total == 1 {
-            return;
-        }
-        if field_str(o, "text").is_some_and(is_keep_going) {
+        let keep_going = field_str(o, "text").is_some_and(is_keep_going);
+        self.first_keep_going.get_or_insert(keep_going);
+        if keep_going {
             self.keep_going = self.keep_going.saturating_add(1);
         } else {
             self.human_other = self.human_other.saturating_add(1);
@@ -862,6 +936,15 @@ impl RunStats {
             }),
         };
         tokens["children_flagged"] = json!(self.children.len());
+        // At least these many: the source lost bytes, or (native) Codex child and fork
+        // sessions were left out.
+        tokens["lower_bound"] = match source {
+            Some(leg) => json!(
+                degraded_legs.contains(leg.name())
+                    || (leg == Leg::Native && self.children.len() > 0)
+            ),
+            None => Value::Null,
+        };
 
         // Models, provider errors and id-less calls come from the same source as the tokens;
         // with no usage at all, from the wire if it decoded anything, else the native files.
@@ -893,11 +976,28 @@ impl RunStats {
             (false, false) => "none",
         };
         let errors = (error_marking != "none").then_some(self.tool_errors.len());
+        // In chat mode the participant types the prompt, so the first human message is the
+        // prompt and is neither "keep going" nor other. A goal delivered another way is not a
+        // human message, so then every human message is a later one.
+        let chat = reads
+            .first()
+            .and_then(|read| read.outcome.operations.launch())
+            .is_some_and(|launch| {
+                matches!(launch, CaptureRecord::Launch { continuation, .. }
+                    if continuation.starts_with("chat:"))
+            });
         let human = if self.native.active {
-            json!({"source": "native", "total": self.human_total,
-                "keep_going": self.keep_going, "other": self.human_other})
+            let (mut keep_going, mut other) = (self.keep_going, self.human_other);
+            match self.first_keep_going {
+                Some(true) if chat => keep_going -= 1,
+                Some(false) if chat => other -= 1,
+                _ => {}
+            }
+            json!({"source": "native", "total": self.human_total, "first_is_prompt": chat,
+                "keep_going": keep_going, "other": other})
         } else {
-            json!({"source": "none", "total": null, "keep_going": null, "other": null})
+            json!({"source": "none", "total": null, "first_is_prompt": null,
+                "keep_going": null, "other": null})
         };
 
         let mut stats = json!({
@@ -909,6 +1009,7 @@ impl RunStats {
             "tokens": tokens,
             "models": models,
             "models_omitted": models_omitted,
+            "models_counted_per": if primary.models_per_turn { "turn" } else { "response" },
             "tools": {
                 "calls": self.tool_calls.len().saturating_add(primary.calls_without_id),
                 "calls_without_id": primary.calls_without_id,
@@ -931,6 +1032,66 @@ impl RunStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capture_analysis::api::{ObservationTimeRange, SourceRef};
+    use goalcup_protocol::capture::{CaptureTime, StreamKey};
+
+    fn observation(kind: &str, id: Option<&str>, fields: Value) -> Observation {
+        let stream = StreamKey {
+            producer: "p".into(),
+            stream: 1,
+        };
+        let at = CaptureTime {
+            wall: "2026-10-22T00:00:00Z".into(),
+            mono_ns: 1,
+            clock_id: "p".into(),
+        };
+        let mut observation = Observation::new(
+            SourceRef::new(stream, 0, 0),
+            ObservationTimeRange::new(at.clone(), at),
+            kind,
+            fields,
+        );
+        observation.supplied_id = id.map(str::to_string);
+        observation
+    }
+
+    #[test]
+    fn past_the_id_budget_counting_goes_on_and_says_so() {
+        let mut stats = RunStats::default();
+        stats.budget.max = 2;
+        let call = |id| observation(kinds::TOOL_CALL, Some(id), json!({"name": "Bash"}));
+        for id in ["a", "b", "a", "c"] {
+            stats.observe(ClaudeCode::ID, &call(id));
+        }
+        let document = stats.document(&[]).stats;
+        // "a" was kept, so its repeat counts once; "c" came past the budget and still counts.
+        assert_eq!(document["tools"]["calls"], 3);
+        assert_eq!(document["bounds"]["ids_over_budget"], true);
+    }
+
+    #[test]
+    fn paths_and_urls_are_never_shown_as_models() {
+        for shown in [
+            "model-5-5",
+            "model-5.5",
+            "qwen2.5:7b",
+            "accounts/x/models/y",
+        ] {
+            assert_eq!(shown_model(shown), Some(shown));
+        }
+        for hidden in [
+            "/Users/alice/models/q.gguf",
+            "./q.gguf",
+            "~/models/q.gguf",
+            "http://gpu-box.local:8080/v1",
+            "C:\\models\\q.gguf",
+            "alice@host",
+            "<synthetic>",
+            "",
+        ] {
+            assert_eq!(shown_model(hidden), None, "{hidden:?}");
+        }
+    }
 
     #[test]
     fn keep_going_is_the_exact_phrase_only() {

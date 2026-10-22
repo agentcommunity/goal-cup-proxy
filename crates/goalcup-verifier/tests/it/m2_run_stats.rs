@@ -11,12 +11,12 @@ use goalcup_protocol::capture::{
     WireIdentity,
 };
 use goalcup_protocol::export::CHAIN_FILE;
-use goalcup_verifier::capture_analysis::anthropic;
+use goalcup_verifier::capture_analysis::{anthropic, openai, thread};
 use goalcup_verifier::{RunStatsResult, VerifyOptions, run_stats};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use support::capture_records::{at, epoch, goal, key, launch, stream, write_trace};
+use support::capture_records::{at, epoch, goal, key, launch, stream, wire_meta, write_trace};
 
 const CLAUDE: &str = "b2c3d4e5f60718293a4b5c6d7e8f90a1";
 const CODEX: &str = "c0dec0dec0dec0dec0dec0dec0dec0de";
@@ -211,15 +211,76 @@ fn anthropic_wire_records() -> Vec<CaptureRecord> {
             reply.as_bytes(),
         ));
     }
-    records.push(CaptureRecord::Connection {
+    records.push(connection_close());
+    records
+}
+
+/// One WebSocket connection of `hint`: each message is one stream, in order.
+fn ws_run(hint: &str, messages: &[(CaptureSource, Value)]) -> Vec<CaptureRecord> {
+    let mut records = vec![connection_open()];
+    for (index, (source, message)) in (1u64..).zip(messages) {
+        let meta = CaptureMeta {
+            wire: Some(WireIdentity {
+                connection: CONN.to_string(),
+                exchange: 1,
+                message_index: Some(index),
+            }),
+            label: format!("{hint} #{index}"),
+            protocol_hint: Some(hint.to_string()),
+            method: None,
+            host: Some("api.example.test".to_string()),
+            path: Some("/backend-api/codex/responses".to_string()),
+            status: None,
+            content_type: None,
+        };
+        records.extend(stream(
+            WIRE,
+            index,
+            *source,
+            meta,
+            message.to_string().as_bytes(),
+        ));
+    }
+    records.push(connection_close());
+    epoch(WIRE, records)
+}
+
+fn connection_close() -> CaptureRecord {
+    CaptureRecord::Connection {
         producer: WIRE.to_string(),
         connection: CONN.to_string(),
         observed: at(WIRE, 3),
         event: ConnectionEvent::Close {
             outcome: ConnectionOutcome::Complete,
         },
-    });
-    records
+    }
+}
+
+fn openai_completed(id: &str) -> Value {
+    json!({"type": "response.completed", "sequence_number": 9, "response": {
+        "id": id, "object": "response", "status": "completed", "model": "gpt-test",
+        "output": [], "error": null, "incomplete_details": null,
+        "usage": {"input_tokens": 100, "input_tokens_details": {"cached_tokens": 60},
+            "output_tokens": 20, "output_tokens_details": {"reasoning_tokens": 5},
+            "total_tokens": 120}}})
+}
+
+fn openai_created(id: &str) -> Value {
+    json!({"type": "response.created", "sequence_number": 0, "response": {
+        "id": id, "object": "response", "status": "in_progress", "model": "gpt-test",
+        "output": [], "usage": null, "error": null}})
+}
+
+fn amp_snapshot(message_id: Option<&str>, output: u64) -> Value {
+    let mut message = json!({"threadId": "thread-1", "role": "assistant",
+        "state": {"type": "complete"},
+        "content": [{"type": "text", "text": "done", "blockState": "complete"}],
+        "usage": {"model": "amp-test-model", "inputTokens": 4, "outputTokens": output,
+            "cacheCreationInputTokens": 300, "cacheReadInputTokens": 9000}});
+    if let Some(id) = message_id {
+        message["messageId"] = json!(id);
+    }
+    json!({"jsonrpc": "2.0", "method": "message_added", "params": {"message": message, "seq": 1}})
 }
 
 fn connection_open() -> CaptureRecord {
@@ -281,16 +342,32 @@ fn codex_native() -> Vec<CaptureRecord> {
 // Traces.
 // ---------------------------------------------------------------------------------------
 
-fn records_of(parts: Vec<Vec<CaptureRecord>>) -> Vec<CaptureRecord> {
+/// Every shipped connector's `continuation`: the participant types the prompt.
+const CHAT: &str = "chat: the participant types the prompt and may type keep going";
+
+fn records_of(continuation: &str, parts: Vec<Vec<CaptureRecord>>) -> Vec<CaptureRecord> {
     let mut records = goal();
-    records.push(launch("claude-code-cli", None, None));
+    let mut launch = launch("claude-code-cli", None, None);
+    if let CaptureRecord::Launch {
+        continuation: c, ..
+    } = &mut launch
+    {
+        *c = continuation.to_string();
+    }
+    records.push(launch);
     records.extend(parts.into_iter().flatten());
     records
 }
 
+fn trace_with(continuation: &str, parts: Vec<Vec<CaptureRecord>>) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    write_trace(dir.path(), &records_of(continuation, parts), true);
+    dir
+}
+
 fn trace(parts: Vec<Vec<CaptureRecord>>, sealed: bool) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    write_trace(dir.path(), &records_of(parts), sealed);
+    write_trace(dir.path(), &records_of(CHAT, parts), sealed);
     dir
 }
 
@@ -326,7 +403,12 @@ fn tokens_come_from_one_named_source_and_count_each_reply_once() {
     assert_eq!(tokens["cache_read"], 600);
     assert_eq!(tokens["cache_write"], 0);
     assert_eq!(tokens["output"], 31);
-    assert_eq!(tokens["reasoning"], Value::Null);
+    assert_eq!(
+        tokens["reasoning"],
+        Value::Null,
+        "Anthropic never states it"
+    );
+    assert_eq!(tokens["lower_bound"], false);
     // The session file's numbers stay beside, never added: msg_1 is written twice and counts
     // once.
     let native = &tokens["other_source"];
@@ -361,10 +443,11 @@ fn a_degraded_wire_hands_the_tokens_to_the_session_files() {
             lost_bytes: Some(10),
         },
     );
-    let run = trace(vec![epoch(WIRE, wire), claude_native()], true);
+    let run = trace(vec![epoch(WIRE, wire.clone()), claude_native()], true);
     let result = stats_of(&[run.path()]);
     assert_eq!(result.stats["tokens"]["source"], "native");
     assert_eq!(result.stats["tokens"]["input"], 90);
+    assert_eq!(result.stats["tokens"]["lower_bound"], false);
     assert_eq!(result.stats["tokens"]["other_source"]["source"], "wire");
     assert_eq!(result.stats["analysis"]["state"], "partial");
     assert_eq!(
@@ -372,6 +455,12 @@ fn a_degraded_wire_hands_the_tokens_to_the_session_files() {
         json!([anthropic::DECODER_ID])
     );
     assert_eq!(result.exit_code, 1);
+
+    // With no session file the degraded wire is all there is: at least its numbers.
+    let wire_only = trace(vec![epoch(WIRE, wire)], true);
+    let tokens = &stats_of(&[wire_only.path()]).stats["tokens"];
+    assert_eq!(tokens["source"], "wire");
+    assert_eq!(tokens["lower_bound"], true);
 }
 
 #[test]
@@ -393,12 +482,17 @@ fn replayed_tool_results_count_once_and_errors_only_where_the_harness_marks_them
     assert_eq!(stats["tools"]["results"], 1);
     assert_eq!(stats["tools"]["errors"], Value::Null);
     assert_eq!(stats["tools"]["error_marking"], "none");
-    // The last cumulative total of the session, never the per-call counts.
-    assert_eq!(stats["tokens"]["source"], "native");
-    assert_eq!(stats["tokens"]["input"], 100);
-    assert_eq!(stats["tokens"]["cache_read"], 200);
-    assert_eq!(stats["tokens"]["output"], 25);
-    assert_eq!(stats["tokens"]["reasoning"], 4);
+    // The last cumulative total of the session, never the per-call counts. Codex counts per
+    // session, so there is no response count, and it states no cache write.
+    let tokens = &stats["tokens"];
+    assert_eq!(tokens["source"], "native");
+    assert_eq!(tokens["input"], 100);
+    assert_eq!(tokens["cache_read"], 200);
+    assert_eq!(tokens["cache_write"], Value::Null);
+    assert_eq!(tokens["output"], 25);
+    assert_eq!(tokens["reasoning"], 4);
+    assert_eq!(tokens["responses"], Value::Null);
+    assert_eq!(stats["models_counted_per"], "turn");
 }
 
 #[test]
@@ -407,15 +501,212 @@ fn keep_going_is_counted_after_the_prompt_and_subagents_once() {
     let stats = stats_of(&[run.path()]).stats;
     assert_eq!(
         stats["human_messages"],
-        json!({"source": "native", "total": 3, "keep_going": 1, "other": 1})
+        json!({"source": "native", "total": 3, "first_is_prompt": true,
+            "keep_going": 1, "other": 1})
     );
     assert_eq!(stats["subagents"]["spawned"], 1);
+
+    // A launch that is not chat mode delivered the goal itself: every human message is a
+    // later one, the first included.
+    let delivered = trace_with("exec", vec![claude_native()]);
+    assert_eq!(
+        stats_of(&[delivered.path()]).stats["human_messages"],
+        json!({"source": "native", "total": 3, "first_is_prompt": false,
+            "keep_going": 1, "other": 2})
+    );
 
     // No session file: whether a human typed cannot be read, so it is unknown.
     let wire_only = trace(vec![anthropic_wire()], true);
     let stats = stats_of(&[wire_only.path()]).stats;
     assert_eq!(stats["human_messages"]["source"], "none");
     assert_eq!(stats["human_messages"]["keep_going"], Value::Null);
+}
+
+#[test]
+fn openai_responses_subtract_cached_input_and_count_a_retry_as_its_own_reply() {
+    // resp_1, then a retry of the same request that the provider answered as resp_2.
+    let wire = ws_run(
+        openai::PROTOCOL_HINT,
+        &[
+            (
+                CaptureSource::WsClient,
+                json!({"type": "response.create", "model": "gpt-test",
+                "input": []}),
+            ),
+            (CaptureSource::WsServer, openai_created("resp_1")),
+            (CaptureSource::WsServer, openai_completed("resp_1")),
+            (
+                CaptureSource::WsClient,
+                json!({"type": "response.create", "model": "gpt-test",
+                "input": []}),
+            ),
+            (CaptureSource::WsServer, openai_created("resp_2")),
+            (CaptureSource::WsServer, openai_completed("resp_2")),
+        ],
+    );
+    let run = trace(vec![wire], true);
+    let stats = stats_of(&[run.path()]).stats;
+    let tokens = &stats["tokens"];
+    assert_eq!(tokens["source"], "wire");
+    assert_eq!(tokens["responses"], 2);
+    assert_eq!(tokens["responses_without_usage"], 0);
+    assert_eq!(tokens["input"], 80, "100 - 60 cached, twice");
+    assert_eq!(tokens["cache_read"], 120);
+    assert_eq!(tokens["cache_write"], Value::Null, "OpenAI never states it");
+    assert_eq!(tokens["output"], 40);
+    assert_eq!(tokens["reasoning"], 10, "a part of output, not added to it");
+    assert_eq!(
+        stats["models"],
+        json!([{"model": "gpt-test", "responses": 2}])
+    );
+}
+
+#[test]
+fn chat_completions_count_the_usage_chunk_with_deepseek_cache_hits() {
+    let request = json!({"model": "deepseek-test", "stream": true,
+        "stream_options": {"include_usage": true},
+        "messages": [{"role": "user", "content": "x"}]});
+    let reply = [
+        json!({"id": "chatcmpl-1", "model": "deepseek-test",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]}),
+        json!({"id": "chatcmpl-1", "model": "deepseek-test", "choices": [],
+            "usage": {"prompt_tokens": 50, "completion_tokens": 7, "total_tokens": 57,
+                "prompt_cache_hit_tokens": 30, "prompt_cache_miss_tokens": 20}}),
+    ]
+    .iter()
+    .map(|chunk| format!("data: {chunk}\n\n"))
+    .collect::<String>()
+        + "data: [DONE]\n\n";
+    let mut wire = vec![connection_open()];
+    wire.extend(stream(
+        WIRE,
+        1,
+        CaptureSource::WireRequest,
+        wire_meta(CaptureSource::WireRequest, 1),
+        request.to_string().as_bytes(),
+    ));
+    wire.extend(stream(
+        WIRE,
+        2,
+        CaptureSource::WireResponse,
+        wire_meta(CaptureSource::WireResponse, 1),
+        reply.as_bytes(),
+    ));
+    wire.push(connection_close());
+    let run = trace(vec![epoch(WIRE, wire)], true);
+    let tokens = &stats_of(&[run.path()]).stats["tokens"];
+    assert_eq!(tokens["source"], "wire");
+    assert_eq!(tokens["responses"], 1);
+    assert_eq!(tokens["responses_without_usage"], 0);
+    assert_eq!(tokens["input"], 20);
+    assert_eq!(tokens["cache_read"], 30);
+    assert_eq!(tokens["output"], 7);
+    assert_eq!(tokens["cache_write"], Value::Null);
+    assert_eq!(tokens["reasoning"], Value::Null);
+}
+
+#[test]
+fn amp_snapshots_count_once_per_message_and_never_without_an_id() {
+    // The same message three times as it grows, then a snapshot with no message id, which
+    // cannot be told from a repeat.
+    let wire = ws_run(
+        thread::PROTOCOL_HINT,
+        &[
+            (CaptureSource::WsServer, amp_snapshot(Some("msg-1"), 10)),
+            (CaptureSource::WsServer, amp_snapshot(Some("msg-1"), 40)),
+            (CaptureSource::WsServer, amp_snapshot(Some("msg-1"), 40)),
+            (CaptureSource::WsServer, amp_snapshot(None, 999)),
+        ],
+    );
+    let run = trace(vec![wire], true);
+    let stats = stats_of(&[run.path()]).stats;
+    let tokens = &stats["tokens"];
+    assert_eq!(tokens["source"], "wire");
+    assert_eq!(tokens["responses"], 1);
+    assert_eq!(tokens["input"], 4);
+    assert_eq!(tokens["cache_write"], 300);
+    assert_eq!(tokens["cache_read"], 9000);
+    assert_eq!(tokens["output"], 40);
+}
+
+#[test]
+fn model_paths_and_urls_are_hidden_and_a_resume_placeholder_is_no_reply() {
+    let assistant = |id: &str, model: &str| {
+        json!({"type": "assistant", "message": {"id": id, "model": model,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+            "content": [{"type": "text", "text": "x"}]}})
+    };
+    let session = jsonl(&[
+        assistant("msg_a", "/Users/alice/models/q.gguf"),
+        assistant("msg_b", "http://gpu-box.local:8080/v1"),
+        assistant("msg_c", "good-model"),
+        // Claude Code's resume placeholder: no call, all-zero usage.
+        json!({"type": "assistant", "message": {"id": "msg_s", "model": "<synthetic>",
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "content": [{"type": "text", "text": "x"}]}}),
+    ]);
+    let run = trace(
+        vec![epoch(
+            CLAUDE,
+            stream(
+                CLAUDE,
+                1,
+                CaptureSource::Native,
+                native_meta("claude-code-jsonl"),
+                &session,
+            ),
+        )],
+        true,
+    );
+    let stats = stats_of(&[run.path()]).stats;
+    assert_eq!(
+        stats["models"],
+        json!([{"model": "good-model", "responses": 1}])
+    );
+    assert_eq!(stats["models_omitted"], 2);
+    assert_eq!(stats["tokens"]["responses"], 3);
+    assert_eq!(stats["tokens"]["responses_without_usage"], 0);
+    let text = stats.to_string();
+    assert!(
+        !text.contains("alice") && !text.contains("gpu-box"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_codex_spawn_counts_once_and_a_wait_is_no_spawn() {
+    let collab = |id: &str, tool: &str| {
+        json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "CollabAgentToolCall", "id": id, "tool": tool, "status": "completed",
+            "receiver_thread_ids": []}}})
+    };
+    let call = |id: &str, name: &str| {
+        json!({"type": "response_item", "payload": {"type": "function_call",
+            "call_id": id, "name": name, "arguments": "{}"}})
+    };
+    let lines = jsonl(&[
+        json!({"type": "session_meta", "payload": {"id": "session-1", "source": "cli"}}),
+        call("call_spawn", "spawn_agent"),
+        collab("call_spawn", "spawn_agent"),
+        call("call_wait", "wait_agent"),
+        collab("call_wait", "wait"),
+    ]);
+    let run = trace(
+        vec![epoch(
+            CODEX,
+            stream(
+                CODEX,
+                1,
+                CaptureSource::Native,
+                native_meta("codex-jsonl"),
+                &lines,
+            ),
+        )],
+        true,
+    );
+    let stats = stats_of(&[run.path()]).stats;
+    assert_eq!(stats["subagents"]["spawned"], 1);
+    assert_eq!(stats["tools"]["calls"], 2);
 }
 
 #[test]

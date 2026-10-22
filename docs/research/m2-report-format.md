@@ -170,19 +170,20 @@ Schema 1, with example numbers:
   "traces": [{"entry_id": "e0123456789abcdef", "exit_code": 1, "integrity": "incomplete",
               "sealed": false, "validated_records": 812345, "validated_bytes": 4123456789}],
   "analysis": {"state": "partial", "degraded": ["openai-chat-completions"]},
-  "tokens": {"source": "wire", "responses": 4210, "responses_without_usage": 3,
-             "input": 1234567, "cache_read": 98765432, "cache_write": 2345678, "output": 3456789,
-             "reasoning": null, "children_flagged": 0,
+  "tokens": {"source": "wire", "lower_bound": false, "responses": 4210,
+             "responses_without_usage": 3, "input": 1234567, "cache_read": 98765432,
+             "cache_write": 2345678, "output": 3456789, "reasoning": null, "children_flagged": 0,
              "other_source": {"source": "native", "responses": 4100, "responses_without_usage": 0,
                               "input": 1200000, "cache_read": 97000000, "cache_write": 2300000,
                               "output": 3400000, "reasoning": null}},
   "models": [{"model": "claude-opus-5-5", "responses": 4000}],
-  "models_omitted": 0,
+  "models_omitted": 0, "models_counted_per": "response",
   "tools": {"calls": 5210, "calls_without_id": 0, "results": 5190, "errors": 312,
             "error_marking": "is_error"},
   "subagents": {"spawned": 14},
   "provider_errors": {"total": 12, "by_code": {"overloaded_error": 3, "rate_limit_error": 9}},
-  "human_messages": {"source": "native", "total": 9, "keep_going": 7, "other": 1},
+  "human_messages": {"source": "native", "total": 9, "first_is_prompt": true,
+                     "keep_going": 7, "other": 1},
   "bounds": {"ids_over_budget": false}
 }
 ```
@@ -192,34 +193,37 @@ Schema 1, with example numbers:
 | `traces[]` | One per input trace, in input order: `entry_id` (`null` unless a short id of letters, digits and `._:-`), its own `exit_code`, `integrity`, `sealed`, `validated_records`, `validated_bytes`. |
 | `analysis` | `state` as in the research summary (`available`, `partial`, `unavailable`); `degraded` lists the decoders that failed or said `incomplete` in any trace. |
 | `tokens.source` | `wire` when a wire decoder stated usage and none degraded; else `native` when a session file did; else `wire` if it stated any; else `none`, and every count is `null` (unknown, not 0). |
-| `tokens` counts | `responses` (with usage), `responses_without_usage` (seen, never stated usage), `input` (input not served from cache), `cache_read`, `cache_write`, `output`, `reasoning` (`null` when the source never states it). |
+| `tokens` counts | `responses` (with usage), `responses_without_usage` (seen, never stated usage), `input` (input not served from cache), `cache_read`, `cache_write`, `output`, `reasoning`. A count the source never states is `null`, not 0: OpenAI, Chat Completions and Codex state no `cache_write`, Anthropic, Claude Code and Amp no `reasoning`. `reasoning` is a part of `output` (OpenAI, Codex), never added to it. Codex counts per session, not per response, so with Codex usage `responses` and `responses_without_usage` are `null`. |
+| `tokens.lower_bound` | `true` when the counts are "at least": the chosen source has a degraded decoder, or it is the native source and Codex child or fork sessions were left out. `null` with no source. |
 | `tokens.other_source` | The same counts from the other source, or `null`. Never added to the first. |
-| `tokens.children_flagged` | Codex child or fork sessions whose totals are left out: whether they include the parent's context is unmeasured. |
-| `models` | Response-scoped model names of the token source (with no source, the wire if it decoded anything, else the session files), one per response id; at most 16 by `responses` then name. A name is kept when it is 1 to 64 bytes of printable ASCII. |
+| `tokens.children_flagged` | Codex child or fork sessions whose totals are left out of the native counts: whether they include the parent's context is unmeasured, so native Codex tokens are a lower bound when this is above 0. |
+| `models` | Model names of the token source (with no source, the wire if it decoded anything, else the session files), one per response id (Codex: per turn, and `models_counted_per` says `turn`); at most 16 by count then name. A name is kept only when it is 1 to 64 bytes of letters, digits and `._:/-`, does not start with `/` or `.`, and holds no `://`: a local server that reports a file path or a URL as its model never shows it. Claude Code's `<synthetic>` resume placeholder is no model call and is not counted. |
 | `models_omitted` | Responses whose model is not listed: a name not kept, or past the 16. |
 | `tools.calls` | Distinct supplied tool call ids over every decoder (native and wire share ids), plus `calls_without_id` from the token source. |
 | `tools.results` | Distinct tool call ids with a result, however often requests replay it. A result with no id is not counted. |
 | `tools.errors` | Distinct tool call ids with a result the harness marked an error: `is_error: true` (Claude Code, Anthropic wire) or a shell `exit_code` other than 0 (Amp). `null` when `error_marking` is `none`. |
 | `tools.error_marking` | `is_error`, `exit_code`, `both` or `none`: whether this run's decoders that emitted tool facts read an error flag at all. Codex and Hermes do not today. |
-| `subagents.spawned` | Distinct ids of `Task` and `Agent` calls (Claude Code, Anthropic wire, Amp) and Codex `CollabAgentToolCall` items. |
+| `subagents.spawned` | Distinct ids of `Task` and `Agent` calls (Claude Code, Anthropic wire, Amp) and of Codex `spawn_agent` calls. Codex writes one spawn as a `function_call`, on the wire and as a completed `CollabAgentToolCall` item, all with one call id, so it counts once; its other collab tools (`wait`) are not spawns. |
 | `provider_errors` | `error` observations of the token source, once per supplied id: `total`, and `by_code` (the safe `code`, `error_type`, `type` or `subtype` token, at most 16, the rest under `other`). A hook's blocked prompt is not counted. |
-| `human_messages` | Native session files only. `total` counts distinct supplied ids; the first is the prompt; `keep_going` counts the rest whose text is exactly "keep going" after trimming, lower-casing and dropping end punctuation; `other` the rest. `source: none` and `null` counts when no session file was decoded. |
-| `bounds.ids_over_budget` | `true` when the run's 4 million kept ids ran out; counting then goes on without de-dup. |
+| `human_messages` | Native session files only; `total` counts distinct supplied ids. Every shipped connector launches in chat mode (its `continuation` starts with `chat:`): the participant types the prompt, so the first human message is the prompt (`first_is_prompt: true`) and is in neither split. A launch in another mode delivered the goal itself, which the decoders never mark human, so every human message is a later one. `keep_going` counts those whose text is exactly "keep going" after trimming, lower-casing and dropping end punctuation; `other` the rest. `source: none` and `null` counts when no session file was decoded. |
+| `bounds.ids_over_budget` | `true` when the run's 1 million kept ids (over every set, responses included; about 100 MB at most) ran out. Counting then goes on without de-dup, so a later repeat counts again. |
 
-The token rules, per decoder, all keyed by the supplied id and taking each count's largest
-snapshot, so a repeated or cumulative snapshot counts once:
+The token rules, per decoder, take each count's largest snapshot per key, so a repeated or
+cumulative snapshot counts once. A wire key is scoped to its producer and connection (and an Amp
+key to its thread), so two servers reusing short ids never share one; a native key is not, so a
+session file written again after a `continue` counts once.
 
 | Decoder | One count per | Counts |
 |---|---|---|
-| `anthropic-messages` | message id | input and cache from `message_start`; output from the last `message_delta` (cumulative), else `message_start`. A delta with no id is not counted. |
-| `openai-responses` | response id | the terminal event's usage; `input` = `input_tokens` minus `input_tokens_details.cached_tokens`; `reasoning` from `output_tokens_details`. |
+| `anthropic-messages` | message id | `message_start`, then every `message_delta` (cumulative: its output, and any input or cache counts it carries). A delta with no id is not counted. |
+| `openai-responses` | response id | the terminal event's usage; `input` = `input_tokens` minus `input_tokens_details.cached_tokens`; `reasoning` from `output_tokens_details`. A retry the provider answers under a new id is its own response. |
 | `openai-chat-completions` | response id | the last usage chunk; `input` = `prompt_tokens` minus cached (`prompt_tokens_details.cached_tokens` or `prompt_cache_hit_tokens`). |
-| `amp-thread-jsonrpc` | `messageId` | the last snapshot: `inputTokens`, `outputTokens`, `cacheCreationInputTokens`, `cacheReadInputTokens`. |
-| `claude-code-native` | `message.id` | Claude Code repeats the usage on every content-block line; counted once. |
-| `codex-native` | session | the last cumulative `total_token_usage`; per-call `last_token_usage` is never summed. |
+| `amp-thread-jsonrpc` | thread and `messageId` | the last snapshot: `inputTokens`, `outputTokens`, `cacheCreationInputTokens`, `cacheReadInputTokens`. A snapshot with no id is not counted. |
+| `claude-code-native` | `message.id` | Claude Code repeats the usage on every content-block line; counted once. A line with no id is not counted. |
+| `codex-native` | session | the last cumulative `total_token_usage`; per-call `last_token_usage` is never summed. Child and fork sessions are left out (`children_flagged`). |
 
-A usage with no id counts as a response of its own. Nothing in the file is text from the run: no
-prompt, message, tool name, path, host, URL or id other than `entry_id`. It is bounded (64 KiB)
+Other usage with no id counts as a response of its own. Nothing in the file is text from the run:
+no prompt, message, tool name, path, host, URL or id other than `entry_id`. It is bounded (64 KiB)
 and its keys are sorted, so the same traces give the same bytes.
 
 ## Exit codes
