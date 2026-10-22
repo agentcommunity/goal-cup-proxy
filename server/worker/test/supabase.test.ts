@@ -4,7 +4,7 @@
 // to its function and parameter names.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
@@ -557,11 +557,11 @@ test("every RPC the Worker calls exists in the SQL, with the same argument names
   assert.deepEqual(problems, []);
 });
 
-/** The text of the last `CREATE [OR REPLACE] FUNCTION <name>(` in the mirror, up to its closing `$$;`. */
-function lastFunctionBody(name: string): string {
-  const sql = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
+/** The text of the last `CREATE [OR REPLACE] FUNCTION <name>(` in the mirror (or `file`), up to its closing `$$;`. */
+function lastFunctionBody(name: string, file = join(SRC, "sql", "goal-cup-tracer-upload.sql")): string {
+  const sql = readFileSync(file, "utf8");
   const at = [...sql.matchAll(new RegExp(`CREATE (?:OR REPLACE )?FUNCTION ${name.replace(".", "\\.")}\\(`, "g"))].at(-1)?.index;
-  assert.ok(at !== undefined, `no ${name} in the SQL`);
+  assert.ok(at !== undefined, `no ${name} in ${file}`);
   const open = sql.indexOf("$$", at);
   return sql.slice(at, sql.indexOf("$$", open + 2));
 }
@@ -577,15 +577,22 @@ test("every notice kind the Worker queues is allowed by the notices CHECK constr
   for (const kind of NOTICE_KINDS) assert.equal(text.split(`WHEN '${kind}'`).length - 1, 2, `notice_text: ${kind} needs a subject and a body`);
 });
 
-test("upload_open_run refuses a start outside the window with the Worker's two messages, before it writes anything", () => {
+test("upload_open_run refuses a start outside the window with the Worker's two messages, before it writes or locks anything", () => {
   // The Worker tries the next EVENT_ID event after a window refusal; that is safe only while the
-  // refusal leaves no trace, and it can tell a window refusal only by these exact messages.
-  const body = lastFunctionBody("public.goal_cup_upload_open_run");
-  const firstWrite = body.search(/\b(INSERT|UPDATE|DELETE)\b/);
-  assert.ok(firstWrite > 0, "the scan found no write in open_run");
-  for (const message of [BEFORE_WINDOW, AFTER_WINDOW]) {
-    const at = body.indexOf(`'${message}'`);
-    assert.ok(at > 0, `open_run has no '${message}'`);
-    assert.ok(at < firstWrite, `open_run writes before it refuses with '${message}'`);
+  // refusal leaves no trace, and it can tell a window refusal only by these exact messages. Checked
+  // in the mirror and in every pending migration that defines open_run.
+  const pending = readdirSync(join(SRC, "sql", "pending")).filter((f) => f.endsWith(".sql")).map((f) => join(SRC, "sql", "pending", f));
+  const files = [join(SRC, "sql", "goal-cup-tracer-upload.sql"), ...pending.filter((f) => readFileSync(f, "utf8").includes("FUNCTION public.goal_cup_upload_open_run("))];
+  assert.ok(files.length >= 2, "the scan found no pending open_run");
+  for (const file of files) {
+    const body = lastFunctionBody("public.goal_cup_upload_open_run", file);
+    // A write, a row lock (FOR UPDATE / FOR SHARE) or an advisory lock: none may come before a window refusal.
+    const firstWrite = body.search(/\b(INSERT|UPDATE|DELETE)\b|\bFOR SHARE\b|pg_advisory/);
+    assert.ok(firstWrite > 0, `the scan found no write in open_run (${file})`);
+    for (const message of [BEFORE_WINDOW, AFTER_WINDOW]) {
+      const at = body.indexOf(`'${message}'`);
+      assert.ok(at > 0, `open_run has no '${message}' (${file})`);
+      assert.ok(at < firstWrite, `open_run writes or locks before it refuses with '${message}' (${file})`);
+    }
   }
 });

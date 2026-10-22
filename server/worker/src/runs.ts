@@ -190,10 +190,15 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
     credential: auth.credential,
     credential_expires_at: boundCredentialExpiry(deadline_at),
   };
+  // Worst case: one database call per listed event, each up to its 10 s timeout; EVENT_ID lists at most 4.
   let result: OpenRunResult | undefined;
-  for (const event_id of events) {
+  for (const [i, event_id] of events.entries()) {
     result = await ctx.db.openRun({ ...args, event_id });
-    if (result.kind !== "forbidden" || result.window === undefined) break;
+    if (result.kind === "forbidden" && result.window !== undefined) continue;
+    // A refusal the Worker does not know as a window refusal ends the list early. If the website
+    // rewords a window message, this line is the sign: the start never reached the next event.
+    if (result.kind === "forbidden" && i < events.length - 1) console.error(`event-pick: unrecognised refusal from ${event_id}: ${result.message}`);
+    break;
   }
   if (result === undefined) throw new ApiError(500, "misconfigured", "No event is configured for this run.");
   if (result.kind === "conflict") throw conflict(OPENED_ALREADY);

@@ -178,7 +178,11 @@ practice runs, and an operator any number of test runs.
 **The start window.** A competition run can be started only inside the event's start window (its
 edges are inside). Before it opens the answer is `403` ("The start window has not opened yet.");
 after it closes, `403` with the message "after the start window you can only `goalcup continue` your
-run". Practice has no window.
+run". Practice has no window. When the server lists several events (`EVENT_ID`), a start goes to the
+first one whose window holds it; with none open, the answer is the last event's refusal. The two
+messages above are load-bearing: they are how the Worker tells a window refusal from the database's
+other refusals, so the website's `goal_cup_upload_open_run` must keep them word for word (see
+`server/worker/README.md`, "EVENT_ID: the dry run, then the cup").
 
 A credential opens one run. A repeat of the same `session_id` (the one the open call sent, whatever
 `continue` has added since) on a credential that already opened a run returns that run's answer

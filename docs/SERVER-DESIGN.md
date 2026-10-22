@@ -44,7 +44,8 @@ for every table. Production and staging each have their own key and role.
    only; any other run id is `404`. It expires one hour after approval while unbound, and at
    `deadline_at` plus 24 hours once bound.
 3. **Open.** The server checks the start window (competition only), that `repo_url` is a public
-   GitHub repository, and picks the event from the credential's mode. It stamps `official_start` from
+   GitHub repository, and picks the event: for competition, the first `EVENT_ID` event whose window
+   holds the start; for practice and test, the practice or test event. It stamps `official_start` from
    its own clock and sets `deadline_at` (`RUN_HOURS`, or `PRACTICE_RUN_MINUTES` for practice). It
    mints `run_id` and `entry_id`. One account has one main run: a new competition start replaces the
    old one, which then ends at the new start. Only competition replaces: practice and organizer test

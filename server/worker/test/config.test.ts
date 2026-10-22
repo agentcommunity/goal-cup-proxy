@@ -79,6 +79,10 @@ test("EVENT_ID is one event id, or up to 4 different ids separated by commas, ke
     assert.throws(() => readConfig({ ...baseEnv, EVENT_ID: bad }), (e) => e instanceof ApiError && e.code === "misconfigured" && /EVENT_ID/.test(e.message), JSON.stringify(bad));
   }
   assert.throws(() => readConfig({ ...baseEnv, EVENT_ID: undefined as unknown as string }), (e) => e instanceof ApiError && e.code === "misconfigured");
+  // A list holds competition events only: never the practice or the test event.
+  for (const bad of ["cup,practice", "test,cup"]) {
+    assert.throws(() => readConfig({ ...baseEnv, TEST_EVENT_ID: "test", EVENT_ID: bad }), (e) => e instanceof ApiError && e.code === "misconfigured", bad);
+  }
 });
 
 test("RUN_SECONDS, CLOSE_AFTER_SECONDS and the start window are honoured only with the local backend", () => {

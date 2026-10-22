@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { Ctx } from "../src/context.ts";
-import type { OpenRunArgs, OpenRunResult } from "../src/db.ts";
+import type { EntryRow, OpenRunArgs, OpenRunResult, RunRow } from "../src/db.ts";
 import { ApiError } from "../src/errors.ts";
 import { openRun } from "../src/runs.ts";
 import { Signer } from "../src/sign.ts";
@@ -578,21 +578,54 @@ describe("EVENT_ID lists the dry run and the cup: a start goes to the first even
     assert.ok(docs.length > 0 && docs.every((k) => k.startsWith(`traces/dry/${a.run_id}/${entry}/`)), docs.join(" "));
   }, TWO_EVENTS, "2026-11-05T12:00:00Z");
 
-  test("any other refusal is the answer: the next event is not tried", async () => {
+  /** Open a run with EVENT_ID "dry,cup" against a database that gives `answer` for "dry"; the events tried and the lines logged. */
+  async function openAgainst(answer: OpenRunResult): Promise<{ status: number | string; tried: string[]; logged: string[] }> {
     const tried: string[] = [];
+    const logged: string[] = [];
     const ctx = {
       cfg: { eventIds: ["dry", "cup"], githubCheck: false, runSeconds: 3600, practiceRunSeconds: 600 },
       db: {
         openRun: async (a: OpenRunArgs): Promise<OpenRunResult> => {
           tried.push(a.event_id);
-          return { kind: "forbidden", message: "Accept the Goal Cup terms on the website first." };
+          return answer;
         },
       },
       now: () => new Date("2026-11-07T01:00:00Z"),
     } as unknown as Ctx;
     const auth = { member: "alice", credential: "c".repeat(64), run_id: null, mode: "competition" } as const;
     const request = new Request("https://w/v1/runs", { method: "POST", body: JSON.stringify(openBody()) });
-    await assert.rejects(openRun(ctx, auth, request), (e) => e instanceof ApiError && e.status === 403 && e.message === "Accept the Goal Cup terms on the website first.");
-    assert.deepEqual(tried, ["dry"]);
+    const real = console.error;
+    console.error = (...args: unknown[]) => void logged.push(args.map(String).join(" "));
+    try {
+      return { status: (await openRun(ctx, auth, request)).status, tried, logged };
+    } catch (e) {
+      return { status: e instanceof ApiError ? `${e.status} ${e.message}` : String(e), tried, logged };
+    } finally {
+      console.error = real;
+    }
+  }
+
+  test("any other refusal is the answer: the next event is not tried, and the Worker logs it", async () => {
+    const terms = "Accept the Goal Cup terms on the website first.";
+    const r = await openAgainst({ kind: "forbidden", message: terms });
+    assert.equal(r.status, `403 ${terms}`);
+    assert.deepEqual(r.tried, ["dry"]);
+    assert.deepEqual(r.logged, [`event-pick: unrecognised refusal from dry: ${terms}`]);
+  });
+
+  test("a conflict or an existing run is the answer: the next event is not tried", async () => {
+    const conflict = await openAgainst({ kind: "conflict" });
+    assert.match(String(conflict.status), /^409 /);
+    assert.deepEqual(conflict.tried, ["dry"]);
+    const run = {
+      run_id: "r0123456789abcdef", event_id: "dry", member_id: "alice", mode: "competition", status: "open",
+      official_start: "2026-11-05T12:00:00Z", deadline_at: "2026-11-12T12:00:00Z", replaced_at: null,
+      repo_url: "https://github.com/someone/goal-cup-entry", first_entry_id: "e0123456789abcdef",
+      current_entry_id: "e0123456789abcdef", current_sealed_at: null, stored_bytes: 0, chunk_count: 0,
+    } as unknown as RunRow;
+    const existing = await openAgainst({ kind: "existing", run, entry: { entry_id: "e0123456789abcdef" } as unknown as EntryRow });
+    assert.equal(existing.status, 200);
+    assert.deepEqual(existing.tried, ["dry"]);
+    assert.deepEqual([...conflict.logged, ...existing.logged], []);
   });
 });

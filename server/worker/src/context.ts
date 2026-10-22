@@ -131,6 +131,11 @@ export function readConfig(env: Env): Config {
   if (env.TEST_EVENT_ID !== undefined && !EVENT_ID_PATTERN.test(env.TEST_EVENT_ID)) {
     throw misconfigured("TEST_EVENT_ID must be lowercase letters, digits and dashes.");
   }
+  // A list holds competition events only. The database refuses a competition start in a practice or
+  // test event ("not open for runs"), which would end the list there.
+  if (ids.length > 1 && ids.some((id) => id === env.PRACTICE_EVENT_ID || id === env.TEST_EVENT_ID)) {
+    throw misconfigured("EVENT_ID must not list PRACTICE_EVENT_ID or TEST_EVENT_ID.");
+  }
   const opens = testOnlyTimes(env, "START_WINDOW_OPENS", ids);
   const closes = testOnlyTimes(env, "START_WINDOW_CLOSES", ids);
   const windowed = [...opens, ...closes].some((t) => t !== null);

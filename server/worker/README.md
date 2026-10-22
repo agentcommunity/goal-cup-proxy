@@ -318,6 +318,23 @@ Any other refusal (terms, sign-up, an unknown event) is the answer at once. If n
 start, the answer is the last event's refusal: "The start window has not opened yet." until the cup opens,
 "after the start window ..." once it has closed. With one id, the Worker works as before.
 
+The two window messages are load-bearing. The Worker knows a window refusal only by their exact text
+(`BEFORE_WINDOW` and `AFTER_WINDOW` in `src/db.ts`), and the text lives in the website's migration. If the
+website rewords one, a start that should move on to the next event gets the first event's refusal instead,
+and the Worker logs `event-pick: unrecognised refusal from <event id>: <message>`. Search Workers Logs for
+`event-pick:`. Keep the messages word for word in any new `open_run`.
+
+Two ordering rules keep the try safe:
+
+- In `open_run`, the window check stays before any write or lock (`test/supabase.test.ts` checks the
+  mirror and `sql/pending/`).
+- A sign-up-gated event (`requires_signup`) goes last in the list, or the sign-up gate stays after the
+  window check in `open_run` (it is today). Otherwise a sign-up refusal from an earlier event would end
+  the list before the right event is tried.
+
+A list may not name `PRACTICE_EVENT_ID` or `TEST_EVENT_ID` (`500 misconfigured`). Each try is one
+database call with a 10-second timeout, so a start waits for at most 4 of them.
+
 A run keeps the event it started in. Continue, chunks, heartbeats, the seal, the emails and the cron all
 read the run's own `event_id`, never `EVENT_ID`. A dry run that is still going on 7 Nov stays in the dry run,
 and its files stay under `traces/goalcup-dryrun-2026/`. (A cup start by the same account replaces it, as any
