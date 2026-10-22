@@ -6,7 +6,7 @@ use super::schema::{
     MAX_CONFIGURE_ARGS, MAX_CONFIGURE_COMMANDS, MAX_MODEL_HOST_KEY_PARTS, MAX_NO_PROMPT_SETTINGS,
     MAX_NO_PROMPT_VALUES, MODEL_HOST_DENIED_WORDS, MODEL_HOST_FILE_EXTENSIONS, NativeForm, Origin,
     ParticipantSpec, PlatformKey, RunHome, Strategy, display_name_problem, first_screen_problem,
-    no_prompt_value_problem,
+    no_prompt_value_problem, setup_section_problem,
 };
 use super::{MIGRATION_SENTENCE, SUPPORTED_SCHEMA_VERSIONS};
 use crate::ProtocolError;
@@ -338,7 +338,16 @@ impl HarnessManifest {
             .and_then(|p| p.first_screen.as_deref())
     }
 
-    /// `[participant]`: both strings reach a terminal, so they are held to plain text.
+    /// The anchor of the harness's section in `docs/HARNESS-SETUP.md`, when its manifest names
+    /// one.
+    pub fn setup_section(&self) -> Option<&str> {
+        self.participant
+            .as_ref()
+            .and_then(|p| p.setup_section.as_deref())
+    }
+
+    /// `[participant]`: both strings reach a terminal, so they are held to plain text, and the
+    /// setup section goes into a link, so it is held to an anchor's shape.
     fn check_participant(&self) -> Result<(), ProtocolError> {
         let Some(p) = &self.participant else {
             return Ok(());
@@ -348,6 +357,9 @@ impl HarnessManifest {
         }
         if let Some(why) = p.first_screen.as_deref().and_then(first_screen_problem) {
             return Err(refuse("participant.first_screen", why));
+        }
+        if let Some(why) = p.setup_section.as_deref().and_then(setup_section_problem) {
+            return Err(refuse("participant.setup_section", why));
         }
         self.check_no_prompts(p)
     }

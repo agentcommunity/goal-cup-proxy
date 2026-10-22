@@ -96,7 +96,9 @@ line names the first step that needs you.
 1. **login.** You have run `goalcup login`.
 2. **harness.** A shipped harness on your `PATH`, with its version. Prep discovers the installed
    connectors. Choose one, for example `goalcup prep --harness codex-cli`; the current source
-   also has `claude-code-cli`, `hermes-cli` and `amp-cli`. Prep remembers your choice.
+   also has `claude-code-cli`, `hermes-cli` and `amp-cli`. Prep remembers your choice. The line
+   ends with a link to your harness's section of
+   [Set up your harness for a 168-hour run](HARNESS-SETUP.md). Read it before a long run.
 3. **harness_home.** Prep opens the harness once, in the home Goal Cup Proxy keeps for it. This is
    never your own `~/.claude` or `~/.codex`. Sign in there, with a login or account you can
    revoke (section 11 says why), and add the settings, MCP servers and skills you want your agent

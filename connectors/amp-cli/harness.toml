@@ -8,6 +8,8 @@ display_name = "Amp"
 # Measured with no login: a home with no sign-in asks for one, before the chat. Start-up
 # screens before the first prompt are the participant's own setup, allowed for any harness.
 first_screen = "If Amp asks you to sign in, do it now, before you type your prompt."
+# Amp's section of docs/HARNESS-SETUP.md, which `goalcup prep` links to (fix plan v8).
+setup_section = "amp"
 
 [capture]
 # `amp login` polls this host for the device code; tunnelled, never recorded.

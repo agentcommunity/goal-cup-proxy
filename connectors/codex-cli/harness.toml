@@ -4,6 +4,8 @@ id = "codex-cli"
 
 [participant]
 display_name = "Codex"
+# Codex's section of docs/HARNESS-SETUP.md, which `goalcup prep` links to (fix plan v8).
+setup_section = "codex"
 
 # D67: what `goalcup prep` recommends, and never sets: no approval prompt, and no sandbox (the
 # workspace-write sandbox makes .git read-only, and in a container it cannot start at all).

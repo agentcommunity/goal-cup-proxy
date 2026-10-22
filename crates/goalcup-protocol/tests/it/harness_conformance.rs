@@ -93,9 +93,9 @@ fn check_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// D67: `goalcup prep` links a connector's `participant.no_prompts` recommendation to
-/// `docs/harnesses/<id>.md#run-without-permission-prompts`, so that section exists, and every
-/// harness doc says how to run without permission prompts.
+/// D67: every harness doc says how to run without permission prompts, and a connector that
+/// lists `participant.no_prompts` has such a doc. (Prep links the recommendation to the setup
+/// guide, `every_connector_links_to_its_section_of_the_setup_guide`.)
 #[test]
 fn every_no_prompts_recommendation_links_to_a_harness_doc_section() {
     let mut linked = 0;
@@ -120,6 +120,61 @@ fn every_no_prompts_recommendation_links_to_a_harness_doc_section() {
         linked += usize::from(lists);
     }
     assert!(linked > 0, "no connector lists participant.no_prompts");
+}
+
+/// The anchors GitHub gives the headings of `text`: lower-case, everything but letters, digits,
+/// `_`, `-` and spaces dropped, spaces turned into `-` (the rule `scripts/check-links.py`
+/// follows; the guide repeats no heading, so repeats are not numbered here).
+fn heading_anchors(text: &str) -> Vec<String> {
+    let mut fenced = false;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        let Some(title) = line.trim_start_matches('#').strip_prefix(' ') else {
+            continue;
+        };
+        if fenced || !line.starts_with('#') {
+            continue;
+        }
+        out.push(
+            title
+                .trim()
+                .to_lowercase()
+                .chars()
+                .filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ' '))
+                .map(|c| if c == ' ' { '-' } else { c })
+                .collect(),
+        );
+    }
+    out
+}
+
+/// Fix plan v8: `goalcup prep` links every harness to its section of the participant's setup
+/// guide, `docs/HARNESS-SETUP.md#<participant.setup_section>`. So every connector names one,
+/// and the guide has that heading.
+#[test]
+fn every_connector_links_to_its_section_of_the_setup_guide() {
+    let guide = root().join("docs/HARNESS-SETUP.md");
+    let anchors = heading_anchors(
+        &std::fs::read_to_string(&guide).unwrap_or_else(|e| panic!("{}: {e}", guide.display())),
+    );
+    let mut seen = 0;
+    for dir in connector_dirs() {
+        let m = load_dir(&dir, Origin::Pinned).unwrap().manifest;
+        let section = m
+            .setup_section()
+            .unwrap_or_else(|| panic!("{}: no participant.setup_section", m.id));
+        assert!(
+            anchors.iter().any(|a| a == section),
+            "{}: docs/HARNESS-SETUP.md has no heading `#{section}`",
+            m.id
+        );
+        seen += 1;
+    }
+    assert!(seen > 0, "no connector checked");
 }
 
 // ---------------------------------------------------------------------------------------
