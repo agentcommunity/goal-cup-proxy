@@ -13,7 +13,7 @@ settle       prep.json gets `repo_url` (REPO_URL, default the empty practice rep
              token, whether the repository is empty, so a test run needs a real token; a practice
              start does not, and without the file an existing github.json for the repository is
              kept, else a format-valid placeholder (never sent: a practice clone is anonymous) is
-             written. A prep.json that names a prepared full-flow repository (another repository,
+             written; a github.json holding another token is refused, never overwritten. A prep.json that names a prepared full-flow repository (another repository,
              with a github.json for it) is kept as it is, with its github.json.
 home-config  the owner's cheapest-model rules and the kit's no-permission-prompt setting, in the
              connector's tracker home (never ~/.codex or ~/.claude): codex-cli's config.toml gets
@@ -157,6 +157,11 @@ def settle(cfg, work, repo):
     if have and not same_repo(have, repo) and gh and same_repo(gh.get("repo_url"), have):
         say(f"prep.json names the prepared repository {have}: kept, with its github.json")
         return
+    if (token is None and gh and not same_repo(gh.get("repo_url"), repo)
+            and gh.get("token") not in (None, "", PLACEHOLDER_TOKEN)):
+        # A real token for another repository: never replaced by the placeholder.
+        raise Refused(f"{gh_path} holds a token for another repository and no {TOKEN_ENV} "
+                      "is given; not overwritten")
     prep["repo_url"] = repo
     if not prep.get("work_root"):
         os.makedirs(work, mode=0o700, exist_ok=True)

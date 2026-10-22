@@ -811,6 +811,27 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
         self.assertEqual((cfg / "prep.json").read_text(), prep)
         self.assertEqual((cfg / "github.json").read_text(), gh)
 
+    def test_settle_without_a_token_file_never_overwrites_a_real_token(self) -> None:
+        cfg = self.base / "vol/cfg"
+        cfg.mkdir(parents=True)
+        prep = json.dumps({"harness": "codex-cli"})
+        gh = json.dumps({"repo_url": "https://github.com/someone/other", "token": SENTINEL})
+        (cfg / "prep.json").write_text(prep)
+        (cfg / "github.json").write_text(gh)
+        run = self.settle()
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("FAIL settle", run.stdout)
+        self.assertNotIn(SENTINEL, run.stdout + run.stderr)
+        self.assertEqual((cfg / "github.json").read_text(), gh)
+        self.assertEqual((cfg / "prep.json").read_text(), prep)
+        # The placeholder itself is the kit's, and is replaced as before.
+        (cfg / "github.json").write_text(json.dumps(
+            {"repo_url": "https://github.com/someone/other",
+             "token": "ghp_matrixfaketoken00000000000000000000"}))
+        run = self.settle()
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(json.loads((cfg / "github.json").read_text())["repo_url"], PRACTICE)
+
     def test_settle_refuses_a_token_file_without_a_token_and_never_prints_it(self) -> None:
         token = self.base / "github-token"
         token.write_text("not a token " + SENTINEL + "\n")
