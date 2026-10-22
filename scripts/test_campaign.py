@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("campaign", HERE / "campaign.py")
@@ -98,6 +98,7 @@ class FakeRunner:
         self.signals = []
         self.order = []          # ("docker", verb) and ("signal", sig), in order
         self.real_kit = False    # run scripts/kit_settle.py for real (it only writes files)
+        self.on_interactive = None  # (argv, env) -> exit status of an interactive child
 
     def popen(self, argv, env=None, cwd=None, stdout=None):
         with self.lock:
@@ -138,6 +139,8 @@ class FakeRunner:
         with self.lock:
             self.calls.append(list(argv))
             self.envs.append(dict(env or {}))
+        if self.on_interactive:
+            return self.on_interactive(argv, env or {})
         return 0
 
     def signal_group(self, proc, sig):
@@ -714,7 +717,8 @@ class CampaignRun(Base):
                          {"lin": "PASS", "mac": "FAIL"})
         md = (out / "summary.md").read_text()
         self.assertIn("| lin | docker | codex-cli | PASS |", md)
-        self.assertIn("2026-10-23T08:00:00Z | hello", (out / "mac" / "run.log").read_text())
+        # (Stamped when it was read: the second cell starts START_SPACING_S after the first.)
+        self.assertRegex((out / "mac" / "run.log").read_text(), r"2026-10-23T08:00:\d\dZ \| hello")
         # The docker cell: linux-matrix with the cell's name, its sampler inside the container.
         run_argv = next(c for c in runner.calls if "linux-matrix.sh" in " ".join(c))
         self.assertEqual(run_argv[2:9], ["run", "codex-cli", "--", "--test", "--duration", "3600",
@@ -824,6 +828,25 @@ class CampaignRun(Base):
         camp, _ = self.make(cells, runner, parallel=2)
         camp.run()
         self.assertLessEqual(peak[0], 2)
+        self.assertEqual([r.result["verdict"] for r in camp.runs], ["PASS"] * 4)
+
+    def test_cells_start_at_least_thirty_seconds_apart(self):
+        runner = FakeRunner()
+        clock = FakeClock()
+        starts = []
+
+        def make_proc(argv):
+            starts.append(clock.monotonic())
+            return FakeProc(["linux-matrix: x linux-x86_64 0 PASS 2026-10-23"])
+        runner.make_proc = make_proc
+        cells = [self.docker_cell(f"c{i}", f"m{i}") for i in range(3)]
+        cells.append(self.host_cell("h", "m9"))
+        camp, _ = self.make(cells, runner, clock=clock, parallel=4)
+        camp.run()
+        self.assertEqual(len(starts), 4)
+        starts.sort()
+        gaps = [b - a for a, b in zip(starts, starts[1:])]
+        self.assertTrue(all(g >= campaign.START_SPACING_S for g in gaps), gaps)
         self.assertEqual([r.result["verdict"] for r in camp.runs], ["PASS"] * 4)
 
     def test_no_secret_value_or_key_path_in_argv_logs_or_files(self):
@@ -967,7 +990,7 @@ class CampaignRun(Base):
                 camp, _ = self.make([self.host_cell("mac", "m1")], runner)
                 camp.run()
                 res = json.loads((self.root / "out" / "mac" / "result.json").read_text())
-                self.assertEqual(res["final_row"], f"codex-cli darwin-arm64 0.1_beta {result} 2026-10-23")
+                self.assertEqual(res["final_row"], f"codex-cli darwin-arm64 0.1 {result} 2026-10-23")
                 self.assertEqual(res["verdict"], verdict)
 
     def test_a_linux_matrix_fail_after_the_row_is_the_final_row(self):
@@ -1054,11 +1077,57 @@ class Commands(Base):
         path.write_text(json.dumps({"defaults": defaults, "cells": cells}))
         return str(path)
 
+    @staticmethod
+    def fake_prep(rc=0, home_ready=True, harness="codex-cli"):
+        """An interactive `goalcup prep` that leaves prep.json as the real one does, exiting rc."""
+        def run(argv, env):
+            if argv[1:2] == ["prep"]:
+                cfg = Path(env["GOALCUP_CONFIG_DIR"])
+                (cfg / "prep.json").write_text(json.dumps({"harness": harness,
+                                                           "home_ready": home_ready}))
+                return rc
+            return 0
+        return run
+
+    def login_host(self, runner):
+        cfgdir = self.root / "new-cfg"
+        path = self.write([{"id": "mac", "where": "host", "test_member_id": "m1",
+                            "config_dir": str(cfgdir)}])
+        runner.real_kit = True
+        with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+            rc = campaign.main(["login", path, "mac"], runner=runner)
+        return rc, cfgdir, out.getvalue() + err.getvalue()
+
+    def test_host_login_settles_when_prep_exits_1_with_the_home_signed_in(self):
+        runner = FakeRunner()
+        runner.on_interactive = self.fake_prep(rc=1)
+        rc, cfgdir, said = self.login_host(runner)
+        self.assertEqual(rc, 0, said)
+        self.assertTrue(any(str(campaign.KIT) in c for c in runner.calls))
+        prep = json.loads((cfgdir / "prep.json").read_text())
+        self.assertEqual(prep["work_root"], str(cfgdir / "work"))
+        self.assertIs(prep["home_ready"], True)
+        self.assertTrue((cfgdir / "github.json").exists())
+
+    def test_host_login_fails_when_prep_did_not_sign_the_home_in(self):
+        for rc_prep, ready, harness in ((0, False, "codex-cli"), (1, False, "codex-cli"),
+                                        (0, True, "amp-cli")):
+            with self.subTest(rc=rc_prep, ready=ready, harness=harness):
+                runner = FakeRunner()
+                runner.on_interactive = self.fake_prep(rc=rc_prep, home_ready=ready,
+                                                       harness=harness)
+                rc, cfgdir, said = self.login_host(runner)
+                self.assertNotEqual(rc, 0)
+                self.assertIn("home_ready", said)
+                self.assertFalse(any(str(campaign.KIT) in c for c in runner.calls))
+                self.assertFalse((cfgdir / "github.json").exists())
+
     def test_login_host_runs_login_then_prep_in_its_config_dir(self):
         cfgdir = self.root / "new-cfg"
         path = self.write([{"id": "mac", "where": "host", "test_member_id": "m1",
                             "config_dir": str(cfgdir)}])
         runner = FakeRunner()
+        runner.on_interactive = self.fake_prep()
         rc = campaign.main(["login", path, "mac"], runner=runner)
         self.assertEqual(rc, 0)
         self.assertEqual(runner.calls[0][:3], ["goalcup", "login", "--server"])
@@ -1072,6 +1141,7 @@ class Commands(Base):
         path = self.write([{"id": "mac", "where": "host", "test_member_id": "m1",
                             "config_dir": str(cfgdir)}])
         runner = FakeRunner()
+        runner.on_interactive = self.fake_prep()
         runner.real_kit = True
         with redirect_stdout(io.StringIO()) as buf:
             rc = campaign.main(["login", path, "mac"], runner=runner)

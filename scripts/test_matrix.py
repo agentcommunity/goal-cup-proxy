@@ -80,7 +80,8 @@ test = "--test" in args
 
 run_dir = cfg / "runs" / "r1"
 trace = cfg / "artifacts" / ENTRY / "trace"
-chain = b'{"body":{"harness_version":"stub-harness 9.9.9"}}\n'
+chain = (json.dumps({"body": {"harness_version":
+                             os.environ.get("STUB_HV", "stub-harness 9.9.9")}}) + "\n").encode()
 
 def write_run():
     # A test run's record is written before the harness starts, as goalcup start does it.
@@ -100,6 +101,9 @@ if test:
 
 # setraw flushes pending input: finish that transition before the feeder sees ready.
 tty.setraw(0)
+if os.environ.get("STUB_BRACKETED") == "1":
+    # A TUI that switches bracketed paste on, as Codex, Claude Code and Amp do.
+    sys.stdout.write("\x1b[?2004h")
 print("Recording in chat mode: stub starts now in this terminal.", flush=True)
 chunks, t0 = [], time.time()
 while time.time() - t0 < 30:
@@ -136,8 +140,23 @@ else:
 '''
 
 VERIFY = r'''#!/usr/bin/env python3
-import json, sys
+import json, os, sys
 from pathlib import Path
+if sys.argv[1] == "--research-json":
+    # The research report: what the agent did (STUB_WORK: usage, assistant or none).
+    (Path(os.environ["STUB_OUT"]) / "research.argv").write_text("\n".join(sys.argv[1:]))
+    work = os.environ.get("STUB_WORK", "usage")
+    obs = [{"kind": "model_request", "fields": {"endpoint": "/v1/messages"}},
+           {"kind": "usage", "fields": {"input_tokens": 900, "output_tokens": 0}}]
+    if work == "usage":
+        obs.append({"kind": "usage", "fields": {"last_token_usage": {"output_tokens": 12}}})
+    elif work == "assistant":
+        obs.append({"kind": "model_response", "fields": {"role": "assistant", "content": "ok"}})
+    with open(sys.argv[sys.argv.index("--output") + 1], "x") as f:
+        for ob in obs:
+            f.write(json.dumps({"type": "observation", "decoder": "stub", "observation": ob}) + "\n")
+        f.write(json.dumps({"type": "summary", "exit_code": 1}) + "\n")
+    sys.exit(1)
 size = (Path(sys.argv[2]) / "chain.jsonl").stat().st_size
 print(json.dumps({"integrity": "valid", "anchor": "signed", "validated_records": 1,
                   "validated_bytes": size, "validated_head": "a" * 64, "sealed": True}))
@@ -260,6 +279,7 @@ class World:
 
 
 DURATION = 4
+AMP_VERSION = "0.0.1792209635-g24a9fe (released 2026-10-17T04:00:35.000Z, 4d ago)"
 MULTILINE = "Build the thing.\n\n  Then\ttest it.\n"
 TYPED = "Build the thing. Then test it."
 TEST = ("--test", "--duration", str(DURATION))
@@ -282,6 +302,10 @@ SCENARIOS = {
     "test_seal_slow": ("stubchat", {"STUB_STOP": "0", "STUB_SEAL_SLEEP": "10"},
                        ("--test", "--duration", "4", "--timeout", "14"), True),
     "prompt_control": ("stubchat", {}, (), False, "go\x1b[Bnow\n"),
+    "amp_version": ("stubchat", {"STUB_HV": AMP_VERSION, "STUB_WORK": "assistant"}),
+    "silent": ("stubchat", {"STUB_WORK": "none"}),
+    "bracketed": ("stubchat", {"STUB_BRACKETED": "1",
+                               "STUB_PROMPT": "\x1b[200~" + PROMPT + "\x1b[201~"}),
 }
 
 
@@ -323,6 +347,40 @@ class MatrixTests(unittest.TestCase):
         # The text arrives without its Enter, and the Enter comes on its own (a read of its own).
         self.assertEqual(text[1], PROMPT)
         self.assertEqual(enter[1], "\r")
+
+    def test_a_tui_with_bracketed_paste_on_gets_the_prompt_as_one_paste(self) -> None:
+        w = self.worlds["bracketed"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        chunks = json.loads(w.seen("start.stdin_chunks"))
+        self.assertEqual(chunks[0][1], "\x1b[200~" + PROMPT + "\x1b[201~")
+        self.assertEqual(chunks[1][1], "\r")
+
+    def test_a_run_whose_agent_never_answered_fails_the_row(self) -> None:
+        w = self.worlds["silent"]
+        self.assertNotEqual(w.run.returncode, 0)
+        self.assertIn("the agent never answered the prompt", w.run.stderr)
+        self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ FAIL ")
+        self.assertNotRegex(w.run.stdout, r"(?m) PASS ")
+
+    def test_output_tokens_or_an_assistant_message_count_as_agent_work(self) -> None:
+        # chat: a usage observation with output tokens; amp_version: an assistant message only.
+        for name in ("chat", "amp_version"):
+            w = self.worlds[name]
+            self.assertEqual(w.run.returncode, 0, w.said())
+            self.assertTrue(w.seen("research.argv").startswith("--research-json\n"))
+            self.assertIn("agent work in the trace", w.log)
+
+    def test_the_row_keeps_the_version_line_up_to_its_version_number(self) -> None:
+        w = self.worlds["amp_version"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertRegex(w.run.stdout,
+                         r"(?m)^stubchat \S+ 0\.0\.1792209635-g24a9fe PASS \d{4}-\d\d-\d\d$")
+
+    def test_a_tui_without_bracketed_paste_gets_the_raw_keys(self) -> None:
+        w = self.worlds["chat"]
+        chunks = json.loads(w.seen("start.stdin_chunks"))
+        self.assertEqual(chunks[1][1], PROMPT)
+        self.assertNotIn("\x1b[200~", "".join(c[1] for c in chunks))
 
     def test_a_test_run_is_sealed_after_its_duration_from_the_submitted_prompt(self) -> None:
         w = self.worlds["test_chat"]

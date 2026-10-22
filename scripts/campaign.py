@@ -11,7 +11,7 @@
 A cell is one organizer test run of one connector, either in Docker (scripts/linux-matrix.sh,
 one container and one volume per cell) or on this machine (scripts/matrix.sh with a prepared
 configuration directory of the cell's own). `run` starts every selected cell (at most --parallel
-at once), starts scripts/research-sample.py beside it, plays the cell's drills at their times,
+at once, and at most one per 30 s: staging allows 5 device starts a minute per address), starts scripts/research-sample.py beside it, plays the cell's drills at their times,
 and writes, per cell, under DIR/<cell>/:
 
     run.log       the cell's output, each line prefixed with its UTC time and " | "
@@ -75,6 +75,9 @@ PRODUCTION_HOST = "ingest.agentcommunity.org"
 KEY_ENV = "GOALCUP_TEST_APPROVAL_KEY_FILE"
 TOKEN_ENV = "MATRIX_GITHUB_TOKEN_FILE"
 KIT = HERE / "kit_settle.py"
+# Staging allows 5 device starts per minute per address (8 cells at once got HTTP 429): the
+# campaign starts at most one cell per this many seconds.
+START_SPACING_S = 30
 CELL_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 CONNECTOR_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 MEMBER_ID = re.compile(r"[A-Za-z0-9_-]+")
@@ -1097,6 +1100,10 @@ class CellRun:
             self._kit("home-config")
             # What the harness writes from here on is this run's (model-check reads the mtimes).
             marker.touch()
+        if not camp.start_turn(self.stop):
+            self.set_state(state="not started")
+            self.write_result(exit_code=None, interrupted=True, started=False)
+            return
         self.start_mono = camp.clock.monotonic()
         self.start_utc = camp.clock.utcnow()
         self.set_state(state="running", start_utc=utc(self.start_utc))
@@ -1299,6 +1306,8 @@ class Campaign:
         self.summary_lock = threading.Lock()
         self.remaining = len(cells)
         self.remaining_lock = threading.Lock()
+        self.start_lock = threading.Lock()
+        self.last_start = None
         Path(self.out).mkdir(parents=True, exist_ok=True)
         self.runs = [CellRun(self, c) for c in cells]
 
@@ -1314,6 +1323,21 @@ class Campaign:
                     return False
                 return True
         return False
+
+    def start_turn(self, stop):
+        """Wait until START_SPACING_S have passed since the last cell started; False when the cell
+        is stopped first. One cell at a time is let through."""
+        with self.start_lock:
+            if self.last_start is not None:
+                left = START_SPACING_S - (self.clock.monotonic() - self.last_start)
+                while left > 0:
+                    if self.stopping.is_set() or self.clock.wait(stop, left):
+                        return False
+                    left = START_SPACING_S - (self.clock.monotonic() - self.last_start)
+            if self.stopping.is_set() or stop.is_set():
+                return False
+            self.last_start = self.clock.monotonic()
+            return True
 
     def release_slot(self):
         self.slots.release()
@@ -1632,8 +1656,16 @@ def cmd_login(args, runner):
     if rc != 0:
         return rc
     rc = runner.interactive([goalcup, "prep", "--harness", cell["connector"]], env=env)
+    # prep exits 1 while any of its steps is still to do, which a kit cell always has (no push
+    # helper, a practice repository): what this login needs is the harness home signed in.
+    prep = read_json(os.path.join(cell["config_dir"], "prep.json")) or {}
+    if not (prep.get("harness") == cell["connector"] and prep.get("home_ready") is True):
+        print(f"error cell {cell['id']}: goalcup prep (exit {rc}) did not record the "
+              f"{cell['connector']} home as signed in (prep.json home_ready)", file=sys.stderr)
+        return rc or 1
     if rc != 0:
-        return rc
+        print(f"note  cell {cell['id']}: goalcup prep exited {rc} with steps still to do; the "
+              f"{cell['connector']} home is signed in, so the kit settles the rest")
     argv, env = settle_command(cfg, cell)
     rc, out = runner.run(argv, env=env, timeout=60)
     print(out, end="")

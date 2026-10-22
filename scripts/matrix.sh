@@ -17,7 +17,11 @@
 #      signed by the server's acknowledgement);
 #   2. the server's copy: `GET /v1/runs/<id>` with the run's own credential says `sealed`, `stop`,
 #      and holds exactly the bytes, records and head the local chain ends with, and the entry's
-#      committed end (`final`) is that same record.
+#      committed end (`final`) is that same record;
+#   3. for a real harness, the agent worked: `goalcup-verify --research-json` on the trace shows
+#      at least one model exchange that carries output (a usage observation with output or
+#      completion tokens above 0, or a decoded assistant message). A prompt swallowed by a
+#      first-run dialog or split into keys leaves none, and the row FAILs.
 #
 # The upload API has no call that returns the stored chain, so (2) is a comparison of the
 # server's position with the local chain, not a download. docs/OPERATING.md, "The matrix", says
@@ -50,7 +54,9 @@
 #                              becomes one space, because a newline typed into a TUI submits (or
 #                              splits) the prompt early. Control characters other than tab and
 #                              newline are refused. A long prompt reaches the TUI as a paste; give
-#                              it time with MATRIX_SUBMIT_DELAY before the Enter.
+#                              it time with MATRIX_SUBMIT_DELAY before the Enter. A harness that
+#                              has switched bracketed paste on (ESC[?2004h before the prompt) gets
+#                              the prompt wrapped in ESC[200~ ... ESC[201~.
 #   MATRIX_PROMPT_DELAY        seconds between "the harness is up" and the prompt (fake: 1,
 #                              any other connector: 30).
 #   MATRIX_SUBMIT_DELAY        seconds between the typed prompt and the Enter that submits it
@@ -414,7 +420,10 @@ START_LAUNCHED=0
 print_row() {
   [ "$ROW_PRINTED" = 0 ] || return 0
   ROW_PRINTED=1
-  hv=$(printf '%s' "$HV" | tr -s ' \t' '__')
+  # The version line up to its version number: "codex-cli 0.156.1" stays whole, Amp's
+  # "0.0.x (released <date>, 4d ago)" keeps 0.0.x, so the row does not change from day to day.
+  hv=$(printf '%s\n' "$HV" | head -n 1 |
+    awk '{ o = ""; for (i = 1; i <= NF; i++) { o = o (i > 1 ? "_" : "") $i; if ($i ~ /^[0-9]/) break }; print o }')
   [ -n "$hv" ] || hv=unreported
   if [ "$RESULT" != PASS ] && [ -n "$FAIL_REASON" ]; then
     log "FAIL: $FAIL_REASON"
@@ -887,7 +896,12 @@ PY
     printf '$PRE_KEYS'; : > $(shq "$ROOT/prekeys-sent")
   fi
   if [ -f $(shq "$ROOT/send") ] && [ ! -f $(shq "$ROOT/sent") ]; then
-    printf '%s' $(shq "$PROMPT"); sleep $SUBMIT_DELAY; printf '$PROMPT_ENTER'; : > $(shq "$ROOT/sent")
+    if [ -f $(shq "$ROOT/paste") ]; then
+      printf '\033[200~%s\033[201~' $(shq "$PROMPT")
+    else
+      printf '%s' $(shq "$PROMPT")
+    fi
+    sleep $SUBMIT_DELAY; printf '$PROMPT_ENTER'; : > $(shq "$ROOT/sent")
   fi
   sleep 1
   done"
@@ -913,6 +927,12 @@ PY
       fi
       if [ ! -f "$ROOT/send" ] && [ $((now - READY_AT)) -ge "$DELAY" ]; then
         if [ -z "$PRE_KEYS" ] || { [ -f "$ROOT/prekeys-sent" ] && [ $((now - PRE_AT)) -ge 2 ]; }; then
+          # A harness that has switched bracketed paste on gets the prompt as one paste, so a
+          # pty that splits a long write cannot turn it into keys and the Enter stays a submit.
+          if grep -qF "$(printf '\033[?2004h')" "$ROOT/start.out" 2>/dev/null; then
+            : >"$ROOT/paste"
+            log "the harness has bracketed paste on: the prompt goes as one bracketed paste"
+          fi
           : >"$ROOT/send"
         fi
       fi
@@ -1028,9 +1048,70 @@ PY
 
   # ---- 1. the local verifier, 2. the server's copy
   verify_trace "$TRACE" || return 1
+  if [ "$IS_FAKE" = 0 ]; then
+    agent_worked "$TRACE" || return 1
+  fi
   compare_copy "$RUN_ID" "$ENTRY_ID" "$TRACE" "$RUN_DIR/credential" "$STRICT" || return 1
 
   RESULT=PASS
+  return 0
+}
+
+# The agent answered: the research report (under the same key as verify_trace) holds a usage
+# observation with output or completion tokens above 0, or a decoded assistant message. Its exit
+# status is not the question here (verify_trace judged the evidence); the report must exist.
+agent_worked() { # trace
+  rm -f "$ROOT/research.ndjson"
+  if [ -n "$SKEY" ]; then
+    "$VERIFY" --research-json "$1" --output "$ROOT/research.ndjson" --dev-key "$SKEY" 2>"$ROOT/research.err"
+  else
+    "$VERIFY" --research-json "$1" --output "$ROOT/research.ndjson" 2>"$ROOT/research.err"
+  fi
+  log "goalcup-verify --research-json $1: exit $?"
+  log_file "goalcup-verify --research-json (stderr)" "$ROOT/research.err"
+  [ -f "$ROOT/research.ndjson" ] ||
+    fail "goalcup-verify --research-json wrote no report: $(last_line "$ROOT/research.err")" || return 1
+  worked=$(python3 - "$ROOT/research.ndjson" <<'PY'
+import json, sys
+
+OUT = ("output_tokens", "completion_tokens", "outputtokens", "completiontokens")
+
+
+def has_output(o):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if (k.lower() in OUT and isinstance(v, (int, float)) and not isinstance(v, bool)
+                    and v > 0):
+                return True
+            if isinstance(v, (dict, list)) and has_output(v):
+                return True
+    elif isinstance(o, list):
+        return any(has_output(v) for v in o)
+    return False
+
+
+usage = assistant = 0
+for line in open(sys.argv[1], errors="replace"):
+    try:
+        o = json.loads(line)
+    except ValueError:
+        continue
+    if not isinstance(o, dict) or o.get("type") != "observation":
+        continue
+    ob = o.get("observation") if isinstance(o.get("observation"), dict) else {}
+    fields = ob.get("fields") if isinstance(ob.get("fields"), dict) else {}
+    if ob.get("kind") == "usage" and has_output(fields):
+        usage += 1
+    elif ob.get("kind") == "model_response" and fields.get("role") == "assistant":
+        assistant += 1
+print(f"{usage} usage observations with output, {assistant} assistant messages")
+PY
+  )
+  log "agent work in the trace: ${worked:-unreadable report}"
+  case $worked in
+    "0 usage observations with output, 0 assistant messages" | "")
+      fail "the agent never answered the prompt (no model output in the trace: ${worked:-unreadable report})" || return 1 ;;
+  esac
   return 0
 }
 
@@ -1043,6 +1124,7 @@ verify_trace() { # trace [allow_incomplete]
   VRC=$?
   KEYNOTE="the pinned server key"
   VERIFY_NOTE=""
+  SKEY=""
   if [ "$VRC" = 2 ] && grep -q receipt_key_not_accepted "$ROOT/verify.out"; then
     SKEY=${MATRIX_SERVER_KEY:-$(py_get "$1/receipt.json" public_key)}
     log "verify without a supplied key: exit $VRC; retrying with --dev-key (the server's own signing key is not pinned in this build for $SERVER)"

@@ -19,7 +19,11 @@ home-config  the owner's cheapest-model rules, in the connector's tracker home (
              ~/.claude): codex-cli's config.toml gets `model = "gpt-5.6-luna"` and
              `model_reasoning_effort` = EFFORT (low, the default, or minimal: only when the
              installed codex lists minimal for that model); claude-code-cli's settings.json gets
-             `"model": "haiku"` and `"alwaysThinkingEnabled": false`, other keys kept.
+             `"model": "haiku"` and `"alwaysThinkingEnabled": false`, and its .claude.json
+             `"fullscreenUpsellSeenCount": 3` (what answering "Not now" to "Try the new fullscreen
+             renderer?" stores; the renderer is not changed). amp-cli's run home gets
+             `"agentMode": "low"` and `"neoWelcomeDismissed": true` in
+             .local/share/amp/session.json (its login files are never read). Other keys kept.
 model-check  after the run: every Codex turn (rollouts' `turn_context`) of the sessions written
              since MARKER must be gpt-5.6-luna at EFFORT; every Claude assistant message of the
              transcripts under projects/ (subagents too) must name a haiku model (`<synthetic>`
@@ -46,6 +50,10 @@ PLACEHOLDER_TOKEN = "ghp_matrixfaketoken00000000000000000000"
 TOKEN_MIN, TOKEN_MAX = 20, 255
 LUNA = "gpt-5.6-luna"
 CLAUDE_MODEL = "haiku"
+# Claude Code (2.1.299) shows "Try the new fullscreen renderer?" until this count reaches 3;
+# "Not now" sets it to 3 and changes nothing else.
+CLAUDE_UPSELL_KEY, CLAUDE_UPSELL_SEEN = "fullscreenUpsellSeenCount", 3
+AMP_SESSION = {"agentMode": "low", "neoWelcomeDismissed": True}
 EFFORTS = ("low", "minimal")
 TAG = "kit:"
 
@@ -226,8 +234,27 @@ def home_config(cfg, connector, effort):
         doc = read_object(path, {})
         doc["model"] = CLAUDE_MODEL
         doc["alwaysThinkingEnabled"] = False
+        state_path = os.path.join(home(cfg, connector), ".claude.json")
+        state = read_object(state_path, {})
         write_json(path, doc)
-        say(f"claude home settings: model {CLAUDE_MODEL}, thinking off")
+        seen = state.get(CLAUDE_UPSELL_KEY)
+        if not (isinstance(seen, int) and seen >= CLAUDE_UPSELL_SEEN):
+            state[CLAUDE_UPSELL_KEY] = CLAUDE_UPSELL_SEEN
+            write_json(state_path, state)
+        say(f"claude home settings: model {CLAUDE_MODEL}, thinking off, the fullscreen renderer "
+            "offer answered as \"Not now\"")
+    elif connector == "amp-cli":
+        # The run HOME (run_home = "shared"): <cfg>/capture-homes/amp-cli.run-home.
+        run_home = home(cfg, connector + ".run-home")
+        d = run_home
+        for part in (".local", "share", "amp"):
+            d = os.path.join(d, part)
+            os.makedirs(d, mode=0o700, exist_ok=True)
+        path = os.path.join(d, "session.json")
+        doc = read_object(path, {})
+        doc.update(AMP_SESSION)
+        write_json(path, doc)
+        say("amp session: agent mode low, the welcome dismissed")
 
 
 # --------------------------------------------------------------------------- model-check
