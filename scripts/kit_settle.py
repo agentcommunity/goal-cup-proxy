@@ -183,12 +183,21 @@ def settle(cfg, work, repo):
 def codex_lists_minimal():
     """Whether the installed codex lists `minimal` for Luna: `codex debug models --bundled`, read
     as JSON; the object that names the model (slug, id, model or name) must hold "minimal"
-    somewhere. Anything else (no codex, no such command, another format) is a no."""
-    try:
-        out = subprocess.run(["codex", "debug", "models", "--bundled"], capture_output=True,
-                             timeout=60, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+    somewhere. Anything else (no codex, no such command, another format) is a no.
+
+    Codex is given a HOME and a CODEX_HOME of its own (an empty temporary directory, removed
+    after, with no XDG_* paths): on a host cell this runs on the owner's machine, and Codex must
+    never write into the real ~/.codex (it may make state there on any command). The bundled
+    list needs no login."""
+    with tempfile.TemporaryDirectory(prefix="kit-codex-probe-") as scratch:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("XDG_")}
+        env.update(HOME=scratch, CODEX_HOME=os.path.join(scratch, ".codex"))
+        os.mkdir(env["CODEX_HOME"], 0o700)
+        try:
+            out = subprocess.run(["codex", "debug", "models", "--bundled"], capture_output=True,
+                                 timeout=60, check=False, env=env, cwd=scratch)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
     if out.returncode != 0:
         return False
     try:

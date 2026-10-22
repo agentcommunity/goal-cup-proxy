@@ -705,6 +705,32 @@ class ContainerHalfTests(unittest.TestCase):
         self.assertIn("does not list minimal", run.stdout)
         self.assertFalse((self.homes / "codex-cli/config.toml").exists())
 
+    def test_the_codex_probe_never_runs_in_the_real_home(self) -> None:
+        # A host cell runs the probe on the owner's machine: whatever Codex writes on start must
+        # land in a home of the probe's own, never the real ~/.codex.
+        self.codex_stub(["minimal", "low"])
+        stub = self.bin / "codex"
+        seen = self.base / "probe-env.json"
+        stub.write_text(stub.read_text().replace("#!/bin/sh\n", (
+            "#!/bin/sh\n"
+            f"python3 -c 'import json, os; json.dump({{k: os.environ.get(k) for k in "
+            f"(\"HOME\", \"CODEX_HOME\")}}, open(\"{seen}\", \"w\"))'\n"
+            'mkdir -p "${CODEX_HOME:-$HOME/.codex}/tmp"\n'), 1))
+        real = self.base / "owner-home"
+        real.mkdir()
+        run = self.inner("inner-home-config", "codex-cli", LINUX_MATRIX_CODEX_EFFORT="minimal",
+                         HOME=str(real), CODEX_HOME=str(real / ".codex"))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        got = json.loads(seen.read_text())
+        for name in ("HOME", "CODEX_HOME"):
+            self.assertTrue(got[name], name)
+            path = Path(got[name]).resolve()
+            self.assertNotEqual(path, real, name)
+            self.assertNotIn(real, path.parents, name)
+        self.assertEqual(list(real.iterdir()), [], "the probe wrote into the real home")
+        self.assertIn('model_reasoning_effort = "minimal"',
+                      (self.homes / "codex-cli/config.toml").read_text())
+
     def inner_run_world(self, model: str = "claude-haiku-4-5") -> Path:
         """A stand-in /src: the connector's manifest and a matrix.sh that records what it got
         and leaves one haiku transcript, on a volume where prep recorded the sign-in."""
