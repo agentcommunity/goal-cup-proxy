@@ -39,6 +39,7 @@ Update this table in the same PR as any entry it lists.
 | D62, D63 | current | |
 | D64 | partly superseded | D65 (the disk watch pauses, never stops) |
 | D65, D66, D67 | current | |
+| D68 | proposed, owner to approve | |
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
@@ -758,3 +759,30 @@ that stops to ask for approval stalls until its deadline (lx-codex and lx-claude
   configure command or launch option sets them (D52, D57 stand).
 - **The test kit's own cells are the organiser's.** `scripts/kit_settle.py` sets them in the kit's
   tracker homes, like the cheapest-model rule: those are not participant homes.
+
+## D68. The connector contract is locked at schema 1.
+
+*Proposed 22 Oct 2026, owner to approve.* Owner: "bring your own harness, not limited to these
+four". Adding a harness must stay a data change that core changes do not break.
+
+- **The contract** is [CONNECTOR-SCHEMA, "The connector contract"](CONNECTOR-SCHEMA.md#the-connector-contract):
+  the fields, the launch environment, the homes, native roots, hosts, `[participant]` and the
+  decoder hooks a connector may rely on.
+- **Compatibility.** While schema 1 is read, a connector that loads today keeps loading and
+  launching with the same meaning. Schema 1 may only grow (a new optional field, a wider bound, a
+  new closed value).
+- **Deprecation.** A field is retired by a DECISIONS entry, at least one release and 14 days of
+  notice (none during an event), a `doctor` warning, then `schema_version = 2` with every
+  in-tree connector migrated in the same PR. A security tightening follows the same rule; the
+  owner may waive the notice when waiting is unsafe.
+- **Held by tests.** Two frozen schema-1 fixtures for harnesses nobody ships
+  (`crates/goalcup-cli/tests/fixtures/schema-1-connectors/`) take the connector contract through
+  `--dev`, beside every shipped connector. A connector made from the contributor template loads
+  with no Rust change, and no core literal names a harness (`no_family_literals.rs`). A change
+  that fails one of them is a break, not a test to update.
+- **Open: the pin and the cutoff.** A connector runs without `--dev` only when the release pins
+  it (`connector-dirs.txt`, compiled in). So a participant's own harness needs a merged PR and a
+  release before 6 Nov 2026 12:00 UTC. A `--dev` run today opens a server run and uploads like
+  any other: the server checks no connector list (D43 ruling 4 is not built), and the report
+  labels it `Dev/unpinned`. The owner decides whether a `--dev` run may count, and if not, where
+  it is refused (the CLI in competition mode, or the server by digest).
