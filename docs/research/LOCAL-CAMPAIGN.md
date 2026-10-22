@@ -72,9 +72,10 @@ not prove: other platforms, other harness versions, model behaviour, or particip
 A cell is one harness, on one machine kind, for one duration, with one test member and its own
 login. Copy `scripts/campaign.example.json` and edit it: the key file path, the GitHub token file
 path (`github_token_file`), host `config_dir`s and members. `scripts/kit_settle.py` writes that
-token into each cell's `github.json` (0600) with the practice repository: in the container for a
+token (a fine-grained token with Metadata read only; one that can push is refused) into each cell's
+`github.json` (0600) with the practice repository: in the container for a
 Docker cell (linux-matrix.sh hands it in on standard input; no secret is mounted into a cell's
-container), after `login` and before every `run` for a host cell, so a token rotated later is picked
+container, and the approval key never enters one: the host approves the device codes), after `login` and before every `run` for a host cell, so a token rotated later is picked
 up. A Docker cell's long run is checked against its server copy after the run: the fetch runs in a
 throwaway container of its own, never in the cell's (OPERATING, "A long run"). The default prompt is [campaign-workload.txt](campaign-workload.txt): a cheap, many-step
 coding task that stays in the workspace and stops on its own. An agent that finishes early and idles

@@ -164,8 +164,18 @@ class Base(unittest.TestCase):
         self.token = self.root / "github-token"
         self.token.write_text(TOKEN + "\n")
         os.environ.pop(campaign.KEY_ENV, None)
+        # What GitHub answers kit_settle.py for the practice repository: a token that cannot push.
+        repo = self.root / "github-api/repos/agentcommunity/goalcup-matrix-empty"
+        repo.parent.mkdir(parents=True)
+        repo.write_text(json.dumps({"permissions": {"admin": False, "push": False, "pull": True}}))
+        self.saved_api = os.environ.get("KIT_GITHUB_API")
+        os.environ["KIT_GITHUB_API"] = (self.root / "github-api").as_uri()
 
     def tearDown(self):
+        if self.saved_api is None:
+            os.environ.pop("KIT_GITHUB_API", None)
+        else:
+            os.environ["KIT_GITHUB_API"] = self.saved_api
         self.tmp.cleanup()
 
     def config(self, cells, **defaults):

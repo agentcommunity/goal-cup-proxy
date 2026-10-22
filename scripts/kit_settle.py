@@ -15,6 +15,11 @@ settle       prep.json gets `repo_url` (REPO_URL, default the empty practice rep
              kept, else a format-valid placeholder (never sent: a practice clone is anonymous) is
              written; a github.json holding another token is refused, never overwritten. A prep.json that names a prepared full-flow repository (another repository,
              with a github.json for it) is kept as it is, with its github.json.
+             Before a token is written, GitHub is asked what it may do there
+             (GET /repos/<owner>/<repo>, KIT_GITHUB_API overrides the API's address for tests):
+             a token that may push (or maintain, or admin) is refused, because the agent can read
+             github.json and one agent push makes every later test start refuse the repository.
+             Use a fine-grained token with Metadata read only. No answer is a refusal too.
 home-config  the owner's cheapest-model rules and the kit's no-permission-prompt setting, in the
              connector's tracker home (never ~/.codex or ~/.claude): codex-cli's config.toml gets
              `model = "gpt-5.6-luna"`, `model_reasoning_effort` = EFFORT (low, the default, or
@@ -49,6 +54,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 
 PRACTICE_REPO = "https://github.com/agentcommunity/goalcup-matrix-empty"
 TOKEN_ENV = "MATRIX_GITHUB_TOKEN_FILE"
@@ -146,6 +153,31 @@ def read_token(path):
 
 # --------------------------------------------------------------------------- settle
 
+def check_token_cannot_push(token, repo):
+    """Refused unless GitHub says this token may not push to `repo` (nor maintain or admin it).
+    The token goes in a header only; no refusal repeats it."""
+    m = re.fullmatch(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?", repo)
+    if not m:
+        raise Refused(f"cannot tell what the token may do: {repo} is not a GitHub repository")
+    api = os.environ.get("KIT_GITHUB_API", "https://api.github.com").rstrip("/")
+    req = urllib.request.Request(f"{api}/repos/{m.group(1)}/{m.group(2)}", headers={
+        "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+        "User-Agent": "goalcup-kit-settle"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            doc = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise Refused(f"cannot tell what the token may do on {repo}: GitHub answered {e.code}")
+    except (OSError, ValueError) as e:
+        raise Refused(f"cannot tell what the token may do on {repo}: {type(e).__name__}")
+    perms = doc.get("permissions") if isinstance(doc, dict) else None
+    if not isinstance(perms, dict):
+        raise Refused(f"cannot tell what the token may do on {repo}: GitHub named no permissions")
+    if perms.get("push") is not False or perms.get("maintain") or perms.get("admin"):
+        raise Refused(f"the token from {TOKEN_ENV} may push to {repo}: give one that cannot "
+                      "(a fine-grained token with Metadata read only)")
+
+
 def settle(cfg, work, repo):
     token_file = os.environ.get(TOKEN_ENV) or ""
     token = read_token(token_file) if token_file else None
@@ -162,6 +194,8 @@ def settle(cfg, work, repo):
         # A real token for another repository: never replaced by the placeholder.
         raise Refused(f"{gh_path} holds a token for another repository and no {TOKEN_ENV} "
                       "is given; not overwritten")
+    if token is not None:
+        check_token_cannot_push(token, repo)
     prep["repo_url"] = repo
     if not prep.get("work_root"):
         os.makedirs(work, mode=0o700, exist_ok=True)

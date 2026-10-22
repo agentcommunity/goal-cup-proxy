@@ -58,11 +58,10 @@
 #                              variable out of its environment at once, so no child inherits the
 #                              path. A Docker run mounts
 #                              the file read-only (-v <file>:/run/key:ro) and never uses -e.
-#   MATRIX_APPROVAL_KEY_ONCE=1 the key file is a copy made for this one run, in a place the
-#                              harness could read (scripts/linux-matrix.sh). The script removes it
-#                              when it opens it for the run's approval, the last one, so it is gone
-#                              before the run is approved and the harness can start; on the way
-#                              out it is removed in any case. Never set it for a file of your own.
+#   MATRIX_CODES_FILE          with no key file: each device code to approve is appended to this
+#                              file as `login <code>` or `run <code>`, for a caller that approves
+#                              it where the key is (scripts/linux-matrix.sh approves on the host,
+#                              so the key never enters the container the harness runs in).
 #   GOALCUP_TEST_MEMBER_ID     the member the test approval approves as (default: member1).
 #   MATRIX_REPO_URL            the empty public repository (default:
 #                              https://github.com/agentcommunity/goalcup-matrix-empty).
@@ -147,14 +146,16 @@
 #                        in docs/OPERATING.md): every entry of RUN (default: the newest) in the
 #                        configuration directory DIR is verified locally and compared with the
 #                        server's position for it. Starts and approves nothing; read-only.
-#   --judge-copy DIR [RUN]
+#   <connector> <server> --judge-copy DIR RUN ENTRY [--test]
 #                        the end checks of a long run that already ran in DIR and got a
 #                        NOT-VERIFIED row because its server copy could not be fetched then: the
 #                        same checks the run makes on a fetched copy (the tail, the verifier,
-#                        the agent's work, the workspace, the server's position; strict, as for
-#                        the run's own mode), on the last entry of RUN (default: the newest), with
-#                        the copy from MATRIX_SERVER_COPY or a fetch now. Prints the run's row.
-#                        For a Docker cell, whose container never holds a fetch credential.
+#                        the agent's work, the workspace, the server's position; strict for a
+#                        practice run, or with --test for a test run), on ENTRY of RUN, with the
+#                        copy from MATRIX_SERVER_COPY or a fetch now. The caller names the run,
+#                        entry, connector, server and mode; a run record that says otherwise
+#                        FAILs. Prints the run's row. For a Docker cell, whose container never
+#                        holds a fetch credential. The run prints `run: <id> entry: <id>`.
 #
 # Without GOALCUP_TEST_APPROVAL_KEY_FILE the script prints the approval address and code that goalcup
 # printed (nothing else) and waits while you approve, in a browser, as a member. There are two
@@ -195,6 +196,7 @@ CHECK_CFG=""
 CHECK_RUN=""
 # check: --check-copy; judge: --judge-copy.
 CHECK_MODE=""
+JUDGE_ENTRY=""
 ALLOW_PRODUCTION=0
 KEEP=0
 LOG=""
@@ -220,11 +222,18 @@ while [ $# -gt 0 ]; do
       CHECK_MODE=${1#--}
       CHECK_MODE=${CHECK_MODE%-copy}
       shift
-      case ${2:-} in "" | -*) ;; *)
+      if [ "$CHECK_MODE" = judge ]; then
+        [ $# -ge 3 ] || bad_usage "--judge-copy needs a configuration directory, a run and an entry"
         CHECK_RUN=$2
-        shift
-        ;;
-      esac
+        JUDGE_ENTRY=$3
+        shift 2
+      else
+        case ${2:-} in "" | -*) ;; *)
+          CHECK_RUN=$2
+          shift
+          ;;
+        esac
+      fi
       ;;
     --log)
       [ $# -ge 2 ] || bad_usage "--log needs a file"
@@ -250,9 +259,12 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-if [ -n "$CHECK_CFG" ]; then
-  [ -z "$CONNECTOR" ] || bad_usage "--$CHECK_MODE-copy takes no connector or server"
-  CONNECTOR=$CHECK_MODE-copy
+if [ "$CHECK_MODE" = check ]; then
+  [ -z "$CONNECTOR" ] || bad_usage "--check-copy takes no connector or server"
+  CONNECTOR=check-copy
+elif [ "$CHECK_MODE" = judge ]; then
+  [ -n "$CONNECTOR" ] && [ -n "$SERVER" ] || bad_usage "--judge-copy needs the run's connector and server"
+  case $CHECK_RUN$JUDGE_ENTRY in *[!A-Za-z0-9_-]* | "") bad_usage "--judge-copy needs a run id and an entry id" ;; esac
 else
   [ -n "$CONNECTOR" ] && [ -n "$SERVER" ] || bad_usage "a connector and a server are needed"
 fi
@@ -265,11 +277,10 @@ if [ -n "${GOALCUP_TEST_APPROVAL_KEY:-}" ]; then
   exit 2
 fi
 KEYFILE=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
-KEY_ONCE=${MATRIX_APPROVAL_KEY_ONCE:-0}
+CODES_FILE=${MATRIX_CODES_FILE:-}
 # The path leaves the environment too, so goalcup, the daemon and the harness never inherit where
 # the key file is.
-unset GOALCUP_TEST_APPROVAL_KEY_FILE MATRIX_APPROVAL_KEY_ONCE
-case $KEY_ONCE in 0 | 1) ;; *) echo "matrix: MATRIX_APPROVAL_KEY_ONCE is 0 or 1" >&2; exit 2 ;; esac
+unset GOALCUP_TEST_APPROVAL_KEY_FILE MATRIX_CODES_FILE
 # Which approval comes next: the login's, then the run's (the last one).
 APPROVING=login
 if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
@@ -341,9 +352,11 @@ esac
 
 # --test and --duration: a test run of a real harness, in a prepared configuration directory,
 # sealed by this script. Never one without the other: a test run left to the server lasts 168 h.
-if [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
+if [ "$CHECK_MODE" = judge ] && [ -z "$DURATION" ]; then
+  : # --test says the judged run is a test run
+elif [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
   if [ -n "$CHECK_CFG" ]; then
-    echo "matrix: --test and --duration are not for --$CHECK_MODE-copy" >&2
+    echo "matrix: --test and --duration are not for --$CHECK_MODE-copy (--judge-copy takes --test alone)" >&2
     exit 2
   fi
   if [ "$TEST" != 1 ] || [ -z "$DURATION" ]; then
@@ -423,7 +436,7 @@ validate_server() {
       ;;
   esac
 }
-[ -n "$CHECK_CFG" ] || validate_server
+[ "$CHECK_MODE" = check ] || validate_server
 
 # ------------------------------------------------------------------------------ platform
 
@@ -517,7 +530,6 @@ cleanup() {
   trap '' INT TERM HUP
   # The shell's own notices about the jobs it ends here go to the log, not the terminal.
   exec 2>>"$LOG"
-  if [ "$KEY_ONCE" = 1 ] && [ -n "$KEYFILE" ]; then rm -f "$KEYFILE" 2>/dev/null; fi
   if [ -n "$ROOT" ] && [ -d "$ROOT" ]; then {
     : >"$ROOT/done" 2>/dev/null
     # A test run that failed after its entry was found and before its seal was asked for would
@@ -622,16 +634,9 @@ scan_and_approve() {
   [ -n "$code" ] || return 0
   printf '%s\n' "$code" >>"$ROOT/seen.txt"
   if [ -n "$KEYFILE" ]; then
-    # A key file made for this run only (MATRIX_APPROVAL_KEY_ONCE=1) is removed as it is opened
-    # for the run's approval: gone before the approval is even sent, so before the harness starts.
-    # If it cannot be removed, no key is sent and the approval is refused.
     status=$({
-      exec 5<"$KEYFILE" || exit 1
-      if [ "$KEY_ONCE" = 1 ] && [ "$APPROVING" = run ]; then
-        rm -f "$KEYFILE" && [ ! -e "$KEYFILE" ] || exit 1
-      fi
       printf 'Authorization: Bearer '
-      tr -d '\n' <&5
+      tr -d '\n' <"$KEYFILE"
       printf '\n'
     } | http POST /v1/device/approve "$ROOT/approve.out" -H @- -H 'Content-Type: application/json' \
       -d "{\"user_code\":\"$code\",\"member_id\":\"$MEMBER\",\"approve\":true}")
@@ -640,6 +645,9 @@ scan_and_approve() {
       log "the test approval was refused"
       return 1
     fi
+  elif [ -n "$CODES_FILE" ]; then
+    printf '%s %s\n' "$APPROVING" "$code" >>"$CODES_FILE" || return 1
+    say "the $APPROVING code $code is for the caller to approve (MATRIX_CODES_FILE)"
   else
     line=$(tr -d '\r' <"$1" | grep "shows the code $code" | tail -1)
     say "no GOALCUP_TEST_APPROVAL_KEY_FILE: approve this in a browser, as a member:"
@@ -1066,6 +1074,8 @@ PY
   TRACE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["trace_dir"])' "$RUN_JSON")
   ENTRY_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["entry_id"])' "$RUN_JSON")
   log "run $RUN_ID, entry $ENTRY_ID, trace $TRACE"
+  # For a caller that judges a long run later (--judge-copy): which run and entry this was.
+  printf 'run: %s entry: %s\n' "$RUN_ID" "$ENTRY_ID"
   # Read before the end-of-run checks, so a FAIL row still names the harness version. A long
   # run's first records are pruned on this machine: its version is read from the server's copy.
   PRUNED=0
@@ -1536,27 +1546,36 @@ judge_copy() {
   VERIFY=$(find_bin goalcup-verify)
   [ -n "$VERIFY" ] || fail "goalcup-verify is needed (cargo build --workspace, or MATRIX_BIN_DIR)" || return 1
   CFG=${CHECK_CFG%/}
-  if [ -n "$CHECK_RUN" ]; then
-    RUN_JSON="$CFG/runs/$CHECK_RUN/run.json"
-  else
-    RUN_JSON=$(ls -t "$CFG"/runs/*/run.json 2>/dev/null | head -1)
-  fi
-  [ -n "$RUN_JSON" ] && [ -f "$RUN_JSON" ] || fail "no run record under $CFG/runs" || return 1
+  RUN_JSON="$CFG/runs/$CHECK_RUN/run.json"
+  [ -f "$RUN_JSON" ] || fail "no run record $RUN_JSON" || return 1
   RUN_DIR=$(dirname "$RUN_JSON")
-  RUN_ID=$(py_get "$RUN_JSON" run_id)
-  # The row names the run's connector, as the run's own row does.
-  CONNECTOR=$(py_get "$RUN_JSON" connector_id)
-  case $CONNECTOR in *[!A-Za-z0-9._-]* | "") CONNECTOR=judge-copy; fail "run $RUN_ID names no valid connector" || return 1 ;; esac
+  RUN_ID=$CHECK_RUN
+  ENTRY_ID=$JUDGE_ENTRY
+  if [ "$TEST" = 1 ]; then STRICT=sealed; else STRICT=1; fi
   IS_FAKE=0
   [ "$CONNECTOR" != "$FAKE_ID" ] || IS_FAKE=1
-  SERVER=$(py_get "$RUN_JSON" server_url)
-  [ -n "$SERVER" ] || fail "run $RUN_ID has no server (a local-only run has no server copy)" || return 1
-  validate_server
-  # A test run's end is the seal; a practice run's is the deadline (stop), as in the run.
-  if [ "$(py_get "$RUN_JSON" test)" = true ]; then STRICT=sealed; else STRICT=1; fi
-  TRACE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["trace_dir"])' "$RUN_JSON") ||
-    fail "run $RUN_ID has no entries" || return 1
-  ENTRY_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["entry_id"])' "$RUN_JSON")
+  # The run record lives where the agent could write: it must say what the caller says.
+  mismatch=$(python3 - "$RUN_JSON" "$RUN_ID" "$ENTRY_ID" "$CONNECTOR" "$SERVER_LC" "$TEST" <<'PY'
+import json, sys
+path, run, entry, connector, server, test = sys.argv[1:]
+try:
+    r = json.load(open(path))
+    last = r["entries"][-1]
+except (OSError, ValueError, KeyError, IndexError, TypeError):
+    print("the record cannot be read")
+    sys.exit(0)
+got = {
+    "run_id": (r.get("run_id"), run),
+    "entry": (last.get("entry_id"), entry),
+    "connector_id": (r.get("connector_id"), connector),
+    "server_url": (str(r.get("server_url") or "").rstrip("/").lower(), server),
+    "test": (r.get("test") is True, test == "1"),
+}
+print(", ".join(f"{k} is {a!r}, not {b!r}" for k, (a, b) in got.items() if a != b))
+PY
+  )
+  [ -z "$mismatch" ] || fail "the run record $RUN_JSON does not match the run: $mismatch" || return 1
+  TRACE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["trace_dir"])' "$RUN_JSON")
   ROOT=$(mktemp -d "${TMPDIR:-/tmp}/goalcup-matrix.XXXXXX") || fail "cannot make a temporary directory" || return 1
   log "judge-copy of run $RUN_ID ($CONNECTOR, entry $ENTRY_ID, strict=$STRICT) on $SERVER, configuration $CFG"
   PRUNED=0

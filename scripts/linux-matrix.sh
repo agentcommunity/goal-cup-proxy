@@ -58,19 +58,21 @@
 # container (the harness runs there, as the same user as every step, with no sandbox, so it could
 # read any mounted file). Its value goes on the standard input of the one `docker exec` (or
 # throwaway container) that needs it, never in an argument, a `-e`, a log or this script's output.
-#   GOALCUP_TEST_APPROVAL_KEY_FILE  the server's test approval key (login and run). The container
-#                                   half keeps it in a private file of the container's own /tmp
-#                                   (not the volume) and removes it once the approvals are sent:
-#                                   for a run, matrix.sh removes it as it opens it for the run's
-#                                   approval (MATRIX_APPROVAL_KEY_ONCE), so it is gone before the
-#                                   harness can start; for a login, before prep opens the harness.
+#   GOALCUP_TEST_APPROVAL_KEY_FILE  the server's test approval key (login and run). It never
+#                                   enters a container: the container half writes each device code
+#                                   to a file in the log directory (`login <code>`, `run <code>`;
+#                                   MATRIX_CODES_FILE), and this script approves it on this
+#                                   machine, the key piped into curl's standard input. At most one
+#                                   code per phase, in order, and none after the run's (which comes
+#                                   before the harness starts).
 #   MATRIX_GITHUB_TOKEN_FILE        a GitHub token for the practice repository (login and run;
 #                                   needed for `-- --test`): a test start asks GitHub, with it,
 #                                   whether the repository is empty. Written into the volume's
 #                                   github.json (scripts/kit_settle.py), where goalcup's git
-#                                   credential helper finds it, so the harness can read it there:
-#                                   it must not be able to push to that repository (one agent
-#                                   push there makes every later test start refuse it).
+#                                   credential helper finds it, so the harness can read it there.
+#                                   Use a fine-grained token with Metadata read only: kit_settle.py
+#                                   refuses one that can push to the repository (one agent push
+#                                   there makes every later test start refuse it).
 #   GOALCUP_TEST_MEMBER_ID          the member approved as
 #                                   (default 00000000-0000-4000-8000-0000000c0de1).
 #   LINUX_MATRIX_SERVER             default https://goalcup-ingest-staging.b-9a5.workers.dev;
@@ -107,14 +109,18 @@
 #                                   (absolute path). None of these four ever enters the cell's
 #                                   container: they reach the evidence of every run, and the
 #                                   database is shared with production. A long run's trace is pruned
-#                                   in the container, so matrix.sh there says NOT-VERIFIED (exit 4).
-#                                   Then, with the harness, goalcup and matrix.sh exited,
-#                                   fetch-run.sh rebuilds the run's server copy in a throwaway
-#                                   container of its own (the image; the checkout read-only, the
-#                                   index and mirror read-only, the URL and token on its standard
-#                                   input, nothing of the cell's), and `matrix.sh --judge-copy` makes
-#                                   the run's own end checks on that copy in the cell's container,
-#                                   which never gets a credential. Its row is printed last.
+#                                   in the container, so matrix.sh there says NOT-VERIFIED (exit 4)
+#                                   and names the run and entry. Then, with the harness, goalcup
+#                                   and matrix.sh exited, fetch-run.sh rebuilds that entry's server
+#                                   copy in a throwaway container of its own (the image; the
+#                                   checkout read-only, the index and mirror read-only, the URL and
+#                                   token on its standard input, nothing of the cell's), and
+#                                   `matrix.sh --judge-copy` makes the run's own end checks on that
+#                                   copy in another throwaway container: the volume and the binaries
+#                                   read-only, no credential, the run, entry, server and mode named
+#                                   by this script. Its row is printed last. If the copy cannot be
+#                                   fetched or judged, the run's NOT-VERIFIED row is printed again
+#                                   with the reason (exit 4): not a FAIL of the run.
 #                                   CLOUDFLARE_ACCOUNT_ID, MATRIX_FETCH_BUCKET (default
 #                                   goalcup-traces-staging) and MATRIX_FETCH_TIMEOUT (default 1800)
 #                                   apply to that fetch. DATABASE_URL or CLOUDFLARE_API_TOKEN in this
@@ -242,11 +248,9 @@ for root in sys.argv[1:]:
 PY
 }
 
-# `goalcup login`, its one device code approved through the test route: the key goes from its
-# private file straight into curl's standard input as a header, as matrix.sh does it. The file is
-# gone when this returns, before prep can open the harness.
-inner_login() { # keyfile
-    keyfile=$1
+# `goalcup login`, its one device code written to MATRIX_CODES_FILE for the host half, which
+# approves it where the key is (approve_codes). The key never enters the container.
+inner_login() {
     mkdir -p "$CFG" && chmod 700 "$CFG" || fail "login: config directory"
     out=$TMPDIR/login.$$
     rm -f "$out" "$out.rc"
@@ -257,22 +261,12 @@ inner_login() { # keyfile
         code=$(tr -d '\r' <"$out" | sed -n 's/.*shows the code \([A-Z]\{4\}-[A-Z]\{4\}\)\..*/\1/p' | head -n 1)
         if [ -z "$approved" ] && [ -n "$code" ]; then
             approved=$code
-            status=$({
-                printf 'Authorization: Bearer '
-                tr -d '\n' <"$keyfile"
-                printf '\n'
-            } | curl -sS --max-time 30 -o /dev/null -w '%{http_code}' -X POST -H @- \
-                -H 'Content-Type: application/json' \
-                -d "{\"user_code\":\"$code\",\"member_id\":\"$GOALCUP_TEST_MEMBER_ID\",\"approve\":true}" \
-                "$LINUX_MATRIX_SERVER/v1/device/approve")
-            echo "linux-matrix: login code approved as $GOALCUP_TEST_MEMBER_ID: HTTP $status"
-            [ "$status" = 200 ] || { kill "$job" 2>/dev/null; fail "login approval (HTTP $status)"; }
+            printf 'login %s\n' "$code" >>"$MATRIX_CODES_FILE" || { kill "$job" 2>/dev/null; fail "login: the codes file"; }
         fi
         [ "$waited" -lt 300 ] || { kill "$job" 2>/dev/null; cat "$out"; fail "login timed out"; }
         sleep 2
         waited=$((waited + 2))
     done
-    forget_secrets
     rc=$(cat "$out.rc")
     [ "$rc" = 0 ] || { cat "$out"; fail "goalcup login exited $rc"; }
     tail -n 1 "$out"
@@ -331,12 +325,11 @@ inner_prepare() { # connector [tokenfile]
     inner_settle "${2:-}"
 }
 
-# The run: matrix.sh, then the owner's model rule. The key's private file goes to matrix.sh,
-# which removes it as it opens it for the run's approval (before the harness can start).
-inner_run() { # keyfile connector [matrix.sh options]
-    keyfile=$1
-    h=$2
-    shift 2
+# The run: matrix.sh (no key: it writes its device codes to MATRIX_CODES_FILE for the host half
+# to approve), then the owner's model rule.
+inner_run() { # connector [matrix.sh options]
+    h=$1
+    shift
     export MATRIX_CONFIG_DIR=$CFG
     # Claude Code asks whether it may trust each new workspace, "No, exit" selected: Down, Enter.
     if [ "$h" = claude-code-cli ] && [ -z "${MATRIX_PRE_PROMPT_KEYS+set}" ]; then
@@ -347,10 +340,8 @@ inner_run() { # keyfile connector [matrix.sh options]
     marker=$TMPDIR/run-start.$$
     : >"$marker"
     log=/logs/matrix-$h${LINUX_MATRIX_CELL:+-$LINUX_MATRIX_CELL}-$(date -u +%Y%m%dT%H%M%SZ).log
-    GOALCUP_TEST_APPROVAL_KEY_FILE=$keyfile MATRIX_APPROVAL_KEY_ONCE=1 \
-        sh /src/scripts/matrix.sh "$h" "$LINUX_MATRIX_SERVER" --log "$log" "$@" >"$TMPDIR/matrix.$$.out"
+    sh /src/scripts/matrix.sh "$h" "$LINUX_MATRIX_SERVER" --log "$log" "$@" >"$TMPDIR/matrix.$$.out"
     rc=$?
-    forget_secrets
     row=$(grep "^$h " "$TMPDIR/matrix.$$.out" | tail -n 1)
     if ! inner_model_check "$h" "$marker" >"$TMPDIR/model.$$.out" 2>&1; then
         # A run that broke the owner rule never shows a PASS row: matrix.sh's row says FAIL.
@@ -366,13 +357,6 @@ inner_run() { # keyfile connector [matrix.sh options]
     exit "$rc"
 }
 
-# The run id of the newest run record on the volume: the run that just ended.
-inner_last_run() {
-    rj=$(ls -t "$CFG"/runs/*/run.json 2>/dev/null | head -n 1)
-    [ -n "$rj" ] || exit 1
-    python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["run_id"])' "$rj"
-}
-
 # A command that takes a secret reads it first (secret_in), before anything else runs.
 case ${1:-} in
 inner-*) trap forget_secrets EXIT ;;
@@ -380,7 +364,7 @@ esac
 case ${1:-} in
 inner-home-config) inner_home_config "$2"; exit 0 ;;
 inner-home-files) inner_home_files "$2"; exit 0 ;;
-inner-login) secret_in keyfile; inner_home_config "$2"; inner_login "$keyfile"; exit 0 ;;
+inner-login) inner_home_config "$2"; inner_login; exit 0 ;;
 inner-home-ready) inner_home_ready "$2"; exit 0 ;;
 inner-model-check) inner_model_check "$2" "$3"; exit $? ;;
 inner-settle)
@@ -395,8 +379,7 @@ inner-prepare)
     inner_prepare "$2" "$tokenfile"
     exit 0
     ;;
-inner-last-run) inner_last_run; exit $? ;;
-inner-run) shift; secret_in keyfile; inner_run "$keyfile" "$@" ;;
+inner-run) shift; inner_run "$@" ;;
 esac
 
 # ------------------------------------------------------------------ on this machine
@@ -618,13 +601,16 @@ unlock() {
     [ "$locked" = 0 ] || rmdir "$lock" 2>/dev/null
     locked=0
 }
-# The throwaway fetch container and the server copy's file on this machine, once made.
+# The throwaway fetch or judge container and the server copy's file on this machine, once made.
 fetcher=""
 copyfile=""
+# The file in the log directory the container half writes its device codes to (approve_codes).
+codes=.codes-$h${cell:+-$cell}-$$
 on_exit() {
     [ "$created" = 0 ] || docker rm -f "$name" >/dev/null 2>&1
     [ -z "$fetcher" ] || docker rm -f "$fetcher" >/dev/null 2>&1
     [ -z "$copyfile" ] || rm -f "$copyfile" "$copyfile.out"
+    rm -f "$logdir/$codes" "$logdir/$codes.out"
     unlock
 }
 trap on_exit EXIT
@@ -707,27 +693,54 @@ mkdir -p /tmp/copy &&
 
 # The fetch credentials, one line each, for FETCH_IN_CONTAINER's standard input.
 fetch_secrets() {
-    [ -z "$dbfile" ] || tr -d '\n' <"$dbfile"
+    [ -z "$dbfile" ] || tr -d '\r\n' <"$dbfile"
     echo
-    [ -z "$cftokenfile" ] || tr -d '\n' <"$cftokenfile"
+    [ -z "$cftokenfile" ] || tr -d '\r\n' <"$cftokenfile"
     echo
+}
+
+# The device codes the container half asks this machine to approve (MATRIX_CODES_FILE, one
+# `<phase> <code>` line each, under the log directory), approved here with the key piped from its
+# file into curl's standard input: the key never enters a container. One code per phase, in the
+# order named, while the job runs; none after the last (the run's approval comes before its
+# harness starts, so nothing the harness writes is ever approved).
+approve_codes() { # job codes-file phase...
+    ac_job=$1
+    ac_file=$2
+    shift 2
+    while [ $# -gt 0 ] && kill -0 "$ac_job" 2>/dev/null; do
+        code=$(sed -n "s/^$1 \([A-Z][A-Z][A-Z][A-Z]-[A-Z][A-Z][A-Z][A-Z]\)\$/\1/p" "$ac_file" 2>/dev/null | head -n 1)
+        if [ -n "$code" ]; then
+            status=$({
+                printf 'Authorization: Bearer '
+                tr -d '\r\n' <"$keyfile"
+                printf '\n'
+            } | curl -sS --max-time 30 -o /dev/null -w '%{http_code}' -X POST -H @- \
+                -H 'Content-Type: application/json' \
+                -d "{\"user_code\":\"$code\",\"member_id\":\"$member\",\"approve\":true}" \
+                "$server/v1/device/approve")
+            echo "linux-matrix: $1 code $code approved on this machine as $member: HTTP $status"
+            [ "$status" = 200 ] || fail "$1 approval (HTTP $status)"
+            shift
+        fi
+        sleep 1
+    done
 }
 
 # A long run's server copy, after the run (matrix.sh in the cell said NOT-VERIFIED: its trace was
 # pruned and the container has no fetch credential). The harness, goalcup and matrix.sh have
-# exited. fetch-run.sh rebuilds the copy of the run in a throwaway container from the same image:
+# exited. fetch-run.sh rebuilds the entry's copy in a throwaway container from the same image:
 # the checkout, the chunk index and the bucket mirror read-only, the credentials on its standard
-# input, nothing of the cell's (no volume, no binaries, no logs), so nothing the agent could have
-# left runs beside them. The copy, which holds no credential, then goes into the cell's container,
-# and `matrix.sh --judge-copy` makes the run's own end checks on it there. Its row is the last line.
-server_copy() {
-    run_id=$(docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-last-run) ||
-        fail "server copy: no run record on volume $volume"
-    case $run_id in
-    r[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
-    *) fail "server copy: the newest run record names no run id" ;;
-    esac
-    copyfile=$(mktemp "${TMPDIR:-/tmp}/goalcup-linux-matrix-copy.XXXXXX") || fail "server copy: a temporary file"
+# input, nothing of the cell's. Then `matrix.sh --judge-copy` makes the run's own end checks on it
+# in another throwaway container: the cell's volume and the binaries read-only, a home of its own,
+# no credential, and the run, entry, connector, server and mode named here (the run record, which
+# the agent could write, must agree). Its row is the last line. If the copy cannot be fetched or
+# judged, the run stays NOT-VERIFIED: its row again, with the reason, exit 4.
+server_copy() { # run entry not-verified-row
+    run_id=$1
+    entry_id=$2
+    nv_row=$3
+    copyfile=$(mktemp "${TMPDIR:-/tmp}/goalcup-linux-matrix-copy.XXXXXX") || copy_fail "a temporary file"
     set -- -v "$PWD":/src:ro
     [ -z "$fetch_index" ] || set -- "$@" -v "$fetch_index:$FETCH_INDEX_IN:ro"
     [ -z "$fetch_store" ] || set -- "$@" -v "$fetch_store:$FETCH_STORE_IN:ro"
@@ -738,24 +751,37 @@ server_copy() {
     [ -z "$fetch_store" ] || set -- "$@" --store "$FETCH_STORE_IN"
     fetcher=$name-fetch
     docker rm -f "$fetcher" >/dev/null 2>&1
-    echo "linux-matrix: server copy of run $run_id (fetch-run.sh in a container of its own, at most ${fetch_timeout}s)"
-    fetch_secrets | docker run --rm -i --name "$fetcher" --cpus="$cpus" "$@" "$run_id" >"$copyfile" &
-    wait $! || fail "server copy: fetch-run.sh failed (its words above)"
+    echo "linux-matrix: server copy of entry $entry_id (fetch-run.sh in a container of its own, at most ${fetch_timeout}s)"
+    fetch_secrets | docker run --rm -i --name "$fetcher" --cpus="$cpus" "$@" "$entry_id" >"$copyfile" &
+    wait $! || copy_fail "fetch-run.sh failed (its words above)"
     fetcher=""
-    dest=/tmp/goalcup-servercopy.$$
-    step_in "server copy into $name" "$copyfile" "$name" \
-        sh -c 'rm -rf "$1" && mkdir -p "$1" && tar -xf - -C "$1"' sh "$dest"
     log=/logs/matrix-$h${cell:+-$cell}-copy-$(date -u +%Y%m%dT%H%M%SZ).log
-    echo "linux-matrix: judge the run on its server copy"
-    docker exec -u dev -e MATRIX_SERVER_COPY="$dest" "$name" \
-        sh /src/scripts/matrix.sh --judge-copy "$CFG" "$run_id" --log "$log" >"$copyfile.out" &
+    set -- "$h" "$server" --judge-copy "$CFG" "$run_id" "$entry_id" --log "$log"
+    case " $extra " in *" --test "*) set -- "$@" --test ;; esac
+    echo "linux-matrix: judge the run on its server copy (a container of its own)"
+    fetcher=$name-judge
+    docker rm -f "$fetcher" >/dev/null 2>&1
+    docker run --rm -i --name "$fetcher" --cpus="$cpus" -u dev \
+        -v "$PWD":/src:ro -v "$target":/target:ro -v "$volume":$VOL:ro -v "$logdir":/logs \
+        -e HOME=/tmp -e TMPDIR=/tmp -e MATRIX_BIN_DIR=/target/debug \
+        ${MATRIX_EXPECT_FILES:+-e MATRIX_EXPECT_FILES="$MATRIX_EXPECT_FILES"} \
+        "$img" sh -c 'd=$(mktemp -d) && tar -xf - -C "$d" && MATRIX_SERVER_COPY=$d exec sh /src/scripts/matrix.sh "$@"' \
+        sh "$@" <"$copyfile" >"$copyfile.out" &
     wait $!
     rc=$?
+    fetcher=""
     row=$(grep "^$h " "$copyfile.out" | tail -n 1)
+    [ -n "$row" ] || copy_fail "matrix.sh --judge-copy gave no row (exit $rc)"
     cat "$copyfile.out"
     echo "linux-matrix: log on the host: $logdir/$(basename "$log")"
-    echo "linux-matrix: ${row:-no row (matrix.sh --judge-copy exit $rc)}"
+    echo "linux-matrix: $row"
     exit "$rc"
+}
+# The server copy was not had: the run stays as matrix.sh in the cell judged it.
+copy_fail() { # why
+    echo "linux-matrix: the server copy was not checked: $*"
+    echo "linux-matrix: $nv_row"
+    exit 4
 }
 
 cpus=$(docker info --format '{{.NCPU}}' 2>/dev/null)
@@ -773,7 +799,7 @@ if [ "$action" = build ]; then
         -v "$PWD":/src:ro -v "$registry":/usr/local/cargo/registry -v "$target":/target \
         "$img" sleep infinity >/dev/null || fail "container"
     created=1
-    docker exec -u 0 "$name" chown dev /target || fail "target volume"
+    docker exec -u 0 "$name" chown -R dev /target || fail "target volume"
     step "build" -w /src "$name" cargo build --offline --locked --workspace
     echo "linux-matrix: built (images for $built; binaries in volume $target)"
     exit 0
@@ -799,8 +825,11 @@ old=$(docker ps -aq --filter "label=$label")
 [ -z "$old" ] || docker rm -f $old >/dev/null 2>&1
 # --init: something must reap orphans, as on a real host. No --privileged: nothing is mounted
 # inside; the volume is the Docker host's own ext4.
+# The registry only when this run builds (a prebuilt run needs no cargo).
+registry_mount=""
+[ "$prebuilt" = 1 ] || registry_mount="$registry:/usr/local/cargo/registry"
 docker run -d --name "$name" --label "$label" --init --cpus="$cpus" \
-    -v "$PWD":/src:ro -v "$registry":/usr/local/cargo/registry -v "$target_mount" \
+    -v "$PWD":/src:ro ${registry_mount:+-v "$registry_mount"} -v "$target_mount" \
     -v "$volume":$VOL -v "$logdir":/logs "$@" \
     -e HOME=$VOL/home -e TMPDIR=$VOL/tmp -e GOALCUP_CONFIG_DIR=$CFG \
     -e GOALCUP_CONNECTORS_DIR=/src/connectors -e LINUX_MATRIX_SERVER="$server" \
@@ -810,10 +839,9 @@ docker run -d --name "$name" --label "$label" --init --cpus="$cpus" \
     -e PATH=$BIN:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     -w $VOL "$img" sleep infinity >/dev/null || fail "container"
 created=1
-owned="$VOL $VOL/home $VOL/tmp $VOL/work"
-[ "$prebuilt" = 1 ] || owned="/target $owned"
-docker exec -u 0 "$name" sh -c "mkdir -p $VOL/home $VOL/tmp $VOL/work && chown dev $owned" ||
+docker exec -u 0 "$name" sh -c "mkdir -p $VOL/home $VOL/tmp $VOL/work && chown dev $VOL $VOL/home $VOL/tmp $VOL/work" ||
     fail "volume"
+[ "$prebuilt" = 1 ] || docker exec -u 0 "$name" chown -R dev /target || fail "target volume"
 
 if [ "$prebuilt" = 1 ]; then
     docker exec -u dev "$name" sh -c 'test -x /target/debug/goalcup && test -x /target/debug/goalcup-daemon && test -x /target/debug/goalcup-verify' ||
@@ -821,6 +849,8 @@ if [ "$prebuilt" = 1 ]; then
     echo "linux-matrix: prebuilt binaries from volume $target (read-only)"
 else
     step "build" -w /src "$name" cargo build --offline --locked --workspace
+    # The binaries the harness must not change (it runs as dev): root's from here on.
+    docker exec -u 0 "$name" chown -R root:root /target || fail "target volume"
 fi
 # Installed as a participant installs them (packaging/install.sh: ~/.local/bin), so the harness and
 # its login shells find goalcup where a real install puts it, not in the build's /target/debug.
@@ -832,20 +862,25 @@ if [ "$action" = run ]; then
     else
         echo "linux-matrix: run (about 12 minutes; the practice run ends at the server's deadline)"
     fi
-    # The kit's GitHub token, then the approval key, each on the standard input of the one step
-    # that reads it.
+    # The kit's GitHub token on the standard input of the one step that reads it.
     step_in "prepare" "${tokenfile:-/dev/null}" "$name" sh /src/scripts/linux-matrix.sh inner-prepare "$h" ${tokenfile:+token}
-    set --
-    [ -z "${MATRIX_PROMPT_FILE:-}" ] || set -- -e MATRIX_PROMPT_FILE=$PROMPT_IN
+    set -- -e MATRIX_CODES_FILE=/logs/$codes
+    [ -z "${MATRIX_PROMPT_FILE:-}" ] || set -- "$@" -e MATRIX_PROMPT_FILE=$PROMPT_IN
+    runout=$logdir/$codes.out
     # $extra holds checked words only (options and digits), so it splits as meant.
-    docker exec -i -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" $extra <"$keyfile" &
+    docker exec -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" $extra >"$runout" &
     run_job=$!
+    approve_codes "$run_job" "$logdir/$codes" login run
     wait "$run_job"
     rc=$?
     run_job=""
+    cat "$runout"
     # NOT-VERIFIED (4): a long run whose server copy the container could not fetch, by design.
     [ "$rc" = 4 ] && [ "$fetch_ready" = 1 ] || exit "$rc"
-    server_copy
+    nv_row=$(tail -n 1 "$runout" | sed 's/^linux-matrix: //')
+    ids=$(sed -n 's/^run: \(r[0-9a-f]\{16\}\) entry: \(e[0-9a-f]\{16\}\)$/\1 \2/p' "$runout" | tail -n 1)
+    [ -n "$ids" ] || copy_fail "matrix.sh named no run and entry"
+    server_copy $ids "$nv_row"
 fi
 
 loginlog=$logdir/login-$h${cell:+-$cell}-$(date -u +%Y%m%dT%H%M%SZ).log
@@ -858,7 +893,11 @@ record_home_files() {
     docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-files "$h" | tee -a "$loginlog"
 }
 
-step_in "login" "$keyfile" "$name" sh /src/scripts/linux-matrix.sh inner-login "$h"
+echo "linux-matrix: login"
+docker exec -u dev -e MATRIX_CODES_FILE=/logs/$codes "$name" sh /src/scripts/linux-matrix.sh inner-login "$h" &
+login_job=$!
+approve_codes "$login_job" "$logdir/$codes" login
+wait "$login_job" || fail "login"
 if [ "$(docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-ready "$h")" = yes ]; then
     settle
     record_home_files
