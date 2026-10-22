@@ -57,16 +57,25 @@ pub fn refuse_inside_harness(in_harness: bool) -> Result<(), CliError> {
 
 /// `goalcup seal` as a person types it in their own terminal: ask first unless `yes`, seal, keep
 /// the technical lines in the run's `host.log`, and say in plain words what happened and what
-/// to do next. `input` is where the answer is read from (the terminal).
+/// to do next. `input` is where the answer is read from (the terminal). `terminal`: `input` is
+/// a terminal. Without one and without `yes` nothing is asked or read (a script's open pipe
+/// would never answer): it is refused, and the refusal names `--yes`.
+#[allow(clippy::too_many_arguments)]
 pub fn seal_for_person(
     client: &dyn DaemonClient,
     connectors: &Path,
     cfg: &Path,
     entry_id: &str,
     yes: bool,
+    terminal: bool,
     input: &mut dyn std::io::BufRead,
     out: &mut dyn std::io::Write,
 ) -> Result<(), CliError> {
+    if !yes && !terminal {
+        return Err(CliError::Refused(
+            crate::participant::seal_needs_terminal().to_string(),
+        ));
+    }
     let facts = PartFacts::of(cfg, connectors, entry_id);
     if !yes {
         confirm(
@@ -659,6 +668,7 @@ mod tests {
                 &cfg,
                 &part,
                 false,
+                true,
                 &mut answer.as_bytes(),
                 &mut out,
             )
@@ -682,6 +692,7 @@ mod tests {
             &cfg,
             &part,
             true,
+            false,
             &mut "no\n".as_bytes(),
             &mut out,
         )
@@ -712,11 +723,48 @@ mod tests {
             &cfg,
             &part,
             false,
+            true,
             &mut "yes\n".as_bytes(),
             &mut Vec::new(),
         )
         .unwrap();
         assert_eq!(seals(&mock), 2);
+    }
+
+    /// With no terminal to ask in (a script, a pipe that never answers) and no `--yes`, nothing
+    /// is asked, read or stopped, and the refusal names `goalcup seal --yes`.
+    #[test]
+    fn a_seal_without_a_terminal_or_yes_stops_nothing_and_names_yes() {
+        use crate::daemon::MockDaemonClient;
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("cfg");
+        let mock = MockDaemonClient::armed_ok(tmp.path(), "fake");
+        let part = mock.info().entry_id;
+        crate::entries::write_entry(&cfg, &mock.info()).unwrap();
+        let far = crate::run::now_unix() + 3_600;
+        crate::run::tests_support::continuable_run(&cfg, "run-open", &part, far);
+
+        let mut out = Vec::new();
+        // A "yes" waiting on the input is not read: no terminal means no question.
+        let refused = super::seal_for_person(
+            &mock,
+            &tmp.path().join("no-connectors"),
+            &cfg,
+            &part,
+            false,
+            false,
+            &mut "yes\n".as_bytes(),
+            &mut out,
+        )
+        .unwrap_err();
+        assert_eq!(refused.exit_code(), 1);
+        assert!(
+            refused.to_string().contains("goalcup seal --yes"),
+            "{refused}"
+        );
+        assert!(out.is_empty(), "{}", String::from_utf8_lossy(&out));
+        let seals = mock.calls().iter().filter(|c| *c == "seal_capture").count();
+        assert_eq!(seals, 0);
     }
 
     /// `goalcup seal` on an entry the tracker could not reopen says what `goalcup doctor` says:

@@ -690,6 +690,7 @@ fn seal(entry: Option<String>, yes: bool) -> Result<(), CliError> {
         &cfg,
         &entry_id,
         yes,
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
         &mut std::io::stdin().lock(),
         &mut std::io::stdout(),
     )?;

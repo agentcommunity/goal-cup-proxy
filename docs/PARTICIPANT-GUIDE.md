@@ -348,7 +348,8 @@ A run can be continued only on the machine that started it. Goal Cup Proxy never
 on its own.
 
 **Stopping the agent yourself: `goalcup seal`.** Run it from another terminal, never inside the
-agent's session. It stops the agent and ends the current part. It does not end the run: the run
+agent's session. It asks first: type `yes`. (`goalcup seal --yes` skips the question; a script
+must use it.) Then it stops the agent and ends the current part. It does not end the run: the run
 stays open until its deadline, and `goalcup continue` goes on with it. When the agent's work is
 done, you need no extra step. Leave it; the run ends by itself at the deadline.
 
