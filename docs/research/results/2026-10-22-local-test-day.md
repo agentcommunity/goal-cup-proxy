@@ -135,54 +135,51 @@ larger.
 - Short 18-19 Oct Codex runs wrote about 46 MB in 5-8 minutes, mostly connection open/end records
   (about 17k each) at start-up; not a rate to project.
 
-## Fixes made today
+## Fixes made today (all merged into `smart/zen-gates-d9tmbh`)
 
-- ea5c30f9: reserve test, campaign build order, check-sql locale.
-- Fix plan v1 ([plan](2026-10-22-fix-plan.md), merged 9fec42e6): one GitHub token file for test
-  cells (`scripts/kit_settle.py`), host cells get the cheapest-model rules and the model check,
-  Hermes reports its version (verified live: "Hermes Agent v0.19.0"), docs say public repos.
-- Fix plan v2 ([plan](2026-10-22-fix-plan-v2.md)): in progress in two worktrees
-  (`fix/v2-product`, `fix/v2-kit`).
+| Plan | What it fixed | Proven live? |
+|---|---|---|
+| ea5c30f9 | reserve test asserted the wrong thing; campaign build order; check-sql locale | gate |
+| [v1](2026-10-22-fix-plan.md) | kit token file for test cells; host model rules; Hermes reports its version | Hermes version yes; token path no (no token) |
+| [v2](2026-10-22-fix-plan-v2.md) | **brotli/zstd replies decoded** (every Claude run had gaps); macOS exiting-root stop; bracketed paste; "agent worked" check; Claude/Amp first-run state; spaced starts | yes: Claude 0 gaps Mac and Docker |
+| [v3](2026-10-22-fix-plan-v3.md) | long runs verified on their server copy; drill pass lines for the 30-minute upload; honest upload status; long workload; subagent attribution (Amp, Codex) | server copies verified by hand; matrix path not run |
+| [v4](2026-10-22-fix-plan-v4.md) | no permission prompts in test cells; "agent worked" = workspace changed; Docker fetch settings; **D67** (participants set up their own harness) | yes: Docker Codex and Claude work |
+| [v5](2026-10-22-fix-plan-v5.md) | Goal Cup's run home restores the PATH it handed the harness (Codex login shell on Linux lost `goalcup` and the participant's tools); skill backstop; kit installs goalcup like install.sh; two flaky tests | probe in a Debian container |
+| [v6](2026-10-22-fix-plan-v6.md) | **Goal Cup's home lock collided with Claude Code's token-refresh lock**: a start or continue with an expired token stalled | unit tests only |
+| [v7](2026-10-22-fix-plan-v7.md) | kit settles Claude Code's auto-mode offer | unit test only |
+| [v8](2026-10-22-fix-plan-v8.md) | [`docs/HARNESS-SETUP.md`](../../HARNESS-SETUP.md); `goalcup prep` links to it | links and tests |
+| [v9](2026-10-22-fix-plan-v9.md) | `goalcup mcp`: time-left as an MCP tool the agent calls (owner-approved); prep prints the snippet | Claude Code registered it ("Connected"); no run called it yet |
+
+Gates: `gate.sh fast` PASS after every merge (last on 30299446). `gate.sh full` on ad030750: all
+2245 Rust tests pass; two flaky Python tests (fixed in v5). A code review of all changes found no
+high-severity defect; six small findings are being fixed on `fix/review`.
 
 ## For the cloud agent
 
-In priority order. Evidence is aggregates; raw traces stay on the owner's Mac.
+In priority order. Evidence is aggregates; raw traces stay on the owner's Mac. Findings list (local):
+`~/goalcup-campaign/FINDINGS.md` on the owner's Mac.
 
-1. **Claude Code replies are brotli; the proxy cannot decode them (every Claude run "incomplete").**
-   `api.anthropic.com` answers `content-encoding: br` when offered (curl, 22 Oct). The proxy decodes
-   identity/gzip/deflate only (`crates/goalcup-cli/src/proxy/http.rs` `Decoder::for_codings`), so
-   each reply is an `unsupported_encoding` gap (mac-claude and lx-claude: 2 gaps each, the replies to
-   the start-up probe). Fix in plan v2 K5 (brotli-decompressor, plus zstd). Check that branch first.
-2. **Codex cannot commit or push without a human approving; in a container it cannot run anything.**
-   In Docker the sandbox fails to start (`bwrap: No permissions to create a new namespace`), so
-   every command needs an approval (lx-codex retest, 00:47Z). On the Mac only `.git` is blocked. Codex's default `workspace-write`
-   sandbox makes `.git` read-only: `git add` failed with `Operation not permitted` on
-   `.git/index.lock`; Codex then asked for approval and waited 8.7 of 10 minutes (mac-codex). The
-   connector passes no sandbox option (D57); RULES let the participant type only "keep going".
-   Owner decision: connector arguments, a RULES change allowing harness permission answers, or
-   participant guidance. Without it, a Codex participant has no judged commit.
-3. **A matrix row passes without any agent work.** lx-codex and lx-amp passed with 0 model turns.
-   Plan v2 K7 adds the check; K6 (bracketed paste: Codex 0.153 on the Linux pty split the 1,443-char
-   prompt into a 1,024-char paste plus text, and the Enter became a newline) and K8 (Claude Code's
-   "Try the new fullscreen renderer?" dialog took the prompt; Amp welcome state) fix the causes.
-4. **macOS: harness stop sealed Unresolved (ProcessAuthorityUnavailable) although it exited**
-   (mac-codex, mac-amp). A root caught in the ~30-45 ms exiting window (`ps` state `E`,
-   `proc_pidinfo` already failing) is refused as recycled in
-   `crates/goalcup-daemon/src/terminate/authority.rs` (~394-406). Plan v2 K10.
-5. **Kit**: campaign starts must be spaced (HTTP 429); `campaign.py login` settles only when prep
-   exits 0 (prep exits 1 while any step is todo); Amp's version line holds a relative age.
-   (All three fixed on `fix/v2-kit`.)
-6. **Long runs** ([plan v3](2026-10-22-fix-plan-v3.md)): the matrix must verify a pruned run's
-   server copy (L1), the drill pass line must match the 30-minute upload timer (L2), `goalcup
-   status` must stop saying "up to date" while records wait (L3), long cells need a long workload
-   (L4), and the research report must attribute subagents (L5: Amp parent ids, Codex native
-   message types and `spawn_agent`, Hermes children).
-8. **Codex cannot find `goalcup` in a Docker cell** (lx-codex v4 rerun): `goalcup time-left` and
-   `seal` answered `/bin/sh: 1: goalcup: not found`, while Claude Code in the same kind of cell
-   found it. Check Codex's `shell_environment_policy` and the PATH handed to the harness, and
-   whether a real Linux install (binary on the participant's PATH) has the same problem.
-7. **Amp cost**: Task subagents ran `claude-opus-5-5` while the thread's mode was `low`. Worth a
-   line in the Amp participant notes and in the cheapest-settings rule.
-6. Still to run when the owner is back: the token, then test-run cells with drills via
-   `campaign.py`, full-flow cells on the gc-test repositories (judged commit), Claude Code after K5
-   and K8, lx-codex after K6.
+1. **Prove v5, v6, v7 and v9 in live cells.** Rerun mac-claude and lx-claude with an expired token
+   (v6: must start working without anyone typing; v7: no auto-mode dialog), a Docker Codex cell
+   (v5: `goalcup time-left` answers inside Codex), and one cell per harness with the `goalcup mcp`
+   tool configured from prep's snippet (v9; Codex/Amp/Hermes "not measured").
+2. **The competition path has never run.** Needs the owner's fine-grained token
+   (`~/.goalcup-secrets/gc-test-token`, nembal/gc-test-* repos, public): test runs via
+   `campaign.py` with drills, full-flow cells (pushes, `GOALCUP.md`, judged commit equals GitHub's
+   last push before the deadline), staging `GITHUB_TOKEN` reading the repos.
+3. **Codex in a container has no working sandbox** (`bwrap: No permissions to create a new
+   namespace`); with Codex's defaults every command waits for an approval. D67: participants set
+   `approval_policy`/`sandbox_mode` themselves; HARNESS-SETUP.md says how. Verify the guide's Codex
+   section on a real Linux install.
+4. **Long workloads end early with cheap models** (Hermes 32 commits in 20 min, then DONE.md),
+   so drills often hit an idle chain. Use a task without a natural end for drill cells.
+5. **Token expiry during a run** is proven only for Claude (refresh works mid-run). Codex and Amp:
+   not measured.
+6. **WSL2**: not run (no Windows machine). Needs a Windows 11 ARM VM with nested virtualization
+   (the Mac is an M4 Pro) or a cloud Windows VM.
+7. **Staging is set to `PRACTICE_RUN_MINUTES=120`** (deploy `--var`); a plain
+   `wrangler deploy --env staging` restores 10.
+8. **Owner items**: website PR nembal/agentcommunity_page#319 (migration file, already applied);
+   review the new dependency `brotli-decompressor` 5.0.3 (BSD-3-Clause/MIT); D67 has a bullet added
+   by an implementer (prep links the guide); Amp's Task subagents ran `claude-opus-5-5` in mode
+   `low` (cost note in the guide).
