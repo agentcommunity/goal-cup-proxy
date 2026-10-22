@@ -88,7 +88,9 @@ most runs have one, and `goalcup continue` starts the next. Every flag is in `go
 `goalcup-verify --capture-integrity <trace>` checks a sealed trace (0 complete and valid,
 1 incomplete or not sealed, 2 invalid, 3 no usable report). Exit 0 says the record is consistent,
 not that the run was good. `goalcup-verify --research-json <trace> --output <new.ndjson>` writes a
-private research report. Every command and exit code: [OPERATING](docs/OPERATING.md).
+private research report. `goalcup-verify --stats <trace>… --output <new.json>` writes one run's
+numbers (tokens, models, tool calls and errors, subagents, "keep going") and no text, with the same
+exit codes. Every command and exit code: [OPERATING](docs/OPERATING.md).
 
 ## How it works
 
@@ -106,7 +108,7 @@ harness  --HTTPS_PROXY-->  recording proxy (in goalcup, loopback)  -->  model pr
                   goalcup start uploads chunks and heartbeats  -->  Goal Cup server
                                                      (signs a start receipt and an ack per chunk)
 
-goalcup-verify reads a sealed trace offline: integrity check and research report.
+goalcup-verify reads a sealed trace offline: integrity check, research report and run stats.
 ```
 
 - **The wire leg.** The harness reaches its model through a local recording proxy, set by

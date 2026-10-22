@@ -144,6 +144,84 @@ not Rust type or variant names. Any Rust field addition that would enter researc
 requires a research-report schema bump or an explicit projection layer; Rust's
 `#[non_exhaustive]` affects matching and construction, not serialized compatibility.
 
+## Run stats (`--stats`)
+
+`goalcup-verify --stats TRACE [TRACE…] --output STATS.json` reads one run's traces, in segment
+order, and writes one JSON object of numbers. The library function is
+`goalcup_verifier::run_stats(traces, options)`. It runs the same decoders as the research report,
+but its sink keeps only counters and bounded sets of hashed ids, shared across the run's traces, so
+an id repeated across a `continue` counts once. No observation is written. It is meant as the first
+output of the server's verify job (not built); a participant can run it on their own trace too.
+
+Invocation: `--output` names a new file ending in `.json`, outside every trace, created `0600`. An
+existing file is refused. At most 128 traces, each named once. Stdout stays empty; stderr gets one
+summary line. `--dev-key` keeps its meaning.
+
+Exit codes: 0 every trace complete and valid and no decoder degraded; 1 a trace incomplete or
+unsealed, or a decoder degraded; 2 a trace with invalid evidence (its validated prefix is still
+counted); 3 no usable file: a refused invocation, a trace that could not be read or is not v5, the
+same trace twice. On exit 3 no file is left behind.
+
+Schema 1, with example numbers:
+
+```json
+{
+  "type": "run_stats", "schema_version": 1, "verifier_version": "0.7.0",
+  "traces": [{"entry_id": "e0123456789abcdef", "exit_code": 1, "integrity": "incomplete",
+              "sealed": false, "validated_records": 812345, "validated_bytes": 4123456789}],
+  "analysis": {"state": "partial", "degraded": ["openai-chat-completions"]},
+  "tokens": {"source": "wire", "responses": 4210, "responses_without_usage": 3,
+             "input": 1234567, "cache_read": 98765432, "cache_write": 2345678, "output": 3456789,
+             "reasoning": null, "children_flagged": 0,
+             "other_source": {"source": "native", "responses": 4100, "responses_without_usage": 0,
+                              "input": 1200000, "cache_read": 97000000, "cache_write": 2300000,
+                              "output": 3400000, "reasoning": null}},
+  "models": [{"model": "claude-opus-5-5", "responses": 4000}],
+  "models_omitted": 0,
+  "tools": {"calls": 5210, "calls_without_id": 0, "results": 5190, "errors": 312,
+            "error_marking": "is_error"},
+  "subagents": {"spawned": 14},
+  "provider_errors": {"total": 12, "by_code": {"overloaded_error": 3, "rate_limit_error": 9}},
+  "human_messages": {"source": "native", "total": 9, "keep_going": 7, "other": 1},
+  "bounds": {"ids_over_budget": false}
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `traces[]` | One per input trace, in input order: `entry_id` (`null` unless a short id of letters, digits and `._:-`), its own `exit_code`, `integrity`, `sealed`, `validated_records`, `validated_bytes`. |
+| `analysis` | `state` as in the research summary (`available`, `partial`, `unavailable`); `degraded` lists the decoders that failed or said `incomplete` in any trace. |
+| `tokens.source` | `wire` when a wire decoder stated usage and none degraded; else `native` when a session file did; else `wire` if it stated any; else `none`, and every count is `null` (unknown, not 0). |
+| `tokens` counts | `responses` (with usage), `responses_without_usage` (seen, never stated usage), `input` (input not served from cache), `cache_read`, `cache_write`, `output`, `reasoning` (`null` when the source never states it). |
+| `tokens.other_source` | The same counts from the other source, or `null`. Never added to the first. |
+| `tokens.children_flagged` | Codex child or fork sessions whose totals are left out: whether they include the parent's context is unmeasured. |
+| `models` | Response-scoped model names of the token source (with no source, the wire if it decoded anything, else the session files), one per response id; at most 16 by `responses` then name. A name is kept when it is 1 to 64 bytes of printable ASCII. |
+| `models_omitted` | Responses whose model is not listed: a name not kept, or past the 16. |
+| `tools.calls` | Distinct supplied tool call ids over every decoder (native and wire share ids), plus `calls_without_id` from the token source. |
+| `tools.results` | Distinct tool call ids with a result, however often requests replay it. A result with no id is not counted. |
+| `tools.errors` | Distinct tool call ids with a result the harness marked an error: `is_error: true` (Claude Code, Anthropic wire) or a shell `exit_code` other than 0 (Amp). `null` when `error_marking` is `none`. |
+| `tools.error_marking` | `is_error`, `exit_code`, `both` or `none`: whether this run's decoders that emitted tool facts read an error flag at all. Codex and Hermes do not today. |
+| `subagents.spawned` | Distinct ids of `Task` and `Agent` calls (Claude Code, Anthropic wire, Amp) and Codex `CollabAgentToolCall` items. |
+| `provider_errors` | `error` observations of the token source, once per supplied id: `total`, and `by_code` (the safe `code`, `error_type`, `type` or `subtype` token, at most 16, the rest under `other`). A hook's blocked prompt is not counted. |
+| `human_messages` | Native session files only. `total` counts distinct supplied ids; the first is the prompt; `keep_going` counts the rest whose text is exactly "keep going" after trimming, lower-casing and dropping end punctuation; `other` the rest. `source: none` and `null` counts when no session file was decoded. |
+| `bounds.ids_over_budget` | `true` when the run's 4 million kept ids ran out; counting then goes on without de-dup. |
+
+The token rules, per decoder, all keyed by the supplied id and taking each count's largest
+snapshot, so a repeated or cumulative snapshot counts once:
+
+| Decoder | One count per | Counts |
+|---|---|---|
+| `anthropic-messages` | message id | input and cache from `message_start`; output from the last `message_delta` (cumulative), else `message_start`. A delta with no id is not counted. |
+| `openai-responses` | response id | the terminal event's usage; `input` = `input_tokens` minus `input_tokens_details.cached_tokens`; `reasoning` from `output_tokens_details`. |
+| `openai-chat-completions` | response id | the last usage chunk; `input` = `prompt_tokens` minus cached (`prompt_tokens_details.cached_tokens` or `prompt_cache_hit_tokens`). |
+| `amp-thread-jsonrpc` | `messageId` | the last snapshot: `inputTokens`, `outputTokens`, `cacheCreationInputTokens`, `cacheReadInputTokens`. |
+| `claude-code-native` | `message.id` | Claude Code repeats the usage on every content-block line; counted once. |
+| `codex-native` | session | the last cumulative `total_token_usage`; per-call `last_token_usage` is never summed. |
+
+A usage with no id counts as a response of its own. Nothing in the file is text from the run: no
+prompt, message, tool name, path, host, URL or id other than `entry_id`. It is bounded (64 KiB)
+and its keys are sorted, so the same traces give the same bytes.
+
 ## Exit codes
 
 - **0**: the trace is complete and valid, and no decoder is degraded. `local_only` anchoring alone

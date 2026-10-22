@@ -458,6 +458,11 @@ else gets it, but the raw upload cannot be changed. So:
 
 Raw records stay private and are never published.
 
+To see your own numbers, run `goalcup-verify --stats <trace> --output my-run.json`, with the folder
+of the `trace:` line Goal Cup Proxy printed when it sealed the run (name each part's folder, in
+order, if you ran `goalcup continue`). It writes tokens, models, tool calls and errors, subagents and how often you
+typed "keep going": counts only, no text.
+
 ## 12. Test runs (organizers only)
 
 `goalcup start --test` opens an organizer test run. It runs for the full length, like a
