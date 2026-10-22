@@ -137,6 +137,8 @@ export interface LocalOptions {
   startWindow?: { opens: string | null; closes: string | null };
   /** The run length, for the live snapshot's `event.run_hours` (the database has it on the event). */
   runSeconds?: number;
+  /** The events this deployment has, by id, with their kind (the database's events rows); unset: none, so no live snapshot. */
+  events?: Record<string, string>;
 }
 
 const BEFORE_WINDOW = "The start window has not opened yet.";
@@ -181,12 +183,14 @@ export class LocalDb implements Db {
   readonly #closeAfterSeconds: number;
   readonly #window: LocalOptions["startWindow"];
   readonly #runSeconds: number | undefined;
+  readonly #events: Record<string, string> | undefined;
 
   private constructor(bucket: R2Bucket, options: LocalOptions) {
     this.#bucket = bucket;
     this.#closeAfterSeconds = options.closeAfterSeconds ?? CLOSE_AFTER_SECONDS;
     this.#window = options.startWindow;
     this.#runSeconds = options.runSeconds;
+    this.#events = options.events;
   }
 
   static create(bucket: R2Bucket, options: LocalOptions = {}): LocalDb {
@@ -463,23 +467,27 @@ export class LocalDb implements Db {
 
   /** Twin of public.goal_cup_upload_live_snapshot (sql/pending/20261022100000_goal_cup_tracer_live_stats.sql): change both together. */
   async liveSnapshot(eventId: string, now: string): Promise<Omit<LiveSnapshot, "server"> | null> {
+    const kind = this.#events?.[eventId];
+    if (kind === undefined) return null; // not an event of this deployment
     const ago = (seconds: number) => formatTime(addSeconds(new Date(now), -seconds));
     /** `n`, or null when fewer than LIVE_MIN_GROUP runs feed it (by default, the n runs it counts). */
     const k = (n: number, feeders: number = n): LiveNumber => (feeders >= LIVE_MIN_GROUP ? n : null);
     // Every competition run of the event that has started; test and practice runs never count.
     const runs = (await this.#all<StoredRun>("state/runs/")).filter((r) => r.event_id === eventId && r.mode === "competition" && r.status !== "abandoned" && r.official_start <= now);
 
-    // The main runs (entries): what each is now, and its harness.
+    // The main runs (entries): what each is now, and its harness. A run is over at its end, or once
+    // its current entry has its final heartbeat or seal (the agent stopped).
     const main = runs.filter((r) => !isReplaced(r)).map((r) => {
-      const before = now < endsAt(r);
-      const running = before && r.last_heartbeat_at != null && r.last_heartbeat_at >= ago(20 * 60);
+      const cur = currentOf(r);
+      const over = now >= endsAt(r) || cur.final !== null || cur.sealed_at !== null;
+      const running = !over && r.last_heartbeat_at != null && r.last_heartbeat_at >= ago(20 * 60);
       const connector = r.entries[0]!.connector_id;
       return {
         status: r.status,
+        over,
         running,
         working: running && r.last_model_request_at != null && r.last_model_request_at >= ago(30 * 60),
-        quiet: before && (r.last_heartbeat_at ?? r.official_start) < ago(20 * 60),
-        finished: !before,
+        quiet: !over && (r.last_heartbeat_at ?? r.official_start) < ago(20 * 60),
         harness: /^[a-z0-9][a-z0-9-]{0,63}$/.test(connector) ? connector : "other",
       };
     });
@@ -495,35 +503,34 @@ export class LocalDb implements Db {
       const f = folded.get(to) ?? { started: 0, running: 0 };
       folded.set(to, { started: f.started + b.started, running: f.running + b.running });
     }
+    // A hidden "other" hides every harness's running count (differencing; see the SQL).
+    const otherHidden = (folded.get("other")?.started ?? LIVE_MIN_GROUP) < LIVE_MIN_GROUP;
     const harnesses = [...folded]
       .filter(([, b]) => b.started >= LIVE_MIN_GROUP)
       .sort(([x, a], [y, b]) => Number(x === "other") - Number(y === "other") || b.started - a.started || x.localeCompare(y))
-      .map(([id, b]) => ({ id, started: b.started, running: k(b.running) }));
+      .map(([id, b]) => ({ id, started: b.started, running: otherHidden ? null : k(b.running) }));
 
-    // Work: every competition run, replaced ones too.
+    // Work: every competition run, replaced ones too, from per-run and per-entry facts.
     const entries = runs.flatMap((r) => r.entries);
     const runsWith = (f: (e: StoredEntry) => boolean) => runs.filter((r) => r.entries.some(f)).length;
-    const beats = (e: StoredEntry, upTo: string) => (e.beats ?? []).filter((b) => b.at <= upTo);
-    const most = (bs: { model_requests: number | null }[]) => Math.max(0, ...bs.map((b) => b.model_requests ?? 0));
-    const slot = (at: string) => Math.floor(Date.parse(at) / 300_000);
-    let slots = 0;
-    let workingSlots = 0;
-    for (const r of runs) {
-      slots += new Set(r.entries.flatMap((e) => beats(e, now).map((b) => slot(b.at)))).size;
-      // Slots with a heartbeat whose count is above every earlier one of its entry: the calls grew.
-      const grew = new Set<number>();
-      for (const e of r.entries) {
-        let top = 0;
-        for (const b of beats(e, now)) {
-          if (b.model_requests !== null && b.model_requests > top) {
-            grew.add(slot(b.at));
-            top = b.model_requests;
-          }
-        }
-      }
-      workingSlots += grew.size;
+    const seconds = runs.reduce((sum, r) => {
+      if (r.last_heartbeat_at == null) return sum;
+      const until = [r.last_heartbeat_at, endsAt(r), now].sort()[0]!;
+      return sum + Math.max(0, (Date.parse(until) - Date.parse(r.official_start)) / 1000);
+    }, 0);
+    // The last hour: per entry that beat in it, its highest count there minus its last count before.
+    const hourStart = ago(3600);
+    const grownRuns = new Set<string>();
+    let hourCalls = 0;
+    for (const e of entries) {
+      const reported = (e.beats ?? []).filter((b) => b.at <= now && b.model_requests !== null) as { at: string; model_requests: number }[];
+      const inHour = reported.filter((b) => b.at > hourStart);
+      if (inHour.length === 0) continue;
+      const before = reported.filter((b) => b.at <= hourStart).at(-1)?.model_requests ?? 0;
+      const grown = Math.max(0, Math.max(...inHour.map((b) => b.model_requests)) - before);
+      hourCalls += grown;
+      if (grown > 0) grownRuns.add(e.run_id);
     }
-    const hourCalls = entries.reduce((sum, e) => sum + Math.max(0, most(beats(e, now)) - most(beats(e, ago(3600)))), 0);
 
     const notices = (await this.#all<LocalNotice>("state/notices/")).filter((n) => n.created_at <= now && runs.some((r) => r.run_id === n.run_id));
     const noticeCount = (kind: NoticeKind) => {
@@ -535,7 +542,7 @@ export class LocalDb implements Db {
       schema_version: 1,
       event: {
         id: eventId,
-        kind: "competition",
+        kind,
         start_window_opens: this.#window?.opens ?? null,
         start_window_closes: this.#window?.closes ?? null,
         run_hours: this.#runSeconds === undefined ? null : this.#runSeconds / 3600,
@@ -548,18 +555,18 @@ export class LocalDb implements Db {
         running: count((m) => m.running),
         working: count((m) => m.working),
         quiet: count((m) => m.quiet),
-        finished: count((m) => m.finished),
-        sealed: count((m) => m.finished && m.status === "sealed"),
-        incomplete: count((m) => m.finished && m.status === "incomplete"),
+        finished: count((m) => m.over),
+        sealed: count((m) => m.over && m.status === "sealed"),
+        incomplete: count((m) => m.over && m.status === "incomplete"),
       },
       harnesses: main.length >= LIVE_MIN_GROUP ? harnesses : null,
       work: {
-        agent_hours: k(Math.round((slots * 5) / 6) / 10, runsWith((e) => beats(e, now).length > 0)),
-        working_hours: k(Math.round((workingSlots * 5) / 6) / 10, runsWith((e) => beats(e, now).length > 0)),
-        model_calls: k(entries.reduce((sum, e) => sum + (e.model_requests ?? 0), 0), runsWith((e) => e.model_requests != null)),
-        model_calls_last_hour: k(hourCalls, runsWith((e) => beats(e, now).some((b) => b.at > ago(3600)))),
+        agent_hours: k(Math.round(seconds / 360) / 10, runs.filter((r) => r.last_heartbeat_at != null).length),
+        working_hours: null,
+        model_calls: k(Math.floor(entries.reduce((sum, e) => sum + (e.model_requests ?? 0), 0) / 100) * 100, runsWith((e) => e.model_requests != null)),
+        model_calls_last_hour: k(hourCalls, grownRuns.size),
         restarts: k(entries.filter((e) => e.segment > 0).length, runsWith((e) => e.segment > 0)),
-        data_bytes: k(entries.reduce((sum, e) => sum + (e.stored_bytes ?? 0), 0), runsWith((e) => (e.stored_bytes ?? 0) > 0)),
+        data_bytes: k(Math.floor(entries.reduce((sum, e) => sum + (e.stored_bytes ?? 0), 0) / 1048576) * 1048576, runsWith((e) => (e.stored_bytes ?? 0) > 0)),
       },
       notices: { silence: noticeCount("silence"), idle_3h: noticeCount("idle_3h"), idle_6h: noticeCount("idle_6h"), disk_full: noticeCount("disk_full") },
       survival: null,

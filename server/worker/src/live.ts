@@ -34,11 +34,26 @@ function num(v: unknown, what: string, whole = true): LiveNumber {
   throw new Error(`${what} is not a count`);
 }
 
-/** The published document: `raw` (what the database answered) rebuilt from the known keys only; throws on any wrong shape. */
-export function publicSnapshot(raw: unknown): LiveSnapshot {
+/**
+ * A count of runs (or of things every one of which comes from a different run's group, as notices and
+ * restarts): null, 0, or at least LIVE_MIN_GROUP. A count of 1 to 4 means the group rule broke where
+ * the number was made; nothing is published then (defence in depth).
+ */
+function runCount(v: unknown, what: string): LiveNumber {
+  const n = num(v, what);
+  if (n !== null && n > 0 && n < LIVE_MIN_GROUP) throw new Error(`${what} is ${n}, under the group size`);
+  return n;
+}
+
+/**
+ * The published document: `raw` (what the database answered for `eventId`) rebuilt from the known
+ * keys only; throws on any wrong shape.
+ */
+export function publicSnapshot(raw: unknown, eventId: string): LiveSnapshot {
   const d = obj(raw);
   if (d.schema_version !== 1) throw new Error("schema_version is not 1");
   const ev = obj(d.event);
+  if (ev.id !== eventId) throw new Error("event.id is not the event asked for");
   if (typeof ev.id !== "string" || typeof ev.kind !== "string" || !EVENT_KINDS.includes(ev.kind)) throw new Error("event");
   for (const k of ["start_window_opens", "start_window_closes"]) if (ev[k] !== null && !isTime(ev[k])) throw new Error(`event.${k}`);
   if (!isTime(d.generated_at)) throw new Error("generated_at");
@@ -51,9 +66,9 @@ export function publicSnapshot(raw: unknown): LiveSnapshot {
     harnesses = d.harnesses.map((h: unknown, i) => {
       const b = obj(h);
       if (typeof b.id !== "string" || !HARNESS_ID.test(b.id)) throw new Error(`harnesses[${i}].id`);
-      const started = num(b.started, `harnesses[${i}].started`);
+      const started = runCount(b.started, `harnesses[${i}].started`);
       if (started === null || started < LIVE_MIN_GROUP) throw new Error(`harnesses[${i}] is under the group size`);
-      return { id: b.id, started, running: num(b.running, `harnesses[${i}].running`) };
+      return { id: b.id, started, running: runCount(b.running, `harnesses[${i}].running`) };
     });
   }
   return {
@@ -67,10 +82,12 @@ export function publicSnapshot(raw: unknown): LiveSnapshot {
     },
     generated_at: d.generated_at,
     min_group: LIVE_MIN_GROUP,
-    entries: { signed_up: null, ...Object.fromEntries(ENTRY_KEYS.map((k) => [k, num(entries[k] ?? null, `entries.${k}`)])) } as LiveSnapshot["entries"],
+    entries: { signed_up: null, ...Object.fromEntries(ENTRY_KEYS.map((k) => [k, runCount(entries[k] ?? null, `entries.${k}`)])) } as LiveSnapshot["entries"],
     harnesses,
-    work: Object.fromEntries(WORK_KEYS.map((k) => [k, num(work[k] ?? null, `work.${k}`, !k.endsWith("_hours"))])) as LiveSnapshot["work"],
-    notices: Object.fromEntries(NOTICE_KEYS.map((k) => [k, num(notices[k] ?? null, `notices.${k}`)])) as LiveSnapshot["notices"],
+    work: Object.fromEntries(
+      WORK_KEYS.map((k) => [k, k === "restarts" ? runCount(work[k] ?? null, "work.restarts") : num(work[k] ?? null, `work.${k}`, !k.endsWith("_hours"))]),
+    ) as LiveSnapshot["work"],
+    notices: Object.fromEntries(NOTICE_KEYS.map((k) => [k, runCount(notices[k] ?? null, `notices.${k}`)])) as LiveSnapshot["notices"],
     // Not built yet (later steps of the design): always null here, whatever the database said.
     survival: null,
     hourly: null,
@@ -91,7 +108,7 @@ export async function writeLiveSnapshot(ctx: Ctx, now: Date): Promise<number> {
       console.error(`live-snapshot-failed: the database has no event ${ctx.cfg.eventId} for this deployment`);
       return 0;
     }
-    const doc = publicSnapshot(raw);
+    const doc = publicSnapshot(raw, ctx.cfg.eventId);
     await ctx.env.TRACES.put(liveKey(ctx.cfg.eventId), JSON.stringify(doc), { httpMetadata: { contentType: "application/json" } });
     return 1;
   } catch (e) {
@@ -100,14 +117,27 @@ export async function writeLiveSnapshot(ctx: Ctx, now: Date): Promise<number> {
   }
 }
 
-/** Public, no credential: the snapshot as the cron last wrote it. Never a database call. */
-export async function serveLive(ctx: Ctx, _request: Request): Promise<Response> {
+/** The data center's edge cache (Workers `caches.default`); absent outside the Workers runtime (the Node tests). */
+function edgeCache(): Cache | undefined {
+  return typeof caches === "undefined" ? undefined : (caches as unknown as { default?: Cache }).default;
+}
+
+/**
+ * Public, no credential: the snapshot as the cron last wrote it. Never a database call. A data
+ * center keeps the answer for LIVE_MAX_AGE (the edge cache), so a busy page costs one R2 read a
+ * minute per data center. The stored bytes are streamed as they are, with R2's etag.
+ */
+export async function serveLive(ctx: Ctx, request: Request): Promise<Response> {
+  const cache = edgeCache();
+  const hit = await cache?.match(request);
+  if (hit !== undefined) return hit;
   const cors = { "access-control-allow-origin": "*" };
   const stored = await ctx.env.TRACES.get(liveKey(ctx.cfg.eventId));
   if (stored === null) throw new ApiError(404, "not_ready", "No live totals yet; the server writes them every 5 minutes.", cors);
-  const doc: unknown = await stored.json();
-  return new Response(JSON.stringify(doc), {
+  const res = new Response(stored.body, {
     status: 200,
-    headers: { "content-type": "application/json", "cache-control": `public, max-age=${LIVE_MAX_AGE}`, ...cors },
+    headers: { "content-type": "application/json", "cache-control": `public, max-age=${LIVE_MAX_AGE}`, etag: stored.httpEtag, ...cors },
   });
+  await cache?.put(request, res.clone());
+  return res;
 }

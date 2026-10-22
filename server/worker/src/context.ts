@@ -139,7 +139,9 @@ export async function getDb(env: Env): Promise<Db> {
     if (backend === "supabase") return new SupabaseDb(env.SUPABASE_URL, env.SUPABASE_KEY);
     if (backend === "local") {
       const cfg = readConfig(env);
-      return LocalDb.create(env.TRACES, { closeAfterSeconds: cfg.closeAfterSeconds, startWindow: cfg.startWindow, runSeconds: cfg.runSeconds });
+      // The local events: the configured ids. EVENT_ID is a competition here (there is no dry-run row to read).
+      const events: Record<string, string> = { [cfg.practiceEventId]: "practice", ...(cfg.testEventId === undefined ? {} : { [cfg.testEventId]: "test" }), [cfg.eventId]: "competition" };
+      return LocalDb.create(env.TRACES, { closeAfterSeconds: cfg.closeAfterSeconds, startWindow: cfg.startWindow, runSeconds: cfg.runSeconds, events });
     }
   } catch (e) {
     // The detail goes to the Worker's log only: a caller without a credential gets this answer too,

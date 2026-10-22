@@ -15,7 +15,9 @@ export class FakeBucket {
 
   async get(key: string) {
     const o = this.map.get(key);
-    return o === undefined ? null : { etag: o.etag, json: async () => JSON.parse(o.text) as unknown };
+    return o === undefined
+      ? null
+      : { etag: o.etag, httpEtag: `"${o.etag}"`, body: new Response(o.text).body, json: async () => JSON.parse(o.text) as unknown };
   }
 
   /**

@@ -443,13 +443,14 @@ The previous entry is not sealed or closed by this; it may still upload its wrap
 
 No credential. For the website's live page (`/goalcup/live`) and anyone else. `goalcup` never calls
 it. The cron writes the totals of the current event (`EVENT_ID`) to R2 every 5 minutes
-(`live/{event_id}.json`); this call answers that copy and never touches the database.
+(`live/{event_id}.json`); this call answers that copy, streamed with R2's `etag`, and never touches
+the database. Each data center keeps the answer for 60 seconds (the edge cache).
 
 | Status | Body | Headers |
 |---|---|---|
 | `200` | the snapshot below | `content-type: application/json`, `cache-control: public, max-age=60`, `access-control-allow-origin: *` |
 | `404` | `{"error": "not_ready", "message": …}`: no snapshot yet | `access-control-allow-origin: *` |
-| `503` | `maintenance`, as for every call | `retry-after` |
+| `503` | `maintenance`, as for every call (the cron writes nothing then either; after the switch the copy is as old as its `generated_at` until the next tick) | `retry-after` |
 
 What it counts: only competition runs (`mode` `competition`) of the event and of this deployment,
 never test or practice runs, and no run given back with `abandon`. "Entry" numbers count main runs
@@ -459,7 +460,14 @@ IP address, country, machine fact, vitals, run id or entry id.
 
 **The group of 5.** A number is `null` unless at least `min_group` (5) runs feed it: a count of runs
 below 5 is `null` (0 too); a sum is `null` unless 5 runs added to it. A harness with fewer than 5
-started runs folds into `other`, and `other` is left out while it has fewer than 5.
+started runs folds into `other`, and `other` is left out while it has fewer than 5. The Worker
+refuses to publish a snapshot with a count of 1 to 4 (it logs `live-snapshot-failed`).
+
+**Differencing.** Comparing two snapshots, or a total with its parts, must not show one run's numbers:
+`model_calls` is floored to a multiple of 100 and `data_bytes` to a whole MiB; when `other` is left
+out, every harness's `running` is `null` (its `started` still follows from the total minus the named
+harnesses, a count only). A run that starts, stops or goes quiet still shows as a change of 1 in a
+count of 5 or more: that is what a live count is.
 
 Schema 1 (example numbers; the field names and their meaning follow the live stats design):
 
@@ -474,8 +482,8 @@ Schema 1 (example numbers; the field names and their meaning follow the live sta
               "finished": 28, "sealed": 25, "incomplete": null},
   "harnesses": [{"id": "claude-code-cli", "started": 131, "running": 117},
                 {"id": "other", "started": 22, "running": 11}],
-  "work": {"agent_hours": 15873.5, "working_hours": 12011.0, "model_calls": 3184220,
-           "model_calls_last_hour": 41230, "restarts": 64, "data_bytes": 871234567890},
+  "work": {"agent_hours": 15873.5, "working_hours": null, "model_calls": 3184200,
+           "model_calls_last_hour": 41230, "restarts": 64, "data_bytes": 871234535424},
   "notices": {"silence": 57, "idle_3h": 140, "idle_6h": 61, "disk_full": null},
   "survival": null, "hourly": null, "trace": null, "github": null, "server": null
 }
@@ -486,23 +494,25 @@ Schema 1 (example numbers; the field names and their meaning follow the live sta
 | `event` | the event's row: `kind` is its mode (`competition`, `dry_run`, …), the start window, `run_hours` |
 | `generated_at` | the cron tick that wrote it |
 | `entries.started` | main runs that have started |
-| `entries.running` | before their end, last heartbeat under 20 minutes old (the `silence` threshold) |
+| `entries.running` | not over, last heartbeat under 20 minutes old (the `silence` threshold) |
 | `entries.working` | running, and the last model request under 30 minutes old |
-| `entries.quiet` | before their end, no heartbeat (or start) for 20 minutes or more |
-| `entries.finished`, `sealed`, `incomplete` | past their end; `sealed` and `incomplete` as the close wrote them |
+| `entries.quiet` | not over, no heartbeat (or start) for 20 minutes or more |
+| `entries.finished`, `sealed`, `incomplete` | over: past their end, or stopped early (the current segment has its final heartbeat or seal); `sealed` and `incomplete` as the close wrote them |
 | `entries.signed_up` | always `null` for now (sign-ups are not read yet) |
 | `harnesses` | main runs by the connector of their first segment (`started`, `running`); `null` while fewer than 5 runs started |
-| `work.agent_hours` | per run, the 5-minute slots with a heartbeat, times 5 minutes, summed (one decimal) |
-| `work.working_hours` | the same, only slots in which the run's model calls grew |
-| `work.model_calls` | the sum of each entry's highest reported `model_requests` (a `continue` adds, never doubles) |
-| `work.model_calls_last_hour` | per entry, the growth of that count over the last hour; fed by the runs that beat in that hour |
+| `work.agent_hours` | per run, the time from its start to its last heartbeat (at most its end), summed (one decimal); a quiet gap inside a run counts too |
+| `work.working_hours` | `null` for now: an exact figure needs every heartbeat of the event read each tick, which the shared database must not do |
+| `work.model_calls` | the sum of each entry's highest reported `model_requests` (a `continue` adds, never doubles), floored to 100 |
+| `work.model_calls_last_hour` | per entry that beat in the last hour, its highest count there minus its last count before; fed by the runs whose count grew |
 | `work.restarts` | segments after the first (`goalcup continue`); fed by the runs that restarted |
-| `work.data_bytes` | compressed bytes stored in R2 |
+| `work.data_bytes` | compressed bytes stored in R2, floored to a MiB |
 | `notices` | emails queued per kind; each fed by the runs that got one |
 | `survival`, `hourly`, `trace`, `github`, `server` | `null`: later steps of the live stats design, not built yet |
 
 The cron writes the snapshot after its other steps, in its own `try`: a failure is the log line
-`live-snapshot-failed: …` and changes nothing else, and the last good copy keeps being served. It
+`live-snapshot-failed: …` and changes nothing else, and the last good copy keeps being served. The
+SQL reads per-run and per-entry columns, and heartbeats of the last hour only: about 20 ms at 400
+runs with a week of heartbeats (`check-sql.sh` checks it stays under 1 second with no temp spill). It
 needs website migration `20261022100000_goal_cup_tracer_live_stats.sql`
 ([sql/pending](../server/worker/sql/pending/README.md)); until that is applied the GET answers
 `404 not_ready`.

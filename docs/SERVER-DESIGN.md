@@ -159,20 +159,23 @@ Built, not yet live: it needs website migration 20261022100000 applied, then a W
 community totals of the current event, from the database the server already fills (agents started,
 running and quiet, harness mix, agent hours, model calls, restarts, data stored, notices). The cron's
 last step calls one SQL function (`goal_cup_upload_live_snapshot`) and writes the answer to R2 as
-`live/{event_id}.json`; the GET serves that copy and never calls the database, so traffic costs
-nothing there and a bad database minute only makes the copy older. The Worker rebuilds the document
+`live/{event_id}.json`; the GET serves that copy (each data center keeps it for 60 seconds) and
+never calls the database, so traffic costs nothing there and a bad database minute only makes the
+copy older. The SQL reads per-run columns and the last hour of heartbeats only, never a whole week
+of them: about 20 ms at event scale. The Worker rebuilds the document
 key by key before it writes it, so only the published fields can exist. Test and practice runs are
-left out in the SQL. A number fed by fewer than 5 runs is `null`, and a harness with fewer than 5
-runs folds into `other`. Nothing per run or per member is in it. Contract:
+left out in the SQL. A number fed by fewer than 5 runs is `null`, a harness with fewer than 5 runs
+folds into `other`, and call and byte totals are rounded down so two snapshots cannot be compared
+to read one run. Nothing per run or per member is in it. Contract:
 [UPLOAD-API](UPLOAD-API.md#get-v1livejson--public-community-totals).
 
 ## Not built
 
 - The verify job that reassembles stored chunks and runs `goalcup-verify` over them. Until it exists,
   nothing downloads the stored chain; `scripts/matrix.sh --check-copy` compares positions instead.
-- The rest of the live stats design: survival and the hourly strip, tokens and tool calls from the
-  traces (the verify job), GitHub numbers, uptime and outage windows, the daily copies. Their fields
-  in `live.json` are `null`.
+- The rest of the live stats design: working hours (it needs a stored counter), survival and the
+  hourly strip, tokens and tool calls from the traces (the verify job), GitHub numbers, uptime and
+  outage windows, the daily copies. Their fields in `live.json` are `null`.
 - A separate organizer pause on new starts (`MAINTENANCE` stops everything).
 - A second pinned signing key for rotation.
 - Teams, and more than one main run per account.

@@ -3,8 +3,9 @@
 // the test moves (test/helpers/inproc.ts); `tick` runs the cron once.
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import type { LiveSnapshot } from "../src/db.ts";
+import { LocalDb } from "../src/db-local.ts";
 import { liveKey, publicSnapshot } from "../src/live.ts";
 import { credentialFor, openBody } from "./helpers/client.ts";
 import { inProcess } from "./helpers/inproc.ts";
@@ -53,7 +54,7 @@ lifecycle("the cron writes live.json and the GET serves it, public for 60 second
 });
 
 lifecycle("test and practice runs are not counted", async (r) => {
-  await runs(r, 5, { calls: 10 });
+  await runs(r, 5, { calls: 100 });
   await runs(r, 5, { mode: "test", calls: 1000, tag: "t" });
   await runs(r, 5, { mode: "practice", calls: 1000, tag: "p" });
   await r.tick();
@@ -61,7 +62,7 @@ lifecycle("test and practice runs are not counted", async (r) => {
   assert.equal(doc.entries.started, 5);
   assert.equal(doc.entries.running, 5);
   assert.deepEqual(doc.harnesses, [{ id: "codex-cli", started: 5, running: 5 }]);
-  assert.equal(doc.work.model_calls, 50);
+  assert.equal(doc.work.model_calls, 500);
 }, ONE_EVENT);
 
 lifecycle("a number fed by fewer than 5 runs is null, and a harness under 5 folds into other", async (r) => {
@@ -81,34 +82,94 @@ lifecycle("a number fed by fewer than 5 runs is null, and a harness under 5 fold
   assert.equal(doc.entries.started, 6);
   assert.deepEqual(doc.harnesses, [{ id: "other", started: 6, running: 6 }]);
 
-  // One more codex-cli: it has 5 and shows; other (2) is left out.
+  // One more codex-cli: it has 5 and shows; other (2) is left out, and with it every running count.
   await runs(r, 1, { tag: "c" });
   await r.tick();
   doc = await live(r);
-  assert.deepEqual(doc.harnesses, [{ id: "codex-cli", started: 5, running: 5 }]);
+  assert.deepEqual(doc.harnesses, [{ id: "codex-cli", started: 5, running: null }]);
   assert.equal(doc.entries.quiet, null); // 0 quiet runs: also under 5
 });
 
 lifecycle("a continue adds its model calls and never doubles them; the last hour counts only its growth", async (r) => {
-  const all = await runs(r, 5, { calls: 10 }); // 09:00
+  const all = await runs(r, 5, { calls: 1000 }); // 09:00
   r.after(45 * MIN);
-  for (const run of all) await r.beat(run.token, run.run_id, run.entry_id, { model_requests: 10 }); // 09:45, no new calls
+  for (const run of all) await r.beat(run.token, run.run_id, run.entry_id, { model_requests: 1000 }); // 09:45, no new calls
   r.after(45 * MIN);
-  for (const run of all) await r.beat(run.token, run.run_id, run.entry_id, { model_requests: 30 }); // 10:30
+  for (const run of all) await r.beat(run.token, run.run_id, run.entry_id, { model_requests: 3000 }); // 10:30
   // One run's agent died: the new segment counts from zero.
   const a = all[0]!;
   const c = await r.cont(a.token, a.run_id, a.entry_id, "s-continued");
   assert.equal(c.status, 201, JSON.stringify(c.body));
-  await r.beat(a.token, a.run_id, c.body.entry_id, { model_requests: 4 });
+  await r.beat(a.token, a.run_id, c.body.entry_id, { model_requests: 400 });
   await r.tick();
   const doc = await live(r);
-  assert.equal(doc.work.model_calls, 5 * 30 + 4);
-  assert.equal(doc.work.model_calls_last_hour, 5 * 20 + 4);
+  assert.equal(doc.work.model_calls, 5 * 3000 + 400);
+  assert.equal(doc.work.model_calls_last_hour, 5 * 2000 + 400); // growth since the 09:00 count, the last before 09:30
   assert.equal(doc.work.restarts, null); // one run restarted: under 5
-  assert.equal(doc.work.agent_hours, 1.3); // 3 slots of 5 minutes per run (the continue beat in a slot its run had): 75 minutes
-  assert.equal(doc.work.working_hours, 0.8); // only 2 of them had new calls: 50 minutes
+  assert.equal(doc.work.agent_hours, 7.5); // start to last heartbeat: 1.5 hours per run
+  assert.equal(doc.work.working_hours, null); // not built: it would read every heartbeat
   assert.deepEqual(doc.harnesses, [{ id: "codex-cli", started: 5, running: 5 }]); // the continue's connector does not count
 });
+
+lifecycle("model calls are floored to 100 and stored bytes to a MiB", async (r) => {
+  const all = await runs(r, 5, { calls: 199 });
+  for (const [i, run] of all.entries()) await r.hold(`m-${i}`, run.run_id, run.entry_id);
+  await r.tick();
+  const doc = await live(r);
+  assert.equal(doc.work.model_calls, 900); // 995
+  assert.equal(doc.work.data_bytes, 0); // 5 x 10 bytes
+});
+
+lifecycle("the last hour's calls are null unless 5 runs' calls grew in it", async (r) => {
+  const all = await runs(r, 6, { calls: 100 }); // 09:00
+  r.after(90 * MIN);
+  for (const [i, run] of all.entries()) await r.beat(run.token, run.run_id, run.entry_id, { model_requests: i < 4 ? 200 : 100 });
+  await r.tick();
+  assert.equal((await live(r)).work.model_calls_last_hour, null); // 6 beat in the hour, only 4 grew
+});
+
+lifecycle("a run whose agent stopped before its deadline counts as finished, not quiet", async (r) => {
+  const all = await runs(r, 5);
+  for (const [i, run] of all.entries()) {
+    const head = await r.hold(`m-${i}`, run.run_id, run.entry_id);
+    await r.finish(run.token, run.run_id, run.entry_id, head);
+  }
+  r.after(60 * MIN); // no heartbeat for an hour, deadline days away
+  await r.tick();
+  const doc = await live(r);
+  assert.equal(doc.entries.finished, 5);
+  assert.equal(doc.entries.quiet, null);
+  assert.equal(doc.entries.running, null);
+});
+
+lifecycle("a failing or wrong live snapshot changes nothing else: notices go out, the last copy stays", async (r) => {
+  await runs(r, 5);
+  await r.tick();
+  const first = r.bucket.map.get(liveKey("cup"))!.text;
+  const logged: string[] = [];
+  const log = mock.method(console, "error", (line: string) => void logged.push(String(line)));
+  const answers = [() => Promise.reject(new Error("database down")), () => Promise.resolve({ schema_version: 2 })];
+  const snap = mock.method(LocalDb.prototype, "liveSnapshot", () => answers.shift()!());
+  try {
+    const before = outbox(r).length;
+    await runs(r, 1, { tag: "late" }); // a new run is owed its started email
+    r.after(5 * MIN);
+    await r.tick();
+    r.after(5 * MIN);
+    await r.tick();
+    assert.equal(snap.mock.callCount(), 2);
+    assert.equal(outbox(r).length, before + 1);
+    assert.equal(logged.filter((l) => l.startsWith("live-snapshot-failed")).length, 2, logged.join("\n"));
+    assert.equal(r.bucket.map.get(liveKey("cup"))!.text, first);
+    assert.equal((await r.api.call("GET", "/v1/live.json")).status, 200);
+  } finally {
+    snap.mock.restore();
+    log.mock.restore();
+  }
+});
+
+/** The outbox rows written so far. */
+const outbox = (r: Rig) => [...r.bucket.map.keys()].filter((k) => k.startsWith("state/notices/"));
 
 /** Every key path of a JSON value, arrays as `[]`. */
 function paths(v: unknown, at = ""): string[] {
@@ -139,7 +200,7 @@ lifecycle("the snapshot holds community totals only: no run, entry, member, repo
   for (const secret of ["m-0", "github.com", openBody().workspace, openBody().session_id, "203.0.113"]) assert.ok(!text.includes(secret), `${secret} in ${text}`);
 });
 
-test("a field the database adds is never published, and a harness under 5 from the database is refused", () => {
+test("a field the database adds is never published; a count of 1 to 4, a harness under 5 or another event is refused", () => {
   const good = {
     schema_version: 1,
     event: { id: "cup", kind: "competition", start_window_opens: T0, start_window_closes: null, run_hours: 168, staging: false },
@@ -150,9 +211,12 @@ test("a field the database adds is never published, and a harness under 5 from t
     notices: { silence: null, idle_3h: null, idle_6h: null, disk_full: null },
     trace: null, github: null, runs: [{ run_id: "r0000000000000001" }],
   };
-  assert.deepEqual([...new Set(paths(publicSnapshot(good)))].sort(), PUBLIC_KEYS);
-  assert.throws(() => publicSnapshot({ ...good, harnesses: [{ id: "codex-cli", started: 4, running: null }] }));
-  assert.throws(() => publicSnapshot({ ...good, harnesses: [{ id: "Robert'); DROP", started: 6, running: 6 }] }));
+  assert.deepEqual([...new Set(paths(publicSnapshot(good, "cup")))].sort(), PUBLIC_KEYS);
+  assert.throws(() => publicSnapshot(good, "another-event"));
+  assert.throws(() => publicSnapshot({ ...good, harnesses: [{ id: "codex-cli", started: 4, running: null }] }, "cup"));
+  assert.throws(() => publicSnapshot({ ...good, harnesses: [{ id: "codex-cli", started: 6, running: 3 }] }, "cup"));
+  assert.throws(() => publicSnapshot({ ...good, entries: { ...good.entries, quiet: 2 } }, "cup"));
+  assert.throws(() => publicSnapshot({ ...good, harnesses: [{ id: "Robert'); DROP", started: 6, running: 6 }] }, "cup"));
 });
 
 test("the GET never calls the database", async () => {
