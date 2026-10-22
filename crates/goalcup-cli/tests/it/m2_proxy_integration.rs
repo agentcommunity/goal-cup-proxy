@@ -941,6 +941,7 @@ async fn a_fail_open_tunnel_is_chained_when_it_begins_not_when_it_ends() {
     close_both(client, up).await;
     let report = rig.stop().await;
     assert_eq!(report.health.tunneled_fail_open, 1);
+    assert_eq!(report.health.fail_open_sni_mismatch, 1, "{report:?}");
     assert_eq!(report.producer_close, ProducerClose::Queued);
     sink.settle().await;
     let frames = sink.frames();
@@ -974,6 +975,7 @@ async fn a_fail_open_tunnel_is_chained_when_it_begins_not_when_it_ends() {
     drop(tcp);
     let report = rig.stop().await;
     assert_eq!(report.health.tunneled_fail_open, 1, "{report:?}");
+    assert_eq!(report.health.fail_open_not_tls, 1, "{report:?}");
     sink.settle().await;
     assert_eq!(
         losses(&sink.frames())
@@ -1042,6 +1044,67 @@ async fn a_fail_open_tunnel_open_at_stop_is_still_capture_loss() {
     assert!(report.capture_loss(), "{report:?}");
     let _ = read_to_end(&mut client).await;
     let _ = read_to_end(&mut up).await;
+    sink.settle().await;
+    assert_eq!(losses(&sink.frames()), vec![(0, GapReason::DecodeFailed)]);
+}
+
+/// Fix plan v10 U1: a client that closes after the `200` for an approved host, before its
+/// ClientHello is complete (no byte at all, or part of a record header), sent nothing of that
+/// host's traffic. It is a client failure: no upstream connection, no fail-open, no loss. A
+/// ClientHello that does arrive but cannot be parsed stays fail-open, a loss, with its reason.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_client_that_closes_before_its_client_hello_is_no_loss() {
+    let pki = TestPki::new("upstream test CA");
+    let upstream = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    upstream.set_nonblocking(true).unwrap();
+    let port = upstream.local_addr().unwrap().port();
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut config = RigConfig::new(&pki);
+    config.approved = vec![approved("localhost", policy(&[("/", true, None)]))];
+    let mut rig = Rig::start(config, sink.clone()).await;
+    let handle = rig.handle();
+
+    let silent = connect_via(rig.addr, &format!("localhost:{port}")).await;
+    drop(silent);
+    let mut partial = connect_via(rig.addr, &format!("localhost:{port}")).await;
+    partial.write_all(&[0x16, 0x03, 0x01, 0x00]).await.unwrap();
+    drop(partial);
+    eventually("both closes are client failures", || {
+        handle.health().admission_failures.client_io == 2
+    })
+    .await;
+    let health = handle.health();
+    assert_eq!(health.tunneled_fail_open, 0, "{health:?}");
+    assert_eq!(health.admission_failed, 2, "{health:?}");
+    assert_eq!(
+        upstream.accept().map(|_| ()).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "no upstream connection was opened for a client that sent no ClientHello"
+    );
+    sink.settle().await;
+    assert!(
+        losses(&sink.frames()).is_empty(),
+        "a client close is no loss"
+    );
+
+    // A complete handshake record that is not a ClientHello: still fail-open, by its reason.
+    let mut garbage = connect_via(rig.addr, &format!("localhost:{port}")).await;
+    garbage
+        .write_all(&[0x16, 0x03, 0x01, 0x00, 0x04, 0x02, 0x00, 0x00, 0x00])
+        .await
+        .unwrap();
+    eventually("the unparsable ClientHello is a fail-open tunnel", || {
+        handle.health().fail_open_unparsed == 1
+    })
+    .await;
+    let (tunnelled, _) = upstream.accept().expect("the tunnel connected upstream");
+    drop(tunnelled);
+    drop(garbage);
+    let report = rig.stop().await;
+    assert_eq!(report.health.tunneled_fail_open, 1, "{report:?}");
+    assert_eq!(report.health.fail_open_unparsed, 1, "{report:?}");
+    assert_eq!(report.health.admission_failures.client_io, 2, "{report:?}");
+    assert!(report.capture_loss(), "{report:?}");
     sink.settle().await;
     assert_eq!(losses(&sink.frames()), vec![(0, GapReason::DecodeFailed)]);
 }

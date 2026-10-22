@@ -631,8 +631,18 @@ pub struct ProxyHealth {
     pub tunneled_not_approved: u64,
     /// Tunnels to an **approved** host whose ClientHello did not name it (absent or different
     /// SNI, not TLS, unparsable): relayed unchanged and not captured. Counted when decided, so a
-    /// tunnel still open at stop is counted too.
+    /// tunnel still open at stop is counted too. A client that closes before completing its
+    /// ClientHello is no tunnel: it is an admission failure (`client_io`), and no loss.
     pub tunneled_fail_open: u64,
+    /// Of `tunneled_fail_open`, by reason: the ClientHello was malformed or over its bound.
+    pub fail_open_unparsed: u64,
+    /// Of `tunneled_fail_open`: the ClientHello carried no server name.
+    pub fail_open_no_sni: u64,
+    /// Of `tunneled_fail_open`: the ClientHello named another server, or a tunnel to another
+    /// authority named an approved host.
+    pub fail_open_sni_mismatch: u64,
+    /// Of `tunneled_fail_open`: the first bytes were not a TLS handshake record.
+    pub fail_open_not_tls: u64,
     /// Intercepted connections relayed as bytes, uncaptured, because the capture table was
     /// full.
     pub capture_table_full: u64,
@@ -696,6 +706,10 @@ struct Counters {
     tunneled_auth_host: AtomicU64,
     tunneled_not_approved: AtomicU64,
     tunneled_fail_open: AtomicU64,
+    fail_open_unparsed: AtomicU64,
+    fail_open_no_sni: AtomicU64,
+    fail_open_sni_mismatch: AtomicU64,
+    fail_open_not_tls: AtomicU64,
     capture_table_full: AtomicU64,
     admission_refused_auth: AtomicU64,
     admission_failed: AtomicU64,
@@ -747,6 +761,10 @@ impl Counters {
             tunneled_auth_host: read(&self.tunneled_auth_host),
             tunneled_not_approved: read(&self.tunneled_not_approved),
             tunneled_fail_open: read(&self.tunneled_fail_open),
+            fail_open_unparsed: read(&self.fail_open_unparsed),
+            fail_open_no_sni: read(&self.fail_open_no_sni),
+            fail_open_sni_mismatch: read(&self.fail_open_sni_mismatch),
+            fail_open_not_tls: read(&self.fail_open_not_tls),
             capture_table_full: read(&self.capture_table_full),
             // Counted on the emitter by the relays; `Shared::health` fills it in.
             opaque_fallbacks: 0,
@@ -940,8 +958,9 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
         if reason != connect::TunnelReason::NotApproved {
             shared.outages.success();
         }
-        if is_fail_open(reason) {
+        if let Some(by_reason) = fail_open_counter(counters, reason) {
             bump(&counters.tunneled_fail_open);
+            bump(by_reason);
             let _ = shared
                 .emitter
                 .proxy_loss(metadata::capture_time(), ProxyLoss::FailOpenTunnel);
@@ -1042,12 +1061,16 @@ fn record_upstream_reach(shared: &Shared, admission: &Admission) {
 /// An approved host's traffic relayed uncaptured: a tunnel to an approved host that was not
 /// intercepted, or a tunnel to any other authority whose ClientHello names an approved host
 /// (`SniMismatch`). An authentication host and a host that is not approved are otherwise
-/// opaque by design, not a loss.
-fn is_fail_open(reason: connect::TunnelReason) -> bool {
-    !matches!(
-        reason,
-        connect::TunnelReason::AuthHost | connect::TunnelReason::NotApproved
-    )
+/// opaque by design, not a loss. Returns the per-reason counter of a fail-open tunnel, `None`
+/// for one that is opaque by design.
+fn fail_open_counter(counters: &Counters, reason: connect::TunnelReason) -> Option<&AtomicU64> {
+    match reason {
+        connect::TunnelReason::AuthHost | connect::TunnelReason::NotApproved => None,
+        connect::TunnelReason::ClientHelloUnparsed => Some(&counters.fail_open_unparsed),
+        connect::TunnelReason::SniAbsent => Some(&counters.fail_open_no_sni),
+        connect::TunnelReason::SniMismatch => Some(&counters.fail_open_sni_mismatch),
+        connect::TunnelReason::NotTls => Some(&counters.fail_open_not_tls),
+    }
 }
 
 /// Counts a connection as unsettled (in admission or an opaque tunnel) while it lives; one

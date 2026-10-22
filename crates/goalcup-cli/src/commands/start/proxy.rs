@@ -226,6 +226,10 @@ pub(super) fn proxy_admission_line(
         ("tunneled_not_approved", h.tunneled_not_approved),
         ("cut", h.cut_intercepted),
         ("fail_open", h.tunneled_fail_open),
+        ("fail_open_unparsed", h.fail_open_unparsed),
+        ("fail_open_no_sni", h.fail_open_no_sni),
+        ("fail_open_sni_mismatch", h.fail_open_sni_mismatch),
+        ("fail_open_not_tls", h.fail_open_not_tls),
         ("auth_refused", h.admission_refused_auth),
         ("failed", h.admission_failed),
         ("malformed", a.malformed),
@@ -324,6 +328,28 @@ mod tests {
         assert_eq!(
             proxy_admission_line(&health, &none),
             "proxy admission: accepted=26 intercepted=23 tunneled_auth_host=1 tunneled_not_approved=2 cut=1"
+        );
+    }
+
+    /// A fail-open tunnel is a loss gap in the chain with no reason of its own, so the line
+    /// says which of the four reasons each one had.
+    #[test]
+    fn the_admission_line_breaks_fail_open_down_by_reason() {
+        let none = crate::proxy::AdmissionFailureCounts::default();
+        let health = crate::proxy::ProxyHealth {
+            accepted: 9,
+            intercepted: 4,
+            tunneled_fail_open: 5,
+            fail_open_unparsed: 1,
+            fail_open_no_sni: 1,
+            fail_open_sni_mismatch: 2,
+            fail_open_not_tls: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            proxy_admission_line(&health, &none),
+            "proxy admission: accepted=9 intercepted=4 fail_open=5 fail_open_unparsed=1 \
+             fail_open_no_sni=1 fail_open_sni_mismatch=2 fail_open_not_tls=1"
         );
     }
 }
