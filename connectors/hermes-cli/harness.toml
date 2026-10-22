@@ -11,6 +11,14 @@ display_name = "Hermes"
 # field may not name the tracker (F7), so the hint says "continue the run".
 first_screen = "If Hermes asks to run setup, do it now, before you type your prompt: answer Y and pick your provider and model. Hermes then closes; continue the run, then type your prompt."
 
+# D67: what `goalcup prep` recommends, and never sets: no approval prompt for commands Hermes
+# deems dangerous (an unquoted YAML `off` reads as false, which Hermes also takes as off).
+# docs/harnesses/hermes-cli.md, "Run without permission prompts".
+[[participant.no_prompts]]
+file = "config.yaml"
+key = "approvals.mode"
+values = ["off", "false"]
+
 [capture]
 # Chat mode (D57): `hermes chat` opens Hermes's classic REPL in the participant's terminal and the
 # participant types the prompt; `/exit`, `/quit` or Ctrl-D end it with exit 0 (measured 16 Oct

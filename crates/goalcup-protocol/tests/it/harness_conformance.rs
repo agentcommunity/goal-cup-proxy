@@ -93,6 +93,35 @@ fn check_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// D67: `goalcup prep` links a connector's `participant.no_prompts` recommendation to
+/// `docs/harnesses/<id>.md#run-without-permission-prompts`, so that section exists, and every
+/// harness doc says how to run without permission prompts.
+#[test]
+fn every_no_prompts_recommendation_links_to_a_harness_doc_section() {
+    let mut linked = 0;
+    for dir in connector_dirs() {
+        let m = load_dir(&dir, Origin::Pinned).unwrap().manifest;
+        let doc = root().join("docs/harnesses").join(format!("{}.md", m.id));
+        let lists = m
+            .participant
+            .as_ref()
+            .is_some_and(|p| !p.no_prompts.is_empty());
+        if !lists && !doc.is_file() {
+            continue;
+        }
+        let text = std::fs::read_to_string(&doc)
+            .unwrap_or_else(|e| panic!("{}: {}: {e}", m.id, doc.display()));
+        assert!(
+            text.contains("\n## Run without permission prompts\n"),
+            "{}: no \"Run without permission prompts\" section in {}",
+            m.id,
+            doc.display()
+        );
+        linked += usize::from(lists);
+    }
+    assert!(linked > 0, "no connector lists participant.no_prompts");
+}
+
 // ---------------------------------------------------------------------------------------
 // The set under test (M-2)
 // ---------------------------------------------------------------------------------------
@@ -277,11 +306,14 @@ fn sensitivity_f7_catches_a_value_validate_does_not_scan() {
 #[test]
 fn sensitivity_a_connector_without_a_display_name_is_refused() {
     let (_tmp, dir) = copy_connector("codex-cli");
-    mutate(
-        &dir.join("harness.toml"),
-        "[participant]\ndisplay_name = \"Codex\"\n",
-        "",
+    // The whole `[participant]` section, its `[[participant.no_prompts]]` rows included.
+    let path = dir.join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let (start, end) = (
+        text.find("[participant]").expect("a [participant] table"),
+        text.find("[capture]").expect("a [capture] table"),
     );
+    std::fs::write(&path, format!("{}{}", &text[..start], &text[end..])).unwrap();
     load_dir(&dir, Origin::Pinned).expect("the loader accepts a manifest with no [participant]");
     let err = check_dir(&dir).expect_err("a connector with no display_name");
     assert!(err.contains("no [participant] display_name"), "{err}");

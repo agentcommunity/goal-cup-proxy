@@ -2,6 +2,6 @@
 # Written by `sh scripts/pin-manifests.sh`; never edited by hand. Read at build time by
 # crates/goalcup-protocol/src/pins.rs, which refuses a malformed file (the crate does not build).
 amp-cli a9507effa48b06f0812e977d130e8146637ef42268e324dd9e049448c708fc9b
-claude-code-cli 7ccf46566c701b3f4c14a60a56526a77c6369d72b7646e452c06eae459608a67
-codex-cli abfa229d5b22144d0805c03f0fc42c198ddb4d13c811d4a1cfe781be16eb0f12
-hermes-cli 64ffb162343c7e04fc2ca38fa48bcb723344cb837e8af0cd719d7dc37d587435
+claude-code-cli 1a058a663059fd9ad225ccb8ce3ab3f89ed298b021e590396ba141ed9f88669f
+codex-cli 5d845ea18446ed135792f0f4faed1bf0bb807a9e34873421d477186818e86d46
+hermes-cli 1c9fc091ea5caaa831e3808b50eb02ca338f4003c77d01c6c8a2582d52fa15ff

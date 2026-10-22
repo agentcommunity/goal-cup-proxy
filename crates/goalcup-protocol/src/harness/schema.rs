@@ -254,6 +254,36 @@ pub struct ParticipantSpec {
     /// example). Shown just before the harness opens. Absent when the harness asks nothing.
     #[serde(default)]
     pub first_screen: Option<String>,
+    /// The settings in the harness's own config that make it run without permission prompts
+    /// (D67): a harness that asks stalls, because the participant may type only "keep going".
+    /// `goalcup prep` reads them in the shared config home and, when one is not set to an
+    /// accepted value, recommends it with a link to `docs/harnesses/<id>.md`. Goal Cup never
+    /// writes them. At most [`MAX_NO_PROMPT_SETTINGS`].
+    #[serde(default)]
+    pub no_prompts: Vec<NoPromptSetting>,
+}
+
+/// The most settings `participant.no_prompts` may list.
+pub const MAX_NO_PROMPT_SETTINGS: usize = 4;
+/// The most accepted values one `participant.no_prompts` setting may list.
+pub const MAX_NO_PROMPT_VALUES: usize = 4;
+/// The longest accepted value of a `participant.no_prompts` setting.
+pub const MAX_NO_PROMPT_VALUE_CHARS: usize = 64;
+
+/// One `[[participant.no_prompts]]` row: a scalar at `key` in `file` (in the shared config home)
+/// that is one of `values` when the harness runs without permission prompts. Read like
+/// [`ModelHostFrom`], and held to its file and key rules.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct NoPromptSetting {
+    /// The config file, relative to the shared config home; `.yaml`, `.yml`, `.json` or `.toml`.
+    pub file: String,
+    /// The setting's key, its table names joined with `.`.
+    pub key: String,
+    /// The values that mean "no prompt", as text (`true` for a boolean); the first is the one
+    /// recommended.
+    pub values: Vec<String>,
 }
 
 /// Why `s` is not fit to print to a terminal as one line of plain text, or `None` when it is.
@@ -294,6 +324,12 @@ pub fn display_name_problem(s: &str) -> Option<String> {
 /// Why `s` is not a valid `participant.first_screen`: one plain line of at most 200 characters.
 pub fn first_screen_problem(s: &str) -> Option<String> {
     plain_line_problem(s, MAX_FIRST_SCREEN_CHARS)
+}
+
+/// Why `s` is not a valid `participant.no_prompts` value: one plain line of at most 64
+/// characters (it is printed in prep's recommendation).
+pub fn no_prompt_value_problem(s: &str) -> Option<String> {
+    plain_line_problem(s, MAX_NO_PROMPT_VALUE_CHARS)
 }
 
 /// `[capture]`: the **profile**, the whole recipe for capturing one harness.

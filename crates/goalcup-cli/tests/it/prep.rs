@@ -1546,6 +1546,103 @@ fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
 
 // ------------------------------------------------------------------ the model service (D62)
 
+/// D67: the chat connector lists two `participant.no_prompts` settings. Prep reads them in the
+/// harness's Goal Cup home and recommends each one that is not set, with the doc's link, in the
+/// harness home step; it never changes the step's state, the exit code or the files.
+#[test]
+fn prep_recommends_the_no_prompt_settings_and_never_writes_them() {
+    let rig = Rig::chat_only();
+    let path = rig.connectors.join(CHAT_ID).join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap().replacen(
+        "[capture]\n",
+        "[participant]\ndisplay_name = \"Fake Agent\"\n\n\
+         [[participant.no_prompts]]\nfile = \"config.toml\"\nkey = \"approval_policy\"\n\
+         values = [\"never\"]\n\n\
+         [[participant.no_prompts]]\nfile = \"settings.json\"\nkey = \"permissions.skip\"\n\
+         values = [\"true\"]\n\n[capture]\n",
+        1,
+    );
+    std::fs::write(&path, text).unwrap();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    all_but_the_harness(&rig);
+    let home = rig.cfg.join("capture-homes").join(CHAT_ID);
+    const ASKS: &str = "Fake Agent may stop to ask your permission";
+    let link = format!(
+        "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/harnesses/{CHAT_ID}.md\
+         #run-without-permission-prompts"
+    );
+
+    // Not set up yet: the step is still todo for the set-up itself, and names both settings.
+    let (code, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness_home");
+    assert!(step.starts_with("[todo] harness_home:"), "{out}");
+    assert!(step.contains(ASKS) && step.contains(&link), "{out}");
+    assert!(
+        step.contains("`approval_policy` to `never`")
+            && step.contains("`permissions.skip` to `true`"),
+        "{out}"
+    );
+    assert_eq!(code, 1);
+
+    // Set up, nothing set: the step is ok and still says what to set.
+    std::fs::create_dir_all(&home).unwrap();
+    let mut file = prep_file(&rig.cfg);
+    file.harness = CHAT_ID.to_string();
+    file.home_ready = true;
+    goalcup_cli::prep_file::write_prep(&rig.cfg, &file).unwrap();
+    let (_, out) = prep(&rig, &["--repo", REPO, "--json"], &facts);
+    let steps = json(&out);
+    let home_step = steps.iter().find(|s| s["step"] == "harness_home").unwrap();
+    assert_eq!(home_step["state"], "ok", "{out}");
+    assert!(home_step["say"].as_str().unwrap().contains(ASKS), "{out}");
+
+    // One set: only the other is named.
+    std::fs::write(home.join("config.toml"), "approval_policy = \"never\"\n").unwrap();
+    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness_home");
+    assert!(step.starts_with("[ok] harness_home:"), "{out}");
+    assert!(
+        !step.contains("`approval_policy`") && step.contains("`permissions.skip` to `true`"),
+        "{out}"
+    );
+
+    // Another value is not an accepted one; a JSON boolean is read as `true`.
+    std::fs::write(
+        home.join("config.toml"),
+        "approval_policy = \"on-request\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("settings.json"),
+        r#"{"permissions":{"skip":true}}"#,
+    )
+    .unwrap();
+    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness_home");
+    assert!(
+        step.contains("`approval_policy` to `never`") && !step.contains("`permissions.skip`"),
+        "{out}"
+    );
+
+    // All set: no recommendation, and prep wrote neither file.
+    std::fs::write(home.join("config.toml"), "approval_policy = \"never\"\n").unwrap();
+    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness_home");
+    assert!(
+        step.starts_with("[ok] harness_home:") && !step.contains(ASKS),
+        "{out}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("config.toml")).unwrap(),
+        "approval_policy = \"never\"\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("settings.json")).unwrap(),
+        r#"{"permissions":{"skip":true}}"#
+    );
+}
+
 /// A connector that reads its model service from the harness's config: a home whose harness
 /// names one Goal Cup cannot record (here a local `http://localhost` server) is not ready. Prep
 /// says why, clears the mark and opens the harness again, so the participant can choose another

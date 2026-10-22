@@ -3757,6 +3757,99 @@ fn a_model_host_from_is_held_to_its_rules() {
     );
 }
 
+/// `participant.no_prompts` (D67): settings read like `capture.model_host_from` (a YAML, JSON or
+/// TOML file in the shared config home, a dotted key, neither naming a key), each with 1 to 4
+/// plain values, at most 4 settings, none twice.
+#[test]
+fn no_prompt_settings_are_held_to_their_rules() {
+    fn row(file: &str, key: &str, values: &[&str]) -> Value {
+        let mut r = Table::new();
+        r.insert("file".into(), Value::String(file.into()));
+        r.insert("key".into(), Value::String(key.into()));
+        r.insert("values".into(), strings(values));
+        Value::Table(r)
+    }
+    fn with(rows: Vec<Value>) -> Table {
+        let mut t = codex();
+        let mut p = Table::new();
+        p.insert("display_name".into(), Value::String("Codex".into()));
+        p.insert("no_prompts".into(), Value::Array(rows));
+        t.insert("participant".into(), Value::Table(p));
+        t
+    }
+    admitted(&with(vec![]), PINNED);
+    admitted(
+        &with(vec![
+            row("config.toml", "approval_policy", &["never"]),
+            row(
+                "settings.json",
+                "permissions.defaultMode",
+                &["bypassPermissions"],
+            ),
+            row("config.yaml", "approvals.mode", &["off", "false"]),
+        ]),
+        PINNED,
+    );
+    let m = parsed(&with(vec![row(
+        "config.toml",
+        "approval_policy",
+        &["never"],
+    )]));
+    let p = m.participant.expect("participant");
+    assert_eq!(p.no_prompts.len(), 1);
+    assert_eq!(p.no_prompts[0].values, vec!["never".to_string()]);
+
+    for (rows, needles) in [
+        (
+            vec![row("auth.json", "mode", &["x"])],
+            &["participant.no_prompts.file", "`auth`"][..],
+        ),
+        (
+            vec![row("config.ini", "mode", &["x"])],
+            &["participant.no_prompts.file", ".toml"],
+        ),
+        (
+            vec![row("../config.toml", "mode", &["x"])],
+            &["participant.no_prompts.file"],
+        ),
+        (
+            vec![row("config.toml", "api_key", &["x"])],
+            &["participant.no_prompts.key", "`key`"],
+        ),
+        (
+            vec![row("config.toml", "mode", &[])],
+            &["participant.no_prompts.values"],
+        ),
+        (
+            vec![row("config.toml", "mode", &["a", "b", "c", "d", "e"])],
+            &["participant.no_prompts.values"],
+        ),
+        (
+            vec![row("config.toml", "mode", &["bad\u{1b}[2J"])],
+            &["participant.no_prompts.values"],
+        ),
+        (
+            vec![
+                row("config.toml", "mode", &["x"]),
+                row("config.toml", "mode", &["y"]),
+            ],
+            &["participant.no_prompts", "twice"],
+        ),
+        (
+            (0..5)
+                .map(|i| row("config.toml", &format!("k{i}"), &["x"]))
+                .collect(),
+            &["participant.no_prompts", "more than 4"],
+        ),
+    ] {
+        refused(&with(rows), PINNED, needles);
+    }
+
+    let mut per_run = with(vec![row("config.toml", "approval_policy", &["never"])]);
+    set(&mut per_run, &["capture", "home"], "config_home", "per_run");
+    refused(&per_run, PINNED, &["participant.no_prompts", "config_home"]);
+}
+
 /// The native pattern matcher the launcher and the daemon share. A `*` in the pattern is a
 /// wildcard even where the name holds a literal `*` at the same place: `*ab` matches `*b`.
 #[test]

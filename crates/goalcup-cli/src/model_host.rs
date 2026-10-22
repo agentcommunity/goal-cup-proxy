@@ -197,6 +197,17 @@ pub fn read(
 /// The string at `key` in the file at `path` (named `name` in the manifest), or `None` when the
 /// file is missing, too large, a symlink or unparseable, or the key is absent or not a string.
 fn read_value(path: &Path, name: &str, key: &str) -> Option<String> {
+    read_scalar(path, name, key, false)
+}
+
+/// The scalar at `key` in the file at `path`, as text: a string as it is, and a boolean or a
+/// number of a JSON or TOML file as written (`true`, `3`). `None` as for [`read_value`]. For
+/// `participant.no_prompts` (D67), which is only read, never written.
+pub fn read_setting(path: &Path, name: &str, key: &str) -> Option<String> {
+    read_scalar(path, name, key, true)
+}
+
+fn read_scalar(path: &Path, name: &str, key: &str, any_scalar: bool) -> Option<String> {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
     let file = std::fs::OpenOptions::new()
@@ -217,30 +228,41 @@ fn read_value(path: &Path, name: &str, key: &str) -> Option<String> {
     let parts: Vec<&str> = key.split('.').collect();
     let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     match extension.as_deref() {
-        Some("json") => json_lookup(text, &parts),
-        Some("toml") => toml_lookup(text, &parts),
+        Some("json") => json_lookup(text, &parts, any_scalar),
+        Some("toml") => toml_lookup(text, &parts, any_scalar),
         Some("yaml" | "yml") => yaml_lookup(text, &parts),
         _ => None,
     }
 }
 
-fn json_lookup(text: &str, parts: &[&str]) -> Option<String> {
+fn json_lookup(text: &str, parts: &[&str], any_scalar: bool) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
     let mut at = &value;
     for part in parts {
         at = at.as_object()?.get(*part)?;
     }
-    at.as_str().map(str::to_string)
+    match at {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) if any_scalar => {
+            Some(at.to_string())
+        }
+        _ => None,
+    }
 }
 
-fn toml_lookup(text: &str, parts: &[&str]) -> Option<String> {
+fn toml_lookup(text: &str, parts: &[&str], any_scalar: bool) -> Option<String> {
     let table: toml::Table = text.parse().ok()?;
     let (last, tables) = parts.split_last()?;
     let mut at = &table;
     for part in tables {
         at = at.get(*part)?.as_table()?;
     }
-    at.get(*last)?.as_str().map(str::to_string)
+    match at.get(*last)? {
+        toml::Value::String(s) => Some(s.clone()),
+        toml::Value::Boolean(b) if any_scalar => Some(b.to_string()),
+        toml::Value::Integer(i) if any_scalar => Some(i.to_string()),
+        _ => None,
+    }
 }
 
 /// The scalar at `parts` in a YAML document of block mappings (`key:` lines nested by
@@ -520,27 +542,49 @@ sessions:
         assert_eq!(
             json_lookup(
                 r#"{"model":{"base_url":"https://j.example/v1"}}"#,
-                &["model", "base_url"]
+                &["model", "base_url"],
+                false
             )
             .as_deref(),
             Some("https://j.example/v1")
         );
         assert_eq!(
-            json_lookup(r#"{"model":{"base_url":3}}"#, &["model", "base_url"]),
+            json_lookup(r#"{"model":{"base_url":3}}"#, &["model", "base_url"], false),
             None
         );
         assert_eq!(
             toml_lookup(
                 "[model]\nbase_url = \"https://t.example\"\n",
-                &["model", "base_url"]
+                &["model", "base_url"],
+                false
             )
             .as_deref(),
             Some("https://t.example")
         );
         assert_eq!(
-            toml_lookup("base_url = \"https://t.example\"\n", &["base_url"]).as_deref(),
+            toml_lookup("base_url = \"https://t.example\"\n", &["base_url"], false).as_deref(),
             Some("https://t.example")
         );
+    }
+
+    #[test]
+    fn a_setting_reads_booleans_and_numbers_as_text_and_never_a_table() {
+        let json = r#"{"skip":true,"n":3,"permissions":{"defaultMode":"bypassPermissions"}}"#;
+        assert_eq!(json_lookup(json, &["skip"], true).as_deref(), Some("true"));
+        assert_eq!(json_lookup(json, &["n"], true).as_deref(), Some("3"));
+        assert_eq!(json_lookup(json, &["skip"], false), None);
+        assert_eq!(
+            json_lookup(json, &["permissions", "defaultMode"], true).as_deref(),
+            Some("bypassPermissions")
+        );
+        assert_eq!(json_lookup(json, &["permissions"], true), None);
+        let toml = "approval_policy = \"never\"\nflag = false\n[t]\nx = 1\n";
+        assert_eq!(
+            toml_lookup(toml, &["approval_policy"], true).as_deref(),
+            Some("never")
+        );
+        assert_eq!(toml_lookup(toml, &["flag"], true).as_deref(), Some("false"));
+        assert_eq!(toml_lookup(toml, &["t"], true), None);
     }
 
     #[test]
