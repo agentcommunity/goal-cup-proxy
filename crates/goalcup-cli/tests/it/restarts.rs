@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 
 /// A test build's disk sizes: the reservation, no margin, a 50 ms watch.
 const DISK: (&str, &str) = ("GOALCUP_TEST_DISK", "4194304,0,50");
-/// The uploader's cadence a test can watch, with a heartbeat every 100 ms.
+/// The uploader's cadence a test can watch, with a heartbeat every 100 ms. The fifth number is the
+/// wrap-up: a part not all sent within 10 s of its seal is left for `goalcup upload`.
 const BEATING: (&str, &str) = (
     "GOALCUP_TEST_UPLOAD_POLICY",
     "200,25,100,400,10000,268435456,3000,100",
@@ -32,17 +33,32 @@ impl Drop for Reaper {
     }
 }
 
-/// The pids of every `goalcup-daemon --config <config>` on this machine.
+/// The pids of every `goalcup-daemon --config <config>` on this machine, matched on whole
+/// arguments. None when `ps` cannot be run: this also runs in [`Reaper`]'s drop, which must not
+/// panic.
 fn daemons_for(config: &Path) -> Vec<i32> {
-    let table = std::process::Command::new("/bin/ps")
+    let Some(table) = std::process::Command::new("ps")
         .args(["-axww", "-o", "pid=,command="])
         .output()
-        .expect("ps");
-    let needle = format!("--config {} ", config.display());
+        .ok()
+    else {
+        return Vec::new();
+    };
+    let config = config.to_string_lossy();
     String::from_utf8_lossy(&table.stdout)
         .lines()
-        .filter(|line| line.contains("goalcup-daemon") && line.contains(&needle))
-        .filter_map(|line| line.split_whitespace().next()?.parse().ok())
+        .filter_map(|line| {
+            let mut tokens = line.split_whitespace();
+            let pid = tokens.next()?.parse().ok()?;
+            let argv: Vec<&str> = tokens.collect();
+            let daemon = argv
+                .first()
+                .is_some_and(|exe| Path::new(exe).file_name() == Some("goalcup-daemon".as_ref()));
+            let ours = argv
+                .windows(2)
+                .any(|pair| pair[0] == "--config" && pair[1] == config);
+            (daemon && ours).then_some(pid)
+        })
         .collect()
 }
 
@@ -329,6 +345,8 @@ fn a_run_crosses_two_platform_stops_and_each_continue_keeps_it_whole() {
         (&entry1, "two", 1, vec![GapReason::IngestLost]),
         (&entry2, "three", 0, vec![]),
     ] {
+        // `wait_until` allows 60 s, but the real limit is the wrap-up in [`BEATING`]
+        // (`WrapUp::after`, 10 s): what a part's host has not sent by then it never sends.
         wait_until(&format!("{entry} all sent"), || {
             server.seal_of(entry).is_some()
                 && server_copy(&server, entry) == local_chain(&rig, entry)
@@ -360,9 +378,9 @@ fn a_run_crosses_two_platform_stops_and_each_continue_keeps_it_whole() {
 
 /// The run's clone is gone when the participant continues: a sandbox whose work folder was on a
 /// disk that did not survive the stop, or a folder moved away. The continue is refused before
-/// anything changes, here or on the server, and names the folder; with the folder back in place
-/// the next continue goes on in it. (Before, the missing folder was made again, empty, and the
-/// agent went on in it with none of its work.)
+/// anything changes, here or on the server, and names the folder and the seal that ends the last
+/// part without it; with the folder back in place the next continue goes on in it. (Before, the
+/// missing folder was made again, empty, and the agent went on in it with none of its work.)
 #[test]
 fn a_continue_whose_clone_is_gone_is_refused_and_changes_nothing() {
     let rig = Rig::chat();
@@ -375,7 +393,8 @@ fn a_continue_whose_clone_is_gone_is_refused_and_changes_nothing() {
     first.type_line("/exit");
     assert!(first.wait().success(), "{}", first.shown());
     let run_id = server.run_ids()[0].clone();
-    let workspace = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap().workspace;
+    let record = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap();
+    let (workspace, last_part) = (record.workspace, record.entries[0].entry_id.clone());
     let away = rig.root.join("moved-away");
     std::fs::rename(&workspace, &away).unwrap();
     let (agent, folders) = (harness(&rig, "tui.pid"), rig.run_dirs());
@@ -386,6 +405,14 @@ fn a_continue_whose_clone_is_gone_is_refused_and_changes_nothing() {
     assert_eq!(status.code(), Some(1), "{said}");
     assert!(said.contains(&workspace.display().to_string()), "{said}");
     assert!(said.contains("Nothing was changed"), "{said}");
+    // The other way on, when the clone is lost: the part already recorded still reaches the
+    // server, since a seal needs no clone.
+    assert!(
+        said.contains(&format!(
+            "goalcup seal {last_part} --yes, then goalcup upload"
+        )),
+        "{said}"
+    );
     assert!(!workspace.exists(), "the folder was not made again");
     assert_eq!(
         server.entry_ids(&run_id).len(),

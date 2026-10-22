@@ -374,8 +374,8 @@ fn the_remaining_types_round_trip() {
         serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap()
     );
     assert_eq!(
-        CONTROL_API_VERSION, 10,
-        "v10 removed the seal's workspace arm, the status finalization and the native scope; v9 \
+        CONTROL_API_VERSION, 11,
+        "v11 added a continued run's existing_clone to a capture create; v10 removed the seal's workspace arm, the status finalization and the native scope; v9 \
          added the run's exact secret values to a capture create; v8 removed the V1 vocabulary \
          nothing produced",
     );

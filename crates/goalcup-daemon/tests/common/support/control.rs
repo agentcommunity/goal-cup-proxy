@@ -347,6 +347,7 @@ pub async fn capture_control_harness() -> CaptureControlHarness {
         entry_id: None,
         native_since: None,
         run_secrets: Vec::new(),
+        existing_clone: false,
     };
     let response = inner
         .client

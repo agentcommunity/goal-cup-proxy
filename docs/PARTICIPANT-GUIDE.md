@@ -345,8 +345,11 @@ Choose your model and model service in prep, before the run. Typing a harness co
 reviewed. Nothing is blocked.
 
 A run can be continued only on the machine that started it, with the run's folder (its clone in
-your work folder) where it was. If that folder is gone, `goalcup continue` names it and changes
-nothing. Goal Cup Proxy never restarts the agent on its own.
+your work folder) where it was. A clone you moved to another disk may be linked back at its old
+path. If that folder is gone, or is no longer a clone (its `.git` folder removed), `goalcup
+continue` says so and changes nothing. If the clone is lost, end the run's last part so it still
+reaches the server: `goalcup seal <part> --yes`, then `goalcup upload` (both work without the
+clone). Goal Cup Proxy never restarts the agent on its own.
 
 **Stopping the agent yourself: `goalcup seal`.** Run it from another terminal, never inside the
 agent's session. It stops the agent and ends the current part. It does not end the run: the run

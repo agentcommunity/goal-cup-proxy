@@ -316,6 +316,7 @@ pub(super) async fn create_capture_workspace(
         request.reserve_bytes,
         request.native_since,
         secrets,
+        request.existing_clone,
     ) {
         Ok(info) => axum::Json(info).into_response(),
         Err(e) => ControlErrorResponse::from(e).into_response(),

@@ -19,7 +19,8 @@ continue` starts the next one (D4, D57).
   disk that survives the stop, at the same path, for the same user.
 - **One defect fixed here.** A continue whose clone was gone (work folder on a disk that did not
   survive, or a folder moved) made the folder again, empty, and the agent went on in it with none
-  of its work. It is now refused before anything changes.
+  of its work. It is now refused before anything changes, by `goalcup continue` and again by the
+  daemon where it makes the workspace.
 - **Three rules questions** go to the owner (last section). Today's rules allow a restart after a
   crash or reboot "on the same machine" with only "keep going" typed; they do not name platform
   caps or a new VM.
@@ -30,15 +31,17 @@ Everything is under `$HOME` by default (Linux):
 
 | Path | Holds | Lost with it |
 |---|---|---|
-| `~/.config/goalcup` | run records, the run's credential, upload spool, state, harness homes (sessions, sign-in), time-left file | `continue` and `upload` refuse: "not started on this computer" |
+| `~/.config/goalcup` | run records, the run's credential, upload spool, state, harness homes (sessions, sign-in), time-left file | `continue` refuses: "Run … was not started on this computer"; `upload` finds no run to send |
 | `~/.config/goalcup-artifacts` | each part's chain files, seal, receipt, the run's disk reserve | the unsent tail of the chain and every seal |
 | `~/goalcup-work/<clone>` (prep's `--work-root`) | the clone the agent works in | all unpushed work; `continue` now refuses |
 | the folder `start` or `continue` ran in | each part's own folder (`HOME` of a harness with `run_home = "empty"`) | nothing needed later |
 
 `GOALCUP_CONFIG_DIR` moves the first two together. The harness's own sessions live in the shared
 harness home under `~/.config/goalcup/capture-homes/` (D39, D59), so `resume_args` finds them
-when that folder survives. Claude Code (`--continue`), Codex (`resume --last`) and Amp (`last`)
-pick the last session of the current folder, so the clone must also keep its absolute path.
+when that folder survives. Claude Code (`--continue`), Codex (`resume --last`) and Hermes
+(`--continue`) pick the last session of the current folder, so the clone must also keep its
+absolute path (a link from that path to a moved clone is followed). Amp's `last` is not measured
+(rough edge 6).
 
 ## What happens at each kind of stop
 
@@ -51,7 +54,7 @@ pick the last session of the current folder, so the clone must also keep its abs
 | **C. Graceful shutdown (SIGTERM to every process, then SIGKILL)** | Same as B or D. The host does not catch SIGTERM (`goalcup-platform/src/terminal.rs`, `CAUGHT`), and the daemon on SIGTERM "seals nothing" (`goalcup-daemon/src/bin/goalcup-daemon.rs`). | as B or D |
 | **D. Power-off or VM killed, disk kept** | Nothing runs after boot; no service restarts the daemon (D4). | `goalcup continue` starts a daemon, which reopens the part for status and seal only; continue seals it (one `IngestLost` gap, `producer_unclosed`, exit 1). A last line cut mid-write cannot be reopened: the part is closed at its last whole record, unsealed, nothing repaired (OPERATING drill 5). |
 | **E. Disk wiped, or a new machine** | The server keeps what it acknowledged. The run stays `open` until its deadline, then turns `incomplete` 24 h later (its last part has no seal). | Nothing works: `goalcup continue` refuses (`commands/continue_run.rs`, `resolve`). Inside the start window a new competition start replaces the run and needs a new empty repository; after it, nothing. |
-| **F. Disk kept, clone gone** (work folder on scratch storage) | as B or D | Before this change: the agent went on in an empty folder. Now: `Put the run's folder back at <path> and run goalcup continue again. If it is lost, write to goalcup@agentcommunity.org …` |
+| **F. Disk kept, clone gone** (work folder on scratch storage) | as B or D | Before this change: the agent went on in an empty folder. Now: `Put the run's folder back at <path> (a link to it there is fine) and run goalcup continue again. If it is lost, end the run's last part so it still reaches the Goal Cup server: goalcup seal <part> --yes, then goalcup upload. …` A folder that is there but is no clone (its `.git` removed, or a file or link in its place) is refused as that, with the same seal: `End the run's last part …`. |
 
 In B and D the participant may also end the part without going on: `goalcup seal <part> --yes`
 from another terminal, then `goalcup upload`.
@@ -91,11 +94,11 @@ this with the server refusing chunks across both stops.
 
 | # | What | Evidence | Proposal |
 |---|---|---|---|
-| 1 | **Fixed** (877c0be). Continue with the clone gone made an empty folder and ran the agent in it. The daemon admits a missing workspace as new and empty (`goalcup-daemon/src/workspace.rs`, `check_workspace_available`). | test `restarts::a_continue_whose_clone_is_gone_is_refused_and_changes_nothing` (failed before the fix: the harness started) | `continue` refuses unless the run's folder is a clone, before the home lock and the server. |
+| 1 | **Fixed** (877c0be and the review follow-up). Continue with the clone gone made an empty folder and ran the agent in it. The daemon admits a missing workspace as new and empty (`goalcup-daemon/src/workspace.rs`, `check_workspace_available`). | test `restarts::a_continue_whose_clone_is_gone_is_refused_and_changes_nothing` (failed before the fix: the harness started); `control_api::a_continued_capture_create_needs_the_clone_and_makes_nothing_without_it` | One clone rule (`goalcup-platform/src/clone.rs`): a `.git` directory, no work tree above, a linked workspace followed. `continue` applies it before the home lock and the server, and says which case it is; the daemon applies it again where it makes a continued part's workspace (`existing_clone`, control API 11), so a clone gone in between is not made again. |
 | 2 | A wiped disk or new machine ends recording for good. | `resolve` in `commands/continue_run.rs`; RULES "on the same machine" | Rules question 3. If allowed, a "move" would need the three folders restored at the same paths; nothing records that the machine changed. |
-| 3 | SIGTERM is treated like SIGKILL. A graceful platform stop gives no seal and no last upload, so a wiped disk loses up to 30 min plus the seal. | `terminal.rs` `CAUGHT` has no SIGTERM; daemon "seal nothing" | Catch SIGTERM in the host and send the backlog at once (seal if the grace allows). Until then, a participant who knows the cap time can run `goalcup seal` before it (rules question 2). |
+| 3 | For the entry, SIGTERM is treated like SIGKILL: the daemon waits for seals in flight and leaves no torn tail, but seals nothing itself, and the host does not catch it. A graceful platform stop gives no seal and no last upload, so a wiped disk loses up to 30 min plus the seal. | `terminal.rs` `CAUGHT` has no SIGTERM; daemon "seal nothing" | Catch SIGTERM in the host and send the backlog at once (seal if the grace allows). Until then, a participant who knows the cap time can run `goalcup seal` before it (rules question 2). |
 | 4 | Continue needs the server. A server outage at restart time keeps the agent down. | `upload_e2e::segments::a_continue_with_the_server_away_creates_nothing_and_a_later_one_goes_on` | Accept (D64 covers a running part, not a new one), or open the part locally and register it later: large. |
-| 5 | Each part records again every session file written since the run started, whole (D57 `since_run_start`). With k stops the native leg is recorded about k/2 times over, which costs disk reservation and upload. | probe in the new test: part 2's native bytes held the lines of parts 0, 1 and 2 | Accept for 7 parts, or later start each part's read where the previous part's seal left the file. |
+| 5 | Each part records again every session file written since the run started, whole (D57 `since_run_start`). With k stops the native leg is recorded about k/2 times over, which costs disk reservation and upload. | a one-off probe (not asserted by a test): part 2's native bytes held the lines of parts 0, 1 and 2 | Accept for 7 parts, or later start each part's read where the previous part's seal left the file. |
 | 6 | Amp's `resume_args = ["last"]` is not measured against a logged-in home. | `connectors/amp-cli/harness.toml` comment | Measure on the 24 h step. |
 
 No defect was found in the clock, the reserve hand-over, the shared-home lock, or the backlog
@@ -127,7 +130,7 @@ across several stops.
 
 ## Tests
 
-- `crates/goalcup-cli/tests/it/restarts.rs` (fast tier, about 4 s):
+- `crates/goalcup-cli/tests/it/restarts.rs` (fast tier, about 4 s and 2.5 s):
   `a_run_crosses_two_platform_stops_and_each_continue_keeps_it_whole` runs start, SIGKILL of host
   and agent (daemon lives), continue, SIGKILL of host, agent and the real daemon process (frozen
   first, as at a power cut), continue, `goalcup seal --yes` from another terminal. The server
@@ -137,7 +140,11 @@ across several stops.
   sealed and signed, gaps `[IngestLost]`, `[IngestLost]`, none (exit 1, 1, 0), what was typed in
   each part recorded, `resume --last` given at each continue, a new daemon after the power-off,
   and a fresh time-left file with the same deadline.
-- `a_continue_whose_clone_is_gone_is_refused_and_changes_nothing`: the fix above.
+- `a_continue_whose_clone_is_gone_is_refused_and_changes_nothing`: the fix above, end to end.
+  The daemon's half is `goalcup-daemon/tests/it/control_api.rs`
+  (`a_continued_capture_create_needs_the_clone_and_makes_nothing_without_it`); the rule's cases
+  (gone, no `.git`, `.git` a file or link, a linked clone, inside another repository, unreadable)
+  are unit tests in `goalcup-platform/src/clone.rs` and `commands/continue_run.rs`.
 - Existing single-stop tests, `full` tier, `crates/goalcup-cli/tests/full/upload_e2e.rs`
   (`segments::`): killed agent then continue, reboot with a torn tail, continue during the first
   host's wrap-up, server away, run over, a run not started here, rotated parts through a crash.
