@@ -91,6 +91,17 @@ in every cell. Uploads go on a 30-minute timer by design, so "ACK lag under 2 mi
 usable pass line (plan v3 L2). Agents finished in 5 to 7 minutes and idled: Hermes stops at
 `agent.max_turns` (default 90); the workloads are too short for long cells (plan v3 L4).
 
+### Reruns after fix plan v2 (22 Oct 00:43 to 00:57 UTC, 10-minute practice)
+
+| Cell | Before v2 | After v2 |
+|---|---|---|
+| mac-claude | FAIL, 2 gaps, prompt lost to a dialog | **PASS**: integrity valid, 0 gaps, server copy equal, agent worked (3 commits, 25 tests), time-left answered, seal refused. First clean Claude Code capture. |
+| lx-claude | FAIL, 2 gaps, no work | 0 gaps, server copy equal, prompt delivered, but Claude never answered it (1 small haiku call); model check FAILs the row. Cause under analysis. |
+| lx-codex | hollow PASS, prompt never submitted | prompt delivered as one bracketed paste; Codex's sandbox cannot start in Docker (`bwrap: No permissions to create a new namespace`), Codex asks for escalation and waits: no work. |
+
+The new "agent worked" row check passed lx-claude and lx-codex on title or probe calls: too
+lenient; a stricter rule is under analysis.
+
 ## Fixes made today
 
 - ea5c30f9: reserve test, campaign build order, check-sql locale.
@@ -109,7 +120,9 @@ In priority order. Evidence is aggregates; raw traces stay on the owner's Mac.
    identity/gzip/deflate only (`crates/goalcup-cli/src/proxy/http.rs` `Decoder::for_codings`), so
    each reply is an `unsupported_encoding` gap (mac-claude and lx-claude: 2 gaps each, the replies to
    the start-up probe). Fix in plan v2 K5 (brotli-decompressor, plus zstd). Check that branch first.
-2. **Codex cannot commit or push without a human approving.** Codex's default `workspace-write`
+2. **Codex cannot commit or push without a human approving; in a container it cannot run anything.**
+   In Docker the sandbox fails to start (`bwrap: No permissions to create a new namespace`), so
+   every command needs an approval (lx-codex retest, 00:47Z). On the Mac only `.git` is blocked. Codex's default `workspace-write`
    sandbox makes `.git` read-only: `git add` failed with `Operation not permitted` on
    `.git/index.lock`; Codex then asked for approval and waited 8.7 of 10 minutes (mac-codex). The
    connector passes no sandbox option (D57); RULES let the participant type only "keep going".
