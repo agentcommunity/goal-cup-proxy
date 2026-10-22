@@ -247,6 +247,42 @@ pub struct RunState {
     /// `state.json` an older build wrote.
     #[serde(default)]
     pub time_left: Option<TimeLeft>,
+    /// The native leg is silent: the recording proxy has recorded this many model calls and the
+    /// harness's native source has admitted no file, past [`NativeSilence`]. The tick sets it and
+    /// clears it once a file is admitted; it never stops or pauses anything. Absent from a
+    /// `state.json` an older build wrote.
+    #[serde(default)]
+    pub native_silent: Option<u64>,
+}
+
+/// When the watch tick calls a run's native leg silent: the recording proxy has recorded at
+/// least `calls` model requests, at least `after` has passed since the agent started, and the
+/// native source has admitted no file at all. A harness that writes no session file (a setting
+/// it ignores, a session folder it moved, the wrong home) then shows early, not when the
+/// verifier runs after the week (D2: the wire leg does not stand in for it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeSilence {
+    pub calls: u64,
+    pub after: std::time::Duration,
+}
+
+impl Default for NativeSilence {
+    /// Ten model calls and ten minutes: every shipped harness writes its session file well
+    /// before that.
+    fn default() -> Self {
+        NativeSilence {
+            calls: 10,
+            after: std::time::Duration::from_secs(10 * 60),
+        }
+    }
+}
+
+impl NativeSilence {
+    /// Whether the native leg is silent after `calls` model requests, `since_start` after the
+    /// agent started, with `native_files` admitted.
+    pub fn holds(self, calls: u64, since_start: std::time::Duration, native_files: u64) -> bool {
+        native_files == 0 && calls >= self.calls && since_start >= self.after
+    }
 }
 
 /// What `goalcup status` may tell the participant about `goalcup continue` for a run: the advice
@@ -342,6 +378,7 @@ impl RunState {
             ended: false,
             continuable: false,
             time_left: None,
+            native_silent: None,
         }
     }
 
@@ -440,6 +477,15 @@ impl RunState {
             && !self.ended
         {
             lines.push(participant::problem_sleep(why));
+        }
+        if let Some(calls) = self.native_silent
+            && !self.ended
+        {
+            lines.push(participant::problem_native_silent(
+                who.harness,
+                calls,
+                who.guide,
+            ));
         }
         // An agent the host ended because the run is over (its deadline, a newer run) is not a
         // problem; one that left while the run is open, or that a full disk stopped, is.
@@ -1038,6 +1084,7 @@ mod tests {
             harness: "Some Agent",
             run_id: "r0123456789abcdef",
             until: Some("Sat 14 Nov, 10:12 UTC"),
+            guide: "https://example.test/HARNESS-SETUP.md#some-agent",
         }
     }
 

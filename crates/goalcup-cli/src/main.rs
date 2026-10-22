@@ -295,6 +295,7 @@ fn run(command: Command) -> Result<u8, CliError> {
             dev,
             run_folder: std::env::current_dir().ok(),
             disk: disk_policy()?,
+            native_silence: goalcup_cli::run::NativeSilence::default(),
             mode: if test {
                 goalcup_cli::account::device::RunMode::Test
             } else if practice {
@@ -585,6 +586,7 @@ fn continue_run(run: Option<String>) -> Result<(), CliError> {
             run,
             run_folder: std::env::current_dir().ok(),
             disk: disk_policy()?,
+            native_silence: goalcup_cli::run::NativeSilence::default(),
             upload_policy: upload_policy()?,
             sleep_lock: goalcup_platform::awake::hold,
         },

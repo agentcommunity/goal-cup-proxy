@@ -688,6 +688,12 @@ impl NativeCapture {
         report
     }
 
+    /// How many files the sources have admitted so far. A file once admitted stays, so this
+    /// never falls.
+    pub fn tracked_files(&self) -> usize {
+        self.files.len()
+    }
+
     pub fn loss_report(&self) -> NativeLossReport {
         NativeLossReport {
             producer: self.emitter.producer.clone(),

@@ -45,6 +45,8 @@ pub(super) struct Owner {
     native_lost_at: Option<Instant>,
     /// Where a producer's loss notes its cause; the gap records only that it was lost.
     cycles: Arc<CycleCounters>,
+    /// The native adapter's admitted files after its last poll, for the status document.
+    native_files: Arc<AtomicU64>,
 }
 
 impl Owner {
@@ -73,12 +75,19 @@ impl Owner {
             native_lost: 0,
             native_lost_at: None,
             cycles: Arc::new(CycleCounters::default()),
+            native_files: Arc::default(),
         }
     }
 
     /// Note the causes of producer losses on `cycles`, the daemon's own.
     pub(super) fn noting_to(mut self, cycles: Arc<CycleCounters>) -> Owner {
         self.cycles = cycles;
+        self
+    }
+
+    /// Keep the native adapter's admitted-file count on `files`, which the entry's status reads.
+    pub(super) fn counting_native_files_to(mut self, files: Arc<AtomicU64>) -> Owner {
+        self.native_files = files;
         self
     }
 
@@ -154,6 +163,8 @@ impl Owner {
         let report = native.poll();
         // Deferred work polls again on the next pass.
         self.last_native = (!report.more_work).then(Instant::now);
+        self.native_files
+            .fetch_max(native.tracked_files() as u64, Ordering::Release);
         self.record_native_losses(false);
     }
 

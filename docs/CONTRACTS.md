@@ -246,7 +246,10 @@ leaves its mark.
 - The rest of the status document is small. `health` is `online`, `sealed` or
   `sealing_recovery_needed`; a registry row an older build wrote with another word reads as
   `unknown`. `arming` is `armed` (not launched yet) or `started`. There is no `event` block: the
-  round's dates are the upload server's, which owns the clock.
+  round's dates are the upload server's, which owns the clock. `native_files_admitted` is how many
+  files a live entry's native source has admitted so far, a count and not a verdict; it is absent
+  when the daemon does not hold the native reader (a sealed or reopened entry). `goalcup start`
+  reads it to say early that a harness writes no session file while model calls are recorded.
 - Gap history is sticky across finish and upload. `assistance_observed = false` means no explicit
   intervention was recorded. It is never a finding of zero assistance.
 - `goalcup-verify --capture-integrity TRACE` reads protocol v5 only. Exit codes: 0 complete and
@@ -584,7 +587,7 @@ wins over this text.
   `Host` is refused `401` with code `unauthorized` and a fixed body that quotes nothing it was sent,
   on a public route and on a bearer route alike. This closes DNS rebinding. A client that builds its
   URL from `control.json` sends a matching `Host`.
-- **Control API version.** `CONTROL_API_VERSION` is 10. `goalcup` and `goalcup-daemon` ship
+- **Control API version.** `CONTROL_API_VERSION` is 11. `goalcup` and `goalcup-daemon` ship
   together in one release, so a pair from two releases is refused, never bridged: the CLI refuses a
   `control.json` of another version and an answer whose `x-goalcup-control-version` header differs,
   and the daemon answers a request that names another version `426 unsupported`. Version 5 added the
@@ -596,5 +599,7 @@ wins over this text.
   its answer. Version 8 removed the V1 vocabulary nothing produced: the
   `WorkspaceInfo` shape, `GET /v0/entries/current`, the status document's `event` and
   `event_status_source`, the `arming` values `start_signal_seen` and `refused`, and every `health`
-  value but the three above. Version 9 added `run_secrets` to workspace creation (D60). None of
+  value but the three above. Version 9 added `run_secrets` to workspace creation (D60). Version
+  10 removed what no writer produced (the seal answer's workspace arm, `finalization`,
+  `native_scope`). Version 11 added `native_files_admitted` to the status document (C4). None of
   these changes the frozen v5 chain.

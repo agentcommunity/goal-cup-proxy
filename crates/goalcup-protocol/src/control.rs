@@ -59,7 +59,10 @@ pub const STATUS_DOMAIN: &[u8] = b"goalcup-status-v1\0";
 /// bare seal answers a [`SealManifest`] or an error; `StatusPayload.finalization`; and the
 /// `native_scope` of the capture launch and finish requests, which the daemon never read once
 /// headless capture left (D54 amendment).
-pub const CONTROL_API_VERSION: u32 = 10;
+/// V11 adds `StatusPayload.native_files_admitted`, the files a live entry's native source has
+/// admitted; an older CLI would drop the field and fail to verify the document, so the pair is
+/// refused instead.
+pub const CONTROL_API_VERSION: u32 = 11;
 
 pub const ROUTE_ENTRIES: &str = "/v0/entries";
 pub const ROUTE_HEALTH: &str = "/v0/health";
@@ -335,6 +338,13 @@ pub struct StatusPayload {
     /// admitted before it spawns anything. Absent from every legacy payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admissions_refused: Option<u64>,
+    /// How many files a live v5 entry's native source has admitted so far: a count, never a
+    /// verdict. `goalcup start` reads it to say early that the harness has written no session
+    /// file while model calls are recorded (D3: the judgement is the CLI's). Absent when the
+    /// daemon does not hold the entry's native reader (a sealed or reopened entry) and from
+    /// every legacy payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_files_admitted: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

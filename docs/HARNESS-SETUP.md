@@ -9,6 +9,13 @@ Goal Cup never changes your harness settings
 You set them yourself. `goalcup prep` tells you when a permission setting is missing, and links
 to this page.
 
+Goal Cup records two things: the model calls (on the wire) and the harness's own session file.
+One does not stand in for the other. If a run has recorded model calls for ten minutes and the
+harness has still written no session file, `goalcup start` says so once in the terminal, and
+`goalcup status` keeps it as a `PROBLEM:` line that links to your harness's section here. Keep
+the agent running, and check the settings in that section and the harness version. The line goes
+away once a session file is recorded.
+
 The facts here come from Goal Cup's own runs, most of them from the
 [local test day of 22 October 2026](research/results/2026-10-22-local-test-day.md). "Not measured"
 means that nobody at Goal Cup has tried it. The details are in each
