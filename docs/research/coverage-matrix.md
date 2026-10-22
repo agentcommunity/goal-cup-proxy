@@ -78,8 +78,12 @@ What the table adds and what it does not:
   workloads in 5 to 7 minutes and idled, so it does not show busy-run growth.
 - Decoding, retrieval and child coverage were not regenerated for these runs in the results file.
   Subagent attribution is a decoder change (89703603: Amp `parentToolUseId` and `Task` results,
-  Codex messages and `spawn_agent`), not a measured replay of the 22 October copies. Hermes
-  children stay wire-only until a native decoder exists.
+  Codex messages and `spawn_agent`), not a measured replay of the 22 October copies. Later decoder
+  changes, also not replayed: `codex-native` 4 says what an unmarked user or developer message is
+  (`unmarked_message` with its supplied `content_item_kinds`), and `amp-thread-jsonrpc` 3 decodes
+  `edit_file` results (`diff`, `line_range`; shape from public readers, synthetic-only). Hermes
+  children stay wire-only and unattributed: the snapshot names no parent, has no protocol hint, and
+  Hermes 0.21.1 stopped writing it ([facts](../harnesses/hermes-cli.md#4-session-format-and-identity)).
 - Size, measured by `scripts/research-measure.py` on the 120-minute server copies and five 18 to 19
   October Codex traces: Codex 8.2 MB/h, Amp 4.9 to 10.4 MB/h, Hermes 26 to 37 MB/h (over 95% wire).
   Linear 168 h projections: about 1.4 GB, 0.8 to 1.75 GB and 4.4 to 6.2 GB; about 130 MB, 80 to 170
