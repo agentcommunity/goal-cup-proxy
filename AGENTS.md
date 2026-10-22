@@ -21,7 +21,7 @@ unmeasured. These targets do not establish that current connectors capture every
 |---|---|
 | `crates/goalcup-protocol` | Every byte definition: chain, v5 records, control API types, harness schema (`harness.rs`), trust tables (`capture_policy.rs`), connector pins. No rule logic. |
 | `crates/goalcup-daemon` | `goalcup-daemon`: ingest, redaction, chain writer, native-file capture, finish, process termination. Small on purpose. |
-| `crates/goalcup-cli` | `goalcup` (ten commands: `start`, `continue`, `status`, `time-left`, `entries`, `seal`, `doctor`, `login`, `prep`, `upload`). Launches the harness, runs the recording proxy, uploads. |
+| `crates/goalcup-cli` | `goalcup` (eleven commands: `start`, `continue`, `status`, `time-left`, `mcp`, `entries`, `seal`, `doctor`, `login`, `prep`, `upload`). Launches the harness, runs the recording proxy, uploads. |
 | `crates/goalcup-verifier` | `goalcup-verify` and the decoders. Every judgement about the bytes lives here. |
 | `crates/goalcup-platform` | Unix-only OS code shared by the others: disk reservation, capability-based file access, machine facts, sleep lock. |
 | `connectors/<id>/` | One harness = one `harness.toml` plus seed files. Data, not code. Pinned by digest. |

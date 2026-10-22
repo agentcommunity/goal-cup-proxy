@@ -35,10 +35,10 @@ use std::process::ExitCode;
     after_help = AFTER_HELP,
     subcommand_required = true,
     arg_required_else_help = true,
-    // So the list under `Commands:` is exactly the ten sub-commands below. clap's built-in
-    // `help` sub-command would be an eleventh line in it, indistinguishable to a reader — and
+    // So the list under `Commands:` is exactly the eleven sub-commands below. clap's built-in
+    // `help` sub-command would be a twelfth line in it, indistinguishable to a reader — and
     // to a test — from a sub-command this tree decided to ship. `goalcup <command> --help` is
-    // the same help by the route the other nine already take.
+    // the same help by the route the other ten already take.
     disable_help_subcommand = true
 )]
 struct Args {
@@ -77,7 +77,7 @@ Without `--harness` it checks the harness you chose in `goalcup prep`; pass `--h
 check another one, or `--harness all` to check every shipped harness (one you have not \
 installed then makes this command exit 1).";
 
-/// The sub-commands: ten, and the hidden `git-credential` that a run's clone calls. `verify`
+/// The sub-commands: eleven, and the hidden `git-credential` that a run's clone calls. `verify`
 /// is deliberately absent: see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
@@ -171,6 +171,13 @@ enum Command {
     /// computer, as `goalcup status` does.
     #[command(name = "time-left")]
     TimeLeft,
+    /// Serve the time left as an MCP tool, `time_left`, for your agent to call.
+    ///
+    /// Your harness starts this command itself, by its full path, when you add it to the
+    /// harness's MCP servers (`goalcup prep` prints the lines for your harness). It speaks MCP
+    /// on standard input and output, answers what `goalcup time-left` prints, and only reads:
+    /// it writes no file and opens no port. You never run it yourself.
+    Mcp,
     /// Start your agent again, when it stopped before the run's time was up.
     ///
     /// An agent that exits, a closed window or a restart ends one part of your run. The run
@@ -303,6 +310,12 @@ fn run(command: Command) -> Result<u8, CliError> {
         Command::Continue { run } => continue_run(run).map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),
         Command::TimeLeft => time_left().map(|()| 0),
+        Command::Mcp => commands::mcp::serve(
+            &mut std::io::stdin().lock(),
+            &mut std::io::stdout().lock(),
+            &mut || commands::time_left::answer(goalcup_cli::run::now_unix()),
+        )
+        .map(|()| 0),
         Command::Entries { json } => entries(json).map(|()| 0),
         Command::Seal { entry, yes } => seal(entry, yes).map(|()| 0),
         Command::Doctor { json, harness } => {
@@ -358,7 +371,11 @@ fn send_leftovers(command: &Command) {
         return;
     };
     let skip = match command {
-        Command::Doctor { .. } | Command::GitCredential { .. } | Command::Seal { .. } => return,
+        // `mcp` only reads, and its harness may hide the in-harness marker from it.
+        Command::Doctor { .. }
+        | Command::GitCredential { .. }
+        | Command::Seal { .. }
+        | Command::Mcp => return,
         Command::TimeLeft if goalcup_cli::run::time_left::file_from_env().is_some() => return,
         Command::Upload { entry: None } => goalcup_cli::run::newest(&cfg).ok().flatten(),
         Command::Upload { entry: Some(part) } => {
@@ -381,15 +398,7 @@ fn send_leftovers_skipping(cfg: &std::path::Path, skip: Option<&str>) {
 /// `goalcup time-left`: inside the agent's session, the file the launch names; in a person's own
 /// terminal, the newest open run on this computer.
 fn time_left() -> Result<(), CliError> {
-    let now = goalcup_cli::run::now_unix();
-    let out = &mut std::io::stdout();
-    match goalcup_cli::run::time_left::file_from_env() {
-        Some(file) => commands::time_left::time_left_with(&file, now, out),
-        None => {
-            let cfg = goalcup_cli::config::config_dir()?;
-            commands::time_left::time_left_of_open_run(&cfg, now, out)
-        }
-    }
+    commands::time_left::time_left(goalcup_cli::run::now_unix(), &mut std::io::stdout())
 }
 
 /// When chunks go and how failures wait: the shipped policy, or in a test build one named by

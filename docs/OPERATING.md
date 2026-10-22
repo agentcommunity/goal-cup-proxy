@@ -482,6 +482,7 @@ goalcup start --harness <id> [--practice | --test]   # opens the harness in chat
 goalcup status | upload | seal [<part-id>]           # default: the newest run started here
 goalcup continue [<run-id>]
 goalcup entries | time-left
+goalcup mcp                                          # the time-left MCP tool; the harness starts it
 goalcup-verify --capture-integrity <trace-dir>       # the line `start` printed
 ```
 
