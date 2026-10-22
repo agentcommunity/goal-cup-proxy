@@ -4,7 +4,8 @@
 //! line. It answers `initialize`, `ping`, `tools/list` and `tools/call`, takes every notification
 //! (`notifications/initialized` among them) without an answer, and stops at the end of its input
 //! with exit 0. Its one tool, [`TOOL`], takes no arguments and returns the line
-//! `goalcup time-left` prints ([`super::time_left::answer`]), so the two cannot differ.
+//! `goalcup time-left` prints from the time-left file ([`super::time_left::mcp_answer`]); with no
+//! file it says the time is unknown, since inside the harness there is no run to look up.
 //!
 //! The harness starts it by absolute path, so the agent's `PATH` does not matter. It only reads:
 //! it writes no file, opens no port, asks no server, and cannot seal, stop or continue anything

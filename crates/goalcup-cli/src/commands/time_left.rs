@@ -10,8 +10,9 @@
 //! computer is read instead, the way `goalcup status` counts its time left
 //! ([`time_left_of_open_run`]).
 //!
-//! [`answer`] makes that choice and finds the line. `goalcup time-left` prints it, and the
-//! `time_left` tool of `goalcup mcp` (fix plan v9) returns it, so the two cannot differ.
+//! [`answer`] makes that choice and finds the line, and `goalcup time-left` prints it. The
+//! `time_left` tool of `goalcup mcp` (fix plan v9) returns the same line from the file
+//! ([`mcp_answer`]); it runs only inside the harness, so without the file it says "unknown".
 
 use crate::CliError;
 use crate::run::time_left::{file_says_practice, left_line, sentence};
@@ -28,6 +29,24 @@ pub fn answer(now: u64) -> Result<String, CliError> {
     match crate::run::time_left::file_from_env() {
         Some(file) => line_from_file(&file, now),
         None => line_of_open_run(&crate::config::config_dir()?, now),
+    }
+}
+
+/// The `time_left` tool of `goalcup mcp`: the line from the file the environment names, as
+/// [`answer`] reads it. The server runs only inside the harness, whose `HOME` is the run home, so
+/// without the file it never looks for a configuration directory (it would find none and say no
+/// run is open): it says the time is unknown right now.
+pub fn mcp_answer(now: u64) -> Result<String, CliError> {
+    mcp_answer_from(crate::run::time_left::file_from_env().as_deref(), now)
+}
+
+/// [`mcp_answer`] with the file the environment names, if any.
+fn mcp_answer_from(file: Option<&Path>, now: u64) -> Result<String, CliError> {
+    match file {
+        Some(file) => line_from_file(file, now),
+        None => Err(CliError::Refused(crate::participant::time_left_unknown(
+            false,
+        ))),
     }
 }
 
@@ -99,6 +118,28 @@ fn put(out: &mut dyn std::io::Write, line: &str) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The MCP tool without a time-left file says the time is unknown, never "No run is open"
+    /// (inside the harness the configuration directory is not the participant's); with the file
+    /// it answers what the file says, as `goalcup time-left` does.
+    #[test]
+    fn the_mcp_tool_without_the_file_says_unknown_not_no_run() {
+        let refused = mcp_answer_from(None, 1_000).unwrap_err();
+        assert_eq!(refused.exit_code(), 1);
+        assert_eq!(
+            refused.to_string(),
+            crate::participant::time_left_unknown(false)
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("time-left");
+        assert_eq!(
+            mcp_answer_from(Some(&missing), 1_000)
+                .unwrap_err()
+                .to_string(),
+            line_from_file(&missing, 1_000).unwrap_err().to_string()
+        );
+    }
 
     /// In a person's own terminal (no time-left file) the newest open run's state answers, in
     /// the line the agent gets; with no open run it says so and exits 1.
