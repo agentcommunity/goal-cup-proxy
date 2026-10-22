@@ -223,7 +223,11 @@ In priority order. Evidence is aggregates; raw traces stay on the owner's Mac. F
   `/Volumes/gcsmall`), all results under `~/goalcup-campaign/results/`, the findings list
   `~/goalcup-campaign/FINDINGS.md`.
 - **Secrets (owner's Mac, mode 600):** `~/.goalcup-secrets/staging-test-approval-key` (staging
-  `TEST_APPROVAL_KEY` was rotated to it on 22 Oct). The GitHub token file does not exist yet.
+  `TEST_APPROVAL_KEY` was rotated to it on 22 Oct). `~/.goalcup-secrets/gc-test-token` (fine-grained,
+  saved 22 Oct ~04:45Z): GitHub's API answers for the practice repo and nembal/gc-test-*. **Before any
+  test cell, confirm it cannot push to `agentcommunity/goalcup-matrix-empty`** (the API's `push: true`
+  there may be the account's role, not the token's scope); one agent push there would make every later
+  test start refuse the repo.
 - **GitHub:** public empty repos `nembal/gc-test-*` (8); website PR nembal/agentcommunity_page#319.
 - **Staging:** every test and practice run of the day (run ids in the results above); the Worker is
   this branch's code with `PRACTICE_RUN_MINUTES=10`.
