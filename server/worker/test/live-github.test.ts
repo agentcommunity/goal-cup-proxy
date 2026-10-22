@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { afterEach, mock } from "node:test";
 import { LocalDb } from "../src/db-local.ts";
 import type { LiveSnapshot } from "../src/db.ts";
-import { GITHUB_SETTLE } from "../src/github.ts";
+import { GITHUB_GRACE, GITHUB_SETTLE } from "../src/github.ts";
 import { GITHUB_RESERVE, GITHUB_STATS_PER_TICK } from "../src/live-github.ts";
 import { liveKey } from "../src/live.ts";
 import { credentialFor } from "./helpers/client.ts";
@@ -200,10 +200,17 @@ lifecycle("a 429 or a rate-limit 403 ends the step for the tick, and that run is
     r.after(5 * MIN);
   }
 
-  // A 403 that is not a rate limit (a blocked repository, say) is that repository's: the others are read.
-  const calls = github(same(all), (u) => (u.pathname.includes(all[0]!.path) ? json({ message: "blocked" }, 403) : undefined));
+  // Search answers its secondary limit with a bare 403: that ends the step too.
+  let bare = github(same(all), (u) => (u.pathname === "/search/issues" ? json({ message: "secondary rate limit" }, 403) : undefined));
   await r.tick();
-  assert.equal(readRepos(calls).length, 3);
+  assert.equal(readRepos(bare).length, 1);
+  assert.equal(stored(r, all[0]!.run_id), null);
+  r.after(5 * MIN);
+
+  // A 403 that is not a rate limit (a blocked repository, say) is that repository's: the others are read.
+  bare = github(same(all), (u) => (u.pathname.includes(all[0]!.path) ? json({ message: "blocked" }, 403) : undefined));
+  await r.tick();
+  assert.equal(readRepos(bare).length, 3);
   assert.equal(stored(r, all[0]!.run_id)?.commits, null);
   assert.equal(stored(r, all[2]!.run_id)?.commits, 12);
 }, ON);
@@ -220,7 +227,8 @@ lifecycle("the step stops once GitHub says fewer than the reserve of calls is le
 
 lifecycle("after the end: one last reading up to the judged commit, then never again", async (r) => {
   const [run] = await runs(r, 1);
-  const repos = same([run!], { commits: 9, commitsAt: { [SHA]: 7 }, prs: 2 });
+  // The week after the end (pushes after the deadline) is left out of the last reading.
+  const repos = same([run!], { commits: 9, commitsAt: { [SHA]: 7 }, prs: 2, weeks: [[BEFORE, 9999, -9999], [WEEK, 250, -40], [WEEK + 7 * 24 * 3600, 5000, -5000]] });
   let calls = github(repos);
   await r.tick(); // during the run
   const during = calls.find((u) => u.pathname.endsWith("/commits"))!;
@@ -260,10 +268,11 @@ lifecycle("the GitHub numbers are community totals only: no repository, owner, r
   }
 }, ON);
 
-lifecycle("a failing GitHub reader changes nothing else: notices go out and the snapshot is written (D64)", async (r) => {
-  await runs(r, 5);
+lifecycle("a failing GitHub reader changes nothing else: the tick finishes, notices go out, the snapshot is written (D64)", async (r) => {
+  const all = await runs(r, 5);
   const logged: string[] = [];
   const log = mock.method(console, "error", (line: string) => void logged.push(String(line)));
+  // The database fails under the step twice: before it asks GitHub, and while it stores a reading.
   const due = mock.method(LocalDb.prototype, "githubDue", () => Promise.reject(new Error("database down")));
   try {
     github({}, () => new Error("GitHub must not be asked"));
@@ -273,22 +282,109 @@ lifecycle("a failing GitHub reader changes nothing else: notices go out and the 
     assert.equal((await live(r)).entries.started, 5);
   } finally {
     due.mock.restore();
+  }
+  const write = mock.method(LocalDb.prototype, "recordGithub", () => Promise.reject(new Error("write refused")));
+  try {
+    const before = r.bucket.map.get(liveKey("cup"))!.text;
+    const calls = github(same(all));
+    r.after(5 * MIN);
+    await r.tick(); // resolves: the step's failure is not the tick's
+    assert.equal(readRepos(calls).length, 1, "the step ends at the failure");
+    assert.ok(logged.some((l) => l.startsWith("github-stats-failed: write refused")), logged.join("\n"));
+    assert.notEqual(r.bucket.map.get(liveKey("cup"))!.text, before, "the snapshot of this tick was written");
+  } finally {
+    write.mock.restore();
     log.mock.restore();
   }
+}, ON);
 
-  // A GitHub that cannot be reached ends the step quietly: one warning, nothing stored, nothing else touched.
+lifecycle("when the tick's first call cannot reach GitHub the step ends; that run goes to the back of the line", async (r) => {
+  const all = await runs(r, 3);
   const warned: string[] = [];
   const warn = mock.method(console, "warn", (line: string) => void warned.push(String(line)));
   try {
-    const before = r.bucket.map.get(liveKey("cup"))!.text;
-    const calls = github({}, () => new Error("offline"));
-    r.after(5 * MIN);
+    let calls = github({}, () => new Error("offline"));
     await r.tick();
-    assert.equal(readRepos(calls).length, 1, "the first failure stops the step");
+    assert.equal(calls.length, 1, "one 8-second wait, not one per run");
     assert.ok(warned.some((l) => l.includes("stopped for this tick: GitHub could not be reached")), warned.join("\n"));
-    assert.notEqual(r.bucket.map.get(liveKey("cup"))!.text, before, "the snapshot of this tick was written");
-    assert.ok(![...r.bucket.map.keys()].some((k) => k.startsWith("state/github/")));
+    assert.deepEqual(stored(r, all[0]!.run_id), { commits: null, prs_opened: null, lines_added: null, lines_removed: null, read_at: null, due_at: t(5 * MIN), final: false });
+    r.after(5 * MIN);
+    calls = github(same(all));
+    await r.tick();
+    assert.deepEqual(readRepos(calls), [all[1]!.path, all[2]!.path, all[0]!.path], "the runs due before it come first");
   } finally {
     warn.mock.restore();
   }
 }, ON);
+
+lifecycle("a run GitHub does not answer for on its 2nd or 3rd call is asked again behind the others; the rest are read", async (r) => {
+  const all = await runs(r, GITHUB_STATS_PER_TICK + 2);
+  const stuck = all[0]!;
+  for (const second of [true, false]) {
+    for (const k of [...r.bucket.map.keys()].filter((key) => key.startsWith("state/github/"))) r.bucket.map.delete(k);
+    const hangs = (u: URL) =>
+      (second ? u.pathname === "/search/issues" && u.searchParams.get("q")!.includes(stuck.path) : u.pathname === `/repos/${stuck.path}/stats/code_frequency`)
+        ? new Error("timed out")
+        : undefined;
+    let calls = github(same(all), hangs);
+    await r.tick();
+    assert.equal(readRepos(calls).length, GITHUB_STATS_PER_TICK, "every run of the tick was asked");
+    assert.equal(stored(r, all[1]!.run_id)?.commits, 12);
+    assert.deepEqual(stored(r, stuck.run_id), { commits: null, prs_opened: null, lines_added: null, lines_removed: null, read_at: null, due_at: later(5 * MIN), final: false }, "nothing new");
+    r.after(5 * MIN);
+    calls = github(same(all), hangs);
+    await r.tick();
+    assert.deepEqual(readRepos(calls), [all[20]!.path, all[21]!.path, stuck.path], "the two never read come first");
+    r.after(5 * MIN);
+  }
+}, ON);
+
+lifecycle("after the end a judged commit of none, or none decided by the grace hour, makes the run final with its last numbers", async (r) => {
+  const [gone, unknown] = await runs(r, 2);
+  github(same([gone!, unknown!]));
+  await r.tick(); // the readings during the run
+  // From the end: GitHub has no repository `gone` (the judged commit becomes none after the grace
+  // hour), and cannot be reached for `unknown`'s repository (no judged commit at all).
+  const after = (u: URL) => (u.pathname === `/repos/${gone!.path}` ? json({}, 404) : u.pathname === `/repos/${unknown!.path}` ? new Error("offline") : undefined);
+  r.at(t(3600 + GITHUB_SETTLE));
+  let calls = github(same([gone!, unknown!]), after);
+  await r.tick();
+  assert.deepEqual(readRepos(calls), [], "no last reading before a judged commit");
+  assert.equal(stored(r, gone!.run_id)?.final, false);
+  r.at(t(3600 + GITHUB_GRACE));
+  calls = github(same([gone!, unknown!]), after);
+  await r.tick();
+  assert.deepEqual(readRepos(calls), []);
+  for (const run of [gone!, unknown!]) {
+    assert.deepEqual(stored(r, run.run_id), { commits: 12, prs_opened: 3, lines_added: 250, lines_removed: 40, read_at: T0, due_at: null, final: true });
+  }
+}, HOUR);
+
+lifecycle("a last reading whose lines GitHub is still computing is retried until the grace hour, then final without them", async (r) => {
+  const [run] = await runs(r, 1);
+  const repos = same([run!], { commits: 9, commitsAt: { [SHA]: 7 }, prs: 2, computing: 1000 });
+  github(repos);
+  r.at(t(3600 + GITHUB_SETTLE));
+  await r.tick();
+  assert.equal(stored(r, run!.run_id)?.final, false);
+  assert.equal(stored(r, run!.run_id)?.due_at, t(3600 + GITHUB_SETTLE + 5 * MIN));
+  r.at(t(3600 + GITHUB_GRACE));
+  await r.tick();
+  assert.deepEqual(stored(r, run!.run_id), { commits: 7, prs_opened: 2, lines_added: null, lines_removed: null, read_at: t(3600 + GITHUB_GRACE), due_at: null, final: true });
+  r.after(5 * MIN);
+  const calls = github(repos);
+  await r.tick();
+  assert.deepEqual(readRepos(calls), [], "never again");
+}, HOUR);
+
+lifecycle("an empty repository (commits 409, code_frequency 204) counts 0", async (r) => {
+  const [run] = await runs(r, 1);
+  github(same([run!]), (u) => (u.pathname.endsWith("/commits") ? json({ message: "Git Repository is empty." }, 409) : u.pathname.endsWith("/code_frequency") ? new Response(null, { status: 204 }) : undefined));
+  await r.tick();
+  assert.deepEqual(stored(r, run!.run_id), { commits: 0, prs_opened: 3, lines_added: 0, lines_removed: 0, read_at: T0, due_at: t(3600), final: false });
+}, ON);
+
+/** The rig's clock (it moves `Date.now`) plus `seconds`, as the reader writes times. */
+function later(seconds: number): string {
+  return new Date(Date.now() + seconds * 1000).toISOString().replace(".000Z", "Z");
+}

@@ -514,8 +514,8 @@ Schema 1 (example numbers; the field names and their meaning follow the live sta
 | `github.as_of` | the newest reading counted |
 | `github.repos` | repositories with a reading: the main runs' repositories, one each (two runs naming one repository count it once) |
 | `github.commits` | commits on the default branch since the run's start; after the end, those reachable from the judged commit |
-| `github.prs_opened` | pull requests the repository's owner opened during the run, by GitHub's timestamp; others' are not counted |
-| `github.lines_added`, `lines_removed` | additions and deletions of the weeks the run touches (GitHub's `code_frequency`), floored to 100; every file counts, generated ones and lockfiles too |
+| `github.prs_opened` | pull requests the repository's owner opened during the run, by GitHub's timestamp; only the owner's own, so a repository owned by an organization, or PRs opened by a bot or app, count 0 |
+| `github.lines_added`, `lines_removed` | additions and deletions of the whole weeks the run touches (GitHub's `code_frequency`), floored to 100; every file counts, generated ones and lockfiles too |
 | `survival`, `hourly`, `trace`, `server` | `null`: later steps of the live stats design, not built yet |
 
 The cron writes the snapshot after its other steps, in its own `try`: a failure is the log line
@@ -538,18 +538,30 @@ calls each, with the judged commit's headers, token and 8-second timeout:
    header's last page. After the end: `sha=<judged commit>`, so pushes GitHub timestamped after the
    end are left out. `409` (an empty repository) is 0.
 2. `GET /search/issues?q=repo:{owner}/{repo} is:pr author:{owner} created:<start>..<end>`:
-   `total_count`. Anyone can open a pull request on a public repository; only the owner's are counted.
-3. `GET /repos/{owner}/{repo}/stats/code_frequency`: the weeks the run touches. `202` (GitHub is
+   `total_count`. Anyone can open a pull request on a public repository, so only the repository
+   owner's own count: a repository owned by an organization, and pull requests opened by a bot or a
+   GitHub App, give 0.
+3. `GET /repos/{owner}/{repo}/stats/code_frequency`: the weeks the run touches, up to the week the
+   run ends in. GitHub counts lines per whole week (from Sunday 00:00 UTC), so lines committed before
+   the start in the start week, and after the deadline in the end week, can count. `202` (GitHub is
    still computing, which it does after every push) is asked again next tick; `204` is 0.
 
-A run is read about hourly while it runs. From 5 minutes after its end it gets one last reading,
-once the judged commit is decided; it is retried each tick while a number is missing, for at most an
-hour, and then never read again. A number not read (an error status, a repository turned private or
-gone) keeps its last value. A `429`, a `403` that GitHub marks as a rate limit (`x-ratelimit-remaining:
-0` or `retry-after`), or a GitHub that cannot be reached ends the step for the tick; the run being read
-is not stored and stays first in line. The step also stops once GitHub says fewer than 1,000 core
-calls are left in the hour, which the judged commits and the public-repo check of every start need
-more. At 300 runs that is a full round about every 75 minutes, about 720 calls an hour. The database
+A run is read about hourly while it runs: 20 runs a tick is 240 an hour, so "hourly" holds up to
+about 240 main runs, and beyond that each run is read less often (at 300, about every 75 minutes;
+about 720 calls an hour). From 5 minutes after its end it gets one last reading, once the judged
+commit is decided; it is retried each tick while a number is missing, and an hour after the end it
+is made final with whatever it has (a judged commit of `none` or none at all keeps the last numbers),
+and then never read again. A number not read (an error status, a repository turned private or gone)
+keeps its last value.
+
+A rate limit ends the step for the tick, and the run being read is not stored and stays first in
+line: a `429`, any `403` from search (its secondary limit), or a `403` that GitHub marks as a rate
+limit (`x-ratelimit-remaining: 0` or `retry-after`). Any other `403` (a blocked repository) is that
+repository's only. A GitHub that cannot be reached (an error, or the 8-second timeout) costs only that
+run: it is stored as "nothing new" and asked again 5 minutes later, behind the runs already due, or
+made final after its hour; only when the tick's first call cannot reach GitHub does the step end for
+the tick. The step also stops once GitHub says fewer than 1,000 core calls are left in the hour,
+which the judged commits and the public-repo check of every start need more. The database
 keeps numbers only (`goal_cup_tracer.run_github`: no URL, owner, sha, message or author), and the
 snapshot sums them. A failure is the log line `github-stats-failed: …` and changes nothing else.
 It needs website migration `20261023100000_goal_cup_tracer_live_github.sql`, after `20261022100000`.

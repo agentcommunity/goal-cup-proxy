@@ -109,10 +109,14 @@ CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy --env staging # staging
 - The live totals' GitHub numbers need website migration
   `20261023100000_goal_cup_tracer_live_github.sql`, applied after `20261022100000` and the same way.
   It adds one table (`goal_cup_tracer.run_github`, numbers only) and two functions, and replaces the
-  live snapshot function; the live Worker is not affected. `wrangler.toml` sets `GITHUB_STATS = "on"`
-  for both deployments; a Worker deployed before the migration logs `github-stats-failed` each tick
-  and the `github` block stays `null`, nothing else changes. To switch the reader off without a code
-  change, deploy with `--var GITHUB_STATS:off`.
+  live snapshot function; the live Worker is not affected. `wrangler.toml` has `GITHUB_STATS = "on"`
+  for staging and `"off"` for production. Staging shares the database, so it is the canary: after the
+  migration, deploy staging and check that the staging `live.json` gets a `github` block (it needs 5
+  staging runs with a reading) and that its log has no `github-stats-failed`. Then turn production on
+  with a one-line change, `GITHUB_STATS = "on"` in the top `[vars]` of `wrangler.toml`, committed and
+  deployed as usual. A Worker with the reader on and no migration logs `github-stats-failed` each
+  tick and the `github` block stays `null`; nothing else changes. To switch it off again without a
+  code change, deploy with `--var GITHUB_STATS:off`.
 - `GITHUB_TOKEN` needs public read access and nothing more: a fine-grained token with "Public
   repositories (read-only)" and no account or repository permissions, or a classic token with no
   scopes. Never one that can push. The judged commits, the start check and the GitHub numbers all use

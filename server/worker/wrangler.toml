@@ -58,7 +58,9 @@ DB_BACKEND = "supabase"
 GITHUB_CHECK = "on"
 # Read the competition runs' public repositories for the live totals' github block (src/live-github.ts):
 # commits, pull requests and lines, about hourly per run, with GITHUB_TOKEN. Anything but "on": not read.
-GITHUB_STATS = "on"
+# Off in production until website migration 20261023100000 is applied and staging (the canary, on
+# the same database) has shown the block; then this one line becomes "on" (docs/OPERATING.md).
+GITHUB_STATS = "off"
 # The website's page where a member approves a device request (no query string).
 # goalcup opens it with `?code=<user code>`.
 APPROVAL_URL = "https://agentcommunity.org/goalcup/approve"
@@ -148,6 +150,7 @@ PRACTICE_RUN_MINUTES = "10"
 RUN_MAX_COMPRESSED_BYTES = "68719476736"
 DB_BACKEND = "supabase"
 GITHUB_CHECK = "on"
+# On here first: staging is the GitHub reader's canary (production stays off until it has shown the block).
 GITHUB_STATS = "on"
 # The website's approval page (agentcommunity.org; it signs the member in with the site's session).
 APPROVAL_URL = "https://agentcommunity.org/goalcup/approve"
