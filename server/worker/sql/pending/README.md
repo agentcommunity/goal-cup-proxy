@@ -1,9 +1,17 @@
-# Pending website migration
+# Pending website migrations
 
-This migration was written in this repository first, because the website repository
-(`agentCommunity_PAGE`), which owns the migrations, was not at hand. It is also the last section
-of the mirror `../goal-cup-tracer-upload.sql`, byte for byte, so the Worker's SQL parity test
-(`test/supabase.test.ts`) already checks the Worker against it.
+These migrations were written in this repository first, because the website repository
+(`agentCommunity_PAGE`), which owns the migrations, was not at hand.
+
+- `20261021100000_goal_cup_tracer_event_readiness.sql` is also the last section of the mirror
+  `../goal-cup-tracer-upload.sql`, byte for byte. It was applied to the shared database on 22 Oct
+  (TODO.md); its website branch is not merged yet.
+- `20261022100000_goal_cup_tracer_live_stats.sql` (the live totals, `GET /v1/live.json`) is NOT in
+  the mirror yet, on purpose: the mirror is regenerated from the website repo once the file merges
+  there. Until then `scripts/check-sql.sh` applies it after the mirror, and the Worker's SQL parity
+  test (`test/supabase.test.ts`) reads it after the mirror too. Not applied anywhere. It adds one
+  read-only function, `public.goal_cup_upload_live_snapshot(p_event_id, p_at)`, with the Worker
+  roles' grants; no table, column or row changes. Land it with the same steps as below.
 
 `20261021100000_goal_cup_tracer_event_readiness.sql` holds five changes in one file, one
 transaction (its header has the detail):
@@ -37,5 +45,8 @@ is no "staging first" for SQL. The order:
 4. Deploy and test the staging Worker, then deploy production. The Worker that is live keeps
    working on the migrated database; the new Worker calls the new
    `goal_cup_upload_commit_chunk`, `goal_cup_upload_heartbeat` and
-   `goal_cup_upload_record_final_commit` overloads, so it needs the migration first.
-5. Regenerate the mirror from the website repo (command in its header) and delete this folder.
+   `goal_cup_upload_record_final_commit` overloads, so it needs the migration first. (For the live
+   totals: the new Worker calls `goal_cup_upload_live_snapshot`; without it the cron logs
+   `live-snapshot-failed` and `GET /v1/live.json` answers `404 not_ready`, nothing else.)
+5. Regenerate the mirror from the website repo (command in its header) and delete each file it now
+   holds from this folder; delete the folder when it is empty.

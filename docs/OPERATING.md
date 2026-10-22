@@ -93,8 +93,19 @@ CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy --env staging # staging
   `RESEND_API_KEY`, and for staging only `TEST_APPROVAL_KEY`. The signing seed is made offline and kept in
   the owner's password manager, never in a repo. Meanings: [server/worker/README](../server/worker/README.md#configuration).
 - Watch a deploy with `npx wrangler tail`. Useful log lines: `tick <step> <run_id>: …` (a cron step failed),
-  `r2-put-unrecognised-error` (R2 refused a put for a reason the Worker does not know), `misconfigured: …`.
+  `r2-put-unrecognised-error` (R2 refused a put for a reason the Worker does not know), `misconfigured: …`,
+  `live-snapshot-failed: …` (the live totals were not written this tick; the last copy stays).
 - Before the first real upload, prove the two R2 behaviours listed in the worker README ("Before launch").
+- The public live totals (`GET /v1/live.json`) need website migration
+  `20261022100000_goal_cup_tracer_live_stats.sql` before the Worker that calls it is deployed. Land it
+  as the event-readiness one was ([sql/pending](../server/worker/sql/pending/README.md)): run
+  `sh server/worker/scripts/check-sql.sh` (as a normal user, or as root with a `postgres` user), copy
+  the file unchanged into the website repo's `supabase/migrations/` and merge it there, then the
+  lead agent applies it once and the owner approves:
+  `psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <file>`, then `pnpm db:check`. It only
+  adds one read-only function, so the live Worker is not affected. Then deploy staging, check
+  `GET /v1/live.json` after the next tick, then production. A Worker deployed before the migration
+  logs `live-snapshot-failed` each tick and answers `404 not_ready`; nothing else changes.
 
 ## Test runs
 

@@ -6,8 +6,11 @@
 #      auth.users, public.email_suppression_list, public.member_profiles);
 #   3. applies the mirror sql/goal-cup-tracer-upload.sql up to its first pending section, in one
 #      transaction: the database as it is today;
-#   4. checks that the mirror's pending sections are the files in sql/pending/, byte for byte;
-#   5. applies each pending file with the production command (psql -X -1 -v ON_ERROR_STOP=1 -f);
+#   4. checks that the mirror's pending sections are the files in sql/pending/, byte for byte (a
+#      pending file the mirror does not hold yet is allowed only after every file it does hold:
+#      the mirror is regenerated from the website repo once that file merges there);
+#   5. applies each pending file, in name order, with the production command
+#      (psql -X -1 -v ON_ERROR_STOP=1 -f);
 #   6. smoke-calls the new and the old-signature functions, then stops and deletes everything.
 #
 #   sh server/worker/scripts/check-sql.sh
@@ -77,13 +80,32 @@ if [ ! -e "$1" ]; then
   echo "check-sql: no file in sql/pending/" >&2
   exit 2
 fi
-first=$(basename "$1")
-marker="-- ======================== $first ========================"
-awk -v m="$marker" '$0 == m { exit } NR > 1 { print prev } { prev = $0 }' "$mirror" > "$tmp/base.sql"
+in_mirror() { grep -qxF -- "-- ======================== $1 ========================" "$mirror"; }
+first=""
 for f in "$@"; do
-  printf '\n-- ======================== %s ========================\n' "${f##*/}"
-  cat "$f"
-done > "$tmp/sections.sql"
+  if in_mirror "${f##*/}"; then first=${f##*/}; break; fi
+done
+if [ -n "$first" ]; then
+  marker="-- ======================== $first ========================"
+  awk -v m="$marker" '$0 == m { exit } NR > 1 { print prev } { prev = $0 }' "$mirror" > "$tmp/base.sql"
+else
+  first="(none: no pending file is in the mirror yet)"
+  cp "$mirror" "$tmp/base.sql"
+fi
+: > "$tmp/sections.sql"
+later=""
+for f in "$@"; do
+  if in_mirror "${f##*/}"; then
+    if [ -n "$later" ]; then
+      echo "check-sql: ${f##*/} is in the mirror but $later, before it, is not" >&2
+      exit 1
+    fi
+    { printf '\n-- ======================== %s ========================\n' "${f##*/}"; cat "$f"; } >> "$tmp/sections.sql"
+  else
+    [ -n "$later" ] || later=${f##*/}
+    echo "check-sql: ${f##*/} is not in the mirror yet (applied after the mirror)"
+  fi
+done
 if ! cat "$tmp/base.sql" "$tmp/sections.sql" | cmp -s - "$mirror"; then
   echo "check-sql: the mirror's last sections are not the files in sql/pending/, byte for byte" >&2
   exit 1
@@ -225,6 +247,77 @@ BEGIN
     ASSERT NOT has_function_privilege('authenticated', k, 'EXECUTE'), 'authenticated can call ' || k;
     ASSERT NOT has_function_privilege('public', k, 'EXECUTE'), 'PUBLIC can call ' || k;
   END LOOP;
+END $$;
+SQL
+
+# The live snapshot (20261022100000): competition runs only, of this deployment, groups under 5 left
+# out, nothing per run. Rows are put in directly; the snapshot only reads.
+pg -1 <<'SQL'
+DO $$
+DECLARE
+  z   constant text := repeat('0', 64);
+  t0  constant timestamptz := '2026-11-09T12:00:00Z';
+  r   jsonb;
+  k   text;
+  i   int;
+  id  text;
+BEGIN
+  INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, run_hours, staging)
+  VALUES ('live-cup', 'competition', '2026-11-07T00:00:00Z', '2026-11-08T00:00:00Z', 168, false);
+  -- 6 competition runs (5 of one harness, 1 of another), 3 test, 2 practice and 1 staging run in
+  -- the same event. Each beat 70, 40 and 10 minutes ago, with 2, 2 (no new calls) and 10 model
+  -- calls; the others report far more, which must not show.
+  FOR i IN 1..12 LOOP
+    id := 'r00000000000a00' || lpad(to_hex(i), 2, '0');
+    INSERT INTO goal_cup_tracer.runs (id, event_id, member_id, mode, official_start, deadline_at, repo_url, staging,
+                                      last_heartbeat_at, last_model_request_at)
+    VALUES (id, 'live-cup', ('00000000-0000-4000-8000-0000000000' || lpad(to_hex(i), 2, '0'))::uuid,
+            CASE WHEN i <= 6 THEN 'competition' WHEN i <= 9 THEN 'test' WHEN i <= 11 THEN 'practice' ELSE 'competition' END,
+            t0 - interval '2 days', t0 + interval '5 days', 'https://github.com/secret/repo' || i, i = 12,
+            t0 - interval '10 minutes', t0 - interval '2 hours');
+    INSERT INTO goal_cup_tracer.entries (id, run_id, segment, connector_id, manifest_sha256, connector_dir_sha256,
+                                         workspace, session_id, harness_version, tracer_version, model_requests, stored_bytes)
+    VALUES ('e' || substr(id, 2), id, 0, CASE WHEN i = 6 THEN 'odd-cli' ELSE 'claude-code-cli' END, z, z,
+            '/secret/workspace', 'secret-session', '1', '1', CASE WHEN i <= 6 THEN 10 ELSE 1000 END, CASE WHEN i <= 6 THEN 100 ELSE 99999 END);
+    INSERT INTO goal_cup_tracer.heartbeats (run_id, entry_id, received_at, seq, head, offset_local, final, model_requests, client_ip)
+    VALUES (id, 'e' || substr(id, 2), t0 - interval '70 minutes', 0, z, 0, false, CASE WHEN i <= 6 THEN 2 ELSE 500 END, '203.0.113.9'),
+           (id, 'e' || substr(id, 2), t0 - interval '40 minutes', 0, z, 0, false, CASE WHEN i <= 6 THEN 2 ELSE 500 END, '203.0.113.9'),
+           (id, 'e' || substr(id, 2), t0 - interval '10 minutes', 0, z, 0, false, CASE WHEN i <= 6 THEN 10 ELSE 1000 END, '203.0.113.9');
+    IF i <= 5 OR i > 6 THEN
+      INSERT INTO goal_cup_tracer.notices (run_id, member_id, kind, dedupe_key, created_at)
+      VALUES (id, ('00000000-0000-4000-8000-0000000000' || lpad(to_hex(i), 2, '0'))::uuid, 'silence', '', t0 - interval '1 hour');
+    END IF;
+  END LOOP;
+  INSERT INTO goal_cup_tracer.notices (run_id, member_id, kind, dedupe_key, created_at)
+  VALUES ('r00000000000a0001', '00000000-0000-4000-8000-000000000001', 'idle_3h', '', t0 - interval '1 hour');
+
+  r := public.goal_cup_upload_live_snapshot('live-cup', t0::text);
+  ASSERT r ->> 'schema_version' = '1' AND r ->> 'generated_at' = '2026-11-09T12:00:00Z', 'snapshot: ' || r::text;
+  ASSERT r -> 'event' = '{"id": "live-cup", "kind": "competition", "start_window_opens": "2026-11-07T00:00:00Z",
+                          "start_window_closes": "2026-11-08T00:00:00Z", "run_hours": 168}'::jsonb, 'event: ' || r::text;
+  ASSERT r -> 'entries' = '{"signed_up": null, "started": 6, "running": 6, "working": null, "quiet": null,
+                            "finished": null, "sealed": null, "incomplete": null}'::jsonb, 'entries: ' || r::text;
+  ASSERT r -> 'harnesses' = '[{"id": "claude-code-cli", "started": 5, "running": 5}]'::jsonb, 'harnesses: ' || r::text;
+  ASSERT r -> 'work' = '{"agent_hours": 1.5, "working_hours": 1.0, "model_calls": 60, "model_calls_last_hour": 48, "restarts": null,
+                         "data_bytes": 600}'::jsonb, 'work: ' || r::text;
+  ASSERT r -> 'notices' = '{"silence": 5, "idle_3h": null, "idle_6h": null, "disk_full": null}'::jsonb, 'notices: ' || r::text;
+  ASSERT r -> 'trace' = 'null'::jsonb AND r -> 'github' = 'null'::jsonb AND r -> 'survival' = 'null'::jsonb
+         AND r -> 'hourly' = 'null'::jsonb, 'survival, hourly, trace, github: ' || r::text;
+  FOREACH k IN ARRAY ARRAY['r000000', 'e000000', '00000000-', 'secret', '203.0.113', 'github.com'] LOOP
+    ASSERT position(k IN r::text) = 0, 'the snapshot holds ' || k || ': ' || r::text;
+  END LOOP;
+  -- Before any run started, every count is null; an event of another deployment, or none, is NULL.
+  r := public.goal_cup_upload_live_snapshot('live-cup', (t0 - interval '3 days')::text);
+  ASSERT r -> 'entries' ->> 'started' IS NULL AND r -> 'harnesses' = 'null'::jsonb AND r -> 'work' ->> 'model_calls' IS NULL, 'empty: ' || r::text;
+  ASSERT public.goal_cup_upload_live_snapshot('no-such-event', t0::text) IS NULL, 'unknown event';
+
+  k := 'public.goal_cup_upload_live_snapshot(text, text)';
+  ASSERT has_function_privilege('goal_cup_ingest_staging', k, 'EXECUTE'), 'staging Worker cannot call ' || k;
+  ASSERT has_function_privilege('goal_cup_ingest_production', k, 'EXECUTE'), 'production Worker cannot call ' || k;
+  ASSERT has_function_privilege('service_role', k, 'EXECUTE'), 'service_role cannot call ' || k;
+  ASSERT NOT has_function_privilege('anon', k, 'EXECUTE'), 'anon can call ' || k;
+  ASSERT NOT has_function_privilege('authenticated', k, 'EXECUTE'), 'authenticated can call ' || k;
+  ASSERT NOT has_function_privilege('public', k, 'EXECUTE'), 'PUBLIC can call ' || k;
 END $$;
 SQL
 echo "check-sql: smoke calls passed"

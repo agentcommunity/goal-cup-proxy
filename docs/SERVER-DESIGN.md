@@ -152,11 +152,27 @@ run replaces nothing and is never replaced, so an operator may run several at on
 are left out of every public number. `server/worker/scripts/delete-test-runs.sh` deletes all of them.
 See [OPERATING](OPERATING.md#test-runs).
 
+## Live totals
+
+Built, not yet live: it needs website migration 20261022100000 applied, then a Worker deploy
+([OPERATING](OPERATING.md#deploy)). `GET /v1/live.json` is the one public, unauthenticated read: the
+community totals of the current event, from the database the server already fills (agents started,
+running and quiet, harness mix, agent hours, model calls, restarts, data stored, notices). The cron's
+last step calls one SQL function (`goal_cup_upload_live_snapshot`) and writes the answer to R2 as
+`live/{event_id}.json`; the GET serves that copy and never calls the database, so traffic costs
+nothing there and a bad database minute only makes the copy older. The Worker rebuilds the document
+key by key before it writes it, so only the published fields can exist. Test and practice runs are
+left out in the SQL. A number fed by fewer than 5 runs is `null`, and a harness with fewer than 5
+runs folds into `other`. Nothing per run or per member is in it. Contract:
+[UPLOAD-API](UPLOAD-API.md#get-v1livejson--public-community-totals).
+
 ## Not built
 
 - The verify job that reassembles stored chunks and runs `goalcup-verify` over them. Until it exists,
   nothing downloads the stored chain; `scripts/matrix.sh --check-copy` compares positions instead.
-- Live totals in the heartbeat, outage windows, and the public `live.json`.
+- The rest of the live stats design: survival and the hourly strip, tokens and tool calls from the
+  traces (the verify job), GitHub numbers, uptime and outage windows, the daily copies. Their fields
+  in `live.json` are `null`.
 - A separate organizer pause on new starts (`MAINTENANCE` stops everything).
 - A second pinned signing key for rotation.
 - Teams, and more than one main run per account.

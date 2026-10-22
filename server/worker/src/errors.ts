@@ -6,6 +6,7 @@ export type ErrorCode =
   | "unauthorized" // 401
   | "forbidden" // 403
   | "not_found" // 404
+  | "not_ready" // 404: GET /v1/live.json before the cron wrote the first snapshot
   | "method_not_allowed" // 405 (not in the contract; only for a wrong verb on a known path)
   | "conflict" // 409
   | "closed" // 410

@@ -424,6 +424,39 @@ export interface ClaimedNotice {
 /** How sending one claimed notice ended: `detail` is the provider's message id, the skip reason, or a short error. */
 export type NoticeOutcome = "sent" | "skipped" | "failed";
 
+/**
+ * The fewest runs that may feed a public number (docs/UPLOAD-API.md, `GET /v1/live.json`): a count of
+ * runs, or a sum over runs, fed by fewer is null, and a harness with fewer folds into `other`.
+ */
+export const LIVE_MIN_GROUP = 5;
+/** A count or a sum over runs, or null when fewer than LIVE_MIN_GROUP runs feed it. */
+export type LiveNumber = number | null;
+
+/**
+ * The community totals of one event, as `GET /v1/live.json` serves them (schema 1). Competition runs
+ * of the event only, never test or practice runs; nothing about one run or one member.
+ */
+export interface LiveSnapshot {
+  schema_version: 1;
+  event: { id: string; kind: string; start_window_opens: string | null; start_window_closes: string | null; run_hours: number | null };
+  generated_at: string;
+  min_group: number;
+  /** Main runs (not replaced). `signed_up` stays null until the sign-up table is read. */
+  entries: Record<"started" | "running" | "working" | "quiet" | "finished" | "sealed" | "incomplete", LiveNumber> & { signed_up: null };
+  /** Main runs by the connector of their first segment; null while fewer than LIVE_MIN_GROUP runs started. */
+  harnesses: { id: string; started: number; running: LiveNumber }[] | null;
+  /** Every competition run of the event, replaced ones too. `model_calls_last_hour` is not in the design's example; the rest are. */
+  work: Record<"agent_hours" | "working_hours" | "model_calls" | "model_calls_last_hour" | "restarts" | "data_bytes", LiveNumber>;
+  notices: Record<"silence" | "idle_3h" | "idle_6h" | "disk_full", LiveNumber>;
+  /** Later steps of the live stats design (survival, the hourly strip, the verify job, the GitHub reader, uptime); null until built. */
+  survival: null;
+  hourly: null;
+  trace: null;
+  github: null;
+  /** Added by the Worker (src/live.ts), not the database. */
+  server: null;
+}
+
 export interface Db {
   /** Start a device request. The two hashes must be new. */
   createDevice(args: CreateDeviceArgs): Promise<void>;
@@ -482,4 +515,9 @@ export interface Db {
   commitChunk(args: CommitChunkArgs): Promise<CommitChunkResult>;
   /** Seal the entry. A repeat with the same hashes is `already_sealed`; different hashes once sealed are `conflict`. */
   sealRun(args: SealArgs): Promise<SealResult>;
+  /**
+   * The community totals of the event at `now` (see `LiveSnapshot`), or null when the event is not
+   * one of this deployment's. Only reads. The cron calls it once per tick; no request does.
+   */
+  liveSnapshot(eventId: string, now: string): Promise<Omit<LiveSnapshot, "server"> | null>;
 }

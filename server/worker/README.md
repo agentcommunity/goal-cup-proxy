@@ -55,16 +55,17 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/notices.ts` | The 5-minute cron: close runs, record the judged GitHub commit, queue the run emails |
 | `src/github.ts` | The GitHub API: the judged commit (last push before the deadline) and the headers every GitHub call carries |
 | `src/mail.ts` | Sends each queued notice once through Resend |
+| `src/live.ts` | The public live totals: the cron's snapshot to R2 (`live/{event_id}.json`) and `GET /v1/live.json` |
 | `src/sign.ts` | Ed25519 receipts and acknowledgements (byte-exact with the Rust formats) |
 | `src/db.ts` | The `Db` interface: one method per step, and the run-state rules (`endsAt`, `statusAt`) |
 | `src/db-supabase.ts` | Production: one Postgres function per step, through PostgREST RPC |
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
 | `src/context.ts`, `env.ts`, `errors.ts`, `util.ts` | Configuration, bindings, error types, helpers |
 | `sql/goal-cup-tracer-upload.sql` | Copy of the website's migration that `db-supabase.ts` calls. The website repo is the authority. |
-| `sql/pending/` | The migration written here first, not yet in the website repo nor applied (its README says how to land it) |
-| `scripts/check-sql.sh` | Applies the mirror and the pending migration to a throwaway local Postgres and smoke-calls the new functions |
+| `sql/pending/` | The migrations written here first, not yet in the website repo (its README says which is applied and how to land them) |
+| `scripts/check-sql.sh` | Applies the mirror and the pending migrations to a throwaway local Postgres and smoke-calls the new functions |
 | `scripts/delete-test-runs.sh` | Deletes all organizer test runs, rows and R2 objects ([OPERATING](../../docs/OPERATING.md#test-runs)) |
-| `test/` | `sign.test.ts` (the signing vectors shared with the Rust crate), `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
+| `test/` | `sign.test.ts` (the signing vectors shared with the Rust crate), `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode`, `live` (the Worker in this process on a clock the test moves) |
 
 ## Configuration
 
@@ -370,9 +371,10 @@ or on production. Treat both as open. When you run one, write the date and the r
 
 ## The cron
 
-`scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes. Four steps, in this
+`scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes. Five steps, in this
 order, each in its own try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`, `sendNotices`
-(`src/mail.ts`). All take the time as a parameter. They read `Db.runsForTick(now)` (open runs, and runs
+(`src/mail.ts`), and `liveSnapshot` (`src/live.ts`: one database call, one R2 write; its failure is the
+log line `live-snapshot-failed`). All take the time as a parameter. They read `Db.runsForTick(now)` (open runs, and runs
 that ended in the last 48 hours; never abandoned ones). The constants (20 minutes of silence, idle at 3
 and 6 hours, an hour to wait for the commit, 5 minutes before GitHub is asked, an hour of grace for a
 `404` or a failing activity API, 50 runs asked of GitHub per tick, 20 emails per tick) are in

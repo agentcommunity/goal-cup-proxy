@@ -29,6 +29,7 @@ import type {
   FinalCommitDetail,
   HeartbeatArgs,
   HeartbeatResult,
+  LiveSnapshot,
   NoticeArgs,
   NoticeOutcome,
   OpenRunArgs,
@@ -411,6 +412,18 @@ export class SupabaseDb implements Db {
       p_head_fallback: d.head_fallback,
     });
     this.#flag("upload_record_final_commit", v);
+  }
+
+  async liveSnapshot(eventId: string, now: string): Promise<Omit<LiveSnapshot, "server"> | null> {
+    // Website migration 20261022100000 (sql/pending). src/live.ts rebuilds the published document
+    // key by key from this answer, so only its shape is checked here.
+    const v = await this.#rpc("upload_live_snapshot", { p_event_id: eventId, p_at: now });
+    if (v === null) return null;
+    if (!isObject(v)) {
+      console.error(`supabase upload_live_snapshot: expected an object`);
+      throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
+    }
+    return v as unknown as Omit<LiveSnapshot, "server">;
   }
 
   async sealRun(a: SealArgs): Promise<SealResult> {

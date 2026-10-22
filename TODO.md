@@ -148,6 +148,10 @@ Status (22 Oct, same branch, [local test day](docs/research/results/2026-10-22-l
 - Not run: test runs, full-flow cells and the judged-commit check (no GitHub token yet); WSL2 (no
   Windows machine); fix plans v5 to v7 are not rerun; 8 h and 24 h steps. See
   [local next steps](docs/research/LOCAL-NEXT-STEPS.md#open-since-22-oct).
+- Live stats step (a) built, not live (design: PR #241): `GET /v1/live.json`, community totals from
+  the database, written by the cron to R2. Needs the owner's answers in #241 (the group of 5, the dry
+  run), then website migration `20261022100000` (`server/worker/sql/pending/`) applied, then a Worker
+  deploy, before the 4 Nov feature stop.
 
 ### WP0: Measure
 Status (17 Oct, with 22 Oct notes in the list below): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging
