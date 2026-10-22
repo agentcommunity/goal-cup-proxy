@@ -176,6 +176,7 @@ larger.
 | [v6](2026-10-22-fix-plan-v6.md) | **Goal Cup's home lock collided with Claude Code's token-refresh lock**: a start or continue with an expired token stalled | **yes**: Mac and Docker Claude work after a refresh |
 | [v7](2026-10-22-fix-plan-v7.md) | kit settles Claude Code's auto-mode offer | **yes** |
 | [v8](2026-10-22-fix-plan-v8.md) | [`docs/HARNESS-SETUP.md`](../../HARNESS-SETUP.md); `goalcup prep` links to it | links and tests |
+| [v10](2026-10-22-fix-plan-v10.md) | a client that closes before its TLS greeting is a client failure, not a loss (mac-amp's 2 gaps); fail-open counted by reason | unit and integration tests; live Amp check open |
 | [v9](2026-10-22-fix-plan-v9.md) | `goalcup mcp`: time-left as an MCP tool the agent calls (owner-approved); prep prints the snippet | Claude Code registered it ("Connected"); no run called it yet |
 
 Gates: `gate.sh fast` PASS after every merge (last on 30299446). `gate.sh full` on ad030750: all
@@ -187,8 +188,7 @@ high-severity defect; six small findings are being fixed on `fix/review`.
 In priority order. Evidence is aggregates; raw traces stay on the owner's Mac. Findings list (local):
 `~/goalcup-campaign/FINDINGS.md` on the owner's Mac.
 
-1. **Plan v10** (`fix/v10`): a client that closes before its TLS greeting must not count as a loss
-   (mac-amp's 2 gaps). Merge if its gate passes, then a 2-hour Amp cell must show 0 gaps. **v9 live
+1. **Plan v10 is merged**: a 2-hour Amp cell must now show 0 gaps (mac-amp had 2 false losses). **v9 live
    check**: one cell per harness with the `goalcup mcp` tool configured from prep's snippet
    (Codex/Amp/Hermes "not measured"). v5, v6, v7 and K10 are proven live.
 2. **The competition path has never run.** Needs the owner's fine-grained token
@@ -211,3 +211,20 @@ In priority order. Evidence is aggregates; raw traces stay on the owner's Mac. F
    review the new dependency `brotli-decompressor` 5.0.3 (BSD-3-Clause/MIT); D67 has a bullet added
    by an implementer (prep links the guide); Amp's Task subagents ran `claude-opus-5-5` in mode
    `low` (cost note in the guide).
+
+## What still exists (kept on purpose; delete only what the owner names)
+
+- **Docker volumes (logins and traces):** `goalcup-linux-matrix-codex-cli-lx-codex`,
+  `goalcup-linux-matrix-claude-code-cli-lx-claude`, `goalcup-linux-matrix-amp-cli-lx-amp`,
+  `goalcup-linux-matrix-hermes-cli-lx-hermes`, plus older `goalcup-linux-matrix-codex-cli` and
+  `goalcup-linux-matrix-hermes-cli`, and the build volume `goalcup-linux-matrix-target-2732686530`.
+- **Mac cells:** `~/goalcup-campaign/cells/mac-{codex,claude,amp,hermes}` (with `-artifacts`,
+  `-work`), the disk-drill cell on the 9 GiB image `~/goalcup-campaign/gcsmall.dmg` (mounted at
+  `/Volumes/gcsmall`), all results under `~/goalcup-campaign/results/`, the findings list
+  `~/goalcup-campaign/FINDINGS.md`.
+- **Secrets (owner's Mac, mode 600):** `~/.goalcup-secrets/staging-test-approval-key` (staging
+  `TEST_APPROVAL_KEY` was rotated to it on 22 Oct). The GitHub token file does not exist yet.
+- **GitHub:** public empty repos `nembal/gc-test-*` (8); website PR nembal/agentcommunity_page#319.
+- **Staging:** every test and practice run of the day (run ids in the results above); the Worker is
+  this branch's code with `PRACTICE_RUN_MINUTES=10`.
+- **Worktrees** under `~/dev/worktrees/goal-cup-tracer/` for each fix branch (all merged).
