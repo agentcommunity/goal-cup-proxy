@@ -20,12 +20,8 @@
 //!
 //! The goal is accepted once: redacted by the profile's streaming redactor, appended as one
 //! `Goal` stream, closed, and synced before its key is answered. The launch record names that
-//! stream and is appended after the harness is spawned. A schema-1 profile whose identity binds
-//! at launch binds its one scoped native source there, or a stream-less `SourceChanged` gap
-//! records its unavailability; a profile whose identity binding is deferred binds it at finish
-//! instead and records no gap at launch (CONTRACTS.md,
-//! "C6 local finish budget (H-10 4a)" ¶9). Controlled-workload stores
-//! retain run-HOME capture. Records are durable from the next sync.
+//! stream and is appended after the harness is spawned. The profile's one native source names no
+//! session (chat mode) and is read from the create on. Records are durable from the next sync.
 //!
 //! # Local finish
 //!
@@ -36,7 +32,7 @@
 //! Both budget boundaries move by the actual termination time, which is outside the budget.
 //! It then closes admission, lets existing wire producers drain until the end of the drain
 //! share, stops the owner (native finish, remaining producers cut as losses, flush, sync),
-//! chains the proxy's counters as gaps, seals the
+//! chains the recording proxy's counters as gaps, seals the
 //! workspace (a clone's Git state or why it could not be read, else the walk; D56), and calls `write_local_finish` once. The
 //! drain share expiring is the existing cut-with-a-gap, never a refusal. A stage that waits on a permit, the
 //! entry's lock or the owner, or that is about to begin with less than [`FINISH_RESPONSE_MARGIN`]
@@ -66,7 +62,7 @@
 //! admission-side stand-in `!named`; it equals the writer's and reader's "unrecorded" while the
 //! writer retains what the sink admitted, and where it does not the writer's `lost_producers`
 //! keeps the chain valid. A named predecessor that is not wire in the writer (a payload `Open` after
-//! a `Loss`, no `Connection`) is not reachable from the proxy's single lineage.
+//! a `Loss`, no `Connection`) is not reachable from the recording proxy's single lineage.
 //!
 //! A daemon restart reopens every other entry for status and seal only: no producer is admitted
 //! again, and the gap count is read back from the chain, so gap history outlives the daemon. A
@@ -145,15 +141,14 @@ use std::time::{Duration, Instant};
 mod finish;
 mod harness;
 mod harness_build;
-mod native_scope;
+mod native_plan;
 mod owner;
 mod sink;
 mod writer;
 
 use self::finish::*;
-use self::harness::recorded_capture_harness;
 pub(crate) use self::harness::{ProfileDigests, capture_harness};
-use self::native_scope::*;
+use self::native_plan::*;
 use self::owner::*;
 use self::sink::*;
 use self::writer::*;
@@ -177,11 +172,6 @@ pub(crate) struct CaptureEntry {
     secrets: crate::redact::RunSecrets,
     /// The schema-1 termination binary a registered harness handle may name.
     pub(super) native_binary: Option<String>,
-    /// Schema-declared scoped source, enabled once its session identity is bound: at launch or
-    /// at finish according to `capture.identity.binding`.
-    scoped_native: Option<NativeSourceSpec>,
-    /// Where that source stands; see [`NativeBinding`]. Taken after `run`, never before it.
-    native_binding: Mutex<NativeBinding>,
     /// The daemon's observation clock.
     clock: IngestClock,
     /// Where the entry notes a cause its chain has no room for; the daemon's own, once created.
@@ -199,9 +189,10 @@ pub(crate) struct CaptureEntry {
     run: Mutex<CaptureRun>,
     owner: Arc<OwnerControl>,
     thread: Mutex<Option<JoinHandle<()>>>,
-    /// Set by every finish attempt before it closes admission; nothing clears it. It is the
-    /// "a finish has begun" signal a late native-scope bind is refused on (CONTRACTS.md, C6 local
-    /// finish budget ¶9), and it is true for an attempt that expired as well as for one that sealed.
+    /// Test seam: set by every finish attempt before it closes admission, an attempt that expired
+    /// as well as one that sealed, and never cleared. A test reads it
+    /// ([`super::Daemon::capture_finishing`]) to know a finish has begun.
+    #[cfg(any(test, feature = "test-hooks"))]
     finishing: AtomicBool,
     /// What an expired finish left for the next one to chain; see [`ExpiredFinish`].
     expired: Mutex<Option<ExpiredFinish>>,
@@ -272,8 +263,6 @@ struct OwnerControl {
     drained: AtomicBool,
     /// What the native adapter may still spend when the owner stops.
     finish_budget_ns: AtomicU64,
-    /// One bounded launch-to-owner handoff; no native poll precedes Launch.
-    pending_native: Mutex<Option<NativeCapture>>,
     #[cfg(test)]
     fault: AtomicBool,
     /// Test seam: the owner parks after its stop request, before it drains, until cleared.
@@ -406,7 +395,7 @@ impl Daemon {
         secrets: crate::redact::RunSecrets,
         artifact: &EntryArtifactRoot,
         artifact_dir: &Path,
-        plan: NativePlan,
+        plan: Vec<NativeSourceSpec>,
         created_at: String,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
         let trace = artifact.create_trace().map_err(|error| {
@@ -500,22 +489,12 @@ impl Daemon {
             clock.clone(),
             CaptureAuthority::Live,
         );
-        // Prepare the fixed isolated source root before spawn: the leaf opens it once.
-        if let Some(source) = &plan.scoped {
-            // A `{config_home}` root, or a `{run_home}` root under a shared run `HOME`, was
-            // created above, and a failure there refused the create. For a per-run `{run_home}`
-            // root, an unavailable root must not stop the harness: the Launch
-            // constructor reports the required-source gap if this could not make it available.
-            let _ = std::fs::create_dir_all(&source.root);
-        }
         capture.cycles = self.inner.cycles.clone();
-        capture.scoped_native = plan.scoped;
-        *lock(&capture.native_binding) = plan.initial_binding;
-        let native = if plan.controlled.is_empty() {
+        let native = if plan.is_empty() {
             None
         } else {
             Some(
-                native_capture(plan.controlled, capture.sink.clone())
+                native_capture(plan, capture.sink.clone())
                     .map_err(|error| DaemonError::Config(format!("native capture: {error}")))?,
             )
         };
@@ -844,17 +823,6 @@ impl Daemon {
             // A failed sync is latched by the writer and reported by status.
             let _ = writer.sync();
         }
-        // The binding is in memory: a reopened entry has no source to install, and a launched
-        // Hermes run still owes the finish's deferred-scope gap.
-        // Unless the chain already holds it: a finish that chained the gap and was refused
-        // after it must not chain a second one when the next daemon finishes.
-        let deferred = launched
-            && unfinished
-            && self.recorded_harness_defers_scope(
-                &row.connector_id,
-                row.connector_dir_sha256.as_deref(),
-            )
-            && !chained.launch_source_gap;
         let entry_id = row.entry_id.clone();
         let capture = CaptureEntry::new_with_authority(
             row,
@@ -863,9 +831,6 @@ impl Daemon {
             self.inner.capture_clock.clone(),
             CaptureAuthority::RecoveredStatusSealOnly,
         );
-        if deferred {
-            *lock(&capture.native_binding) = NativeBinding::Deferred;
-        }
         *lock(&capture.chained_finish) = chained.finish;
         self.captures().insert(entry_id, Arc::new(capture));
         Ok(())
@@ -881,7 +846,11 @@ impl Daemon {
             .map(|capture| {
                 let run = capture.lock();
                 let (gate, health) = match (run.finished(), run.launched()) {
-                    (Some(_), _) => (ArmingState::Started, HealthState::Sealed),
+                    (Some(done), _) if done.seal == LocalSealOutcome::SealWritten => {
+                        (ArmingState::Started, HealthState::Sealed)
+                    }
+                    // Finished without its `seal.json`: not sealed, and it needs attention.
+                    (Some(_), _) => (ArmingState::Started, HealthState::SealingRecoveryNeeded),
                     (None, true) => (ArmingState::Started, HealthState::Online),
                     (None, false) => (ArmingState::Armed, HealthState::Online),
                 };
@@ -979,9 +948,6 @@ impl Daemon {
 struct ChainFacts {
     /// Gap records: gap history outlives the daemon.
     gaps: u64,
-    /// A stream-less `SourceChanged` gap after the `Launch`: the one gap a deferred native scope
-    /// owes the run, already recorded.
-    launch_source_gap: bool,
     launched: bool,
     /// Whether any envelope was visited yet.
     visited: bool,
@@ -1027,12 +993,9 @@ impl ChainFacts {
                 record: CaptureRecord::Launch { .. },
             } => self.launched = true,
             EventBody::Capture {
-                record: CaptureRecord::Gap { stream, reason, .. },
+                record: CaptureRecord::Gap { .. },
             } => {
                 self.gaps += 1;
-                if self.launched && stream.is_none() && *reason == GapReason::SourceChanged {
-                    self.launch_source_gap = true;
-                }
             }
             EventBody::Capture {
                 record:
@@ -1048,6 +1011,7 @@ impl ChainFacts {
                     // Until `seal.json` is read back and binds the terminal: see `bind_seal`.
                     sealed_at: envelope.recorded_at.clone(),
                     seal_written: false,
+                    manifest: None,
                 });
                 self.seal_digest = Some(seal_manifest_sha256.clone());
             }
@@ -1066,6 +1030,9 @@ pub(super) struct ChainedFinish {
     pub(super) sealed_at: String,
     /// Whether its `seal.json` is written and binds it; a finish without one is a failed seal.
     pub(super) seal_written: bool,
+    /// The manifest the terminal binds, kept while its `seal.json` is not written, so that the
+    /// next finish writes it again. This daemon's memory only: a restarted one has none.
+    pub(super) manifest: Option<SealManifest>,
 }
 
 /// Sign a v5 entry's status with `capture` as its capture projection and the receiver's
@@ -1106,8 +1073,6 @@ impl CaptureEntry {
             extra_patterns: Vec::new(),
             secrets: crate::redact::RunSecrets::default(),
             native_binary: None,
-            scoped_native: None,
-            native_binding: Mutex::new(NativeBinding::NotRequired),
             clock,
             cycles: Arc::new(CycleCounters::default()),
             ingest: None,
@@ -1120,6 +1085,7 @@ impl CaptureEntry {
             run: Mutex::new(CaptureRun { entry, goal }),
             owner: Arc::new(OwnerControl::default()),
             thread: Mutex::new(None),
+            #[cfg(any(test, feature = "test-hooks"))]
             finishing: AtomicBool::new(false),
             expired: Mutex::new(None),
             opened: std::time::Instant::now(),
@@ -1258,7 +1224,7 @@ impl CaptureEntry {
             harness_version: request.harness_version.clone(),
             recorder_revision: DAEMON_VERSION.to_string(),
             continuation: request.continuation.clone(),
-            // The tracer no longer registers a tool allowance (D52); the v5 fields stay in the
+            // Goal Cup Proxy no longer registers a tool allowance (D52); the v5 fields stay in the
             // record shape so traces that carry them still verify.
             allowed_tool_rule: None,
             process_handoff_digest: None,
@@ -1277,7 +1243,6 @@ impl CaptureEntry {
         let now = (self.clock)();
         writer.require(record, &now)?;
         run.goal = Goal::Launched(request.goal_stream.clone());
-        self.bind_launch_scope(request.native_scope.as_deref(), &mut writer, &now);
         Ok(())
     }
 

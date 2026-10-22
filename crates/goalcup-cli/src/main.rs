@@ -35,10 +35,10 @@ use std::process::ExitCode;
     after_help = AFTER_HELP,
     subcommand_required = true,
     arg_required_else_help = true,
-    // So the list under `Commands:` is exactly the nine sub-commands below. clap's built-in
-    // `help` sub-command would be a tenth line in it, indistinguishable to a reader — and to a
-    // test — from a sub-command this tree decided to ship. `goalcup <command> --help` is
-    // the same help by the route the other eight already take.
+    // So the list under `Commands:` is exactly the eleven sub-commands below. clap's built-in
+    // `help` sub-command would be a twelfth line in it, indistinguishable to a reader — and
+    // to a test — from a sub-command this tree decided to ship. `goalcup <command> --help` is
+    // the same help by the route the other ten already take.
     disable_help_subcommand = true
 )]
 struct Args {
@@ -55,7 +55,6 @@ Steps:
   3. goalcup start --harness <id> --practice     a 10-minute practice run
   4. goalcup start --harness <id>                your run, inside the start window
 While it runs: goalcup status (in another terminal). If the agent stopped early: goalcup continue.
-A headless harness takes `--goal-file <file>` instead of a typed prompt.
 To check a finished run: goalcup-verify --capture-integrity <trace-dir>
 
 Guide: https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/PARTICIPANT-GUIDE.md
@@ -78,7 +77,7 @@ Without `--harness` it checks the harness you chose in `goalcup prep`; pass `--h
 check another one, or `--harness all` to check every shipped harness (one you have not \
 installed then makes this command exit 1).";
 
-/// The sub-commands: nine, and the hidden `git-credential` that a run's clone calls. `verify`
+/// The sub-commands: eleven, and the hidden `git-credential` that a run's clone calls. `verify`
 /// is deliberately absent: see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
@@ -130,7 +129,8 @@ enum Command {
     ///
     /// Your agent opens in this terminal. Type your prompt there, and after it only
     /// "keep going". Until the agent exits, goalcup prints nothing here; open a second terminal
-    /// and run `goalcup status` to see the run. A headless harness takes `--goal-file` instead.
+    /// and run `goalcup status` to see the run. The run's folder is created in the folder you
+    /// run `goalcup start` from.
     Start {
         /// Which harness to run, for example `claude-code-cli` or `codex-cli` (`goalcup doctor`
         /// lists every one this build ships).
@@ -140,12 +140,6 @@ enum Command {
         /// run says so, and it does not count as a competition entry.
         #[arg(long)]
         dev: bool,
-        /// For a headless harness only: a text file holding your goal, the
-        /// agent's first and only prompt. The run's folder is created next to this file, so put
-        /// it in an empty folder of its own, outside any git repository. A chat-mode harness
-        /// refuses it; its run's folder is created in the folder you run `goalcup start` from.
-        #[arg(long, value_name = "PATH")]
-        goal_file: Option<std::path::PathBuf>,
         /// A practice run: the server keeps it apart from the competition, and it never
         /// replaces your competition run. Needs `goalcup login` and `goalcup prep` first,
         /// like a competition run.
@@ -160,14 +154,30 @@ enum Command {
     /// Show how your run is doing: recording state, health, storage and any gaps. Run it in a
     /// second terminal while the agent works.
     Status {
-        /// The entry id (`goalcup entries` lists them). Defaults to the newest run started on
-        /// this machine.
-        #[arg(value_name = "ENTRY")]
+        /// One part of a run (`goalcup entries` lists the parts). Defaults to the newest run
+        /// started on this machine.
+        #[arg(value_name = "part-id")]
         entry: Option<String>,
         /// Print the signed status document as JSON, and nothing else.
         #[arg(long)]
         json: bool,
     },
+    /// Show how much time your run has left. Your agent may run it too; goalcup never tells
+    /// the agent anything by itself.
+    ///
+    /// Inside the agent's session it reads the count the running `goalcup start` keeps from the
+    /// server; when that count is missing or older than five minutes, it says the time is
+    /// unknown right now and exits 1. In your own terminal it reads the newest open run on this
+    /// computer, as `goalcup status` does.
+    #[command(name = "time-left")]
+    TimeLeft,
+    /// Serve the time left as an MCP tool, `time_left`, for your agent to call.
+    ///
+    /// Your harness starts this command itself, by its full path, when you add it to the
+    /// harness's MCP servers (`goalcup prep` prints the lines for your harness). It speaks MCP
+    /// on standard input and output, answers what `goalcup time-left` prints, and only reads:
+    /// it writes no file and opens no port. You never run it yourself.
+    Mcp,
     /// Start your agent again, when it stopped before the run's time was up.
     ///
     /// An agent that exits, a closed window or a restart ends one part of your run. The run
@@ -177,34 +187,37 @@ enum Command {
     /// continue a run only on the computer that started it.
     Continue {
         /// The run to continue. Defaults to the newest run started on this machine.
-        #[arg(value_name = "RUN_ID")]
+        #[arg(value_name = "run-id")]
         run: Option<String>,
     },
-    /// Send the rest of a run to the Goal Cup server, when `goalcup start` could not: the
-    /// network was down, the laptop slept, or the process was stopped. Safe to run again.
+    /// Send what is not uploaded yet to the Goal Cup server: the network was down, the laptop
+    /// slept, or goalcup was stopped. Safe to run again. Every goalcup command also tries this
+    /// by itself for a few seconds.
     Upload {
-        /// The entry id (`goalcup entries` lists them). Defaults to every entry of the newest run
-        /// started on this machine that is not yet sent.
-        #[arg(value_name = "ENTRY")]
+        /// One part of a run (`goalcup entries` lists the parts). Defaults to every part of the
+        /// newest run started on this machine that is not yet sent.
+        #[arg(value_name = "part-id")]
         entry: Option<String>,
     },
-    /// List the recorded parts (entries) of your runs on this computer, sealed ones included.
+    /// List the recorded parts of your runs on this computer, sealed ones included. A part is
+    /// one unbroken stretch of recording; each `goalcup continue` starts a new one.
     Entries {
         /// Print the list as one JSON array.
         #[arg(long)]
         json: bool,
     },
-    /// End a run early: stop the agent, seal the record, and print where the trace is.
+    /// Stop your agent now, and seal this part of your run.
     ///
-    /// `goalcup start` seals on its own when the agent exits, so this is only for stopping a
-    /// run before then. goalcup records through a small background program, `goalcup-daemon`
-    /// (beside this binary). It exits once every run is sealed. `status` and `entries` start
-    /// it again to answer; it stays up while a run whose daemon died is unsealed, until you run
-    /// `goalcup seal`.
+    /// Your run stays open until its end time: `goalcup continue` starts its next part. You do
+    /// not need this when the agent exits by itself, or when the run's time is up. It asks
+    /// before it stops anything. The details go to the run's host.log.
     Seal {
-        /// The entry id. Defaults to the newest run started on this machine.
-        #[arg(value_name = "ENTRY")]
+        /// One part of a run. Defaults to the newest run started on this machine.
+        #[arg(value_name = "part-id")]
         entry: Option<String>,
+        /// Do not ask: stop the agent at once.
+        #[arg(long)]
+        yes: bool,
     },
     /// Check that goalcup can record on this computer and that each agent is installed. Not one
     /// of the steps above: use it when something does not work.
@@ -239,6 +252,11 @@ fn main() -> ExitCode {
     {
         goalcup_cli::set_finish_budget(std::time::Duration::from_millis(ms));
     }
+    // A test build can run a chat-mode harness with no terminal (`chat_without_terminal`).
+    #[cfg(feature = "test-support")]
+    if std::env::var_os("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL").is_some_and(|v| v == "1") {
+        goalcup_cli::set_chat_without_terminal(true);
+    }
     let args = match Args::try_parse() {
         Ok(args) => args,
         Err(e) => {
@@ -265,17 +283,16 @@ fn main() -> ExitCode {
 }
 
 fn run(command: Command) -> Result<u8, CliError> {
+    send_leftovers(&command);
     match command {
         Command::Start {
             harness,
             dev,
-            goal_file,
             practice,
             test,
         } => start(commands::start::StartOptions {
             harness,
             dev,
-            goal_file,
             run_folder: std::env::current_dir().ok(),
             disk: disk_policy()?,
             mode: if test {
@@ -292,8 +309,15 @@ fn run(command: Command) -> Result<u8, CliError> {
         .map(|()| 0),
         Command::Continue { run } => continue_run(run).map(|()| 0),
         Command::Status { entry, json } => status(entry, json).map(|()| 0),
+        Command::TimeLeft => time_left().map(|()| 0),
+        Command::Mcp => commands::mcp::serve(
+            &mut std::io::stdin().lock(),
+            &mut std::io::stdout().lock(),
+            &mut || commands::time_left::mcp_answer(goalcup_cli::run::now_unix()),
+        )
+        .map(|()| 0),
         Command::Entries { json } => entries(json).map(|()| 0),
-        Command::Seal { entry } => seal(entry).map(|()| 0),
+        Command::Seal { entry, yes } => seal(entry, yes).map(|()| 0),
         Command::Doctor { json, harness } => {
             doctor(commands::doctor::DoctorOptions { json, harness })
         }
@@ -334,6 +358,49 @@ fn run(command: Command) -> Result<u8, CliError> {
     }
 }
 
+/// Before a participant's command: send the finished parts of runs on this computer that are
+/// not on the server yet, waiting a few seconds at most ([`commands::upload::send_leftovers`]).
+/// Never inside the agent's session, and never for `doctor`, `seal` (after its seal instead) or
+/// the credential helper. The run a command sends itself is left to it: the newest run for
+/// `upload`, the named part's run for `upload <part-id>`, the run `continue` goes on with.
+fn send_leftovers(command: &Command) {
+    if goalcup_cli::launch::in_harness() {
+        return;
+    }
+    let Ok(cfg) = goalcup_cli::config::config_dir() else {
+        return;
+    };
+    let skip = match command {
+        // `mcp` only reads, and its harness may hide the in-harness marker from it.
+        Command::Doctor { .. }
+        | Command::GitCredential { .. }
+        | Command::Seal { .. }
+        | Command::Mcp => return,
+        Command::TimeLeft if goalcup_cli::run::time_left::file_from_env().is_some() => return,
+        Command::Upload { entry: None } => goalcup_cli::run::newest(&cfg).ok().flatten(),
+        Command::Upload { entry: Some(part) } => {
+            goalcup_cli::run::of_entry(&cfg, part).ok().flatten()
+        }
+        Command::Continue { run: Some(run) } => goalcup_cli::run::read(&cfg, run).ok(),
+        Command::Continue { run: None } => goalcup_cli::run::newest(&cfg).ok().flatten(),
+        _ => None,
+    };
+    send_leftovers_skipping(&cfg, skip.as_ref().map(|run| run.run_id.as_str()));
+}
+
+/// [`send_leftovers`] for every run but `skip`.
+fn send_leftovers_skipping(cfg: &std::path::Path, skip: Option<&str>) {
+    if let Ok(policy) = upload_policy() {
+        commands::upload::send_leftovers(cfg, policy, skip, commands::upload::LEFTOVERS_WAIT);
+    }
+}
+
+/// `goalcup time-left`: inside the agent's session, the file the launch names; in a person's own
+/// terminal, the newest open run on this computer.
+fn time_left() -> Result<(), CliError> {
+    commands::time_left::time_left(goalcup_cli::run::now_unix(), &mut std::io::stdout())
+}
+
 /// When chunks go and how failures wait: the shipped policy, or in a test build one named by
 /// [`TEST_UPLOAD_POLICY`].
 fn upload_policy() -> Result<goalcup_cli::upload::uploader::Policy, CliError> {
@@ -357,7 +424,8 @@ fn disk_policy() -> Result<goalcup_cli::run::reserve::DiskPolicy, CliError> {
 }
 
 /// A test build's disk sizes: `reserve_bytes,start_margin_bytes,tick_ms`, then optionally
-/// `free_floor_bytes` and, after it, `chain_quota_bytes`.
+/// `free_floor_bytes`, after it `chain_quota_bytes`, and after that
+/// `pause_below_bytes,resume_above_bytes` (without them the agent is never paused, D65).
 #[cfg(feature = "test-support")]
 const TEST_DISK_POLICY: &str = "GOALCUP_TEST_DISK";
 
@@ -449,9 +517,9 @@ fn prep(opts: commands::prep::PrepOptions) -> Result<u8, CliError> {
 fn start(opts: commands::start::StartOptions) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
-    // `--goal-file` is for a headless harness only, and a headless one needs it: said before a
-    // daemon is started or anything else is done.
-    commands::start::goal_file_fits_connector(&connectors, &opts)?;
+    // A harness that cannot be loaded is refused before a daemon is started or anything else
+    // is done.
+    goalcup_cli::connector::load_harness(&connectors, &opts.harness, opts.dev)?;
     let client = ensure_daemon(
         &cfg,
         goalcup_cli::daemon::MissingConfig::WriteDefault {
@@ -524,8 +592,8 @@ fn continue_run(run: Option<String>) -> Result<(), CliError> {
     )
 }
 
-/// A test build's one extra input to `goalcup start`: a PEM file of certificates the proxy
-/// trusts upstream beside the public roots, so a synthetic local upstream can be reached. A
+/// A test build's one extra input to `goalcup start`: a PEM file of certificates the recording
+/// proxy trusts upstream beside the public roots, so a synthetic local upstream can be reached. A
 /// shipped build compiles none of this.
 #[cfg(feature = "test-support")]
 const TEST_UPSTREAM_ROOTS: &str = "GOALCUP_TEST_UPSTREAM_ROOTS";
@@ -610,18 +678,24 @@ fn status(entry: Option<String>, json: bool) -> Result<(), CliError> {
 /// name. A run that outlived its daemon (a crash, a reboot) is why this starts one from
 /// `<cfg>/daemon.toml` when none answers: that daemon reopens the run for status and seal. It
 /// never writes the file: with no configuration, no daemon was ever started from here.
-fn seal(entry: Option<String>) -> Result<(), CliError> {
+fn seal(entry: Option<String>, yes: bool) -> Result<(), CliError> {
+    commands::seal::refuse_inside_harness(goalcup_cli::launch::in_harness())?;
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
     let client = ensure_daemon(&cfg, goalcup_cli::daemon::MissingConfig::Refuse)?;
     let entry_id = resolve_entry(&cfg, entry)?;
-    commands::seal::seal_with(
+    commands::seal::seal_for_person(
         &client,
         &connectors,
         &cfg,
         &entry_id,
+        yes,
+        &mut std::io::stdin().lock(),
         &mut std::io::stdout(),
-    )
+    )?;
+    // The part just sealed goes up by itself, as the leftovers of any command do.
+    send_leftovers_skipping(&cfg, None);
+    Ok(())
 }
 
 /// The entry named on the command line, or the newest run this machine started.
@@ -637,7 +711,7 @@ fn resolve_entry(cfg: &std::path::Path, entry: Option<String>) -> Result<String,
                 CliError::Refused(format!(
                     "no run has been started from this machine: there is no record under {}. \
                      Only a run started here can be sealed here, because the workspace to \
-                     scan and the tracker's own file list are in that record.",
+                     scan and goalcup's own file list are in that record.",
                     goalcup_cli::entries::entries_dir(cfg).display()
                 ))
             }),
@@ -651,8 +725,8 @@ fn entries(json: bool) -> Result<(), CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let mut out = std::io::stdout();
     match daemon_to_read(&cfg)? {
-        Some(client) => commands::entries::entries_with(&client, json, &mut out),
-        None => commands::entries::render_entries(&[], json, &mut out),
+        Some(client) => commands::entries::entries_with(&client, &cfg, json, &mut out),
+        None => commands::entries::render_entries(&cfg, &[], json, &mut out),
     }
 }
 

@@ -2,7 +2,7 @@
 //! run.
 //!
 //! The binary is run against a temporary configuration directory and the chat-mode development
-//! connector (`Rig::chat`, whose harness is `fixtures/m2-fake-tui.sh`). The machine's facts
+//! connector (`Rig::chat_only`, whose harness is `fixtures/m2-fake-tui.sh`). The machine's facts
 //! (mains power, free space, hosts, the sleep lock) are stated through the test door
 //! `GOALCUP_TEST_PREP` rather than read from the machine the test runs on, GitHub is a local
 //! fake, and a run on a terminal is a pseudo-terminal of the test's own.
@@ -126,6 +126,8 @@ fn facts(github: &str, more: &[&str]) -> String {
         "hosts=ok".to_string(),
         "awake=ok".to_string(),
         format!("github={github}"),
+        // Every folder on ext4 unless the test says otherwise, whatever this machine's are.
+        "fs=/=ext4".to_string(),
     ];
     parts.extend(more.iter().map(|s| s.to_string()));
     // The parser takes the last of a repeated key.
@@ -236,7 +238,7 @@ fn prep_file(cfg: &Path) -> PrepFile {
 
 #[test]
 fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
 
@@ -390,7 +392,7 @@ fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
 
 #[test]
 fn a_second_prep_skips_passed_steps() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
     log_in(&rig, "http://127.0.0.1:1");
@@ -461,7 +463,7 @@ fn a_second_prep_skips_passed_steps() {
 
 #[test]
 fn prep_waits_for_enter_before_it_opens_the_harness() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
     log_in(&rig, "http://127.0.0.1:1");
@@ -487,7 +489,7 @@ fn prep_waits_for_enter_before_it_opens_the_harness() {
 
 #[test]
 fn prep_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
     log_in(&rig, "http://127.0.0.1:1");
@@ -536,7 +538,7 @@ fn prep_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
 
 #[test]
 fn prep_refuses_a_work_folder_inside_a_git_repository_and_names_the_fix() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
     log_in(&rig, "http://127.0.0.1:1");
@@ -579,7 +581,7 @@ fn prep_refuses_a_work_folder_inside_a_git_repository_and_names_the_fix() {
 
 #[test]
 fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     // The filesystem is judged by its type, not by where it is mounted: a Windows drive mounted
     // at an odd place is refused, and a Linux mount under `/mnt/c` is not.
@@ -639,7 +641,7 @@ fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
 
 #[test]
 fn prep_on_wsl2_the_machine_step_is_ok_without_a_sleep_lock() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let (_, text) = prep(
         &rig,
@@ -669,7 +671,7 @@ fn prep_on_wsl2_the_machine_step_is_ok_without_a_sleep_lock() {
 
 #[test]
 fn prep_fails_wsl_artifact_root_and_config_folder_on_a_windows_host_filesystem() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let work = "/home/me/goalcup-work";
     let artifacts = format!("{}-artifacts", rig.cfg.display());
@@ -699,9 +701,59 @@ fn prep_fails_wsl_artifact_root_and_config_folder_on_a_windows_host_filesystem()
     );
 }
 
+/// A run keeps its records on APFS, ext4 or XFS only: prep says so for the work folder, the
+/// artifact root and the configuration folder, with the way to move each, on any machine.
+#[test]
+fn prep_fails_a_folder_on_an_unsupported_filesystem_and_says_how_to_move_it() {
+    let rig = Rig::chat_only();
+    let github = FakeGithub::good();
+    let work = rig.root.join("btrfs").join("goalcup-work");
+    let on_btrfs = facts(
+        &github.base,
+        &[&format!("fs={}=btrfs", rig.root.join("btrfs").display())],
+    );
+    let (code, text) = prep(&rig, &["--work-root", work.to_str().unwrap()], &on_btrfs);
+    assert_eq!(code, 1, "{text}");
+    let machine = line(&text, "machine");
+    assert!(
+        machine.starts_with("[fail] machine:")
+            && machine.contains(&format!("work folder {}", work.display()))
+            && machine.contains("btrfs")
+            && machine.contains("ext4, XFS or APFS")
+            && machine.contains("goalcup prep --work-root"),
+        "{text}"
+    );
+    // A refused work folder is not kept for `goalcup start` to find.
+    assert_ne!(prep_file(&rig.cfg).work_root, work.display().to_string());
+
+    let elsewhere = rig.root.join("goalcup-work");
+    let on_overlay = facts(
+        &github.base,
+        &[&format!("fs={}=overlay", rig.cfg.display())],
+    );
+    let (code, text) = prep(
+        &rig,
+        &["--work-root", elsewhere.to_str().unwrap()],
+        &on_overlay,
+    );
+    assert_eq!(code, 1, "{text}");
+    let machine = line(&text, "machine");
+    assert!(
+        machine.contains("config folder")
+            && machine.contains("overlayfs")
+            && machine.contains("GOALCUP_CONFIG_DIR")
+            && !machine.contains("work folder"),
+        "{text}"
+    );
+    assert_eq!(
+        prep_file(&rig.cfg).work_root,
+        elsewhere.display().to_string()
+    );
+}
+
 #[test]
 fn prep_fails_wsl1_in_one_sentence() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let (code, text) = prep(
         &rig,
@@ -725,7 +777,7 @@ fn prep_fails_wsl1_in_one_sentence() {
 
 #[test]
 fn prep_does_not_start_a_run() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
     let github = FakeGithub::good();
     log_in(&rig, &server.url());
@@ -768,7 +820,7 @@ fn prep_does_not_start_a_run() {
 
 #[test]
 fn prep_json_marks_the_human_steps() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
 
@@ -843,7 +895,7 @@ fn prep_json_marks_the_human_steps() {
 
 #[test]
 fn prep_refuses_what_the_flags_get_wrong_before_it_writes_anything() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
     for args in [
@@ -863,7 +915,7 @@ fn prep_refuses_what_the_flags_get_wrong_before_it_writes_anything() {
 
 #[test]
 fn the_machine_step_judges_power_space_git_and_the_network() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let machine = |more: &[&str]| {
         let (code, text) = prep(&rig, &[], &facts(&github.base, more));
@@ -904,7 +956,7 @@ fn the_machine_step_judges_power_space_git_and_the_network() {
 
 #[test]
 fn the_harness_step_names_what_it_cannot_use() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
 
@@ -914,9 +966,6 @@ fn the_harness_step_names_what_it_cannot_use() {
         harness.starts_with("[fail]") && harness.contains(CHAT_ID),
         "{text}"
     );
-    // The headless connector of the same rig is no chat harness.
-    let (_, text) = prep(&rig, &["--harness", "m2-fake"], &facts);
-    assert!(line(&text, "harness").starts_with("[fail]"), "{text}");
     // A harness that is not installed is a failure that says so.
     let out = prep_command(&rig, &[], &facts)
         .env("PATH", "/usr/bin:/bin")
@@ -952,7 +1001,7 @@ fn github_that_only_takes(good: &'static str, size: u32) -> FakeGithub {
 
 #[test]
 fn a_revoked_token_is_found_on_the_next_prep_and_replaced_and_replaced() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let new_token = format!("github_pat_{}", "B".repeat(60));
     let new_token: &'static str = Box::leak(new_token.into_boxed_str());
     let github = github_that_only_takes(new_token, 0);
@@ -1008,7 +1057,7 @@ fn a_revoked_token_is_found_on_the_next_prep_and_replaced_and_replaced() {
 
 #[test]
 fn a_repository_that_is_not_empty_is_a_failure_on_every_prep_and_no_reason_for_a_new_token() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let token_in_use: &'static str = Box::leak(token().into_boxed_str());
     let github = github_that_only_takes(token_in_use, 12);
     log_in(&rig, "http://127.0.0.1:1");
@@ -1086,7 +1135,7 @@ fn all_but_the_harness(rig: &Rig) {
 
 #[test]
 fn prep_opens_a_harness_that_needs_its_interpreter_with_the_participants_environment() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
     all_but_the_harness(&rig);
@@ -1156,13 +1205,13 @@ fn prep_opens_a_harness_that_needs_its_interpreter_with_the_participants_environ
     }
     assert!(
         !env.lines().any(|l| l.starts_with("GOALCUP_")),
-        "the tracer's own variables reached the harness:\n{env}"
+        "goalcup's own variables reached the harness:\n{env}"
     );
 }
 
 #[test]
 fn the_harness_step_checks_the_interpreter_on_the_participants_path() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let github = FakeGithub::good();
     let facts = facts(&github.base, &[]);
 
@@ -1419,22 +1468,24 @@ fn a_failing_configure_command_keeps_the_home_not_ready_and_launches_nothing() {
 
 // ------------------------------------------------------------------ a home someone else holds
 
-/// Take the flock `goalcup start` and `goalcup prep` take on `<cfg>/capture-homes/<id>.lock`,
-/// as another process: the lock is on this open file, so the prep (a process of its own) is
-/// refused. `holder`, when given, is the run id a recording run writes into the file.
+/// Take the flock `goalcup start` and `goalcup prep` take on
+/// `<cfg>/capture-homes/<id>.goalcup.lock`, as another process: the lock is on this open file, so
+/// the prep (a process of its own) is refused. `holder`, when given, is the run id a recording run
+/// writes into the file.
 fn hold_home_lock(rig: &Rig, id: &str, holder: Option<&str>) -> std::fs::File {
     use std::os::fd::AsRawFd;
     let homes = rig.cfg.join("capture-homes");
     std::fs::create_dir_all(&homes).unwrap();
+    let path = homes.join(format!("{id}.goalcup.lock"));
     let lock = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(true)
-        .open(homes.join(format!("{id}.lock")))
+        .open(&path)
         .unwrap();
     if let Some(run) = holder {
-        std::fs::write(homes.join(format!("{id}.lock")), run).unwrap();
+        std::fs::write(&path, run).unwrap();
     }
     // SAFETY: `lock` owns a live descriptor; `flock` reads nothing else.
     let taken = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
@@ -1497,13 +1548,206 @@ fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
 
 // ------------------------------------------------------------------ the model service (D62)
 
+/// The setup guide (fix plan v8), as prep links to it.
+const SETUP_GUIDE: &str =
+    "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/HARNESS-SETUP.md";
+
+/// Fix plan v8: prep's harness step points to the setup guide on every prep, with nothing
+/// missing too, at the section the connector names, else at the guide; the step stays ok.
+#[test]
+fn prep_points_the_harness_step_to_the_setup_guide() {
+    let rig = Rig::chat_only();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    all_but_the_harness(&rig);
+
+    // The connector names no section: the guide itself.
+    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness");
+    assert!(step.starts_with("[ok] harness:"), "{out}");
+    assert!(
+        step.ends_with(&format!("Before a long run, read {SETUP_GUIDE}")),
+        "{out}"
+    );
+
+    // It names one: that section, in the text and in `--json`.
+    let path = rig.connectors.join(CHAT_ID).join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap().replacen(
+        "[capture]\n",
+        "[participant]\ndisplay_name = \"Fake Agent\"\nsetup_section = \"fake-agent\"\n\n\
+         [capture]\n",
+        1,
+    );
+    std::fs::write(&path, text).unwrap();
+    let want = format!("Before a long run, read {SETUP_GUIDE}#fake-agent");
+    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness");
+    assert!(
+        step.starts_with("[ok] harness:") && step.ends_with(&want),
+        "{out}"
+    );
+    let (_, out) = prep(&rig, &["--repo", REPO, "--json"], &facts);
+    let steps = json(&out);
+    let harness = steps.iter().find(|s| s["step"] == "harness").unwrap();
+    assert_eq!(harness["state"], "ok", "{out}");
+    assert!(harness["say"].as_str().unwrap().ends_with(&want), "{out}");
+}
+
+/// Fix plan v9: a connector that names where its MCP servers are listed gets, in prep's harness
+/// step, the lines that add `goalcup mcp` there, with this binary's absolute path and the file in
+/// the harness's Goal Cup home; prep writes nothing there, and the step stays ok.
+#[test]
+fn prep_prints_the_time_left_tool_lines_with_the_absolute_path_and_writes_nothing() {
+    let rig = Rig::chat_only();
+    let path = rig.connectors.join(CHAT_ID).join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap().replacen(
+        "[capture]\n",
+        "[participant]\ndisplay_name = \"Fake Agent\"\n\n\
+         [participant.time_left_tool]\nfile = \"config.toml\"\nkey = \"mcp_servers\"\n\
+         pass_env = \"env_vars\"\n\n[capture]\n",
+        1,
+    );
+    std::fs::write(&path, text).unwrap();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    all_but_the_harness(&rig);
+    let home = rig.cfg.join("capture-homes").join(CHAT_ID);
+    let file = home.join("config.toml");
+    let goalcup = env!("CARGO_BIN_EXE_goalcup");
+
+    for json_mode in [false, true] {
+        let mut args = vec!["--repo", REPO];
+        if json_mode {
+            args.push("--json");
+        }
+        let (_, out) = prep(&rig, &args, &facts);
+        let say = if json_mode {
+            let steps = json(&out);
+            let harness = steps.iter().find(|s| s["step"] == "harness").unwrap();
+            assert_eq!(harness["state"], "ok", "{out}");
+            harness["say"].as_str().unwrap().to_string()
+        } else {
+            assert!(line(&out, "harness").starts_with("[ok] harness:"), "{out}");
+            out.clone()
+        };
+        assert!(
+            say.contains(&format!("`mcp_servers` in {}", file.display())),
+            "{say}"
+        );
+        let lines: Vec<&str> = say.lines().map(str::trim).collect();
+        for want in [
+            "[mcp_servers.goalcup]".to_string(),
+            format!("command = {}", serde_json::to_string(goalcup).unwrap()),
+            "args = [\"mcp\"]".to_string(),
+            "env_vars = [\"GOALCUP_TIME_LEFT_FILE\"]".to_string(),
+        ] {
+            assert!(lines.contains(&want.as_str()), "{want} in:\n{say}");
+        }
+    }
+    assert!(!file.exists(), "prep wrote the harness's config");
+}
+
+/// D67: the chat connector lists two `participant.no_prompts` settings. Prep reads them in the
+/// harness's Goal Cup home and recommends each one that is not set, with the setup guide's
+/// link, in the harness home step; it never changes the step's state, the exit code or the files.
+#[test]
+fn prep_recommends_the_no_prompt_settings_and_never_writes_them() {
+    let rig = Rig::chat_only();
+    let path = rig.connectors.join(CHAT_ID).join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap().replacen(
+        "[capture]\n",
+        "[participant]\ndisplay_name = \"Fake Agent\"\nsetup_section = \"fake-agent\"\n\n\
+         [[participant.no_prompts]]\nfile = \"config.toml\"\nkey = \"approval_policy\"\n\
+         values = [\"never\"]\n\n\
+         [[participant.no_prompts]]\nfile = \"settings.json\"\nkey = \"permissions.skip\"\n\
+         values = [\"true\"]\n\n[capture]\n",
+        1,
+    );
+    std::fs::write(&path, text).unwrap();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    all_but_the_harness(&rig);
+    let home = rig.cfg.join("capture-homes").join(CHAT_ID);
+    const ASKS: &str = "Fake Agent may stop to ask your permission";
+    let link = format!("{SETUP_GUIDE}#fake-agent");
+
+    // Not set up yet: the step is still todo for the set-up itself, and names both settings.
+    let (code, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness_home");
+    assert!(step.starts_with("[todo] harness_home:"), "{out}");
+    assert!(step.contains(ASKS) && step.contains(&link), "{out}");
+    assert!(
+        step.contains("`approval_policy` to `never`")
+            && step.contains("`permissions.skip` to `true`"),
+        "{out}"
+    );
+    assert_eq!(code, 1);
+
+    // Set up, nothing set: the step is ok and still says what to set.
+    std::fs::create_dir_all(&home).unwrap();
+    let mut file = prep_file(&rig.cfg);
+    file.harness = CHAT_ID.to_string();
+    file.home_ready = true;
+    goalcup_cli::prep_file::write_prep(&rig.cfg, &file).unwrap();
+    let (_, out) = prep(&rig, &["--repo", REPO, "--json"], &facts);
+    let steps = json(&out);
+    let home_step = steps.iter().find(|s| s["step"] == "harness_home").unwrap();
+    assert_eq!(home_step["state"], "ok", "{out}");
+    assert!(home_step["say"].as_str().unwrap().contains(ASKS), "{out}");
+
+    // One set: only the other is named.
+    std::fs::write(home.join("config.toml"), "approval_policy = \"never\"\n").unwrap();
+    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness_home");
+    assert!(step.starts_with("[ok] harness_home:"), "{out}");
+    assert!(
+        !step.contains("`approval_policy`") && step.contains("`permissions.skip` to `true`"),
+        "{out}"
+    );
+
+    // Another value is not an accepted one; a JSON boolean is read as `true`.
+    std::fs::write(
+        home.join("config.toml"),
+        "approval_policy = \"on-request\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("settings.json"),
+        r#"{"permissions":{"skip":true}}"#,
+    )
+    .unwrap();
+    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness_home");
+    assert!(
+        step.contains("`approval_policy` to `never`") && !step.contains("`permissions.skip`"),
+        "{out}"
+    );
+
+    // All set: no recommendation, and prep wrote neither file.
+    std::fs::write(home.join("config.toml"), "approval_policy = \"never\"\n").unwrap();
+    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness_home");
+    assert!(
+        step.starts_with("[ok] harness_home:") && !step.contains(ASKS),
+        "{out}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("config.toml")).unwrap(),
+        "approval_policy = \"never\"\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("settings.json")).unwrap(),
+        r#"{"permissions":{"skip":true}}"#
+    );
+}
+
 /// A connector that reads its model service from the harness's config: a home whose harness
 /// names one Goal Cup cannot record (here a local `http://localhost` server) is not ready. Prep
 /// says why, clears the mark and opens the harness again, so the participant can choose another
 /// service there; once the config names an https service on the network, the home is ready.
 #[test]
 fn prep_keeps_the_home_not_ready_while_the_model_service_cannot_be_recorded() {
-    let rig = Rig::chat();
+    let rig = Rig::chat_only();
     let from = crate::model_host_from::reads_model_host(&rig, CHAT_ID);
     let home = rig.cfg.join("capture-homes").join(CHAT_ID);
     let github = FakeGithub::good();

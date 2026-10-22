@@ -5,8 +5,19 @@ id = "amp-cli"
 
 [participant]
 display_name = "Amp"
-# Measured with no login: a home with no sign-in opens with this question, before the chat.
-first_screen = "Amp may ask whether you want to log in. Choose yes and finish the sign-in in your browser."
+# Measured with no login: a home with no sign-in asks for one, before the chat. Start-up
+# screens before the first prompt are the participant's own setup, allowed for any harness.
+first_screen = "If Amp asks you to sign in, do it now, before you type your prompt."
+# Amp's section of docs/HARNESS-SETUP.md, which `goalcup prep` links to (fix plan v8).
+setup_section = "amp"
+
+# Fix plan v9: where the participant adds `goalcup mcp`, the time-left tool; prep prints the lines
+# and never writes them. `amp mcp add` writes the one key `amp.mcpServers` in this file of its
+# HOME (measured). Whether Amp hands the server its environment: not measured.
+[participant.time_left_tool]
+file = ".config/amp/settings.json"
+key = "amp.mcpServers"
+pass_env = "inherited"
 
 [capture]
 # `amp login` polls this host for the device code; tunnelled, never recorded.
@@ -52,7 +63,7 @@ real_dirs = [
 ]
 
 # Bun reads NODE_EXTRA_CA_CERTS. It ADDS the proxy CA to the system roots, so this is not
-# fail-closed (D41): a connection Amp made past the proxy would still verify, unrecorded
+# fail-closed (D41): a connection Amp made past the recording proxy would still verify, unrecorded
 # (docs/CHEAT-CHECKLIST.md, "Amp's native leg is a metadata log").
 [capture.ca]
 env = ["NODE_EXTRA_CA_CERTS"]
@@ -78,7 +89,7 @@ form = "append_only"
 protocol_hint = "amp-thread-metadata-no-transcript"
 since_run_start = true
 
-# The npm `.bin/amp` is a link to the native executable, which is the process the tracer starts.
+# The npm `.bin/amp` is a link to the native executable, which is the process goalcup starts.
 [capture.termination]
 strategy = "process_group"
 grace_seconds = 10

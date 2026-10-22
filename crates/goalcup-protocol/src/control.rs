@@ -19,9 +19,8 @@
 
 use crate::ProtocolError;
 use crate::events::HealthState;
-use crate::provenance::{PreCutoffDrainOutcomeV1, TerminationOutcomeV1};
+use crate::provenance::TerminationOutcomeV1;
 use crate::seal::SealManifest;
-use crate::submission::SubmissionOutcomeV1;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -54,9 +53,13 @@ pub const STATUS_DOMAIN: &[u8] = b"goalcup-status-v1\0";
 /// `start_signal_seen` and `refused`, and every `HealthState` but `online`, `sealed` and
 /// `sealing_recovery_needed`. The CLI and the daemon ship together, so a pair from two
 /// releases is refused rather than bridged.
-/// V9 adds `run_secrets` to the capture create: the run's own exact secret values (the proxy
-/// credential), which the daemon redacts from every recorded body (D60).
-pub const CONTROL_API_VERSION: u32 = 9;
+/// V9 adds `run_secrets` to the capture create: the run's own exact secret values (the recording
+/// proxy credential), which the daemon redacts from every recorded body (D60).
+/// V10 removes what no writer produced: the seal answer's workspace arm (`FinishReportV1`), so a
+/// bare seal answers a [`SealManifest`] or an error; `StatusPayload.finalization`; and the
+/// `native_scope` of the capture launch and finish requests, which the daemon never read once
+/// headless capture left (D54 amendment).
+pub const CONTROL_API_VERSION: u32 = 10;
 
 pub const ROUTE_ENTRIES: &str = "/v0/entries";
 pub const ROUTE_HEALTH: &str = "/v0/health";
@@ -240,30 +243,6 @@ pub struct CycleErrors {
     pub last_pass_at: Option<String>,
 }
 
-/// Read-only projection of the registry's durable V4 finalization intent.
-///
-/// This deliberately exposes only the three participant-actionable states, not a second
-/// copy of the daemon's recovery journal. `Incomplete` carries whichever exact outcomes
-/// were already committed when progress stopped; `Terminal` requires both outcomes that
-/// the finalization link binds. The status publisher derives this exclusively from the
-/// persisted intent, never from a live workspace scan or current process absence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
-pub enum WorkspaceFinalizationStatusV1 {
-    // Struct variants keep `deny_unknown_fields` effective even for the fieldless state.
-    Finishing {},
-    Incomplete {
-        pre_cutoff_drain: Option<PreCutoffDrainOutcomeV1>,
-        termination: Option<TerminationOutcomeV1>,
-        submission: Option<SubmissionOutcomeV1>,
-    },
-    Terminal {
-        pre_cutoff_drain: PreCutoffDrainOutcomeV1,
-        termination: TerminationOutcomeV1,
-        submission: SubmissionOutcomeV1,
-    },
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusPayload {
     pub entry_id: String,
@@ -342,11 +321,6 @@ pub struct StatusPayload {
     /// one.
     #[serde(default)]
     pub harness_unverified: bool,
-    /// V1-V3 payloads omit this field byte-for-byte. V4 sets it only from the durable
-    /// workspace intent so restart and the unauthenticated read-only route report the same
-    /// finishing/incomplete/terminal fact.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub finalization: Option<WorkspaceFinalizationStatusV1>,
     /// The M2 capture projection. Every legacy payload omits it byte-for-byte:
     /// `None` is skipped on the wire and a document without the field decodes as `None`.
     /// Filled only by the pre-sign projection of a v5 entry, never by guessing.
@@ -534,33 +508,6 @@ pub struct DaemonHealth {
     pub reopen_failed: Vec<String>,
 }
 
-/// The durable answer to a V4 workspace finalization request.
-///
-/// These are terminal facts recovered from the daemon's registry and trace. They are not
-/// reconstructed by walking the live workspace, because that walk would occur after the
-/// signed cutoff and could include bytes that never qualified for the submission.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FinishReportV1 {
-    pub entry_id: String,
-    pub trace_dir: String,
-    pub termination: TerminationOutcomeV1,
-    pub submission: SubmissionOutcomeV1,
-}
-
-/// Response body for `POST /v0/entries/{id}/seal`.
-///
-/// The legacy arm remains byte-for-byte compatible with the historical bare
-/// [`SealManifest`]. A V4 workspace response is distinguished by its closed field set and
-/// appears first so serde cannot discard workspace-only fields through the permissive
-/// historical manifest shape.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum SealResponse {
-    Workspace(FinishReportV1),
-    Legacy(SealManifest),
-}
-
 // ------------------------------------------------------------------ v5 local capture
 
 /// `POST` [`ROUTE_CAPTURE_WORKSPACES`]: a protocol-v5 local capture entry — its workspace,
@@ -639,7 +586,7 @@ pub struct CaptureWorkspaceInfo {
     /// This entry's launch-scoped ingest credential, held in memory only: never argv,
     /// environment, disk or logs.
     pub ingest_secret: String,
-    /// The fresh producer ID the proxy's first ingest epoch uses.
+    /// The fresh producer ID the recording proxy's first ingest epoch uses.
     pub producer_id: String,
     /// The run key every status document of this entry is signed with; the caller pins it
     /// and verifies against it with [`SignedStatus::verify_with`].
@@ -708,19 +655,16 @@ pub struct CaptureLaunchRequest {
     pub harness_version: String,
     /// The profile's declarative continuation, as the launch resolved it.
     pub continuation: String,
-    /// This run's native session identity; unavailable identity records a capture gap.
-    #[serde(default)]
-    pub native_scope: Option<String>,
 }
 
 /// The loopback proxy's raw health counters at stop. The daemon records one stream-less
 /// gap per non-zero counter except `sink_refusals`, whose losses are already chained.
 ///
-/// Since H-16 this is a confirmatory second copy, not the only carrier: the proxy chains each of
-/// these losses as a stream-zero `Loss` frame when it happens, so a request that never reaches
-/// the daemon, or loses a race to a standalone seal, no longer hides them. A handled request
-/// therefore adds daemon-clocked gaps for losses already chained on the producer's clock; gap
-/// counts count loss records, not losses.
+/// Since H-16 this is a confirmatory second copy, not the only carrier: the recording proxy chains
+/// each of these losses as a stream-zero `Loss` frame when it happens, so a request that never
+/// reaches the daemon, or loses a race to a standalone seal, no longer hides them. A handled
+/// request therefore adds daemon-clocked gaps for losses already chained on the producer's clock;
+/// gap counts count loss records, not losses.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyCounters {
@@ -767,7 +711,7 @@ pub fn proxy_drain_share(budget: Duration) -> Duration {
 }
 
 /// `POST /v0/entries/{id}/seal` for a v5 entry. `proxy` is `None` when no proxy report
-/// exists, because the launcher that ran the proxy is gone.
+/// exists, because the launcher that ran the recording proxy is gone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureSealRequest {
@@ -777,13 +721,6 @@ pub struct CaptureSealRequest {
     /// gets. Above the budget: clamped to it. Zero: refused before any finish step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remaining_finish_ms: Option<u64>,
-    /// The native session identity of a family that only learns it at the end of its turn
-    /// (Hermes prints it on stderr), read by the launcher after the harness exited. Installed by
-    /// this finish before the entry's owner stops, and ignored for every family whose scope was
-    /// due at the launch. Absent: no identity was read, and a standalone `goalcup seal` never
-    /// sends one. Additive; an older daemon refuses a body that carries it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native_scope: Option<String>,
 }
 
 impl CaptureSealRequest {
@@ -989,9 +926,10 @@ pub trait DaemonClient {
     fn status(&self, entry_id: &str) -> Result<SignedStatus, ControlError>;
     /// Every entry this daemon knows about.
     fn entries(&self) -> Result<Vec<EntrySummary>, ControlError>;
-    /// Finalize the entry and return the daemon's durable result. Workspace entries never
-    /// rescan live bytes in the CLI; legacy entries retain their historical manifest arm.
-    fn seal(&self, entry_id: &str) -> Result<SealResponse, ControlError>;
+    /// The bare seal, with no capture seal request. The daemon answers it for a v5 capture
+    /// only with an error (`malformed` for a capture row it could not reopen, `missing` for an
+    /// id it does not hold); a v5 entry is finished with [`Self::seal_capture`].
+    fn seal(&self, entry_id: &str) -> Result<SealManifest, ControlError>;
     /// The harness is a TUI and must be a child of the participant's terminal, so the
     /// CLI spawns it and hands the daemon the pids to terminate at the deadline (D22).
     fn register_process(
@@ -1030,8 +968,8 @@ pub trait DaemonClient {
     ) -> Result<(), ControlError> {
         Err(capture_unsupported())
     }
-    /// Finish a v5 entry locally, posting the proxy's counters. `read_timeout` is how long
-    /// the caller waits for the answer: its remaining budget, the termination allowance and
+    /// Finish a v5 entry locally, posting the recording proxy's counters. `read_timeout` is how
+    /// long the caller waits for the answer: its remaining budget, the termination allowance and
     /// the connect slack (CONTRACTS.md, C6 local finish budget ¶6).
     fn seal_capture(
         &self,

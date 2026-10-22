@@ -1,12 +1,12 @@
-//! The operating-system layer of the tracker. It holds the configuration-directory policy
+//! The operating-system layer of Goal Cup Proxy. It holds the configuration-directory policy
 //! below, a sleep inhibitor, free-disk checks, machine facts, process-image and terminal
-//! helpers, and the handle-rooted file access modules (`readcap`, `sourcecap`, `tracecap`).
+//! helpers, and the handle-rooted file access modules (`sourcecap`, `tracecap`).
 //!
-//! The native capability layers (`readcap`, `sourcecap`, `tracecap` and `filecap`'s error
-//! types) are implemented for Unix only. Windows is not yet supported; it is planned (D42).
+//! The native capability layers (`sourcecap` and `tracecap`) are implemented for Unix only.
+//! Windows is not yet supported natively; it runs under WSL2, and native Windows is planned (D42).
 //! A non-Unix build fails at compile time below rather than shipping a silently unsupported
-//! binary, and the workspace carries no non-Unix stub code. Linux is best-effort until it is
-//! tested.
+//! binary, and the workspace carries no non-Unix stub code. macOS and Linux are both supported;
+//! what has been measured on each is in the platform table of README.md.
 
 #[cfg(not(unix))]
 compile_error!(
@@ -20,14 +20,11 @@ pub mod disk;
 /// The calling thread's `errno`, for the `readdir` end-of-directory idiom.
 #[cfg(unix)]
 pub mod errno;
-/// Contained file access rooted in an owned directory capability.
-pub mod filecap;
 pub mod handle_budget;
 /// Facts about the machine and small host helpers, with no identity in them.
 pub mod machine;
 /// The executable file a running process was started from.
 pub mod process_image;
-pub mod readcap;
 pub mod sourcecap;
 /// The terminal a chat-mode harness shares with its launcher: its signals, its foreground group.
 pub mod terminal;

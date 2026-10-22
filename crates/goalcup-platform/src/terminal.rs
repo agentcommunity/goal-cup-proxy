@@ -248,13 +248,15 @@ impl Drop for EchoOff {
 /// A harness that suspends itself (Ctrl-Z in its own key handling, `kill(0, SIGTSTP)`) would
 /// otherwise stop while this process kept waiting for an exit, and the participant's shell, whose
 /// foreground job is this process, would never get the terminal back. Suspension is not
-/// supported during a run: `SIGCONT` goes to the child's process group at once, and `on_stopped`
-/// hears the signal that stopped it. This process never stops itself.
+/// supported during a run: `on_stopped` hears the signal that stopped it and answers whether to
+/// continue it, and `SIGCONT` then goes to the child's process group at once. A stop it answers
+/// `false` for is someone's deliberate freeze (the agent paused on a nearly full disk, D65) and is
+/// left alone. This process never stops itself.
 ///
 /// The child is reaped here, so the caller must not wait for it again.
 pub fn wait_resuming(
     pid: u32,
-    on_stopped: &mut dyn FnMut(libc::c_int),
+    on_stopped: &mut dyn FnMut(libc::c_int) -> bool,
 ) -> std::io::Result<std::process::ExitStatus> {
     use std::os::unix::process::ExitStatusExt;
     let pid = libc::pid_t::try_from(pid).map_err(|_| std::io::Error::other("pid out of range"))?;
@@ -270,6 +272,9 @@ pub fn wait_resuming(
             return Err(error);
         }
         if libc::WIFSTOPPED(status) {
+            if !on_stopped(libc::WSTOPSIG(status)) {
+                continue;
+            }
             // SAFETY: integers only; the group is the stopped child's own.
             unsafe {
                 let group = libc::getpgid(pid);
@@ -279,7 +284,6 @@ pub fn wait_resuming(
                     libc::kill(pid, libc::SIGCONT);
                 }
             }
-            on_stopped(libc::WSTOPSIG(status));
             continue;
         }
         return Ok(std::process::ExitStatus::from_raw(status));
@@ -289,6 +293,7 @@ pub fn wait_resuming(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::CommandExt as _;
 
     /// Signal dispositions belong to the process, not to a test thread. Plain `cargo test` runs
     /// the tests of this module as threads of one process, so a test that installs or reads
@@ -421,11 +426,57 @@ mod tests {
         let child = std::process::Command::new("/bin/sh")
             .args(["-c", "kill -STOP $$; kill -STOP $$; exit 7"])
             .stdin(std::process::Stdio::null())
+            .process_group(0)
             .spawn()
             .unwrap();
         let mut stops = Vec::new();
-        let status = wait_resuming(child.id(), &mut |signal| stops.push(signal)).unwrap();
+        let status = wait_resuming(child.id(), &mut |signal| {
+            stops.push(signal);
+            true
+        })
+        .unwrap();
         assert_eq!(status.code(), Some(7));
         assert_eq!(stops, [libc::SIGSTOP, libc::SIGSTOP]);
+    }
+
+    /// A stop the caller does not continue (the disk pause, D65) holds until someone else
+    /// continues the child; the wait goes on meanwhile.
+    ///
+    /// Both stop tests give the child its own process group: `wait_resuming` continues the whole
+    /// group, and under plain `cargo test` the test threads share one, so the other test would
+    /// continue this child too.
+    #[test]
+    #[allow(
+        clippy::zombie_processes,
+        reason = "`wait_resuming` reaps it, not `Child::wait`"
+    )]
+    fn a_stop_the_caller_keeps_is_not_continued() {
+        let child = std::process::Command::new("/bin/sh")
+            .args(["-c", "kill -STOP $$; exit 7"])
+            .stdin(std::process::Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id() as libc::pid_t;
+        let (stops, continued) = (std::cell::Cell::new(0), std::cell::Cell::new(false));
+        let status = wait_resuming(child.id(), &mut |_| {
+            stops.set(stops.get() + 1);
+            // Still stopped a moment later: nobody continued it.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+            continued.set(!stat.contains(") T "));
+            // SAFETY: two integers; the test's own unreaped child.
+            unsafe { libc::kill(pid, libc::SIGCONT) };
+            false
+        })
+        .unwrap();
+        assert_eq!(status.code(), Some(7));
+        assert_eq!(stops.get(), 1);
+        if cfg!(target_os = "linux") {
+            assert!(
+                !continued.get(),
+                "the wait continued a stop it was told to keep"
+            );
+        }
     }
 }

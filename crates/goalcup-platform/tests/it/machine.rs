@@ -1,7 +1,8 @@
 use goalcup_platform::machine::{
-    ac_from_pmset, container_from_systemd, facts, is_wsl_from, mountinfo_fstype, url_allowed,
-    windows_host_filesystem, windows_host_filesystem_with, windows_host_fstype, windows_host_magic,
-    wsl_check_with, wsl_version_from,
+    ac_from_pmset, container_from_systemd, facts, is_wsl_from, mountinfo_fstype,
+    unsupported_fstype, unsupported_magic, url_allowed, windows_host_filesystem,
+    windows_host_filesystem_with, windows_host_fstype, windows_host_magic, wsl_check_with,
+    wsl_version_from,
 };
 use std::path::{Path, PathBuf};
 
@@ -156,6 +157,36 @@ fn the_wsl_checks_refuse_wsl1_and_every_folder_on_a_windows_host_filesystem() {
     );
     // A folder whose filesystem cannot be told is not refused.
     assert_eq!(wsl_check_with(Some(2), &folders, &|_: &Path| None), Ok(()));
+}
+
+#[test]
+fn the_filesystems_a_run_cannot_keep_records_on_are_named_by_type_and_by_magic() {
+    for (name, said) in [
+        ("btrfs", "btrfs"),
+        ("zfs", "ZFS"),
+        ("nfs4", "NFS"),
+        ("cifs", "SMB"),
+        ("smb3", "SMB"),
+        ("smbfs", "SMB"),
+        ("tmpfs", "tmpfs"),
+        ("overlay", "overlayfs"),
+        ("fuse.sshfs", "FUSE"),
+        ("macfuse", "FUSE"),
+    ] {
+        assert_eq!(unsupported_fstype(name), Some(said), "{name}");
+    }
+    for name in ["ext4", "xfs", "apfs", "9p", ""] {
+        assert_eq!(unsupported_fstype(name), None, "{name}");
+    }
+    assert_eq!(unsupported_magic(0x9123_683E), Some("btrfs"));
+    assert_eq!(unsupported_magic(0x794C_7630), Some("overlayfs"));
+    for smb in [0xFF53_4D42, 0xFE53_4D42, 0x517B] {
+        assert_eq!(unsupported_magic(smb), Some("SMB"), "{smb:#x}");
+    }
+    // ext4 and XFS.
+    for magic in [0xEF53, 0x5846_5342] {
+        assert_eq!(unsupported_magic(magic), None, "{magic:#x}");
+    }
 }
 
 #[test]

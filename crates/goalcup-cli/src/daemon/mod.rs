@@ -70,8 +70,8 @@ use goalcup_protocol::control::{
     CaptureSealError, CaptureSealRequest, CaptureWorkspaceInfo, CaptureWorkspaceRequest,
     ControlError, DaemonClient, DaemonHealth, EntrySummary, ErrorBody, FINISH_COMMIT_RESERVE,
     ROUTE_CAPTURE_WORKSPACES, ROUTE_ENTRIES, ROUTE_HEALTH, SUFFIX_ABANDON, SUFFIX_CAPTURE_GOAL,
-    SUFFIX_CAPTURE_LAUNCH, SUFFIX_PROCESS, SUFFIX_SEAL, SUFFIX_STATUS, SealResponse, SignedStatus,
-    entry_route, is_public_route,
+    SUFFIX_CAPTURE_LAUNCH, SUFFIX_PROCESS, SUFFIX_SEAL, SUFFIX_STATUS, SignedStatus, entry_route,
+    is_public_route,
 };
 use goalcup_protocol::process::ProcessRegistration;
 use std::path::Path;
@@ -617,7 +617,7 @@ impl DaemonClient for HttpDaemonClient {
     /// `goalcup seal` sends it only when the entry has no capture status: the daemon answers
     /// it `malformed` for a capture row it could not reopen (a torn entry) and `missing` for an
     /// id it does not hold. The `conflict` that shares `busy`'s `409` is never retried.
-    fn seal(&self, entry_id: &str) -> Result<SealResponse, ControlError> {
+    fn seal(&self, entry_id: &str) -> Result<goalcup_protocol::seal::SealManifest, ControlError> {
         let answer = self.post_seal(entry_id, None)?;
         parsed(&entry_route(entry_id, SUFFIX_SEAL), answer)
     }

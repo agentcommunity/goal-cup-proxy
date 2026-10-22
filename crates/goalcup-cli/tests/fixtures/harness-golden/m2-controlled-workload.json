@@ -8,53 +8,6 @@
       "value_in_plan": "<TMP>/proxy-ca.pem"
     }
   ],
-  "capture_profile": {
-    "args": [
-      "/synthetic/workload.py",
-      "/synthetic/config.json",
-      "--"
-    ],
-    "auth_hosts": [
-      "auth.e00.localhost"
-    ],
-    "ca_env": [
-      "NODE_EXTRA_CA_CERTS"
-    ],
-    "config_home": "shared",
-    "configure": [],
-    "continuation": "none: one fixed traffic plan, no input after the goal",
-    "env": {},
-    "executable": {
-      "version_args": []
-    },
-    "home": "empty",
-    "hosts": [
-      {
-        "evidence_paths": [
-          "/v1/echo",
-          "/v1/sse",
-          "/v1/ws",
-          "/v1/bulk"
-        ],
-        "host": "api.e00.localhost",
-        "prefix_paths": [],
-        "protocol_hint": "e00-controlled"
-      }
-    ],
-    "identity": {
-      "binding": null,
-      "grammar": null,
-      "id_field": null,
-      "match_field": null,
-      "match_value": null,
-      "prefix": null,
-      "source": "none"
-    },
-    "interactive": false,
-    "providers": [],
-    "resume_args": [],
-    "skills_dir": null
-  },
   "connector": {
     "dir_digest_matches_its_pin": false,
     "files_dir": [],
@@ -65,12 +18,12 @@
   },
   "env_differs_from_policy": [],
   "goal_placement_for_an_option_shaped_goal": {
-    "argv_len": 4,
-    "goal_index": 3,
-    "goal_prefix": 0,
+    "argv_len": 2,
+    "goal_index": null,
+    "goal_prefix": null,
     "tail": [
-      "--",
-      "--profile evil -p x"
+      "/synthetic/workload.py",
+      "/synthetic/config.json"
     ]
   },
   "home": {
@@ -80,18 +33,15 @@
   "plan": {
     "argv": [
       "/synthetic/workload.py",
-      "/synthetic/config.json",
-      "--",
-      "write result.txt"
+      "/synthetic/config.json"
     ],
-    "capture": {
-      "goal_index": 3,
-      "goal_prefix": 0
-    },
+    "capture": null,
     "cwd": "<TMP>/workspace",
     "env_base_keys": [],
     "env_remove": [],
     "env_set": {
+      "GOALCUP_IN_HARNESS": "1",
+      "GOALCUP_TIME_LEFT_FILE": "<TMP>/time-left/entry-0001",
       "HOME": "<TMP>/run-home",
       "HTTPS_PROXY": "<PROXY_URL>",
       "LOGNAME": "participant",
@@ -109,7 +59,7 @@
       "native_binary": null,
       "strategy": "process_group"
     },
-    "mode": "Server",
+    "mode": "Tui",
     "program": "<TMP>/bin/fake-harness"
   },
   "redaction": {
@@ -120,41 +70,6 @@
     "pipes": {
       "stderr": false,
       "stdout": false
-    }
-  },
-  "termination": {
-    "kill": {
-      "grace_seconds": 10,
-      "native_binary": null,
-      "strategy": "process_group"
-    },
-    "registered_handle": {
-      "argv": [
-        "/synthetic/workload.py",
-        "/synthetic/config.json",
-        "--",
-        "<goal>"
-      ],
-      "env_keys": [
-        "HOME",
-        "HTTPS_PROXY",
-        "LOGNAME",
-        "NODE_EXTRA_CA_CERTS",
-        "NO_PROXY",
-        "PATH",
-        "TMPDIR",
-        "USER",
-        "WORKLOAD_HOME",
-        "https_proxy",
-        "no_proxy"
-      ],
-      "grace_seconds": 10,
-      "has_process_start": true,
-      "native_binary": null,
-      "native_pid_found": false,
-      "pgid_is_pid": false,
-      "program": "<TMP>/bin/fake-harness",
-      "strategy": "process_group"
     }
   }
 }

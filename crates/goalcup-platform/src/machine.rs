@@ -28,7 +28,7 @@ pub struct MachineFacts {
     pub disk_total_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_free_bytes: Option<u64>,
-    /// True only on WSL2 (WSL1 cannot run the tracker, so a run never reports it).
+    /// True only on WSL2 (WSL1 cannot run Goal Cup Proxy, so a run never reports it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wsl: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -256,8 +256,9 @@ pub fn windows_host_filesystem(path: &Path) -> Option<String> {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn statfs_type(path: &Path) -> Option<u64> {
+/// `statfs(2)` of `path`, or `None` when the call fails.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn statfs(path: &Path) -> Option<libc::statfs> {
     let c = CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
     // SAFETY: `c` is NUL-terminated and `stat` is a writable statfs for the call.
@@ -265,12 +266,17 @@ fn statfs_type(path: &Path) -> Option<u64> {
         return None;
     }
     // SAFETY: statfs returned 0, so it filled the struct.
-    let stat = unsafe { stat.assume_init() };
-    // `f_type` is signed or unsigned and 32 or 64 bits wide by target; the magic numbers fit 32.
-    Some(u64::from(stat.f_type as u32))
+    Some(unsafe { stat.assume_init() })
 }
 
-/// The refusal for a machine that WSL cannot run the tracker on.
+/// The Linux `statfs` magic number of the filesystem `path` is on.
+#[cfg(target_os = "linux")]
+fn statfs_type(path: &Path) -> Option<u64> {
+    // `f_type` is signed or unsigned and 32 or 64 bits wide by target; the magic numbers fit 32.
+    statfs(path).map(|stat| u64::from(stat.f_type as u32))
+}
+
+/// The refusal for a machine that WSL cannot run Goal Cup Proxy on.
 const WSL1_REFUSAL: &str = "WSL1 cannot run Goal Cup: convert this distribution to WSL2 with \
                             `wsl --set-version <distro> 2`";
 
@@ -312,6 +318,67 @@ pub fn wsl_check_with(
 /// [`wsl_check_with`] on this machine: its WSL version, and the filesystems it reads.
 pub fn wsl_check(folders: &[(&str, &Path)]) -> Result<(), String> {
     wsl_check_with(wsl_version(), folders, &windows_host_filesystem)
+}
+
+/// The name to say for a filesystem type a run's folders cannot be on: btrfs, ZFS, NFS, SMB,
+/// tmpfs, overlayfs and FUSE. A run keeps its traces on APFS, ext4 or XFS only. `name` is a type
+/// name as macOS `statfs` writes it in `f_fstypename`, or as a mount table spells it; `None` for
+/// any other type. On Linux, [`unsupported_filesystem`] reads the `statfs` magic number instead
+/// ([`unsupported_magic`]).
+#[doc(hidden)]
+pub fn unsupported_fstype(name: &str) -> Option<&'static str> {
+    let name = name.to_ascii_lowercase();
+    match name.as_str() {
+        "btrfs" => Some("btrfs"),
+        "zfs" => Some("ZFS"),
+        "nfs" | "nfs4" => Some("NFS"),
+        // `cifs` and `smb3` on Linux; `smbfs` on macOS.
+        "cifs" | "smb3" | "smbfs" => Some("SMB"),
+        "tmpfs" => Some("tmpfs"),
+        "overlay" | "overlayfs" => Some("overlayfs"),
+        // `fuse`, `fuseblk`, `fuse.sshfs` on Linux; `macfuse`, `osxfuse` on macOS.
+        _ if name.starts_with("fuse") || name.ends_with("fuse") => Some("FUSE"),
+        _ => None,
+    }
+}
+
+/// [`unsupported_fstype`] for the magic number Linux `statfs` reports as `f_type`.
+#[doc(hidden)]
+pub fn unsupported_magic(f_type: u64) -> Option<&'static str> {
+    match f_type {
+        0x9123_683E => Some("btrfs"),
+        0x2FC1_2FC1 => Some("ZFS"),
+        0x6969 => Some("NFS"),
+        // CIFS, SMB2 and the old SMB.
+        0xFF53_4D42 | 0xFE53_4D42 | 0x517B => Some("SMB"),
+        0x0102_1994 => Some("tmpfs"),
+        0x794C_7630 => Some("overlayfs"),
+        0x6573_5546 => Some("FUSE"),
+        _ => None,
+    }
+}
+
+/// The name of the filesystem `path` is on when a run's folders cannot be on it (see
+/// [`unsupported_fstype`]), or `None` when it is fine or cannot be told. `path` need not exist
+/// yet: the nearest existing ancestor is looked at, by its real path.
+pub fn unsupported_filesystem(path: &Path) -> Option<&'static str> {
+    let existing = nearest_existing(path)?;
+    #[cfg(target_os = "linux")]
+    {
+        statfs_type(&existing).and_then(unsupported_magic)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let stat = statfs(&existing)?;
+        // SAFETY: `f_fstypename` is a NUL-terminated name inside the struct.
+        let name = unsafe { std::ffi::CStr::from_ptr(stat.f_fstypename.as_ptr()) };
+        unsupported_fstype(&name.to_string_lossy())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = existing;
+        None
+    }
 }
 
 /// Whether the machine runs on mains power; `None` when that cannot be told (a desktop with
@@ -561,6 +628,129 @@ fn disk_space(path: &Path) -> Option<(u64, u64)> {
     Some((total, free))
 }
 
+/// What one process uses, each field `None` when it could not be read.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessUsage {
+    pub rss_bytes: Option<u64>,
+    /// User plus system CPU time so far, in milliseconds.
+    pub cpu_ms: Option<u64>,
+    pub open_files: Option<u64>,
+}
+
+/// The resident memory, CPU time and open files of process `pid`, read from `/proc` (Linux) or
+/// `proc_pidinfo` (macOS), never from a command. Only a process of this user can be read.
+#[cfg(target_os = "linux")]
+pub fn process_usage(pid: u32) -> ProcessUsage {
+    let read = |what: &str| std::fs::read_to_string(format!("/proc/{pid}/{what}")).ok();
+    let rss_bytes = read("status").and_then(|status| {
+        let kib = status
+            .lines()
+            .find_map(|line| line.strip_prefix("VmRSS:"))?;
+        let kib: u64 = kib.trim().strip_suffix("kB")?.trim().parse().ok()?;
+        kib.checked_mul(1024)
+    });
+    let cpu_ms = read("stat").and_then(|stat| {
+        // Field 2 may hold spaces: count from after its last `)`. `state` is field 3, `utime`
+        // and `stime` (in clock ticks) fields 14 and 15.
+        let mut fields = stat.get(stat.rfind(')')? + 2..)?.split_whitespace();
+        let utime: u64 = fields.nth(11)?.parse().ok()?;
+        let stime: u64 = fields.next()?.parse().ok()?;
+        // SAFETY: `sysconf` takes an integer and touches no memory.
+        let hz = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) }).ok()?;
+        (hz > 0).then(|| utime.saturating_add(stime).saturating_mul(1000) / hz)
+    });
+    let open_files = std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .ok()
+        .map(|dir| {
+            let listed = dir.count() as u64;
+            // Listing our own descriptors holds one open for the listing.
+            if pid == std::process::id() {
+                listed.saturating_sub(1)
+            } else {
+                listed
+            }
+        });
+    ProcessUsage {
+        rss_bytes,
+        cpu_ms,
+        open_files,
+    }
+}
+
+/// See the Linux [`process_usage`].
+#[cfg(target_os = "macos")]
+pub fn process_usage(pid: u32) -> ProcessUsage {
+    let Ok(pid) = libc::c_int::try_from(pid) else {
+        return ProcessUsage::default();
+    };
+    // SAFETY: an all-zero `proc_taskinfo` is a valid value for the call to overwrite.
+    let mut task: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+    // SAFETY: `task` is a valid, exclusively borrowed local of exactly `size` bytes, and
+    // `proc_pidinfo` does not keep the pointer.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTASKINFO,
+            0,
+            (&mut task as *mut libc::proc_taskinfo).cast(),
+            size,
+        )
+    };
+    let task = (read == size).then_some(task);
+    let cpu_ms = task.and_then(|task| {
+        // CPU times are in Mach time units, nanoseconds only once scaled by the timebase.
+        let (numer, denom) = mach_timebase()?;
+        let ticks = u128::from(task.pti_total_user) + u128::from(task.pti_total_system);
+        u64::try_from(ticks * u128::from(numer) / u128::from(denom) / 1_000_000).ok()
+    });
+    let fd_size = std::mem::size_of::<libc::proc_fdinfo>();
+    // SAFETY: a null buffer asks only for the size the list needs.
+    let needed =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+    let open_files = usize::try_from(needed)
+        .ok()
+        .filter(|&needed| needed > 0)
+        .and_then(|needed| {
+            let mut list: Vec<libc::proc_fdinfo> = Vec::with_capacity(needed / fd_size + 16);
+            let bytes = libc::c_int::try_from(list.capacity() * fd_size).ok()?;
+            // SAFETY: `list` has room for `bytes` bytes; the call writes whole entries into it
+            // and answers how many bytes it wrote. Nothing reads the entries.
+            let wrote = unsafe {
+                libc::proc_pidinfo(
+                    pid,
+                    libc::PROC_PIDLISTFDS,
+                    0,
+                    list.as_mut_ptr().cast(),
+                    bytes,
+                )
+            };
+            let wrote = usize::try_from(wrote).ok().filter(|&wrote| wrote > 0)?;
+            Some((wrote / fd_size) as u64)
+        });
+    ProcessUsage {
+        rss_bytes: task.map(|task| task.pti_resident_size),
+        cpu_ms,
+        open_files,
+    }
+}
+
+/// The Mach timebase as `(numer, denom)`.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn mach_timebase() -> Option<(u32, u32)> {
+    let mut info = libc::mach_timebase_info { numer: 0, denom: 0 };
+    // SAFETY: `info` is a valid out pointer for the one struct the call writes.
+    let rc = unsafe { libc::mach_timebase_info(&mut info) };
+    (rc == 0 && info.numer > 0 && info.denom > 0).then_some((info.numer, info.denom))
+}
+
+/// Elsewhere nothing is read.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn process_usage(_pid: u32) -> ProcessUsage {
+    ProcessUsage::default()
+}
+
 /// The first executable called `name` on `PATH`.
 pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
@@ -577,6 +767,20 @@ pub(crate) fn is_executable(p: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This process's own memory, CPU time and open files read, each plausible.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_process_of_this_user_is_read() {
+        let usage = process_usage(std::process::id());
+        assert!(
+            usage.rss_bytes.is_some_and(|rss| rss > 1 << 20),
+            "{usage:?}"
+        );
+        assert!(usage.cpu_ms.is_some(), "{usage:?}");
+        // stdin, stdout and stderr at least.
+        assert!(usage.open_files.is_some_and(|n| n >= 3), "{usage:?}");
+    }
 
     /// One machine in the opener table: what it is, what is on its `PATH`, and the opener it
     /// must get, with the arguments before the URL.

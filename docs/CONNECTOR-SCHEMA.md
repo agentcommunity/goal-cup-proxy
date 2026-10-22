@@ -4,6 +4,35 @@ What may `connectors/<id>/harness.toml` contain? This is the public field and va
 reference for harness authors and reviewers. The procedure for adding a harness is
 [HARNESS-ONBOARDING](HARNESS-ONBOARDING.md).
 
+## What a chat connector writes
+
+Every shipped connector runs its harness in chat mode (D57), and a new one does too. This is all
+a chat connector writes. The [template](../skills/adding-a-capture-harness/templates/connector-harness.toml)
+has each line with its comment. The full reference below has every rule.
+
+| Field | What to write | Example |
+|---|---|---|
+| `schema_version`, `id` | `1`, and the folder name | `id = "codex-cli"` |
+| `[participant]` | `display_name`; `first_screen` only if the harness asks something first; `no_prompts` when a setting in its config stops its permission prompts (D67); `setup_section`, its section in [HARNESS-SETUP](HARNESS-SETUP.md); `time_left_tool`, where its MCP servers are listed | `display_name = "Codex"` |
+| `capture.interactive`, `continuation` | `true`, and the fixed chat sentence | `continuation = "chat: the participant types the prompt and may type keep going"` |
+| `capture.args`, `resume_args` | Options to open the chat (often none), and how to reopen the last session | `args = []`, `resume_args = ["--continue"]` |
+| `[capture.executable]` | The program name on `PATH`, and its version option | `program = "claude"`, `version_args = ["--version"]` |
+| `[capture.env]` and `[capture.platform.<key>.env]` | `SHELL`, `NODE_USE_ENV_PROXY = "1"` for a Node harness, the self-update switch; `SHELL = "/bin/bash"` on Linux | `DISABLE_AUTOUPDATER = "1"` |
+| `[capture.home]` | `run_home`, `config_home`, the harness's home variable, its real folders, `skills_dir` | `config_home = "shared"`, `env = "CODEX_HOME"` |
+| `[capture.ca]` | The CA variable the harness reads, and `extend` or `replace` | `env = ["NODE_EXTRA_CA_CERTS"]`, `mode = "extend"` |
+| `[capture.identity]` | Always `source = "none"` | `source = "none"` |
+| `[[capture.native]]` | The session files: `name`, `root`, `pattern`, `form`, `protocol_hint`, `since_run_start = true` | `root = "{config_home}/sessions"` |
+| Model host | `model_host_from` when the participant picks the service; else `providers` or one `[[capture.hosts]]` row | `model_host_from = { file = "config.yaml", key = "model.base_url" }` |
+| `capture.auth_hosts` | Sign-in hosts, tunnelled and never recorded | `auth_hosts = ["auth.openai.com"]` |
+| `[capture.termination]` | `process_group`, or `native_pid` for an npm wrapper; a grace in seconds | `strategy = "process_group"`, `grace_seconds = 10` |
+| `[redaction]` | Optional: plan, quota and billing fields the harness sends | `{ kind = "codex_plan_type", json_field = "plan_type", value = "string" }` |
+
+Only when needed: `capture.configure` (a setting with no environment variable, as Hermes has),
+`capture.argv_guard` and `capture.reserved_env_prefixes` (a harness that scans its own options or
+has a safe-mode variable). A connector never writes `goal_flag`, an identity `binding` or
+selector, or `[capture.credential]`: each is refused. Seeds (`capture.home.seed`) are allowed but no shipped
+connector uses them.
+
 The executable authority is
 [`harness.rs`](../crates/goalcup-protocol/src/harness.rs). Its
 [`capture_policy.rs`](../crates/goalcup-protocol/src/capture_policy.rs) trust tables,
@@ -31,7 +60,7 @@ All public schema structs and enums are non-exhaustive. A manifest cannot select
 
 - `Origin::Pinned` is an in-tree or pin-checked connector. It refuses an interpreter as the
   executable and refuses an absolute, home-relative, parent-relative or expanding path in an
-  argument. There is no per-connector list in Rust (D51): `capture.args`, `goal_flag` and
+  argument. There is no per-connector list in Rust (D51): `capture.args` and
   `capture.env` are held to the generic rules below, and a new connector, variable or argument,
   a model name included, is a data change reviewed in its PR. An unpinned id is refused at the
   pin gate and runs only under `--dev`.
@@ -53,9 +82,9 @@ optional field or table is absent.
 | `capture` | required table | The complete launch-and-capture profile below. |
 | `participant` | optional, default absent | `[participant]`: the harness's display name and first-screen hint for messages to the participant; see below. |
 | `redaction` | optional, default absent | Connector-selected rows from the core redaction mirror. |
-| `capture.args` | required | 1–64 strings (0–64 with `interactive`); each at most 4096 bytes and without control characters. |
-| `capture.goal_flag` | optional, default absent | One long option, at most 32 bytes, matching `--[a-z][a-z0-9-]*`; no `=` or value. Refused with `interactive`. |
-| `capture.interactive` | optional, default `false` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57); see below. |
+| `capture.args` | required | 0–64 strings in chat mode; each at most 4096 bytes and without control characters. |
+| `capture.goal_flag` | refused | Headless mode's goal option; refused as chat mode only (see below). |
+| `capture.interactive` | required: `true` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57). `false`, or leaving it out, is refused as chat mode only (see below). |
 | `capture.resume_args` | optional, default `[]` | Strings appended after `capture.args` when a run is continued and already has a file in one of its `[[capture.native]]` stores; otherwise the harness opens the normal way. Each is held to every `args` rule, and `args` and `resume_args` together hold at most 64. |
 | `capture.configure` | optional, default `[]` | `interactive` only. At most 4 commands, each 1–16 arguments of 1–256 bytes. Each argument is held to every `args` rule and takes no template (`{` and `}` are refused). See [Configure commands](#configure-commands). |
 | `capture.continuation` | required | Non-blank, one line, 1–512 bytes; declarative provenance for unattended continuation. |
@@ -75,16 +104,16 @@ optional field or table is absent.
 | `capture.providers` | optional, default `[]` | Unique names from the shared provider table; each adds that provider's host row. See below. |
 | `capture.model_host_from` | optional, default absent | `{ file = "<path>", key = "<dotted key>" }`: where the harness's own config names its model service. Requires `config_home = "shared"`. See [The model host from the harness's config](#the-model-host-from-the-harnesss-config). |
 
-The goal has exactly one slot: either `capture.args` ends in the literal `--` and the goal is the
-next single argument, or `capture.goal_flag` is present and carries the goal as
-`--flag=<goal>`, never both. Every argument, every `resume_args` entry and `goal_flag` passes the
-core deny policy and the optional argument guard.
-
 With `interactive = true` (D57) there is no goal slot: the participant types the prompt in the
-harness. The profile then takes no `goal_flag`, its `args` need not end in `--` and may be
-empty, and its `identity.source` must be `none`. With `false`, the default, every
-rule above holds unchanged. `resume_args` parses in either recipe, but `goalcup continue`
-currently supports chat mode only and appends it after `args`; headless continuation is unsupported.
+harness. Its `args` may be empty, and its `identity.source` is `none`. Every argument and every `resume_args` entry passes the core deny policy and the
+optional argument guard. `goalcup continue` appends `resume_args` after `args`.
+
+**Headless mode was removed (21 Oct, simplification plan A1).** It gave the harness one goal as an
+argument and named a session through the `preassigned`, `stdout_json` or `stderr_line` identity
+sources. A manifest that still says `interactive = false` (or leaves it out), or writes
+`goal_flag`, one of those sources or any of their identity fields (`binding`, `match_field`,
+`match_value`, `id_field`, `prefix`, `grammar`, `wait_seconds`), is refused with one "chat mode
+only" message that names the field. It stays `schema_version = 1`.
 
 ### Configure commands
 
@@ -124,13 +153,13 @@ configure = [
   credential, proxy and trust spellings, a profile switch and the connector's own guarded options.
   Review is the control for the rest.
 
-Argument templates (`args` and `resume_args`) admit only `{workspace}` and `{session_id}`.
+Argument templates (`args` and `resume_args`) admit only `{workspace}`.
 `capture.env` value templates also admit `{config_home}` (the isolated harness home) and
 `{run_home}` (the run's private `HOME`), so a harness with a second state variable can point it
 inside them (`DATA_DIR = "{config_home}/data"`). The value rules still apply around a token: no
 leading `/` or `~`, no `$`, backtick or `://`, and no `..` component. `{{` and `}}` render literal
-braces. Any other token or unmatched brace is refused. `{session_id}` has the identity rules
-described below.
+braces. Any other token or unmatched brace is refused (`{session_id}` included: no run names
+a session).
 
 ### Executable
 
@@ -278,7 +307,7 @@ must be empty, and the native `root` must be `{run_home}/...`: anything else wou
 harness never reads, admitted to record nothing.
 
 That run `HOME` is fresh each run, so a login made before the run is lost. `run_home = "shared"`
-keeps it instead (D59): one empty directory per connector, made by the tracker and kept across
+keeps it instead (D59): one empty directory per connector, made by Goal Cup Proxy and kept across
 runs, held to the rules of a shared config home. Runs on it are serialized; the daemon refuses it
 at the participant's `HOME`, at a `real_dirs` path or anywhere but directly under
 `<config_dir>/capture-homes`; the baseline lists it in place of the config home; a missing
@@ -286,9 +315,15 @@ at the participant's `HOME`, at a `real_dirs` path or anywhere but directly unde
 identity `none` needs `since_run_start = true`. It is refused with
 `capture.home.env`: such a harness shares its config home instead.
 
+Every run `HOME` gets one file from Goal Cup Proxy, whatever the connector: `.profile`, mode
+`0600`, exporting the `PATH` the launch hands the harness (shell-quoted). A harness that runs its
+commands in a login shell (Codex's `/bin/sh -lc`) has them run `/etc/profile`, which on Debian and
+Ubuntu resets `PATH`; this puts the participant's back (D57). A `.profile` already there (a shared
+run home's) is kept as it is, so a shared run home keeps the `PATH` of the run that first wrote it.
+
 ## Credential and CA
 
-The tracer never sees, forwards or stores a participant's provider key (D61). A
+Goal Cup Proxy never sees, forwards or stores a participant's provider key (D61). A
 `[capture.credential]` table, in the base profile or in a `[capture.platform.<key>]` override, is
 refused with "a connector may not pass a provider key; the harness keeps its own login in its
 home". A harness that reads its key from an environment variable only is set up with its own
@@ -311,14 +346,14 @@ The launch points each name at a file made for the run:
 
 | Name | Mode | The file | The harness then trusts |
 |---|---|---|---|
-| own variable | `extend` | the recording proxy's CA alone | its own roots plus the proxy (`NODE_EXTRA_CA_CERTS`, `CODEX_CA_CERTIFICATE`) |
-| own variable | `replace` | the recording proxy's CA alone | the proxy only, so it fails closed (`HERMES_CA_BUNDLE`, D41) |
-| shared row | `extend` only | the system's trusted roots plus the proxy's CA | the real roots plus the proxy |
+| own variable | `extend` | the recording proxy's CA alone | its own roots plus the recording proxy (`NODE_EXTRA_CA_CERTS`, `CODEX_CA_CERTIFICATE`) |
+| own variable | `replace` | the recording proxy's CA alone | the recording proxy only, so it fails closed (`HERMES_CA_BUNDLE`, D41) |
+| shared row | `extend` only | the system's trusted roots plus the recording proxy's CA | the real roots plus the recording proxy |
 
 A `replace` variable fails closed: if the harness skips `HTTPS_PROXY` and connects straight to its
 provider, the handshake fails, so no model call goes unrecorded. **A shared row gives that up.**
 Its file must hold the real roots, or every tool child's TLS would break, so a connection the
-harness makes past the proxy still verifies and is not recorded
+harness makes past the recording proxy still verifies and is not recorded
 ([CHEAT-CHECKLIST](CHEAT-CHECKLIST.md#anchoring-and-the-agents-reach)). So a builder names a shared
 row only when the harness has no CA variable of its own. When the harness has a harness-specific
 variable that replaces its roots, name that one with `mode = "replace"`. A shared row is never
@@ -326,13 +361,13 @@ named in a `replace` profile.
 
 The shared-row file is built when the run starts from the OS trust store (macOS: the System Roots
 keychain; Linux: the distribution bundle, such as `/etc/ssl/certs/ca-certificates.crt`). It holds
-certificates only, the proxy CA first, and is written with mode 0600 into the run's private `ca/`
+certificates only, the recording proxy CA first, and is written with mode 0600 into the run's private `ca/`
 directory. A start with no readable trust store is refused. Apple's `/usr/bin/python3` links
 LibreSSL, which ignores `SSL_CERT_FILE`; a Python harness from Homebrew, python.org or uv honours
 it.
 
 Each name is also held to the shared environment-name rules (no provider, git, npm, OpenSSL or
-tracker namespace, no credential or proxy word). `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
+Goal Cup namespace, no credential or proxy word). `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and
 `NODE_TLS_REJECT_UNAUTHORIZED` are refused in every field. A CA variable is refused in
 `capture.env` and `capture.home.env`: `capture.ca` is the one field that sets it. A new mode or a
 new name shape is a core policy and DECISIONS change.
@@ -341,28 +376,10 @@ new name shape is a core policy and DECISIONS change.
 
 | Field | Required/default | Contract |
 |---|---|---|
-| `capture.identity.source` | required | Closed values: `preassigned`, `stdout_json`, `stderr_line`, `none`. An `interactive` profile takes `none` only. |
-| `capture.identity.binding` | required except for `none` | Closed values: `at_launch`, `deferred`. |
-| `capture.identity.match_field` | `stdout_json` only; required there | Dot path of 1–4 nonempty `[A-Za-z0-9_]+` segments. |
-| `capture.identity.match_value` | `stdout_json` only; required there | 1–64 bytes, no control character. |
-| `capture.identity.id_field` | `stdout_json` only; required there | Same dot-path grammar as `match_field`. |
-| `capture.identity.wait_seconds` | `stdout_json` only; default 120 | 1–600: how long the launch waits for the identity event before recording the launch without one. |
-| `capture.identity.prefix` | `stderr_line` only; required there | 1–32 printable ASCII bytes. |
-| `capture.identity.grammar` | `stderr_line` only; required there | Closed values: `timestamp-hex`, `token`. |
+| `capture.identity.source` | required | `none`, the one value. `preassigned`, `stdout_json` and `stderr_line` were headless mode's and are refused as chat mode only. |
 
-`timestamp-hex` means `\d{8}_\d{6}_[0-9a-f]{6}`. `token` means 1–128 characters from
-`[A-Za-z0-9_-]`; a lowercase UUID is a token. The only admitted source/binding pairs are:
-
-| Source | Binding |
-|---|---|
-| `preassigned` | `at_launch` |
-| `stdout_json` | `at_launch` |
-| `stderr_line` | `deferred` |
-| `none` | absent |
-
-JSON selector fields are forbidden on all other sources; stderr fields are forbidden on all other
-sources. `none` takes no binding. Widening this table is a core change with an offline harness-kit
-case, but remains schema 1 because it makes a formerly refused combination valid.
+Every other identity field (`binding`, `match_field`, `match_value`, `id_field`, `wait_seconds`,
+`prefix`, `grammar`) is refused as chat mode only.
 
 ## `[[capture.native]]`
 
@@ -377,9 +394,8 @@ Exactly one native row is required.
 | `capture.native[].protocol_hint` | optional, default absent | `append_only` only; 1–64 bytes matching `^[a-z][a-z0-9.-]{0,63}$`. |
 | `capture.native[].since_run_start` | optional, default `false` | Boolean. `true` reads only the files new or written since the run started (D57). |
 
-Pattern components admit `[A-Za-z0-9._-]`, `*`, `?` and the special `{id}` token. Empty, `.` or
-`..` components, recursive `**`, other braces and absolute paths are refused. `{id}` appears
-exactly once when the identity source names a session, and not at all when the source is `none`.
+Pattern components admit `[A-Za-z0-9._-]`, `*` and `?`. Empty, `.` or `..` components,
+recursive `**`, braces (`{id}` included: no run names a session) and absolute paths are refused.
 Globs do not cross `/`.
 
 With `since_run_start = true`, the launcher may send the run's start time (`native_since`, Unix
@@ -415,7 +431,7 @@ All fields default when the optional table is present.
 
 A guarded `--name` or `--name=value` is refused. A single-dash cluster is scanned left to right;
 a guarded short option is refused, while a `short_with_value` option consumes the rest of the
-token and ends scanning. The guard is applied to every `args` and `resume_args` item and to `goal_flag`. It can only
+token and ends scanning. The guard is applied to every `args` and `resume_args` item. It can only
 make the core argument policy stricter.
 
 ## `[capture.termination]`
@@ -436,7 +452,7 @@ with `capture.model_host_from` may list none: its model host comes from the harn
 each start.
 
 A model provider's host row is written once, in the shared provider table
-`crates/goalcup-protocol/providers.toml`, which is compiled into the tracer. A connector names
+`crates/goalcup-protocol/providers.toml`, which is compiled into `goalcup`. A connector names
 rows there with `capture.providers = ["anthropic"]`. The loader appends each named row to
 `capture.hosts`, after the connector's own rows, and every host rule below applies to it. An
 unknown or repeated name is refused, and so is a host that the connector also writes itself. A new
@@ -478,13 +494,12 @@ in the harness, and the harness saves its address in its own config. There is no
   hints; every other path under the base is recorded with no hint. A host the connector also lists
   in `capture.hosts` keeps that row. Every other host stays an opaque tunnel, counted in
   `proxy admission:` and never opened.
-- **What is logged.** Only `model service: <host>:<port> (<key> in <file>)`: in the start's output
-  for a headless run, in the run's `host.log` for a chat-mode one. A userinfo (`user:pass@`), the
-  path and the query are never logged or recorded.
+- **What is logged.** Only `model service: <host>:<port> (<key> in <file>)`, in the run's
+  `host.log`. A userinfo (`user:pass@`), the path and the query are never logged or recorded.
 - **Refused at start, and not ready at prep.** A missing file or key, a value that is not an
   `http` or `https` URL, plain `http` (only `HTTPS_PROXY` is set, so it would pass around the
-  recorder), a loopback name, an address literal, a single-label name, a host that names the
-  tracker, and an authentication host. The refusal names the value (`<scheme>://<host>:<port>`
+  recorder), a loopback name, an address literal, a single-label name, a host that names
+  Goal Cup, and an authentication host. The refusal names the value (`<scheme>://<host>:<port>`
   only), the reason and the way to change it: "`<display name>` is set to use `<value>`, which Goal
   Cup cannot record: `<reason>`. Goal Cup records only an https model service that is not on this
   computer. Run goalcup prep --harness `<id>`, choose such a service there, then run the command
@@ -495,7 +510,7 @@ in the harness, and the harness saves its address in its own config. There is no
 - **Schema rules.** `file` is a relative path of at most 4 components with a `.yaml`, `.yml`,
   `.json` or `.toml` extension. `key` is 1–8 names of `[A-Za-z0-9_-]` (1–64 bytes each) joined
   with `.`. No `.`, `-` or `_` separated part of the file's name or of the key may be `auth`,
-  `credential(s)`, `secret(s)`, `token(s)`, `key(s)`, `api_key` or `env`, in any case: the tracer
+  `credential(s)`, `secret(s)`, `token(s)`, `key(s)`, `api_key` or `env`, in any case: Goal Cup Proxy
   reads a service address, never a key file or a key.
 - **A switch mid-run.** A service the participant switches to inside a running session is not
   intercepted until the next segment. The participant guide says: exit the harness and run
@@ -511,8 +526,11 @@ Both strings are printed to a terminal, so they are held to plain text.
 |---|---|---|
 | `participant.display_name` | required when the table is present | The name as a person says it ("Claude Code"). 1–40 characters. |
 | `participant.first_screen` | optional, default absent | What the harness shows first and what to do about it, shown just before the harness opens. 1–200 characters. Leave it out when the harness asks nothing. |
+| `participant.no_prompts` | optional, default `[]` | Up to 4 `{ file, key, values }` rows (D67): a setting in the harness's own config that makes it run without permission prompts, and the 1–4 values (as text, `true` for a boolean; the first is the one recommended) that mean so. `file` and `key` follow the `capture.model_host_from` rules (a `.yaml`, `.yml`, `.json` or `.toml` file in the shared config home, a dotted key, neither naming a key file or a key); requires `config_home = "shared"`; no row twice. `goalcup prep` reads them and, for each one not set to a listed value, recommends it in its harness home step with a link to the harness's `setup_section`. `docs/harnesses/<id>.md` must have a "Run without permission prompts" section. Goal Cup never writes them, and prep never fails for them. |
+| `participant.setup_section` | optional, default absent | The anchor of the harness's section in [HARNESS-SETUP](HARNESS-SETUP.md), the participant's setup guide (`setup_section = "codex"` for `### Codex`). 1–40 lower-case letters and digits joined by single `-`. `goalcup prep` links there on its harness step ("Before a long run, read ...") and in a `no_prompts` recommendation; without it the link names the guide alone. `harness_conformance.rs` requires every shipped connector to name one, and the guide to have that heading. |
+| `participant.time_left_tool` | optional, default absent | `{ file, key, pass_env }` (fix plan v9): where the participant adds `goalcup mcp`, the time-left MCP tool, in the harness's own config. `file` and `key` follow the `no_prompts` rules, but `file` is relative to the home `goalcup prep` opens (the shared config home, else the shared run `HOME`; one of the two is required). `key` is the file's table of MCP servers: dotted table names in TOML, one top-level key written as it is in JSON and YAML (`amp.mcpServers` is one JSON key). `pass_env` says how the harness hands the server `GOALCUP_TIME_LEFT_FILE`: `inherited` (default; its whole environment), `env_vars` (only the names an `env_vars` list gives) or `env_template` (only an `env` map, whose `${VAR}` values it fills). `goalcup prep` prints the lines for the file's type, with goalcup's absolute path, on its harness step. Goal Cup never writes them (D67). |
 
-Both fields are an allow-list: printable ASCII only (0x20 to 0x7E), no leading or trailing space,
+Both strings (and each `no_prompts` value) are an allow-list: printable ASCII only (0x20 to 0x7E), no leading or trailing space,
 and no two spaces in a row. That refuses every control character (ESC and so any ANSI sequence,
 CR, LF, tab, DEL, the C1 range) and every non-ASCII character, so no invisible, bidirectional,
 tag or odd-space character gets through. `harness_conformance.rs` also requires every shipped
@@ -522,6 +540,17 @@ connector to declare a `display_name`.
 [participant]
 display_name = "Claude Code"
 first_screen = "Claude Code may ask whether you trust this folder. Choose Yes."
+setup_section = "claude-code"
+
+[participant.time_left_tool]
+file = ".claude.json"
+key = "mcpServers"
+pass_env = "inherited"
+
+[[participant.no_prompts]]
+file = "settings.json"
+key = "permissions.defaultMode"
+values = ["bypassPermissions"]
 ```
 
 ## `[redaction]`
@@ -564,7 +593,7 @@ JSON field, not a header: use `json_field` with the header name, which the field
 `header_prefix` only matches `name: value` text.
 
 The shared set already covers what every harness holds: provider keys, tokens, e-mail addresses,
-and the tracer's own proxy credential (`proxy_credential`, the secret in the launch's
+and the recording proxy's credential (`proxy_credential`, the secret in the launch's
 `HTTPS_PROXY`). A connector never names those. On top of the patterns, the daemon redacts the
 exact value of the run's proxy credential in every form `goalcup_protocol::run_secret::encoded_forms`
 derives, as `<redacted:run_secret>` (D60).
@@ -585,8 +614,7 @@ extra_patterns = [
 
 In addition to the local rules above, all of these apply:
 
-1. `preassigned` requires `{session_id}` in `capture.args`. `{session_id}` anywhere in `args`,
-   `resume_args` or an environment value requires `preassigned`.
+1. (Retired with headless mode: the `preassigned` and `{session_id}` rule.)
 2. (Retired by D61: the credential rules. A `[capture.credential]` table is refused.)
 3. `capture.home.seed`, `dirs` and an explicit `per_run_dir` require `config_home = "per_run"`.
 4. With `identity.source = "none"`, the native root must be `{run_home}/...` with a run home
@@ -594,7 +622,7 @@ In addition to the local rules above, all of these apply:
    source must declare
    `since_run_start = true`. A shared unscoped source read from before the run could read another
    run's session and is refused.
-5. The native root plus pattern, compared case-insensitively with `{id}` treated as `*`, cannot
+5. The native root plus pattern, compared case-insensitively, cannot
    match a seed destination. A `{run_home}` root is checked both with the config home coincident
    with the run home and nested below `per_run_dir`.
 6. `capture.home.env` (when present) and all `capture.ca.env` names are pairwise
@@ -604,7 +632,7 @@ In addition to the local rules above, all of these apply:
    scoped path.
 9. A native hint is allowed only on `append_only`; a prefix path cannot be `/`.
 10. A manifest is delivery-agnostic: no argument, resume argument, goal flag, environment key/value, host or auth
-    host may name Goal Cup, its reserved environment namespace or a tracker host. There is no
+    host may name Goal Cup, its reserved environment namespace or a Goal Cup host. There is no
     schema field for a server, upload or delivery credential.
 11. `run_home = "shared"` is refused with `capture.home.env` (D59).
 
@@ -654,7 +682,7 @@ hand-merging hashes.
 
 A `capture.providers` row lives in `providers.toml`, outside `connectors/<id>/`, so the directory
 digest does not cover it. The effective host set of a pinned connector is its digest plus the
-tracer build's provider table, which is compiled in and changes only in a reviewed core PR.
+`goalcup` build's provider table, which is compiled in and changes only in a reviewed core PR.
 
 Schema evolution and pin evolution are separate. A new optional field whose absence preserves
 current behaviour, a widened bound, a new closed value or a newly admitted cross-field pair may
@@ -671,11 +699,11 @@ directory with its pin.
 - [`connectors/hermes-cli/harness.toml`](../connectors/hermes-cli/harness.toml): chat mode with a
   `configure` command, its model host read from its own `config.yaml` (`model_host_from`, no
   `hosts`), a `snapshot` native source read from the run's start, an argv guard and a reserved
-  prefix. Its headless form, with `stderr_line` identity, is frozen at
-  [`headless-connectors/hermes-cli`](../crates/goalcup-protocol/tests/fixtures/headless-connectors/hermes-cli/harness.toml)
-  for the tests of that recipe.
+  prefix.
 - [`connectors/codex-cli/harness.toml`](../connectors/codex-cli/harness.toml): chat mode
   (`interactive`), shared config home, `since_run_start`, `native_pid` termination, extra
   redaction patterns and per-platform env.
 - [`connectors/claude-code-cli/harness.toml`](../connectors/claude-code-cli/harness.toml): chat
   mode with a `keychain_link` run home.
+- [`connectors/amp-cli/harness.toml`](../connectors/amp-cli/harness.toml): chat mode with a
+  shared run home and no home variable (`run_home = "shared"`, a `{run_home}` native root).

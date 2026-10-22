@@ -36,6 +36,11 @@ exit 0
 
 VERSION_CHECK = "python3 scripts/check-version.py"
 
+# `id -u` prints $STUB_UID, so the tests do not depend on who runs them.
+ID_STUB = """#!/bin/sh
+echo "${STUB_UID:-1000}"
+"""
+
 
 class GateTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -50,6 +55,9 @@ class GateTests(unittest.TestCase):
             stub = bindir / name
             stub.write_text(STUB)
             stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+        id_stub = bindir / "id"
+        id_stub.write_text(ID_STUB)
+        id_stub.chmod(id_stub.stat().st_mode | stat.S_IXUSR)
         # gate.sh works in the directory above its own, so it runs from a copy in a scratch tree.
         # The scratch tree holds the Worker's node_modules, which `full` requires, so these tests
         # do not depend on whether `npm ci` has run in the checkout.
@@ -64,6 +72,8 @@ class GateTests(unittest.TestCase):
         }
         self.env.pop("STUB_NO_NEXTEST", None)
         self.env.pop("STUB_FAIL_ON", None)
+        self.env.pop("STUB_UID", None)
+        self.env.pop("GOALCUP_GATE_ALLOW_ROOT", None)
 
     def run_gate(self, tier: str, **extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -87,6 +97,18 @@ class GateTests(unittest.TestCase):
         build = calls.index("cargo build --offline --workspace")
         tests = [i for i, c in enumerate(calls) if c.startswith(("cargo nextest run", "cargo test"))]
         self.assertTrue(tests and build < min(tests), calls)
+
+    def test_root_is_refused_before_any_step(self) -> None:
+        result = self.run_gate("fast", STUB_UID="0")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("GOALCUP_GATE_ALLOW_ROOT=1", result.stderr)
+        self.assertEqual(result.stdout.splitlines()[-1], "gate fast: FAIL")
+        self.assertEqual(self.calls(), [])
+
+    def test_root_runs_when_allowed(self) -> None:
+        result = self.run_gate("fast", STUB_UID="0", GOALCUP_GATE_ALLOW_ROOT="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls()[0], VERSION_CHECK)
 
     def test_fast_excludes_full(self) -> None:
         self.run_gate("fast")

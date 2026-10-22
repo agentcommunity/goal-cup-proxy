@@ -53,7 +53,7 @@ fn this_crate_never_terminates_anything() {
     // probe's, it is dead before `start` has decided anything, and it is not the launched
     // harness — which is the process this rule is about.
     //
-    // `commands/start.rs`: the abandon path signals the group of a harness the daemon was
+    // `commands/start/phases.rs`: the abandon path signals the group of a harness the daemon was
     // never successfully told about, on a start that is failing. Nothing will measure that
     // process, nothing will seal what it writes, and the workspace it is running in is about
     // to be deleted — `commands::start::launch`'s own header is where that reasoning lives.
@@ -94,6 +94,9 @@ fn this_crate_never_terminates_anything() {
     // The `start.rs` exemption stays ONE file: a second file that signals a launched harness
     // would have to be exempted here as well, by name.
     //
+    // `run/pause.rs` (D65) is not exempt and needs no exemption: it freezes and continues the
+    // harness on a nearly full disk (`SIGSTOP`, `SIGCONT`) and ends nothing.
+    //
     // A NEW file that signals is still caught, which is the whole point of the sweep.
     //
     // The sweep asserts what it walked before it asserts anything about the contents:
@@ -126,7 +129,7 @@ fn this_crate_never_terminates_anything() {
         // is the sweep doing its job.
         let exempt = [
             "preflight/probe.rs",
-            "commands/start.rs",
+            "commands/start/phases.rs",
             "released_child.rs",
             "src/subreaper.rs",
             "src/harness_version.rs",

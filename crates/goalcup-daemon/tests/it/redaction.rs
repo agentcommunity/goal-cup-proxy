@@ -150,7 +150,7 @@ fn the_shared_set_kinds_are_in_the_documented_order() {
             "stripe_key",
             "gitlab_token",
             "digitalocean_token",
-            // then the tracer's own proxy credential: userinfo, percent-encoded, Basic token.
+            // then goalcup's own proxy credential: userinfo, percent-encoded, Basic token.
             "proxy_credential",
             "proxy_credential",
             "proxy_credential",

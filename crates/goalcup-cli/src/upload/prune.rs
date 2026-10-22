@@ -2,8 +2,10 @@
 //! enough ago.
 //!
 //! A 168-hour run with many agents records more than a disk holds, so a part the server has
-//! acknowledged is deleted [`PRUNE_AFTER`] later, or at once when the parts alone are past the
-//! run's reservation ([`crate::run::reserve::pressure`]). Everything here is a judgement on
+//! acknowledged is deleted [`PRUNE_AFTER`] later, or at once under pressure: the parts alone are
+//! past the run's reservation ([`crate::run::reserve::pressure`]), or the disk is short of space
+//! whatever the chain's size, under 5 GiB free beyond the reserve or the reserve drawn down to
+//! nothing ([`crate::run::reserve::short_of_disk`]). Everything here is a judgement on
 //! names and numbers; the run's watch tick ([`crate::run::watch`]) owns the clock and does the
 //! deleting.
 //!
@@ -16,6 +18,9 @@
 //!   surviving record;
 //! - any part behind one that is kept: deletion only ever takes a prefix of the parts, so the
 //!   ones that remain are contiguous (`chain_parts` refuses a gap).
+//!
+//! After a run, [`clean_finished`] deletes at once every part but the last of an entry that is
+//! sealed here and whose upload finished (the server acknowledged its whole chain and its seal).
 
 use goalcup_protocol::export::{ChainPart, chain_parts};
 use std::collections::HashMap;
@@ -90,6 +95,82 @@ pub fn parts_now(trace_dir: &Path) -> std::io::Result<Vec<ChainPart>> {
     Err(last.unwrap_or_else(|| std::io::ErrorKind::NotFound.into()))
 }
 
+/// Whether `trace_dir` holds a valid `seal.json` for `entry_id`: one that parses as a seal
+/// manifest of that entry. The daemon writes it last, so without it the entry is not sealed,
+/// whatever else says it finished.
+pub fn is_sealed(trace_dir: &Path, entry_id: &str) -> bool {
+    use std::io::Read;
+    const SEAL_MAX_BYTES: u64 = 16 * 1024 * 1024;
+    let Ok(file) = std::fs::File::open(trace_dir.join(goalcup_protocol::export::SEAL_FILE)) else {
+        return false;
+    };
+    let mut bytes = Vec::new();
+    if file.take(SEAL_MAX_BYTES).read_to_end(&mut bytes).is_err() {
+        return false;
+    }
+    serde_json::from_slice::<goalcup_protocol::seal::SealManifest>(&bytes)
+        .is_ok_and(|seal| seal.entry_id == entry_id)
+}
+
+/// Delete the chain parts of a finished entry: sealed here ([`is_sealed`]) and sent
+/// ([`super::uploader::is_sent`]: the server acknowledged its whole chain and its seal). Every
+/// part but the last goes; `seal.json`, `baseline.json`, `acks.jsonl` and the last part stay.
+/// Anything else is left alone. Best effort: a part that cannot be deleted stays, with the ones
+/// after it. Answers the bytes freed.
+pub fn clean_finished(spool: &Path, entry: &crate::run::EntryRef) -> u64 {
+    if !super::uploader::is_sent(spool, &entry.entry_id)
+        || !is_sealed(&entry.trace_dir, &entry.entry_id)
+    {
+        return 0;
+    }
+    let Ok(parts) = parts_now(&entry.trace_dir) else {
+        return 0;
+    };
+    // The server holds every whole record of a sealed entry it took the seal of.
+    let Some((acked, _, _)) = super::uploader::local_end(&parts) else {
+        return 0;
+    };
+    let due = deletable(
+        &entry.entry_id,
+        &parts,
+        acked,
+        &mut AckAges::default(),
+        Instant::now(),
+        true,
+    );
+    let mut freed = 0;
+    for path in due {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => break,
+        }
+        freed += parts
+            .iter()
+            .find(|part| part.path == path)
+            .map_or(0, |part| part.len);
+    }
+    freed
+}
+
+/// [`clean_finished`] for every entry of every run on this machine. The time-left file of a run
+/// whose host has finished (and that no later segment has taken over) goes too: no agent of it
+/// is left to read it.
+pub fn clean_finished_runs(cfg: &Path) -> u64 {
+    let spool = cfg.join(super::UPLOADS_DIR_NAME);
+    let runs = crate::run::all(cfg);
+    for run in &runs {
+        let state = crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id));
+        if state.is_some_and(|state| state.ended) {
+            crate::run::time_left::remove_file(cfg, &run.run_id);
+        }
+    }
+    runs.iter()
+        .flat_map(|run| &run.entries)
+        .map(|entry| clean_finished(&spool, entry))
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +193,25 @@ mod tests {
             .iter()
             .map(|p| p.display().to_string())
             .collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn the_time_left_file_of_a_run_whose_host_finished_is_removed() {
+        let cfg = tempfile::tempdir().unwrap();
+        crate::run::tests_support::continuable_run(cfg.path(), "run-a", "part-a", 1);
+        crate::run::tests_support::continuable_run(cfg.path(), "run-b", "part-b", 1);
+        for run in ["run-a", "run-b"] {
+            let file = crate::run::time_left::file_path(cfg.path(), run);
+            crate::config::write_secret_file(&file, b"seconds_left=1\n").unwrap();
+        }
+        // run-a's host has finished; run-b's still records.
+        let dir = crate::run::run_dir(cfg.path(), "run-a");
+        let mut state = crate::run::read_state(&dir).unwrap();
+        state.ended = true;
+        crate::run::StateKeeper::begin(&dir, state);
+        clean_finished_runs(cfg.path());
+        assert!(!crate::run::time_left::file_path(cfg.path(), "run-a").exists());
+        assert!(crate::run::time_left::file_path(cfg.path(), "run-b").exists());
     }
 
     #[test]
@@ -245,6 +345,64 @@ mod tests {
         // Once the first two are gone, their ages are forgotten.
         deletable("a", &parts[2..], 250, &mut ages, t0 + 3 * HOUR, false);
         assert!(!ages.0.contains_key(&("a".to_string(), 0)));
+    }
+
+    /// After the run: a sealed and sent entry keeps its last part and its documents, and loses
+    /// the parts the server acknowledged; an entry not sent keeps everything.
+    #[test]
+    fn a_finished_entry_loses_only_its_acknowledged_parts_and_an_unsent_one_nothing() {
+        use goalcup_platform::tracecap::part_file_name;
+        let cfg = tempfile::tempdir().unwrap();
+        let spool = cfg.path().join(crate::upload::UPLOADS_DIR_NAME);
+        std::fs::create_dir_all(&spool).unwrap();
+        let record = |seq: u64| format!("{{\"seq\":{seq},\"prev\":\"p\",\"hash\":\"h{seq}\"}}\n");
+        let entry = |id: &str| {
+            let trace_dir = cfg.path().join(id);
+            std::fs::create_dir_all(&trace_dir).unwrap();
+            let (a, b) = (record(0), record(1));
+            std::fs::write(trace_dir.join("chain.jsonl"), &a).unwrap();
+            std::fs::write(trace_dir.join(part_file_name(a.len() as u64)), &b).unwrap();
+            let seal = serde_json::json!({
+                "entry_id": id, "sealed_at": "2026-10-21T00:00:00Z", "workspace": "/w",
+                "files": [], "excluded": [],
+            });
+            std::fs::write(trace_dir.join("seal.json"), seal.to_string()).unwrap();
+            for kept in ["baseline.json", "acks.jsonl"] {
+                std::fs::write(trace_dir.join(kept), b"{}\n").unwrap();
+            }
+            crate::run::EntryRef {
+                entry_id: id.to_string(),
+                trace_dir,
+            }
+        };
+        let names = |entry: &crate::run::EntryRef| {
+            let mut names: Vec<String> = std::fs::read_dir(&entry.trace_dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().into_string().unwrap())
+                .collect();
+            names.sort();
+            names
+        };
+
+        let unsent = entry("e-unsent");
+        let before = names(&unsent);
+        assert_eq!(clean_finished(&spool, &unsent), 0);
+        assert_eq!(names(&unsent), before, "nothing unacknowledged goes");
+
+        let sent = entry("e-sent");
+        std::fs::write(spool.join("e-sent.sent"), b"sent\n").unwrap();
+        assert_eq!(clean_finished(&spool, &sent), record(0).len() as u64);
+        let last = part_file_name(record(0).len() as u64);
+        let mut kept = vec!["acks.jsonl", "baseline.json", last.as_str(), "seal.json"];
+        kept.sort();
+        assert_eq!(names(&sent), kept);
+
+        // Sent but not sealed here (its seal.json was never written): nothing goes either.
+        let unsealed = entry("e-unsealed");
+        std::fs::write(spool.join("e-unsealed.sent"), b"sent\n").unwrap();
+        std::fs::remove_file(unsealed.trace_dir.join("seal.json")).unwrap();
+        assert_eq!(clean_finished(&spool, &unsealed), 0);
+        assert!(unsealed.trace_dir.join("chain.jsonl").exists());
     }
 
     #[test]

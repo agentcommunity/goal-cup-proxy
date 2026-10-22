@@ -1,6 +1,6 @@
 //! A run's own exact secret value on the streaming redactor (D60).
 //!
-//! The launcher hands the daemon the run's proxy credential, the one secret the tracer gives a
+//! The launcher hands the daemon the run's proxy credential, the one secret goalcup gives a
 //! harness. Every form of it (`goalcup_protocol::run_secret::encoded_forms`), with the line breaks
 //! a wrapped or escaped copy carries, is removed from every recorded body, wherever the stream is
 //! cut into pushes, and equal to the whole-record oracle `Redactor::for_run`. Every value here is
@@ -283,15 +283,18 @@ fn wrapped_cases() -> Vec<(String, Vec<u8>)> {
     cases
 }
 
+shards!(a_wrapped_run_secret_is_never_persisted, 4);
 /// A wrapped form leaves the chain too: in one push and split at every byte, each equal to the
 /// oracle, and none holds a form once its breaks are taken out (C1, C1b).
-#[test]
-fn a_wrapped_run_secret_is_never_persisted() {
+fn a_wrapped_run_secret_is_never_persisted(shard: &Shard) {
     for (name, input) in wrapped_cases() {
         assert!(leaks(&input), "{name}: the case holds the value");
         let (want_bytes, want_spans) = oracle(&input);
         assert!(!leaks(&want_bytes), "{name}: the oracle redacts it");
         for split in 0..=input.len() {
+            if !shard.mine() {
+                continue;
+            }
             let mut p = Producer::with_redactor(P1, redactor());
             let mut records = p.open(1, CaptureSource::WireRequest);
             records.extend(p.bytes(1, &input[..split]));
@@ -302,6 +305,9 @@ fn a_wrapped_run_secret_is_never_persisted() {
             assert!(!leaks(&bytes), "{name}: split at {split}");
             assert_eq!(bytes, want_bytes, "{name}: bytes differ, split at {split}");
             assert_eq!(spans, want_spans, "{name}: audit differs, split at {split}");
+        }
+        if !shard.mine() {
+            continue;
         }
         let (bytes, spans) = retained(&stream_through(redactor(), &input, &[1], 3));
         assert_eq!(

@@ -720,9 +720,7 @@ fn the_mocks_remaining_hooks_do_what_the_tasks_that_call_them_expect() {
 
     // The seal, once, and the mirror that disagrees with the workspace.
     m.make_sealed_manifest_differ_on("README.md");
-    let control::SealResponse::Legacy(sealed) = m.seal(&info.entry_id).unwrap() else {
-        panic!("the legacy mock seal must return the historical manifest arm");
-    };
+    let sealed = m.seal(&info.entry_id).unwrap();
     assert!(sealed.files.iter().any(|f| f.path == "README.md"));
     assert!(
         matches!(m.seal(&info.entry_id), Err(ControlError::Conflict(_))),
@@ -751,7 +749,6 @@ fn capture_request(remaining_ms: u64) -> control::CaptureSealRequest {
     control::CaptureSealRequest {
         proxy: None,
         remaining_finish_ms: Some(remaining_ms),
-        native_scope: None,
     }
 }
 
@@ -1061,7 +1058,7 @@ fn the_capture_seal_carries_its_remaining_budget_and_its_own_read_timeout() {
 /// below the gated definition, and nothing in it reads the environment variable.
 #[test]
 fn pause_points_exist_only_under_test_support() {
-    let source = include_str!("../../src/commands/start.rs");
+    let source = include_str!("../../src/commands/start/mod.rs");
     let gated = "#[cfg(feature = \"test-support\")]\nfn pause_at(point: &'static str) {";
     let shipped = "#[cfg(not(feature = \"test-support\"))]\n#[inline(always)]\nfn pause_at(_point: &'static str) {}";
     let (before, rest) = source
@@ -1084,7 +1081,10 @@ fn pause_points_exist_only_under_test_support() {
         "no other code reads the pause directory"
     );
     // The one use is a call of the one function, unconditional.
-    assert!(source.contains("pause_at(\"capture-finish-started\")"));
+    assert!(
+        include_str!("../../src/commands/start/finish.rs")
+            .contains("pause_at(\"capture-finish-started\")")
+    );
 }
 
 /// The only places this crate starts a process are the launch module's one command builder
@@ -1165,7 +1165,11 @@ fn the_only_command_site_is_the_launch_builder() {
 /// of the one function that launches a capture run and of the launch module's spawners.
 #[test]
 fn capture_children_spawn_only_through_the_gate() {
-    let start = include_str!("../../src/commands/start.rs");
+    let start = concat!(
+        include_str!("../../src/commands/start/mod.rs"),
+        include_str!("../../src/commands/start/phases.rs"),
+        include_str!("../../src/commands/start/finish.rs"),
+    );
     // The capture launch is its phase functions, which run in the order they are written:
     // `capture` through `finish_run`, up to the words for a harness's end.
     let (_, rest) = start
@@ -1212,25 +1216,8 @@ fn capture_children_spawn_only_through_the_gate() {
         failed.matches("gated.abort();").count() >= 3,
         "a failed handle, registration, or an interrupt aborts the gate"
     );
-    // A released child is never given back to a spawner: the schema-selected identity tee
-    // only takes its stdout and its already-loaded rule.
-    let scoped_tee = "tee_scoped_capture_with_rule(&mut spawned, rule)";
-    assert_eq!(
-        body.matches(scoped_tee).count(),
-        1,
-        "the gated capture has one authoritative schema-selected identity tee"
-    );
-    let stderr_tee = "tee_stderr_capture_with_rule(&mut spawned, rule)";
-    assert_eq!(
-        body.matches(stderr_tee).count(),
-        1,
-        "the gated capture has one authoritative schema-selected stderr tee"
-    );
-    for tee in [scoped_tee, stderr_tee] {
-        assert!(at("gated.release()") < at(tee));
-    }
-    // The gate is handed the plan and its pipes, and nothing else: no secret rides on it (D61).
-    assert!(flat_body.contains("spawn_gated(&plan, prep.streams.pipes(), GATE_READY_WITHIN)"));
+    // The gate is handed the plan, and nothing else: no secret rides on it (D61).
+    assert!(flat_body.contains("spawn_gated(&plan, GATE_READY_WITHIN)"));
 
     // And the spawners the launch module still has are the ungated ordinary one and the gate.
     let launch = include_str!("../../src/launch.rs");

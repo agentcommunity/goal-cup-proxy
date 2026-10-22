@@ -10,13 +10,14 @@ export type ErrorCode =
   | "conflict" // 409
   | "closed" // 410
   | "too_large" // 413
+  | "quota_exceeded" // 413: the chunk would take the run past RUN_MAX_COMPRESSED_BYTES; nothing stored, goalcup retries
   | "digest_mismatch" // 422
   | "rate_limited" // 429: the device flow's per-address limit
   | "maintenance" // 503
   | "awaiting_final" // 503: past deadline_at, before the final heartbeat
   | "misconfigured" // 500: the deployment is wrong, not the request
   | "internal" // 500
-  | "upstream_error"; // 502: Supabase, GitHub or R2 failed; the tracer retries with backoff
+  | "upstream_error"; // 502: Supabase, GitHub or R2 failed; goalcup retries with backoff
 
 export class ApiError extends Error {
   readonly status: number;

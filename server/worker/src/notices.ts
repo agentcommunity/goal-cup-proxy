@@ -1,8 +1,10 @@
 // What the server does on its own, every 5 minutes (the `scheduled` export; wrangler.toml has the
-// cron): close runs that are over, record the GitHub commit at each deadline, queue the run
-// emails into the outbox, and send them (src/mail.ts: each queued row once, through Resend; the
+// cron): close runs that are over, record the judged GitHub commit (src/github.ts) of each run that reached its
+// deadline, queue the run emails into the outbox, and send them (src/mail.ts: each queued row once, through Resend; the
 // database writes the email and picks the address, and gives a staging Worker none). Contract: docs/UPLOAD-API.md,
 // "What the server does on its own".
+//
+// A silence email goes out only when the server itself was well for the whole silence (`noteTick`).
 //
 // Every notice is decided here, in `queueNotices`, never in a request handler. A notice is
 // stored once per (run, kind, dedupe key), so a repeated or a concurrent tick queues nothing twice.
@@ -11,17 +13,29 @@ import { type Ctx, makeCtx } from "./context.ts";
 import { type NoticeKind, type TickRun, endsAt, isReplaced, statusAt } from "./db.ts";
 import type { Env } from "./env.ts";
 import { sendNotices } from "./mail.ts";
-import { githubHeaders } from "./runs.ts";
-import { REPO_URL, addSeconds, formatTime } from "./util.ts";
+import { GITHUB_SETTLE, judgedCommit } from "./github.ts";
+import { addSeconds, formatTime, isTime } from "./util.ts";
 
 /** A run with no heartbeat for this long is silent. */
 export const SILENCE_AFTER = 20 * 60;
+/** Two ticks further apart than this (two missed 5-minute ticks) mean the server itself was not well. */
+export const TICK_GAP = 11 * 60;
+/** A tick is well only if some run's heartbeat reached the server this recently (goalcup beats every 5 minutes). */
+export const FLEET_FRESH = 10 * 60;
+/** Where the cron keeps its health marker, in the TRACES bucket (outside traces/, so outside the bucket lock). */
+export const HEALTH_KEY = "cron/health.json";
 /** Hours without a model request after which an idle notice goes out, one notice each. */
 export const IDLE_HOURS = [3, 6] as const;
-/** The ended notice waits this long for the deadline commit, then goes out without one. */
+/** The ended notice waits this long for the judged commit, then goes out without one. */
 export const ENDED_WAIT = 3600;
-/** The most runs one tick asks GitHub about (oldest first; the rest wait for the next tick). */
+/**
+ * The most runs one tick asks GitHub about. When more are due, each tick starts where the window of
+ * the tick before ended (`inTurn`), so runs GitHub keeps failing on cannot crowd out the others.
+ * Each takes at most 3 + ACTIVITY_PAGES calls.
+ */
 export const COMMITS_PER_TICK = 50;
+/** The cron's period: ticks are numbered by it to turn the window. */
+const TICK_MS = 5 * 60 * 1000;
 
 const earlier = (now: Date, seconds: number) => formatTime(addSeconds(now, -seconds));
 
@@ -48,47 +62,76 @@ export async function closeRuns(ctx: Ctx, now: Date): Promise<number> {
 }
 
 /**
- * The commit GitHub has at the head of the repository: its sha, `none` when GitHub says there is no
- * such repository or it is empty, null when it could not say (retry next tick).
- */
-async function headCommit(ctx: Ctx, repoUrl: string): Promise<string | null> {
-  if (!REPO_URL.test(repoUrl)) return null;
-  const path = repoUrl.slice("https://github.com/".length);
-  let res: Response;
-  try {
-    res = await fetch(`https://api.github.com/repos/${path}/commits/HEAD`, { headers: githubHeaders(ctx.env), signal: AbortSignal.timeout(8000) });
-  } catch {
-    return null;
-  }
-  if (res.status === 404 || res.status === 409) return "none";
-  if (res.status !== 200) return null;
-  try {
-    const sha = ((await res.json()) as { sha?: unknown }).sha;
-    return typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * For runs that ended at their deadline: ask GitHub for the head commit and keep it. It is asked on
- * the first tick at or after `ends_at`, so it may include pushes made after the deadline.
- * Returns how many were recorded.
+ * For runs that ended at their deadline: decide the judged commit (`judgedCommit`) and keep it, with
+ * how it was found. Asked from the first tick at or after `ends_at` + GITHUB_SETTLE. Returns how many were recorded.
  */
 export async function recordFinalCommits(ctx: Ctx, now: Date): Promise<number> {
   const due = (await ctx.db.runsForTick(formatTime(now))).filter(
-    (r) => r.mode === "competition" && !isReplaced(r) && r.final_commit === null && endsAt(r) <= formatTime(now),
+    (r) => r.mode === "competition" && !isReplaced(r) && r.final_commit === null && formatTime(addSeconds(new Date(endsAt(r)), GITHUB_SETTLE)) <= formatTime(now),
   );
-  return eachRun("recordFinalCommits", due.slice(0, COMMITS_PER_TICK), async (run) => {
-    const commit = await headCommit(ctx, run.repo_url);
-    if (commit === null) return 0;
-    await ctx.db.recordFinalCommit(run.member_id, run.run_id, commit, formatTime(now));
+  if (due.length > 0 && !ctx.env.GITHUB_TOKEN && ctx.env.DB_BACKEND !== "local") {
+    console.error("WARNING: GITHUB_TOKEN is not set. Production must set it: unauthenticated GitHub calls share one small rate limit and the judged commits may not be read.");
+  }
+  return eachRun("recordFinalCommits", inTurn(due, now), async (run) => {
+    const judged = await judgedCommit(ctx, run, now);
+    if (judged === null) return 0;
+    await ctx.db.recordFinalCommit(run.member_id, run.run_id, judged.commit, formatTime(now), judged.detail);
     return 1;
   });
 }
 
-/** The notices a competition run is owed at `now`: kind, dedupe key, payload. */
-function owed(run: TickRun, now: Date): { kind: NoticeKind; key: string; payload: Record<string, unknown> }[] {
+/** At most COMMITS_PER_TICK of `due` (oldest first), the window moving on by that many each tick. */
+export function inTurn<T>(due: T[], now: Date): T[] {
+  if (due.length <= COMMITS_PER_TICK) return due;
+  const from = (Math.floor(now.getTime() / TICK_MS) * COMMITS_PER_TICK) % due.length;
+  return [...due.slice(from), ...due.slice(0, from)].slice(0, COMMITS_PER_TICK);
+}
+
+/**
+ * The server's own health, kept between ticks in HEALTH_KEY (docs/UPLOAD-API.md, "The server's
+ * health"): `healthy_since` is the start of the current unbroken stretch of well ticks. A tick is
+ * well when the tick before it ran at most TICK_GAP earlier and some run's heartbeat reached the
+ * server in the last FLEET_FRESH. Anything else (two ticks in a row missed or failed by the database,
+ * the maintenance switch, no heartbeat from any run, a marker that cannot be read) starts the stretch
+ * again at `now`. A silence email needs this stretch to be older than SILENCE_AFTER, so trouble on
+ * our side never mails anyone, and every run gets SILENCE_AFTER to come back after it ends.
+ */
+interface Health {
+  last_tick_at: string;
+  healthy_since: string;
+}
+
+async function readHealth(ctx: Ctx): Promise<Health | null> {
+  try {
+    const got = (await (await ctx.env.TRACES.get(HEALTH_KEY))?.json()) as Partial<Health> | null | undefined;
+    return got != null && isTime(got.last_tick_at) && isTime(got.healthy_since) ? (got as Health) : null;
+  } catch (e) {
+    console.error(`tick health: cannot read ${HEALTH_KEY}: ${message(e)}`);
+    return null;
+  }
+}
+
+async function writeHealth(bucket: R2Bucket, health: Health): Promise<void> {
+  try {
+    await bucket.put(HEALTH_KEY, JSON.stringify(health));
+  } catch (e) {
+    console.error(`tick health: cannot write ${HEALTH_KEY}: ${message(e)}`); // the next tick then sees a gap: fail quiet
+  }
+}
+
+/** Note this tick in the marker, given the runs it read (all modes), and return `healthy_since`. */
+export async function noteTick(ctx: Ctx, now: Date, runs: TickRun[]): Promise<string> {
+  const at = formatTime(now);
+  const before = await readHealth(ctx);
+  const onTime = before !== null && before.last_tick_at <= at && before.last_tick_at >= earlier(now, TICK_GAP);
+  const heard = runs.some((r) => r.last_heartbeat_at !== null && r.last_heartbeat_at >= earlier(now, FLEET_FRESH));
+  const healthy_since = onTime && heard ? before.healthy_since : at;
+  await writeHealth(ctx.env.TRACES, { last_tick_at: at, healthy_since });
+  return healthy_since;
+}
+
+/** The notices a competition run is owed at `now`: kind, dedupe key, payload. `healthySince`: see `noteTick`. */
+function owed(run: TickRun, now: Date, healthySince: string, closeAfterSeconds: number): { kind: NoticeKind; key: string; payload: Record<string, unknown> }[] {
   const at = formatTime(now);
   const ends = endsAt(run);
   if (at >= ends) {
@@ -96,18 +139,30 @@ function owed(run: TickRun, now: Date): { kind: NoticeKind; key: string; payload
     if (isReplaced(run)) return [];
     if (run.final_commit === null && at < formatTime(addSeconds(new Date(ends), ENDED_WAIT))) return [];
     const commit = run.final_commit === null || run.final_commit === "none" ? null : run.final_commit;
-    return [{ kind: "ended", key: "", payload: { ends_at: ends, commit, repo_url: run.repo_url } }];
+    // `uploaded`: the server holds the run's last part, sealed (the run is `sealed`). If not, the
+    // email names the close, after which no upload is taken.
+    const uploaded = run.current_sealed_at !== null;
+    const closes_at = formatTime(addSeconds(new Date(ends), closeAfterSeconds));
+    return [{ kind: "ended", key: "", payload: { ends_at: ends, commit, repo_url: run.repo_url, uploaded, closes_at } }];
   }
 
   const notices: ReturnType<typeof owed> = [{ kind: "started", key: "", payload: { official_start: run.official_start, deadline_at: run.deadline_at, repo_url: run.repo_url } }];
   if (run.flagged_at !== null) notices.push({ kind: "recording", key: "", payload: { flagged_at: run.flagged_at, recording: run.flag_reason } });
+  // A disk pause the heartbeats marked as owed (at most one per run per 6 hours, decided where the
+  // heartbeat is stored): one email per pause start, whether or not the run is still paused or beating.
+  if (run.disk_notice_at != null) notices.push({ kind: "disk_full", key: run.disk_notice_at, payload: { since: run.disk_notice_at } });
 
   const heard = run.last_heartbeat_at ?? run.official_start;
   if (heard < earlier(now, SILENCE_AFTER)) {
-    notices.push({ kind: "silence", key: heard, payload: { last_heartbeat_at: run.last_heartbeat_at } });
+    // Silent. Mailed only when the server itself was well for the whole of it (`noteTick`): a
+    // silence that our own trouble may explain is never mailed. The key stays the run's last
+    // heartbeat, so a silence that outlasts our trouble is mailed once, after it.
+    if (healthySince < earlier(now, SILENCE_AFTER)) {
+      notices.push({ kind: "silence", key: heard, payload: { last_heartbeat_at: run.last_heartbeat_at } });
+    }
   } else if (run.last_heartbeat_at !== null && run.last_model_request_at !== null) {
     // The run is beating, so its agent is what is quiet. (A run that has never reported
-    // model_requests is not judged: the tracer may not send them.)
+    // model_requests is not judged: goalcup may not send them.)
     for (const hours of IDLE_HOURS) {
       if (run.last_model_request_at < earlier(now, hours * 3600)) {
         notices.push({ kind: hours === 3 ? "idle_3h" : "idle_6h", key: run.last_model_request_at, payload: { hours, since: run.last_model_request_at } });
@@ -125,16 +180,26 @@ function owed(run: TickRun, now: Date): { kind: NoticeKind; key: string; payload
  */
 export async function queueNotices(ctx: Ctx, now: Date): Promise<number> {
   const at = formatTime(now);
-  const batch = (await ctx.db.runsForTick(at))
+  const runs = await ctx.db.runsForTick(at);
+  const healthySince = await noteTick(ctx, now, runs); // only after the database answered: a tick it fails is not well
+  const batch = runs
     .filter((r) => r.mode === "competition" || r.mode === "test") // test runs mail their operator ("[TEST]", from the database)
-    .flatMap((run) => owed(run, now).map((n) => ({ run_id: run.run_id, member_id: run.member_id, kind: n.kind, dedupe_key: n.key, payload: n.payload, at })));
+    .flatMap((run) => owed(run, now, healthySince, ctx.cfg.closeAfterSeconds).map((n) => ({ run_id: run.run_id, member_id: run.member_id, kind: n.kind, dedupe_key: n.key, payload: n.payload, at })));
   return batch.length === 0 ? 0 : ctx.db.queueNotices(batch);
 }
 
 /** One cron tick. Each step is on its own: one that fails is logged and the others still run. */
 export async function runTick(env: Env): Promise<void> {
-  // While the maintenance switch is on tracers cannot beat, so silence would be false news.
-  if (env.MAINTENANCE === "on") return;
+  // While the maintenance switch is on no goalcup can beat, so silence would be false news. The
+  // marker goes too, so the server's well stretch starts again at the first tick after the switch.
+  if (env.MAINTENANCE === "on") {
+    try {
+      await env.TRACES.delete(HEALTH_KEY);
+    } catch (e) {
+      console.error(`tick health: cannot delete ${HEALTH_KEY}: ${message(e)}`);
+    }
+    return;
+  }
   let ctx: Ctx;
   try {
     ctx = await makeCtx(env);

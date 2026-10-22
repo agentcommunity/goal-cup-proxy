@@ -19,10 +19,11 @@
 //!
 //! **Some writers here are test-only builders, on purpose.** The capture runtime writes
 //! a trace with `write_baseline_for_protocol`, `append_chain` and `write_local_finish`.
-//! The V1 writers — `write_cutoff_for_protocol`, `write_finalization_for_protocol`,
-//! `write_receipt` and `write_seal_for_protocol` — lost their daemon caller in D48. They are
-//! compiled only under `test` or the `test-hooks` feature, because the protocol and verifier
-//! tests build signed and sealed fixture traces with them; a production build does not carry them.
+//! The V1 writers — `write_receipt` and `write_seal_for_protocol` — have no daemon caller
+//! (D48). They are compiled only under `test` or the `test-hooks` feature, because the
+//! protocol and verifier tests build receipt-bearing and sealed fixture traces with them; a
+//! production build does not carry them. There is no signed-mode cutoff or finalization
+//! writer (D54).
 
 use crate::ProtocolError;
 use crate::ack::AckCheckpoint;
@@ -33,8 +34,6 @@ use crate::capture::{
 };
 use crate::chain::{GENESIS, Link, link_hash};
 use crate::envelope::{Envelope, EventBody};
-#[cfg(any(test, feature = "test-hooks"))]
-use crate::provenance::{CutoffReachedV1, FinalizationV1};
 use crate::provenance::{ProvenanceError, Rfc3339Utc, Sha256Digest, TerminationOutcomeV1};
 #[cfg(any(test, feature = "test-hooks"))]
 use crate::receipt::StartReceipt;
@@ -190,22 +189,16 @@ pub enum ExportError {
     AcksExist,
     #[error("{name} already exists: fixed trace documents are absent-only")]
     FixedDocumentExists { name: &'static str },
+    #[error("the chain does not end in a local finish, so it has no seal.json to write again")]
+    NoLocalFinish,
+    #[error("the seal manifest is not the one the chain's local finish binds")]
+    SealManifestMismatch,
     #[error(
         "a {kind} is chained by write_{kind} and by nothing else: append_chain does not take \
          one, because the position and once-only rules that make a {kind} mean anything are \
          enforced there and a hand-assembled body would carry none of them"
     )]
     ReservedBody { kind: &'static str },
-    #[error("the chain reached cutoff at seq {cutoff_seq}: only its bound finalization may follow")]
-    AfterCutoff { cutoff_seq: u64 },
-    #[error("this export already chained a cutoff at seq {seq}")]
-    CutoffAlreadyChained { seq: u64 },
-    #[error("a finalization requires a preceding cutoff")]
-    FinalizationBeforeCutoff,
-    #[error("this export already chained a finalization at seq {seq}")]
-    FinalizationAlreadyChained { seq: u64 },
-    #[error("the finalization does not match the cutoff")]
-    FinalizationBindingMismatch,
     #[error("the chain is terminal at seq {terminal_seq}: no chain record may follow")]
     Terminal { terminal_seq: u64 },
     #[error(
@@ -304,60 +297,10 @@ fn resumed_phase_after(phase: &ExportPhase, env: &Envelope) -> Result<ExportPhas
                     seq: env.link.seq,
                     link: env.link.clone(),
                     kind: TerminalKind::LocalFinish,
+                    seal_manifest_sha256: Some(seal_manifest_sha256.clone()),
                 }),
-                ExportPhase::Cutoff { seq, .. } => {
-                    Err(format!("a local finish follows cutoff seq {seq}"))
-                }
                 ExportPhase::Terminal { seq, .. } => {
                     Err(format!("a local finish follows terminal seq {seq}"))
-                }
-            }
-        }
-        EventBody::CutoffReachedV1(cutoff) => {
-            validate_new_phase_envelope(env)?;
-            cutoff
-                .validate()
-                .map_err(|_| "cutoff document is invalid".to_string())?;
-            match phase {
-                ExportPhase::Open => Ok(ExportPhase::Cutoff {
-                    seq: env.link.seq,
-                    link: env.link.clone(),
-                    entry_id: env.entry_id.clone(),
-                    receipt_sha256: cutoff.receipt_sha256.clone(),
-                }),
-                ExportPhase::Cutoff { seq, .. } => {
-                    Err(format!("a second cutoff; the first is at seq {seq}"))
-                }
-                ExportPhase::Terminal { seq, .. } => {
-                    Err(format!("a cutoff follows terminal seq {seq}"))
-                }
-            }
-        }
-        EventBody::FinalizationV1(finalization) => {
-            validate_new_phase_envelope(env)?;
-            finalization
-                .validate()
-                .map_err(|_| "finalization document is invalid".to_string())?;
-            match phase {
-                ExportPhase::Open => Err("a finalization appears before cutoff".to_string()),
-                ExportPhase::Cutoff {
-                    entry_id,
-                    receipt_sha256,
-                    ..
-                } if entry_id == &env.entry_id
-                    && receipt_sha256 == finalization.receipt_sha256() =>
-                {
-                    Ok(ExportPhase::Terminal {
-                        seq: env.link.seq,
-                        link: env.link.clone(),
-                        kind: TerminalKind::FinalizationV1,
-                    })
-                }
-                ExportPhase::Cutoff { .. } => {
-                    Err("finalization does not match the cutoff binding".to_string())
-                }
-                ExportPhase::Terminal { seq, .. } => {
-                    Err(format!("a finalization follows terminal seq {seq}"))
                 }
             }
         }
@@ -366,19 +309,14 @@ fn resumed_phase_after(phase: &ExportPhase, env: &Envelope) -> Result<ExportPhas
                 seq: env.link.seq,
                 link: env.link.clone(),
                 kind: TerminalKind::LegacySeal,
+                seal_manifest_sha256: None,
             }),
-            ExportPhase::Cutoff { seq, .. } => {
-                Err(format!("a legacy seal follows cutoff seq {seq}"))
-            }
             ExportPhase::Terminal { seq, .. } => {
                 Err(format!("a legacy seal follows terminal seq {seq}"))
             }
         },
         _ => match phase {
             ExportPhase::Open => Ok(ExportPhase::Open),
-            ExportPhase::Cutoff { seq, .. } => {
-                Err(format!("an ordinary record follows cutoff seq {seq}"))
-            }
             ExportPhase::Terminal { seq, .. } => {
                 Err(format!("a record follows terminal seq {seq}"))
             }
@@ -386,7 +324,7 @@ fn resumed_phase_after(phase: &ExportPhase, env: &Envelope) -> Result<ExportPhas
     }
 }
 
-/// A cutoff, finalization or local finish is a daemon envelope with a valid time and a bounded
+/// A local finish is a daemon envelope with a valid time and a bounded
 /// entry. Its version (v5) and the absence of envelope redaction are already admitted by
 /// [`admit`] before this runs.
 fn validate_new_phase_envelope(env: &Envelope) -> Result<(), String> {
@@ -397,10 +335,7 @@ fn validate_new_phase_envelope(env: &Envelope) -> Result<(), String> {
         || env.entry_id.len() > 256
         || env.entry_id.bytes().any(|byte| byte.is_ascii_control())
     {
-        Err(
-            "a cutoff, finalization or local finish must be a modern daemon envelope without redaction"
-                .to_string(),
-        )
+        Err("a local finish must be a modern daemon envelope without redaction".to_string())
     } else {
         Ok(())
     }
@@ -490,9 +425,7 @@ fn validate_local_finish(
 /// at the quota.
 fn spends_terminal_allowance(body: &EventBody) -> bool {
     match body {
-        EventBody::Seal { .. } | EventBody::CutoffReachedV1(_) | EventBody::FinalizationV1(_) => {
-            true
-        }
+        EventBody::Seal { .. } => true,
         EventBody::Capture { record } => matches!(
             record,
             CaptureRecord::Gap { .. }
@@ -524,9 +457,8 @@ pub struct ChainTerminal {
 /// line through it, and an independent reader (the M2 integrity reader) applies the same
 /// rules read-only instead of re-deriving them. It checks, in order: version admission (v5
 /// only) and no envelope redaction, baseline-first and once-only (the genesis must be the
-/// baseline), and the phase machine — a capture record never
-/// follows a cutoff or a terminal; a cutoff is followed only by its bound finalization;
-/// exactly one terminal (legacy seal, finalization or v5 local finish) closes the chain.
+/// baseline), and the phase machine — a capture record never follows a terminal, and
+/// exactly one terminal (legacy seal or v5 local finish) closes the chain.
 /// A local finish must carry its own observation as the envelope time, valid fields,
 /// a typed termination with ordered times and a lowercase SHA-256 manifest digest.
 ///
@@ -601,18 +533,12 @@ impl ChainPhaseReplay {
         self.baseline_seq
     }
 
-    /// The seq of an admitted cutoff that no finalization has closed yet.
-    pub fn cutoff_seq(&self) -> Option<u64> {
-        match self.phase {
-            ExportPhase::Cutoff { seq, .. } => Some(seq),
-            _ => None,
-        }
-    }
-
     /// The terminal that closed the chain, or `None` for an unsealed chain.
     pub fn terminal(&self) -> Option<ChainTerminal> {
         match &self.phase {
-            ExportPhase::Terminal { seq, link, kind } => Some(ChainTerminal {
+            ExportPhase::Terminal {
+                seq, link, kind, ..
+            } => Some(ChainTerminal {
                 seq: *seq,
                 hash: link.hash.clone(),
                 kind: *kind,
@@ -845,16 +771,12 @@ impl PreparedTraceResume {
 enum ExportPhase {
     #[default]
     Open,
-    Cutoff {
-        seq: u64,
-        link: Link,
-        entry_id: String,
-        receipt_sha256: Sha256Digest,
-    },
     Terminal {
         seq: u64,
         link: Link,
         kind: TerminalKind,
+        /// The `seal.json` digest a local finish binds; `None` for a legacy seal.
+        seal_manifest_sha256: Option<String>,
     },
 }
 
@@ -863,8 +785,6 @@ enum ExportPhase {
 pub enum TerminalKind {
     /// `EventBody::Seal`, written by the seal writer.
     LegacySeal,
-    /// `EventBody::FinalizationV1`, bound to the preceding signed-mode cutoff.
-    FinalizationV1,
     /// The v5 `CaptureRecord::LocalFinish`, written only by [`TraceExport::write_local_finish`].
     LocalFinish,
 }
@@ -1122,14 +1042,6 @@ impl TraceExport {
             EventBody::Baseline { .. } => {
                 return Err(ExportError::ReservedBody { kind: "baseline" });
             }
-            EventBody::CutoffReachedV1(_) => {
-                return Err(ExportError::ReservedBody { kind: "cutoff" });
-            }
-            EventBody::FinalizationV1(_) => {
-                return Err(ExportError::ReservedBody {
-                    kind: "finalization",
-                });
-            }
             EventBody::Capture {
                 record: CaptureRecord::LocalFinish { .. },
             } => {
@@ -1240,7 +1152,6 @@ impl TraceExport {
     fn ensure_open_for_ordinary_append(&self) -> Result<(), ExportError> {
         match self.phase {
             ExportPhase::Open => Ok(()),
-            ExportPhase::Cutoff { seq, .. } => Err(ExportError::AfterCutoff { cutoff_seq: seq }),
             ExportPhase::Terminal {
                 seq,
                 kind: TerminalKind::LegacySeal,
@@ -1248,105 +1159,6 @@ impl TraceExport {
             } => Err(ExportError::Sealed { seal_seq: seq }),
             ExportPhase::Terminal { seq, .. } => Err(ExportError::Terminal { terminal_seq: seq }),
         }
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    /// Append the once-only cutoff boundary. The version is admitted before anything is
-    /// hashed or written: only v5 is.
-    pub fn write_cutoff_for_protocol(
-        &mut self,
-        protocol_version: u32,
-        entry_id: &str,
-        recorded_at: &str,
-        cutoff: CutoffReachedV1,
-    ) -> Result<Link, ExportError> {
-        cutoff.validate()?;
-        validate_phase_inputs(entry_id, recorded_at)?;
-        match self.phase {
-            ExportPhase::Open => {}
-            ExportPhase::Cutoff { seq, .. } => {
-                return Err(ExportError::CutoffAlreadyChained { seq });
-            }
-            ExportPhase::Terminal { seq, .. } => {
-                return Err(ExportError::Terminal { terminal_seq: seq });
-            }
-        }
-        let receipt_sha256 = cutoff.receipt_sha256.clone();
-        let mut env = Envelope {
-            protocol_version,
-            entry_id: entry_id.to_string(),
-            source: "daemon".to_string(),
-            recorded_at: recorded_at.to_string(),
-            link: Link {
-                seq: 0,
-                prev: String::new(),
-                hash: String::new(),
-            },
-            body: EventBody::CutoffReachedV1(cutoff),
-            redaction: None,
-        };
-        let link = self.append_link_unchecked(&mut env)?;
-        self.phase = ExportPhase::Cutoff {
-            seq: link.seq,
-            link: link.clone(),
-            entry_id: entry_id.to_string(),
-            receipt_sha256,
-        };
-        Ok(link)
-    }
-
-    #[cfg(any(test, feature = "test-hooks"))]
-    /// Append the single terminal result bound to the preceding cutoff, its version admitted
-    /// before hashing or writing exactly as for [`Self::write_cutoff_for_protocol`]. It must
-    /// name the cutoff's entry and receipt, and only one is ever chained.
-    pub fn write_finalization_for_protocol(
-        &mut self,
-        protocol_version: u32,
-        entry_id: &str,
-        recorded_at: &str,
-        finalization: FinalizationV1,
-    ) -> Result<Link, ExportError> {
-        finalization.validate()?;
-        validate_phase_inputs(entry_id, recorded_at)?;
-        match &self.phase {
-            ExportPhase::Open => return Err(ExportError::FinalizationBeforeCutoff),
-            ExportPhase::Cutoff {
-                entry_id: cutoff_entry,
-                receipt_sha256,
-                ..
-            } if cutoff_entry == entry_id && receipt_sha256 == finalization.receipt_sha256() => {}
-            ExportPhase::Cutoff { .. } => {
-                return Err(ExportError::FinalizationBindingMismatch);
-            }
-            ExportPhase::Terminal {
-                seq,
-                kind: TerminalKind::FinalizationV1,
-                ..
-            } => return Err(ExportError::FinalizationAlreadyChained { seq: *seq }),
-            ExportPhase::Terminal { seq, .. } => {
-                return Err(ExportError::Terminal { terminal_seq: *seq });
-            }
-        }
-        let mut env = Envelope {
-            protocol_version,
-            entry_id: entry_id.to_string(),
-            source: "daemon".to_string(),
-            recorded_at: recorded_at.to_string(),
-            link: Link {
-                seq: 0,
-                prev: String::new(),
-                hash: String::new(),
-            },
-            body: EventBody::FinalizationV1(finalization),
-            redaction: None,
-        };
-        let link = self.append_link_unchecked(&mut env)?;
-        self.phase = ExportPhase::Terminal {
-            seq: link.seq,
-            link: link.clone(),
-            kind: TerminalKind::FinalizationV1,
-        };
-        Ok(link)
     }
 
     #[cfg(any(test, feature = "test-hooks"))]
@@ -1499,12 +1311,11 @@ impl TraceExport {
     /// `CaptureRecord::LocalFinish` carrying the local `observed` time, a bounded `reason`
     /// and the caller's actual `termination` outcome — the typed result of really reaping the
     /// process, never a claim this primitive makes; an `Unresolved` outcome stays unresolved.
-    /// There is no receipt, signed cutoff or deadline prerequisite and none is fabricated.
+    /// There is no receipt or deadline prerequisite and none is fabricated.
     ///
     /// Inputs are validated before any write: the termination's time ordering through
     /// `TerminationOutcomeV1::validate`, the observation and reason bounds, and the chain
-    /// state — an open capture chain with a configured quota; a cutoff chain may only
-    /// finalize, and a terminal chain refuses (`LocalFinishAlreadyChained` for a committed
+    /// state — an open capture chain with a configured quota; a terminal chain refuses (`LocalFinishAlreadyChained` for a committed
     /// local finish, so a retry observes it rather than writing a duplicate).
     ///
     /// It appends exactly one terminal envelope, closes the phase and flushes the chain, so the
@@ -1521,9 +1332,6 @@ impl TraceExport {
     ) -> Result<(PathBuf, Link), ExportError> {
         match self.phase {
             ExportPhase::Open => {}
-            ExportPhase::Cutoff { seq, .. } => {
-                return Err(ExportError::AfterCutoff { cutoff_seq: seq });
-            }
             ExportPhase::Terminal {
                 seq,
                 kind: TerminalKind::LocalFinish,
@@ -1537,6 +1345,7 @@ impl TraceExport {
         let canonical = manifest.clone().sorted();
         validate_phase_inputs(&canonical.entry_id, &observed.wall)?;
         let bytes = to_json("seal", &canonical)?;
+        let seal_manifest_sha256 = hex::encode(Sha256::digest(&bytes));
         let mut env = Envelope {
             protocol_version: M2_PROTOCOL_VERSION,
             entry_id: canonical.entry_id.clone(),
@@ -1552,7 +1361,7 @@ impl TraceExport {
                     observed,
                     reason: reason.to_string(),
                     termination,
-                    seal_manifest_sha256: hex::encode(Sha256::digest(&bytes)),
+                    seal_manifest_sha256: seal_manifest_sha256.clone(),
                 },
             },
             redaction: None,
@@ -1562,11 +1371,54 @@ impl TraceExport {
             seq: link.seq,
             link: link.clone(),
             kind: TerminalKind::LocalFinish,
+            seal_manifest_sha256: Some(seal_manifest_sha256),
         };
         self.sync_capture()?;
         let path = self.write_fixed(FixedTraceDocument::Seal, &bytes)?;
         self.sync_capture()?;
         Ok((path, link))
+    }
+
+    /// Write `seal.json` again for the local finish this chain already ends in, after the first
+    /// write failed (a full disk). `manifest` must be the one that finish chained: its bytes are
+    /// checked against the digest the terminal binds, and any other manifest is refused before
+    /// anything is written. A file the failed write left behind (empty, or cut short of these
+    /// bytes) is replaced; a whole copy is kept; anything else is refused and left as it is.
+    pub fn rewrite_local_finish_seal(
+        &mut self,
+        manifest: &SealManifest,
+    ) -> Result<PathBuf, ExportError> {
+        let ExportPhase::Terminal {
+            kind: TerminalKind::LocalFinish,
+            seal_manifest_sha256: Some(bound),
+            ..
+        } = &self.phase
+        else {
+            return Err(ExportError::NoLocalFinish);
+        };
+        let bytes = to_json("seal", &manifest.clone().sorted())?;
+        if hex::encode(Sha256::digest(&bytes)) != *bound {
+            return Err(ExportError::SealManifestMismatch);
+        }
+        if let Some(file) = self.root.read_fixed(FixedTraceDocument::Seal)? {
+            let mut there = Vec::new();
+            file.take(bytes.len() as u64 + 1)
+                .read_to_end(&mut there)
+                .map_err(|source| ExportError::Io {
+                    path: self.root.display.join(SEAL_FILE).display().to_string(),
+                    source,
+                })?;
+            if there == bytes {
+                return Ok(self.root.display.join(SEAL_FILE));
+            }
+            if !bytes.starts_with(&there) {
+                return Err(ExportError::FixedDocumentExists { name: SEAL_FILE });
+            }
+            self.root.dir.remove_fixed(FixedDocument::Seal)?;
+        }
+        let path = self.write_fixed(FixedTraceDocument::Seal, &bytes)?;
+        self.root.dir.sync()?;
+        Ok(path)
     }
 
     #[cfg(any(test, feature = "test-hooks"))]
@@ -1663,9 +1515,6 @@ impl TraceExport {
     ) -> Result<(PathBuf, Link), ExportError> {
         match self.phase {
             ExportPhase::Open => {}
-            ExportPhase::Cutoff { seq, .. } => {
-                return Err(ExportError::AfterCutoff { cutoff_seq: seq });
-            }
             ExportPhase::Terminal {
                 seq,
                 kind: TerminalKind::LegacySeal,
@@ -1699,6 +1548,7 @@ impl TraceExport {
             seq: link.seq,
             link: link.clone(),
             kind: TerminalKind::LegacySeal,
+            seal_manifest_sha256: None,
         };
         let path = self.write_fixed(FixedTraceDocument::Seal, &bytes)?;
         Ok((path, link))

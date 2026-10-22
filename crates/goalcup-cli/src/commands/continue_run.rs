@@ -27,12 +27,14 @@
 //! run does ([`super::start`]).
 
 use crate::CliError;
+use crate::commands::say;
 use crate::commands::start::{
-    Continuing, SleepLockFn, StartOptions, continue_preflight, continue_segment,
-    lock_home_for_continue, refuse_wsl, run_folder_for_continue,
+    Continuing, SleepLockFn, StartOptions, check_run_folders, continue_preflight, continue_segment,
+    run_folder_for_continue,
 };
 use crate::connector::HarnessConnector;
 use crate::entries::{EntryRecord, read_entry};
+use crate::home::lock_home_for_continue;
 use crate::retry::retry_busy;
 use crate::run::reserve::{DiskPolicy, artifact_root, held_by_another, reserve_path};
 use crate::run::{HarnessState, RunRecord};
@@ -112,7 +114,7 @@ struct Earlier {
 /// The refusal for an earlier segment that cannot be closed: before anything is sent.
 fn unsealable(entry_id: &str, why: &str) -> CliError {
     CliError::Refused(format!(
-        "Run goalcup seal {entry_id}, then goalcup continue. The earlier part of the run (entry \
+        "Run goalcup seal {entry_id}, then goalcup continue. The earlier part of the run (part \
          {entry_id}) could not be sealed ({why}). Nothing was sent."
     ))
 }
@@ -129,10 +131,12 @@ pub fn continue_with(
     let (record, credential) = resolve(cfg, opts.run.as_deref())?;
     let run_id = record.run_id.clone();
     let server_url = record.server_url.clone().unwrap_or_default();
+    // The run may still be open, so a new start (which would replace it) is not advised.
     let previous = record.entries.last().ok_or_else(|| {
         CliError::Refused(format!(
-            "Start a new run with goalcup start. Run {run_id} has nothing recorded on this \
-             computer to go on from. Nothing was changed."
+            "Write to {} and name run {run_id}. It has nothing recorded on this computer to go \
+             on from, so it cannot be continued here. Nothing was changed.",
+            crate::participant::SUPPORT_ADDRESS
         ))
     })?;
     let previous_entry = read_entry(cfg, &previous.entry_id)?;
@@ -141,7 +145,8 @@ pub fn continue_with(
     let folder = run_folder_for_continue(opts.run_folder.as_deref(), &record.workspace)?;
     // WSL1 cannot run this, and WSL2 cannot keep a run on a Windows drive: judged here, over every
     // folder the segment writes to, before the home is locked or anything is closed or changed.
-    refuse_wsl(
+    // A folder on a filesystem a run cannot keep its records on is only warned about.
+    check_run_folders(
         env,
         cfg,
         &folder,
@@ -176,8 +181,10 @@ pub fn continue_with(
         let Some(upload) = crate::upload::read_record(cfg, entry_id)? else {
             if last {
                 return Err(CliError::Refused(format!(
-                    "Start a new run with goalcup start. The last part of run {run_id} (entry \
-                     {entry_id}) has no upload record on this computer. Nothing was changed."
+                    "Write to {} and name run {run_id}. Its last part ({entry_id}) has no \
+                     upload record on this computer, so it cannot be continued here. Nothing \
+                     was changed.",
+                    crate::participant::SUPPORT_ADDRESS
                 )));
             }
             continue;
@@ -205,13 +212,7 @@ pub fn continue_with(
                 continue;
             }
         }
-        let receipt: goalcup_protocol::receipt::StartReceipt = {
-            let path = crate::upload::receipt_path(cfg, entry_id);
-            serde_json::from_slice(&std::fs::read(&path).map_err(|source| CliError::Io {
-                path: path.display().to_string(),
-                source,
-            })?)?
-        };
+        let receipt = crate::upload::read_receipt(cfg, entry_id)?;
         let entry = read_entry(cfg, entry_id)?;
         let how = how_to_close(client, &entry)?;
         earlier.push(Earlier {
@@ -250,7 +251,7 @@ pub fn continue_with(
                 say(out, crate::participant::EARLIER_PART_UPLOADING)?;
             }
             // Another goalcup began to send it since it was looked at: it needs nothing here.
-            Err(error) => say(out, &format!("entry {entry_id}: {error}"))?,
+            Err(error) => log_line(cfg, &entry_id, &format!("part {entry_id}: {error}")),
         }
     }
 
@@ -258,7 +259,6 @@ pub fn continue_with(
     let start = StartOptions {
         harness: record.connector_id.clone(),
         dev: previous_entry.dev,
-        goal_file: None,
         run_folder: Some(folder),
         disk: opts.disk,
         mode: record.mode(),
@@ -302,7 +302,7 @@ fn how_to_close(client: &(dyn DaemonClient + Sync), entry: &EntryRecord) -> Resu
     if status.verify_with(&entry.run_public_key).is_err() || status.payload.entry_id != *entry_id {
         return Err(unsealable(
             entry_id,
-            "the tracker's answer for it did not verify",
+            "goalcup's recorder gave an answer for it that did not verify",
         ));
     }
     Ok(if status.payload.sealed_at.is_some() {
@@ -338,12 +338,18 @@ fn close_previous(
         }
         How::FromTail => {
             note_repo_head_unless_noted(spool, &segment.upload);
+            log_line(
+                cfg,
+                entry_id,
+                &format!(
+                    "part {entry_id}: the recorder no longer holds it open, so it is closed from \
+                     the end of its chain as an incomplete part."
+                ),
+            );
             let _ = say(
                 out,
-                &format!(
-                    "entry {entry_id}: the tracker no longer holds it open, so it is closed from \
-                     the end of its chain as an incomplete segment."
-                ),
+                "The earlier part of this run ended without a clean seal. What was recorded is \
+                 kept and uploads now. Nothing to do.",
             );
             Ok(Closing::FromTail)
         }
@@ -356,27 +362,35 @@ fn close_previous(
                 client,
                 entry_id,
                 None,
-                None,
                 deadline,
                 allowance,
                 Some(cfg),
             )
             .map_err(|error| unsealable(entry_id, &error.to_string()))?;
+            log_line(
+                cfg,
+                entry_id,
+                &format!("part {entry_id}: its host had gone, so it was sealed now."),
+            );
             let _ = say(
                 out,
-                &format!("entry {entry_id}: its host had gone, so it was sealed now."),
+                "The earlier part of this run was still open, so it was sealed now.",
             );
             Ok(Closing::Sealed)
         }
     }
 }
 
-/// One line to the participant, or the write error naming the stream.
-fn say(out: &mut dyn std::io::Write, line: &str) -> Result<(), CliError> {
-    writeln!(out, "{line}").map_err(|source| CliError::Io {
-        path: "stdout".to_string(),
-        source,
-    })
+/// One technical line in the `host.log` of the run that holds `entry_id`, for support: what a
+/// participant need not read. Nothing happens when the log cannot be written.
+fn log_line(cfg: &Path, entry_id: &str, line: &str) {
+    let Ok(Some(run)) = crate::run::of_entry(cfg, entry_id) else {
+        return;
+    };
+    let log = crate::run::run_dir(cfg, &run.run_id).join(crate::host_log::HOST_LOG_NAME);
+    if let Ok(mut file) = crate::host_log::open_append(&log) {
+        let _ = std::io::Write::write_all(&mut file, format!("goalcup: {line}\n").as_bytes());
+    }
 }
 
 #[cfg(test)]

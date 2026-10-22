@@ -2,8 +2,8 @@
 //! --capture-integrity TRACE`.
 //!
 //! Every fixture is a real `TraceExport`: a v5 baseline, ordinary capture appends, and
-//! either no terminal, `write_local_finish`, or the versioned signed cutoff/finalization
-//! writers. Nothing here hand-appends a reserved body. Negative cases mutate a temporary
+//! either no terminal or `write_local_finish`, with or without a start receipt and ACKs.
+//! Nothing here hand-appends a reserved body. Negative cases mutate a temporary
 //! fixture only after its writer is closed (`append_bytes`, or a byte edit of one file), and
 //! the expectations come from what was written — the chain read back independently, the
 //! records the test itself appended — never from the reader under test.
@@ -29,12 +29,7 @@ use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::export::{
     ACKS_FILE, BASELINE_FILE, CHAIN_FILE, RECEIPT_FILE, SEAL_FILE, TraceExport, manifest_sha256,
 };
-use goalcup_protocol::provenance::{
-    CaptureUnavailableV1, CutoffReachedV1, FinalizationV1, NoRepositoryReasonV1,
-    PreCutoffDrainOutcomeV1, PublisherNotAttemptedReasonV1, PublisherNotAttemptedV1,
-    RepositoryNonSelectionV1, Rfc3339Utc, Sha256Digest, SnapshotNotAttemptedV1,
-    TerminationMethodV1, TerminationOutcomeV1,
-};
+use goalcup_protocol::provenance::{Rfc3339Utc, TerminationMethodV1, TerminationOutcomeV1};
 use goalcup_protocol::receipt::{StartReceipt, StartReceiptClaims};
 use goalcup_protocol::redaction::{RedactionAudit, RedactionAuditSpan};
 use goalcup_protocol::seal::{SealManifest, SealedFile};
@@ -523,21 +518,6 @@ fn sign_ack(key: &SigningKey, link: &Link, acked_at: &str) -> AckCheckpoint {
     ack
 }
 
-fn receipt_digest_finalization(digest: &Sha256Digest) -> FinalizationV1 {
-    FinalizationV1::CaptureUnavailable {
-        receipt_sha256: digest.clone(),
-        termination: confirmed(),
-        capture: CaptureUnavailableV1::NotAttempted(SnapshotNotAttemptedV1 {
-            selection: RepositoryNonSelectionV1::None {
-                reason: NoRepositoryReasonV1::NotFound,
-            },
-        }),
-        publisher: PublisherNotAttemptedV1 {
-            reason: PublisherNotAttemptedReasonV1::SelectionFailed,
-        },
-    }
-}
-
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_goalcup-verify"))
 }
@@ -837,20 +817,23 @@ fn hash_or_signature_tamper_fails() {
     assert_eq!(report.verified_ack, None);
 }
 
-/// A signed-finalization trace like the receipt fixture above, but the receipt carries
-/// `receipt_deadline`, and the cutoff record (and the finalization chained to it) claims
-/// `cutoff_deadline` and `cutoff_receipt` instead of the receipt's own deadline and digest.
-/// With `ack_at`, the server also acknowledges the finalization at that time.
-fn signed_trace_with_cutoff(
+/// A receipt-anchored trace: a Launch carrying `launch_key`, a start receipt over the head
+/// after it that claims `receipt_key` and `receipt_deadline`, the goal and a wire exchange,
+/// then the local finish. With `ack_at`, the server also acknowledges the finish at that time.
+fn receipt_trace(
     receipt_deadline: &str,
-    cutoff_deadline: &str,
-    cutoff_receipt: Option<Sha256Digest>,
+    receipt_key: Option<&str>,
+    launch_key: Option<&str>,
     ack_at: Option<&str>,
 ) -> tempfile::TempDir {
     let key = server_key();
     let dir = tempfile::tempdir().unwrap();
     let mut export = capture_export(dir.path());
-    append(&mut export, &launch());
+    let mut launch = launch();
+    if let CaptureRecord::Launch { run_public_key, .. } = &mut launch {
+        *run_public_key = launch_key.map(str::to_string);
+    }
+    append(&mut export, &launch);
     let (_, head) = export.head().unwrap();
     let receipt = StartReceipt::sign(
         StartReceiptClaims {
@@ -863,7 +846,7 @@ fn signed_trace_with_cutoff(
             manifest_sha256: "cc".repeat(32),
             chain_head: head,
             connector_dir_sha256: None,
-            run_public_key: None,
+            run_public_key: receipt_key.map(str::to_string),
             questionnaire_version: None,
         },
         &key,
@@ -873,27 +856,8 @@ fn signed_trace_with_cutoff(
     for record in goal_stream().into_iter().chain(complete_wire(None)) {
         append(&mut export, &record);
     }
-    // The writer ties the finalization to the cutoff's receipt, so both name the same digest.
-    let digest = cutoff_receipt.unwrap_or_else(|| receipt.canonical_digest().unwrap());
-    export
-        .write_cutoff_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-27T12:00:08Z",
-            CutoffReachedV1 {
-                receipt_sha256: digest.clone(),
-                deadline_at: utc(cutoff_deadline),
-                pre_cutoff_drain: PreCutoffDrainOutcomeV1::Complete,
-            },
-        )
-        .unwrap();
-    let last = export
-        .write_finalization_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-27T12:00:09Z",
-            receipt_digest_finalization(&digest),
-        )
+    let (_, last) = export
+        .write_local_finish(&manifest(), finish_time(), "participant_stop", confirmed())
         .unwrap();
     if let Some(acked_at) = ack_at {
         export
@@ -1082,39 +1046,110 @@ fn the_report_names_the_run_and_its_first_failure() {
     assert!(report.entry_id.is_some());
 }
 
-/// The cutoff record is what binds a signed finalization to the receipt's 168-hour deadline.
-/// A cutoff that names another deadline, or another receipt, is invalid evidence, and the
-/// matching control is clean.
+/// The signed-mode cutoff and finalization bodies left the protocol (D54 amendment of 21 Oct
+/// 2026). A correctly linked line carrying either, in the spelling the old writer used, no
+/// longer decodes: the scan stops at it as `record_malformed`, exit 2, and keeps the lines
+/// before it. It is never read as a terminal.
 #[test]
-fn a_cutoff_that_does_not_match_its_receipt_names_its_finding() {
-    let options = supplied(&server_key());
-    let control = signed_trace_with_cutoff(DEADLINE_AT, DEADLINE_AT, None, None);
-    let (report, _) = scan_with(control.path(), &options);
-    assert_eq!(report.exit_code(), 0, "control: {report:#?}");
-    assert!(report.sealed);
+fn a_removed_signed_terminal_body_is_record_malformed() {
+    #[derive(serde::Serialize)]
+    struct Body<'a> {
+        kind: &'a str,
+        content: serde_json::Value,
+    }
+    #[derive(serde::Serialize)]
+    struct Claims<'a> {
+        protocol_version: u32,
+        entry_id: &'a str,
+        source: &'a str,
+        recorded_at: &'a str,
+        seq: u64,
+        body: &'a Body<'a>,
+    }
+    #[derive(serde::Serialize)]
+    struct Line<'a> {
+        protocol_version: u32,
+        entry_id: &'a str,
+        source: &'a str,
+        recorded_at: &'a str,
+        seq: u64,
+        prev: &'a str,
+        hash: &'a str,
+        body: &'a Body<'a>,
+    }
+    let removed = [
+        Body {
+            kind: "cutoff_reached_v1",
+            content: serde_json::json!({
+                "receipt_sha256": "ab".repeat(32),
+                "deadline_at": DEADLINE_AT,
+                "pre_cutoff_drain": "complete",
+            }),
+        },
+        Body {
+            kind: "finalization_v1",
+            content: serde_json::json!({"capture_unavailable": {"receipt_sha256": "ab".repeat(32)}}),
+        },
+    ];
+    for body in &removed {
+        let dir = make_trace(&launched(complete_wire(None)), false);
+        let control = scan(dir.path()).0;
+        assert_eq!(
+            control.exit_code(),
+            1,
+            "{}: control {control:#?}",
+            body.kind
+        );
+        let last = chain_lines(dir.path()).pop().unwrap();
+        let seq = last.link.seq + 1;
+        let recorded_at = "2026-09-27T12:00:08Z";
+        let mut claimed = goalcup_protocol::chain::CHAIN_DOMAIN.to_vec();
+        claimed.extend(
+            serde_json::to_vec(&Claims {
+                protocol_version: M2_PROTOCOL_VERSION,
+                entry_id: &last.entry_id,
+                source: "daemon",
+                recorded_at,
+                seq,
+                body,
+            })
+            .unwrap(),
+        );
+        let hash = goalcup_protocol::chain::link_hash(&last.link.hash, &claimed);
+        let mut line = serde_json::to_vec(&Line {
+            protocol_version: M2_PROTOCOL_VERSION,
+            entry_id: &last.entry_id,
+            source: "daemon",
+            recorded_at,
+            seq,
+            prev: &last.link.hash,
+            hash: &hash,
+            body,
+        })
+        .unwrap();
+        line.push(b'\n');
+        append_bytes(&dir.path().join(CHAIN_FILE), &line);
 
-    let wrong_deadline = signed_trace_with_cutoff(DEADLINE_AT, "2026-09-27T12:31:00Z", None, None);
-    let (report, _) = scan_with(wrong_deadline.path(), &options);
-    assert_eq!(report.exit_code(), 2, "{report:#?}");
-    assert!(has(&report, "cutoff_deadline_mismatch"), "{report:#?}");
-    assert!(!has(&report, "cutoff_receipt_mismatch"), "{report:#?}");
-    assert!(!report.sealed, "{report:#?}");
-
-    let wrong_receipt = signed_trace_with_cutoff(
-        DEADLINE_AT,
-        DEADLINE_AT,
-        Some(Sha256Digest::try_from("ab".repeat(32)).unwrap()),
-        None,
-    );
-    let (report, _) = scan_with(wrong_receipt.path(), &options);
-    assert_eq!(report.exit_code(), 2, "{report:#?}");
-    assert!(has(&report, "cutoff_receipt_mismatch"), "{report:#?}");
-    assert!(!has(&report, "cutoff_deadline_mismatch"), "{report:#?}");
+        let (report, _) = scan(dir.path());
+        assert_eq!(report.exit_code(), 2, "{}: {report:#?}", body.kind);
+        assert_eq!(
+            report.first_failure,
+            Some(FirstFailure {
+                seq: Some(seq),
+                code: "record_malformed".to_string()
+            }),
+            "{}: {report:#?}",
+            body.kind
+        );
+        assert_eq!(report.validated_records, seq, "{}", body.kind);
+        assert_eq!(report.terminal, None, "{}", body.kind);
+        assert!(!report.sealed, "{}", body.kind);
+    }
 }
 
 /// Where the counted prefix ends is a fact the report states, not a verdict: it never moves the
 /// exit. The chain's clocks here are the fixture's: the baseline at 12:00:00, every capture
-/// record at 12:00:01, the cutoff at 12:00:08 and the finalization at 12:00:09.
+/// record at 12:00:01 and the local finish at 12:00:05.5.
 #[test]
 fn the_report_states_where_the_deadline_falls_in_the_chain() {
     let options = supplied(&server_key());
@@ -1122,8 +1157,8 @@ fn the_report_states_where_the_deadline_falls_in_the_chain() {
     let acked = "2026-09-27T12:01:00Z";
 
     // The boundary: the capture records are stamped 12:00:01, exactly the deadline's second, and
-    // count as at or before it. The cutoff (12:00:08) and the finalization (12:00:09) are after it.
-    let dir = signed_trace_with_cutoff(early, early, None, Some(acked));
+    // count as at or before it. The local finish (12:00:05.5) is after it.
+    let dir = receipt_trace(early, None, None, Some(acked));
     let lines = chain_lines(dir.path()).len() as u64;
     let (report, _) = scan_with(dir.path(), &options);
     assert_eq!(
@@ -1131,10 +1166,10 @@ fn the_report_states_where_the_deadline_falls_in_the_chain() {
         0,
         "facts do not change the exit: {report:#?}"
     );
-    assert_eq!(report.records_after_deadline, Some(2), "{report:#?}");
+    assert_eq!(report.records_after_deadline, Some(1), "{report:#?}");
     assert_eq!(
         report.last_seq_at_or_before_deadline,
-        Some(lines - 3),
+        Some(lines - 2),
         "{report:#?}"
     );
     assert_eq!(report.last_ack_at.as_deref(), Some(acked), "{report:#?}");
@@ -1142,7 +1177,7 @@ fn the_report_states_where_the_deadline_falls_in_the_chain() {
 
     // One second earlier is the other side of the boundary: only the baseline (12:00:00) is at or
     // before the deadline, and every later record is after it.
-    let dir = signed_trace_with_cutoff("2026-09-27T12:00:00Z", "2026-09-27T12:00:00Z", None, None);
+    let dir = receipt_trace("2026-09-27T12:00:00Z", None, None, None);
     let (report, _) = scan_with(dir.path(), &options);
     assert_eq!(
         report.records_after_deadline,
@@ -1155,8 +1190,8 @@ fn the_report_states_where_the_deadline_falls_in_the_chain() {
         "{report:#?}"
     );
 
-    // A deadline past the whole chain: nothing is after it, the last record is the finalization.
-    let dir = signed_trace_with_cutoff(DEADLINE_AT, DEADLINE_AT, None, None);
+    // A deadline past the whole chain: nothing is after it, the last record is the local finish.
+    let dir = receipt_trace(DEADLINE_AT, None, None, None);
     let (report, _) = scan_with(dir.path(), &options);
     assert_eq!(report.records_after_deadline, Some(0), "{report:#?}");
     assert_eq!(
@@ -1168,7 +1203,7 @@ fn the_report_states_where_the_deadline_falls_in_the_chain() {
 
     // A deadline before the first record: nothing is at or before it.
     let before_all = "2026-09-27T11:59:45Z";
-    let dir = signed_trace_with_cutoff(before_all, before_all, None, None);
+    let dir = receipt_trace(before_all, None, None, None);
     let (report, _) = scan_with(dir.path(), &options);
     assert_eq!(report.records_after_deadline, Some(lines), "{report:#?}");
     assert_eq!(report.last_seq_at_or_before_deadline, None, "{report:#?}");
@@ -1388,57 +1423,11 @@ fn verified_ack_progress_is_returned_without_claiming_terminal_delivery() {
 
 #[test]
 fn signed_receipt_clock_is_returned_without_replacing_launch_clock() {
-    let key = server_key();
-    let options = supplied(&key);
-    let dir = tempfile::tempdir().unwrap();
-    let mut export = capture_export(dir.path());
-    let launch = launch();
-    append(&mut export, &launch);
-    // Actual receipt issuance over the chain head at that moment.
-    let (_, head) = export.head().unwrap();
-    let receipt = StartReceipt::sign(
-        StartReceiptClaims {
-            entry_id: ENTRY.to_string(),
-            connector_id: "codex-cli".to_string(),
-            workspace: "/ws".to_string(),
-            session_id: "session-t18".to_string(),
-            started_at: STARTED_AT.to_string(),
-            deadline_at: DEADLINE_AT.to_string(),
-            manifest_sha256: "cc".repeat(32),
-            chain_head: head,
-            connector_dir_sha256: None,
-            run_public_key: None,
-            questionnaire_version: None,
-        },
-        &key,
-    )
-    .unwrap();
-    export.write_receipt(&receipt).unwrap();
-    for record in goal_stream().into_iter().chain(complete_wire(None)) {
-        append(&mut export, &record);
-    }
-    let digest = receipt.canonical_digest().unwrap();
-    export
-        .write_cutoff_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-27T12:00:08Z",
-            CutoffReachedV1 {
-                receipt_sha256: digest.clone(),
-                deadline_at: utc(DEADLINE_AT),
-                pre_cutoff_drain: PreCutoffDrainOutcomeV1::Complete,
-            },
-        )
-        .unwrap();
-    let final_link = export
-        .write_finalization_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-27T12:00:09Z",
-            receipt_digest_finalization(&digest),
-        )
-        .unwrap();
-    drop(export);
+    let options = supplied(&server_key());
+    // Actual receipt issuance over the chain head after the Launch, then a local finish.
+    let dir = receipt_trace(DEADLINE_AT, None, None, None);
+    let final_link = chain_lines(dir.path()).pop().unwrap().link;
+    let seal_digest = manifest_sha256(&manifest()).unwrap();
 
     let (report, seen) = scan_with(dir.path(), &options);
     assert_eq!(report.exit_code(), 0, "{report:#?}");
@@ -1458,16 +1447,16 @@ fn signed_receipt_clock_is_returned_without_replacing_launch_clock() {
         Some(CaptureTerminalFacts {
             seq: final_link.seq,
             hash: final_link.hash.clone(),
-            observed: None,
-            observed_at: "2026-09-27T12:00:09Z".to_string(),
-            kind: CaptureTerminalKind::SignedFinalization,
-            reason: None,
+            observed: Some(finish_time()),
+            observed_at: finish_time().wall,
+            kind: CaptureTerminalKind::LocalFinish,
+            reason: Some("participant_stop".to_string()),
             termination: Some(confirmed()),
-            seal_manifest_sha256: None,
+            seal_manifest_sha256: Some(seal_digest),
         })
     );
     // The launch record keeps its own local clock; the signed start does not replace it.
-    assert_eq!(seen[0], launch);
+    assert_eq!(seen[0], launch());
     let CaptureRecord::Launch { observed, .. } = &seen[0] else {
         unreachable!()
     };
@@ -1486,63 +1475,6 @@ fn signed_receipt_clock_is_returned_without_replacing_launch_clock() {
     assert_eq!(unkeyed.anchor, AnchorState::LocalOnly);
 }
 
-/// A signed-receipt trace whose `Launch` carries `launch_key` and whose receipt claims
-/// `receipt_key`, built exactly like the receipt trace above.
-fn receipt_trace_with_launch_key(receipt_key: Option<&str>, launch_key: &str) -> tempfile::TempDir {
-    let server = server_key();
-    let dir = tempfile::tempdir().unwrap();
-    let mut export = capture_export(dir.path());
-    let mut launch = launch();
-    if let CaptureRecord::Launch { run_public_key, .. } = &mut launch {
-        *run_public_key = Some(launch_key.to_string());
-    }
-    append(&mut export, &launch);
-    let (_, head) = export.head().unwrap();
-    let receipt = StartReceipt::sign(
-        StartReceiptClaims {
-            entry_id: ENTRY.to_string(),
-            connector_id: "codex-cli".to_string(),
-            workspace: "/ws".to_string(),
-            session_id: "session-t18".to_string(),
-            started_at: STARTED_AT.to_string(),
-            deadline_at: DEADLINE_AT.to_string(),
-            manifest_sha256: "cc".repeat(32),
-            chain_head: head,
-            connector_dir_sha256: None,
-            run_public_key: receipt_key.map(str::to_string),
-            questionnaire_version: None,
-        },
-        &server,
-    )
-    .unwrap();
-    export.write_receipt(&receipt).unwrap();
-    for record in goal_stream().into_iter().chain(complete_wire(None)) {
-        append(&mut export, &record);
-    }
-    let digest = receipt.canonical_digest().unwrap();
-    export
-        .write_cutoff_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-27T12:00:08Z",
-            CutoffReachedV1 {
-                receipt_sha256: digest.clone(),
-                deadline_at: utc(DEADLINE_AT),
-                pre_cutoff_drain: PreCutoffDrainOutcomeV1::Complete,
-            },
-        )
-        .unwrap();
-    export
-        .write_finalization_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-27T12:00:09Z",
-            receipt_digest_finalization(&digest),
-        )
-        .unwrap();
-    dir
-}
-
 /// Contract S1: a `Launch.run_public_key` must equal the key of a verified receipt that
 /// carries one. No v5 producer writes a receipt key yet (capture entries are Legacy-bound and
 /// request no receipt), so this guards the S-phase registration, not today's traces.
@@ -1559,13 +1491,13 @@ fn a_launch_key_must_agree_with_a_verified_receipts_key() {
     let options = supplied(&server_key());
 
     // Match: valid, signed.
-    let dir = receipt_trace_with_launch_key(Some(&run_a), &run_a);
+    let dir = receipt_trace(DEADLINE_AT, Some(&run_a), Some(&run_a), None);
     let (report, _) = scan_with(dir.path(), &options);
     assert_eq!(report.exit_code(), 0, "{report:#?}");
     assert_eq!(report.anchor, AnchorState::Signed);
 
     // Mismatch: the Launch is refused as the first capture record, and nothing after it is read.
-    let dir = receipt_trace_with_launch_key(Some(&run_a), &run_b);
+    let dir = receipt_trace(DEADLINE_AT, Some(&run_a), Some(&run_b), None);
     let (report, seen) = scan_with(dir.path(), &options);
     assert_eq!(report.exit_code(), 2, "{report:#?}");
     assert_eq!(
@@ -1580,12 +1512,12 @@ fn a_launch_key_must_agree_with_a_verified_receipts_key() {
 
     // The receipt's spelling is compared canonically: an uppercase receipt key for the same
     // point agrees. (The Launch's own spelling must be lowercase; the corpus pins that.)
-    let dir = receipt_trace_with_launch_key(Some(&run_a.to_uppercase()), &run_a);
+    let dir = receipt_trace(DEADLINE_AT, Some(&run_a.to_uppercase()), Some(&run_a), None);
     let (report, _) = scan_with(dir.path(), &options);
     assert_eq!(report.exit_code(), 0, "{report:#?}");
 
     // A receipt key that is not a usable key is a receipt fault, named as one.
-    let dir = receipt_trace_with_launch_key(Some(&"zz".repeat(32)), &run_a);
+    let dir = receipt_trace(DEADLINE_AT, Some(&"zz".repeat(32)), Some(&run_a), None);
     let (report, _) = scan_with(dir.path(), &options);
     assert_eq!(report.exit_code(), 2, "{report:#?}");
     assert!(has(&report, "receipt_malformed"), "{:?}", report.findings);
@@ -1598,7 +1530,7 @@ fn a_launch_key_must_agree_with_a_verified_receipts_key() {
     // A receipt with no key claims nothing to compare. Skipping is right: the design requires
     // equality only with "any receipt or registration key supplied", and every receipt that
     // can sit beside a v5 chain today is keyless.
-    let dir = receipt_trace_with_launch_key(None, &run_a);
+    let dir = receipt_trace(DEADLINE_AT, None, Some(&run_a), None);
     let (report, _) = scan_with(dir.path(), &options);
     assert_eq!(report.exit_code(), 0, "{report:#?}");
 }

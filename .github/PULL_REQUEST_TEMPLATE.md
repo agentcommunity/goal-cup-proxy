@@ -37,11 +37,10 @@ author's half of that list, so say where the reviewer can check it.
 - [ ] Each file under `files/`, `args`, `env` value, seed, host, native pattern, identity source and
       CA variable is justified in this description, with no model base URL or
       redirect (items 1 to 9).
-- [ ] Headless only: kit case under `crates/goalcup-cli/tests/fixtures/harness-kit/<id>/` and
-      the checker output. Chat mode: mark this not applicable; the generic connector contract
-      supplies its stand-in. Any committed fixture went through `spikes/redact.py` (items 7 and 10).
-- [ ] The diff touches only `connectors/<id>/`, the pin line above, the goldens, a headless-only kit case
-      when needed, and `docs/harnesses/<id>.md`; no `.rs` file is changed and no policy row or decoder
-      is added (item 10).
+- [ ] No kit case is added: the generic connector contract supplies the stand-in. Any committed
+      fixture went through `spikes/redact.py` (items 7 and 10).
+- [ ] The diff touches only `connectors/<id>/`, the pin line above, the goldens and
+      `docs/harnesses/<id>.md`; no `.rs` file is changed and no policy row or decoder is added
+      (item 10).
 - [ ] Last lines of `sh scripts/check-connector.sh <id>` and `sh scripts/gate.sh fast` pasted.
       Claim only what passed: the kit runs a stand-in, not the real harness.

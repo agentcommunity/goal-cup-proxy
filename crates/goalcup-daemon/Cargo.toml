@@ -1,8 +1,11 @@
 [package]
 name = "goalcup-daemon"
+description = "The goalcup-daemon recorder: ingest, redaction, the hash chain writer, session-file capture and seal."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 rust-version.workspace = true
 publish = false
 

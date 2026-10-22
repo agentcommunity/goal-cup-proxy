@@ -116,7 +116,8 @@ struct CreateBody<'a> {
     purpose: &'a str,
     mode: &'a str,
     connector_id: &'a str,
-    tracer_version: &'a str,
+    #[serde(flatten)]
+    proxy_version: crate::upload::api::ProxyVersion,
 }
 
 /// The answer to `POST /v1/device`. No `Debug`: it holds the device code.
@@ -180,7 +181,7 @@ pub fn approve(
                 purpose: purpose_name,
                 mode,
                 connector_id,
-                tracer_version: crate::CLI_VERSION,
+                proxy_version: crate::upload::api::ProxyVersion::current(),
             }),
         )
         .map_err(|e| match e {
@@ -250,8 +251,8 @@ pub fn approve(
                 "approved" => return finish(answer, purpose),
                 _ => {
                     return Err(CliError::Internal(
-                        "the server answered the approval poll with a status this tracker does \
-                         not know"
+                        "the server answered the approval poll with a status goalcup does not \
+                         know"
                             .into(),
                     ));
                 }
@@ -300,7 +301,7 @@ fn sleep(d: Duration) {
 
 fn bad_answer(what: &str) -> CliError {
     CliError::Internal(format!(
-        "the server's answer to the approval request is not one this tracker accepts ({what}). \
+        "the server's answer to the approval request is not one goalcup accepts ({what}). \
          Nothing was created; run the command again, and report it if it keeps happening."
     ))
 }
@@ -365,5 +366,24 @@ fn finish(answer: Polled, asked: Purpose<'_>) -> Result<Approved, CliError> {
             Ok(Approved::Run(credential))
         }
         _ => Err(bad_answer("an approval for something else than was asked")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `POST /v1/device` names this build's version under both names, with the same value.
+    #[test]
+    fn the_device_ask_sends_the_version_under_both_names() {
+        let body = serde_json::to_value(CreateBody {
+            purpose: "run",
+            mode: "practice",
+            connector_id: "c",
+            proxy_version: crate::upload::api::ProxyVersion::current(),
+        })
+        .unwrap();
+        assert_eq!(body["proxy_version"], crate::CLI_VERSION);
+        assert_eq!(body["tracer_version"], crate::CLI_VERSION);
     }
 }

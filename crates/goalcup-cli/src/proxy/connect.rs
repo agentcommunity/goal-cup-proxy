@@ -17,7 +17,10 @@
 //!   opaque by-design one. A protocol whose server speaks first cannot pass this proxy: the
 //!   wait for the client's bytes runs out at the admission deadline.
 //! - [`Admission::Failed`]: a fixed [`FailureClass`] and, once the CONNECT target parsed and
-//!   the caller authenticated, the target host.
+//!   the caller authenticated, the target host. A client that closes after the `200` for an
+//!   approved host, before its ClientHello is complete, is [`FailureClass::ClientIo`]: no
+//!   upstream connection is made and nothing is relayed, so no byte of that host went
+//!   uncaptured.
 //!
 //! This module emits no capture frames and takes no sink: whatever it reads before a
 //! decision is either replayed into the chosen path or discarded with the connection. A caller
@@ -29,8 +32,8 @@
 //! The proxy credential authorizes this local listener only. It arrives as
 //! `Proxy-Authorization: Basic base64("goalcup:<secret>")` on the CONNECT request — what a
 //! client sends for the proxy URL [`ProxyCredential::proxy_url`] returns — and is compared in
-//! constant time. The CONNECT head is never forwarded upstream, so the proxy never sends the
-//! credential to a provider. The harness can: an agent that runs `env` puts `HTTPS_PROXY` in a
+//! constant time. The CONNECT head is never forwarded upstream, so the recording proxy never sends
+//! the credential to a provider. The harness can: an agent that runs `env` puts `HTTPS_PROXY` in a
 //! request body. The daemon's shared `proxy_credential` redaction rule removes it from the
 //! trace, not from the traffic. It is never logged, hashed or retained: `Debug` impls redact it,
 //! and no outcome or error formats the request line, the target text, a header or the
@@ -319,7 +322,8 @@ pub enum TunnelReason {
     SniMismatch,
     /// The first bytes were not a TLS handshake record.
     NotTls,
-    /// The ClientHello was malformed, ended early or exceeded the inspection bound.
+    /// The ClientHello was malformed or exceeded the inspection bound (or, to a host that is
+    /// not approved, the client closed before completing it).
     ClientHelloUnparsed,
 }
 
@@ -414,8 +418,9 @@ pub async fn admit<S: AsyncIo + 'static>(inbound: S, config: &AdmissionConfig) -
 
 /// [`admit`], calling `on_tunnel` with the reason at the moment a tunnel is decided, before the
 /// first byte of it is relayed. The tunnel runs inside this future until both directions close,
-/// so a caller that must act when an uncaptured relay *begins* (the proxy chains it as a loss)
-/// cannot wait for the return value: a task cancelled or panicking mid-tunnel never gets there.
+/// so a caller that must act when an uncaptured relay *begins* (the recording proxy chains it as a
+/// loss) cannot wait for the return value: a task cancelled or panicking mid-tunnel never gets
+/// there.
 pub(crate) async fn admit_observed<S: AsyncIo + 'static>(
     inbound: S,
     config: &AdmissionConfig,
@@ -549,6 +554,9 @@ async fn negotiate<S: AsyncIo + 'static>(
         HelloParse::Sni(None) => TunnelReason::SniAbsent,
         HelloParse::NotTls => TunnelReason::NotTls,
         HelloParse::NeedMore | HelloParse::Malformed => TunnelReason::ClientHelloUnparsed,
+        // Nothing of the host's traffic exists to relay: a client failure, not a fail-open
+        // tunnel, and no upstream connection is opened for it.
+        HelloParse::Closed => return Decision::Failed(FailureClass::ClientIo),
     };
     match connect_upstream(&target, config, connect_until).await {
         Ok(upstream) => Decision::Tunnel {
@@ -1002,7 +1010,8 @@ fn set_upstream_keepalive(stream: &TcpStream) {
 
 /// Reads until the ClientHello is complete (or cannot be), into at most
 /// [`MAX_CLIENT_HELLO_PEEK_BYTES`]. Returns every byte read — `prefix` included — so the
-/// chosen path can replay them.
+/// chosen path can replay them. A client that closes (EOF) before the ClientHello is complete
+/// yields [`HelloParse::Closed`]; one that fills the bound without completing it, `NeedMore`.
 async fn peek_client_hello<S: AsyncIo>(
     inbound: &mut S,
     mut buf: Vec<u8>,
@@ -1016,7 +1025,7 @@ async fn peek_client_hello<S: AsyncIo>(
         let room = (MAX_CLIENT_HELLO_PEEK_BYTES - buf.len()).min(chunk.len());
         let n = inbound.read(&mut chunk[..room]).await?;
         if n == 0 {
-            return Ok((buf, HelloParse::NeedMore));
+            return Ok((buf, HelloParse::Closed));
         }
         buf.extend_from_slice(&chunk[..n]);
     }
@@ -1025,8 +1034,10 @@ async fn peek_client_hello<S: AsyncIo>(
 /// What the bytes so far say about the ClientHello.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum HelloParse {
-    /// Not enough bytes yet (or, once returned from the peek, never enough).
+    /// Not enough bytes yet (or, once returned from the peek, the inspection bound was reached).
     NeedMore,
+    /// Returned only by the peek: the client closed before the ClientHello was complete.
+    Closed,
     /// The first record is not a TLS handshake record.
     NotTls,
     /// A TLS handshake that is not a well-formed ClientHello.

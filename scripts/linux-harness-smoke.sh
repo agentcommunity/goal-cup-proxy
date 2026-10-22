@@ -6,10 +6,9 @@
 # with a never-logged-in home must launch it, stop at auth, seal and verify (exit 0), and leave
 # no process named codex or claude running (so run it where no other one runs, as
 # linux-check.sh's container does). Nothing here signs in; no model reply is expected.
-# `goalcup start` is driven the way the connector's manifest says: a headless connector gets
-# `--goal-file`; a chat-mode connector (`[capture] interactive = true`) gets none and a terminal
-# of its own, where the smoke types one prompt, waits, then hangs the terminal up, as a
-# participant closing the window does (the run still seals).
+# Every connector is chat mode (D57): `goalcup start` gets a terminal of its own, where the
+# smoke types one prompt, waits, then hangs the terminal up, as a participant closing the window
+# does (the run still seals).
 # Needs: Linux, goalcup, goalcup-daemon and goalcup-verify on PATH, GOALCUP_CONNECTORS_DIR set
 # when the binaries are not beside a connectors/ directory, TMPDIR on ext4 or XFS, curl,
 # sha256sum, pgrep, python3 (3.11 or newer: tomllib, pty), and network (the npm registry, and `goalcup start` checks the provider host
@@ -72,17 +71,6 @@ connectors_dir() {
             return
         fi
     done
-}
-
-# Prints `chat` for a connector whose manifest says `[capture] interactive = true`, else `headless`.
-mode_of() {
-    python3 - "$(connectors_dir)/$1/harness.toml" <<'PY'
-import sys, tomllib
-
-with open(sys.argv[1], "rb") as f:
-    manifest = tomllib.load(f)
-print("chat" if manifest.get("capture", {}).get("interactive", False) else "headless")
-PY
 }
 
 # Runs `goalcup start` of a chat-mode connector on a terminal of its own: waits for the launch
@@ -214,28 +202,19 @@ smoke() {
     }
     echo "harness smoke: $h version: $(run "$prog" --version 2>/dev/null | head -n 1)"
     run goalcup doctor --harness "$h" || fail "$h doctor"
-    mode=$(mode_of "$h") || fail "$h manifest ($(connectors_dir)/$h/harness.toml)"
-    echo "harness smoke: $h start ($mode)"
+    [ -f "$(connectors_dir)/$h/harness.toml" ] || fail "$h manifest ($(connectors_dir)/$h/harness.toml)"
+    echo "harness smoke: $h start (chat)"
     # The run holds its 3 GiB reservation and wants 1 GiB more free (linux-check gives the ext4
     # volume 8 GiB for this). `timeout` bounds a harness that keeps retrying. `goalcup start`
     # exits 0 once the run seals, whatever the harness's own exit code.
-    case $mode in
-    chat)
-        write_chat_driver
-        # The run's workspace is made in the current directory, which must not be inside a Git
-        # worktree (a CI checkout is one), so start from the empty goal directory.
-        (
-            cd "$d/goal" &&
-                run timeout 900 python3 "$work/chat_driver.py" "$d/tty.out" \
-                    goalcup start --harness "$h" >"$d/start.out" 2>&1
-        )
-        ;;
-    *)
-        echo "Print the word hello." >"$d/goal/goal.txt"
-        run timeout 600 goalcup start --harness "$h" --goal-file "$d/goal/goal.txt" \
-            >"$d/start.out" 2>&1
-        ;;
-    esac
+    write_chat_driver
+    # The run's workspace is made in the current directory, which must not be inside a Git
+    # worktree (a CI checkout is one), so start from the empty goal directory.
+    (
+        cd "$d/goal" &&
+            run timeout 900 python3 "$work/chat_driver.py" "$d/tty.out" \
+                goalcup start --harness "$h" >"$d/start.out" 2>&1
+    )
     rc=$?
     cat "$d/start.out"
     echo "harness smoke: $h start exit $rc"

@@ -3,27 +3,27 @@
 //! binaries, with one stand-in (`fixtures/connector-stand-in.sh`) installed as its program.
 //!
 //! The stand-in knows no harness. The runner derives everything it needs from the connector's
-//! own `harness.toml`: chat mode or headless, its version probe, the session file its first
-//! native source finds, its goal-cup skill folder, its CA variables and its identity line. So a
-//! new connector folder is run here with no edit. The connector directory is copied byte for
+//! own `harness.toml`: its version probe, the session file its first native source finds, its
+//! goal-cup skill folder and its CA variables. Every connector runs in chat mode (D57) on a
+//! terminal of its own. So a new connector folder is run here with no edit. The connector directory is copied byte for
 //! byte, so it loads as the pinned one without `--dev`; the provider-host probe is skipped
 //! (`GOALCUP_TEST_OFFLINE_UPSTREAMS`), so no provider is reached and nothing goes over the wire.
 //! The static half is `tests/it/connector_contract.rs`.
 
 use crate::common::m2_cli_support::OnPty;
-use crate::common::m2_vertical_support::{self, GOAL, RESERVE, Vertical};
+use crate::common::m2_vertical_support::{self, RESERVE, Vertical};
 use crate::common::real_home_guard::with_real_home_guard;
 use crate::common::secret_support::KEY;
 use crate::common::support;
 
 use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
 use goalcup_protocol::capture_policy::SHARED_CA_ENV;
-use goalcup_protocol::harness::{CaptureSpec, IdGrammar, IdentitySource, Origin};
+use goalcup_protocol::harness::{CaptureSpec, Origin};
 use goalcup_protocol::pins::shipped_connector_ids;
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 /// What a chat-mode run's participant types.
 const PROMPT: &str = "hello";
@@ -31,14 +31,6 @@ const PROMPT: &str = "hello";
 /// `text` as one single-quoted shell word.
 fn sh_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
-}
-
-/// The session id the stand-in reports, in the connector's identity grammar.
-fn session_id(c: &CaptureSpec) -> &'static str {
-    match c.identity.grammar {
-        Some(IdGrammar::TimestampHex) => "20261016_120000_abcdef",
-        _ => "kit-session-0001",
-    }
 }
 
 /// The connector's `capture.configure` commands, one per line, each argument list joined by
@@ -51,46 +43,9 @@ fn configure_lines(c: &CaptureSpec) -> String {
         .join("\n")
 }
 
-/// The preassigned id's argument and prefix. Render with control-byte sentinels (which a
-/// manifest cannot contain) so escaped braces stay literal, and a workspace in the prefix
-/// becomes the child's actual working directory without evaluating any connector text.
-fn preassigned_arg(c: &CaptureSpec) -> (usize, String) {
-    if c.identity.source != IdentitySource::Preassigned {
-        return (0, sh_quote(""));
-    }
-    let mut vars = goalcup_protocol::template::TemplateVars::new();
-    vars.set("session_id", "\x01");
-    vars.set("workspace", "\x02");
-    let (index, rendered) = c
-        .args
-        .iter()
-        .enumerate()
-        .map(|(index, arg)| {
-            (
-                index,
-                goalcup_protocol::template::render(arg, &vars).unwrap(),
-            )
-        })
-        .find(|(_, rendered)| rendered.contains('\x01'))
-        .expect("a preassigned connector passes its session id in args");
-    let prefix = rendered.split_once('\x01').unwrap().0;
-    let shell_prefix = prefix
-        .split('\x02')
-        .map(sh_quote)
-        .collect::<Vec<_>>()
-        .join("\"${PWD}\"");
-    (index + 1, shell_prefix)
-}
-
 /// The stand-in's variables, as shell assignments, derived from the connector alone.
 fn stand_in_header(c: &CaptureSpec, out: &Path) -> String {
     let config_home = format!("${{{}}}", c.home.env.as_deref().unwrap_or("HOME"));
-    let sid = if c.identity.source == IdentitySource::Preassigned {
-        "{id}"
-    } else {
-        session_id(c)
-    };
-    let (session_arg, session_prefix) = preassigned_arg(c);
     let native = c
         .native
         .first()
@@ -99,97 +54,38 @@ fn stand_in_header(c: &CaptureSpec, out: &Path) -> String {
         .root
         .replace("{config_home}", &config_home)
         .replace("{run_home}", "${HOME}");
-    let pattern = native
-        .pattern
-        .replace('*', "kit")
-        .replace('?', "k")
-        .replace("{id}", sid);
+    let pattern = native.pattern.replace('*', "kit").replace('?', "k");
     let skills = c
         .home
         .skills_dir
         .as_ref()
         .map(|dir| format!("{config_home}/{dir}/goal-cup"))
         .unwrap_or_default();
-    let identity = &c.identity;
-    let (stream, line) = match identity.source {
-        IdentitySource::None | IdentitySource::Preassigned => ("", String::new()),
-        IdentitySource::StderrLine => (
-            "stderr",
-            format!("{}{sid}", identity.prefix.as_deref().unwrap_or("")),
-        ),
-        IdentitySource::StdoutJson => {
-            let mut event = serde_json::Value::Null;
-            for (path, value) in [
-                (
-                    identity.match_field.as_deref(),
-                    identity.match_value.as_deref(),
-                ),
-                (identity.id_field.as_deref(), Some(sid)),
-            ] {
-                let mut at = &mut event;
-                for part in path
-                    .expect("a stdout_json identity names its fields")
-                    .split('.')
-                {
-                    if !at.is_object() {
-                        *at = serde_json::json!({});
-                    }
-                    at = at
-                        .as_object_mut()
-                        .unwrap()
-                        .entry(part)
-                        .or_insert(serde_json::Value::Null);
-                }
-                *at = serde_json::json!(value.expect("and the value it matches"));
-            }
-            ("stdout", event.to_string())
-        }
-        other => panic!(
-            "the connector stand-in does not speak `{other:?}` identity yet: add it to \
-             fixtures/connector-stand-in.sh and here"
-        ),
-    };
-    let mode = if c.interactive { "chat" } else { "headless" };
     format!(
-        "KIT_OUT={out}\nKIT_MODE={mode}\nKIT_VERSION_ARGV={version}\n\
+        "KIT_OUT={out}\nKIT_VERSION_ARGV={version}\n\
          KIT_NATIVE_FILE=\"{root}/{pattern}\"\nKIT_SKILLS_DIR=\"{skills}\"\nKIT_CA_VARS={ca}\n\
-         KIT_ID_STREAM={stream}\nKIT_ID_LINE={line}\nKIT_CONFIGURE={configure}\n\
-         KIT_SESSION_ARG={session_arg}\nKIT_SESSION_PREFIX={session_prefix}\n\
-         export KIT_OUT KIT_MODE KIT_VERSION_ARGV KIT_NATIVE_FILE KIT_SKILLS_DIR KIT_CA_VARS \
-         KIT_ID_STREAM KIT_ID_LINE KIT_CONFIGURE KIT_SESSION_ARG KIT_SESSION_PREFIX\n",
+         KIT_CONFIGURE={configure}\n\
+         export KIT_OUT KIT_VERSION_ARGV KIT_NATIVE_FILE KIT_SKILLS_DIR KIT_CA_VARS \
+         KIT_CONFIGURE\n",
         out = sh_quote(&out.display().to_string()),
         version = sh_quote(&c.executable.version_args.join(" ")),
         ca = sh_quote(&c.ca.env.join(" ")),
-        line = sh_quote(&line),
         configure = sh_quote(&configure_lines(c)),
     )
 }
 
 /// One connector, run the way a participant runs it, and judged.
 fn run_connector(id: &str) {
-    run_connector_case(id, None);
-}
-
-/// A connector folder supplied in memory is staged as an unpinned test connector. The same
-/// runner and stand-in judge it; the shipped path continues to require its compiled pin.
-fn run_connector_case(id: &str, synthetic: Option<&str>) -> ConnectorRun {
     let world = Vertical::new("plain", serde_json::json!({}));
     // The world's development workload goes: without `--dev` every connector in the directory
     // is held to the pinned rules, and that one is a development connector.
     std::fs::remove_dir_all(world.connectors.join(m2_vertical_support::CONNECTOR)).unwrap();
     let connector_dir = world.connectors.join(id);
-    let digest = if let Some(text) = synthetic {
-        std::fs::create_dir(&connector_dir).unwrap();
-        std::fs::write(connector_dir.join("harness.toml"), text).unwrap();
-        goalcup_protocol::connector_dir::connector_dir_sha256(&connector_dir).unwrap()
-    } else {
-        support::copy_tree(&support::connectors_dir().join(id), &connector_dir);
-        let pinned = goalcup_protocol::pins::pinned_connector_dir_sha256(id)
-            .expect("a shipped connector is pinned");
-        let digest = goalcup_protocol::connector_dir::connector_dir_sha256(&connector_dir).unwrap();
-        assert_eq!(digest, pinned, "{id}: the copy is the pinned directory");
-        digest
-    };
+    support::copy_tree(&support::connectors_dir().join(id), &connector_dir);
+    let pinned = goalcup_protocol::pins::pinned_connector_dir_sha256(id)
+        .expect("a shipped connector is pinned");
+    let digest = goalcup_protocol::connector_dir::connector_dir_sha256(&connector_dir).unwrap();
+    assert_eq!(digest, pinned, "{id}: the copy is the pinned directory");
     let manifest = goalcup_protocol::harness::load_dir(&connector_dir, Origin::Pinned)
         .expect("the connector recipe validates as pinned data")
         .manifest;
@@ -197,18 +93,14 @@ fn run_connector_case(id: &str, synthetic: Option<&str>) -> ConnectorRun {
 
     // The stand-in, under the connector's program name. A chat-mode harness gets the
     // participant's PATH, so it starts as an npm harness does, `#!/usr/bin/env node` with the
-    // `node` beside it; a headless one gets the launch's fixed PATH, so it is a plain script.
+    // `node` beside it.
     let out = world.root.join("kit-out");
     let bin = world.root.join("participant-bin");
     std::fs::create_dir_all(&out).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
     let body = std::fs::read_to_string(support::fixture("connector-stand-in.sh")).unwrap();
     let (_, body) = body.split_once('\n').unwrap();
-    let shebang = if c.interactive {
-        "#!/usr/bin/env node"
-    } else {
-        "#!/bin/sh"
-    };
+    let shebang = "#!/usr/bin/env node";
     let program = bin.join(&c.executable.program);
     std::fs::write(
         &program,
@@ -257,38 +149,18 @@ fn run_connector_case(id: &str, synthetic: Option<&str>) -> ConnectorRun {
     for name in ["DEEPSEEK_API_KEY", "AMP_API_KEY", "OPENAI_API_KEY"] {
         command.env(name, KEY);
     }
-    if synthetic.is_some() {
-        command.arg("--dev");
-    }
-    if c.interactive {
-        let mut run = OnPty::spawn(command, None);
-        run.wait_shown("kit: ready");
-        run.type_line(PROMPT);
-        run.wait_shown(&format!("kit: noted {PROMPT}"));
-        run.type_line("/exit");
-        let status = run.wait();
-        assert!(status.success(), "{id}: {status:?}\n{}", run.shown());
-        assert!(
-            !run.shown().contains("kit: configured"),
-            "{id}: a configure command printed on the participant's terminal\n{}",
-            run.shown()
-        );
-    } else {
-        use std::os::unix::process::CommandExt;
-        let output = command
-            .arg("--goal-file")
-            .arg(&world.goal)
-            .stdin(Stdio::null())
-            .process_group(0)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{id}: {}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
+    let mut run = OnPty::spawn(command, None);
+    run.wait_shown("kit: ready");
+    run.type_line(PROMPT);
+    run.wait_shown(&format!("kit: noted {PROMPT}"));
+    run.type_line("/exit");
+    let status = run.wait();
+    assert!(status.success(), "{id}: {status:?}\n{}", run.shown());
+    assert!(
+        !run.shown().contains("kit: configured"),
+        "{id}: a configure command printed on the participant's terminal\n{}",
+        run.shown()
+    );
 
     // What the harness was started with.
     let report = |name: &str| std::fs::read_to_string(out.join(name)).unwrap_or_default();
@@ -323,8 +195,7 @@ fn run_connector_case(id: &str, synthetic: Option<&str>) -> ConnectorRun {
             );
         }
     }
-    let tty = if c.interactive { "tty" } else { "not-a-tty" };
-    assert_eq!(report("stdin").trim(), tty, "{id}");
+    assert_eq!(report("stdin").trim(), "tty", "{id}");
     assert_eq!(
         report("skills").trim(),
         if c.home.skills_dir.is_some() {
@@ -355,12 +226,11 @@ fn run_connector_case(id: &str, synthetic: Option<&str>) -> ConnectorRun {
             .any(|k| k.to_ascii_uppercase().ends_with("_BASE_URL")),
         "{id}: D1, no model base URL: {env:?}"
     );
-    let chat_only = if c.interactive {
-        Some("xterm-256color")
-    } else {
-        None
-    };
-    assert_eq!(env.get("TERM").map(String::as_str), chat_only, "{id}");
+    assert_eq!(
+        env.get("TERM").map(String::as_str),
+        Some("xterm-256color"),
+        "{id}"
+    );
     let argv = report("argv");
     assert!(
         env.values().all(|v| !v.contains(KEY)),
@@ -368,7 +238,8 @@ fn run_connector_case(id: &str, synthetic: Option<&str>) -> ConnectorRun {
     );
     assert!(!argv.contains(KEY), "{id}: the key is in no argument");
     // `goalcup start` hands each CA variable the file its row names (D41): a harness's own
-    // variable the proxy's CA alone, a shared row the proxy's CA and the system's roots.
+    // variable the recording proxy's CA alone, a shared row the recording proxy's CA and the
+    // system's roots.
     for name in &c.ca.env {
         let file = std::fs::read(out.join(format!("ca-{name}")))
             .unwrap_or_else(|e| panic!("{id}: the file `{name}` names: {e}"));
@@ -380,15 +251,13 @@ fn run_connector_case(id: &str, synthetic: Option<&str>) -> ConnectorRun {
         }
     }
 
-    // The argv is the manifest's `args`, rendered for this run's workspace; a headless run
-    // places its goal after them, as one element.
+    // The argv is the manifest's `args`, rendered for this run's workspace, and nothing more.
     let entry = world.entry_id();
     let entry_record =
         goalcup_cli::entries::read_entry(&world.cfg, &entry).expect("the run's entry record");
     let workspace = entry_record.workspace;
     let mut vars = goalcup_protocol::template::TemplateVars::new();
     vars.set("workspace", workspace.clone());
-    vars.set("session_id", entry_record.session_id.clone());
     let want: Vec<String> = c
         .args
         .iter()
@@ -400,17 +269,7 @@ fn run_connector_case(id: &str, synthetic: Option<&str>) -> ConnectorRun {
         want.as_slice(),
         "{id}: the args"
     );
-    let goal = std::fs::read_to_string(&world.goal).unwrap();
-    if c.interactive {
-        assert_eq!(got.len(), want.len(), "{id}: the args alone");
-    } else {
-        let rest = &got[want.len()..];
-        assert_eq!(
-            rest.iter().filter(|a| a.contains(goal.trim())).count(),
-            1,
-            "{id}: one element holds the goal: {rest:?}"
-        );
-    }
+    assert_eq!(got.len(), want.len(), "{id}: the args alone");
 
     // The chain: the pinned connector bound in `Launch`, one goal stream, the session file.
     let chain = world.chain(&entry);
@@ -433,114 +292,24 @@ fn run_connector_case(id: &str, synthetic: Option<&str>) -> ConnectorRun {
         .filter(|s| s.source == CaptureSource::Goal)
         .collect();
     assert_eq!(goals.len(), 1, "{id}");
-    let (want_goal, prompt) = if c.interactive {
-        (
-            goalcup_cli::commands::start::CHAT_MODE_GOAL.to_string(),
-            PROMPT,
-        )
-    } else {
-        (goal.clone(), GOAL)
-    };
-    assert_eq!(goals[0].data, want_goal.as_bytes(), "{id}: the goal stream");
+    assert_eq!(
+        goals[0].data,
+        goalcup_cli::commands::start::CHAT_MODE_GOAL.as_bytes(),
+        "{id}: the goal stream"
+    );
     let native: Vec<u8> = streams
         .values()
         .filter(|s| s.source == CaptureSource::Native)
         .flat_map(|s| s.data.clone())
         .collect();
     assert!(
-        String::from_utf8_lossy(&native).contains(prompt),
+        String::from_utf8_lossy(&native).contains(PROMPT),
         "{id}: the prompt is in the recorded session file"
     );
     let (code, integrity) = world.verify(&entry);
     assert_eq!(integrity["sealed"], true, "{id}: {integrity}");
     assert_eq!(integrity["integrity"], "valid", "{id}: {integrity}");
     assert_eq!(code, 0, "{id}: {integrity}");
-    ConnectorRun {
-        session_id: entry_record.session_id,
-        argv: got.iter().map(|arg| (*arg).to_string()).collect(),
-        native_labels: streams
-            .values()
-            .filter(|stream| stream.source == CaptureSource::Native)
-            .map(|stream| stream.meta.label.clone())
-            .collect(),
-    }
-}
-
-struct ConnectorRun {
-    session_id: String,
-    argv: Vec<String>,
-    native_labels: Vec<String>,
-}
-
-/// Both public argv forms must place the id minted by `goalcup start` in the stand-in's
-/// native filename, so the daemon's preassigned binding records the file rather than a decoy.
-fn run_preassigned_case(equals: bool) {
-    let id = "contract-preassigned";
-    let args = if equals {
-        r#"["--session-id={session_id}", "--"]"#
-    } else {
-        r#"["--session-id", "{session_id}", "--"]"#
-    };
-    let manifest = format!(
-        r#"
-schema_version = 1
-id = "{id}"
-[capture]
-args = {args}
-continuation = "one synthetic headless turn"
-[capture.executable]
-program = "contract-agent"
-[capture.home]
-run_home = "empty"
-config_home = "per_run"
-env = "CONTRACT_HOME"
-real_dirs = ["{{user_home}}/.contract"]
-[capture.ca]
-env = ["NODE_EXTRA_CA_CERTS"]
-mode = "extend"
-[capture.identity]
-source = "preassigned"
-binding = "at_launch"
-[[capture.native]]
-name = "session"
-root = "{{config_home}}/sessions"
-pattern = "session-{{id}}.jsonl"
-form = "append_only"
-[[capture.hosts]]
-host = "models.example.test"
-evidence_paths = ["/v1/echo"]
-"#
-    );
-    with_real_home_guard(|| {
-        let run = run_connector_case(id, Some(&manifest));
-        assert_eq!(run.session_id.len(), 36, "start minted a UUID");
-        assert_ne!(run.session_id, "kit-session-0001");
-        let mut expected = if equals {
-            vec![format!("--session-id={}", run.session_id)]
-        } else {
-            vec!["--session-id".into(), run.session_id.clone()]
-        };
-        expected.extend(["--".into(), GOAL.into()]);
-        assert_eq!(
-            run.argv, expected,
-            "the child received the minted id in argv"
-        );
-        assert_eq!(
-            run.native_labels,
-            [format!("session:session-{}.jsonl#g1", run.session_id)],
-            "the actual stand-in file was captured under that same minted id"
-        );
-    });
-}
-
-#[test]
-fn connector_contract_preassigned_token_uses_minted_id() {
-    run_preassigned_case(false);
-}
-
-#[test]
-fn connector_contract_preassigned_equals_uses_minted_id() {
-    run_preassigned_case(true);
 }
 
 /// Every connector folder passes one participant-shaped run with no case of its own: it loads

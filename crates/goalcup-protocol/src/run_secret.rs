@@ -1,6 +1,6 @@
 //! A run's own exact secret values and the byte forms they take (D60).
 //!
-//! The tracer hands a harness one secret of its own, which it knows exactly: the per-run proxy
+//! Goal Cup Proxy hands a harness one secret of its own, which it knows exactly: the per-run proxy
 //! credential in `HTTPS_PROXY` (H8). It never handles a participant's API key: the harness holds
 //! that in its own config. The launcher passes the proxy credential to the daemon on the capture
 //! create ([`crate::control::CaptureWorkspaceRequest::run_secrets`]), in memory only, and the

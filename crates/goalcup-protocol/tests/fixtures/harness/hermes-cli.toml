@@ -3,9 +3,9 @@ schema_version = 1
 id = "hermes-cli"
 
 [capture]
-# hermes chat -Q --provider deepseek --model deepseek-v4-flash --query=<goal>
+interactive = true
+# hermes chat -Q --provider deepseek --model deepseek-v4-flash (the frozen headless recipe, now chat mode)
 args = ["chat", "-Q", "--provider", "deepseek", "--model", "deepseek-v4-flash"]
-goal_flag = "--query"
 # Hermes's own switches (HERMES_SAFE_MODE, HERMES_IGNORE_USER_CONFIG) would silently stop the
 # session snapshot; `capture.env` may set none of them.
 reserved_env_prefixes = ["HERMES_"]
@@ -35,16 +35,13 @@ env = ["HERMES_CA_BUNDLE"]
 mode = "replace"
 
 [capture.identity]
-source = "stderr_line"
-binding = "deferred"
-prefix = "session_id: "
-grammar = "timestamp-hex"
+source = "none"
 
 # Only the run's own snapshot; never a request_dump_* file (D41). No decoder yet.
 [[capture.native]]
 name = "session"
 root = "{config_home}/sessions"
-pattern = "session_{id}.json"
+pattern = "session_*.json"
 form = "snapshot"
 
 # Hermes scans raw argv for -p/--profile, --tui, --cli and -h before argparse, which abbreviates.

@@ -1,4 +1,5 @@
-//! Upstream outage windows: when the proxy could not reach an upstream, and when it could again.
+//! Upstream outage windows: when the recording proxy could not reach an upstream, and when it could
+//! again.
 //!
 //! Only provider hosts count (approved and authentication hosts; a host that is not approved is
 //! the agent's own traffic). An admission whose upstream TCP connect failed after every retry
@@ -20,7 +21,7 @@ use std::sync::Mutex;
 /// counted in [`super::ProxyHealth::upstream_outages`].
 pub(crate) const MAX_KEPT_OUTAGE_WINDOWS: usize = 32;
 
-/// One stretch of failed upstream connects, coalesced. Times are the proxy's wall clock
+/// One stretch of failed upstream connects, coalesced. Times are the recording proxy's wall clock
 /// (RFC 3339 UTC, nanoseconds), as every capture observation's `wall`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutageWindow {
@@ -29,7 +30,7 @@ pub struct OutageWindow {
     /// Admissions whose upstream connect failed in this window.
     pub failures: u64,
     /// The first upstream connect that succeeded after the window began; `None` while the
-    /// outage lasts (or if it lasted until the proxy stopped).
+    /// outage lasts (or if it lasted until the recording proxy stopped).
     pub recovered: Option<String>,
 }
 
@@ -131,7 +132,7 @@ pub(crate) fn finish_lines(total: u64, windows: &[OutageWindow]) -> Vec<String> 
         let s = if w.failures == 1 { "" } else { "s" };
         let end = match &w.recovered {
             Some(at) => format!("recovered {at}"),
-            None => "not recovered when the proxy stopped".to_string(),
+            None => "not recovered when the recording proxy stopped".to_string(),
         };
         lines.push(format!(
             "proxy upstream outage: {} to {}, {} failed connect{s}, {end}",
@@ -240,8 +241,8 @@ mod tests {
             vec![
                 "proxy upstream outage: 1 earlier window not listed".to_string(),
                 "proxy upstream outage: t1 to t3, 3 failed connects, recovered t4".to_string(),
-                "proxy upstream outage: t6 to t6, 1 failed connect, not recovered when the proxy \
-                 stopped"
+                "proxy upstream outage: t6 to t6, 1 failed connect, not recovered when the \
+                 recording proxy stopped"
                     .to_string(),
             ]
         );

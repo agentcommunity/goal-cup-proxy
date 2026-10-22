@@ -14,19 +14,19 @@ fn opts(harness: Option<&str>) -> DoctorOptions {
     }
 }
 
-/// `start` of a headless connector (the `headless-per-run` fixture): a `--goal-file` start
-/// reaches the launch's own checks. With its harness not installed it refuses before the daemon
-/// is asked for anything, so no capture workspace or reserved chain is left behind. A provider
-/// key in the environment changes nothing and is never repeated.
+/// `start` of a fixture connector (`chat-per-run`) reaches the launch's own checks. With its
+/// harness not installed it refuses before the daemon is asked for anything, so no capture
+/// workspace or reserved chain is left behind. A provider key in the environment changes
+/// nothing and is never repeated.
 #[test]
-fn a_goal_file_start_of_a_headless_connector_refuses_before_the_daemon() {
+fn a_start_with_no_harness_installed_refuses_before_the_daemon() {
     const KEY: &str = crate::common::secret_support::KEY;
+    // This process has no terminal to hand the harness; the check under test comes after it.
+    goalcup_cli::set_chat_without_terminal(true);
     let tmp = tempfile::tempdir().unwrap();
-    let m = support::mock_armed(&tmp, "headless-per-run");
-    let goal = tmp.path().join("goal.txt");
-    std::fs::write(&goal, "write result.txt").unwrap();
-    let mut o = support::start_options("headless-per-run");
-    o.goal_file = Some(goal);
+    let m = support::mock_armed(&tmp, "chat-per-run");
+    let mut o = support::start_options("chat-per-run");
+    o.run_folder = Some(tmp.path().to_path_buf());
     o.dev = true;
     let mut env = support::clean_env_with_no_harness_installed();
     env.insert("DEEPSEEK_API_KEY".to_string(), KEY.to_string());

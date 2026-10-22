@@ -448,7 +448,7 @@ mod retries {
         /// newer start replaced.
         stop_reason: Arc<Mutex<Option<Option<String>>>>,
         /// How many final heartbeats still have their answer lost: the stand-in stores them,
-        /// and the tracer is answered `503`.
+        /// and goalcup is answered `503`.
         lose_finals: Arc<Mutex<u32>>,
         /// Seconds added to every `official_start` and `deadline_at` the server answers: how the
         /// server's times look from a machine whose date is this far behind the server's.
@@ -687,7 +687,7 @@ mod retries {
                 workspace: "/nowhere".into(),
                 session_id: "00000000-0000-4000-8000-000000000001".into(),
                 harness_version: "1".into(),
-                tracer_version: "0.1.0".into(),
+                proxy_version: "0.1.0".into(),
                 repo_url: "https://github.com/goal-cup/demo".into(),
                 machine: None,
             };
@@ -880,12 +880,14 @@ mod retries {
             std::slice::from_ref(&entry),
             &|_| acknowledged,
             t0,
+            false,
             &mut |_| {},
         );
         pruner.sweep(
             std::slice::from_ref(&entry),
             &|_| acknowledged,
             t0 + Duration::from_secs(3 * 3600),
+            false,
             &mut |_| {},
         );
         goalcup_protocol::export::chain_parts(&entry.trace_dir)
@@ -941,17 +943,111 @@ mod retries {
         assert_eq!(sweep_far_ahead(&run, uploader.acknowledged()), 2);
     }
 
+    /// The chain the server holds for the run, its chunks decompressed and joined in order,
+    /// with no hole and no overlap between them.
+    fn server_copy(run: &Run) -> Vec<u8> {
+        let mut chunks = run.server.chunks(&run.record.run_id);
+        chunks.sort_by_key(|c| c.offset);
+        let mut joined = Vec::new();
+        for chunk in chunks {
+            assert_eq!(chunk.offset, joined.len() as u64, "a hole or an overlap");
+            let body = std::fs::read(&chunk.body_path).unwrap();
+            joined.extend_from_slice(&zstd::decode_all(body.as_slice()).unwrap());
+        }
+        joined
+    }
+
+    /// The trace's chain grown to `n` records at once (renamed into place), as the daemon's
+    /// appends would have grown it: the uploader and the heartbeats never read half of it.
+    fn grow(trace: &std::path::Path, n: u64) {
+        let next = trace.parent().unwrap().join("next-chain");
+        std::fs::write(&next, chain(n).0).unwrap();
+        std::fs::rename(&next, trace.join("chain.jsonl")).unwrap();
+    }
+
+    /// D64: a bad deploy answers every call `401`, `404`, `410` or `500` for a while. The run is
+    /// never stopped for it, and keeps recording; once the server answers again the upload goes
+    /// on by itself, and the wrap-up after the stop keeps asking through the same refusals. In
+    /// the end the server holds every record exactly once, and the seal.
     #[test]
-    fn a_401_ends_the_upload_at_once() {
-        let run = Run::new(Box::new(|label| is_chunk(label).then_some(401)));
-        let (report, _, took) = finish(&run, Duration::from_secs(20));
-        assert!(!report.caught_up && !report.sealed, "{report:?}");
-        assert!(
-            report.why.as_deref().unwrap_or("").contains("401"),
-            "{report:?}"
+    fn a_server_refusing_every_call_for_a_while_never_stops_the_run_and_gets_every_record_once() {
+        use std::sync::atomic::AtomicU8;
+        // 0: every call refused; 1: all but `GET`; 2: none; 3: the next `left` calls refused.
+        let mode = Arc::new(AtomicU8::new(0));
+        let left = Arc::new(Mutex::new(0u32));
+        let statuses = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+        let (mode_in, left_in, statuses_in) = (mode.clone(), left.clone(), statuses.clone());
+        let mut turn = 0usize;
+        let run = Run::new(Box::new(move |label| {
+            let refuse = match mode_in.load(Ordering::SeqCst) {
+                0 => true,
+                1 => !label.starts_with("GET"),
+                2 => false,
+                _ => {
+                    let mut left = left_in.lock().unwrap();
+                    let refuse = *left > 0;
+                    *left = left.saturating_sub(1);
+                    refuse
+                }
+            };
+            refuse.then(|| {
+                let status = [401, 404, 410, 500][turn % 4];
+                turn += 1;
+                statuses_in.lock().unwrap().insert(status);
+                status
+            })
+        }));
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        let vitals = RunSignals::default();
+        let (running, stopped) = start_beating(&run, vitals.clone());
+        let not_stopped = |when: &str| {
+            assert!(
+                stopped.try_recv().is_err(),
+                "the run was stopped {when}: the server's errors must never stop it"
+            );
+        };
+
+        // The server's position and the heartbeats refused.
+        wait_for("refused positions and heartbeats", || {
+            (run.front.count("GET /v1/runs/") >= 3 && run.front.count("POST /v1/runs/") >= 4)
+                .then_some(())
+        });
+        not_stopped("while every call was refused");
+        // Chunks refused too, while the agent goes on and the chain grows.
+        mode.store(1, Ordering::SeqCst);
+        grow(&trace, 6);
+        wait_for("refused chunks", || {
+            (run.front.count("PUT /v1/runs/") >= 4).then_some(())
+        });
+        not_stopped("while every chunk was refused");
+        assert_eq!(
+            *statuses.lock().unwrap(),
+            [401, 404, 410, 500].into_iter().collect(),
+            "every status was answered"
         );
-        assert_eq!(run.front.count("PUT /v1/runs/"), 1, "asked once, not again");
-        assert!(took < Duration::from_secs(5), "{took:?}");
+        assert!(run.server.chunks(&run.record.run_id).is_empty());
+
+        // The server is fixed: the upload goes on by itself, during the run.
+        mode.store(2, Ordering::SeqCst);
+        wait_for("the chain on the server", || {
+            (server_copy(&run) == chain(6).0).then_some(())
+        });
+        not_stopped("once the server answered");
+
+        // More recorded; the run stops, and its wrap-up meets the same refusals again.
+        grow(&trace, 8);
+        *left.lock().unwrap() = 8;
+        mode.store(3, Ordering::SeqCst);
+        let report = running.finish(WrapUp::after(Duration::from_secs(20)));
+        assert!(report.caught_up && report.sealed, "{report:?}");
+        assert_eq!(*left.lock().unwrap(), 0, "the wrap-up met the refusals");
+        assert_eq!(
+            server_copy(&run),
+            chain(8).0,
+            "every record arrived, and only once"
+        );
+        assert!(run.server.final_commit(&run.record.run_id).is_some());
+        assert!(run.server.seal(&run.record.run_id).is_some());
     }
 
     #[test]
@@ -980,7 +1076,7 @@ mod retries {
 
     // ------------------------------------------------------------- what the heartbeat says
 
-    use goalcup_cli::run::{Recording, Vitals};
+    use goalcup_cli::run::{Recording, RunSignals};
     use goalcup_cli::upload::uploader::begin;
     use std::sync::atomic::AtomicU64;
 
@@ -991,7 +1087,7 @@ mod retries {
 
     fn start_beating(
         run: &Run,
-        vitals: Vitals,
+        vitals: RunSignals,
     ) -> (
         goalcup_cli::upload::uploader::Running,
         std::sync::mpsc::Receiver<String>,
@@ -1027,7 +1123,7 @@ mod retries {
     fn the_heartbeat_carries_recording_and_model_requests() {
         let run = Run::new(Box::new(|_| None));
         let counter = Arc::new(AtomicU64::new(7));
-        let vitals = Vitals::counting(counter.clone());
+        let vitals = RunSignals::counting(counter.clone());
         vitals.set_recording(Recording::Gaps);
         let (running, _stopped) = start_beating(&run, vitals.clone());
         let id = run.record.run_id.clone();
@@ -1043,17 +1139,83 @@ mod retries {
                 .then_some(())
         };
         wait_for("a heartbeat saying gaps and 7", || said("gaps", 7));
-        // What the tick and the proxy learn later is what the next heartbeat says.
+        // What the tick and the recording proxy learn later is what the next heartbeat says.
         vitals.set_recording(Recording::Ok);
         counter.store(10, Ordering::SeqCst);
         wait_for("a heartbeat saying ok and 10", || said("ok", 10));
         drop(running);
     }
 
+    /// A machine that answers 20 GiB free, and memory and CPU time but no open files.
+    struct Partial;
+
+    impl goalcup_cli::vitals::Reader for Partial {
+        fn disk_free(&self, _near: &std::path::Path) -> Option<u64> {
+            Some(20 << 30)
+        }
+
+        fn usage(&self, _pid: u32) -> goalcup_platform::machine::ProcessUsage {
+            goalcup_platform::machine::ProcessUsage {
+                rss_bytes: Some(80 << 20),
+                cpu_ms: Some(4_000),
+                open_files: None,
+            }
+        }
+    }
+
+    /// The heartbeat carries `vitals`: what the reader could read, and nothing it could not;
+    /// `agent_paused` is `"disk"` once the run's state says the agent is paused for the disk.
+    #[test]
+    fn the_heartbeat_carries_the_vitals_it_could_read() {
+        use goalcup_cli::run::{DiskState, RunState, StateKeeper};
+        let run = Run::new(Box::new(|_| None));
+        let run_dir = run.spool.parent().unwrap().join("runs").join("r");
+        let mut state = RunState::launched(&run.record.entry_id, Ok(()));
+        state.disk = DiskState {
+            free_bytes: 20 << 30,
+            reserve_bytes: 3 << 30,
+            low: false,
+            disk_paused: false,
+        };
+        StateKeeper::begin(&run_dir, state);
+        let probe = goalcup_cli::vitals::Probe::reading(
+            &run_dir,
+            std::path::Path::new(&run.record.trace_dir),
+            Arc::new(Partial),
+        );
+        let (running, _stopped) = start_beating(&run, RunSignals::default().probing(probe));
+        let id = run.record.run_id.clone();
+        let vitals_said = |paused: serde_json::Value| {
+            run.server
+                .heartbeats(&id)
+                .into_iter()
+                .filter_map(|h| h.vitals)
+                .find(|v| v["agent_paused"] == paused)
+        };
+        let vitals = wait_for("a heartbeat with vitals", || {
+            vitals_said(serde_json::Value::Null)
+        });
+        assert_eq!(vitals["disk_free_bytes"], 20u64 << 30, "{vitals}");
+        assert_eq!(vitals["disk_short"], false, "{vitals}");
+        assert_eq!(vitals["rss_bytes"], 80u64 << 20, "{vitals}");
+        assert_eq!(vitals["cpu_ms"], 4_000, "{vitals}");
+        assert!(vitals.get("open_files").is_none(), "{vitals}");
+        // The disk pause writes `disk.disk_paused` into the run's state (D65).
+        let path = run_dir.join(goalcup_cli::run::STATE_FILE_NAME);
+        let mut raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        raw["disk"]["disk_paused"] = true.into();
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        wait_for("a heartbeat saying the agent is paused", || {
+            vitals_said("disk".into())
+        });
+        drop(running);
+    }
+
     #[test]
     fn a_replaced_answer_stops_the_run_with_its_reason() {
         let run = Run::new(Box::new(|_| None));
-        let (running, stopped) = start_beating(&run, Vitals::default());
+        let (running, stopped) = start_beating(&run, RunSignals::default());
         // Beating along, and the server says nothing about stopping.
         wait_for("a first heartbeat", || {
             (run.front.count("POST /v1/runs/") >= 1).then_some(())
@@ -1071,7 +1233,7 @@ mod retries {
         for reason in [Some("deadline".to_string()), None] {
             let run = Run::new(Box::new(|_| None));
             *run.front.stop_reason.lock().unwrap() = Some(reason);
-            let (running, stopped) = start_beating(&run, Vitals::default());
+            let (running, stopped) = start_beating(&run, RunSignals::default());
             let said = stopped
                 .recv_timeout(Duration::from_secs(20))
                 .expect("the run was not stopped");
@@ -1120,7 +1282,7 @@ mod retries {
             workspace: "/nowhere".into(),
             session_id: "00000000-0000-4000-8000-000000000002".into(),
             harness_version: "1".into(),
-            tracer_version: "0.1.0".into(),
+            proxy_version: "0.1.0".into(),
         };
         let segment = match continue_run(&client, &run.record.run_id, &request).unwrap() {
             Continued::Segment(segment) => segment,
@@ -1150,7 +1312,7 @@ mod retries {
             run.spool.clone(),
             count,
             stop,
-            Vitals::default(),
+            RunSignals::default(),
         )
         .unwrap();
         wait_for("a heartbeat of the segment", || {
@@ -1296,7 +1458,7 @@ mod retries {
         let run = Run::new(Box::new(move |label| {
             (label.ends_with("/heartbeat") && in_fault.load(Ordering::SeqCst)).then_some(503)
         }));
-        let vitals = Vitals::default();
+        let vitals = RunSignals::default();
         let (running, stopped) = start_beating(&run, vitals.clone());
         let trouble = wait_for("three failed heartbeats", || {
             let trouble = vitals.heartbeat_trouble();
@@ -1319,33 +1481,78 @@ mod retries {
         drop(running);
     }
 
+    /// D64: a server that keeps refusing the run (`401` to its heartbeats and chunks) is named
+    /// for `goalcup status` once it has done so three times in a row, the run is not stopped,
+    /// and the problem clears once the server answers normally again.
     #[test]
-    fn a_401_or_410_on_a_heartbeat_stops_the_run_and_names_it() {
-        for status in [401, 410] {
-            let run = Run::new(Box::new(move |label| {
-                label.ends_with("/heartbeat").then_some(status)
-            }));
-            let (running, stopped) = start_beating(&run, Vitals::default());
-            let reason = stopped
-                .recv_timeout(Duration::from_secs(20))
-                .expect("the run was not stopped");
-            assert!(
-                goalcup_cli::upload::uploader::refused_run(&reason)
-                    && reason.contains(&status.to_string()),
-                "{reason}"
-            );
-            drop(running);
-        }
-        // Any other refusal is counted and asked again.
-        let run = Run::new(Box::new(|label| {
-            label.ends_with("/heartbeat").then_some(404)
+    fn a_server_refusing_the_run_is_a_problem_until_it_answers_and_never_a_stop() {
+        let refusing = Arc::new(AtomicBool::new(true));
+        let on = refusing.clone();
+        let run = Run::new(Box::new(move |label| {
+            (on.load(Ordering::SeqCst) && !label.starts_with("GET")).then_some(401)
         }));
-        let vitals = Vitals::default();
+        let trace = std::path::PathBuf::from(&run.record.trace_dir);
+        std::fs::remove_file(trace.join("seal.json")).unwrap();
+        let vitals = RunSignals::default();
+        assert_eq!(vitals.server_refusing(), None);
         let (running, stopped) = start_beating(&run, vitals.clone());
-        wait_for("failed heartbeats", || {
-            (vitals.heartbeat_trouble().failures >= 2).then_some(())
+        wait_for("the refusal to be named", || {
+            (vitals.server_refusing() == Some(401)).then_some(())
+        });
+        assert!(
+            run.front.count("POST /v1/runs/") + run.front.count("PUT /v1/runs/") >= 3,
+            "named before three refusals"
+        );
+        assert!(stopped.try_recv().is_err(), "a 401 stopped the run");
+        refusing.store(false, Ordering::SeqCst);
+        wait_for("the problem to clear", || {
+            vitals.server_refusing().is_none().then_some(())
+        });
+        wait_for("the chain on the server", || {
+            (server_copy(&run) == chain(3).0).then_some(())
         });
         assert!(stopped.try_recv().is_err());
+        drop(running);
+    }
+
+    /// The server cannot be reached from the first moment: the run still stops at its deadline,
+    /// on its own count (WP11), and nothing else stops it before then.
+    #[test]
+    fn a_run_whose_server_is_never_reached_stops_at_its_own_deadline() {
+        let run = Run::new(Box::new(|_| None));
+        let closed = {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}", listener.local_addr().unwrap())
+        };
+        let client = ServerClient::with_credential(&closed, &run.credential);
+        let (stop, stopped) = std::sync::mpsc::channel();
+        let began = Instant::now();
+        let count = goalcup_cli::upload::uploader::LocalDeadline::left_from(
+            2,
+            goalcup_protocol::clock::ContinuousOrigin::now(),
+        );
+        let vitals = RunSignals::default();
+        let running = begin(
+            client,
+            run.record.clone(),
+            run.key.clone(),
+            beating(),
+            run.spool.clone(),
+            Some(count),
+            stop,
+            vitals.clone(),
+        )
+        .unwrap();
+        let reason = stopped
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the run was not stopped at its deadline");
+        let took = began.elapsed();
+        assert!(reason.contains("by the server's count"), "{reason}");
+        assert!(
+            took >= Duration::from_millis(1900) && took < Duration::from_secs(10),
+            "stopped {took:?} into a run with 2 s left"
+        );
+        assert!(vitals.heartbeat_trouble().failures > 0, "it kept trying");
         drop(running);
     }
 
@@ -1359,7 +1566,7 @@ mod retries {
             }
             None
         }));
-        let (running, _stopped) = start_beating(&run, Vitals::default());
+        let (running, _stopped) = start_beating(&run, RunSignals::default());
         wait_for("a first heartbeat", || {
             (run.front.count("POST /v1/runs/") >= 1).then_some(())
         });
@@ -1402,7 +1609,7 @@ mod retries {
             run.spool.clone(),
             None,
             stop,
-            Vitals::default(),
+            RunSignals::default(),
         )
         .unwrap();
         wait_for("a first heartbeat", || {
@@ -1440,12 +1647,11 @@ mod retries {
         std::fs::remove_file(trace.join("seal.json")).unwrap();
         let acks = trace.join("acks.jsonl");
         std::os::unix::fs::symlink(trace.parent().unwrap().join("elsewhere.jsonl"), &acks).unwrap();
-        let vitals = Vitals::default();
+        let vitals = RunSignals::default();
         let (running, _stopped) = start_beating(&run, vitals.clone());
         wait_for("the acknowledgement to be refused", || {
             vitals
                 .upload_problem()
-                .0
                 .is_some_and(|why| why.contains("acks.jsonl"))
                 .then_some(())
         });
@@ -1457,12 +1663,11 @@ mod retries {
             0,
             "marked as working while an ack is owed"
         );
-        assert!(vitals.upload_problem().0.is_some());
+        assert!(vitals.upload_problem().is_some());
         // Written at last, the upload is well again.
         std::fs::remove_file(&acks).unwrap();
         wait_for("the upload to be well", || {
-            (last_ok.load(Ordering::SeqCst) > 0 && vitals.upload_problem().0.is_none())
-                .then_some(())
+            (last_ok.load(Ordering::SeqCst) > 0 && vitals.upload_problem().is_none()).then_some(())
         });
         assert_eq!(std::fs::read_to_string(&acks).unwrap().lines().count(), 1);
         drop(running);
@@ -1511,9 +1716,9 @@ mod retries {
             trace.join("acks.jsonl"),
         )
         .unwrap();
-        let vitals = Vitals::default();
+        let vitals = RunSignals::default();
         let (running, _stopped) = start_beating(&run, vitals.clone());
-        wait_for("a retry", || vitals.upload_problem().0.map(|_| ()));
+        wait_for("a retry", || vitals.upload_problem().map(|_| ()));
         let began = Instant::now();
         drop(running);
         assert!(
@@ -1523,6 +1728,6 @@ mod retries {
         );
         vitals.upload_ok();
         std::thread::sleep(Duration::from_millis(300));
-        assert_eq!(vitals.upload_problem().0, None, "it retried after the drop");
+        assert_eq!(vitals.upload_problem(), None, "it retried after the drop");
     }
 }

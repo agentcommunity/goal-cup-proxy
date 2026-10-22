@@ -1,7 +1,7 @@
 //! `goalcup` — the participant's command line.
 //!
-//! The nine sub-commands live in [`commands`]; the upload server and the participant's token
-//! for it live in [`server`]; the tracker's own configuration directory
+//! The eleven sub-commands live in [`commands`]; the upload server and the participant's token
+//! for it live in [`server`]; Goal Cup Proxy's own configuration directory
 //! and the documents in it live in [`config`]; the shipped connector manifests and the
 //! release-hash allowlist over them live in [`connector`]; the one client that speaks
 //! the daemon's control API — one transport, one auth rule, and no retry of its own —
@@ -21,7 +21,7 @@
 //! | Exit | Meaning |
 //! |---|---|
 //! | 0 | The command did what it was asked. |
-//! | 1 | Refused, and the participant can fix it: no daemon, a busy tracker, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. Also, after the seal, on Linux a run whose launcher sweep left a process running (`subreaper.rs`). |
+//! | 1 | Refused, and the participant can fix it: no daemon, a busy daemon, an entry that is already sealed, a mistyped sub-command, a `preflight_failed` refusal. Also, after the seal, on Linux a run whose launcher sweep left a process running (`subreaper.rs`). |
 //! | 2 | **Never produced by this CLI.** It is `goalcup-verify`'s "invalid evidence" exit; the V1 `goalcup doctor --verify` that relayed it was removed by D48. |
 //! | 3 | The CLI could not do its job: a file it could not read, a response it could not parse. |
 //! | 4 | **Never produced by this CLI.** It was a gate's number; the V1 arming and `goalcup resume` gates were removed (D48), and control API v6 removed the daemon's `arming_timeout` code. |
@@ -32,13 +32,17 @@
 pub mod account;
 pub(crate) mod arming;
 pub mod ca_bundle;
-pub mod capture_tee;
 pub mod commands;
 pub mod config;
 pub mod connector;
 pub mod daemon;
 pub mod entries;
+/// The folder checks of `prep`, `start` and `continue`: WSL, and the filesystem a run's records
+/// are kept on.
+pub mod folder_gate;
 pub mod harness_version;
+/// The harness homes runs share (D39, D59) and a run's own directory.
+pub(crate) mod home;
 /// Where `goalcup start` says things while a chat-mode harness owns the terminal (D57).
 pub mod host_log;
 pub mod launch;
@@ -58,8 +62,8 @@ pub mod server;
 pub mod skill;
 pub mod subreaper;
 pub mod upload;
-/// The WSL version and Windows-drive checks of `prep`, `start` and `continue`.
-pub mod wsl_gate;
+/// The disk and goalcup's own processes, as the heartbeats and `goalcup status` report them.
+pub mod vitals;
 
 use goalcup_protocol::ProtocolError;
 use goalcup_protocol::control::ControlError;
@@ -93,6 +97,35 @@ pub fn set_finish_budget(budget: std::time::Duration) {
         u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
         std::sync::atomic::Ordering::SeqCst,
     );
+}
+
+/// Whether this process runs a chat-mode harness without a terminal: never, in a shipped build.
+/// A test build can say so ([`set_chat_without_terminal`], or `GOALCUP_TEST_CHAT_WITHOUT_TERMINAL=1`
+/// for the binary), so that a lifecycle test with no pseudo-terminal still runs the one launch
+/// path every connector takes (D57): `goalcup start` then neither asks for the terminal nor
+/// takes it, says what it would have written to the run's log on its own output, and gives the
+/// harness `/dev/null` for stdin.
+pub fn chat_without_terminal() -> bool {
+    #[cfg(feature = "test-support")]
+    {
+        CHAT_WITHOUT_TERMINAL.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(feature = "test-support"))]
+    {
+        false
+    }
+}
+
+#[cfg(feature = "test-support")]
+static CHAT_WITHOUT_TERMINAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// **Test-only.** Run chat-mode harnesses in this process without a terminal
+/// ([`chat_without_terminal`]).
+#[doc(hidden)]
+#[cfg(feature = "test-support")]
+pub fn set_chat_without_terminal(on: bool) {
+    CHAT_WITHOUT_TERMINAL.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// The version this build carries, printed by `goalcup --version`.

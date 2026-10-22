@@ -359,7 +359,7 @@ impl TraceDirHandle {
         Ok(Some(File::from(fd)))
     }
 
-    fn remove_regular(&self, name: &str) -> Result<(), TraceCapError> {
+    pub(super) fn remove_regular(&self, name: &str) -> Result<(), TraceCapError> {
         let operation = "remove contained regular file";
         let name = c_name(name);
         let raw = unsafe {

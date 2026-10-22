@@ -436,9 +436,7 @@ fn put_named(out: &mut dyn Write, name: &str, text: &str) -> Result<(), CliError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use goalcup_protocol::control::{
-        ControlError, DaemonHealth, EntrySummary, SealResponse, SignedStatus,
-    };
+    use goalcup_protocol::control::{ControlError, DaemonHealth, EntrySummary, SignedStatus};
     use goalcup_protocol::process::ProcessRegistration;
 
     /// A daemon that answers `health` and nothing else.
@@ -451,7 +449,7 @@ mod tests {
         fn entries(&self) -> Result<Vec<EntrySummary>, ControlError> {
             Err(ControlError::Unsupported("test".to_string()))
         }
-        fn seal(&self, _: &str) -> Result<SealResponse, ControlError> {
+        fn seal(&self, _: &str) -> Result<goalcup_protocol::seal::SealManifest, ControlError> {
             Err(ControlError::Unsupported("test".to_string()))
         }
         fn register_process(&self, _: &str, _: &ProcessRegistration) -> Result<(), ControlError> {

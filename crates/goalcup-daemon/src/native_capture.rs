@@ -29,11 +29,6 @@
 //! shared store's old sessions are neither tracked nor reported; once admitted, a file stays
 //! and is read from offset 0. Every admitted file is recorded, and none is preferred.
 //!
-//! A harness-supplied session or thread ID never goes into a pattern as text. The caller
-//! passes it as [`NativeSourceSpec::scope_id`] and writes `{id}` where it belongs; the adapter
-//! refuses any ID that is not 1-128 ASCII letters, digits, `-` or `_` before substituting it,
-//! so an ID can never add a wildcard, a separator or a relative component to the scope.
-//!
 //! # Producer, admission and ordering
 //!
 //! The adapter is one capture producer. It mints a fresh 128-bit producer ID, asks
@@ -126,16 +121,14 @@
 //! use goalcup_protocol::capture::CaptureSink;
 //! use std::sync::Arc;
 //!
-//! fn wire(sink: Arc<dyn CaptureSink>, codex_home: std::path::PathBuf, thread_id: &str) {
+//! fn wire(sink: Arc<dyn CaptureSink>, codex_home: std::path::PathBuf) {
 //!     let config = NativeCaptureConfig {
 //!         sources: vec![NativeSourceSpec {
 //!             name: "codex-rollout".into(),
 //!             root: codex_home.join("sessions"),
-//!             pattern: "*/*/*/rollout-*-{id}.jsonl".into(),
+//!             pattern: "*/*/*/rollout-*.jsonl".into(),
 //!             form: NativeStoreForm::AppendOnly,
 //!             hint: Some(NativeHint::new("codex-jsonl").unwrap()),
-//!             // Validated, then substituted for `{id}`: `*`, `?` or `/` is refused.
-//!             scope_id: Some(thread_id.to_string()),
 //!             modified_since: None,
 //!         }],
 //!         limits: NativeCaptureLimits::default(),
@@ -163,6 +156,7 @@ use goalcup_protocol::capture::{
     FrameEvent, GapReason, MAX_CAPTURE_QUEUE_BYTES, MAX_METADATA_STRING_BYTES, MAX_OPEN_STREAMS,
     MAX_SEGMENT_BYTES, StreamKey, SubmitResult,
 };
+use goalcup_protocol::harness::glob_matches;
 use goalcup_protocol::hints::valid_hint;
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
@@ -193,9 +187,6 @@ const MAX_PATTERN_BYTES: usize = 1024;
 const OPEN_ATTEMPTS: usize = 3;
 /// Room a label keeps for its `#g<generation>` suffix: `#g` and `u64::MAX`'s 20 digits.
 const GENERATION_SUFFIX_BYTES: usize = 22;
-/// The one placeholder a pattern may carry, replaced by the validated scope ID.
-const SCOPE_ID_PLACEHOLDER: &str = "{id}";
-const MAX_SCOPE_ID_BYTES: usize = 128;
 
 /// A validated native protocol hint. It is open vocabulary and never inferred from connector
 /// identity, form, path, or filename.
@@ -237,18 +228,12 @@ pub struct NativeSourceSpec {
     /// retained; it never appears in a label or an error.
     pub root: PathBuf,
     /// `/`-separated relative pattern under `root`. Each component is a literal name or a
-    /// single-component glob using `*` and `?`; `**`, `.`, `..`, empty components and
-    /// absolute patterns are refused. `{id}` marks where [`Self::scope_id`] goes; no other
-    /// brace is allowed.
+    /// single-component glob using `*` and `?`; `**`, `.`, `..`, a brace, empty components and
+    /// absolute patterns are refused.
     pub pattern: String,
     pub form: NativeStoreForm,
     /// Protocol hint, append-only JSONL stores only.
     pub hint: Option<NativeHint>,
-    /// The run's own session or thread ID (for example Codex's `thread.started` ID or the
-    /// Claude session UUID), substituted for every `{id}` in `pattern` only after it is
-    /// validated as 1-128 ASCII letters, digits, `-` or `_`. Required exactly when the
-    /// pattern contains `{id}`.
-    pub scope_id: Option<String>,
     /// The run's start (D57): a matched file is tracked only once the later of its
     /// modification and status-change times, truncated to whole seconds, is at or after it.
     /// `None` tracks every matched file.
@@ -584,9 +569,8 @@ impl NativeCapture {
             if !spec.root.is_absolute() {
                 return Err(self::config("a source root must be an absolute path"));
             }
-            let expanded = expand_pattern(&spec.pattern, spec.scope_id.as_deref())?;
-            let pattern = parse_pattern(&expanded)?;
-            let scope = (spec.root.clone(), expanded);
+            let pattern = parse_pattern(&spec.pattern)?;
+            let scope = (spec.root.clone(), spec.pattern);
             if scopes.contains(&scope) {
                 return Err(self::config(
                     "two sources declare the same root and pattern",
@@ -1062,40 +1046,6 @@ impl DiscoveryFacts {
     }
 }
 
-fn valid_scope_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= MAX_SCOPE_ID_BYTES
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
-/// Substitute a validated scope ID for `{id}`. An ID is required exactly when the pattern
-/// names the placeholder, and no other brace may remain.
-fn expand_pattern(pattern: &str, scope_id: Option<&str>) -> Result<String, NativeCaptureError> {
-    let expanded = match (scope_id, pattern.contains(SCOPE_ID_PLACEHOLDER)) {
-        (Some(id), true) => {
-            if !valid_scope_id(id) {
-                return Err(config(
-                    "a scope id is 1-128 ASCII letters, digits, '-' or '_'",
-                ));
-            }
-            pattern.replace(SCOPE_ID_PLACEHOLDER, id)
-        }
-        (None, false) => pattern.to_string(),
-        (Some(_), false) => {
-            return Err(config(
-                "a scope id needs an `{id}` placeholder in its pattern",
-            ));
-        }
-        (None, true) => return Err(config("an `{id}` placeholder needs a scope id")),
-    };
-    if expanded.contains(['{', '}']) {
-        return Err(config("`{id}` is the only placeholder a pattern may use"));
-    }
-    Ok(expanded)
-}
-
 fn valid_source_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= MAX_SOURCE_NAME_BYTES
@@ -1110,6 +1060,9 @@ fn parse_pattern(pattern: &str) -> Result<Vec<Component>, NativeCaptureError> {
     }
     if pattern.starts_with('/') {
         return Err(config("a pattern is relative to its root"));
+    }
+    if pattern.contains(['{', '}']) {
+        return Err(config("a pattern has no placeholder and no brace"));
     }
     let mut components = Vec::new();
     for part in pattern.split('/') {
@@ -1133,35 +1086,6 @@ fn parse_pattern(pattern: &str) -> Result<Vec<Component>, NativeCaptureError> {
         return Err(config("a pattern has at most eight components"));
     }
     Ok(components)
-}
-
-/// One component against one glob: `*` matches any run (including none), `?` exactly one
-/// character, anything else itself. Applied to capability-enumerated names.
-fn glob_matches(name: &str, pattern: &str) -> bool {
-    let name: Vec<char> = name.chars().collect();
-    let pattern: Vec<char> = pattern.chars().collect();
-    let (mut i, mut j) = (0usize, 0usize);
-    let (mut star, mut matched) = (None, 0usize);
-    while i < name.len() {
-        if j < pattern.len() && (pattern[j] == '?' || pattern[j] == name[i]) {
-            i += 1;
-            j += 1;
-        } else if j < pattern.len() && pattern[j] == '*' {
-            star = Some(j);
-            matched = i;
-            j += 1;
-        } else if let Some(position) = star {
-            j = position + 1;
-            matched += 1;
-            i = matched;
-        } else {
-            return false;
-        }
-    }
-    while j < pattern.len() && pattern[j] == '*' {
-        j += 1;
-    }
-    j == pattern.len()
 }
 
 fn render_relative(components: &[SourceName]) -> String {

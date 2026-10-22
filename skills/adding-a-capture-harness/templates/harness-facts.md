@@ -14,10 +14,10 @@ Section 8 lives only in this sheet: the PR description links the sheet, it does 
 Rules: docs/harnesses/README.md. -->
 
 ## 1. Run one prompt, in chat mode first
-Chat mode is the product (D57): the command that opens the harness's chat in a terminal (no
+Chat mode is the only mode (D57): the command that opens the harness's chat in a terminal (no
 argument is best), how the participant types the prompt, how to quit, and the flag that reopens
-the most recent session. Only if chat mode cannot work: the headless command and flags to run one
-prompt with no human input, and how it exits.
+the most recent session. A harness with no chat mode in a terminal cannot be captured: say so here
+and set `Status: facts only`.
 
 ## 2. Install and record a version
 How to install a given version; where the binary lands; how to print the version.

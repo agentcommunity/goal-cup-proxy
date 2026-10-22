@@ -1,16 +1,18 @@
 # Working in this repository
 
-This repository holds a research tracer for running coding agents across harnesses and operating
+This repository holds Goal Cup Proxy, a research recorder for running coding agents across harnesses and operating
 systems. It records declared model traffic and native session artifacts into a sealed hash chain,
 with offline verification and versioned research decoders. Goal Cup's one-prompt, 168-hour contest
 uses that evidence and adds server upload and event rules. Current support is macOS and Linux;
 Windows uses WSL2, with real-machine validation pending and native Windows planned.
 This file is the map for agents and people. Open work is in [`TODO.md`](TODO.md).
 
-Read the [research target](docs/RESEARCH-TARGET.md) and
-[local research handoff](docs/LOCAL-RESEARCH-HANDOFF.md) before planning capture work. Tool calls
-and results visible in agent context are sufficient; independent full tool-output/spill capture
-is not required. Preserve subagent conversations where exposed and state where coverage is
+Read first: the [docs map](docs/README.md), which lists every doc by audience; the
+[event readiness plan](docs/plans/2026-10-20-event-readiness.md), which sets the work to
+6 Nov; and [local next steps](docs/research/LOCAL-NEXT-STEPS.md), what to measure next and in what
+order. Before planning capture work, also read the [research target](docs/RESEARCH-TARGET.md). Tool
+calls and results visible in agent context are sufficient; independent full tool-output/spill
+capture is not required. Preserve subagent conversations where exposed and state where coverage is
 unmeasured. These targets do not establish that current connectors capture every activity.
 
 ## Map
@@ -19,14 +21,15 @@ unmeasured. These targets do not establish that current connectors capture every
 |---|---|
 | `crates/goalcup-protocol` | Every byte definition: chain, v5 records, control API types, harness schema (`harness.rs`), trust tables (`capture_policy.rs`), connector pins. No rule logic. |
 | `crates/goalcup-daemon` | `goalcup-daemon`: ingest, redaction, chain writer, native-file capture, finish, process termination. Small on purpose. |
-| `crates/goalcup-cli` | `goalcup` (nine commands: `start`, `continue`, `status`, `entries`, `seal`, `doctor`, `login`, `prep`, `upload`). Launches the harness, runs the recording proxy, uploads. |
+| `crates/goalcup-cli` | `goalcup` (eleven commands: `start`, `continue`, `status`, `time-left`, `mcp`, `entries`, `seal`, `doctor`, `login`, `prep`, `upload`). Launches the harness, runs the recording proxy, uploads. |
 | `crates/goalcup-verifier` | `goalcup-verify` and the decoders. Every judgement about the bytes lives here. |
 | `crates/goalcup-platform` | Unix-only OS code shared by the others: disk reservation, capability-based file access, machine facts, sleep lock. |
 | `connectors/<id>/` | One harness = one `harness.toml` plus seed files. Data, not code. Pinned by digest. |
 | `server/worker` | The upload server: a Cloudflare Worker in TypeScript. |
-| `scripts/` | `gate.sh`, `pin-manifests.sh`, `check-connector.sh`, `check-links.py`, `matrix.sh`, release scripts. |
+| `scripts/` | The gate, pins, connector check, link check, matrix, release and research tools. One line each, and which ones CI and the gate run: [`scripts/README.md`](scripts/README.md). |
 | `skills/` | Agent skills: `adding-a-capture-harness` (for contributors), `goal-cup-setup` (for participants), `goal-cup` (copied into the harness home). |
-| `docs/`, `packaging/` | Docs; release packaging and `install.sh`. |
+| `docs/` | Docs by audience: [`docs/README.md`](docs/README.md). Finished work and old narratives: `docs/archive/`. |
+| `packaging/` | Release packaging and `install.sh`. |
 | `spikes/`, `harnesses/` | Old measurements (read-only fixtures) and local harness installs (git-ignored). |
 
 The dependency rule: the daemon never links the verifier, and the CLI never links the daemon.
@@ -35,9 +38,11 @@ Both are checked by tests.
 ## Read next
 
 1. [`README.md`](README.md): build, install, run, the gate.
-2. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): how the parts fit, and the terms.
+2. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): how the parts fit, and the one glossary (run,
+   part, segment, chain file, seal, receipt, ack).
 3. [`docs/DECISIONS.md`](docs/DECISIONS.md): current rules and historical decisions. Code comments
-   cite them as `D<number>`; follow any explicit superseding or retired status.
+   cite them as `D<number>`; the status table at the top says which are current, superseded or
+   retired.
 4. [`docs/RULES.md`](docs/RULES.md): the participant contract.
 5. [`docs/CHEAT-CHECKLIST.md`](docs/CHEAT-CHECKLIST.md): read before you trust a verifier Pass.
    [`docs/TERMINATION.md`](docs/TERMINATION.md): what `Confirmed` does and does not claim.
@@ -61,10 +66,12 @@ setup, project build and gate Cargo commands run with `--offline`.
 
 - **Never set a model base URL on any harness.** The only wire path is the loopback recording
   proxy, reached through the harness's process-scoped `HTTPS_PROXY` (D1, D36).
-- **The tracer records and never manages the agent.** No prompting, no auto "keep going", no
-  finish tool. The participant types the prompt and may type only "keep going".
+- **Goal Cup Proxy records and never manages the agent.** No prompting, no auto "keep going", no
+  finish tool. The participant types the prompt and may type only "keep going". Two exceptions:
+  D65, on a nearly full disk Goal Cup Proxy freezes the agent and resumes it by itself; and D66,
+  the agent may ask `goalcup time-left` how much time is left (pull only, nothing is pushed).
 - **No harness names in core code.** A harness is data (a connector) plus shared modules.
-- **Never write into `~/.claude`, `~/.codex`, `~/.hermes` or any app-wide config.** The tracer
+- **Never write into `~/.claude`, `~/.codex`, `~/.hermes` or any app-wide config.** Goal Cup Proxy
   makes isolated homes. A test that launches a harness uses a private `HOME`.
 - **Connector edits regenerate the pins** with `sh scripts/pin-manifests.sh` in the same commit,
   or every start refuses.

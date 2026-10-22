@@ -4,6 +4,29 @@ id = "codex-cli"
 
 [participant]
 display_name = "Codex"
+# Codex's section of docs/HARNESS-SETUP.md, which `goalcup prep` links to (fix plan v8).
+setup_section = "codex"
+
+# Fix plan v9: where the participant adds `goalcup mcp`, the time-left tool; prep prints the lines
+# and never writes them. Codex hands an MCP server only the variables `env_vars` names (`codex
+# mcp add` writes this table, and `codex mcp get` reads `env_vars`: measured, 0.156.1).
+[participant.time_left_tool]
+file = "config.toml"
+key = "mcp_servers"
+pass_env = "env_vars"
+
+# D67: what `goalcup prep` recommends, and never sets: no approval prompt, and no sandbox (the
+# workspace-write sandbox makes .git read-only, and in a container it cannot start at all).
+# docs/harnesses/codex-cli.md, "Run without permission prompts".
+[[participant.no_prompts]]
+file = "config.toml"
+key = "approval_policy"
+values = ["never"]
+
+[[participant.no_prompts]]
+file = "config.toml"
+key = "sandbox_mode"
+values = ["danger-full-access"]
 
 [capture]
 auth_hosts = ["auth.openai.com"]
@@ -19,7 +42,7 @@ args = [
   "-c", 'projects={{ "{workspace}" = {{ trust_level = "trusted" }} }}',
   "-C", "{workspace}",
 ]
-# `goalcup continue`: reopen the most recent session in the tracer's home. Not yet measured
+# `goalcup continue`: reopen the most recent session in goalcup's home. Not yet measured
 # against a logged-in home (docs/harnesses/codex-cli.md, section 10).
 resume_args = ["resume", "--last"]
 

@@ -5,7 +5,7 @@
 // Layout:
 //   state/runs/{run_id}.json     the run and its entries, with receipts and chunks (a few hundred bytes each)
 //   state/open/{member}.json     {"run_id": …}: the member's latest competition run, the one a new start replaces
-//   state/open/{member}.test.json  the same for the member's test runs (the same mode replaces the same mode)
+//                                (only competition replaces; test and practice runs have no slot)
 //   state/devices/{sha256}.json  a device request, by the hash of its device code
 //   state/usercodes/{sha256}.json  {"device_sha256": …}: the request a user code belongs to
 //   state/credentials/{sha256}.json  a run credential, by its own hash
@@ -27,6 +27,7 @@ import type {
   Db,
   DevicePoll,
   EntryRow,
+  FinalCommitDetail,
   HeartbeatArgs,
   HeartbeatResult,
   MachineFacts,
@@ -35,15 +36,15 @@ import type {
   NoticeArgs,
   OpenRunArgs,
   OpenRunResult,
-  RunMode,
   RunRow,
   RunStatus,
   SealArgs,
   SealResult,
   StoreReceiptResult,
   TickRun,
+  Vitals,
 } from "./db.ts";
-import { CLOSE_AFTER_SECONDS, FIRST_SEQ, GENESIS, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
+import { CLOSE_AFTER_SECONDS, DISK_NOTICE_GAP_SECONDS, FIRST_SEQ, GENESIS, NO_FINAL_DETAIL, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
 import type { StartReceipt } from "./sign.ts";
 import { addSeconds, formatTime, sha256Hex, toHex } from "./util.ts";
 
@@ -51,6 +52,9 @@ interface StoredEntry extends EntryRow {
   harness_version: string;
   tracer_version: string;
   chunks: ChunkRecord[];
+  /** Compressed bytes the entry's committed chunks hold in R2, and how many chunks (absent in a state file from before). */
+  stored_bytes?: number;
+  chunk_count?: number;
   /** The highest `model_requests` a heartbeat of this entry has sent; null until one does. */
   model_requests?: number | null;
   final_repo_head: string | null;
@@ -60,6 +64,7 @@ interface StoredEntry extends EntryRow {
     head: string;
     offset_local: number;
     recording: string | null;
+    vitals?: Vitals | null;
     client_ip: string | null;
     client_country: string | null;
   } | null;
@@ -67,7 +72,7 @@ interface StoredEntry extends EntryRow {
 }
 
 /** The run and its entries (lowest segment first); `current_*` are worked out when it is read. */
-interface StoredRun extends Omit<RunRow, "first_entry_id" | "current_entry_id" | "current_sealed_at"> {
+interface StoredRun extends Omit<RunRow, "first_entry_id" | "current_entry_id" | "current_sealed_at" | "stored_bytes" | "chunk_count"> {
   machine: MachineFacts | null;
   client_ip: string | null;
   client_country: string | null;
@@ -83,6 +88,16 @@ interface StoredRun extends Omit<RunRow, "first_entry_id" | "current_entry_id" |
   flag_reason?: "gaps" | "failed" | null;
   final_commit?: string | null;
   final_commit_at?: string | null;
+  /** How the judged commit was found (`FinalCommitDetail`). */
+  final_pushed_at?: string | null;
+  final_branch?: string | null;
+  final_late_push?: boolean | null;
+  final_force_push?: boolean | null;
+  final_head_fallback?: boolean | null;
+  /** The latest vitals a heartbeat sent; the start of the running disk pause; the start of the latest pause owed a disk_full email. */
+  last_vitals?: Vitals | null;
+  disk_paused_at?: string | null;
+  disk_notice_at?: string | null;
   entries: StoredEntry[];
 }
 
@@ -158,7 +173,7 @@ export class LocalDb implements Db {
   // ---- plumbing --------------------------------------------------------------------------
 
   #runKey = (runId: string) => `state/runs/${runId}.json`;
-  #openKey = (member: string, mode: RunMode) => `state/open/${encodeURIComponent(member)}${mode === "test" ? ".test" : ""}.json`;
+  #openKey = (member: string) => `state/open/${encodeURIComponent(member)}.json`;
 
   async #readRun(runId: string): Promise<{ run: StoredRun; etag: string } | null> {
     const obj = await this.#bucket.get(this.#runKey(runId));
@@ -306,6 +321,9 @@ export class LocalDb implements Db {
       flag_reason: null,
       final_commit: null,
       final_commit_at: null,
+      last_vitals: null,
+      disk_paused_at: null,
+      disk_notice_at: null,
       entries: [newEntry(a.entry_id, a.run_id, 0, a)],
     };
     await this.#keep(run);
@@ -315,22 +333,22 @@ export class LocalDb implements Db {
   /**
    * Store a new run. A competition run first marks the account's latest competition run replaced,
    * then takes the account's slot with a conditional put; if someone else took it meanwhile, go
-   * round again (that run is replaced in turn). A test run does the same with the account's test
-   * slot: the same mode replaces the same mode, and practice replaces nothing.
+   * round again (that run is replaced in turn). Only competition replaces: a test run or a practice
+   * run is just stored, so an operator's test runs run side by side.
    */
   async #keep(run: StoredRun): Promise<void> {
     const create = { onlyIf: { etagDoesNotMatch: "*" } };
-    if (run.mode === "practice") {
+    if (run.mode !== "competition") {
       await this.#bucket.put(this.#runKey(run.run_id), JSON.stringify(run), create);
       return;
     }
-    const openKey = this.#openKey(run.member_id, run.mode);
+    const openKey = this.#openKey(run.member_id);
     for (let i = 0; i < MAX_CAS_TRIES; i++) {
       const marker = await this.#bucket.get(openKey);
       if (marker !== null) {
         const heldId = ((await marker.json()) as { run_id: string }).run_id;
         await this.#updateRun<null>(heldId, run.member_id, null, (held) =>
-          held.mode === run.mode && held.status === "open" && held.replaced_at === null
+          held.mode === "competition" && held.status === "open" && held.replaced_at === null
             ? { next: { ...held, replaced_at: held.official_start > run.official_start ? held.official_start : run.official_start }, answer: null }
             : { answer: null },
         );
@@ -380,7 +398,7 @@ export class LocalDb implements Db {
       if (run.status === "abandoned" || run.status === "incomplete") return { answer: "closed" };
       const entry = entryOf(run, a.entry_id);
       if (entry === undefined) return { answer: "not_found" };
-      const note = { at: a.at, seq: a.seq, head: a.head, offset_local: a.offset_local, recording: a.recording, client_ip: a.client_ip, client_country: a.client_country };
+      const note = { at: a.at, seq: a.seq, head: a.head, offset_local: a.offset_local, recording: a.recording, vitals: a.vitals, client_ip: a.client_ip, client_country: a.client_country };
       if (!a.final) {
         // A sealed entry has nothing left to record.
         if (entry.sealed_at !== null) return { answer: "recorded" };
@@ -465,9 +483,23 @@ export class LocalDb implements Db {
     } while (cursor !== undefined);
   }
 
-  recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void> {
+  recordFinalCommit(memberId: string, runId: string, commit: string, at: string, d: FinalCommitDetail = NO_FINAL_DETAIL): Promise<void> {
     return this.#updateRun<void>(runId, memberId, undefined, (run) =>
-      run.final_commit != null ? { answer: undefined } : { next: { ...run, final_commit: commit, final_commit_at: at }, answer: undefined },
+      run.final_commit != null
+        ? { answer: undefined }
+        : {
+            next: {
+              ...run,
+              final_commit: commit,
+              final_commit_at: at,
+              final_pushed_at: d.pushed_at,
+              final_branch: d.branch,
+              final_late_push: d.late_push,
+              final_force_push: d.force_push,
+              final_head_fallback: d.head_fallback,
+            },
+            answer: undefined,
+          },
     );
   }
 
@@ -506,8 +538,10 @@ export class LocalDb implements Db {
     });
   }
 
-  commitChunk(a: CommitChunkArgs): Promise<CommitChunkResult> {
+  async commitChunk(a: CommitChunkArgs): Promise<CommitChunkResult> {
     const c = a.chunk;
+    // The database raises on this too (goal_cup_upload_commit_chunk): a negative size is a Worker bug.
+    if (!Number.isSafeInteger(a.stored_bytes) || a.stored_bytes < 0) throw new Error(`commitChunk: stored_bytes ${a.stored_bytes} is not a size`);
     return this.#updateRun<CommitChunkResult>(a.run_id, a.member_id, "not_found", (run) => {
       const entry = entryOf(run, c.entry_id);
       if (entry === undefined) return { answer: "not_found" };
@@ -518,7 +552,16 @@ export class LocalDb implements Db {
       }
       // The point of the whole function: advance only if the entry still stands where the caller saw it.
       if (entry.offset !== c.offset || entry.head !== c.prev || entry.next_seq !== c.first_seq) return { answer: "conflict" };
-      const next = { ...entry, offset: c.offset + c.length, next_seq: c.last_seq + 1, head: c.head, last_ack: c.ack, chunks: [...entry.chunks, c] };
+      const next = {
+        ...entry,
+        offset: c.offset + c.length,
+        next_seq: c.last_seq + 1,
+        head: c.head,
+        last_ack: c.ack,
+        chunks: [...entry.chunks, c],
+        stored_bytes: (entry.stored_bytes ?? 0) + a.stored_bytes,
+        chunk_count: (entry.chunk_count ?? 0) + 1,
+      };
       return { next: withEntry(run, next), answer: "committed" };
     });
   }
@@ -546,8 +589,8 @@ export class LocalDb implements Db {
 
 /**
  * `entry` with the heartbeat noted, in `run`, and the run-level facts it adds: its time, the latest
- * connection (a missing one keeps the last), the first flag, and an entry's first or higher
- * `model_requests` (each entry counts from zero).
+ * connection (a missing one keeps the last), the first flag, an entry's first or higher
+ * `model_requests` (each entry counts from zero), the latest vitals and the disk pause they report.
  */
 function withSignals(run: StoredRun, entry: StoredEntry, a: HeartbeatArgs): StoredRun {
   const flag = a.recording === "gaps" || a.recording === "failed" ? a.recording : null;
@@ -559,7 +602,22 @@ function withSignals(run: StoredRun, entry: StoredEntry, a: HeartbeatArgs): Stor
     last_client_country: a.client_country ?? run.last_client_country ?? null,
     ...(flag !== null && run.flagged_at == null ? { flagged_at: a.at, flag_reason: flag } : {}),
     ...(grew ? { last_model_request_at: a.at } : {}),
+    ...diskPause(run, a),
   };
+}
+
+/**
+ * The run's vitals and disk pause after this heartbeat. Twin of the rule in
+ * goal_cup_tracer.note_heartbeat (sql/pending/20261021100000_goal_cup_tracer_event_readiness.sql,
+ * section 3): change both together.
+ */
+function diskPause(run: StoredRun, a: HeartbeatArgs): Pick<StoredRun, "last_vitals" | "disk_paused_at" | "disk_notice_at"> {
+  if (a.vitals === null) return {}; // no vitals: nothing said about a pause
+  if (a.vitals.agent_paused !== "disk") return { last_vitals: a.vitals, disk_paused_at: null };
+  if (run.disk_paused_at != null) return { last_vitals: a.vitals }; // the same pause goes on
+  const gap = formatTime(addSeconds(new Date(a.at), -DISK_NOTICE_GAP_SECONDS));
+  const owed = run.disk_notice_at == null || run.disk_notice_at <= gap;
+  return { last_vitals: a.vitals, disk_paused_at: a.at, ...(owed ? { disk_notice_at: a.at } : {}) };
 }
 
 const newEntry = (
@@ -588,6 +646,8 @@ const newEntry = (
   baseline_sha256: null,
   sealed_at: null,
   chunks: [],
+  stored_bytes: 0,
+  chunk_count: 0,
   final_repo_head: null,
   last_heartbeat: null,
   heartbeat_count: 0,
@@ -600,10 +660,19 @@ function toRun(r: StoredRun): RunRow {
     machine: _m, client_ip: _i, client_country: _c, abandon_reason: _a, sealed_at: _s, entries: _e,
     last_client_ip: _p, last_client_country: _q,
     last_heartbeat_at: _h, last_model_request_at: _l, flagged_at: _f, flag_reason: _g, final_commit: _k, final_commit_at: _t,
+    final_pushed_at: _pa, final_branch: _b, final_late_push: _lp, final_force_push: _fp, final_head_fallback: _hf,
+    last_vitals: _v, disk_paused_at: _d, disk_notice_at: _n,
     ...row
   } = r;
   const cur = currentOf(r);
-  return { ...row, first_entry_id: r.entries[0]!.entry_id, current_entry_id: cur.entry_id, current_sealed_at: cur.sealed_at };
+  return {
+    ...row,
+    first_entry_id: r.entries[0]!.entry_id,
+    current_entry_id: cur.entry_id,
+    current_sealed_at: cur.sealed_at,
+    stored_bytes: r.entries.reduce((sum, e) => sum + (e.stored_bytes ?? 0), 0),
+    chunk_count: r.entries.reduce((sum, e) => sum + (e.chunk_count ?? 0), 0),
+  };
 }
 
 /** A run as the cron reads it. */
@@ -615,11 +684,16 @@ function toTick(r: StoredRun): TickRun {
     flagged_at: r.flagged_at ?? null,
     flag_reason: r.flag_reason ?? null,
     final_commit: r.final_commit ?? null,
+    disk_notice_at: r.disk_notice_at ?? null,
   };
 }
 
 /** The public shape of an entry: drop the bookkeeping that only the local store keeps. */
 function toEntry(e: StoredEntry): EntryRow {
-  const { harness_version: _h, tracer_version: _t, chunks: _c, final_repo_head: _f, last_heartbeat: _l, heartbeat_count: _n, model_requests: _m, ...row } = e;
+  const {
+    harness_version: _h, tracer_version: _t, chunks: _c, final_repo_head: _f, last_heartbeat: _l, heartbeat_count: _n, model_requests: _m,
+    stored_bytes: _b, chunk_count: _k,
+    ...row
+  } = e;
   return row;
 }

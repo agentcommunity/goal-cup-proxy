@@ -1,7 +1,6 @@
 id = "kit-controlled-workload"
 identity_source = "none"
 identity_binding = "none"
-identity_id = ""
 native_source = "controlled"
 native_path = "native/controlled.jsonl"
 native_form = "append_only"

@@ -1,10 +1,11 @@
 # What do we want to achieve?
 
-The tracer is a research instrument for running coding agents across harnesses and operating
+Goal Cup Proxy is a research instrument for running coding agents across harnesses and operating
 systems. Preserve useful source evidence, make it flow reliably to private research output, and
 state what was not observed. Goal Cup's contest is one use of that evidence. This target records
 the maintainer's direction from the 18 October 2026 review; it is not a claim that all of it works
-today. Start execution with the [local handoff](LOCAL-RESEARCH-HANDOFF.md).
+today. Start execution with [local next steps](research/LOCAL-NEXT-STEPS.md); the 18 Oct
+[local handoff](LOCAL-RESEARCH-HANDOFF.md) shows the method.
 
 ## Agreed scope
 
@@ -23,7 +24,7 @@ today. Start execution with the [local handoff](LOCAL-RESEARCH-HANDOFF.md).
   credentials may permit broader staging reads unless the grants explicitly restrict them.
   Keep those credentials with the authorized custodian; researchers receive cleaned exports
   rather than direct database or bucket access.
-- The tracer observes and never supplies encouragement, prompts, or automatic restarts. Native
+- Goal Cup Proxy observes and never supplies encouragement, prompts, or automatic restarts. Native
   same-harness subagents and continuation configured before launch are allowed (D10, D37).
 - Current implementation is Unix-only: macOS and Linux, with WSL2 as a separate Linux environment.
   Native Windows is a future platform target; a WSL2 result is not native Windows validation.
@@ -62,7 +63,7 @@ continuation to manufacture duration.
 
 Acceptance:
 
-1. Record the tracer, harness, model/effort, OS/architecture, connector digest, and run/entry IDs.
+1. Record Goal Cup Proxy, harness, model/effort, OS/architecture, connector digest, and run/entry IDs.
 2. Retrieve actual stored bytes using the organizer retrieval path. Matching upload position is
    useful but is not a substitute. Verify the rebuilt chain and compare verified record count,
    bytes, and head with the complete local chain where retained.

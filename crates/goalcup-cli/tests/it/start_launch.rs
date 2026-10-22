@@ -84,8 +84,6 @@ fn capture_reserve_bytes_is_no_longer_a_flag() {
             "start",
             "--harness",
             "any-harness",
-            "--goal-file",
-            "/nonexistent/goal.txt",
             "--capture-reserve-bytes",
             "1",
         ])
@@ -151,10 +149,8 @@ fn start_on_wsl(wsl: &str, with_work_folder: Option<&str>) -> String {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("cfg");
     std::fs::create_dir(&cfg).unwrap();
-    let beside = tmp.path().join("goal-folder");
+    let beside = tmp.path().join("run-folder");
     std::fs::create_dir(&beside).unwrap();
-    let goal = beside.join("goal.txt");
-    std::fs::write(&goal, "write result.txt").unwrap();
     if let Some(work) = with_work_folder {
         goalcup_cli::server::write_server_config(
             &cfg,
@@ -175,10 +171,10 @@ fn start_on_wsl(wsl: &str, with_work_folder: Option<&str>) -> String {
     }
     let m = support::mock_armed(&tmp, "codex-cli");
     let mut o = support::start_options("codex-cli");
-    o.goal_file = Some(goal);
+    o.run_folder = Some(beside.clone());
     let mut env = support::clean_env();
     env.insert(
-        goalcup_cli::wsl_gate::Host::VAR.to_string(),
+        goalcup_cli::folder_gate::Host::VAR.to_string(),
         wsl.replace("{cfg}", &cfg.display().to_string())
             .replace("{beside}", &beside.display().to_string()),
     );
@@ -199,7 +195,10 @@ fn start_on_wsl(wsl: &str, with_work_folder: Option<&str>) -> String {
         m.calls()
     );
     let made: Vec<_> = std::fs::read_dir(&beside).unwrap().flatten().collect();
-    assert_eq!(made.len(), 1, "only the goal file: {made:?}");
+    assert!(
+        made.is_empty(),
+        "nothing was made in the run folder: {made:?}"
+    );
     assert!(!cfg.join("runs").exists(), "no run record");
     let reserve = goalcup_cli::run::reserve::artifact_root(&cfg).join("reserve");
     assert!(!reserve.exists(), "no reserve file or folder");
@@ -326,13 +325,12 @@ fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
 /// and still seals and uploads when the window is closed.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod chat {
-    use crate::common::m2_cli_support::{CHAT_HOME_ID, CHAT_ID, Hooked, Launcher, OnPty, Rig};
+    use crate::common::m2_cli_support::{CHAT_HOME_ID, CHAT_ID, Launcher, OnPty, Rig};
     use crate::common::upload_server::{ServerOptions, UploadServer};
     use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
-    const RESERVE: u64 = 4 * 1024 * 1024;
     /// What `goalcup start` prints last before the harness owns the terminal.
     const LAUNCH_LINE: &str = "Recording in chat mode";
     /// A test build's disk sizes: the reservation, no margin, a 50 ms watch.
@@ -689,7 +687,7 @@ mod chat {
     /// A chat-mode harness gets the participant's terminal and tools: their PATH (the fake
     /// harness is a `#!/usr/bin/env node` script, and the `node` it finds is only on that PATH),
     /// their TERM, COLORTERM, LANG and LC_*; the connector's own SHELL wins over theirs. It gets
-    /// none of their proxy, base-URL or credential variables, and none of the tracer's own: its
+    /// none of their proxy, base-URL or credential variables, and none of goalcup's own: its
     /// proxy is the run's loopback recorder.
     #[test]
     fn the_harness_gets_the_participants_terminal_and_tools_and_nothing_else() {
@@ -776,9 +774,23 @@ mod chat {
         ] {
             assert!(!env.contains_key(key), "{key} reached the harness: {env:?}");
         }
+        // Of goalcup's own variables only the launch's two reach it (D66): the harness marker
+        // and the run's time-left file, under the configuration directory. None of the
+        // participant's (`GOALCUP_CONFIG_DIR` among them).
+        let own: Vec<&str> = env
+            .keys()
+            .map(String::as_str)
+            .filter(|k| k.starts_with("GOALCUP_"))
+            .collect();
+        assert_eq!(
+            own,
+            ["GOALCUP_IN_HARNESS", "GOALCUP_TIME_LEFT_FILE"],
+            "goalcup's own variables reached the harness: {env:?}"
+        );
         assert!(
-            !env.keys().any(|k| k.starts_with("GOALCUP_")),
-            "the tracer's own variables reached the harness: {env:?}"
+            env["GOALCUP_TIME_LEFT_FILE"]
+                .starts_with(&rig.cfg.join("time-left").display().to_string()),
+            "{env:?}"
         );
     }
 
@@ -1009,42 +1021,15 @@ mod chat {
         assert_eq!(server.status(run_id).as_deref(), Some("sealed"));
     }
 
-    /// A chat-mode connector takes no goal file, and a headless one needs one: both are
-    /// refused before anything is created, with a sentence that says which.
+    /// Headless mode is gone, and its `--goal-file` with it: the flag is a usage error, said
+    /// before anything is created.
     #[test]
-    fn a_goal_file_with_an_interactive_connector_is_refused() {
+    fn the_goal_file_flag_is_gone() {
         let rig = Rig::chat();
-        let goal = rig.goal("write hello.txt");
-        let http = rig.client();
-        let client = Hooked::new(&http, &rig);
-        let mut opts = rig.chat_options(RESERVE);
-        opts.goal_file = Some(goal.clone());
-        let (result, out) =
-            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
-        let refused = result.expect_err("a goal file with a chat-mode connector");
-        let said = refused.to_string();
-        assert_eq!(refused.exit_code(), 1, "{said}");
-        assert!(
-            said.contains(CHAT_ID) && said.contains("chat mode"),
-            "{said}"
-        );
-        assert!(said.contains("--goal-file"), "{said}");
-        assert!(client.book().calls.is_empty(), "{out}");
-        assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
-        assert!(!rig.chat_home().exists(), "the shared home was not claimed");
-
-        // The headless connector still needs its goal file.
-        let mut opts = rig.options(&goal, RESERVE);
-        opts.goal_file = None;
-        let (result, _) = std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
-        let refused = result.expect_err("a headless connector with no goal file");
-        assert!(refused.to_string().contains("--goal-file"), "{refused}");
-        assert!(client.book().calls.is_empty());
-
-        // The binary says the same, before anything is created.
+        let folder = rig.run_folder();
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_goalcup"))
             .args(["start", "--harness", CHAT_ID, "--dev", "--goal-file"])
-            .arg(&goal)
+            .arg(folder.join("goal.txt"))
             .env_clear()
             .env("PATH", rig.path())
             .env("GOALCUP_CONFIG_DIR", &rig.cfg)
@@ -1053,8 +1038,18 @@ mod chat {
             .unwrap();
         let said = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(1), "{said}");
-        assert!(said.contains("chat mode"), "{said}");
+        assert!(said.contains("--goal-file"), "{said}");
+        assert!(said.contains("unexpected argument"), "{said}");
         assert!(rig.run_dirs().is_empty());
+        let help = std::process::Command::new(env!("CARGO_BIN_EXE_goalcup"))
+            .args(["start", "--help"])
+            .output()
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&help.stdout).contains("goal-file"),
+            "{}",
+            String::from_utf8_lossy(&help.stdout)
+        );
     }
 
     /// Before the launch the goal-cup skill is put in the harness's skills folder, replacing

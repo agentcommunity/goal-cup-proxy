@@ -232,7 +232,7 @@ fn entries_lists_one_line_per_entry_json_is_an_array_and_a_sealed_entry_leaves_t
     let tmp = tempfile::tempdir().unwrap();
     let m = support::mock_armed(&tmp, "codex-cli");
     let mut out = Vec::new();
-    entries_with(&m, false, &mut out).unwrap();
+    entries_with(&m, tmp.path(), false, &mut out).unwrap();
     let text = String::from_utf8(out).unwrap();
     assert_eq!(
         text.lines().filter(|l| l.contains("entry-")).count(),
@@ -240,12 +240,41 @@ fn entries_lists_one_line_per_entry_json_is_an_array_and_a_sealed_entry_leaves_t
     );
     // The way to a run comes first, and the states are in words, not wire names.
     assert!(
-        text.lines().next().unwrap().contains("goalcup status <id>"),
+        text.lines()
+            .next()
+            .unwrap()
+            .contains("goalcup status <part-id>"),
         "{text}"
     );
     assert!(!text.contains("online"), "{text}");
+    // With a run record for the part, its line names the run `goalcup continue` takes.
+    let entry_id = m.info().entry_id;
+    goalcup_cli::run::write(
+        tmp.path(),
+        &goalcup_cli::run::RunRecord {
+            run_id: "run-with-a-part".to_string(),
+            server_url: Some("https://server.example".to_string()),
+            practice: false,
+            test: false,
+            connector_id: "codex-cli".to_string(),
+            workspace: std::path::PathBuf::from("/w"),
+            started_at_unix: 1,
+            deadline_at: None,
+            entries: vec![goalcup_cli::run::EntryRef {
+                entry_id: entry_id.clone(),
+                trace_dir: std::path::PathBuf::from("/t"),
+            }],
+        },
+    )
+    .unwrap();
     let mut out = Vec::new();
-    entries_with(&m, true, &mut out).unwrap();
+    entries_with(&m, tmp.path(), false, &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("goalcup continue <run-id>"), "{text}");
+    let line = text.lines().find(|l| l.contains(&entry_id)).unwrap();
+    assert!(line.contains("run-with-a-part"), "{text}");
+    let mut out = Vec::new();
+    entries_with(&m, tmp.path(), true, &mut out).unwrap();
     let v: Vec<goalcup_protocol::control::EntrySummary> = serde_json::from_slice(&out).unwrap();
     assert_eq!(v.len(), m.entry_count());
 
@@ -253,7 +282,7 @@ fn entries_lists_one_line_per_entry_json_is_an_array_and_a_sealed_entry_leaves_t
     let before = m.entry_count();
     m.seal(&m.info().entry_id).unwrap();
     let mut out = Vec::new();
-    entries_with(&m, false, &mut out).unwrap();
+    entries_with(&m, tmp.path(), false, &mut out).unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(
         m.entry_count() < before,
@@ -423,8 +452,6 @@ fn a_capture_status_shows_its_capture_block_and_no_legacy_run_lines() {
     for said in [
         "capture: recording",
         "run running",
-        "delivery local_only",
-        "anchor local_only",
         "analysis not_run",
         "Local capture is recording to this machine only.",
         "2048 of 4194304 bytes used, 4194304 reserved, durable through seq 4 (1536 bytes)",
@@ -439,6 +466,10 @@ fn a_capture_status_shows_its_capture_block_and_no_legacy_run_lines() {
         "events:",
         "time remaining",
         "round dates",
+        // The recorder never knows the upload: its constant local_only words are not shown
+        // beside the Upload line that knows (they stay in --json, as signed).
+        "delivery local_only",
+        "anchor local_only",
     ] {
         assert!(
             !text.contains(legacy),
@@ -536,7 +567,6 @@ fn launched_capture(
                 spawned_at: goalcup_cli::proxy::metadata::capture_time(),
                 harness_version: "0.153.0".to_string(),
                 continuation: "exec: no input after the goal".to_string(),
-                native_scope: None,
             },
         )
         .unwrap();
@@ -629,7 +659,6 @@ fn a_shipped_chat_profile_capture_records_and_seals_valid() {
             &control::CaptureSealRequest {
                 proxy: Some(control::ProxyCounters::default()),
                 remaining_finish_ms: Some(10_000),
-                native_scope: None,
             },
             std::time::Duration::from_secs(30),
         )
@@ -667,7 +696,6 @@ fn a_capture_reopened_under_its_live_run_seals_with_the_loss_chained() {
             &control::CaptureSealRequest {
                 proxy: Some(control::ProxyCounters::default()),
                 remaining_finish_ms: Some(10_000),
-                native_scope: None,
             },
             std::time::Duration::from_secs(30),
         )
@@ -700,6 +728,14 @@ fn run_with_state_on(
     deadline_at: Option<&str>,
 ) {
     use goalcup_cli::run::{EntryRef, RunRecord, StateKeeper, run_dir, write};
+    // The entry's trace holds a valid seal.json: a run whose host finished is sealed.
+    let trace_dir = trace_of(cfg, entry_id);
+    std::fs::create_dir_all(&trace_dir).unwrap();
+    let seal = serde_json::json!({
+        "entry_id": entry_id, "sealed_at": "2026-10-21T00:00:00Z", "workspace": "/w",
+        "files": [], "excluded": [],
+    });
+    std::fs::write(trace_dir.join("seal.json"), seal.to_string()).unwrap();
     write(
         cfg,
         &RunRecord {
@@ -713,7 +749,7 @@ fn run_with_state_on(
             deadline_at: deadline_at.map(str::to_string),
             entries: vec![EntryRef {
                 entry_id: entry_id.to_string(),
-                trace_dir: PathBuf::from("/t"),
+                trace_dir,
             }],
         },
     )
@@ -729,8 +765,13 @@ fn run_with_state_on(
     StateKeeper::begin(&run_dir(cfg, entry_id), state);
 }
 
-/// Write the run's state as a tracer that stopped at `updated_at` left it: the keeper stamps
-/// the time of every write, so the file is edited after.
+/// The trace directory [`run_with_state_on`] gives the entry.
+fn trace_of(cfg: &std::path::Path, entry_id: &str) -> PathBuf {
+    cfg.join("traces").join(entry_id)
+}
+
+/// Write the run's state as a goalcup process that stopped at `updated_at` left it: the keeper
+/// stamps the time of every write, so the file is edited after.
 fn leave_state_at(cfg: &std::path::Path, entry_id: &str, updated_at: u64) {
     let file = goalcup_cli::run::run_dir(cfg, entry_id).join(goalcup_cli::run::STATE_FILE_NAME);
     let mut json: serde_json::Value =
@@ -764,6 +805,64 @@ fn participant_block(text: &str) -> &str {
         .unwrap()
 }
 
+/// `goalcup status` shows the free disk, what goalcup's own processes use and a pause for the
+/// disk on one line, and under `--json` beside the signed document, which still verifies.
+#[test]
+fn status_shows_the_disk_and_what_goalcup_uses() {
+    use goalcup_cli::run::{DiskState, RunState, run_dir};
+    use goalcup_cli::upload::api::HeartbeatVitals;
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.disk = DiskState {
+        free_bytes: 20 << 30,
+        reserve_bytes: 3 << 30,
+        low: false,
+        disk_paused: false,
+    };
+    run_with_state(&cfg, &info.entry_id, state);
+    let dir = run_dir(&cfg, &info.entry_id);
+    // What the last heartbeat read of goalcup's processes.
+    let heartbeat = HeartbeatVitals {
+        rss_bytes: Some(80 << 20),
+        cpu_ms: Some(125_000),
+        open_files: Some(40),
+        ..HeartbeatVitals::default()
+    };
+    std::fs::write(
+        dir.join(goalcup_cli::vitals::VITALS_FILE_NAME),
+        serde_json::to_vec(&heartbeat).unwrap(),
+    )
+    .unwrap();
+    // The disk pause says so in the state (D65).
+    let file = dir.join(goalcup_cli::run::STATE_FILE_NAME);
+    let mut raw: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    raw["disk"]["disk_paused"] = true.into();
+    std::fs::write(&file, serde_json::to_vec(&raw).unwrap()).unwrap();
+
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    let line = participant_block(&text)
+        .lines()
+        .find(|line| line.contains("This computer"))
+        .unwrap_or_else(|| panic!("{text}"));
+    for said in ["20 GiB", "80 MiB", "2 min", "paused for disk"] {
+        assert!(line.contains(said), "{said}: {line}");
+    }
+
+    let json = status_text(&m, &cfg, &info.entry_id, true);
+    let doc: control::SignedStatus = serde_json::from_str(&json).unwrap();
+    doc.verify_with(&info.run_public_key).unwrap();
+    let raw: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let local = &raw[goalcup_cli::commands::status::LOCAL_KEY];
+    assert_eq!(local["disk_free_bytes"], 20u64 << 30, "{json}");
+    assert_eq!(local["agent_paused"], "disk", "{json}");
+    assert_eq!(local["rss_bytes"], 80u64 << 20, "{json}");
+    assert_eq!(local["cpu_ms"], 125_000, "{json}");
+}
+
 #[test]
 fn status_puts_every_problem_first() {
     use goalcup_cli::run::{DiskState, HarnessState, Recording, RunState, UploadState, now_unix};
@@ -782,11 +881,13 @@ fn status_puts_every_problem_first() {
         last_ok_at: Some(now - 40 * 60),
         problem: Some("the server answered 503".to_string()),
         stopped: false,
+        refused: None,
     };
     state.disk = DiskState {
         free_bytes: 3 << 30,
         reserve_bytes: 1 << 30,
         low: true,
+        disk_paused: false,
     };
     state.harness = HarnessState::Exited {
         status: "exit code 1".to_string(),
@@ -990,6 +1091,7 @@ fn status_names_heartbeats_that_keep_failing() {
     state.heartbeat = HeartbeatState {
         failures: HEARTBEATS_FAILING_AFTER - 1,
         last_failure: Some("the server answered HTTP 503".to_string()),
+        ..HeartbeatState::default()
     };
     run_with_state(&cfg, &info.entry_id, state.clone());
     let text = status_text(&m, &cfg, &info.entry_id, false);
@@ -1012,6 +1114,39 @@ fn status_names_heartbeats_that_keep_failing() {
     run_with_state(&cfg, &info.entry_id, state);
     let text = status_text(&m, &cfg, &info.entry_id, false);
     assert!(problem_lines(&text).is_empty(), "{text}");
+}
+
+/// D64: a server that keeps refusing the run's calls is one problem line, naming the status,
+/// while the run records; none once the server answers again or the run has ended.
+#[test]
+fn status_names_a_server_that_keeps_refusing_the_run() {
+    use goalcup_cli::run::{HarnessState, Recording, RunState, now_unix};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.updated_at = now_unix();
+    state.recording = Recording::Ok;
+    state.harness = HarnessState::Running;
+    state.upload.refused = Some(401);
+    run_with_state(&cfg, &info.entry_id, state.clone());
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    let problems = problem_lines(&text);
+    assert_eq!(problems.len(), 1, "{text}");
+    assert!(problems[0].contains("401"), "{text}");
+
+    for cleared in [false, true] {
+        let mut state = state.clone();
+        if cleared {
+            state.upload.refused = None;
+        } else {
+            state.ended = true;
+        }
+        run_with_state(&cfg, &info.entry_id, state);
+        let text = status_text(&m, &cfg, &info.entry_id, false);
+        assert!(problem_lines(&text).is_empty(), "{text}");
+    }
 }
 
 /// Start a practice run P, then a competition run C, then continue P: P's new segment is the
@@ -1222,8 +1357,65 @@ fn status_header_names_the_harness_the_mode_and_the_end() {
     );
 }
 
+/// The Upload line says "up to date" only when every record written is acknowledged; between
+/// the timed sends it says the upload works, how often it sends, and how many records wait.
+#[test]
+fn status_says_up_to_date_only_when_every_record_is_acknowledged() {
+    use goalcup_cli::run::{HarnessState, RunState};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.harness = HarnessState::Running;
+    state.updated_at = goalcup_cli::run::now_unix();
+    state.upload.last_ok_at = Some(control::parse_z(support::NOW).unwrap() - 16 * 60);
+    run_with_state_on(
+        &cfg,
+        &info.entry_id,
+        state,
+        Some("https://server.example"),
+        Some("2099-01-01T00:00:00Z"),
+    );
+    let trace = trace_of(&cfg, &info.entry_id);
+    let chain: String = (0..=40u64)
+        .map(|seq| format!("{{\"seq\":{seq},\"prev\":\"p\",\"hash\":\"h{seq}\"}}\n"))
+        .collect();
+    std::fs::write(trace.join("chain.jsonl"), chain).unwrap();
+    let ack = |seq: u64| {
+        let line = serde_json::json!({
+            "entry_id": info.entry_id, "seq": seq, "hash": format!("h{seq}"),
+            "acked_at": "2026-10-22T12:00:00Z", "server_signature": "00",
+        });
+        std::fs::write(trace.join("acks.jsonl"), format!("{line}\n")).unwrap();
+    };
+    let upload_line = |text: &str| {
+        participant_block(text)
+            .lines()
+            .find(|l| l.contains("Upload:"))
+            .unwrap_or_else(|| panic!("{text}"))
+            .to_string()
+    };
+
+    ack(9);
+    let line = upload_line(&status_text(&m, &cfg, &info.entry_id, false));
+    assert!(!line.contains("up to date"), "{line}");
+    assert!(line.contains("sent every 30 minutes"), "{line}");
+    assert!(line.contains("last sent 16 min ago"), "{line}");
+    assert!(line.contains("31 records wait for the next send"), "{line}");
+
+    ack(40);
+    let line = upload_line(&status_text(&m, &cfg, &info.entry_id, false));
+    assert!(line.contains("up to date (last sent 16 min ago)"), "{line}");
+
+    // No acknowledgement on this machine: every record waits, never "up to date".
+    std::fs::remove_file(trace.join("acks.jsonl")).unwrap();
+    let line = upload_line(&status_text(&m, &cfg, &info.entry_id, false));
+    assert!(line.contains("41 records wait"), "{line}");
+}
+
 /// What `goalcup status` says once a run is over: sealed, uploaded, being finished, or left
-/// unfinished by a tracer that stopped. The Next line is the action each state needs.
+/// unfinished by a goalcup process that stopped. The Next line is the action each state needs.
 #[test]
 fn status_names_the_next_action_for_every_state_of_a_run_that_is_over() {
     use goalcup_cli::run::{HarnessState, RunState};
@@ -1233,7 +1425,7 @@ fn status_names_the_next_action_for_every_state_of_a_run_that_is_over() {
     let cfg = support::cfg_with_entry(tmp.path(), &info);
     let server = Some("https://server.example");
     let over = Some("2020-01-01T00:00:00Z");
-    // The run's time is up and its tracer ended the agent for it.
+    // The run's time is up and its goalcup process ended the agent for it.
     let state = |ended: bool, updated_at: u64| {
         let mut state = RunState::launched(&info.entry_id, Ok(()));
         state.harness = HarnessState::Exited {
@@ -1291,17 +1483,23 @@ fn status_names_the_next_action_for_every_state_of_a_run_that_is_over() {
     assert!(next_of(&text).contains("nothing to do"), "{text}");
     std::fs::remove_file(spool.join(format!("{}.sent", info.entry_id))).unwrap();
 
-    // Time is up and the tracer is still finishing the run: wait.
+    // Time is up and goalcup is still finishing the run: wait.
     run_with_state_on(&cfg, &info.entry_id, state(false, fresh), server, over);
     let text = said(&cfg);
     assert!(participant_block(&text).contains("finishing"), "{text}");
     assert!(next_of(&text).contains("wait"), "{text}");
     assert!(problem_lines(&text).is_empty(), "{text}");
 
-    // Time is up and nothing writes the state any more (the computer restarted): waiting never
-    // helps. The run is sealed by hand, then sent.
+    // Time is up and nothing writes the state any more (the computer restarted) after its part
+    // was sealed: no seal is asked for again, only the upload.
     run_with_state_on(&cfg, &info.entry_id, state(false, 1), server, over);
     leave_state_at(&cfg, &info.entry_id, 1);
+    let text = said(&cfg);
+    assert_eq!(next_of(&text), "Next: run goalcup upload", "{text}");
+    assert!(!text.contains("goalcup seal"), "{text}");
+
+    // The same before its part was sealed: waiting never helps. It is sealed by hand, then sent.
+    std::fs::remove_file(trace_of(&cfg, &info.entry_id).join("seal.json")).unwrap();
     let text = said(&cfg);
     assert!(
         participant_block(&text).contains("stopped before it finished"),
@@ -1324,6 +1522,43 @@ fn status_names_the_next_action_for_every_state_of_a_run_that_is_over() {
         "{text}"
     );
     assert!(next_of(&text).contains("nothing to do"), "{text}");
+}
+
+/// T25: a run whose host finished without writing seal.json (a full disk) is not called sealed,
+/// and the next action is to seal it, then upload.
+#[test]
+fn status_calls_a_run_sealed_only_when_its_seal_json_is_there() {
+    use goalcup_cli::run::{HarnessState, RunState};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.harness = HarnessState::Exited {
+        status: "signal 15".to_string(),
+    };
+    state.stopped =
+        Some("the server says the run is over (its deadline was 2020-01-01T00:00:00Z)".into());
+    state.ended = true;
+    let server = Some("https://server.example");
+    let over = Some("2020-01-01T00:00:00Z");
+    run_with_state_on(&cfg, &info.entry_id, state, server, over);
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(
+        participant_block(&text).contains("sealed, not all"),
+        "{text}"
+    );
+
+    std::fs::remove_file(trace_of(&cfg, &info.entry_id).join("seal.json")).unwrap();
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    let block = participant_block(&text);
+    assert!(block.contains("not sealed"), "{text}");
+    assert!(!block.contains("sealed, not all"), "{text}");
+    let next = block.lines().find(|l| l.starts_with("Next:")).unwrap();
+    assert!(
+        next.contains("goalcup seal") && next.ends_with("goalcup upload"),
+        "{text}"
+    );
 }
 
 /// A run a newer run replaced did not end at its deadline, and the header does not say it did.
@@ -1508,11 +1743,9 @@ fn the_binary_leads_with_chat_mode_start() {
 
     let out = run(&["--help"]);
     let help = String::from_utf8_lossy(&out.stdout);
-    let chat = help
-        .find("goalcup start --harness <id>")
-        .expect("the start line");
-    let headless = help.find("--goal-file").expect("the headless note");
-    assert!(chat < headless, "chat-mode start leads: {help}");
+    assert!(help.contains("goalcup start --harness <id>"), "{help}");
+    // Headless mode was removed: no goal file is offered anywhere.
+    assert!(!help.contains("--goal-file"), "{help}");
 }
 
 /// `goalcup upload` with no id works on the newest run only, skips entries already sent, says
@@ -1588,7 +1821,7 @@ fn upload_with_no_id_picks_the_newest_runs_unsent_entries() {
     let error = unsent_of_newest_run(cfg).unwrap_err();
     assert!(error.to_string().contains("is local"), "{error}");
     assert!(
-        error.to_string().contains("goalcup upload <entry>"),
+        error.to_string().contains("goalcup upload <part-id>"),
         "{error}"
     );
 }

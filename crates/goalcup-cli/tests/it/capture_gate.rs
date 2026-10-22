@@ -10,14 +10,12 @@
 //! nextest): each forks, and a fork taken while another test
 //! holds a freshly written script open is how a "text file busy" is made.
 
-use crate::common::support;
 use crate::common::table_lock::TableLock;
 
 use goalcup_cli::CliError;
 use goalcup_cli::launch::{
-    GOAL_ARG_MARKER, GatedSpawn, HeadlessCapture, LaunchPlan, Pipes, ReleasedChildEnd, Spawned,
-    StdoutJsonRule, end_released_child, gated_handle, launched_at_now, spawn_gated,
-    stdout_tee_with_rule, tee_scoped_capture_with_rule,
+    GatedSpawn, LaunchPlan, ReleasedChildEnd, Spawned, end_released_child, gated_handle,
+    launched_at_now, spawn_gated,
 };
 use goalcup_protocol::manifest::{Kill, KillStrategy, LaunchMode};
 use goalcup_protocol::process::{ProcessHandle, is_alive, process_start_identity};
@@ -58,17 +56,9 @@ impl World {
         env.insert("PATH".into(), "/usr/bin:/bin".into());
         env.insert("OUT".into(), self.dir.path().display().to_string());
         env.insert("NATIVE".into(), self.path(NATIVE).display().to_string());
-        let argv = vec![
-            script_path.display().to_string(),
-            "--".to_string(),
-            "the goal".to_string(),
-        ];
+        let argv = vec![script_path.display().to_string(), "chat".to_string()];
         LaunchPlan {
             program: "/bin/sh".into(),
-            capture: Some(HeadlessCapture {
-                goal_index: argv.len() - 1,
-                goal_prefix: 0,
-            }),
             argv,
             env_set: env,
             env_remove: Vec::new(),
@@ -89,7 +79,7 @@ impl World {
 
     fn gated(&self, script: &str) -> (LaunchPlan, GatedSpawn) {
         let plan = self.plan(script, None, 1);
-        let gated = spawn_gated(&plan, Pipes::default(), PATIENCE).expect("a parked child");
+        let gated = spawn_gated(&plan, PATIENCE).expect("a parked child");
         (plan, gated)
     }
 
@@ -204,7 +194,7 @@ fn gate_release_execs_with_stable_pid_and_start_identity() {
 fn gated_handle_has_no_native_hint() {
     let w = World::new();
     let plan = w.plan(RAN, Some(NATIVE), 7);
-    let gated = spawn_gated(&plan, Pipes::default(), PATIENCE).unwrap();
+    let gated = spawn_gated(&plan, PATIENCE).unwrap();
     let handle = gated_handle(&plan, &gated, &launched_at_now()).unwrap();
     assert_eq!(handle.pid, gated.pid);
     assert_eq!(handle.native_pid, None);
@@ -218,10 +208,7 @@ fn gated_handle_has_no_native_hint() {
         process_start_identity(gated.pid),
         "the fork-time identity is registered while parked"
     );
-    assert_eq!(
-        handle.argv.last().map(String::as_str),
-        Some(GOAL_ARG_MARKER)
-    );
+    assert_eq!(handle.argv, plan.argv, "the handle records the plan's argv");
     gated.abort();
 }
 
@@ -230,7 +217,7 @@ fn parked_child_death_is_never_released() {
     let w = World::new();
     let plan = w.plan(RAN, None, 1);
     // A ready timeout far longer than the assertion below: only EOF or EPIPE can end it early.
-    let gated = spawn_gated(&plan, Pipes::default(), Duration::from_secs(60)).unwrap();
+    let gated = spawn_gated(&plan, Duration::from_secs(60)).unwrap();
     let pid = gated.pid;
     kill9(pid);
     wait_for("the killed child to die", || !is_alive(pid));
@@ -261,7 +248,7 @@ fn pid_read_ends_on_child_death_or_fork_failure() {
     let mut plan = w.plan(RAN, None, 1);
     plan.cwd = w.path("no-such-directory");
     let began = Instant::now();
-    let refused = spawn_gated(&plan, Pipes::default(), Duration::from_secs(60)).err();
+    let refused = spawn_gated(&plan, Duration::from_secs(60)).err();
     assert!(
         matches!(refused, Some(CliError::Io { .. })),
         "the spawn failure is the answer: {refused:?}"
@@ -276,7 +263,7 @@ fn pid_read_ends_on_child_death_or_fork_failure() {
     // A death after the pid is seen as EOF, because the launcher dropped the child's end once
     // the pid arrived; with the end retained the release would wait out its whole 60 s.
     let plan = w.plan(RAN, None, 1);
-    let gated = spawn_gated(&plan, Pipes::default(), Duration::from_secs(60)).unwrap();
+    let gated = spawn_gated(&plan, Duration::from_secs(60)).unwrap();
     kill9(gated.pid);
     wait_for("the killed child to die", || !is_alive(gated.pid));
     let began = Instant::now();
@@ -288,102 +275,12 @@ fn pid_read_ends_on_child_death_or_fork_failure() {
     );
 }
 
-#[test]
-fn a_piped_stdout_is_the_childs_after_the_release() {
-    let w = World::new();
-    let plan = w.plan("echo hello-from-the-harness\n", None, 1);
-    let gated = spawn_gated(
-        &plan,
-        Pipes {
-            stdout: true,
-            stderr: false,
-        },
-        PATIENCE,
-    )
-    .unwrap();
-    let mut spawned = gated.release().unwrap();
-    let mut text = String::new();
-    std::io::Read::read_to_string(&mut spawned.child.stdout.take().unwrap(), &mut text).unwrap();
-    assert_eq!(text.trim(), "hello-from-the-harness");
-    let _ = spawned.child.wait();
-}
-
-fn stdout_rule() -> StdoutJsonRule {
-    StdoutJsonRule {
-        match_field: "event.type".into(),
-        match_value: "started".into(),
-        id_field: "event.id".into(),
-    }
-}
-
-fn scan_stdout(bytes: &[u8]) -> Option<String> {
-    let (sender, receiver) = std::sync::mpsc::channel();
-    let mut forwarded = Vec::new();
-    stdout_tee_with_rule(bytes, &mut forwarded, sender, &stdout_rule()).unwrap();
-    assert_eq!(forwarded, bytes);
-    receiver.recv().unwrap()
-}
-
-#[test]
-fn stdout_identity_uses_manifest_paths_and_first_match_is_final() {
-    let bytes = b"{\"event\":{\"type\":\"started\"}}\n\
-                  {\"event\":{\"type\":\"started\",\"id\":\"later\"}}\n";
-    assert_eq!(
-        scan_stdout(bytes),
-        None,
-        "an unusable first match ends scanning"
-    );
-
-    let bytes = b"{\"event\":{\"type\":\"noise\",\"id\":\"wrong\"}}\n\
-                  {\"event\":{\"type\":\"started\",\"id\":\"wanted\"}}\n\
-                  {\"event\":{\"type\":\"started\",\"id\":\"later\"}}\n";
-    assert_eq!(scan_stdout(bytes), Some("wanted".into()));
-}
-
-#[test]
-fn stdout_identity_scans_only_the_first_64_complete_lines() {
-    let mut bytes = vec![];
-    for _ in 0..64 {
-        bytes.extend_from_slice(b"{}\n");
-    }
-    bytes.extend_from_slice(b"{\"event\":{\"type\":\"started\",\"id\":\"line-65\"}}\n");
-    assert_eq!(scan_stdout(&bytes), None);
-}
-
-/// A tee asked of a child whose pipe was never made ends that child and says so; it does not
-/// panic the launcher. This guards the manifest-derived stream plan against a mismatched spawn.
-#[test]
-fn a_tee_on_a_child_without_its_pipe_refuses_and_ends_the_child() {
-    let w = World::new();
-    for scoped in [true, false] {
-        let plan = w.plan("sleep 30\n", None, 1);
-        let gated = spawn_gated(&plan, Pipes::default(), PATIENCE).unwrap();
-        let pid = gated.pid;
-        let mut spawned = gated.release().unwrap();
-        let refused = if scoped {
-            tee_scoped_capture_with_rule(&mut spawned, support::stdout_event_rule()).err()
-        } else {
-            goalcup_cli::capture_tee::tee_stderr_capture_with_rule(
-                &mut spawned,
-                support::stderr_marker_rule(),
-            )
-            .err()
-        };
-        let error = refused.expect("a tee without its pipe refuses");
-        assert!(
-            matches!(error, CliError::Io { .. } | CliError::Refused(_)),
-            "{error:?}"
-        );
-        wait_for("the child to be ended", || !is_alive(pid));
-    }
-}
-
 // ------------------------------------------------------------------ ending a released child
 
 /// A released gated child and its handle, registered the way `capture()` does.
 fn released(w: &World, script: &str, native: Option<&str>, grace: u64) -> (ProcessHandle, Spawned) {
     let plan = w.plan(script, native, grace);
-    let gated = spawn_gated(&plan, Pipes::default(), PATIENCE).unwrap();
+    let gated = spawn_gated(&plan, PATIENCE).unwrap();
     let handle = gated_handle(&plan, &gated, &launched_at_now()).unwrap();
     let spawned = gated.release().unwrap();
     (handle, spawned)
@@ -586,7 +483,7 @@ fn end_released_child_on_exited_root_with_a_named_native_binary_is_unverified() 
 fn a_parked_child_that_died_is_refused_in_its_own_words() {
     let w = World::new();
     let plan = w.plan(RAN, None, 1);
-    let gated = spawn_gated(&plan, Pipes::default(), PATIENCE).unwrap();
+    let gated = spawn_gated(&plan, PATIENCE).unwrap();
     kill9(gated.pid);
     wait_for("the killed child to die", || !is_alive(gated.pid));
     let refused = gated_handle(&plan, &gated, &launched_at_now())

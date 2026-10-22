@@ -11,7 +11,7 @@
 //! first:
 //! * the declared id is the folder name (`load_dir` does not compare with the folder name);
 //! * no non-comment line of `harness.toml` names the tracker, a rule broader than
-//!   `validate`'s (which scans args, goal flag, env and hosts, not `continuation` or
+//!   `validate`'s (which scans args, env and hosts, not `continuation` or
 //!   `evidence_paths`).
 //!
 //! The set the loop runs over is itself asserted (M-2): every id the pins file pins
@@ -70,7 +70,7 @@ fn check_dir(dir: &Path) -> Result<(), String> {
     let text = String::from_utf8(loaded.harness_toml.clone()).map_err(|e| e.to_string())?;
     for line in text.lines().filter(|l| !l.trim_start().starts_with('#')) {
         if mentions_goalcup(line) {
-            return Err(format!("{}: `{line}` names the tracker (F7)", m.id));
+            return Err(format!("{}: `{line}` names Goal Cup Proxy (F7)", m.id));
         }
     }
 
@@ -91,6 +91,61 @@ fn check_dir(dir: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// The anchors GitHub gives the headings of `text`: lower-case, everything but letters, digits,
+/// `_`, `-` and spaces dropped, spaces turned into `-` (the rule `scripts/check-links.py`
+/// follows; the guide repeats no heading, so repeats are not numbered here).
+fn heading_anchors(text: &str) -> Vec<String> {
+    let mut fenced = false;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        let Some(title) = line.trim_start_matches('#').strip_prefix(' ') else {
+            continue;
+        };
+        if fenced || !line.starts_with('#') {
+            continue;
+        }
+        out.push(
+            title
+                .trim()
+                .to_lowercase()
+                .chars()
+                .filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ' '))
+                .map(|c| if c == ' ' { '-' } else { c })
+                .collect(),
+        );
+    }
+    out
+}
+
+/// Fix plan v8: `goalcup prep` links every harness to its section of the participant's setup
+/// guide, `docs/HARNESS-SETUP.md#<participant.setup_section>`. So every connector names one,
+/// and the guide has that heading.
+#[test]
+fn every_connector_links_to_its_section_of_the_setup_guide() {
+    let guide = root().join("docs/HARNESS-SETUP.md");
+    let anchors = heading_anchors(
+        &std::fs::read_to_string(&guide).unwrap_or_else(|e| panic!("{}: {e}", guide.display())),
+    );
+    let mut seen = 0;
+    for dir in connector_dirs() {
+        let m = load_dir(&dir, Origin::Pinned).unwrap().manifest;
+        let section = m
+            .setup_section()
+            .unwrap_or_else(|| panic!("{}: no participant.setup_section", m.id));
+        assert!(
+            anchors.iter().any(|a| a == section),
+            "{}: docs/HARNESS-SETUP.md has no heading `#{section}`",
+            m.id
+        );
+        seen += 1;
+    }
+    assert!(seen > 0, "no connector checked");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -157,12 +212,12 @@ fn copy_connector_as(id: &str, folder: &str) -> (tempfile::TempDir, PathBuf) {
     copy_dir_as(&root().join("connectors").join(id), folder)
 }
 
-/// [`copy_connector`] of the frozen copy of `id` as it shipped while headless, for the tests
-/// of the headless recipe's text.
-fn copy_headless_connector(id: &str) -> (tempfile::TempDir, PathBuf) {
+/// [`copy_connector`] of the frozen copy of `id` as it shipped before chat mode, for the tests
+/// of its recipe's text (Hermes's seeds, Codex's continuation).
+fn copy_frozen_connector(id: &str) -> (tempfile::TempDir, PathBuf) {
     copy_dir_as(
         &root()
-            .join("crates/goalcup-protocol/tests/fixtures/headless-connectors/")
+            .join("crates/goalcup-protocol/tests/fixtures/frozen-connectors/")
             .join(id),
         id,
     )
@@ -221,7 +276,7 @@ fn sensitivity_a_missing_harness_toml_is_refused() {
 
 #[test]
 fn sensitivity_load_dir_refuses_an_unnamed_file_under_files() {
-    let (_tmp, dir) = copy_headless_connector("hermes-cli");
+    let (_tmp, dir) = copy_frozen_connector("hermes-cli");
     std::fs::write(dir.join("files/stray.txt"), b"x\n").unwrap();
     let err = check_dir(&dir).expect_err("a stray file");
     assert!(
@@ -232,7 +287,7 @@ fn sensitivity_load_dir_refuses_an_unnamed_file_under_files() {
 
 #[test]
 fn sensitivity_load_dir_refuses_a_seed_the_directory_lacks() {
-    let (_tmp, dir) = copy_headless_connector("hermes-cli");
+    let (_tmp, dir) = copy_frozen_connector("hermes-cli");
     std::fs::remove_file(dir.join("files/auth.json")).unwrap();
     let err = check_dir(&dir).expect_err("a missing seed");
     assert!(
@@ -260,7 +315,7 @@ fn sensitivity_load_dir_refuses_an_extra_rule_that_is_not_a_form() {
 /// is documentation, never an argument, env value or host.
 #[test]
 fn sensitivity_f7_catches_a_value_validate_does_not_scan() {
-    let (_tmp, dir) = copy_headless_connector("codex-cli");
+    let (_tmp, dir) = copy_frozen_connector("codex-cli");
     mutate(
         &dir.join("harness.toml"),
         "full access with network, stdin",
@@ -277,11 +332,14 @@ fn sensitivity_f7_catches_a_value_validate_does_not_scan() {
 #[test]
 fn sensitivity_a_connector_without_a_display_name_is_refused() {
     let (_tmp, dir) = copy_connector("codex-cli");
-    mutate(
-        &dir.join("harness.toml"),
-        "[participant]\ndisplay_name = \"Codex\"\n",
-        "",
+    // The whole `[participant]` section, its `[[participant.no_prompts]]` rows included.
+    let path = dir.join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let (start, end) = (
+        text.find("[participant]").expect("a [participant] table"),
+        text.find("[capture]").expect("a [capture] table"),
     );
+    std::fs::write(&path, format!("{}{}", &text[..start], &text[end..])).unwrap();
     load_dir(&dir, Origin::Pinned).expect("the loader accepts a manifest with no [participant]");
     let err = check_dir(&dir).expect_err("a connector with no display_name");
     assert!(err.contains("no [participant] display_name"), "{err}");

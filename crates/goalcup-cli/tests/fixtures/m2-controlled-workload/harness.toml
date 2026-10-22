@@ -18,7 +18,8 @@ schema_version = 1
 id = "m2-controlled-workload"
 
 [capture]
-args = ["@WORKLOAD@", "@CONFIG@", "--"]
+interactive = true
+args = ["@WORKLOAD@", "@CONFIG@"]
 continuation = "none: one fixed traffic plan, no input after the goal"
 auth_hosts = ["auth.e00.localhost"]
 

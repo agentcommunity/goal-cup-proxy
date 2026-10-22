@@ -1,7 +1,7 @@
 # Security policy
 
-How do I report a vulnerability, and what does this tool do on my machine? For anyone who runs the
-tracer or reviews a change to it.
+How do I report a vulnerability, and what does this tool do on my machine? For anyone who runs
+Goal Cup Proxy or reviews a change to it.
 
 ## Supported versions
 
@@ -41,7 +41,7 @@ one of those is known, not new, unless it shows that the stated bound does not h
   Hermes keep shared config homes (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `HERMES_HOME`); Amp keeps
   an isolated shared `HOME`. Runs sharing a home are serialized. Claude Code's per-run home
   links the macOS Keychains directory. Hermes's shared home is never seeded: its own setup
-  keeps its provider and login there. The tracer passes no provider key and never writes
+  keeps its provider and login there. Goal Cup Proxy passes no provider key and never writes
   app-wide harness configuration such as `~/.claude`, `~/.codex` or `~/.hermes`.
 - With `goalcup login`, talks to the Goal Cup server (`https://ingest.agentcommunity.org`) and to
   GitHub for the participant's repository. A run's credential is stored at mode 0600 under the
@@ -59,7 +59,7 @@ A trace that never reached the server can be rewritten and re-sealed
 | Other local accounts | Blocked by loopback plus a secret on every socket, and 0600/0700 files. Create artifact and config directories made by hand with mode 0700. |
 | Web pages | No CORS. The bearer is required on every mutating route. A status read needs a 64-bit entry id. The control API refuses any `Host` other than its own loopback address and port before the public/bearer split, so a DNS-rebinding page reads nothing. One route is public: `/v0/entries/{id}/status` ([CONTRACTS](docs/CONTRACTS.md#the-control-apis-unauthenticated-surface)). |
 | Same-user processes, including the agent under test | **Inside the boundary.** They can read `control.json` (mode 0600, same uid), the harness environment and run directories, and call authenticated mutators while a capture has live authority. After a restart, a recovered capture accepts status and seal only. Detection is after the fact, from the captured native and wire records. |
-| Network | The proxy validates upstream TLS. Only declared provider hosts and paths are decrypted and retained. Authentication hosts always tunnel unmodified. |
+| Network | The recording proxy validates upstream TLS. Only declared provider hosts and paths are decrypted and retained. Authentication hosts always tunnel unmodified. |
 | The Goal Cup server | Signs start receipts and acknowledgements with an Ed25519 key. The verifier accepts only the key built into it (`SERVER_PUBLIC_KEYS`, the production Worker's). Any other key verifies only when passed with `--dev-key`, and the report then says `key_source: "supplied"` and `server_key_unpinned`. No key whose seed is in this repository is trusted. |
 | Connector authors | **Trusted code.** See below. |
 

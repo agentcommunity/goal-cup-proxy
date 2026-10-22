@@ -36,6 +36,17 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
   };
   const poll = (device_code: string) => api.call("POST", "/v1/device/token", { json: { device_code } });
 
+  test("proxy_version or tracer_version names Goal Cup Proxy's version; two that differ are 400", async () => {
+    for (const over of [{ tracer_version: undefined, proxy_version: "0.7.0" }, { proxy_version: undefined, tracer_version: "0.6.0" }, { proxy_version: "0.7.0", tracer_version: "0.7.0" }]) {
+      const d = await api.call("POST", "/v1/device", { json: deviceBody(over) });
+      assert.equal(d.status, 200, JSON.stringify(d.body));
+      deviceCodes.push(d.body.device_code);
+    }
+    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: "0.7.0", tracer_version: "0.6.0" }) }), 400, "malformed");
+    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: undefined }) }), 400, "malformed");
+    assertError(await api.call("POST", "/v1/device", { json: deviceBody({ tracer_version: undefined, proxy_version: "x".repeat(65) }) }), 400, "malformed");
+  });
+
   test("pending, approve, pickup once, then 410", async () => {
     const before = Date.now();
     const d = await api.call("POST", "/v1/device", { json: deviceBody() });
@@ -148,7 +159,14 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
     assert.equal(first.status, 201, JSON.stringify(first.body));
     const again = await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "same" }) });
     assert.equal(again.status, 200, JSON.stringify(again.body));
-    assert.deepEqual(again.body, first.body);
+    // The clock moves between the two answers, so seconds_left may be a second less, never more.
+    const sameRun = (body: Record<string, unknown>) => {
+      const { seconds_left, ...rest } = body;
+      const { seconds_left: firstLeft, ...firstRest } = first.body;
+      assert.deepEqual(rest, firstRest);
+      assert.ok(typeof seconds_left === "number" && seconds_left <= firstLeft && seconds_left > firstLeft - 60, JSON.stringify(body));
+    };
+    sameRun(again.body);
 
     const other = await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "different" }) });
     assertError(other, 409, "conflict");
@@ -157,7 +175,7 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
     // After the receipt, still the same run.
     const r = await api.call("POST", `/v1/runs/${first.body.run_id}/receipt`, { token, json: { entry_id: first.body.entry_id, chain_head: "b".repeat(64) } });
     assert.equal(r.status, 200);
-    assert.deepEqual((await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "same" }) })).body, first.body);
+    sameRun((await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "same" }) })).body);
   });
 
   test("a member's second credential opens a second run, which replaces the first", async () => {
@@ -184,16 +202,22 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
         token,
         json: { entry_id: run.entry_id, seq: 0, head: GENESIS, offset_local: 0, final: false, repo_head: null, ...extra },
       });
+    // The clock moves between the open and the heartbeat, so seconds_left is a range, not one number.
+    const answered = (body: Record<string, unknown>) => {
+      const { seconds_left, ...rest } = body;
+      assert.deepEqual(rest, { stop: false, deadline_at: run.deadline_at, reason: null });
+      assert.ok(typeof seconds_left === "number" && seconds_left > 168 * 3600 - 60 && seconds_left <= 168 * 3600, JSON.stringify(body));
+    };
     for (const recording of ["ok", "gaps", "failed", "unknown"]) {
       const r = await beat({ recording, model_requests: 12 });
       assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual({ ...r.body, seconds_left: undefined }, { stop: false, deadline_at: run.deadline_at, seconds_left: undefined, reason: null });
+      answered(r.body);
     }
     assert.equal((await beat({})).status, 200);
     // null is absent, as for repo_head.
     const nulls = await beat({ recording: null, model_requests: null });
     assert.equal(nulls.status, 200, JSON.stringify(nulls.body));
-    assert.deepEqual({ ...nulls.body, seconds_left: undefined }, { stop: false, deadline_at: run.deadline_at, seconds_left: undefined, reason: null });
+    answered(nulls.body);
     assertError(await beat({ model_requests: 2 ** 53 }), 400, "malformed");
     assertError(await beat({ recording: "fine" }), 400, "malformed");
     assertError(await beat({ model_requests: -1 }), 400, "malformed");

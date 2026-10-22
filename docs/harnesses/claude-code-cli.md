@@ -33,7 +33,7 @@ claude -p --permission-mode bypassPermissions \
 - Stop self-update: `DISABLE_AUTOUPDATER=1` (code: connector env).
 - Version lock: while a run is going Claude creates and removes `~/.local/state/claude/locks/2.1.283.lock`; `XDG_STATE_HOME` redirects it (measured).
 - Linux packages (measured: tarballs fetched with `npm pack` and hashed, 2026-10-13): `@anthropic-ai/claude-code-linux-x64@2.1.283` and `@anthropic-ai/claude-code-linux-arm64@2.1.283`, each holding the native executable at `package/claude`. The packages without a `-musl` suffix are the ones measured (assumed glibc builds; linkage not checked); the `-musl` packages were not measured. Measured SHA-256 of that file: x86_64 `1859583c...804ae2`, arm64 `346d294f...15e697`. `claude --version` on Linux prints `2.1.283 (Claude Code)` and exits 0 (measured, Docker `rust:1.99` image on arm64, `--network none`, empty temporary `HOME` and `CLAUDE_CONFIG_DIR`, 2026-10-13). Linux install locations of the native installer: unknown (not tried).
-- Linux, no login (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login): `goalcup doctor` passes the executable check on the arm64 binary, reached through a symlink on `PATH`. Claude returns `{"is_error":true,"result":"Not logged in · Please run /login","terminal_reason":"api_error"}` with `duration_api_ms` 0 and `total_cost_usd` 0 in about 49 ms, and exits 1; the proxy saw one intercepted connection, closed `interrupted`, with no wire stream. The run seals (`AlreadyStopped`) and `goalcup-verify --capture-integrity` exits 0.
+- Linux, no login (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login): `goalcup doctor` passes the executable check on the arm64 binary, reached through a symlink on `PATH`. Claude returns `{"is_error":true,"result":"Not logged in · Please run /login","terminal_reason":"api_error"}` with `duration_api_ms` 0 and `total_cost_usd` 0 in about 49 ms, and exits 1; the recording proxy saw one intercepted connection, closed `interrupted`, with no wire stream. The run seals (`AlreadyStopped`) and `goalcup-verify --capture-integrity` exits 0.
 - Linux x86_64, no login (measured, GitHub-hosted `ubuntu-24.04` runner, 4 vCPU, ext4, 2026-10-13, [run 38448817041](https://github.com/agentcommunity/goal-cup-tracer/actions/runs/38448817041), `scripts/linux-harness-smoke.sh`): `claude --version` prints `2.1.283 (Claude Code)`, `goalcup doctor` passes, Claude returns `{"is_error":true,"result":"Not logged in · Please run /login"}` with `duration_api_ms` 0 and `total_cost_usd` 0 in 126 ms and exits 1, `goalcup start` prints `proxy admission: accepted=5 intercepted=5`, the run seals `AlreadyStopped`, `goalcup-verify --capture-integrity` exits 0, and no `claude` process is left. That run drove the headless form (`--goal-file`, `claude -p`). Since PR #181 the script reads the connector's manifest instead: a chat-mode connector, as this one is, gets a terminal, one typed prompt, then a hangup, so the outcome above is the headless run's, and this sheet records no chat-mode Linux result.
 - macOS Intel (from the npm tarball, 2026-10-14; not run): `@anthropic-ai/claude-code-darwin-x64@2.1.283` holds `package/claude`.
 - Windows install locations: unknown. A SHA-256 matches one platform and one architecture only, which is why builds are recorded rather than pinned (D53).
@@ -84,7 +84,7 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 - **Kill.** Goal Cup signals the process group, 10 s grace, then SIGKILL (code: `strategy = process_group`). SIGTERM-specific behaviour of Claude: unknown.
 - **Hard kill.** `kill -9` leaves no session-end record; request body files written through the OTel raw-body switch were complete JSON up to the kill (measured, 2.1.259).
 - **Exit codes.** 0 after a finished turn, 1 for a missing goal (measured). 1 on Linux arm64 and x86_64 with no login (measured). Others: unknown.
-- **Orphans.** On Linux there was no fork-and-leave on the no-login path: Claude's three short-lived children exited before it did, nothing stayed in its process group afterwards, and nothing but the tracker's daemon was reparented to init (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login, 0.1 s sampling; a child that lived and died between samples would not show, so this holds at that sampling interval). A logged-in Linux run, which runs tools, is not measured.
+- **Orphans.** On Linux there was no fork-and-leave on the no-login path: Claude's three short-lived children exited before it did, nothing stayed in its process group afterwards, and nothing but `goalcup-daemon` was reparented to init (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login, 0.1 s sampling; a child that lived and died between samples would not show, so this holds at that sampling interval). A logged-in Linux run, which runs tools, is not measured.
 
 ## 8. Things Goal Cup cannot isolate
 
@@ -108,9 +108,9 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 
 The connector runs Claude Code in its normal chat mode in the participant's terminal, and the participant types the prompt (code: [connectors/claude-code-cli/harness.toml](../../connectors/claude-code-cli/harness.toml)): `interactive = true`, `args = []` (`claude` alone), identity `none`, native root `{config_home}/projects` with pattern `*/*.jsonl` and `since_run_start = true`, `skills_dir = "skills"` (the goal-cup skill goes in `$CLAUDE_CONFIG_DIR/skills/goal-cup/`), `resume_args = ["--continue"]` (what `goalcup continue` appends; measured below to append to the same session file). `DISABLE_AUTOUPDATER` and `CLAUDE_CODE_RETRY_WATCHDOG` are kept.
 
-Measured on macOS arm64, Claude Code 2.1.283, 2026-10-14, by driving the TUI on a pseudo-terminal (120x40) in a fresh `git init` workspace, with `CLAUDE_CONFIG_DIR` the tracer's isolated home and a `HOME` holding only `Library/Keychains`. That home was **logged out** (the assistant answered "Not logged in · Please run /login"), so no model reply was seen:
+Measured on macOS arm64, Claude Code 2.1.283, 2026-10-14, by driving the TUI on a pseudo-terminal (120x40) in a fresh `git init` workspace, with `CLAUDE_CONFIG_DIR` Goal Cup Proxy's isolated home and a `HOME` holding only `Library/Keychains`. That home was **logged out** (the assistant answered "Not logged in · Please run /login"), so no model reply was seen:
 
-- A new workspace shows "Quick safety check: Is this a project you created or one you trust?" with the cursor on **"No, exit"**. The participant must pick "Yes, I trust this folder" (Down, then Enter). Every fresh clone of a run shows it once. The participant answers it themselves, and the rules allow that: it is a start-up dialog of the harness, not a message to the agent ([RULES](../RULES.md#one-prompt-then-only-keep-going)). The tracer says so before the harness opens, from the connector's `participant.first_screen` (`Claude Code may ask whether you trust this folder. Choose Yes.`). The tracer never answers it. Choosing "No, exit" ends Claude Code at once.
+- A new workspace shows "Quick safety check: Is this a project you created or one you trust?" with the cursor on **"No, exit"**. The participant must pick "Yes, I trust this folder" (Down, then Enter). Every fresh clone of a run shows it once. The participant answers it themselves, and the rules allow that: it is a start-up dialog of the harness, not a message to the agent ([RULES](../RULES.md#one-prompt-then-only-keep-going)). Goal Cup Proxy says so before the harness opens, from the connector's `participant.first_screen` (`Claude Code may ask whether you trust this folder. Choose Yes.`). Goal Cup Proxy never answers it. Choosing "No, exit" ends Claude Code at once.
 - The transcript is **not** created at startup or after the trust prompt. It is created when the first message is submitted, at `projects/<cwd with / replaced by ->/<session uuid>.jsonl`.
 - The typed message is a `type: "user"` record whose `message.content` is the text.
 - `/exit` prints `Resume this session with: claude --resume <uuid>`.
@@ -121,3 +121,40 @@ PENDING (need a logged-in home, which the owner must restore; nobody on our side
 
 - A model reply in chat mode through the recording proxy.
 - One 10-minute practice run of this connector on this Mac against staging.
+
+## Run without permission prompts
+
+During a run you may type only "keep going" ([RULES](../RULES.md)), so a Claude Code that stops at
+"This command requires approval" waits until the deadline. Goal Cup recommends these two settings
+and never sets them for you (D67). They go in `settings.json` in Claude Code's Goal Cup home
+(`CLAUDE_CONFIG_DIR`, under `capture-homes/claude-code-cli/` in your Goal Cup configuration folder;
+`goalcup prep` prints the full path when one is missing), beside your other keys:
+
+```json
+{
+  "permissions": { "defaultMode": "bypassPermissions" },
+  "skipDangerousModePermissionPrompt": true
+}
+```
+
+- `permissions.defaultMode` accepts `default` (also written `manual`), `acceptEdits`,
+  `bypassPermissions`, `plan`, `dontAsk` and `auto` (the settings schema in the 2.1.299 bundle).
+  `bypassPermissions` asks for nothing.
+- `skipDangerousModePermissionPrompt` is the record that you accepted the bypass disclaimer once.
+  Without it in the user settings, Claude Code 2.1.283 and 2.1.299 start in `default` mode instead
+  ("Permission mode downgraded to default"), which asks. Accepting the disclaimer of
+  `claude --dangerously-skip-permissions` writes the same key, but into the home Claude Code was
+  started with (usually `~/.claude`), so set it in the Goal Cup home's file.
+- Claude Code refuses bypass mode as root (unless `IS_SANDBOX=1`); run it as a normal user.
+- What we saw: in Docker, Claude Code 2.1.283 switched itself from auto to manual permission mode,
+  answered the main turn, then waited at "This command requires approval" until the deadline
+  (lx-claude rerun, local test day). The Mac run on 2.1.299 stayed in auto mode.
+- Bypass mode lets the agent's commands change anything your user can. Run it on a machine or in a
+  container you are content to let it change.
+- `goalcup prep` reads both keys and, while one is not set this way, adds the recommendation to its
+  harness home step. It never changes them and never fails for them. The test kit
+  (`scripts/kit_settle.py`) sets both in its own cells.
+- Evidence: [local test day](../research/results/2026-10-22-local-test-day.md),
+  [plan v4](../research/results/2026-10-22-fix-plan-v4.md).
+- Every setting for a long run, for participants:
+  [Set up your harness for a 168-hour run](../HARNESS-SETUP.md#claude-code).

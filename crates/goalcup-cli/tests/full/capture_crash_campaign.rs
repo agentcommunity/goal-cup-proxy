@@ -5,9 +5,9 @@
 //!
 //! The faults are real processes and real operating-system conditions, nothing else:
 //!
-//! - the crash is `kill -9` of the one daemon the test spawned, while the proxy in `goalcup
-//!   start` and the workload keep running; the restart is a second real `goalcup-daemon` over
-//!   the same private registry;
+//! - the crash is `kill -9` of the one daemon the test spawned, while the recording proxy in
+//!   `goalcup start` and the workload keep running; the restart is a second real
+//!   `goalcup-daemon` over the same private registry;
 //! - the torn tail is a real partial append: the daemon child runs under an `RLIMIT_FSIZE`
 //!   (`capture_crash_support::Daemon::spawn`), so the production writer's own `write` is cut
 //!   short by the kernel mid-line and the next one fails. No byte of the chain is written by
@@ -140,17 +140,17 @@ fn local_finishes(chain: &Chain) -> usize {
     chain.count(|r| matches!(r, CaptureRecord::LocalFinish { .. }))
 }
 
-/// Run directories `goalcup start` made beside the goal file: a relaunch would make a second.
+/// Run directories `goalcup start` made in the run folder: a relaunch would make a second.
 fn run_directories(v: &Vertical) -> usize {
-    std::fs::read_dir(v.goal.parent().unwrap())
+    std::fs::read_dir(&v.runs)
         .unwrap()
         .flatten()
         .filter(|e| e.path().is_dir())
         .count()
 }
 
-/// What the upstream endpoint, counting outside the workload, the proxy and the recorder, saw:
-/// every echo request and every WebSocket message exactly as many times as the workload sent
+/// What the upstream endpoint, counting outside the workload, the recording proxy and the recorder,
+/// saw: every echo request and every WebSocket message exactly as many times as the workload sent
 /// it. A request the relay replayed would be counted twice here.
 fn assert_upstream_saw_each_once(v: &Vertical, row: &mut Row) {
     let counters = v.endpoint_counters();
@@ -620,7 +620,8 @@ fn torn_tail_is_preserved_and_nonresumable() {
     // CLI ladder rung 1: refused, the daemon has no status for that entry.
     assert_eq!(st.code(), Some(1), "{out}{err}");
     assert!(err.contains("no status for that entry"), "{err}");
-    let (st, out, err) = leaves_trace_unchanged(&trace, "seal", || cli(&v, &["seal", &entry]));
+    let (st, out, err) =
+        leaves_trace_unchanged(&trace, "seal", || cli(&v, &["seal", "--yes", &entry]));
     row.note("seal_exit", st.code());
     row.note("seal_stderr", err.clone());
     // CLI ladder rung 1 (H-15): a safe refusal. The daemon holds the row as a capture but has no
@@ -629,7 +630,7 @@ fn torn_tail_is_preserved_and_nonresumable() {
     // with "malformed control response".
     assert_eq!(st.code(), Some(1), "{out}{err}");
     assert!(
-        err.contains(&format!("Entry {entry} cannot be sealed")),
+        err.contains(&format!("Part {entry} cannot be sealed")),
         "{err}"
     );
     assert!(err.contains("torn or unreadable"), "{err}");
@@ -928,7 +929,7 @@ fn capture_recovery_emits_no_assistance() {
 
 // `goalcup start` forks its capture child and parks it before `exec` until the daemon has the
 // child's registration durably (D40). The rows below hold the launcher at the gate's three
-// points (`commands/start.rs::pause_at`, `test-support` builds only) and break one thing at
+// points (`commands/start/mod.rs::pause_at`, `test-support` builds only) and break one thing at
 // each. The one fact every "never execs" row reads is the workload's own `out/pid`, which it
 // writes as the first thing it does and which a parked child cannot have written.
 
@@ -1385,7 +1386,8 @@ fn a_standalone_seal_that_commits_first_keeps_the_proxys_loss() {
     let entry = v.entry_id();
     gate_reached(&pause, "capture-finish-proxy-stopped");
 
-    // The harness has exited and the proxy has stopped; nothing has asked the daemon to seal.
+    // The harness has exited and the recording proxy has stopped; nothing has asked the daemon to
+    // seal.
     let out = seal_observed(&v, &entry, &mut row, "standalone_seal");
     assert!(out.contains("finished locally"), "{out}");
 
@@ -1399,7 +1401,7 @@ fn a_standalone_seal_that_commits_first_keeps_the_proxys_loss() {
     assert!(exit.success(), "{}\n{}", exit, start.output());
     assert!(
         start.output().contains("fail_open=1"),
-        "the proxy counted the tunnel: {}",
+        "the recording proxy counted the tunnel: {}",
         start.output()
     );
 

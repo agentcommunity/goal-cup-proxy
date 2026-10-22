@@ -14,7 +14,7 @@
 //! hangup ([`goalcup_platform::terminal::hangup_seen`]) it stays quiet and the rest goes to the
 //! log. A write to a terminal that is gone fails with `EIO` (or `EPIPE`), and while a log is
 //! open such a failure is swallowed: it must not end the host, which has a seal and an upload
-//! to finish. A headless run never opens a log, and its output is exactly what it was.
+//! to finish. A command that opens no log (`goalcup upload`) prints exactly what it did.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -171,6 +171,28 @@ impl Drop for Quiet {
 /// never panics: there is nothing to tell about a line that could not be told.
 pub fn say(line: &str) {
     say_raw(&format!("goalcup: {line}"));
+}
+
+/// One `goalcup: <line>` in `host.log` only, while a log is open, and never on the terminal: a
+/// measurement for whoever reads the log later (one line per uploaded chunk), too frequent and
+/// too technical for the participant. With no log open (`goalcup upload`) it goes nowhere.
+pub fn log_only(line: &str) {
+    if let Some(log) = sink().log.as_mut() {
+        let _ = writeln!(log, "goalcup: {line}");
+    }
+}
+
+/// [`say`] on the terminal even while the host is quiet: for the one line a participant must see
+/// while a chat-mode harness owns the terminal, said when the harness is frozen and draws nothing
+/// (the agent paused on a nearly full disk, D65). A terminal that is gone is not an error.
+pub fn say_loud(line: &str) {
+    let line = format!("goalcup: {line}");
+    let mut sink = sink();
+    if let Some(log) = sink.log.as_mut() {
+        let _ = writeln!(log, "{line}");
+    }
+    // On a line of its own after whatever the harness drew, which may be in raw mode.
+    let _ = write!(std::io::stderr(), "\r\n{line}\r\n");
 }
 
 /// [`say`] for a line that already names who says it.

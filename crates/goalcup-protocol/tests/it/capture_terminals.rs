@@ -1,7 +1,7 @@
 //! Explicit terminal writers for protocol-v5 capture chains.
 //!
-//! Covers the versioned cutoff/finalization writers, the local-only `LocalFinish` terminal
-//! primitive, and the public phase replay a reader applies to the same rules. Every
+//! Covers the local-only `LocalFinish` terminal primitive, the test-only seal writer, and the
+//! public phase replay a reader applies to the same rules. Every
 //! fixture is a real `TraceExport`; every assertion reads the bytes back off disk.
 
 use goalcup_protocol::capture::{
@@ -11,10 +11,7 @@ use goalcup_protocol::chain::Link;
 use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::export::*;
 use goalcup_protocol::provenance::{
-    CaptureUnavailableV1, CutoffReachedV1, FinalizationV1, NoRepositoryReasonV1,
-    PreCutoffDrainOutcomeV1, ProvenanceError, PublisherNotAttemptedReasonV1,
-    PublisherNotAttemptedV1, RepositoryNonSelectionV1, Rfc3339Utc, Sha256Digest,
-    SnapshotNotAttemptedV1, TerminationFailureV1, TerminationMethodV1, TerminationOutcomeV1,
+    ProvenanceError, Rfc3339Utc, TerminationFailureV1, TerminationMethodV1, TerminationOutcomeV1,
 };
 use goalcup_protocol::seal::{SealManifest, SealedFile};
 use sha2::{Digest, Sha256};
@@ -178,113 +175,6 @@ fn linked_line(head: &(u64, String), mut env: Envelope) -> Vec<u8> {
     line
 }
 
-fn receipt_digest() -> Sha256Digest {
-    // A receipt digest computed from actual bytes, shared by the cutoff and finalization.
-    Sha256Digest::from_bytes(Sha256::digest(b"synthetic start receipt for entry-m2-0001").into())
-}
-
-fn cutoff() -> CutoffReachedV1 {
-    CutoffReachedV1 {
-        receipt_sha256: receipt_digest(),
-        deadline_at: utc("2026-09-27T12:00:03Z"),
-        pre_cutoff_drain: PreCutoffDrainOutcomeV1::Complete,
-    }
-}
-
-fn finalization() -> FinalizationV1 {
-    FinalizationV1::CaptureUnavailable {
-        receipt_sha256: receipt_digest(),
-        termination: confirmed(),
-        capture: CaptureUnavailableV1::NotAttempted(SnapshotNotAttemptedV1 {
-            selection: RepositoryNonSelectionV1::None {
-                reason: NoRepositoryReasonV1::NotFound,
-            },
-        }),
-        publisher: PublisherNotAttemptedV1 {
-            reason: PublisherNotAttemptedReasonV1::SelectionFailed,
-        },
-    }
-}
-
-#[test]
-fn v5_cutoff_and_finalization_keep_version_five() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mut export = capture_export(tmp.path());
-    export.append_chain(&mut v5(gap(10))).unwrap();
-    let cutoff_link = export
-        .write_cutoff_for_protocol(M2_PROTOCOL_VERSION, ENTRY, "2026-09-27T12:00:03Z", cutoff())
-        .unwrap();
-    // Only the bound finalization may follow a cutoff.
-    assert!(matches!(
-        export.append_chain(&mut v5(gap(11))),
-        Err(ExportError::AfterCutoff { cutoff_seq }) if cutoff_seq == cutoff_link.seq
-    ));
-    assert!(matches!(
-        export.write_local_finish(&manifest(), at(12), "participant_stop", confirmed()),
-        Err(ExportError::AfterCutoff { .. })
-    ));
-    let final_link = export
-        .write_finalization_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-27T12:00:04Z",
-            finalization(),
-        )
-        .unwrap();
-    assert_eq!(final_link.seq, cutoff_link.seq + 1);
-
-    let chain = assert_recomputed_chain(tmp.path());
-    assert!(
-        chain
-            .iter()
-            .all(|env| env.protocol_version == M2_PROTOCOL_VERSION),
-        "every record of a capture chain is protocol v5"
-    );
-    assert_eq!(chain.len(), 4);
-    assert!(matches!(chain[0].body, EventBody::Baseline { .. }));
-    assert!(matches!(chain[2].body, EventBody::CutoffReachedV1(ref c) if *c == cutoff()));
-    assert_eq!(chain[2].link, cutoff_link);
-    assert!(
-        matches!(chain[3].body, EventBody::FinalizationV1(ref f) if *f == finalization()),
-        "the finalization is the final position"
-    );
-    assert_eq!(chain[3].link, final_link);
-    assert_eq!(
-        export.head(),
-        Some((final_link.seq, final_link.hash.clone()))
-    );
-
-    // Terminal: nothing further, neither a record nor a second terminal.
-    let before = snapshot(tmp.path());
-    assert!(matches!(
-        export.append_chain(&mut v5(gap(13))),
-        Err(ExportError::Terminal { terminal_seq }) if terminal_seq == final_link.seq
-    ));
-    assert!(matches!(
-        export.write_local_finish(&manifest(), at(14), "participant_stop", confirmed()),
-        Err(ExportError::Terminal { .. })
-    ));
-    assert_eq!(snapshot(tmp.path()), before);
-
-    // The phase replay and a reopened writer both reconstruct the same terminal.
-    let replayed = replay(tmp.path()).unwrap();
-    assert_eq!(
-        replayed.terminal(),
-        Some(ChainTerminal {
-            seq: final_link.seq,
-            hash: final_link.hash.clone(),
-            kind: TerminalKind::FinalizationV1,
-        })
-    );
-    drop(export);
-    let mut resumed = TraceExport::resume(tmp.path()).unwrap();
-    resumed.configure_capture_quota(QUOTA).unwrap();
-    assert!(matches!(
-        resumed.append_chain(&mut v5(gap(15))),
-        Err(ExportError::Terminal { .. })
-    ));
-}
-
 /// The reserved writers take a version only so the fixtures can name it; nothing but v5 is
 /// admitted, and a refused version writes nothing.
 #[test]
@@ -294,16 +184,12 @@ fn reserved_writers_refuse_every_version_but_five_before_writing() {
     let before = snapshot(tmp.path());
     for version in [1, 4] {
         assert!(matches!(
-            export.write_cutoff_for_protocol(version, ENTRY, "2026-09-27T12:00:03Z", cutoff()),
-            Err(ExportError::InvalidCaptureEnvelope { .. })
-        ));
-        assert!(matches!(
             export.write_seal_for_protocol(version, &manifest()),
             Err(ExportError::InvalidCaptureEnvelope { .. })
         ));
     }
     assert!(matches!(
-        export.write_cutoff_for_protocol(6, ENTRY, "2026-09-27T12:00:03Z", cutoff()),
+        export.write_seal_for_protocol(6, &manifest()),
         Err(ExportError::UnsupportedProtocolVersion {
             protocol_version: 6,
             ..
@@ -373,12 +259,10 @@ fn local_finish_without_receipt_closes_chain() {
                 EventBody::Capture {
                     record: CaptureRecord::LocalFinish { .. }
                 } | EventBody::Seal { .. }
-                    | EventBody::CutoffReachedV1(_)
-                    | EventBody::FinalizationV1(_)
             ))
             .count(),
         1,
-        "exactly one terminal record and no seal, cutoff or finalization"
+        "exactly one terminal record and no seal"
     );
     assert!(check_terminal_manifest(terminal, &manifest()).is_ok());
     for absent in [RECEIPT_FILE, "submission"] {
@@ -399,7 +283,7 @@ fn local_finish_without_receipt_closes_chain() {
         "the terminal link is synced before the finish reports success"
     );
 
-    // Closed: later capture, seal, cutoff and terminal writes are refused; artifact preserved.
+    // Closed: later capture, seal and terminal writes are refused; artifact preserved.
     let before = snapshot(tmp.path());
     assert!(matches!(
         export.append_chain(&mut v5(gap(12))),
@@ -407,15 +291,6 @@ fn local_finish_without_receipt_closes_chain() {
     ));
     assert!(matches!(
         export.write_seal_for_protocol(M2_PROTOCOL_VERSION, &manifest()),
-        Err(ExportError::Terminal { .. })
-    ));
-    assert!(matches!(
-        export.write_cutoff_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-27T12:00:06Z",
-            cutoff()
-        ),
         Err(ExportError::Terminal { .. })
     ));
     assert_eq!(snapshot(tmp.path()), before);
@@ -500,15 +375,6 @@ fn reopened_local_finish_stays_terminal() {
         resumed.write_seal_for_protocol(M2_PROTOCOL_VERSION, &manifest()),
         Err(ExportError::Terminal { .. })
     ));
-    assert!(matches!(
-        resumed.write_cutoff_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-27T12:00:06Z",
-            cutoff()
-        ),
-        Err(ExportError::Terminal { .. })
-    ));
     assert_eq!(snapshot(tmp.path()), before);
 
     // A hand-linked record after the local finish makes the chain unresumable.
@@ -525,6 +391,40 @@ fn reopened_local_finish_stays_terminal() {
         replay(tmp.path()),
         Err(ExportError::ChainCorrupt { .. })
     ));
+}
+
+/// `seal.json` written again after a failed write is the manifest the local finish binds and
+/// no other, on the export that chained it and on one resumed from disk.
+#[test]
+fn a_rewritten_seal_must_be_the_manifest_the_local_finish_binds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut export = capture_export(tmp.path());
+    export
+        .write_local_finish(&manifest(), at(900), "participant_stop", confirmed())
+        .unwrap();
+    let seal = tmp.path().join(SEAL_FILE);
+    let bound = std::fs::read(&seal).unwrap();
+    let mut other = manifest();
+    other.files[0].sha256 = "ff".repeat(32);
+
+    std::fs::remove_file(&seal).unwrap();
+    assert!(matches!(
+        export.rewrite_local_finish_seal(&other),
+        Err(ExportError::SealManifestMismatch)
+    ));
+    assert!(!seal.exists(), "a refused manifest writes nothing");
+    export.rewrite_local_finish_seal(&manifest()).unwrap();
+    assert_eq!(std::fs::read(&seal).unwrap(), bound);
+    drop(export);
+
+    std::fs::remove_file(&seal).unwrap();
+    let mut resumed = TraceExport::resume(tmp.path()).unwrap();
+    assert!(matches!(
+        resumed.rewrite_local_finish_seal(&other),
+        Err(ExportError::SealManifestMismatch)
+    ));
+    resumed.rewrite_local_finish_seal(&manifest()).unwrap();
+    assert_eq!(std::fs::read(&seal).unwrap(), bound);
 }
 
 #[test]
@@ -848,22 +748,51 @@ fn assert_hand_linked_local_finish_refused(
     assert_eq!(snapshot(root), before, "{case}: nothing was mutated");
 }
 
+/// The signed-mode cutoff and finalization bodies left the protocol (D54 amendment): a chain
+/// that carries one, in the spelling the old writer used, no longer decodes there, so resume
+/// refuses it at that line and writes nothing.
 #[test]
-fn replay_refuses_a_local_finish_after_a_cutoff() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mut export = capture_export(tmp.path());
-    export
-        .write_cutoff_for_protocol(M2_PROTOCOL_VERSION, ENTRY, "2026-09-27T12:00:03Z", cutoff())
-        .unwrap();
-    let head = export.head().unwrap();
-    drop(export);
-    assert_eq!(replay(tmp.path()).unwrap().cutoff_seq(), Some(head.0));
-    assert_hand_linked_local_finish_refused(
-        tmp.path(),
-        head,
-        hand_local_finish("participant_stop", confirmed()),
-        "local finish after a signed-mode cutoff",
-    );
+fn a_chain_carrying_a_removed_signed_terminal_does_not_resume() {
+    let removed = [
+        serde_json::json!({
+            "kind": "cutoff_reached_v1",
+            "content": {
+                "receipt_sha256": "ab".repeat(32),
+                "deadline_at": "2026-09-27T12:00:03Z",
+                "pre_cutoff_drain": "complete",
+            },
+        }),
+        serde_json::json!({
+            "kind": "finalization_v1",
+            "content": {"capture_unavailable": {"receipt_sha256": "ab".repeat(32)}},
+        }),
+    ];
+    for body in removed {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut export = capture_export(tmp.path());
+        export.append_chain(&mut v5(gap(10))).unwrap();
+        let (seq, prev) = export.head().unwrap();
+        drop(export);
+        let line = serde_json::json!({
+            "protocol_version": M2_PROTOCOL_VERSION,
+            "entry_id": ENTRY,
+            "source": "daemon",
+            "recorded_at": "2026-09-27T12:00:03Z",
+            "seq": seq + 1,
+            "prev": prev,
+            "hash": "00".repeat(32),
+            "body": body,
+        });
+        let mut bytes = serde_json::to_vec(&line).unwrap();
+        bytes.push(b'\n');
+        append_raw(tmp.path(), &bytes);
+        let before = snapshot(tmp.path());
+        match TraceExport::resume(tmp.path()) {
+            Err(ExportError::ChainCorrupt { seq: refused, .. }) if refused == seq + 1 => {}
+            other => panic!("{body}: resume must refuse seq {}: {other:?}", seq + 1),
+        }
+        assert_eq!(snapshot(tmp.path()), before, "nothing was mutated");
+    }
 }
 
 #[test]
@@ -896,29 +825,6 @@ fn replay_refuses_a_local_finish_after_another_terminal() {
         head,
         hand_local_finish("participant_stop", confirmed()),
         "local finish after a seal",
-    );
-
-    // A local finish after a signed finalization.
-    let tmp = tempfile::tempdir().unwrap();
-    let mut export = capture_export(tmp.path());
-    export
-        .write_cutoff_for_protocol(M2_PROTOCOL_VERSION, ENTRY, "2026-09-27T12:00:03Z", cutoff())
-        .unwrap();
-    export
-        .write_finalization_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-27T12:00:04Z",
-            finalization(),
-        )
-        .unwrap();
-    let head = export.head().unwrap();
-    drop(export);
-    assert_hand_linked_local_finish_refused(
-        tmp.path(),
-        head,
-        hand_local_finish("participant_stop", confirmed()),
-        "local finish after a finalization",
     );
 }
 

@@ -82,6 +82,8 @@ pub struct Layout {
     pub harness_home: PathBuf,
     pub ca: PathBuf,
     pub bin: PathBuf,
+    /// The run's time-left file (D66), not created.
+    pub time_left: PathBuf,
 }
 
 impl Layout {
@@ -95,6 +97,7 @@ impl Layout {
         for d in [&workspace, &run_home, &harness_home, &bin] {
             std::fs::create_dir_all(d).unwrap();
         }
+        let time_left = base.join("time-left").join("entry-0001");
         let ca = base.join("proxy-ca.pem");
         std::fs::write(&ca, b"not a real certificate\n").unwrap();
         Layout {
@@ -104,6 +107,7 @@ impl Layout {
             harness_home,
             ca,
             bin,
+            time_left,
         }
     }
 }
@@ -120,7 +124,6 @@ pub fn proxy_url() -> String {
 pub fn vars(layout: &Layout) -> TemplateVars {
     let mut v = TemplateVars::new();
     v.set("workspace", layout.workspace.to_str().unwrap());
-    v.set("session_id", SESSION);
     v.set("harness_home", layout.harness_home.to_str().unwrap());
     v.set("entry_id", "entry-0001");
     v.set("run_id", "entry-0001");
@@ -147,20 +150,8 @@ pub fn resolved(exe: &Path) -> ResolvedExecutable {
     resolve_harness_executable(exe).expect("the fake is a regular file")
 }
 
-pub fn launch<'a>(
-    layout: &'a Layout,
-    goal: &'a [u8],
-    exe: &'a ResolvedExecutable,
-    proxy: &'a str,
-    parent: &'a BTreeMap<String, String>,
-) -> CaptureLaunch<'a> {
-    CaptureLaunch {
-        goal: Some(goal),
-        ..chat_launch(layout, exe, proxy, parent)
-    }
-}
-
-/// [`launch`] for a chat-mode connector (D57): no goal, the participant types the prompt.
+/// What a capture launch is given beside the connector (D57: no goal, the participant types
+/// the prompt).
 pub fn chat_launch<'a>(
     layout: &'a Layout,
     exe: &'a ResolvedExecutable,
@@ -168,7 +159,6 @@ pub fn chat_launch<'a>(
     parent: &'a BTreeMap<String, String>,
 ) -> CaptureLaunch<'a> {
     CaptureLaunch {
-        goal: None,
         executable: exe,
         run_home: &layout.run_home,
         config_home: &layout.harness_home,
@@ -176,5 +166,6 @@ pub fn chat_launch<'a>(
         ca_certificate: &layout.ca,
         ca_bundle: None,
         parent_env: parent,
+        time_left_file: Some(&layout.time_left),
     }
 }

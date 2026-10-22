@@ -7,7 +7,7 @@
 //! harness homes.
 //!
 //! Every case runs with an invented provider key ([`KIT_PROVIDER_KEY`]) in `goalcup start`'s own
-//! environment, as a participant's shell might export one. The tracer never hands one to the
+//! environment, as a participant's shell might export one. Goal Cup Proxy never hands one to the
 //! harness (D61), so the runner checks that no fragment of it is in the sealed trace, the run
 //! directory or the launcher's forwarded stdout and stderr.
 
@@ -16,7 +16,7 @@ use crate::common::real_home_guard::{self, home_listing, with_real_home_guard};
 use crate::common::support;
 
 use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
-use goalcup_protocol::harness::{Binding, IdentitySource, NativeForm, Origin};
+use goalcup_protocol::harness::{IdentitySource, NativeForm, Origin};
 use goalcup_verifier::capture_analysis::api::{Disposition, Observation};
 use goalcup_verifier::capture_analysis::registry::DecoderRegistry;
 use goalcup_verifier::capture_analysis::session::decode_records;
@@ -37,7 +37,6 @@ struct Expect {
     id: String,
     identity_source: String,
     identity_binding: String,
-    identity_id: Option<String>,
     native_source: String,
     native_path: String,
     native_form: String,
@@ -153,7 +152,6 @@ fn parse_expect(text: &str) -> Expect {
         id: get("id"),
         identity_source: get("identity_source"),
         identity_binding: get("identity_binding"),
-        identity_id: optional("identity_id"),
         native_source: get("native_source"),
         native_path: get("native_path"),
         native_form: get("native_form"),
@@ -261,9 +259,7 @@ impl Staged {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        // The label carries the identity for a `{id}` pattern, which a preassigned run only
-        // learns from the entry, so match the source prefix and the first generation. The
-        // wrong-id file is never captured, so exactly one native stream can match.
+        // Match the source prefix and the first generation: exactly one native stream can.
         let source_prefix = format!("{}:", self.case.expect.native_source);
         let first_bytes = self
             .case
@@ -333,9 +329,11 @@ impl Staged {
         if dev {
             command.arg("--dev");
         }
+        // Run from the world's run folder, as a participant runs it from theirs; the test build
+        // has no terminal to hand the chat-mode stand-in (D57).
         command
-            .arg("--goal-file")
-            .arg(&self.world.goal)
+            .current_dir(&self.world.runs)
+            .env("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL", "1")
             .env("GOALCUP_TEST_DISK", format!("{RESERVE},0,50"))
             .process_group(0);
         command
@@ -356,23 +354,6 @@ impl Staged {
             output: text,
         }
     }
-}
-
-fn expected_identity(expect: &Expect) -> (IdentitySource, Option<Binding>) {
-    let source = match expect.identity_source.as_str() {
-        "none" => IdentitySource::None,
-        "preassigned" => IdentitySource::Preassigned,
-        "stdout_json" => IdentitySource::StdoutJson,
-        "stderr_line" => IdentitySource::StderrLine,
-        other => panic!("unsupported identity source {other:?}"),
-    };
-    let binding = match expect.identity_binding.as_str() {
-        "none" => None,
-        "at_launch" => Some(Binding::AtLaunch),
-        "deferred" => Some(Binding::Deferred),
-        other => panic!("unsupported identity binding {other:?}"),
-    };
-    (source, binding)
 }
 
 fn assert_completed(run: &Completed) {
@@ -412,31 +393,17 @@ fn assert_completed(run: &Completed) {
         .expect("status verifies with the key persisted before the run");
     assert_eq!(signed.payload.entry_id, run.entry);
     assert_eq!(signed.payload.connector_id, expect.id);
-    let identity_id = match expect.identity_source.as_str() {
-        "preassigned" => {
-            assert!(
-                !entry_record.session_id.is_empty(),
-                "a preassigned run persisted no session id"
-            );
-            Some(entry_record.session_id.as_str())
-        }
-        "stdout_json" | "stderr_line" => {
-            let id = expect.identity_id.as_deref().expect("the emitted identity");
-            assert!(
-                run.output.contains(id),
-                "{} did not emit its expected identity {id:?}: {}",
-                run.staged.case.name,
-                run.output
-            );
-            Some(id)
-        }
-        "none" => None,
-        other => panic!("unsupported identity source {other:?}"),
-    };
-    let native_path = identity_id.map_or_else(
-        || expect.native_path.clone(),
-        |id| expect.native_path.replace("{id}", id),
+    // Chat mode names no session (D57): the native path is the case's own.
+    assert_eq!(
+        (
+            expect.identity_source.as_str(),
+            expect.identity_binding.as_str()
+        ),
+        ("none", "none"),
+        "{}",
+        run.staged.case.name
     );
+    let native_path = expect.native_path.clone();
 
     let streams = chain.streams();
     let requests: Vec<_> = streams
@@ -523,9 +490,10 @@ fn assert_completed(run: &Completed) {
         other => panic!("unknown expected native form {other}"),
     };
     assert_eq!(native_spec.form, expected_form);
-    let (source, binding) = expected_identity(expect);
-    assert_eq!(loaded.manifest.capture.identity.source, source);
-    assert_eq!(loaded.manifest.capture.identity.binding, binding);
+    assert_eq!(
+        loaded.manifest.capture.identity.source,
+        IdentitySource::None
+    );
 
     let records: Vec<CaptureRecord> = chain.records().cloned().collect();
     let (decoded, _) = decode_records(
@@ -714,9 +682,14 @@ fn every_immediate_kit_directory_must_be_complete() {
     assert!(result.is_err(), "an incomplete case was silently skipped");
 }
 
+/// Each kit case runs to completion once. Without `--dev` it is refused before its stand-in
+/// spawns; with it, the same staged case spawns, seals and matches its expectations. The
+/// `synthetic-per-run` run also shows the home paths it declares created with private
+/// modes.
 #[test]
-fn every_kit_case_requires_the_dev_door() {
+fn every_kit_case_seals_and_matches_expectations() {
     with_real_home_guard(|| {
+        let mut modes_checked = false;
         for case in cases() {
             let staged = Staged::new(&case);
             let refused = staged.start(false);
@@ -732,24 +705,15 @@ fn every_kit_case_requires_the_dev_door() {
                 "{} spawned without --dev",
                 case.name
             );
-            let completed = staged.complete();
-            assert!(
-                completed.staged.marker.is_file(),
-                "{}: {}",
-                case.name,
-                completed.output
-            );
-        }
-    });
-}
-
-#[test]
-fn every_kit_case_seals_and_matches_expectations() {
-    with_real_home_guard(|| {
-        for case in cases() {
-            let run = Staged::new(&case).complete();
+            let run = staged.complete();
+            assert!(run.staged.marker.is_file(), "{}: {}", case.name, run.output);
+            if case.name == "synthetic-per-run" {
+                assert_private_home_modes(&run, &case);
+                modes_checked = true;
+            }
             assert_completed(&run);
         }
+        assert!(modes_checked, "the synthetic-per-run case ran");
     });
 }
 
@@ -757,8 +721,8 @@ fn every_kit_case_seals_and_matches_expectations() {
 fn a_denied_argv_is_refused_before_spawn() {
     let case = cases()
         .into_iter()
-        .find(|case| case.name == "synthetic-stdout-json")
-        .expect("the stdout-json case");
+        .find(|case| case.name == "synthetic-per-run")
+        .expect("the per-run case");
     let staged = Staged::new(&case);
     let path = staged.connector_dir.join("harness.toml");
     let text = std::fs::read_to_string(&path).unwrap();
@@ -779,57 +743,51 @@ fn a_denied_argv_is_refused_before_spawn() {
     );
 }
 
-#[test]
-fn nested_duplicate_and_implicit_home_paths_are_created_with_private_modes() {
-    with_real_home_guard(|| {
-        let case = cases()
-            .into_iter()
-            .find(|case| case.name == "synthetic-stdout-json")
-            .expect("the stdout-json case");
-        let run = Staged::new(&case).complete();
-        let run_dir = run.staged.world.run_dir().expect("one run directory");
-        let home = run_dir.join("stdout-home");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let seed = case.expect.seed_path.as_ref().expect("the nested seed");
+/// Nested, duplicate and implicit home paths are created with private modes: the nested seed
+/// is 0400 with its bytes, every implicit parent of it and every declared directory 0700.
+fn assert_private_home_modes(run: &Completed, case: &Case) {
+    let run_dir = run.staged.world.run_dir().expect("one run directory");
+    let home = run_dir.join("stdout-home");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let seed = case.expect.seed_path.as_ref().expect("the nested seed");
+        assert_eq!(
+            std::fs::metadata(home.join(seed))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o400
+        );
+        assert_eq!(
+            std::fs::read(home.join(seed)).unwrap(),
+            b"{\"network\":\"offline\",\"updates\":false}\n"
+        );
+        let mut parent = Path::new(seed).parent();
+        while let Some(relative) = parent.filter(|path| !path.as_os_str().is_empty()) {
             assert_eq!(
-                std::fs::metadata(home.join(seed))
+                std::fs::metadata(home.join(relative))
                     .unwrap()
                     .permissions()
                     .mode()
                     & 0o777,
-                0o400
+                0o700,
+                "implicit seed parent {}",
+                relative.display()
             );
-            assert_eq!(
-                std::fs::read(home.join(seed)).unwrap(),
-                b"{\"network\":\"offline\",\"updates\":false}\n"
-            );
-            let mut parent = Path::new(seed).parent();
-            while let Some(relative) = parent.filter(|path| !path.as_os_str().is_empty()) {
-                assert_eq!(
-                    std::fs::metadata(home.join(relative))
-                        .unwrap()
-                        .permissions()
-                        .mode()
-                        & 0o777,
-                    0o700,
-                    "implicit seed parent {}",
-                    relative.display()
-                );
-                parent = relative.parent();
-            }
-            for dir in &case.expect.dirs {
-                assert_eq!(
-                    std::fs::metadata(home.join(dir))
-                        .unwrap()
-                        .permissions()
-                        .mode()
-                        & 0o777,
-                    0o700,
-                    "{dir}"
-                );
-            }
+            parent = relative.parent();
         }
-    });
+        for dir in &case.expect.dirs {
+            assert_eq!(
+                std::fs::metadata(home.join(dir))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700,
+                "{dir}"
+            );
+        }
+    }
 }

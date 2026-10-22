@@ -24,3 +24,6 @@ __pycache__/
 spikes/wire-pty/out/
 # release tarballs (scripts/package-release.sh)
 /dist/
+
+# Agent worktrees (local only)
+.claude/worktrees/

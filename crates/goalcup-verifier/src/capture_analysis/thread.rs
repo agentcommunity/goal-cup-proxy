@@ -3,7 +3,13 @@
 //! This is application/thread evidence, not the server's hidden provider request. Only complete
 //! server `message_added.params.message` snapshots are interpreted. Assistant text/thinking
 //! blocks yield `model_response`, model-facing `tool_use` blocks yield `tool_call`, and user
-//! `tool_result` blocks yield context-visible `tool_result`. Supplied `usage.model` and integer
+//! `tool_result` blocks yield context-visible `tool_result`: `run.result.output`, or a `run.result`
+//! that is itself the text (a `Task` subagent's final answer, `create_file`), with the number of
+//! the subagent's own tool uses a `Task` run lists under `run.progress[].tool_uses` as
+//! `subagent_tool_uses`. Subagents share the parent's thread WebSocket: a snapshot whose
+//! `params.parentToolUseId` (or `parentToolCallId`) names the parent's `Task` call carries it as
+//! `parent_tool_use_id` on every fact, so a subagent's messages are told from the parent's
+//! (version 2). Supplied `usage.model` and integer
 //! usage counters are snapshots, never summed. All facts carry `scope: application_thread`,
 //! message/block identity where safely supplied, and their own retained message's source span.
 //!
@@ -20,7 +26,9 @@
 //! capture, which the tracker conservatively retains as unknown rather than guessing content.
 //!
 //! Measured: one macOS Amp 0.0.1792209635-g24a9fe thread capture, with text/tool/usage snapshots,
-//! a user context-visible tool result, JSON objects/array and literal ping/pong. Thinking blocks,
+//! a user context-visible tool result, JSON objects/array and literal ping/pong; and a second (22
+//! Oct) with `Task` subagents: their snapshots carry `params.parentToolUseId`, and the `Task`
+//! results a string `run.result` with `run.progress`. Thinking blocks,
 //! batch arrays containing complete messages, malformed/lost data and limit paths are synthetic.
 
 use super::api::{DecoderFailure, DecoderSummary, DecoderV1, Observation, StreamOpen, kinds};
@@ -30,7 +38,7 @@ use goalcup_protocol::capture::{CaptureRecord, CaptureSource, StreamKey};
 use serde_json::{Map, Value};
 
 pub const DECODER_ID: &str = "amp-thread-jsonrpc";
-pub const DECODER_VERSION: &str = "1";
+pub const DECODER_VERSION: &str = "2";
 pub const PROTOCOL_HINT: &str = "amp-thread-jsonrpc";
 
 fn selects(source: CaptureSource, hint: Option<&str>) -> bool {
@@ -195,14 +203,20 @@ impl Record<'_, '_> {
             self.unknown("unsupported_event", extra);
             return;
         }
-        let Some(message) = object
-            .get("params")
+        let params = object.get("params");
+        let Some(message) = params
             .and_then(|v| v.get("message"))
             .and_then(Value::as_object)
         else {
             self.unknown("unsupported_message", Map::new());
             return;
         };
+        // A subagent's snapshot names the parent's tool call it runs under.
+        let parent = params.and_then(|p| {
+            p.get("parentToolUseId")
+                .or_else(|| p.get("parentToolCallId"))
+        });
+        let message_fields = |record: &Self| record.message_fields(message, parent);
         let role = message.get("role").and_then(Value::as_str);
         let assistant = role == Some("assistant");
         if !(assistant || role == Some("user")) {
@@ -228,7 +242,7 @@ impl Record<'_, '_> {
             return;
         };
         for (index, block) in blocks.iter().take(MAX_LISTED).enumerate() {
-            let mut fields = self.message_fields(message);
+            let mut fields = message_fields(self);
             fields.insert("block_index".into(), index.into());
             let Some(block) = block.as_object() else {
                 self.unknown("unsupported_block", fields);
@@ -273,16 +287,32 @@ impl Record<'_, '_> {
                 (false, Some("tool_result")) => {
                     let run = block.get("run");
                     let result = run.and_then(|v| v.get("result"));
-                    let output = result.and_then(|v| v.get("output")).and_then(Value::as_str);
-                    if run.and_then(|v| v.get("status")).and_then(Value::as_str) != Some("done")
-                        || output.is_none()
-                    {
+                    // `{output, exitCode}` for a shell; the text itself for a `Task` or a file
+                    // write.
+                    let output = result
+                        .and_then(|v| v.get("output"))
+                        .and_then(Value::as_str)
+                        .or_else(|| result.and_then(Value::as_str));
+                    let Some(output) = output.filter(|_| {
+                        run.and_then(|v| v.get("status")).and_then(Value::as_str) == Some("done")
+                    }) else {
                         self.unknown("unsupported_tool_result", fields);
                         continue;
-                    }
+                    };
                     put_id(&mut fields, "call_id", block.get("toolUseID"));
                     fields.insert("status".into(), "done".into());
-                    put_text(&mut fields, "output", output.unwrap());
+                    put_text(&mut fields, "output", output);
+                    if let Some(progress) = run
+                        .and_then(|v| v.get("progress"))
+                        .and_then(Value::as_array)
+                    {
+                        let uses: usize = progress
+                            .iter()
+                            .filter_map(|p| p.get("tool_uses").and_then(Value::as_array))
+                            .map(Vec::len)
+                            .sum();
+                        fields.insert("subagent_tool_uses".into(), uses.into());
+                    }
                     if let Some(code) = result
                         .and_then(|v| v.get("exitCode"))
                         .filter(|v| v.is_i64() || v.is_u64())
@@ -296,17 +326,17 @@ impl Record<'_, '_> {
         }
         if blocks.len() > MAX_LISTED {
             self.out.tally.incomplete = true;
-            let mut fields = self.message_fields(message);
+            let mut fields = message_fields(self);
             fields.insert("blocks_omitted".into(), (blocks.len() - MAX_LISTED).into());
             self.unknown("over_budget", fields);
         }
         if assistant && let Some(usage) = message.get("usage").and_then(Value::as_object) {
-            let mut fields = self.message_fields(message);
+            let mut fields = message_fields(self);
             put_token(&mut fields, "model", usage.get("model"));
             if fields.contains_key("model") {
                 self.observe(kinds::MODEL, id(message.get("messageId")), fields);
             }
-            let mut fields = self.message_fields(message);
+            let mut fields = message_fields(self);
             for name in [
                 "inputTokens",
                 "outputTokens",
@@ -322,11 +352,16 @@ impl Record<'_, '_> {
             self.observe(kinds::USAGE, id(message.get("messageId")), fields);
         }
     }
-    fn message_fields(&self, message: &Map<String, Value>) -> Map<String, Value> {
+    fn message_fields(
+        &self,
+        message: &Map<String, Value>,
+        parent: Option<&Value>,
+    ) -> Map<String, Value> {
         let mut fields = self.base();
         put_id(&mut fields, "message_id", message.get("messageId"));
         put_id(&mut fields, "thread_id", message.get("threadId"));
         put_token(&mut fields, "role", message.get("role"));
+        put_id(&mut fields, "parent_tool_use_id", parent);
         fields
     }
 }

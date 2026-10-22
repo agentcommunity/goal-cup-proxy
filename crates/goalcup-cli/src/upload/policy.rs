@@ -1,9 +1,10 @@
-//! The uploader's budgets: when chunks go, how a failure waits, which answers end an upload at
-//! all, and how long the wrap-up after the stop lasts.
+//! The uploader's budgets: when chunks go, how a failure waits, which answers end a manual
+//! `goalcup upload`, and how long the wrap-up after the stop lasts.
 //!
-//! These are budgets with retries, not limits. One failed attempt never ends a run's upload:
-//! every answer but `401`, `404` and `410` ([`ServerError::ends_upload`]) is asked again after
-//! [`backoff`], and the wrap-up ([`WrapUp`]) is the only thing that bounds the asking.
+//! These are budgets with retries, not limits. No answer ever ends a run's upload (D64): every
+//! failure is asked again after [`backoff`], and the wrap-up ([`WrapUp`]) is the only thing that
+//! bounds the asking. Only `goalcup upload`, with a person waiting at the terminal, gives up on
+//! `401`, `404` and `410` ([`ServerError::ends_manual_upload`]).
 
 use super::http::ServerError;
 use goalcup_protocol::clock::ContinuousOrigin;
@@ -245,12 +246,15 @@ impl WrapUp {
 }
 
 impl ServerError {
-    /// Whether this answer ends the upload of the run: the token is not accepted (`401`), or
-    /// the run is not there (`404`) or is closed (`410`). Nothing asking again can change
-    /// that. Every other answer, a `400` or `413` that rejected a chunk included, is asked
-    /// again after [`backoff`], for as long as the wrap-up (or the run) lasts: the server, the
-    /// network or a rule being deployed may be different a minute from now.
-    pub fn ends_upload(&self) -> bool {
+    /// Whether `goalcup upload`, run by hand with a person waiting, gives up on this answer and
+    /// says why: the token is not accepted (`401`), or the run is not there (`404`) or is closed
+    /// (`410`). Every other answer, a `400` or `413` that rejected a chunk included, is asked
+    /// again after [`backoff`].
+    ///
+    /// A run's own upload (beside `goalcup start` or `goalcup continue`, and their wrap-up)
+    /// never asks this (D64): a bad deploy can answer any status for a while, and the run keeps
+    /// recording and asking until the server is fixed.
+    pub fn ends_manual_upload(&self) -> bool {
         matches!(
             self,
             ServerError::Status {
@@ -259,10 +263,22 @@ impl ServerError {
             }
         )
     }
+
+    /// The status of an answer that refuses the call: any `4xx` but `429`. A `5xx`, a `429` or
+    /// no answer at all is the server away or busy, which the upload and heartbeat lines already
+    /// say; a refusal that repeats is said on its own ([`crate::run::RunSignals::server_refused`]).
+    pub fn refusal_status(&self) -> Option<u16> {
+        match self {
+            ServerError::Status { status, .. } if (400..500).contains(status) && *status != 429 => {
+                Some(*status)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The wait before asking again: from `min`, doubling per consecutive failure to `max`, plus
-/// up to a quarter more at random so a fleet of tracers does not ask in step, and never
+/// up to a quarter more at random so a fleet of clients does not ask in step, and never
 /// less than what the server asked for.
 pub fn backoff(policy: &Policy, failures: u32, retry_after: Option<Duration>) -> Duration {
     use rand::Rng;
@@ -288,19 +304,19 @@ mod tests {
     }
 
     #[test]
-    fn only_401_404_410_stop_the_uploader() {
+    fn only_401_404_410_end_a_manual_upload() {
         for ends in [401, 404, 410] {
-            assert!(status(ends).ends_upload(), "{ends}");
+            assert!(status(ends).ends_manual_upload(), "{ends}");
         }
         for retried in [400, 402, 403, 409, 413, 422, 429, 500, 502, 503, 504] {
-            assert!(!status(retried).ends_upload(), "{retried}");
+            assert!(!status(retried).ends_manual_upload(), "{retried}");
         }
         for retried in [
             ServerError::Transport("refused".into()),
             ServerError::Malformed("not json".into()),
             ServerError::Tls("untrusted".into()),
         ] {
-            assert!(!retried.ends_upload(), "{retried}");
+            assert!(!retried.ends_manual_upload(), "{retried}");
         }
     }
 

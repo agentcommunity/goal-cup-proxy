@@ -109,7 +109,6 @@ fn the_payload_is_the_capture_projection() {
     assert_eq!(payload.deadline_at, None);
     assert_eq!(payload.events_uploaded, 0);
     assert_eq!(payload.events_pending, 0);
-    assert!(payload.finalization.is_none());
 
     // A failure is named before anything else.
     inputs.capture.run = RunState::Sealed;

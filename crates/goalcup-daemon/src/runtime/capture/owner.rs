@@ -32,7 +32,6 @@ pub(super) struct Owner {
     secrets: crate::redact::RunSecrets,
     ingest: Option<Arc<IngestEntry>>,
     native: Option<NativeCapture>,
-    required_native: bool,
     redactors: BTreeMap<String, StreamRedactor>,
     /// Producers the owner interrupted: nothing of theirs is appended afterwards and no
     /// ProducerClosed is ever written for them.
@@ -66,7 +65,6 @@ impl Owner {
             secrets,
             ingest,
             native,
-            required_native: false,
             redactors: BTreeMap::new(),
             lost: BTreeSet::new(),
             last_flush: Instant::now(),
@@ -106,27 +104,17 @@ impl Owner {
             if control.fault.load(Ordering::Acquire) {
                 panic!("a test stops the owner before it drains");
             }
-            self.take_native(control);
             self.cycle();
         }
         #[cfg(any(test, feature = "test-hooks"))]
         while control.hold_drain.load(Ordering::Acquire) {
             std::thread::sleep(IDLE_WAIT);
         }
-        self.take_native(control);
         if let Some(native) = &mut self.native {
             let finished = native.finish(NativeFinishBudget {
                 max_bytes: NATIVE_FINISH_BYTES,
                 max_duration_ns: control.finish_budget_ns.load(Ordering::Acquire),
             });
-            let changed = native.loss_report().source_changes > 0;
-            if self.required_native
-                && (changed
-                    || finished.uncaptured_files > 0
-                    || finished.completed_streams + finished.interrupted_streams == 0)
-            {
-                lock(&self.writer).streamless_gap(GapReason::SourceChanged, &(self.clock)());
-            }
             if finished.discovery_capped {
                 lock(&self.writer).streamless_gap(GapReason::LimitExceeded, &(self.clock)());
             }
@@ -138,13 +126,6 @@ impl Owner {
         self.flush_all();
         self.sync();
         control.drained.store(true, Ordering::Release);
-    }
-
-    pub(super) fn take_native(&mut self, control: &OwnerControl) {
-        if let Some(native) = lock(&control.pending_native).take() {
-            self.native = Some(native);
-            self.required_native = true;
-        }
     }
 
     /// One pass: drain the queue, apply the receiver's losses, and poll the native adapter.

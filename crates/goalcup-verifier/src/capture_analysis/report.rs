@@ -322,9 +322,9 @@ fn models_omitted(decoders: &[DecoderOutcome]) -> Value {
 /// Whether the harness's own session file and the recorded traffic agree that model work
 /// happened. Only zero against non-zero is judged: a harness may write several native entries
 /// per call. `native_activity_without_wire_streams` is a note for judges: the session file names
-/// model work while the proxy recorded no wire stream at all (a harness that bypassed the
-/// proxy, or a fake). It never changes the exit code. `unchecked` when there is no native model
-/// activity to compare, or wire streams were recorded but no model request was decoded from
+/// model work while the recording proxy recorded no wire stream at all (a harness that bypassed the
+/// recording proxy, or a fake). It never changes the exit code. `unchecked` when there is no native
+/// model activity to compare, or wire streams were recorded but no model request was decoded from
 /// them (a compressed or oversized body, a degraded decoder): the calls may be there unread.
 fn cross_leg(outcome: &DecodeOutcome) -> Value {
     let native: u64 = outcome
@@ -424,7 +424,7 @@ mod tests {
     fn the_cross_leg_note_judges_zero_against_non_zero_only() {
         assert_eq!(cross_leg_state(3, 2, 1), "consistent");
         assert_eq!(cross_leg_state(1, 9, 9), "consistent");
-        // The session names model work and the proxy recorded nothing at all.
+        // The session names model work and the recording proxy recorded nothing at all.
         assert_eq!(
             cross_leg_state(5, 0, 0),
             "native_activity_without_wire_streams"

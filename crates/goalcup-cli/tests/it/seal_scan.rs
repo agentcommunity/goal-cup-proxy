@@ -155,7 +155,7 @@ fn a_torn_entry_is_refused_with_what_happened_and_nothing_is_sealed() {
     );
     let said = error.to_string();
     assert!(
-        said.contains(&format!("Entry {entry} cannot be sealed")),
+        said.contains(&format!("Part {entry} cannot be sealed")),
         "{said}"
     );
     assert!(said.contains("torn or unreadable"), "{said}");
@@ -165,7 +165,7 @@ fn a_torn_entry_is_refused_with_what_happened_and_nothing_is_sealed() {
     );
     assert!(said.contains("preserved"), "{said}");
     assert!(
-        said.contains("goalcup-verify --capture-integrity <the entry's trace directory>"),
+        said.contains("goalcup-verify --capture-integrity <the part's trace directory>"),
         "the one command to read what survives: {said}"
     );
     assert!(said.contains(&format!("a folder named {entry}")), "{said}");

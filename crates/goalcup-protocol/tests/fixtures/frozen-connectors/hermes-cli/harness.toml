@@ -1,0 +1,67 @@
+# FROZEN LOADER INPUT, not a recipe. A copy of `connectors/hermes-cli` as it shipped before
+# chat mode, converted to chat mode, that tests read so they keep their subject when the
+# shipped connector changes. Only tests load it, and it tracks no harness release: the
+# launch recipe is `connectors/hermes-cli/harness.toml`.
+schema_version = 1
+id = "hermes-cli"
+
+[participant]
+display_name = "Hermes"
+
+[capture]
+interactive = true
+# hermes chat -Q --provider deepseek (headless until 21 Oct, now chat mode). The model is Hermes's own default (owner
+# direction, 2026-10-14). Goal Cup Proxy passes no key (D61): Hermes reads its own login.
+args = ["chat", "-Q", "--provider", "deepseek"]
+# Hermes's own switches (HERMES_SAFE_MODE, HERMES_IGNORE_USER_CONFIG) would silently stop the
+# session snapshot; `capture.env` may set none of them.
+reserved_env_prefixes = ["HERMES_"]
+continuation = "none: hermes chat -Q one turn, session JSON snapshot on, stdin /dev/null"
+# The model host, from the shared provider table (crates/goalcup-protocol/providers.toml).
+providers = ["deepseek"]
+
+[capture.executable]
+program = "hermes"
+
+[capture.env]
+TERMINAL_HOME_MODE = "profile"
+
+[capture.home]
+run_home = "empty"
+config_home = "per_run"
+env = "HERMES_HOME"
+per_run_dir = "hermes"
+dirs = ["home"]
+real_dirs = ["{user_home}/.hermes"]
+seed = [
+  { file = "config.yaml" },
+  { file = "auth.json" },
+  { file = ".update_check" },
+]
+
+# HERMES_CA_BUNDLE replaces the roots of Hermes's provider clients with the proxy CA alone, which
+# fails closed (D41).
+[capture.ca]
+env = ["HERMES_CA_BUNDLE"]
+mode = "replace"
+
+[capture.identity]
+source = "none"
+
+# Only the run's own snapshot; never a request_dump_* file (D41). No native decoder yet.
+[[capture.native]]
+name = "session"
+root = "{config_home}/sessions"
+pattern = "session_*.json"
+form = "snapshot"
+
+# Hermes scans raw argv for -p/--profile, --tui, --cli and -h before argparse, which abbreviates.
+[capture.argv_guard]
+long = ["profile", "tui", "cli", "help"]
+short = ["p", "h"]
+short_with_value = ["p", "z", "m", "t", "r", "s", "q", "c"]
+long_abbreviations = true
+
+[capture.termination]
+strategy = "process_group"
+grace_seconds = 10

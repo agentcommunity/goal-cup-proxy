@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem privately
+    url: https://github.com/agentcommunity/goal-cup-tracer/security/advisories/new
+    about: A vulnerability, or a way to get around or forge the recording. Never open a public issue for it. See SECURITY.md.
+  - name: Help with your run
+    url: https://agentcommunity.org/goalcup
+    about: For help during the event, write to goalcup@agentcommunity.org with your `goalcup status` output and run id. Never send a token.

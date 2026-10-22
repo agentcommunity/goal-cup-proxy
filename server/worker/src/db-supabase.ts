@@ -26,6 +26,7 @@ import type {
   Db,
   DevicePoll,
   EntryRow,
+  FinalCommitDetail,
   HeartbeatArgs,
   HeartbeatResult,
   NoticeArgs,
@@ -39,6 +40,7 @@ import type {
   StoreReceiptResult,
   TickRun,
 } from "./db.ts";
+import { NOTICE_KINDS, NO_FINAL_DETAIL } from "./db.ts";
 import { ApiError } from "./errors.ts";
 import type { StartReceipt } from "./sign.ts";
 import { RUN_ID, isEntryId, isHex64, isTime } from "./util.ts";
@@ -75,6 +77,9 @@ const RUN_SHAPE: Record<string, Check> = {
   first_entry_id: isEntryId,
   current_entry_id: isEntryId,
   current_sealed_at: nullable(isTime),
+  // Website migration 20261021100000 adds these; this Worker needs it applied first (README).
+  stored_bytes: uint,
+  chunk_count: uint,
 };
 const TICK_SHAPE: Record<string, Check> = {
   ...RUN_SHAPE,
@@ -83,6 +88,7 @@ const TICK_SHAPE: Record<string, Check> = {
   flagged_at: nullable(isTime),
   flag_reason: nullable(oneOf("gaps", "failed")),
   final_commit: nullable((v) => typeof v === "string" && /^([0-9a-f]{40}|none)$/.test(v)),
+  disk_notice_at: nullable(isTime),
 };
 const ENTRY_SHAPE: Record<string, Check> = {
   entry_id: isEntryId,
@@ -105,7 +111,7 @@ const ENTRY_SHAPE: Record<string, Check> = {
 };
 const NOTICE_SHAPE: Record<string, Check> = {
   id: uint,
-  kind: oneOf("started", "silence", "idle_3h", "idle_6h", "recording", "ended"),
+  kind: oneOf(...NOTICE_KINDS),
   run_id: RUN_SHAPE.run_id!,
   to: nullable(text),
   subject: text,
@@ -150,7 +156,7 @@ export class SupabaseDb implements Db {
     this.#key = key;
   }
 
-  /** Call one function. Any failure becomes a 502, which the tracer retries with backoff. */
+  /** Call one function. Any failure becomes a 502, which goalcup retries with backoff. */
   async #rpc(fn: string, args: Record<string, unknown>): Promise<unknown> {
     let res: Response;
     try {
@@ -329,7 +335,7 @@ export class SupabaseDb implements Db {
   }
 
   async commitChunk(a: CommitChunkArgs): Promise<CommitChunkResult> {
-    const v = await this.#rpc("upload_commit_chunk", { p_member_id: a.member_id, p_run_id: a.run_id, p_chunk: a.chunk });
+    const v = await this.#rpc("upload_commit_chunk", { p_member_id: a.member_id, p_run_id: a.run_id, p_chunk: a.chunk, p_stored_bytes: a.stored_bytes });
     return this.#word("upload_commit_chunk", v, ["committed", "conflict", "beyond_final", "closed", "not_found"] as const);
   }
 
@@ -348,6 +354,9 @@ export class SupabaseDb implements Db {
       p_client_ip: a.client_ip,
       p_client_country: a.client_country,
       p_at: a.at,
+      // Only with vitals: without them the 13-argument form answers (the new 14-argument form has
+      // no DEFAULT, so each call matches exactly one overload; test/supabase.test.ts checks both).
+      ...(a.vitals === null ? {} : { p_vitals: a.vitals }),
     });
     return this.#word("upload_heartbeat", v, ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"] as const);
   }
@@ -388,8 +397,19 @@ export class SupabaseDb implements Db {
     this.#word("upload_finish_notice", v, ["ok", "not_found"] as const);
   }
 
-  async recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void> {
-    const v = await this.#rpc("upload_record_final_commit", { p_member_id: memberId, p_run_id: runId, p_commit: commit, p_at: at });
+  async recordFinalCommit(memberId: string, runId: string, commit: string, at: string, d: FinalCommitDetail = NO_FINAL_DETAIL): Promise<void> {
+    // Website migration 20261021100000: the 9-argument form (the old 4-argument one stays for the live Worker).
+    const v = await this.#rpc("upload_record_final_commit", {
+      p_member_id: memberId,
+      p_run_id: runId,
+      p_commit: commit,
+      p_at: at,
+      p_pushed_at: d.pushed_at,
+      p_branch: d.branch,
+      p_late_push: d.late_push,
+      p_force_push: d.force_push,
+      p_head_fallback: d.head_fallback,
+    });
     this.#flag("upload_record_final_commit", v);
   }
 

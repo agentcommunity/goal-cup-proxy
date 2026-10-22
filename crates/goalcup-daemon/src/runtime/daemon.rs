@@ -56,10 +56,10 @@ pub(super) struct DaemonInner {
     /// Test seam: the chain part size and age every entry this daemon creates rotates at.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) part_limits: Mutex<Option<(u64, std::time::Duration)>>,
-    /// The latest finalization time this process has handed out. The finalization clock is
+    /// The latest durable time this process has handed out. The durable clock is
     /// the wall clock, which keeps counting while the Mac sleeps; this high-water keeps a
     /// wall-clock rollback within one process from moving any phase backwards.
-    pub(super) finalization_high_water: Mutex<f64>,
+    pub(super) durable_high_water: Mutex<f64>,
     /// What the daemon's loop lost, so the signed status can carry it.
     pub(super) cycles: Arc<CycleCounters>,
     /// Set once, after the listener bound: the OS chooses the port when the configured one
@@ -178,7 +178,7 @@ impl Daemon {
             simulated_sleep_seconds: Mutex::new(0.0),
             #[cfg(any(test, feature = "test-hooks"))]
             part_limits: Mutex::new(None),
-            finalization_high_water: Mutex::new(0.0),
+            durable_high_water: Mutex::new(0.0),
             cycles: Arc::new(CycleCounters::default()),
             control_addr: OnceLock::new(),
             listeners: Mutex::new(Vec::new()),

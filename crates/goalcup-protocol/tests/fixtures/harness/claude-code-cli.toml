@@ -3,6 +3,7 @@ schema_version = 1
 id = "claude-code-cli"
 
 [capture]
+interactive = true
 auth_hosts = ["platform.claude.com"]
 continuation = "none: claude -p one turn, acceptEdits, permission prompts denied, stdin /dev/null"
 args = [
@@ -11,11 +12,9 @@ args = [
   "--effort", "low",
   "--permission-mode", "acceptEdits",
   "--permission-prompts", "none",
-  "--session-id", "{session_id}",
   "--output-format", "json",
   "--strict-mcp-config",
   "--mcp-config", '{{"mcpServers":{{}}}}',
-  "--",
 ]
 
 [capture.executable]
@@ -40,13 +39,13 @@ env = ["NODE_EXTRA_CA_CERTS"]
 mode = "extend"
 
 [capture.identity]
-source = "preassigned"
-binding = "at_launch"
+source = "none"
 
 [[capture.native]]
 name = "main"
 root = "{config_home}/projects"
-pattern = "*/{id}.jsonl"
+pattern = "*/*.jsonl"
+since_run_start = true
 form = "append_only"
 protocol_hint = "claude-code-jsonl"
 

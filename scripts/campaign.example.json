@@ -1,0 +1,65 @@
+{
+  "name": "ladder-2h",
+  "defaults": {
+    "server": "https://goalcup-ingest-staging.b-9a5.workers.dev",
+    "approval_key_file": "/Users/you/.goalcup-secrets/staging-test-approval-key",
+    "github_token_file": "/Users/you/.goalcup-secrets/kit-github-token",
+    "connector": "codex-cli",
+    "duration_s": 7200,
+    "sample_every_s": 300,
+    "matrix_timeout_slack_s": 3600,
+    "prompt_file": "../docs/research/campaign-workload.txt",
+    "goalcup": "goalcup"
+  },
+  "cells": [
+    {
+      "id": "linux-cut",
+      "where": "docker",
+      "codex_effort": "low",
+      "test_member_id": "00000000-0000-4000-8000-0000000c0de1",
+      "drills": [
+        {
+          "at_s": 1800,
+          "kind": "network_cut",
+          "seconds": 600
+        }
+      ]
+    },
+    {
+      "id": "linux-pause",
+      "where": "docker",
+      "codex_effort": "low",
+      "test_member_id": "00000000-0000-4000-8000-0000000c0de2",
+      "drills": [
+        {
+          "at_s": 1800,
+          "kind": "pause",
+          "seconds": 1800
+        },
+        {
+          "at_s": 4200,
+          "kind": "note",
+          "text": "look at goalcup status in the container"
+        }
+      ]
+    },
+    {
+      "id": "mac-cut",
+      "where": "host",
+      "test_member_id": "00000000-0000-4000-8000-0000000c0de3",
+      "config_dir": "/Users/you/goalcup-campaign/mac-cut",
+      "drills": [
+        {
+          "at_s": 1800,
+          "kind": "network_cut",
+          "seconds": 600
+        },
+        {
+          "at_s": 3600,
+          "kind": "pause",
+          "seconds": 1800
+        }
+      ]
+    }
+  ]
+}

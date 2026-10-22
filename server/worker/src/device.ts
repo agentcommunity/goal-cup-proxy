@@ -1,5 +1,5 @@
-// The device flow (docs/UPLOAD-API.md, "Sign in and the run credential"). The tracer asks for a
-// code, the member approves it on the website, and the tracer picks up a run credential once.
+// The device flow (docs/UPLOAD-API.md, "Sign in and the run credential"). goalcup asks for a
+// code, the member approves it on the website, and goalcup picks up a run credential once.
 //
 //   POST /v1/device          no authentication: start a request
 //   POST /v1/device/token    no authentication: poll it with the device code (in the body, never a URL)
@@ -12,7 +12,7 @@ import type { DevicePurpose, RunMode } from "./db.ts";
 import { ApiError, closed, json, malformed, notFound, unauthorized } from "./errors.ts";
 import { limitAddress, limitDeviceCode } from "./ratelimit.ts";
 import { readJson } from "./runs.ts";
-import { addSeconds, constantTimeEqual, formatTime, hexField, sha256Hex, strField, toHex } from "./util.ts";
+import { addSeconds, constantTimeEqual, formatTime, hexField, proxyVersionField, sha256Hex, strField, toHex } from "./util.ts";
 
 /** The letters of a user code: no vowels, so no word, and nothing that looks like another character. */
 export const USER_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ";
@@ -51,7 +51,7 @@ export async function createDevice(ctx: Ctx, request: Request): Promise<Response
   const purpose = enumField<DevicePurpose>(b, "purpose", ["login", "run"]);
   const mode = enumField<RunMode>(b, "mode", ["competition", "practice", "test"]);
   const connector_id = strField(b, "connector_id", 128);
-  const tracer_version = strField(b, "tracer_version", 64);
+  const tracer_version = proxyVersionField(b);
 
   let uri: URL;
   try {

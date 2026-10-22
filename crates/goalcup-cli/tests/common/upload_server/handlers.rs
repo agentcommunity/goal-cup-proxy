@@ -156,7 +156,7 @@ fn now_z() -> String {
 }
 
 /// Request log plus the maintenance switch. Maintenance comes before authentication: the contract
-/// says the server asks *every* tracer to wait.
+/// says the server asks *every* client to wait.
 async fn gate(State(s): St, req: Request, next: Next) -> Response {
     s.calls
         .lock()
@@ -333,7 +333,23 @@ struct ConnectorFields {
     workspace: String,
     session_id: String,
     harness_version: String,
-    tracer_version: String,
+    proxy_version: Option<String>,
+    tracer_version: Option<String>,
+}
+
+/// The client's version: `proxy_version`, or `tracer_version`, its name from before the rename
+/// to Goal Cup Proxy. The Worker takes either; when both are sent they must agree.
+fn proxy_version<'a>(
+    new: &'a Option<String>,
+    old: &'a Option<String>,
+) -> Result<&'a str, ApiError> {
+    match (new, old) {
+        (Some(new), Some(old)) if new != old => Err(ApiError::malformed(
+            "proxy_version and tracer_version differ.",
+        )),
+        (Some(version), _) | (None, Some(version)) => Ok(version),
+        (None, None) => Err(ApiError::malformed("proxy_version is missing.")),
+    }
 }
 
 impl ConnectorFields {
@@ -351,7 +367,11 @@ impl ConnectorFields {
             ));
         }
         check_text("harness_version", &self.harness_version, 64)?;
-        check_text("tracer_version", &self.tracer_version, 64)?;
+        check_text(
+            "proxy_version",
+            proxy_version(&self.proxy_version, &self.tracer_version)?,
+            64,
+        )?;
         for (name, value) in [
             ("manifest_sha256", &self.manifest_sha256),
             ("connector_dir_sha256", &self.connector_dir_sha256),
@@ -375,7 +395,10 @@ impl ConnectorFields {
             connector_dir_sha256: self.connector_dir_sha256,
             workspace: self.workspace,
             harness_version: self.harness_version,
-            tracer_version: self.tracer_version,
+            proxy_version: self
+                .proxy_version
+                .or(self.tracer_version)
+                .unwrap_or_default(),
             receipt: None,
             chunks: Vec::new(),
             seal: None,
@@ -508,12 +531,13 @@ async fn open_run(State(s): St, headers: HeaderMap, body: Bytes) -> Result<Respo
     if !bind_credential(&s, who.credential.as_deref(), &run) {
         return Err(opened_already());
     }
-    // A competition start replaces the member's other open competition run: it ends now. A
-    // test run replaces only another test run, and a competition run never replaces a test one.
-    if !practice {
+    // Only competition replaces: a competition start ends the member's other open competition
+    // run now. A test run replaces nothing and is never replaced (an operator's test runs run side
+    // by side), and practice never replaces.
+    if who.mode == "competition" {
         for other in runs.values_mut() {
             if other.member == member
-                && other.mode == who.mode
+                && other.mode == "competition"
                 && other.status == RunStatus::Open
                 && other.replaced_at.is_none()
             {
@@ -966,6 +990,15 @@ async fn put_chunk(
                 "Goalcup-First-Seq is not the server's next seq.",
             ));
         }
+        // The run's size limit, before the body is read. A retry of a held chunk was answered
+        // above, so it is never refused here.
+        if run.stored_bytes() + hdr.content_length > s.run_max_bytes {
+            return Err(ApiError::new(
+                413,
+                "quota_exceeded",
+                "This chunk would take the run past the server's size limit. Nothing was stored.",
+            ));
+        }
         let entry_id = entry.entry_id.clone();
         (hdr, entry_id)
     };
@@ -1059,6 +1092,7 @@ async fn put_chunk(
         head: hdr.head,
         body_path: final_path,
         ack,
+        stored_bytes: hdr.content_length,
     };
     let reply = chunk_reply(&chunk);
     run.entry_mut(&entry_id)
@@ -1169,6 +1203,8 @@ struct HeartbeatRequest {
     recording: Option<String>,
     #[serde(default)]
     model_requests: Option<u64>,
+    #[serde(default)]
+    vitals: Option<serde_json::Value>,
 }
 
 async fn heartbeat(
@@ -1266,6 +1302,7 @@ async fn heartbeat(
         repo_head: req.repo_head,
         recording: req.recording,
         model_requests: req.model_requests,
+        vitals: req.vitals,
         received_at: now_z(),
     });
     s.persist(run);
@@ -1302,7 +1339,8 @@ struct DeviceBody {
     purpose: String,
     mode: String,
     connector_id: String,
-    tracer_version: String,
+    proxy_version: Option<String>,
+    tracer_version: Option<String>,
 }
 
 async fn create_device(State(s): St, body: Bytes) -> Result<Response, ApiError> {
@@ -1315,9 +1353,10 @@ async fn create_device(State(s): St, body: Bytes) -> Result<Response, ApiError> 
             "mode is not competition, practice or test.",
         ));
     }
+    let version = proxy_version(&req.proxy_version, &req.tracer_version)?.to_string();
     for (name, value, max) in [
         ("connector_id", &req.connector_id, 128),
-        ("tracer_version", &req.tracer_version, 64),
+        ("proxy_version", &version, 64),
     ] {
         if value.is_empty() || utf16_len(value) > max {
             return Err(ApiError::malformed(format!(
@@ -1342,7 +1381,7 @@ async fn create_device(State(s): St, body: Bytes) -> Result<Response, ApiError> 
         purpose: req.purpose,
         mode: req.mode,
         connector_id: req.connector_id,
-        tracer_version: req.tracer_version,
+        proxy_version: version,
     };
     let approval = *s.approval.lock().unwrap_or_else(|e| e.into_inner());
     s.device_log

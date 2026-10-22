@@ -77,12 +77,12 @@ export class Client {
 
 export const APPROVAL_KEY = "test-approval-key";
 
-/** `POST /v1/device`, the way the tracer sends it. */
+/** `POST /v1/device`, the way goalcup sends it. */
 export const deviceBody = (overrides: Record<string, unknown> = {}) => ({
   purpose: "run",
   mode: "competition",
   connector_id: "codex-cli",
-  tracer_version: "0.1.0",
+  proxy_version: "0.1.0",
   ...overrides,
 });
 
@@ -109,7 +109,7 @@ export function openBody(overrides: Record<string, unknown> = {}) {
     workspace: "/Users/p/goal-1/run-x/workspace — ünï",
     session_id: "6f1c2d3e-0000-4000-8000-000000000001",
     harness_version: "0.153.0",
-    tracer_version: "0.1.0",
+    proxy_version: "0.1.0",
     repo_url: "https://github.com/someone/goal-cup-entry",
     ...overrides,
   };

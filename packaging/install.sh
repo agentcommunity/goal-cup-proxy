@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the Goal Cup tracer from a GitHub release. One command, no sudo:
+# Install Goal Cup Proxy from a GitHub release. One command, no sudo:
 #
 #   curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh
 #

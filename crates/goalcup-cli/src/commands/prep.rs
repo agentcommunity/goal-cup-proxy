@@ -5,18 +5,27 @@
 //!
 //! 1. **login**: `server.json` names an account. Prep does not run the device flow itself.
 //! 2. **harness**: one of the connectors that run in chat mode (`interactive = true`), picked
-//!    with `--harness` or because it is the only one, found on `PATH`, its version shown.
+//!    with `--harness` or because it is the only one, found on `PATH`, its version shown, and a
+//!    pointer to its section of the setup guide, `docs/HARNESS-SETUP.md` (the connector's
+//!    `participant.setup_section`), on every prep. When the connector names where its MCP
+//!    servers are listed (`participant.time_left_tool`, fix plan v9), the step also prints the
+//!    lines that add `goalcup mcp` there, with this binary's absolute path; it never writes them.
 //! 3. **harness home**: the harness is opened once in the home its runs will use, so the
 //!    participant signs in and adds settings, MCP servers and skills there
 //!    ([`crate::launch::prep_launch`]: no proxy, no capture, no daemon entry). The tracker
 //!    cannot see a vendor sign-in, so this step is the person's word: it is ok once the harness
-//!    they were given has exited 0, and that is recorded in `prep.json` (`home_ready`).
+//!    they were given has exited 0, and that is recorded in `prep.json` (`home_ready`). When the
+//!    harness's config does not set a connector's `participant.no_prompts` setting, the step's
+//!    line also recommends it, with the setup guide's link (D67); that never changes the setting
+//!    or the step's state.
 //! 4. **GitHub**: the repository from `--repo` is public, empty and pushable with the stored
 //!    token ([`crate::account::github::check`]); with a terminal, the token is read unshown.
 //! 5. **machine**: mains power, free space for a run's reservation, the server's and the
 //!    provider's hosts reachable, `git` on `PATH`, under WSL the WSL2 version and a work folder,
-//!    artifact root and configuration folder that are not on a Windows-host filesystem, and a
-//!    sleep lock the machine can take (one it cannot take is said, and is never a `todo`).
+//!    artifact root and configuration folder that are not on a Windows-host filesystem, the
+//!    same three folders on APFS, ext4 or XFS (not btrfs, ZFS, NFS, SMB, tmpfs, overlayfs or
+//!    FUSE), and a sleep lock the machine can take (one it cannot take is said, and is never a
+//!    `todo`).
 //! 6. **practice**: a practice run of this harness whose every entry was sealed and uploaded.
 //!    Prep never starts a run: it says `goalcup start --practice` and stops.
 //!
@@ -38,9 +47,9 @@
 use crate::CliError;
 use crate::account::github::{self, GithubSetup};
 use crate::connector::{HarnessConnector, harness_dirs};
+use crate::folder_gate::Host;
 use crate::prep_file::{PrepFile, read_prep_lenient, write_prep};
 use crate::run::reserve::{LOW_DISK_BYTES, RUN_RESERVE_BYTES, START_MARGIN, artifact_root, human};
-use crate::wsl_gate::Host;
 use goalcup_protocol::harness::Origin;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -211,7 +220,7 @@ impl Doors for Here {
         env: &BTreeMap<String, String>,
         go: &mut dyn FnMut() -> Result<bool, CliError>,
     ) -> Result<Option<bool>, CliError> {
-        use crate::commands::start::{WorkspaceAt, claim_home_for_prep};
+        use crate::home::{WorkspaceAt, claim_home_for_prep};
         let profile = &connector.loaded.manifest.capture;
         // The home every run of this connector keeps (its config home, D39, or its run
         // `HOME`, D59), held so no run is recording in it while the participant is signed in
@@ -229,7 +238,7 @@ impl Doors for Here {
         // `HOME` is the home itself, used as it is and never removed.
         let beside = cfg.join("prep-launch");
         crate::config::create_private_dir(&beside)?;
-        let run = crate::commands::start::RunDir::create(
+        let run = crate::home::RunDir::create(
             &beside,
             profile.home.run_home,
             home.is_run_home.then_some(home.dir.as_path()),
@@ -372,7 +381,7 @@ pub fn prep_with(
     report.push(harness)?;
 
     // 3. harness home
-    let home = match &connector {
+    let mut home = match &connector {
         Some(c) => home_step(doors, cfg, env, c, &mut file, acting, &mut report)?,
         None => step(
             STEP_HARNESS_HOME,
@@ -382,6 +391,16 @@ pub fn prep_with(
              so you can sign in and add your settings, MCP servers and skills",
         ),
     };
+    // D67: a recommendation only. It never changes the step's state or the harness's settings.
+    if let Some(advice) = connector.as_ref().and_then(|c| no_prompts_advice(cfg, c))
+        && home.state != State::Fail
+    {
+        if !home.say.ends_with('.') {
+            home.say.push('.');
+        }
+        home.say.push(' ');
+        home.say.push_str(&advice);
+    }
     report.push(home)?;
     save(cfg, &file, &before)?;
 
@@ -505,15 +524,13 @@ fn login_step(cfg: &Path) -> Step {
 
 // ------------------------------------------------------------------ 2. harness
 
-/// Every connector in `connectors` that runs in chat mode and loads, in id order.
-fn chat_connectors(connectors: &Path, dev: bool) -> Result<Vec<HarnessConnector>, CliError> {
+/// Every connector in `connectors` that loads (each runs in chat mode, D57), in id order.
+fn loadable_connectors(connectors: &Path, dev: bool) -> Result<Vec<HarnessConnector>, CliError> {
     let origin = if dev { Origin::Dev } else { Origin::Pinned };
     let mut found = Vec::new();
     for dir in harness_dirs(connectors)? {
         // One that does not load is `goalcup doctor`'s to report; it cannot be picked here.
-        if let Ok(loaded) = goalcup_protocol::harness::load_discovered_dir(&dir, origin)
-            && loaded.manifest.capture.interactive
-        {
+        if let Ok(loaded) = goalcup_protocol::harness::load_discovered_dir(&dir, origin) {
             found.push(HarnessConnector { dir, loaded });
         }
     }
@@ -529,7 +546,7 @@ fn harness_step(
     dev: bool,
 ) -> (Option<HarnessConnector>, Step) {
     let fail = |say: String| (None, step(STEP_HARNESS, State::Fail, false, say));
-    let chat = match chat_connectors(connectors, dev) {
+    let chat = match loadable_connectors(connectors, dev) {
         Ok(chat) => chat,
         Err(error) => return fail(error.to_string()),
     };
@@ -605,8 +622,52 @@ fn harness_step(
             );
         }
     };
-    let say = format!("{id} {version} ({path})");
+    // Fix plan v8: the guide to the harness's settings, on every prep, missing settings or not.
+    // Only a pointer: it never changes the step's state or a setting.
+    let mut say = format!(
+        "{id} {version} ({path}). Before a long run, read {}",
+        setup_guide_link(&connector)
+    );
+    // Fix plan v9: the lines that add the time-left tool, on every prep. Only printed.
+    if let Some(lines) = time_left_tool_advice(cfg, &connector) {
+        say.push('\n');
+        say.push_str(&lines);
+    }
     (Some(connector), step(STEP_HARNESS, State::Ok, false, say))
+}
+
+/// Fix plan v9: when the connector names where its MCP servers are listed
+/// (`participant.time_left_tool`), the lines that add `goalcup mcp` there, with this binary's
+/// absolute path, so the agent can ask the time left whatever its `PATH`. Indented under the
+/// harness step. Never written: Goal Cup does not change the harness's settings (D67).
+fn time_left_tool_advice(cfg: &Path, connector: &HarnessConnector) -> Option<String> {
+    let tool = connector
+        .loaded
+        .manifest
+        .participant
+        .as_ref()?
+        .time_left_tool
+        .as_ref()?;
+    let file = crate::home::prep_home_leaf(cfg, connector)?.join(&tool.file);
+    let goalcup = std::env::current_exe().ok()?;
+    let lines = crate::commands::mcp::setup_lines(tool, goalcup.to_str()?);
+    let indented: Vec<String> = lines
+        .lines()
+        .map(|l| {
+            if l.is_empty() {
+                String::new()
+            } else {
+                format!("    {l}")
+            }
+        })
+        .collect();
+    Some(format!(
+        "  So your agent can ask how much time is left whatever its PATH, add Goal Cup's \
+         time-left tool to `{}` in {} (Goal Cup does not change that file):\n{}",
+        tool.key,
+        file.display(),
+        indented.join("\n")
+    ))
 }
 
 // ------------------------------------------------------------------ 3. the harness home
@@ -624,7 +685,7 @@ fn home_step(
     let human = |state, say: String| step(STEP_HARNESS_HOME, state, true, say);
     // The home the runs keep: its config home (D39) or its run `HOME` (D59). A connector whose
     // homes are all made fresh for each run has none to set up.
-    let Some(home) = crate::commands::start::prep_home_leaf(cfg, connector) else {
+    let Some(home) = crate::home::prep_home_leaf(cfg, connector) else {
         return Ok(step(
             STEP_HARNESS_HOME,
             State::Ok,
@@ -724,6 +785,57 @@ fn model_host_problem(cfg: &Path, connector: &HarnessConnector) -> Option<String
         "{} In {name}, choose an https model service that is not on this computer, then exit \
          {name}.",
         why.sentence(name)
+    ))
+}
+
+/// The participant's harness setup guide (fix plan v8): every setting a 168-hour run needs.
+pub const SETUP_GUIDE: &str =
+    "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/HARNESS-SETUP.md";
+
+/// The setup guide's link for `connector`: its `participant.setup_section`, else the guide.
+/// The section comes from the connector's data, so this names no harness.
+fn setup_guide_link(connector: &HarnessConnector) -> String {
+    match connector.loaded.manifest.setup_section() {
+        Some(section) => format!("{SETUP_GUIDE}#{section}"),
+        None => SETUP_GUIDE.to_string(),
+    }
+}
+
+/// D67: when the harness's own config (in its Goal Cup home) does not set each of the
+/// connector's `participant.no_prompts` settings to an accepted value, one sentence recommending
+/// them, with the setup guide's link. `None` when all are set, or the connector lists none. Only
+/// reads; never writes the harness's settings and never fails prep.
+fn no_prompts_advice(cfg: &Path, connector: &HarnessConnector) -> Option<String> {
+    let manifest = &connector.loaded.manifest;
+    let settings = &manifest.participant.as_ref()?.no_prompts;
+    let home = cfg
+        .join(goalcup_protocol::harness::CAPTURE_HOMES_DIR)
+        .join(&manifest.id);
+    let unset: Vec<String> = settings
+        .iter()
+        .filter(|s| {
+            let value = crate::model_host::read_setting(&home.join(&s.file), &s.file, &s.key);
+            !value.is_some_and(|v| s.values.contains(&v))
+        })
+        .map(|s| {
+            format!(
+                "`{}` to `{}` in {}",
+                s.key,
+                s.values[0],
+                home.join(&s.file).display()
+            )
+        })
+        .collect();
+    if unset.is_empty() {
+        return None;
+    }
+    let name = connector.display_name();
+    Some(format!(
+        "{name} may stop to ask your permission, and during a run you may type only \"keep \
+         going\", so it would wait. Goal Cup recommends setting {}. Goal Cup does not change \
+         {name}'s settings; see {}",
+        unset.join(", "),
+        setup_guide_link(connector)
     ))
 }
 
@@ -979,6 +1091,19 @@ fn machine_step(
             note(State::Fail, why);
         }
     }
+    // On any machine: a run keeps its records on APFS, ext4 or XFS only. Found here, the folder
+    // is moved before any approval or clone; the work folder is judged alone, as above.
+    let work_fs = host.check_filesystems(&[("work folder", work_root)]);
+    if let Err(why) = &work_fs {
+        note(State::Fail, why.clone());
+    }
+    let artifacts = artifact_root(cfg);
+    if let Err(why) = host.check_filesystems(&[
+        ("artifact root", artifacts.as_path()),
+        ("config folder", cfg),
+    ]) {
+        note(State::Fail, why);
+    }
 
     // A sleep lock the machine cannot take never makes the step not-ok (WSL2 never has one, nor
     // does a Linux without `systemd-inhibit`): the person is told to keep the machine awake
@@ -1011,7 +1136,7 @@ fn machine_step(
     }
     Machine {
         step: step(STEP_MACHINE, worst, false, say),
-        work_root_ok: work_check.is_ok() && work_in_git.is_none(),
+        work_root_ok: work_check.is_ok() && work_fs.is_ok() && work_in_git.is_none(),
     }
 }
 

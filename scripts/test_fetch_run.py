@@ -166,34 +166,36 @@ class FetchRunTest(unittest.TestCase):
     # Fixtures.
 
     def coherent_signed_case(self) -> Path:
-        """Derive valid D63 evidence without changing the historical contradictory corpus."""
+        """A valid receipt-anchored trace: a sealed corpus case plus a signed start receipt over
+        its Launch and a signed ack at its local finish. The committed corpus is not changed.
+
+        The signed-receipt corpus cases end in the signed cutoff and finalization that left the
+        protocol (D54 amendment), so a valid signed trace is derived from a local finish."""
         case = self.root / "coherent-signed"
-        shutil.copytree(CORPUS / "signed-receipt-key-agrees", case)
+        shutil.copytree(CORPUS / "sealed-websocket", case)
         lines = [json.loads(line) for line in (case / "chain.jsonl").read_text().splitlines()]
-        receipt = json.loads((case / "receipt.json").read_text())
-        launch = next(line["body"]["content"]["record"] for line in lines
-                      if line["body"].get("content", {}).get("record", {}).get("kind") == "launch")
+        position, launch = next(
+            (n, line["body"]["content"]["record"]) for n, line in enumerate(lines)
+            if line["body"].get("content", {}).get("record", {}).get("kind") == "launch"
+        )
+        receipt = json.loads((CORPUS / "signed-receipt-key-agrees" / "receipt.json").read_text())
+        receipt["claims"]["entry_id"] = lines[0]["entry_id"]
+        receipt["claims"]["connector_id"] = launch["profile_id"]
         receipt["claims"]["manifest_sha256"] = launch["profile_digest"]
-        compact = lambda value: json.dumps(value, separators=(",", ":")).encode()
+        receipt["claims"]["chain_head"] = lines[position]["hash"]
+        del receipt["claims"]["run_public_key"]
+        compact = lambda value: json.dumps(value, separators=(",", ":")).encode()  # noqa: E731
         receipt["signature"] = ed25519_sign(
             DEV_SEED, b"goalcup-receipt-v1\0" + compact(receipt["claims"])
         ).hex()
         (case / "receipt.json").write_bytes(compact(receipt))
-        digest = sha256(b"goalcup:start-receipt-digest:v1\0" + compact(receipt))
-        # Only the terminal records bind the receipt digest; all earlier evidence stays intact.
-        for position, line in enumerate(lines):
-            if line["body"]["kind"] == "cutoff_reached_v1":
-                line["body"]["content"]["receipt_sha256"] = digest
-            elif line["body"]["kind"] == "finalization_v1":
-                line["body"]["content"]["capture_unavailable"]["receipt_sha256"] = digest
-            else:
-                continue
-            line["prev"] = lines[position - 1]["hash"]
-            claims = {key: line[key] for key in ("protocol_version", "entry_id", "source", "recorded_at", "seq", "body")}
-            line["hash"] = sha256(line["prev"].encode() + b"goalcup-chain-v1\0" + compact(claims))
-        (case / "chain.jsonl").write_bytes(b"".join(compact(line) + b"\n" for line in lines))
-        ack = json.loads((case / "acks.jsonl").read_text())
-        ack["hash"] = lines[-1]["hash"]
+        ack = {
+            "entry_id": lines[-1]["entry_id"],
+            "seq": lines[-1]["seq"],
+            "hash": lines[-1]["hash"],
+            "acked_at": "2026-10-02T12:01:00Z",
+            "server_signature": "",
+        }
         ack["server_signature"] = ed25519_sign(DEV_SEED, ack_signing_bytes(ack)).hex()
         (case / "acks.jsonl").write_bytes(compact(ack) + b"\n")
         return case
@@ -301,11 +303,12 @@ class FetchRunTest(unittest.TestCase):
         self.assertEqual((trace / "chain.jsonl").read_bytes(), (case / "chain.jsonl").read_bytes())
         self.assert_same_json_lines(trace / "acks.jsonl", case / "acks.jsonl")
         self.assertEqual(json.loads((trace / "receipt.json").read_text()), json.loads((case / "receipt.json").read_text()))
-        self.assertEqual(sorted(p.name for p in trace.iterdir()), ["acks.jsonl", "baseline.json", "chain.jsonl", "receipt.json"])
-        self.assertEqual((trace / "baseline.json").read_bytes(), (case / "baseline.json").read_bytes())
+        self.assertEqual(
+            sorted(p.name for p in trace.iterdir()), ["acks.jsonl", "baseline.json", "chain.jsonl", "receipt.json", "seal.json"]
+        )
+        for name in ("baseline.json", "seal.json"):
+            self.assertEqual((trace / name).read_bytes(), (case / name).read_bytes(), name)
         self.assertEqual(sorted(p.name for p in self.out.iterdir()), [ENTRY], "no temporary leftovers")
-        # This case is a signed finalization: it has a baseline and no seal.
-        self.assertIn("no seal.json", result.stderr)
 
         key = json.loads((case / "receipt.json").read_text())["public_key"]
         report = self.verify(trace, "--dev-key", key)
@@ -323,7 +326,8 @@ class FetchRunTest(unittest.TestCase):
         key = json.loads((case / "receipt.json").read_text())["public_key"]
         report = self.verify(trace, "--dev-key", key)
         said = json.loads(report.stdout)
-        self.assertEqual((said["integrity"], said["validated_records"]), ("valid", 21), report.stdout)
+        records = len((case / "chain.jsonl").read_text().splitlines())
+        self.assertEqual((said["integrity"], said["validated_records"]), ("valid", records), report.stdout)
         self.assertIsNone(said["first_failure"])
 
     def test_contradictory_historical_evidence_is_rebuilt_without_repair(self) -> None:

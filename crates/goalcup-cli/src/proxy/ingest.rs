@@ -6,8 +6,9 @@
 //!
 //! One loopback TCP connection per producer epoch. Its first item is the handshake: a
 //! big-endian `u32` length and the compact JSON object `{"entry_id","producer","token"}`, in
-//! that order, at most [`MAX_HANDSHAKE_BYTES`] (the shared golden is
-//! `goalcup-protocol/tests/fixtures/m2-ingest/golden-stream.hex`). Every later item is one
+//! that order, at most [`MAX_HANDSHAKE_BYTES`], from the protocol's [`encode_ingest_handshake`]
+//! (the shared golden is `goalcup-protocol/tests/fixtures/m2-ingest/golden-stream.hex`). Every
+//! later item is one
 //! length-prefixed [`IngestMessage`] from [`encode_ingest_message`], unchanged.
 //!
 //! Nothing is ever read back. The receiver sends no acknowledgement, so the sender never waits
@@ -72,9 +73,8 @@
 use goalcup_protocol::capture::{
     CaptureFrame, CaptureLimitError, CaptureSink, EpochAdmission, GapReason, IngestMessage,
     MAX_CAPTURE_QUEUE_BYTES, MAX_HANDSHAKE_BYTES, MAX_PRODUCERS, SubmitResult,
-    encode_ingest_message, is_capture_id,
+    encode_ingest_handshake, encode_ingest_message, is_capture_id,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt;
 use std::future::Future;
@@ -162,8 +162,8 @@ pub struct SinkConfig {
 impl SinkConfig {
     /// `endpoint` is the daemon's loopback ingest listener; `entry_id` and `secret` authorize
     /// this launch's fresh producers for that one entry; `producer` is the initial producer ID
-    /// (32 lowercase hex), the same one the caller hands the proxy; `shutdown_deadline` is the
-    /// one bound on [`IngestSink::shutdown`]. Reconnects follow [`RECONNECT_DELAYS`].
+    /// (32 lowercase hex), the same one the caller hands the recording proxy; `shutdown_deadline`
+    /// is the one bound on [`IngestSink::shutdown`]. Reconnects follow [`RECONNECT_DELAYS`].
     pub fn new(
         endpoint: SocketAddr,
         entry_id: String,
@@ -230,50 +230,12 @@ pub enum SinkConfigError {
     InvalidProducer,
     #[error("the ingest handshake would exceed its {limit}-byte limit")]
     HandshakeTooLarge { limit: usize },
+    #[error("the entry ID is not an ingest entry ID (1 to 256 bytes, no control byte)")]
+    InvalidEntryId,
     #[error("the shutdown deadline or a reconnect delay is zero")]
     InvalidTiming,
     #[error("the capture sink needs a running Tokio runtime")]
     NoRuntime,
-}
-
-/// The handshake, private to the sender: field order `entry_id`, `producer`, `token`;
-/// unknown fields refused; `Debug` never shows the token.
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Handshake<'a> {
-    entry_id: &'a str,
-    producer: &'a str,
-    token: &'a str,
-}
-
-impl fmt::Debug for Handshake<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Handshake")
-            .field("entry_id", &self.entry_id)
-            .field("producer", &self.producer)
-            .finish_non_exhaustive()
-    }
-}
-
-/// The framed handshake, or `None` over [`MAX_HANDSHAKE_BYTES`]. JSON never shortens a
-/// string, so an over-limit raw length is refused before anything is serialized.
-fn encode_handshake(entry_id: &str, producer: &str, token: &str) -> Option<Vec<u8>> {
-    if entry_id.len() + producer.len() + token.len() > MAX_HANDSHAKE_BYTES {
-        return None;
-    }
-    let body = serde_json::to_vec(&Handshake {
-        entry_id,
-        producer,
-        token,
-    })
-    .ok()?;
-    if body.len() > MAX_HANDSHAKE_BYTES {
-        return None;
-    }
-    let mut framed = Vec::with_capacity(4 + body.len());
-    framed.extend_from_slice(&(body.len() as u32).to_be_bytes());
-    framed.extend_from_slice(&body);
-    Some(framed)
 }
 
 /// Counters of one sink, for its owner's report. Byte counts are encoded item bytes.
@@ -675,7 +637,7 @@ impl Shared {
     }
 }
 
-/// The IPC capture sink. Share it with the proxy as `Arc<dyn CaptureSink>`; keep one
+/// The IPC capture sink. Share it with the recording proxy as `Arc<dyn CaptureSink>`; keep one
 /// `Arc<IngestSink>` to call [`IngestSink::shutdown`].
 pub struct IngestSink {
     shared: Arc<Shared>,
@@ -694,8 +656,8 @@ impl fmt::Debug for IngestSink {
 
 /// Builds the sink and starts its one background task, whose first attempt connects for the
 /// configured initial producer at once. Must run inside a Tokio runtime; performs no I/O
-/// itself. The caller then polls `try_begin_epoch(producer)` until `Ready` (the proxy's startup
-/// does) before its first frame.
+/// itself. The caller then polls `try_begin_epoch(producer)` until `Ready` (the recording proxy's
+/// startup does) before its first frame.
 pub fn connect_sink(config: SinkConfig) -> Result<Arc<IngestSink>, SinkConfigError> {
     let SinkConfig {
         endpoint,
@@ -716,10 +678,15 @@ pub fn connect_sink(config: SinkConfig) -> Result<Arc<IngestSink>, SinkConfigErr
         return Err(SinkConfigError::InvalidProducer);
     }
     // Every producer ID has the same length, so one encoding bounds every epoch's handshake.
-    if encode_handshake(&entry_id, &producer, secret.expose()).is_none() {
-        return Err(SinkConfigError::HandshakeTooLarge {
-            limit: MAX_HANDSHAKE_BYTES,
-        });
+    match encode_ingest_handshake(&entry_id, &producer, secret.expose()) {
+        Ok(_) => {}
+        Err(CaptureLimitError::FrameTooLarge { .. }) => {
+            return Err(SinkConfigError::HandshakeTooLarge {
+                limit: MAX_HANDSHAKE_BYTES,
+            });
+        }
+        // The producer and the secret were checked above: what is left is the entry ID.
+        Err(_) => return Err(SinkConfigError::InvalidEntryId),
     }
     if shutdown_deadline.is_zero() || reconnect_delays.iter().any(Duration::is_zero) {
         return Err(SinkConfigError::InvalidTiming);
@@ -973,7 +940,7 @@ impl Writer {
             }
         };
         let _ = stream.set_nodelay(true);
-        let Some(handshake) = encode_handshake(&self.entry_id, producer, self.secret.expose())
+        let Ok(handshake) = encode_ingest_handshake(&self.entry_id, producer, self.secret.expose())
         else {
             // Bounded at construction for every 32-hex ID; kept terminal, never retried.
             self.shared.lock().latch_terminal(GapReason::LimitExceeded);
@@ -1171,11 +1138,9 @@ impl Writer {
 mod tests {
     use super::*;
 
-    const PRODUCER: &str = "0123456789abcdef0123456789abcdef";
-
-    /// The sink's own count of spent IDs is the one accurate producer budget (the proxy's startup
-    /// proposes IDs before the emitter exists): a fresh proposal is admitted while fewer than
-    /// `MAX_PRODUCERS` IDs are spent, and refused for good once that many are.
+    /// The sink's own count of spent IDs is the one accurate producer budget (the recording proxy's
+    /// startup proposes IDs before the emitter exists): a fresh proposal is admitted while fewer
+    /// than `MAX_PRODUCERS` IDs are spent, and refused for good once that many are.
     #[test]
     fn the_producer_budget_stops_at_max_producers() {
         let id = |n: usize| format!("{n:032x}");
@@ -1208,37 +1173,5 @@ mod tests {
             at.begin(&id(MAX_PRODUCERS + 1)),
             EpochAdmission::Disabled(GapReason::LimitExceeded)
         );
-    }
-
-    #[test]
-    fn handshake_is_ordered_compact_json_behind_a_length() {
-        let framed = encode_handshake("entry", PRODUCER, "tok").unwrap();
-        let body =
-            br#"{"entry_id":"entry","producer":"0123456789abcdef0123456789abcdef","token":"tok"}"#;
-        assert_eq!(&framed[..4], &(body.len() as u32).to_be_bytes());
-        assert_eq!(&framed[4..], body);
-    }
-
-    #[test]
-    fn handshake_refuses_unknown_fields_and_hides_the_token() {
-        let extra = r#"{"entry_id":"e","producer":"p","token":"t","extra":1}"#;
-        assert!(serde_json::from_str::<Handshake<'_>>(extra).is_err());
-        let known = r#"{"entry_id":"e","producer":"p","token":"sentinel-token-value"}"#;
-        let decoded: Handshake<'_> = serde_json::from_str(known).unwrap();
-        assert_eq!(decoded.token, "sentinel-token-value");
-        assert!(!format!("{decoded:?}").contains("sentinel-token-value"));
-    }
-
-    #[test]
-    fn handshake_over_the_limit_is_refused_before_and_after_escaping() {
-        let fixed = r#"{"entry_id":"e","producer":"","token":""}"#.len() + PRODUCER.len();
-        let fits = MAX_HANDSHAKE_BYTES - fixed;
-        let exact = encode_handshake("e", PRODUCER, &"x".repeat(fits)).unwrap();
-        assert_eq!(exact.len(), 4 + MAX_HANDSHAKE_BYTES);
-        assert!(encode_handshake("e", PRODUCER, &"x".repeat(fits + 1)).is_none());
-        // Raw input far over the limit is refused before serialization.
-        assert!(encode_handshake("e", PRODUCER, &"x".repeat(64 * 1024)).is_none());
-        // Short raw input that JSON escaping pushes over the limit.
-        assert!(encode_handshake("e", PRODUCER, &"\u{1}".repeat(300)).is_none());
     }
 }

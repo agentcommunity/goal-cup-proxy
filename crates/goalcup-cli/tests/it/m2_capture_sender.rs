@@ -134,7 +134,8 @@ fn config(addr: std::net::SocketAddr, producer: &str) -> SinkConfig {
     .with_reconnect_delays(FAST)
 }
 
-/// Polls admission the way the proxy's startup does: `Pending` keeps the same ID, no busy loop.
+/// Polls admission the way the recording proxy's startup does: `Pending` keeps the same ID, no busy
+/// loop.
 async fn admit(sink: &IngestSink, producer: &str) -> EpochAdmission {
     let deadline = Instant::now() + WAIT;
     loop {

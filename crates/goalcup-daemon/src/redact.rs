@@ -161,7 +161,7 @@ pub(crate) fn match_view(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 /// The shared set: `spikes/redact.py`'s ten original rules in its order, plus `masked_key`
 /// (listed right after `openai_key` here and last in the script; a soft rule never wins an
 /// overlap, so its position does not matter, see [`select`]), then seven fixed vendor
-/// prefixes, then the three forms of the tracer's own `proxy_credential`. The committed
+/// prefixes, then the three forms of goalcup's own `proxy_credential`. The committed
 /// fixtures were redacted with that script and the verifier's parsers read those bytes, so
 /// the ten keep the script's spelling and their place in its list. The script carries the
 /// three `proxy_credential` literals too, after its ten and before its last rule.
@@ -281,7 +281,7 @@ const SHARED: &[(&str, &str)] = &[
     ("stripe_key", r"[sr]k_live_[A-Za-z0-9]{16,}"),
     ("gitlab_token", r"glpat-[A-Za-z0-9_\-]{20,}"),
     ("digitalocean_token", r"dop_v1_[a-f0-9]{32,}"),
-    // ── then the tracer's own proxy credential, in the three forms a harness holds it ──
+    // ── then goalcup's own proxy credential, in the three forms a harness holds it ──
     // The capture launch hands the harness `HTTPS_PROXY=http://goalcup:<32 lowercase
     // hex>@127.0.0.1:<port>` (`goalcup-cli` `ProxyCredential::proxy_url`). An agent that runs
     // `env`, or a harness that uploads its environment, puts that per-run secret in a
@@ -359,7 +359,7 @@ fn compile(kind: &str, re: &str) -> Option<Pattern> {
     }
 }
 
-/// The kind of every exact-value rule ([`RunSecrets`]): the run's own secret (the proxy
+/// The kind of every exact-value rule ([`RunSecrets`]): the run's own secret (the recording proxy
 /// credential), named apart from the shared `proxy_credential` pattern rule.
 pub const RUN_SECRET_KIND: &str = "run_secret";
 

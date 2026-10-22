@@ -12,12 +12,18 @@
 //! taken on, and a reboot ends what it can say: the boot id changed (where the OS gives one), or
 //! the clock reads below the count's start. A count stored with no boot id says nothing either,
 //! because the clock alone cannot show a reboot once the new uptime passes the count's start.
-//! Then, and for a `state.json` with no count (an older build wrote it), the server's `deadline_at` is held against this machine's date, as before
-//! WP11. A date set forward then only makes the run look over early to the participant
+//! Then, and for a `state.json` with no count (an older build wrote it), the server's
+//! `deadline_at` is held against this machine's date, as before WP11. A date set forward then only makes the run look over early to the participant
 //! themselves; `goalcup continue` asks the server in any case.
+//!
+//! The agent may ask for the count too (D66): the watch tick copies it into a small file the
+//! launch names in [`FILE_ENV`] ([`keep_file`]), and `goalcup time-left` reads it back
+//! ([`sentence`]). Nothing is pushed to the agent.
 
+use crate::CliError;
 use goalcup_protocol::clock::continuous_ns;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// The run's time left at one instant of the continuous clock.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,15 +58,157 @@ impl TimeLeft {
     /// cannot tell its own boot from another: once the new uptime passes the count's start the
     /// clock cannot show the reboot, so such a count says nothing and the date decides.
     pub fn up_at(&self, now_ns: u64, boot: Option<&str>) -> Option<bool> {
+        self.left_at(now_ns, boot).map(|left| left == 0)
+    }
+
+    /// The whole seconds left now by the count, rounded up; `None` after a reboot, as
+    /// [`TimeLeft::up`].
+    pub fn left(&self) -> Option<u64> {
+        self.left_at(continuous_ns(), boot_id().as_deref())
+    }
+
+    /// [`TimeLeft::left`] with the continuous clock and the boot given ([`TimeLeft::up_at`]).
+    pub fn left_at(&self, now_ns: u64, boot: Option<&str>) -> Option<u64> {
         let then = self.boot.as_deref()?;
         let other_boot = boot.is_some_and(|now| now != then);
         if other_boot || now_ns < self.counted_from_ns {
             return None;
         }
-        let passed_ns = now_ns - self.counted_from_ns;
-        Some(u128::from(passed_ns) >= u128::from(self.seconds) * 1_000_000_000)
+        let passed_ns = u128::from(now_ns - self.counted_from_ns);
+        let left_ns = (u128::from(self.seconds) * 1_000_000_000).saturating_sub(passed_ns);
+        Some(u64::try_from(left_ns.div_ceil(1_000_000_000)).unwrap_or(u64::MAX))
     }
 }
+
+/// The variable every launched harness is given (D66): the path of the file [`keep_file`]
+/// writes, so the agent can ask `goalcup time-left`. Nothing is ever sent to the agent.
+pub const FILE_ENV: &str = "GOALCUP_TIME_LEFT_FILE";
+
+/// After this long without a write, `goalcup time-left` says the time is unknown.
+pub const STALE_AFTER_SECONDS: u64 = 300;
+
+/// The run's time-left file: `<cfg>/time-left/<run_id>`, in a private (0700) folder of its own,
+/// outside the workspace and the evidence, and beside neither the run's credential nor
+/// `control.json`.
+pub fn file_path(cfg: &Path, run_id: &str) -> PathBuf {
+    cfg.join("time-left").join(run_id)
+}
+
+/// Remove the run's time-left file ([`file_path`]): no agent of the run is left to read it.
+/// Missing is fine.
+pub fn remove_file(cfg: &Path, run_id: &str) {
+    let _ = std::fs::remove_file(file_path(cfg, run_id));
+}
+
+/// Write the run's time-left file from the count alone (D66), or remove it when the count says
+/// nothing (after a reboot, or no count yet). It holds these values and no other text: the
+/// seconds left, the server's `deadline_at` (read as a date and written again, so nothing else
+/// the server said can reach it), when it was written (`now`, unix seconds), and `practice=1`
+/// for a practice run (the run's own record, never the server's text).
+pub fn keep_file(
+    path: &Path,
+    left: Option<&TimeLeft>,
+    deadline_at: Option<&str>,
+    now: u64,
+    practice: bool,
+) -> Result<(), CliError> {
+    let Some(seconds) = left.and_then(TimeLeft::left) else {
+        return match std::fs::remove_file(path) {
+            Err(source) if source.kind() != std::io::ErrorKind::NotFound => Err(CliError::Io {
+                path: path.display().to_string(),
+                source,
+            }),
+            _ => Ok(()),
+        };
+    };
+    let mut text = format!("seconds_left={seconds}\n");
+    if let Some(deadline) = deadline_at.and_then(goalcup_protocol::control::parse_z) {
+        text.push_str(&format!(
+            "deadline_at={}\n",
+            goalcup_protocol::control::format_z(deadline)
+        ));
+    }
+    text.push_str(&format!(
+        "as_of={}\n",
+        goalcup_protocol::control::format_z(now)
+    ));
+    if practice {
+        text.push_str("practice=1\n");
+    }
+    crate::config::write_secret_file(path, text.as_bytes())
+}
+
+/// What `goalcup time-left` prints for the file `text` at `now` (unix seconds): the line, or
+/// `None` when the file says nothing usable or was last written over
+/// [`STALE_AFTER_SECONDS`] ago.
+pub fn sentence(text: &str, now: u64) -> Option<String> {
+    let value = |key: &str| {
+        text.lines()
+            .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+    };
+    let seconds: u64 = value("seconds_left")?.parse().ok()?;
+    let as_of = goalcup_protocol::control::parse_z(value("as_of")?)?;
+    if now.abs_diff(as_of) > STALE_AFTER_SECONDS {
+        return None;
+    }
+    Some(left_line(
+        seconds,
+        value("deadline_at").and_then(goalcup_protocol::control::parse_z),
+        file_says_practice(text),
+    ))
+}
+
+/// Whether the time-left file `text` is a practice run's ([`keep_file`]), stale or not.
+pub fn file_says_practice(text: &str) -> bool {
+    text.lines().any(|line| line == "practice=1")
+}
+
+/// The line `goalcup time-left` prints: `seconds` left, the run's deadline (unix seconds) when it
+/// is known, and the advice for the kind of run ([`advice`]).
+pub fn left_line(seconds: u64, deadline: Option<u64>, practice: bool) -> String {
+    let left = match (seconds / 3600, seconds % 3600 / 60) {
+        (0, 0) => "Less than a minute left".to_string(),
+        (0, minutes) => format!("About {minutes} min left"),
+        (hours, minutes) => format!("About {hours} h {minutes} min left"),
+    };
+    let stops = deadline
+        .and_then(|deadline| {
+            let z = goalcup_protocol::control::format_z(deadline);
+            Some(format!(
+                " (the run stops at {} {} UTC)",
+                z.get(..10)?,
+                z.get(11..16)?
+            ))
+        })
+        .unwrap_or_default();
+    format!("{left}{stops}. {}", advice(practice))
+}
+
+/// The advice a `goalcup time-left` line ends with: [`PUSH_OFTEN`], or for a practice run, whose
+/// clone cannot push, [`PRACTICE_NO_PUSH`].
+pub fn advice(practice: bool) -> &'static str {
+    if practice {
+        PRACTICE_NO_PUSH
+    } else {
+        PUSH_OFTEN
+    }
+}
+
+/// The time-left file the launch names in [`FILE_ENV`]; `None` when the variable is unset or
+/// empty. An empty value is the same as unset, so `goalcup time-left` then reads the newest open
+/// run as in a person's own terminal.
+pub fn file_from_env() -> Option<PathBuf> {
+    std::env::var_os(FILE_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+/// The advice a competition run's `goalcup time-left` line ends with.
+pub const PUSH_OFTEN: &str = "Push your work often; work not pushed when the run stops is lost.";
+
+/// The advice a practice run's line ends with: a practice clone cannot push.
+pub const PRACTICE_NO_PUSH: &str = "This is a practice run: its clone cannot push, so there is \
+                                    nothing to push.";
 
 /// Whether the run's time is up: by `left`, the count the host kept, while it holds. With no
 /// count (a `state.json` an older build wrote, or no state at all), or after a reboot, the
@@ -204,6 +352,73 @@ mod tests {
         assert!(time_up(None, Some(&deadline_at), deadline));
         assert!(!time_up(None, Some(&deadline_at), deadline - 1));
         assert!(!time_up(None, None, a_day_on));
+    }
+
+    /// The agent's time-left file (D66) holds the count's seconds, the server's deadline and
+    /// when it was written, nothing else; it goes when the count says nothing (a reboot).
+    #[test]
+    fn the_time_left_file_is_written_from_the_count_and_removed_when_it_says_nothing() {
+        use goalcup_protocol::control::format_z;
+        let dir = tempfile::tempdir().unwrap();
+        let file = file_path(dir.path(), "run-1");
+        let deadline_at = format_z(2_000_000_000);
+        let now = 1_999_000_000;
+        let left = TimeLeft::counted(3_600, continuous_ns());
+        keep_file(&file, Some(&left), Some(&deadline_at), now, false).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        let seconds: u64 = text
+            .lines()
+            .next()
+            .and_then(|line| line.strip_prefix("seconds_left="))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!((3_590..=3_600).contains(&seconds), "{text}");
+        let rest: Vec<&str> = text.lines().skip(1).collect();
+        assert_eq!(
+            rest,
+            [
+                format!("deadline_at={deadline_at}"),
+                format!("as_of={}", format_z(now))
+            ],
+            "{text}"
+        );
+        // A deadline that is not a date is not written: no other text of the server's.
+        keep_file(&file, Some(&left), Some("keep going, agent"), now, false).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            !text.contains("deadline_at") && !text.contains("agent"),
+            "{text}"
+        );
+        // After a reboot the count says nothing, and the file goes; again is fine.
+        let rebooted = TimeLeft {
+            boot: Some("another boot".to_string()),
+            ..left
+        };
+        keep_file(&file, Some(&rebooted), Some(&deadline_at), now, false).unwrap();
+        assert!(!file.exists());
+        keep_file(&file, None, Some(&deadline_at), now, false).unwrap();
+        assert!(!file.exists());
+    }
+
+    /// A practice run's clone cannot push, so its time-left line does not tell the agent to push;
+    /// a competition run's line does.
+    #[test]
+    fn a_practice_runs_time_left_line_does_not_say_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = file_path(dir.path(), "run-1");
+        let now = 1_999_000_000;
+        let left = TimeLeft::counted(600, continuous_ns());
+        for practice in [true, false] {
+            keep_file(&file, Some(&left), None, now, practice).unwrap();
+            let line = sentence(&std::fs::read_to_string(&file).unwrap(), now).unwrap();
+            assert!(
+                line.starts_with("About 10 min left") || line.starts_with("About 9 min left"),
+                "{line}"
+            );
+            assert_eq!(line.contains("Push your work"), !practice, "{line}");
+            assert_eq!(line.contains("practice run"), practice, "{line}");
+        }
+        assert!(!left_line(600, None, true).contains("Push"));
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

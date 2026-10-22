@@ -1,25 +1,27 @@
 # Architecture
 
-How do the parts of the tracer fit, and where is each guarantee tested? For contributors and
+How do the parts of Goal Cup Proxy fit, and where is each guarantee tested? For contributors and
 their agents. Wire formats are in [CONTRACTS](CONTRACTS.md); rules that bind the code are in
 [DECISIONS](DECISIONS.md). Section 12 lists the terms. Use them exactly.
 
-## 1. What the tracer is for
+## 1. What Goal Cup Proxy is for
 
-The tracer preserves evidence of running agent work for research across harnesses and operating
+Goal Cup Proxy preserves evidence of running agent work for research across harnesses and operating
 systems. It records declared native session artifacts and model traffic, seals them into a hash
 chain, and leaves interpretation to versioned decoders. Goal Cup's one-prompt, 168-hour contest
 uses this evidence for review and adds upload, deadline and participant rules.
 
 The [research target](RESEARCH-TARGET.md) defines the desired evidence and how to test coverage;
-the [local research handoff](LOCAL-RESEARCH-HANDOFF.md) identifies the next validation work.
+[local next steps](research/LOCAL-NEXT-STEPS.md) sets the next validation work. The
+[local research handoff](LOCAL-RESEARCH-HANDOFF.md) is history: how the research work was handed
+over, not the work to do next.
 Context-visible tool calls/results are sufficient without independently recording full tool
 output or spill files. Subagent conversations are a separate research objective whose coverage
 must be measured. These are targets, not assertions of universal capture. Platform status is in
 the [README](../README.md#platforms): native Windows is planned; WSL2 is a Linux path awaiting
 real Windows-machine validation.
 
-The tracer guarantees:
+Goal Cup Proxy guarantees:
 
 1. **Bounded capture.** The harness's declared native artifacts and model traffic for the run.
    Detected capture loss is a gap in the chain, never an invented record. Activity outside the
@@ -57,15 +59,15 @@ TypeScript).
 
 | Part | Does | Code |
 |---|---|---|
-| `goalcup start` | Preflight; creates the entry; runs the recording proxy in process; gates and launches the harness; seals when it exits; uploads | [commands/start.rs](../crates/goalcup-cli/src/commands/start.rs) |
+| `goalcup start` | Preflight; creates the entry; runs the recording proxy in process; gates and launches the harness; seals when it exits; uploads | [commands/start/](../crates/goalcup-cli/src/commands/start/) |
 | `goalcup login`, `prep`, `continue`, `upload` | Device-flow login; machine and repository readiness; next segment of a run; finish an upload | [commands/](../crates/goalcup-cli/src/commands/), [account/](../crates/goalcup-cli/src/account/), [upload/](../crates/goalcup-cli/src/upload/) |
 | `goalcup seal`, `status`, `entries`, `doctor` | End a run early; read status; list runs; check the machine | [commands/](../crates/goalcup-cli/src/commands/) |
-| Proxy | Loopback CONNECT proxy. Relays bytes unchanged; tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
+| Recording proxy | Loopback CONNECT proxy. Relays bytes unchanged; tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
 | Daemon | Control API on loopback; ingest; per-producer redaction; chain append; native-file capture; finish; termination | [runtime/capture/](../crates/goalcup-daemon/src/runtime/capture/mod.rs) |
 | Verifier | Integrity reader and research report. Six built-in decoders: native `codex-native` and `claude-code-native`; wire `openai-responses`, `anthropic-messages`, `openai-chat-completions`, and `amp-thread-jsonrpc` | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
 | Upload server | Checks the run credential, stores chunks in R2, signs receipts and acknowledgements, sends the run emails | [server/worker](../server/worker/README.md), [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DESIGN.md) |
 
-The control API (version `CONTROL_API_VERSION`, now 9) requires its version on mutating requests.
+The control API (version `CONTROL_API_VERSION`, now 10) requires its version on mutating requests.
 Create binds the connector-directory digest, may carry the server's entry id, and carries the
 run's own secret, the proxy credential (`run_secrets`, D60), which the daemon redacts by exact
 value and holds in memory for that entry only.
@@ -79,9 +81,9 @@ test data, and no `.rs` file ([CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md),
 
 The manifest says, for one harness:
 
-- how to launch it: program, argv template, environment, chat mode (`interactive = true`) or
-  headless (`goal_flag`), `resume_args`;
-- which hosts the proxy decrypts (`[[capture.hosts]]`, each with a `protocol_hint`) and which CA
+- how to launch it: program, argv template, environment, chat mode (`interactive = true`),
+  `resume_args`;
+- which hosts the recording proxy decrypts (`[[capture.hosts]]`, each with a `protocol_hint`) and which CA
   variable the harness reads;
 - which session files to read (`[[capture.native]]`: root, glob, `append_only` or `snapshot`,
   `since_run_start`) and how the session is identified (`[capture.identity]`);
@@ -90,7 +92,7 @@ The manifest says, for one harness:
   redaction patterns.
 
 Shared modules do the rest: the loader and its trust tables (`harness.rs`, `capture_policy.rs`), the
-launcher, the native-file reader, the proxy, the redactor and the decoders. A harness whose wire or
+launcher, the native-file reader, the recording proxy, the redactor and the decoders. A harness whose wire or
 session format no decoder reads is still recorded. It is *capture-only* and decoded later when a
 decoder is added.
 
@@ -99,7 +101,7 @@ decoder is added.
   match. The CLI and the daemon each load the connector and must agree on the digest before an
   entry is created (D46). The pin stops a connector from smuggling in a base URL. Review is the
   control against a malicious merge ([SECURITY](../SECURITY.md), D51).
-- **Builds are recorded, not pinned.** The tracer runs the harness that `program` resolves to on
+- **Builds are recorded, not pinned.** Goal Cup Proxy runs the harness that `program` resolves to on
   `PATH` and records `Launch.harness_build` (program digest, running-image digest, platform) and
   the version the harness prints (D53).
 - **Discovery.** `$GOALCUP_CONNECTORS_DIR`, else `../share/goalcup/connectors` or
@@ -109,12 +111,14 @@ decoder is added.
   home (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) under `<config>/capture-homes/<id>`; runs on one are
   serialized by a lock (D39). Claude Code's run home links the macOS Keychains directory. Hermes
   shares one `HERMES_HOME` the same way; the participant's own Hermes setup keeps its provider and
-  key there, and the tracer passes it none (D61). Amp instead keeps one isolated shared `HOME`
-  across serialized runs. Other run homes are fresh, according to the connector.
-- **Contract kit.** Four synthetic cases (`controlled-workload`, `synthetic-preassigned`,
-  `synthetic-stderr-token` and `synthetic-stdout-json`) under `crates/goalcup-cli/tests/fixtures/harness-kit/` test the
-  shared modules with stand-ins. A headless connector adds a case; chat connectors use the
-  manifest-driven shared stand-in. A passing kit says "synthetic
+  key there, and Goal Cup Proxy passes it none (D61). Amp instead keeps one isolated shared `HOME`
+  across serialized runs. Other run homes are fresh, according to the connector. Every run home
+  gets a `.profile` that exports the `PATH` the harness is handed, so a login shell whose
+  `/etc/profile` resets `PATH` (Debian, Ubuntu) still finds the participant's tools and `goalcup`
+  ([CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#capturehome-and-seeds)).
+- **Contract kit.** Synthetic cases under `crates/goalcup-cli/tests/fixtures/harness-kit/` test the
+  shared modules with stand-ins. Every connector runs through the manifest-driven shared stand-in
+  (the connector contract), so a new connector adds no case. A passing kit says "synthetic
   tested", not "works with the real harness".
 
 ## 5. The two legs
@@ -131,7 +135,7 @@ Neither leg erases a gap in the other.
 
 ## 6. Entry lifecycle
 
-CLI phases are in `commands/start.rs` (`prepare`, `create_and_gate`, `register_and_release`,
+CLI phases are in `commands/start/phases.rs` (`prepare`, `create_and_gate`, `register_and_release`,
 `run_harness`, `finish_and_scan`). Daemon finish stages are in
 [finish.rs](../crates/goalcup-daemon/src/runtime/capture/finish.rs).
 
@@ -139,7 +143,7 @@ CLI phases are in `commands/start.rs` (`prepare`, `create_and_gate`, `register_a
    allocated. On the server path: approve the run in the browser, clone the repository, open the run.
 2. **Create.** The daemon compares connector digests (D46) and then writes `baseline.json` and the
    seq-0 `Baseline`. The chain is quota-only. The run host holds one disk reservation per run
-   (D40 as amended). The proxy starts and the goal marker is recorded.
+   (D40 as amended). The recording proxy starts and the goal marker is recorded.
 3. **Spawn gate.** The harness parks before `exec`. After the daemon durably registers it, the CLI
    re-opens the resolved program path with `O_NOFOLLOW|O_NONBLOCK`, requires a regular file and
    releases the harness. No binary bytes are read. No execution is bound to an inode.
@@ -149,7 +153,7 @@ CLI phases are in `commands/start.rs` (`prepare`, `create_and_gate`, `register_a
    the connector's grace, SIGKILL, sweep and reconfirm run with wire and native capture still live.
    This runs outside the capture budget ([TERMINATION](TERMINATION.md)); both the drain-share
    boundary and final deadline move by actual termination time. The launcher sees the child exit
-   and stops its proxy; competing finishes share one terminal.
+   and stops its recording proxy; competing finishes share one terminal.
 6. **Finish capture.** Close admission, drain the existing producers, persist explicit loss,
    stop the owner, read the workspace state (Git for a clone, a file walk otherwise), then write
    `LocalFinish` plus `seal.json`. A refused finish writes no terminal and retains its termination
@@ -168,8 +172,8 @@ launched and handed nothing off is abandoned after `UNLAUNCHED_LIMIT` (15 minute
 
 | Concept | What it is |
 |---|---|
-| Chain | `chain.jsonl`: append-only, hash-linked, byte-canonical v5 envelopes, one writer per entry ([writer.rs](../crates/goalcup-daemon/src/runtime/capture/writer.rs)). Long runs rotate into part files `chain.<start>.jsonl` at 256 MiB or 30 minutes (D55) |
-| Envelope bodies | `Baseline`, `Seal`, `CutoffReachedV1`, `FinalizationV1`, `Capture` |
+| Chain | `chain.jsonl`: append-only, hash-linked, byte-canonical v5 envelopes, one writer per entry ([writer.rs](../crates/goalcup-daemon/src/runtime/capture/writer.rs)). Long runs rotate into chain files `chain.<start>.jsonl` at 256 MiB or 30 minutes (D55) |
+| Envelope bodies | `Baseline`, `Seal`, `Capture` (the cutoff and signed-finalization bodies were removed on 21 Oct; a line carrying one is `record_malformed`, D54) |
 | Capture records | `Open`, `Segment` (redacted, base64), `End`, `Gap`, `Connection`, `Recovery`, `ProducerClosed`, `Launch`, `Assistance`, `LocalFinish` ([capture.rs](../crates/goalcup-protocol/src/capture.rs)) |
 | Gap | A chained statement of loss with a `GapReason`. A trace with a gap is incomplete, never clean |
 | Loss | A stream-zero proxy frame for traffic relayed but not captured. Chained as a stream-less gap |
@@ -195,15 +199,16 @@ exit judges the record, not the run (D45). Research output: `goalcup-verify --re
 verifies only under a key in `SERVER_PUBLIC_KEYS` (the production Worker's) or one passed with
 `--dev-key`; the report then says `key_source: pinned` or `supplied`.
 
-## 8. The proxy
+## 8. The recording proxy
 
-- **CONNECT on loopback**, authenticated by a per-launch credential in the proxy URL. The
+- **CONNECT on loopback**, authenticated by a per-launch credential in the recording proxy URL. The
   credential is never forwarded ([connect.rs](../crates/goalcup-cli/src/proxy/connect.rs)).
 - **TLS only for declared hosts** whose SNI matches. Authentication hosts, other hosts and
   mismatched ClientHellos tunnel opaquely. Upstream TLS is always validated. The CA is
   name-constrained to the approved hosts and its key never leaves memory ([tls.rs](../crates/goalcup-cli/src/proxy/tls.rs)).
-- **HTTP/1.1 and WebSocket only** (no HTTP/2). One gzip or deflate coding and
-  `permessage-deflate` are undone. Any other coding is an `UnsupportedEncoding` gap.
+- **HTTP/1.1 and WebSocket only** (no HTTP/2). One gzip, deflate, brotli or zstd
+  coding and `permessage-deflate` are undone. Any other coding is an `UnsupportedEncoding` gap,
+  named in `host.log`.
 - **No header is recorded.** Bytes are forwarded unchanged. Only selected bodies and allowlisted
   metadata become frames ([metadata.rs](../crates/goalcup-cli/src/proxy/metadata.rs)).
 - **Capture is a side channel.** A refused frame stops capture, never the relay. Each loss is
@@ -228,30 +233,48 @@ At most `MAX_HELD_BYTES` (16 KiB) of undecided bytes are held per stream. Past t
 **fails closed**: everything from the earliest undecided byte is replaced up to the next safe
 terminator. Below the bound, output equals whole-stream redaction whatever the chunking. A
 connector rule is a typed form with its own recognizer, never a regex. Redaction is best effort. The residuals are
-in the [checklist](CHEAT-CHECKLIST.md). The proxy also strips credential headers by name.
+in the [checklist](CHEAT-CHECKLIST.md). The recording proxy also strips credential headers by name.
 
 ## 10. Upload and the server
 
 `goalcup start` uploads the chain to the Worker in compressed chunks while the run records and
-keeps the server's acknowledgement of each in `acks.jsonl`. Recording never waits on the network.
+keeps the server's acknowledgement of each in `acks.jsonl`. Recording never waits on the network,
+and no server error stops the run or ends its upload (D64).
 The server issues the entry id, the official start and the deadline, signs a start receipt (stored
 as `receipt.json`) and signs an acknowledgement per stored chunk. Parts the server acknowledged
-may be pruned locally; the verifier then reports `chain_pruned_locally` (incomplete, verify the
+are pruned locally two hours later, or at once when the parts alone pass the 3 GiB reservation or
+the disk has under 5 GiB free beyond it (never the part being written or the one holding the last
+acknowledged record); the verifier then reports `chain_pruned_locally` (incomplete, verify the
 server copy). The deadline is 168 hours on the server's clock. At the deadline the CLI stops the
 agent and seals. Details: [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DESIGN.md).
 
 ## 11. Not here
 
-Deliberately not built: durable ingest replay, automatic proxy restart, torn-tail repair, a PTY or
-input relay, continuous workspace hashing, tracker-injected reminders, cross-harness linking and
+Deliberately not built: durable ingest replay, automatic recording proxy restart, torn-tail repair, a PTY or
+input relay, continuous workspace hashing, reminders injected by Goal Cup Proxy, cross-harness linking and
 native Windows. Operating the binaries: [OPERATING](OPERATING.md).
 
 ## 12. Terms
 
-- **run**: one participant's contest run on the server. It can have several segments.
-- **entry**: one segment of a run: one harness, one workspace, one chain. `goalcup continue` makes
-  the next entry. (A chain `Segment` record is a different thing: a body of captured bytes.)
-- **harness**: the coding agent program (Codex CLI, Claude Code, Hermes).
+This is the one glossary for the repository. Other docs link here. Use the words exactly.
+
+**Runs and their pieces.** One concept, one name per audience:
+
+| Concept | Participants say | Code and protocol say | What it is |
+|---|---|---|---|
+| The 168-hour attempt | run | run (`run_id`) | One participant's contest run on the server. It has one or more parts. |
+| One unbroken stretch of recording | part | segment, stored as an entry (`entry_id`) | One harness, one workspace, one chain. `goalcup continue` starts the next one. |
+| One file of a long chain | (not shown) | chain file | `chain.jsonl`, then `chain.<start>.jsonl` after each rotation at 256 MiB or 30 minutes (D55). Joined in order, they are one chain. |
+
+"Segment" and "entry" name the same thing; new text says segment, and existing field names
+(`entry_id`, `goalcup entries`) stay. A chain `Segment` record is a different thing: a body of
+captured bytes. D55 and the finding codes `chain_part_missing` and `chain_pruned_locally` call
+chain files "parts"; read that as chain files.
+
+- **seal**: ending a segment: stop the harness, finish capture, write `LocalFinish` and `seal.json`.
+- **receipt**: the server's signed start receipt for one segment: its facts and chain head, with its start and deadline.
+- **ack** (acknowledgement): the server's signed note that it stored the chain up to one record.
+- **harness**: the coding agent program (Codex CLI, Claude Code, Hermes, Amp).
 - **connector**: `connectors/<id>/`, the pinned directory that says how to launch and capture one
   harness. Its identity is `connector_dir_sha256`. The loader is `harness::load_dir`.
 - **harness manifest**: `connectors/<id>/harness.toml`, harness-contract schema 1. Parsed by
@@ -264,7 +287,7 @@ native Windows. Operating the binaries: [OPERATING](OPERATING.md).
 - **shared capture home**: `<config>/capture-homes/<connector>`, the isolated config home that all
   runs of one connector use (D39).
 - **native leg / wire leg**: section 5.
-- **producer, epoch, stream**: a producer sends capture frames (the proxy, the native adapter). An
+- **producer, epoch, stream**: a producer sends capture frames (the recording proxy, the native adapter). An
   epoch is one admitted lifetime of a producer; a restarted producer is a new epoch. A stream is one
   payload sequence in an epoch. Stream zero carries `Connection`, `Recovery` and `Loss`.
 - **capture-only**: bytes recorded and not decoded, because no decoder accepts the stream or the
@@ -273,7 +296,6 @@ native Windows. Operating the binaries: [OPERATING](OPERATING.md).
   accepts into observations. Trait `DecoderV1`; `DecoderRegistry::builtin()` lists six.
   `protocol_hint` is open, grammar-checked metadata that tells the registry which decoders to offer.
 - **gap, Loss, Recovery**: section 7.
-- **seal**: ending an entry: finish, terminate owned processes, write `LocalFinish` and `seal.json`.
 - **finish budget**: the one capture budget (180 s), split into a drain share and a 2 s commit
   reserve. Termination is outside it.
 - **spawn gate**: the harness waits before `exec` until the daemon has durably registered it.
@@ -281,6 +303,20 @@ native Windows. Operating the binaries: [OPERATING](OPERATING.md).
 - **run key**: the entry's per-run Ed25519 key. Its public half is `Launch.run_public_key`.
 - **research-report schema** (now 4): the private NDJSON report format. Not the same as harness-contract
   schema 1 (`harness.toml`) or the decoder API version.
+
+**Names kept from "Goal Cup Tracer" on purpose.** The product is Goal Cup Proxy. These
+identifiers keep the old name, because changing them would break something that is already out:
+
+- the repository URL, `github.com/agentcommunity/goal-cup-tracer`, until the repository is renamed;
+- the server's database schema, `goal_cup_tracer`;
+- `server/worker/sql/goal-cup-tracer-upload.sql`, the mirror of the website's migrations;
+- the `tracer_version` field on the wire, which reports the `goalcup` version.
+
+**The rule for the repository rename.** Do it in one pull request that updates every copy of the
+URL together: `packaging/install.sh`, the `AFTER_HELP` guide URL in
+`crates/goalcup-cli/src/main.rs`, and the install URLs in README, RULES and the participant's
+guide. GitHub then sends the old URL to the new one. Never create a new repository under the old
+name: that would end the redirect, and old install commands would fetch from it.
 
 ## 13. Where each guarantee is tested
 
@@ -306,6 +342,6 @@ Paths are under `crates/`.
 | Every connector folder: the connector contract | `goalcup-cli/tests/it/connector_contract.rs` (static), `goalcup-cli/tests/full/connector_contract.rs` (one run each) |
 | Crash, torn tail, restart | `goalcup-cli/tests/full/capture_crash_campaign.rs` |
 | Whole vertical on a synthetic workload | `goalcup-cli/tests/full/m2_synthetic_vertical.rs` |
-| Four contract-kit cases | `goalcup-cli/tests/it/harness_contract_kit.rs` |
+| Contract-kit cases | `goalcup-cli/tests/it/harness_contract_kit.rs` |
 | Research report | `goalcup-verifier/tests/it/m2_research_report.rs` |
 | Upload against the real Worker | `goalcup-cli/tests/full/upload_worker.rs`, `server/worker/test` |

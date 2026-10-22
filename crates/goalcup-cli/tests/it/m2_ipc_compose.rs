@@ -1,6 +1,6 @@
 //! The composed capture chain over real loopback TCP.
 //!
-//! The proxy (`proxy::start`, with its one `CaptureEmitter`) → the IPC sender
+//! The recording proxy (`proxy::start`, with its one `CaptureEmitter`) → the IPC sender
 //! (`proxy::ingest::connect_sink`) → the daemon's receiver (`goalcup_daemon::ingest`
 //! `IngestListener`/`IngestEntry`) → a test-local entry-owner sink. The other suites test one
 //! side against an emulator of the other; this file composes the real ones in this order:
@@ -425,7 +425,7 @@ impl Drop for Upstream {
 }
 
 /// An authenticated CONNECT to `target` through `proxy`, then TLS for `localhost` trusting
-/// only `ca` (the proxy's per-launch CA).
+/// only `ca` (the recording proxy's per-launch CA).
 async fn intercepted_client(
     proxy: SocketAddr,
     target: &str,
@@ -449,7 +449,7 @@ async fn intercepted_client(
         TlsConnector::from(client_config(std::slice::from_ref(ca))).connect(name, tcp),
     )
     .await
-    .expect("client TLS through the proxy")
+    .expect("client TLS through the recording proxy")
 }
 
 // ---------------------------------------------------------------------------------------
@@ -682,7 +682,8 @@ struct Options {
 }
 
 impl Options {
-    /// The sender connects straight to the receiver, and the proxy gets the sender's sink itself.
+    /// The sender connects straight to the receiver, and the recording proxy gets the sender's sink
+    /// itself.
     fn direct() -> Self {
         Options {
             link: None,
@@ -736,7 +737,7 @@ impl Chain {
             secret
         };
 
-        // The sender, then the proxy with the same producer and the same sink.
+        // The sender, then the recording proxy with the same producer and the same sink.
         let sender = connect_sink(
             SinkConfig::new(
                 endpoint,
@@ -794,7 +795,7 @@ impl Chain {
             }),
         )
         .await
-        .expect("the proxy starts once T12 has written its handshake");
+        .expect("the recording proxy starts once T12 has written its handshake");
         assert_eq!(proxy.producer(), PRODUCER);
         Self {
             listener: Some(listener),
@@ -1227,7 +1228,7 @@ async fn receiver_loss_mid_run_recovers_into_a_fresh_epoch_the_receiver_accepts(
     );
 
     // The receiver closed the fresh epoch with its exact final sequence; the sender agrees but
-    // reports the earlier loss; the proxy saw the refusal and two admitted epochs.
+    // reports the earlier loss; the recording proxy saw the refusal and two admitted epochs.
     let last = frames.last().unwrap().seq;
     assert_eq!(
         (closed.producer.as_str(), closed.final_seq),
@@ -1517,9 +1518,9 @@ async fn recovery_lost_in_flight_is_named_by_the_next_and_the_receiver_releases_
 // ---------------------------------------------------------------------------------------
 
 /// The sender presents a secret the receiver never issued. The receiver refuses the handshake
-/// before consulting the owner: no ID is consumed and no frame admitted. The proxy, which started
-/// on the sender's written handshake (the link held it back from the receiver until then), relays
-/// every byte unchanged.
+/// before consulting the owner: no ID is consumed and no frame admitted. The recording proxy, which
+/// started on the sender's written handshake (the link held it back from the receiver until then),
+/// relays every byte unchanged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn wrong_secret_is_refused_before_admission_and_the_relay_is_unaffected() {
     let pki = TestPki::new("cp2 upstream CA");

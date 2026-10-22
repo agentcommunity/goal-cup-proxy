@@ -2,15 +2,14 @@
 //!
 //! A run holds one physically allocated reserve file for as long as it records, not one per
 //! chain. It is a **floor, not a cap**: the reserve plus the run's chain parts on disk are kept
-//! at 3 GiB ([`target`]), so the reserve gives space back as the chain grows and takes it again
+//! at 3 GiB ([`target_with`]), so the reserve gives space back as the chain grows and takes it again
 //! when parts are removed; a run may grow past 3 GiB while the disk has room. The reserve also
 //! gives space back when something else fills the disk (the agent's own build), before the
-//! recording suffers. A run stops cleanly only when the disk itself is nearly full, the reserve
-//! has nothing left to give back, and uploads are failing ([`verdict`]).
+//! recording suffers. A full disk never stops a run: below [`PAUSE_BELOW`] free beyond the
+//! reservation the agent is paused until space returns ([`super::pause`], D65).
 //!
 //! The file sits at `<artifact_root>/reserve/<run_id>`, on the same volume as the traces.
 
-use super::EntryRef;
 use crate::CliError;
 use goalcup_platform::disk::{ReserveFile, free_bytes};
 use goalcup_protocol::capture::CHAIN_QUOTA_BYTES;
@@ -29,8 +28,11 @@ pub const LOW_DISK_BYTES: u64 = 5 << 30;
 /// The free space the reserve gives back to keep: below it the disk is full for this purpose.
 pub const FREE_FLOOR: u64 = 256 << 20;
 
-/// Uploads are failing when none was acknowledged for this long.
-pub const UPLOAD_FAILING_AFTER: Duration = Duration::from_secs(30 * 60);
+/// Below this much free disk beyond the reservation the agent is paused (D65).
+pub const PAUSE_BELOW: u64 = 1 << 30;
+
+/// Above this much free disk beyond the reservation a paused agent resumes (D65).
+pub const RESUME_ABOVE: u64 = 3 << 30;
 
 /// How long past its deadline a run's reserve is kept, for the last upload.
 pub const KEEP_AFTER_DEADLINE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -57,6 +59,11 @@ pub struct DiskPolicy {
     pub chain_quota: u64,
     /// How often the watch ticks ([`WATCH_PERIOD`]).
     pub tick: Duration,
+    /// Free bytes beyond the reservation below which the agent is paused ([`PAUSE_BELOW`]);
+    /// 0 never pauses it.
+    pub pause_below: u64,
+    /// Free bytes beyond the reservation above which a paused agent resumes ([`RESUME_ABOVE`]).
+    pub resume_above: u64,
 }
 
 impl Default for DiskPolicy {
@@ -67,14 +74,17 @@ impl Default for DiskPolicy {
             free_floor: FREE_FLOOR,
             chain_quota: CHAIN_QUOTA_BYTES,
             tick: WATCH_PERIOD,
+            pause_below: PAUSE_BELOW,
+            resume_above: RESUME_ABOVE,
         }
     }
 }
 
 impl DiskPolicy {
     /// A test build's sizes from `spec`: `reserve_bytes,start_margin_bytes,tick_ms`, and
-    /// optionally `free_floor_bytes` and then `chain_quota_bytes` after them. A shipped build
-    /// has no such door.
+    /// optionally `free_floor_bytes`, then `chain_quota_bytes`, then
+    /// `pause_below_bytes,resume_above_bytes`. Without the last two a test build never pauses
+    /// the agent. A shipped build has no such door.
     #[cfg(feature = "test-support")]
     pub fn from_test_spec(spec: &str) -> Option<DiskPolicy> {
         let n: Vec<u64> = spec
@@ -84,7 +94,12 @@ impl DiskPolicy {
         let (reserve_bytes, start_margin, tick_ms, free_floor, chain_quota) = match n[..] {
             [a, b, c] => (a, b, c, FREE_FLOOR, CHAIN_QUOTA_BYTES),
             [a, b, c, d] => (a, b, c, d, CHAIN_QUOTA_BYTES),
-            [a, b, c, d, e] => (a, b, c, d, e),
+            [a, b, c, d, e, ..] => (a, b, c, d, e),
+            _ => return None,
+        };
+        let (pause_below, resume_above) = match n[..] {
+            [_, _, _, _, _, f, g] => (f, g),
+            [_, _, _] | [_, _, _, _] | [_, _, _, _, _] => (0, 0),
             _ => return None,
         };
         Some(DiskPolicy {
@@ -93,6 +108,8 @@ impl DiskPolicy {
             free_floor,
             chain_quota,
             tick: Duration::from_millis(tick_ms),
+            pause_below,
+            resume_above,
         })
     }
 }
@@ -108,14 +125,16 @@ pub fn artifact_root(cfg: &Path) -> PathBuf {
     crate::daemon::spawn::artifact_root(cfg)
 }
 
-/// What the reserve should hold: whatever keeps it and the chain on disk at 3 GiB, and never
-/// more than the disk can give once the floor is kept free. `footprint` is the chain parts on
-/// disk, `free` the volume's free bytes, `reserve` what the reserve holds now.
+/// [`target_with`] at the shipped sizes.
+#[cfg(test)]
 pub fn target(footprint: u64, free: u64, reserve: u64) -> u64 {
     target_with(&DiskPolicy::default(), footprint, free, reserve)
 }
 
-/// [`target`] at the sizes of `policy`.
+/// What the reserve should hold at the sizes of `policy`: whatever keeps it and the chain on
+/// disk at the reservation (3 GiB shipped), and never more than the disk can give once the floor
+/// is kept free. `footprint` is the chain parts on disk, `free` the volume's free bytes,
+/// `reserve` what the reserve holds now.
 pub fn target_with(policy: &DiskPolicy, footprint: u64, free: u64, reserve: u64) -> u64 {
     policy.reserve_bytes.saturating_sub(footprint).min(
         reserve
@@ -124,81 +143,27 @@ pub fn target_with(policy: &DiskPolicy, footprint: u64, free: u64, reserve: u64)
     )
 }
 
-/// What the watch makes of the disk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiskVerdict {
-    Ok,
-    /// Less than [`LOW_DISK_BYTES`] free beyond the reservation.
-    Low {
-        free: u64,
-    },
-    /// The disk is full, nothing is left to give back, and uploads are failing: stop cleanly.
-    Stop,
-}
-
-/// The verdict on one reading.
-///
-/// `held` is what the reserve holds and `free_beyond_reserve` what the volume has beyond it,
-/// both read after the reserve was resized to [`target`]. `Stop` needs all three: the reserve
-/// drawn down to nothing (`held == 0`), the free space below [`FREE_FLOOR`], and uploads
-/// failing. Free space just under the floor while the reserve still holds bytes is a reserve
-/// that has more to give back, not a full disk. The footprint alone never stops a run: it may
-/// grow past 3 GiB while the disk has room, which is why it does not enter the verdict.
-pub fn verdict(
-    footprint: u64,
-    held: u64,
-    free_beyond_reserve: u64,
-    uploads_failing: bool,
-) -> DiskVerdict {
-    verdict_with(
-        &DiskPolicy::default(),
-        footprint,
-        held,
-        free_beyond_reserve,
-        uploads_failing,
-    )
-}
-
-/// [`verdict`] at the floor of `policy`.
-pub fn verdict_with(
-    policy: &DiskPolicy,
-    _footprint: u64,
-    held: u64,
-    free_beyond_reserve: u64,
-    uploads_failing: bool,
-) -> DiskVerdict {
-    if held == 0 && free_beyond_reserve < policy.free_floor && uploads_failing {
-        DiskVerdict::Stop
-    } else if free_beyond_reserve < LOW_DISK_BYTES {
-        DiskVerdict::Low {
-            free: free_beyond_reserve,
-        }
-    } else {
-        DiskVerdict::Ok
-    }
+/// Whether one reading of `free_beyond_reserve`, read after the reserve was resized to
+/// [`target_with`], is low: less than [`LOW_DISK_BYTES`]. Low is a warning, never a stop: a
+/// full disk never ends a run (D65).
+pub fn is_low(free_beyond_reserve: u64) -> bool {
+    free_beyond_reserve < LOW_DISK_BYTES
 }
 
 /// Whether the run's chain parts alone are past the reservation (`reserve_bytes`, the
-/// [`DiskPolicy`]'s): parts that are acknowledged may then go.
+/// [`DiskPolicy`]'s): parts that are acknowledged may then go at once. The disk itself can call
+/// for the same ([`short_of_disk`]).
 pub fn pressure(footprint: u64, reserve_bytes: u64) -> bool {
     footprint > reserve_bytes
 }
 
-/// The bytes of one entry's chain on disk: the sum of its parts' lengths
-/// ([`goalcup_protocol::export::chain_parts`]). A missing directory, or a chain that cannot be
-/// listed, counts for nothing.
-pub fn chain_footprint(trace_dir: &Path) -> u64 {
-    crate::upload::prune::parts_now(trace_dir)
-        .map(|parts| parts.iter().map(|part| part.len).sum())
-        .unwrap_or(0)
-}
-
-/// The chain bytes on disk across all of a run's entries.
-pub fn footprint(entries: &[EntryRef]) -> u64 {
-    entries
-        .iter()
-        .map(|entry| chain_footprint(&entry.trace_dir))
-        .sum()
+/// Whether the disk is short of space, whatever the chain's own size: less than
+/// [`LOW_DISK_BYTES`] free beyond the reserve, or the reserve (`held`) drawn down to nothing.
+/// Parts the server acknowledged then go at once instead of after their safety time, so that
+/// something else filling the disk (the agent's own build) does not meet the run's uploaded
+/// copy still taking room.
+pub fn short_of_disk(held: u64, free_beyond_reserve: u64) -> bool {
+    held == 0 || free_beyond_reserve < LOW_DISK_BYTES
 }
 
 /// `bytes` in the largest unit that keeps it short: `3 GiB`, `2.4 GiB`, `100 MiB`.
@@ -444,9 +409,9 @@ pub const LONGEST_RUN: Duration =
 /// - A run that has ended is done, whatever became of its upload: its deadline passed, its host
 ///   stopped it for its end (the server's stop, a newer run replacing it), or the server said it
 ///   is sealed or incomplete (`server_ended`).
-/// - A run that is not over is done when `goalcup continue` cannot restart it (a headless
-///   connector, or no credential here) and every one of its entries is sealed and sent. A run
-///   with a chat-mode connector keeps its reserve: `continue` reuses it.
+/// - A run that is not over is done when `goalcup continue` cannot restart it (a state that says
+///   so, or no credential here) and every one of its entries is sealed and sent. A run that can
+///   be continued keeps its reserve: `continue` reuses it.
 pub fn run_is_done(cfg: &Path, record: &super::RunRecord, server_ended: bool, now: u64) -> bool {
     if record.server_url.is_none() || server_ended {
         return true;
@@ -587,24 +552,27 @@ mod tests {
         assert_eq!(target(5 * GIB, 50 * GIB, 0), 0);
         assert!(pressure(5 * GIB, RUN_RESERVE_BYTES));
         assert!(!pressure(3 * GIB, RUN_RESERVE_BYTES));
-        assert_eq!(verdict(5 * GIB, 0, 50 * GIB, true), DiskVerdict::Ok);
-        assert_eq!(verdict(5 * GIB, 0, 50 * GIB, false), DiskVerdict::Ok);
+        assert!(!is_low(50 * GIB));
     }
 
     #[test]
-    fn the_agent_filling_the_disk_draws_down_the_reserve_before_any_stop() {
+    fn the_disk_is_short_under_five_gib_beyond_the_reserve_or_with_the_reserve_gone() {
+        assert!(!short_of_disk(3 * GIB, 5 * GIB));
+        assert!(short_of_disk(3 * GIB, 5 * GIB - 1));
+        assert!(short_of_disk(0, 50 * GIB), "the reserve has nothing left");
+        assert!(!short_of_disk(1, 50 * GIB));
+    }
+
+    #[test]
+    fn the_agent_filling_the_disk_draws_down_the_reserve() {
         // 100 MiB free, 2 GiB reserved: the reserve gives back all but the floor.
         let held = target(0, 100 * MIB, 2 * GIB);
         assert_eq!(held, 2 * GIB + 100 * MIB - FREE_FLOOR);
         assert!(held < 2 * GIB);
-        // After it did, the disk has the floor free: low, but not a stop, even with the
-        // uploads failing.
+        // After it did, the disk has the floor free: low.
         let freed = 100 * MIB + (2 * GIB - held);
         assert_eq!(freed, FREE_FLOOR);
-        assert_eq!(
-            verdict(0, held, freed, true),
-            DiskVerdict::Low { free: FREE_FLOOR }
-        );
+        assert!(is_low(freed));
     }
 
     #[test]
@@ -614,59 +582,17 @@ mod tests {
     }
 
     #[test]
-    fn a_full_disk_with_failing_uploads_stops() {
-        assert_eq!(verdict(GIB, 0, 100 * MIB, true), DiskVerdict::Stop);
-        assert_eq!(verdict(0, 0, 0, true), DiskVerdict::Stop);
-    }
-
-    #[test]
-    fn a_reserve_that_still_holds_bytes_is_never_a_full_disk() {
-        // Free space just under the floor with the reserve holding GiB: it has more to give.
-        assert_eq!(
-            verdict(0, 2 * GIB, FREE_FLOOR - 4096, true),
-            DiskVerdict::Low {
-                free: FREE_FLOOR - 4096
-            }
-        );
-        assert_eq!(
-            verdict(0, 1, 0, true),
-            DiskVerdict::Low { free: 0 },
-            "even one byte held"
-        );
-    }
-
-    #[test]
-    fn a_full_disk_with_working_uploads_does_not_stop() {
-        assert_eq!(
-            verdict(GIB, 0, 100 * MIB, false),
-            DiskVerdict::Low { free: 100 * MIB }
-        );
+    fn a_full_disk_is_low_and_never_a_stop() {
+        // D65: no reading stops a run, not even a full disk with the reserve drawn down to
+        // nothing; the agent is paused instead (`super::super::pause`).
+        assert!(is_low(0));
+        assert!(is_low(100 * MIB));
     }
 
     #[test]
     fn low_below_five_gib_beyond_the_reservation() {
-        assert_eq!(verdict(0, 0, 5 * GIB, true), DiskVerdict::Ok);
-        assert_eq!(
-            verdict(0, 0, 5 * GIB - 1, true),
-            DiskVerdict::Low { free: 5 * GIB - 1 }
-        );
-    }
-
-    #[test]
-    fn the_footprint_counts_the_chain_and_its_parts_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let write = |name: &str, len: usize| std::fs::write(dir.path().join(name), vec![0; len]);
-        write("chain.jsonl", 100).unwrap();
-        write("chain.00000000000000000100.jsonl", 40).unwrap();
-        write("chain.jsonl.tmp", 7).unwrap();
-        write("seal.json", 9).unwrap();
-        write("chain.x.jsonl", 5).unwrap();
-        assert_eq!(chain_footprint(dir.path()), 140);
-        // The first parts deleted after their acknowledgement: what is left is counted.
-        std::fs::remove_file(dir.path().join("chain.jsonl")).unwrap();
-        assert_eq!(chain_footprint(dir.path()), 40);
-        assert_eq!(chain_footprint(&dir.path().join("missing")), 0);
-        assert_eq!(chain_footprint(Path::new("")), 0);
+        assert!(!is_low(5 * GIB));
+        assert!(is_low(5 * GIB - 1));
     }
 
     #[test]
@@ -687,6 +613,8 @@ mod tests {
             free_floor: FREE_FLOOR,
             chain_quota: CHAIN_QUOTA_BYTES,
             tick: Duration::from_millis(50),
+            pause_below: 0,
+            resume_above: 0,
         };
         let refused = RunReserve::take(&path, &policy).unwrap_err();
         assert_eq!(refused.exit_code(), 1);
@@ -704,6 +632,8 @@ mod tests {
             free_floor: FREE_FLOOR,
             chain_quota: CHAIN_QUOTA_BYTES,
             tick: Duration::from_millis(50),
+            pause_below: 0,
+            resume_above: 0,
         };
         let mut reserve = RunReserve::take(&path, &policy).unwrap();
         assert!(reserve.allocated() >= 8 * MIB);
@@ -742,6 +672,8 @@ mod tests {
             free_floor: FREE_FLOOR,
             chain_quota: CHAIN_QUOTA_BYTES,
             tick: Duration::from_millis(50),
+            pause_below: 0,
+            resume_above: 0,
         }
     }
 
@@ -823,14 +755,14 @@ mod tests {
         // Chat-mode: `goalcup continue` reuses the reserve, sent or not.
         server_run(cfg.path(), "r-chat", later, true, &["e1"], &["e1"]);
         credential(cfg.path(), "r-chat");
-        // Headless, everything sent: nothing will use the reserve again.
+        // Not continuable, everything sent: nothing will use the reserve again.
         server_run(cfg.path(), "r-sent", later, false, &["e2"], &["e2"]);
         // Chat-mode, but this machine holds no credential for it: `continue` is refused, so
         // once everything is sent nothing will use the reserve.
         server_run(cfg.path(), "r-nocred", later, true, &["e7"], &["e7"]);
-        // Headless, the upload fell short: the reserve stays until the run is over.
+        // Not continuable, the upload fell short: the reserve stays until the run is over.
         server_run(cfg.path(), "r-unsent", later, false, &["e3"], &[]);
-        // Headless, two segments, one still unsent.
+        // Not continuable, two segments, one still unsent.
         server_run(cfg.path(), "r-half", later, false, &["e4", "e5"], &["e4"]);
         // Chat-mode but stopped for the run's end (a newer run replaced it).
         server_run(cfg.path(), "r-replaced", later, true, &["e6"], &[]);

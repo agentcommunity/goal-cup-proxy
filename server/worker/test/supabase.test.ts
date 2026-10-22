@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
-import type { ChunkRecord, EntryRow, NoticeArgs, OpenRunArgs, RunRow, TickRun } from "../src/db.ts";
+import { type ChunkRecord, type EntryRow, NOTICE_KINDS, type NoticeArgs, type OpenRunArgs, type RunRow, type TickRun } from "../src/db.ts";
 import { SupabaseDb } from "../src/db-supabase.ts";
 import { ApiError } from "../src/errors.ts";
 import type { StartReceipt } from "../src/sign.ts";
@@ -44,6 +44,7 @@ const T = "2026-11-06T09:00:00Z";
 const run: RunRow = {
   run_id: "r0000000000000001", event_id: "cup", member_id: "m", mode: "competition", status: "open", official_start: T,
   deadline_at: "2026-11-13T09:00:00Z", replaced_at: null, repo_url: "https://github.com/a/b", first_entry_id: "e0000000000000001", current_entry_id: "e0000000000000001", current_sealed_at: null,
+  stored_bytes: 0, chunk_count: 0,
 };
 const entry: EntryRow = {
   entry_id: "e0000000000000001", run_id: "r0000000000000001", segment: 0, connector_id: "c", manifest_sha256: H("a"), connector_dir_sha256: H("c"),
@@ -218,12 +219,31 @@ test("abandonRun -> upload_abandon_run", async () => {
   assert.deepEqual(calls[0], { fn: "upload_abandon_run", args: { p_member_id: "m", p_run_id: "r1", p_reason: "why", p_at: "t" } });
 });
 
-test("commitChunk -> upload_commit_chunk(p_chunk)", async () => {
+test("commitChunk -> upload_commit_chunk(p_chunk, p_stored_bytes)", async () => {
   const calls = stub("committed", "conflict", "beyond_final", "closed", "not_found");
   for (const want of ["committed", "conflict", "beyond_final", "closed", "not_found"]) {
-    assert.equal(await db().commitChunk({ member_id: "m", run_id: "r1", chunk }), want);
+    assert.equal(await db().commitChunk({ member_id: "m", run_id: "r1", chunk, stored_bytes: 4321 }), want);
   }
-  assert.deepEqual(calls[0], { fn: "upload_commit_chunk", args: { p_member_id: "m", p_run_id: "r1", p_chunk: chunk } });
+  assert.deepEqual(calls[0], { fn: "upload_commit_chunk", args: { p_member_id: "m", p_run_id: "r1", p_chunk: chunk, p_stored_bytes: 4321 } });
+});
+
+test("a run's stored_bytes and chunk_count come through, are checked, and must be there", async () => {
+  const counted = { ...run, stored_bytes: 68_719_476_736, chunk_count: 2048 };
+  stub({ run: counted, entry });
+  assert.deepEqual(await db().getRun("m", "r1", null), { run: counted, entry });
+  const { stored_bytes: _s, ...uncounted } = run;
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    for (const bad of [{ stored_bytes: -1 }, { stored_bytes: "12" }, { chunk_count: 1.5 }, { stored_bytes: null }]) {
+      stub({ run: { ...run, ...bad }, entry });
+      await assert.rejects(db().getRun("m", "r1", null), (e) => e instanceof ApiError && e.status === 502, JSON.stringify(bad));
+    }
+    stub({ run: uncounted, entry }); // a database without the migration this Worker needs
+    await assert.rejects(db().getRun("m", "r1", null), (e) => e instanceof ApiError && e.status === 502);
+  } finally {
+    console.error = quiet;
+  }
 });
 
 test("sealRun -> upload_seal_run, with the run's status after it", async () => {
@@ -258,7 +278,7 @@ test("recordHeartbeat -> upload_heartbeat", async () => {
   const calls = stub("recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found");
   const a = {
     member_id: "m", run_id: "r1", entry_id: "e1", seq: 9, head: H("9"), offset_local: 1234, final: true, repo_head: "f".repeat(40),
-    recording: "gaps" as const, model_requests: 77, client_ip: "203.0.113.9", client_country: "DE", at: "t",
+    recording: "gaps" as const, model_requests: 77, vitals: null, client_ip: "203.0.113.9", client_country: "DE", at: "t",
   };
   for (const want of ["recorded", "final_committed", "final_existing", "final_conflict", "closed", "not_found"]) {
     assert.equal(await db().recordHeartbeat(a), want);
@@ -277,8 +297,45 @@ test("recordHeartbeat -> upload_heartbeat", async () => {
   assert.deepEqual([calls2[0]!.args.p_recording, calls2[0]!.args.p_model_requests, calls2[0]!.args.p_client_ip, calls2[0]!.args.p_client_country], [null, null, null, null]);
 });
 
+test("recordHeartbeat sends p_vitals only when the heartbeat carried vitals (the 13-argument form answers otherwise)", async () => {
+  const a = {
+    member_id: "m", run_id: "r1", entry_id: "e1", seq: 9, head: H("9"), offset_local: 1234, final: false, repo_head: null,
+    recording: null, model_requests: null, client_ip: null, client_country: null, at: "t",
+  };
+  const vitals = { disk_free_bytes: 2 ** 53 - 1, disk_short: true, agent_paused: "disk" as const, rss_bytes: 1, cpu_ms: 2, open_files: 3 };
+  const calls = stub("recorded", "recorded");
+  await db().recordHeartbeat({ ...a, vitals });
+  await db().recordHeartbeat({ ...a, vitals: null });
+  assert.deepEqual(calls[0]!.args.p_vitals, vitals);
+  assert.ok(!("p_vitals" in calls[1]!.args), JSON.stringify(calls[1]!.args));
+  assert.equal(Object.keys(calls[0]!.args).length, Object.keys(calls[1]!.args).length + 1);
+});
+
+test("a tick run's disk_notice_at comes through, is checked, and must be there", async () => {
+  const owed = { ...tickRun, disk_notice_at: "2026-11-06T10:00:00Z" };
+  stub([owed, tickRun]);
+  assert.deepEqual(await db().runsForTick(T), [owed, tickRun]);
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    for (const bad of ["yesterday", 5, true, undefined]) {
+      stub([{ ...tickRun, disk_notice_at: bad }]);
+      await assert.rejects(db().runsForTick(T), (e) => e instanceof ApiError && e.status === 502, JSON.stringify(bad));
+    }
+  } finally {
+    console.error = quiet;
+  }
+});
+
+test("a claimed disk_full notice is a notice the Worker knows", async () => {
+  const n = { id: 7, kind: "disk_full", run_id: "r0000000000000001", to: null, subject: "s", text: "t" };
+  stub([n]);
+  assert.deepEqual(await db().claimNotices(20, T), [n]);
+});
+
 const tickRun: TickRun = {
   ...run, last_heartbeat_at: "2026-11-06T09:05:00Z", last_model_request_at: T, flagged_at: null, flag_reason: null, final_commit: null,
+  disk_notice_at: null,
 };
 
 test("runsForTick -> upload_runs_for_tick(p_at), each row checked", async () => {
@@ -322,10 +379,16 @@ test("queueNotices -> one upload_queue_notices call with the whole batch, the co
 });
 
 test("recordFinalCommit -> upload_record_final_commit", async () => {
-  const calls = stub(true, false);
+  const calls = stub(true, false, true);
   await db().recordFinalCommit("m", "r1", "a".repeat(40), "t");
   await db().recordFinalCommit("m", "r1", "none", "t");
-  assert.deepEqual(calls[0], { fn: "upload_record_final_commit", args: { p_member_id: "m", p_run_id: "r1", p_commit: "a".repeat(40), p_at: "t" } });
+  await db().recordFinalCommit("m", "r1", "b".repeat(40), "t", { pushed_at: T, branch: "main", late_push: true, force_push: false, head_fallback: false });
+  const none = { p_pushed_at: null, p_branch: null, p_late_push: null, p_force_push: null, p_head_fallback: false };
+  assert.deepEqual(calls[0], { fn: "upload_record_final_commit", args: { p_member_id: "m", p_run_id: "r1", p_commit: "a".repeat(40), p_at: "t", ...none } });
+  assert.deepEqual(calls[2], {
+    fn: "upload_record_final_commit",
+    args: { p_member_id: "m", p_run_id: "r1", p_commit: "b".repeat(40), p_at: "t", p_pushed_at: T, p_branch: "main", p_late_push: true, p_force_push: false, p_head_fallback: false },
+  });
 });
 
 test("closeRun -> upload_close_run", async () => {
@@ -380,10 +443,16 @@ test("a refused request logs PostgREST's code and message, not its details or hi
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Every `this.#rpc("<name>", { p_…: … })` call in db-supabase.ts, with the `p_` keys of its object. */
-function workerCalls(): Map<string, Set<string>> {
+/** The `p_` keys written in a piece of an argument object. */
+const pKeys = (text: string) => [...text.matchAll(/\b(p_[a-z0-9_]+)\s*[:,}\n]/g)].map((k) => k[1] as string);
+
+/**
+ * Every `this.#rpc("<name>", { p_…: … })` call in db-supabase.ts, once per argument set it can send:
+ * a conditional spread `...(cond ? {} : { p_x: … })` makes two variants, without and with its keys.
+ */
+function workerCalls(): { name: string; args: Set<string> }[] {
   const src = readFileSync(join(SRC, "src", "db-supabase.ts"), "utf8");
-  const calls = new Map<string, Set<string>>();
+  const calls: { name: string; args: Set<string> }[] = [];
   for (const m of src.matchAll(/#rpc\("([a-z_]+)",\s*\{/g)) {
     let depth = 1;
     let i = (m.index ?? 0) + m[0].length;
@@ -392,8 +461,12 @@ function workerCalls(): Map<string, Set<string>> {
       if (src[i] === "{") depth++;
       else if (src[i] === "}") depth--;
     }
-    const keys = new Set([...src.slice(start, i - 1).matchAll(/\b(p_[a-z0-9_]+)\s*[:,}\n]/g)].map((k) => k[1] as string));
-    calls.set(m[1] as string, keys);
+    const body = src.slice(start, i - 1);
+    const spread = /\.\.\.\([^?]*\?\s*\{\s*\}\s*:\s*\{([^}]*)\}\s*\)/g;
+    const optional = [...body.matchAll(spread)].map((s) => pKeys(s[1] as string));
+    let variants = [pKeys(body.replace(spread, ""))];
+    for (const keys of optional) variants = variants.flatMap((v) => [v, [...v, ...keys]]);
+    for (const v of variants) calls.push({ name: m[1] as string, args: new Set(v) });
   }
   return calls;
 }
@@ -403,10 +476,13 @@ interface SqlFn {
   required: Set<string>;
 }
 
-/** The last `CREATE [OR REPLACE] FUNCTION public.goal_cup_<name>(…)` for each public function: that one wins. */
-function sqlFunctions(): Map<string, SqlFn> {
+/**
+ * Every overload of each `public.goal_cup_<name>` in the mirror. A later `CREATE OR REPLACE` with the
+ * same parameters replaces an earlier one (the last wins); different parameters are another overload.
+ */
+function sqlFunctions(): Map<string, SqlFn[]> {
   const sql = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
-  const fns = new Map<string, SqlFn>();
+  const fns = new Map<string, Map<string, SqlFn>>();
   for (const m of sql.matchAll(/CREATE (?:OR REPLACE )?FUNCTION public\.goal_cup_([a-z_]+)\(/g)) {
     let depth = 1;
     let i = (m.index ?? 0) + m[0].length;
@@ -435,28 +511,57 @@ function sqlFunctions(): Map<string, SqlFn> {
       params.add(name);
       if (!/\bDEFAULT\b/i.test(p)) required.add(name);
     }
-    fns.set(m[1] as string, { params, required });
+    const name = m[1] as string;
+    if (!fns.has(name)) fns.set(name, new Map());
+    fns.get(name)!.set([...params].join(","), { params, required });
   }
-  return fns;
+  return new Map([...fns].map(([name, overloads]) => [name, [...overloads.values()]]));
 }
 
-test("every RPC the Worker calls exists in the SQL, with the same argument names", () => {
+/** An overload answers a named call when it has every argument sent and gets every one it requires. */
+const answers = (fn: SqlFn, args: Set<string>) => [...args].every((a) => fn.params.has(a)) && [...fn.required].every((r) => args.has(r));
+
+test("every RPC the Worker calls exists in the SQL, with the same argument names, and each call matches exactly one overload", () => {
   const calls = workerCalls();
   const fns = sqlFunctions();
   // The scan must see every call site, or a call could hide from the check.
   const sites = readFileSync(join(SRC, "src", "db-supabase.ts"), "utf8").split('#rpc("').length - 1;
-  assert.equal(calls.size, sites, "the scan missed a #rpc call");
+  assert.equal(new Set(calls.map((c) => c.name)).size, sites, "the scan missed a #rpc call");
   assert.ok(fns.size >= sites, `found only ${fns.size} SQL functions: the scan is broken`);
+  // The heartbeat is sent with and without p_vitals: both forms must be checked.
+  assert.deepEqual(calls.filter((c) => c.name === "upload_heartbeat").map((c) => c.args.size).sort(), [13, 14], "the scan missed a call variant");
   const problems: string[] = [];
-  for (const [name, args] of calls) {
-    const fn = fns.get(name);
-    if (!fn) {
+  for (const { name, args } of calls) {
+    const overloads = fns.get(name);
+    if (!overloads) {
       problems.push(`${name}: no CREATE FUNCTION public.goal_cup_${name}( in the SQL`);
       continue;
     }
     if (args.size === 0) problems.push(`${name}: no p_ argument was read from the Worker call: the scan is broken`);
-    for (const a of args) if (!fn.params.has(a)) problems.push(`${name}: the Worker sends ${a}; the SQL has no such parameter`);
-    for (const r of fn.required) if (!args.has(r)) problems.push(`${name}: the SQL requires ${r}; the Worker does not send it`);
+    const matched = overloads.filter((fn) => answers(fn, args));
+    if (matched.length !== 1) {
+      problems.push(`${name}(${[...args].join(", ")}): ${matched.length} overloads answer it, not exactly one`);
+    }
   }
   assert.deepEqual(problems, []);
+});
+
+/** The text of the last `CREATE [OR REPLACE] FUNCTION <name>(` in the mirror, up to its closing `$$;`. */
+function lastFunctionBody(name: string): string {
+  const sql = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
+  const at = [...sql.matchAll(new RegExp(`CREATE (?:OR REPLACE )?FUNCTION ${name.replace(".", "\\.")}\\(`, "g"))].at(-1)?.index;
+  assert.ok(at !== undefined, `no ${name} in the SQL`);
+  const open = sql.indexOf("$$", at);
+  return sql.slice(at, sql.indexOf("$$", open + 2));
+}
+
+test("every notice kind the Worker queues is allowed by the notices CHECK constraint and has an email in notice_text", () => {
+  const sql = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
+  // The constraint as the last migration that touches it leaves it (the table's own, or a later ADD CONSTRAINT).
+  const checks = [...sql.matchAll(/(?:ADD CONSTRAINT notices_kind_check\s+CHECK|kind\s+text NOT NULL CHECK) \(kind IN \(([^)]*)\)\)/g)];
+  assert.ok(checks.length >= 2, "the scan found no widened notices_kind_check");
+  const allowed = [...checks.at(-1)![1]!.matchAll(/'([a-z0-9_]+)'/g)].map((m) => m[1]);
+  assert.deepEqual([...allowed].sort(), [...NOTICE_KINDS].sort());
+  const text = lastFunctionBody("goal_cup_tracer.notice_text");
+  for (const kind of NOTICE_KINDS) assert.equal(text.split(`WHEN '${kind}'`).length - 1, 2, `notice_text: ${kind} needs a subject and a body`);
 });

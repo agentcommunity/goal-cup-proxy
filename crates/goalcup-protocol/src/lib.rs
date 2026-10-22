@@ -35,7 +35,6 @@ pub mod receipt;
 pub mod redaction;
 pub mod run_secret;
 pub mod seal;
-pub mod submission;
 pub mod template;
 
 #[derive(Debug, thiserror::Error)]

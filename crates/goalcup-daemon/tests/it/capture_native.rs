@@ -327,7 +327,6 @@ fn source(
         pattern: pattern.to_string(),
         form,
         hint,
-        scope_id: None,
         modified_since: None,
     }
 }
@@ -340,10 +339,9 @@ fn codex_thread(root: &Path, thread: &str) -> NativeSourceSpec {
     NativeSourceSpec {
         name: "codex-rollout".into(),
         root: root.to_path_buf(),
-        pattern: "*/*/*/rollout-*-{id}.jsonl".into(),
+        pattern: format!("*/*/*/rollout-*-{thread}.jsonl"),
         form: NativeStoreForm::AppendOnly,
         hint: Some(NativeHint::new("codex-jsonl").unwrap()),
-        scope_id: Some(thread.into()),
         modified_since: None,
     }
 }
@@ -921,65 +919,6 @@ fn shared_day_directory_opens_only_the_target() {
 }
 
 #[test]
-fn scope_id_is_validated_before_it_can_widen_scope() {
-    let root = root();
-    let target = format!("2026/09/27/rollout-a-{THREAD}.jsonl");
-    root.write(&target, b"mine\n");
-    root.write("2026/09/27/rollout-b-someone-else.jsonl", b"theirs\n");
-    let sink = CollectSink::new();
-    let attempt = |spec: NativeSourceSpec| {
-        NativeCapture::new(
-            config(vec![spec], NativeCaptureLimits::default()),
-            sink.clone(),
-            clock(),
-        )
-        .map(|_| ())
-    };
-    let long = "a".repeat(129);
-    for id in [
-        "*", "?", "a*b", "a?b", "a/b", "/", "..", ".", "", "a.b", "{id}", "a\0b", "a b", &long,
-    ] {
-        assert!(
-            matches!(
-                attempt(codex_thread(&root.home, id)),
-                Err(NativeCaptureError::Config(_))
-            ),
-            "scope id {id:?} must be refused"
-        );
-    }
-    let mut unscoped = codex_thread(&root.home, THREAD);
-    unscoped.scope_id = None;
-    assert!(matches!(
-        attempt(unscoped),
-        Err(NativeCaptureError::Config(_))
-    ));
-    let mut unused = codex_thread(&root.home, THREAD);
-    unused.pattern = "*/*/*/rollout-*.jsonl".into();
-    assert!(
-        matches!(attempt(unused), Err(NativeCaptureError::Config(_))),
-        "a scope id the pattern never uses scopes nothing"
-    );
-    let mut braces = codex_thread(&root.home, THREAD);
-    braces.pattern = "*/*/*/rollout-{x}-{id}.jsonl".into();
-    assert!(matches!(
-        attempt(braces),
-        Err(NativeCaptureError::Config(_))
-    ));
-
-    let mut capture = start(
-        vec![codex_thread(&root.home, THREAD)],
-        NativeCaptureLimits::default(),
-        &sink,
-    );
-    capture.poll();
-    assert_eq!(
-        labels(&replay(&sink.frames())),
-        [format!("codex-rollout:{target}#g1")]
-    );
-    sink.assert_clean();
-}
-
-#[test]
 fn newest_day_is_reached_before_older_history_exhausts_the_cap() {
     let root = root();
     for day in 1..=12 {
@@ -1166,6 +1105,9 @@ fn invalid_configuration_is_refused() {
         "a//b",
         "a/",
         "./a",
+        "rollout-{id}.jsonl",
+        "a/{x}/b",
+        "a}b",
     ] {
         assert!(
             matches!(
@@ -1934,16 +1876,10 @@ fn the_adapter_moves_to_a_poll_thread() {
 }
 
 // ---------------------------------------------------------------------------------------
-// Hermes lane A, S5a: the per-run Hermes `sessions` directory as a Snapshot source.
-//
-// The spec below is the one `runtime::capture::scoped_native_source("hermes", ..)` builds
-// (asserted there, in its own unit test); everything here is the collector's behaviour on
-// that exact shape. Every byte is synthetic.
-//
-// These are CHARACTERISATION tests: they build the spec by hand and exercise the collector
-// that existed before slice S5a, so none of them can fail on pre-S5a source. The mapping
-// itself is pinned (and was RED) in the unit tests of `runtime/capture/tests.rs`. Every directory
-// here is a private temporary one: nothing resolves a real `HOME` or any `.hermes`.
+// A Hermes-shaped `sessions` directory as a Snapshot source, one session file named in the
+// pattern. The spec is built by hand; what a shipped connector resolves to is pinned in the
+// unit tests of `runtime/capture/tests.rs`. Every byte is synthetic, and every directory here
+// is a private temporary one: nothing resolves a real `HOME` or any `.hermes`.
 // ---------------------------------------------------------------------------------------
 
 const HERMES_SESSION: &str = "20260930_141500_a1b2c3";
@@ -1953,10 +1889,9 @@ fn hermes_session(sessions: &Path, id: &str) -> NativeSourceSpec {
     NativeSourceSpec {
         name: "session".into(),
         root: sessions.to_path_buf(),
-        pattern: "session_{id}.json".into(),
+        pattern: format!("session_{id}.json"),
         form: NativeStoreForm::Snapshot,
         hint: None,
-        scope_id: Some(id.into()),
         modified_since: None,
     }
 }
@@ -2141,45 +2076,6 @@ fn hermes_symlinked_session_is_not_read() {
         }
     }
     sink.assert_clean();
-}
-
-/// A session ID the collector cannot trust never widens the scope: Hermes IDs
-/// (`YYYYMMDD_HHMMSS_hex`) pass, and every glob, separator or traversal is refused.
-#[test]
-fn hermes_poisoned_scope_ids_are_refused() {
-    let root = root();
-    let sink = CollectSink::new();
-    let attempt = |id: &str| {
-        NativeCapture::new(
-            config(
-                vec![hermes_session(&root.path("sessions"), id)],
-                NativeCaptureLimits::default(),
-            ),
-            sink.clone(),
-            clock(),
-        )
-        .map(|_| ())
-    };
-    fs::create_dir_all(root.path("sessions")).unwrap();
-    attempt(HERMES_SESSION).expect("a real Hermes session id is a valid scope");
-    for id in [
-        "*",
-        "?",
-        "../x",
-        "a/b",
-        "..",
-        ".",
-        "",
-        "a.b",
-        "{id}",
-        "a b",
-        "20260930_14*",
-    ] {
-        assert!(
-            matches!(attempt(id), Err(NativeCaptureError::Config(_))),
-            "scope id {id:?} must be refused"
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------------------

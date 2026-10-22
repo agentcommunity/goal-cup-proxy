@@ -3,8 +3,8 @@
 
     python3 -m unittest discover -s scripts -p 'test_check_connector.py'
 
-Each test copies the script into a throwaway tree that holds a stub pin script, one connector
-and its kit case, so no real cargo, build or pin regeneration runs.
+Each test copies the script into a throwaway tree that holds a stub pin script and one
+chat-mode connector, so no real cargo, build or pin regeneration runs.
 """
 
 from __future__ import annotations
@@ -72,10 +72,10 @@ class CheckConnectorTest(unittest.TestCase):
         self.log = root / "cargo.log"
         write(self.repo / "scripts" / SCRIPT.name, SCRIPT.read_text(), 0o755)
         write(self.repo / "scripts" / "pin-manifests.sh", STUB_PINS, 0o755)
-        write(self.repo / "connectors" / "toy-cli" / "harness.toml", 'id = "toy-cli"\n')
-        kit = self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli"
-        for name in ("harness.toml", "stand-in.py", "expect.toml"):
-            write(kit / name, "# stub\n")
+        write(
+            self.repo / "connectors" / "toy-cli" / "harness.toml",
+            'id = "toy-cli"\n[capture]\ninteractive = true\n',
+        )
         write(self.repo / PINS, f"# header\ncodex-cli {HEX}\n")
         write(self.bin / "cargo", FAKE_CARGO, 0o755)
         write(self.bin / "uname", FAKE_UNAME, 0o755)
@@ -277,37 +277,9 @@ class CheckConnectorTest(unittest.TestCase):
         missing = self.run_script("--allow-no-kit", "toy-cli", CARGO_TARGET_DIR="../nowhere")
         self.assertIn("WARNING: CARGO_TARGET_DIR=../nowhere", missing.stdout)
 
-    def test_template_placeholders_left_fail_the_files_step(self) -> None:
-        kit = self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli"
-        write(
-            kit / "stand-in.py",
-            "'''Copy to harness-kit/<HARNESS_ID>/stand-in.py.'''\n"
-            "# ---- EDIT ----\n"
-            'BODY = b"kit <HARNESS_ID> echo"  # expect.toml wire_request\n'
-            "# ---- end EDIT ----\n"
-            'HOST = "a"  # <not a placeholder>\n',
-        )
-        write(kit / "expect.toml", '# <comment>\nid = "kit-<HARNESS_ID>"\n')
-        result = self.run_script("--allow-no-kit", "toy-cli")
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("FAIL files (template placeholders left)", result.stdout)
-        self.assertIn("stand-in.py:3:BODY", result.stdout)
-        self.assertIn('expect.toml:2:id = "kit-<HARNESS_ID>"', result.stdout)
-        self.assertNotIn("stand-in.py:1:", result.stdout)
-        self.assertNotIn("<comment>", result.stdout)
-        self.assertTrue(any("harness_conformance" in c for c in self.cargo_calls()))
-
-    def test_a_missing_kit_case_fails_but_the_rest_still_runs(self) -> None:
-        shutil.rmtree(self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli")
-        result = self.run_script("--allow-no-kit", "toy-cli")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("FAIL files", result.stdout)
-        self.assertTrue(any("harness_conformance" in c for c in self.cargo_calls()))
-
     # Chat mode needs no kit case of its own.
 
     def test_a_chat_mode_connector_without_a_kit_case_passes_the_files_step(self) -> None:
-        shutil.rmtree(self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli")
         write(
             self.repo / "connectors/toy-cli/harness.toml",
             'id = "toy-cli"\n[capture]\n# interactive = false in a comment\ninteractive = true\n',
@@ -318,7 +290,6 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertIn("test --offline -p goalcup-cli --test it harness_contract_kit::", self.cargo_calls())
 
     def test_a_chat_mode_connector_with_a_placeholder_left_fails_the_files_step(self) -> None:
-        shutil.rmtree(self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli")
         write(
             self.repo / "connectors/toy-cli/harness.toml",
             'id = "toy-cli"\n[capture]\ninteractive = true\nargs = ["<FLAG>"]\n',
@@ -328,15 +299,15 @@ class CheckConnectorTest(unittest.TestCase):
         self.assertIn("FAIL files (template placeholders left)", result.stdout)
         self.assertIn('harness.toml:4:args = ["<FLAG>"]', result.stdout)
 
-    def test_a_headless_connector_still_needs_its_kit_case(self) -> None:
-        shutil.rmtree(self.repo / "crates/goalcup-cli/tests/fixtures/harness-kit/toy-cli")
+    def test_a_headless_connector_fails_the_files_step_but_the_rest_still_runs(self) -> None:
         write(
             self.repo / "connectors/toy-cli/harness.toml",
             'id = "toy-cli"\n[capture]\n# interactive = true\n',
         )
         result = self.run_script("toy-cli", uname="Darwin")
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("FAIL files (missing:", result.stdout)
+        self.assertIn("FAIL files (not chat mode)", result.stdout)
+        self.assertTrue(any("harness_conformance" in c for c in self.cargo_calls()))
 
     # A Node harness without NODE_USE_ENV_PROXY.
 
@@ -344,8 +315,8 @@ class CheckConnectorTest(unittest.TestCase):
         write(self.bin / "toy", shebang + "\nconsole.log('hi')\n", 0o755)
         write(
             self.repo / "connectors/toy-cli/harness.toml",
-            'id = "toy-cli"\n[capture.executable]\nprogram = "toy"\n[capture.env]\n'
-            + manifest_env,
+            'id = "toy-cli"\n[capture]\ninteractive = true\n[capture.executable]\n'
+            'program = "toy"\n[capture.env]\n' + manifest_env,
         )
 
     def test_a_node_script_without_node_use_env_proxy_fails_loudly(self) -> None:
@@ -393,7 +364,8 @@ class CheckConnectorTest(unittest.TestCase):
     def test_a_program_not_on_path_skips_the_node_check_with_a_note(self) -> None:
         write(
             self.repo / "connectors/toy-cli/harness.toml",
-            'id = "toy-cli"\n[capture.executable]\nprogram = "not-installed-toy"\n',
+            'id = "toy-cli"\n[capture]\ninteractive = true\n[capture.executable]\n'
+            'program = "not-installed-toy"\n',
         )
         result = self.run_script("toy-cli", uname="Darwin")
         self.assertEqual(result.returncode, 0, result.stdout)

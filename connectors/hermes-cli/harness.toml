@@ -9,17 +9,36 @@ display_name = "Hermes"
 # has no session file yet, so `goalcup continue` opens `hermes chat` the normal way, without
 # `--continue` (which would find no session and exit 1), and the setup is kept in the home. A
 # field may not name the tracker (F7), so the hint says "continue the run".
-first_screen = "If Hermes asks to run setup, answer Y and pick your provider and model. Hermes then closes: continue the run to start working."
+first_screen = "If Hermes asks to run setup, do it now, before you type your prompt: answer Y and pick your provider and model. Hermes then closes; continue the run, then type your prompt."
+# Hermes's section of docs/HARNESS-SETUP.md, which `goalcup prep` links to (fix plan v8).
+setup_section = "hermes"
+
+# Fix plan v9: where the participant adds `goalcup mcp`, the time-left tool; prep prints the lines
+# and never writes them. Hermes hands an MCP server only PATH, HOME and a few more, plus its
+# `env` map, whose `${VAR}` it fills from its own environment (read from the 0.19.0 source,
+# `tools/mcp_tool.py`; not measured).
+[participant.time_left_tool]
+file = "config.yaml"
+key = "mcp_servers"
+pass_env = "env_template"
+
+# D67: what `goalcup prep` recommends, and never sets: no approval prompt for commands Hermes
+# deems dangerous (an unquoted YAML `off` reads as false, which Hermes also takes as off).
+# docs/harnesses/hermes-cli.md, "Run without permission prompts".
+[[participant.no_prompts]]
+file = "config.yaml"
+key = "approvals.mode"
+values = ["off", "false"]
 
 [capture]
 # Chat mode (D57): `hermes chat` opens Hermes's classic REPL in the participant's terminal and the
 # participant types the prompt; `/exit`, `/quit` or Ctrl-D end it with exit 0 (measured 16 Oct
 # 2026). No provider, model or key option (D61): Hermes uses whatever the participant set up in
-# its home, and the tracer never sees, passes or stores a provider key.
+# its home, and goalcup never sees, passes or stores a provider key.
 interactive = true
 continuation = "chat: the participant types the prompt and may type keep going"
 args = ["chat"]
-# `goalcup continue`: reopen the most recent session in the tracer's home (measured 16 Oct 2026:
+# `goalcup continue`: reopen the most recent session in goalcup's home (measured 16 Oct 2026:
 # `hermes chat --continue` resumes it, `Resumed session <id>`).
 resume_args = ["--continue"]
 # How Hermes stores its session, and nothing about how the agent behaves (D61). Run in the shared
@@ -41,14 +60,18 @@ reserved_env_prefixes = ["HERMES_"]
 # The model service is the participant's choice (D62). Hermes's own setup, and `/model`, save
 # its address as `model.base_url` in `config.yaml` (`hermes_cli/model_setup_flows.py:2890-2905`,
 # `hermes_cli/auth.py:6639-6700`, Hermes 0.19.0). A `<PROVIDER>_BASE_URL` in `.env` overrides it
-# at run time and is not read (a known gap, docs/harnesses/hermes-cli.md section 9). The tracer reads that one key at each start
+# at run time and is not read (a known gap, docs/harnesses/hermes-cli.md section 9). goalcup reads that one key at each start
 # and continue and records that host only; every other host stays an opaque tunnel. There is
-# no provider list: `HERMES_CA_BUNDLE` (below) trusts the proxy alone, so a listed host the
-# participant does not use would only be probed, and an unlisted one they do use would fail.
+# no provider list: `HERMES_CA_BUNDLE` (below) trusts the recording proxy alone, so a listed host
+# the participant does not use would only be probed, and an unlisted one they do use would fail.
 model_host_from = { file = "config.yaml", key = "model.base_url" }
 
 [capture.executable]
 program = "hermes"
+# `hermes --version` prints `Hermes Agent v0.19.0 (2026.7.20)` in under a second with a fresh
+# HOME (measured 22 Oct 2026; it writes only `.hermes/.update_check` and logs there, which the
+# probe home discards).
+version_args = ["--version"]
 
 [capture.env]
 TERMINAL_HOME_MODE = "profile"
@@ -67,7 +90,7 @@ real_dirs = ["{user_home}/.hermes"]
 env = ["HERMES_CA_BUNDLE"]
 mode = "replace"
 
-# D57: no session id is known at launch (the banner prints one on the terminal, which the tracer
+# D57: no session id is known at launch (the banner prints one on the terminal, which goalcup
 # does not read). The run's sessions are every snapshot new or written since the run started,
 # which is safe because runs on the shared home are serialized (D39).
 [capture.identity]

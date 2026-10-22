@@ -278,6 +278,7 @@ impl Daemon {
         // Stage 0: a zero budget is refused before anything is closed or flagged.
         let reads_git = capture.clone;
         let budget = FinishBudget::from_request(request, reads_git)?;
+        #[cfg(any(test, feature = "test-hooks"))]
         capture.finishing.store(true, Ordering::Release);
         let abandoned = AbandonGuard {
             capture: capture.clone(),
@@ -344,18 +345,40 @@ impl Daemon {
                 None => Err(capture.expire(FinishStage::RunLock, None, None)),
             };
         };
-        if let Some(done) = run.finished() {
-            return Ok(done.clone());
+        if let Some(done) = run.finished().cloned() {
+            // A finish whose `seal.json` could not be written (a full disk) writes it again,
+            // when this daemon still holds the manifest its terminal binds. The writer is taken
+            // before the chained finish, as the first finish takes them.
+            if done.seal == LocalSealOutcome::SealWriteFailed {
+                let mut writer = lock(&capture.writer);
+                let mut chained = lock(&capture.chained_finish);
+                let rewritten = chained.as_mut().and_then(|chained| {
+                    let manifest = chained.manifest.as_ref()?;
+                    writer.export.rewrite_local_finish_seal(manifest).ok()?;
+                    chained.manifest = None;
+                    chained.seal_written = true;
+                    Some(chained.sealed_at.clone())
+                });
+                drop(chained);
+                drop(writer);
+                if let Some(sealed_at) = rewritten {
+                    let report = CaptureFinishReport {
+                        seal: LocalSealOutcome::SealWritten,
+                        ..done
+                    };
+                    return self.commit_finish(capture, run, report, sealed_at);
+                }
+            }
+            return Ok(done);
         }
         let entry_id = run.entry.entry_id.clone();
         // The terminal is already chained (its registry write failed, or a daemon died between
         // the two): commit it, and append nothing after it.
-        let chained = lock(&capture.chained_finish).clone();
-        if let Some(chained) = chained {
+        let chained = lock(&capture.chained_finish).as_ref().map(|chained| {
             let report = CaptureFinishReport {
                 entry_id: entry_id.clone(),
                 trace_dir: run.entry.trace_dir.display().to_string(),
-                termination: chained.termination,
+                termination: chained.termination.clone(),
                 terminal_seq: Some(chained.seq),
                 seal: if chained.seal_written {
                     LocalSealOutcome::SealWritten
@@ -363,7 +386,10 @@ impl Daemon {
                     LocalSealOutcome::SealWriteFailed
                 },
             };
-            return self.commit_finish(capture, run, report, chained.sealed_at);
+            (report, chained.sealed_at.clone())
+        });
+        if let Some((report, sealed_at)) = chained {
+            return self.commit_finish(capture, run, report, sealed_at);
         }
 
         // Stage 3: end the registered process tree, outside the budget.
@@ -375,7 +401,7 @@ impl Daemon {
             .registry()
             .get(&entry_id)?
             .ok_or_else(|| DaemonError::Missing(format!("entry {entry_id}")))?;
-        let requested_at = self.finalization_timestamp("termination request")?;
+        let requested_at = self.durable_timestamp("termination request")?;
         let began = std::time::Instant::now();
         // Read without taking the latch: a failed termination or an owner refusal must keep
         // the earlier outcome and proxy counters for the next serialized attempt.
@@ -384,13 +410,9 @@ impl Daemon {
             .and_then(|e| e.termination.clone());
         let (termination, ran) = bind_termination(recorded, || {
             let (outcome, note) = match &row.last_process {
-                // No signed walk budget binds a local capture: the module's own ceiling does.
-                Some(handle) => super::super::termination::terminate_handle(
-                    self,
-                    handle,
-                    usize::MAX,
-                    &requested_at,
-                )?,
+                Some(handle) => {
+                    super::super::termination::terminate_handle(self, handle, &requested_at)?
+                }
                 None => super::super::termination::unresolved_termination(
                     self,
                     &requested_at,
@@ -423,10 +445,6 @@ impl Daemon {
         // exit is awaited until the last instant a stage may begin, and is never joined while it
         // runs. A slow owner is a refusal; its thread stays with the entry for the next finish.
         capture.pause_before(FinishStage::OwnerDrain);
-        // A deferred native scope rides on this request. It is installed here, under the run
-        // lock and before the owner is stopped, so the owner finishes it within the native
-        // budget below (CONTRACTS.md, C6 local finish budget ¶9).
-        capture.install_deferred_scope(request.native_scope.as_deref(), run.launched());
         let stopped = budget.admits()
             && matches!(
                 capture.stop_owner(budget.native_budget(), Some(budget.last_start())),
@@ -442,7 +460,7 @@ impl Daemon {
 
         // Stage 6: the writer is uncontended now; counters and any earlier refusal's gaps precede
         // the terminal. Termination was bound before the latch is taken here.
-        capture.chain_carried_gaps(request, run.launched());
+        capture.chain_carried_gaps(request);
 
         // Stage 7: the workspace seal.
         capture.pause_before(FinishStage::WorkspaceWalk);
@@ -498,6 +516,7 @@ impl Daemon {
                     termination: termination.clone(),
                     sealed_at: sealed_at.clone(),
                     seal_written: true,
+                    manifest: None,
                 });
                 (LocalSealOutcome::SealWritten, Some(link.seq))
             }
@@ -507,14 +526,15 @@ impl Daemon {
                     .head()
                     .map(|(seq, _)| seq)
                     .filter(|seq| Some(*seq) != before);
-                // A terminal chained without its `seal.json`: a retry commits the failure and
-                // appends nothing after it.
+                // A terminal chained without its `seal.json`: a retry commits the failure,
+                // appends nothing after it, and writes `seal.json` again from this manifest.
                 if let Some(seq) = terminal_seq {
                     *lock(&capture.chained_finish) = Some(super::ChainedFinish {
                         seq,
                         termination: termination.clone(),
                         sealed_at: sealed_at.clone(),
                         seal_written: false,
+                        manifest: Some(manifest.clone()),
                     });
                 }
                 (LocalSealOutcome::SealWriteFailed, terminal_seq)
@@ -716,22 +736,15 @@ impl CaptureEntry {
 
     /// Finish stage 6, with the writer uncontended: chain what this finish carries, in the order
     /// the chain reads it (CONTRACTS.md, C6 local finish budget ¶4 and ¶5). First the
-    /// deferred-scope gap, if the entry still owes it. Then the launcher's proxy counters, this
-    /// request's or an expired attempt's. Then one stream-less `ShutdownDeadline` gap if an
+    /// launcher's proxy counters, this request's or an expired attempt's. Then one stream-less `ShutdownDeadline` gap if an
     /// earlier attempt expired: its incomplete finish left capture continuity uncertain.
     /// Takes the sticky [`ExpiredFinish`] after the recorded termination was bound at stage 3.
-    pub(super) fn chain_carried_gaps(&self, request: &CaptureSealRequest, launched: bool) {
+    pub(super) fn chain_carried_gaps(&self, request: &CaptureSealRequest) {
         let latched = lock(&self.expired).take();
         let counters = request
             .proxy
             .or(latched.as_ref().and_then(|latched| latched.proxy_pending));
-        // A deferred scope that no finish installed: the snapshot was never read, and one
-        // stream-less gap says so.
-        let deferred_gap = self.take_deferred_gap(launched);
         let mut writer = lock(&self.writer);
-        if deferred_gap {
-            writer.streamless_gap(GapReason::SourceChanged, &(self.clock)());
-        }
         if let Some(counters) = &counters {
             writer.proxy_gaps(counters, &(self.clock)());
         }

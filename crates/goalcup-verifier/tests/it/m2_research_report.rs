@@ -4,7 +4,7 @@
 //!
 //! Every trace is written by the real protocol writers: a v5 baseline and its
 //! `baseline.json`, a goal stream ended `Complete`, a Launch naming it, ordinary capture
-//! appends and, when sealed, `write_local_finish` (or the signed cutoff and finalization).
+//! appends and, when sealed, `write_local_finish`.
 //! Expectations come from what each test wrote, or from the reader's verified facts where the
 //! claim is that the report carries exactly those, never from the report under test. Decoder
 //! inputs are synthetic unless a comment names a committed fixture.
@@ -24,10 +24,7 @@ use goalcup_protocol::envelope::{Envelope, EventBody};
 use goalcup_protocol::export::{ACKS_FILE, CHAIN_FILE, RECEIPT_FILE, TraceExport};
 use goalcup_protocol::pins::CONNECTOR_DIR_SHA256S;
 use goalcup_protocol::provenance::{
-    CaptureUnavailableV1, CutoffReachedV1, FinalizationV1, NoRepositoryReasonV1,
-    PreCutoffDrainOutcomeV1, PublisherNotAttemptedReasonV1, PublisherNotAttemptedV1,
-    RepositoryNonSelectionV1, Rfc3339Utc, SnapshotNotAttemptedV1, TerminationFailureV1,
-    TerminationMethodV1, TerminationOutcomeV1,
+    Rfc3339Utc, TerminationFailureV1, TerminationMethodV1, TerminationOutcomeV1,
 };
 use goalcup_protocol::receipt::{StartReceipt, StartReceiptClaims};
 use goalcup_protocol::redaction::{RedactionAudit, RedactionAuditSpan};
@@ -864,7 +861,7 @@ fn mixed_observations_end_in_one_bound_summary() {
 
     // Each decoder: its declared identity and version, and counts that are its own lines.
     let versions = [
-        "2",
+        "3",
         "2.1.259-2.1.283",
         openai::DECODER_VERSION,
         anthropic::DECODER_VERSION,
@@ -968,7 +965,7 @@ fn the_report_echoes_launch_keys_and_presents_connector_pin_provenance() {
     assert_eq!(summary["run"]["connector"], "Dev/unpinned");
     assert_eq!(
         hex::encode(Sha256::digest(unversioned(&bytes))),
-        "c78371197fe85f7e8cad184437fb22e408503ba8fbb6c067d8d3ab2f9cb3a8fb"
+        "558ef7001261e52f93a575732216f23c01ed619cb07d03c09c366979433c7d2d"
     );
 
     let (pinned_id, pinned_digest) = CONNECTOR_DIR_SHA256S[0];
@@ -1262,8 +1259,8 @@ fn verified_reader_facts_are_the_only_terminal_and_delivery_authority() {
         }
     }
 
-    // (c) A signed trace: the verified receipt clock is reported beside the terminal, and
-    // the signed terminal keeps its own wall time with no capture time substituted.
+    // (c) A receipt-anchored trace: the verified receipt clock is reported beside the local
+    // terminal, which keeps its own capture time.
     let dir = tempfile::tempdir().unwrap();
     let mut export = new_export(dir.path());
     let (_, head) = export.head().unwrap();
@@ -1288,37 +1285,8 @@ fn verified_reader_facts_are_the_only_terminal_and_delivery_authority() {
     for record in prefix(GOAL_TEXT).iter().chain(&codex_records()) {
         append(&mut export, record);
     }
-    let digest = receipt.canonical_digest().unwrap();
-    export
-        .write_cutoff_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-29T12:00:08Z",
-            CutoffReachedV1 {
-                receipt_sha256: digest.clone(),
-                deadline_at: utc(DEADLINE_AT),
-                pre_cutoff_drain: PreCutoffDrainOutcomeV1::Complete,
-            },
-        )
-        .unwrap();
-    let final_link = export
-        .write_finalization_for_protocol(
-            M2_PROTOCOL_VERSION,
-            ENTRY,
-            "2026-09-29T12:00:09Z",
-            FinalizationV1::CaptureUnavailable {
-                receipt_sha256: digest,
-                termination: confirmed(),
-                capture: CaptureUnavailableV1::NotAttempted(SnapshotNotAttemptedV1 {
-                    selection: RepositoryNonSelectionV1::None {
-                        reason: NoRepositoryReasonV1::NotFound,
-                    },
-                }),
-                publisher: PublisherNotAttemptedV1 {
-                    reason: PublisherNotAttemptedReasonV1::SelectionFailed,
-                },
-            },
-        )
+    let (_, final_link) = export
+        .write_local_finish(&manifest(), finish_time(), "participant_stop", confirmed())
         .unwrap();
     drop(export);
     let (result, _, lines) = report_with(dir.path(), &options);
@@ -1336,12 +1304,12 @@ fn verified_reader_facts_are_the_only_terminal_and_delivery_authority() {
     );
     // A verified, bound receipt gives the deadline counts a clock to be set against.
     assert!(delivery["records_after_deadline"].is_u64(), "{delivery:#}");
-    assert_eq!(
-        summary["run"]["terminal"],
-        json!({"seq": final_link.seq, "hash": final_link.hash, "observed": null,
-            "observed_at": "2026-09-29T12:00:09Z", "kind": "signed_finalization",
-            "reason": null, "termination": confirmed(), "seal_manifest_sha256": null})
-    );
+    let terminal = &summary["run"]["terminal"];
+    assert_eq!(terminal["seq"], final_link.seq);
+    assert_eq!(terminal["hash"], final_link.hash);
+    assert_eq!(terminal["kind"], "local_finish");
+    assert_eq!(terminal["observed"], json!(finish_time()));
+    assert_eq!(terminal["termination"], json!(confirmed()));
 }
 
 #[test]
@@ -1620,9 +1588,9 @@ fn unknown_protocol_is_integrity_valid_analysis_unavailable() {
     }
 }
 
-/// D53: builds are recorded, not pinned, so a session file that names model work while the proxy
-/// recorded no wire stream at all is noted for judges: a harness that bypassed the proxy, or a
-/// fake. The note never changes the exit code.
+/// D53: builds are recorded, not pinned, so a session file that names model work while the
+/// recording proxy recorded no wire stream at all is noted for judges: a harness that bypassed the
+/// recording proxy, or a fake. The note never changes the exit code.
 #[test]
 fn a_session_with_model_work_and_no_wire_stream_is_noted_not_failed() {
     let trace = make_report_trace(GOAL_TEXT, &codex_records(), Some(confirmed()));
@@ -1704,7 +1672,7 @@ fn native_and_wire_counts_remain_distinct() {
     for key in keys(&rest) {
         assert!(!key.contains("total") && !key.contains("model"), "{key}");
     }
-    // The native session names model work and the proxy recorded model calls.
+    // The native session names model work and the recording proxy recorded model calls.
     assert_eq!(cross_leg["state"], "consistent", "{cross_leg:#}");
     assert_eq!(cross_leg["wire_model_requests"], 2);
     assert!(cross_leg["wire_streams"].as_u64().unwrap() > 0);

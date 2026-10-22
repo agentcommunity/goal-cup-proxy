@@ -4,7 +4,8 @@
 //! * Decoder selection (`DecoderRegistry::builtin()`): which of the registered
 //!   decoders a stream is shown to, for every combination of stream source, `protocol_hint` and
 //!   payload shape in a fixed probe list. Observed through `write_research_report`: the summary's
-//!   `analysis.decoders` rows. The hint a decoder keys on is data in the stream's metadata
+//!   `analysis.decoders` rows. The golden lists only the rows that are not zero; the test
+//!   asserts that every other pair is zero. The hint a decoder keys on is data in the stream's metadata
 //!   (a connector's `capture.hosts[].protocol_hint`, or the daemon's native hint); the decoder
 //!   is code.
 //! * The reader's tool allowance (`reader.rs`, shape only since the D52 amendment): which
@@ -319,24 +320,36 @@ fn probe_records(source: CaptureSource, hint: Option<&str>, payload: &[u8]) -> V
     epoch(PROBE, records)
 }
 
-/// Which decoders saw the stream, from the summary's decoder rows.
-fn decoder_rows(dir: &Path) -> Value {
+/// Every registered decoder's row for the trace, from the summary's decoder rows.
+fn decoder_rows(dir: &Path) -> Vec<Value> {
     let mut out = Vec::new();
     let result = write_research_report(dir, &VerifyOptions::default(), &mut out)
         .unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
     let rows = result.summary["analysis"]["decoders"].as_array().unwrap();
-    json!(
-        rows.iter()
-            .map(|row| json!({
+    rows.iter()
+        .map(|row| {
+            json!({
                 "decoder": row["decoder"],
                 "decoder_version": row["summary"]["decoder_version"],
                 "written": row["written"],
                 "observations": row["summary"]["observations"],
                 "unknown_records": row["summary"]["unknown_records"],
                 "failure": row["failure"],
-            }))
-            .collect::<Vec<_>>()
-    )
+            })
+        })
+        .collect()
+}
+
+/// A decoder that wrote nothing, observed nothing and did not fail.
+fn is_zero(row: &Value) -> bool {
+    row["written"] == 0
+        && row["observations"] == 0
+        && row["unknown_records"] == 0
+        && row["failure"].is_null()
+}
+
+fn decoder_id(row: &Value) -> Value {
+    json!({"decoder": row["decoder"], "decoder_version": row["decoder_version"]})
 }
 
 #[test]
@@ -362,29 +375,45 @@ fn verifier_decoder_selection_per_protocol_hint_is_pinned() {
         ("ws_client", CaptureSource::WsClient),
         ("wire_request", CaptureSource::WireRequest),
     ];
-    let mut rows = Vec::new();
+    // Which decoders a report registers at all, with no stream to show them.
+    let empty = decoder_rows(trace(launch(ANY_PROFILE, None, None), vec![]).path());
+    assert!(empty.iter().all(is_zero), "an empty trace: {empty:?}");
+    let registered: Vec<Value> = empty.iter().map(decoder_id).collect();
+    // Only the probe and decoder pairs that did something are pinned. Every other pair is
+    // checked to be all zero here, so a decoder that starts seeing a new stream still changes
+    // the golden.
+    let mut active = Vec::new();
     for (source_name, source) in sources {
         for hint in hints {
             for kind in payloads {
                 let records = probe_records(source, hint, &payload(kind));
-                let dir = trace(launch(ANY_PROFILE, None, None), records);
-                rows.push(json!({
-                    "source": source_name,
-                    "protocol_hint": hint,
-                    "payload": kind,
-                    "decoders": decoder_rows(dir.path()),
-                }));
+                let rows = decoder_rows(trace(launch(ANY_PROFILE, None, None), records).path());
+                assert_eq!(
+                    rows.iter().map(decoder_id).collect::<Vec<_>>(),
+                    registered,
+                    "{source_name} {hint:?} {kind}: every registered decoder reports a row"
+                );
+                for row in rows.iter().filter(|r| !is_zero(r)) {
+                    active.push(json!({
+                        "source": source_name,
+                        "protocol_hint": hint,
+                        "payload": kind,
+                        "decoder": row["decoder"],
+                        "written": row["written"],
+                        "observations": row["observations"],
+                        "unknown_records": row["unknown_records"],
+                        "failure": row["failure"],
+                    }));
+                }
             }
         }
     }
-    // Which decoder ids a report registers at all, with no stream to show them.
-    let empty = trace(launch(ANY_PROFILE, None, None), vec![]);
     check_golden(
         "decoder-selection.json",
         &json!({
-            "registered_decoders_in_order": decoder_rows(empty.path())
-                .as_array().unwrap().iter().map(|r| r["decoder"].clone()).collect::<Vec<_>>(),
-            "probes": rows,
+            "registered_decoders_in_order": registered,
+            "rule": "every combination of source, protocol_hint, payload and decoder not listed in active is zero: written, observations and unknown_records are 0 and failure is null",
+            "active": active,
         }),
     );
 }

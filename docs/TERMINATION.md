@@ -126,6 +126,13 @@ the second's line gone from the table before the next snapshot (a grandchild for
 orphaned) — are one paid bit. A handler that runs a subprocess which exits before the next
 snapshot is refused (a fork nothing adopted): fail-closed. `all_gone` is never true. The
 singleton path proves one process's death and cannot see a descendant reparented before it attached.
+**The exiting window.** For about 30 to 45 ms after death a macOS process shows state `E` in `ps`,
+which `liveness` reads as live (only `Z` is gone), while `proc_pidinfo` already fails, so its start
+identity cannot be read. A root caught there is waited for as on Linux: `liveness` again every 5 ms
+for at most 200 ms, no longer live is the exit, nothing is signalled meanwhile, and a root still
+live at the end is refused as recycled (fail-closed). An argv read as `(comm)`, macOS's form of
+Linux's `[comm]`, is waited for the same way. Measured on the 22 Oct smokes: Amp and Codex roots
+caught in the window sealed `Unresolved(ProcessAuthorityUnavailable)` with nothing left alive.
 
 ## The launcher's ending of a child it just released (D40, outside this contract)
 
@@ -226,9 +233,7 @@ Measured in Docker: `the_launcher_sweeps_an_orphan_forked_after_the_root_died_be
 controlled workload's `orphan-after-root` mode. Its member forks a detached `sleep 300` only after
 the root has died. The orphan is gone when `goalcup start` returns, the sweep line comes before the
 seal's report, and the trace verifies. Without the subreaper the same test fails with the orphan
-alive. `a_root_reaped_by_the_scope_wait_still_has_its_orphans_swept` repeats it under a
-`stdout_json` identity (Codex's shape) whose root exits before any scope line, so the launcher's
-scope wait reaps the root before the launch is recorded; the sweep is armed before that wait.
+alive.
 
 The residuals, stated plainly:
 

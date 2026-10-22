@@ -1,6 +1,6 @@
 //! A local stand-in for the Goal Cup upload server, for tests only.
 //!
-//! It implements `UPLOAD-API.md` (version 1) over loopback HTTP so the Rust tests of the tracer's
+//! It implements `UPLOAD-API.md` (version 1) over loopback HTTP so the Rust tests of goalcup's
 //! uploader run without Cloudflare. A TypeScript Worker implements the same contract; where the
 //! two ever disagree the contract file decides, and a test here is the cheap way to find out.
 //!
@@ -24,12 +24,17 @@
 //!
 //! The run lifecycle: a competition start replaces the member's other open competition run, a
 //! practice credential opens a practice run (never replacing, no window), a test credential opens a
-//! test run (a competition run that replaces, and is replaced by, only another test run), and
-//! `ServerOptions::start_window_opens` / `start_window_closes` bound competition starts.
+//! test run (like a competition run, but it never replaces and is never replaced, so one operator's
+//! test runs run side by side), and `ServerOptions::start_window_opens` / `start_window_closes`
+//! bound competition starts.
+//!
+//! The per-run size limit: a chunk that would take the compressed bytes a run holds (each stored
+//! chunk's `Content-Length`, over all its entries) past `ServerOptions::run_max_compressed_bytes`
+//! is `413 quota_exceeded`, before the body is read, as the Worker's `RUN_MAX_COMPRESSED_BYTES`.
 //!
 //! What the Worker does on its own (the 5-minute cron: closing runs, the commit at the deadline
 //! and the run emails, see "What the server does on its own" in `UPLOAD-API.md`) is not built here;
-//! nothing in the tracer reads it. The heartbeat's `recording` and `model_requests` are kept on
+//! nothing in goalcup reads it. The heartbeat's `recording` and `model_requests` are kept on
 //! the heartbeat record (`heartbeats_of`); they flag nothing and queue nothing. A run's status
 //! follows the same close rule as the Worker's, but is worked out when it is asked for, not
 //! written by a cron.
@@ -65,7 +70,7 @@ use state::{RunStatus, Shared};
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
     /// `(token, member)` pairs: pasted member tokens the server still accepts, member-scoped,
-    /// for the tracer's old login. Legacy: removed with the pasted token (T5).
+    /// for goalcup's old login. Legacy: removed with the pasted token (T5).
     pub tokens: Vec<(String, String)>,
     /// The member the stand-in approves device requests as; a login request's handle.
     pub device_member: String,
@@ -81,6 +86,9 @@ pub struct ServerOptions {
     /// both unset, the default, means always open.
     pub start_window_opens: Option<u64>,
     pub start_window_closes: Option<u64>,
+    /// The per-run size limit in compressed bytes (the Worker's `RUN_MAX_COMPRESSED_BYTES`,
+    /// default 64 GiB).
+    pub run_max_compressed_bytes: u64,
     /// Seed of the Ed25519 key that signs receipts and acknowledgements.
     pub signing_seed: [u8; 32],
     /// A fixed port, so a test can restart on the same one. `None` picks a free port.
@@ -98,6 +106,7 @@ impl Default for ServerOptions {
             close_after_seconds: 24 * 3600,
             start_window_opens: None,
             start_window_closes: None,
+            run_max_compressed_bytes: 64 << 30,
             signing_seed: [7u8; 32],
             port: None,
         }
@@ -128,6 +137,7 @@ impl UploadServer {
             run_secs: config.run_seconds.unwrap_or(config.run_hours * 3600),
             practice_secs: config.practice_run_seconds,
             close_after_secs: config.close_after_seconds,
+            run_max_bytes: config.run_max_compressed_bytes,
             window_opens: config.start_window_opens,
             window_closes: config.start_window_closes,
             key,
@@ -174,7 +184,7 @@ impl UploadServer {
                 // Shutting the runtime down cancels every connection task still alive, so a
                 // pooled keep-alive connection cannot outlive `stop` and keep answering. A plain
                 // drop would also wait for a blocking task still reading a chunk body, which
-                // holds `stop` until the tracer's own timeout ends the request; a server that
+                // holds `stop` until goalcup's own timeout ends the request; a server that
                 // goes away does not wait for its clients.
                 rt.shutdown_timeout(std::time::Duration::from_millis(100));
             })
@@ -236,7 +246,7 @@ impl UploadServer {
     }
 
     /// The next chunk PUT is stored and committed, then the connection is cut without a reply:
-    /// the tracer sees a transport error for a chunk the server holds, and its retry must be
+    /// goalcup sees a transport error for a chunk the server holds, and its retry must be
     /// answered from the stored acknowledgement.
     pub fn drop_next_chunk_reply(&self) {
         self.shared.drop_replies.store(1, Ordering::SeqCst);
@@ -443,7 +453,7 @@ impl UploadServer {
             .flatten()
     }
 
-    /// `open`, `sealed`, `incomplete` or `abandoned`. For the tracer's tests a run whose current
+    /// `open`, `sealed`, `incomplete` or `abandoned`. For goalcup's tests a run whose current
     /// entry is sealed reads `sealed` here even before the run's end; the API's own `status`
     /// (`GET /v1/runs/{id}`) says `open` until then, so that the run can still be continued.
     pub fn status(&self, run_id: &str) -> Option<String> {

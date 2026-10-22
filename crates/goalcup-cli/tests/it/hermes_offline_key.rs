@@ -1,7 +1,7 @@
 //! P1 for Hermes in chat mode from its own home (D61): no fragment of the participant's
-//! provider key reaches what the tracer records or uploads.
+//! provider key reaches what goalcup records or uploads.
 //!
-//! The tracer never sees, passes or stores that key. The participant's own setup puts it in
+//! Goal Cup Proxy never sees, passes or stores that key. The participant's own setup puts it in
 //! `$HERMES_HOME/.env` (Hermes's own file, in the one home every run of the connector shares),
 //! and Hermes reads it from there. The promise is about what can still go wrong: the agent prints
 //! that file into its session, and the session file is recorded and uploaded.
@@ -21,7 +21,7 @@
 //! decoded) and in the uploaded baseline. A failure names the window's offset, never its bytes.
 //!
 //! What this does not claim: the `base64` print stays in the session as base64 text. The daemon
-//! removes a key by its shape, and a key the tracer never sees cannot be matched once encoded
+//! removes a key by its shape, and a key goalcup never sees cannot be matched once encoded
 //! (D61, docs/CHEAT-CHECKLIST.md). No 8-byte window of the key is in that text, which is all the
 //! search below can show of it.
 //!
@@ -550,7 +550,6 @@ fn the_real_hermes_writes_its_session_file_once_configured_and_keeps_its_key_out
         &vars,
         &workspace,
         &CaptureLaunch {
-            goal: None,
             executable: &resolved,
             run_home: &run_home,
             config_home: &hermes_home,
@@ -558,6 +557,7 @@ fn the_real_hermes_writes_its_session_file_once_configured_and_keeps_its_key_out
             ca_certificate: &ca,
             ca_bundle: None,
             parent_env: &parent,
+            time_left_file: None,
         },
     )
     .expect("the capture plan");

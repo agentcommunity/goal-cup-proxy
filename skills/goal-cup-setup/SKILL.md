@@ -5,7 +5,7 @@ description: Use when a person asks you to set them up for the /goal Cup, get th
 
 # Setting a person up for the /goal Cup
 
-You are helping a person get their machine ready for a /goal Cup run with the Goal Cup tracer
+You are helping a person get their machine ready for a /goal Cup run with Goal Cup Proxy
 (`goalcup`). The person's guide is [docs/PARTICIPANT-GUIDE.md](../../docs/PARTICIPANT-GUIDE.md);
 the rules are [docs/RULES.md](../../docs/RULES.md). This skill gets them as far as
 `goalcup prep: ready.` and no further.
@@ -21,26 +21,29 @@ the rules are [docs/RULES.md](../../docs/RULES.md). This skill gets them as far 
 - Never ask for, read, print or store the GitHub token yourself. The person pastes it into
   `goalcup prep`, which reads it without showing it.
 - Never write to `~/.claude`, `~/.codex` or any harness's own config, and never set a model base
-  URL or a proxy variable. The tracer keeps its own home for each harness.
+  URL or a proxy variable. Goal Cup Proxy keeps its own home for each harness.
 
 ## Tell the person this early
 
 Say these plainly, once, before the first human step:
 
 - **Two approvals are normal.** `goalcup login` approves this computer once. It signs the person
-  in and gives the tracer no credential for any run. Each `goalcup start` then approves that one
+  in and gives Goal Cup Proxy no credential for any run. Each `goalcup start` then approves that one
   run, so no run starts on their account without their approval. It is not a mistake when the
   browser asks again.
 - **After each browser approval, return to the terminal now.** The next step happens there.
-- **A firewall such as Little Snitch may ask about `goalcup`.** Allow it. Each tracer update is a
+- **A firewall such as Little Snitch may ask about `goalcup`.** Allow it. Each Goal Cup Proxy update is a
   new program file, so the firewall may ask again after every update. Allow it again.
-- **Claude Code asks, at the start of each run, whether to trust the folder.** The person answers
-  it themselves (Yes) before they type their prompt. That is allowed. Do not answer it for them.
+- **Any harness may show setup screens before the first prompt** (Claude Code's folder-trust
+  question, a sign-in, a model choice). The person answers them themselves before they type their
+  prompt. That is allowed for every harness. Do not answer them for the person.
+- **Set the harness so it does not stop to ask for approvals.** During the run nobody may approve
+  anything, so choose the harness's own setting for this before the run.
 - **The person types one prompt, and after that only "keep going".**
 
 ## The loop
 
-1. Check the tracer is installed: `goalcup --version`. If it is not, tell the person how to
+1. Check Goal Cup Proxy is installed: `goalcup --version`. If it is not, tell the person how to
    install it and stop. The guide's section 1 has the one command, for macOS, Linux and (inside
    WSL2) Windows: `curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh`.
    If no release is published yet, follow the README's build-from-source steps.

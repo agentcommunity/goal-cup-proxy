@@ -6,6 +6,29 @@ id = "claude-code-cli"
 display_name = "Claude Code"
 # Shown just before the harness opens: a fresh run folder makes it ask this once.
 first_screen = "Claude Code may ask whether you trust this folder. Choose Yes."
+# Claude Code's section of docs/HARNESS-SETUP.md, which `goalcup prep` links to (fix plan v8).
+setup_section = "claude-code"
+
+# Fix plan v9: where the participant adds `goalcup mcp`, the time-left tool; prep prints the lines
+# and never writes them. `claude mcp add --scope user` writes `mcpServers` in `.claude.json` of
+# CLAUDE_CONFIG_DIR, and the server gets Claude Code's environment (measured, 2.1.299).
+[participant.time_left_tool]
+file = ".claude.json"
+key = "mcpServers"
+pass_env = "inherited"
+
+# D67: what `goalcup prep` recommends, and never sets: bypass mode, and the one-time acceptance
+# of its disclaimer, without which Claude Code falls back to asking (2.1.283, 2.1.299).
+# docs/harnesses/claude-code-cli.md, "Run without permission prompts".
+[[participant.no_prompts]]
+file = "settings.json"
+key = "permissions.defaultMode"
+values = ["bypassPermissions"]
+
+[[participant.no_prompts]]
+file = "settings.json"
+key = "skipDangerousModePermissionPrompt"
+values = ["true"]
 
 [capture]
 auth_hosts = ["platform.claude.com"]

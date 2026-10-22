@@ -2,36 +2,50 @@
 # scripts/matrix.sh <connector> <server-url> [options]
 # scripts/matrix.sh --check-copy <config-dir> [run-id]
 #
-# One practice run of one connector against one upload server, start to finish, and one result
-# row:
+# One practice run (or, with --test, one organizer test run sealed after --duration) of one
+# connector against one upload server, start to finish, and one result row:
 #
-#     <connector> <os>-<arch> <harness_version> PASS|FAIL <date>
+#     <connector> <os>-<arch> <harness_version> PASS|FAIL|NOT-VERIFIED <date>
 #
 # The run is the real thing: `goalcup login`, `goalcup start --practice` (the device-flow
 # approval, the clone of the matrix repository, the harness), the end of the run, the seal and
-# the upload. A chat-mode connector (`interactive = true`) runs under a pseudo-terminal, gets one
-# typed prompt, and is stopped by the tracer at the practice deadline. A headless connector (not
-# `interactive`, like hermes-cli) runs with `--goal-file`, gets its goal from MATRIX_PROMPT in
-# that file, types nothing, and ends when the harness does; the script then waits for the
-# server's deadline before it asks for the server's copy. Then it checks:
+# the upload. Every connector is a chat-mode one (`interactive = true`, D57): it runs under a
+# pseudo-terminal, gets one typed prompt, and is stopped by goalcup at the practice deadline.
+# Then it checks:
 #
 #   1. `goalcup-verify --capture-integrity` on the local trace exits 0 (integrity valid, anchor
 #      signed by the server's acknowledgement);
 #   2. the server's copy: `GET /v1/runs/<id>` with the run's own credential says `sealed`, `stop`,
 #      and holds exactly the bytes, records and head the local chain ends with, and the entry's
-#      committed end (`final`) is that same record.
+#      committed end (`final`) is that same record;
+#   3. for a real harness, the agent worked: `goalcup-verify --research-json` on the trace shows
+#      at least one model exchange that carries output (a usage observation with output or
+#      completion tokens above 0, or a decoded assistant message). A prompt swallowed by a
+#      first-run dialog or split into keys leaves none, and the row FAILs. And the workspace
+#      changed: in the run record's `workspace` (the clone), `git status --porcelain
+#      --untracked-files=all` is not empty, or a commit (on any ref, pushed or not) was made since
+#      the run started. A run that only named its session, or stalled at a permission prompt,
+#      changes nothing and FAILs. MATRIX_EXPECT_FILES=0 skips this for a prompt that writes nothing.
 #
 # The upload API has no call that returns the stored chain, so (2) is a comparison of the
 # server's position with the local chain, not a download. docs/OPERATING.md, "The matrix", says
 # why that is enough and what it does not prove.
 #
-# <connector> is `m2-fake-tui` or `m2-fake-headless` (connectors this script writes for itself
-# around the test suite's fake TUI and fake headless harness, admitted with --dev; no harness, no
-# login, no model) or the id of a shipped connector (`codex-cli`, `hermes-cli`, ...), which needs
-# that harness installed and logged in, in a prepared configuration directory (MATRIX_CONFIG_DIR,
-# below). The script reads the connector's harness.toml to tell chat mode from headless:
-# GOALCUP_CONNECTORS_DIR, else the connectors directory beside the goalcup binary, else this
-# checkout's; if none holds it, the connector is taken to be chat mode.
+# A long run (about 30 minutes or more) prunes its acknowledged chain parts on this machine, so its
+# trace holds `chain.<offset>.jsonl` parts and no chain.jsonl, and the local verifier says
+# chain_pruned_locally. Then the checks run on the server's copy, rebuilt by scripts/fetch-run.sh
+# (read only), plus one more: every local part is byte for byte the copy's bytes at its offset, and
+# the last one ends where the copy ends. The fetch needs MATRIX_FETCH_INDEX or DATABASE_URL, and
+# MATRIX_FETCH_STORE or CLOUDFLARE_ACCOUNT_ID with CLOUDFLARE_API_TOKEN (below). Without them the
+# row says NOT-VERIFIED ("NOT VERIFIED: long run, server copy not fetched"), exit 4: not a PASS,
+# and not a FAIL of the run.
+#
+# <connector> is `m2-fake-tui` (a connector this script writes for itself around the test
+# suite's fake TUI, admitted with --dev; no harness, no login, no model) or the id of a shipped
+# connector (`codex-cli`, `hermes-cli`, ...), which needs that harness installed and logged in,
+# in a prepared configuration directory (MATRIX_CONFIG_DIR, below). The connector's harness.toml
+# must be found: GOALCUP_CONNECTORS_DIR, else the connectors directory beside the goalcup binary,
+# else this checkout's.
 #
 # Environment. The approval key is never in this script's environment, a variable, an argument,
 # a log or a file it writes: you give the PATH of a file that holds it, and the script reads that
@@ -46,10 +60,19 @@
 #   GOALCUP_TEST_MEMBER_ID     the member the test approval approves as (default: member1).
 #   MATRIX_REPO_URL            the empty public repository (default:
 #                              https://github.com/agentcommunity/goalcup-matrix-empty).
-#   MATRIX_PROMPT              what is typed into the harness, or for a headless connector
-#                              written to its goal file (default: a one-line greeting).
+#   MATRIX_PROMPT              what is typed into the harness (default: one line asking for a
+#                              file matrix-ok.txt holding "ok").
+#   MATRIX_PROMPT_FILE         a regular file holding the prompt instead (UTF-8; long workloads).
+#                              Not together with MATRIX_PROMPT. The harness gets
+#                              it typed on ONE line: every run of white space, newlines included,
+#                              becomes one space, because a newline typed into a TUI submits (or
+#                              splits) the prompt early. Control characters other than tab and
+#                              newline are refused. A long prompt reaches the TUI as a paste; give
+#                              it time with MATRIX_SUBMIT_DELAY before the Enter. A harness that
+#                              has switched bracketed paste on (ESC[?2004h before the prompt) gets
+#                              the prompt wrapped in ESC[200~ ... ESC[201~.
 #   MATRIX_PROMPT_DELAY        seconds between "the harness is up" and the prompt (fake: 1,
-#                              any other connector: 30). Chat mode only.
+#                              any other connector: 30).
 #   MATRIX_SUBMIT_DELAY        seconds between the typed prompt and the Enter that submits it
 #                              (default 2). Text and Enter in one write are read by Codex as a
 #                              paste: the text stays in the composer and nothing is submitted.
@@ -62,20 +85,53 @@
 #   MATRIX_PRE_PROMPT_DELAY    seconds between "the harness is up" and those keys (default 5; the
 #                              prompt follows two seconds after them, or at MATRIX_PROMPT_DELAY
 #                              if that is later).
+#   MATRIX_EXPECT_FILES        1 (default): a real harness's run must change its workspace (check
+#                              3); 0: a custom prompt that writes nothing, the model check only.
 #   MATRIX_CONFIG_DIR          a prepared goalcup configuration directory for a real harness
 #                              (made with `GOALCUP_CONFIG_DIR=<dir> goalcup prep`, its logins in
 #                              place). Never the platform default. Left in place afterwards.
 #   MATRIX_SERVER_KEY          the server's Ed25519 public key (64 hex), for goalcup-verify
 #                              --dev-key. Default: the key in the run's receipt.
 #   MATRIX_BIN_DIR             where goalcup, goalcup-daemon and goalcup-verify are.
+#   MATRIX_FETCH_INDEX         for a long run: the chunk index fetch-run.sh --index reads (the JSON
+#                              its query returns), instead of DATABASE_URL.
+#   MATRIX_FETCH_STORE         for a long run: a mirror of the bucket (fetch-run.sh --store),
+#                              instead of CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN.
+#   DATABASE_URL, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
+#                              read-only credentials for fetch-run.sh, as it documents. They leave
+#                              this script's environment at once: only fetch-run.sh gets them, in
+#                              its environment, never on a command line.
+#   MATRIX_FETCH_BUCKET        the R2 bucket (default goalcup-traces for production,
+#                              goalcup-traces-staging otherwise).
+#   MATRIX_FETCH_TIMEOUT       seconds the fetch may take (default 1800).
+#   MATRIX_FETCH_SCRIPT        another fetch script with fetch-run.sh's arguments (tests).
 #
 # Options:
 #   --allow-production   permit https://ingest.agentcommunity.org. Tests never use it.
 #   --keep               do not delete the temporary directory (it holds the run's trace).
 #   --log FILE           where the details go (default: a new file in $TMPDIR).
-#   --timeout SECONDS    give up on the run after this long (default 1800). One budget: for a
-#                        headless run the wait for the server's deadline takes what the start
-#                        left of it.
+#   --timeout SECONDS    give up on the run after this long (default 1800; with --duration,
+#                        the duration plus 1800). One budget: for a test run the seal, the end of
+#                        `goalcup start` and any `goalcup upload` take what is left after the
+#                        duration.
+#   --test --duration SECONDS
+#                        an organizer test run (`goalcup start --harness <id> --test`, approved
+#                        through the same test key flow; the member must be a test operator)
+#                        instead of a practice run, ended by this script: SECONDS (1 to 604800)
+#                        after the prompt is submitted, or when
+#                        the harness exits if that is earlier, it runs `goalcup seal <entry>` for
+#                        this run's own entry. The entry is the one entry of the one run record
+#                        this start wrote (a test run, of this connector), and `goalcup entries
+#                        --json` must list it with this connector; anything else FAILs and nothing
+#                        is sealed (never a guess). Then `goalcup start` finishes its wrap-up; if
+#                        it did not report the seal uploaded, `goalcup upload <entry>` runs. The
+#                        checks are the practice ones, except that the end is the seal, not the
+#                        deadline: the server's copy must say `sealed` and equal the local chain,
+#                        and `stop` is not required (the server's 168-hour deadline is far off).
+#                        A run that FAILs after its entry was found and before it was sealed is
+#                        sealed on the way out (best effort, logged). Both options go together,
+#                        only with a real connector (not a fake) and MATRIX_CONFIG_DIR. The log
+#                        names the mode and the duration (`mode=test duration=<N>s`).
 #   --check-copy DIR [RUN]
 #                        only the server-copy check, for a run you made by hand (the edge cases
 #                        in docs/OPERATING.md): every entry of RUN (default: the newest) in the
@@ -100,12 +156,16 @@ REPO=$(dirname "$HERE")
 
 PRODUCTION_HOST="ingest.agentcommunity.org"
 FAKE_ID="m2-fake-tui"
-FAKE_HEADLESS_ID="m2-fake-headless"
 DEFAULT_REPO_URL="https://github.com/agentcommunity/goalcup-matrix-empty"
 
 usage() {
   # The whole header: every comment line after the first, up to the first line that is not one.
   awk 'NR > 1 && !/^#/ { exit } NR > 1 { print }' "$PROG" | sed 's/^# \{0,1\}//' >&2
+  exit 2
+}
+# A bad command line: one line naming what is wrong, not the whole header.
+bad_usage() { # what
+  echo "matrix: $1; see --help" >&2
   exit 2
 }
 
@@ -119,13 +179,22 @@ ALLOW_PRODUCTION=0
 KEEP=0
 LOG=""
 TIMEOUT=1800
+TIMEOUT_SET=0
+TEST=0
+DURATION=""
 while [ $# -gt 0 ]; do
   case $1 in
     -h | --help) usage ;;
     --allow-production) ALLOW_PRODUCTION=1 ;;
     --keep) KEEP=1 ;;
+    --test) TEST=1 ;;
+    --duration)
+      [ $# -ge 2 ] || bad_usage "--duration needs a number of seconds"
+      DURATION=$2
+      shift
+      ;;
     --check-copy)
-      [ $# -ge 2 ] || usage
+      [ $# -ge 2 ] || bad_usage "--check-copy needs a configuration directory"
       CHECK_CFG=$2
       shift
       case ${2:-} in "" | -*) ;; *)
@@ -135,33 +204,34 @@ while [ $# -gt 0 ]; do
       esac
       ;;
     --log)
-      [ $# -ge 2 ] || usage
+      [ $# -ge 2 ] || bad_usage "--log needs a file"
       LOG=$2
       shift
       ;;
     --timeout)
-      [ $# -ge 2 ] || usage
+      [ $# -ge 2 ] || bad_usage "--timeout needs a number of seconds"
       TIMEOUT=$2
+      TIMEOUT_SET=1
       shift
       ;;
-    -*) usage ;;
+    -*) bad_usage "unknown option $1" ;;
     *)
       if [ -z "$CONNECTOR" ]; then
         CONNECTOR=$1
       elif [ -z "$SERVER" ]; then
         SERVER=$1
       else
-        usage
+        bad_usage "unexpected argument $1 (the arguments are <connector> <server>)"
       fi
       ;;
   esac
   shift
 done
 if [ -n "$CHECK_CFG" ]; then
-  [ -z "$CONNECTOR" ] || usage
+  [ -z "$CONNECTOR" ] || bad_usage "--check-copy takes no connector or server"
   CONNECTOR=check-copy
 else
-  [ -n "$CONNECTOR" ] && [ -n "$SERVER" ] || usage
+  [ -n "$CONNECTOR" ] && [ -n "$SERVER" ] || bad_usage "a connector and a server are needed"
 fi
 
 # The approval key: only ever a FILE. A key in the environment would sit in this process's
@@ -179,6 +249,17 @@ if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
   echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE must name a regular file this user can read" >&2
   exit 2
 fi
+# The read-only credentials of the long-run fetch leave the environment too: goalcup, the daemon
+# and the harness never inherit them; only fetch-run.sh gets them (fetch_copy).
+FETCH_DB=${DATABASE_URL:-}
+FETCH_CF_ACCOUNT=${CLOUDFLARE_ACCOUNT_ID:-}
+FETCH_CF_TOKEN=${CLOUDFLARE_API_TOKEN:-}
+unset DATABASE_URL CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN
+FETCH_INDEX=${MATRIX_FETCH_INDEX:-}
+FETCH_STORE=${MATRIX_FETCH_STORE:-}
+FETCH_SCRIPT=${MATRIX_FETCH_SCRIPT:-$HERE/fetch-run.sh}
+FETCH_TIMEOUT=${MATRIX_FETCH_TIMEOUT:-1800}
+case $FETCH_TIMEOUT in '' | *[!0-9]*) echo "matrix: MATRIX_FETCH_TIMEOUT is a number of seconds" >&2; exit 2 ;; esac
 PRE_KEYS=${MATRIX_PRE_PROMPT_KEYS:-}
 case $PRE_KEYS in
   *\'* | *%* | *\$* | *\`*)
@@ -187,6 +268,14 @@ case $PRE_KEYS in
     ;;
 esac
 PRE_DELAY=${MATRIX_PRE_PROMPT_DELAY:-5}
+EXPECT_FILES=${MATRIX_EXPECT_FILES:-1}
+case $EXPECT_FILES in
+  0 | 1) ;;
+  *)
+    echo "matrix: MATRIX_EXPECT_FILES is 0 or 1" >&2
+    exit 2
+    ;;
+esac
 SUBMIT_DELAY=${MATRIX_SUBMIT_DELAY:-2}
 case $SUBMIT_DELAY in
   *[!0-9]* | "")
@@ -221,6 +310,53 @@ case $TIMEOUT in
     exit 2
     ;;
 esac
+
+# --test and --duration: a test run of a real harness, in a prepared configuration directory,
+# sealed by this script. Never one without the other: a test run left to the server lasts 168 h.
+if [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
+  if [ -n "$CHECK_CFG" ]; then
+    echo "matrix: --test and --duration are not for --check-copy" >&2
+    exit 2
+  fi
+  if [ "$TEST" != 1 ] || [ -z "$DURATION" ]; then
+    echo "matrix: --test and --duration go together (a test run lasts 168 hours on the server; the script seals it after --duration SECONDS)" >&2
+    exit 2
+  fi
+  case $DURATION in
+    *[!0-9]* | "" | 0*)
+      echo "matrix: --duration is a whole number of seconds from 1 to 604800" >&2
+      exit 2
+      ;;
+  esac
+  if [ "${#DURATION}" -gt 6 ] || [ "$DURATION" -gt 604800 ]; then
+    echo "matrix: --duration is a whole number of seconds from 1 to 604800" >&2
+    exit 2
+  fi
+  case $CONNECTOR in
+    "$FAKE_ID")
+      echo "matrix: --test needs a real connector, not $CONNECTOR" >&2
+      exit 2
+      ;;
+  esac
+  if [ -z "${MATRIX_CONFIG_DIR:-}" ]; then
+    echo "matrix: --test needs MATRIX_CONFIG_DIR (a prepared configuration directory whose harness is signed in)" >&2
+    exit 2
+  fi
+  [ "$TIMEOUT_SET" = 1 ] || TIMEOUT=$((DURATION + 1800))
+fi
+
+# The prompt from a file: checked here, read once the connector's mode is known.
+PROMPT_FILE=${MATRIX_PROMPT_FILE:-}
+if [ -n "$PROMPT_FILE" ]; then
+  if [ -n "${MATRIX_PROMPT:-}" ]; then
+    echo "matrix: set MATRIX_PROMPT or MATRIX_PROMPT_FILE, not both" >&2
+    exit 2
+  fi
+  if [ ! -f "$PROMPT_FILE" ] || [ ! -r "$PROMPT_FILE" ]; then
+    echo "matrix: MATRIX_PROMPT_FILE must name a regular file this user can read" >&2
+    exit 2
+  fi
+fi
 
 # The server: https://..., or http:// to this machine. Never production without the flag.
 validate_server() {
@@ -321,13 +457,25 @@ ROOT=""
 CFG=""
 OWN_CONFIG=0
 STARTED_RUN=0
+# A test run: when the prompt went in, this run's own entry, and when its seal was asked for.
+SUBMIT_AT=""
+SEAL_ENTRY=""
+SEAL_ASKED_AT=""
+EARLY=0
+START_LAUNCHED=0
 
 print_row() {
   [ "$ROW_PRINTED" = 0 ] || return 0
   ROW_PRINTED=1
-  hv=$(printf '%s' "$HV" | tr -s ' \t' '__')
+  # The version line up to its version number: "codex-cli 0.156.1" stays whole, Amp's
+  # "0.0.x (released <date>, 4d ago)" keeps 0.0.x, so the row does not change from day to day.
+  hv=$(printf '%s\n' "$HV" | head -n 1 |
+    awk '{ o = ""; for (i = 1; i <= NF; i++) { o = o (i > 1 ? "_" : "") $i; if ($i ~ /^[0-9]/) break }; print o }')
   [ -n "$hv" ] || hv=unreported
-  if [ "$RESULT" != PASS ] && [ -n "$FAIL_REASON" ]; then
+  if [ "$RESULT" = NOT-VERIFIED ]; then
+    log "$FAIL_REASON"
+    printf 'matrix: %s\n' "$FAIL_REASON" >&3
+  elif [ "$RESULT" != PASS ] && [ -n "$FAIL_REASON" ]; then
     log "FAIL: $FAIL_REASON"
     printf 'matrix: FAIL: %s\n' "$FAIL_REASON" >&3
   fi
@@ -343,8 +491,37 @@ cleanup() {
   exec 2>>"$LOG"
   if [ -n "$ROOT" ] && [ -d "$ROOT" ]; then {
     : >"$ROOT/done" 2>/dev/null
+    # A test run that failed after its entry was found and before its seal was asked for would
+    # go on for 168 hours: seal that entry (and only it) first, best effort and bounded.
+    if [ "$TEST" = 1 ] && [ -n "$SEAL_ENTRY" ] && [ -z "$SEAL_ASKED_AT" ]; then
+      log "the test run's entry $SEAL_ENTRY was not sealed; sealing it now (best effort, at most 120s)"
+      run_bounded seal 120 "seal --yes $SEAL_ENTRY"
+      src=$?
+      log "goalcup seal $SEAL_ENTRY on the way out: exit $src"
+      [ "$src" = 0 ] || log "seal it by hand: GOALCUP_CONFIG_DIR=$CFG goalcup seal --yes $SEAL_ENTRY"
+      log_file "goalcup seal (output)" "$ROOT/seal.out"
+      log_file "goalcup seal (stderr)" "$ROOT/seal.err"
+    elif [ "$TEST" = 1 ] && [ -n "$SEAL_ENTRY" ] && [ ! -s "$ROOT/seal.rc" ]; then
+      # A seal was asked for and is still running: let it finish (bounded) rather than kill it.
+      log "goalcup seal $SEAL_ENTRY is still running; waiting for it (at most 120s)"
+      cw=0
+      while [ ! -s "$ROOT/seal.rc" ] && [ "$cw" -lt 120 ]; do
+        sleep 2
+        cw=$((cw + 2))
+      done
+      if [ -s "$ROOT/seal.rc" ]; then
+        log "goalcup seal $SEAL_ENTRY on the way out: exit $(cat "$ROOT/seal.rc")"
+      else
+        log "goalcup seal $SEAL_ENTRY did not finish; seal it by hand: GOALCUP_CONFIG_DIR=$CFG goalcup seal --yes $SEAL_ENTRY"
+        printf 'matrix: the test run is not sealed; seal it by hand: GOALCUP_CONFIG_DIR=%s goalcup seal --yes %s\n' "$CFG" "$SEAL_ENTRY" >&3
+      fi
+      log_file "goalcup seal (output)" "$ROOT/seal.out"
+      log_file "goalcup seal (stderr)" "$ROOT/seal.err"
+    elif [ "$TEST" = 1 ] && [ -z "$SEAL_ENTRY" ] && [ "$START_LAUNCHED" = 1 ]; then
+      log "a test run may still be open on the server, its entry unknown here: in $CFG run goalcup entries, then goalcup seal --yes <entry>"
+    fi
     # Whatever is still running from this script's own temporary directory, by that unique path.
-    for pidfile in "$ROOT/login.pid" "$ROOT/start.pid"; do
+    for pidfile in "$ROOT/login.pid" "$ROOT/start.pid" "$ROOT/entries.pid" "$ROOT/seal.pid" "$ROOT/upload.pid"; do
       if [ -f "$pidfile" ] && [ ! -f "$ROOT/$(basename "$pidfile" .pid).rc" ]; then kill -TERM "$(cat "$pidfile")" 2>/dev/null; fi
     done
     if command -v pkill >/dev/null 2>&1; then
@@ -455,17 +632,177 @@ write_wrapper() { # file name "goalcup arguments" [stty]
 }
 
 # Wait for the background job that writes its exit status to $1, scanning the output $2 for
-# approvals meanwhile. 0 when it finished (status in $1), 1 on timeout, 2 on a refused approval.
+# approvals meanwhile. 0 when it finished (status in $1), 1 on timeout, 2 on a refused approval,
+# 3 when a step of the test run's flow failed (FAIL_REASON says which). The limit is wall-clock
+# time, so a step that takes a while inside the loop still counts.
 wait_job() { # rcfile outfile limit
-  waited=0
+  wj_start=$(date +%s)
   while [ ! -f "$1" ]; do
     if [ "$SCAN" = 1 ]; then scan_and_approve "$2" || return 2; fi
-    after_scan "$2"
-    if [ "$waited" -ge "$3" ]; then return 1; fi
+    after_scan "$2" || return 3
+    if [ $(($(date +%s) - wj_start)) -ge "$3" ]; then return 1; fi
     sleep 2
-    waited=$((waited + 2))
   done
   return 0
+}
+
+# One goalcup command through its wrapper, in the background, waited for at most LIMIT seconds:
+# its standard output in $ROOT/NAME.out, its standard error in $ROOT/NAME.err. Returns its exit
+# status, or 124 when it ran out of time (it is then ended by its recorded process id).
+run_bounded() { # name limit "goalcup arguments"
+  write_wrapper "$ROOT/$1-wrapper.sh" "$1" "$3"
+  rm -f "$ROOT/$1.rc"
+  ( ( (sh "$ROOT/$1-wrapper.sh" >"$ROOT/$1.out" 2>"$ROOT/$1.err" </dev/null); echo $? >"$ROOT/$1.rc") 2>/dev/null & )
+  rb_start=$(date +%s)
+  while [ ! -s "$ROOT/$1.rc" ]; do
+    if [ $(($(date +%s) - rb_start)) -ge "$2" ]; then
+      kill -TERM "$(cat "$ROOT/$1.pid" 2>/dev/null)" 2>/dev/null
+      return 124
+    fi
+    sleep 1
+  done
+  return "$(cat "$ROOT/$1.rc")"
+}
+
+# The run records this start wrote: every run.json under the configuration directory not older
+# than the start's wrapper (whole seconds on some systems, so equal counts as new), newest first.
+fresh_runs() {
+  ls -t "$CFG"/runs/*/run.json 2>/dev/null | while IFS= read -r f; do
+    if ! [ "$WRAP" -nt "$f" ]; then printf '%s\n' "$f"; fi
+  done
+}
+
+# What is left of --timeout since the start began, never below zero.
+budget_left() {
+  bl=$((TIMEOUT - ($(date +%s) - START_AT)))
+  [ "$bl" -gt 0 ] || bl=0
+  printf '%s\n' "$bl"
+}
+
+# ---- a test run: find its own entry, and seal it
+
+# This run's entry, never a guess: exactly one run record written by this start, a test run of
+# this connector with exactly one entry (e + 16 hex digits), and `goalcup entries --json` lists
+# that entry with this connector. Sets SEAL_ENTRY; anything else fails and nothing is sealed.
+resolve_entry() {
+  fresh_runs >"$ROOT/fresh.txt"
+  n=$(grep -c . "$ROOT/fresh.txt")
+  [ "$n" = 1 ] ||
+    fail "cannot tell this run's entry: $n run records under $CFG/runs are as new as this start (want exactly one); nothing was sealed" || return 1
+  rj=$(cat "$ROOT/fresh.txt")
+  facts=$(python3 - "$rj" "$CONNECTOR" <<'PY'
+import json, re, sys
+try:
+    r = json.load(open(sys.argv[1]))
+except (OSError, ValueError) as e:
+    print("problem=the run record cannot be read (%s)" % type(e).__name__)
+    sys.exit(0)
+problems = []
+if r.get("test") is not True:
+    problems.append("it is not a test run")
+if r.get("connector_id") != sys.argv[2]:
+    problems.append("its connector is %r" % r.get("connector_id"))
+entries = r.get("entries") or []
+if len(entries) != 1:
+    problems.append("it has %d entries, not one" % len(entries))
+elif not re.fullmatch(r"e[0-9a-f]{16}", str(entries[0].get("entry_id"))):
+    problems.append("its entry id is not e followed by 16 hex digits")
+if problems:
+    print("problem=" + "; ".join(problems))
+else:
+    print("run=" + re.sub(r"[^A-Za-z0-9_-]", "?", str(r.get("run_id"))))
+    print("entry=" + entries[0]["entry_id"])
+PY
+  )
+  problem=$(printf '%s\n' "$facts" | sed -n 's/^problem=//p')
+  [ -z "$problem" ] || fail "the run record $rj is not this test run's: $problem; nothing was sealed" || return 1
+  entry=$(printf '%s\n' "$facts" | sed -n 's/^entry=//p')
+  case $entry in e[0-9a-f]*) ;; *) fail "no entry id in the run record $rj; nothing was sealed" || return 1 ;; esac
+  run_bounded entries 120 "entries --json"
+  erc=$?
+  log_file "goalcup entries --json" "$ROOT/entries.out"
+  log_file "goalcup entries --json (stderr)" "$ROOT/entries.err"
+  [ "$erc" = 0 ] || fail "goalcup entries --json exited $erc; nothing was sealed" || return 1
+  listed=$(python3 - "$ROOT/entries.out" "$entry" "$CONNECTOR" <<'PY'
+import json, sys
+try:
+    items = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    print("unreadable")
+    sys.exit(0)
+hits = [e for e in items if isinstance(e, dict) and e.get("entry_id") == sys.argv[2]] if isinstance(items, list) else []
+if len(hits) != 1:
+    print("absent")
+elif hits[0].get("connector_id") != sys.argv[3]:
+    print("another connector")
+else:
+    print("listed")
+PY
+  )
+  [ "$listed" = listed ] ||
+    fail "goalcup entries --json does not list entry $entry of $CONNECTOR ($listed); nothing was sealed" || return 1
+  SEAL_ENTRY=$entry
+  log "this test run: run $(printf '%s\n' "$facts" | sed -n 's/^run=//p'), entry $SEAL_ENTRY (from $rj, listed by goalcup entries --json)"
+}
+
+# Ask for the seal of this run's entry, in the background: `goalcup start` keeps running and
+# does its own wrap-up when the daemon has stopped the harness.
+request_seal() { # why
+  SEAL_ASKED_AT=$(date +%s)
+  say "goalcup seal $SEAL_ENTRY: $1"
+  write_wrapper "$ROOT/seal-wrapper.sh" seal "seal --yes $SEAL_ENTRY"
+  rm -f "$ROOT/seal.rc"
+  ( ( (sh "$ROOT/seal-wrapper.sh" >"$ROOT/seal.out" 2>"$ROOT/seal.err" </dev/null); echo $? >"$ROOT/seal.rc") 2>/dev/null & )
+}
+
+# Called every turn of the wait for `goalcup start`: notes when the prompt went in (and finds the
+# entry at once, so a failure shows early and a later failure can still seal it), then asks for
+# the seal once the duration has passed.
+test_tick() {
+  tt_now=$(date +%s)
+  if [ -z "$SUBMIT_AT" ]; then
+    [ -f "$ROOT/sent" ] || return 0
+    SUBMIT_AT=$tt_now
+    log "the prompt was submitted; the seal is due in ${DURATION}s"
+    resolve_entry || return 1
+    return 0
+  fi
+  [ -z "$SEAL_ASKED_AT" ] || return 0
+  [ $((tt_now - SUBMIT_AT)) -ge "$DURATION" ] || return 0
+  request_seal "${DURATION}s have passed since the prompt was submitted"
+  return 0
+}
+
+# After `goalcup start` has ended in a test run: the seal asked for (now, if the harness ended
+# first), finished within the budget, and successful.
+finish_test_seal() {
+  if [ -z "$SEAL_ASKED_AT" ]; then
+    EARLY=1
+    if [ -z "$SUBMIT_AT" ]; then
+      log "goalcup start ended before the prompt was submitted"
+      if resolve_entry; then
+        request_seal "goalcup start ended before the prompt was submitted"
+      fi
+      fail "goalcup start ended before the prompt was submitted; goalcup's last words: $(last_line "$ROOT/start.out")" || return 1
+    fi
+    log "the harness ended $(($(date +%s) - SUBMIT_AT))s after the prompt was submitted, before the duration (${DURATION}s)"
+    request_seal "the harness ended before the duration"
+  fi
+  left=$(budget_left)
+  ws=$(date +%s)
+  while [ ! -s "$ROOT/seal.rc" ]; do
+    if [ $(($(date +%s) - ws)) -ge "$left" ]; then
+      log_file "goalcup seal (output so far)" "$ROOT/seal.out"
+      fail "goalcup seal $SEAL_ENTRY did not finish within the --timeout budget" || return 1
+    fi
+    sleep 2
+  done
+  log_file "goalcup seal $SEAL_ENTRY (output)" "$ROOT/seal.out"
+  log_file "goalcup seal $SEAL_ENTRY (stderr)" "$ROOT/seal.err"
+  src=$(cat "$ROOT/seal.rc")
+  [ "$src" = 0 ] ||
+    fail "goalcup seal $SEAL_ENTRY exited $src: $(cat "$ROOT/seal.out" "$ROOT/seal.err" | last_line /dev/stdin)" || return 1
+  log "mode=test duration=${DURATION}s: entry $SEAL_ENTRY sealed, asked for $((SEAL_ASKED_AT - SUBMIT_AT))s after the prompt was submitted$([ "$EARLY" = 1 ] && echo " (the harness ended first)")"
 }
 after_scan() { :; }
 # Whether the log being waited on is still scanned for an approval code. It stops once the
@@ -482,6 +819,11 @@ run_matrix() {
     fail "goalcup, goalcup-daemon and goalcup-verify are needed (cargo build --workspace, or MATRIX_BIN_DIR)" || return 1
   GOALCUP_VERSION=$("$GOALCUP" --version 2>&1 | head -1)
   log "matrix $CONNECTOR on $PLATFORM against $SERVER, $DATE"
+  if [ "$TEST" = 1 ]; then
+    log "mode=test duration=${DURATION}s timeout=${TIMEOUT}s (an organizer test run, sealed by this script)"
+  else
+    log "mode=practice timeout=${TIMEOUT}s"
+  fi
   log "goalcup: $GOALCUP ($GOALCUP_VERSION); verifier: $VERIFY; daemon: $DAEMON"
   log "key file supplied: $([ -n "$KEYFILE" ] && echo yes || echo no); member: $MEMBER; repository: $REPO_URL"
 
@@ -536,14 +878,29 @@ run_matrix() {
     PROMPT_ENTER='\n'
     READY_MARK="tui: ready"
     DELAY=${MATRIX_PROMPT_DELAY:-1}
-  elif [ "$CONNECTOR" = "$FAKE_HEADLESS_ID" ]; then
-    IS_FAKE=1
-    make_fake_headless_connector || return 1
-    DEV_FLAG="--dev"
   fi
   MATRIX_TERM=${MATRIX_TERM:-$([ "$CONNECTOR" = "$FAKE_ID" ] && echo dumb || echo xterm-256color)}
   read_manifest || return 1
-  PROMPT=${MATRIX_PROMPT:-"Goal Cup matrix check: reply with the single word ok."}
+  # The default writes one file, so that check 3 sees the workspace change.
+  PROMPT=${MATRIX_PROMPT:-"Goal Cup matrix check: create a file named matrix-ok.txt in this folder holding the single word ok, then reply with the single word ok."}
+  if [ -n "$PROMPT_FILE" ]; then
+    PROMPT=$(python3 - "$PROMPT_FILE" 2>"$ROOT/prompt.err" <<'PY'
+import sys
+try:
+    text = open(sys.argv[1], "rb").read().decode("utf-8")
+except UnicodeDecodeError:
+    sys.exit("it is not UTF-8")
+if any((ord(c) < 32 and c not in "\t\n\r") or ord(c) == 127 for c in text):
+    sys.exit("it holds a control character other than tab and newline")
+# One line, as typed.
+text = " ".join(text.split())
+if not text:
+    sys.exit("it is empty")
+sys.stdout.write(text)
+PY
+    ) || fail "MATRIX_PROMPT_FILE $PROMPT_FILE: $(last_line "$ROOT/prompt.err")" || return 1
+    log "prompt from MATRIX_PROMPT_FILE $PROMPT_FILE: ${#PROMPT} characters, typed on one line"
+  fi
 
   if [ "$OWN_CONFIG" = 1 ]; then
     # What `goalcup prep` would have settled. A practice clone is anonymous and installs no push
@@ -575,101 +932,184 @@ run_matrix() {
   [ "$(cat "$ROOT/login.rc")" = 0 ] ||
     fail "goalcup login exited $(cat "$ROOT/login.rc"): $(last_line "$ROOT/login.out")" || return 1
 
-  # ---- start --practice
+  # ---- start --practice (or --test)
   : >"$ROOT/seen.txt"
   WRAP="$ROOT/start-wrapper.sh"
-  START_ARGS="start --harness $CONNECTOR $DEV_FLAG --practice"
-  WRAP_KIND=""
-  if [ "$MODE" = headless ]; then
-    # The goal is a file: the goal of a headless harness is its only input, typed by nobody.
-    printf '%s\n' "$PROMPT" >"$ROOT/goal.txt"
-    START_ARGS="$START_ARGS --goal-file $(shq "$ROOT/goal.txt")"
-  else
-    WRAP_KIND=stty
+  if [ "$TEST" = 1 ]; then RUN_FLAG=--test; else RUN_FLAG=--practice; fi
+  START_ARGS="start --harness $CONNECTOR $DEV_FLAG $RUN_FLAG"
+  write_wrapper "$WRAP" start "$START_ARGS" stty
+  # The feeder holds the terminal's input open until the run is over (an end of input would be
+  # an end of the chat) and types the prompt once, when the main loop says the harness is up.
+  # The status file is written by the terminal's side of the pipe, so it appears when script
+  # ends, not when the feeder does.
+  FEED="while [ ! -f $(shq "$ROOT/done") ]; do
+  if [ -f $(shq "$ROOT/prekeys-send") ] && [ ! -f $(shq "$ROOT/prekeys-sent") ]; then
+    printf '$PRE_KEYS'; : > $(shq "$ROOT/prekeys-sent")
   fi
-  write_wrapper "$WRAP" start "$START_ARGS" "$WRAP_KIND"
-  if [ "$MODE" = headless ]; then
-    say "start --practice, headless (the harness ends the run; then waiting for the server's deadline)"
-    # No terminal and nothing typed: the harness's input is empty. (Started from a subshell, as the
-    # login is.)
-    ( ( (sh "$WRAP" >"$ROOT/start.out" 2>&1 </dev/null); echo $? >"$ROOT/start.rc") 2>/dev/null & )
-  else
-    # The feeder holds the terminal's input open until the run is over (an end of input would be
-    # an end of the chat) and types the prompt once, when the main loop says the harness is up.
-    # The status file is written by the terminal's side of the pipe, so it appears when script
-    # ends, not when the feeder does.
-    FEED="while [ ! -f $(shq "$ROOT/done") ]; do
-    if [ -f $(shq "$ROOT/prekeys-send") ] && [ ! -f $(shq "$ROOT/prekeys-sent") ]; then
-      printf '$PRE_KEYS'; : > $(shq "$ROOT/prekeys-sent")
-    fi
-    if [ -f $(shq "$ROOT/send") ] && [ ! -f $(shq "$ROOT/sent") ]; then
-      printf '%s' $(shq "$PROMPT"); sleep $SUBMIT_DELAY; printf '$PROMPT_ENTER'; : > $(shq "$ROOT/sent")
-    fi
-    sleep 1
-  done"
-    say "start --practice (the run lasts the server's practice length; waiting for its deadline)"
-    if [ "$OS" = macos ]; then
-      ( ( (eval "$FEED") | (script -q /dev/null sh "$WRAP" >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
+  if [ -f $(shq "$ROOT/send") ] && [ ! -f $(shq "$ROOT/sent") ]; then
+    if [ -f $(shq "$ROOT/paste") ]; then
+      printf '\033[200~%s\033[201~' $(shq "$PROMPT")
     else
-      ( ( (eval "$FEED") | (script -qec "sh $(shq "$WRAP")" /dev/null >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
+      printf '%s' $(shq "$PROMPT")
     fi
-    READY_AT=""
-    PRE_AT=""
-    after_scan() {
-      if [ -n "$READY_AT" ]; then
-        now=$(date +%s)
-        if [ -n "$PRE_KEYS" ] && [ -z "$PRE_AT" ] && [ $((now - READY_AT)) -ge "$PRE_DELAY" ]; then
-          : >"$ROOT/prekeys-send"
-          PRE_AT=$now
-          log "the first-run keys are typed"
-        fi
-        if [ ! -f "$ROOT/send" ] && [ $((now - READY_AT)) -ge "$DELAY" ]; then
-          if [ -z "$PRE_KEYS" ] || { [ -f "$ROOT/prekeys-sent" ] && [ $((now - PRE_AT)) -ge 2 ]; }; then
-            : >"$ROOT/send"
-          fi
-        fi
-      fi
-      if [ -z "$READY_AT" ] && grep -q "$READY_MARK" "$ROOT/start.out" 2>/dev/null; then
-        READY_AT=$(date +%s)
-        SCAN=0
-        log "the harness is up"
-      fi
-    }
+    sleep $SUBMIT_DELAY; printf '$PROMPT_ENTER'; : > $(shq "$ROOT/sent")
   fi
+  sleep 1
+  done"
+  if [ "$TEST" = 1 ]; then
+    say "start --test (an organizer test run; sealed ${DURATION}s after the prompt is submitted, or when the harness ends)"
+  else
+    say "start --practice (the run lasts the server's practice length; waiting for its deadline)"
+  fi
+  if [ "$OS" = macos ]; then
+    ( ( (eval "$FEED") | (script -q /dev/null sh "$WRAP" >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
+  else
+    ( ( (eval "$FEED") | (script -qec "sh $(shq "$WRAP")" /dev/null >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
+  fi
+  READY_AT=""
+  PRE_AT=""
+  chat_tick() {
+    if [ -n "$READY_AT" ]; then
+      now=$(date +%s)
+      if [ -n "$PRE_KEYS" ] && [ -z "$PRE_AT" ] && [ $((now - READY_AT)) -ge "$PRE_DELAY" ]; then
+        : >"$ROOT/prekeys-send"
+        PRE_AT=$now
+        log "the first-run keys are typed"
+      fi
+      if [ ! -f "$ROOT/send" ] && [ $((now - READY_AT)) -ge "$DELAY" ]; then
+        if [ -z "$PRE_KEYS" ] || { [ -f "$ROOT/prekeys-sent" ] && [ $((now - PRE_AT)) -ge 2 ]; }; then
+          # A harness that has switched bracketed paste on gets the prompt as one paste, so a
+          # pty that splits a long write cannot turn it into keys and the Enter stays a submit.
+          if grep -qF "$(printf '\033[?2004h')" "$ROOT/start.out" 2>/dev/null; then
+            : >"$ROOT/paste"
+            log "the harness has bracketed paste on: the prompt goes as one bracketed paste"
+          fi
+          : >"$ROOT/send"
+        fi
+      fi
+    fi
+    if [ -z "$READY_AT" ] && grep -q "$READY_MARK" "$ROOT/start.out" 2>/dev/null; then
+      READY_AT=$(date +%s)
+      SCAN=0
+      log "the harness is up"
+    fi
+    return 0
+  }
+  after_scan() {
+    chat_tick
+    [ "$TEST" = 0 ] || test_tick
+  }
+  START_LAUNCHED=1
   START_AT=$(date +%s)
   wait_job "$ROOT/start.rc" "$ROOT/start.out" "$TIMEOUT"
   w=$?
   : >"$ROOT/done"
-  log_file "goalcup start ($([ "$MODE" = headless ] && echo output || echo terminal))" "$ROOT/start.out"
+  log_file "goalcup start (terminal)" "$ROOT/start.out"
   case $w in
     1) fail "the run did not finish within ${TIMEOUT}s" || return 1 ;;
     2) fail "the test approval was refused (wrong key, member, or not a test server)" || return 1 ;;
+    3) return 1 ;;
   esac
   START_RC=$(cat "$ROOT/start.rc")
-  log "goalcup start exit status: $START_RC$([ "$MODE" = headless ] || echo " (script's status; the harness is stopped by the deadline, so a non-zero status is not itself a failure)")"
+  if [ "$TEST" = 1 ]; then
+    log "goalcup start exit status: $START_RC (the harness is stopped by the seal, so a non-zero status is not itself a failure)"
+    finish_test_seal || return 1
+  else
+    log "goalcup start exit status: $START_RC (script's status; the harness is stopped by the deadline, so a non-zero status is not itself a failure)"
+  fi
 
   tr -d '\r' <"$ROOT/start.out" >"$ROOT/start.txt"
 
   # ---- what the run left (the newest run record this start wrote)
-  RUN_JSON=""
-  ls -t "$CFG"/runs/*/run.json 2>/dev/null >"$ROOT/runs.txt"
-  while IFS= read -r f; do
-    # Not older than the wrapper (whole seconds on some systems, so equal counts as new).
-    if ! [ "$WRAP" -nt "$f" ]; then
-      RUN_JSON=$f
-      break
-    fi
-  done <"$ROOT/runs.txt"
+  RUN_JSON=$(fresh_runs | head -1)
   [ -n "$RUN_JSON" ] ||
-    fail "no run record under $CFG/runs; the tracer's last words: $(last_line "$ROOT/start.txt")" || return 1
+    fail "no run record under $CFG/runs; goalcup's last words: $(last_line "$ROOT/start.txt")" || return 1
   RUN_DIR=$(dirname "$RUN_JSON")
   RUN_ID=$(py_get "$RUN_JSON" run_id)
   TRACE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["trace_dir"])' "$RUN_JSON")
   ENTRY_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["entry_id"])' "$RUN_JSON")
   log "run $RUN_ID, entry $ENTRY_ID, trace $TRACE"
+  # Read before the end-of-run checks, so a FAIL row still names the harness version. A long
+  # run's first records are pruned on this machine: its version is read from the server's copy.
+  PRUNED=0
   if [ -f "$TRACE/chain.jsonl" ]; then
-    # Read before the end-of-run checks, so a FAIL row still names the harness version.
-    HV=$(python3 - "$TRACE/chain.jsonl" <<'PY'
+    read_hv "$TRACE/chain.jsonl"
+  elif ls "$TRACE"/chain.[0-9]*.jsonl >/dev/null 2>&1; then
+    PRUNED=1
+  fi
+
+  # goalcup's own words about how the run ended. The `deadline:` line goes to the run's host.log
+  # (the terminal belongs to the harness), and `harness exited:` and `uploaded:` to the terminal:
+  # so both files are read.
+  { cat "$ROOT/start.txt"; [ ! -f "$RUN_DIR/host.log" ] || tr -d '\r' <"$RUN_DIR/host.log"; } >"$ROOT/ended.txt"
+
+  COPY_TRIES=6
+  COPY_SLEEP=5
+  STRICT=1
+  if [ "$TEST" = 1 ]; then
+    # The end is this script's seal, not the server's deadline (168 hours away).
+    [ "$ENTRY_ID" = "$SEAL_ENTRY" ] ||
+      fail "the run record's last entry $ENTRY_ID is not the entry that was sealed, $SEAL_ENTRY" || return 1
+    if ! grep -Eq '^uploaded:.*(the|its) seal' "$ROOT/ended.txt"; then
+      left=$(budget_left)
+      say "goalcup start did not report the seal uploaded; goalcup upload $SEAL_ENTRY (at most ${left}s)"
+      run_bounded upload "$left" "upload $SEAL_ENTRY"
+      urc=$?
+      log_file "goalcup upload (output)" "$ROOT/upload.out"
+      log_file "goalcup upload (stderr)" "$ROOT/upload.err"
+      [ "$urc" = 0 ] || fail "goalcup upload $SEAL_ENTRY exited $urc" || return 1
+      tr -d '\r' <"$ROOT/upload.out" >>"$ROOT/ended.txt"
+      tr -d '\r' <"$ROOT/upload.err" >>"$ROOT/ended.txt"
+    fi
+    grep -Eq '^uploaded:.*(the|its) seal' "$ROOT/ended.txt" ||
+      fail "neither goalcup start nor goalcup upload reported the upload finished with the seal" || return 1
+    STRICT=sealed
+  else
+    grep -q '^deadline:' "$ROOT/ended.txt" ||
+      fail "the run did not end at its deadline (no 'deadline:' line in the terminal output or host.log); goalcup's last words: $(last_line "$ROOT/ended.txt")" || return 1
+  fi
+  if [ "$TEST" = 0 ]; then
+    grep -q '^uploaded:.*the seal' "$ROOT/ended.txt" ||
+      fail "goalcup did not report the upload finished with the seal (no 'uploaded: ... and the seal' line)" || return 1
+  fi
+  if [ "$CONNECTOR" = "$FAKE_ID" ]; then
+    grep -q 'tui: noted' "$ROOT/start.txt" || fail "the typed prompt never reached the harness" || return 1
+  fi
+  JUDGED=$TRACE
+  if [ "$PRUNED" = 1 ]; then
+    # A long run: its acknowledged parts were pruned here (by design); the server's copy is judged.
+    log "the trace holds chain parts and no chain.jsonl: a long run, pruned on this machine; the checks run on the server's copy"
+    if ! fetch_configured; then
+      RESULT=NOT-VERIFIED
+      FAIL_REASON="NOT VERIFIED: long run, server copy not fetched (give MATRIX_FETCH_INDEX or DATABASE_URL, and MATRIX_FETCH_STORE or CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, to rebuild it with scripts/fetch-run.sh)"
+      return 1
+    fi
+    fetch_copy "$ENTRY_ID" || return 1
+    JUDGED=$ROOT/servercopy/$ENTRY_ID
+    [ "$HV" != unreported ] || read_hv "$JUDGED/chain.jsonl"
+    same_tail "$TRACE" "$JUDGED/chain.jsonl" || return 1
+  fi
+  [ -f "$JUDGED/chain.jsonl" ] || fail "no chain.jsonl in the trace" || return 1
+
+  # ---- 1. the verifier, 2. the server's copy
+  verify_trace "$JUDGED" || return 1
+  if [ "$IS_FAKE" = 0 ]; then
+    agent_worked "$JUDGED" || return 1
+    if [ "$EXPECT_FILES" = 1 ]; then
+      workspace_changed "$RUN_JSON" || return 1
+    else
+      log "MATRIX_EXPECT_FILES=0: the workspace is not required to change"
+    fi
+  fi
+  compare_copy "$RUN_ID" "$ENTRY_ID" "$JUDGED" "$RUN_DIR/credential" "$STRICT" || return 1
+
+  RESULT=PASS
+  return 0
+}
+
+# The harness version the chain at $1 names first ("unreported" when none does), into HV.
+read_hv() { # chain.jsonl
+  HV=$(python3 - "$1" <<'PY'
 import json, sys
 def find(o):
     if isinstance(o, dict):
@@ -691,51 +1131,189 @@ for line in open(sys.argv[1]):
         print(r.splitlines()[0][:64])
         break
 PY
-    )
-    [ -n "$HV" ] || HV=unreported
-    log "harness version: $HV"
-  fi
+  )
+  [ -n "$HV" ] || HV=unreported
+  log "harness version: $HV"
+}
 
-  # The tracer's own words about how the run ended. A chat-mode run's `deadline:` line goes to the
-  # run's host.log (the terminal belongs to the harness), a headless run's to the terminal, and
-  # `harness exited:` and `uploaded:` to the terminal in both: so both files are read.
-  { cat "$ROOT/start.txt"; [ ! -f "$RUN_DIR/host.log" ] || tr -d '\r' <"$RUN_DIR/host.log"; } >"$ROOT/ended.txt"
-
-  COPY_TRIES=6
-  COPY_SLEEP=5
-  if [ "$MODE" = headless ]; then
-    # The harness ends the run when it is done. It ended at the deadline (a long goal) or on its
-    # own with exit code 0; any other exit is a harness that did not do its job.
-    if ! grep -q '^deadline:' "$ROOT/ended.txt"; then
-      exited=$(grep '^harness exited:' "$ROOT/ended.txt" | tail -1 | cut -c1-200)
-      [ -n "$exited" ] || exited="no harness-exited line; the tracer's last words: $(last_line "$ROOT/start.txt")"
-      [ "$exited" = "harness exited: exit code 0." ] ||
-        fail "the headless harness did not finish its goal: $exited" || return 1
-      # Over on the harness's side, open on the server's until its deadline (the practice length).
-      COPY_SLEEP=10
-      # What is left of --timeout after the start, not a second budget.
-      left=$((TIMEOUT - ($(date +%s) - START_AT)))
-      [ "$left" -gt 0 ] || left=0
-      COPY_TRIES=$((left / COPY_SLEEP + 1))
-      say "the harness finished its goal; the server's copy is checked after the server's deadline"
-    fi
+# The agent answered: the research report (under the same key as verify_trace) holds a usage
+# observation with output or completion tokens above 0, or a decoded assistant message. Its exit
+# status is not the question here (verify_trace judged the evidence); the report must exist.
+agent_worked() { # trace
+  rm -f "$ROOT/research.ndjson"
+  if [ -n "$SKEY" ]; then
+    "$VERIFY" --research-json "$1" --output "$ROOT/research.ndjson" --dev-key "$SKEY" 2>"$ROOT/research.err"
   else
-    grep -q '^deadline:' "$ROOT/ended.txt" ||
-      fail "the run did not end at its deadline (no 'deadline:' line in the terminal output or host.log); the tracer's last words: $(last_line "$ROOT/ended.txt")" || return 1
+    "$VERIFY" --research-json "$1" --output "$ROOT/research.ndjson" 2>"$ROOT/research.err"
   fi
-  grep -q '^uploaded:.*the seal' "$ROOT/ended.txt" ||
-    fail "the tracer did not report the upload finished with the seal (no 'uploaded: ... and the seal' line)" || return 1
-  if [ "$CONNECTOR" = "$FAKE_ID" ]; then
-    grep -q 'tui: noted' "$ROOT/start.txt" || fail "the typed prompt never reached the harness" || return 1
-  fi
-  [ -f "$TRACE/chain.jsonl" ] || fail "no chain.jsonl in the trace" || return 1
+  log "goalcup-verify --research-json $1: exit $?"
+  log_file "goalcup-verify --research-json (stderr)" "$ROOT/research.err"
+  [ -f "$ROOT/research.ndjson" ] ||
+    fail "goalcup-verify --research-json wrote no report: $(last_line "$ROOT/research.err")" || return 1
+  worked=$(python3 - "$ROOT/research.ndjson" <<'PY'
+import json, sys
 
-  # ---- 1. the local verifier, 2. the server's copy
-  verify_trace "$TRACE" || return 1
-  compare_copy "$RUN_ID" "$ENTRY_ID" "$TRACE" "$RUN_DIR/credential" 1 || return 1
+OUT = ("output_tokens", "completion_tokens", "outputtokens", "completiontokens")
 
-  RESULT=PASS
+
+def has_output(o):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if (k.lower() in OUT and isinstance(v, (int, float)) and not isinstance(v, bool)
+                    and v > 0):
+                return True
+            if isinstance(v, (dict, list)) and has_output(v):
+                return True
+    elif isinstance(o, list):
+        return any(has_output(v) for v in o)
+    return False
+
+
+usage = assistant = 0
+for line in open(sys.argv[1], errors="replace"):
+    try:
+        o = json.loads(line)
+    except ValueError:
+        continue
+    if not isinstance(o, dict) or o.get("type") != "observation":
+        continue
+    ob = o.get("observation") if isinstance(o.get("observation"), dict) else {}
+    fields = ob.get("fields") if isinstance(ob.get("fields"), dict) else {}
+    if ob.get("kind") == "usage" and has_output(fields):
+        usage += 1
+    elif ob.get("kind") == "model_response" and fields.get("role") == "assistant":
+        assistant += 1
+print(f"{usage} usage observations with output, {assistant} assistant messages")
+PY
+  )
+  log "agent work in the trace: ${worked:-unreadable report}"
+  case $worked in
+    "0 usage observations with output, 0 assistant messages" | "")
+      fail "the agent never answered the prompt (no model output in the trace: ${worked:-unreadable report})" || return 1 ;;
+  esac
   return 0
+}
+
+# The agent changed its workspace (the run record's `workspace`, the clone): `git status` shows a
+# changed or new path (untracked files included), or a commit on any ref was made since the run
+# started (committer time at or after the record's `started_at_unix`; a pushed commit counts too).
+# A model call alone (a title, an answer that stalled at a permission prompt) is not work.
+workspace_changed() { # run.json
+  worked=$(python3 - "$1" 2>"$ROOT/workspace.err" <<'PY'
+import json, os, subprocess, sys
+
+rec = json.load(open(sys.argv[1]))
+ws, start = rec.get("workspace"), rec.get("started_at_unix")
+if not isinstance(ws, str) or not ws or not isinstance(start, int):
+    sys.exit("the run record names no workspace or start time")
+if not os.path.isdir(ws):
+    sys.exit(f"the workspace {ws} is gone")
+
+
+def git(*args):
+    out = subprocess.run(["git", "-C", ws, *args], capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit(f"git {args[0]} in {ws}: {(out.stderr.strip().splitlines() or ['failed'])[-1]}")
+    return out.stdout
+
+
+changed = [l for l in git("status", "--porcelain", "--untracked-files=all").splitlines() if l.strip()]
+# An empty clone has no commit and no ref: then git log --all lists nothing.
+times = [int(t) for t in git("log", "--all", "--format=%ct").split()]
+new = sum(1 for t in times if t >= start)
+print(f"{len(changed)} changed paths, {new} new commits in {ws}")
+PY
+  ) || fail "the workspace could not be read: $(last_line "$ROOT/workspace.err")" || return 1
+  log "workspace: $worked"
+  case $worked in
+    "0 changed paths, 0 new commits in "*)
+      fail "the agent changed nothing in its workspace (${worked#0 changed paths, 0 new commits in }: git status clean, no commit since the start; MATRIX_EXPECT_FILES=0 for a prompt that writes nothing)" || return 1 ;;
+  esac
+  return 0
+}
+
+# Whether a long run's server copy can be fetched: an index (file or database) and the objects
+# (a bucket mirror or R2).
+fetch_configured() {
+  { [ -n "$FETCH_INDEX" ] || [ -n "$FETCH_DB" ]; } &&
+    { [ -n "$FETCH_STORE" ] || { [ -n "$FETCH_CF_ACCOUNT" ] && [ -n "$FETCH_CF_TOKEN" ]; }; }
+}
+
+# Rebuild the server's copy of one entry into $ROOT/servercopy/<entry> with fetch-run.sh (read
+# only), bounded by MATRIX_FETCH_TIMEOUT. The credentials reach it in its environment only.
+fetch_copy() { # entry
+  fc_entry=$1
+  fc_bucket=${MATRIX_FETCH_BUCKET:-}
+  if [ -z "$fc_bucket" ]; then
+    case $SERVER_LC in
+      "https://$PRODUCTION_HOST" | "https://$PRODUCTION_HOST"/*) fc_bucket=goalcup-traces ;;
+      *) fc_bucket=goalcup-traces-staging ;;
+    esac
+  fi
+  set -- --bucket "$fc_bucket"
+  [ -z "$FETCH_INDEX" ] || set -- "$@" --index "$FETCH_INDEX"
+  [ -z "$FETCH_STORE" ] || set -- "$@" --store "$FETCH_STORE"
+  set -- "$@" "$fc_entry" "$ROOT/servercopy"
+  log "rebuilding the server's copy of entry $fc_entry: fetch-run.sh $* (index: ${FETCH_INDEX:-the database, read only}; objects: ${FETCH_STORE:-R2, read only}; at most ${FETCH_TIMEOUT}s)"
+  rm -rf "$ROOT/servercopy"
+  mkdir -p "$ROOT/servercopy" || fail "cannot make $ROOT/servercopy" || return 1
+  (
+    if [ -n "$FETCH_DB" ]; then DATABASE_URL=$FETCH_DB; export DATABASE_URL; fi
+    if [ -n "$FETCH_CF_ACCOUNT" ]; then CLOUDFLARE_ACCOUNT_ID=$FETCH_CF_ACCOUNT; export CLOUDFLARE_ACCOUNT_ID; fi
+    if [ -n "$FETCH_CF_TOKEN" ]; then CLOUDFLARE_API_TOKEN=$FETCH_CF_TOKEN; export CLOUDFLARE_API_TOKEN; fi
+    exec sh "$FETCH_SCRIPT" "$@"
+  ) >"$ROOT/fetch.out" 2>"$ROOT/fetch.err" </dev/null &
+  fc_pid=$!
+  fc_start=$(date +%s)
+  while kill -0 "$fc_pid" 2>/dev/null; do
+    if [ $(($(date +%s) - fc_start)) -ge "$FETCH_TIMEOUT" ]; then
+      kill -TERM "$fc_pid" 2>/dev/null
+      wait "$fc_pid" 2>/dev/null
+      fail "fetch-run.sh did not finish within ${FETCH_TIMEOUT}s" || return 1
+    fi
+    sleep 1
+  done
+  wait "$fc_pid"
+  fc_rc=$?
+  log_file "fetch-run.sh (output)" "$ROOT/fetch.out"
+  log_file "fetch-run.sh (stderr)" "$ROOT/fetch.err"
+  [ "$fc_rc" = 0 ] || fail "fetch-run.sh exited $fc_rc: $(last_line "$ROOT/fetch.err")" || return 1
+  [ -f "$ROOT/servercopy/$fc_entry/chain.jsonl" ] ||
+    fail "fetch-run.sh left no chain.jsonl for entry $fc_entry" || return 1
+}
+
+# Every chain part left on this machine is byte for byte the server copy's bytes at its offset,
+# and the last one ends where the copy ends.
+same_tail() { # trace copy_chain
+  python3 - "$1" "$2" >"$ROOT/tail.out" 2>&1 <<'PY'
+import os, re, sys
+trace, copy = sys.argv[1], sys.argv[2]
+parts = []
+for name in os.listdir(trace):
+    m = re.fullmatch(r"chain\.(\d{20})\.jsonl", name)
+    if m:
+        parts.append((int(m.group(1)), name))
+parts.sort()
+size = os.path.getsize(copy)
+ok = bool(parts)
+end = None
+with open(copy, "rb") as c:
+    for start, name in parts:
+        with open(os.path.join(trace, name), "rb") as f:
+            data = f.read()
+        c.seek(start)
+        good = c.read(len(data)) == data
+        ok = ok and good
+        end = start + len(data)
+        print(("ok    " if good else "FAIL  ") + f"local {name} ({len(data)} bytes) = server copy bytes {start}..{end}")
+good = end == size
+ok = ok and good
+print(("ok    " if good else "FAIL  ") + f"the last local part ends where the server copy ends: local={end} server={size}")
+sys.exit(0 if ok else 1)
+PY
+  st_rc=$?
+  log_file "local chain parts against the server's copy" "$ROOT/tail.out"
+  [ "$st_rc" = 0 ] || fail "the local chain parts are not the server copy's tail (see the comparison in the log)" || return 1
 }
 
 # The local verifier on one trace: exit 0, integrity valid, and the anchor signed by the server's
@@ -747,6 +1325,7 @@ verify_trace() { # trace [allow_incomplete]
   VRC=$?
   KEYNOTE="the pinned server key"
   VERIFY_NOTE=""
+  SKEY=""
   if [ "$VRC" = 2 ] && grep -q receipt_key_not_accepted "$ROOT/verify.out"; then
     SKEY=${MATRIX_SERVER_KEY:-$(py_get "$1/receipt.json" public_key)}
     log "verify without a supplied key: exit $VRC; retrying with --dev-key (the server's own signing key is not pinned in this build for $SERVER)"
@@ -774,7 +1353,8 @@ verify_trace() { # trace [allow_incomplete]
 # The upload API returns a position, not the stored bytes, so this compares what the server says it
 # holds (offset, record count, head, committed end, last acknowledgement) with the local chain
 # the verifier has just checked end to end. With strict=1 (the last entry of a finished run) the
-# run must also be sealed and over.
+# run must also be sealed and over; with strict=sealed (a test run this script sealed) it must be
+# sealed, and `stop` is not required (the server's deadline has not come).
 compare_copy() { # run_id entry_id trace credential_file strict
   tries=0
   while :; do
@@ -783,7 +1363,7 @@ compare_copy() { # run_id entry_id trace credential_file strict
       http GET "/v1/runs/$1?entry_id=$2" "$ROOT/server.json" -H @-)
     log "GET /v1/runs/$1?entry_id=$2: HTTP $status $(cat "$ROOT/server.json" 2>/dev/null)"
     [ "$status" = 200 ] || fail "GET /v1/runs/$1 with the run's credential answered HTTP $status" || return 1
-    [ "$5" = 1 ] || break
+    [ "$5" != 0 ] || break
     [ "$(py_get "$ROOT/server.json" status)" = sealed ] && break
     tries=$((tries + 1))
     [ "$tries" -lt "${COPY_TRIES:-6}" ] || break
@@ -794,7 +1374,8 @@ import json, os, sys
 server = json.load(open(sys.argv[1]))
 verify = json.load(open(sys.argv[2]))
 chain_bytes = os.path.getsize(sys.argv[3])
-strict = sys.argv[4] == "1"
+strict = sys.argv[4] in ("1", "sealed")
+stop = sys.argv[4] == "1"
 records = verify["validated_records"]
 head = verify["validated_head"]
 final = server.get("final") or {}
@@ -811,10 +1392,9 @@ if strict or verify.get("sealed"):
         ("committed end (final).head = local chain head", final.get("head"), head),
     ]
 if strict:
-    checks += [
-        ("status is sealed", server.get("status"), "sealed"),
-        ("the run is over (stop)", server.get("stop"), True),
-    ]
+    checks += [("status is sealed", server.get("status"), "sealed")]
+if stop:
+    checks += [("the run is over (stop)", server.get("stop"), True)]
 ok = True
 for name, got, want in checks:
     good = got == want
@@ -850,6 +1430,7 @@ run_check() {
   ROOT=$(mktemp -d "${TMPDIR:-/tmp}/goalcup-matrix.XXXXXX") || fail "cannot make a temporary directory" || return 1
   log "check-copy of run $RUN_ID on $SERVER, configuration $CFG"
   ok=1
+  unverified=0
   n=0
   # One "entry_id=trace_dir" per line, read a line at a time so a path may hold spaces. (fd 4, so
   # nothing run inside the loop can read the list from standard input.)
@@ -860,7 +1441,20 @@ for e in json.load(open(sys.argv[1]))["entries"]:
     entry=${pair%%=*}
     trace=${pair#*=}
     say "entry $entry (segment $n)"
-    if [ ! -f "$trace/chain.jsonl" ]; then
+    if [ ! -f "$trace/chain.jsonl" ] && ls "$trace"/chain.[0-9]*.jsonl >/dev/null 2>&1; then
+      # A long run's entry, pruned on this machine: its server copy is judged, if it can be fetched.
+      if ! fetch_configured; then
+        say "entry $entry: NOT VERIFIED: long run, server copy not fetched"
+        unverified=1
+      elif fetch_copy "$entry" && same_tail "$trace" "$ROOT/servercopy/$entry/chain.jsonl" &&
+        verify_trace "$ROOT/servercopy/$entry" 1 &&
+        compare_copy "$RUN_ID" "$entry" "$ROOT/servercopy/$entry" "$RUN_DIR/credential" 0; then
+        say "entry $entry: pruned here; the server's copy verifies (verifier exit $VRC${VERIFY_NOTE:+, incomplete coverage}), matches its position, and ends with the local parts"
+      else
+        say "entry $entry: $FAIL_REASON"
+        ok=0
+      fi
+    elif [ ! -f "$trace/chain.jsonl" ]; then
       FAIL_REASON="entry $entry has no local chain at $trace"
       ok=0
     elif ! verify_trace "$trace" 1 || ! compare_copy "$RUN_ID" "$entry" "$trace" "$RUN_DIR/credential" 0; then
@@ -873,6 +1467,11 @@ for e in json.load(open(sys.argv[1]))["entries"]:
   done 4<"$ROOT/entries.txt"
   [ "$n" -gt 0 ] || fail "run $RUN_ID has no entries" || return 1
   [ "$ok" = 1 ] || return 1
+  if [ "$unverified" = 1 ]; then
+    RESULT=NOT-VERIFIED
+    FAIL_REASON="NOT VERIFIED: long run, server copy not fetched"
+    return 1
+  fi
   RESULT=PASS
 }
 
@@ -891,12 +1490,10 @@ except Exception:
 print(v if not isinstance(v, bool) else str(v).lower())' "$1" "$2"
 }
 
-# What the connector's harness.toml says about how it runs: MODE (chat when `interactive = true`,
-# headless otherwise: it takes its goal as an argument). Read the way goalcup finds its connectors: GOALCUP_CONNECTORS_DIR, else the
-# directory beside the binary, else this checkout's. A manifest nowhere is a failure. One key
-# per line, as the shipped manifests have them.
+# The connector's harness.toml, found the way goalcup finds its connectors: GOALCUP_CONNECTORS_DIR,
+# else the directory beside the binary, else this checkout's. A manifest nowhere is a failure.
+# Every connector runs in chat mode (D57); goalcup itself refuses one that does not.
 read_manifest() {
-  MODE=chat
   manifest=""
   if [ -n "$CONNECTORS_ENV" ]; then
     manifest="$CONNECTORS_ENV/$CONNECTOR/harness.toml"
@@ -910,33 +1507,9 @@ read_manifest() {
     done
   fi
   if [ ! -f "$manifest" ]; then
-    # Chat mode is the safe guess for the old fake only: a headless connector taken for chat mode
-    # would get a terminal and a typed prompt, and fail half a minute later for no clear reason.
     fail "no harness.toml found for $CONNECTOR (set GOALCUP_CONNECTORS_DIR to the connectors directory)" || return 1
   fi
-  cat >"$ROOT/manifest.py" <<'PY'
-import re, sys
-table = ""
-interactive = False
-for raw in open(sys.argv[1]):
-    line = raw.strip()
-    if line.startswith("#") or not line:
-        continue
-    m = re.match(r"^\[+([^\]]+)\]+\s*(#.*)?$", line)
-    if m:
-        table = m.group(1).strip()
-        continue
-    m = re.match(r"^([A-Za-z0-9_]+)\s*=\s*(.*?)\s*(#.*)?$", line)
-    if not m:
-        continue
-    key, value = m.group(1), m.group(2)
-    if table == "capture" and key == "interactive":
-        interactive = value == "true"
-print("mode=" + ("chat" if interactive else "headless"))
-PY
-  facts=$(python3 "$ROOT/manifest.py" "$manifest") || fail "cannot read $manifest" || return 1
-  MODE=$(printf '%s\n' "$facts" | sed -n 's/^mode=//p')
-  log "connector $CONNECTOR: $MODE mode"
+  log "connector $CONNECTOR: $manifest"
 }
 
 # The connector for m2-fake-tui: this script's own copy of the test suite's chat-mode fake, in
@@ -1007,70 +1580,12 @@ protocol_hint = "openai-responses"
 EOF
 }
 
-# The connector for m2-fake-headless: this script's own copy of the test suite's fake headless
-# harness (tests/fixtures/m2-fake-harness.sh), as a headless connector: the goal after `--`, stdin
-# empty. The `stop` file is there from the start, so the fake ends at once with exit code 0, as a
-# one-turn harness does (hermes-cli): the run ends on the harness's side long before the server's
-# deadline.
-make_fake_headless_connector() {
-  FIXTURE="$REPO/crates/goalcup-cli/tests/fixtures/m2-fake-harness.sh"
-  [ -f "$FIXTURE" ] || fail "the fake headless harness fixture is missing: $FIXTURE" || return 1
-  CONNECTORS_ENV="$ROOT/connectors"
-  mkdir -p "$CONNECTORS_ENV/$FAKE_HEADLESS_ID" "$ROOT/bin" "$ROOT/fake-out"
-  : >"$ROOT/fake-out/stop"
-  {
-    echo '#!/bin/sh'
-    printf 'M2_FAKE_OUT=%s\nexport M2_FAKE_OUT\n' "$(shq "$ROOT/fake-out")"
-    sed '1d' "$FIXTURE"
-  } >"$ROOT/bin/$FAKE_HEADLESS_ID"
-  chmod 755 "$ROOT/bin/$FAKE_HEADLESS_ID"
-  HARNESS_PATH="$ROOT/bin:$PATH"
-  cat >"$CONNECTORS_ENV/$FAKE_HEADLESS_ID/harness.toml" <<EOF
-schema_version = 1
-id = "$FAKE_HEADLESS_ID"
-
-[capture]
-auth_hosts = ["auth.openai.com"]
-continuation = "none: the fake harness takes no input after its goal"
-args = ["run", "-C", "{workspace}", "--"]
-
-[capture.executable]
-program = "$FAKE_HEADLESS_ID"
-
-[capture.home]
-run_home = "empty"
-config_home = "shared"
-env = "CODEX_HOME"
-real_dirs = ["{user_home}/.codex"]
-
-[capture.ca]
-env = ["CODEX_CA_CERTIFICATE"]
-mode = "extend"
-
-[capture.identity]
-source = "none"
-
-[[capture.native]]
-name = "session"
-root = "{config_home}/sessions"
-pattern = "*.jsonl"
-form = "append_only"
-since_run_start = true
-
-[capture.termination]
-strategy = "process_group"
-grace_seconds = 2
-
-[[capture.hosts]]
-host = "localhost"
-evidence_paths = ["/v1/responses"]
-protocol_hint = "openai-responses"
-EOF
-}
-
 if [ -n "$CHECK_CFG" ]; then run_check; else run_matrix; fi
 if [ "$RESULT" != PASS ] && [ -n "${RUN_DIR:-}" ] && [ -f "$RUN_DIR/host.log" ]; then
-  log_file "host.log (the tracer's messages during the run)" "$RUN_DIR/host.log"
+  log_file "host.log (goalcup's messages during the run)" "$RUN_DIR/host.log"
 fi
-[ "$RESULT" = PASS ]
-exit $?
+case $RESULT in
+  PASS) exit 0 ;;
+  NOT-VERIFIED) exit 4 ;;
+  *) exit 1 ;;
+esac

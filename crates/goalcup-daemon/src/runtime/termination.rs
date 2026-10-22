@@ -1,9 +1,7 @@
 //! How a harness's process tree is ended and what the measurement is allowed to claim, plus the
-//! monotone finalization clock every durable timestamp reads.
+//! monotone durable clock every termination timestamp reads.
 //!
-//! This is the one termination path a local capture finish uses (`capture::finish`). It lives
-//! beside that module rather than in it because the V1 workspace finalizer shared it until
-//! D48 removed that finalizer.
+//! This is the one termination path a local capture finish uses (`capture::finish`).
 //! `Confirmed` means exactly what [`crate::terminate`] and `docs/TERMINATION.md` say it means.
 
 use super::Daemon;
@@ -15,14 +13,13 @@ use goalcup_protocol::provenance::{
     Rfc3339Utc, TerminationFailureV1, TerminationMethodV1, TerminationOutcomeV1,
 };
 
-/// End `handle`'s tree, walking at most `walk_cap` processes, and say what the measurement
-/// established: `Confirmed` exactly as the module doc above defines it,
-/// `AlreadyStopped` only after asking, and `Unresolved` for everything else.
+/// End `handle`'s tree and say what the measurement established: `Confirmed` exactly as the
+/// module doc above defines it, `AlreadyStopped` only after asking, and `Unresolved` for
+/// everything else.
 #[cfg(unix)]
 pub(super) fn terminate_handle(
     daemon: &Daemon,
     handle: &ProcessHandle,
-    walk_cap: usize,
     requested_at: &Rfc3339Utc,
 ) -> Result<(TerminationOutcomeV1, Option<String>), DaemonError> {
     let unresolved = |reason: TerminationFailureV1, note: String| {
@@ -39,7 +36,7 @@ pub(super) fn terminate_handle(
             return Ok((
                 TerminationOutcomeV1::AlreadyStopped {
                     checked_at: daemon
-                        .finalization_timestamp_at_or_after(requested_at, "termination check")?,
+                        .durable_timestamp_at_or_after(requested_at, "termination check")?,
                 },
                 Some(format!(
                     "strategy={:?} root={} already_stopped=true signalled=false",
@@ -58,7 +55,7 @@ pub(super) fn terminate_handle(
         }
     }
 
-    let report = match crate::terminate::terminate_within(handle, walk_cap) {
+    let report = match crate::terminate::terminate(handle) {
         Ok(report) => report,
         // The guard's own refusal: a recycled number, or a live pid running an argv the
         // launch never registered. Nothing was signalled.
@@ -122,7 +119,7 @@ pub(super) fn terminate_handle(
         TerminationOutcomeV1::Confirmed {
             requested_at: requested_at.clone(),
             confirmed_at: daemon
-                .finalization_timestamp_at_or_after(requested_at, "termination confirmation")?,
+                .durable_timestamp_at_or_after(requested_at, "termination confirmation")?,
             method: TerminationMethodV1::ProcessSignal,
         },
         Some(format!("{measured} reconfirmed=true")),
@@ -141,7 +138,7 @@ pub(super) fn unresolved_termination(
         TerminationOutcomeV1::Unresolved {
             requested_at: requested_at.clone(),
             stopped_waiting_at: daemon
-                .finalization_timestamp_at_or_after(requested_at, "termination stop-wait")?,
+                .durable_timestamp_at_or_after(requested_at, "termination stop-wait")?,
             reason,
         },
         Some(note),
@@ -174,15 +171,15 @@ fn termination_summary(report: &crate::terminate::TerminationReport) -> String {
 }
 
 impl Daemon {
-    /// Now on the finalization clock: the wall clock, which keeps counting while the Mac
+    /// Now on the durable clock: the wall clock, which keeps counting while the Mac
     /// sleeps, never earlier than a time this process already handed out. Never an `Instant`:
     /// that stops during sleep, so a run sealed after a lid-closed night would record its
     /// harness ending hours before it did.
-    pub(super) fn finalization_now_unix(&self) -> f64 {
+    pub(super) fn durable_now_unix(&self) -> f64 {
         let candidate = self.wall_now_unix();
         let mut high_water = self
             .inner
-            .finalization_high_water
+            .durable_high_water
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         *high_water = high_water.max(candidate);
@@ -203,12 +200,12 @@ impl Daemon {
         now
     }
 
-    pub(super) fn finalization_timestamp_at_or_after(
+    pub(super) fn durable_timestamp_at_or_after(
         &self,
         minimum: &Rfc3339Utc,
         fact: &str,
     ) -> Result<Rfc3339Utc, DaemonError> {
-        let current = self.finalization_timestamp(fact)?;
+        let current = self.durable_timestamp(fact)?;
         if goalcup_protocol::control::parse_z(current.as_str())
             < goalcup_protocol::control::parse_z(minimum.as_str())
         {
@@ -218,10 +215,10 @@ impl Daemon {
         }
     }
 
-    /// Now on the finalization clock, as the timestamp of `fact`.
-    pub(super) fn finalization_timestamp(&self, fact: &str) -> Result<Rfc3339Utc, DaemonError> {
+    /// Now on the durable clock, as the timestamp of `fact`.
+    pub(super) fn durable_timestamp(&self, fact: &str) -> Result<Rfc3339Utc, DaemonError> {
         Rfc3339Utc::try_from(goalcup_protocol::control::format_z(
-            self.finalization_now_unix().max(0.0) as u64,
+            self.durable_now_unix().max(0.0) as u64,
         ))
         .map_err(|error| DaemonError::Refused(format!("cannot timestamp {fact}: {error}")))
     }
@@ -256,17 +253,17 @@ mod tests {
     async fn a_seal_after_a_night_asleep_records_the_real_time() {
         let temp = tempfile::tempdir().unwrap();
         let daemon = daemon(&temp).await;
-        let evening = daemon.finalization_now_unix();
+        let evening = daemon.durable_now_unix();
 
         *daemon.inner.simulated_sleep_seconds.lock().unwrap() = NIGHT;
-        let morning = daemon.finalization_now_unix();
+        let morning = daemon.durable_now_unix();
 
         assert!(
             morning - evening >= NIGHT,
-            "eight hours asleep moved the finalization clock {:.0} s",
+            "eight hours asleep moved the durable clock {:.0} s",
             morning - evening
         );
-        let stamped = daemon.finalization_timestamp("the morning seal").unwrap();
+        let stamped = daemon.durable_timestamp("the morning seal").unwrap();
         let stamped = goalcup_protocol::control::parse_z(stamped.as_str()).unwrap() as f64;
         assert!(
             (stamped - morning).abs() < 2.0,
@@ -277,12 +274,12 @@ mod tests {
 
     /// The rollback guard still holds: a wall clock stepped back never moves a phase back.
     #[tokio::test]
-    async fn a_wall_clock_stepped_back_never_moves_finalization_back() {
+    async fn a_wall_clock_stepped_back_never_moves_the_durable_clock_back() {
         let temp = tempfile::tempdir().unwrap();
         let daemon = daemon(&temp).await;
-        let before = daemon.finalization_now_unix();
+        let before = daemon.durable_now_unix();
         *daemon.inner.simulated_sleep_seconds.lock().unwrap() = -NIGHT;
-        assert!(daemon.finalization_now_unix() >= before);
+        assert!(daemon.durable_now_unix() >= before);
         daemon.stop().await;
     }
 }

@@ -2,11 +2,11 @@
 """NON-SHIPPING controlled workload of the M2 local production vertical. /usr/bin/python3 stdlib.
 
     m2-controlled-workload.py --version
-    m2-controlled-workload.py CONFIG.json -- GOAL
+    m2-controlled-workload.py CONFIG.json
 
 The capture executable of the `m2-controlled-workload` development connector: `goalcup start`
 launches it through the recording proxy (`HTTPS_PROXY`, the proxy CA in `NODE_EXTRA_CA_CERTS`)
-with the goal as its one last argument. It reads the goal once, writes native JSONL under
+the way it launches a chat-mode harness (D57), with no goal. It writes native JSONL under
 `$HOME/native/`, exchanges traffic with the controlled endpoint (`api.e00.localhost`; the
 authentication host `auth.e00.localhost` is a tunnel), writes `result.txt` in its working
 directory and exits 0 when every exchange it made was byte-checked (1 otherwise, 64 on usage).
@@ -22,7 +22,7 @@ wait after the traffic) and `max_s` (the bound on either, default 60). Modes:
                  boundary both ways, across two native writes 300 ms apart, and once in a
                  request cut off inside the secret
 - fail-open      one echo (so the producer records a wire exchange), then a CONNECT to the
-                 approved API host whose first bytes are not a TLS ClientHello: the proxy
+                 approved API host whose first bytes are not a TLS ClientHello: the recording proxy
                  tunnels it uncaptured (fail-open) and the workload reads until EOF
 - stream         16 KiB echoes every 100 ms and 8 KiB WS messages every 200 ms on
                  connections kept open, one native line a second, until `release` or `max_s`
@@ -85,7 +85,7 @@ os._exit(0)
 
 
 class Workload:
-    def __init__(self, cfg, goal):
+    def __init__(self, cfg):
         self.cfg, self.out = cfg, cfg["out"]
         self.items, self.lock = [], threading.Lock()
         native_dir = os.path.join(os.environ["HOME"], "native")
@@ -99,7 +99,6 @@ class Workload:
                             "--native-path": self.native_path, "--test-id": cfg["test_id"]},
                            cfg.get("schedule", "smoke"))
         self.deadline = time.monotonic() + cfg.get("max_s", 60)
-        self.goal = {"bytes": len(goal.encode()), "sha256": E.sha(goal.encode())}
         self.rng = E.Rng(0x723)
 
     def released(self):
@@ -326,12 +325,12 @@ def main(argv):
     if argv == ["--version"]:
         print(VERSION)
         return 0
-    if len(argv) != 3 or argv[1] != "--":
+    if len(argv) != 1:
         sys.stderr.write(__doc__)
         return 64
     with open(argv[0], encoding="utf-8") as fh:
         cfg = json.load(fh)
-    work = Workload(cfg, argv[2])
+    work = Workload(cfg)
     with open(os.path.join(work.out, "pid.tmp"), "w") as fh:
         fh.write("%d\n" % os.getpid())
     os.replace(os.path.join(work.out, "pid.tmp"), os.path.join(work.out, "pid"))
@@ -346,7 +345,7 @@ def main(argv):
         with open(work.native_path, "rb") as fh:
             native = fh.read()
     with open(os.path.join(work.out, "report.json"), "w", encoding="utf-8") as fh:
-        json.dump({"version": VERSION, "mode": cfg["mode"], "ok": ok, "goal": work.goal,
+        json.dump({"version": VERSION, "mode": cfg["mode"], "ok": ok,
                    "items": work.items, "native": {"bytes": len(native), "sha256": E.sha(native)}},
                   fh)
     return 0 if ok else 1

@@ -4,7 +4,7 @@
 // name nor a log line can be reversed to an address (IPv4 has too few addresses for a plain hash).
 //
 //   start  POST /v1/device, per client address (an IPv6 client by its /64)
-//   poll   POST /v1/device/token, per device code: one tracer polls one code every 5 seconds
+//   poll   POST /v1/device/token, per device code: one goalcup polls one code every 5 seconds
 //          (12 a minute), and people behind one venue or campus NAT each poll their own code
 //   token  POST /v1/device/token, per client address: a high cap against abuse only
 //

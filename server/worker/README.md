@@ -33,7 +33,7 @@ Try it by hand against `npm run dev`. A credential comes from the device flow; t
 
 ```sh
 curl -s -XPOST localhost:8787/v1/device -H 'content-type: application/json' \
-  -d '{"purpose":"run","mode":"practice","connector_id":"codex-cli","tracer_version":"x.y.z"}'
+  -d '{"purpose":"run","mode":"practice","connector_id":"codex-cli","proxy_version":"x.y.z"}'
 # -> device_code, user_code. Approve the user code as a member, then pick up the credential:
 curl -s -XPOST localhost:8787/v1/device/approve -H 'authorization: Bearer dev-approval-key' \
   -H 'content-type: application/json' -d '{"user_code":"<user_code>","member_id":"member1","approve":true}'
@@ -52,7 +52,8 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/auth.ts` | Bearer run credential to member, and the one run it may touch |
 | `src/runs.ts` | Open, continue, receipt, abandon, position, heartbeat, seal |
 | `src/chunks.ts` | The chunk upload: early refusals, retry rule, streaming to R2, atomic commit |
-| `src/notices.ts` | The 5-minute cron: close runs, record the GitHub commit at the deadline, queue the run emails |
+| `src/notices.ts` | The 5-minute cron: close runs, record the judged GitHub commit, queue the run emails |
+| `src/github.ts` | The GitHub API: the judged commit (last push before the deadline) and the headers every GitHub call carries |
 | `src/mail.ts` | Sends each queued notice once through Resend |
 | `src/sign.ts` | Ed25519 receipts and acknowledgements (byte-exact with the Rust formats) |
 | `src/db.ts` | The `Db` interface: one method per step, and the run-state rules (`endsAt`, `statusAt`) |
@@ -60,6 +61,8 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
 | `src/context.ts`, `env.ts`, `errors.ts`, `util.ts` | Configuration, bindings, error types, helpers |
 | `sql/goal-cup-tracer-upload.sql` | Copy of the website's migration that `db-supabase.ts` calls. The website repo is the authority. |
+| `sql/pending/` | The migration written here first, not yet in the website repo nor applied (its README says how to land it) |
+| `scripts/check-sql.sh` | Applies the mirror and the pending migration to a throwaway local Postgres and smoke-calls the new functions |
 | `scripts/delete-test-runs.sh` | Deletes all organizer test runs, rows and R2 objects ([OPERATING](../../docs/OPERATING.md#test-runs)) |
 | `test/` | `sign.test.ts` (the signing vectors shared with the Rust crate), `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
 
@@ -74,10 +77,11 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `TEST_EVENT_ID` | none | Event that organizer test runs (mode `test`) belong to. Unset: the server opens no test run (`403`). |
 | `RUN_HOURS` | `168` | A competition run's `deadline_at` = `official_start` + this many hours. |
 | `PRACTICE_RUN_MINUTES` | `10` | A practice run's length. |
+| `RUN_MAX_COMPRESSED_BYTES` | `68719476736` (64 GiB) | The most compressed chunk bytes one run may hold in R2, over all its entries. A chunk that would pass it is `413 quota_exceeded`, nothing stored; goalcup retries, so raising it (a deploy) resumes the upload. Log lines `quota-half`, `quota-full`, `quota-exceeded <run_id>`. |
 | `DB_BACKEND` | `supabase` | `supabase` (production) or `local` (`wrangler dev` and tests only). Never set `local` in the deployed `wrangler.toml`. |
 | `APPROVAL_URL` | in `wrangler.toml` | The website page where a member approves a device request, without a query string. `verification_uri_complete` adds `?code=<user code>`. |
 | `STAGING` | off | `on` marks a staging deployment: the only place besides `DB_BACKEND=local` where `TEST_APPROVAL_KEY` may be set. Set only in `[env.staging.vars]`. |
-| `GITHUB_CHECK` | off | `on` makes `POST /v1/runs` ask GitHub that `repo_url` is a public repository (`wrangler.toml` sets `on`; `npm run dev` and the tests turn it off). A missing or private repository is `400`; GitHub unreachable or rate-limiting is `502`, which the tracer retries. |
+| `GITHUB_CHECK` | off | `on` makes `POST /v1/runs` ask GitHub that `repo_url` is a public repository (`wrangler.toml` sets `on`; `npm run dev` and the tests turn it off). A missing or private repository is `400`; GitHub unreachable or rate-limiting is `502`, which goalcup retries. |
 | `MAINTENANCE`, `MAINTENANCE_RETRY_AFTER` | off, `300` | `on` makes every call answer `503 maintenance` with that `Retry-After`, before authentication and before any body is read. The cron does nothing while it is on. |
 | `DEVICE_START_PER_MINUTE`, `DEVICE_POLL_PER_MINUTE`, `DEVICE_TOKEN_PER_MINUTE` | `120`, `30`, `1200` | Device-flow limits: starts per client address, polls per device code, polls per client address (abuse cap). |
 | `NOTICE_FROM` | none | Sender of the run emails. Needed once `RESEND_API_KEY` is set. |
@@ -91,7 +95,7 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 | `RECEIPT_SIGNING_KEY` | The Ed25519 seed, 32 bytes as 64 hex characters, generated offline. Its public key is pinned in the verifier. |
 | `SUPABASE_URL`, `SUPABASE_KEY` | The project URL, and a Supabase secret API key whose role may only run `public.goal_cup_upload_*`. Not the community-wide service key. |
 | `RATE_LIMIT_KEY` | Random, at least 32 characters: the HMAC key of every rate-limit key. A deployment answers every device call `500 misconfigured` without it. |
-| `GITHUB_TOKEN` | Read-only token for public repositories. Required in production and staging: the cron reads each run's commit at its deadline, and the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses. |
+| `GITHUB_TOKEN` | Read-only token for public repositories. Required in production and staging: the cron reads each run's judged commit (repository, activity and possibly `commits/HEAD`), and the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses. Without it the cron logs `WARNING: GITHUB_TOKEN is not set` and carries on. |
 | `RESEND_API_KEY` | Switches the run emails on. Send-only. |
 | `TEST_APPROVAL_KEY` | **Tests and staging only.** Switches on `POST /v1/device/approve`, which approves a device request as any member. Set anywhere else, every call answers `500 misconfigured`. Unset, the route is `404`. Never set it in production. |
 
@@ -110,11 +114,14 @@ Without `routes = []`, a staging deploy would move `ingest.agentcommunity.org` t
   33,554,432, `Content-Type` and all seven `Goalcup-*` headers are well formed, and the maintenance
   switch is off.
 - **Then:** offset, `prev` and first sequence must continue exactly where the entry stands (`409`).
+- **Then the run's size limit:** the run's `stored_bytes` plus this chunk's `Content-Length` must stay
+  within `RUN_MAX_COMPRESSED_BYTES` (`413 quota_exceeded`, body unread, nothing stored).
 - **Storage:** the body is piped (never buffered) into R2 with a create-only put, and R2 checks the
   SHA-256 (`422 digest_mismatch`, nothing stored). If the name already exists, an earlier attempt stored
   it but its database step failed, and the upload continues from there.
-- **Then one atomic database step** advances offset, sequence and head and records the chunk and its
-  ack, only if they still match what was checked. A request that loses a race is answered from the
+- **Then one atomic database step** advances offset, sequence and head, records the chunk and its
+  ack, and adds the chunk's compressed size and one chunk to the entry's `stored_bytes` and
+  `chunk_count`, only if they still match what was checked. A request that loses a race is answered from the
   stored chunk if it was a retry, otherwise `409`.
 - **Not checked here, by design:** whether the bytes are a valid chain.
 
@@ -165,7 +172,7 @@ production (no `--env`) must show no new deployment.
 ### Maintenance on and off
 
 Maintenance makes every call (except `GET /v1/health`) answer `503 maintenance` with `Retry-After`, before
-authentication. Tracers back off and keep recording. The cron does nothing while it is on. Run deadlines do
+authentication. goalcup clients back off and keep recording. The cron does nothing while it is on. Run deadlines do
 not move.
 
 There is one way to switch it on: `npx wrangler deploy --var MAINTENANCE:on`, from a clean checkout of
@@ -262,7 +269,7 @@ checkout (`agentCommunity_PAGE`), not in `server/worker`.
 6. Look at the rows: `psql "$DATABASE_URL_REMOTE" -X -c "select id, mode, start_window_opens,
    start_window_closes from goal_cup_tracer.events where staging = false order by id"`.
 7. Mirror the migration into this repository. Set `F` to the full path of
-   `server/worker/sql/goal-cup-tracer-upload.sql` in a tracer worktree, and run the regeneration command in
+   `server/worker/sql/goal-cup-tracer-upload.sql` in a goal-cup-tracer worktree, and run the regeneration command in
    the header of that file (the lines above `REGEN-END`) from the root of the website checkout at its
    `main`. Read `git diff` of the mirror: the only new part must be your migration. Commit it and open a pull
    request here.
@@ -357,7 +364,7 @@ or on production. Treat both as open. When you run one, write the date and the r
   picked up in time is lost.
 - Database or storage failures are `502 upstream_error`, and misconfiguration is `500 misconfigured`
   (one generic sentence for every cause; the detail, which may hold configuration, goes to the Worker's
-  log only). The tracer retries any 5xx.
+  log only). goalcup retries any 5xx.
 - A run that is over is closed the first time any call names it. The cron does the same for runs
   nobody looks at.
 
@@ -367,13 +374,17 @@ or on production. Treat both as open. When you run one, write the date and the r
 order, each in its own try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`, `sendNotices`
 (`src/mail.ts`). All take the time as a parameter. They read `Db.runsForTick(now)` (open runs, and runs
 that ended in the last 48 hours; never abandoned ones). The constants (20 minutes of silence, idle at 3
-and 6 hours, an hour to wait for the commit, 50 GitHub calls per tick, 20 emails per tick) are in
-`notices.ts` and `mail.ts` and have no variable. The rules are in
+and 6 hours, an hour to wait for the commit, 5 minutes before GitHub is asked, an hour of grace for a
+`404` or a failing activity API, 50 runs asked of GitHub per tick, 20 emails per tick) are in
+`notices.ts`, `github.ts` and `mail.ts` and have no variable. The rules are in
 [UPLOAD-API](../../docs/UPLOAD-API.md#what-the-server-does-on-its-own).
 
 Cost: each step reads the run list with one call. `queueNotices` makes one call for the whole batch
-however many runs there are. `closeRuns` makes one call per run due to close. `recordFinalCommits` makes
-at most 50 GitHub fetches and 50 writes. That is about a hundred subrequests in a busy tick, so the cron
+however many runs there are. `closeRuns` makes one call per run due to close. `recordFinalCommits` asks
+GitHub about at most 50 runs (taking turns when more are due), each with 2 to 4 fetches (repository,
+activity, and the commit list and `commits/HEAD` only as a fallback; up to 8 for a run with more than
+100 activities), and makes 50 writes. That is a few
+hundred subrequests in a busy tick, so the cron
 needs the paid Workers plan (the free plan allows 50 per invocation). A failed step is logged
 (`tick <step> <run_id>: <message>` or `tick queueNotices: <message>`) and the next tick retries; a notice
 is stored once per run, kind and key, so a retry is safe.

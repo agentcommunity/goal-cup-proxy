@@ -597,6 +597,49 @@ fn a_tree_that_ignores_sigterm_is_given_the_whole_grace_and_then_killed() {
     );
 }
 
+/// macOS's exit window (K10, the 22 Oct smokes). A dying macOS process shows state `E` in
+/// `ps` for 30 to 45 ms, so `liveness` reads it live, while `proc_pidinfo` already fails, so
+/// its start identity is unreadable. The guard read that as a recycled number and the Amp and
+/// Codex seals ended `Unresolved` although nothing survived. Here a multi-process tree in the
+/// shipped TUI shape ignores SIGTERM, so its root is SIGKILLed after the grace: the report
+/// must be the kill working, with the root's identity held, which is what `Confirmed` reads.
+/// A small shell tears down faster than the guard's next read, so this does not force the
+/// window; `terminate_sim`'s `StartGoneExitsAfterReads` interleaving pins it deterministically.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_darwin_root_sigkilled_while_exiting_is_observed_gone_not_lost() {
+    let child = support::spawn_stubborn();
+    let tree = goalcup_protocol::process::descendants(child.pid, &support::ps());
+    assert!(
+        tree.len() > 1,
+        "a singleton would prove nothing here: {tree:?}"
+    );
+    let mut h = support::handle(child.pid, KillStrategy::NativePid, "sleep");
+    h.pgid = None; // the shipped TUI shape
+    h.argv = vec!["/bin/sh".to_string()];
+
+    let r = terminate(&h).expect("the tree terminates");
+
+    assert!(
+        !r.survived_term.is_empty(),
+        "the root must be SIGKILLed: {r:?}"
+    );
+    assert!(
+        r.observed_gone
+            && !r.targeted.is_empty()
+            && r.still_alive.is_empty()
+            && !r.walk_cap_exceeded
+            && !r.harness_unverified,
+        "a root caught exiting after SIGKILL is not a lost authority: {r:?}"
+    );
+    for pid in tree {
+        assert!(
+            !goalcup_protocol::process::is_alive(pid),
+            "pid {pid} survived: {r:?}"
+        );
+    }
+}
+
 /// The stale-pid guard. A pid that cannot be the process the CLI registered is never
 /// signalled — the alternative is the daemon killing whatever the OS handed the number to.
 #[test]
@@ -1008,13 +1051,17 @@ mod support {
     impl Drop for Fixture {
         fn drop(&mut self) {
             // The group, not the pid: the leader's children outlive it otherwise, which is
-            // the very failure these tests exist for.
-            let _ = Command::new("/bin/kill")
-                .args(["-9", &format!("-{}", self.pid)])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            // the very failure these tests exist for. A signal call and not `/bin/kill -9
+            // -<pgid>`: procps-ng 4.0.4's kill reads only the first digit of a negative pid, so
+            // a group whose id starts with 1 became `kill(-1)`, every process this user owns,
+            // the test runner included.
+            if let Ok(group) = i32::try_from(self.pid)
+                && group > 1
+            {
+                // SAFETY: two integers; the group is the one this fixture's leader was spawned
+                // to lead (`own_group`).
+                unsafe { libc::kill(-group, libc::SIGKILL) };
+            }
             let _ = self.child.kill();
             let _ = self.child.wait();
         }

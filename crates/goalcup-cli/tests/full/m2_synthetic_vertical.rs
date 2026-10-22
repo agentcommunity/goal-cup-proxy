@@ -1,5 +1,5 @@
 //! The local production vertical on a synthetic workload: the shipped `goalcup-daemon`, this
-//! build's `goalcup start --goal-file` with its in-process proxy and IPC sender, the physically
+//! build's `goalcup start` with its in-process proxy and IPC sender, the physically
 //! reserved chain, native capture, the local finish and `goalcup-verify`, with no service.
 //! Only the workload (`fixtures/m2-controlled-workload.py`) and its TLS upstream (the
 //! controlled TLS endpoint) are fixtures; `m2_vertical_support` says how they are wired.
@@ -27,8 +27,7 @@ use goalcup_protocol::capture::{
 };
 use m2_common::contains;
 use m2_vertical_support::{
-    GOAL, RESERVE, Stream, Vertical, files_under, holds_proxy_credential, now, sentinel_prefix,
-    wall,
+    RESERVE, Stream, Vertical, files_under, holds_proxy_credential, now, sentinel_prefix, wall,
 };
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
@@ -134,11 +133,6 @@ fn local_finish_without_service_is_complete() {
     // What the workload did, from its own report and the run directory.
     let report = v.report();
     assert_eq!(report["ok"], true, "{report}");
-    assert_eq!(
-        report["goal"]["sha256"],
-        goalcup_daemon::workspace::sha256_hex(GOAL.as_bytes()),
-        "the goal reached the workload whole, as its one argument"
-    );
     let run = v.run_dir().unwrap();
     assert_eq!(
         std::fs::read_to_string(run.join("workspace/result.txt")).unwrap(),
@@ -155,7 +149,11 @@ fn local_finish_without_service_is_complete() {
         .filter(|(_, s)| s.source == CaptureSource::Goal)
         .collect();
     assert_eq!(goals.len(), 1);
-    assert_eq!(goals[0].1.data, GOAL.as_bytes());
+    // The harness is given no goal (D57): the run records the fixed sentence that says so.
+    assert_eq!(
+        goals[0].1.data,
+        goalcup_cli::commands::start::CHAT_MODE_GOAL.as_bytes()
+    );
     let launches: Vec<_> = chain
         .records()
         .filter_map(|r| match r {
@@ -439,7 +437,7 @@ fn native_partial_line_survives_local_finish() {
 #[ignore = "real processes and sockets; run by name with --ignored"]
 fn clean_producer_close_and_unexpected_eof_differ() {
     let _lock = TableLock::acquire();
-    // A launcher that ends with its harness: the proxy's producer closes in order.
+    // A launcher that ends with its harness: the recording proxy's producer closes in order.
     let v = Vertical::new("plain", json!({}));
     let mut start = v.start(RESERVE);
     let entry = v.entry_id();
@@ -502,7 +500,7 @@ fn clean_producer_close_and_unexpected_eof_differ() {
         v.events()
             .iter()
             .any(|e| e["start"].as_f64().is_some_and(|t| t > killed_at) && e["ok"] == false),
-        "the proxy is gone with the launcher"
+        "the recording proxy is gone with the launcher"
     );
     let live = v.status(&entry).payload.capture.unwrap();
     assert_eq!(
@@ -742,7 +740,7 @@ fn standalone_seal_stops_live_stream_before_draining_its_producer() {
             |r| matches!(r, CaptureRecord::ProducerClosed { producer, .. } if *producer == wire)
         ),
         1,
-        "the proxy closes its producer after the harness stops"
+        "the recording proxy closes its producer after the harness stops"
     );
     assert_eq!(
         after.count(|r| matches!(

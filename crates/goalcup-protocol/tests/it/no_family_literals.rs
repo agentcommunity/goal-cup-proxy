@@ -72,7 +72,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/goalcup-verifier/src/capture_analysis/registry.rs",
-        "Codex CLI 0.153.0 CLI/exec rollouts and 0.156.1 native child with inherited context",
+        "Codex CLI 0.153.0 CLI/exec rollouts, 0.156.1 native child with inherited context, and a 0.156.1 parent with two spawn_agent children",
         "evidence note: the harness build this decoder was measured against",
     ),
     (
@@ -97,7 +97,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/goalcup-verifier/src/capture_analysis/registry.rs",
-        "one retrieved/replayed macOS Amp 0.0.1792209635-g24a9fe thread WebSocket sample",
+        "two retrieved/replayed macOS Amp 0.0.1792209635-g24a9fe thread WebSocket samples, one with Task subagents",
         "evidence note: the harness build this decoder was measured against",
     ),
 ];
@@ -304,16 +304,22 @@ fn core_code_names_no_harness_in_a_string_literal() {
     let names = connector_names();
     let capture_paths = [
         root.join("crates/goalcup-cli/src/launch.rs"),
-        root.join("crates/goalcup-cli/src/capture_tee.rs"),
         root.join("crates/goalcup-cli/src/per_run_home.rs"),
-        root.join("crates/goalcup-cli/src/commands/start.rs"),
+        root.join("crates/goalcup-cli/src/home.rs"),
+        root.join("crates/goalcup-cli/src/commands/start/mod.rs"),
+        root.join("crates/goalcup-cli/src/commands/start/finish.rs"),
+        root.join("crates/goalcup-cli/src/commands/start/forked.rs"),
+        root.join("crates/goalcup-cli/src/commands/start/phases.rs"),
+        root.join("crates/goalcup-cli/src/commands/start/proxy.rs"),
+        root.join("crates/goalcup-cli/src/commands/start/refusals.rs"),
+        root.join("crates/goalcup-cli/src/commands/start/server.rs"),
         root.join("crates/goalcup-cli/src/commands/continue_run.rs"),
         root.join("crates/goalcup-cli/src/commands/prep.rs"),
         root.join("crates/goalcup-cli/src/host_log.rs"),
         root.join("crates/goalcup-cli/src/skill.rs"),
         root.join("crates/goalcup-platform/src/terminal.rs"),
         root.join("crates/goalcup-platform/src/machine.rs"),
-        root.join("crates/goalcup-cli/src/wsl_gate.rs"),
+        root.join("crates/goalcup-cli/src/folder_gate.rs"),
         root.join("crates/goalcup-cli/src/prep_file.rs"),
         root.join("crates/goalcup-cli/src/run/mod.rs"),
         root.join("crates/goalcup-cli/src/run/reserve.rs"),

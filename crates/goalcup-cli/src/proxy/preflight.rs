@@ -1,4 +1,4 @@
-//! The `goalcup start` connectivity preflight: before the entry, the proxy or the harness
+//! The `goalcup start` connectivity preflight: before the entry, the recording proxy or the harness
 //! exists, one bounded TCP connect to each provider host the profile intercepts.
 //!
 //! A run whose provider is unreachable from the start would otherwise record a harness that
@@ -7,11 +7,11 @@
 //! LuLu, endpoint security) holding the connections of a freshly built, unsigned `goalcup`
 //! until someone answers its prompt; the refusal names this binary's path for that reason.
 //!
-//! The probe is the proxy's own upstream connect ([`super::connect`]): it resolves, cycles the
-//! addresses and retries inside [`PREFLIGHT_BUDGET`], every host at once. It sends nothing over
-//! the connection and closes it. A loopback host (`localhost`, a `.localhost` name, a loopback
-//! literal) has no network path to check and is skipped. Nothing here is said to the harness,
-//! which does not exist yet.
+//! The probe is the recording proxy's own upstream connect ([`super::connect`]): it resolves,
+//! cycles the addresses and retries inside [`PREFLIGHT_BUDGET`], every host at once. It sends
+//! nothing over the connection and closes it. A loopback host (`localhost`, a `.localhost` name, a
+//! loopback literal) has no network path to check and is skipped. Nothing here is said to the
+//! harness, which does not exist yet.
 
 use super::connect::{ConnectFailureKind, DEFAULT_CONNECT_ATTEMPT_TIMEOUT, Retry, connect_host};
 use std::path::PathBuf;
@@ -55,6 +55,25 @@ impl std::fmt::Display for Unreachable {
 }
 
 impl Unreachable {
+    /// The whole refusal: `goalcup start`'s ([`Display`](std::fmt::Display)), or, for the next
+    /// part of the open run `continuing`, one that says the run is still open and names
+    /// `goalcup continue`. A start is never advised then: a new start replaces the run.
+    pub(crate) fn refusal(&self, continuing: Option<&str>) -> String {
+        let Some(run_id) = continuing else {
+            return self.to_string();
+        };
+        let binary = match &self.binary {
+            Some(path) => path.display().to_string(),
+            None => "this goalcup binary".to_string(),
+        };
+        format!(
+            "If this computer is online, allow {binary} in your firewall (such as Little Snitch), \
+             then run: goalcup continue {run_id}. Your run is still open. The provider host {}, \
+             so the agent would get no answer; it was not started.",
+            self.reason(),
+        )
+    }
+
     /// The host and what went wrong, without `goalcup start`'s refusal around it: for
     /// `goalcup prep`, which says the same thing in its own sentence.
     pub(crate) fn reason(&self) -> String {
@@ -134,8 +153,8 @@ fn probe_endpoints(endpoints: Vec<(String, u16)>, budget: Duration) -> Result<()
         budget,
         binary: std::env::current_exe().ok(),
     };
-    // A runtime of its own, gone before the proxy's is built. One that cannot be built is not
-    // a reason to refuse here: the proxy's own start would refuse it a moment later.
+    // A runtime of its own, gone before the recording proxy's is built. One that cannot be built is
+    // not a reason to refuse here: the recording proxy's own start would refuse it a moment later.
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -200,6 +219,33 @@ mod tests {
         assert!(said.contains("Nothing was created."), "{said}");
         let binary = std::env::current_exe().unwrap();
         assert!(said.contains(&binary.display().to_string()), "{said}");
+    }
+
+    /// During `goalcup continue` the run is open, and a new start would replace it: the refusal
+    /// names the firewall fix and `goalcup continue <run>`, says the run is still open, and
+    /// never advises a start.
+    #[test]
+    fn a_continue_that_cannot_reach_the_provider_names_continue_never_start() {
+        let refused = Unreachable {
+            host: "api.example".into(),
+            port: 443,
+            kind: ConnectFailureKind::TcpTimeout,
+            budget: PREFLIGHT_BUDGET,
+            binary: Some(PathBuf::from("/opt/goalcup")),
+        };
+        let said = refused.refusal(Some("run-7"));
+        assert!(
+            said.contains("allow /opt/goalcup in your firewall"),
+            "{said}"
+        );
+        assert!(said.contains("goalcup continue run-7"), "{said}");
+        assert!(said.contains("Your run is still open."), "{said}");
+        assert!(
+            !said.contains("goalcup start") && !said.contains("start again"),
+            "{said}"
+        );
+        // A start (no run open) keeps its own words.
+        assert_eq!(refused.refusal(None), refused.to_string());
     }
 
     #[test]

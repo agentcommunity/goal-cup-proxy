@@ -50,13 +50,14 @@
 //! capture's, so that is the capture block with its states, the daemon's sentence, storage, gaps
 //! and admissions. Staleness is [`goalcup_protocol::control::STALE_AFTER_SECONDS`], the one
 //! threshold every reader of the status document uses, and `now` is a parameter so the rendering
-//! is deterministic. `--json` prints the signed document alone.
+//! is deterministic. `--json` prints the signed document, with this machine's own facts
+//! beside it under `local`, outside what is signed.
 
 use crate::CliError;
 use crate::entries::{self, EntryRecord};
 use crate::participant;
 use crate::retry::retry_busy;
-use goalcup_protocol::capture::M2Status;
+use goalcup_protocol::capture::{AnchorState, DeliveryState, M2Status};
 use goalcup_protocol::control::{
     DaemonClient, STALE_AFTER_SECONDS, SignedStatus, StatusPayload, parse_z,
 };
@@ -99,8 +100,10 @@ pub fn status_in(
         &crate::run::reserve::artifact_root(cfg),
         crate::run::now_unix(),
     );
+    // What is sealed and sent need not stay on this machine: its acknowledged parts go.
+    crate::upload::prune::clean_finished_runs(cfg);
     // First of everything, before the daemon is even asked: where the run is and what to do
-    // about anything wrong with it. A `--json` caller gets the document alone.
+    // about anything wrong with it. A `--json` caller gets the document.
     let mut run_id = None;
     if !json {
         let (report, run) = run_report(cfg, connectors, &record, now);
@@ -117,8 +120,8 @@ pub fn status_in(
             &record.entry_id,
             "signature did not verify".to_string(),
             format!(
-                "the status document for entry {} did not verify against the run key \
-                 this machine pinned when the entry was created, so nothing in it has \
+                "the status document for part {} did not verify against the run key \
+                 this machine pinned when the part was created, so nothing in it has \
                  been shown. The status route is unauthenticated by ruling: something \
                  other than the daemon that opened this run may be answering on the \
                  control port, and a deadline printed off that document would be its \
@@ -135,11 +138,11 @@ pub fn status_in(
             json,
             &record.entry_id,
             format!(
-                "the document that came back is for entry {}",
+                "the document that came back is for part {}",
                 document.payload.entry_id
             ),
             format!(
-                "entry {} was asked for and the daemon answered with a document for entry \
+                "part {} was asked for and the daemon answered with a document for part \
                  {}, so nothing in it has been shown. It carries a good signature — the run \
                  key this machine pinned signs every document of this run — and it is still \
                  about a different run than the one the question was about.",
@@ -148,13 +151,15 @@ pub fn status_in(
         );
     }
     if json {
-        // The document as the daemon signed it, byte for byte, so a participant can hand it
+        // The document as the daemon signed it, field for field, so a participant can hand it
         // to an organiser and it still verifies. It is reached only once both checks above
         // have passed, so a `--json` caller never has to decide whether to trust it.
-        put(
-            out,
-            &format!("{}\n", serde_json::to_string_pretty(&document)?),
-        )?;
+        // Beside it, outside what is signed, `local`: this machine's own facts.
+        let shown = WithLocal {
+            document: &document,
+            local: local_facts(cfg, &record),
+        };
+        put(out, &format!("{}\n", serde_json::to_string_pretty(&shown)?))?;
     } else {
         // The technical block follows the participant block, under its own heading.
         if let Some(run_id) = &run_id {
@@ -166,6 +171,42 @@ pub fn status_in(
         put(out, &render_status(&document, now))?;
     }
     Ok(())
+}
+
+/// The key of `goalcup status --json` beside the signed document that holds this machine's own
+/// facts ([`local_vitals`]). It is not signed: it comes from the run's files, not the daemon.
+pub const LOCAL_KEY: &str = "local";
+
+/// The signed document, its fields as they are, and [`LOCAL_KEY`] after them.
+#[derive(serde::Serialize)]
+struct WithLocal<'a> {
+    #[serde(flatten)]
+    document: &'a SignedStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    local: Option<crate::upload::api::HeartbeatVitals>,
+}
+
+/// [`local_vitals`] for the run of `record`; `None` when this machine has no state for it.
+fn local_facts(cfg: &Path, record: &EntryRecord) -> Option<crate::upload::api::HeartbeatVitals> {
+    let run = crate::run::of_entry(cfg, &record.entry_id).ok().flatten()?;
+    let run_dir = crate::run::run_dir(cfg, &run.run_id);
+    let state = crate::run::read_state(&run_dir)?;
+    Some(local_vitals(&run_dir, &state))
+}
+
+/// The run's vitals in the heartbeats' shape: the free disk as the watch tick last measured it,
+/// whether the agent is paused for it, and what goalcup's own processes used at the last
+/// heartbeat (none for a run with no server).
+fn local_vitals(
+    run_dir: &Path,
+    state: &crate::run::RunState,
+) -> crate::upload::api::HeartbeatVitals {
+    let mut vitals = crate::vitals::last(run_dir).unwrap_or_default();
+    if state.disk != crate::run::DiskState::default() {
+        vitals.disk_free_bytes = Some(state.disk.free_bytes);
+    }
+    vitals.agent_paused = state.disk.disk_paused.then(|| "disk".to_string());
+    vitals
 }
 
 /// The first line of the run section of an organizer test run (`goalcup start --test`).
@@ -194,11 +235,7 @@ fn run_report(
     let now = parse_z(now).unwrap_or_else(crate::run::now_unix);
     let state = crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id));
     let over = crate::run::is_over(&run, state.as_ref(), now);
-    let left = participant::seconds_left(
-        state.as_ref().and_then(|state| state.time_left.as_ref()),
-        run.deadline_at.as_deref(),
-        now,
-    );
+    let left = participant::run_seconds_left(&run, state.as_ref(), now);
     // Over by a stop (a newer run, the server's close) is not over by the deadline.
     let early = state.as_ref().is_some_and(|state| {
         state.stopped_for_its_end()
@@ -275,13 +312,24 @@ fn run_report(
     let exited = matches!(state.harness, crate::run::HarnessState::Exited { .. });
     // Done: its time is up, or the agent left a run nothing can restart.
     let done = over || (state.ended && exited && advice == crate::run::Advice::Cannot);
+    // Sealed only with a valid `seal.json`: a host can finish without having written one.
+    let sealed = run
+        .entries
+        .last()
+        .is_some_and(|e| crate::upload::prune::is_sealed(&e.trace_dir, &e.entry_id));
+    let stale = state.is_stale(now);
+    // A host that died after its seal left nothing to finish: what is left is the upload, and
+    // `goalcup seal` is not asked for again (it would be asked for ever).
+    let host_finished = state.ended || (stale && sealed);
     let phase = if done {
-        if !state.ended {
+        if !host_finished {
             participant::Phase::Finishing
         } else if all_sent {
             participant::Phase::Uploaded
-        } else {
+        } else if sealed {
             participant::Phase::Sealed
+        } else {
+            participant::Phase::NotSealed
         }
     } else if exited {
         participant::Phase::AgentExited
@@ -304,12 +352,11 @@ fn run_report(
         .upload
         .last_ok_at
         .map(|last_ok| now.saturating_sub(last_ok));
-    let stale = state.is_stale(now);
     let upload = if !on_server {
         participant::UploadNow::NotUsed
     } else if phase == participant::Phase::Uploaded {
         participant::UploadNow::Done
-    } else if state.ended && !all_sent {
+    } else if host_finished && !all_sent {
         // Nothing is sending now: the host is done, and what is left waits for `goalcup upload`
         // (or, for an open run, for `goalcup continue`).
         participant::UploadNow::Unfinished
@@ -318,7 +365,12 @@ fn run_report(
     } else if state.upload.problem.is_some() {
         participant::UploadNow::Retrying { ago }
     } else if ago.is_some() {
-        participant::UploadNow::UpToDate { ago }
+        // "Up to date" only when every record written is acknowledged; uploads run on a timer,
+        // so between sends records wait, and that is said.
+        match records_waiting_in(&run.entries) {
+            Some(0) => participant::UploadNow::UpToDate { ago },
+            waiting => participant::UploadNow::Sending { ago, waiting },
+        }
     } else {
         participant::UploadNow::NotYet
     };
@@ -343,11 +395,12 @@ fn run_report(
         // Time is up and the state is moving: goalcup is finishing the run. If nothing writes it
         // any more (the computer restarted, the process was killed), nobody will: seal it here.
         participant::Phase::Finishing if stale => participant::Next::Seal { upload: on_server },
+        participant::Phase::NotSealed => participant::Next::Seal { upload: on_server },
         participant::Phase::Finishing => participant::Next::Wait,
         participant::Phase::Sealed if on_server => participant::Next::Upload,
         participant::Phase::Sealed => participant::Next::Nothing,
     };
-    let header = participant::status_header(&participant::StatusHeader {
+    let mut header = participant::status_header(&participant::StatusHeader {
         harness: &name,
         mode,
         phase: Some(phase),
@@ -359,6 +412,15 @@ fn run_report(
         early,
         young: false,
     });
+    // While goalcup records: the disk, and what its own processes use.
+    if !state.ended
+        && let Some(line) = participant::this_computer(&local_vitals(
+            &crate::run::run_dir(cfg, &run.run_id),
+            &state,
+        ))
+    {
+        header.push(line);
+    }
     let problems: String = problems
         .iter()
         .map(|problem| format!("{} {problem}\n", participant::PROBLEM))
@@ -377,7 +439,7 @@ const NEW_RUN_SECS: u64 = 5 * 60;
 
 /// The harness's display name from its connector, or the connector id when the connector cannot
 /// be loaded here.
-fn harness_name(connectors: Option<&Path>, connector_id: &str, dev: bool) -> String {
+pub(crate) fn harness_name(connectors: Option<&Path>, connector_id: &str, dev: bool) -> String {
     connectors
         .and_then(|dir| crate::connector::load_harness(dir, connector_id, dev).ok())
         .map_or_else(
@@ -421,7 +483,7 @@ fn refuse(
             &format!("{}\n", serde_json::to_string_pretty(&document)?),
         )?;
     } else {
-        put(out, &format!("entry {entry_id}: {headline}\n"))?;
+        put(out, &format!("part {entry_id}: {headline}\n"))?;
     }
     Err(CliError::Refused(said))
 }
@@ -463,7 +525,7 @@ pub fn render_status(s: &SignedStatus, now: &str) -> String {
     let detail = plain(&p.detail);
     let workspace = plain(&p.workspace);
     let mut lines: Vec<String> = Vec::new();
-    lines.push(format!("entry {} ({})", p.entry_id, p.connector_id));
+    lines.push(format!("part {} ({})", p.entry_id, p.connector_id));
 
     // First, before anything a reader might act on: whether anything has published a
     // document for this entry lately.
@@ -481,6 +543,27 @@ pub fn render_status(s: &SignedStatus, now: &str) -> String {
     lines.join("\n") + "\n"
 }
 
+/// How many records of all the run's `entries` (every segment, not only the last) are written
+/// and not yet acknowledged. `None` for no entries, or when any entry's count cannot be read.
+fn records_waiting_in(entries: &[crate::run::EntryRef]) -> Option<u64> {
+    if entries.is_empty() {
+        return None;
+    }
+    entries.iter().map(|e| records_waiting(&e.trace_dir)).sum()
+}
+
+/// How many records of the trace at `trace_dir` are written and not yet acknowledged by the
+/// server: the last record's `seq` minus the last acknowledgement's. `None` when either cannot be
+/// read; a trace with records and no acknowledgement counts them all.
+fn records_waiting(dir: &Path) -> Option<u64> {
+    let parts = goalcup_protocol::export::chain_parts(dir).ok()?;
+    let (_, last, _) = crate::upload::uploader::local_end(&parts)?;
+    match crate::upload::uploader::last_ack(&dir.join(goalcup_protocol::export::ACKS_FILE)) {
+        Some((acked, _)) => Some(last.saturating_sub(acked)),
+        None => Some(last + 1),
+    }
+}
+
 /// The capture block of a v5 status, in the wire's own words.
 fn capture_lines(p: &StatusPayload, c: &M2Status, detail: &str, workspace: &str) -> Vec<String> {
     let storage = &c.storage;
@@ -493,15 +576,19 @@ fn capture_lines(p: &StatusPayload, c: &M2Status, detail: &str, workspace: &str)
     } else {
         "; byte accounting unavailable"
     };
+    // The recorder never knows the upload (D3): its delivery and anchor stay `local_only` for
+    // every run, which read as "nothing uploaded" beside the Upload line that knows. They are
+    // said only when they say something else; `--json` keeps them as signed.
+    let mut wire = vec![format!("run {}", wire_word(&c.run))];
+    if c.delivery != DeliveryState::LocalOnly {
+        wire.push(format!("delivery {}", wire_word(&c.delivery)));
+    }
+    if c.anchor != AnchorState::LocalOnly {
+        wire.push(format!("anchor {}", wire_word(&c.anchor)));
+    }
+    wire.push(format!("analysis {}", wire_word(&c.analysis)));
     let mut lines = vec![
-        format!(
-            "  capture: {} — run {}, delivery {}, anchor {}, analysis {}",
-            wire_word(&c.capture),
-            wire_word(&c.run),
-            wire_word(&c.delivery),
-            wire_word(&c.anchor),
-            wire_word(&c.analysis)
-        ),
+        format!("  capture: {} — {}", wire_word(&c.capture), wire.join(", ")),
         format!("  {detail}"),
         format!("  workspace: {workspace}"),
         format!(
@@ -554,7 +641,7 @@ fn freshness(s: &SignedStatus, now: &str) -> String {
     let age = asked - cached;
     if age > STALE_AFTER_SECONDS {
         return format!(
-            "  offline: nothing has published a status for this entry in {age}s, and a \
+            "  offline: nothing has published a status for this part in {age}s, and a \
              running daemon publishes one at least every {STALE_AFTER_SECONDS}s. What \
              follows is the last document there was ({}).",
             plain(&s.cached_at)
@@ -607,4 +694,55 @@ pub(crate) fn put(out: &mut dyn Write, text: &str) -> Result<(), CliError> {
             path: "standard output".to_string(),
             source,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A trace of `records` records whose last acknowledgement is `acked` (none for `None`).
+    fn entry(root: &Path, id: &str, records: u64, acked: Option<u64>) -> crate::run::EntryRef {
+        let trace_dir = root.join(id);
+        std::fs::create_dir_all(&trace_dir).unwrap();
+        let chain: String = (0..records)
+            .map(|seq| format!("{{\"seq\":{seq},\"prev\":\"p\",\"hash\":\"h{seq}\"}}\n"))
+            .collect();
+        std::fs::write(trace_dir.join(goalcup_protocol::export::CHAIN_FILE), chain).unwrap();
+        if let Some(seq) = acked {
+            let ack = serde_json::json!({
+                "entry_id": id, "seq": seq, "hash": format!("h{seq}"),
+                "acked_at": "2026-10-22T00:00:00Z", "server_signature": "00",
+            });
+            std::fs::write(
+                trace_dir.join(goalcup_protocol::export::ACKS_FILE),
+                format!("{ack}\n"),
+            )
+            .unwrap();
+        }
+        crate::run::EntryRef {
+            entry_id: id.to_string(),
+            trace_dir,
+        }
+    }
+
+    /// Records an earlier segment wrote and the server has not acknowledged still wait, even
+    /// when the last segment is all sent: status is not "up to date" until every entry is.
+    #[test]
+    fn records_waiting_counts_every_entry_not_only_the_last() {
+        let root = tempfile::tempdir().unwrap();
+        let earlier = entry(root.path(), "e-1", 5, Some(2));
+        let last = entry(root.path(), "e-2", 3, Some(2));
+        assert_eq!(records_waiting(&last.trace_dir), Some(0));
+        assert_eq!(
+            records_waiting_in(&[earlier.clone(), last.clone()]),
+            Some(2)
+        );
+        let unsent = entry(root.path(), "e-3", 4, None);
+        assert_eq!(
+            records_waiting_in(&[earlier, last.clone(), unsent]),
+            Some(6)
+        );
+        assert_eq!(records_waiting_in(std::slice::from_ref(&last)), Some(0));
+        assert_eq!(records_waiting_in(&[]), None);
+    }
 }

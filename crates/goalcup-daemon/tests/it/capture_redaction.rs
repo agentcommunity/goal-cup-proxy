@@ -749,8 +749,8 @@ fn corpus() -> Vec<u8> {
     c
 }
 
-#[test]
-fn every_split_point_matches_whole_record_policy() {
+shards!(every_split_point_matches_whole_record_policy, 2);
+fn every_split_point_matches_whole_record_policy(shard: &Shard) {
     let input = corpus();
     let (want_bytes, want_spans) = legacy(&input);
     assert!(
@@ -759,6 +759,9 @@ fn every_split_point_matches_whole_record_policy() {
         want_spans.len()
     );
     for split in 0..=input.len() {
+        if !shard.mine() {
+            continue;
+        }
         let mut p = Producer::new(P1);
         let mut records = p.open(1, CaptureSource::WireRequest);
         records.extend(p.bytes(1, &input[..split]));
@@ -774,13 +777,17 @@ fn every_split_point_matches_whole_record_policy() {
     }
 }
 
-#[test]
-fn seeded_random_chunking_matches_whole_record_policy() {
+shards!(seeded_random_chunking_matches_whole_record_policy, 2);
+fn seeded_random_chunking_matches_whole_record_policy(shard: &Shard) {
     let seeds: u64 = std::env::var("T04_FUZZ_SEEDS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1500);
+    // Each seed draws its input and chunkings from its own generator.
     for seed in 1..=seeds {
+        if !shard.mine() {
+            continue;
+        }
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
         let input = random_input(&mut rng, 60);
         let (want_bytes, want_spans) = legacy(&input);
@@ -1318,8 +1325,11 @@ fn adversarial_input(rng: &mut Rng) -> Vec<u8> {
     input
 }
 
-#[test]
-fn adversarial_long_inputs_never_expose_a_whole_record_secret() {
+shards!(
+    adversarial_long_inputs_never_expose_a_whole_record_secret,
+    2
+);
+fn adversarial_long_inputs_never_expose_a_whole_record_secret(shard: &Shard) {
     let seeds: u64 = std::env::var("T04_ADVERSARIAL_SEEDS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1327,25 +1337,35 @@ fn adversarial_long_inputs_never_expose_a_whole_record_secret() {
     let mut failures = Vec::new();
     let mut spans = 0usize;
     for seed in 1..=seeds {
+        if !shard.mine() {
+            continue;
+        }
         let mut rng = Rng(seed.wrapping_mul(0xA076_1D64_78BD_642F) | 1);
         let input = adversarial_input(&mut rng);
         spans += legacy(&input).1.len();
         failures.extend(never_less(&format!("seed {seed}"), &input, &mut rng));
     }
-    assert!(spans > 0);
+    // A part that took no seed (fewer seeds than parts) has nothing to have found.
+    let taken = shard.taken();
+    assert!(
+        taken == 0 || spans > 0,
+        "{}: {taken} seeds drew no secret span",
+        shard.label()
+    );
     assert!(
         failures.is_empty(),
-        "{} of {seeds} seeds:\n{}",
+        "{}: {} of its {taken} seeds:\n{}",
+        shard.label(),
         failures.len(),
         failures.join("\n")
     );
 }
 
+shards!(seeded_long_inputs_never_expose_a_whole_record_secret, 6);
 /// Seeded inputs past the hold bound with the same directional oracle. Every long run is
 /// closed by `,`, so no whole-record match can begin inside one and run past the hold
 /// (the documented unproven-prefix limits); runs may be glued to what precedes them.
-#[test]
-fn seeded_long_inputs_never_expose_a_whole_record_secret() {
+fn seeded_long_inputs_never_expose_a_whole_record_secret(shard: &Shard) {
     // 60 by default.
     let seeds: u64 = std::env::var("T04_DIRECTIONAL_SEEDS")
         .ok()
@@ -1376,6 +1396,9 @@ fn seeded_long_inputs_never_expose_a_whole_record_secret() {
     ];
     let mut failures = Vec::new();
     for seed in 1..=seeds {
+        if !shard.mine() {
+            continue;
+        }
         let mut rng = Rng(seed.wrapping_mul(0xD1B5_4A32_D192_ED03) | 1);
         let mut input = Vec::new();
         while input.len() < 60_000 {
@@ -1413,17 +1436,19 @@ fn seeded_long_inputs_never_expose_a_whole_record_secret() {
     }
     assert!(
         failures.is_empty(),
-        "{} of {seeds} seeds:\n{}",
+        "{}: {} of its {} seeds:\n{}",
+        shard.label(),
         failures.len(),
+        shard.taken(),
         failures.join("\n")
     );
 }
 
+shards!(seeded_long_inputs_are_chunking_invariant, 6);
 /// Seeded inputs far longer than the hold bound, with long runs of every class a
 /// candidate can grow through, streamed at very different chunkings: forced decisions
 /// must be the same wherever the frame boundaries fall, and so must a discontinuity.
-#[test]
-fn seeded_long_inputs_are_chunking_invariant() {
+fn seeded_long_inputs_are_chunking_invariant(shard: &Shard) {
     let seeds: u64 = std::env::var("T04_LONG_SEEDS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1487,12 +1512,16 @@ fn seeded_long_inputs_are_chunking_invariant() {
             retained_of(&records, 1)
         };
         for ending in [EndReason::Complete, EndReason::Interrupted] {
-            let reference = whole(ending, &[MAX_SEGMENT_BYTES]);
-            for chunks in [
+            let chunkings = [
                 random_chunks(&mut rng, 40),
                 random_chunks(&mut rng, 5000),
                 vec![1, 2, 3, 5, 8, 13],
-            ] {
+            ];
+            if !shard.mine() {
+                continue;
+            }
+            let reference = whole(ending, &[MAX_SEGMENT_BYTES]);
+            for chunks in chunkings {
                 assert_eq!(
                     whole(ending, &chunks),
                     reference,
@@ -3153,11 +3182,14 @@ const MASKED_FORMS: &[&str] = &[
     "sk-R7aMV****************************************************************oKYo",
 ];
 
+shards!(
+    a_masked_key_split_across_any_chunk_boundary_is_one_redaction,
+    3
+);
 /// The same split-and-chunk oracle as the corpus, for each masked form on its own, in
 /// the middle of ordinary bytes and at both ends of a stream: a masked key split across any
 /// two pushes, or any three, is one redaction identical to the whole-record one.
-#[test]
-fn a_masked_key_split_across_any_chunk_boundary_is_one_redaction() {
+fn a_masked_key_split_across_any_chunk_boundary_is_one_redaction(shard: &Shard) {
     for form in MASKED_FORMS {
         // There is no left boundary: a mask is a mask after anything.
         for (input, masked) in [
@@ -3174,6 +3206,9 @@ fn a_masked_key_split_across_any_chunk_boundary_is_one_redaction() {
             (format!("\u{e9}{form}").into_bytes(), true),
             (format!("\u{300}{form}").into_bytes(), true),
         ] {
+            if !shard.mine() {
+                continue;
+            }
             let (want_bytes, want_spans) = legacy(&input);
             assert_eq!(
                 want_spans.iter().any(|s| s.kind == "masked_key"),
@@ -3218,13 +3253,13 @@ fn a_masked_key_split_across_any_chunk_boundary_is_one_redaction() {
     }
 }
 
+shards!(a_masked_key_around_the_hold_bound_is_never_retained, 8);
 /// The hold bound. A masked key that begins before, at or after the point where a long
 /// undecided run (an email local part, which every byte keeps live) forces the stream to
 /// fail closed is never retained: the stream may redact more than the whole-record policy
 /// (here, the whole rest of the line), never less. Swept across the bound, at several
 /// chunkings, with the key before the run, inside it and after it.
-#[test]
-fn a_masked_key_around_the_hold_bound_is_never_retained() {
+fn a_masked_key_around_the_hold_bound_is_never_retained(shard: &Shard) {
     let h = MAX_HELD_BYTES;
     let mut rng = Rng(0x5EC2E7);
     let mut failures = Vec::new();
@@ -3263,16 +3298,21 @@ fn a_masked_key_around_the_hold_bound_is_never_retained() {
                     }
                 }
                 input.push(b'\n');
+                // Drawn for every case, so each part sees the chunkings the unsplit loop saw.
+                let chunkings = [
+                    vec![MAX_SEGMENT_BYTES],
+                    random_chunks(&mut rng, 3000),
+                    vec![1, 7, 64],
+                ];
+                if !shard.mine() {
+                    continue;
+                }
                 let (_, want) = legacy(&input);
                 assert!(
                     want.iter().any(|s| s.kind == "masked_key"),
                     "{form} pad {pad} shape {shape}: the oracle sees the key"
                 );
-                for chunks in [
-                    vec![MAX_SEGMENT_BYTES],
-                    random_chunks(&mut rng, 3000),
-                    vec![1, 7, 64],
-                ] {
+                for chunks in chunkings {
                     let (bytes, got) = retained_of(
                         &stream_through(StreamRedactor::new(), &input, &chunks, 2),
                         1,
@@ -3954,14 +3994,14 @@ fn sse_strings(stream: &[u8]) -> String {
     out
 }
 
+shards!(a_key_streamed_as_sse_deltas_is_redacted_in_every_delta, 8);
 /// H-20 review: a key the model prints arrives as many SSE text deltas. Spread over 20 or more
 /// deltas in the Anthropic, chat-completions and Responses shapes, complete, cut off before its
 /// END, and with its END line split across two deltas (the BEGIN line whole in one delta), no
 /// 16-character run of the body survives, in the raw bytes or in the text rebuilt from the
 /// deltas (every string of every data line, decoded). Every data line still parses, the text past the bound is kept, and the stream at
 /// three chunkings, the whole-record policy and `spikes/redact.py` agree.
-#[test]
-fn a_key_streamed_as_sse_deltas_is_redacted_in_every_delta() {
+fn a_key_streamed_as_sse_deltas_is_redacted_in_every_delta(shard: &Shard) {
     const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
     const END: &str = "-----END PRIVATE KEY-----";
     let b64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -4017,6 +4057,9 @@ fn a_key_streamed_as_sse_deltas_is_redacted_in_every_delta() {
                 "{variant} seed {seed}: {key_deltas} deltas"
             );
             for shape in ["anthropic", "chat", "responses"] {
+                if !shard.mine() {
+                    continue;
+                }
                 let name = format!("{shape} {variant} seed {seed}");
                 let stream: String = deltas.iter().map(|d| sse_event(shape, d)).collect();
                 assert_eq!(
@@ -4048,9 +4091,14 @@ fn a_key_streamed_as_sse_deltas_is_redacted_in_every_delta() {
             }
         }
     }
-    assert!(checked > 10_000);
+    // Over 10,000 runs checked in all; each part checks its share.
+    assert!(checked * shard.parts() > 10_000, "{checked}");
 }
 
+shards!(
+    a_second_begin_inside_a_block_keeps_the_stream_equal_to_the_record,
+    4
+);
 /// H-20 re-review: a second BEGIN inside a lone BEGIN's block is no match to the whole-record
 /// regex (it lies inside the first match), but the stream held it to its own bound, so the first
 /// block outlived the hold and the stream failed closed: a one-line request body lost every
@@ -4058,11 +4106,13 @@ fn a_key_streamed_as_sse_deltas_is_redacted_in_every_delta() {
 /// 0.5, 4, 8 and 15.9 KB apart, in a one-line JSON body and in JSONL: the stream equals the
 /// whole-record policy at three chunkings (and `spikes/redact.py` agrees), every record parses,
 /// and every later turn's marker past the blocks is kept.
-#[test]
-fn a_second_begin_inside_a_block_keeps_the_stream_equal_to_the_record() {
+fn a_second_begin_inside_a_block_keeps_the_stream_equal_to_the_record(shard: &Shard) {
     const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
     for gap in [500usize, 4000, 8000, 15_900] {
         for one_line in [true, false] {
+            if !shard.mine() {
+                continue;
+            }
             let name = format!("gap {gap}, one line {one_line}");
             let (open, sep, close) = if one_line {
                 (r#"{"model":"m","messages":["#, ",", "]}\n")
@@ -4212,14 +4262,14 @@ fn key_lines(rng: &mut Rng, lines: usize) -> Vec<String> {
         .collect()
 }
 
+shards!(a_real_key_late_in_a_lone_begins_window_is_redacted_whole, 4);
 /// H-20 re-review 2: a lone BEGIN mention opens a window; a real key whose BEGIN falls late in
 /// it, with its END past the window, lost the tail past the bound. A window with no END now
 /// ends at the first BEGIN inside it, and that BEGIN opens its own. The real key's BEGIN at
 /// 12 to 16 KB after the mention, for RSA-2048 and RSA-4096 bodies, in JSONL and raw text: no
 /// 16-character run survives, and the stream, the whole-record policy and `spikes/redact.py`
 /// agree.
-#[test]
-fn a_real_key_late_in_a_lone_begins_window_is_redacted_whole() {
+fn a_real_key_late_in_a_lone_begins_window_is_redacted_whole(shard: &Shard) {
     const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
     const END: &str = "-----END PRIVATE KEY-----";
     let mut rng = Rng(0x1A7E_0B16);
@@ -4248,6 +4298,9 @@ fn a_real_key_late_in_a_lone_begins_window_is_redacted_whole() {
                 lines.join("\n")
             );
             for (shape, input) in [("jsonl", jsonl), ("raw", raw)] {
+                if !shard.mine() {
+                    continue;
+                }
                 let name = format!("{size} {shape} at {t}");
                 let (out, _) = all_three_agree(&name, input.as_bytes());
                 for line in &lines {
@@ -4266,14 +4319,17 @@ fn a_real_key_late_in_a_lone_begins_window_is_redacted_whole() {
     }
 }
 
+shards!(
+    a_run_across_the_end_of_a_lone_begins_window_keeps_the_stream_equal,
+    4
+);
 /// H-20 re-review 2: a base64url run (no `/`: a Codex `encrypted_content` value) that starts
 /// inside a lone BEGIN's window and crosses its end kept the email recognizer live from inside
 /// the window, so the whole window was held past the hold and the stream failed closed: a
 /// one-line body lost every later record. A decided window now leaves in parts, at its pieces
 /// (and its one cut at `PEM_SLICE`), so the stream equals the whole-record policy. The
 /// reviewer's runs, as `(start in the window, length)`, in JSONL and in a one-line body.
-#[test]
-fn a_run_across_the_end_of_a_lone_begins_window_keeps_the_stream_equal() {
+fn a_run_across_the_end_of_a_lone_begins_window_keeps_the_stream_equal(shard: &Shard) {
     const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
     let b64url = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let b64 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -4301,6 +4357,9 @@ fn a_run_across_the_end_of_a_lone_begins_window_keeps_the_stream_equal() {
             })
             .collect();
         for one_line in [false, true] {
+            if !shard.mine() {
+                continue;
+            }
             let name = format!("{class} {s}/{len} one line {one_line}");
             let (sep, open, close) = if one_line {
                 (",", r#"{"input":["#, "]}\n")
@@ -4342,6 +4401,10 @@ fn a_run_across_the_end_of_a_lone_begins_window_keeps_the_stream_equal() {
     }
 }
 
+shards!(
+    a_cut_right_after_a_backslash_leaves_nothing_between_the_two_markers,
+    6
+);
 /// H-20 re-review 3 (Important 1): a bounded window's cut at `PEM_SLICE` that fell right after
 /// a backslash left that backslash raw between the two markers. The stream decides the first
 /// part on the bytes up to the cut alone, where a piece loses the backslashes it ends on, so its
@@ -4357,8 +4420,7 @@ fn a_run_across_the_end_of_a_lone_begins_window_keeps_the_stream_equal() {
 /// chunkings equals the whole-record policy and `spikes/redact.py` (the raw `→` excepted: the
 /// script counts the bound in characters, so its block ends later in bytes); the two markers
 /// touch; every record parses; and no 16-character run of the key body survives.
-#[test]
-fn a_cut_right_after_a_backslash_leaves_nothing_between_the_two_markers() {
+fn a_cut_right_after_a_backslash_leaves_nothing_between_the_two_markers(shard: &Shard) {
     const BEGIN: &str = "-----BEGIN PRIVATE KEY-----";
     let b64url = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut rng = Rng(0x0BAC_51A5);
@@ -4481,6 +4543,10 @@ fn a_cut_right_after_a_backslash_leaves_nothing_between_the_two_markers() {
         };
         for &form in forms {
             for &k in &at {
+                cases += 1;
+                if !shard.mine() {
+                    continue;
+                }
                 let name = format!("{shape} {form} cut at {k}");
                 let probe = build(form, &format!("{piece}{run}"));
                 let begin = probe.find(BEGIN).unwrap();
@@ -4524,11 +4590,10 @@ fn a_cut_right_after_a_backslash_leaves_nothing_between_the_two_markers() {
                         }
                     }
                 }
-                cases += 1;
             }
         }
     }
-    assert!(cases >= 40, "{cases} cases swept");
+    assert!(cases >= 40, "{cases} cases swept, every part's included");
 }
 
 /// H-20 re-review 3 (Minor 2): `spikes/redact.py` had only the shell/TOML form of

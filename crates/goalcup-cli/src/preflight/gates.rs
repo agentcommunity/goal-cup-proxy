@@ -56,7 +56,7 @@ impl Check {
     /// `goalcup doctor` calls it for the daemon's, so the daemon's line and a connector's
     /// line cannot drift into two layouts that read as two reports.
     pub(crate) fn render(&self) -> String {
-        let mut out = format!("  {}  {:<16}{}\n", self.level.word(), self.id, self.detail);
+        let mut out = format!("  {}  {:<20}{}\n", self.level.word(), self.id, self.detail);
         if !self.fix.is_empty() {
             out.push_str(&format!("        fix: {}\n", self.fix));
         }

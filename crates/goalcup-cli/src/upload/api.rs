@@ -13,6 +13,59 @@ pub struct ErrorBody {
     pub message: String,
 }
 
+/// This program's version, as `POST /v1/device`, an open and a continue send it: under
+/// `proxy_version`, and under its name from before the rename to Goal Cup Proxy,
+/// `tracer_version`, with the same value, so a server of either age reads it. Read back, either
+/// name serves; when both are present they must agree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "VersionFields", try_from = "VersionFields")]
+pub struct ProxyVersion(pub String);
+
+impl ProxyVersion {
+    /// The version of this build.
+    pub fn current() -> ProxyVersion {
+        ProxyVersion(crate::CLI_VERSION.to_string())
+    }
+}
+
+impl From<&str> for ProxyVersion {
+    fn from(version: &str) -> ProxyVersion {
+        ProxyVersion(version.to_string())
+    }
+}
+
+/// [`ProxyVersion`] on the wire: both names.
+#[derive(Serialize, Deserialize)]
+struct VersionFields {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tracer_version: Option<String>,
+}
+
+impl From<ProxyVersion> for VersionFields {
+    fn from(version: ProxyVersion) -> VersionFields {
+        VersionFields {
+            tracer_version: Some(version.0.clone()),
+            proxy_version: Some(version.0),
+        }
+    }
+}
+
+impl TryFrom<VersionFields> for ProxyVersion {
+    type Error = String;
+
+    fn try_from(fields: VersionFields) -> Result<ProxyVersion, String> {
+        match (fields.proxy_version, fields.tracer_version) {
+            (Some(new), Some(old)) if new != old => {
+                Err("proxy_version and tracer_version differ".to_string())
+            }
+            (Some(version), _) | (None, Some(version)) => Ok(ProxyVersion(version)),
+            (None, None) => Err("missing field `proxy_version`".to_string()),
+        }
+    }
+}
+
 /// `POST /v1/runs`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenRunRequest {
@@ -22,7 +75,8 @@ pub struct OpenRunRequest {
     pub workspace: String,
     pub session_id: String,
     pub harness_version: String,
-    pub tracer_version: String,
+    #[serde(flatten)]
+    pub proxy_version: ProxyVersion,
     pub repo_url: String,
     /// What the machine is, without who it is ([`goalcup_platform::machine::facts`]). Left out
     /// when a caller has none to send.
@@ -41,7 +95,8 @@ pub struct ContinueRequest {
     pub workspace: String,
     pub session_id: String,
     pub harness_version: String,
-    pub tracer_version: String,
+    #[serde(flatten)]
+    pub proxy_version: ProxyVersion,
 }
 
 /// The answer to [`ContinueRequest`]: the new entry, and the run's own start and deadline.
@@ -53,7 +108,7 @@ pub struct ContinueRun {
     pub official_start: String,
     pub deadline_at: String,
     /// Whole seconds from the server's clock to `deadline_at` when it answered (0 once it has
-    /// come). The tracer counts the run down from this, never from this machine's date. An
+    /// come). Goal Cup Proxy counts the run down from this, never from this machine's date. An
     /// older server leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seconds_left: Option<u64>,
@@ -67,7 +122,7 @@ pub struct OpenRun {
     pub official_start: String,
     pub deadline_at: String,
     /// Whole seconds from the server's clock to `deadline_at` when it answered (0 once it has
-    /// come). The tracer counts the run down from this, never from this machine's date. An
+    /// come). Goal Cup Proxy counts the run down from this, never from this machine's date. An
     /// older server leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seconds_left: Option<u64>,
@@ -143,6 +198,33 @@ pub struct HeartbeatRequest {
     /// Model requests seen so far, cumulative. Left out with `recording`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_requests: Option<u64>,
+    /// The disk and goalcup's own processes. Left out with `recording`, and by a run that
+    /// has nothing to read them from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vitals: Option<HeartbeatVitals>,
+}
+
+/// The `vitals` of a heartbeat (`docs/UPLOAD-API.md`). A number that could not be read is left
+/// out, never guessed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeartbeatVitals {
+    /// Free bytes on the volume of the run's files (beyond the run's reservation, which is a
+    /// file there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_free_bytes: Option<u64>,
+    /// [`crate::run::reserve::short_of_disk`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_short: Option<bool>,
+    /// `"disk"` while goalcup has paused the agent for a nearly full disk, else `null`.
+    #[serde(default)]
+    pub agent_paused: Option<String>,
+    /// Summed over this `goalcup` process (with its recording proxy) and the daemon it started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rss_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_files: Option<u64>,
 }
 
 /// The answer to a heartbeat.
@@ -152,7 +234,7 @@ pub struct HeartbeatAnswer {
     pub stop: bool,
     pub deadline_at: String,
     /// Whole seconds from the server's clock to `deadline_at` when it answered (0 once it has
-    /// come). The tracer counts the run down from this, never from this machine's date. An
+    /// come). Goal Cup Proxy counts the run down from this, never from this machine's date. An
     /// older server leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seconds_left: Option<u64>,
@@ -193,5 +275,56 @@ impl StatusAnswer {
     /// The server says the run itself is over: sealed or incomplete.
     pub fn run_ended(&self) -> bool {
         matches!(self.run_status.as_deref(), Some("sealed" | "incomplete"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn continue_request(version: &str) -> ContinueRequest {
+        ContinueRequest {
+            previous_entry_id: "e0000000000000000".into(),
+            connector_id: "c".into(),
+            manifest_sha256: "0".repeat(64),
+            connector_dir_sha256: "0".repeat(64),
+            workspace: "/w".into(),
+            session_id: "s".into(),
+            harness_version: "h".into(),
+            proxy_version: version.into(),
+        }
+    }
+
+    /// The version goes out under both names with the same value, so a server from before the
+    /// rename and one after it both read it.
+    #[test]
+    fn the_version_is_sent_under_both_names() {
+        let sent = serde_json::to_value(continue_request("1.2.3-test")).unwrap();
+        assert_eq!(sent["proxy_version"], "1.2.3-test");
+        assert_eq!(sent["tracer_version"], "1.2.3-test");
+    }
+
+    /// Either name reads back; both must agree; one of them must be there.
+    #[test]
+    fn the_version_reads_from_either_name() {
+        let mut body = serde_json::to_value(continue_request("1.2.3-test")).unwrap();
+        let back: ContinueRequest = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(back.proxy_version, ProxyVersion::from("1.2.3-test"));
+        for (keep, drop) in [
+            ("proxy_version", "tracer_version"),
+            ("tracer_version", "proxy_version"),
+        ] {
+            let mut one = body.clone();
+            one.as_object_mut().unwrap().remove(drop);
+            assert!(one.get(keep).is_some());
+            let back: ContinueRequest = serde_json::from_value(one).unwrap();
+            assert_eq!(back.proxy_version.0, "1.2.3-test");
+        }
+        body["tracer_version"] = "9.9.9-test".into();
+        assert!(serde_json::from_value::<ContinueRequest>(body.clone()).is_err());
+        let fields = body.as_object_mut().unwrap();
+        fields.remove("tracer_version");
+        fields.remove("proxy_version");
+        assert!(serde_json::from_value::<ContinueRequest>(body).is_err());
     }
 }

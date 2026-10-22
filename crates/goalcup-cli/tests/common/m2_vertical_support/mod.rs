@@ -44,9 +44,6 @@ fn disk_spec(quota: u64) -> String {
     )
 }
 
-/// The one goal every run is given.
-pub const GOAL: &str = "exchange the controlled traffic plan through the recording proxy";
-
 /// The E02 sentinel's prefix, built at run time like the load's, so no source holds it.
 pub fn sentinel_prefix() -> Vec<u8> {
     [&b"sk-"[..], b"ant-"].concat()
@@ -65,7 +62,8 @@ pub struct Vertical {
     pub out: PathBuf,
     /// Every child's standard output and error, and every command's.
     pub logs: PathBuf,
-    pub goal: PathBuf,
+    /// The folder `goalcup start` is run from, where it makes the run's directory.
+    pub runs: PathBuf,
     upstream_pem: PathBuf,
     runtime: tokio::runtime::Runtime,
     endpoint: Option<ControlledEndpoint>,
@@ -80,6 +78,13 @@ impl Vertical {
     /// A daemon, an endpoint and a connector whose workload runs `mode`, with `extra` merged
     /// into its configuration.
     pub fn new(mode: &str, extra: Value) -> Vertical {
+        Vertical::new_logging_to(mode, extra, None)
+    }
+
+    /// [`Vertical::new`] with every child's output kept in `logs` instead of under the world's
+    /// root: the T25 disk-full rows put the root on a volume they fill, and a log on that volume
+    /// would fail together with the recording it is meant to explain.
+    pub fn new_logging_to(mode: &str, extra: Value, logs: Option<PathBuf>) -> Vertical {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         let dir = |name: &str| {
@@ -87,16 +92,17 @@ impl Vertical {
             std::fs::create_dir_all(&path).unwrap();
             path
         };
-        let (cfg, connectors, artifacts, out, logs) = (
-            dir("cfg"),
-            dir("connectors"),
-            dir("artifacts"),
-            dir("out"),
-            dir("logs"),
-        );
+        let (cfg, connectors, artifacts, out) =
+            (dir("cfg"), dir("connectors"), dir("artifacts"), dir("out"));
+        let logs = match logs {
+            Some(logs) => {
+                std::fs::create_dir_all(&logs).unwrap();
+                logs
+            }
+            None => dir("logs"),
+        };
         let (workspaces, home) = (dir("workspaces"), dir("home"));
-        let goal = dir("runs").join("goal.txt");
-        std::fs::write(&goal, GOAL).unwrap();
+        let runs = dir("runs");
 
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -161,7 +167,7 @@ impl Vertical {
             artifacts,
             out,
             logs,
-            goal,
+            runs,
             upstream_pem,
             runtime,
             endpoint: Some(endpoint),
@@ -177,7 +183,7 @@ impl Vertical {
     }
 
     /// `goalcup` with only this world's directories in its environment.
-    fn goalcup(&self) -> Command {
+    pub fn goalcup(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_goalcup"));
         command
             .env_clear()
@@ -200,15 +206,16 @@ impl Vertical {
         command
     }
 
-    /// `goalcup start --harness m2-controlled-workload --dev --goal-file GOAL`, with chains
-    /// limited to `reserve` bytes (`GOALCUP_TEST_DISK`), in a process group of its own, which
-    /// the harness joins.
+    /// `goalcup start --harness m2-controlled-workload --dev`, run from [`Vertical::runs`] with
+    /// no terminal (the test build's `GOALCUP_TEST_CHAT_WITHOUT_TERMINAL`), with chains limited
+    /// to `reserve` bytes (`GOALCUP_TEST_DISK`), in a process group of its own, which the
+    /// harness joins.
     pub fn start(&self, reserve: u64) -> Launcher {
         self.start_with(disk_spec(reserve), None)
     }
 
     /// [`Vertical::start`] with `GOALCUP_TEST_PAUSE_DIR` naming `pause_dir`: the launcher holds
-    /// at each point whose `<point>.arm` file is there (see `commands/start.rs::pause_at`).
+    /// at each point whose `<point>.arm` file is there (see `commands/start/mod.rs::pause_at`).
     pub fn start_paused(&self, reserve: u64, pause_dir: &Path) -> Launcher {
         self.start_with(disk_spec(reserve), Some(pause_dir))
     }
@@ -237,8 +244,9 @@ impl Vertical {
         use std::os::unix::process::CommandExt;
         let mut command = self.goalcup();
         command
-            .args(["start", "--harness", CONNECTOR, "--dev", "--goal-file"])
-            .arg(&self.goal)
+            .args(["start", "--harness", CONNECTOR, "--dev"])
+            .current_dir(&self.runs)
+            .env("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL", "1")
             .env("GOALCUP_TEST_DISK", disk)
             .env("GOALCUP_TEST_UPSTREAM_ROOTS", &self.upstream_pem);
         if let Some(dir) = pause_dir {
@@ -278,11 +286,23 @@ impl Vertical {
         serde_json::from_str(&out).unwrap()
     }
 
-    /// `goalcup seal ENTRY`: its exit, what it printed and how long it took.
+    /// `goalcup seal --yes ENTRY`: its exit, what it printed with the technical lines it kept in
+    /// the run's `host.log` after it, and how long it took.
     pub fn seal(&self, entry: &str) -> (ExitStatus, String, Duration) {
+        // A local run's id is its entry's.
+        let log =
+            goalcup_cli::run::run_dir(&self.cfg, entry).join(goalcup_cli::host_log::HOST_LOG_NAME);
+        // Only the lines this seal adds: the log keeps every earlier seal's too, and a second
+        // seal's report would otherwise carry the first one's.
+        let before = std::fs::read(&log).map_or(0, |kept| kept.len());
         let began = Instant::now();
-        let (status, out) = self.run("seal", &["seal", entry]);
-        (status, out, began.elapsed())
+        let (status, mut out) = self.run("seal", &["seal", "--yes", entry]);
+        let took = began.elapsed();
+        let kept = std::fs::read(&log).unwrap_or_default();
+        out.push_str(&String::from_utf8_lossy(
+            kept.get(before..).unwrap_or_default(),
+        ));
+        (status, out, took)
     }
 
     /// `goalcup-verify --capture-integrity TRACE`: its exit and its report.
@@ -336,9 +356,9 @@ impl Vertical {
         Chain::read(&self.trace(entry).join("chain.jsonl"))
     }
 
-    /// The run directory `goalcup start` made beside the goal file.
+    /// The run directory `goalcup start` made in [`Vertical::runs`].
     pub fn run_dir(&self) -> Option<PathBuf> {
-        std::fs::read_dir(self.goal.parent().unwrap())
+        std::fs::read_dir(&self.runs)
             .unwrap()
             .flatten()
             .map(|e| e.path())
@@ -400,7 +420,8 @@ impl Vertical {
     }
 
     /// The controlled endpoint's own request counters: what reached the upstream, counted
-    /// outside the workload, the proxy and the recorder. Only the crash campaign reads it.
+    /// outside the workload, the recording proxy and the recorder. Only the crash campaign reads
+    /// it.
     pub fn endpoint_counters(&self) -> endpoint::EndpointCounters {
         self.endpoint.as_ref().expect("the endpoint").counters()
     }
@@ -706,7 +727,7 @@ impl Chain {
             .collect()
     }
 
-    /// The producer of the proxy's first captured request: the launch's first wire epoch.
+    /// The producer of the recording proxy's first captured request: the launch's first wire epoch.
     pub fn first_wire_producer(&self) -> String {
         self.records()
             .find_map(|r| match r {

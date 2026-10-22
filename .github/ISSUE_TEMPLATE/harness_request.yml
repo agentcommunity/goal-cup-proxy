@@ -1,0 +1,57 @@
+name: Harness request
+description: Ask for a coding-agent harness to be supported, or offer to add one.
+labels: ["harness"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A harness is data, not code: one `connectors/<id>/harness.toml` and a facts sheet. If you
+        want to add it yourself, start with `skills/adding-a-capture-harness/SKILL.md` and
+        `docs/HARNESS-ONBOARDING.md` ("Check first" lists what most often blocks a harness).
+  - type: input
+    id: name
+    attributes:
+      label: Harness name
+      placeholder: Example CLI
+    validations:
+      required: true
+  - type: input
+    id: link
+    attributes:
+      label: Official site or download
+      description: Where the official release comes from.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version you use
+  - type: dropdown
+    id: chat
+    attributes:
+      label: Does it have a chat mode in a terminal?
+      description: Goal Cup Proxy runs every harness in chat mode, where the participant types the prompt.
+      options:
+        - "Yes"
+        - "No"
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: facts
+    attributes:
+      label: What you know about it
+      description: |
+        Any of these help: which model providers it talks to, whether it honours `HTTPS_PROXY`,
+        which variable sets its CA bundle, where it keeps its session files, and how it keeps its
+        sign-in without an environment key.
+  - type: dropdown
+    id: help
+    attributes:
+      label: Will you open the connector pull request?
+      options:
+        - Yes, I will open it
+        - I can help test it
+        - No, this is a request only
+    validations:
+      required: true

@@ -23,6 +23,7 @@
 //! still busy when that is spent.
 
 use crate::CliError;
+use crate::commands::say;
 use crate::entries::read_entry;
 use crate::retry::{BUSY_ATTEMPTS, retry_busy, retry_capture_seal, retry_capture_seal_until};
 use crate::upload::policy::WrapUp;
@@ -40,6 +41,144 @@ use std::path::Path;
 /// spelled twice is a binary that is one day spelled wrong in the place somebody copies from.
 pub(crate) const VERIFIER_BIN: &str = "goalcup-verify";
 
+/// Refuse `goalcup seal` run from inside the harness: `in_harness` is
+/// [`crate::launch::in_harness`], which every recording launch makes true in the harness's
+/// environment, so the agent cannot end its own segment by accident. A seal typed in another
+/// terminal is not in the harness, and the host's own seal at the end of a run does not come
+/// here.
+pub fn refuse_inside_harness(in_harness: bool) -> Result<(), CliError> {
+    if in_harness {
+        return Err(CliError::Refused(
+            crate::participant::seal_inside_harness().to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// `goalcup seal` as a person types it in their own terminal: ask first unless `yes`, seal, keep
+/// the technical lines in the run's `host.log`, and say in plain words what happened and what
+/// to do next. `input` is where the answer is read from (the terminal).
+pub fn seal_for_person(
+    client: &dyn DaemonClient,
+    connectors: &Path,
+    cfg: &Path,
+    entry_id: &str,
+    yes: bool,
+    input: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<(), CliError> {
+    let facts = PartFacts::of(cfg, connectors, entry_id);
+    if !yes {
+        confirm(
+            &crate::participant::seal_question(&facts.harness, facts.open_until.as_deref()),
+            input,
+            out,
+        )?;
+    }
+    let mut details = Vec::new();
+    let sealed = seal_entry(client, connectors, cfg, entry_id, &mut details);
+    // The technical lines go to the run's log; with no run folder here, they are shown.
+    let log = facts.log_path.as_deref().filter(|log| {
+        crate::host_log::open_append(log)
+            .and_then(|mut file| std::io::Write::write_all(&mut file, &details))
+            .is_ok()
+    });
+    if log.is_none() {
+        let _ = out.write_all(&details);
+    }
+    let outcome = sealed?;
+    let lines = crate::participant::seal_done(&crate::participant::SealDone {
+        harness: &facts.harness,
+        part_id: entry_id,
+        sealed: outcome != Some(LocalSealOutcome::SealWriteFailed),
+        go_on: facts
+            .go_on
+            .as_ref()
+            .map(|(run, until)| (run.as_str(), until.as_str())),
+        open_until: facts.open_until.as_deref(),
+        details: log,
+    });
+    for line in lines {
+        say(out, &line)?;
+    }
+    Ok(())
+}
+
+/// Ask `question` and read one answer from `input`: only "yes" goes on. Anything else, or no
+/// answer (no terminal), stops here with nothing done.
+pub fn confirm(
+    question: &str,
+    input: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<(), CliError> {
+    write!(out, "{question} ")
+        .and_then(|()| out.flush())
+        .map_err(|source| CliError::Io {
+            path: "stdout".to_string(),
+            source,
+        })?;
+    let mut answer = String::new();
+    let _ = input.read_line(&mut answer);
+    if answer.trim().eq_ignore_ascii_case("yes") {
+        return Ok(());
+    }
+    // The answer ended no line of its own when there was none.
+    let _ = writeln!(out);
+    Err(CliError::Refused(crate::participant::seal_not_confirmed()))
+}
+
+/// What the plain words of a seal name: the harness, the run's end while it stays open, and
+/// where the run's log is.
+struct PartFacts {
+    harness: String,
+    /// The run's end ([`crate::participant::end_words`]) while the run stays open.
+    open_until: Option<String>,
+    /// The run and its end, when `goalcup continue` can start its next part.
+    go_on: Option<(String, String)>,
+    log_path: Option<std::path::PathBuf>,
+}
+
+impl PartFacts {
+    fn of(cfg: &Path, connectors: &Path, entry_id: &str) -> PartFacts {
+        let record = read_entry(cfg, entry_id).ok();
+        let harness = record.as_ref().map_or_else(
+            || "the agent".to_string(),
+            |r| crate::commands::status::harness_name(Some(connectors), &r.connector_id, r.dev),
+        );
+        let Ok(Some(run)) = crate::run::of_entry(cfg, entry_id) else {
+            return PartFacts {
+                harness,
+                open_until: None,
+                go_on: None,
+                log_path: None,
+            };
+        };
+        let run_dir = crate::run::run_dir(cfg, &run.run_id);
+        let state = crate::run::read_state(&run_dir);
+        let now = crate::run::now_unix();
+        let over = crate::run::is_over(&run, state.as_ref(), now);
+        let left = crate::participant::run_seconds_left(&run, state.as_ref(), now);
+        let open_until = run
+            .deadline_at
+            .as_deref()
+            .filter(|_| run.server_url.is_some() && !over)
+            .map(|deadline| crate::participant::end_words(deadline, left));
+        let continuable = state.as_ref().is_some_and(|state| state.continuable);
+        let go_on = open_until
+            .clone()
+            .filter(|_| crate::run::can_continue(cfg, &run, continuable, over))
+            .map(|until| (run.run_id.clone(), until));
+        PartFacts {
+            harness,
+            open_until,
+            go_on,
+            log_path: run_dir
+                .is_dir()
+                .then(|| run_dir.join(crate::host_log::HOST_LOG_NAME)),
+        }
+    }
+}
+
 /// The testable half: everything except resolving a real client and a real config dir.
 ///
 /// `connectors`, `cfg` and `out` are parameters and not lookups for the reason the rest of
@@ -52,6 +191,17 @@ pub fn seal_with(
     entry_id: &str,
     out: &mut dyn std::io::Write,
 ) -> Result<(), CliError> {
+    seal_entry(client, connectors, cfg, entry_id, out).map(|_| ())
+}
+
+/// [`seal_with`], answering how the seal was written (`None`: no local finish was reported).
+fn seal_entry(
+    client: &dyn DaemonClient,
+    connectors: &Path,
+    cfg: &Path,
+    entry_id: &str,
+    out: &mut dyn std::io::Write,
+) -> Result<Option<LocalSealOutcome>, CliError> {
     // The cached record establishes which entry this machine means, and names its connector.
     let record = read_entry(cfg, entry_id)?;
     let status = retry_busy(|| client.status(entry_id));
@@ -77,9 +227,8 @@ pub fn seal_with(
                 }
                 Err(_) => crate::daemon::SLOW_CALL_TIMEOUT,
             };
-        // A standalone seal sends no counters and no native scope: whatever identity the
-        // harness printed after it was asked to stop is a later fact (seams design v2, 3).
-        finish_locally(client, entry_id, None, None, deadline, allowance, None, out)?;
+        // A standalone seal sends no counters.
+        let finish = finish_locally(client, entry_id, None, deadline, allowance, None, out)?;
         // The entry is sealed: the run's reserve is released if nothing will use it again (a run
         // with no server and no host holding it; a run all of whose entries are sent).
         if let Ok(Some(run)) = crate::run::of_entry(cfg, entry_id) {
@@ -91,7 +240,7 @@ pub fn seal_with(
                 crate::run::now_unix(),
             );
         }
-        return Ok(());
+        return Ok(Some(finish.seal));
     }
 
     // No capture status: the bare seal is the only one this command can send. The daemon
@@ -100,12 +249,12 @@ pub fn seal_with(
     // with `busy` (the route reads only the registry row), so the generic retry is enough.
     match retry_busy(|| client.seal(entry_id)) {
         Ok(_) => Err(CliError::Control(ControlError::Malformed(format!(
-            "the tracker answered the seal of entry {entry_id} with a pre-v5 seal report, which \
+            "goalcup's recorder answered the seal of part {entry_id} with a pre-v5 seal report, which \
              this build does not read"
         )))),
         Err(ControlError::Busy(said)) => Err(CliError::Refused(format!(
-            "the tracker is still busy with entry {entry_id} while retrying (up to {} attempts): {said}. \
-                 The entry is held, not broken, and no seal manifest was returned to this command. \
+            "goalcup's recorder is still busy with part {entry_id} while retrying (up to {} attempts): {said}. \
+                 The part is held, not broken, and no seal manifest was returned to this command. \
                  The daemon may still be completing a seal — wait a moment and \
                  run `goalcup seal {entry_id}` again.",
             BUSY_ATTEMPTS
@@ -122,8 +271,8 @@ pub fn seal_with(
 }
 
 /// Finish a local capture entry and say how it finished, where its trace is, and the one
-/// command that checks it. `proxy` is the launcher's proxy report: `goalcup start
-/// --goal-file` hands it over when its harness exits, and this command has none.
+/// command that checks it. `proxy` is the launcher's proxy report: `goalcup start` hands it
+/// over when its harness exits, and this command has none.
 ///
 /// The finish runs inside `deadline`, the one local-finish budget its caller started
 /// (CONTRACTS.md, C6 local finish budget). Every attempt states what remains of it, and its transport timeout
@@ -142,7 +291,6 @@ pub(crate) fn finish_locally(
     client: &dyn DaemonClient,
     entry_id: &str,
     proxy: Option<ProxyCounters>,
-    native_scope: Option<String>,
     deadline: std::time::Instant,
     termination_allowance: std::time::Duration,
     reconnect: Option<&Path>,
@@ -152,7 +300,6 @@ pub(crate) fn finish_locally(
         client,
         entry_id,
         proxy,
-        native_scope,
         deadline,
         termination_allowance,
         reconnect,
@@ -168,7 +315,6 @@ pub(crate) fn seal_locally(
     client: &dyn DaemonClient,
     entry_id: &str,
     proxy: Option<ProxyCounters>,
-    native_scope: Option<String>,
     deadline: std::time::Instant,
     termination_allowance: std::time::Duration,
     reconnect: Option<&Path>,
@@ -177,7 +323,6 @@ pub(crate) fn seal_locally(
         client,
         entry_id,
         proxy,
-        native_scope,
         deadline,
         WrapUp::one_attempt(),
         termination_allowance,
@@ -191,14 +336,13 @@ pub(crate) fn seal_locally(
 /// again).
 ///
 /// The first attempt is within `first_deadline`, the one local-finish budget its caller took
-/// (and shared with the proxy's stop and the tees); each later attempt has a whole budget of its
-/// own, and follows a daemon restarted since the one before.
+/// (and shared with the recording proxy's stop and the tees); each later attempt has a whole budget
+/// of its own, and follows a daemon restarted since the one before.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn seal_locally_until(
     client: &dyn DaemonClient,
     entry_id: &str,
     proxy: Option<ProxyCounters>,
-    native_scope: Option<String>,
     first_deadline: std::time::Instant,
     until: WrapUp,
     termination_allowance: std::time::Duration,
@@ -223,7 +367,6 @@ pub(crate) fn seal_locally_until(
             let request = CaptureSealRequest {
                 proxy,
                 remaining_finish_ms: Some(u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)),
-                native_scope: native_scope.clone(),
             };
             waited = crate::daemon::capture_seal_read_timeout(remaining, termination_allowance);
             // A daemon restarted since the caller's client was built is at another port or
@@ -258,13 +401,21 @@ pub(crate) fn report_local_finish(
             out,
             &format!("entry {entry_id}: finished locally; {terminal} and seal.json binds it."),
         )?,
-        LocalSealOutcome::SealWriteFailed => say(
-            out,
-            &format!(
-                "entry {entry_id}: finished locally, but seal.json could not be written \
-                 ({terminal}), so the trace reads incomplete."
-            ),
-        )?,
+        LocalSealOutcome::SealWriteFailed => {
+            // With its terminal chained, the tracker writes seal.json again on the next seal.
+            let again = if finish.terminal_seq.is_some() {
+                format!(" Once there is disk space, run `goalcup seal {entry_id}` again.")
+            } else {
+                String::new()
+            };
+            say(
+                out,
+                &format!(
+                    "entry {entry_id}: finished locally, but seal.json could not be written \
+                     ({terminal}), so the trace reads incomplete.{again}"
+                ),
+            )?
+        }
     }
     // A run opened on an upload server carries its signed start receipt in the trace.
     let receipt =
@@ -314,16 +465,16 @@ fn torn_entry_refusal(cfg: &Path, entry_id: &str, daemon_said: &str) -> CliError
             crate::run::reopen_failed_sentence(&entry_id),
             crate::run::reopen_failed_next(&run_id)
         ),
-        None => "This entry can be neither sealed nor resumed, so start a new run for new work."
+        None => "This part can be neither sealed nor resumed, so start a new run for new work."
             .to_string(),
     };
     CliError::Refused(format!(
-        "Entry {entry_id} cannot be sealed: the tracker holds its record but could not reopen its \
+        "Part {entry_id} cannot be sealed: goalcup holds its record but could not reopen its \
          trace (it is torn or unreadable, for example a write cut short), so there is no open \
          capture to finish. Nothing was sealed, written or repaired: the trace bytes are preserved \
          exactly as the crash left them. Read what survives with `{VERIFIER_BIN} \
-         --capture-integrity <the entry's trace directory>` (the tracker keeps it under its \
-         artifact root, in a folder named {entry_id}). {todo} (The tracker said: {daemon_said})"
+         --capture-integrity <the part's trace directory>` (goalcup keeps it under its \
+         artifact root, in a folder named {entry_id}). {todo} (goalcup's recorder said: {daemon_said})"
     ))
 }
 
@@ -337,33 +488,33 @@ fn capture_finish_refusal(
     let admitted = !failure.not_admitted();
     match failure.into_error() {
         ControlError::FinishDeadline(stage) if stage == "run_lock" => CliError::Refused(format!(
-            "Another finish of entry {entry_id} is still in progress. Run `goalcup seal \
+            "Another finish of part {entry_id} is still in progress. Run `goalcup seal \
              {entry_id}` again to read its result."
         )),
         ControlError::FinishDeadline(stage) => CliError::Refused(format!(
-            "Entry {entry_id} did not finish within its {}-second local budget (stopped before \
-             {stage}). Nothing terminal was written and the entry is still open. Run `goalcup \
-             seal {entry_id}` to finish it; its trace will read incomplete.",
+            "Part {entry_id} did not finish within {} seconds (stopped before {stage}). It is \
+             still open. Run `goalcup seal {entry_id}` to finish it; it will be marked \
+             incomplete.",
             crate::finish_budget().as_secs()
         )),
         // A transport failure or a read timeout after the request was written: the daemon may
         // still commit this finish, and a later seal answers a committed one unchanged.
         ControlError::Unreachable(_) if admitted => CliError::Refused(format!(
-            "The tracker did not answer the finish of entry {entry_id} within {}s. It may still \
+            "goalcup's recorder did not answer the finish of part {entry_id} within {}s. It may still \
              complete it. Run `goalcup seal {entry_id}`: a finish it already committed is \
              answered unchanged.",
             waited.as_secs()
         )),
         error @ (ControlError::Unreachable(_) | ControlError::Unauthorized(_)) => {
             CliError::Refused(format!(
-                "Entry {entry_id} was not finished: the tracker refused this command's \
+                "Part {entry_id} was not finished: goalcup's recorder refused this command's \
                  connection or credentials ({error}) before the finish began. Run `goalcup seal \
                  {entry_id}`."
             ))
         }
         ControlError::Busy(said) => CliError::Refused(format!(
-            "the tracker is still busy with entry {entry_id} while retrying (the {}-second \
-             finish budget leaves no room for another attempt): {said}. The entry is held, not \
+            "goalcup's recorder is still busy with part {entry_id} while retrying (the {}-second \
+             finish budget leaves no room for another attempt): {said}. The part is held, not \
              broken. Run `goalcup seal {entry_id}` again.",
             crate::finish_budget().as_secs()
         )),
@@ -371,13 +522,13 @@ fn capture_finish_refusal(
     }
 }
 
-/// What the tracker says of the harness's end, in words. The variant name leads (it is what the
+/// What goalcup says of the harness's end, in words. The variant name leads (it is what the
 /// record and the verifier call the outcome), and a stop that could not be confirmed says what
 /// to check.
 pub(crate) fn render_termination(outcome: &TerminationOutcomeV1) -> String {
     match outcome {
         TerminationOutcomeV1::AlreadyStopped { checked_at } => format!(
-            "AlreadyStopped, the harness had already ended when the tracker checked at {}",
+            "AlreadyStopped, the harness had already ended when goalcup checked at {}",
             checked_at.as_str()
         ),
         TerminationOutcomeV1::Confirmed {
@@ -395,7 +546,7 @@ pub(crate) fn render_termination(outcome: &TerminationOutcomeV1) -> String {
             stopped_waiting_at,
             reason,
         } => format!(
-            "Unresolved, the harness was asked to stop at {} and the tracker gave up waiting at \
+            "Unresolved, the harness was asked to stop at {} and goalcup gave up waiting at \
              {} (reason: {}), so its stop is not confirmed; check that no process of this run \
              is still running before you start another in this folder",
             requested_at.as_str(),
@@ -425,16 +576,18 @@ fn wire_words<T: serde::Serialize>(value: &T) -> String {
     }
 }
 
-/// One line to the participant, or the write error naming the stream.
-fn say(out: &mut dyn std::io::Write, line: &str) -> Result<(), CliError> {
-    writeln!(out, "{line}").map_err(|source| CliError::Io {
-        path: "stdout".to_string(),
-        source,
-    })
-}
-
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn seal_refuses_inside_the_harness_and_runs_without_the_marker() {
+        let refused = super::refuse_inside_harness(true);
+        assert!(
+            matches!(&refused, Err(crate::CliError::Refused(said)) if said.contains("another terminal")),
+            "{refused:?}"
+        );
+        assert!(super::refuse_inside_harness(false).is_ok());
+    }
+
     use super::render_termination;
     use goalcup_protocol::provenance::{
         Rfc3339Utc, TerminationFailureV1, TerminationMethodV1, TerminationOutcomeV1,
@@ -478,6 +631,92 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    /// A person's `goalcup seal` asks first, and only "yes" stops anything; `--yes` asks
+    /// nothing. Once sealed it says, in plain words, that the run stays open and how to go on,
+    /// and the technical lines go to the run's host.log, not the terminal.
+    #[test]
+    fn a_persons_seal_asks_first_unless_yes_and_says_how_to_go_on() {
+        use crate::daemon::MockDaemonClient;
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("cfg");
+        let mock = MockDaemonClient::armed_ok(tmp.path(), "fake");
+        let part = mock.info().entry_id;
+        crate::entries::write_entry(&cfg, &mock.info()).unwrap();
+        let far = crate::run::now_unix() + 3_600;
+        crate::run::tests_support::continuable_run(&cfg, "run-open", &part, far);
+        let connectors = tmp.path().join("no-connectors");
+        let seals =
+            |mock: &MockDaemonClient| mock.calls().iter().filter(|c| *c == "seal_capture").count();
+
+        // Anything but yes: nothing is stopped.
+        for answer in ["no\n", "", "y\n"] {
+            let mut out = Vec::new();
+            let refused = super::seal_for_person(
+                &mock,
+                &connectors,
+                &cfg,
+                &part,
+                false,
+                &mut answer.as_bytes(),
+                &mut out,
+            )
+            .unwrap_err();
+            let asked = String::from_utf8(out).unwrap();
+            assert!(asked.contains("This stops"), "{asked}");
+            assert!(asked.contains("Your run stays open until"), "{asked}");
+            assert!(asked.contains("Type yes to stop it."), "{asked}");
+            assert!(
+                refused.to_string().contains("Nothing was stopped"),
+                "{refused}"
+            );
+            assert_eq!(seals(&mock), 0, "{answer:?}");
+        }
+
+        // `--yes`: no question, and nothing is read.
+        let mut out = Vec::new();
+        super::seal_for_person(
+            &mock,
+            &connectors,
+            &cfg,
+            &part,
+            true,
+            &mut "no\n".as_bytes(),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(seals(&mock), 1);
+        let said = String::from_utf8(out).unwrap();
+        assert!(!said.contains("Type yes"), "{said}");
+        assert!(
+            said.trim_end().ends_with(
+                "To go on: goalcup continue run-open. If your work is done, nothing else is \
+                 needed."
+            ),
+            "{said}"
+        );
+        for word in ["anchor", "trace", "verify", "chain", "entry", "tracker"] {
+            assert!(!said.contains(word), "{word}: {said}");
+        }
+        let log = std::fs::read_to_string(
+            crate::run::run_dir(&cfg, "run-open").join(crate::host_log::HOST_LOG_NAME),
+        )
+        .unwrap();
+        assert!(log.contains("--capture-integrity"), "{log}");
+
+        // A typed yes seals too.
+        super::seal_for_person(
+            &mock,
+            &connectors,
+            &cfg,
+            &part,
+            false,
+            &mut "yes\n".as_bytes(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(seals(&mock), 2);
     }
 
     /// `goalcup seal` on an entry the tracker could not reopen says what `goalcup doctor` says:

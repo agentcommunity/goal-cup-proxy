@@ -1,0 +1,43 @@
+schema_version = 1
+id = "kit-synthetic-per-run"
+
+[capture]
+interactive = true
+args = ["-I", "-S", "@STAND_IN@", "@PORT@", "@TEST_ID@", "@MARKER@", "@GO@"]
+continuation = "one offline echo and one snapshot in a per-run home"
+
+[capture.executable]
+program = "python3"
+
+[capture.home]
+run_home = "empty"
+config_home = "per_run"
+env = "SYNTHJSON_HOME"
+per_run_dir = "stdout-home"
+dirs = ["cache/data", ".config/tool", "cache", ".config/tool", "snapshots"]
+seed = [{ file = "implicit/seed/settings.json", mode = "0400" }]
+real_dirs = ["{user_home}/.codex", "{user_home}/.claude", "{user_home}/.hermes"]
+
+[capture.ca]
+env = ["NODE_EXTRA_CA_CERTS"]
+mode = "extend"
+
+[capture.identity]
+source = "none"
+
+[[capture.native]]
+name = "per-run-case"
+root = "{config_home}"
+pattern = "snapshots/*.json"
+form = "snapshot"
+
+[capture.argv_guard]
+long = ["profile", "help"]
+short = ["V"]
+short_with_value = ["c"]
+long_abbreviations = true
+
+[[capture.hosts]]
+host = "api.e00.localhost"
+evidence_paths = ["/v1/echo"]
+protocol_hint = "kit-json-wire"

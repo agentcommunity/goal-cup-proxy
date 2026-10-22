@@ -28,8 +28,6 @@ use std::time::{Duration, Instant};
 
 /// The registered root in every scenario.
 const ROOT: u32 = 100;
-/// The module's own ceiling; the sim never approaches it.
-const WALK_CAP: usize = 4_096;
 /// The poll interval the module sleeps between sweeps, so a scenario can count in polls.
 const POLL: Duration = Duration::from_millis(50);
 
@@ -935,7 +933,7 @@ fn sorted(v: &[u32]) -> Vec<u32> {
 }
 
 fn run(sim: &Sim, handle: &ProcessHandle) -> Result<TerminationReport, ProcessError> {
-    terminate_with(handle, WALK_CAP, sim)
+    terminate_with(handle, sim)
 }
 
 // ─── Green: the sim and the seam agree with process_kill on the ordinary cases ──────────
@@ -1305,49 +1303,8 @@ fn claude_shape_bash_tool_orphaned_child_dies_late() {
     }
 }
 
-/// The same Bash-tool shape, but the grandchild ignores SIGTERM — a server
-/// the tool started that traps it. `sh` dies on its SIGTERM and orphans the ignorer alive.
-///
-/// Ignored: its first line, `!observed_gone`, assumes the orphan survives the call; it
-/// does not — it is SIGKILLed by its recorded identity, nothing of ours is alive, and
-/// `observed_gone` is the correct answer.
-/// `claude_shape_bash_tool_orphaned_ignorer_is_killed` below asserts that behaviour.
-#[test]
-#[ignore = "F7 closed: this scenario's `!observed_gone` line asserts the orphan survives; it is SIGKILLed now — see claude_shape_bash_tool_orphaned_ignorer_is_killed"]
-fn claude_shape_bash_tool_orphaned_child_ignores_term() {
-    for platform in [Platform::Macos, Platform::Linux] {
-        let tree = node(
-            ROOT,
-            "claude",
-            false,
-            OnTerm::DiesAfterPolls(1),
-            vec![node(
-                101,
-                "sh",
-                false,
-                OnTerm::DiesAfterPolls(0),
-                vec![leaf(102, "sleep", false, OnTerm::Ignores)],
-            )],
-        );
-        let sim = Sim::new(platform, tree, vec![]);
-        let handle = sim.handle(None, None);
-        let report = run(&sim, &handle).expect("a live claude tree terminates");
-        let w = sim.world();
-        assert!(!report.observed_gone, "I1: {platform:?}: {report:?}");
-        let unnamed: Vec<u32> = w
-            .alive_born()
-            .into_iter()
-            .filter(|pid| !report.still_alive.contains(pid))
-            .collect();
-        assert!(
-            unnamed.is_empty() && report.killed == vec![102],
-            "F7 {platform:?}: the orphan must be SIGKILLed or named.\n\
-             alive-and-unnamed={unnamed:?}\n{report:?}\n{}",
-            w.describe()
-        );
-    }
-}
-
+/// The same Bash-tool shape, but the grandchild ignores SIGTERM: a server the tool started
+/// that traps it. `sh` dies on its SIGTERM and orphans the ignorer alive (F7).
 /// The orphaned SIGTERM-ignorer is chosen for SIGKILL by its recorded
 /// identity — the phase-A gate follows it out of the lineage — and the signal is authorised
 /// by that identity too, so it dies, is named in `killed`, and the tree is observed gone.
@@ -1495,32 +1452,8 @@ fn f8_orphaned_member_clears_phase_a_gate() {
 }
 
 /// The root exits at poll 1 of its own accord. `codex`, already signalled, forks a
-/// replacement at poll 2 and exits at poll 3.
+/// replacement at poll 2 and exits at poll 3 (F8).
 ///
-/// Ignored: the escapee is adopted from the live `codex` under a `Closed` anchor,
-/// SIGKILLed by its own identity, and `observed_gone` is the correct answer with nothing of
-/// ours alive, so this scenario's `!observed_gone` line does not hold.
-/// `fork_after_root_self_exit_is_adopted_from_the_live_member`
-/// asserts that behaviour on both platforms.
-#[test]
-#[ignore = "F8 closed: this scenario asserted the witness's fail-closed refusal over an escapee that is now adopted and killed — see fork_after_root_self_exit_is_adopted_from_the_live_member"]
-fn macos_witness_refuses_fork_after_root_self_exit() {
-    let sim = Sim::new(
-        Platform::Macos,
-        root_self_exit_then_fork_tree(),
-        vec![(1, Event::Exit { pid: ROOT })],
-    );
-    let handle = sim.handle(None, Some("codex"));
-    let report = run(&sim, &handle).expect("a live tree terminates");
-    let w = sim.world();
-    assert!(
-        !report.observed_gone,
-        "I1: observed_gone over the escapee {:?}\n{report:?}\n{}",
-        w.alive_born(),
-        w.describe()
-    );
-}
-
 /// On Linux, with no fork witness. The fork at poll 2 happens while `codex` is
 /// alive and identity-verified, so a walk from `codex` names pid 102, even with the anchor
 /// `Closed` by the root's own exit; the walk runs and the escapee dies.
@@ -1818,6 +1751,12 @@ enum RootRead {
     /// root never exits: a process with no readable argv that stays live is not provably the
     /// registered program.
     ArgvGoneWhileLive { after_kills: usize },
+    /// macOS's exit window: once `after_kills` signals have been delivered, the root's start
+    /// identity cannot be read (`proc_pidinfo` fails for a dying process) while `ps` still shows
+    /// it in state `E`, so `liveness` answers live for `live_reads` reads before it is gone.
+    /// Measured on the 22 Oct smokes (Amp and Codex roots, 30 to 45 ms): the guard read the
+    /// unreadable identity as a recycled number and the seal was `Unresolved`.
+    StartGoneExitsAfterReads { after_kills: usize, live_reads: i64 },
     /// The argv read answers a program the launch never registered, and the root stays live.
     RenamedWhileLive,
     /// The same, but only once `after_kills` signals have been delivered.
@@ -1932,6 +1871,17 @@ impl ProcessOs for RacingRoot {
                     self.sim.start_identity(pid)
                 }
             }
+            RootRead::StartGoneExitsAfterReads {
+                after_kills,
+                live_reads,
+            } if self.sim.world().kills.len() >= after_kills => {
+                // Every read while the exit is pending finds nothing; the first one starts it.
+                if !self.fired.swap(true, SeqCst) {
+                    self.exit_in.store(live_reads, SeqCst);
+                }
+                None
+            }
+            RootRead::StartGoneExitsAfterReads { .. } => self.sim.start_identity(pid),
             RootRead::Stranger => Some("sim:stranger".to_string()),
             RootRead::UnreadableWhileLive => None,
             RootRead::ArgvGoneThenExits { .. }
@@ -1990,7 +1940,7 @@ fn a_root_that_exits_between_the_guards_reads_after_a_signal_is_a_closed_anchor_
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::ExitsAfterKills { after_kills: 1 });
-        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let report = terminate_with(&handle, &os).expect("the chase completes");
         let w = sim.world();
         assert!(
             os.fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -2020,8 +1970,8 @@ fn a_root_that_exits_between_the_guards_reads_before_any_signal_is_absent_not_re
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::ExitsAfterKills { after_kills: 0 });
-        let report = terminate_with(&handle, WALK_CAP, &os)
-            .expect("an exited root is an absent root, not a refusal");
+        let report =
+            terminate_with(&handle, &os).expect("an exited root is an absent root, not a refusal");
         let w = sim.world();
         assert!(
             report.harness_unverified && !report.all_gone && !report.observed_gone,
@@ -2043,8 +1993,7 @@ fn a_different_creation_identity_at_the_root_is_still_refused_as_recycled() {
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::Stranger);
-        let err = terminate_with(&handle, WALK_CAP, &os)
-            .expect_err("a recycled pid has no safe termination");
+        let err = terminate_with(&handle, &os).expect_err("a recycled pid has no safe termination");
         assert!(err.to_string().contains("recycled"), "{platform:?}: {err}");
         assert!(sim.world().kills.is_empty(), "{platform:?}");
     }
@@ -2058,7 +2007,7 @@ fn an_unreadable_creation_identity_on_a_live_root_is_still_refused() {
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::UnreadableWhileLive);
-        let err = terminate_with(&handle, WALK_CAP, &os)
+        let err = terminate_with(&handle, &os)
             .expect_err("a live root with no readable identity is not signalled");
         assert!(err.to_string().contains("recycled"), "{platform:?}: {err}");
         assert!(sim.world().kills.is_empty(), "{platform:?}");
@@ -2076,7 +2025,7 @@ fn a_root_whose_argv_is_gone_because_it_is_exiting_after_a_signal_is_not_a_loss(
         // After the worker's signal. The measured case was the root's own SIGTERM; both reach
         // the guard through `sweep_anchor`, and this root exits once its worker is signalled.
         let os = RacingRoot::new(&sim, RootRead::ArgvGoneThenExits { after_kills: 1 });
-        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let report = terminate_with(&handle, &os).expect("the chase completes");
         let w = sim.world();
         assert!(
             os.fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -2108,7 +2057,7 @@ fn a_root_still_exiting_at_the_guards_second_read_is_not_a_loss() {
                 live_reads: 3,
             },
         );
-        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let report = terminate_with(&handle, &os).expect("the chase completes");
         let w = sim.world();
         assert!(
             os.fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -2124,6 +2073,71 @@ fn a_root_still_exiting_at_the_guards_second_read_is_not_a_loss() {
     }
 }
 
+/// macOS's exit window after a signal: the root's start identity is already unreadable while
+/// `liveness` still reads its `E` state as live for a few reads. The guard waits for the exit
+/// as it does for an empty argv, and the seal is the kill working, not a recycled number.
+#[test]
+fn a_root_whose_start_identity_is_gone_because_it_is_exiting_is_not_a_loss() {
+    for platform in [Platform::Macos, Platform::Linux] {
+        let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
+        let handle = sim.handle(None, None);
+        let os = RacingRoot::new(
+            &sim,
+            RootRead::StartGoneExitsAfterReads {
+                after_kills: 1,
+                live_reads: 3,
+            },
+        );
+        let report = terminate_with(&handle, &os).expect("the chase completes");
+        let w = sim.world();
+        assert!(
+            os.fired.load(std::sync::atomic::Ordering::SeqCst),
+            "{platform:?}: the interleaving was never injected\n{}",
+            w.describe()
+        );
+        assert!(
+            report.observed_gone && !report.harness_unverified,
+            "{platform:?}: an exiting root's unreadable identity lost the chase: {report:?}\n{}",
+            w.describe()
+        );
+        assert!(w.alive_born().is_empty(), "{platform:?}:\n{}", w.describe());
+    }
+}
+
+/// The wait is bounded and changes no refusal: a root whose start identity stays unreadable
+/// while it stays live past the wait is still a lost anchor, and it is never signalled again.
+#[test]
+fn a_root_with_no_readable_start_identity_still_live_after_the_wait_is_a_loss() {
+    for platform in [Platform::Macos, Platform::Linux] {
+        let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
+        let handle = sim.handle(None, None);
+        let os = RacingRoot::new(
+            &sim,
+            RootRead::StartGoneExitsAfterReads {
+                after_kills: 1,
+                live_reads: i64::MAX,
+            },
+        );
+        let report = terminate_with(&handle, &os).expect("the chase completes");
+        let w = sim.world();
+        assert!(
+            os.fired.load(std::sync::atomic::Ordering::SeqCst),
+            "{platform:?}: the interleaving was never injected\n{}",
+            w.describe()
+        );
+        assert!(
+            report.harness_unverified && !report.observed_gone,
+            "{platform:?}: {report:?}\n{}",
+            w.describe()
+        );
+        assert!(
+            w.kills.iter().all(|k| k.pid != ROOT),
+            "{platform:?}: a root with no readable identity was signalled: {:?}",
+            w.kills
+        );
+    }
+}
+
 /// The wait is bounded and changes no refusal: a root whose argv stays `[sh]` while it stays
 /// live is still a lost anchor, and the root itself is never signalled.
 #[test]
@@ -2132,7 +2146,7 @@ fn a_live_root_with_no_readable_argv_is_still_a_loss() {
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::ArgvGoneWhileLive { after_kills: 1 });
-        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let report = terminate_with(&handle, &os).expect("the chase completes");
         let w = sim.world();
         assert!(
             os.fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -2160,8 +2174,8 @@ fn a_live_root_running_another_program_is_still_refused() {
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::RenamedWhileLive);
-        let report = terminate_with(&handle, WALK_CAP, &os)
-            .expect("a renamed root is reported, not an error");
+        let report =
+            terminate_with(&handle, &os).expect("a renamed root is reported, not an error");
         // `guard_degraded` is what only the renamed-argv report sets for a handle with an
         // argv; an absent root's report would pass every other assertion here.
         assert!(
@@ -2183,7 +2197,7 @@ fn a_live_root_renamed_after_a_signal_is_still_a_loss() {
         let sim = Sim::new(platform, root_waiting_on_one_worker(), vec![]);
         let handle = sim.handle(None, None);
         let os = RacingRoot::new(&sim, RootRead::RenamedAfterKills { after_kills: 1 });
-        let report = terminate_with(&handle, WALK_CAP, &os).expect("the chase completes");
+        let report = terminate_with(&handle, &os).expect("the chase completes");
         let w = sim.world();
         assert!(
             os.fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -2220,7 +2234,7 @@ fn a_live_root_identity_lost_at_any_read_boundary_never_reports_observed_gone() 
             let sim = Sim::new(platform, tree, vec![]);
             let handle = sim.handle(None, None);
             let os = RacingRoot::new(&sim, RootRead::UnreadableAfterReads { after_reads });
-            let result = terminate_with(&handle, WALK_CAP, &os);
+            let result = terminate_with(&handle, &os);
             if !os.fired.load(std::sync::atomic::Ordering::SeqCst) {
                 continue;
             }

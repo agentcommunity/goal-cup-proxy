@@ -1,7 +1,7 @@
 // The Worker's bindings, variables and secrets. See README.md for what each one is.
 
 export interface Env {
-  /** R2 bucket: raw chunks under traces/…; (local backend only) state under state/…. */
+  /** R2 bucket: raw chunks under traces/…; the cron's health marker at cron/health.json (src/notices.ts); (local backend only) state under state/…. */
   TRACES: R2Bucket;
 
   /** Event that new competition runs belong to, e.g. "cup". */
@@ -14,6 +14,12 @@ export interface Env {
   RUN_HOURS?: string;
   /** Practice run length in minutes (default 10). */
   PRACTICE_RUN_MINUTES?: string;
+  /**
+   * The most compressed bytes one run may hold in R2, over all its entries (default 68719476736,
+   * 64 GiB). A chunk that would take the run past it is refused with 413 quota_exceeded and nothing
+   * is stored; goalcup keeps the data and retries, so raising this resumes the upload.
+   */
+  RUN_MAX_COMPRESSED_BYTES?: string;
   /**
    * Tests only, DB_BACKEND=local only: run length in seconds; seconds after a run ends until it is
    * closed (default 24 h); and the competition start window (RFC 3339, `2026-11-06T09:00:00Z`;

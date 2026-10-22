@@ -1,7 +1,7 @@
 //! The stand-in's run lifecycle against `UPLOAD-API.md`: one main run per account (a later start
 //! replaces the earlier), practice runs, the start window, `continue` and its segments, and the
 //! close 24 hours after a run ends. The Worker's own tests (`server/worker/test/lifecycle.test.ts`
-//! and `segments.test.ts`) hold the same rules, so the tracer's tests can trust this stand-in.
+//! and `segments.test.ts`) hold the same rules, so goalcup's tests can trust this stand-in.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -228,7 +228,7 @@ impl Rig {
                 "workspace": "/tmp/run-1/two",
                 "session_id": session,
                 "harness_version": "9",
-                "tracer_version": "0.2.0",
+                "proxy_version": "0.2.0",
             })),
             b"",
         )
@@ -415,28 +415,26 @@ fn practice_never_replaces_and_has_no_window_and_its_own_length() {
 }
 
 #[test]
-fn a_test_start_replaces_only_an_open_test_run_and_a_competition_start_leaves_it() {
+fn test_runs_of_one_operator_run_side_by_side_and_a_competition_start_leaves_them() {
     let rig = Rig::new();
     let [t1c, t2c] = [(); 2].map(|_| rig.server.mint_test_credential("member-1"));
     let [c1, c2] = [(); 2].map(|_| rig.server.mint_credential("member-1"));
     let t1 = rig.start(&t1c, "t1");
     assert_eq!(rig.server.mode(&t1.run).as_deref(), Some("test"));
-    // A competition start does not end the test run, and a test start does not end it either
-    // until it is itself a test start.
+    // A competition start does not end the test run.
     let c1 = rig.start(&c1, "c1");
     assert_eq!(rig.server.replaced_at(&t1.run), None);
-    assert_eq!(
-        rig.beat(&t1, &t1.entry, 0, GENESIS, false).body["stop"],
-        false
-    );
-    // A test start replaces the open test run, and only that one.
+    // A second test start ends nothing: both test runs stay open and beating.
     let t2 = rig.start(&t2c, "t2");
-    assert!(rig.server.replaced_at(&t1.run).is_some());
+    for t in [&t1, &t2] {
+        assert_eq!(rig.server.replaced_at(&t.run), None);
+        assert_eq!(rig.beat(t, &t.entry, 0, GENESIS, false).body["stop"], false);
+    }
     assert_eq!(rig.server.replaced_at(&c1.run), None);
-    assert_eq!(rig.server.replaced_at(&t2.run), None);
-    // And a second competition start replaces the competition run, not the test one.
+    // And a second competition start replaces the competition run, not the test ones.
     let c2 = rig.start(&c2, "c2");
     assert!(rig.server.replaced_at(&c1.run).is_some());
+    assert_eq!(rig.server.replaced_at(&t1.run), None);
     assert_eq!(rig.server.replaced_at(&t2.run), None);
     assert_eq!(rig.server.replaced_at(&c2.run), None);
 }
@@ -866,6 +864,32 @@ fn machine_must_be_a_flat_object_of_at_most_4_kib() {
     ] {
         is_error(&open(bad), 400, "malformed");
     }
+}
+
+/// An open names the client's version as `proxy_version`, as `tracer_version` (its name before
+/// the rename to Goal Cup Proxy), or as both when they agree, as the Worker reads it.
+#[test]
+fn an_open_reads_the_version_under_either_name() {
+    let rig = Rig::new();
+    let open = |names: &[(&str, &str)]| {
+        let mut body = Rig::open_body("s1");
+        body.as_object_mut().unwrap().remove("tracer_version");
+        for (name, value) in names {
+            body[*name] = json!(value);
+        }
+        rig.open_with(&rig.server.mint_credential("member-1"), &body, &[])
+    };
+    assert_eq!(open(&[("proxy_version", "0.1.0")]).status, 201);
+    assert_eq!(
+        open(&[("proxy_version", "0.1.0"), ("tracer_version", "0.1.0")]).status,
+        201
+    );
+    is_error(
+        &open(&[("proxy_version", "0.1.0"), ("tracer_version", "0.0.9")]),
+        400,
+        "malformed",
+    );
+    is_error(&open(&[]), 400, "malformed");
 }
 
 #[test]

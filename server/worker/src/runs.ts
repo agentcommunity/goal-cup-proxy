@@ -3,9 +3,9 @@
 
 import type { Auth } from "./auth.ts";
 import type { Ctx } from "./context.ts";
-import type { Env } from "./env.ts";
-import { type EntryRow, type MachineFacts, type RecordingState, type RunRow, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
+import { type EntryRow, type MachineFacts, type RecordingState, type RunRow, type Vitals, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
+import { githubHeaders } from "./github.ts";
 import {
   REPO_URL,
   addSeconds,
@@ -14,6 +14,7 @@ import {
   hexField,
   isEntryId,
   newId,
+  proxyVersionField,
   readBodyCapped,
   sha256Hex,
   strField,
@@ -92,8 +93,8 @@ export function requireOpen(ctx: Ctx, run: RunRow, entry: EntryRow): void {
 
 /**
  * Whole seconds from the server's clock now to the run's `deadline_at`, rounded up, and 0 once it
- * has come. The tracer counts down from this and never from its own machine's date (WP11), so it
- * is on every answer that tells the tracer about the deadline: open, continue and heartbeat.
+ * has come. goalcup counts down from this and never from its own machine's date, so it
+ * is on every answer that tells goalcup about the deadline: open, continue and heartbeat.
  */
 export function secondsLeft(run: { deadline_at: string }, now: Date): number {
   return Math.max(0, Math.ceil((Date.parse(run.deadline_at) - now.getTime()) / 1000));
@@ -123,7 +124,7 @@ function connectorFields(b: Record<string, unknown>) {
     workspace: strField(b, "workspace", 4096),
     session_id,
     harness_version: strField(b, "harness_version", 64),
-    tracer_version: strField(b, "tracer_version", 64),
+    tracer_version: proxyVersionField(b),
   };
 }
 
@@ -234,18 +235,7 @@ export async function continueRun(ctx: Ctx, auth: Auth, runId: string, request: 
   }
 }
 
-/** The headers every call to the GitHub API carries (the token, if there is one, only raises the rate limit). */
-export function githubHeaders(env: Env): Record<string, string> {
-  const headers: Record<string, string> = {
-    accept: "application/vnd.github+json",
-    "user-agent": "goalcup-upload-worker",
-    "x-github-api-version": "2022-11-28",
-  };
-  if (env.GITHUB_TOKEN) headers.authorization = `Bearer ${env.GITHUB_TOKEN}`;
-  return headers;
-}
-
-/** GitHub says the repository exists and is public. Failures to ask are 502, so the tracer retries. */
+/** GitHub says the repository exists and is public. Failures to ask are 502, so goalcup retries. */
 async function requirePublicGithubRepo(ctx: Ctx, repoUrl: string): Promise<void> {
   const path = repoUrl.slice("https://github.com/".length); // owner/repo, shape already checked
   const headers = githubHeaders(ctx.env);
@@ -350,7 +340,7 @@ export async function getPosition(ctx: Ctx, member: string, runId: string, reque
   });
 }
 
-/** Seconds a tracer is told to wait when it must send its final heartbeat first. */
+/** Seconds goalcup is told to wait when it must send its final heartbeat first. */
 export const FINAL_RETRY_AFTER = 60;
 
 // ---- POST /v1/runs/{id}/heartbeat ---------------------------------------------------------
@@ -370,6 +360,7 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
     throw malformed('recording must be "ok", "gaps", "failed" or "unknown".');
   }
   const model_requests = b.model_requests == null ? null : uintField(b, "model_requests");
+  const vitals = vitalsField(b, runId);
   const { run, entry } = await requireRun(ctx, member, runId, entry_id);
   // An abandoned or closed run accepts nothing more, a final heartbeat included.
   requireAccepting(ctx, run);
@@ -385,6 +376,7 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
     repo_head: b.final ? repo : null, // only the final heartbeat's repo head means anything
     recording: (b.recording ?? null) as RecordingState | null,
     model_requests,
+    vitals,
     ...clientFacts(request),
     at: formatTime(ctx.now()),
   });
@@ -402,10 +394,46 @@ export async function heartbeat(ctx: Ctx, member: string, runId: string, request
   }
 }
 
-function uintField(o: Record<string, unknown>, name: string): number {
+function uintField(o: Record<string, unknown>, name: string, label: string = name): number {
   const v = o[name];
-  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw malformed(`${name} must be a non-negative whole number.`);
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw malformed(`${label} must be a non-negative whole number.`);
   return v;
+}
+
+const VITAL_COUNTS = ["disk_free_bytes", "rss_bytes", "cpu_ms", "open_files"] as const;
+
+/**
+ * `vitals`, if sent: an object of the known fields, each optional, null meaning absent. Keys the
+ * server does not know are dropped (a newer goalcup may send more). Vitals never cost a heartbeat
+ * (it is what keeps the run alive, D64): a known field of the wrong type is dropped, and a `vitals`
+ * that is not an object, or an `agent_paused` other than "disk" or null, drops the whole vitals, so
+ * the heartbeat says nothing about a pause (neither starts nor ends one). Each drop is a log line
+ * `vitals-dropped <field> <run_id>`, without the value. Only the known fields, nulls left out, go further.
+ */
+function vitalsField(b: Record<string, unknown>, runId: string): Vitals | null {
+  const dropped = (field: string) => console.warn(`vitals-dropped ${field} ${runId}`);
+  const v = b.vitals;
+  if (v == null) return null;
+  if (typeof v !== "object" || Array.isArray(v)) {
+    dropped("vitals");
+    return null;
+  }
+  const got: Record<string, unknown> = { ...v };
+  if (got.agent_paused != null && got.agent_paused !== "disk") {
+    dropped("vitals.agent_paused");
+    return null;
+  }
+  const out: Vitals = {};
+  if (got.agent_paused === "disk") out.agent_paused = "disk";
+  for (const name of VITAL_COUNTS) {
+    const n = got[name];
+    if (n == null) continue;
+    if (typeof n === "number" && Number.isSafeInteger(n) && n >= 0) out[name] = n;
+    else dropped(`vitals.${name}`);
+  }
+  if (typeof got.disk_short === "boolean") out.disk_short = got.disk_short;
+  else if (got.disk_short != null) dropped("vitals.disk_short");
+  return out;
 }
 
 // ---- POST /v1/runs/{id}/seal --------------------------------------------------------------

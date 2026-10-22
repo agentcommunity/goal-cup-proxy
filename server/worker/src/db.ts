@@ -82,7 +82,7 @@ export interface RunRow {
   status: RunStatus;
   official_start: string;
   deadline_at: string;
-  /** Set when a later competition start by the account replaced this run: the run ends then. */
+  /** Set when a later competition start by the account replaced this competition run: the run ends then. */
   replaced_at: string | null;
   repo_url: string;
   /** The entry of segment 0, the one `POST /v1/runs` made. */
@@ -91,6 +91,13 @@ export interface RunRow {
   current_entry_id: string;
   /** When that entry was sealed, or null. */
   current_sealed_at: string | null;
+  /**
+   * What the run holds in R2 so far, over all its entries: the compressed bytes (each committed
+   * chunk's Content-Length) and the number of committed chunks. The per-run size limit
+   * (RUN_MAX_COMPRESSED_BYTES) is checked against `stored_bytes`.
+   */
+  stored_bytes: number;
+  chunk_count: number;
 }
 
 /** One segment of a run: its own chain, receipt and seal. Segment 0 is made by `POST /v1/runs`. */
@@ -138,7 +145,7 @@ export interface ChunkRecord {
   ack: Ack;
 }
 
-/** The facts about the machine the tracer sends: a flat object of strings, numbers, booleans and nulls. */
+/** The facts about the machine goalcup sends: a flat object of strings, numbers, booleans and nulls. */
 export type MachineFacts = Record<string, string | number | boolean | null>;
 
 export interface OpenRunArgs {
@@ -213,6 +220,8 @@ export interface CommitChunkArgs {
   member_id: string;
   run_id: string;
   chunk: ChunkRecord;
+  /** The compressed bytes this chunk put in R2 (its Content-Length): added to the entry's `stored_bytes` with the chunk. */
+  stored_bytes: number;
 }
 /**
  * `conflict`: offset, prev or first_seq no longer match the entry (someone advanced it first).
@@ -221,8 +230,26 @@ export interface CommitChunkArgs {
  */
 export type CommitChunkResult = "committed" | "conflict" | "beyond_final" | "closed" | "not_found";
 
-/** How the tracer says its own recording is going. */
+/** How goalcup says its own recording is going. */
 export type RecordingState = "ok" | "gaps" | "failed" | "unknown";
+
+/**
+ * What a heartbeat may say about goalcup's own processes and the machine's free disk, and
+ * nothing else (docs/UPLOAD-API.md, heartbeat). Every field is optional; a field goalcup sent
+ * as null is left out. `agent_paused: "disk"`: goalcup has paused the agent because the disk is
+ * almost full; vitals without it say the agent is not paused.
+ */
+export interface Vitals {
+  disk_free_bytes?: number;
+  disk_short?: boolean;
+  agent_paused?: "disk";
+  rss_bytes?: number;
+  cpu_ms?: number;
+  open_files?: number;
+}
+
+/** A disk pause that begins is owed a disk_full email unless the run's last one began less than this long ago. */
+export const DISK_NOTICE_GAP_SECONDS = 6 * 3600;
 
 export interface HeartbeatArgs {
   member_id: string;
@@ -236,6 +263,8 @@ export interface HeartbeatArgs {
   /** Optional facts the heartbeat carries; null when it did not send them. */
   recording: RecordingState | null;
   model_requests: number | null;
+  /** Null when the heartbeat sent none. */
+  vitals: Vitals | null;
   /** Server-side facts about the connection (never shown to anyone). */
   client_ip: string | null;
   client_country: string | null;
@@ -246,9 +275,13 @@ export interface HeartbeatArgs {
  * latest IP and country (a missing one keeps the last). A `recording` of `gaps` or `failed` flags
  * the run (once, the first wins). `model_requests` is kept per entry (a continued process counts
  * from zero): the first one an entry reports, and any above that entry's stored value, stores it
- * and moves the run's last model request to `at`; a lower or equal one changes nothing. Anything
- * else changes nothing. `final_committed` / `final_existing`: the final heartbeat's (seq, head)
- * is now / already was the committed end. `final_conflict`: a different end is committed, or the
+ * and moves the run's last model request to `at`; a lower or equal one changes nothing. `vitals`
+ * are kept on the heartbeat and as the run's latest (none keeps the last). Vitals saying
+ * `agent_paused: "disk"` start a disk pause if none is running, and set the run's `disk_notice_at`
+ * to `at` unless it is less than `DISK_NOTICE_GAP_SECONDS` old; vitals without it end the pause;
+ * no vitals change neither (a pause that began while one began less than that long ago is
+ * owed nothing). Anything else changes nothing. `final_committed` / `final_existing`: the final
+ * heartbeat's (seq, head) is now / already was the committed end. `final_conflict`: a different end is committed, or the
  * chain the server holds already contradicts this one. `closed`: the run is abandoned or incomplete.
  */
 export type HeartbeatResult = "recorded" | "final_committed" | "final_existing" | "final_conflict" | "closed" | "not_found";
@@ -322,14 +355,47 @@ export interface TickRun extends RunRow {
   /** When a heartbeat first said the recording had `gaps` or `failed`, and which of the two. */
   flagged_at: string | null;
   flag_reason: "gaps" | "failed" | null;
-  /** The GitHub commit at the deadline: 40 hex, `none` for a repository GitHub does not have, null until asked. */
+  /** The judged GitHub commit (see `FinalCommitDetail`): 40 hex, `none` for a repository GitHub does not have, null until decided. */
   final_commit: string | null;
+  /**
+   * The start of the latest disk pause that is owed a disk_full email (see `HeartbeatResult`); null
+   * until a heartbeat reports one.
+   */
+  disk_notice_at: string | null;
 }
+
+/**
+ * How the judged commit was found (docs/UPLOAD-API.md, "The judged commit"): the last push to the
+ * repository's default branch that GitHub timestamped at or before the run's `ends_at`.
+ */
+export interface FinalCommitDetail {
+  /** When GitHub received the judged push (its activity `timestamp`); null when not known. */
+  pushed_at: string | null;
+  /** The default branch that was read; null when GitHub gave none. */
+  branch: string | null;
+  /** GitHub had a push to that branch after `ends_at` when it was asked (not judged); null when not known. */
+  late_push: boolean | null;
+  /** GitHub had a force push to that branch between the run's start and `ends_at`; null when not known. */
+  force_push: boolean | null;
+  /**
+   * The commit was not read from the activity API, so an organizer reviews it by hand: it came from
+   * the commit list (`commits?sha=<branch>&until=<ends_at>`, by commit date) or `commits/HEAD` (the
+   * head when asked, which may be a later push), because the activity API was unavailable, listed
+   * no update of the branch, or listed only updates after `ends_at` within its page limit; or it is
+   * `none` because GitHub kept answering an error status for the grace hour.
+   */
+  head_fallback: boolean;
+}
+
+/** No detail: what a caller that passes none stores. */
+export const NO_FINAL_DETAIL: Readonly<FinalCommitDetail> = Object.freeze({ pushed_at: null, branch: null, late_push: null, force_push: null, head_fallback: false });
 
 /** A run that is over this long, and no longer open, is not looked at by the cron any more. */
 export const TICK_LOOKBACK_SECONDS = 48 * 3600;
 
-export type NoticeKind = "started" | "silence" | "idle_3h" | "idle_6h" | "recording" | "ended";
+/** Every kind of run email; the database's notices CHECK constraint and its notice_text list the same. */
+export const NOTICE_KINDS = ["started", "silence", "idle_3h", "idle_6h", "recording", "ended", "disk_full"] as const;
+export type NoticeKind = (typeof NOTICE_KINDS)[number];
 
 /** One row for the outbox: src/mail.ts sends it, once, with the text and address the database gives. */
 export interface NoticeArgs {
@@ -370,7 +436,8 @@ export interface Db {
   /**
    * Open a run (segment 0) for the account and bind the credential to it, in one atomic step.
    * A competition run replaces the account's other open competition run (`replaced_at` = this
-   * run's `official_start`), a test run the account's open test run; a practice run replaces nothing.
+   * run's `official_start`). Only competition replaces: a test run or a practice run replaces
+   * nothing and is never replaced, so an operator's test runs can run side by side.
    */
   openRun(args: OpenRunArgs): Promise<OpenRunResult>;
   /** Add the next segment. See `ContinueRunResult`. */
@@ -399,13 +466,19 @@ export interface Db {
   claimNotices(limit: number, now: string): Promise<ClaimedNotice[]>;
   /** Record how sending a claimed notice ended. `to` is the address used (for `sent`). */
   finishNotice(id: number, outcome: NoticeOutcome, to: string | null, detail: string, now: string): Promise<void>;
-  /** Store the commit found at the deadline (a 40-hex sha, or `none`). The first one stored stays. */
-  recordFinalCommit(memberId: string, runId: string, commit: string, at: string): Promise<void>;
+  /**
+   * Store the judged commit (a 40-hex sha, or `none`), the time it was decided, and how it was found.
+   * The first one stored stays. `detail` left out stores no detail (all null, no fallback).
+   */
+  recordFinalCommit(memberId: string, runId: string, commit: string, at: string, detail?: FinalCommitDetail): Promise<void>;
   /** A stored chunk of the entry that starts at `offset`, or null. */
   getChunk(memberId: string, runId: string, entryId: string, offset: number): Promise<ChunkRecord | null>;
   storeReceipt(memberId: string, runId: string, entryId: string, chainHead: string, receipt: StartReceipt): Promise<StoreReceiptResult>;
   abandonRun(memberId: string, runId: string, reason: string, at: string): Promise<AbandonResult>;
-  /** Advance the chunk's entry past `chunk` and record the chunk and its ack, only if the entry still stands where the chunk expects. */
+  /**
+   * Advance the chunk's entry past `chunk` and record the chunk and its ack, only if the entry still
+   * stands where the chunk expects; in the same step add `stored_bytes` and one chunk to the entry's counters.
+   */
   commitChunk(args: CommitChunkArgs): Promise<CommitChunkResult>;
   /** Seal the entry. A repeat with the same hashes is `already_sealed`; different hashes once sealed are `conflict`. */
   sealRun(args: SealArgs): Promise<SealResult>;

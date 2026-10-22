@@ -97,8 +97,9 @@ fn admitted(t: &Table, origin: Origin) {
 const PINNED: Origin = Origin::Pinned;
 const DEV: Origin = Origin::Dev;
 
-/// Hermes (headless, `stderr_line`), the claude and codex shapes, and a controlled
-/// workload: the four identity shapes a row can need.
+/// Hermes (a per-run home with seeds), the claude and codex shapes (shared homes), and a
+/// controlled workload: the frozen recipes of the removed headless mode, now chat mode, which the
+/// rows mutate.
 fn hermes() -> Table {
     fixture("hermes-cli")
 }
@@ -118,9 +119,10 @@ schema_version = 1
 id = "m2-controlled-workload"
 
 [capture]
+interactive = true
 auth_hosts = ["auth.e00.localhost"]
 continuation = "none: one fixed traffic plan, no input after the goal"
-args = ["/work/tests/fixtures/m2-controlled-workload.py", "/work/config.json", "--"]
+args = ["/work/tests/fixtures/m2-controlled-workload.py", "/work/config.json"]
 
 [capture.executable]
 program = "python3"
@@ -201,17 +203,14 @@ fn the_parsed_fixtures_carry_the_values_the_design_gives() {
     let h = HarnessManifest::from_toml_str(&fixture_text("hermes-cli")).unwrap();
     assert_eq!(h.capture.home.env.as_deref(), Some("HERMES_HOME"));
     assert_eq!(h.capture.home.seed.len(), 3);
-    assert_eq!(h.capture.native[0].pattern, "session_{id}.json");
+    assert_eq!(h.capture.native[0].pattern, "session_*.json");
     assert_eq!(h.termination().grace_seconds(), 10);
     assert!(h.capture.argv_guard.as_ref().unwrap().long_abbreviations);
     let c = HarnessManifest::from_toml_str(&fixture_text("codex-cli")).unwrap();
     assert_eq!(c.termination().native_binary.as_deref(), Some("codex"));
     assert_eq!(c.redaction.as_ref().unwrap().extra_patterns.len(), 3);
     let k = HarnessManifest::from_toml_str(&fixture_text("claude-code-cli")).unwrap();
-    assert_eq!(
-        k.capture.identity.binding.map(|b| b.as_str()),
-        Some("at_launch")
-    );
+    assert_eq!(k.capture.identity.source.as_str(), "none");
     assert_eq!(k.capture.home.per_run_dir_name(), "harness-home");
 }
 
@@ -277,11 +276,8 @@ fn an_unknown_key_is_refused_with_its_table_and_the_schema_sentence() {
 
 #[test]
 fn an_unknown_value_of_a_closed_field_is_refused_with_the_same_sentence() {
-    // Including `grammar = "uuid"`, which v2 cut (M8).
     let cases: Vec<(&[&str], &str, &str)> = vec![
-        (&["capture", "identity"], "grammar", "uuid"),
         (&["capture", "identity"], "source", "pty"),
-        (&["capture", "identity"], "binding", "eventually"),
         (&["capture", "home"], "run_home", "tmp"),
         (&["capture", "home"], "config_home", "private"),
         (&["capture", "ca"], "mode", "append"),
@@ -424,14 +420,13 @@ fn the_native_root_and_pattern_follow_their_grammar() {
         refused(&t, PINNED, &["capture.native.root"]);
     }
     let bad_patterns = [
-        ("/abs/{id}.json", "relative"),
-        ("a/../{id}.json", "`.` or `..`"),
-        ("**/{id}.json", "`**`"),
-        ("{id}/{id}.json", "more than one `{id}`"),
-        ("session.json", "needs `{id}`"),
-        ("{foo}-{id}.json", "no brace but `{id}`"),
-        ("a b/{id}.json", "outside"),
-        ("a//{id}.json", "empty component"),
+        ("/abs/*.json", "relative"),
+        ("a/../*.json", "`.` or `..`"),
+        ("**/*.json", "`**`"),
+        ("session_{id}.json", "names `{id}`"),
+        ("{foo}-*.json", "no brace"),
+        ("a b/*.json", "outside"),
+        ("a//*.json", "empty component"),
     ];
     for (pattern, needle) in bad_patterns {
         let mut t = hermes();
@@ -443,7 +438,7 @@ fn the_native_root_and_pattern_follow_their_grammar() {
         &mut t,
         &["capture", "native"],
         "pattern",
-        "a/b/c/d/e/f/g/h/{id}.json",
+        "a/b/c/d/e/f/g/h/*.json",
     );
     refused(&t, PINNED, &["more than eight components"]);
     let mut t = hermes();
@@ -457,7 +452,7 @@ fn a_native_pattern_that_matches_a_seed_is_refused() {
     // sweep the credential store (M10).
     let mut t = hermes();
     set(&mut t, &["capture", "native"], "root", "{config_home}");
-    set(&mut t, &["capture", "native"], "pattern", "{id}.json");
+    set(&mut t, &["capture", "native"], "pattern", "*.json");
     refused(&t, PINNED, &["matches the seed", "auth.json"]);
     // Nested: root under a directory, seed in it.
     let mut t = hermes();
@@ -473,7 +468,7 @@ fn a_native_pattern_that_matches_a_seed_is_refused() {
             .collect(),
         ));
     refused(&t, PINNED, &["matches the seed", "sessions/session_x.json"]);
-    // The shipped shape, `sessions/session_{id}.json` beside three non-matching seeds, passes.
+    // The frozen shape, `sessions/session_*.json` beside three non-matching seeds, passes.
     admitted(&hermes(), PINNED);
 }
 
@@ -488,60 +483,58 @@ fn a_run_home_native_root_may_not_sweep_a_seed_either() {
         set(&mut t, &["capture", "native"], "pattern", pattern);
         t
     };
-    // The same directory: `{id}.json` reads `auth.json` under the run home.
+    // The same directory: `*.json` reads `auth.json` under the run home.
     refused(
-        &aim("{run_home}", "{id}.json"),
+        &aim("{run_home}", "*.json"),
         PINNED,
         &["matches the seed", "auth.json", "run home"],
     );
     refused(
-        &aim("{run_home}", "config{id}.yaml"),
+        &aim("{run_home}", "config*.yaml"),
         PINNED,
         &["matches the seed", "config.yaml"],
     );
     // Nested: Hermes's per-run config home is `hermes`, so `{run_home}/hermes/...` is the seeds.
     refused(
-        &aim("{run_home}/hermes", "config{id}.yaml"),
+        &aim("{run_home}/hermes", "config*.yaml"),
         PINNED,
         &["matches the seed", "config.yaml"],
     );
     refused(
-        &aim("{run_home}/hermes", "{id}.json"),
+        &aim("{run_home}/hermes", "*.json"),
         PINNED,
         &["matches the seed", "auth.json"],
     );
     // APFS folds case: neither spelling hides a seed, under either home.
     refused(
-        &aim("{run_home}", "CONFIG{id}.YAML"),
+        &aim("{run_home}", "CONFIG*.YAML"),
         PINNED,
         &["matches the seed"],
     );
     refused(
-        &aim("{run_home}/HERMES", "{id}.JSON"),
+        &aim("{run_home}/HERMES", "*.JSON"),
         PINNED,
         &["matches the seed"],
     );
     refused(
-        &aim("{config_home}", "CONFIG{id}.YAML"),
+        &aim("{config_home}", "CONFIG*.YAML"),
         PINNED,
         &["matches the seed"],
     );
     // A root that cannot be a seed's path is fine, as is the shipped shape.
-    admitted(&aim("{run_home}/sessions", "session_{id}.json"), PINNED);
-    admitted(
-        &aim("{run_home}/hermes/sessions", "session_{id}.json"),
-        PINNED,
-    );
-    admitted(&aim("{config_home}/sessions", "session_{id}.json"), PINNED);
+    admitted(&aim("{run_home}/sessions", "session_*.json"), PINNED);
+    admitted(&aim("{run_home}/hermes/sessions", "session_*.json"), PINNED);
+    admitted(&aim("{config_home}/sessions", "session_*.json"), PINNED);
     // A harness that seeds nothing has nothing to sweep.
     let mut t = claude();
     set(&mut t, &["capture", "native"], "root", "{run_home}");
-    set(&mut t, &["capture", "native"], "pattern", "{id}.jsonl");
+    set(&mut t, &["capture", "native"], "pattern", "*.jsonl");
     admitted(&t, PINNED);
 }
 
 #[test]
 fn identity_none_needs_a_per_run_root_and_no_id_placeholder() {
+    // Chat mode names no session, so no pattern may scope to one.
     let mut t = workload();
     set(
         &mut t,
@@ -560,7 +553,7 @@ fn identity_none_needs_a_per_run_root_and_no_id_placeholder() {
 }
 
 // ---------------------------------------------------------------------------------------
-// Refusal table: identity and credential
+// Refusal table: credential
 // ---------------------------------------------------------------------------------------
 
 fn with_credential(mut t: Table, per_run: bool) -> Table {
@@ -585,7 +578,7 @@ fn with_credential_named(t: &mut Table, name: &str) {
         );
 }
 
-/// The words every `[capture.credential]` refusal carries (D61): the tracer never sees,
+/// The words every `[capture.credential]` refusal carries (D61): goalcup never sees,
 /// forwards or stores a participant's provider key.
 const NO_KEY: &[&str] = &["capture.credential", "may not pass a provider key"];
 
@@ -619,20 +612,8 @@ fn a_connector_with_a_credential_table_is_refused() {
 }
 
 #[test]
-fn a_credential_with_preassigned_identity_is_refused() {
-    refused(&with_credential(claude(), true), PINNED, NO_KEY);
-}
-
-#[test]
 fn a_credential_with_no_identity_is_refused() {
     refused(&with_credential(workload(), true), DEV, NO_KEY);
-}
-
-#[test]
-fn a_credential_with_stdout_json_identity_is_refused() {
-    // Once admitted with a per-run home (D50); refused with and without one now.
-    refused(&with_credential(codex(), true), PINNED, NO_KEY);
-    refused(&with_credential(codex(), false), PINNED, NO_KEY);
 }
 
 #[test]
@@ -676,91 +657,6 @@ fn a_provider_key_name_is_refused_in_every_field() {
     let mut t = with_credential(claude(), true);
     with_credential_named(&mut t, "AMP_API_KEY");
     refused(&t, PINNED, NO_KEY);
-}
-
-#[test]
-fn only_the_admitted_identity_pairs_load() {
-    // stdout_json+deferred, stderr_line+at_launch, preassigned+deferred.
-    for (source, binding) in [
-        ("stdout_json", "deferred"),
-        ("stderr_line", "at_launch"),
-        ("preassigned", "deferred"),
-    ] {
-        let mut t = codex();
-        set(&mut t, &["capture", "identity"], "source", source);
-        set(&mut t, &["capture", "identity"], "binding", binding);
-        // Sibling fields are removed so the pair is the refusal, not a stray field.
-        let id = tbl(&mut t, &["capture", "identity"]);
-        if source != "stdout_json" {
-            for k in ["match_field", "match_value", "id_field"] {
-                id.remove(k);
-            }
-        }
-        if source == "stderr_line" {
-            id.insert("prefix".into(), "sid: ".into());
-            id.insert("grammar".into(), "token".into());
-        }
-        if source == "preassigned" {
-            set(
-                &mut t,
-                &["capture"],
-                "args",
-                strings(&["--id", "{session_id}", "--"]),
-            );
-        }
-        refused(&t, PINNED, &["not supported by this build", binding]);
-    }
-    // `none` takes no binding; every other source needs one.
-    let mut t = workload();
-    set(&mut t, &["capture", "identity"], "binding", "at_launch");
-    refused(&t, DEV, &["takes no `binding`"]);
-    let mut t = codex();
-    tbl(&mut t, &["capture", "identity"]).remove("binding");
-    refused(&t, PINNED, &["binding", "required"]);
-}
-
-#[test]
-fn identity_fields_belong_to_their_source() {
-    let mut t = codex();
-    tbl(&mut t, &["capture", "identity"]).remove("id_field");
-    refused(&t, PINNED, &["`stdout_json` needs"]);
-    let mut t = codex();
-    set(&mut t, &["capture", "identity"], "match_field", "a.b.c.d.e");
-    refused(&t, PINNED, &["match_field", "dot path"]);
-    let mut t = codex();
-    set(&mut t, &["capture", "identity"], "prefix", "x: ");
-    refused(&t, PINNED, &["belong to `stderr_line`"]);
-    let mut t = hermes();
-    tbl(&mut t, &["capture", "identity"]).remove("prefix");
-    refused(&t, PINNED, &["`stderr_line` needs"]);
-    let mut t = hermes();
-    set(&mut t, &["capture", "identity"], "prefix", "p\u{e9}");
-    refused(&t, PINNED, &["printable ASCII"]);
-    let mut t = hermes();
-    set(&mut t, &["capture", "identity"], "match_field", "type");
-    refused(&t, PINNED, &["belong to `stdout_json`"]);
-    let mut t = claude();
-    set(&mut t, &["capture", "identity"], "prefix", "x");
-    refused(&t, PINNED, &["takes no"]);
-}
-
-#[test]
-fn session_id_and_preassigned_imply_each_other() {
-    let mut t = claude();
-    set(&mut t, &["capture"], "args", strings(&["-p", "--"]));
-    refused(&t, PINNED, &["`preassigned` needs `{session_id}`"]);
-    let mut t = codex();
-    set(
-        &mut t,
-        &["capture"],
-        "args",
-        strings(&["exec", "{session_id}", "--"]),
-    );
-    refused(&t, PINNED, &["`{session_id}` needs", "preassigned"]);
-    // In an env value too.
-    let mut t = codex();
-    set(&mut t, &["capture", "env"], "RUN_TAG", "{session_id}");
-    refused(&t, PINNED, &["`{session_id}` needs"]);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -860,7 +756,7 @@ fn a_ca_variable_is_data_held_to_the_ca_shape_and_the_shared_rules() {
         admitted(&t, PINNED);
     }
     // A shared row is handed the system's roots too, so it cannot be a `replace` profile's
-    // name: that profile trusts the proxy alone and fails closed (D41).
+    // name: that profile trusts the recording proxy alone and fails closed (D41).
     for names in [
         &["SSL_CERT_FILE"][..],
         &["REQUESTS_CA_BUNDLE"],
@@ -893,7 +789,7 @@ fn a_ca_variable_is_data_held_to_the_ca_shape_and_the_shared_rules() {
         ("OPENAI_CA_CERTS", "model provider"),
         ("GIT_SSL_CA_FILE", "configures git"),
         ("OPENSSL_CA_FILE", "OpenSSL"),
-        ("GOALCUP_CA_BUNDLE", "tracker"),
+        ("GOALCUP_CA_BUNDLE", "Goal Cup Proxy"),
         ("NPM_CONFIG_CA_FILE", "npm"),
         ("AUTH_CA_CERT", "credential"),
     ] {
@@ -953,9 +849,9 @@ fn server_upload_and_goalcup_names_are_refused() {
     for key in ["GOALCUP_SERVER", "goalcup_upload_url", "GOALCUP_"] {
         let mut t = codex();
         set(&mut t, &["capture", "env"], key, "x");
-        refused(&t, PINNED, &["capture.env", "tracker"]);
+        refused(&t, PINNED, &["capture.env", "Goal Cup Proxy"]);
     }
-    // `goalcup` in an arg, an env value, a host, an auth host, the goal flag.
+    // `goalcup` in an arg, an env value, a host, an auth host.
     let mut t = codex();
     set(
         &mut t,
@@ -969,7 +865,7 @@ fn server_upload_and_goalcup_names_are_refused() {
     refused(&t, PINNED, &["capture.env", "delivery-agnostic"]);
     let mut t = codex();
     set(&mut t, &["capture", "hosts"], "host", "api.goalcup.example");
-    refused(&t, PINNED, &["tracker's own host"]);
+    refused(&t, PINNED, &["Goal Cup Proxy's own host"]);
     let mut t = codex();
     set(
         &mut t,
@@ -977,10 +873,11 @@ fn server_upload_and_goalcup_names_are_refused() {
         "auth_hosts",
         strings(&["auth.goalcup.example"]),
     );
-    refused(&t, PINNED, &["capture.auth_hosts", "tracker's own host"]);
-    let mut t = hermes();
-    set(&mut t, &["capture"], "goal_flag", "--goalcup-goal");
-    refused(&t, PINNED, &["goal_flag", "delivery-agnostic"]);
+    refused(
+        &t,
+        PINNED,
+        &["capture.auth_hosts", "Goal Cup Proxy's own host"],
+    );
     // A loopback host is already not a capture host.
     let mut t = codex();
     set(&mut t, &["capture", "hosts"], "host", "127.0.0.1");
@@ -1084,7 +981,8 @@ fn shell_is_admitted_only_as_a_known_shell() {
 
 #[test]
 fn node_use_env_proxy_is_admitted_only_as_1() {
-    // D59: it names no endpoint; it makes a Node harness honour the proxy the launch pins.
+    // D59: it names no endpoint; it makes a Node harness honour the recording proxy the launch
+    // pins.
     let mut t = codex();
     set(&mut t, &["capture", "env"], "NODE_USE_ENV_PROXY", "1");
     admitted(&t, PINNED);
@@ -1641,7 +1539,7 @@ fn a_retired_pin_key_is_refused_with_its_own_sentence() {
             (over, format!("capture.platform.linux-x86_64.{key}")),
         ] {
             let sentence = format!(
-                "`{key}` is no longer a connector field (D53): the tracer records the build \
+                "`{key}` is no longer a connector field (D53): Goal Cup Proxy records the build \
                  that runs instead of pinning one; delete the line."
             );
             for origin in [PINNED, DEV] {
@@ -1654,7 +1552,7 @@ fn a_retired_pin_key_is_refused_with_its_own_sentence() {
 }
 
 // ---------------------------------------------------------------------------------------
-// Refusal table: args (I5e, N1) and the goal slot
+// Refusal table: args (I5e, N1)
 // ---------------------------------------------------------------------------------------
 
 #[test]
@@ -1731,49 +1629,15 @@ fn the_capture_arg_deny_list_still_applies() {
 }
 
 #[test]
-fn the_goal_goes_exactly_one_way() {
-    // Both `--` and a goal flag.
-    let mut t = codex();
-    set(&mut t, &["capture"], "goal_flag", "--prompt");
-    refused(&t, PINNED, &["exactly one way"]);
-    // Neither.
-    let mut t = codex();
-    set(&mut t, &["capture"], "args", strings(&["exec"]));
-    refused(&t, PINNED, &["exactly one way"]);
-    // A goal flag alone.
-    let mut t = codex();
-    set(&mut t, &["capture"], "args", strings(&["exec"]));
-    set(&mut t, &["capture"], "goal_flag", "--prompt");
-    admitted(&t, PINNED);
-    for bad in [
-        "prompt",
-        "--Prompt",
-        "--a=b",
-        "--",
-        "--1x",
-        &format!("--{}", "a".repeat(31)),
-    ] {
-        let mut t = codex();
-        set(&mut t, &["capture"], "args", strings(&["exec"]));
-        set(&mut t, &["capture"], "goal_flag", bad.to_string());
-        refused(&t, PINNED, &["capture.goal_flag"]);
-    }
-    let mut t = codex();
-    set(&mut t, &["capture"], "args", strings(&["exec"]));
-    set(&mut t, &["capture"], "goal_flag", "--base-url");
-    refused(&t, PINNED, &["capture.goal_flag"]);
-}
-
-#[test]
 fn args_and_continuation_have_bounds() {
     let mut t = codex();
     set(&mut t, &["capture"], "args", strings(&[]));
-    refused(&t, PINNED, &["1 to 64"]);
+    admitted(&t, PINNED);
     let many: Vec<String> = (0..65).map(|i| format!("a{i}")).collect();
     let many: Vec<&str> = many.iter().map(String::as_str).collect();
     let mut t = codex();
     set(&mut t, &["capture"], "args", strings(&many));
-    refused(&t, PINNED, &["1 to 64"]);
+    refused(&t, PINNED, &["0 to 64"]);
     let mut t = codex();
     set(
         &mut t,
@@ -1801,7 +1665,7 @@ fn args_and_continuation_have_bounds() {
 #[test]
 fn template_tokens_are_closed_and_braces_are_literal_only_doubled() {
     // Review R7 I-3: nothing supplies `{port}`, so a recipe naming it would validate and then
-    // fail at launch, after the proxy is up.
+    // fail at launch, after the recording proxy is up.
     for bad in [
         "{port}",
         "{home}",
@@ -1879,7 +1743,7 @@ fn argv_guard_is_generic_and_only_tightens() {
         set(&mut t, &["capture"], "args", strings(&["chat", arg]));
         refused(&t, PINNED, &["capture.args", arg]);
     }
-    // `-Q`, `--provider`, `--model` and the goal flag are untouched.
+    // `-Q`, `--provider` and `--model` are untouched.
     admitted(&hermes(), PINNED);
     // Without `long_abbreviations`, only the exact name is refused.
     let mut t = hermes();
@@ -1898,10 +1762,6 @@ fn argv_guard_is_generic_and_only_tightens() {
         strings(&["chat", "--profile"]),
     );
     refused(&t, PINNED, &["--profile"]);
-    // The goal flag is guarded too.
-    let mut t = hermes();
-    set(&mut t, &["capture"], "goal_flag", "--help");
-    refused(&t, PINNED, &["capture.goal_flag"]);
     // The guard's own shape.
     for (field, bad) in [
         ("long", strings(&["Profile"])),
@@ -2629,7 +2489,7 @@ fn the_cheap_launcher_names_are_interpreters_too() {
 fn the_closed_sets_are_non_exhaustive_so_a_downstream_match_must_end_in_a_wildcard() {
     use goalcup_protocol::capture_policy::{CaMode, EnvContext};
     use goalcup_protocol::harness::{
-        Binding, ConfigHome, IdGrammar, IdentitySource, NativeForm, RunHome, SeedMode, Strategy,
+        ConfigHome, IdentitySource, NativeForm, RunHome, SeedMode, Strategy,
     };
     assert_eq!(
         match NativeForm::Snapshot {
@@ -2641,9 +2501,6 @@ fn the_closed_sets_are_non_exhaustive_so_a_downstream_match_must_end_in_a_wildca
     );
     assert_eq!(
         match IdentitySource::None {
-            IdentitySource::Preassigned
-            | IdentitySource::StdoutJson
-            | IdentitySource::StderrLine => 1,
             IdentitySource::None => 2,
             _ => 0,
         },
@@ -2653,22 +2510,6 @@ fn the_closed_sets_are_non_exhaustive_so_a_downstream_match_must_end_in_a_wildca
         match Strategy::NativePid {
             Strategy::ProcessGroup => 1,
             Strategy::NativePid => 2,
-            _ => 0,
-        },
-        2
-    );
-    assert_eq!(
-        match Binding::Deferred {
-            Binding::AtLaunch => 1,
-            Binding::Deferred => 2,
-            _ => 0,
-        },
-        2
-    );
-    assert_eq!(
-        match IdGrammar::Token {
-            IdGrammar::TimestampHex => 1,
-            IdGrammar::Token => 2,
             _ => 0,
         },
         2
@@ -3041,7 +2882,6 @@ fn an_override_with_any_other_field_is_refused() {
         ("home", Value::Table(Table::new())),
         ("hosts", Value::Array(vec![])),
         ("auth_hosts", strings(&["evil.example"])),
-        ("goal_flag", "--goal".into()),
         ("ca", Value::Table(Table::new())),
         ("executable", Value::Table(Table::new())),
         ("version_args", strings(&["--version"])),
@@ -3144,30 +2984,6 @@ fn argv_that_loosens_the_run_is_refused_by_rule() {
         set(&mut t, &["capture"], "args", strings(&["exec", arg, "--"]));
         refused(&t, PINNED, &["capture.args", needle]);
         refused(&t, DEV, &["capture.args", needle]);
-    }
-}
-
-/// D51: the goal flag rule reads whole words, so Amp's `--execute` is a goal flag and `--exec`
-/// is not.
-#[test]
-fn goal_flag_words_are_whole_words() {
-    for (flag, ok) in [
-        ("--execute", true),
-        ("--query", true),
-        ("--prompt", true),
-        ("--payload", true),
-        ("--exec", false),
-        ("--prompt-file", false),
-        ("--run", false),
-        ("--load-config", false),
-    ] {
-        let mut t = hermes();
-        set(&mut t, &["capture"], "goal_flag", flag);
-        if ok {
-            admitted(&t, PINNED);
-        } else {
-            refused(&t, PINNED, &["capture.goal_flag", "the goal is a prompt"]);
-        }
     }
 }
 
@@ -3378,35 +3194,6 @@ fn a_pinned_connector_names_no_loopback_or_single_label_host() {
     }
 }
 
-/// The stdout identity wait is connector data, not a constant named after one harness.
-#[test]
-fn the_stdout_identity_wait_is_a_bounded_connector_field() {
-    let m = parsed(&codex());
-    assert_eq!(
-        m.capture.identity.stdout_wait(),
-        std::time::Duration::from_secs(120)
-    );
-    let mut t = codex();
-    set(&mut t, &["capture", "identity"], "wait_seconds", 300);
-    let m = parsed(&t);
-    assert_eq!(
-        m.capture.identity.stdout_wait(),
-        std::time::Duration::from_secs(300)
-    );
-    for bad in [0, 601] {
-        let mut t = codex();
-        set(&mut t, &["capture", "identity"], "wait_seconds", bad);
-        refused(&t, PINNED, &["capture.identity.wait_seconds", "1 to 600"]);
-    }
-    let mut t = hermes();
-    set(&mut t, &["capture", "identity"], "wait_seconds", 60);
-    refused(
-        &t,
-        PINNED,
-        &["capture.identity", "wait_seconds", "stdout_json"],
-    );
-}
-
 /// A connector reserves its harness's own namespace as data (`reserved_env_prefixes`), so a
 /// switch that would silently stop capture is refused without a harness name in the policy.
 #[test]
@@ -3504,29 +3291,9 @@ fn an_interactive_profile_takes_no_goal_and_no_credential() {
     let mut t = chat();
     set(&mut t, &["capture"], "args", strings(&["chat", "--"]));
     admitted(&t, PINNED);
-    // No goal flag: the participant types the prompt.
-    let mut t = chat();
-    set(&mut t, &["capture"], "goal_flag", "--prompt");
-    refused(&t, PINNED, &["capture.goal_flag", "interactive"]);
     // No credential (D61).
     let t = with_credential(chat(), true);
     refused(&t, PINNED, NO_KEY);
-    // Identity `none` only.
-    let mut t = chat();
-    let id = tbl(&mut t, &["capture", "identity"]);
-    id.insert("source".into(), "preassigned".into());
-    id.insert("binding".into(), "at_launch".into());
-    refused(
-        &t,
-        PINNED,
-        &["capture.identity.source", "interactive", "`none`"],
-    );
-    // Without `interactive` every headless rule holds again: the goal needs its one slot.
-    let mut t = chat();
-    set(&mut t, &["capture"], "interactive", false);
-    refused(&t, PINNED, &["the goal is placed exactly one way"]);
-    tbl(&mut t, &["capture"]).remove("interactive");
-    refused(&t, PINNED, &["the goal is placed exactly one way"]);
     // `skills_dir` is a relative path under the config home.
     for bad in ["/skills", "../skills", "a//b", ".", "a/../b"] {
         let mut t = chat();
@@ -3536,6 +3303,78 @@ fn an_interactive_profile_takes_no_goal_and_no_credential() {
     let mut t = chat();
     set(&mut t, &["capture", "home"], "skills_dir", ".agents/skills");
     admitted(&t, PINNED);
+}
+
+/// Headless mode was removed (21 Oct 2026): every trace of it is refused with one sentence that
+/// says chat mode only, before the strict deserialization would call it a newer schema's field.
+#[test]
+fn a_headless_manifest_is_refused_as_chat_mode_only() {
+    use goalcup_protocol::harness::CHAT_MODE_ONLY;
+    // `interactive` absent or false.
+    let mut t = chat();
+    set(&mut t, &["capture"], "interactive", false);
+    refused(&t, PINNED, &["capture.interactive", CHAT_MODE_ONLY]);
+    tbl(&mut t, &["capture"]).remove("interactive");
+    refused(&t, PINNED, &["capture.interactive", CHAT_MODE_ONLY]);
+    let mut t = workload();
+    tbl(&mut t, &["capture"]).remove("interactive");
+    refused(&t, DEV, &["capture.interactive", CHAT_MODE_ONLY]);
+    // A goal slot.
+    let mut t = chat();
+    set(&mut t, &["capture"], "goal_flag", "--prompt");
+    refused(&t, PINNED, &["capture.goal_flag", CHAT_MODE_ONLY]);
+    // Nor in a platform override, which may change only env entries.
+    for (key, value) in [
+        ("interactive", Value::from(false)),
+        ("goal_flag", "--goal".into()),
+        ("identity", Value::Table(Table::new())),
+    ] {
+        let mut t = with_platform(codex(), "linux-x86_64", &[]);
+        set(&mut t, &["capture", "platform", "linux-x86_64"], key, value);
+        refused(
+            &t,
+            PINNED,
+            &[
+                &format!("capture.platform.linux-x86_64.{key}"),
+                CHAT_MODE_ONLY,
+            ],
+        );
+    }
+    // A session identity, by its source and by each of its fields.
+    for source in ["preassigned", "stdout_json", "stderr_line"] {
+        let mut t = chat();
+        set(&mut t, &["capture", "identity"], "source", source);
+        refused(&t, PINNED, &["capture.identity.source", CHAT_MODE_ONLY]);
+    }
+    for (key, value) in [
+        ("binding", Value::from("at_launch")),
+        ("match_field", "type".into()),
+        ("match_value", "thread.started".into()),
+        ("id_field", "thread_id".into()),
+        ("prefix", "session_id: ".into()),
+        ("grammar", "token".into()),
+        ("wait_seconds", 60.into()),
+    ] {
+        let mut t = chat();
+        set(&mut t, &["capture", "identity"], key, value);
+        refused(
+            &t,
+            PINNED,
+            &[&format!("capture.identity.{key}"), CHAT_MODE_ONLY],
+        );
+    }
+    // The minted session id is no template token any more.
+    let mut t = chat();
+    set(
+        &mut t,
+        &["capture"],
+        "args",
+        strings(&["--id", "{session_id}"]),
+    );
+    refused(&t, PINNED, &["capture.args", "not a token here"]);
+    let mut t = codex();
+    set(&mut t, &["capture", "env"], "RUN_TAG", "{session_id}");
+    refused(&t, PINNED, &["capture.env", "not a token here"]);
 }
 
 #[test]
@@ -3552,13 +3391,13 @@ fn none_on_a_shared_home_needs_since_run_start() {
     refused(&t, PINNED, &["must be per run", "since_run_start"]);
     set(&mut t, &["capture", "native"], "since_run_start", true);
     admitted(&t, PINNED);
-    // The same holds for a headless profile with no session identity.
+    // The same holds for the controlled workload.
     let mut t = workload();
     set(&mut t, &["capture", "native"], "root", "{config_home}");
     refused(&t, DEV, &["must be per run", "since_run_start"]);
     set(&mut t, &["capture", "native"], "since_run_start", true);
     admitted(&t, DEV);
-    // A per-run root needs no filter, and a scoped source may take one.
+    // A per-run root needs no filter, and may take one.
     let mut t = workload();
     set(&mut t, &["capture", "native"], "since_run_start", true);
     admitted(&t, DEV);
@@ -3569,7 +3408,7 @@ fn none_on_a_shared_home_needs_since_run_start() {
 
 #[test]
 fn resume_args_follow_the_argv_rules() {
-    // Optional, with or without `interactive`.
+    // Optional.
     let mut t = chat();
     tbl(&mut t, &["capture"]).remove("resume_args");
     admitted(&t, PINNED);
@@ -3587,7 +3426,7 @@ fn resume_args_follow_the_argv_rules() {
         ("--profile", "configuration profile"),
         ("/etc/passwd", "absolute path"),
         ("a\u{7}b", "control character"),
-        ("{session_id}", "preassigned"),
+        ("{session_id}", "not a token here"),
         ("{nope}", "not a token here"),
         ("--tag=goalcup", "delivery-agnostic"),
     ] {
@@ -3643,10 +3482,6 @@ fn an_interactive_profile_may_have_no_args() {
     let many: Vec<&str> = many.iter().map(String::as_str).collect();
     set(&mut t, &["capture"], "resume_args", strings(&many));
     refused(&t, PINNED, &["capture.resume_args", "64"]);
-    // A headless profile still needs one argument.
-    let mut t = codex();
-    set(&mut t, &["capture"], "args", strings(&[]));
-    refused(&t, PINNED, &["capture.args", "1 to 64"]);
 }
 
 /// Lane T's chat-mode connectors (D57), frozen as drafted: both pass the validator as pinned.
@@ -3657,7 +3492,6 @@ fn the_chat_mode_connector_drafts_validate() {
         let m = HarnessManifest::from_toml_str(&text).unwrap_or_else(|e| panic!("{id}: {e}"));
         assert_eq!(m.id, id);
         m.validate(PINNED).unwrap_or_else(|e| panic!("{id}: {e}"));
-        assert!(m.capture.interactive, "{id}");
         assert!(m.capture.native[0].since_run_start, "{id}");
         assert_eq!(m.capture.home.skills_dir.as_deref(), Some("skills"), "{id}");
     }
@@ -3723,7 +3557,7 @@ fn a_configure_command_is_held_to_the_argument_rules() {
         ),
         (
             commands(&[&["set", "goalcup"]]),
-            &["capture.configure", "tracker"],
+            &["capture.configure", "Goal Cup Proxy"],
         ),
     ];
     for (value, needles) in cases {
@@ -3815,10 +3649,6 @@ fn a_configure_command_is_held_to_the_argument_rules() {
         commands(&[&["--tui", "config"]]),
     );
     refused(&t, PINNED, &["capture.configure", "--tui"]);
-    // A headless profile has no prep launch to run them with.
-    let mut t = hermes();
-    set(&mut t, &["capture"], "configure", commands(&[ok]));
-    refused(&t, PINNED, &["capture.configure", "chat-mode"]);
 }
 
 /// `capture.model_host_from` (D62): with it a profile may list no host; it needs the shared
@@ -3925,4 +3755,224 @@ fn a_model_host_from_is_held_to_its_rules() {
         PINNED,
         &["capture.model_host_from", "config_home"],
     );
+}
+
+/// `participant.no_prompts` (D67): settings read like `capture.model_host_from` (a YAML, JSON or
+/// TOML file in the shared config home, a dotted key, neither naming a key), each with 1 to 4
+/// plain values, at most 4 settings, none twice.
+#[test]
+fn no_prompt_settings_are_held_to_their_rules() {
+    fn row(file: &str, key: &str, values: &[&str]) -> Value {
+        let mut r = Table::new();
+        r.insert("file".into(), Value::String(file.into()));
+        r.insert("key".into(), Value::String(key.into()));
+        r.insert("values".into(), strings(values));
+        Value::Table(r)
+    }
+    fn with(rows: Vec<Value>) -> Table {
+        let mut t = codex();
+        let mut p = Table::new();
+        p.insert("display_name".into(), Value::String("Codex".into()));
+        p.insert("no_prompts".into(), Value::Array(rows));
+        t.insert("participant".into(), Value::Table(p));
+        t
+    }
+    admitted(&with(vec![]), PINNED);
+    admitted(
+        &with(vec![
+            row("config.toml", "approval_policy", &["never"]),
+            row(
+                "settings.json",
+                "permissions.defaultMode",
+                &["bypassPermissions"],
+            ),
+            row("config.yaml", "approvals.mode", &["off", "false"]),
+        ]),
+        PINNED,
+    );
+    let m = parsed(&with(vec![row(
+        "config.toml",
+        "approval_policy",
+        &["never"],
+    )]));
+    let p = m.participant.expect("participant");
+    assert_eq!(p.no_prompts.len(), 1);
+    assert_eq!(p.no_prompts[0].values, vec!["never".to_string()]);
+
+    for (rows, needles) in [
+        (
+            vec![row("auth.json", "mode", &["x"])],
+            &["participant.no_prompts.file", "`auth`"][..],
+        ),
+        (
+            vec![row("config.ini", "mode", &["x"])],
+            &["participant.no_prompts.file", ".toml"],
+        ),
+        (
+            vec![row("../config.toml", "mode", &["x"])],
+            &["participant.no_prompts.file"],
+        ),
+        (
+            vec![row("config.toml", "api_key", &["x"])],
+            &["participant.no_prompts.key", "`key`"],
+        ),
+        (
+            vec![row("config.toml", "mode", &[])],
+            &["participant.no_prompts.values"],
+        ),
+        (
+            vec![row("config.toml", "mode", &["a", "b", "c", "d", "e"])],
+            &["participant.no_prompts.values"],
+        ),
+        (
+            vec![row("config.toml", "mode", &["bad\u{1b}[2J"])],
+            &["participant.no_prompts.values"],
+        ),
+        (
+            vec![
+                row("config.toml", "mode", &["x"]),
+                row("config.toml", "mode", &["y"]),
+            ],
+            &["participant.no_prompts", "twice"],
+        ),
+        (
+            (0..5)
+                .map(|i| row("config.toml", &format!("k{i}"), &["x"]))
+                .collect(),
+            &["participant.no_prompts", "more than 4"],
+        ),
+    ] {
+        refused(&with(rows), PINNED, needles);
+    }
+
+    let mut per_run = with(vec![row("config.toml", "approval_policy", &["never"])]);
+    set(&mut per_run, &["capture", "home"], "config_home", "per_run");
+    refused(&per_run, PINNED, &["participant.no_prompts", "config_home"]);
+}
+
+/// `participant.time_left_tool` (fix plan v9): a config file and key held to the rules of a value
+/// read from the harness's config, a known way to pass the variable, and a home the participant
+/// keeps (a shared config home or a shared run `HOME`).
+#[test]
+fn a_time_left_tool_is_held_to_its_rules() {
+    use goalcup_protocol::harness::PassEnv;
+    fn with(file: &str, key: &str, pass_env: Option<&str>) -> Table {
+        let mut t = codex();
+        let mut tool = Table::new();
+        tool.insert("file".into(), Value::String(file.into()));
+        tool.insert("key".into(), Value::String(key.into()));
+        if let Some(pass_env) = pass_env {
+            tool.insert("pass_env".into(), Value::String(pass_env.into()));
+        }
+        let mut p = Table::new();
+        p.insert("display_name".into(), Value::String("Codex".into()));
+        p.insert("time_left_tool".into(), Value::Table(tool));
+        t.insert("participant".into(), Value::Table(p));
+        t
+    }
+    for (file, key, pass_env) in [
+        ("config.toml", "mcp_servers", Some("env_vars")),
+        (".claude.json", "mcpServers", Some("inherited")),
+        (".config/amp/settings.json", "amp.mcpServers", None),
+        ("config.yaml", "mcp_servers", Some("env_template")),
+    ] {
+        admitted(&with(file, key, pass_env), PINNED);
+    }
+    let tool = parsed(&with("config.toml", "mcp_servers", None))
+        .participant
+        .and_then(|p| p.time_left_tool)
+        .expect("a time_left_tool");
+    assert_eq!(tool.pass_env, PassEnv::Inherited);
+
+    for (table, needles) in [
+        (
+            with("auth.json", "mcpServers", None),
+            &["participant.time_left_tool.file", "`auth`"][..],
+        ),
+        (
+            with("config.ini", "mcp_servers", None),
+            &["participant.time_left_tool.file"],
+        ),
+        (
+            with("../config.toml", "mcp_servers", None),
+            &["participant.time_left_tool.file"],
+        ),
+        (
+            with("config.toml", "mcp servers", None),
+            &["participant.time_left_tool.key"],
+        ),
+        (
+            with("config.toml", "mcp_servers", Some("everything")),
+            &["participant.time_left_tool", "unknown variant `everything`"],
+        ),
+    ] {
+        refused(&table, PINNED, needles);
+    }
+    let mut per_run = with("config.toml", "mcp_servers", None);
+    set(&mut per_run, &["capture", "home"], "config_home", "per_run");
+    refused(&per_run, PINNED, &["participant.time_left_tool", "shared"]);
+}
+
+/// `participant.setup_section` (fix plan v8) goes into prep's link unchanged, so it is a heading
+/// anchor: 1 to 40 lower-case letters and digits joined by single `-`.
+#[test]
+fn a_setup_section_is_held_to_an_anchor_shape() {
+    fn with(section: &str) -> Table {
+        let mut t = codex();
+        let mut p = Table::new();
+        p.insert("display_name".into(), Value::String("Codex".into()));
+        p.insert("setup_section".into(), Value::String(section.into()));
+        t.insert("participant".into(), Value::Table(p));
+        t
+    }
+    let (longest, too_long) = ("a".repeat(40), "a".repeat(41));
+    for good in ["codex", "claude-code", "x2", longest.as_str()] {
+        admitted(&with(good), PINNED);
+    }
+    assert_eq!(
+        parsed(&with("claude-code")).setup_section(),
+        Some("claude-code")
+    );
+    for bad in [
+        "",
+        "Codex",
+        "claude code",
+        "claude--code",
+        "-codex",
+        "codex-",
+        "#codex",
+        "codex?x=1",
+        "c\u{e9}dex",
+        too_long.as_str(),
+    ] {
+        refused(&with(bad), PINNED, &["participant.setup_section"]);
+    }
+}
+
+/// The native pattern matcher the launcher and the daemon share. A `*` in the pattern is a
+/// wildcard even where the name holds a literal `*` at the same place: `*ab` matches `*b`.
+#[test]
+fn a_native_glob_star_is_a_wildcard_against_any_name() {
+    use goalcup_protocol::harness::glob_matches;
+    for (name, pattern) in [
+        ("*ab", "*b"),
+        ("*ab", "*"),
+        ("*ab", "?ab"),
+        ("ab", "*b"),
+        ("b", "*b"),
+        ("rollout-1-x.jsonl", "rollout-*.jsonl"),
+        ("abcb", "a*b"),
+        ("", "*"),
+    ] {
+        assert!(glob_matches(name, pattern), "{name:?} ~ {pattern:?}");
+    }
+    for (name, pattern) in [
+        ("*ab", "*c"),
+        ("ab", "?"),
+        ("abc", "a*b"),
+        ("", "?"),
+        ("rollout.json", "rollout-*.jsonl"),
+    ] {
+        assert!(!glob_matches(name, pattern), "{name:?} !~ {pattern:?}");
+    }
 }

@@ -25,8 +25,8 @@ fn load_harness(id: &str) -> goalcup_cli::connector::HarnessConnector {
         .expect("the shipped schema-1 harness loads")
 }
 
-/// The protocol's host rule, which validates a manifest at load, agrees with the proxy's on
-/// every shape either one refuses. (That every host a connector names passes both is the
+/// The protocol's host rule, which validates a manifest at load, agrees with the recording proxy's
+/// on every shape either one refuses. (That every host a connector names passes both is the
 /// connector contract, `it/connector_contract.rs`.)
 #[test]
 fn the_load_time_host_rule_and_the_proxys_agree() {
@@ -62,7 +62,7 @@ fn the_load_time_host_rule_and_the_proxys_agree() {
         assert_eq!(
             is_capture_host(sample),
             is_config_host(sample),
-            "`{sample}`: the load-time rule and the proxy's must agree"
+            "`{sample}`: the load-time rule and the recording proxy's must agree"
         );
     }
 }

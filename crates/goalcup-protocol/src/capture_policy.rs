@@ -34,7 +34,6 @@ pub(crate) const MAX_CAPTURE_HOSTS: usize = 16;
 pub(crate) const MAX_CAPTURE_PATHS_PER_HOST: usize = 32;
 pub(crate) const MAX_CAPTURE_PATH_BYTES: usize = 1024;
 pub(crate) const MAX_CONTINUATION_BYTES: usize = 512;
-pub(crate) const MAX_GOAL_FLAG_BYTES: usize = 32;
 
 // ---------------------------------------------------------------------------------------
 // CA trust, credentials, tracker hosts
@@ -44,14 +43,14 @@ pub(crate) const MAX_GOAL_FLAG_BYTES: usize = 32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CaMode {
-    /// Measured to add the proxy's CA to the harness's roots. A harness's own variable is
-    /// handed the proxy's CA alone. A [`SHARED_CA_ENV`] row is declared `extend` too: it
+    /// Measured to add the recording proxy's CA to the harness's roots. A harness's own variable is
+    /// handed the recording proxy's CA alone. A [`SHARED_CA_ENV`] row is declared `extend` too: it
     /// replaces the roots of whatever reads it, so it is handed the system's roots plus the
-    /// proxy's CA, and the resulting trust is the same as an extending variable's.
+    /// recording proxy's CA, and the resulting trust is the same as an extending variable's.
     Extend,
-    /// Names a file that REPLACES the harness's provider-client roots with the proxy's CA.
-    /// That fails closed (the harness then trusts only the proxy, which verifies the real
-    /// upstream), but it is a different trust statement, so a manifest must declare it.
+    /// Names a file that REPLACES the harness's provider-client roots with the recording proxy's
+    /// CA. That fails closed (the harness then trusts only the recording proxy, which verifies the
+    /// real upstream), but it is a different trust statement, so a manifest must declare it.
     Replace,
 }
 
@@ -62,10 +61,10 @@ impl CaMode {
 
 /// The CA variables every tool child reads too (OpenSSL's, and Python `requests`'). They replace
 /// the roots of whatever reads them, so the launch hands them a file of the system's roots plus
-/// the proxy's CA, and a profile names them only with `mode = "extend"` (the resulting trust is
-/// the real roots plus the proxy). That gives up failing closed: a connection the harness makes
-/// past the proxy still verifies, and nothing records it (CHEAT-CHECKLIST). A harness with a
-/// replace-mode variable of its own names that instead.
+/// the recording proxy's CA, and a profile names them only with `mode = "extend"` (the resulting
+/// trust is the real roots plus the recording proxy). That gives up failing closed: a connection
+/// the harness makes past the recording proxy still verifies, and nothing records it
+/// (CHEAT-CHECKLIST). A harness with a replace-mode variable of its own names that instead.
 pub const SHARED_CA_ENV: &[&str] = &["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"];
 
 /// How a harness's own CA variable ends (D43, closed). The name itself is connector data
@@ -260,7 +259,7 @@ pub const INJECTION_PREFIXES: &[(&str, &str)] = &[
     ),
     (
         "GOALCUP_",
-        "is the tracker's own namespace, and a harness is delivery-agnostic",
+        "is Goal Cup Proxy's own namespace, and a harness is delivery-agnostic",
     ),
     (
         "OPENSSL_",
@@ -423,7 +422,8 @@ fn env_name_denied(key: &str, ctx: EnvContext) -> Option<&'static str> {
         return Some("redirects an endpoint (D1)");
     }
     // The one proxy name admitted (D59), in `capture.env` only, its value held to `1` by
-    // [`env_value_denied`]: it names no endpoint, it makes Node honour the proxy the launch pins.
+    // [`env_value_denied`]: it names no endpoint, it makes Node honour the recording proxy the
+    // launch pins.
     let node_env_proxy = ctx == EnvContext::CaptureEnv && upper == NODE_USE_ENV_PROXY;
     if (upper.ends_with("_PROXY") || upper == "PROXY") && !node_env_proxy {
         return Some("is a proxy variable, which the capture launch pins itself");
@@ -977,26 +977,9 @@ pub fn capture_arg_denied(arg: &str) -> Option<&'static str> {
         .map(|(_, why)| *why)
 }
 
-/// Why a `goal_flag` is refused beyond [`capture_arg_denied`], or `None` (D51). The goal is a
-/// prompt the harness reads: an option whose name says it runs, evaluates or loads its value
-/// (`--exec`, `--command`, `--script`, `--file`, `--config`) would hand the goal text to
-/// something other than the model. Compared lower-cased, word by word (`-` and `_` split).
-pub fn goal_flag_denied(flag: &str) -> Option<&'static str> {
-    const WORDS: &[&str] = &[
-        "exec", "eval", "shell", "cmd", "command", "script", "run", "file", "path", "load",
-        "config", "import", "plugin", "hook",
-    ];
-    // Whole words only: `--exec` and `--prompt-file` are refused, `--execute` (Amp's goal
-    // flag) and `--payload` are not.
-    flag.to_ascii_lowercase()
-        .split(['-', '_'])
-        .any(|part| WORDS.contains(&part))
-        .then_some("names an option that runs, evaluates or loads its value; the goal is a prompt")
-}
-
 /// A configured host: lowercase ASCII letters, digits and hyphens in dot-separated labels
 /// of 1–63 bytes, not starting or ending with a hyphen, at most 253 bytes, with no scheme,
-/// port, userinfo, wildcard or trailing dot, and not an IPv4 literal. The same rule the
+/// port, userinfo, wildcard or trailing dot, and not an IPv4 literal. The same rule the recording
 /// proxy's `goalcup_cli::proxy::tls::is_config_host` applies to what it is handed.
 pub fn is_capture_host(host: &str) -> bool {
     !host.is_empty()

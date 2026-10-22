@@ -1,39 +1,18 @@
-//! Versioned provenance documents a v5 chain can carry: the cutoff, the signed-mode
-//! finalization and the termination outcome, with the primitives they are built from.
+//! The provenance primitives a v5 chain carries: the lowercase SHA-256 digest, the canonical
+//! UTC timestamp, the run-key spelling, and the termination outcome a local finish records
+//! (D54).
 //!
-//! These types validate and bind declarations. They do not inspect a repository, read
-//! captured objects or run a publisher.
-//!
-//! **What is left of the Git vocabulary.** `FinalizationV1::CaptureUnavailable` names the
-//! repository selection that did not happen (`RepositoryNonSelectionV1`,
-//! `SelectedRepositoryV1`, `SnapshotFailedV1`) and the publisher that was not run. The frozen v5
-//! corpus case `signed-receipt-ack-finalization` carries it, so its types stay exactly as they
-//! were, every enum variant included: dropping one would change how a hostile line reads. The
-//! repository observations, snapshot, history, commit, publication and recovery documents were
-//! never produced by any writer and left with D54.
+//! These types validate and bind declarations. They do not inspect a repository or read
+//! captured objects.
 
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::cmp::Ordering;
 
-const MAX_PORTABLE_PATH_BYTES_V1: usize = 4_096;
-
-const MAX_REF_BYTES_V1: usize = 1_024;
-
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProvenanceError {
     #[error("invalid lowercase SHA-256 digest")]
     InvalidSha256,
-    #[error("invalid lowercase Git object id")]
-    InvalidGitObjectId,
-    #[error("Git object id width does not match the declared object format")]
-    GitObjectFormatMismatch,
-    #[error("invalid portable relative path")]
-    InvalidPortablePath,
-    #[error("invalid refs/heads publication target")]
-    InvalidHeadsRef,
-    #[error("invalid normalized GitHub remote")]
-    InvalidRemote,
     #[error("invalid canonical UTC timestamp")]
     InvalidTimestamp,
     #[error("invalid {field}: {reason}")]
@@ -89,132 +68,6 @@ impl<'de> Deserialize<'de> for Sha256Digest {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GitObjectFormat {
-    Sha1,
-    Sha256,
-}
-
-impl GitObjectFormat {
-    fn hex_len(self) -> usize {
-        match self {
-            Self::Sha1 => 40,
-            Self::Sha256 => 64,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(transparent)]
-pub struct GitObjectId(String);
-
-impl GitObjectId {
-    pub fn validate_for(&self, format: GitObjectFormat) -> Result<(), ProvenanceError> {
-        if self.0.len() == format.hex_len() {
-            Ok(())
-        } else {
-            Err(ProvenanceError::GitObjectFormatMismatch)
-        }
-    }
-}
-
-impl TryFrom<&str> for GitObjectId {
-    type Error = ProvenanceError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        if (value.len() == 40 || value.len() == 64)
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            Ok(Self(value.to_string()))
-        } else {
-            Err(ProvenanceError::InvalidGitObjectId)
-        }
-    }
-}
-
-impl TryFrom<String> for GitObjectId {
-    type Error = ProvenanceError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::try_from(value.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for GitObjectId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::try_from(value).map_err(serde::de::Error::custom)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(transparent)]
-pub struct PortableRelativePathOrRoot(String);
-
-impl TryFrom<&str> for PortableRelativePathOrRoot {
-    type Error = ProvenanceError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        validate_portable_path(value, true)?;
-        Ok(Self(value.to_string()))
-    }
-}
-
-impl TryFrom<String> for PortableRelativePathOrRoot {
-    type Error = ProvenanceError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::try_from(value.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for PortableRelativePathOrRoot {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::try_from(value).map_err(serde::de::Error::custom)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(transparent)]
-pub struct ValidatedHeadsRef(String);
-
-impl TryFrom<&str> for ValidatedHeadsRef {
-    type Error = ProvenanceError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        validate_heads_ref(value)?;
-        Ok(Self(value.to_string()))
-    }
-}
-
-impl TryFrom<String> for ValidatedHeadsRef {
-    type Error = ProvenanceError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::try_from(value.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for ValidatedHeadsRef {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::try_from(value).map_err(serde::de::Error::custom)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct Rfc3339Utc(String);
@@ -260,26 +113,6 @@ impl<'de> Deserialize<'de> for Rfc3339Utc {
     }
 }
 
-pub(crate) type ChainHash = Sha256Digest;
-
-/// Validate the shared questionnaire binding grammar without changing its receipt wire type.
-pub fn validate_questionnaire_version(value: &str) -> Result<(), ProvenanceError> {
-    let bytes = value.as_bytes();
-    if bytes.is_empty()
-        || bytes.len() > 128
-        || !bytes[0].is_ascii_alphanumeric()
-        || !bytes
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-    {
-        return Err(invalid(
-            "questionnaire_version",
-            "must use the bounded version-token grammar",
-        ));
-    }
-    Ok(())
-}
-
 /// Return the canonical lowercase spelling of a usable, non-weak Ed25519 run key.
 pub fn canonical_run_public_key(value: &str) -> Result<String, ProvenanceError> {
     if value.len() != 64 {
@@ -294,204 +127,6 @@ pub fn canonical_run_public_key(value: &str) -> Result<String, ProvenanceError> 
         return Err(ProvenanceError::PublicKeyMalformed);
     }
     Ok(hex::encode(bytes))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GitRemoteTransportV1 {
-    Https,
-    Ssh,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NormalizedGitHubRemote {
-    pub host: String,
-    pub owner: String,
-    pub repository: String,
-    pub transport: GitRemoteTransportV1,
-}
-
-impl NormalizedGitHubRemote {
-    pub fn validate(&self) -> Result<(), ProvenanceError> {
-        if self.host.is_empty()
-            || self.host.len() > 253
-            || self
-                .host
-                .bytes()
-                .any(|b| !(b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-'))
-            || self.host.starts_with(['.', '-'])
-            || self.host.ends_with(['.', '-'])
-            || self.host.contains("..")
-            || self
-                .host
-                .split('.')
-                .any(|label| label.is_empty() || label.starts_with('-') || label.ends_with('-'))
-            || !valid_github_component(&self.owner)
-            || !valid_github_component(&self.repository)
-            || self.repository.to_ascii_lowercase().ends_with(".git")
-        {
-            return Err(ProvenanceError::InvalidRemote);
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum RepositoryNonSelectionV1 {
-    None {
-        reason: NoRepositoryReasonV1,
-    },
-    Ambiguous {
-        candidate_count: u32,
-    },
-    Unsupported {
-        reason: RepositoryUnsupportedReasonV1,
-    },
-}
-
-impl RepositoryNonSelectionV1 {
-    pub(crate) fn validate(&self) -> Result<(), ProvenanceError> {
-        if let Self::Ambiguous { candidate_count } = self
-            && *candidate_count < 2
-        {
-            return Err(invalid(
-                "candidate_count",
-                "an ambiguous selection requires at least two candidates",
-            ));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NoRepositoryReasonV1 {
-    NotFound,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RepositoryUnsupportedReasonV1 {
-    EligibleOutputOutsideSelectedRepository,
-    BareRepository,
-    LinkedWorktree,
-    NestedRepository,
-    Gitlink,
-    SplitIndex,
-    SparseIndex,
-    AlternateObjectDirectory,
-    UnsupportedRepositoryFormat,
-    UnsupportedObjectFormat,
-    UnsupportedIndex,
-    UnsupportedLaunchEnvironment,
-    UnsupportedConfigAuthority,
-    DetachedHead,
-    UnsafeRepositoryPath,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SelectedRepositoryV1 {
-    pub workspace_relative_root: PortableRelativePathOrRoot,
-    pub remote: NormalizedGitHubRemote,
-    pub target_ref: ValidatedHeadsRef,
-    pub object_format: GitObjectFormat,
-    pub pre_seal_head: PreSealHeadV1,
-    pub selection_basis_chain_hash: ChainHash,
-}
-
-impl SelectedRepositoryV1 {
-    pub(crate) fn validate(&self) -> Result<(), ProvenanceError> {
-        self.remote.validate()?;
-        match &self.pre_seal_head {
-            PreSealHeadV1::Unborn => {}
-            PreSealHeadV1::Existing { commit, tree } => {
-                commit.validate_for(self.object_format)?;
-                tree.validate_for(self.object_format)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum PreSealHeadV1 {
-    Unborn,
-    Existing {
-        commit: GitObjectId,
-        tree: GitObjectId,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SnapshotPhaseV1 {
-    Eligibility,
-    Enumerate,
-    Copy,
-    Protect,
-    Verify,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SnapshotFailureReasonV1 {
-    UnsupportedAuthority,
-    IncompleteAuthority,
-    UnsupportedEntryKind,
-    UnsupportedPath,
-    BoundExceeded,
-    RaceDetected,
-    Io,
-    IntegrityMismatch,
-    ProtectionFailed,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SnapshotFailedV1 {
-    pub phase: SnapshotPhaseV1,
-    pub reason: SnapshotFailureReasonV1,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SnapshotNotAttemptedV1 {
-    pub selection: RepositoryNonSelectionV1,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PreCutoffDrainFailureV1 {
-    AdmissionStateUnavailable,
-    WriterUnavailable,
-    WriterWatermarkAmbiguous,
-    ChainSyncFailed,
-    RestartStateAmbiguous,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum PreCutoffDrainOutcomeV1 {
-    Complete,
-    Degraded { reason: PreCutoffDrainFailureV1 },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CutoffReachedV1 {
-    pub receipt_sha256: Sha256Digest,
-    pub deadline_at: Rfc3339Utc,
-    pub pre_cutoff_drain: PreCutoffDrainOutcomeV1,
-}
-
-impl CutoffReachedV1 {
-    pub(crate) fn validate(&self) -> Result<(), ProvenanceError> {
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -533,8 +168,8 @@ pub enum TerminationOutcomeV1 {
 
 impl TerminationOutcomeV1 {
     /// Check the outcome's own time ordering: a stop is not confirmed, and a wait does not
-    /// end, before it was requested. Public so the v5 local terminal writer and readers apply
-    /// exactly the rule finalizations already use; the semantics are unchanged.
+    /// end, before it was requested. The v5 local terminal writer and the phase replay apply
+    /// this one rule.
     pub(crate) fn validate(&self) -> Result<(), ProvenanceError> {
         match self {
             Self::AlreadyStopped { .. } => Ok(()),
@@ -552,170 +187,11 @@ impl TerminationOutcomeV1 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum CaptureUnavailableV1 {
-    NotAttempted(SnapshotNotAttemptedV1),
-    Failed {
-        selected: Box<SelectedRepositoryV1>,
-        failure: SnapshotFailedV1,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PublisherNotAttemptedV1 {
-    pub reason: PublisherNotAttemptedReasonV1,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PublisherNotAttemptedReasonV1 {
-    SelectionFailed,
-    EligibilityFailed,
-    SnapshotFailed,
-    ProjectionFailed,
-    RequiredHistoryFailed,
-    CommitConstructionFailed,
-    CredentialUnavailable,
-    PublisherSetupFailed,
-}
-
-/// The signed-mode terminal bound to the preceding cutoff. One arm: the frozen corpus case
-/// `signed-receipt-ack-finalization` carries it. The `captured` and `workspace_submission`
-/// arms left with D54; no v5 writer ever produced either.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum FinalizationV1 {
-    CaptureUnavailable {
-        receipt_sha256: Sha256Digest,
-        termination: TerminationOutcomeV1,
-        capture: CaptureUnavailableV1,
-        publisher: PublisherNotAttemptedV1,
-    },
-}
-
-impl FinalizationV1 {
-    pub(crate) fn receipt_sha256(&self) -> &Sha256Digest {
-        match self {
-            Self::CaptureUnavailable { receipt_sha256, .. } => receipt_sha256,
-        }
-    }
-
-    /// The termination outcome this finalization records.
-    pub fn termination(&self) -> &TerminationOutcomeV1 {
-        match self {
-            Self::CaptureUnavailable { termination, .. } => termination,
-        }
-    }
-
-    pub fn validate(&self) -> Result<(), ProvenanceError> {
-        match self {
-            Self::CaptureUnavailable {
-                termination,
-                capture,
-                publisher,
-                ..
-            } => {
-                termination.validate()?;
-                let expected = match capture {
-                    CaptureUnavailableV1::NotAttempted(not_attempted) => {
-                        not_attempted.selection.validate()?;
-                        PublisherNotAttemptedReasonV1::SelectionFailed
-                    }
-                    CaptureUnavailableV1::Failed { selected, failure } => {
-                        selected.validate()?;
-                        if failure.phase == SnapshotPhaseV1::Eligibility {
-                            PublisherNotAttemptedReasonV1::EligibilityFailed
-                        } else {
-                            PublisherNotAttemptedReasonV1::SnapshotFailed
-                        }
-                    }
-                };
-                require_publisher_reason(publisher, expected)
-            }
-        }
-    }
-}
-
-fn require_publisher_reason(
-    publisher: &PublisherNotAttemptedV1,
-    expected: PublisherNotAttemptedReasonV1,
-) -> Result<(), ProvenanceError> {
-    if publisher.reason == expected {
-        Ok(())
-    } else {
-        Err(invalid(
-            "publisher.reason",
-            "does not match the causal failure stage",
-        ))
-    }
-}
-
 fn is_lower_hex(value: &str, len: usize) -> bool {
     value.len() == len
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-fn validate_portable_path(value: &str, allow_root: bool) -> Result<(), ProvenanceError> {
-    if value.is_empty() {
-        return if allow_root {
-            Ok(())
-        } else {
-            Err(ProvenanceError::InvalidPortablePath)
-        };
-    }
-    if value.len() > MAX_PORTABLE_PATH_BYTES_V1
-        || value.starts_with('/')
-        || value.contains(['\0', '\\'])
-        || (value.len() >= 2
-            && value.as_bytes()[0].is_ascii_alphabetic()
-            && value.as_bytes()[1] == b':')
-        || value
-            .split('/')
-            .any(|component| component.is_empty() || component == "." || component == "..")
-    {
-        return Err(ProvenanceError::InvalidPortablePath);
-    }
-    Ok(())
-}
-
-fn validate_heads_ref(value: &str) -> Result<(), ProvenanceError> {
-    let Some(suffix) = value.strip_prefix("refs/heads/") else {
-        return Err(ProvenanceError::InvalidHeadsRef);
-    };
-    if suffix.is_empty()
-        || value.len() > MAX_REF_BYTES_V1
-        || value.contains("..")
-        || value.contains("@{")
-        || value.ends_with('.')
-        || value.bytes().any(|byte| {
-            byte <= b' '
-                || byte == 0x7f
-                || matches!(byte, b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\')
-        })
-        || suffix.split('/').any(|component| {
-            component.is_empty()
-                || component.starts_with('.')
-                || component.ends_with(".lock")
-                || component.ends_with('.')
-        })
-    {
-        return Err(ProvenanceError::InvalidHeadsRef);
-    }
-    Ok(())
-}
-
-fn valid_github_component(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 100
-        && value != "."
-        && value != ".."
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
-        })
 }
 
 fn validate_rfc3339_utc(value: &str) -> Result<(), ProvenanceError> {

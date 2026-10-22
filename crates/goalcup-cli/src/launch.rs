@@ -20,33 +20,33 @@
 //!   over it, rendered;
 //! * the allowlist [`CAPTURE_IDENTITY_ENV`] (`USER`, `LOGNAME`, `TMPDIR`), carried across
 //!   from the tracker's environment and nothing else from it;
-//! * the run's `HOME` (per run, or the connector's shared run home, D59), `PATH`
-//!   ([`CAPTURE_PATH`], or for a chat-mode connector the participant's own: [`harness_path`])
-//!   and the profile's home variable;
-//! * for a chat-mode connector only, the participant's terminal environment
-//!   ([`CHAT_PASSTHROUGH_ENV`] and `LC_*`), under the connector's own values;
+//! * the run's `HOME` (per run, or the connector's shared run home, D59), `PATH` (the
+//!   participant's own, or [`CAPTURE_PATH`] when they have none: [`harness_path`]) and the
+//!   profile's home variable;
+//! * the participant's terminal environment ([`CHAT_PASSTHROUGH_ENV`] and `LC_*`), under the
+//!   connector's own values;
 //! * the passive **loopback** recording proxy through process-scoped `HTTPS_PROXY`/
 //!   `https_proxy` — the M2 reservation AGENTS.md names, and the only proxy a launch may name,
 //!   checked by `loopback_proxy_url` — with `NO_PROXY`/`no_proxy` ([`CAPTURE_NO_PROXY`]) and
-//!   the profile's process-scoped CA variable.
+//!   the profile's process-scoped CA variable;
+//! * Goal Cup Proxy's own two, the same for every harness: [`IN_HARNESS_ENV`], under which
+//!   `goalcup seal` refuses, and the run's time-left file the agent may read
+//!   ([`crate::run::time_left::FILE_ENV`], D66). A connector cannot name either (`GOALCUP_*`
+//!   is refused in `capture.env`).
 //!
-//! **D1: the tracker never sets a model base URL.** Nothing on that list can be one except
+//! **D1: Goal Cup Proxy never sets a model base URL.** Nothing on that list can be one except
 //! the profile's `capture.env`, and `goalcup_protocol::capture_policy` refuses a profile that
 //! names a `*_BASE_URL`, `*_API_URL` or `*ENDPOINT` variable, a `*_PROXY` or bare `PROXY`
 //! (other than `NODE_USE_ENV_PROXY = "1"`, which names no endpoint, D59), or any other `*_URL`
 //! there, before a plan is ever built. The participant's shell cannot add
-//! one either, because nothing outside the allowlist is inherited (a chat-mode connector's
-//! pass-through is an allowlist too): an allowlist leaves no `*_URL` the participant exported
-//! to strip.
+//! one either, because nothing outside the allowlist is inherited (the terminal pass-through is
+//! an allowlist too): an allowlist leaves no `*_URL` the participant exported to strip.
 //!
-//! Headless as it is, the capture child stays in the launcher's process group: the daemon
-//! never confirms a group ended (D30), and there a Ctrl-C typed at the terminal reaches it.
+//! # A launch keeps the terminal (D57)
 //!
-//! # A chat-mode launch keeps the terminal (D57)
-//!
-//! A connector with `[capture] interactive = true` runs the harness in its normal chat mode in
-//! the participant's own terminal: [`build_capture_launch`] is given no goal and places none,
-//! and the plan is [`LaunchMode::Tui`]. Its child inherits this process's stdin, stdout and
+//! Every connector runs its harness in its normal chat mode in the participant's own terminal
+//! (`[capture] interactive = true`; headless mode was removed): [`build_capture_launch`] places
+//! no goal, and the plan is [`LaunchMode::Tui`]. Its child inherits this process's stdin, stdout and
 //! stderr (no `/dev/null`, no pipe: the participant types the prompt and reads the answer), and
 //! it stays in **this process's own process group**, which is the terminal's foreground group
 //! when `goalcup start` is run from a shell.
@@ -78,15 +78,14 @@
 //! handle therefore carries `pgid: None`, and `KillStrategy::ProcessGroup` degrades
 //! to the descendant walk it already implements.
 //!
-//! [`LaunchMode::Server`] is a headless harness the participant talks to over a socket. It
-//! has no tty to lose, so it may own its group and its handle carries a real `pgid` — which
-//! is the strictly better thing to hand a terminator. No shipped connector uses this mode;
-//! the variant stays in the schema for a harness that is genuinely headless.
+//! [`LaunchMode::Server`] is a harness the participant talks to over a socket. It has no tty to
+//! lose, so it may own its group and its handle carries a real `pgid` — which is the strictly
+//! better thing to hand a terminator. No capture plan uses this mode; the variant stays in the
+//! process-handle schema.
 //!
 //! [`LaunchMode::AttachOnly`] builds no plan at all. In V1, attach mode armed the folder and
 //! the participant opened a session in it; there was no argv, so the V1 `plan` refused it
-//! rather than inventing one. A headless capture plan is [`LaunchMode::Server`] and a chat-mode
-//! one (D57) is [`LaunchMode::Tui`].
+//! rather than inventing one. Every capture plan (D57) is [`LaunchMode::Tui`].
 //!
 //! # `handle()` is separate from `spawn()`
 //!
@@ -136,8 +135,7 @@
 use crate::CliError;
 use crate::connector::HarnessConnector;
 use crate::proxy::connect::PROXY_USERNAME;
-use goalcup_protocol::capture::MAX_GOAL_BYTES;
-use goalcup_protocol::harness::{CaptureSpec, IdGrammar, IdentitySource, PlatformKey, Strategy};
+use goalcup_protocol::harness::{CaptureSpec, PlatformKey, Strategy};
 use goalcup_protocol::manifest::{Kill, LaunchMode};
 use goalcup_protocol::process::{ProcessHandle, find_named, process_start_identity, snapshot};
 use goalcup_protocol::template::{TemplateVars, render};
@@ -146,10 +144,6 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
-pub(crate) use crate::capture_tee::{CaptureStderr, tee_stderr_capture_with_rule};
-/// The stderr tee of a `stderr_line` capture child lives in its own file; it is part of this
-/// module's interface (D40).
-pub use crate::capture_tee::{ScopeMarker, tee_marked_with_rule};
 /// The ending of a child this process just released lives in its own file, which the
 /// "this crate never terminates anything" sweep exempts by name; it is part of this module's
 /// interface (D40, the root ruling).
@@ -182,38 +176,13 @@ pub struct LaunchPlan {
     pub cwd: PathBuf,
     pub mode: LaunchMode,
     pub kill: Kill,
-    /// Set by [`build_capture_launch`] for a headless capture launch, whose goal is in the
-    /// argv. `None` for a chat-mode launch (D57), which has no goal and keeps the terminal.
-    pub capture: Option<HeadlessCapture>,
-}
-
-/// What makes a capture launch different from an ordinary one, beyond its argv and environment.
-///
-/// [`spawn`] gives such a child `/dev/null` for stdin (both harnesses
-/// append piped stdin to the goal); its environment is exactly [`LaunchPlan::env_set`],
-/// because [`build_capture_launch`] leaves [`LaunchPlan::env_base`] empty (built from nothing, D38);
-/// and `argv[goal_index]` is the goal, which `Debug` does not print.
-///
-/// A recipe that names a `goal_flag` carries its goal inside that flag's own element
-/// (`--query=<goal>`), so the element is `goal_prefix` bytes of flag and `=` and then the goal;
-/// a recipe whose args end in `--` has `goal_prefix` 0 and the whole element is the goal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HeadlessCapture {
-    pub goal_index: usize,
-    pub goal_prefix: usize,
 }
 
 impl fmt::Debug for LaunchPlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LaunchPlan")
             .field("program", &self.program)
-            .field(
-                "argv",
-                &Argv {
-                    argv: &self.argv,
-                    goal: self.capture.map(|c| (c.goal_index, c.goal_prefix)),
-                },
-            )
+            .field("argv", &self.argv)
             .field("env_set", &RedactedEnv(&self.env_set))
             .field("env_remove", &self.env_remove)
             // Names only. This is the participant's own environment: their API keys, their
@@ -224,43 +193,12 @@ impl fmt::Debug for LaunchPlan {
             .field("cwd", &self.cwd)
             .field("mode", &self.mode)
             .field("kill", &self.kill)
-            .field("capture", &self.capture)
             .finish()
     }
 }
 
 /// What a secret value prints as, on every surface in this crate that prints one.
 const REDACTED: &str = "<redacted>";
-
-/// Prints the argv with the goal, if there is one, as its length only (the flag that carries
-/// it, `--query=`, is printed). The goal is retained as a redacted evidence stream and nowhere
-/// else.
-struct Argv<'a> {
-    argv: &'a [String],
-    /// The goal element's index and the length of the flag text in front of the goal.
-    goal: Option<(usize, usize)>,
-}
-
-impl fmt::Debug for Argv<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut l = f.debug_list();
-        for (i, a) in self.argv.iter().enumerate() {
-            match self.goal {
-                Some((goal_index, prefix)) if goal_index == i => {
-                    let flag = a.get(..prefix).unwrap_or("");
-                    l.entry(&format_args!(
-                        "{flag}<goal: {} bytes>",
-                        a.len().saturating_sub(prefix)
-                    ));
-                }
-                _ => {
-                    l.entry(a);
-                }
-            }
-        }
-        l.finish()
-    }
-}
 
 /// Prints every key and every value except a `*_TOKEN` one, and with the userinfo of any
 /// URL in a value replaced.
@@ -386,30 +324,33 @@ pub(crate) const CAPTURE_IDENTITY_ENV: [&str; 3] = ["USER", "LOGNAME", "TMPDIR"]
 /// [`CAPTURE_IDENTITY_ENV`]: the harness runs in their terminal with their tools, so it gets
 /// their `PATH` (an npm harness is a `#!/usr/bin/env node` script, and the agent runs Homebrew,
 /// cargo and the rest), their terminal type and colours, their language, and their shell. Every
-/// `LC_*` variable is carried too. Nothing else: no proxy, no base URL, no credential, none of the
-/// tracer's own secrets. A connector's `[capture.env]` still wins (its `SHELL`, for one), and
+/// `LC_*` variable is carried too. Nothing else: no proxy, no base URL, no credential, none of
+/// goalcup's own secrets. A connector's `[capture.env]` still wins (its `SHELL`, for one), and
 /// the launch's own pins (`HOME`, the home variable, the loopback proxy, the CA) win over both.
-/// A headless launch carries none of these.
 pub const CHAT_PASSTHROUGH_ENV: [&str; 5] = ["PATH", "TERM", "COLORTERM", "LANG", "SHELL"];
 
-/// The `PATH` the harness is given: the participant's own for a chat-mode connector (D57), when
-/// they have one, and [`CAPTURE_PATH`] otherwise.
-pub fn harness_path(profile: &CaptureSpec, parent_env: &BTreeMap<String, String>) -> String {
+/// The `PATH` the harness is given: the participant's own (D57), when they have one, and
+/// [`CAPTURE_PATH`] otherwise.
+pub fn harness_path(parent_env: &BTreeMap<String, String>) -> String {
     match parent_env.get("PATH") {
-        Some(path) if profile.interactive && !path.is_empty() => path.clone(),
+        Some(path) if !path.is_empty() => path.clone(),
         _ => CAPTURE_PATH.to_string(),
     }
 }
 
-/// The participant's variables a chat-mode launch carries across ([`CHAT_PASSTHROUGH_ENV`] and
-/// every `LC_*` the schema would admit as a name); empty for a headless launch.
-fn chat_passthrough(
-    profile: &CaptureSpec,
-    parent_env: &BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    if !profile.interactive {
-        return BTreeMap::new();
-    }
+/// Set to `1` in every recording launch's environment, whatever the harness: `goalcup seal` run
+/// from inside the harness sees it and refuses, so the agent cannot end its own segment.
+pub const IN_HARNESS_ENV: &str = "GOALCUP_IN_HARNESS";
+
+/// Whether this process runs inside a recorded harness: [`IN_HARNESS_ENV`] is set and not
+/// empty. An empty value is the same as unset.
+pub fn in_harness() -> bool {
+    std::env::var_os(IN_HARNESS_ENV).is_some_and(|value| !value.is_empty())
+}
+
+/// The participant's variables a launch carries across ([`CHAT_PASSTHROUGH_ENV`] and every
+/// `LC_*` the schema would admit as a name).
+fn chat_passthrough(parent_env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     parent_env
         .iter()
         .filter(|(key, value)| {
@@ -479,7 +420,7 @@ pub fn capture_executable(
         source,
     })?;
     let mut resolved = resolve_harness_executable(&file)?;
-    let search_path = harness_path(profile, env);
+    let search_path = harness_path(env);
     if let Some(interpreter) = env_interpreter(&file)
         && crate::preflight::resolve_on_path(
             &interpreter,
@@ -606,41 +547,34 @@ fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 
 /// What a capture launch needs that its connector's profile cannot say.
 ///
-/// `Debug` prints the goal's length and the proxy URL without its userinfo, never either
-/// value.
+/// `Debug` prints the proxy URL without its userinfo.
 pub struct CaptureLaunch<'a> {
-    /// The initial goal, exactly as read. Appended as one argument after the template's
-    /// closing `--`, or as the value of the profile's one `--flag=<goal>` element: no shell, no
-    /// quoting, no splitting. `None` for a chat-mode profile (D57), where the participant types
-    /// the prompt; a headless profile refuses `None`, and a chat-mode one refuses a goal.
-    pub goal: Option<&'a [u8]>,
     pub executable: &'a ResolvedExecutable,
     /// The per-run `HOME`, created by the caller in the shape the profile's `home` names.
     pub run_home: &'a Path,
     /// The isolated harness home `launch.home_env` points at (the profile's `config_home`).
     pub config_home: &'a Path,
-    /// `http://goalcup:<credential>@<127.0.0.1|[::1]|localhost>:<port>`, the proxy this launch
-    /// records through ([`crate::proxy::connect::ProxyCredential::proxy_url`]'s shape).
+    /// `http://goalcup:<credential>@<127.0.0.1|[::1]|localhost>:<port>`, the recording proxy this
+    /// launch records through ([`crate::proxy::connect::ProxyCredential::proxy_url`]'s shape).
     pub proxy_url: &'a str,
-    /// The proxy's per-launch CA certificate, handed to each of the profile's own `ca.env`
-    /// variables, in either mode.
+    /// The recording proxy's per-launch CA certificate, handed to each of the profile's own
+    /// `ca.env` variables, in either mode.
     pub ca_certificate: &'a Path,
-    /// The system's roots plus the proxy's CA ([`crate::ca_bundle::bundle_for`]), handed to
-    /// each [`SHARED_CA_ENV`](goalcup_protocol::capture_policy::SHARED_CA_ENV) row the profile
+    /// The system's roots plus the recording proxy's CA ([`crate::ca_bundle::bundle_for`]), handed
+    /// to each [`SHARED_CA_ENV`](goalcup_protocol::capture_policy::SHARED_CA_ENV) row the profile
     /// names. `None` when it names none; a launch that needs it and has none is refused.
     pub ca_bundle: Option<&'a Path>,
-    /// The tracker's own environment. Only [`CAPTURE_IDENTITY_ENV`] is read from it, and for a
-    /// chat-mode connector also [`CHAT_PASSTHROUGH_ENV`] and `LC_*`.
+    /// The tracker's own environment. Only [`CAPTURE_IDENTITY_ENV`], [`CHAT_PASSTHROUGH_ENV`]
+    /// and `LC_*` are read from it.
     pub parent_env: &'a BTreeMap<String, String>,
+    /// The run's time-left file ([`crate::run::time_left::file_path`]), handed to the harness
+    /// as [`crate::run::time_left::FILE_ENV`] (D66). `goalcup start` always gives one.
+    pub time_left_file: Option<&'a Path>,
 }
 
 impl fmt::Debug for CaptureLaunch<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CaptureLaunch")
-            .field(
-                "goal",
-                &self.goal.map(|goal| format!("<{} bytes>", goal.len())),
-            )
             .field("executable", &self.executable)
             .field("run_home", &self.run_home)
             .field("config_home", &self.config_home)
@@ -651,31 +585,9 @@ impl fmt::Debug for CaptureLaunch<'_> {
             .field("ca_certificate", &self.ca_certificate)
             .field("ca_bundle", &self.ca_bundle)
             .field("parent_env", &Keys(self.parent_env))
+            .field("time_left_file", &self.time_left_file)
             .finish()
     }
-}
-
-/// The goal as one argument: UTF-8, non-empty, NUL-free and bounded.
-pub(crate) fn checked_goal(goal: &[u8]) -> Result<&str, CliError> {
-    let refuse = |why: &str| {
-        Err(CliError::Refused(format!(
-            "the goal ({} bytes) {why}. Nothing is launched.",
-            goal.len()
-        )))
-    };
-    if goal.len() > MAX_GOAL_BYTES {
-        return refuse(&format!("is longer than {MAX_GOAL_BYTES} bytes"));
-    }
-    let Ok(text) = std::str::from_utf8(goal) else {
-        return refuse("is not valid UTF-8");
-    };
-    if text.contains('\0') {
-        return refuse("holds a NUL byte, which no argument can carry");
-    }
-    if text.trim().is_empty() {
-        return refuse("is empty or only white space");
-    }
-    Ok(text)
 }
 
 /// The capture launch rendered from harness-contract schema 1.
@@ -689,8 +601,7 @@ pub fn build_capture_launch(
 }
 
 /// [`build_capture_launch`] for a run that is being continued (`goalcup continue`): the
-/// profile's `resume_args` follow its `args`, so the harness picks up its last session. Only a
-/// chat-mode profile can be continued, as it takes no goal.
+/// profile's `resume_args` follow its `args`, so the harness picks up its last session.
 pub fn build_resumed_launch(
     c: &HarnessConnector,
     v: &TemplateVars,
@@ -730,9 +641,7 @@ pub fn has_native_session(
         } else {
             return Ok(true);
         };
-        // A `{id}` in the pattern is the session's own id: any session counts.
-        let pattern = native.pattern.replace("{id}", "*");
-        let parts: Vec<&str> = pattern.split('/').collect();
+        let parts: Vec<&str> = native.pattern.split('/').collect();
         let floor = native.since_run_start.then_some(since);
         match holds_session_file(&root, &parts, floor) {
             Ok(true) => return Ok(true),
@@ -790,26 +699,26 @@ fn holds_session_file(
 /// What [`build_launch`] needs from the caller: a [`CaptureLaunch`], or the same without the
 /// recording proxy (`goalcup prep`'s launch, [`build_prep_launch`]).
 struct Inputs<'a> {
-    goal: Option<&'a [u8]>,
     executable: &'a ResolvedExecutable,
     run_home: &'a Path,
     config_home: &'a Path,
-    /// The loopback proxy URL, the proxy's CA certificate and the roots-plus-proxy bundle
+    /// The loopback proxy URL, the recording proxy's CA certificate and the roots-plus-proxy bundle
     /// handed to the harness; `None` for a launch that records nothing and so has no proxy to
     /// name.
     proxy: Option<(&'a str, &'a Path, Option<&'a Path>)>,
     parent_env: &'a BTreeMap<String, String>,
+    time_left_file: Option<&'a Path>,
 }
 
 impl<'a> Inputs<'a> {
     fn recording(launch: &'a CaptureLaunch<'a>) -> Inputs<'a> {
         Inputs {
-            goal: launch.goal,
             executable: launch.executable,
             run_home: launch.run_home,
             config_home: launch.config_home,
             proxy: Some((launch.proxy_url, launch.ca_certificate, launch.ca_bundle)),
             parent_env: launch.parent_env,
+            time_left_file: launch.time_left_file,
         }
     }
 }
@@ -824,22 +733,6 @@ fn build_launch(
     let id = &c.loaded.manifest.id;
     let profile = &c.loaded.manifest.capture;
     let platform = PlatformKey::current();
-    let goal = match (profile.interactive, launch.goal) {
-        (false, Some(goal)) => Some(checked_goal(goal)?),
-        (true, None) => None,
-        (false, None) => {
-            return Err(CliError::Refused(format!(
-                "`{id}` runs headless and needs a goal: `goalcup start --harness {id} \
-                 --goal-file <file>`. Nothing is launched."
-            )));
-        }
-        (true, Some(_)) => {
-            return Err(CliError::Refused(format!(
-                "`{id}` runs in chat mode: you type the prompt in the harness, so it takes no \
-                 goal. Nothing is launched."
-            )));
-        }
-    };
     for (what, value) in [
         ("workspace", Some(workspace.to_string_lossy())),
         (
@@ -873,7 +766,7 @@ fn build_launch(
         None => None,
     };
 
-    let mut argv = Vec::with_capacity(profile.args.len() + 1);
+    let mut argv = Vec::with_capacity(profile.args.len() + profile.resume_args.len());
     for template in &profile.args {
         let arg = render(template, v)?;
         if let Some(why) = harness_arg_refusal(profile, &arg) {
@@ -884,13 +777,8 @@ fn build_launch(
         argv.push(arg);
     }
     // A continued launch adds the profile's resume arguments after its own, under the same
-    // rules; it places no goal, so a headless profile cannot be continued.
+    // rules.
     if resume {
-        if goal.is_some() {
-            return Err(CliError::Internal(format!(
-                "`{id}` runs headless, and only a chat-mode launch is continued"
-            )));
-        }
         for template in &profile.resume_args {
             let arg = render(template, v)?;
             if let Some(why) = harness_arg_refusal(profile, &arg) {
@@ -901,31 +789,9 @@ fn build_launch(
             argv.push(arg);
         }
     }
-    // A chat-mode launch places no goal: its argv is the profile's args alone.
-    let capture = match goal {
-        None => None,
-        Some(goal) => {
-            let ends_in_separator = argv.last().map(String::as_str) == Some("--");
-            if ends_in_separator == profile.goal_flag.is_some() {
-                return Err(CliError::Internal(format!(
-                    "`{id}`'s capture args place the goal neither one way nor the other"
-                )));
-            }
-            let goal_prefix = profile.goal_flag.as_ref().map_or(0, |flag| flag.len() + 1);
-            match &profile.goal_flag {
-                Some(flag) => argv.push(format!("{flag}={goal}")),
-                None => argv.push(goal.to_string()),
-            }
-            Some(HeadlessCapture {
-                goal_index: argv.len() - 1,
-                goal_prefix,
-            })
-        }
-    };
-
-    // A chat-mode harness gets the participant's terminal environment first; the connector's
-    // own values and the launch's pins below win over it.
-    let mut env = chat_passthrough(profile, launch.parent_env);
+    // The harness gets the participant's terminal environment first; the connector's own
+    // values and the launch's pins below win over it.
+    let mut env = chat_passthrough(launch.parent_env);
     // An env value may also name the run's two homes (`{config_home}`, `{run_home}`); an
     // argument may not.
     let mut env_vars = v.clone();
@@ -940,7 +806,7 @@ fn build_launch(
         }
     }
     env.insert("HOME".into(), run_home.to_string());
-    env.insert("PATH".into(), harness_path(profile, launch.parent_env));
+    env.insert("PATH".into(), harness_path(launch.parent_env));
     // A harness without a home variable keeps its state under the private `HOME` above.
     if let Some(home_env) = &profile.home.env {
         env.insert(home_env.clone(), config_home.to_string());
@@ -952,8 +818,9 @@ fn build_launch(
         for key in ["NO_PROXY", "no_proxy"] {
             env.insert(key.into(), CAPTURE_NO_PROXY.into());
         }
-        // A harness's own variable trusts the proxy alone (a replace-mode one so fails closed,
-        // D41); a shared row, which tool children read too, gets the system's roots as well.
+        // A harness's own variable trusts the recording proxy alone (a replace-mode one so fails
+        // closed, D41); a shared row, which tool children read too, gets the system's roots as
+        // well.
         for key in &profile.ca.env {
             let file = match crate::ca_bundle::handed_file(key) {
                 crate::ca_bundle::HandedFile::ProxyCa => ca_certificate,
@@ -967,6 +834,13 @@ fn build_launch(
                 }
             };
             env.insert(key.clone(), file.to_string());
+        }
+        // Goal Cup Proxy's own variables, the same for every harness: the marker `goalcup seal`
+        // refuses under, and the time-left file the agent may read (D66). Nothing is pushed.
+        env.insert(IN_HARNESS_ENV.into(), "1".into());
+        if let Some(file) = launch.time_left_file {
+            let file = absolute_utf8("time-left file", file)?;
+            env.insert(crate::run::time_left::FILE_ENV.into(), file.to_string());
         }
     }
 
@@ -988,18 +862,13 @@ fn build_launch(
         env_remove: Vec::new(),
         env_base: BTreeMap::new(),
         cwd: workspace.to_path_buf(),
-        // A chat-mode harness keeps the terminal: see the module header.
-        mode: if capture.is_some() {
-            LaunchMode::Server
-        } else {
-            LaunchMode::Tui
-        },
+        // The harness keeps the terminal: see the module header.
+        mode: LaunchMode::Tui,
         kill: Kill {
             strategy,
             native_binary: termination.native_binary,
             grace_seconds,
         },
-        capture,
     };
     let needed = exec_footprint(&plan);
     let limit = exec_limit();
@@ -1026,8 +895,7 @@ pub struct PrepLaunch<'a> {
 /// (the same arguments, the same environment, the same two homes) but with **no recording at
 /// all**: no proxy and no CA variable, no daemon entry, no run directory beyond the throwaway
 /// one holding `run_home`. It is the participant's own session: they sign in, and add settings,
-/// MCP servers and skills to the home that their runs will then use. A headless connector has
-/// no chat to open and is refused.
+/// MCP servers and skills to the home that their runs will then use.
 pub fn build_prep_launch(
     c: &HarnessConnector,
     v: &TemplateVars,
@@ -1039,12 +907,12 @@ pub fn build_prep_launch(
         v,
         workspace,
         &Inputs {
-            goal: None,
             executable: launch.executable,
             run_home: launch.run_home,
             config_home: launch.config_home,
             proxy: None,
             parent_env: launch.parent_env,
+            time_left_file: None,
         },
         false,
     )
@@ -1081,7 +949,7 @@ pub fn prep_launch(
             None
         }
     };
-    let waited = goalcup_platform::terminal::wait_resuming(spawned.child.id(), &mut |_| {});
+    let waited = goalcup_platform::terminal::wait_resuming(spawned.child.id(), &mut |_| true);
     drop(shield);
     if let Some(modes) = modes {
         let _ = modes.restore();
@@ -1116,10 +984,6 @@ pub fn configure_harness(
     }
     let mut vars = TemplateVars::new();
     vars.set("workspace", workspace.display().to_string());
-    vars.set(
-        "session_id",
-        "00000000-0000-4000-8000-000000000000".to_string(),
-    );
     let plan = build_prep_launch(c, &vars, workspace, launch)?;
     let name = c.display_name();
     for command in &profile.configure {
@@ -1134,7 +998,7 @@ pub fn configure_harness(
         // started.
         let mut one = plan.clone();
         one.argv = command.clone();
-        let (mut cmd, _) = build_command(&one, Pipes::default());
+        let (mut cmd, _) = build_command(&one);
         cmd.stdin(std::process::Stdio::null());
         let handles = (log.try_clone(), log.try_clone());
         let (Ok(stdout), Ok(stderr)) = handles else {
@@ -1281,12 +1145,11 @@ pub(crate) fn exec_limit() -> u64 {
 
 /// Whether this plan's child is put at the head of a process group of its own.
 ///
-/// A capture launch is not, although it is headless: a group handle is never confirmed ended
-/// (`docs/TERMINATION.md`, D30), so the daemon ends it by the descendant walk, and in the
-/// launcher's group a Ctrl-C typed at the terminal reaches it too. A chat-mode launch is a
-/// [`LaunchMode::Tui`] and is not either: it must stay in the terminal's foreground group.
+/// A capture launch is a [`LaunchMode::Tui`] and is not: it must stay in the terminal's
+/// foreground group, and a group handle is never confirmed ended (`docs/TERMINATION.md`, D30),
+/// so the daemon ends it by the descendant walk.
 fn leads_its_group(p: &LaunchPlan) -> bool {
-    owns_its_group(p.mode) && p.capture.is_none()
+    owns_its_group(p.mode)
 }
 
 /// Whether this mode's launch may own a process group of its own.
@@ -1346,137 +1209,12 @@ pub(crate) fn quote(s: &str) -> String {
 /// launch stops with a child that never started rather than continuing with a handle that is
 /// wrong about the one field it exists to carry.
 pub fn spawn(p: &LaunchPlan) -> Result<Spawned, CliError> {
-    let (mut command, program) = build_command(p, Pipes::default());
+    let (mut command, program) = build_command(p);
     let child = command.spawn().map_err(|source| CliError::Io {
         path: program.clone(),
         source,
     })?;
     Ok(Spawned { child, program })
-}
-
-/// Which of a capture child's output streams are piped to this process; the rest are
-/// inherited. A `stdout_json` launch pipes stdout (its scope tee), and a `stderr_line` launch
-/// pipes stderr (its marker tee).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Pipes {
-    pub stdout: bool,
-    pub stderr: bool,
-}
-
-/// The manifest rule for selecting a session identity from stdout JSON.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StdoutJsonRule {
-    pub match_field: String,
-    pub match_value: String,
-    pub id_field: String,
-}
-
-/// The manifest rule for selecting a session identity from one stderr line.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StderrLineRule {
-    pub prefix: String,
-    pub grammar: IdGrammar,
-}
-
-/// How the capture launcher consumes stdout.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StdoutUse {
-    Inherit,
-    IdentityJson(StdoutJsonRule),
-}
-
-/// How the capture launcher consumes stderr.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StderrUse {
-    Inherit,
-    IdentityLine(StderrLineRule),
-}
-
-/// The child-output decision derived from one validated harness capture profile.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StreamPlan {
-    pub stdout: StdoutUse,
-    pub stderr: StderrUse,
-}
-
-impl StreamPlan {
-    pub fn for_spec(spec: &CaptureSpec) -> Result<Self, CliError> {
-        let (stdout, stderr) = match spec.identity.source {
-            IdentitySource::Preassigned | IdentitySource::None => {
-                (StdoutUse::Inherit, StderrUse::Inherit)
-            }
-            IdentitySource::StdoutJson => (
-                StdoutUse::IdentityJson(StdoutJsonRule {
-                    match_field: required_identity_field(
-                        spec.identity.match_field.as_deref(),
-                        "match_field",
-                    )?,
-                    match_value: required_identity_field(
-                        spec.identity.match_value.as_deref(),
-                        "match_value",
-                    )?,
-                    id_field: required_identity_field(
-                        spec.identity.id_field.as_deref(),
-                        "id_field",
-                    )?,
-                }),
-                StderrUse::Inherit,
-            ),
-            IdentitySource::StderrLine => (
-                StdoutUse::Inherit,
-                StderrUse::IdentityLine(StderrLineRule {
-                    prefix: required_identity_field(spec.identity.prefix.as_deref(), "prefix")?,
-                    grammar: spec.identity.grammar.ok_or_else(|| {
-                        CliError::Internal(
-                            "validated harness identity stderr_line has no grammar".into(),
-                        )
-                    })?,
-                }),
-            ),
-            _ => {
-                return Err(CliError::Refused(
-                    "the harness uses an identity source this goalcup does not support".into(),
-                ));
-            }
-        };
-        Ok(Self { stdout, stderr })
-    }
-
-    pub fn pipes(&self) -> Pipes {
-        Pipes {
-            stdout: !matches!(self.stdout, StdoutUse::Inherit),
-            stderr: !matches!(self.stderr, StderrUse::Inherit),
-        }
-    }
-}
-
-fn required_identity_field(value: Option<&str>, field: &str) -> Result<String, CliError> {
-    value.map(str::to_owned).ok_or_else(|| {
-        CliError::Internal(format!("validated harness identity rule has no {field}"))
-    })
-}
-
-/// When the daemon may bind the native store, derived only from the identity source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LaunchScope {
-    Preassigned,
-    FromStdout,
-    AtFinish,
-    None,
-}
-
-impl LaunchScope {
-    pub fn for_spec(spec: &CaptureSpec) -> Result<Self, CliError> {
-        match spec.identity.source {
-            IdentitySource::Preassigned => Ok(Self::Preassigned),
-            IdentitySource::StdoutJson => Ok(Self::FromStdout),
-            IdentitySource::StderrLine => Ok(Self::AtFinish),
-            IdentitySource::None => Ok(Self::None),
-            _ => Err(CliError::Refused(
-                "the harness uses an identity source this goalcup does not support".into(),
-            )),
-        }
-    }
 }
 
 /// Why one argument is denied by the schema-1 harness profile.
@@ -1485,11 +1223,10 @@ pub fn harness_arg_refusal(spec: &CaptureSpec, arg: &str) -> Option<&'static str
 }
 
 /// The command a launch runs, and the program path it was resolved to: argv, working
-/// directory, the built environment, `/dev/null` for a capture child's stdin, the process
-/// group a server leads, and the requested pipes. [`spawn`] and [`spawn_gated`] both run what
-/// this builds, so a gated capture child's argv, environment and stdio are exactly an
-/// ungated one's.
-fn build_command(p: &LaunchPlan, pipes: Pipes) -> (Command, String) {
+/// directory, the built environment and the process group a server leads; stdin, stdout and
+/// stderr are inherited. [`spawn`] and [`spawn_gated`] both run what this builds, so a gated
+/// capture child's argv, environment and stdio are exactly an ungated one's.
+fn build_command(p: &LaunchPlan) -> (Command, String) {
     let program = resolved_program(&p.program, &p.env_base);
     let mut command = Command::new(&program);
     command.args(&p.argv).current_dir(&p.cwd);
@@ -1503,10 +1240,9 @@ fn build_command(p: &LaunchPlan, pipes: Pipes) -> (Command, String) {
     for (k, v) in &p.env_set {
         command.env(k, v);
     }
-    // A headless capture launch has no input channel: both measured harnesses append piped
-    // stdin to the goal, so the child never inherits ours. A chat-mode launch (`capture` is
-    // `None`) inherits all three streams: the participant's terminal is its input.
-    if p.capture.is_some() {
+    // The launch inherits all three streams: the participant's terminal is its input. A test
+    // build that runs it with no terminal ([`crate::chat_without_terminal`]) gives it none.
+    if crate::chat_without_terminal() {
         command.stdin(std::process::Stdio::null());
     }
     // The one line the three modes differ in. A TUI never reaches it, and nor does a capture
@@ -1516,233 +1252,7 @@ fn build_command(p: &LaunchPlan, pipes: Pipes) -> (Command, String) {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    if pipes.stdout {
-        command.stdout(std::process::Stdio::piped());
-    }
-    if pipes.stderr {
-        command.stderr(std::process::Stdio::piped());
-    }
     (command, program)
-}
-
-/// The two bounded messages from a capture stdout tee: its one scope identity and its
-/// completion after EOF and all forwarding. Waiting for completion never joins the thread.
-pub struct CaptureStdout {
-    pub scope: std::sync::mpsc::Receiver<Option<String>>,
-    completed: std::sync::mpsc::Receiver<std::io::Result<()>>,
-}
-
-impl CaptureStdout {
-    /// `true` confirms completion; `false` is explicit deadline expiry. A descendant may
-    /// hold stdout open, or destination back-pressure may still hold the final bytes.
-    pub fn finish(&self, deadline: std::time::Instant) -> std::io::Result<bool> {
-        match self
-            .completed
-            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-        {
-            Ok(result) => result.map(|()| true),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(false),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::other(
-                "capture stdout tee ended without completion",
-            )),
-        }
-    }
-}
-
-/// Start the stdout tee with the identity paths declared by the harness manifest. The
-/// completion message is sent only after the last read has been forwarded (or discarded for a
-/// closed destination) and EOF observed.
-pub fn tee_capture_stdout_with_rule(
-    reader: impl std::io::Read + Send + 'static,
-    writer: impl std::io::Write + Send + 'static,
-    rule: StdoutJsonRule,
-) -> std::io::Result<CaptureStdout> {
-    let (sender, scope) = std::sync::mpsc::channel();
-    let (done, completed) = std::sync::mpsc::sync_channel(1);
-    std::thread::Builder::new()
-        .name("capture-stdout".into())
-        .spawn(move || {
-            let result = stdout_tee_with_rule(reader, writer, sender, &rule);
-            let _ = done.send(result);
-        })?;
-    Ok(CaptureStdout { scope, completed })
-}
-
-/// The scope tee of a `stdout_json` launch, with the manifest's identity rule: stdout is read
-/// without changing a byte of participant output. Started on a child the gate has already
-/// released (D40), never a spawner: the tee remains detached, but its completion is observed
-/// within the finish deadline.
-pub fn tee_scoped_capture_with_rule(
-    spawned: &mut Spawned,
-    rule: StdoutJsonRule,
-) -> Result<CaptureStdout, CliError> {
-    let Some(reader) = spawned.child.stdout.take() else {
-        let _ = spawned.child.kill();
-        let _ = spawned.child.wait();
-        return Err(CliError::Io {
-            path: "capture stdout tee".into(),
-            source: std::io::Error::other("the harness's stdout was not piped"),
-        });
-    };
-    match tee_capture_stdout_with_rule(reader, std::io::stdout(), rule) {
-        Ok(stdout) => Ok(stdout),
-        Err(source) => {
-            let _ = spawned.child.kill();
-            let _ = spawned.child.wait();
-            Err(CliError::Io {
-                path: "capture stdout tee".into(),
-                source,
-            })
-        }
-    }
-}
-
-/// Forward stdout unchanged while scanning no more than 64 complete lines of at most 1 MiB for
-/// the manifest's first matching identity event. A matching event ends the scan even when its
-/// id is unusable. A closed destination turns forwarding into draining, not a child error.
-pub fn stdout_tee_with_rule(
-    mut reader: impl std::io::Read,
-    mut writer: impl std::io::Write,
-    sender: std::sync::mpsc::Sender<Option<String>>,
-    rule: &StdoutJsonRule,
-) -> std::io::Result<()> {
-    let mut scan = StdoutIdentityScan::new(rule.clone(), sender);
-    let mut forwarding = true;
-    let mut buf = [0u8; 64 * 1024];
-    let result = loop {
-        let n = match reader.read(&mut buf) {
-            Ok(0) => break Ok(()),
-            Ok(n) => n,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => break Err(e),
-        };
-        // Announce the scope before a participant's stdout back-pressure can delay Launch.
-        scan.feed(&buf[..n]);
-        if forwarding && (writer.write_all(&buf[..n]).is_err() || writer.flush().is_err()) {
-            forwarding = false;
-        }
-    };
-    scan.end();
-    result
-}
-
-/// The stdout JSON identity matcher, fed every byte one stdout reader reads: complete lines of
-/// at most 1 MiB, at most 64 of them, until the first event whose `match_field` is
-/// `match_value`. It sends exactly one message: that event's `id_field` (or `None` when the id
-/// is unusable), or `None` when the line budget or the stream ends first.
-pub(crate) struct StdoutIdentityScan {
-    rule: StdoutJsonRule,
-    sender: std::sync::mpsc::Sender<Option<String>>,
-    line: Vec<u8>,
-    overlong: bool,
-    scanning: bool,
-    complete_lines: usize,
-}
-
-impl StdoutIdentityScan {
-    const LINE_LIMIT: usize = 1024 * 1024;
-    const LINE_COUNT_LIMIT: usize = 64;
-
-    pub(crate) fn new(
-        rule: StdoutJsonRule,
-        sender: std::sync::mpsc::Sender<Option<String>>,
-    ) -> Self {
-        Self {
-            rule,
-            sender,
-            line: Vec::new(),
-            overlong: false,
-            scanning: true,
-            complete_lines: 0,
-        }
-    }
-
-    pub(crate) fn feed(&mut self, bytes: &[u8]) {
-        if !self.scanning {
-            return;
-        }
-        for &byte in bytes {
-            if byte == b'\n' {
-                self.complete_lines += 1;
-                if !self.overlong
-                    && let Ok(event) = serde_json::from_slice::<serde_json::Value>(&self.line)
-                    && json_path(&event, &self.rule.match_field).and_then(|v| v.as_str())
-                        == Some(self.rule.match_value.as_str())
-                {
-                    let id = json_path(&event, &self.rule.id_field)
-                        .and_then(|v| v.as_str())
-                        .map(str::to_owned);
-                    let _ = self.sender.send(id);
-                    self.scanning = false;
-                    self.line.clear();
-                    return;
-                }
-                self.line.clear();
-                self.overlong = false;
-                if self.complete_lines == Self::LINE_COUNT_LIMIT {
-                    let _ = self.sender.send(None);
-                    self.scanning = false;
-                    return;
-                }
-            } else if !self.overlong {
-                if self.line.len() == Self::LINE_LIMIT {
-                    self.line.clear();
-                    self.overlong = true;
-                } else {
-                    self.line.push(byte);
-                }
-            }
-        }
-    }
-
-    /// The stream ended (or its reader failed) before a matching event: say so, once.
-    pub(crate) fn end(&mut self) {
-        if self.scanning {
-            let _ = self.sender.send(None);
-            self.scanning = false;
-        }
-    }
-}
-
-impl Drop for StdoutIdentityScan {
-    fn drop(&mut self) {
-        self.end();
-    }
-}
-
-fn json_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
-    let mut at = value;
-    for component in path.split('.') {
-        if component.is_empty() {
-            return None;
-        }
-        at = at.get(component)?;
-    }
-    Some(at)
-}
-
-/// Bound a `stdout_json` launch's Launch delay by identity, stdout EOF, process exit or the
-/// spawn deadline.
-/// The deadline is a parameter, not read here, so bounded tests can exercise the same wait.
-pub fn wait_native_scope(
-    child: &mut Child,
-    receiver: &std::sync::mpsc::Receiver<Option<String>>,
-    deadline: std::time::Instant,
-) -> Option<String> {
-    loop {
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        if left.is_zero() {
-            return None;
-        }
-        match receiver.recv_timeout(left.min(std::time::Duration::from_millis(20))) {
-            Ok(scope) => return scope,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-        }
-        if !matches!(child.try_wait(), Ok(None)) {
-            return receiver.try_recv().ok().flatten();
-        }
-    }
 }
 
 /// A launched harness, and the program path it was launched from.
@@ -1775,28 +1285,6 @@ fn resolved_program(program: &str, env: &BTreeMap<String, String>) -> String {
         Some(path) => path.display().to_string(),
         None => program.to_string(),
     }
-}
-
-/// What a [`ProcessHandle`] records in place of a capture launch's goal argument.
-///
-/// Fixed and not derived from the goal: the handle is persisted in the daemon's registry,
-/// printed by `Debug` and folded into the registration digest, and a hash of a low-entropy
-/// goal is a guessable stand-in for it (the goal is retained only as its
-/// redacted evidence stream). The daemon reads `argv[0]` alone, so nothing it checks moves.
-pub const GOAL_ARG_MARKER: &str = "<goal>";
-
-/// The argv a handle records: the plan's, with a capture launch's goal element replaced by
-/// [`GOAL_ARG_MARKER`].
-fn recorded_argv(p: &LaunchPlan) -> Vec<String> {
-    let mut argv = p.argv.clone();
-    if let Some(capture) = p.capture
-        && let Some(slot) = argv.get_mut(capture.goal_index)
-    {
-        // The flag that carries the goal stays, and the goal is the marker.
-        let flag = slot.get(..capture.goal_prefix).unwrap_or("").to_string();
-        *slot = format!("{flag}{GOAL_ARG_MARKER}");
-    }
-    argv
 }
 
 /// What the daemon is handed, built after the child exists.
@@ -1858,7 +1346,7 @@ fn build_handle(
         // What the child was exec'd from, as `spawn` resolved it. A `PATH` reordered or a
         // shim rewritten since then does not change what this process is running.
         program: program.to_string(),
-        argv: recorded_argv(p),
+        argv: p.argv.clone(),
         // Names only, never values. One of those values is this run's bearer token, and a
         // process's environment is not portably readable after the fact anyway — what the
         // daemon can check is that a pinned key is still there.
@@ -1989,14 +1477,13 @@ fn above_stdio(
 #[cfg(unix)]
 pub fn spawn_gated(
     p: &LaunchPlan,
-    pipes: Pipes,
     ready_within: std::time::Duration,
 ) -> Result<GatedSpawn, CliError> {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::CommandExt;
 
-    let (mut command, program) = build_command(p, pipes);
+    let (mut command, program) = build_command(p);
     let io = |source: std::io::Error| CliError::Io {
         path: "the capture spawn gate".to_string(),
         source,

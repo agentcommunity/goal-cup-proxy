@@ -175,14 +175,16 @@ next finish commits that terminal to the registry (`SealWritten` when `seal.json
 
 ## C3. Transport and native seams
 
-- The proxy (`goalcup_cli::proxy`) relays HTTP/1.1 and WebSocket. It sets no base URL and changes
+- The recording proxy (`goalcup_cli::proxy`) relays HTTP/1.1 and WebSocket. It sets no base URL and changes
   upstream TLS validation not at all.
-- The relay captures **decoded** bodies: chunked framing removed, at most one `gzip`, `x-gzip` or
-  `deflate` coding inflated. Any other coding records an `UnsupportedEncoding` gap and no body.
+- The relay captures **decoded** bodies: chunked framing removed, at most one `gzip`, `x-gzip`,
+  `deflate`, `br` or `zstd` coding undone (zstd windows up to 8 MiB, RFC 9659). Any other coding,
+  or more than one, records an `UnsupportedEncoding` gap and no body; the `Gap` record stays as v5
+  froze it, and the run's `host.log` names the codings (as tokens, at most four).
   A decode failure keeps the decoded prefix and ends the stream `DecodeError`. End-of-file inside a
   body ends it `Interrupted`.
 - Authentication hosts, and hosts that are not approved, are opaque tunnels and record nothing. The
-  proxy peeks at SNI without consuming bytes. An approved host is intercepted, and only a path that
+  recording proxy peeks at SNI without consuming bytes. An approved host is intercepted, and only a path that
   matches `evidence_paths` (exact) or `prefix_paths` (prefix, query and fragment excluded) is
   captured. An empty policy captures no body. A `Host` that mismatches the SNI ends capture for
   that exchange.
@@ -204,7 +206,7 @@ next finish commits that terminal to the registry (`SealWritten` when `seal.json
 
 ### Proxy loss in the stream (H-16)
 
-The proxy puts every loss in the chain at the moment it happens, so a task cut mid-relay still
+The recording proxy puts every loss in the chain at the moment it happens, so a task cut mid-relay still
 leaves its mark.
 
 - ¶1 *Wire.* `FrameEvent::Loss { reason }` is a stream-zero control. It takes the producer's next
@@ -266,7 +268,7 @@ leaves its mark.
   `record_malformed`. The `Launch` check judges the validated prefix, so a trace that breaks before
   its `Launch` also lists `launch_missing`.
 - Reader facts a consumer may rely on: `verified_ack`, `receipt_clock`, `last_ack_at` and `terminal`
-  (`LocalFinish` or `SignedFinalization`). A missing receipt or ACK is never invented.
+  (`LocalFinish`; the signed finalization was removed on 21 Oct, D54). A missing receipt or ACK is never invented.
   `records_after_deadline` and `last_seq_at_or_before_deadline` use the participant's machine clock: a
   hint, not proof. Schema 3 adds `entry_id`, `profile_id` and `first_failure` (`{seq, code}`).
   A complete local trace may exit 0 with anchor `LocalOnly` and delivery `LocalOnly`; that asserts
@@ -301,8 +303,8 @@ leaves its mark.
 - `POST /v0/entries/{id}/capture/launch`: records the `Launch` (answers `204`). The daemon fills
   `profile_id`, `profile_digest` and `recorder_revision` from the create call. No argv and no goal
   digest are recorded.
-- `POST /v0/entries/{id}/seal` (`CaptureSealRequest`): the finish. It carries `proxy` counters,
-  `remaining_finish_ms` and `native_scope` (below).
+- `POST /v0/entries/{id}/seal` (`CaptureSealRequest`): the finish. It carries `proxy` counters
+  and `remaining_finish_ms` (below).
 - `POST /v0/entries/{id}/abandon`: before the launch and before any process handoff it removes the
   entry's ingest grant, reservation, row, artifacts and empty workspace. Afterwards it is refused
   ("seal it").
@@ -354,18 +356,18 @@ reports `seal_write_failed`, and the status is `Failed`, never `Sealed`.
   caller's budget. Absent means the full budget; larger is clamped; zero is refused as
   `finish_deadline` at stage `not_started`.
 - ¶3 *CLI order.* The launcher takes `D = now + budget` when the harness has exited and calls
-  `proxy.stop()` at once; nothing runs between them. The proxy's `shutdown_deadline` is
+  `proxy.stop()` at once; nothing runs between them. The recording proxy's `shutdown_deadline` is
   `proxy_drain_share(budget)`: the budget less `FINISH_COMMIT_RESERVE` and `GIT_READ_FLOOR`, so
   that a connection held open at a deadline cannot spend the Git read's time (a budget too short
   for both, which only a test build names, keeps the reserve alone). A pre-seal step (the Hermes marker wait) runs after
   `proxy.stop()` and ends at `drain_end - NATIVE_FINISH_MIN` (1 s more than the reserve before
   `D`). With less time left it is skipped. The native scope it reads rides on the seal request
   (¶9). Standalone `goalcup seal` takes `D` after its status read and sends no scope.
-  A run stopped while its harness still runs (its deadline, the server's stop, a full disk, a
+  A run stopped while its harness still runs (its deadline, the server's stop, a
   replacement) takes `D` at the stop instead, with the harness not exited. Its open connections (a
   streaming answer, a kept-alive WebSocket) do not end while it runs: that finish's
   `proxy.stop_within` waits 2 s (`RUNNING_HARNESS_PROXY_DRAIN`) at most, then cuts them. When the
-  proxy's producer close was not queued, the sender's connection is ended too, bounded to 1 s
+  recording proxy's producer close was not queued, the sender's connection is ended too, bounded to 1 s
   (`RUNNING_HARNESS_SINK_SHUTDOWN`), so the daemon's ingest drain reads a lost producer instead of
   waiting for a live one. The seal that ends the harness is then asked within seconds of the stop.
 - ¶4 *Daemon stages.* `D` starts when the daemon decodes the request. In order: (1) blocking
@@ -381,7 +383,7 @@ reports `seal_write_failed`, and the status is `Failed`, never `Sealed`.
   writes no terminal, and uses the unchanged tokens `not_started`, `blocking_permit`, `run_lock`,
   `owner_drain`, `termination`, `workspace_walk`, `local_finish`.
   This amends the former drain-before-termination order: a standalone seal reaches a harness
-  that is still running, and its launcher closes the proxy only after that harness exits. Waiting
+  that is still running, and its launcher closes the recording proxy only after that harness exits. Waiting
   for that producer first spent the entire drain share and manufactured shutdown loss. The run
   lock serializes competing finishes through termination and drain. Control operations that can
   wait on that lock (status, entries, health, goal, abandon and process registration; launch already
@@ -415,10 +417,8 @@ reports `seal_write_failed`, and the status is `Failed`, never `Sealed`.
 - ¶8 *Skew.* An old CLI on a new daemon gets the full budget. A new CLI on an older daemon is
   refused `malformed` before any finish step (exit 3). Nothing is finished or signalled on a
   skewed refusal.
-- ¶9 *Native scope.* The scope of a family that learns it at the end of its turn rides only on a
-  capture finish request (`CaptureSealRequest.native_scope`). It is installed only inside a
-  finish, at stage 5, while `finishing` is set, after the committed-finish answer and before the
-  owner is told to stop. A scope on any other family's finish is ignored.
+- ¶9 *Native scope.* None: chat mode names no session, so neither the launch nor the finish
+  request carries a scope (removed at control API version 10).
 - ¶10 *Evidence.* The real-binary repro rows run debug, test-feature builds of the shipped binaries
   (`pause_at` needs `test-support`); the two test-only holds are observed through seams in
   `runtime/capture/` and not in a real binary. The owner's post-stop work on a full queue was
@@ -486,7 +486,7 @@ Every capture child of `goalcup start` is spawned through `launch::spawn_gated`.
   forbids. An additive v5 field needs a DECISIONS entry that accepts older verifiers failing newer
   traces.
 - **The one exception (D53).** `Launch.harness_build` (`HarnessBuildV1`: `program_sha256`,
-  `image_sha256`, `platform`; optional, skip-if-none) joined v5 after the tag, so the tracer records
+  `image_sha256`, `platform`; optional, skip-if-none) joined v5 after the tag, so Goal Cup Proxy records
   the build that ran instead of pinning one. A released v0.5.0 verifier refuses a trace that carries
   it. A second such field opens v6.
 - **What is frozen.** `M2_PROTOCOL_VERSION = 5` is the only switch. Frozen: the `Envelope`, the
@@ -552,16 +552,14 @@ named.
 - **The v5 freeze** (above): the records a harness's evidence becomes.
 
 These may change without affecting a harness: the server and its allowlist of directory digests,
-upload and receipts, tracker sign-in, and the recorder's internal `FrameEvent` seam. A manifest is
-delivery-agnostic: it cannot name a server, upload or tracker credential, and its evidence reaches
+upload and receipts, Goal Cup sign-in, and the recorder's internal `FrameEvent` seam. A manifest is
+delivery-agnostic: it cannot name a server, upload or Goal Cup credential, and its evidence reaches
 any consumer only as frozen v5 records plus `Launch.connector_dir_sha256`. Subscription auth stays
-in the harness's isolated home and is not the tracker's.
+in the harness's isolated home and is not Goal Cup Proxy's.
 
-### Migrating from manifest.toml
+<a id="migrating-from-manifesttoml"></a>
 
-The daemon and CLI load `harness.toml` through the shared schema-1 loader, and nothing else. The
-loader refuses a leftover `manifest.toml`. `family`, `tier`, `tested_version_range` and
-`capture_only` are not harness schema fields.
+### Schema bumps
 
 No schema bump has happened. The [schema evolution rule](CONNECTOR-SCHEMA.md#pin-evolution) says
 which widening stays schema 1 and which incompatible change creates schema 2. A schema-bump PR
@@ -586,7 +584,7 @@ wins over this text.
   `Host` is refused `401` with code `unauthorized` and a fixed body that quotes nothing it was sent,
   on a public route and on a bearer route alike. This closes DNS rebinding. A client that builds its
   URL from `control.json` sends a matching `Host`.
-- **Control API version.** `CONTROL_API_VERSION` is 9. `goalcup` and `goalcup-daemon` ship
+- **Control API version.** `CONTROL_API_VERSION` is 10. `goalcup` and `goalcup-daemon` ship
   together in one release, so a pair from two releases is refused, never bridged: the CLI refuses a
   `control.json` of another version and an answer whose `x-goalcup-control-version` header differs,
   and the daemon answers a request that names another version `426 unsupported`. Version 5 added the

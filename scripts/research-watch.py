@@ -63,7 +63,7 @@ def main(argv=None, *, clock=time.monotonic, sleep=time.sleep, runner=subprocess
         # No shell, status discovery, input injection, or retry. Suppress child output so
         # this watchdog's log never becomes a second trace or an environment dump.
         result = runner(
-            [args.goalcup, "seal", args.entry],
+            [args.goalcup, "seal", "--yes", args.entry],
             env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

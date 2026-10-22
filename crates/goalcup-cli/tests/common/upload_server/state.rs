@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredChunk {
     pub offset: u64,
-    /// The uncompressed length the tracer declared (`Goalcup-Length`).
+    /// The uncompressed length goalcup declared (`Goalcup-Length`).
     pub length: u64,
     /// SHA-256 of the stored (compressed) body.
     pub sha256: String,
@@ -34,6 +34,10 @@ pub struct StoredChunk {
     pub body_path: PathBuf,
     /// The acknowledgement answered for this chunk, kept so a retry gets the same bytes back.
     pub ack: AckCheckpoint,
+    /// The compressed bytes stored (the request's `Content-Length`): what counts against the
+    /// run's size limit.
+    #[serde(default)]
+    pub stored_bytes: u64,
 }
 
 /// One heartbeat the server accepted, with the server's own receive time.
@@ -45,12 +49,15 @@ pub struct StoredHeartbeat {
     pub offset_local: u64,
     pub final_: bool,
     pub repo_head: Option<String>,
-    /// How the tracer reported its recording (`ok`, `gaps`, `failed`, `unknown`), if it said.
+    /// How goalcup reported its recording (`ok`, `gaps`, `failed`, `unknown`), if it said.
     #[serde(default)]
     pub recording: Option<String>,
-    /// Model calls seen so far, cumulative, if the tracer said.
+    /// Model calls seen so far, cumulative, if goalcup said.
     #[serde(default)]
     pub model_requests: Option<u64>,
+    /// The heartbeat's `vitals` object as sent, if it had one.
+    #[serde(default)]
+    pub vitals: Option<serde_json::Value>,
     /// The server's clock when it received the heartbeat (RFC 3339, to the second).
     pub received_at: String,
 }
@@ -82,7 +89,7 @@ pub struct DeviceRequest {
     pub purpose: String,
     pub mode: String,
     pub connector_id: String,
-    pub tracer_version: String,
+    pub proxy_version: String,
 }
 
 /// A device request the stand-in holds (in memory only: a restart forgets pending ones).
@@ -161,7 +168,7 @@ pub struct EntryRecord {
     pub connector_dir_sha256: String,
     pub workspace: String,
     pub harness_version: String,
-    pub tracer_version: String,
+    pub proxy_version: String,
     pub receipt: Option<StartReceipt>,
     pub chunks: Vec<StoredChunk>,
     /// `(seal_json, baseline_json)`, verbatim.
@@ -217,6 +224,15 @@ impl RunRecord {
     /// continue and heartbeat answers say as `seconds_left`.
     pub fn seconds_left(&self) -> u64 {
         self.deadline_secs().saturating_sub(now_secs())
+    }
+
+    /// The compressed bytes the run holds: its stored chunks, over all its entries.
+    pub fn stored_bytes(&self) -> u64 {
+        self.entries
+            .iter()
+            .flat_map(|e| &e.chunks)
+            .map(|c| c.stored_bytes)
+            .sum()
     }
 
     /// True once the server's clock is at or past the end of the run.
@@ -285,6 +301,8 @@ pub struct Shared {
     pub practice_secs: u64,
     /// How long after a run ends it is closed (`sealed`, or `incomplete`).
     pub close_after_secs: u64,
+    /// The most compressed bytes one run may hold.
+    pub run_max_bytes: u64,
     /// The competition start window, in epoch seconds; an unset edge is open.
     pub window_opens: Option<u64>,
     pub window_closes: Option<u64>,

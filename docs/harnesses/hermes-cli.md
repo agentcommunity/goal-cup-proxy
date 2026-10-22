@@ -21,7 +21,7 @@ hermes chat
 - `hermes chat` (and a bare `hermes`) opens the classic prompt_toolkit REPL. The Ink TUI needs `--tui`, `HERMES_TUI=1` or `display.interface: tui` in `config.yaml`; the connector passes none of them, and the TUI writes the same session file if the participant chose it (measured).
 - The participant types the prompt at the `❯` prompt. `/exit`, `/quit` or Ctrl-D at an empty prompt end Hermes with exit 0 (measured). Ctrl-C at the setup question exits 1 (measured).
 - First launch in a home with no provider: Hermes prints `It looks like Hermes isn't configured yet -- no API keys or providers found.` and asks `Run setup now? [Y/n]`. Enter or `y` runs its own setup wizard (Quick Setup with Nous Portal, Full setup, or Blank Slate; arrow keys and Enter). `n` exits 1. `goalcup prep` opens Hermes there, so the participant answers it once (measured).
-- The banner prints `Session: <id>` on the terminal. The tracer does not read the terminal: the connector's identity is `none`, and the run's sessions are the snapshots written since it started (D57).
+- The banner prints `Session: <id>` on the terminal. Goal Cup Proxy does not read the terminal: the connector's identity is `none`, and the run's sessions are the snapshots written since it started (D57).
 - `hermes chat --continue` resumes the most recent session (`↻ Resumed session <id>`); it is the connector's `resume_args` for `goalcup continue` (measured).
 - The session file needs `sessions.write_json_snapshots: true`, which has no environment variable and is off by default. The connector's first `configure` command, `hermes config set sessions.write_json_snapshots true`, writes that one key into `config.yaml` (output `✓ Set sessions.write_json_snapshots = True in <HERMES_HOME>/config.yaml`, exit 0, other keys kept; measured). `goalcup prep` runs it after the participant's setup, and `goalcup start` before each launch (D61).
 - The session file keeps changing after a compaction only with `compression.in_place: false` (default `true`, `hermes_cli/config.py:1515`; read at `agent/agent_init.py:1667`). In place, a compaction keeps the id with fewer messages and `_save_session_log` never overwrites a snapshot that holds more (`run_agent.py:2754`), so the file freezes. Off, the compaction starts a new id (`agent/conversation_compression.py:1247`) and the next save writes `session_<new id>.json` (`run_agent.py:2723`). The connector's second `configure` command, `hermes config set compression.in_place false`, sets it (exit 0, measured). It changes how the session is stored, not whether Hermes compacts (D61).
@@ -29,11 +29,11 @@ hermes chat
 - Hermes scans raw `sys.argv` before `argparse`: `-p`/`--profile` switches `HERMES_HOME`, and `--tui`, `--cli`, `-h` are matched, with abbreviations. Goal Cup guards these (code: `[capture.argv_guard]`).
 - The capture environment: `HOME` is a fresh private directory, `HERMES_HOME` the shared Goal Cup home `<cfg>/capture-homes/hermes-cli`, `TERMINAL_HOME_MODE=profile`, the participant's `PATH`, `TERM`, `COLORTERM`, `LANG`, `SHELL` and `LC_*`, `HTTPS_PROXY` and `HERMES_CA_BUNDLE` (code). No provider key: Hermes reads its own `.env`.
 
-Headless (the recipe before D61, frozen at [`headless-connectors/hermes-cli`](../../crates/goalcup-protocol/tests/fixtures/headless-connectors/hermes-cli/harness.toml) for the tests of that recipe): `hermes chat -Q --provider deepseek --query=<goal>`, with the key passed to the child, a seeded per-run home and the `session_id: <id>` line on stderr as identity.
+Headless (the recipe before D61, frozen at [`frozen-connectors/hermes-cli`](../../crates/goalcup-protocol/tests/fixtures/frozen-connectors/hermes-cli/harness.toml) for the tests of that recipe): `hermes chat -Q --provider deepseek --query=<goal>`, with the key passed to the child, a seeded per-run home and the `session_id: <id>` line on stderr as identity.
 
 ## 2. Install and record a version
 
-- Distribution: the Python package `hermes-agent`, installed with `uv tool install hermes-agent` (code: `harnesses/install.sh`, which installs the latest version). `hermes-agent==0.19.0` is the measured version. The `==` spelling is standard uv/pip syntax, not run for this sheet. No build is pinned (D53), and the connector has no `version_args` because the version command is not known.
+- Distribution: the Python package `hermes-agent`, installed with `uv tool install hermes-agent` (code: `harnesses/install.sh`, which installs the latest version). `hermes-agent==0.19.0` is the measured version. The `==` spelling is standard uv/pip syntax, not run for this sheet. No build is pinned (D53). The connector's `version_args` is `--version`: `hermes --version` prints `Hermes Agent v0.19.0 (2026.7.20)` in under a second with a fresh HOME (measured 22 Oct 2026, macOS and Docker).
 - Requires Python `>=3.11,<3.14`; measured with CPython 3.13.13 (source; metadata).
 - Binary: `$UV_TOOL_BIN_DIR/hermes` is a 372-byte console script whose entry point is `hermes_cli.main:main`. The daemon records its SHA-256 (D53). Whether those bytes are the same on every install, OS and interpreter path: unknown.
 - Print the version: unknown (the connector does not use a version command; the installed distribution name and version are read from the package metadata).
@@ -55,15 +55,15 @@ Headless (the recipe before D61, frozen at [`headless-connectors/hermes-cli`](..
 - **One per session.** One snapshot file per session id; a resume appends to the same `sessions` row (measured, spike).
 - **Id.** `YYYYMMDD_HHMMSS_<six lowercase hex>`, generated at start (source; the reference row had `20261002_125737_dc0697`).
 - **Where the id first appears.** In chat mode, in the banner (`Session: <id>`) on the terminal and, after a message, as the snapshot's file name (measured 2026-10-16). Headless with `-Q`, on stderr as `session_id: <id>` after the final turn (source; measured on the reference row). Compression keeps the id in place by default; the connector sets `compression.in_place: false`, so each compaction starts a new id and a new snapshot, written since the run started and recorded (D61).
-- **Subagents.** `delegate_task` children get their own session rows with `parent_session_id` and `_delegate_from` inside `model_config` JSON (measured).
+- **Subagents.** `delegate_task` children get their own session rows with `parent_session_id` and `_delegate_from` inside `model_config` JSON (measured). In a recorded run their model calls are on the wire leg only, and the research report does not say which calls are a child's: no decoder reads Hermes's native `session_*.json` yet (measured 22 Oct: two children, on the wire, unattributed).
 - **Model.** Per session and per model in `session_model_usage`; not per message (measured).
 
 ## 5. Auth
 
-- **The participant's own setup (D61).** The tracer passes no provider key. Hermes's setup wizard (opened by `goalcup prep`, or `hermes setup` / `hermes model` in that home) keeps the provider and model in `$HERMES_HOME/config.yaml` (`model.provider`, `model.default`, `model.base_url`) and an API key in `$HERMES_HOME/.env` (mode 0600). `hermes chat` loads `.env` itself, over a same-named variable in its environment (source). OAuth providers (Nous Portal and others) keep their tokens in `auth.json` (source).
-- **What the tracer records of them.** Nothing of their content. The native source reads `sessions/session_*.json` only. The uploaded baseline lists `.env` and `auth.json` by name, size and SHA-256, as every file of the harness home (D56).
+- **The participant's own setup (D61).** Goal Cup Proxy passes no provider key. Hermes's setup wizard (opened by `goalcup prep`, or `hermes setup` / `hermes model` in that home) keeps the provider and model in `$HERMES_HOME/config.yaml` (`model.provider`, `model.default`, `model.base_url`) and an API key in `$HERMES_HOME/.env` (mode 0600). `hermes chat` loads `.env` itself, over a same-named variable in its environment (source). OAuth providers (Nous Portal and others) keep their tokens in `auth.json` (source).
+- **What Goal Cup Proxy records of them.** Nothing of their content. The native source reads `sessions/session_*.json` only. The uploaded baseline lists `.env` and `auth.json` by name, size and SHA-256, as every file of the harness home (D56).
 - **File derived from the key.** Hermes copies an environment or `.env` key into a credential-pool entry in `auth.json` with `secret_fingerprint`, the first 16 hex digits of the key's SHA-256, and no raw key (source; the pre-D61 seed suppressed this).
-- **Key fragments on disk.** After a failed request, `sessions/request_dump_*.json` carries `key[:8]` (measured 2026-10-16 with a synthetic key). The native pattern never matches it. A key the agent prints into the session is removed by the daemon's shape rules when printed raw or JSON-escaped, and not when encoded ([CHEAT-CHECKLIST](../CHEAT-CHECKLIST.md#provider-keys-d61-what-the-tracer-does-not-hold)).
+- **Key fragments on disk.** After a failed request, `sessions/request_dump_*.json` carries `key[:8]` (measured 2026-10-16 with a synthetic key). The native pattern never matches it. A key the agent prints into the session is removed by the daemon's shape rules when printed raw or JSON-escaped, and not when encoded ([CHEAT-CHECKLIST](../CHEAT-CHECKLIST.md#provider-keys-d61-what-goal-cup-proxy-does-not-hold)).
 - **Credential seeding from the host.** Hermes copied a host-level CLI's token into its isolated home with no user action, and the same code path reads two more credential files in the home directory (measured, 2026-09-03). Goal Cup therefore runs with an empty private `HOME`.
 - **Where credentials are stored.** `auth.json` and `.env` under `$HERMES_HOME` on macOS (measured). No Keychain use observed. Linux and Windows: unknown.
 
@@ -91,14 +91,45 @@ Headless (the recipe before D61, frozen at [`headless-connectors/hermes-cli`](..
 - **Host credentials.** Isolation depends on the empty private `HOME` and `HERMES_HOME`; Hermes's own code reads host credential files from the home directory (measured).
 - **Orphaned tool processes.** See section 7.
 - **Machine-wide or managed settings.** unknown.
-- **Another Hermes.** A second `HERMES_HOME`, `--profile`, a Docker container or a desktop app pointed at a remote `hermes serve` is invisible to a local tracker (vendor docs).
+- **Another Hermes.** A second `HERMES_HOME`, `--profile`, a Docker container or a desktop app pointed at a remote `hermes serve` is invisible to a local Goal Cup Proxy (vendor docs).
 
 ## 9. Quirks and open questions
 
 - No model, provider or reasoning effort is set (owner direction 2026-10-14, D61): Hermes uses what the participant chose in its setup.
+- A long run needs `agent.max_turns` raised in Hermes's own `config.yaml`. Hermes ends a turn after that many agent steps (default 90) and waits at the prompt; in the 120-minute practice cells of 22 Oct it stopped after about 7 minutes (measured). For a 168 h run, set it before the start in Goal Cup's Hermes home, for example `HERMES_HOME=<config dir>/capture-homes/hermes-cli hermes config set agent.max_turns 2000`. It is the participant's own setting (D61): Goal Cup Proxy never sets it, and after the run starts the participant may only type "keep going".
 - Since D61 the home is not seeded, so Hermes's defaults apply: title generation (an auxiliary model call), compression, the `tirith` command scanner (downloaded from GitHub at start; with the network refused it prints `tirith security scanner enabled but not available`, measured) and the remote model catalogue. The connector's `configure` commands set only how the session is stored: `sessions.write_json_snapshots: true` and `compression.in_place: false` (D61).
 - The model host is the one `config.yaml` names in `model.base_url` (D62, `capture.model_host_from`), read at each start and continue; there is no provider list. A switch with `/model` inside a running session is not recorded until the participant exits Hermes and runs `goalcup continue`: until then `HERMES_CA_BUNDLE` (replace mode) makes the new service's calls fail their TLS handshake through the opaque tunnel (inference from source, not measured). A custom `http://` or loopback endpoint is refused at start.
 - Known gap, an override of the base URL (source, not measured): for a built-in API-key provider Hermes takes its runtime base URL from `<PROVIDER>_BASE_URL` (for example `DEEPSEEK_BASE_URL` in `$HERMES_HOME/.env`) or from its own registry, not from `config.yaml` (`hermes_cli/runtime_provider.py:1474-1484`). Setup writes the same value to `model.base_url`, so the common case matches (measured). A participant who sets such a variable to another host gets model calls that tunnel and fail their TLS handshake under the replace-mode CA, with no refusal at start.
-- Known gap, OAuth-login providers (traced from source, not measured; to be run in the test round): Nous Portal refreshes its token through `hermes_cli/auth.py:5780` `resolve_nous_runtime_credentials`, whose TLS context `_resolve_verify` (`auth.py:4593`) is built from `HERMES_CA_BUNDLE`, which holds the proxy CA alone. The refresh goes to the login host (`portal.nousresearch.com`), not the approved `model.base_url` host, so it tunnels with its real certificate and fails its handshake. Model calls then fail with an auth error once the token minted at prep has expired, and the start does not refuse. Codex-OAuth and xAI-OAuth refreshes follow the same pattern. So API-key services work, and OAuth-login services may not, until a test-round run measures it.
+- Known gap, OAuth-login providers (traced from source, not measured; to be run in the test round): Nous Portal refreshes its token through `hermes_cli/auth.py:5780` `resolve_nous_runtime_credentials`, whose TLS context `_resolve_verify` (`auth.py:4593`) is built from `HERMES_CA_BUNDLE`, which holds the recording proxy CA alone. The refresh goes to the login host (`portal.nousresearch.com`), not the approved `model.base_url` host, so it tunnels with its real certificate and fails its handshake. Model calls then fail with an auth error once the token minted at prep has expired, and the start does not refuse. Codex-OAuth and xAI-OAuth refreshes follow the same pattern. So API-key services work, and OAuth-login services may not, until a test-round run measures it.
 - The first reference row passed capture integrity but its trace has not been re-decoded; the claim stays capture-only ([reference row, D41](../DECISIONS.md#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules)).
 - Open: every "unknown" above; the Linux and Windows `HERMES_HOME`; the update-check host; failure exit codes; whether the console script bytes are portable; whether `hermes profile use` inside the shared home redirects runs (the `active_profile` file is not guarded).
+
+## Run without permission prompts
+
+During a run you may type only "keep going" ([RULES](../RULES.md)), so a harness that stops to ask
+waits. Hermes 0.19.0 asks only before a shell command it deems dangerous: with the default
+`approvals.mode: smart`, a helper model approves the low-risk ones and the rest get a prompt with a
+60 s timeout (`hermes_cli/config.py:2667-2678`, source, not measured). Goal Cup recommends turning
+the prompt off and never sets it for you (D67). It goes in `config.yaml` in Hermes's Goal Cup home
+(`HERMES_HOME`, under `capture-homes/hermes-cli/` in your Goal Cup configuration folder;
+`goalcup prep` prints the full path when it is missing):
+
+```yaml
+approvals:
+  mode: "off"
+```
+
+- `approvals.mode` accepts `manual`, `smart` and `off` (`tools/approval.py:2436`). Quote `"off"`:
+  an unquoted `off` is YAML for false, which Hermes also takes as off (`tools/approval.py:2429-2438`).
+- `hermes chat --yolo` (or `HERMES_YOLO_MODE=1`, or `/yolo` in a session) does the same for one
+  session; the connector passes no such option. Hermes's own deny rules and blocklist still apply
+  (`tools/approval.py:338`).
+- File edits are not gated (only memory and skill writes are, `tools/write_approval.py`).
+- What we saw: the Hermes practice runs of the local test day (lx-hermes, mac-hermes) made their
+  commits with no approval stall.
+- `goalcup prep` reads `approvals.mode` and, while it is not off, adds the recommendation to its
+  harness home step. It never changes it and never fails for it.
+- Evidence: [local test day](../research/results/2026-10-22-local-test-day.md),
+  [plan v4](../research/results/2026-10-22-fix-plan-v4.md).
+- Every setting for a long run, `agent.max_turns` included, for participants:
+  [Set up your harness for a 168-hour run](../HARNESS-SETUP.md#hermes).

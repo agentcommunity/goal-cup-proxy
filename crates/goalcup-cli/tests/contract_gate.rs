@@ -1,4 +1,4 @@
-//! The contract this crate is built against: the exit ladder, the nine-command tree, the
+//! The contract this crate is built against: the exit ladder, the eleven-command tree, the
 //! tracker's own configuration directory, and the `control.json` the daemon writes.
 //!
 //! `assert_cmd` is unavailable offline, so the binary is the one cargo built for this test
@@ -465,12 +465,12 @@ fn doctor_json_is_one_parseable_document_on_stdout_through_the_binary() {
 
 // ------------------------------------------------------------------ the capture CLI (D48)
 //
-// The binary is the M2 capture CLI: nine commands, and the removed V1 ones refuse by name
+// The binary is the M2 capture CLI: eleven commands, and the removed V1 ones refuse by name
 // instead of vanishing into a clap usage error.
 
 /// The commands `goalcup --help` lists, in the order a participant takes them, and nothing else.
 #[test]
-fn goalcup_lists_the_nine_commands_and_nothing_else() {
+fn goalcup_lists_the_eleven_commands_and_nothing_else() {
     for flag in ["-h", "--help"] {
         let out = goalcup().arg(flag).output().unwrap();
         assert!(out.status.success());
@@ -485,7 +485,16 @@ fn goalcup_lists_the_nine_commands_and_nothing_else() {
         assert_eq!(
             listed,
             [
-                "login", "prep", "start", "status", "continue", "upload", "entries", "seal",
+                "login",
+                "prep",
+                "start",
+                "status",
+                "time-left",
+                "mcp",
+                "continue",
+                "upload",
+                "entries",
+                "seal",
                 "doctor"
             ],
             "`goalcup {flag}` lists the capture commands and nothing else"
@@ -499,20 +508,232 @@ fn goalcup_lists_the_nine_commands_and_nothing_else() {
     assert!(!bad.status.success(), "`goalcup verify` must not exist");
 }
 
-/// `goalcup start` names its goal: the V1 path's flags are not in `--help`, and leaving
-/// `--goal-file` out is a usage error that says so.
+/// `goalcup time-left` reads the file its environment names, as it would inside the harness
+/// (D66): a fresh file prints one line and exits 0; a stale or missing one says the time is
+/// unknown and exits 1. No configuration directory is needed.
 #[test]
-fn goalcup_start_requires_a_goal_file_for_a_headless_harness_and_offers_no_v1_flags() {
+fn goalcup_time_left_reads_the_file_its_environment_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("time-left");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let z = goalcup_protocol::control::format_z;
+    let ask = |file: &std::path::Path| {
+        goalcup()
+            .arg("time-left")
+            .env_remove("GOALCUP_CONFIG_DIR")
+            .env("GOALCUP_TIME_LEFT_FILE", file)
+            .output()
+            .unwrap()
+    };
+    std::fs::write(
+        &file,
+        format!(
+            "seconds_left=148320\ndeadline_at=2026-11-14T00:00:00Z\nas_of={}\n",
+            z(now)
+        ),
+    )
+    .unwrap();
+    let fresh = ask(&file);
+    assert_eq!(fresh.status.code(), Some(0), "{fresh:?}");
+    let said = String::from_utf8_lossy(&fresh.stdout);
+    assert!(
+        said.starts_with("About 41 h 12 min left (the run stops at 2026-11-14 00:00 UTC)."),
+        "{said}"
+    );
+    std::fs::write(
+        &file,
+        format!("seconds_left=148320\nas_of={}\n", z(now - 301)),
+    )
+    .unwrap();
+    for out in [ask(&file), ask(&dir.path().join("missing"))] {
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert!(out.stdout.is_empty(), "{out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("unknown right now"),
+            "{out:?}"
+        );
+    }
+}
+
+/// Every file and folder under `dir`, with its length, so a test can see that nothing changed.
+fn tree(dir: &std::path::Path) -> Vec<(std::path::PathBuf, u64)> {
+    let mut found = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(at) = todo.pop() {
+        for entry in std::fs::read_dir(&at).unwrap().flatten() {
+            let meta = entry.metadata().unwrap();
+            if meta.is_dir() {
+                todo.push(entry.path());
+            }
+            found.push((entry.path(), meta.len()));
+        }
+    }
+    found.sort();
+    found
+}
+
+/// `goalcup mcp` (fix plan v9): its `time_left` tool returns exactly what `goalcup time-left`
+/// prints from the file, for a running run, a practice run, a run at its end and a stale or
+/// missing file; with no file named it says the time is unknown; it writes nothing (it runs in a read-only folder). The end of its input ends it
+/// with exit 0.
+#[test]
+fn goalcup_mcp_time_left_answers_what_goalcup_time_left_prints_and_writes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let ro = dir.path().join("ro");
+    let cfg = ro.join("cfg");
+    std::fs::create_dir_all(&cfg).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let z = goalcup_protocol::control::format_z;
+    let fixtures = [
+        (
+            "running",
+            format!(
+                "seconds_left=148320\ndeadline_at=2026-11-14T00:00:00Z\nas_of={}\n",
+                z(now)
+            ),
+        ),
+        (
+            "practice",
+            format!("seconds_left=540\nas_of={}\npractice=1\n", z(now)),
+        ),
+        ("ended", format!("seconds_left=0\nas_of={}\n", z(now))),
+        (
+            "stale",
+            format!("seconds_left=60\nas_of={}\n", z(now - 301)),
+        ),
+    ];
+    for (name, text) in &fixtures {
+        std::fs::write(ro.join(name), text).unwrap();
+    }
+    let read_only = |mode| {
+        for path in [&cfg, &ro] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+    };
+    read_only(0o500);
+    let before = tree(&ro);
+    let with_env = |command: &mut Command, file: Option<&std::path::Path>| {
+        command
+            .env("HOME", &ro)
+            .env("GOALCUP_CONFIG_DIR", &cfg)
+            .env("TMPDIR", &ro)
+            .env_remove("GOALCUP_IN_HARNESS")
+            .env_remove("XDG_CONFIG_HOME");
+        match file {
+            Some(file) => command.env("GOALCUP_TIME_LEFT_FILE", file),
+            None => command.env_remove("GOALCUP_TIME_LEFT_FILE"),
+        };
+    };
+    let cases: Vec<Option<std::path::PathBuf>> = fixtures
+        .iter()
+        .map(|(name, _)| Some(ro.join(name)))
+        .chain([Some(ro.join("missing")), None])
+        .collect();
+    let missing = ro.join("missing");
+    for file in &cases {
+        let mut cli = goalcup();
+        cli.arg("time-left");
+        // The server runs only inside the harness, where no run can be looked up: with no file
+        // it answers what `goalcup time-left` prints for a missing one, never "No run is open".
+        with_env(&mut cli, Some(file.as_deref().unwrap_or(&missing)));
+        let printed = cli.output().unwrap();
+        let (expected, is_error) = match printed.status.code() {
+            Some(0) => (String::from_utf8(printed.stdout).unwrap(), false),
+            _ => (String::from_utf8(printed.stderr).unwrap(), true),
+        };
+        let expected = expected
+            .trim_end()
+            .trim_start_matches("goalcup: ")
+            .to_string();
+
+        let mut server = goalcup();
+        server
+            .arg("mcp")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        with_env(&mut server, file.as_deref());
+        let mut child = server.spawn().unwrap();
+        {
+            use std::io::Write;
+            let mut stdin = child.stdin.take().unwrap();
+            for line in [
+                r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}"#,
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"time_left","arguments":{}}}"#,
+            ] {
+                writeln!(stdin, "{line}").unwrap();
+            }
+        }
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{file:?}: {out:?}");
+        let replies: Vec<serde_json::Value> = String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(replies.len(), 3, "{file:?}: {replies:?}");
+        assert_eq!(replies[0]["result"]["serverInfo"]["name"], "goalcup");
+        assert_eq!(replies[1]["result"]["tools"][0]["name"], "time_left");
+        let result = &replies[2]["result"];
+        assert_eq!(result["content"][0]["text"], expected, "{file:?}");
+        assert_eq!(result["isError"], is_error, "{file:?}");
+        assert!(!expected.contains("No run is open"), "{file:?}: {expected}");
+    }
+    let after = tree(&ro);
+    read_only(0o700);
+    assert_eq!(before, after, "goalcup mcp and time-left wrote nothing");
+}
+
+/// `goalcup seal` run inside the harness (its marker set) refuses before anything else, and
+/// names another terminal; without the marker it goes on to look for the run.
+#[test]
+fn goalcup_seal_refuses_inside_the_harness() {
+    let cfg = tempfile::tempdir().unwrap();
+    let seal = |marker: Option<&str>| {
+        let mut command = goalcup();
+        command.arg("seal").env("GOALCUP_CONFIG_DIR", cfg.path());
+        match marker {
+            Some(marker) => command.env("GOALCUP_IN_HARNESS", marker),
+            None => command.env_remove("GOALCUP_IN_HARNESS"),
+        };
+        command.output().unwrap()
+    };
+    let inside = seal(Some("1"));
+    assert_eq!(inside.status.code(), Some(1), "{inside:?}");
+    assert!(
+        String::from_utf8_lossy(&inside.stderr).contains("from another terminal"),
+        "{inside:?}"
+    );
+    let outside = seal(None);
+    assert!(
+        !String::from_utf8_lossy(&outside.stderr).contains("another terminal"),
+        "{outside:?}"
+    );
+}
+
+/// `goalcup start` offers neither the V1 path's flags nor headless mode's `--goal-file`: each is
+/// a usage error, said before a daemon is started or anything is made.
+#[test]
+fn goalcup_start_offers_no_goal_file_and_no_v1_flags() {
     let out = goalcup().args(["start", "--help"]).output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8(out.stdout).unwrap();
-    for flag in ["--harness", "--dev", "--goal-file"] {
+    for flag in ["--harness", "--dev"] {
         assert!(
             text.contains(flag),
             "`goalcup start --help` must list {flag}"
         );
     }
     for flag in [
+        "--goal-file",
         "--attach",
         "--print-launch",
         "--no-open",
@@ -525,23 +746,9 @@ fn goalcup_start_requires_a_goal_file_for_a_headless_harness_and_offers_no_v1_fl
             "`goalcup start --help` must not offer {flag}: {text}"
         );
     }
-    // A headless harness without its goal file, and a chat-mode one (D57) with one, are refused
-    // before a daemon is started or anything is made (a configuration directory of the test's
-    // own all the same).
+    // A goal file is refused before a daemon is started or anything is made (a configuration
+    // directory of the test's own all the same).
     let cfg = tempfile::tempdir().unwrap();
-    // The two shapes are the fixture connectors (`tests/fixtures/connectors`), through `--dev`.
-    let out = goalcup()
-        .args(["start", "--harness", "headless-per-run", "--dev"])
-        .env("GOALCUP_CONFIG_DIR", cfg.path())
-        .env("GOALCUP_CONNECTORS_DIR", support::fixture_connectors_dir())
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(1), "a refusal is rung 1");
-    let said = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(
-        said.contains("--goal-file"),
-        "and names the missing flag: {said}"
-    );
     let out = goalcup()
         .args([
             "start",
@@ -555,23 +762,16 @@ fn goalcup_start_requires_a_goal_file_for_a_headless_harness_and_offers_no_v1_fl
         .env("GOALCUP_CONNECTORS_DIR", support::fixture_connectors_dir())
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(1), "a refusal is rung 1");
+    assert_eq!(out.status.code(), Some(1), "a usage error is rung 1");
     let said = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(said.contains("chat mode"), "{said}");
+    assert!(said.contains("--goal-file"), "{said}");
     assert_eq!(
         std::fs::read_dir(cfg.path()).unwrap().count(),
         0,
         "no daemon was started and nothing was written"
     );
     let refused = goalcup()
-        .args([
-            "start",
-            "--harness",
-            "any-harness",
-            "--goal-file",
-            "g.txt",
-            "--attach",
-        ])
+        .args(["start", "--harness", "any-harness", "--attach"])
         .output()
         .unwrap();
     assert_eq!(refused.status.code(), Some(1), "a V1 flag is a usage error");

@@ -70,6 +70,19 @@ pub fn receipt_path(cfg: &Path, entry_id: &str) -> PathBuf {
         .join(format!("{entry_id}.receipt.json"))
 }
 
+/// The start receipt `goalcup start` kept for `entry_id` ([`receipt_path`]).
+pub fn read_receipt(
+    cfg: &Path,
+    entry_id: &str,
+) -> Result<goalcup_protocol::receipt::StartReceipt, CliError> {
+    let path = receipt_path(cfg, entry_id);
+    let bytes = std::fs::read(&path).map_err(|source| CliError::Io {
+        path: path.display().to_string(),
+        source,
+    })?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
 /// The record `goalcup start` kept for `entry_id`, or `None` for a local-only run.
 pub fn read_record(cfg: &Path, entry_id: &str) -> Result<Option<UploadRecord>, CliError> {
     let path = record_path(cfg, entry_id);
@@ -135,11 +148,10 @@ pub fn open_run(server: &ServerClient, request: &OpenRunRequest) -> Result<OpenR
             (Some(start), Some(deadline)) if start < deadline
         );
     if !well_formed {
-        return Err(CliError::Refused(format!(
-            "the Goal Cup server at {} answered a run this tracker cannot use: {run:?}. \
-             Nothing was started.",
-            server.base()
-        )));
+        crate::host_log::log_only(&format!("open run: an answer goalcup cannot use: {run:?}"));
+        return Err(CliError::Refused(
+            crate::participant::server_answer_unusable(server.base(), "run"),
+        ));
     }
     Ok(run)
 }
@@ -201,11 +213,12 @@ pub fn continue_run(
             (Some(start), Some(deadline)) if start < deadline
         );
     if !well_formed {
-        return Err(CliError::Refused(format!(
-            "the Goal Cup server at {} answered a segment this tracker cannot use: {segment:?}. \
-             Nothing was started.",
-            server.base()
-        )));
+        crate::host_log::log_only(&format!(
+            "continue run: an answer goalcup cannot use: {segment:?}"
+        ));
+        return Err(CliError::Refused(
+            crate::participant::server_answer_unusable(server.base(), "part of the run"),
+        ));
     }
     Ok(Continued::Segment(segment))
 }
@@ -469,18 +482,18 @@ pub fn give_back_pending(server_url: &str, cfg: &Path) {
 }
 
 /// Wait for the harness to exit, and when `stop` says the run must stop first (its deadline, or
-/// a full disk), call `on_stop` with the reason while the wait goes on. `on_stop` asks the daemon
+/// a newer run), call `on_stop` with the reason while the wait goes on. `on_stop` asks the daemon
 /// to seal, which ends the harness (the daemon is the only terminator, D22), and so ends this
 /// wait. `stop` is the run's one stop channel: whoever has a reason to end the run sends it there.
 ///
 /// With `on_stopped` (a chat-mode harness, D57) a harness that stops itself is continued at once
 /// and the wait goes on (`goalcup_platform::terminal::wait_resuming`); `on_stopped` hears the
-/// signal that stopped it. The child is then reaped by that wait, not by `child`.
+/// signal that stopped it and answers whether to continue it (not a disk pause, D65). The child is then reaped by that wait, not by `child`.
 pub fn wait_stopping<F: FnOnce(&str) + Send>(
     child: &mut std::process::Child,
     stop: std::sync::mpsc::Receiver<String>,
     on_stop: F,
-    on_stopped: Option<&mut dyn FnMut(i32)>,
+    on_stopped: Option<&mut dyn FnMut(i32) -> bool>,
 ) -> std::io::Result<std::process::ExitStatus> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::RecvTimeoutError;

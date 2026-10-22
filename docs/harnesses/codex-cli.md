@@ -29,12 +29,12 @@ request ([thread_title.rs](https://github.com/openai/codex/blob/rust-v0.156.1/co
 The 19 Oct repeat assigned `/rename Research validation` at the ready prompt before submitting
 the workload; the inline name path sends only a name update, and automatic title generation
 requires an unnamed thread. All 22 captured repeat requests were Luna/high, with no low-effort
-title request observed. This is a harness prelaunch setting, not tracer or connector policy.
+title request observed. This is a harness prelaunch setting, not Goal Cup Proxy or connector policy.
 
 Native delegation was disabled for this experiment: installed-tag full-history forks do not
 provide a global guarantee of the requested child model/effort. Native-child coverage remains
 unmeasured. Participant settings live only in the existing dedicated capture home. The connector
-and shared tracer contain no model-specific enforcement or title-generation workaround.
+and shared Goal Cup Proxy code contain no model-specific enforcement or title-generation workaround.
 
 The baseline yielded 564 decoded observations, including 225 unknown records across native and
 Responses decoders. Those are partial interpretations of retained source bytes; paired tool
@@ -57,7 +57,7 @@ establish containment of every escaped descendant. Native decoder 0.153.0 produc
 false, while interpretation still retains those 194 unknown observations. Context-visible tool
 calls/results are available; independent full tool-output collection is outside this experiment.
 Native-child, endurance and other-platform coverage remain unmeasured by this repeat. See
-[the tracker](../../TODO.md#research-recorder-validation).
+[the TODO list](../../TODO.md#research-recorder-validation).
 
 ## 19 Oct focused native-child recording probe
 
@@ -160,15 +160,16 @@ Compressed rollouts: vendor docs say a background job compresses rollouts older 
 - **Tree.** Three layers (measured): the npm wrapper (`node`), the native `codex` binary, and `codex-code-mode-host` (Codex's own MCP host), which sits in a process group of its own. The `exec` tool runs shell commands as further children.
 - **Kill.** Killing the wrapper does not stop the native binary; it survives, reparented, and keeps the thread writer lock (measured, `kill -9`). Goal Cup signals the native binary (`kill.strategy = native_pid`, `native_binary = "codex"`, 10 s grace; code).
 - **SIGTERM.** A SIGTERM run left `thread-writer-locks/<thread>.lock`, a `tmp/arg0/` directory and a shell snapshot behind in one measurement; the next launch deleted the first two (measured 2026-09-27). An earlier spike measured that a clean SIGTERM removes the lock. The two measurements disagree; treat residue after SIGTERM as possible.
+- **Login shell.** Codex 0.153 runs each agent command as `/bin/sh -lc "<cmd>"`, the shell taken from `/etc/passwd` (measured, rollout of a Docker run, 2026-10-22). A login shell runs `/etc/profile`, which on Debian and Ubuntu sets `PATH` outright, so with an empty `HOME` the participant's `~/.local/bin` (where `install.sh` puts `goalcup`), `~/.cargo/bin` and the rest were lost and `goalcup time-left` failed (measured, Debian container, 2026-10-22). macOS's `/etc/profile` keeps `PATH`. Goal Cup now writes a `.profile` into the run's `HOME` that exports the `PATH` it handed Codex (code: `write_login_profile` in `crates/goalcup-cli/src/home.rs`), so `sh -lc` and `bash -lc` get it back; no Codex setting changes (D67).
 - **Subagents.** Separate rollout files and a spawn tool in the `exec` family (measured). Hooks fire inside subagents with an `agent_id` (measured).
 - **Exit codes.** 0 after a completed `exec` turn (measured). 1 on Linux arm64 and x86_64 with no login, after repeated 401 and `turn.failed` (measured). Others: unknown.
-- **Orphans.** A shell command the agent started (`sleep`) can outlive the sweep and reparent to init (measured 2026-09-15; see [TERMINATION](../TERMINATION.md) for the current claim). On Linux there was no fork-and-leave on the no-login path: the `git` children Codex forks on first start exited before Codex did, nothing stayed in its process group afterwards, and nothing but the tracker's daemon was reparented to init (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login, 1 s sampling; a child that lived and died between samples would not show, so this holds at that sampling interval). A logged-in Linux run, which runs tools, is not measured.
+- **Orphans.** A shell command the agent started (`sleep`) can outlive the sweep and reparent to init (measured 2026-09-15; see [TERMINATION](../TERMINATION.md) for the current claim). On Linux there was no fork-and-leave on the no-login path: the `git` children Codex forks on first start exited before Codex did, nothing stayed in its process group afterwards, and nothing but Goal Cup Proxy's daemon was reparented to init (measured, Linux arm64, Docker Desktop, Debian 13 container, Linux 7.0.12, 2026-10-13, no login, 1 s sampling; a child that lived and died between samples would not show, so this holds at that sampling interval). A logged-in Linux run, which runs tools, is not measured.
 
 ## 8. Things Goal Cup cannot isolate
 
 - **Shared home.** All runs share one isolated `CODEX_HOME` (D39), so runs must be serialized and the directory holds older runs' sessions.
 - **Account state on OpenAI's side.** Plugins, apps, connectors and memory summary arrive from the account and appear in the developer message (measured); rate-limit and plan data ride on every turn.
-- **No sandbox from Goal Cup.** The connector passes no sandbox, approval or model option (D52, D57). Codex runs with its own defaults and the participant's settings. The per-run `HOME` stops automatic loading of `~/.agents/skills` and shell startup files, not deliberate reads or writes.
+- **No sandbox from Goal Cup.** The connector passes no sandbox, approval or model option (D52, D57). Codex runs with its own defaults and the participant's settings; Goal Cup recommends some ([Run without permission prompts](#run-without-permission-prompts), D67). The per-run `HOME` stops automatic loading of `~/.agents/skills` and shell startup files, not deliberate reads or writes.
 - **Machine-wide or managed settings.** The connector seeds no `requirements.toml` in `CODEX_HOME`. A system-wide managed config location: unknown.
 - **A second Codex.** Another `CODEX_HOME`, an older global Homebrew copy, or the Codex desktop app can run beside the tracked one; the app shares `CODEX_HOME` (vendor docs; Goal Cup measured an app thread in 2026-09).
 
@@ -192,7 +193,7 @@ codex -c check_for_update_on_startup=false \
 
 identity `none`; native root `{config_home}/sessions`, pattern `*/*/*/rollout-*.jsonl`, `since_run_start = true` (every rollout new or written since the run started is recorded); `skills_dir = "skills"` (`goalcup start` puts the goal-cup skill in `$CODEX_HOME/skills/goal-cup/` before each launch); `resume_args = ["resume", "--last"]`, what `goalcup continue` appends (not measured, see PENDING below).
 
-Measured on macOS arm64, Codex 0.153.0, 2026-10-14, by driving the TUI on a pseudo-terminal (120x40) in a fresh `git init` workspace, with `CODEX_HOME` the tracer's isolated home and an empty `HOME`. That home was **logged out** (an expired refresh token), so no model reply was seen:
+Measured on macOS arm64, Codex 0.153.0, 2026-10-14, by driving the TUI on a pseudo-terminal (120x40) in a fresh `git init` workspace, with `CODEX_HOME` Goal Cup Proxy's isolated home and an empty `HOME`. That home was **logged out** (an expired refresh token), so no model reply was seen:
 
 - No trust prompt appears with the `projects` trust override.
 - The rollout file is **not** created at startup (none after 15 s at an idle prompt). It is created when the first message is submitted (its birth time is the Enter), under `sessions/YYYY/MM/DD/`, and its name carries the startup time: `rollout-<startup time>-<thread id>.jsonl`.
@@ -203,6 +204,37 @@ Measured on macOS arm64, Codex 0.153.0, 2026-10-14, by driving the TUI on a pseu
 
 PENDING (need a logged-in home, which the owner must restore; nobody on our side logs in for a test):
 
-- Whether `codex <args> resume --last` in the tracer's home reopens the same rollout file or starts a new one. The connector ships `resume_args = ["resume", "--last"]` on the plan's word, not on a measurement.
+- Whether `codex <args> resume --last` in Goal Cup Proxy's home reopens the same rollout file or starts a new one. The connector ships `resume_args = ["resume", "--last"]` on the plan's word, not on a measurement.
 - A model reply in chat mode through the recording proxy.
 - One 10-minute practice run of this connector on this Mac against staging.
+
+## Run without permission prompts
+
+During a run you may type only "keep going" ([RULES](../RULES.md)), so a Codex that stops to ask for
+an approval waits until the deadline. Goal Cup recommends these two settings and never sets them
+for you (D67). They go in `config.toml` in Codex's Goal Cup home (`CODEX_HOME`, under
+`capture-homes/codex-cli/` in your Goal Cup configuration folder; `goalcup prep` prints the full path
+when one is missing):
+
+```toml
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+```
+
+- `approval_policy = "never"`: Codex never asks; a command that fails is returned to the model
+  (`codex --help`, 0.156.1). Without it, Codex asks whenever its sandbox blocks a command.
+- `sandbox_mode = "danger-full-access"`: no sandbox. The default `workspace-write` sandbox makes
+  `.git` read-only: `git add` failed with `Operation not permitted` on `.git/index.lock`, and Codex
+  then asked and waited 8.7 of 10 minutes (mac-codex, local test day). In a Linux container the
+  sandbox cannot start at all (`bwrap: No permissions to create a new namespace`), so every command
+  needs an approval (lx-codex). With `never` alone, those commands fail instead and
+  the agent cannot commit.
+- Without a sandbox the agent's commands can change anything your user can. Run it on a machine
+  or in a container you are content to let it change.
+- `goalcup prep` reads both keys and, while one is not set this way, adds the recommendation to its
+  harness home step. It never changes them and never fails for them. The test kit
+  (`scripts/kit_settle.py`) sets both in its own cells.
+- Evidence: [local test day](../research/results/2026-10-22-local-test-day.md),
+  [plan v4](../research/results/2026-10-22-fix-plan-v4.md).
+- Every setting for a long run, for participants:
+  [Set up your harness for a 168-hour run](../HARNESS-SETUP.md#codex).

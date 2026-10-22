@@ -1,8 +1,8 @@
-//! The proxy root composed from the real leaves — admission and the per-launch CA,
+//! The recording proxy root composed from the real leaves — admission and the per-launch CA,
 //! `relay_http`, `relay_websocket` — over a real loopback listener, real TLS on both legs, and
 //! a bounded direct `CaptureSink` whose worker validates what it retains.
 //!
-//! Every client trusts only what it must: an intercepted client trusts only the proxy's
+//! Every client trusts only what it must: an intercepted client trusts only the recording proxy's
 //! per-launch CA, and a tunnelled one only the synthetic upstream's test CA. Nothing here is
 //! mocked between the listener and the sink, and nothing leaves loopback.
 
@@ -129,7 +129,7 @@ async fn startup_admits_configured_producer_before_emitter() {
     let handle = within("start", starting)
         .await
         .unwrap()
-        .expect("the proxy starts once admitted");
+        .expect("the recording proxy starts once admitted");
     assert_eq!(handle.producer(), PRODUCER);
     assert_eq!(handle.health().producers_admitted, 1);
 
@@ -941,6 +941,7 @@ async fn a_fail_open_tunnel_is_chained_when_it_begins_not_when_it_ends() {
     close_both(client, up).await;
     let report = rig.stop().await;
     assert_eq!(report.health.tunneled_fail_open, 1);
+    assert_eq!(report.health.fail_open_sni_mismatch, 1, "{report:?}");
     assert_eq!(report.producer_close, ProducerClose::Queued);
     sink.settle().await;
     let frames = sink.frames();
@@ -974,6 +975,7 @@ async fn a_fail_open_tunnel_is_chained_when_it_begins_not_when_it_ends() {
     drop(tcp);
     let report = rig.stop().await;
     assert_eq!(report.health.tunneled_fail_open, 1, "{report:?}");
+    assert_eq!(report.health.fail_open_not_tls, 1, "{report:?}");
     sink.settle().await;
     assert_eq!(
         losses(&sink.frames())
@@ -1042,6 +1044,67 @@ async fn a_fail_open_tunnel_open_at_stop_is_still_capture_loss() {
     assert!(report.capture_loss(), "{report:?}");
     let _ = read_to_end(&mut client).await;
     let _ = read_to_end(&mut up).await;
+    sink.settle().await;
+    assert_eq!(losses(&sink.frames()), vec![(0, GapReason::DecodeFailed)]);
+}
+
+/// Fix plan v10 U1: a client that closes after the `200` for an approved host, before its
+/// ClientHello is complete (no byte at all, or part of a record header), sent nothing of that
+/// host's traffic. It is a client failure: no upstream connection, no fail-open, no loss. A
+/// ClientHello that does arrive but cannot be parsed stays fail-open, a loss, with its reason.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_client_that_closes_before_its_client_hello_is_no_loss() {
+    let pki = TestPki::new("upstream test CA");
+    let upstream = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    upstream.set_nonblocking(true).unwrap();
+    let port = upstream.local_addr().unwrap().port();
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut config = RigConfig::new(&pki);
+    config.approved = vec![approved("localhost", policy(&[("/", true, None)]))];
+    let mut rig = Rig::start(config, sink.clone()).await;
+    let handle = rig.handle();
+
+    let silent = connect_via(rig.addr, &format!("localhost:{port}")).await;
+    drop(silent);
+    let mut partial = connect_via(rig.addr, &format!("localhost:{port}")).await;
+    partial.write_all(&[0x16, 0x03, 0x01, 0x00]).await.unwrap();
+    drop(partial);
+    eventually("both closes are client failures", || {
+        handle.health().admission_failures.client_io == 2
+    })
+    .await;
+    let health = handle.health();
+    assert_eq!(health.tunneled_fail_open, 0, "{health:?}");
+    assert_eq!(health.admission_failed, 2, "{health:?}");
+    assert_eq!(
+        upstream.accept().map(|_| ()).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "no upstream connection was opened for a client that sent no ClientHello"
+    );
+    sink.settle().await;
+    assert!(
+        losses(&sink.frames()).is_empty(),
+        "a client close is no loss"
+    );
+
+    // A complete handshake record that is not a ClientHello: still fail-open, by its reason.
+    let mut garbage = connect_via(rig.addr, &format!("localhost:{port}")).await;
+    garbage
+        .write_all(&[0x16, 0x03, 0x01, 0x00, 0x04, 0x02, 0x00, 0x00, 0x00])
+        .await
+        .unwrap();
+    eventually("the unparsable ClientHello is a fail-open tunnel", || {
+        handle.health().fail_open_unparsed == 1
+    })
+    .await;
+    let (tunnelled, _) = upstream.accept().expect("the tunnel connected upstream");
+    drop(tunnelled);
+    drop(garbage);
+    let report = rig.stop().await;
+    assert_eq!(report.health.tunneled_fail_open, 1, "{report:?}");
+    assert_eq!(report.health.fail_open_unparsed, 1, "{report:?}");
+    assert_eq!(report.health.admission_failures.client_io, 2, "{report:?}");
+    assert!(report.capture_loss(), "{report:?}");
     sink.settle().await;
     assert_eq!(losses(&sink.frames()), vec![(0, GapReason::DecodeFailed)]);
 }
@@ -1148,7 +1211,7 @@ async fn stop_with_active_stream_and_blocked_sink_meets_one_deadline() {
         "{report:?}"
     );
     assert_eq!(report.transport_failures(), 0);
-    // Every socket the proxy held is gone.
+    // Every socket the recording proxy held is gone.
     for (what, ended) in [
         ("client", read_to_end(&mut client).await),
         ("upstream", read_to_end(&mut up).await),
@@ -1302,7 +1365,7 @@ async fn connection_local_tls_error_keeps_listener_and_other_identities() {
     e.shutdown().await.unwrap();
     let _ = read_to_end(&mut e_up).await;
 
-    // C fails the harness-facing handshake: its client does not trust the proxy's CA.
+    // C fails the harness-facing handshake: its client does not trust the recording proxy's CA.
     let tcp = connect_via(rig.addr, &format!("localhost:{port}")).await;
     assert!(try_tls_over(tcp, &[pki.root()], "localhost").await.is_err());
     let _c_up = upstream.accept().await;
@@ -1538,8 +1601,8 @@ async fn start_accepts_more_tasks_than_capture_connections() {
     }
 }
 
-/// The harness's subprocesses share the proxy, so intercepted connections can outnumber the
-/// emitter's connection table. One past it is relayed uncaptured and counted; it neither
+/// The harness's subprocesses share the recording proxy, so intercepted connections can outnumber
+/// the emitter's connection table. One past it is relayed uncaptured and counted; it neither
 /// refuses the agent nor ends capture for the connections in the table.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn intercepted_connections_past_the_capture_table_fail_open() {
@@ -1620,7 +1683,7 @@ async fn intercepted_connections_past_the_capture_table_fail_open() {
 }
 
 /// Exhausting the open-stream bound ends capture inside the emitter, where the sink never
-/// sees it; the proxy's health still counts it as a refusal.
+/// sees it; the recording proxy's health still counts it as a refusal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn local_stream_limit_refusal_is_counted() {
     allow_descriptors(4096);
@@ -1783,7 +1846,7 @@ async fn start_refuses_invalid_configuration_before_touching_the_sink() {
 
 #[test]
 fn stop_never_closes_the_producer_past_a_stuck_task() {
-    // The proxy gets its own runtime: the sink below blocks one of its workers inside
+    // The recording proxy gets its own runtime: the sink below blocks one of its workers inside
     // `try_submit`, which can starve that runtime's own timers; the owner stops it from here.
     let proxy_rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -2442,7 +2505,8 @@ async fn an_upstream_outage_is_one_window_closed_by_the_next_reach() {
     assert_eq!(open.recovered, None);
 
     // The provider host is back: the next tunnel to it closes the window when it is decided,
-    // which is once the client's first bytes arrive (the proxy reads the server name in them).
+    // which is once the client's first bytes arrive (the recording proxy reads the server name in
+    // them).
     let upstream = Upstream::start(&pki, &["localhost"]).await;
     let mut tunnel = connect_via(rig.addr, &format!("localhost:{}", upstream.addr.port())).await;
     tunnel.write_all(b"not a ClientHello").await.unwrap();

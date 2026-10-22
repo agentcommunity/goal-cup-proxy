@@ -469,6 +469,31 @@ describe("facts about the machine and the connection", () => {
     }
   });
 
+  test("open and continue take proxy_version or tracer_version, store it as tracer_version, and refuse two that differ", async () => {
+    const r = rig({}, T0);
+    try {
+      const versions = (run: string) => (r.storedRun(run).entries as { tracer_version: string }[]).map((e) => e.tracer_version);
+      const alice = await r.cred("alice");
+      const opened = await r.open(alice, "s1", { proxy_version: "0.7.0" });
+      assert.equal(opened.status, 201, JSON.stringify(opened.body));
+      const run = opened.body as Opened;
+      assert.deepEqual(versions(run.run_id), ["0.7.0"]);
+      // A continue from an older release says tracer_version; one from this release may say both.
+      const c1 = await r.cont(alice, run.run_id, run.entry_id, "s-two", { tracer_version: "0.6.0" });
+      assert.equal(c1.status, 201, JSON.stringify(c1.body));
+      assertError(await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { proxy_version: "0.7.1", tracer_version: "0.7.0" }), 400, "malformed");
+      assertError(await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { tracer_version: undefined }), 400, "malformed");
+      assertError(await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { tracer_version: undefined, proxy_version: "x".repeat(65) }), 400, "malformed");
+      const c2 = await r.cont(alice, run.run_id, c1.body.entry_id, "s-three", { proxy_version: "0.7.1", tracer_version: "0.7.1" });
+      assert.equal(c2.status, 201, JSON.stringify(c2.body));
+      assert.deepEqual(versions(run.run_id), ["0.7.0", "0.6.0", "0.7.1"]);
+      assertError(await r.open(await r.cred("bob"), "s4", { proxy_version: "0.7.0", tracer_version: "0.6.0" }), 400, "malformed");
+      assertError(await r.open(await r.cred("carol"), "s5", { proxy_version: undefined }), 400, "malformed");
+    } finally {
+      r.stop();
+    }
+  });
+
   test("a run opened with no machine, no IP and no country stores nulls", async () => {
     const r = rig({}, T0);
     try {

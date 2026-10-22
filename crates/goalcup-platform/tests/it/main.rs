@@ -10,8 +10,6 @@ mod disk;
 #[cfg(unix)]
 mod machine;
 #[cfg(unix)]
-mod readcap_unix;
-#[cfg(unix)]
 mod unix_snapshot_primitives;
 #[cfg(unix)]
 mod unix_sourcecap;

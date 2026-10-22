@@ -1,8 +1,11 @@
 [package]
 name = "goalcup-cli"
+description = "The goalcup command: launches the harness, runs the recording proxy and uploads the run."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 rust-version.workspace = true
 publish = false
 
@@ -58,7 +61,7 @@ ed25519-dalek = { workspace = true, optional = true }
 # The M2 recording proxy (`src/proxy/`). The shared seam
 # (`proxy::api`) needs tokio's `AsyncRead`/`AsyncWrite` and the relay leaves need `io-util`
 # and `sync`; `net`, `time`, `rt-multi-thread` and `macros` come from the workspace line.
-# Still no `fs`: the proxy never touches a participant's disk through tokio.
+# Still no `fs`: the recording proxy never touches a participant's disk through tokio.
 tokio = { workspace = true, features = ["io-util", "sync"] }
 # TLS termination toward the harness and upstream TLS toward the provider (ring provider
 # only), the per-launch CA and leaf certificates, and the upstream validation roots.
@@ -70,9 +73,10 @@ rcgen.workspace = true
 socket2.workspace = true
 webpki-roots.workspace = true
 # `sha1`: the WebSocket accept-key derivation only (`proxy::http`). `flate2`: content
-# decoding and permessage-deflate.
+# decoding and permessage-deflate. `brotli-decompressor`: `br` content decoding.
 sha1.workspace = true
 flate2.workspace = true
+brotli-decompressor.workspace = true
 # Fresh random 128-bit producer and connection identifiers (`proxy::api::CaptureEmitter`).
 # The workspace version the daemon already links, so no new crate.
 rand.workspace = true

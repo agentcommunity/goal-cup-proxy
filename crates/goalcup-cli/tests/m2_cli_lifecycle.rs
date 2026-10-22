@@ -1,6 +1,7 @@
-//! `goalcup start --goal-file` and `goalcup seal` on a protocol-v5 local capture: the real
-//! daemon in process, the real proxy and IPC sink inside `start_with`, and a fake headless
-//! harness (`fixtures/m2-fake-harness.sh`) that records what it was started with.
+//! `goalcup start` and `goalcup seal` on a protocol-v5 local capture: the real daemon in
+//! process, the real proxy and IPC sink inside `start_with`, and a fake chat-mode harness
+//! (`fixtures/m2-fake-harness.sh`, run without a terminal through the test build's seam) that
+//! records what it was started with.
 //!
 //! macOS and Linux (the trace folder must be on APFS, ext4 or XFS). Every test holds the
 //! process-table lock: each runs a daemon, most spawn a harness, and one lowers this
@@ -25,7 +26,6 @@ use goalcup_protocol::provenance::TerminationOutcomeV1;
 use m2_cli_support::{FAKE_ID, Hooked, LaunchFault, RegistrationFault, Rig, Upstream};
 use std::time::{Duration, Instant};
 
-const GOAL: &str = "write hello.txt, then stop";
 const RESERVE: u64 = 4 * 1024 * 1024;
 
 /// A test build's short wrap-up for a run without a server: two seconds, and the seal asked
@@ -82,9 +82,9 @@ impl Drop for OpenFiles {
 }
 
 #[test]
-fn the_proxy_and_the_admitted_producer_precede_the_spawn_and_the_goal_is_one_argument() {
+fn the_proxy_and_the_admitted_producer_precede_the_spawn_and_no_goal_is_passed() {
     let _lock = table_lock::TableLock::acquire();
-    // launchd's default, which leaves the proxy about 120 connections.
+    // launchd's default, which leaves the recording proxy about 120 connections.
     let (soft, hard) = open_files();
     let _restore = OpenFiles(soft);
     let launchd = libc::rlimit {
@@ -95,7 +95,7 @@ fn the_proxy_and_the_admitted_producer_precede_the_spawn_and_the_goal_is_one_arg
     assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &launchd) }, 0);
     let rig = Rig::new();
     rig.tell("stop", "");
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, out) =
@@ -185,19 +185,12 @@ fn the_proxy_and_the_admitted_producer_precede_the_spawn_and_the_goal_is_one_arg
     );
     assert_eq!(rig.harness_file("proxy").as_deref(), Some("listening\n"));
 
+    // Chat mode (D57): the connector's args alone, and no goal after them.
     let argv = rig.harness_file("argv").unwrap();
     let argv: Vec<&str> = argv.lines().collect();
-    assert_eq!(
-        argv.last(),
-        Some(&GOAL),
-        "the goal is the last argument: {argv:?}"
-    );
-    assert_eq!(
-        argv.iter().filter(|a| a.contains(GOAL)).count(),
-        1,
-        "{argv:?}"
-    );
-    assert_eq!(argv[..argv.len() - 1].last(), Some(&"--"), "{argv:?}");
+    assert_eq!(argv.len(), 3, "{argv:?}");
+    assert_eq!(&argv[..2], ["run", "-C"], "{argv:?}");
+    assert!(argv[2].ends_with("/workspace"), "{argv:?}");
     assert_eq!(
         rig.harness_file("stdin").as_deref(),
         Some("eof\n"),
@@ -212,7 +205,7 @@ fn the_proxy_and_the_admitted_producer_precede_the_spawn_and_the_goal_is_one_arg
     let proxy_url = env
         .lines()
         .find_map(|l| l.strip_prefix("HTTPS_PROXY="))
-        .expect("the harness is pointed at the proxy");
+        .expect("the harness is pointed at the recording proxy");
     let credential = proxy_url
         .split_once('@')
         .and_then(|(userinfo, _)| userinfo.rsplit_once(':'))
@@ -230,7 +223,6 @@ fn the_proxy_and_the_admitted_producer_precede_the_spawn_and_the_goal_is_one_arg
     for (name, value) in [
         ("ingest secret", secret.as_str()),
         ("proxy credential", credential),
-        ("goal", GOAL),
     ] {
         assert!(!out.contains(value), "the {name} was printed:\n{out}");
         assert!(
@@ -247,7 +239,7 @@ fn local_pilot_never_requests_receipt() {
     rig.tell("stop", "");
     // No `grant.json`, the file the V1 `goalcup auth` wrote: the pilot runs without one.
     assert!(!rig.cfg.join("grant.json").exists(), "no grant");
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, out) =
@@ -273,7 +265,7 @@ fn local_pilot_never_requests_receipt() {
     assert_eq!(
         launch_clock,
         Some(created.producer_id),
-        "the launch is observed on the clock the proxy's first producer stamps its frames with"
+        "the launch is on the clock the recording proxy's first producer stamps its frames with"
     );
     assert_eq!(report.anchor, AnchorState::LocalOnly);
     assert!(report.sealed, "{:?}", report.findings);
@@ -304,7 +296,7 @@ fn a_run_holds_one_reserve_file_and_releases_it_at_the_end() {
     use std::os::unix::fs::MetadataExt;
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (started, held, record) = std::thread::scope(|s| {
@@ -320,7 +312,24 @@ fn a_run_holds_one_reserve_file_and_releases_it_at_the_end() {
                 )
             })
             .collect();
+        // The reserve is a floor for the reserve plus the chain on disk (run/reserve.rs), so it
+        // shrinks as the chain grows. Read after `held`: the chain only grows meanwhile.
+        let footprint: u64 = goalcup_cli::upload::prune::parts_now(&rig.trace(&entry_id))
+            .unwrap_or_default()
+            .iter()
+            .map(|part| part.len)
+            .sum();
         let record = goalcup_cli::run::read(&rig.cfg, &entry_id);
+        // The seal waits for the launch: one that comes first refuses the start.
+        support::wait_for("the launch", || {
+            (client.count("record_capture_launch") == 1
+                && http.status(&entry_id).is_ok_and(|s| {
+                    s.payload
+                        .capture
+                        .is_some_and(|c| c.run == RunState::Running)
+                }))
+            .then_some(())
+        });
         // Ending the run through the daemon ends the harness.
         let mut sealed = Vec::new();
         goalcup_cli::commands::seal::seal_with(
@@ -331,15 +340,19 @@ fn a_run_holds_one_reserve_file_and_releases_it_at_the_end() {
             &mut sealed,
         )
         .unwrap();
-        (joined(start), held, record)
+        (joined(start), (held, footprint), record)
     });
+    let (held, footprint) = held;
     let (result, out) = started;
     result.unwrap_or_else(|e| panic!("{e}\n{out}"));
     let entry_id = client.created().entry_id;
     // One file, named for the run (a local run's id is its entry's), holding its blocks.
     assert_eq!(held.len(), 1, "{held:?}");
     assert_eq!(held[0].0, entry_id);
-    assert!(held[0].1 >= RESERVE, "{held:?}");
+    assert!(
+        held[0].1 + footprint >= RESERVE,
+        "{held:?} + chain {footprint}"
+    );
     // The record the run left: no server, no deadline, the entry and its trace folder.
     let record = record.expect("a run record while the run records");
     assert_eq!(record.run_id, entry_id);
@@ -363,28 +376,45 @@ fn a_run_holds_one_reserve_file_and_releases_it_at_the_end() {
     assert!(reserve_files(&rig).is_empty(), "{:?}", reserve_files(&rig));
 }
 
+/// D65: a full disk never ends the run. The disk always reads as full (a floor above any free
+/// space) and a local run uploads nothing, which once stopped it; now the watch only resizes the
+/// reserve and warns, and the run ends when it is sealed.
 #[test]
-fn a_full_disk_with_no_upload_ends_the_run_through_the_one_stop_channel() {
+fn a_full_disk_with_no_upload_never_ends_the_run() {
+    use goalcup_cli::run::{HarnessState, read_state, run_dir};
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = rig.options(&goal, RESERVE);
-    // The disk always reads as full: a floor above any free space. A local run uploads nothing,
-    // so its uploads count as failing, and the watch stops the run as the deadline would.
     opts.disk.free_floor = u64::MAX / 2;
-    let (result, out) = std::thread::scope(|s| joined(rig.start(s, &client, opts, None)));
+    let (started, during) = std::thread::scope(|s| {
+        let start = rig.start(s, &client, opts, None);
+        rig.wait_for("sleeper");
+        let entry_id = client.created().entry_id;
+        // Twenty ticks of a full disk.
+        std::thread::sleep(Duration::from_secs(1));
+        let during = read_state(&run_dir(&rig.cfg, &entry_id));
+        goalcup_cli::commands::seal::seal_with(
+            &http,
+            &rig.connectors,
+            &rig.cfg,
+            &entry_id,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        (joined(start), during)
+    });
+    let (result, out) = started;
     result.unwrap_or_else(|e| panic!("{e}\n{out}"));
-    assert!(
-        out.contains("stopped: the disk is nearly full and uploads are failing"),
-        "{out}"
-    );
-    assert!(out.contains("finished locally"), "{out}");
+    let during = during.expect("the run's state while it records");
+    assert_eq!(during.harness, HarnessState::Running, "{out}");
+    assert_eq!(during.stopped, None, "{out}");
+    assert!(!out.contains("disk is nearly full"), "{out}");
     let entry_id = client.created().entry_id;
     let (report, _) = rig.read_trace(&entry_id);
     assert!(report.sealed, "{:?}", report.findings);
-    assert!(reserve_files(&rig).is_empty());
 }
 
 /// The run's `state.json` follows the run: the launch writes it, the tick fills in how the
@@ -396,7 +426,7 @@ fn a_sleep_lock_that_cannot_be_taken_is_a_problem_line_and_the_run_goes_on() {
     use goalcup_cli::run::{HarnessState, Recording, read_state, run_dir};
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = rig.options(&goal, RESERVE);
@@ -537,7 +567,7 @@ fn a_stale_reserve_is_released_by_the_next_start() {
     }
     assert_eq!(reserve_files(&rig).len(), 4);
 
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     rig.tell("stop", "");
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
@@ -565,7 +595,7 @@ fn a_stale_reserve_is_released_by_the_next_start() {
 fn local_owned_stop_and_seal_need_no_anchor() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (started, sealed) = std::thread::scope(|s| {
@@ -624,10 +654,10 @@ fn local_owned_stop_and_seal_need_no_anchor() {
 }
 
 #[test]
-fn a_goal_file_without_a_capture_profile_refuses_before_anything_is_created() {
+fn a_start_without_a_capture_profile_refuses_before_anything_is_created() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::with_capture(false);
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, out) =
@@ -641,40 +671,6 @@ fn a_goal_file_without_a_capture_profile_refuses_before_anything_is_created() {
     assert!(client.names().is_empty(), "{:?}", client.names());
     assert!(rig.run_dirs().is_empty());
     assert!(!rig.harness_started());
-}
-
-#[test]
-fn invalid_goals_refuse_before_any_capture_side_effect() {
-    let _lock = table_lock::TableLock::acquire();
-    let cases: [(&str, &[u8], &str); 4] = [
-        ("empty", b"", "empty or only white space"),
-        ("white space", b" \t\r\n", "empty or only white space"),
-        ("nul", b"do one thing\0then another", "holds a NUL byte"),
-        ("non UTF-8", b"goal \xff", "is not valid UTF-8"),
-    ];
-    for (name, bytes, reason) in cases {
-        let rig = Rig::new();
-        let goal = rig.root.join("runs").join("goal.txt");
-        std::fs::create_dir_all(goal.parent().unwrap()).unwrap();
-        std::fs::write(&goal, bytes).unwrap();
-        let http = rig.client();
-        let client = Hooked::new(&http, &rig);
-        let (result, out) = std::thread::scope(|scope| {
-            joined(rig.start(scope, &client, rig.options(&goal, RESERVE), None))
-        });
-        let error = result.expect_err(name);
-        assert_eq!(error.exit_code(), 1, "{name}: {error}");
-        assert!(error.to_string().contains(reason), "{name}: {error}\n{out}");
-        assert!(client.names().is_empty(), "{name}: {:?}", client.names());
-        assert!(rig.run_dirs().is_empty(), "{name}: a run home was created");
-        assert!(!rig.harness_started(), "{name}: the harness was spawned");
-        let homes = rig.cfg.join("capture-homes");
-        assert!(!homes.exists(), "{name}: {} was created", homes.display());
-        assert!(
-            !homes.join(FAKE_ID).exists(),
-            "{name}: the shared harness home was created"
-        );
-    }
 }
 
 /// A provider host that cannot be reached refuses the start before the daemon is asked for
@@ -695,7 +691,7 @@ fn an_unreachable_provider_host_refuses_the_start_before_anything_is_created() {
         ),
     )
     .unwrap();
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, out) =
@@ -734,7 +730,7 @@ fn an_unpinned_connector_without_dev_is_refused_before_anything_is_created() {
         ),
     )
     .unwrap();
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = rig.options(&goal, RESERVE);
@@ -767,7 +763,7 @@ fn replace_fake_with_aliased_shipped_connector(rig: &Rig, alter_bytes: bool) -> 
 fn assert_aliased_shipped_connector_refuses_before_start_writes(alter_bytes: bool) {
     let rig = Rig::new();
     let id = replace_fake_with_aliased_shipped_connector(&rig, alter_bytes);
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let mut opts = rig.options(&goal, RESERVE);
@@ -799,15 +795,15 @@ fn an_altered_pinned_id_under_an_alias_is_exit_one_before_any_start_write() {
     assert_aliased_shipped_connector_refuses_before_start_writes(true);
 }
 
-/// The proxy fails to start two ways, each before the goal is sent: its sender never finds
-/// the ingest endpoint (a closed port, so the start deadline passes), or its CA certificate has
-/// nowhere to go (a file already sits where it is written).
+/// The recording proxy fails to start two ways, each before the goal is sent: its sender never
+/// finds the ingest endpoint (a closed port, so the start deadline passes), or its CA certificate
+/// has nowhere to go (a file already sits where it is written).
 #[test]
 fn a_proxy_that_cannot_start_refuses_before_the_goal_and_leaves_nothing() {
     let _lock = table_lock::TableLock::acquire();
     for (closed_ingest, said) in [(true, "proxy"), (false, "CA")] {
         let rig = Rig::new();
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         if closed_ingest {
@@ -819,7 +815,7 @@ fn a_proxy_that_cannot_start_refuses_before_the_goal_and_leaves_nothing() {
         let (result, out) = std::thread::scope(|s| {
             joined(rig.start(s, &client, rig.options(&goal, RESERVE), None))
         });
-        let error = result.expect_err("the proxy never started");
+        let error = result.expect_err("the recording proxy never started");
         assert!(format!("{error}").contains(said), "{error}\n{out}");
         assert_eq!(
             client.names(),
@@ -841,7 +837,7 @@ fn a_proxy_that_cannot_start_refuses_before_the_goal_and_leaves_nothing() {
 fn a_lost_goal_answer_never_spawns_and_is_never_retried() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     client.book().lose_goal_answer = true;
@@ -873,7 +869,7 @@ fn a_lost_goal_answer_never_spawns_and_is_never_retried() {
 fn refused_producer_never_spawns_the_harness() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let tmp = tempfile::tempdir().unwrap();
     let mock = goalcup_cli::daemon::MockDaemonClient::armed_ok(tmp.path(), m2_cli_support::FAKE_ID);
     mock.set_capture_status(
@@ -924,7 +920,7 @@ fn a_failed_registration_kills_the_harness_and_seals_instead_of_abandoning() {
         RegistrationFault::AdmittedThenMalformed,
     ] {
         let rig = Rig::new();
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         client.book().registration = Some(fault);
@@ -963,7 +959,7 @@ fn capture_registration_refused_never_execs() {
         RegistrationFault::AdmittedThenMalformed,
     ] {
         let rig = Rig::new();
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         client.book().registration = Some(fault);
@@ -1009,7 +1005,7 @@ fn launch_refused_on_sealed_entry_ends_released_child_within_grace() {
     // A harness that ignores SIGTERM, so only the grace and a SIGKILL end it. The launcher's look
     // at the entry waits until the harness has said it ignores it (see `status_waits_for`).
     rig.tell("steps.sh", "trap '' TERM\ntouch \"$M2_FAKE_OUT/trapped\"\n");
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     client.book().registration = Some(RegistrationFault::AdmittedThenSealed);
@@ -1076,7 +1072,7 @@ fn a_launch_error_on_a_sealed_entry_ends_the_released_child() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::with_grace(2);
     rig.tell("steps.sh", "trap '' TERM\ntouch \"$M2_FAKE_OUT/trapped\"\n");
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     client.book().registration = Some(RegistrationFault::AdmittedThenSealed);
@@ -1117,7 +1113,7 @@ fn transient_launch_failure_on_open_entry_never_ends_child() {
     // would leave no `done` marker.
     rig.tell("stop", "");
     rig.tell("steps.sh", "sleep 2\n");
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     client.book().launch_fault = Some(LaunchFault::Conflict);
@@ -1150,85 +1146,6 @@ fn transient_launch_failure_on_open_entry_never_ends_child() {
     assert!(report.findings.contains(&"launch_missing".to_string()));
 }
 
-/// Residual 1 of the gate design (v2 section 4, kept by v3): a `stdout_json` harness whose root
-/// exits while a descendant it forked still holds its stdout. The launcher's tee cannot see EOF,
-/// so its drain expires at the one finish deadline and says the tail may be missing; the seal
-/// finds the root already gone and signals nothing, and the descendant is never touched.
-#[test]
-fn descendant_holds_stdout_launcher_path() {
-    let _lock = table_lock::TableLock::acquire();
-    let rig = Rig::stdout_identity();
-    rig.tell("stop", "");
-    // The scope identity the harness prints first, then a descendant that inherits stdout.
-    rig.tell(
-        "steps.sh",
-        "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"scope-1\"}'\n\
-         sleep 300 &\n\
-         echo $! > \"$M2_FAKE_OUT/descendant.pid\"\n",
-    );
-    let goal = rig.goal(GOAL);
-    let http = rig.client();
-    let client = Hooked::new(&http, &rig);
-    let began = Instant::now();
-    let (result, out) =
-        std::thread::scope(|s| joined(rig.start(s, &client, rig.options(&goal, RESERVE), None)));
-    let took = began.elapsed();
-    let descendant: u32 = rig
-        .harness_file("descendant.pid")
-        .expect("the harness forked a descendant")
-        .trim()
-        .parse()
-        .unwrap();
-    let started =
-        goalcup_protocol::process::process_start_identity(descendant).expect("a live descendant");
-    // This test owns the descendant and ends it, however the assertions below go.
-    struct Owned(u32, String);
-    impl Drop for Owned {
-        fn drop(&mut self) {
-            if goalcup_protocol::process::process_start_identity(self.0).as_deref()
-                == Some(self.1.as_str())
-            {
-                // SAFETY: two integers; the pid still has the start time this test recorded.
-                unsafe { libc::kill(self.0 as i32, libc::SIGKILL) };
-            }
-        }
-    }
-    let _owned = Owned(descendant, started.clone());
-    let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
-    assert!(
-        outcome.exit_status.expect("a harness ran").success(),
-        "{out}"
-    );
-    assert!(
-        out.contains("Final harness output did not finish within the 10-second finish budget"),
-        "{out}"
-    );
-    assert!(!out.contains("drain bound"), "{out}");
-    assert!(
-        took >= Duration::from_secs(9),
-        "the drain ran to its bound: {took:?}"
-    );
-    assert!(
-        goalcup_protocol::process::is_alive(descendant)
-            && goalcup_protocol::process::process_start_identity(descendant).as_deref()
-                == Some(started.as_str()),
-        "the descendant is the same live process: never signalled"
-    );
-    let (report, records) = rig.read_trace(&client.created().entry_id);
-    assert!(report.sealed, "{:?}", report.findings);
-    let terminal = records
-        .iter()
-        .find_map(|r| match r {
-            CaptureRecord::LocalFinish { termination, .. } => Some(termination.clone()),
-            _ => None,
-        })
-        .expect("a LocalFinish");
-    assert!(
-        matches!(terminal, TerminationOutcomeV1::AlreadyStopped { .. }),
-        "the root was reaped before any signal: {terminal:?}"
-    );
-}
-
 #[test]
 fn automatic_sink_recovery_does_not_record_assistance() {
     let _lock = table_lock::TableLock::acquire();
@@ -1246,7 +1163,7 @@ fn automatic_sink_recovery_does_not_record_assistance() {
             upstream.curl(r#"{"n":2}"#),
         ),
     );
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig).relaying(&rig.runtime);
     let (result, out) = std::thread::scope(|s| {
@@ -1322,7 +1239,7 @@ fn the_seal_carries_the_proxys_counters_into_the_chain() {
     let upstream = Upstream::start(&rig.runtime);
     rig.tell("stop", "");
     rig.tell("steps.sh", &upstream.curl_misnamed());
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, out) = std::thread::scope(|s| {
@@ -1336,7 +1253,7 @@ fn the_seal_carries_the_proxys_counters_into_the_chain() {
     result.unwrap_or_else(|e| panic!("{e}\n{out}"));
     let counters = client.book().seals[0]
         .proxy
-        .expect("the launcher's seal has the proxy's report");
+        .expect("the launcher's seal has the recording proxy's report");
     assert_eq!(counters.tunneled_fail_open, 1, "{counters:?}");
     let (report, records) = rig.read_trace(&client.created().entry_id);
     assert!(
@@ -1354,9 +1271,10 @@ fn the_seal_carries_the_proxys_counters_into_the_chain() {
 }
 
 /// H-16. The launcher's seal request never reaches the daemon (a refused connection, the same
-/// path as a busy daemon whose retries run out), so the proxy's counters are lost with it. The
-/// fail-open tunnel is nevertheless in the chain, because the proxy chained it when it began,
-/// and a later standalone seal (which carries no counters) commits an incomplete run.
+/// path as a busy daemon whose retries run out), so the recording proxy's counters are lost with
+/// it. The fail-open tunnel is nevertheless in the chain, because the recording proxy chained it
+/// when it began, and a later standalone seal (which carries no counters) commits an incomplete
+/// run.
 #[test]
 fn a_seal_that_never_reaches_the_daemon_keeps_the_proxys_loss() {
     use goalcup_cli::CliError;
@@ -1368,7 +1286,7 @@ fn a_seal_that_never_reaches_the_daemon_keeps_the_proxys_loss() {
     let upstream = Upstream::start(&rig.runtime);
     rig.tell("stop", "");
     rig.tell("steps.sh", &upstream.curl_misnamed());
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     // No control.json to re-read after the refusal (H-14), so the refusal stands.
     std::fs::remove_file(rig.cfg.join("control.json")).unwrap();
@@ -1402,7 +1320,7 @@ fn a_seal_that_never_reaches_the_daemon_keeps_the_proxys_loss() {
     );
     assert!(
         out.contains("fail_open=1"),
-        "the proxy counted the tunnel: {out}"
+        "the recording proxy counted the tunnel: {out}"
     );
 
     // The standalone seal that follows any refusal sends no counters.
@@ -1412,7 +1330,6 @@ fn a_seal_that_never_reaches_the_daemon_keeps_the_proxys_loss() {
         &CaptureSealRequest {
             proxy: None,
             remaining_finish_ms: None,
-            native_scope: None,
         },
         Duration::from_secs(60),
     )
@@ -1439,7 +1356,7 @@ fn a_real_upstream_tls_failure_reaches_the_one_admission_summary() {
     let upstream = Upstream::start(&rig.runtime);
     rig.tell("stop", "");
     rig.tell("steps.sh", &upstream.curl(r#"{"n":1}"#));
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     // The upstream presents the test CA, while this proxy uses only public roots.
@@ -1495,7 +1412,7 @@ fn a_blocked_evidence_queue_does_not_outlast_the_one_finish_deadline() {
             upstream.curl_bytes(1536 * 1024),
         ),
     );
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig).relaying(&rig.runtime);
     let bound = FINISH + Duration::from_secs(3);
@@ -1560,12 +1477,13 @@ fn a_blocked_evidence_queue_does_not_outlast_the_one_finish_deadline() {
 }
 
 /// D56: a connection that outlives the harness (here a request nobody answers, held by a
-/// process the harness left behind) must not spend the Git read's floor. The proxy stop waits
-/// for it only until the drain share, which ends `GIT_READ_FLOOR` and the commit reserve before
-/// the deadline, so the seal is asked with at least that much left. With the old bound (the
+/// process the harness left behind) must not spend the Git read's floor. The recording proxy stop
+/// waits for it only until the drain share, which ends `GIT_READ_FLOOR` and the commit reserve
+/// before the deadline, so the seal is asked with at least that much left. With the old bound (the
 /// budget less the reserve) the stop ran to the end and the request stated about 2 s.
 /// The harness ends only once the upstream holds the request: a harness that ended at once
-/// could finish before its background `curl` reached the proxy (seen on a loaded Linux host).
+/// could finish before its background `curl` reached the recording proxy (seen on a loaded Linux
+/// host).
 #[test]
 fn a_connection_held_open_at_the_finish_leaves_the_seal_the_git_floor() {
     use goalcup_protocol::control::{FINISH_COMMIT_RESERVE, GIT_READ_FLOOR};
@@ -1583,7 +1501,7 @@ fn a_connection_held_open_at_the_finish_leaves_the_seal_the_git_floor() {
             upstream.wait_held()
         ),
     );
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let began = Instant::now();
@@ -1604,7 +1522,8 @@ fn a_connection_held_open_at_the_finish_leaves_the_seal_the_git_floor() {
         rig.harness_file("curl.err")
     );
 
-    // The request went out through the proxy and was never answered: it was open at the stop.
+    // The request went out through the recording proxy and was never answered: it was open at the
+    // stop.
     let (_, records) = rig.read_trace(&client.created().entry_id);
     let opened = |wanted: CaptureSource| {
         records
@@ -1652,12 +1571,13 @@ fn a_test_build_trusts_the_upstream_roots_its_environment_names() {
     rig.tell("steps.sh", &upstream.curl(r#"{"n":1}"#));
     let pem = rig.root.join("upstream.pem");
     std::fs::write(&pem, upstream.root_pem()).unwrap();
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let run = |roots: &std::path::Path| {
         std::process::Command::new(env!("CARGO_BIN_EXE_goalcup"))
-            .args(["start", "--harness", FAKE_ID, "--dev", "--goal-file"])
-            .arg(&goal)
+            .args(["start", "--harness", FAKE_ID, "--dev"])
+            .current_dir(&goal)
             .env_clear()
+            .env("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL", "1")
             .env("GOALCUP_TEST_DISK", format!("{RESERVE},0,50"))
             .env("PATH", rig.path())
             .env("GOALCUP_CONFIG_DIR", &rig.cfg)
@@ -1705,203 +1625,6 @@ fn a_test_build_trusts_the_upstream_roots_its_environment_names() {
 }
 
 #[test]
-fn stdout_tee_forwards_every_byte_unchanged() {
-    use std::io::{Cursor, Read, Write};
-    // Small reads split both JSON lines and the event identity across buffer boundaries.
-    struct Chunked(Cursor<Vec<u8>>);
-    impl Read for Chunked {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            let n = buf.len().min(17);
-            self.0.read(&mut buf[..n])
-        }
-    }
-    let mut bytes = b"non-json\n\xff\x00\n".to_vec();
-    bytes.extend(vec![b'x'; 1024 * 1024 + 1]);
-    bytes.extend(b"\n{\"type\":\"thread.started\",\"thread_id\":\"first-id\"}\n");
-    bytes.extend(b"{\"type\":\"thread.started\",\"thread_id\":\"second-id\"}\npartial");
-    let (sender, receiver) = std::sync::mpsc::channel();
-    let mut out = Vec::new();
-    goalcup_cli::launch::stdout_tee_with_rule(
-        Chunked(Cursor::new(bytes.clone())),
-        &mut out,
-        sender,
-        &support::stdout_event_rule(),
-    )
-    .unwrap();
-    assert_eq!(out, bytes);
-    assert_eq!(receiver.recv().unwrap(), Some("first-id".into()));
-    assert!(receiver.try_recv().is_err());
-
-    struct Closed;
-    impl Write for Closed {
-        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let (sender, receiver) = std::sync::mpsc::channel();
-    let mut input = Cursor::new(bytes.clone());
-    goalcup_cli::launch::stdout_tee_with_rule(
-        &mut input,
-        Closed,
-        sender,
-        &support::stdout_event_rule(),
-    )
-    .unwrap();
-    assert_eq!(
-        input.position(),
-        bytes.len() as u64,
-        "closed output still drains"
-    );
-    assert_eq!(receiver.recv().unwrap(), Some("first-id".into()));
-
-    let (sender, receiver) = std::sync::mpsc::channel();
-    let partial = b"{\"type\":\"thread.started\",\"thread_id\":\"partial\"}";
-    let mut out = Vec::new();
-    goalcup_cli::launch::stdout_tee_with_rule(
-        &partial[..],
-        &mut out,
-        sender,
-        &support::stdout_event_rule(),
-    )
-    .unwrap();
-    assert_eq!(out, partial);
-    assert_eq!(receiver.recv().unwrap(), None, "partial line cannot bind");
-}
-
-#[test]
-fn native_scope_wait_ends_on_identity_eof_exit_or_deadline() {
-    use goalcup_cli::launch::wait_native_scope;
-    let _lock = table_lock::TableLock::acquire();
-    let mut child = std::process::Command::new("/bin/sleep")
-        .arg("30")
-        .spawn()
-        .unwrap();
-    let (sender, receiver) = std::sync::mpsc::channel();
-    sender.send(Some("bound-id".into())).unwrap();
-    assert_eq!(
-        wait_native_scope(
-            &mut child,
-            &receiver,
-            Instant::now() + Duration::from_secs(1)
-        ),
-        Some("bound-id".into())
-    );
-    sender.send(None).unwrap();
-    assert_eq!(
-        wait_native_scope(
-            &mut child,
-            &receiver,
-            Instant::now() + Duration::from_secs(1)
-        ),
-        None
-    );
-    let before = Instant::now();
-    assert_eq!(
-        wait_native_scope(&mut child, &receiver, before + Duration::from_millis(40)),
-        None
-    );
-    assert!(before.elapsed() < Duration::from_secs(1));
-    child.kill().unwrap();
-    child.wait().unwrap();
-    // Keep the sender alive, as when a descendant holds the child's stdout open.
-    assert_eq!(
-        wait_native_scope(
-            &mut child,
-            &receiver,
-            Instant::now() + Duration::from_secs(1)
-        ),
-        None
-    );
-    drop(sender);
-}
-
-#[test]
-fn stdout_tee_completion_preserves_tail_after_child_exit_and_has_a_bound() {
-    use goalcup_cli::launch::tee_capture_stdout_with_rule;
-    use std::io::Write;
-    use std::sync::{Arc, Condvar, Mutex};
-    let _lock = table_lock::TableLock::acquire();
-    struct SlowDestination {
-        released: Arc<(Mutex<bool>, Condvar)>,
-        bytes: Arc<Mutex<Vec<u8>>>,
-    }
-    impl Write for SlowDestination {
-        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-            let (lock, ready) = &*self.released;
-            let mut released = lock.lock().unwrap();
-            while !*released {
-                released = ready.wait(released).unwrap();
-            }
-            self.bytes.lock().unwrap().extend_from_slice(data);
-            Ok(data.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    // The child can exit after writing this small payload into its kernel pipe, while its
-    // tee is still blocked forwarding the final bytes to an open participant destination.
-    let payload = format!(
-        "{{\"type\":\"thread.started\",\"thread_id\":\"tail-id\"}}\n{}final-tail\n",
-        "x".repeat(512)
-    );
-    let mut child = std::process::Command::new("/usr/bin/printf")
-        .arg("%s")
-        .arg(&payload)
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let released = Arc::new((Mutex::new(false), Condvar::new()));
-    let bytes = Arc::new(Mutex::new(Vec::new()));
-    let stdout = tee_capture_stdout_with_rule(
-        child.stdout.take().unwrap(),
-        SlowDestination {
-            released: released.clone(),
-            bytes: bytes.clone(),
-        },
-        support::stdout_event_rule(),
-    )
-    .unwrap();
-    assert_eq!(
-        stdout.scope.recv_timeout(Duration::from_secs(1)).unwrap(),
-        Some("tail-id".into())
-    );
-    assert!(child.wait().unwrap().success());
-    let before = Instant::now();
-    let incomplete = stdout.finish(before + Duration::from_millis(40)).unwrap();
-    // Release even if an assertion fails, so the test never leaves its worker blocked.
-    *released.0.lock().unwrap() = true;
-    released.1.notify_all();
-    assert!(!incomplete, "child exit alone is not forwarding completion");
-    assert!(before.elapsed() < Duration::from_secs(1));
-    assert!(
-        stdout
-            .finish(Instant::now() + Duration::from_secs(1))
-            .unwrap()
-    );
-    assert_eq!(*bytes.lock().unwrap(), payload.as_bytes());
-
-    // An otherwise idle pipe whose writer stays open must not cause an unbounded join.
-    let (reader, held_writer) = std::os::unix::net::UnixStream::pair().unwrap();
-    let stdout =
-        tee_capture_stdout_with_rule(reader, std::io::sink(), support::stdout_event_rule())
-            .unwrap();
-    let before = Instant::now();
-    let incomplete = stdout.finish(before + Duration::from_millis(40)).unwrap();
-    drop(held_writer);
-    assert!(!incomplete);
-    assert!(before.elapsed() < Duration::from_secs(1));
-    assert!(
-        stdout
-            .finish(Instant::now() + Duration::from_secs(1))
-            .unwrap()
-    );
-}
-
-#[test]
 fn an_existing_isolated_home_preserves_its_exact_leaf_alias() {
     let _lock = table_lock::TableLock::acquire();
     let rig = Rig::new();
@@ -1928,7 +1651,7 @@ fn an_existing_isolated_home_preserves_its_exact_leaf_alias() {
     )
     .unwrap();
     rig.tell("stop", "");
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, output) = std::thread::scope(|scope| {
@@ -1974,7 +1697,7 @@ fn unsafe_shared_capture_home_leaves_refuse_before_a_request_or_child() {
             }
             _ => unreachable!(),
         }
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         let (result, out) = std::thread::scope(|scope| {
@@ -2036,7 +1759,7 @@ fn shared_capture_home_replacement_before_create_refuses_without_a_request_or_ch
     unsafe { std::env::set_var("GOALCUP_TEST_PAUSE_DIR", &pause) };
     let _restore = PauseEnv;
 
-    let goal = rig.goal(GOAL);
+    let goal = rig.run_folder();
     let http = rig.client();
     let client = Hooked::new(&http, &rig);
     let (result, out) = std::thread::scope(|scope| {
@@ -2075,21 +1798,21 @@ fn capture_finish_refusals_say_what_they_mean_and_carry_the_one_budget() {
                 ))
             },
             &[
-                "did not finish within its 10-second local budget",
+                "did not finish within 10 seconds",
                 "stopped before blocking_permit",
-                "Nothing terminal was written",
+                "It is still open",
             ],
         ),
         (
             "run_lock",
             || CaptureSealError::MaybeAdmitted(ControlError::FinishDeadline("run_lock".into())),
-            &["Another finish of entry", "is still in progress"],
+            &["Another finish of part", "is still in progress"],
         ),
         (
             "ambiguous",
             || CaptureSealError::MaybeAdmitted(ControlError::Unreachable("read timed out".into())),
             &[
-                "did not answer the finish of entry",
+                "did not answer the finish of part",
                 "It may still complete it",
                 "answered unchanged",
             ],
@@ -2111,14 +1834,14 @@ fn capture_finish_refusals_say_what_they_mean_and_carry_the_one_budget() {
         (
             "busy",
             || CaptureSealError::NotAdmitted(ControlError::Busy("held".into())),
-            &["still busy with entry", "goalcup seal"],
+            &["still busy with part", "goalcup seal"],
         ),
     ];
     for (name, fault, wanted) in cases {
         let _lock = table_lock::TableLock::acquire();
         let rig = Rig::new();
         rig.tell("stop", "");
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         // No control.json to re-read after a refusal before the finish began (H-14), so the
         // refusal stands: `a_finish_refused_before_it_began_is_asked_again_...` covers the rest.
@@ -2194,7 +1917,7 @@ fn a_finish_refused_before_it_began_is_asked_again_after_rereading_control_json(
         let _lock = table_lock::TableLock::acquire();
         let rig = Rig::new();
         rig.tell("stop", "");
-        let goal = rig.goal(GOAL);
+        let goal = rig.run_folder();
         let http = rig.client();
         let client = Hooked::new(&http, &rig);
         client.book().seal_fault = Some(fault);

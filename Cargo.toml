@@ -17,6 +17,8 @@ edition = "2024"
 # on any other hard-coded copy.
 version = "0.6.0"
 license = "Apache-2.0"
+repository = "https://github.com/agentcommunity/goal-cup-tracer"
+homepage = "https://agentcommunity.org/goalcup"
 # 1.99: the latest stable release at the owner's decision of 2026-10-11. The code needs
 # less (atomic `try_update`); locked dependencies need 1.88. Clippy's
 # incompatible_msrv lint enforces this.
@@ -34,8 +36,7 @@ debug = false
 # The regex engine and its search helpers, optimised in dev and test builds. The daemon's
 # redactor runs every byte through `regex::bytes`, and unoptimised they made the seeded
 # redaction tests 4 to 9 times slower: on a 4-vCPU x86_64 runner two of them passed nextest's
-# 180 s limit. Debug assertions and overflow checks stay on; the workspace's own crates stay
-# unoptimised.
+# 180 s limit. Debug assertions and overflow checks stay on.
 [profile.dev.package.regex]
 opt-level = 3
 
@@ -50,6 +51,15 @@ opt-level = 3
 
 [profile.dev.package.memchr]
 opt-level = 3
+
+# The daemon itself (its library, binaries and tests) at opt-level 1, debug assertions and
+# overflow checks still on: the redaction suites use about 30% less CPU and the daemon's
+# library tests half. Measured on 4 vCPUs (21 Oct, after a daemon change): the fast gate's
+# build and nextest steps took 364 s at 0, 295 s at 1 and 326 s at 2 (2 runs the tests fastest,
+# but compiles the daemon's large test binary much slower). The other workspace crates stay
+# unoptimised.
+[profile.dev.package.goalcup-daemon]
+opt-level = 1
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -68,7 +78,7 @@ tempfile = "3"
 # `default-features = false` drops ureq's rustls stack and its gzip decoder: the client speaks
 # only to 127.0.0.1, so it links no TLS at all.
 ureq = { version = "2", default-features = false }
-# The entry registry.
+# The daemon's run registry (`goalcup-daemon/src/registry.rs`): every run it knows about.
 redb = "2"
 # The OS calls std does not have (free space, process and signal identity), made through
 # one shared version.
@@ -90,7 +100,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 # thread, which is the only thread allowed to touch a participant's disk.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
 # M2 recorder. The recording proxy is `goalcup-cli`'s `proxy` module (run in-process by
-# `goalcup start --goal-file`); nothing below is linked by the daemon. TLS termination and upstream
+# `goalcup start` and `goalcup continue`); nothing below is linked by the daemon. TLS termination and upstream
 # TLS use rustls with the `ring` provider only: `default-features = false` keeps the aws-lc
 # provider and its C build out of the tree, and `ring` is the only
 # provider.
@@ -113,5 +123,10 @@ sha1 = "0.11"
 # Its fixed 15-bit window is the strategy the proxy uses; the zlib-only window-size
 # constructors do not exist in this build and must not be called.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# HTTP `br` content decoding in `proxy::http`: Anthropic answers brotli whenever a request offers
+# it. Decode only and pure Rust (no encoder, no C). `default-features = false` leaves out its
+# `std` allocator crate (`alloc-stdlib`, which ships no licence file); `proxy::http` supplies
+# the few lines of allocator itself.
+brotli-decompressor = { version = "5", default-features = false }
 # Tests only: parse the certificates the proxy mints.
 x509-parser = "0.18"

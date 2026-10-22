@@ -57,7 +57,7 @@ pub struct Operations {
     references_omitted: u64,
     goals: BTreeMap<StreamKey, GoalExcerpt>,
     reference_bytes: usize,
-    /// Wire streams opened, of any wire source: what the proxy recorded at all.
+    /// Wire streams opened, of any wire source: what the recording proxy recorded at all.
     wire_opens: u64,
 }
 

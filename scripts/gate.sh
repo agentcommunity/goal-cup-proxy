@@ -29,6 +29,15 @@ fast | full) ;;
     ;;
 esac
 
+# Some permission tests always fail as root (a root process can open a file mode 000 forbids), so
+# say so at once rather than after the long steps. GOALCUP_GATE_ALLOW_ROOT=1 runs it anyway.
+if [ "$(id -u)" = 0 ] && [ "${GOALCUP_GATE_ALLOW_ROOT:-}" != 1 ]; then
+    echo "gate.sh: do not run the gate as root; some permission tests always fail as root." >&2
+    echo "Run it as a normal user, or set GOALCUP_GATE_ALLOW_ROOT=1 to run it anyway." >&2
+    echo "gate $tier: FAIL"
+    exit 1
+fi
+
 cd "$(dirname "$0")/.."
 start=$(date +%s)
 
@@ -78,7 +87,7 @@ if cargo nextest --version >/dev/null 2>&1; then
         # release check runs them by name. The other ignored tests are not selected.
         step cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only \
             -E 'test(/^(m2_synthetic_vertical|capture_failure_campaign)::/)'
-        # The real upload Worker against the tracer (a rule change there touches the Worker, its
+        # The real upload Worker against goalcup (a rule change there touches the Worker, its
         # local database, the SQL proposal and the Rust stand-in: docs/UPLOAD-API.md).
         step cargo nextest run --offline -p goalcup-cli --test full --run-ignored ignored-only \
             -E 'test(/upload_worker/)'

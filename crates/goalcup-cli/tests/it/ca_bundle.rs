@@ -8,7 +8,7 @@ fn proxy_ca() -> ProxyCa {
     ProxyCa::generate(&["api.example.org".to_string()]).expect("a CA")
 }
 
-/// The OS trust store yields real roots on every platform the tracer runs on.
+/// The OS trust store yields real roots on every platform goalcup runs on.
 #[test]
 fn the_system_trust_store_holds_roots() {
     let source = system_roots_source().expect("the OS trust store is readable");
@@ -51,7 +51,7 @@ fn the_bundle_holds_certificates_only_with_the_proxy_ca_first() {
     assert!(pem.lines().all(|l| l.len() <= 64), "{pem}");
 }
 
-/// A trust store with no root is refused, rather than a file that trusts the proxy alone.
+/// A trust store with no root is refused, rather than a file that trusts the recording proxy alone.
 #[test]
 fn a_store_without_a_root_is_refused() {
     let proxy = proxy_ca();

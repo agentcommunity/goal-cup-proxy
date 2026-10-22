@@ -1,0 +1,61 @@
+# NON-SHIPPING fixture connector: the chat-mode, per-run-home shape. Engine tests load it so that
+# no test of a launch rule depends on one shipped connector's values. It has a reserved env
+# prefix, a private home made from its own seed files, a replace-mode CA variable of its own, one
+# snapshot session file per run and an argv guard. No build pins it, so it loads only through
+# `--dev`.
+schema_version = 1
+id = "chat-per-run"
+
+[capture]
+interactive = true
+args = ["chat", "-Q"]
+reserved_env_prefixes = ["PERRUN_"]
+continuation = "chat: the participant types the prompt, session snapshot on"
+
+[capture.executable]
+program = "per-run-harness"
+
+[capture.env]
+TOOL_HOME_MODE = "profile"
+
+[capture.home]
+run_home = "empty"
+config_home = "per_run"
+env = "PERRUN_HOME"
+per_run_dir = "perrun"
+dirs = ["home"]
+real_dirs = ["{user_home}/.perrun"]
+seed = [
+  { file = "config.yaml" },
+  { file = "auth.json" },
+]
+
+[capture.ca]
+env = ["PERRUN_CA_BUNDLE"]
+mode = "replace"
+
+[capture.identity]
+source = "none"
+
+[[capture.native]]
+name = "session"
+root = "{config_home}/sessions"
+pattern = "session_*.json"
+form = "snapshot"
+
+[capture.argv_guard]
+long = ["profile", "tui", "help"]
+short = ["p", "h"]
+short_with_value = ["p", "m", "q"]
+long_abbreviations = true
+
+[capture.termination]
+strategy = "process_group"
+grace_seconds = 10
+
+# A reserved name: nothing answers there, and a test start that runs this connector renames it
+# to a loopback one, which is never probed.
+[[capture.hosts]]
+host = "api.per-run.example"
+evidence_paths = ["/v1/chat/completions"]
+protocol_hint = "openai-chat-completions"
