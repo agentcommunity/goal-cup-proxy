@@ -253,8 +253,10 @@ the text itself, as a `Task` subagent's answer is) as the context-visible `tool_
 `params.parentToolUseId` (or `parentToolCallId`) names a parent `Task` call is a subagent's: every
 fact from it carries `parent_tool_use_id` (version 2). A file edit's `run.result` object
 `{diff, lineRange}` is a `tool_result` with the bounded text `diff` (no `output`) and, when
-`lineRange` is two integers, `line_range` (version 3; the shape comes from public readers of
-Amp's thread files and is synthetic-only until a capture measures it). Model-facing tool names stay as supplied; executor names do not replace them.
+`lineRange` is two integers, `line_range`; a result with both `output` and `diff` keeps `output`
+(version 3; the shape comes from public readers of Amp's thread files and is synthetic-only until
+a capture measures it). Model-facing tool names stay as supplied; executor names do not replace
+them.
 Safe supplied `messageId`, `threadId`, block IDs and block indices identify each occurrence.
 Tool input is bounded serialized JSON; text/thinking and tool output use bounded text fields.
 A supplied assistant `usage.model` yields `model`; the integer `inputTokens`, `outputTokens`,

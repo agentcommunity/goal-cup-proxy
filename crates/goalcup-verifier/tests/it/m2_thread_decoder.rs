@@ -573,6 +573,7 @@ fn a_task_result_is_the_subagent_answer_with_its_tool_use_count() {
     ));
     assert_eq!(unknown_reasons(&obs), ["unsupported_tool_result"]);
 }
+
 /// Version 3. Synthetic: the `{diff, lineRange}` shape comes from public readers of Amp's thread
 /// files, not from a measured capture.
 #[test]
@@ -598,6 +599,16 @@ fn an_edit_file_result_is_its_diff_with_the_line_range() {
     let results = kind(&obs, "tool_result");
     assert_eq!(results[0].fields["diff_truncated"], true);
     assert_eq!(results[0].fields["diff_bytes"], 17000);
+    assert!(results[0].fields.get("line_range").is_none());
+    // A result with both keeps the output, as every other result does, and no diff.
+    let obs = decode_value(snapshot(
+        "user",
+        json!([{"type":"tool_result","toolUseID":"t","run":{"status":"done",
+            "result":{"output":"shell output","diff":diff,"lineRange":[1,2]}}}]),
+    ));
+    let results = kind(&obs, "tool_result");
+    assert_eq!(results[0].fields["output"], "shell output");
+    assert!(results[0].fields.get("diff").is_none());
     assert!(results[0].fields.get("line_range").is_none());
     // An edit that is not done, or a result with no diff text, is still not a result.
     for run in [

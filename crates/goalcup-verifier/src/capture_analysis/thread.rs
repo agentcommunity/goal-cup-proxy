@@ -6,12 +6,13 @@
 //! `tool_result` blocks yield context-visible `tool_result`: `run.result.output`, or a `run.result`
 //! that is itself the text (a `Task` subagent's final answer, `create_file`), with the number of
 //! the subagent's own tool uses a `Task` run lists under `run.progress[].tool_uses` as
-//! `subagent_tool_uses`. A file edit's `run.result` is `{diff, lineRange}`: the diff the model
-//! sees as bounded text `diff`, and a two-integer `lineRange` as `line_range` (version 3). Subagents share the parent's thread WebSocket: a snapshot whose
-//! `params.parentToolUseId` (or `parentToolCallId`) names the parent's `Task` call carries it as
-//! `parent_tool_use_id` on every fact, so a subagent's messages are told from the parent's
-//! (version 2). Supplied `usage.model` and integer
-//! usage counters are snapshots, never summed. All facts carry `scope: application_thread`,
+//! `subagent_tool_uses`. A file edit's `run.result` is `{diff, lineRange}`: the result's diff
+//! (shape unmeasured) as bounded text `diff`, and a two-integer `lineRange` as `line_range`; a
+//! result with both `output` and `diff` keeps `output` (version 3). Subagents share the parent's
+//! thread WebSocket: a snapshot whose `params.parentToolUseId` (or `parentToolCallId`) names the
+//! parent's `Task` call carries it as `parent_tool_use_id` on every fact, so a subagent's messages
+//! are told from the parent's (version 2). Supplied `usage.model` and integer usage counters are
+//! snapshots, never summed. All facts carry `scope: application_thread`,
 //! message/block identity where safely supplied, and their own retained message's source span.
 //!
 //! No state joins separate messages: deltas, leases, executor notifications, user send/echo,
