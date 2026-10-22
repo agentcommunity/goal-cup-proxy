@@ -7,10 +7,17 @@ measurements in [amp-cli.md](../harnesses/amp-cli.md).
 
 **Answer: not for the event. Nice to have after it.** Amp can ship on 7 Nov with what we have.
 
+**Update, 22 Oct (measured).** A 120-minute macOS Amp run with `Task` subagents: the subagents
+share the parent's thread WebSocket, and every subagent event carries `parentToolUseId` or
+`parentToolCallId`. Decoder `amp-thread-jsonrpc` v2 carries that id as `parent_tool_use_id` on the
+subagent's facts and decodes the `Task` result (the subagent's answer and its tool-use count). So
+no follower is needed for subagent coverage; only the cross-check argument below remains. Subagents
+ran `claude-opus-5-5` while the thread's mode was `low`: the mode does not govern subagent cost.
+
 ## 1. What we get today, without it
 
 - **Wire leg (the content).** Goal Cup Proxy records Amp's thread WebSocket. Decoder
-  `amp-thread-jsonrpc` v1 recovers assistant text, tool calls with input, tool results the model
+  `amp-thread-jsonrpc` v2 recovers assistant text, tool calls with input, tool results the model
   saw, and model and usage. That is the same content the follower would write.
 - **Native leg (counts only).** Amp's own log `~/.cache/amp/logs/threads/T-*.log` has transport state,
   message types, frame sizes and tool runs, but almost no conversation text. We capture it, label it
@@ -19,8 +26,8 @@ measurements in [amp-cli.md](../harnesses/amp-cli.md).
   - the provider request and system prompt (Amp's server builds them);
   - `/api/internal` calls (`getThreadTail` history on a continue, the orb goal text);
   - a possible second user-level WebSocket (not measured);
-  - subagent threads (`Task`, `oracle`, `librarian`, `finder`): we do not know yet if they use the
-    same WebSocket.
+  - (measured 22 Oct, below) subagents are not a gap: `Task` subagents stream over the parent's
+    thread WebSocket.
 - **What this proves:** what the agent said and did, as Amp's server sent it. **What it cannot
   prove:** that a second source agrees. For Claude Code and Codex we compare the wire with a native
   transcript. For Amp we cannot.
@@ -65,9 +72,8 @@ The minimal ask: items 1, 2, 3, 4 (without `seq`), 7 and 8, local CLI only.
 - **RULES:** name Amp orbs (`-ox`, `--executor orb`) and Amp's Claude Code mode as not allowed. The
   first is vendor-cloud execution, the second is a sub-harness (D10).
 
-Blind spots in this note: we have one macOS sample of Amp, the orb thread is unread, and subagent
-traffic is unmeasured. If @nicolay says subagents leave the WebSocket, the "not needed" answer
-weakens for runs that use them.
+Blind spots in this note: two macOS samples of Amp (one with `Task` subagents), the orb thread is
+unread, and `oracle`/`librarian` subagents are unmeasured.
 
 ## Draft reply to @nicolay
 

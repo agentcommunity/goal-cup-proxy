@@ -76,7 +76,7 @@ shared convention is `session_id` (the source's own session), optional `parent_s
 overlong identities are omitted rather than guessed. This convention can be adopted by other
 native formats; their decoders document their own source mappings and versions.
 
-`codex-native` version `2` fixes authority and context from its first `session_meta`. A later
+`codex-native` version `3` fixes authority and context from its first `session_meta`. A later
 copied parent header cannot replace the child or turn child user-role records into typed human
 input. Own identity comes from `payload.id`; `payload.session_id` can still name the parent.
 IDs are nonempty strings of at most 256 UTF-8 bytes. Parent IDs must agree across the supplied
@@ -92,6 +92,14 @@ loss after established identity retains that identity alongside the existing exp
 Unsupported or ambiguous user records remain `unknown`; this neither discards raw evidence nor
 changes capture integrity, the ten kinds, Decoder API version 1, or report schema 4. Decoder
 identity/version and measured-source qualifications remain in `analysis.decoders`.
+
+Version `3` adds: an assistant `response_item.message` is a `model_response` (`role`, `phase`,
+`content_types`; no text). An `event_msg.item_completed` `CollabAgentToolCall` item is a
+`tool_call` (`name` such as `spawn_agent`, `status`, `model`, `reasoning_effort`,
+`receiver_thread_ids`); a child's stream carries the same id as `native_context.session_id`, which
+attributes its records to that call. The other completed items (`AgentMessage`, `UserMessage`,
+`Reasoning`, `CommandExecution`, `FileChange`) repeat a `response_item` of the same stream and are
+`unknown` with `reason: "duplicate_view"`.
 
 ### Summary line
 
@@ -227,11 +235,14 @@ recorded here because they change a summary:
   `message_complete`, or incomplete tool input remain provider detail; gaps, dropped bytes,
   bounds, recovery, and unterminated streams still degrade analysis.
 
-`amp-thread-jsonrpc` version `1` reads only WebSocket client/server messages with that exact
+`amp-thread-jsonrpc` version `2` reads only WebSocket client/server messages with that exact
 hint. It interprets complete server `message_added.params.message` snapshots, with
 `scope: "application_thread"`: assistant text/thinking as `model_response`, assistant
-`tool_use` as `tool_call`, and user `tool_result.run.result.output` as the context-visible
-`tool_result`. Model-facing tool names stay as supplied; executor names do not replace them.
+`tool_use` as `tool_call`, and user `tool_result.run.result.output` (or a `run.result` that is
+the text itself, as a `Task` subagent's answer is) as the context-visible `tool_result`, with
+`subagent_tool_uses` counting a `Task` run's `progress[].tool_uses`. A snapshot whose
+`params.parentToolUseId` (or `parentToolCallId`) names a parent `Task` call is a subagent's: every
+fact from it carries `parent_tool_use_id` (version 2). Model-facing tool names stay as supplied; executor names do not replace them.
 Safe supplied `messageId`, `threadId`, block IDs and block indices identify each occurrence.
 Tool input is bounded serialized JSON; text/thinking and tool output use bounded text fields.
 A supplied assistant `usage.model` yields `model`; the integer `inputTokens`, `outputTokens`,
@@ -246,7 +257,7 @@ individually under the existing list bound. There is no cross-message accumulato
 deduplication: repeated complete snapshots remain per-source occurrences. Loss, redaction,
 malformed JSON, capture decode errors and limits cannot establish complete content. The native
 `amp-thread-metadata-no-transcript` leg and HTTP streams remain capture-only. Measurement is
-one retrieved macOS Amp `0.0.1792209635-g24a9fe` sample; thinking blocks and complete-message
+two retrieved macOS Amp `0.0.1792209635-g24a9fe` samples, one with `Task` subagents; thinking blocks and complete-message
 batch arrays remain synthetic-only. See the [Amp facts](../harnesses/amp-cli.md).
 
 The Chat Completions registry measurement now names the retrieved/replayed Hermes HTTP sample

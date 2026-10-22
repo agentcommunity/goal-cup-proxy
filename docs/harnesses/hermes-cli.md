@@ -55,7 +55,7 @@ Headless (the recipe before D61, frozen at [`frozen-connectors/hermes-cli`](../.
 - **One per session.** One snapshot file per session id; a resume appends to the same `sessions` row (measured, spike).
 - **Id.** `YYYYMMDD_HHMMSS_<six lowercase hex>`, generated at start (source; the reference row had `20261002_125737_dc0697`).
 - **Where the id first appears.** In chat mode, in the banner (`Session: <id>`) on the terminal and, after a message, as the snapshot's file name (measured 2026-10-16). Headless with `-Q`, on stderr as `session_id: <id>` after the final turn (source; measured on the reference row). Compression keeps the id in place by default; the connector sets `compression.in_place: false`, so each compaction starts a new id and a new snapshot, written since the run started and recorded (D61).
-- **Subagents.** `delegate_task` children get their own session rows with `parent_session_id` and `_delegate_from` inside `model_config` JSON (measured).
+- **Subagents.** `delegate_task` children get their own session rows with `parent_session_id` and `_delegate_from` inside `model_config` JSON (measured). In a recorded run their model calls are on the wire leg only, and the research report does not say which calls are a child's: no decoder reads Hermes's native `session_*.json` yet (measured 22 Oct: two children, on the wire, unattributed).
 - **Model.** Per session and per model in `session_model_usage`; not per message (measured).
 
 ## 5. Auth

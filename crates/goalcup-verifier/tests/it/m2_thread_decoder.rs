@@ -517,3 +517,59 @@ fn unsupported_snapshot_fields_and_empty_messages_cannot_supply_facts() {
     assert!(!incomplete);
     assert_eq!(unknown, 1);
 }
+/// Synthetic shapes of a 22 Oct Amp run with `Task` subagents: subagents share the parent's
+/// thread WebSocket, and each of their snapshots names the parent's `Task` call.
+#[test]
+fn a_subagent_snapshot_carries_its_parent_task_call_on_every_fact() {
+    let mut child = snapshot(
+        "assistant",
+        json!([{"type":"text","text":"child reply","blockState":"complete"},
+               {"type":"tool_use","id":"call-c","name":"shell_command","blockState":"complete","complete":true,"input":{"command":"ls"}}]),
+    );
+    child["params"]["message"]["usage"] = json!({"model":"child-model","outputTokens":5});
+    child["params"]["parentToolUseId"] = json!("toolu_task-1");
+    let obs = decode_value(child);
+    let facts: Vec<_> = obs.iter().filter(|o| o.kind != "unknown").collect();
+    assert_eq!(facts.len(), 4, "{obs:#?}"); // text, tool call, model, usage
+    for o in &facts {
+        assert_eq!(o.fields["parent_tool_use_id"], "toolu_task-1", "{o:#?}");
+    }
+    // The other spelling Amp uses on the same socket.
+    let mut child = text();
+    child["params"]["parentToolCallId"] = json!("toolu_task-2");
+    let obs = decode_value(child);
+    assert_eq!(
+        kind(&obs, "model_response")[0].fields["parent_tool_use_id"],
+        "toolu_task-2"
+    );
+    // The parent's own snapshot names no parent.
+    let obs = decode_value(text());
+    assert!(
+        kind(&obs, "model_response")[0]
+            .fields
+            .get("parent_tool_use_id")
+            .is_none()
+    );
+}
+#[test]
+fn a_task_result_is_the_subagent_answer_with_its_tool_use_count() {
+    let obs = decode_value(snapshot(
+        "user",
+        json!([{"type":"tool_result","toolUseID":"toolu_task-1","run":{"status":"done",
+            "result":"the subagent's final answer",
+            "progress":[{"tool_uses":[{"id":"a","tool_name":"Read","input":{},"status":"done","result":{}},
+                                     {"id":"b","tool_name":"Bash","input":{},"status":"done","result":"x"}]},
+                        {"tool_uses":[{"id":"c","tool_name":"Read","input":{},"status":"done","result":{}}]}]}}]),
+    ));
+    let results = kind(&obs, "tool_result");
+    assert_eq!(results.len(), 1, "{obs:#?}");
+    assert_eq!(results[0].fields["output"], "the subagent's final answer");
+    assert_eq!(results[0].fields["call_id"], "toolu_task-1");
+    assert_eq!(results[0].fields["subagent_tool_uses"], 3);
+    // A string result of a run that is not done is still not a result.
+    let obs = decode_value(snapshot(
+        "user",
+        json!([{"type":"tool_result","toolUseID":"t","run":{"status":"in-progress","result":"partial"}}]),
+    ));
+    assert_eq!(unknown_reasons(&obs), ["unsupported_tool_result"]);
+}

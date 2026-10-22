@@ -123,7 +123,8 @@ impl DecoderRegistry {
         for registered in [
             Registered::new(
                 || Box::new(native::CodexNativeDecoder::new()),
-                "Codex CLI 0.153.0 CLI/exec rollouts and 0.156.1 native child with inherited context",
+                "Codex CLI 0.153.0 CLI/exec rollouts, 0.156.1 native child with inherited context, and a \
+                 0.156.1 parent with two spawn_agent children",
                 &[],
             ),
             Registered::new(
@@ -157,7 +158,8 @@ impl DecoderRegistry {
             ),
             Registered::new(
                 || Box::new(thread::ThreadDecoder::new()),
-                "one retrieved/replayed macOS Amp 0.0.1792209635-g24a9fe thread WebSocket sample",
+                "two retrieved/replayed macOS Amp 0.0.1792209635-g24a9fe thread WebSocket samples, one \
+                 with Task subagents",
                 &[
                     "thinking blocks",
                     "complete message snapshots inside batch arrays",
