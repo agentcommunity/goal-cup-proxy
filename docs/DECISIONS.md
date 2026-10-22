@@ -770,19 +770,23 @@ four". Adding a harness must stay a data change that core changes do not break.
   decoder hooks a connector may rely on.
 - **Compatibility.** While schema 1 is read, a connector that loads today keeps loading and
   launching with the same meaning. Schema 1 may only grow (a new optional field, a wider bound, a
-  new closed value).
+  new closed value). The one exception is a tightened core policy row (a deny list or trust
+  table): it keeps schema 1 but follows the deprecation rule, with notice and a warning before
+  it refuses, unless the owner rules that waiting is unsafe.
 - **Deprecation.** A field is retired by a DECISIONS entry, at least one release and 14 days of
   notice (none during an event), a `doctor` warning, then `schema_version = 2` with every
   in-tree connector migrated in the same PR. A security tightening follows the same rule; the
   owner may waive the notice when waiting is unsafe.
-- **Held by tests.** Two frozen schema-1 fixtures for harnesses nobody ships
+- **Held by tests.** Four frozen schema-1 fixtures for harnesses nobody ships
   (`crates/goalcup-cli/tests/fixtures/schema-1-connectors/`) take the connector contract through
   `--dev`, beside every shipped connector. A connector made from the contributor template loads
   with no Rust change, and no core literal names a harness (`no_family_literals.rs`). A change
   that fails one of them is a break, not a test to update.
 - **Open: the pin and the cutoff.** A connector runs without `--dev` only when the release pins
   it (`connector-dirs.txt`, compiled in). So a participant's own harness needs a merged PR and a
-  release before 6 Nov 2026 12:00 UTC. A `--dev` run today opens a server run and uploads like
+  release before 6 Nov 2026 12:00 UTC. `--dev` admits an unpinned connector and relaxes three
+  load rules (`Origin::Dev`): the interpreter refusal for `program`, the argument path rules, and
+  the loopback and single-label host refusal. A `--dev` run today opens a server run and uploads like
   any other: the server checks no connector list (D43 ruling 4 is not built), and the report
   labels it `Dev/unpinned`. The owner decides whether a `--dev` run may count, and if not, where
   it is refused (the CLI in competition mode, or the server by digest).
