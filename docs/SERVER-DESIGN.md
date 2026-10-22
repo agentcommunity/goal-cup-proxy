@@ -156,7 +156,8 @@ See [OPERATING](OPERATING.md#test-runs).
 
 - The verify job that reassembles stored chunks and runs `goalcup-verify` over them. Until it exists,
   nothing downloads the stored chain; `scripts/matrix.sh --check-copy` compares positions instead.
-- Live totals in the heartbeat, outage windows, and the public `live.json`.
+- Live totals in the heartbeat, outage windows, and the public `live.json`. Design for `live.json`,
+  the stats it carries and the verify job's numbers-only summary: [live stats design](research/LIVE-STATS-DESIGN.md).
 - A separate organizer pause on new starts (`MAINTENANCE` stops everything).
 - A second pinned signing key for rotation.
 - Teams, and more than one main run per account.
