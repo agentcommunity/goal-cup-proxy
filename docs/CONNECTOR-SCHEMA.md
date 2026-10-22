@@ -315,6 +315,12 @@ at the participant's `HOME`, at a `real_dirs` path or anywhere but directly unde
 identity `none` needs `since_run_start = true`. It is refused with
 `capture.home.env`: such a harness shares its config home instead.
 
+Every run `HOME` gets one file from Goal Cup Proxy, whatever the connector: `.profile`, mode
+`0600`, exporting the `PATH` the launch hands the harness (shell-quoted). A harness that runs its
+commands in a login shell (Codex's `/bin/sh -lc`) has them run `/etc/profile`, which on Debian and
+Ubuntu resets `PATH`; this puts the participant's back (D57). A `.profile` already there (a shared
+run home's) is kept as it is, so a shared run home keeps the `PATH` of the run that first wrote it.
+
 ## Credential and CA
 
 Goal Cup Proxy never sees, forwards or stores a participant's provider key (D61). A

@@ -487,7 +487,8 @@ impl RunDir {
             _ => Err(CliError::Refused(
                 "the harness uses a run-home mode this goalcup does not support".into(),
             )),
-        });
+        })
+        .and_then(|()| write_login_profile(&run.home, &crate::launch::harness_path(env)));
         if let Err(e) = made {
             let _ = run.remove();
             return Err(e);
@@ -512,6 +513,55 @@ impl RunDir {
         };
         std::fs::remove_dir_all(&self.dir).and(clone)
     }
+}
+
+/// The first line of the `.profile` [`write_login_profile`] writes.
+pub(crate) const LOGIN_PROFILE_HEADER: &str = "# Written by Goal Cup: the PATH this run handed the \
+     harness, which a login shell's /etc/profile resets.";
+
+/// Write `<run_home>/.profile`, which puts back the `PATH` the launch hands the harness
+/// ([`crate::launch::harness_path`]), unless a `.profile` is there already (a shared run home's
+/// own, D59), which is kept as it is.
+///
+/// A harness that runs its commands in a login shell (Codex's `/bin/sh -lc`) has them run
+/// `/etc/profile`, which on Debian and Ubuntu sets `PATH` outright; the participant's own
+/// `~/.profile` would add `~/.local/bin` back, but the run's `HOME` is Goal Cup's empty one. This
+/// repairs what that empty `HOME` took away, so the agent's commands get the participant's `PATH`
+/// (D57) and `goalcup` on it. It changes no harness setting (D67). `bash -l` reads `.profile` when
+/// the home has no `.bash_profile`, which an empty run home never has.
+pub(crate) fn write_login_profile(run_home: &Path, path: &str) -> Result<(), CliError> {
+    let file = run_home.join(".profile");
+    let mut options = std::fs::OpenOptions::new();
+    // `create_new` never follows or replaces anything already there, a link included.
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut out = match options.open(&file) {
+        Ok(out) => out,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(source) => {
+            return Err(CliError::Io {
+                path: file.display().to_string(),
+                source,
+            });
+        }
+    };
+    let body = format!(
+        "{LOGIN_PROFILE_HEADER}\nexport PATH={}\n",
+        shell_single_quoted(path)
+    );
+    std::io::Write::write_all(&mut out, body.as_bytes()).map_err(|source| CliError::Io {
+        path: file.display().to_string(),
+        source,
+    })
+}
+
+/// `value` as one POSIX shell word: single quotes, each `'` written `'\''`.
+fn shell_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
 }
 
 pub(crate) fn private_dir(dir: &Path, recursive: bool) -> Result<(), CliError> {
@@ -579,6 +629,86 @@ mod tests {
         std::fs::create_dir_all(&fresh.workspace).unwrap();
         fresh.remove().unwrap();
         assert!(!fresh.workspace.exists());
+    }
+
+    /// A folder with an executable `goalcup-marker` in it, and a run made with that folder first
+    /// on the participant's `PATH`.
+    fn run_with_marker_on_path(tmp: &Path) -> (RunDir, String) {
+        use std::os::unix::fs::PermissionsExt;
+        // A quote in the folder's name proves the line is quoted for the shell.
+        let bin = tmp.join("it's bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let marker = bin.join("goalcup-marker");
+        std::fs::write(&marker, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let beside = tmp.join("beside");
+        std::fs::create_dir_all(&beside).unwrap();
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let env = BTreeMap::from([("PATH".to_string(), path.clone())]);
+        let run =
+            RunDir::create(&beside, RunHome::Empty, None, &env, WorkspaceAt::InRunDir).unwrap();
+        (run, path)
+    }
+
+    /// `sh -c <script>` with `HOME` the run's and the system `PATH` only.
+    fn sh_in(home: &Path, flag: &str, script: &str) -> std::process::Output {
+        std::process::Command::new("/bin/sh")
+            .arg(flag)
+            .arg(script)
+            .env_clear()
+            .env("HOME", home)
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap()
+    }
+
+    /// The run's `HOME` holds a `.profile` that gives a shell back exactly the `PATH` the launch
+    /// hands the harness, so a login shell whose `/etc/profile` resets `PATH` (Debian's, which
+    /// Codex's `/bin/sh -lc` runs) still finds the participant's tools.
+    #[test]
+    fn the_run_home_restores_the_harness_path_after_a_login_shell_reset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (run, path) = run_with_marker_on_path(tmp.path());
+        let profile = run.home.join(".profile");
+        let printed = sh_in(&run.home, "-c", r#". "$HOME/.profile"; printf %s "$PATH""#);
+        assert_eq!(String::from_utf8_lossy(&printed.stdout), path);
+        // What Debian's /etc/profile does, then what a login shell reads next.
+        let found = sh_in(
+            &run.home,
+            "-c",
+            r#"PATH=/usr/local/bin:/usr/bin:/bin; . "$HOME/.profile"; command -v goalcup-marker"#,
+        );
+        assert!(found.status.success(), "{found:?}");
+        // A real login shell, on whatever `/etc/profile` this machine has.
+        let login = sh_in(&run.home, "-lc", "command -v goalcup-marker");
+        assert!(login.status.success(), "{login:?}");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&profile).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// A shared run home's own `.profile` is kept as it is.
+    #[test]
+    fn an_existing_profile_in_the_run_home_is_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shared = tmp.path().join("shared-home");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join(".profile"), b"# the participant's own\n").unwrap();
+        let beside = tmp.path().join("beside");
+        std::fs::create_dir_all(&beside).unwrap();
+        let env = BTreeMap::from([("PATH".to_string(), "/opt/x/bin:/usr/bin".to_string())]);
+        let run = RunDir::create(
+            &beside,
+            RunHome::Shared,
+            Some(&shared),
+            &env,
+            WorkspaceAt::InRunDir,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(run.home.join(".profile")).unwrap(),
+            b"# the participant's own\n"
+        );
     }
 
     /// #11: two runs on one shared harness home. The second is refused plainly while the first
