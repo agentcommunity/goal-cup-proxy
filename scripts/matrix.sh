@@ -17,7 +17,11 @@
 #      signed by the server's acknowledgement);
 #   2. the server's copy: `GET /v1/runs/<id>` with the run's own credential says `sealed`, `stop`,
 #      and holds exactly the bytes, records and head the local chain ends with, and the entry's
-#      committed end (`final`) is that same record.
+#      committed end (`final`) is that same record;
+#   3. for a real harness, the agent worked: `goalcup-verify --research-json` on the trace shows
+#      at least one model exchange that carries output (a usage observation with output or
+#      completion tokens above 0, or a decoded assistant message). A prompt swallowed by a
+#      first-run dialog or split into keys leaves none, and the row FAILs.
 #
 # The upload API has no call that returns the stored chain, so (2) is a comparison of the
 # server's position with the local chain, not a download. docs/OPERATING.md, "The matrix", says
@@ -1044,9 +1048,70 @@ PY
 
   # ---- 1. the local verifier, 2. the server's copy
   verify_trace "$TRACE" || return 1
+  if [ "$IS_FAKE" = 0 ]; then
+    agent_worked "$TRACE" || return 1
+  fi
   compare_copy "$RUN_ID" "$ENTRY_ID" "$TRACE" "$RUN_DIR/credential" "$STRICT" || return 1
 
   RESULT=PASS
+  return 0
+}
+
+# The agent answered: the research report (under the same key as verify_trace) holds a usage
+# observation with output or completion tokens above 0, or a decoded assistant message. Its exit
+# status is not the question here (verify_trace judged the evidence); the report must exist.
+agent_worked() { # trace
+  rm -f "$ROOT/research.ndjson"
+  if [ -n "$SKEY" ]; then
+    "$VERIFY" --research-json "$1" --output "$ROOT/research.ndjson" --dev-key "$SKEY" 2>"$ROOT/research.err"
+  else
+    "$VERIFY" --research-json "$1" --output "$ROOT/research.ndjson" 2>"$ROOT/research.err"
+  fi
+  log "goalcup-verify --research-json $1: exit $?"
+  log_file "goalcup-verify --research-json (stderr)" "$ROOT/research.err"
+  [ -f "$ROOT/research.ndjson" ] ||
+    fail "goalcup-verify --research-json wrote no report: $(last_line "$ROOT/research.err")" || return 1
+  worked=$(python3 - "$ROOT/research.ndjson" <<'PY'
+import json, sys
+
+OUT = ("output_tokens", "completion_tokens", "outputtokens", "completiontokens")
+
+
+def has_output(o):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if (k.lower() in OUT and isinstance(v, (int, float)) and not isinstance(v, bool)
+                    and v > 0):
+                return True
+            if isinstance(v, (dict, list)) and has_output(v):
+                return True
+    elif isinstance(o, list):
+        return any(has_output(v) for v in o)
+    return False
+
+
+usage = assistant = 0
+for line in open(sys.argv[1], errors="replace"):
+    try:
+        o = json.loads(line)
+    except ValueError:
+        continue
+    if not isinstance(o, dict) or o.get("type") != "observation":
+        continue
+    ob = o.get("observation") if isinstance(o.get("observation"), dict) else {}
+    fields = ob.get("fields") if isinstance(ob.get("fields"), dict) else {}
+    if ob.get("kind") == "usage" and has_output(fields):
+        usage += 1
+    elif ob.get("kind") == "model_response" and fields.get("role") == "assistant":
+        assistant += 1
+print(f"{usage} usage observations with output, {assistant} assistant messages")
+PY
+  )
+  log "agent work in the trace: ${worked:-unreadable report}"
+  case $worked in
+    "0 usage observations with output, 0 assistant messages" | "")
+      fail "the agent never answered the prompt (no model output in the trace: ${worked:-unreadable report})" || return 1 ;;
+  esac
   return 0
 }
 
@@ -1059,6 +1124,7 @@ verify_trace() { # trace [allow_incomplete]
   VRC=$?
   KEYNOTE="the pinned server key"
   VERIFY_NOTE=""
+  SKEY=""
   if [ "$VRC" = 2 ] && grep -q receipt_key_not_accepted "$ROOT/verify.out"; then
     SKEY=${MATRIX_SERVER_KEY:-$(py_get "$1/receipt.json" public_key)}
     log "verify without a supplied key: exit $VRC; retrying with --dev-key (the server's own signing key is not pinned in this build for $SERVER)"

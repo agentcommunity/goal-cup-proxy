@@ -571,7 +571,7 @@ class ContainerHalfTests(unittest.TestCase):
         self.assertIn("does not list minimal", run.stdout)
         self.assertFalse((self.homes / "codex-cli/config.toml").exists())
 
-    def inner_run_world(self) -> Path:
+    def inner_run_world(self, model: str = "claude-haiku-4-5") -> Path:
         """A stand-in /src: the connector's manifest and a matrix.sh that records what it got
         and leaves one haiku transcript, on a volume where prep recorded the sign-in."""
         src = self.base / "src"
@@ -584,7 +584,7 @@ class ContainerHalfTests(unittest.TestCase):
 python3 -c 'import json, os, sys; json.dump({{"argv": sys.argv[1:], "keys": os.environ.get("MATRIX_PRE_PROMPT_KEYS"), "cfg": os.environ.get("MATRIX_CONFIG_DIR")}}, open("{got}", "w"))' "$@"
 d="$MATRIX_CONFIG_DIR/capture-homes/claude-code-cli/projects/-w"
 mkdir -p "$d"
-echo '{{"type":"assistant","message":{{"model":"claude-haiku-4-5"}}}}' > "$d/s.jsonl"
+echo '{{"type":"assistant","message":{{"model":"{model}"}}}}' > "$d/s.jsonl"
 echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
 """)
         cfg = self.base / "vol/cfg"
@@ -606,6 +606,15 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
         self.assertTrue(run.stdout.rstrip().splitlines()[-1].endswith("PASS 2026-10-20"))
         settings = json.loads((self.homes / "claude-code-cli/settings.json").read_text())
         self.assertEqual(settings["model"], "haiku")
+
+    def test_inner_run_that_broke_the_owner_rule_prints_no_pass_row(self) -> None:
+        self.inner_run_world(model="claude-sonnet-4-5")
+        run = self.inner("inner-run", "claude-code-cli",
+                         TMPDIR=str(self.base / "tmp"), LINUX_MATRIX_SERVER="https://s.example")
+        self.assertNotEqual(run.returncode, 0)
+        self.assertNotIn("PASS", run.stdout)
+        self.assertIn("claude-code-cli linux-x86_64 2.1.283 FAIL 2026-10-20", run.stdout)
+        self.assertTrue(run.stdout.rstrip().splitlines()[-1].startswith("linux-matrix: FAIL owner rule"))
 
     def test_inner_run_keeps_trust_keys_that_were_set_even_empty(self) -> None:
         got = self.inner_run_world()

@@ -170,7 +170,10 @@ stderr and in the log. PASS means:
    `host.log`, not the terminal, so the script reads both), or at the script's seal for `--test`; and
    `uploaded: … and the seal`;
 3. `goalcup-verify --capture-integrity <trace>` exited 0 with `integrity: valid` and `anchor: signed`;
-4. the server's copy agrees with the local chain.
+4. for a real harness, the agent worked: `goalcup-verify --research-json <trace>` shows a usage
+   observation with output or completion tokens above 0, or a decoded assistant message (else the
+   row FAILs with "the agent never answered the prompt");
+5. the server's copy agrees with the local chain.
 
 **The server copy.** The upload API has no call that returns the stored chain, so the script does not
 download it. It asks `GET /v1/runs/{id}?entry_id=…` with the run's own credential and requires the answer

@@ -280,12 +280,15 @@ inner_run() { # connector [matrix.sh options]
     log=/logs/matrix-$h${LINUX_MATRIX_CELL:+-$LINUX_MATRIX_CELL}-$(date -u +%Y%m%dT%H%M%SZ).log
     sh /src/scripts/matrix.sh "$h" "$LINUX_MATRIX_SERVER" --log "$log" "$@" >"$TMPDIR/matrix.$$.out"
     rc=$?
-    cat "$TMPDIR/matrix.$$.out"
     row=$(grep "^$h " "$TMPDIR/matrix.$$.out" | tail -n 1)
-    if ! inner_model_check "$h" "$marker"; then
+    if ! inner_model_check "$h" "$marker" >"$TMPDIR/model.$$.out" 2>&1; then
+        # A run that broke the owner rule never shows a PASS row: matrix.sh's row says FAIL.
+        sed "s/^\($h [^ ]* [^ ]*\) PASS \([0-9-]*\)\$/\1 FAIL \2/" "$TMPDIR/matrix.$$.out"
+        cat "$TMPDIR/model.$$.out"
         echo "linux-matrix: FAIL owner rule: $(rule_of "$h")"
         exit 1
     fi
+    cat "$TMPDIR/matrix.$$.out" "$TMPDIR/model.$$.out"
     echo "linux-matrix: log on the host: ${LINUX_MATRIX_HOST_LOG_DIR:-/logs}/$(basename "$log")"
     echo "linux-matrix: ${row:-no row (matrix.sh exit $rc)}"
     exit "$rc"
