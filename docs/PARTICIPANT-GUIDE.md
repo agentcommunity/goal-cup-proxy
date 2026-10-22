@@ -28,7 +28,7 @@ stops at each step that needs you.
 Open a terminal (on Windows, the Ubuntu one inside WSL2) and run:
 
 ```sh
-curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh
 ```
 
 This installs the latest release. It picks the build for your machine, checks it against the

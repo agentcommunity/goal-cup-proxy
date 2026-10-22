@@ -519,6 +519,6 @@ The harness ships in the next release once both runs pass.
 
 ## Reach us
 
-Open an issue on [goal-cup-tracer](https://github.com/agentcommunity/goal-cup-tracer/issues) for
+Open an issue on [goal-cup-proxy](https://github.com/agentcommunity/goal-cup-proxy/issues) for
 anything public, including "this step did not work". For anything private, or a security problem,
 email goalcup@agentcommunity.org ([SECURITY](../SECURITY.md)). The maintainer is Balazs Nemethi.
