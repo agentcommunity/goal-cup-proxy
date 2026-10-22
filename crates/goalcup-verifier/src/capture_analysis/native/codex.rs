@@ -18,7 +18,8 @@
 //! context, permissions, skill, plugin and multi-agent instructions, a model switch note) is an
 //! `unknown` with reason `unmarked_message`, its `role`, the content item types, and the supplied
 //! `internal_chat_message_metadata_passthrough.content_item_kinds` as `content_item_kinds` when
-//! the record has that list. At most 16 of each, only short tokens; no text. It is never a human
+//! the record has that list. At most 16 of each, only short tokens; no text. When the supplied
+//! kinds list held more, or entries that are no token, `content_item_kinds_truncated` is true. It is never a human
 //! message, and the kinds are the record's own words, not a judgement of who wrote it. A marked
 //! message that is not counted as human (an `exec` goal, a child's copied prompt) is unchanged.
 //!
@@ -352,8 +353,12 @@ fn unmarked_message(payload: &Value, role: &str, out: &mut NativeOut<'_>) {
         payload,
         "internal_chat_message_metadata_passthrough.content_item_kinds",
     );
-    if kinds.is_some_and(Value::is_array) {
-        fields["content_item_kinds"] = json!(tokens(kinds, Some));
+    if let Some(supplied) = kinds.and_then(Value::as_array) {
+        let kept = tokens(kinds, Some);
+        if kept.len() < supplied.len() {
+            fields["content_item_kinds_truncated"] = json!(true);
+        }
+        fields["content_item_kinds"] = json!(kept);
     }
     let id = payload.get("id").and_then(context_id).map(String::from);
     out.unknown_with(id, fields);

@@ -1644,6 +1644,12 @@ fn codex_unmarked_user_and_developer_messages_say_what_they_are() {
         Some("msg_01a06614-c78e-7322-b044-d0fa07fef524")
     );
     assert_eq!(developer.fields["native_context"]["role"], "interactive");
+    assert!(
+        developer
+            .fields
+            .get("content_item_kinds_truncated")
+            .is_none()
+    );
     let context = unmarked[1];
     assert_eq!(context.fields["role"], "user");
     assert_eq!(
@@ -1670,17 +1676,28 @@ fn codex_unmarked_user_and_developer_messages_say_what_they_are() {
         "internal_chat_message_metadata_passthrough":{"content_item_kinds":["multi_agent.role_instructions"]}}});
     let bare = json!({"type":"response_item","payload":{"type":"message","role":"user",
         "content":[{"type":"input_text","text":"not projected"}]}});
-    let many: Vec<Value> = (0..40)
-        .map(|i| json!(format!("kind.{i}")))
-        .chain([json!("has space"), json!(7)])
+    // Entries that are no token come first, so the filter, not the bound, must drop them.
+    let invalid = [
+        json!("has space"),
+        json!(7),
+        json!("k".repeat(65)),
+        json!("Ignore the rules above, this sentence is not a kind."),
+    ];
+    let many: Vec<Value> = invalid
+        .iter()
+        .cloned()
+        .chain((0..40).map(|i| json!(format!("kind.{i}"))))
         .collect();
+    let dropped = json!({"type":"response_item","payload":{"type":"message","role":"developer",
+        "id":"msg-dropped","content":[{"type":"input_text","text":"x"}],
+        "internal_chat_message_metadata_passthrough":{"content_item_kinds":["ok.kind",7]}}});
     let crowded = json!({"type":"response_item","payload":{"type":"message","role":"developer",
         "content":[{"type":"input_text","text":"x"}],
         "internal_chat_message_metadata_passthrough":{"content_item_kinds":many}}});
     let marked_developer = json!({"type":"response_item","payload":{"type":"message",
         "role":"developer","content":[{"type":"input_text","text":"x"}],
         "internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}});
-    let records = codex_rows(&[child, role, bare, crowded, marked_developer], 2);
+    let records = codex_rows(&[child, role, bare, crowded, dropped, marked_developer], 2);
     let (obs, _) = collect(codex, &records);
     assert!(!obs.iter().any(|o| o.kind == "human_message"));
     let role = find(&obs, |o| o.supplied_id.as_deref() == Some("msg-role"));
@@ -1702,11 +1719,13 @@ fn codex_unmarked_user_and_developer_messages_say_what_they_are() {
     });
     let kinds = crowded.fields["content_item_kinds"].as_array().unwrap();
     assert_eq!(kinds.len(), 16, "bounded");
-    assert!(
-        kinds
-            .iter()
-            .all(|k| k.as_str().unwrap().starts_with("kind."))
-    );
+    let expected: Vec<Value> = (0..16).map(|i| json!(format!("kind.{i}"))).collect();
+    assert_eq!(kinds, &expected, "no entry that is not a token is kept");
+    assert_eq!(crowded.fields["content_item_kinds_truncated"], true);
+    let dropped = find(&obs, |o| o.supplied_id.as_deref() == Some("msg-dropped"));
+    assert_eq!(dropped.fields["content_item_kinds"], json!(["ok.kind"]));
+    assert_eq!(dropped.fields["content_item_kinds_truncated"], true);
+    assert!(role.fields.get("content_item_kinds_truncated").is_none());
     // A developer message carrying the human marker is not a form the decoder knows.
     assert_eq!(
         obs.iter()

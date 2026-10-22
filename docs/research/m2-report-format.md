@@ -105,7 +105,8 @@ Version `4` adds: a `user` or `developer` `response_item.message` without the `u
 is an `unknown` with `reason: "unmarked_message"` that says what the record is: `role`,
 `content_types`, and the record's own `content_item_kinds` (for example
 `environments.environment_context`, `permissions.instructions`, `multi_agent.role_instructions`)
-when it supplies that list. At most 16 short tokens each; no text. It is never a
+when it supplies that list. At most 16 short tokens each; no text. `content_item_kinds_truncated`
+is true when the supplied list held more, or entries that are no token. It is never a
 `human_message`. A marked message that is still not counted as human (an `exec` goal, a child's
 copied prompt) keeps `reason: "unrecognized"`.
 
