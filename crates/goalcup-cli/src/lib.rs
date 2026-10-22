@@ -1,6 +1,6 @@
 //! `goalcup` — the participant's command line.
 //!
-//! The ten sub-commands live in [`commands`]; the upload server and the participant's token
+//! The eleven sub-commands live in [`commands`]; the upload server and the participant's token
 //! for it live in [`server`]; Goal Cup Proxy's own configuration directory
 //! and the documents in it live in [`config`]; the shipped connector manifests and the
 //! release-hash allowlist over them live in [`connector`]; the one client that speaks

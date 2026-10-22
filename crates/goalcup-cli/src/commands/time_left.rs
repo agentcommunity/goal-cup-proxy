@@ -9,6 +9,9 @@
 //! In a person's own terminal there is no such file: the newest open run's state on this
 //! computer is read instead, the way `goalcup status` counts its time left
 //! ([`time_left_of_open_run`]).
+//!
+//! [`answer`] makes that choice and finds the line. `goalcup time-left` prints it, and the
+//! `time_left` tool of `goalcup mcp` (fix plan v9) returns it, so the two cannot differ.
 
 use crate::CliError;
 use crate::run::time_left::{file_says_practice, left_line, sentence};
@@ -18,12 +21,32 @@ use std::path::Path;
 /// The most of the file read: four short lines.
 const MAX_BYTES: u64 = 4096;
 
+/// The time-left line at `now` (unix seconds), or its refusal: from the file the environment
+/// names ([`crate::run::time_left::file_from_env`]), as inside the harness; without one, from the
+/// newest open run in the configuration directory, as in a person's own terminal. It only reads.
+pub fn answer(now: u64) -> Result<String, CliError> {
+    match crate::run::time_left::file_from_env() {
+        Some(file) => line_from_file(&file, now),
+        None => line_of_open_run(&crate::config::config_dir()?, now),
+    }
+}
+
+/// `goalcup time-left`: print [`answer`].
+pub fn time_left(now: u64, out: &mut dyn std::io::Write) -> Result<(), CliError> {
+    put(out, &answer(now)?)
+}
+
 /// Print the time left from `file` (the one [`crate::run::time_left::file_from_env`] names) at
 /// `now` (unix seconds), and answer `Ok`. A file that is missing, unreadable or stale is a
 /// refusal (exit 1) that says the time is unknown right now.
 pub fn time_left_with(file: &Path, now: u64, out: &mut dyn std::io::Write) -> Result<(), CliError> {
+    put(out, &line_from_file(file, now)?)
+}
+
+/// The line [`time_left_with`] prints, or its refusal.
+fn line_from_file(file: &Path, now: u64) -> Result<String, CliError> {
     let mut text = String::new();
-    let line = std::fs::File::open(file)
+    std::fs::File::open(file)
         .and_then(|f| f.take(MAX_BYTES).read_to_string(&mut text))
         .ok()
         .and_then(|_| sentence(&text, now))
@@ -31,8 +54,7 @@ pub fn time_left_with(file: &Path, now: u64, out: &mut dyn std::io::Write) -> Re
             CliError::Refused(crate::participant::time_left_unknown(file_says_practice(
                 &text,
             )))
-        })?;
-    put(out, &line)
+        })
 }
 
 /// Print the time left of the newest run on this computer that is still open (on a server, and
@@ -43,10 +65,14 @@ pub fn time_left_of_open_run(
     now: u64,
     out: &mut dyn std::io::Write,
 ) -> Result<(), CliError> {
+    put(out, &line_of_open_run(cfg, now)?)
+}
+
+/// The line [`time_left_of_open_run`] prints, or its refusal.
+fn line_of_open_run(cfg: &Path, now: u64) -> Result<String, CliError> {
     let mut runs = crate::run::all(cfg);
     runs.sort_by_key(|run| std::cmp::Reverse(run.started_at_unix));
-    let line = runs
-        .into_iter()
+    runs.into_iter()
         .filter(|run| run.server_url.is_some())
         .find_map(|run| {
             let state = crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id));
@@ -60,10 +86,7 @@ pub fn time_left_of_open_run(
                 .and_then(goalcup_protocol::control::parse_z);
             Some(left_line(left, deadline, run.practice))
         })
-        .ok_or_else(|| {
-            CliError::Refused(crate::participant::no_open_run_time_left().to_string())
-        })?;
-    put(out, &line)
+        .ok_or_else(|| CliError::Refused(crate::participant::no_open_run_time_left().to_string()))
 }
 
 fn put(out: &mut dyn std::io::Write, line: &str) -> Result<(), CliError> {

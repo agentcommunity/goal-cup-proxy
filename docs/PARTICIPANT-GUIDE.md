@@ -142,7 +142,8 @@ where it goes.
 
 **Hermes and Amp.** The `goal-cup` skill does not reach these two harnesses yet, so their agent is
 not told that it can check the clock. If you want it to know how much time is left, say in your
-prompt that it may run `goalcup time-left`.
+prompt that it may run `goalcup time-left`, or call the `time_left` tool if you
+[added it](HARNESS-SETUP.md#add-the-goal-cup-time-left-tool).
 
 ## 4. A practice run: `goalcup start --practice`
 
@@ -403,7 +404,8 @@ setting Goal Cup recommends when it is missing, and
 where it goes. Goal Cup never changes it for you.
 
 Goal Cup Proxy itself never types to the agent, never says "keep going" for you, and never restarts
-it by itself. Your agent may ask how much time is left with `goalcup time-left`. You can run it
+it by itself. Your agent may ask how much time is left with `goalcup time-left`, or with the
+[time-left tool](HARNESS-SETUP.md#add-the-goal-cup-time-left-tool) if you added it. You can run it
 in your own terminal too. `goalcup seal` works only from a terminal of your own, never inside the
 agent's session. It asks before it stops the agent, and your run stays open (section 8).
 

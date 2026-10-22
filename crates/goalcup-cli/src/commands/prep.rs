@@ -7,7 +7,9 @@
 //! 2. **harness**: one of the connectors that run in chat mode (`interactive = true`), picked
 //!    with `--harness` or because it is the only one, found on `PATH`, its version shown, and a
 //!    pointer to its section of the setup guide, `docs/HARNESS-SETUP.md` (the connector's
-//!    `participant.setup_section`), on every prep.
+//!    `participant.setup_section`), on every prep. When the connector names where its MCP
+//!    servers are listed (`participant.time_left_tool`, fix plan v9), the step also prints the
+//!    lines that add `goalcup mcp` there, with this binary's absolute path; it never writes them.
 //! 3. **harness home**: the harness is opened once in the home its runs will use, so the
 //!    participant signs in and adds settings, MCP servers and skills there
 //!    ([`crate::launch::prep_launch`]: no proxy, no capture, no daemon entry). The tracker
@@ -622,11 +624,50 @@ fn harness_step(
     };
     // Fix plan v8: the guide to the harness's settings, on every prep, missing settings or not.
     // Only a pointer: it never changes the step's state or a setting.
-    let say = format!(
+    let mut say = format!(
         "{id} {version} ({path}). Before a long run, read {}",
         setup_guide_link(&connector)
     );
+    // Fix plan v9: the lines that add the time-left tool, on every prep. Only printed.
+    if let Some(lines) = time_left_tool_advice(cfg, &connector) {
+        say.push('\n');
+        say.push_str(&lines);
+    }
     (Some(connector), step(STEP_HARNESS, State::Ok, false, say))
+}
+
+/// Fix plan v9: when the connector names where its MCP servers are listed
+/// (`participant.time_left_tool`), the lines that add `goalcup mcp` there, with this binary's
+/// absolute path, so the agent can ask the time left whatever its `PATH`. Indented under the
+/// harness step. Never written: Goal Cup does not change the harness's settings (D67).
+fn time_left_tool_advice(cfg: &Path, connector: &HarnessConnector) -> Option<String> {
+    let tool = connector
+        .loaded
+        .manifest
+        .participant
+        .as_ref()?
+        .time_left_tool
+        .as_ref()?;
+    let file = crate::home::prep_home_leaf(cfg, connector)?.join(&tool.file);
+    let goalcup = std::env::current_exe().ok()?;
+    let lines = crate::commands::mcp::setup_lines(tool, goalcup.to_str()?);
+    let indented: Vec<String> = lines
+        .lines()
+        .map(|l| {
+            if l.is_empty() {
+                String::new()
+            } else {
+                format!("    {l}")
+            }
+        })
+        .collect();
+    Some(format!(
+        "  So your agent can ask how much time is left whatever its PATH, add Goal Cup's \
+         time-left tool to `{}` in {} (Goal Cup does not change that file):\n{}",
+        tool.key,
+        file.display(),
+        indented.join("\n")
+    ))
 }
 
 // ------------------------------------------------------------------ 3. the harness home

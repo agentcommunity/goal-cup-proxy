@@ -48,7 +48,8 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
 
 - The server is the clock. The run ends 168 hours after the server's official start.
 - Check on it from a second terminal with `goalcup status`. Its last line, `Next:`, says what to do.
-- Your agent may run `goalcup time-left` to ask how much time is left. Goal Cup Proxy never sends
+- Your agent may run `goalcup time-left`, or call the `time_left` tool of `goalcup mcp` if you
+  added it to your harness, to ask how much time is left. Goal Cup Proxy never sends
   anything to the agent: no reminders, no "keep going", no restarts.
 - If the agent stops early (a crash, a reboot, a closed window), run `goalcup continue`. Nobody
   restarts it for you.
@@ -77,6 +78,7 @@ most runs have one, and `goalcup continue` starts the next. Every flag is in `go
 | `goalcup start --harness <ID> [--practice \| --test] [--dev]` | Start a run: open the harness here and record it. `--test` is for organizers. |
 | `goalcup status [<part-id>] [--json]` | Show the run: recording state, time left, upload, problems, `Next:`. |
 | `goalcup time-left` | Show how much time the run has left. The agent may run it too. |
+| `goalcup mcp` | Serve the time left as an MCP tool (`time_left`) for the agent. The harness starts it; add it as in [HARNESS-SETUP](docs/HARNESS-SETUP.md#add-the-goal-cup-time-left-tool). |
 | `goalcup continue [<run-id>]` | Start the agent again in the same run, on the same computer. |
 | `goalcup upload [<part-id>]` | Send what is not uploaded yet. Safe to repeat. |
 | `goalcup entries [--json]` | List the recorded parts of your runs on this computer. |
@@ -124,7 +126,7 @@ goalcup-verify reads a sealed trace offline: integrity check and research report
 |---|---|---|
 | `goalcup-protocol` | library | Every byte definition: chain, records, control API, harness schema, connector pins. |
 | `goalcup-daemon` | `goalcup-daemon` | Ingest, redaction, chain writer, session-file capture, seal, process termination. |
-| `goalcup-cli` | `goalcup` | The ten commands, the harness launch, the recording proxy, the upload. |
+| `goalcup-cli` | `goalcup` | The eleven commands, the harness launch, the recording proxy, the upload. |
 | `goalcup-verifier` | `goalcup-verify` | The integrity reader and the decoders. Every judgement about the bytes. |
 | `goalcup-platform` | library | Unix OS code: disk reservation, safe file access, machine facts, sleep lock. |
 

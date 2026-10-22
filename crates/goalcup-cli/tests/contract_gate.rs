@@ -1,4 +1,4 @@
-//! The contract this crate is built against: the exit ladder, the nine-command tree, the
+//! The contract this crate is built against: the exit ladder, the eleven-command tree, the
 //! tracker's own configuration directory, and the `control.json` the daemon writes.
 //!
 //! `assert_cmd` is unavailable offline, so the binary is the one cargo built for this test
@@ -465,12 +465,12 @@ fn doctor_json_is_one_parseable_document_on_stdout_through_the_binary() {
 
 // ------------------------------------------------------------------ the capture CLI (D48)
 //
-// The binary is the M2 capture CLI: ten commands, and the removed V1 ones refuse by name
+// The binary is the M2 capture CLI: eleven commands, and the removed V1 ones refuse by name
 // instead of vanishing into a clap usage error.
 
 /// The commands `goalcup --help` lists, in the order a participant takes them, and nothing else.
 #[test]
-fn goalcup_lists_the_ten_commands_and_nothing_else() {
+fn goalcup_lists_the_eleven_commands_and_nothing_else() {
     for flag in ["-h", "--help"] {
         let out = goalcup().arg(flag).output().unwrap();
         assert!(out.status.success());
@@ -490,6 +490,7 @@ fn goalcup_lists_the_ten_commands_and_nothing_else() {
                 "start",
                 "status",
                 "time-left",
+                "mcp",
                 "continue",
                 "upload",
                 "entries",
@@ -555,6 +556,136 @@ fn goalcup_time_left_reads_the_file_its_environment_names() {
             "{out:?}"
         );
     }
+}
+
+/// Every file and folder under `dir`, with its length, so a test can see that nothing changed.
+fn tree(dir: &std::path::Path) -> Vec<(std::path::PathBuf, u64)> {
+    let mut found = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(at) = todo.pop() {
+        for entry in std::fs::read_dir(&at).unwrap().flatten() {
+            let meta = entry.metadata().unwrap();
+            if meta.is_dir() {
+                todo.push(entry.path());
+            }
+            found.push((entry.path(), meta.len()));
+        }
+    }
+    found.sort();
+    found
+}
+
+/// `goalcup mcp` (fix plan v9): its `time_left` tool returns exactly what `goalcup time-left`
+/// prints, for a running run, a practice run, a run at its end, a stale or missing file and no
+/// run at all, and writes nothing (it runs in a read-only folder). The end of its input ends it
+/// with exit 0.
+#[test]
+fn goalcup_mcp_time_left_answers_what_goalcup_time_left_prints_and_writes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let ro = dir.path().join("ro");
+    let cfg = ro.join("cfg");
+    std::fs::create_dir_all(&cfg).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let z = goalcup_protocol::control::format_z;
+    let fixtures = [
+        (
+            "running",
+            format!(
+                "seconds_left=148320\ndeadline_at=2026-11-14T00:00:00Z\nas_of={}\n",
+                z(now)
+            ),
+        ),
+        (
+            "practice",
+            format!("seconds_left=540\nas_of={}\npractice=1\n", z(now)),
+        ),
+        ("ended", format!("seconds_left=0\nas_of={}\n", z(now))),
+        (
+            "stale",
+            format!("seconds_left=60\nas_of={}\n", z(now - 301)),
+        ),
+    ];
+    for (name, text) in &fixtures {
+        std::fs::write(ro.join(name), text).unwrap();
+    }
+    let read_only = |mode| {
+        for path in [&cfg, &ro] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+    };
+    read_only(0o500);
+    let before = tree(&ro);
+    let with_env = |command: &mut Command, file: Option<&std::path::Path>| {
+        command
+            .env("HOME", &ro)
+            .env("GOALCUP_CONFIG_DIR", &cfg)
+            .env("TMPDIR", &ro)
+            .env_remove("GOALCUP_IN_HARNESS")
+            .env_remove("XDG_CONFIG_HOME");
+        match file {
+            Some(file) => command.env("GOALCUP_TIME_LEFT_FILE", file),
+            None => command.env_remove("GOALCUP_TIME_LEFT_FILE"),
+        };
+    };
+    let cases: Vec<Option<std::path::PathBuf>> = fixtures
+        .iter()
+        .map(|(name, _)| Some(ro.join(name)))
+        .chain([Some(ro.join("missing")), None])
+        .collect();
+    for file in &cases {
+        let mut cli = goalcup();
+        cli.arg("time-left");
+        with_env(&mut cli, file.as_deref());
+        let printed = cli.output().unwrap();
+        let (expected, is_error) = match printed.status.code() {
+            Some(0) => (String::from_utf8(printed.stdout).unwrap(), false),
+            _ => (String::from_utf8(printed.stderr).unwrap(), true),
+        };
+        let expected = expected
+            .trim_end()
+            .trim_start_matches("goalcup: ")
+            .to_string();
+
+        let mut server = goalcup();
+        server
+            .arg("mcp")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        with_env(&mut server, file.as_deref());
+        let mut child = server.spawn().unwrap();
+        {
+            use std::io::Write;
+            let mut stdin = child.stdin.take().unwrap();
+            for line in [
+                r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}"#,
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"time_left","arguments":{}}}"#,
+            ] {
+                writeln!(stdin, "{line}").unwrap();
+            }
+        }
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{file:?}: {out:?}");
+        let replies: Vec<serde_json::Value> = String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(replies.len(), 3, "{file:?}: {replies:?}");
+        assert_eq!(replies[0]["result"]["serverInfo"]["name"], "goalcup");
+        assert_eq!(replies[1]["result"]["tools"][0]["name"], "time_left");
+        let result = &replies[2]["result"];
+        assert_eq!(result["content"][0]["text"], expected, "{file:?}");
+        assert_eq!(result["isError"], is_error, "{file:?}");
+    }
+    let after = tree(&ro);
+    read_only(0o700);
+    assert_eq!(before, after, "goalcup mcp and time-left wrote nothing");
 }
 
 /// `goalcup seal` run inside the harness (its marker set) refuses before anything else, and

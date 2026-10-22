@@ -725,6 +725,11 @@ the agent pulls, and nothing is sent to it.
   missing file, or one written more than 5 minutes ago, is "unknown right now" and exit 1. The goal-cup skill tells the agent the command
   exists. The skill reaches only harnesses with a `skills_dir` (Codex, Claude Code); Hermes and Amp
   need a skills folder measured locally before their connectors get one.
+- **The same answer as a tool** ([fix plan v9](research/results/2026-10-22-fix-plan-v9.md)).
+  `goalcup mcp` is a read-only MCP server on stdin and stdout whose one tool, `time_left`, returns
+  what `goalcup time-left` prints, so the agent can ask whatever its `PATH`. The participant adds
+  it to the harness's MCP servers (D67: `goalcup prep` prints the lines from the connector's
+  `participant.time_left_tool`, and nothing writes them). The skill names the tool first.
 - **`goalcup seal` refuses inside the harness.** Every recording launch also sets
   `GOALCUP_IN_HARNESS=1`, and `goalcup seal` refuses under it and names another terminal, so the
   agent cannot end its own segment by accident. A seal from another terminal, and the host's own
