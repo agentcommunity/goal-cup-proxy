@@ -188,10 +188,10 @@ do not run it from a Windows drive.
 1. **Approve.** `goalcup` prints `Approve your competition run of Claude Code in your browser.`
    and the same line as above about the second approval, then opens your browser:
    `Your browser opened the approval page. Check that the page shows the code <code>.` Check the
-   code, approve this run, and **return to the terminal now**. If you already have a competition
-   run open, it first says so (`You already have a competition run open (started …). Approving
-   replaces it: that run stops, and only the new run counts.`). Each competition run is approved
-   this way. `goalcup` prints `Approved.` when the approval arrives.
+   code, approve this run, and **return to the terminal now**. If this computer already has a
+   competition run open, it first says so (`You already have a competition run open (started
+   …). Approving replaces it: that run stops, and only the new run counts.`). Each competition
+   run is approved this way. `goalcup` prints `Approved.` when the approval arrives.
 2. **Clone.** It prints `Cloning your repository…` and clones your repository into your work
    folder (`goalcup-` followed by a random name). That clone is the agent's workspace.
 3. **Open the run.** It opens the run on the server. Your 168 hours start here, on the server's
@@ -290,16 +290,18 @@ Your competition run with Claude Code: recording.
   Claude Code: running.
   Upload: working, sent every 30 minutes (last sent 12 min ago; 2140 records wait for the next send).
   Problems: none.
+  This computer: 212.4 GiB of disk free; goalcup uses 38.2 MiB of memory, 4 min of CPU time so far.
 Next: nothing to do. The run ends by itself.
 ```
 
 The header says which run it is, its state, when it ends and how much time is left, whether the
-agent runs, how the upload stands, and how many problems there are. Goal Cup Proxy sends the
-record every 30 minutes, so records waiting between sends are normal; the line says `up to date`
-only when the server has acknowledged every record written. If there are problems, one
-`PROBLEM:` line each follows the header, and each says what to do. The last line is always
-`Next:`, and it says what to do now. A block headed `Details:` follows, for support. On a machine
-that has not started a run, `goalcup status` says `no run has been started from this machine yet`.
+agent runs, how the upload stands, how many problems there are, and, while the run records, the
+free disk and what goalcup itself uses. Goal Cup Proxy sends the record every 30 minutes, so
+records waiting between sends are normal; the line says `up to date` only when the server has
+acknowledged every record written. If there are problems, one `PROBLEM:` line each follows the
+header, and each says what to do. The last line of this block is always `Next:`, and it says what
+to do now. A block headed `Details:` follows, for support. On a machine that has not started a
+run, `goalcup status` says `no run has been started from this machine yet`.
 
 | The line says | What it means | What to do |
 |---|---|---|
@@ -331,8 +333,8 @@ When the agent stops before the deadline (a crash, a reboot, a closed window), t
 again in the same run: same deadline, same clone. The harness picks up its last session. If the
 run has no session yet (the harness closed before your first message), the harness starts a new
 one, and `goalcup` says so in one line. No approval is needed, and it says so: `Your run goes on.
-No approval is needed: this computer kept the approval for this run.` While it opens, it prints
-`The earlier part of this run uploads in the background.`
+No approval is needed: this computer kept the approval for this run.` If the earlier part was not
+fully uploaded yet, it also prints `The earlier part of this run uploads in the background.`
 
 The harness may show its setup screens again (section 5), such as Claude Code's folder-trust
 question. You may answer them. If it asks you to sign in again, contact support before you answer

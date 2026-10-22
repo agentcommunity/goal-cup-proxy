@@ -47,7 +47,8 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
 **During the run.**
 
 - The server is the clock. The run ends 168 hours after the server's official start.
-- Check on it from a second terminal with `goalcup status`. Its last line, `Next:`, says what to do.
+- Check on it from a second terminal with `goalcup status`. Its `Next:` line, above the `Details:`
+  block, says what to do.
 - Your agent may run `goalcup time-left`, or call the `time_left` tool of `goalcup mcp` if you
   added it to your harness, to ask how much time is left. Goal Cup Proxy never sends
   anything to the agent: no reminders, no "keep going", no restarts.
