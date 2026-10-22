@@ -86,7 +86,7 @@ consistent, not that the participant followed the rules.
   `Launch.harness_build` digests are the record of what ran. On macOS the image digest reads a
   path, so the same replacement is a residual there too.
 - **One run per shared home, by a lock with two gaps.** `goalcup start` holds an exclusive lock on
-  `capture-homes/<id>.lock` until its finish returns (D39). The lock dies with the launcher: if
+  `capture-homes/<id>.goalcup.lock` until its finish returns (D39). The lock dies with the launcher: if
   `goalcup start` is SIGKILLed while a registered harness keeps running, a new start can share the
   home with it. A by-hand login into that home takes no lock.
 - **Shared-home validation has same-UID and ACL residuals.** The CLI checks leaf and target

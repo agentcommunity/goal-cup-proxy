@@ -1468,22 +1468,24 @@ fn a_failing_configure_command_keeps_the_home_not_ready_and_launches_nothing() {
 
 // ------------------------------------------------------------------ a home someone else holds
 
-/// Take the flock `goalcup start` and `goalcup prep` take on `<cfg>/capture-homes/<id>.lock`,
-/// as another process: the lock is on this open file, so the prep (a process of its own) is
-/// refused. `holder`, when given, is the run id a recording run writes into the file.
+/// Take the flock `goalcup start` and `goalcup prep` take on
+/// `<cfg>/capture-homes/<id>.goalcup.lock`, as another process: the lock is on this open file, so
+/// the prep (a process of its own) is refused. `holder`, when given, is the run id a recording run
+/// writes into the file.
 fn hold_home_lock(rig: &Rig, id: &str, holder: Option<&str>) -> std::fs::File {
     use std::os::fd::AsRawFd;
     let homes = rig.cfg.join("capture-homes");
     std::fs::create_dir_all(&homes).unwrap();
+    let path = homes.join(format!("{id}.goalcup.lock"));
     let lock = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(true)
-        .open(homes.join(format!("{id}.lock")))
+        .open(&path)
         .unwrap();
     if let Some(run) = holder {
-        std::fs::write(homes.join(format!("{id}.lock")), run).unwrap();
+        std::fs::write(&path, run).unwrap();
     }
     // SAFETY: `lock` owns a live descriptor; `flock` reads nothing else.
     let taken = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
@@ -1546,16 +1548,61 @@ fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
 
 // ------------------------------------------------------------------ the model service (D62)
 
+/// The setup guide (fix plan v8), as prep links to it.
+const SETUP_GUIDE: &str =
+    "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/HARNESS-SETUP.md";
+
+/// Fix plan v8: prep's harness step points to the setup guide on every prep, with nothing
+/// missing too, at the section the connector names, else at the guide; the step stays ok.
+#[test]
+fn prep_points_the_harness_step_to_the_setup_guide() {
+    let rig = Rig::chat_only();
+    let github = FakeGithub::good();
+    let facts = facts(&github.base, &[]);
+    all_but_the_harness(&rig);
+
+    // The connector names no section: the guide itself.
+    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness");
+    assert!(step.starts_with("[ok] harness:"), "{out}");
+    assert!(
+        step.ends_with(&format!("Before a long run, read {SETUP_GUIDE}")),
+        "{out}"
+    );
+
+    // It names one: that section, in the text and in `--json`.
+    let path = rig.connectors.join(CHAT_ID).join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap().replacen(
+        "[capture]\n",
+        "[participant]\ndisplay_name = \"Fake Agent\"\nsetup_section = \"fake-agent\"\n\n\
+         [capture]\n",
+        1,
+    );
+    std::fs::write(&path, text).unwrap();
+    let want = format!("Before a long run, read {SETUP_GUIDE}#fake-agent");
+    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let step = line(&out, "harness");
+    assert!(
+        step.starts_with("[ok] harness:") && step.ends_with(&want),
+        "{out}"
+    );
+    let (_, out) = prep(&rig, &["--repo", REPO, "--json"], &facts);
+    let steps = json(&out);
+    let harness = steps.iter().find(|s| s["step"] == "harness").unwrap();
+    assert_eq!(harness["state"], "ok", "{out}");
+    assert!(harness["say"].as_str().unwrap().ends_with(&want), "{out}");
+}
+
 /// D67: the chat connector lists two `participant.no_prompts` settings. Prep reads them in the
-/// harness's Goal Cup home and recommends each one that is not set, with the doc's link, in the
-/// harness home step; it never changes the step's state, the exit code or the files.
+/// harness's Goal Cup home and recommends each one that is not set, with the setup guide's
+/// link, in the harness home step; it never changes the step's state, the exit code or the files.
 #[test]
 fn prep_recommends_the_no_prompt_settings_and_never_writes_them() {
     let rig = Rig::chat_only();
     let path = rig.connectors.join(CHAT_ID).join("harness.toml");
     let text = std::fs::read_to_string(&path).unwrap().replacen(
         "[capture]\n",
-        "[participant]\ndisplay_name = \"Fake Agent\"\n\n\
+        "[participant]\ndisplay_name = \"Fake Agent\"\nsetup_section = \"fake-agent\"\n\n\
          [[participant.no_prompts]]\nfile = \"config.toml\"\nkey = \"approval_policy\"\n\
          values = [\"never\"]\n\n\
          [[participant.no_prompts]]\nfile = \"settings.json\"\nkey = \"permissions.skip\"\n\
@@ -1568,10 +1615,7 @@ fn prep_recommends_the_no_prompt_settings_and_never_writes_them() {
     all_but_the_harness(&rig);
     let home = rig.cfg.join("capture-homes").join(CHAT_ID);
     const ASKS: &str = "Fake Agent may stop to ask your permission";
-    let link = format!(
-        "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/harnesses/{CHAT_ID}.md\
-         #run-without-permission-prompts"
-    );
+    let link = format!("{SETUP_GUIDE}#fake-agent");
 
     // Not set up yet: the step is still todo for the set-up itself, and names both settings.
     let (code, out) = prep(&rig, &["--repo", REPO], &facts);

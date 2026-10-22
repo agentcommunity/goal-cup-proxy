@@ -257,11 +257,19 @@ pub struct ParticipantSpec {
     /// The settings in the harness's own config that make it run without permission prompts
     /// (D67): a harness that asks stalls, because the participant may type only "keep going".
     /// `goalcup prep` reads them in the shared config home and, when one is not set to an
-    /// accepted value, recommends it with a link to `docs/harnesses/<id>.md`. Goal Cup never
+    /// accepted value, recommends it with a link to [`Self::setup_section`]. Goal Cup never
     /// writes them. At most [`MAX_NO_PROMPT_SETTINGS`].
     #[serde(default)]
     pub no_prompts: Vec<NoPromptSetting>,
+    /// The anchor of this harness's section in the participant's setup guide,
+    /// `docs/HARNESS-SETUP.md` (fix plan v8), for example `codex`. `goalcup prep` links there,
+    /// so core code names no harness. Held to [`setup_section_problem`].
+    #[serde(default)]
+    pub setup_section: Option<String>,
 }
+
+/// The most characters a `participant.setup_section` may hold.
+pub const MAX_SETUP_SECTION_CHARS: usize = 40;
 
 /// The most settings `participant.no_prompts` may list.
 pub const MAX_NO_PROMPT_SETTINGS: usize = 4;
@@ -330,6 +338,24 @@ pub fn first_screen_problem(s: &str) -> Option<String> {
 /// characters (it is printed in prep's recommendation).
 pub fn no_prompt_value_problem(s: &str) -> Option<String> {
     plain_line_problem(s, MAX_NO_PROMPT_VALUE_CHARS)
+}
+
+/// Why `s` is not a valid `participant.setup_section`: a heading anchor as GitHub writes it,
+/// 1 to [`MAX_SETUP_SECTION_CHARS`] lower-case letters, digits and single `-` between them, so
+/// it goes into a link unchanged.
+pub fn setup_section_problem(s: &str) -> Option<String> {
+    let n = s.chars().count();
+    if n == 0 || n > MAX_SETUP_SECTION_CHARS {
+        return Some(format!(
+            "must be 1 to {MAX_SETUP_SECTION_CHARS} characters; this has {n}"
+        ));
+    }
+    let shaped = s.split('-').all(|part| {
+        !part.is_empty() && part.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9'))
+    });
+    (!shaped).then(|| {
+        "must be a heading anchor: lower-case letters and digits, joined by single `-`".to_string()
+    })
 }
 
 /// `[capture]`: the **profile**, the whole recipe for capturing one harness.

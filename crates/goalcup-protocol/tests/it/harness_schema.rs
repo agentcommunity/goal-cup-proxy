@@ -3850,6 +3850,42 @@ fn no_prompt_settings_are_held_to_their_rules() {
     refused(&per_run, PINNED, &["participant.no_prompts", "config_home"]);
 }
 
+/// `participant.setup_section` (fix plan v8) goes into prep's link unchanged, so it is a heading
+/// anchor: 1 to 40 lower-case letters and digits joined by single `-`.
+#[test]
+fn a_setup_section_is_held_to_an_anchor_shape() {
+    fn with(section: &str) -> Table {
+        let mut t = codex();
+        let mut p = Table::new();
+        p.insert("display_name".into(), Value::String("Codex".into()));
+        p.insert("setup_section".into(), Value::String(section.into()));
+        t.insert("participant".into(), Value::Table(p));
+        t
+    }
+    let (longest, too_long) = ("a".repeat(40), "a".repeat(41));
+    for good in ["codex", "claude-code", "x2", longest.as_str()] {
+        admitted(&with(good), PINNED);
+    }
+    assert_eq!(
+        parsed(&with("claude-code")).setup_section(),
+        Some("claude-code")
+    );
+    for bad in [
+        "",
+        "Codex",
+        "claude code",
+        "claude--code",
+        "-codex",
+        "codex-",
+        "#codex",
+        "codex?x=1",
+        "c\u{e9}dex",
+        too_long.as_str(),
+    ] {
+        refused(&with(bad), PINNED, &["participant.setup_section"]);
+    }
+}
+
 /// The native pattern matcher the launcher and the daemon share. A `*` in the pattern is a
 /// wildcard even where the name holds a literal `*` at the same place: `*ab` matches `*b`.
 #[test]

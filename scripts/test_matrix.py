@@ -511,9 +511,11 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(w.run.returncode, 0, w.said())
         self.assertRegex(w.run.stdout, r"stubchat \S+ stub-harness_9\.9\.9 PASS ")
         self.assertEqual(w.seen("start.argv"), "start\n--harness\nstubchat\n--test")
-        # Sealed when the harness ended, long before the 30 s duration.
+        # Sealed when the harness ended, before the 30 s duration: counted from the Enter, as the
+        # duration is, so a slow start on a loaded machine does not count against it.
         self.assertEqual(w.seen("seal.argv"), "seal\n--yes\ne0123456789abcdef")
-        self.assertLess(float(w.seen("seal.at")) - w.started, 25)
+        self.assertIn("(the harness ended first)", w.log)
+        self.assertLess(float(w.seen("seal.at")) - float(w.seen("start.submitted_at")), 30)
         # start did not upload the seal, so the script ran `goalcup upload` for the same entry.
         self.assertEqual(w.seen("upload.argv"), "upload\ne0123456789abcdef")
         self.assertIn("timeout=1830s", w.log)

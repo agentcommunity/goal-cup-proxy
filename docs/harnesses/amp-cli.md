@@ -226,3 +226,5 @@ and never sets anything for you (D67):
 - The connector lists no setting for `goalcup prep` to read, so prep recommends nothing for Amp.
 - Evidence: [local test day](../research/results/2026-10-22-local-test-day.md),
   [plan v4](../research/results/2026-10-22-fix-plan-v4.md).
+- Every setting for a long run, for participants:
+  [Set up your harness for a 168-hour run](../HARNESS-SETUP.md#amp).

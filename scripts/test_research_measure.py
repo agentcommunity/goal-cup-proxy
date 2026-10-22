@@ -338,10 +338,11 @@ class CompressionTest(MeasureCase):
             self.assertEqual(result["ratio"], 1.0)
         with open(log) as stream:
             calls = stream.read().splitlines()
+        # Both compressors are fed at once, so they log in either order.
         self.assertEqual(len(calls), 2)
-        self.assertIn("-3", calls[0].split())
-        self.assertNotIn("--long=27", calls[0].split())
-        self.assertIn("--long=27", calls[1].split())
+        for call in calls:
+            self.assertIn("-3", call.split())
+        self.assertEqual(sorted("--long=27" in call.split() for call in calls), [False, True])
 
     def test_failing_compressor_is_reported_not_fatal(self):
         fake = os.path.join(self.bin, "zstd")

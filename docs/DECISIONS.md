@@ -745,6 +745,10 @@ that stops to ask for approval stalls until its deadline (lx-codex and lx-claude
   config home, a key, the accepted values; read like `capture.model_host_from`, D62). `goalcup
   prep` reads them and, when one is not set, adds one recommendation with the doc's link to the
   harness home step. It never changes the setting and never fails or holds back a step for it.
+- **One setup guide for participants** (fix plan v8). [HARNESS-SETUP](HARNESS-SETUP.md) gathers
+  every setting a 168-hour run needs, per harness. Prep's recommendation links to the harness's
+  section there, named by the connector's `participant.setup_section`, and prep's harness step
+  always points to it ("Before a long run, read ...").
 - **Goal Cup never writes a participant's harness permission settings.** No connector field,
   configure command or launch option sets them (D52, D57 stand).
 - **The test kit's own cells are the organiser's.** `scripts/kit_settle.py` sets them in the kit's

@@ -6,6 +6,8 @@ id = "claude-code-cli"
 display_name = "Claude Code"
 # Shown just before the harness opens: a fresh run folder makes it ask this once.
 first_screen = "Claude Code may ask whether you trust this folder. Choose Yes."
+# Claude Code's section of docs/HARNESS-SETUP.md, which `goalcup prep` links to (fix plan v8).
+setup_section = "claude-code"
 
 # D67: what `goalcup prep` recommends, and never sets: bypass mode, and the one-time acceptance
 # of its disclaimer, without which Claude Code falls back to asking (2.1.283, 2.1.299).

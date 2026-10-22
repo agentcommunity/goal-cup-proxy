@@ -11,7 +11,9 @@
 # (@anthropic-ai/claude-code), amp-cli from npm (`npm install --prefix /opt/amp @ampcode/cli@<v>`,
 # the install measured in docs/harnesses/amp-cli.md), hermes-cli from PyPI. The Linux binaries are
 # built from this checkout into a Docker volume of the checkout's own
-# (goalcup-linux-matrix-target-<n>). The goalcup configuration directory, the harness's tracker home
+# (goalcup-linux-matrix-target-<n>) and, at every login and run, installed as packaging/install.sh
+# installs them: copied into the dev user's ~/.local/bin, which is first on the container's PATH
+# (/target/debug is not on it). The goalcup configuration directory, the harness's tracker home
 # in it, the work folder and HOME live on a named volume of the connector's (or cell's) own,
 # goalcup-linux-matrix-<connector>[-<cell>], so a harness sign-in done once survives every later
 # run. `docker volume rm goalcup-linux-matrix-<connector>[-<cell>]` forgets it.
@@ -133,6 +135,8 @@ CLAUDE_MODEL=haiku
 # Paths inside the container.
 VOL=/vol
 CFG=$VOL/cfg
+# The dev user's ~/.local/bin (HOME is $VOL/home), where the binaries are installed.
+BIN=$VOL/home/.local/bin
 KEY_IN=/run/goalcup/approval-key
 TOKEN_IN=/run/goalcup/github-token
 PROMPT_IN=/run/goalcup/prompt
@@ -661,10 +665,10 @@ docker run -d --name "$name" --label "$label" --init --cpus="$cpus" \
     -v "$volume":$VOL -v "$logdir":/logs "$@" \
     -e HOME=$VOL/home -e TMPDIR=$VOL/tmp -e GOALCUP_CONFIG_DIR=$CFG \
     -e GOALCUP_CONNECTORS_DIR=/src/connectors -e LINUX_MATRIX_SERVER="$server" \
-    -e MATRIX_BIN_DIR=/target/debug -e LINUX_MATRIX_CODEX_EFFORT="$effort" \
+    -e MATRIX_BIN_DIR=$BIN -e LINUX_MATRIX_CODEX_EFFORT="$effort" \
     -e LINUX_MATRIX_CELL="$cell" \
     -e GOALCUP_TEST_MEMBER_ID="$member" -e LINUX_MATRIX_HOST_LOG_DIR="$logdir" \
-    -e PATH=/target/debug:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    -e PATH=$BIN:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     -w $VOL "$img" sleep infinity >/dev/null || fail "container"
 created=1
 owned="$VOL $VOL/home $VOL/tmp $VOL/work"
@@ -679,6 +683,9 @@ if [ "$prebuilt" = 1 ]; then
 else
     step "build" -w /src "$name" cargo build --offline --locked --workspace
 fi
+# Installed as a participant installs them (packaging/install.sh: ~/.local/bin), so the harness and
+# its login shells find goalcup where a real install puts it, not in the build's /target/debug.
+step "install" "$name" sh -c "mkdir -p $BIN && install -m 0755 /target/debug/goalcup /target/debug/goalcup-daemon /target/debug/goalcup-verify $BIN/"
 
 if [ "$action" = run ]; then
     if [ -n "$extra" ]; then

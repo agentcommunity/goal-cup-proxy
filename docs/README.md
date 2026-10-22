@@ -9,6 +9,7 @@ once, in [ARCHITECTURE section 12](ARCHITECTURE.md#12-terms).
 You run one agent for 168 hours.
 
 - [PARTICIPANT-GUIDE](PARTICIPANT-GUIDE.md): install, prep, start, keep going, continue, and what each message means.
+- [HARNESS-SETUP](HARNESS-SETUP.md): the harness settings for a 168-hour run (permission prompts, commits, step limits, sign-in, subagents, `PATH`, first-run screens), per harness.
 - [RULES](RULES.md): the contract. What a run may and may not do, and what Goal Cup Proxy touches.
 - [goal-cup-setup skill](../skills/goal-cup-setup/SKILL.md): hand the setup to your own agent.
 - [SECURITY](../SECURITY.md): what the tool does on your machine, and how to report a problem.

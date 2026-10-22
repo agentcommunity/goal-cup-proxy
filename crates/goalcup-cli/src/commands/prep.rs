@@ -5,14 +5,17 @@
 //!
 //! 1. **login**: `server.json` names an account. Prep does not run the device flow itself.
 //! 2. **harness**: one of the connectors that run in chat mode (`interactive = true`), picked
-//!    with `--harness` or because it is the only one, found on `PATH`, its version shown.
+//!    with `--harness` or because it is the only one, found on `PATH`, its version shown, and a
+//!    pointer to its section of the setup guide, `docs/HARNESS-SETUP.md` (the connector's
+//!    `participant.setup_section`), on every prep.
 //! 3. **harness home**: the harness is opened once in the home its runs will use, so the
 //!    participant signs in and adds settings, MCP servers and skills there
 //!    ([`crate::launch::prep_launch`]: no proxy, no capture, no daemon entry). The tracker
 //!    cannot see a vendor sign-in, so this step is the person's word: it is ok once the harness
 //!    they were given has exited 0, and that is recorded in `prep.json` (`home_ready`). When the
 //!    harness's config does not set a connector's `participant.no_prompts` setting, the step's
-//!    line also recommends it (D67); that never changes the setting or the step's state.
+//!    line also recommends it, with the setup guide's link (D67); that never changes the setting
+//!    or the step's state.
 //! 4. **GitHub**: the repository from `--repo` is public, empty and pushable with the stored
 //!    token ([`crate::account::github::check`]); with a terminal, the token is read unshown.
 //! 5. **machine**: mains power, free space for a run's reservation, the server's and the
@@ -617,7 +620,12 @@ fn harness_step(
             );
         }
     };
-    let say = format!("{id} {version} ({path})");
+    // Fix plan v8: the guide to the harness's settings, on every prep, missing settings or not.
+    // Only a pointer: it never changes the step's state or a setting.
+    let say = format!(
+        "{id} {version} ({path}). Before a long run, read {}",
+        setup_guide_link(&connector)
+    );
     (Some(connector), step(STEP_HARNESS, State::Ok, false, say))
 }
 
@@ -739,13 +747,22 @@ fn model_host_problem(cfg: &Path, connector: &HarnessConnector) -> Option<String
     ))
 }
 
-/// Where each harness's doc is, for the recommendation's link (`<id>.md`).
-const HARNESS_DOCS: &str =
-    "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/harnesses";
+/// The participant's harness setup guide (fix plan v8): every setting a 168-hour run needs.
+pub const SETUP_GUIDE: &str =
+    "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/HARNESS-SETUP.md";
+
+/// The setup guide's link for `connector`: its `participant.setup_section`, else the guide.
+/// The section comes from the connector's data, so this names no harness.
+fn setup_guide_link(connector: &HarnessConnector) -> String {
+    match connector.loaded.manifest.setup_section() {
+        Some(section) => format!("{SETUP_GUIDE}#{section}"),
+        None => SETUP_GUIDE.to_string(),
+    }
+}
 
 /// D67: when the harness's own config (in its Goal Cup home) does not set each of the
 /// connector's `participant.no_prompts` settings to an accepted value, one sentence recommending
-/// them, with the harness doc's link. `None` when all are set, or the connector lists none. Only
+/// them, with the setup guide's link. `None` when all are set, or the connector lists none. Only
 /// reads; never writes the harness's settings and never fails prep.
 fn no_prompts_advice(cfg: &Path, connector: &HarnessConnector) -> Option<String> {
     let manifest = &connector.loaded.manifest;
@@ -775,9 +792,9 @@ fn no_prompts_advice(cfg: &Path, connector: &HarnessConnector) -> Option<String>
     Some(format!(
         "{name} may stop to ask your permission, and during a run you may type only \"keep \
          going\", so it would wait. Goal Cup recommends setting {}. Goal Cup does not change \
-         {name}'s settings; see {HARNESS_DOCS}/{}.md#run-without-permission-prompts",
+         {name}'s settings; see {}",
         unset.join(", "),
-        manifest.id
+        setup_guide_link(connector)
     ))
 }
 

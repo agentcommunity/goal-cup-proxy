@@ -20,6 +20,9 @@ display_name = "<HARNESS NAME>"         # 1 to 40 printable ASCII characters, as
 # What the harness shows first and what to do about it (a trust or login question). Shown just
 # before the harness opens. At most 200 printable ASCII characters, one line. Delete if it asks nothing.
 # first_screen = "<HARNESS NAME> may ask <QUESTION>. Choose <ANSWER>."
+# The anchor of this harness's section in docs/HARNESS-SETUP.md (lower-case letters and digits
+# joined by "-"). Add that section to the guide too: a shipped connector needs one.
+# setup_section = "<harness-name>"
 
 [capture]
 # Chat mode: the harness opens in the participant's terminal and the participant types the

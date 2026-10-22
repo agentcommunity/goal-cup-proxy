@@ -88,6 +88,26 @@ fn private_dirs(dir: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// The skill's fallback for an agent that cannot find `goalcup` names the variable the
+    /// launch sets and the keys the time-left file holds: the text is the contract here.
+    #[test]
+    fn the_skill_names_the_time_left_file_the_launch_hands_the_agent() {
+        use crate::run::time_left::{FILE_ENV, keep_file};
+        assert!(SKILL_TEXT.contains(&format!("${FILE_ENV}")));
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("left");
+        let left = crate::run::time_left::TimeLeft::counted(
+            3600,
+            goalcup_protocol::clock::continuous_ns(),
+        );
+        keep_file(&file, Some(&left), Some("2026-10-29T00:00:00Z"), 1, false).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        for line in text.lines() {
+            let key = line.split('=').next().unwrap();
+            assert!(SKILL_TEXT.contains(&format!("`{key}`")), "{key}");
+        }
+    }
+
     #[test]
     fn the_skill_replaces_its_own_folder_and_nothing_beside_it() {
         let home = tempfile::tempdir().unwrap();

@@ -13,7 +13,7 @@ has each line with its comment. The full reference below has every rule.
 | Field | What to write | Example |
 |---|---|---|
 | `schema_version`, `id` | `1`, and the folder name | `id = "codex-cli"` |
-| `[participant]` | `display_name`; `first_screen` only if the harness asks something first; `no_prompts` when a setting in its config stops its permission prompts (D67) | `display_name = "Codex"` |
+| `[participant]` | `display_name`; `first_screen` only if the harness asks something first; `no_prompts` when a setting in its config stops its permission prompts (D67); `setup_section`, its section in [HARNESS-SETUP](HARNESS-SETUP.md) | `display_name = "Codex"` |
 | `capture.interactive`, `continuation` | `true`, and the fixed chat sentence | `continuation = "chat: the participant types the prompt and may type keep going"` |
 | `capture.args`, `resume_args` | Options to open the chat (often none), and how to reopen the last session | `args = []`, `resume_args = ["--continue"]` |
 | `[capture.executable]` | The program name on `PATH`, and its version option | `program = "claude"`, `version_args = ["--version"]` |
@@ -315,6 +315,12 @@ at the participant's `HOME`, at a `real_dirs` path or anywhere but directly unde
 identity `none` needs `since_run_start = true`. It is refused with
 `capture.home.env`: such a harness shares its config home instead.
 
+Every run `HOME` gets one file from Goal Cup Proxy, whatever the connector: `.profile`, mode
+`0600`, exporting the `PATH` the launch hands the harness (shell-quoted). A harness that runs its
+commands in a login shell (Codex's `/bin/sh -lc`) has them run `/etc/profile`, which on Debian and
+Ubuntu resets `PATH`; this puts the participant's back (D57). A `.profile` already there (a shared
+run home's) is kept as it is, so a shared run home keeps the `PATH` of the run that first wrote it.
+
 ## Credential and CA
 
 Goal Cup Proxy never sees, forwards or stores a participant's provider key (D61). A
@@ -520,7 +526,8 @@ Both strings are printed to a terminal, so they are held to plain text.
 |---|---|---|
 | `participant.display_name` | required when the table is present | The name as a person says it ("Claude Code"). 1–40 characters. |
 | `participant.first_screen` | optional, default absent | What the harness shows first and what to do about it, shown just before the harness opens. 1–200 characters. Leave it out when the harness asks nothing. |
-| `participant.no_prompts` | optional, default `[]` | Up to 4 `{ file, key, values }` rows (D67): a setting in the harness's own config that makes it run without permission prompts, and the 1–4 values (as text, `true` for a boolean; the first is the one recommended) that mean so. `file` and `key` follow the `capture.model_host_from` rules (a `.yaml`, `.yml`, `.json` or `.toml` file in the shared config home, a dotted key, neither naming a key file or a key); requires `config_home = "shared"`; no row twice. `goalcup prep` reads them and, for each one not set to a listed value, recommends it in its harness home step with a link to `docs/harnesses/<id>.md#run-without-permission-prompts`, which must exist. Goal Cup never writes them, and prep never fails for them. |
+| `participant.no_prompts` | optional, default `[]` | Up to 4 `{ file, key, values }` rows (D67): a setting in the harness's own config that makes it run without permission prompts, and the 1–4 values (as text, `true` for a boolean; the first is the one recommended) that mean so. `file` and `key` follow the `capture.model_host_from` rules (a `.yaml`, `.yml`, `.json` or `.toml` file in the shared config home, a dotted key, neither naming a key file or a key); requires `config_home = "shared"`; no row twice. `goalcup prep` reads them and, for each one not set to a listed value, recommends it in its harness home step with a link to the harness's `setup_section`. `docs/harnesses/<id>.md` must have a "Run without permission prompts" section. Goal Cup never writes them, and prep never fails for them. |
+| `participant.setup_section` | optional, default absent | The anchor of the harness's section in [HARNESS-SETUP](HARNESS-SETUP.md), the participant's setup guide (`setup_section = "codex"` for `### Codex`). 1–40 lower-case letters and digits joined by single `-`. `goalcup prep` links there on its harness step ("Before a long run, read ...") and in a `no_prompts` recommendation; without it the link names the guide alone. `harness_conformance.rs` requires every shipped connector to name one, and the guide to have that heading. |
 
 Both strings (and each `no_prompts` value) are an allow-list: printable ASCII only (0x20 to 0x7E), no leading or trailing space,
 and no two spaces in a row. That refuses every control character (ESC and so any ANSI sequence,
@@ -532,6 +539,7 @@ connector to declare a `display_name`.
 [participant]
 display_name = "Claude Code"
 first_screen = "Claude Code may ask whether you trust this folder. Choose Yes."
+setup_section = "claude-code"
 
 [[participant.no_prompts]]
 file = "settings.json"

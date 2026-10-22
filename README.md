@@ -33,8 +33,9 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
 3. **Prep**: `goalcup prep --harness <id>`, then `goalcup prep --repo https://github.com/<owner>/<repo>`.
    Run `goalcup prep` until steps 1 to 5 say `[ok]`; step 6 turns `[ok]` after your practice run
    (next step). Prep opens the harness once in its own
-   isolated home: sign in there, and set it so it never stops to ask you for approval. Your
-   repository must be new, empty and public, with a fine-grained token for it.
+   isolated home: sign in there, and set it so it never stops to ask you for approval
+   ([set up your harness for a 168-hour run](docs/HARNESS-SETUP.md)). Your repository must be
+   new, empty and public, with a fine-grained token for it.
 4. **Practice**: `goalcup start --harness <id> --practice`. It lasts about ten minutes, never
    pushes and never counts. Do as many as you like.
 5. **Start** inside the start window: `goalcup start --harness <id>`. Approve this run in the
@@ -260,7 +261,7 @@ Every doc, grouped by who reads it: [docs/README.md](docs/README.md). The key on
 
 | You are | Start with |
 |---|---|
-| A participant | [PARTICIPANT-GUIDE](docs/PARTICIPANT-GUIDE.md), [RULES](docs/RULES.md), [SECURITY](SECURITY.md) |
+| A participant | [PARTICIPANT-GUIDE](docs/PARTICIPANT-GUIDE.md), [HARNESS-SETUP](docs/HARNESS-SETUP.md), [RULES](docs/RULES.md), [SECURITY](SECURITY.md) |
 | A harness builder | [skill](skills/adding-a-capture-harness/SKILL.md), [HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md), [CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md), [facts sheets](docs/harnesses/README.md) |
 | A developer | [AGENTS](AGENTS.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [DECISIONS](docs/DECISIONS.md), [CONTRACTS](docs/CONTRACTS.md), [TODO](TODO.md) |
 | An organizer | [OPERATING](docs/OPERATING.md), [UPLOAD-API](docs/UPLOAD-API.md), [SERVER-DESIGN](docs/SERVER-DESIGN.md), [server/worker](server/worker/README.md) |
