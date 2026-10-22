@@ -502,6 +502,11 @@ windows, reported at the finish as `upstream_outages=N` on the `proxy admission:
 upstream outage:` line per window. The frozen v5 chain has no record kind for an outage, so the windows are
 not in the trace.
 
+A connection to a provider host that is relayed uncaptured (fail-open) is a `decode_failed` gap. The same
+line breaks `fail_open=N` down by reason: `fail_open_unparsed`, `fail_open_no_sni`, `fail_open_sni_mismatch`
+and `fail_open_not_tls`. A client that closes after the `200` before its ClientHello is complete sent nothing
+to relay: it is counted as `client_io`, no upstream connection is opened, and it leaves no gap.
+
 `goalcup`'s exit codes:
 
 | Exit | Meaning |
