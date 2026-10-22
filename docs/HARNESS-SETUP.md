@@ -21,9 +21,11 @@ means that nobody at Goal Cup has tried it. The details are in each
 3. Exit the harness.
 4. Open the settings file of your harness ([where the settings live](#where-the-settings-live)).
 5. Add the settings from your harness's section below.
-6. Run `goalcup prep` again. It names each permission setting that is still missing.
-7. Do a practice run: `goalcup start --harness <id> --practice`.
-8. In the practice run, check that the agent commits without asking you anything.
+6. Add the Goal Cup time-left tool ([how](#add-the-goal-cup-time-left-tool)).
+7. Run `goalcup prep` again. It names each permission setting that is still missing.
+8. Do a practice run: `goalcup start --harness <id> --practice`.
+9. In the practice run, check that the agent commits without asking you anything, and ask it to
+   call its `time_left` tool.
 
 ## Where the settings live
 
@@ -112,6 +114,102 @@ agent:
 3. You can also set it with a command:
    `HERMES_HOME="<your capture-homes folder>/hermes-cli" hermes config set agent.max_turns 2000`.
 4. Choose a model service with an API key, not an OAuth sign-in ([section 4](#4-sign-in-lifetime)).
+
+## Add the Goal Cup time-left tool
+
+Your agent may ask how much time is left. `goalcup time-left` works only when the agent's shell
+finds `goalcup` on its `PATH` ([section 6](#6-your-tools-on-path)). The time-left tool works
+whatever the `PATH`: your harness starts `goalcup mcp` by its full path, and the agent calls its
+tool `time_left`.
+
+- It answers the same line as `goalcup time-left`, from the same file.
+- It only reads. It cannot stop, seal or continue anything, and it opens no network port.
+- It talks to your harness over standard input and output, not over the network. So the recording
+  proxy does not see the call. The harness's own session file shows the call and its answer, as
+  for any tool (not measured per harness).
+- If it is missing, the agent can still run `goalcup time-left`, or read the file named in
+  `$GOALCUP_TIME_LEFT_FILE`.
+
+Goal Cup does not add the tool for you. `goalcup prep` prints the lines for your harness, with the
+full path of your `goalcup` filled in, and the file to put them in. Add them to that file in the
+harness's Goal Cup home, next to the MCP servers you already have. Below, `/path/to/goalcup` stands
+for the path prep prints (`command -v goalcup` shows it too), and `<capture-homes>` for the folder
+in [where the settings live](#where-the-settings-live).
+
+In a practice run, ask the agent to call `time_left`. That shows the tool works in your harness.
+
+### Codex: the time-left tool
+
+Add to `codex-cli/config.toml`:
+
+```toml
+[mcp_servers.goalcup]
+command = "/path/to/goalcup"
+args = ["mcp"]
+env_vars = ["GOALCUP_TIME_LEFT_FILE"]
+```
+
+1. Codex hands an MCP server only a few variables of its own, plus the ones `env_vars` names. So
+   keep the `env_vars` line.
+2. You can also run
+   `CODEX_HOME="<capture-homes>/codex-cli" codex mcp add goalcup -- /path/to/goalcup mcp`, then
+   add the `env_vars` line.
+3. Measured with Codex 0.156.1: `codex mcp add` writes the first three lines, and `codex mcp get`
+   reads `env_vars`. Codex starting the tool in a session, and the agent calling it: not measured.
+
+### Claude Code: the time-left tool
+
+Run:
+
+```sh
+CLAUDE_CONFIG_DIR="<capture-homes>/claude-code-cli" claude mcp add --scope user goalcup -- /path/to/goalcup mcp
+```
+
+1. That adds the server to `mcpServers` in `claude-code-cli/.claude.json`. You can add it there by
+   hand instead, while Claude Code is not running:
+   `"mcpServers": { "goalcup": { "command": "/path/to/goalcup", "args": ["mcp"] } }`.
+2. Measured with Claude Code 2.1.299: the command writes there, and `claude mcp list` starts the
+   tool, which answers ("Connected") and gets `GOALCUP_TIME_LEFT_FILE` from Claude Code's
+   environment. The agent calling it in a run: not measured.
+
+### Amp: the time-left tool
+
+Add to `amp-cli.run-home/.config/amp/settings.json`:
+
+```json
+"amp.mcpServers": {
+  "goalcup": {
+    "command": "/path/to/goalcup",
+    "args": ["mcp"]
+  }
+}
+```
+
+1. `amp.mcpServers` is one key, with the dot in it.
+2. You can also run
+   `HOME="<capture-homes>/amp-cli.run-home" amp mcp add goalcup -- /path/to/goalcup mcp`.
+3. Measured: `amp mcp add` writes this key in that file. Whether Amp hands the tool
+   `GOALCUP_TIME_LEFT_FILE`, and the agent calling it: not measured.
+
+### Hermes: the time-left tool
+
+Add to `hermes-cli/config.yaml`:
+
+```yaml
+mcp_servers:
+  goalcup:
+    command: "/path/to/goalcup"
+    args: ["mcp"]
+    env:
+      GOALCUP_TIME_LEFT_FILE: "${GOALCUP_TIME_LEFT_FILE}"
+```
+
+1. Hermes hands an MCP server only `PATH`, `HOME` and a few more, plus its `env` map. It fills
+   `${GOALCUP_TIME_LEFT_FILE}` from its own environment. So keep the `env` lines (read from the
+   source, `tools/mcp_tool.py`).
+2. Hermes needs its MCP support installed. Without it, `hermes mcp test goalcup` says to install
+   `hermes-agent[mcp]` (measured).
+3. Hermes starting the tool, and the agent calling it: not measured.
 
 ## 1. Run without permission prompts
 
@@ -204,7 +302,8 @@ there.
 1. Install the tools your agent needs before the start.
 2. Check that they are on `PATH` in the terminal you start from.
 3. In a practice run, ask the agent to run `goalcup time-left`. That shows `goalcup` is on its
-   `PATH`.
+   `PATH`. The [time-left tool](#add-the-goal-cup-time-left-tool) does not need `goalcup` on the
+   agent's `PATH`.
 
 | Harness | What we saw |
 |---|---|

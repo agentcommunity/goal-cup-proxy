@@ -19,7 +19,8 @@ anything during the run. You make and approve every decision yourself. Do not wa
 reply; none will come.
 
 **The deadline.** The run stops at a fixed deadline set by the server, 168 hours after the
-official start. Run `goalcup time-left` to see how much time is left. If `goalcup` is not found,
+official start. To see how much time is left, call the `time_left` tool of the `goalcup` MCP
+server if this session has it. Otherwise run `goalcup time-left`. If `goalcup` is not found,
 read the file named in `$GOALCUP_TIME_LEFT_FILE` instead (`cat "$GOALCUP_TIME_LEFT_FILE"`):
 `seconds_left` is the time left, `deadline_at` the deadline in UTC, and `as_of` when it was
 written; a value more than five minutes old is not current. Push your work often: work not pushed

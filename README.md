@@ -78,7 +78,7 @@ most runs have one, and `goalcup continue` starts the next. Every flag is in `go
 | `goalcup start --harness <ID> [--practice \| --test] [--dev]` | Start a run: open the harness here and record it. `--test` is for organizers. |
 | `goalcup status [<part-id>] [--json]` | Show the run: recording state, time left, upload, problems, `Next:`. |
 | `goalcup time-left` | Show how much time the run has left. The agent may run it too. |
-| `goalcup mcp` | Serve the time left as an MCP tool (`time_left`) for the agent. The harness starts it; add it as in [HARNESS-SETUP](docs/HARNESS-SETUP.md). |
+| `goalcup mcp` | Serve the time left as an MCP tool (`time_left`) for the agent. The harness starts it; add it as in [HARNESS-SETUP](docs/HARNESS-SETUP.md#add-the-goal-cup-time-left-tool). |
 | `goalcup continue [<run-id>]` | Start the agent again in the same run, on the same computer. |
 | `goalcup upload [<part-id>]` | Send what is not uploaded yet. Safe to repeat. |
 | `goalcup entries [--json]` | List the recorded parts of your runs on this computer. |
