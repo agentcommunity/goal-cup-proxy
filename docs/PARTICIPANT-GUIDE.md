@@ -135,6 +135,8 @@ during the run, so a harness that asks can wait for days. Set it before the run,
 home that prep opens. You choose how. For example, Claude Code has a permission mode that does
 not ask (`bypassPermissions`), and Codex can be set to never ask for approval
 (`approval_policy = "never"`). Try your setting in a practice run.
+[Set up your harness for a 168-hour run](HARNESS-SETUP.md) lists every setting per harness and
+where it goes.
 
 **Hermes and Amp.** The `goal-cup` skill does not reach these two harnesses yet, so their agent is
 not told that it can check the clock. If you want it to know how much time is left, say in your
@@ -394,9 +396,9 @@ agent asks or an approval the agent needs. If the harness asks you to sign in ag
 run, contact support before you answer.
 
 So set your harness up in prep to run without permission prompts: `goalcup prep` says which
-setting Goal Cup recommends when it is missing, and "Run without permission prompts" in your
-harness's page under [docs/harnesses](harnesses/) shows where it goes. Goal Cup never changes it
-for you.
+setting Goal Cup recommends when it is missing, and
+[Set up your harness for a 168-hour run](HARNESS-SETUP.md#1-run-without-permission-prompts) shows
+where it goes. Goal Cup never changes it for you.
 
 Goal Cup Proxy itself never types to the agent, never says "keep going" for you, and never restarts
 it by itself. Your agent may ask how much time is left with `goalcup time-left`. You can run it
