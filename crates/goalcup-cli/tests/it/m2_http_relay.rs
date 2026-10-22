@@ -461,8 +461,19 @@ async fn large_chunked_body_with_split_lines_keeps_contiguous_ranges() {
 
 /// A response whose body is `coded`, sent with `headers`; returns the response stream.
 async fn capture_coded_response(headers: &[&str], coded: &[u8]) -> StreamView {
+    capture_coded_response_in(headers, coded, &[usize::MAX]).await
+}
+
+/// As [`capture_coded_response`], with the relay reading the upstream in pieces of at most
+/// `reads` bytes, in turn.
+async fn capture_coded_response_in(headers: &[&str], coded: &[u8], reads: &[usize]) -> StreamView {
     let sink = RecordingSink::new();
-    let mut h = start(emitter_for(sink.clone()), policy(&[("/v1/", true, None)]));
+    let mut h = start_with(
+        emitter_for(sink.clone()),
+        policy(&[("/v1/", true, None)]),
+        1 << 20,
+        |io| Box::new(ChoppyIo::new(io, reads)),
+    );
     let resp = response("HTTP/1.1 200 OK", headers, coded);
     round_trip(&mut h, &request("GET", "/v1/coded", &[], b""), &resp).await;
     close_both(h).await;
@@ -647,6 +658,80 @@ async fn brotli_and_zstd_replies_decode_with_no_gap() {
         );
         assert_eq!(view.gaps, vec![GapReason::DecodeFailed], "{name}");
         assert_eq!(view.end, Some(EndReason::DecodeError), "{name}");
+    }
+}
+
+/// `data` as a brotli stream of uncompressed meta-blocks (RFC 7932 sections 9.1 and 9.2),
+/// written by hand: no brotli encoder is in the build, and this one shares nothing with the
+/// decoder.
+fn brotli_stored(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let (mut bits, mut used) = (0u64, 0u32);
+    let mut put = |out: &mut Vec<u8>, value: u64, n: u32, pad: bool| {
+        bits |= value << used;
+        used += n;
+        while used >= 8 || (pad && used > 0) {
+            out.push(bits as u8);
+            bits >>= 8;
+            used = used.saturating_sub(8);
+        }
+    };
+    put(&mut out, 0, 1, false); // WBITS: 16
+    for piece in data.chunks(1 << 16) {
+        // ISLAST 0, MNIBBLES 4, MLEN - 1, ISUNCOMPRESSED 1, then the bytes from a byte boundary.
+        put(&mut out, 0, 3, false);
+        put(&mut out, (piece.len() - 1) as u64, 16, false);
+        put(&mut out, 1, 1, true);
+        out.extend_from_slice(piece);
+    }
+    put(&mut out, 0b11, 2, true); // ISLAST 1, ISLASTEMPTY 1
+    out
+}
+
+/// Review P4 M1: a reply whose decoded size is a whole number of the decoder's 32 KiB output
+/// pieces ends complete, with no gap, whether its coded bytes arrive in one read or in many.
+/// zstd once lost track of its finished frame there and called the reply undecodable. A frame
+/// cut short at that size is still a gap: the fix must not fail open.
+#[tokio::test]
+async fn a_reply_that_decodes_to_whole_32_kib_pieces_has_no_gap() {
+    let body = sse_body();
+    for size in [32_768, 65_536, 98_304, 40_000] {
+        let plain = &body[..size];
+        let zstd_one = zstd::encode_all(plain, 3).unwrap();
+        // The first frame ends on the boundary, and another follows it.
+        let zstd_two = [
+            zstd::encode_all(&plain[..32_768], 3).unwrap(),
+            zstd::encode_all(&plain[32_768..], 3).unwrap(),
+        ]
+        .concat();
+        let br = brotli_stored(plain);
+        let cases = [
+            ("zstd", "zstd", &zstd_one),
+            ("zstd, two frames", "zstd", &zstd_two),
+            ("br", "br", &br),
+        ];
+        for (name, coding, coded) in cases {
+            for reads in [&[usize::MAX][..], &[7, 4096, 1000]] {
+                let headers = [
+                    &format!("Content-Encoding: {coding}") as &str,
+                    &length(coded),
+                ];
+                let view = capture_coded_response_in(&headers, coded, reads).await;
+                let case = format!("{name}, {size} bytes, reads {reads:?}");
+                assert!(view.bytes == plain, "{case}: decoded body differs");
+                assert!(view.gaps.is_empty(), "{case}: {:?}", view.gaps);
+                assert_eq!(view.end, Some(EndReason::Complete), "{case}");
+            }
+        }
+
+        let cut = &zstd_one[..zstd_one.len() - 3];
+        let view = capture_coded_response(&["Content-Encoding: zstd", &length(cut)], cut).await;
+        assert!(
+            plain.starts_with(&view.bytes),
+            "{size}: only a decoded prefix"
+        );
+        assert_eq!(view.gaps, vec![GapReason::DecodeFailed], "{size}");
+        assert_eq!(view.end, Some(EndReason::DecodeError), "{size}");
     }
 }
 
