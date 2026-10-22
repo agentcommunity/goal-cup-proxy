@@ -283,13 +283,15 @@ like this:
 Your competition run with Claude Code: recording.
   Ends: Sat 14 Nov, 10:12 CET (09:12 UTC), 95 h 10 min left.
   Claude Code: running.
-  Upload: up to date (last sent 2 min ago).
+  Upload: working, sent every 30 minutes (last sent 12 min ago; 2140 records wait for the next send).
   Problems: none.
 Next: nothing to do. The run ends by itself.
 ```
 
 The header says which run it is, its state, when it ends and how much time is left, whether the
-agent runs, how the upload stands, and how many problems there are. If there are problems, one
+agent runs, how the upload stands, and how many problems there are. Goal Cup Proxy sends the
+record every 30 minutes, so records waiting between sends are normal; the line says `up to date`
+only when the server has acknowledged every record written. If there are problems, one
 `PROBLEM:` line each follows the header, and each says what to do. The last line is always
 `Next:`, and it says what to do now. A block headed `Details:` follows, for support. On a machine
 that has not started a run, `goalcup status` says `no run has been started from this machine yet`.

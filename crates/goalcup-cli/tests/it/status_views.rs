@@ -452,8 +452,6 @@ fn a_capture_status_shows_its_capture_block_and_no_legacy_run_lines() {
     for said in [
         "capture: recording",
         "run running",
-        "delivery local_only",
-        "anchor local_only",
         "analysis not_run",
         "Local capture is recording to this machine only.",
         "2048 of 4194304 bytes used, 4194304 reserved, durable through seq 4 (1536 bytes)",
@@ -468,6 +466,10 @@ fn a_capture_status_shows_its_capture_block_and_no_legacy_run_lines() {
         "events:",
         "time remaining",
         "round dates",
+        // The recorder never knows the upload: its constant local_only words are not shown
+        // beside the Upload line that knows (they stay in --json, as signed).
+        "delivery local_only",
+        "anchor local_only",
     ] {
         assert!(
             !text.contains(legacy),
@@ -1353,6 +1355,63 @@ fn status_header_names_the_harness_the_mode_and_the_end() {
         text.starts_with("Your practice run with claude-code-cli: recording."),
         "{text}"
     );
+}
+
+/// The Upload line says "up to date" only when every record written is acknowledged; between
+/// the timed sends it says the upload works, how often it sends, and how many records wait.
+#[test]
+fn status_says_up_to_date_only_when_every_record_is_acknowledged() {
+    use goalcup_cli::run::{HarnessState, RunState};
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    let mut state = RunState::launched(&info.entry_id, Ok(()));
+    state.harness = HarnessState::Running;
+    state.updated_at = goalcup_cli::run::now_unix();
+    state.upload.last_ok_at = Some(control::parse_z(support::NOW).unwrap() - 16 * 60);
+    run_with_state_on(
+        &cfg,
+        &info.entry_id,
+        state,
+        Some("https://server.example"),
+        Some("2099-01-01T00:00:00Z"),
+    );
+    let trace = trace_of(&cfg, &info.entry_id);
+    let chain: String = (0..=40u64)
+        .map(|seq| format!("{{\"seq\":{seq},\"prev\":\"p\",\"hash\":\"h{seq}\"}}\n"))
+        .collect();
+    std::fs::write(trace.join("chain.jsonl"), chain).unwrap();
+    let ack = |seq: u64| {
+        let line = serde_json::json!({
+            "entry_id": info.entry_id, "seq": seq, "hash": format!("h{seq}"),
+            "acked_at": "2026-10-22T12:00:00Z", "server_signature": "00",
+        });
+        std::fs::write(trace.join("acks.jsonl"), format!("{line}\n")).unwrap();
+    };
+    let upload_line = |text: &str| {
+        participant_block(text)
+            .lines()
+            .find(|l| l.contains("Upload:"))
+            .unwrap_or_else(|| panic!("{text}"))
+            .to_string()
+    };
+
+    ack(9);
+    let line = upload_line(&status_text(&m, &cfg, &info.entry_id, false));
+    assert!(!line.contains("up to date"), "{line}");
+    assert!(line.contains("sent every 30 minutes"), "{line}");
+    assert!(line.contains("last sent 16 min ago"), "{line}");
+    assert!(line.contains("31 records wait for the next send"), "{line}");
+
+    ack(40);
+    let line = upload_line(&status_text(&m, &cfg, &info.entry_id, false));
+    assert!(line.contains("up to date (last sent 16 min ago)"), "{line}");
+
+    // No acknowledgement on this machine: every record waits, never "up to date".
+    std::fs::remove_file(trace.join("acks.jsonl")).unwrap();
+    let line = upload_line(&status_text(&m, &cfg, &info.entry_id, false));
+    assert!(line.contains("41 records wait"), "{line}");
 }
 
 /// What `goalcup status` says once a run is over: sealed, uploaded, being finished, or left

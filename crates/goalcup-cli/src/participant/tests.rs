@@ -303,6 +303,32 @@ fn the_status_header_names_the_run_the_state_the_end_the_agent_and_the_upload() 
     assert!(text.contains("09:12 UTC"), "{text}");
     assert!(text.contains("Some Agent: running."), "{text}");
     assert!(text.contains("up to date (last sent 2 min ago)"), "{text}");
+    // Records waiting for the next timed send: never "up to date".
+    for (waiting, said) in [
+        (
+            Some(3201),
+            "Upload: working, sent every 30 minutes (last sent 2 min ago; 3201 records wait for \
+             the next send).",
+        ),
+        (
+            Some(1),
+            "Upload: working, sent every 30 minutes (last sent 2 min ago; 1 record waits for the \
+             next send).",
+        ),
+        (
+            None,
+            "Upload: working, sent every 30 minutes (last sent 2 min ago).",
+        ),
+    ] {
+        let mut sending = header(Some(Phase::Recording), Some(RunMode::Competition));
+        sending.upload = UploadNow::Sending {
+            ago: Some(120),
+            waiting,
+        };
+        let text = status_header(&sending).join("\n");
+        assert!(text.contains(said), "{said}: {text}");
+        assert!(!text.contains("up to date"), "{text}");
+    }
     assert!(text.contains("Problems: none."), "{text}");
 
     for (mode, word) in [

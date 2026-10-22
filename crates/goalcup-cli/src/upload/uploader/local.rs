@@ -42,7 +42,7 @@ pub fn lock_entry(spool_dir: &Path, entry_id: &str) -> Result<std::fs::File, Cli
 }
 
 /// The `seq` and `acked_at` of the last acknowledgement in `acks`, or `None` for none.
-pub(super) fn last_ack(acks: &Path) -> Option<(u64, u64)> {
+pub fn last_ack(acks: &Path) -> Option<(u64, u64)> {
     let text = std::fs::read_to_string(acks).ok()?;
     text.lines()
         .rev()
