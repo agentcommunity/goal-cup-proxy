@@ -223,6 +223,42 @@ fn a_schema_1_connector_written_today_keeps_loading_and_runs_only_through_dev() 
     }
 }
 
+/// The defaults a connector may rely on, from the fixture that writes only the required fields:
+/// the harness is named by its id, it is stopped by its process group after 10 seconds, its
+/// version is not asked, and a continued launch reopens it with its `args` alone.
+#[test]
+fn a_schema_1_connector_that_leaves_the_optional_fields_out_gets_the_defaults() {
+    let c = goalcup_cli::connector::load_harness(
+        &support::schema_1_fixtures_dir(),
+        "schema1-minimal",
+        true,
+    )
+    .unwrap_or_else(|e| panic!("schema1-minimal no longer loads: {e}"));
+    let m = &c.loaded.manifest;
+    assert!(
+        m.participant.is_none(),
+        "the fixture writes the required fields only"
+    );
+    assert_eq!(c.display_name(), "schema1-minimal");
+    assert!(m.capture.executable.version_args.is_empty());
+    let l = s::Layout::new();
+    let vars = s::vars(&l);
+    let exe = s::fake_harness(&l.bin);
+    let resolved = s::resolved(&exe);
+    let proxy = s::proxy_url();
+    let parent = s::parent_env();
+    let launch = s::chat_launch(&l, &resolved, &proxy, &parent);
+    let plan = build_capture_launch(&c, &vars, &l.workspace, &launch).unwrap();
+    assert_eq!(
+        plan.kill.strategy,
+        goalcup_protocol::manifest::KillStrategy::ProcessGroup
+    );
+    assert_eq!(plan.kill.grace_seconds, 10);
+    assert_eq!(plan.kill.native_binary, None);
+    let resumed = build_resumed_launch(&c, &vars, &l.workspace, &launch).unwrap();
+    assert_eq!(resumed.argv, plan.argv, "no resume_args: the args alone");
+}
+
 // ---------------------------------------------------------------------------------------
 // The manifest's own facts.
 // ---------------------------------------------------------------------------------------
@@ -417,7 +453,11 @@ fn hostile_parent(c: &goalcup_protocol::harness::CaptureSpec) -> BTreeMap<String
         ("NODE_OPTIONS", "--require /evil.js"),
         ("SSL_CERT_FILE", "/evil/roots.pem"),
         ("TERM", "xterm-256color"),
+        ("COLORTERM", "truecolor"),
         ("LANG", "en_US.UTF-8"),
+        ("LC_ALL", "en_US.UTF-8"),
+        ("SHELL", "/bin/sh"),
+        ("PATH", "/opt/participant/bin:/usr/bin:/bin"),
     ] {
         parent.insert(k.to_string(), v.to_string());
     }
@@ -443,6 +483,17 @@ fn every_connector_launch_environment_is_built_from_nothing() {
     }
 }
 
+/// `launch` with a system-roots-and-proxy-CA bundle in `l`'s folder, as `goalcup start` hands one
+/// to a connector that names a shared CA row (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`).
+fn with_bundle<'a>(l: &s::Layout, launch: CaptureLaunch<'a>) -> CaptureLaunch<'a> {
+    let bundle: &'a Path = Box::leak(l.root.path().join("bundle.pem").into_boxed_path());
+    std::fs::write(bundle, b"roots\n").unwrap();
+    CaptureLaunch {
+        ca_bundle: Some(bundle),
+        ..launch
+    }
+}
+
 /// Every connector's launch, alike and with no per-harness code, names the run's time-left file
 /// the agent may read (D66) and the marker `goalcup seal` refuses under; the participant's own
 /// values for either do not reach the harness.
@@ -461,7 +512,7 @@ fn every_connector_launch_names_the_time_left_file_and_the_harness_marker() {
             &c,
             &s::vars(&l),
             &l.workspace,
-            &s::chat_launch(&l, &resolved, &proxy, &parent),
+            &with_bundle(&l, s::chat_launch(&l, &resolved, &proxy, &parent)),
         )
         .unwrap_or_else(|e| panic!("{id}: {e}"));
         let get = |k: &str| plan.env_set.get(k).map(String::as_str);
@@ -498,6 +549,9 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
     assert_eq!(parent, original, "{id}: the parent env is untouched");
 
     let own = capture.resolved_env(PlatformKey::current());
+    let mut env_vars = s::vars(&l);
+    env_vars.set("config_home", l.harness_home.to_str().unwrap());
+    env_vars.set("run_home", l.run_home.to_str().unwrap());
     let mut allowed: BTreeSet<String> = own.keys().cloned().collect();
     for pin in [
         "HOME",
@@ -532,6 +586,29 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
     assert_eq!(get("HTTPS_PROXY"), Some(proxy.as_str()), "{id}");
     assert_eq!(get("https_proxy"), Some(proxy.as_str()), "{id}");
     assert_eq!(get("NO_PROXY"), Some(CAPTURE_NO_PROXY), "{id}");
+    assert_eq!(get("no_proxy"), Some(CAPTURE_NO_PROXY), "{id}");
+    // What the participant's shell hands the harness, unless the connector's own entry wins.
+    for name in [
+        "PATH",
+        "TERM",
+        "COLORTERM",
+        "LANG",
+        "LC_ALL",
+        "SHELL",
+        "USER",
+        "LOGNAME",
+        "TMPDIR",
+    ] {
+        let want = match own.get(name) {
+            Some(template) => Some(render(template, &env_vars).unwrap()),
+            None => parent.get(name).cloned(),
+        };
+        assert_eq!(
+            get(name),
+            want.as_deref(),
+            "{id}: `{name}` comes from the shell"
+        );
+    }
     if let Some(home) = &capture.home.env {
         assert_eq!(get(home), l.harness_home.to_str(), "{id}: `{home}`");
     }
@@ -543,9 +620,6 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
         };
         assert_eq!(get(name), want.to_str(), "{id}: `{name}`");
     }
-    let mut env_vars = s::vars(&l);
-    env_vars.set("config_home", l.harness_home.to_str().unwrap());
-    env_vars.set("run_home", l.run_home.to_str().unwrap());
     for (k, v) in &own {
         let expected = render(v, &env_vars).unwrap();
         assert_eq!(get(k), Some(expected.as_str()), "{id}: its own `{k}`");
@@ -586,7 +660,7 @@ fn every_connector_places_no_goal() {
         let resolved = s::resolved(&exe);
         let proxy = s::proxy_url();
         let parent = hostile_parent(capture);
-        let none = s::chat_launch(&l, &resolved, &proxy, &parent);
+        let none = with_bundle(&l, s::chat_launch(&l, &resolved, &proxy, &parent));
         let args = rendered(&capture.args, &vars);
         let plan = build_capture_launch(&c, &vars, &l.workspace, &none)
             .unwrap_or_else(|e| panic!("{id}: {e}"));

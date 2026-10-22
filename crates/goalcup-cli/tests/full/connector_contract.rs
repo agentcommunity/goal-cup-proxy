@@ -333,6 +333,43 @@ fn run_connector(id: &str, from: Folder) {
     assert_eq!(integrity["sealed"], true, "{id}: {integrity}");
     assert_eq!(integrity["integrity"], "valid", "{id}: {integrity}");
     assert_eq!(code, 0, "{id}: {integrity}");
+
+    // The session file is recorded under the hint the connector declared, as declared (D43). A
+    // hint no decoder accepts is capture-only: the research report lists it under
+    // `analysis.undecoded`, and the integrity verdict above is unchanged (D45).
+    let declared = c.native[0].protocol_hint.as_deref();
+    let registry = goalcup_verifier::capture_analysis::registry::DecoderRegistry::builtin();
+    let (_, summary) = world.research(&entry);
+    let undecoded = summary["analysis"]["undecoded"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{id}: no analysis.undecoded: {summary}"));
+    let mut native_streams = 0;
+    for (key, stream) in streams
+        .iter()
+        .filter(|(_, s)| s.source == CaptureSource::Native)
+    {
+        native_streams += 1;
+        assert_eq!(
+            stream.meta.protocol_hint.as_deref(),
+            declared,
+            "{id}: the native stream keeps its declared hint"
+        );
+        let open = goalcup_verifier::capture_analysis::api::StreamOpen::new(
+            key,
+            CaptureSource::Native,
+            declared,
+            stream.meta.content_type.as_deref(),
+        );
+        let listed = undecoded
+            .iter()
+            .any(|g| g["source"] == "native" && g["hint"].as_str() == declared);
+        assert_eq!(
+            listed,
+            registry.accepting(&open).is_empty(),
+            "{id}: capture-only exactly when no decoder accepts `{declared:?}`: {summary}"
+        );
+    }
+    assert!(native_streams > 0, "{id}: a native stream was recorded");
 }
 
 /// Every connector folder passes one participant-shaped run with no case of its own: it loads

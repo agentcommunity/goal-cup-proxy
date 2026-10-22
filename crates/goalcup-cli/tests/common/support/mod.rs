@@ -98,8 +98,14 @@ pub fn schema_1_fixture_ids() -> Vec<String> {
     let dir = schema_1_fixtures_dir();
     let mut ids: Vec<String> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
-        .map(|entry| entry.expect("a directory entry").file_name())
-        .map(|name| name.into_string().expect("a UTF-8 folder name"))
+        .map(|entry| entry.expect("a directory entry"))
+        .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|entry| {
+            entry
+                .file_name()
+                .into_string()
+                .expect("a UTF-8 folder name")
+        })
         .collect();
     ids.sort();
     assert!(ids.len() >= 2, "the schema-1 fixtures are there: {ids:?}");
