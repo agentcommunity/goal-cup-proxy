@@ -3,9 +3,10 @@
 use super::parse::refuse;
 use super::schema::{
     CHAT_MODE_ONLY, CONFIGURE_DENIED_KEYS, ConfigHome, HarnessManifest, MAX_CONFIGURE_ARG_BYTES,
-    MAX_CONFIGURE_ARGS, MAX_CONFIGURE_COMMANDS, MAX_MODEL_HOST_KEY_PARTS, MODEL_HOST_DENIED_WORDS,
-    MODEL_HOST_FILE_EXTENSIONS, NativeForm, Origin, PlatformKey, RunHome, Strategy,
-    display_name_problem, first_screen_problem,
+    MAX_CONFIGURE_ARGS, MAX_CONFIGURE_COMMANDS, MAX_MODEL_HOST_KEY_PARTS, MAX_NO_PROMPT_SETTINGS,
+    MAX_NO_PROMPT_VALUES, MODEL_HOST_DENIED_WORDS, MODEL_HOST_FILE_EXTENSIONS, NativeForm, Origin,
+    ParticipantSpec, PlatformKey, RunHome, Strategy, display_name_problem, first_screen_problem,
+    no_prompt_value_problem,
 };
 use super::{MIGRATION_SENTENCE, SUPPORTED_SCHEMA_VERSIONS};
 use crate::ProtocolError;
@@ -120,6 +121,68 @@ fn relative_path_problem(path: &str, max: usize) -> Option<String> {
         );
     }
     None
+}
+
+/// The rules of a value read from the harness's own config (`capture.model_host_from`, D62, and
+/// `participant.no_prompts`, D67), refused under `<field>.file` or `<field>.key`: a YAML, JSON or
+/// TOML file relative to the config home, a dotted key, and neither naming a key file or a key
+/// (`why_not_secret` says what is read instead).
+fn config_value_problem(
+    field: &str,
+    file: &str,
+    key: &str,
+    why_not_secret: &str,
+) -> Result<(), ProtocolError> {
+    let file_field = format!("{field}.file");
+    let key_field = format!("{field}.key");
+    if let Some(why) = relative_path_problem(file, 4) {
+        return Err(refuse(&file_field, format!("`{file}` {why}")));
+    }
+    let name = file.rsplit('/').next().unwrap_or(file);
+    let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    if !extension.is_some_and(|e| MODEL_HOST_FILE_EXTENSIONS.contains(&e.as_str())) {
+        return Err(refuse(
+            &file_field,
+            format!(
+                "`{file}` must end in one of .{}: the extension says how it is read",
+                MODEL_HOST_FILE_EXTENSIONS.join(", .")
+            ),
+        ));
+    }
+    let parts: Vec<&str> = key.split('.').collect();
+    let part_ok = |p: &&str| {
+        (1..=64).contains(&p.len())
+            && p.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    };
+    if parts.len() > MAX_MODEL_HOST_KEY_PARTS || !parts.iter().all(part_ok) {
+        return Err(refuse(
+            &key_field,
+            format!(
+                "`{key}` must be 1 to {MAX_MODEL_HOST_KEY_PARTS} names of `[A-Za-z0-9_-]` \
+                 (1 to 64 bytes) joined with `.`"
+            ),
+        ));
+    }
+    let denied = |text: &str| {
+        text.split(['.', '-', '_'])
+            .chain(text.split('.'))
+            .find(|w| {
+                MODEL_HOST_DENIED_WORDS
+                    .iter()
+                    .any(|d| w.eq_ignore_ascii_case(d))
+            })
+            .map(str::to_string)
+    };
+    for (field, text) in [(&file_field, name), (&key_field, key)] {
+        if let Some(word) = denied(text) {
+            return Err(refuse(
+                field,
+                format!("`{text}` names `{word}`: {why_not_secret}"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A single-component glob matcher: `*` any run (including none), `?` one character, anything
@@ -285,6 +348,59 @@ impl HarnessManifest {
         }
         if let Some(why) = p.first_screen.as_deref().and_then(first_screen_problem) {
             return Err(refuse("participant.first_screen", why));
+        }
+        self.check_no_prompts(p)
+    }
+
+    /// `participant.no_prompts` (D67): settings read from the shared config home like
+    /// `capture.model_host_from`, each with 1 to [`MAX_NO_PROMPT_VALUES`] plain values. They
+    /// are only read and recommended, never written.
+    fn check_no_prompts(&self, p: &ParticipantSpec) -> Result<(), ProtocolError> {
+        const FIELD: &str = "participant.no_prompts";
+        if p.no_prompts.is_empty() {
+            return Ok(());
+        }
+        if p.no_prompts.len() > MAX_NO_PROMPT_SETTINGS {
+            return Err(refuse(
+                FIELD,
+                format!("holds more than {MAX_NO_PROMPT_SETTINGS} settings"),
+            ));
+        }
+        if self.capture.home.config_home != ConfigHome::Shared {
+            return Err(refuse(
+                FIELD,
+                "requires `capture.home.config_home = \"shared\"`: the settings are read from the \
+                 home the participant set the harness up in",
+            ));
+        }
+        for s in &p.no_prompts {
+            config_value_problem(
+                FIELD,
+                &s.file,
+                &s.key,
+                "Goal Cup reads a permission setting from the harness's config, never a key file \
+                 or a key",
+            )?;
+            if s.values.is_empty() || s.values.len() > MAX_NO_PROMPT_VALUES {
+                return Err(refuse(
+                    format!("{FIELD}.values"),
+                    format!("`{}` must list 1 to {MAX_NO_PROMPT_VALUES} values", s.key),
+                ));
+            }
+            if let Some(why) = s.values.iter().find_map(|v| no_prompt_value_problem(v)) {
+                return Err(refuse(format!("{FIELD}.values"), why));
+            }
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        if let Some(d) = p
+            .no_prompts
+            .iter()
+            .find(|s| !seen.insert((s.file.as_str(), s.key.as_str())))
+        {
+            return Err(refuse(
+                FIELD,
+                format!("`{}` in `{}` is listed twice", d.key, d.file),
+            ));
         }
         Ok(())
     }
@@ -829,65 +945,13 @@ impl HarnessManifest {
                  from the home the participant set the harness up in",
             ));
         }
-        if let Some(why) = relative_path_problem(&from.file, 4) {
-            return Err(refuse(
-                "capture.model_host_from.file",
-                format!("`{}` {why}", from.file),
-            ));
-        }
-        let name = from.file.rsplit('/').next().unwrap_or(&from.file);
-        let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
-        if !extension.is_some_and(|e| MODEL_HOST_FILE_EXTENSIONS.contains(&e.as_str())) {
-            return Err(refuse(
-                "capture.model_host_from.file",
-                format!(
-                    "`{}` must end in one of .{}: the extension says how it is read",
-                    from.file,
-                    MODEL_HOST_FILE_EXTENSIONS.join(", .")
-                ),
-            ));
-        }
-        let parts: Vec<&str> = from.key.split('.').collect();
-        let part_ok = |p: &&str| {
-            (1..=64).contains(&p.len())
-                && p.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        };
-        if parts.len() > MAX_MODEL_HOST_KEY_PARTS || !parts.iter().all(part_ok) {
-            return Err(refuse(
-                "capture.model_host_from.key",
-                format!(
-                    "`{}` must be 1 to {MAX_MODEL_HOST_KEY_PARTS} names of `[A-Za-z0-9_-]` \
-                     (1 to 64 bytes) joined with `.`",
-                    from.key
-                ),
-            ));
-        }
-        let denied = |text: &str| {
-            text.split(['.', '-', '_'])
-                .chain(text.split('.'))
-                .find(|w| {
-                    MODEL_HOST_DENIED_WORDS
-                        .iter()
-                        .any(|d| w.eq_ignore_ascii_case(d))
-                })
-                .map(str::to_string)
-        };
-        for (field, text) in [
-            ("capture.model_host_from.file", name),
-            ("capture.model_host_from.key", from.key.as_str()),
-        ] {
-            if let Some(word) = denied(text) {
-                return Err(refuse(
-                    field,
-                    format!(
-                        "`{text}` names `{word}`: Goal Cup Proxy reads the model service's \
-                         address from the harness's config, never a key file or a key"
-                    ),
-                ));
-            }
-        }
-        Ok(())
+        config_value_problem(
+            "capture.model_host_from",
+            &from.file,
+            &from.key,
+            "Goal Cup Proxy reads the model service's address from the harness's config, never a \
+             key file or a key",
+        )
     }
 
     fn check_hosts(&self, origin: Origin) -> Result<(), ProtocolError> {

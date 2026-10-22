@@ -49,10 +49,11 @@ pub use schema::{
     ConfigHome, ExecutableSpec, ExtraPattern, FieldValue, HarnessManifest, HomeSpec, HostSpec,
     IdentitySource, IdentitySpec, MAX_CONFIGURE_ARG_BYTES, MAX_CONFIGURE_ARGS,
     MAX_CONFIGURE_COMMANDS, MAX_DISPLAY_NAME_CHARS, MAX_FIRST_SCREEN_CHARS,
-    MAX_MODEL_HOST_KEY_PARTS, MAX_REDACTION_NAME_BYTES, MODEL_HOST_FILE_EXTENSIONS, ModelHostFrom,
-    NativeForm, NativeSpec, Origin, ParticipantSpec, PlatformKey, PlatformOverride, RedactionRule,
-    RedactionSpec, RunHome, SeedFile, SeedMode, Strategy, TerminationSpec, display_name_problem,
-    first_screen_problem, provider_hosts,
+    MAX_MODEL_HOST_KEY_PARTS, MAX_NO_PROMPT_SETTINGS, MAX_NO_PROMPT_VALUE_CHARS,
+    MAX_NO_PROMPT_VALUES, MAX_REDACTION_NAME_BYTES, MODEL_HOST_FILE_EXTENSIONS, ModelHostFrom,
+    NativeForm, NativeSpec, NoPromptSetting, Origin, ParticipantSpec, PlatformKey,
+    PlatformOverride, RedactionRule, RedactionSpec, RunHome, SeedFile, SeedMode, Strategy,
+    TerminationSpec, display_name_problem, first_screen_problem, provider_hosts,
 };
 
 /// The schema versions this build reads. Reader policy: these only.

@@ -10,7 +10,9 @@
 //!    participant signs in and adds settings, MCP servers and skills there
 //!    ([`crate::launch::prep_launch`]: no proxy, no capture, no daemon entry). The tracker
 //!    cannot see a vendor sign-in, so this step is the person's word: it is ok once the harness
-//!    they were given has exited 0, and that is recorded in `prep.json` (`home_ready`).
+//!    they were given has exited 0, and that is recorded in `prep.json` (`home_ready`). When the
+//!    harness's config does not set a connector's `participant.no_prompts` setting, the step's
+//!    line also recommends it (D67); that never changes the setting or the step's state.
 //! 4. **GitHub**: the repository from `--repo` is public, empty and pushable with the stored
 //!    token ([`crate::account::github::check`]); with a terminal, the token is read unshown.
 //! 5. **machine**: mains power, free space for a run's reservation, the server's and the
@@ -374,7 +376,7 @@ pub fn prep_with(
     report.push(harness)?;
 
     // 3. harness home
-    let home = match &connector {
+    let mut home = match &connector {
         Some(c) => home_step(doors, cfg, env, c, &mut file, acting, &mut report)?,
         None => step(
             STEP_HARNESS_HOME,
@@ -384,6 +386,16 @@ pub fn prep_with(
              so you can sign in and add your settings, MCP servers and skills",
         ),
     };
+    // D67: a recommendation only. It never changes the step's state or the harness's settings.
+    if let Some(advice) = connector.as_ref().and_then(|c| no_prompts_advice(cfg, c))
+        && home.state != State::Fail
+    {
+        if !home.say.ends_with('.') {
+            home.say.push('.');
+        }
+        home.say.push(' ');
+        home.say.push_str(&advice);
+    }
     report.push(home)?;
     save(cfg, &file, &before)?;
 
@@ -724,6 +736,48 @@ fn model_host_problem(cfg: &Path, connector: &HarnessConnector) -> Option<String
         "{} In {name}, choose an https model service that is not on this computer, then exit \
          {name}.",
         why.sentence(name)
+    ))
+}
+
+/// Where each harness's doc is, for the recommendation's link (`<id>.md`).
+const HARNESS_DOCS: &str =
+    "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/harnesses";
+
+/// D67: when the harness's own config (in its Goal Cup home) does not set each of the
+/// connector's `participant.no_prompts` settings to an accepted value, one sentence recommending
+/// them, with the harness doc's link. `None` when all are set, or the connector lists none. Only
+/// reads; never writes the harness's settings and never fails prep.
+fn no_prompts_advice(cfg: &Path, connector: &HarnessConnector) -> Option<String> {
+    let manifest = &connector.loaded.manifest;
+    let settings = &manifest.participant.as_ref()?.no_prompts;
+    let home = cfg
+        .join(goalcup_protocol::harness::CAPTURE_HOMES_DIR)
+        .join(&manifest.id);
+    let unset: Vec<String> = settings
+        .iter()
+        .filter(|s| {
+            let value = crate::model_host::read_setting(&home.join(&s.file), &s.file, &s.key);
+            !value.is_some_and(|v| s.values.contains(&v))
+        })
+        .map(|s| {
+            format!(
+                "`{}` to `{}` in {}",
+                s.key,
+                s.values[0],
+                home.join(&s.file).display()
+            )
+        })
+        .collect();
+    if unset.is_empty() {
+        return None;
+    }
+    let name = connector.display_name();
+    Some(format!(
+        "{name} may stop to ask your permission, and during a run you may type only \"keep \
+         going\", so it would wait. Goal Cup recommends setting {}. Goal Cup does not change \
+         {name}'s settings; see {HARNESS_DOCS}/{}.md#run-without-permission-prompts",
+        unset.join(", "),
+        manifest.id
     ))
 }
 

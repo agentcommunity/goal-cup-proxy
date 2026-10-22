@@ -172,7 +172,11 @@ stderr and in the log. PASS means:
 3. `goalcup-verify --capture-integrity <trace>` exited 0 with `integrity: valid` and `anchor: signed`;
 4. for a real harness, the agent worked: `goalcup-verify --research-json <trace>` shows a usage
    observation with output or completion tokens above 0, or a decoded assistant message (else the
-   row FAILs with "the agent never answered the prompt");
+   row FAILs with "the agent never answered the prompt"), and its workspace changed: in the run
+   record's `workspace` (the clone), `git status --porcelain --untracked-files=all` is not empty or
+   a commit was made since the run started (a run that only named its session, or stalled at a
+   permission prompt, FAILs with "the agent changed nothing in its workspace"). The default prompt
+   asks for one file; `MATRIX_EXPECT_FILES=0` drops this for a custom prompt that writes nothing;
 5. the server's copy agrees with the local chain.
 
 **The server copy.** The upload API has no call that returns the stored chain, so the script does not
@@ -194,9 +198,12 @@ read-only role), and `MATRIX_FETCH_STORE` (a bucket mirror) or `CLOUDFLARE_ACCOU
 `CLOUDFLARE_API_TOKEN` (an R2 read-only token); `MATRIX_FETCH_BUCKET` overrides the bucket
 (`goalcup-traces-staging` unless the server is production). Only `fetch-run.sh` gets the credentials.
 Without them the row is `NOT-VERIFIED` (`NOT VERIFIED: long run, server copy not fetched`, exit 4): not a
-PASS, and not a FAIL of the run. `--check-copy` does the same for each pruned entry. In a Docker cell
-(`linux-matrix.sh`) nothing passes these through yet, so a long Docker cell is `NOT-VERIFIED`; fetch and
-verify its copy from the host.
+PASS, and not a FAIL of the run. `--check-copy` does the same for each pruned entry. A Docker cell
+(`linux-matrix.sh`) is verified the same way: it mounts `MATRIX_FETCH_INDEX` and `MATRIX_FETCH_STORE`
+read-only, or takes the database URL and the R2 token as files (`MATRIX_DATABASE_URL_FILE`,
+`MATRIX_CLOUDFLARE_TOKEN_FILE`, mounted read-only, never a value on Docker's command line) and passes
+`CLOUDFLARE_ACCOUNT_ID`, `MATRIX_FETCH_BUCKET` and `MATRIX_FETCH_TIMEOUT` on; its image holds `zstd` and
+`psql`. `DATABASE_URL` or `CLOUDFLARE_API_TOKEN` in its own environment is not passed in.
 
 A server whose signing key this build does not pin (a local Worker, staging) fails the first verification
 with `receipt_key_not_accepted`. The script then verifies again with `--dev-key` set to

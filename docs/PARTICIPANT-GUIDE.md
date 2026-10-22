@@ -393,6 +393,11 @@ You may answer them again when `goalcup continue` opens the harness. Do not answ
 agent asks or an approval the agent needs. If the harness asks you to sign in again during the
 run, contact support before you answer.
 
+So set your harness up in prep to run without permission prompts: `goalcup prep` says which
+setting Goal Cup recommends when it is missing, and "Run without permission prompts" in your
+harness's page under [docs/harnesses](harnesses/) shows where it goes. Goal Cup never changes it
+for you.
+
 Goal Cup Proxy itself never types to the agent, never says "keep going" for you, and never restarts
 it by itself. Your agent may ask how much time is left with `goalcup time-left`. You can run it
 in your own terminal too. `goalcup seal` works only from a terminal of your own, never inside the

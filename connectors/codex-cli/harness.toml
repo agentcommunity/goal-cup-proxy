@@ -5,6 +5,19 @@ id = "codex-cli"
 [participant]
 display_name = "Codex"
 
+# D67: what `goalcup prep` recommends, and never sets: no approval prompt, and no sandbox (the
+# workspace-write sandbox makes .git read-only, and in a container it cannot start at all).
+# docs/harnesses/codex-cli.md, "Run without permission prompts".
+[[participant.no_prompts]]
+file = "config.toml"
+key = "approval_policy"
+values = ["never"]
+
+[[participant.no_prompts]]
+file = "config.toml"
+key = "sandbox_mode"
+values = ["danger-full-access"]
+
 [capture]
 auth_hosts = ["auth.openai.com"]
 # Chat mode (D57): Codex opens in the participant's terminal and the participant types the prompt.

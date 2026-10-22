@@ -10,7 +10,7 @@ retained for references; some have been superseded or retired.
 
 ## Status
 
-Where each entry stands on 21 Oct 2026. "Current" means follow it as written. "Partly superseded"
+Where each entry stands on 22 Oct 2026. "Current" means follow it as written. "Partly superseded"
 means some clauses are replaced; the entry names which. Read the replacing entry for those clauses.
 Update this table in the same PR as any entry it lists.
 
@@ -38,7 +38,7 @@ Update this table in the same PR as any entry it lists.
 | D61 | partly superseded | D62 (model traffic for listed providers only) |
 | D62, D63 | current | |
 | D64 | partly superseded | D65 (the disk watch pauses, never stops) |
-| D65, D66 | current | |
+| D65, D66, D67 | current | |
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
@@ -729,3 +729,23 @@ the agent pulls, and nothing is sent to it.
   `GOALCUP_IN_HARNESS=1`, and `goalcup seal` refuses under it and names another terminal, so the
   agent cannot end its own segment by accident. A seal from another terminal, and the host's own
   seal at the end of a run, are unchanged.
+
+## D67. Goal Cup recommends running without permission prompts; the participant sets it.
+
+22 Oct 2026, owner ruling: "it should really tell users how to set up their harness, so we can
+recommend how to achieve it but they do it, we dont change harness settings". Answering a
+permission prompt is typing, and the participant may type only "keep going" (RULES), so a harness
+that stops to ask for approval stalls until its deadline (lx-codex and lx-claude, 22 Oct:
+[results](research/results/2026-10-22-local-test-day.md),
+[plan v4](research/results/2026-10-22-fix-plan-v4.md)).
+
+- **Goal Cup recommends, the participant configures.** Each harness doc
+  (`docs/harnesses/<id>.md`, "Run without permission prompts") names the exact setting and where it
+  lives. A connector may list those settings as `[[participant.no_prompts]]` (a file in the shared
+  config home, a key, the accepted values; read like `capture.model_host_from`, D62). `goalcup
+  prep` reads them and, when one is not set, adds one recommendation with the doc's link to the
+  harness home step. It never changes the setting and never fails or holds back a step for it.
+- **Goal Cup never writes a participant's harness permission settings.** No connector field,
+  configure command or launch option sets them (D52, D57 stand).
+- **The test kit's own cells are the organiser's.** `scripts/kit_settle.py` sets them in the kit's
+  tracker homes, like the cheapest-model rule: those are not participant homes.

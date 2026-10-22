@@ -27,7 +27,8 @@ Every cell is held to the owner's cheapest-model rules (scripts/kit_settle.py): 
 gpt-5.6-luna at `codex_effort` (default low), Claude Code haiku with thinking off. A docker cell's
 container applies and checks them (linux-matrix.sh); for a host cell this script does, in its
 config_dir's tracker homes before the run, and checks the run's turns after it: a turn on another
-model, or none found, fails the cell.
+model, or none found, fails the cell. The same step sets the kit's no-permission-prompt settings
+(Codex approval_policy never and no sandbox, Claude Code bypassPermissions), host cells included.
 
 Drills. Docker: `network_cut` disconnects the container from each of its networks and reconnects
 it after `seconds`; `pause` is `docker pause` then `docker unpause` (a stand-in for sleep). A

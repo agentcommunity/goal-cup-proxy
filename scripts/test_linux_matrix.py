@@ -23,6 +23,8 @@ SCRIPT = Path(__file__).with_name("linux-matrix.sh")
 SENTINEL = "SENTINEL-KEY-VALUE-never-printed-0123456789"
 TOKEN = "FAKE-GITHUB-TOKEN-for-tests-only-0123456789"
 PRACTICE = "https://github.com/agentcommunity/goalcup-matrix-empty"
+DB_URL = "postgres://reader:db-secret-never-shown@db.invalid/postgres"
+CF_TOKEN = "cf-token-never-shown-0123456789"
 STUB = """#!/bin/sh
 echo "$*" >> "$STUB_LOG"
 case "$*" in "build "*) cat >> "$STUB_LOG.dockerfiles" ;; esac
@@ -66,7 +68,11 @@ class LinuxMatrixTests(unittest.TestCase):
                      "LINUX_MATRIX_CELL", "LINUX_MATRIX_PREBUILT", "LINUX_MATRIX_CODEX_EFFORT",
                      "MATRIX_PROMPT", "MATRIX_PROMPT_FILE", "MATRIX_PROMPT_DELAY",
                      "MATRIX_SUBMIT_DELAY", "MATRIX_PRE_PROMPT_KEYS", "MATRIX_PRE_PROMPT_DELAY",
-                     "MATRIX_REPO_URL", "MATRIX_GITHUB_TOKEN_FILE"):
+                     "MATRIX_REPO_URL", "MATRIX_GITHUB_TOKEN_FILE", "MATRIX_EXPECT_FILES",
+                     "MATRIX_FETCH_INDEX", "MATRIX_FETCH_STORE", "MATRIX_FETCH_BUCKET",
+                     "MATRIX_FETCH_TIMEOUT", "MATRIX_DATABASE_URL_FILE",
+                     "MATRIX_CLOUDFLARE_TOKEN_FILE", "DATABASE_URL", "CLOUDFLARE_ACCOUNT_ID",
+                     "CLOUDFLARE_API_TOKEN"):
             self.env.pop(name, None)
         self.token = self.base / "github-token"
         self.token.write_text(TOKEN + "\n")
@@ -259,7 +265,9 @@ class LinuxMatrixTests(unittest.TestCase):
         home = cfg / "capture-homes/codex-cli"
         home.mkdir(parents=True)
         (home / "config.toml").write_text(
-            'model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n\n'
+            'model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n'
+            'approval_policy = "on-request"\nsandbox_mode = "workspace-write"\n'
+            'personality = "kept"\n\n'
             '[projects."/w"]\ntrust_level = "trusted"\nmodel = "kept-in-table"\n'
         )
         # The container half reads its fixed paths; point them at the temporary volume.
@@ -270,6 +278,12 @@ class LinuxMatrixTests(unittest.TestCase):
         text = (home / "config.toml").read_text()
         lines = text.splitlines()
         self.assertEqual(lines[:2], ['model = "gpt-5.6-luna"', 'model_reasoning_effort = "low"'])
+        # No permission prompt in a test cell: the container or test machine is the sandbox.
+        self.assertEqual(lines[2:4], ['approval_policy = "never"',
+                                      'sandbox_mode = "danger-full-access"'])
+        self.assertEqual(text.count("approval_policy"), 1)
+        self.assertEqual(text.count("sandbox_mode"), 1)
+        self.assertIn('personality = "kept"', text)
         self.assertNotIn("gpt-6-astra", text)
         self.assertIn('[projects."/w"]\ntrust_level = "trusted"\nmodel = "kept-in-table"', text)
         self.assertEqual(stat.S_IMODE((home / "config.toml").stat().st_mode), 0o600)
@@ -402,6 +416,61 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertIn("-e MATRIX_PROMPT_FILE=/run/goalcup/prompt", inner)
         self.assertNotIn("Build it.", self.log.read_text())
 
+    def test_the_fetch_index_and_store_are_mounted_read_only_for_a_long_run(self) -> None:
+        index = self.base / "index.json"
+        index.write_text("[]")
+        store = self.base / "mirror"
+        store.mkdir()
+        run = self.run_script("run", "codex-cli", MATRIX_FETCH_INDEX=str(index),
+                              MATRIX_FETCH_STORE=str(store), MATRIX_FETCH_BUCKET="goalcup-traces-staging")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        [docker_run] = self.docker_lines("run")
+        self.assertIn(f"-v {index}:/run/goalcup/fetch-index:ro ", docker_run)
+        self.assertIn("-e MATRIX_FETCH_INDEX=/run/goalcup/fetch-index ", docker_run)
+        self.assertIn(f"-v {store}:/run/goalcup/fetch-store:ro ", docker_run)
+        self.assertIn("-e MATRIX_FETCH_STORE=/run/goalcup/fetch-store ", docker_run)
+        self.assertIn("-e MATRIX_FETCH_BUCKET=goalcup-traces-staging ", docker_run)
+        # fetch-run.sh's tools are in the image.
+        dockerfile = Path(str(self.log) + ".dockerfiles").read_text()
+        self.assertIn("zstd", dockerfile)
+        self.assertIn("postgresql-client", dockerfile)
+
+    def test_fetch_credentials_travel_as_files_never_as_values(self) -> None:
+        db, cf = self.base / "db-url", self.base / "cf-token"
+        for path, value in ((db, DB_URL), (cf, CF_TOKEN)):
+            path.write_text(value + "\n")
+            path.chmod(0o600)
+        run = self.run_script("run", "codex-cli", MATRIX_DATABASE_URL_FILE=str(db),
+                              MATRIX_CLOUDFLARE_TOKEN_FILE=str(cf), CLOUDFLARE_ACCOUNT_ID="acct1")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        [docker_run] = self.docker_lines("run")
+        self.assertIn(f"-v {db}:/run/goalcup/database-url:ro ", docker_run)
+        self.assertIn("-e MATRIX_DATABASE_URL_FILE=/run/goalcup/database-url ", docker_run)
+        self.assertIn(f"-v {cf}:/run/goalcup/cloudflare-token:ro ", docker_run)
+        self.assertIn("-e MATRIX_CLOUDFLARE_TOKEN_FILE=/run/goalcup/cloudflare-token ", docker_run)
+        self.assertIn("-e CLOUDFLARE_ACCOUNT_ID=acct1 ", docker_run)
+        everything = self.log.read_text() + run.stdout + run.stderr
+        self.assertNotIn(DB_URL, everything)
+        self.assertNotIn(CF_TOKEN, everything)
+
+    def test_fetch_credentials_in_the_environment_never_reach_the_container(self) -> None:
+        run = self.run_script("run", "codex-cli", DATABASE_URL=DB_URL, CLOUDFLARE_API_TOKEN=CF_TOKEN)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("DATABASE_URL in the environment is not passed into the container", run.stdout)
+        everything = self.log.read_text() + run.stdout + run.stderr
+        self.assertNotIn(DB_URL, everything)
+        self.assertNotIn(CF_TOKEN, everything)
+        self.assertNotIn("DATABASE_URL", self.docker_lines("run")[0])
+
+    def test_a_relative_or_missing_fetch_path_is_refused_before_docker(self) -> None:
+        for env in ({"MATRIX_FETCH_INDEX": "index.json"},
+                    {"MATRIX_FETCH_STORE": str(self.base / "no-mirror")},
+                    {"MATRIX_DATABASE_URL_FILE": str(self.base / "missing")}):
+            with self.subTest(env=env):
+                run = self.run_script("run", "codex-cli", **env)
+                self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertEqual(self.docker_lines("run"), [])
+
     def test_a_relative_or_missing_prompt_file_is_refused(self) -> None:
         for path in ("prompt.txt", str(self.base / "missing.txt")):
             run = self.run_script("run", "codex-cli", MATRIX_PROMPT_FILE=path)
@@ -410,10 +479,11 @@ class LinuxMatrixTests(unittest.TestCase):
 
     def test_matrix_settings_that_are_set_are_passed_on(self) -> None:
         run = self.run_script("run", "claude-code-cli", MATRIX_SUBMIT_DELAY="5",
-                              MATRIX_PRE_PROMPT_KEYS="")
+                              MATRIX_PRE_PROMPT_KEYS="", MATRIX_EXPECT_FILES="0")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         [docker_run] = self.docker_lines("run")
         self.assertIn("-e MATRIX_SUBMIT_DELAY=5 ", docker_run)
+        self.assertIn("-e MATRIX_EXPECT_FILES=0 ", docker_run)
         # Set but empty still travels: it overrides the Claude trust-dialog default.
         self.assertIn("-e MATRIX_PRE_PROMPT_KEYS= ", docker_run)
         self.assertNotIn("MATRIX_PROMPT_DELAY", docker_run)
@@ -491,14 +561,39 @@ class ContainerHalfTests(unittest.TestCase):
         self.assertEqual(doc["model"], "haiku")
         self.assertIs(doc["alwaysThinkingEnabled"], False)
         self.assertEqual(doc["theme"], "dark")
-        self.assertEqual(doc["permissions"], {"allow": ["Bash(ls)"]})
+        self.assertEqual(doc["permissions"], {"allow": ["Bash(ls)"],
+                                              "defaultMode": "bypassPermissions"})
+        self.assertIs(doc["skipDangerousModePermissionPrompt"], True)
         self.assertEqual(stat.S_IMODE((home / "settings.json").stat().st_mode), 0o600)
 
     def test_claude_settings_are_written_when_there_are_none(self) -> None:
         run = self.inner("inner-home-config", "claude-code-cli")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         doc = json.loads((self.homes / "claude-code-cli/settings.json").read_text())
-        self.assertEqual(doc, {"model": "haiku", "alwaysThinkingEnabled": False})
+        self.assertEqual(doc, {"model": "haiku", "alwaysThinkingEnabled": False,
+                               "permissions": {"defaultMode": "bypassPermissions"},
+                               "skipDangerousModePermissionPrompt": True})
+
+    def test_claude_runs_without_permission_prompts_over_another_mode(self) -> None:
+        home = self.homes / "claude-code-cli"
+        home.mkdir(parents=True)
+        (home / "settings.json").write_text(json.dumps({
+            "permissions": {"defaultMode": "default", "deny": ["Bash(rm:*)"]},
+            "skipDangerousModePermissionPrompt": False}))
+        run = self.inner("inner-home-config", "claude-code-cli")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        doc = json.loads((home / "settings.json").read_text())
+        self.assertEqual(doc["permissions"], {"defaultMode": "bypassPermissions",
+                                              "deny": ["Bash(rm:*)"]})
+        self.assertIs(doc["skipDangerousModePermissionPrompt"], True)
+
+    def test_claude_permissions_that_are_not_an_object_are_left_alone_and_fail(self) -> None:
+        home = self.homes / "claude-code-cli"
+        home.mkdir(parents=True)
+        (home / "settings.json").write_text('{"permissions": ["x"]}')
+        run = self.inner("inner-home-config", "claude-code-cli")
+        self.assertNotEqual(run.returncode, 0)
+        self.assertEqual((home / "settings.json").read_text(), '{"permissions": ["x"]}')
 
     def test_claude_fullscreen_offer_is_answered_not_now_keeping_other_state(self) -> None:
         home = self.homes / "claude-code-cli"
@@ -581,7 +676,7 @@ class ContainerHalfTests(unittest.TestCase):
         (src / "scripts").mkdir()
         got = self.base / "matrix-got.json"
         (src / "scripts/matrix.sh").write_text(f"""#!/bin/sh
-python3 -c 'import json, os, sys; json.dump({{"argv": sys.argv[1:], "keys": os.environ.get("MATRIX_PRE_PROMPT_KEYS"), "cfg": os.environ.get("MATRIX_CONFIG_DIR")}}, open("{got}", "w"))' "$@"
+python3 -c 'import json, os, sys; json.dump({{"argv": sys.argv[1:], "keys": os.environ.get("MATRIX_PRE_PROMPT_KEYS"), "cfg": os.environ.get("MATRIX_CONFIG_DIR"), "fetch": {{k: os.environ.get(k) for k in ("DATABASE_URL", "CLOUDFLARE_API_TOKEN", "MATRIX_DATABASE_URL_FILE", "MATRIX_CLOUDFLARE_TOKEN_FILE")}}}}, open("{got}", "w"))' "$@"
 d="$MATRIX_CONFIG_DIR/capture-homes/claude-code-cli/projects/-w"
 mkdir -p "$d"
 echo '{{"type":"assistant","message":{{"model":"{model}"}}}}' > "$d/s.jsonl"
@@ -615,6 +710,21 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
         self.assertNotIn("PASS", run.stdout)
         self.assertIn("claude-code-cli linux-x86_64 2.1.283 FAIL 2026-10-20", run.stdout)
         self.assertTrue(run.stdout.rstrip().splitlines()[-1].startswith("linux-matrix: FAIL owner rule"))
+
+    def test_inner_run_hands_the_fetch_credential_files_to_matrix_as_its_environment(self) -> None:
+        got = self.inner_run_world()
+        db, cf = self.base / "db-url", self.base / "cf-token"
+        db.write_text(DB_URL + "\n")
+        cf.write_text(CF_TOKEN + "\n")
+        run = self.inner("inner-run", "claude-code-cli", TMPDIR=str(self.base / "tmp"),
+                         LINUX_MATRIX_SERVER="https://s.example",
+                         MATRIX_DATABASE_URL_FILE=str(db), MATRIX_CLOUDFLARE_TOKEN_FILE=str(cf))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(json.loads(got.read_text())["fetch"], {
+            "DATABASE_URL": DB_URL, "CLOUDFLARE_API_TOKEN": CF_TOKEN,
+            "MATRIX_DATABASE_URL_FILE": None, "MATRIX_CLOUDFLARE_TOKEN_FILE": None})
+        self.assertNotIn(DB_URL, run.stdout + run.stderr)
+        self.assertNotIn(CF_TOKEN, run.stdout + run.stderr)
 
     def test_inner_run_keeps_trust_keys_that_were_set_even_empty(self) -> None:
         got = self.inner_run_world()

@@ -26,7 +26,7 @@ MATRIX = Path(__file__).with_name("matrix.sh")
 PROMPT = "Goal Cup test prompt: say ok."
 
 GOALCUP = r'''#!/usr/bin/env python3
-import json, os, select, sys, termios, time, tty
+import json, os, select, subprocess, sys, termios, time, tty
 from pathlib import Path
 
 out = Path(os.environ["STUB_OUT"])
@@ -83,6 +83,26 @@ trace = cfg / "artifacts" / ENTRY / "trace"
 chain = (json.dumps({"body": {"harness_version":
                              os.environ.get("STUB_HV", "stub-harness 9.9.9")}}) + "\n").encode()
 
+def make_workspace(ws):
+    # The clone the agent works in, and what the agent left in it (STUB_WS): file (an untracked
+    # file, the default), commit (a commit, the tree clean), none (nothing), old (only a commit
+    # dated before the run: the clone's own history).
+    ws.mkdir(parents=True)
+    git = lambda *a, **env: subprocess.run(
+        ["git", "-C", str(ws), "-c", "user.name=stub", "-c", "user.email=stub@example.invalid", *a],
+        check=True, capture_output=True, env=dict(os.environ, **env))
+    git("init", "-q")
+    mode = os.environ.get("STUB_WS", "file")
+    if mode == "old":
+        then = "2020-01-01T00:00:00Z"
+        git("commit", "-q", "--allow-empty", "-m", "seed", GIT_AUTHOR_DATE=then,
+            GIT_COMMITTER_DATE=then)
+    elif mode in ("file", "commit"):
+        (ws / "matrix-ok.txt").write_text("ok\n")
+        if mode == "commit":
+            git("add", "matrix-ok.txt")
+            git("commit", "-q", "-m", "ok")
+
 def write_run():
     # A test run's record is written before the harness starts, as goalcup start does it.
     trace.mkdir(parents=True)
@@ -100,9 +120,13 @@ def write_run():
     else:
         (trace / "chain.jsonl").write_bytes(chain)
     (run_dir / "credential").write_text(json.dumps({"credential": "c"}))
+    started = int(time.time())
+    workspace = cfg / "work" / "goalcup-stub"
+    make_workspace(workspace)
     (run_dir / "run.json").write_text(json.dumps({
         "run_id": "r1", "server_url": "http://localhost:8787", "test": test,
-        "connector_id": args[args.index("--harness") + 1],
+        "connector_id": args[args.index("--harness") + 1], "workspace": str(workspace),
+        "started_at_unix": started,
         "entries": [{"entry_id": ENTRY, "trace_dir": str(trace)}],
     }))
     if os.environ.get("STUB_PRUNED") != "1":
@@ -340,6 +364,11 @@ SCENARIOS = {
     "prompt_control": ("stubchat", {}, (), False, "go\x1b[Bnow\n"),
     "amp_version": ("stubchat", {"STUB_HV": AMP_VERSION, "STUB_WORK": "assistant"}),
     "silent": ("stubchat", {"STUB_WORK": "none"}),
+    # The model answered; what the agent left in its workspace decides.
+    "ws_none": ("stubchat", {"STUB_WS": "none"}),
+    "ws_old": ("stubchat", {"STUB_WS": "old"}),
+    "ws_commit": ("stubchat", {"STUB_WS": "commit"}),
+    "ws_none_opt_out": ("stubchat", {"STUB_WS": "none", "MATRIX_EXPECT_FILES": "0"}),
     "bracketed": ("stubchat", {"STUB_BRACKETED": "1",
                                "STUB_PROMPT": "\x1b[200~" + PROMPT + "\x1b[201~"}),
     # Long runs: the trace holds only the tail part (pruned), and the server copy is fetched.
@@ -418,6 +447,27 @@ class MatrixTests(unittest.TestCase):
             self.assertEqual(w.run.returncode, 0, w.said())
             self.assertTrue(w.seen("research.argv").startswith("--research-json\n"))
             self.assertIn("agent work in the trace", w.log)
+
+    def test_a_run_that_changed_nothing_in_its_workspace_fails_the_row(self) -> None:
+        # A model answer (a title, a stalled turn) with a clean clone; and a clone whose only
+        # commit predates the run.
+        for name in ("ws_none", "ws_old"):
+            w = self.worlds[name]
+            self.assertNotEqual(w.run.returncode, 0, name)
+            self.assertIn("the agent changed nothing in its workspace", w.run.stderr)
+            self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ FAIL ")
+
+    def test_a_new_file_or_a_new_commit_counts_as_a_changed_workspace(self) -> None:
+        for name, seen in (("chat", "1 changed paths, 0 new commits"),
+                           ("ws_commit", "0 changed paths, 1 new commits")):
+            w = self.worlds[name]
+            self.assertEqual(w.run.returncode, 0, w.said())
+            self.assertIn(f"workspace: {seen} in ", w.log)
+
+    def test_a_prompt_that_writes_nothing_can_opt_out_of_the_workspace_check(self) -> None:
+        w = self.worlds["ws_none_opt_out"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertIn("MATRIX_EXPECT_FILES=0", w.log)
 
     def test_the_row_keeps_the_version_line_up_to_its_version_number(self) -> None:
         w = self.worlds["amp_version"]
@@ -570,6 +620,10 @@ class MatrixArgumentTests(unittest.TestCase):
         self.assertIn("go together", self.refuse("codex-cli", "https://x.example", "--test", **cfg))
         self.assertIn("go together",
                       self.refuse("codex-cli", "https://x.example", "--duration", "60", **cfg))
+
+    def test_expect_files_is_zero_or_one(self) -> None:
+        self.assertIn("MATRIX_EXPECT_FILES is 0 or 1",
+                      self.refuse("codex-cli", "https://x.example", MATRIX_EXPECT_FILES="no"))
 
     def test_duration_is_a_whole_number_of_seconds_in_range(self) -> None:
         for bad in ("0", "abc", "-5", "1.5", "604801", "0100"):
