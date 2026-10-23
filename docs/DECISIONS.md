@@ -25,7 +25,7 @@ Update this table in the same PR as any entry it lists.
 | D24 | current | |
 | D25 | partly superseded | D66 (the agent may ask for the time left) |
 | D26, D30, D36, D37 | current | |
-| D38 | partly superseded | D52 (the cheapest-model clause) |
+| D38 | partly superseded | D52 (the cheapest-model clause), D69 (the agent's git login) |
 | D39 | partly superseded | D57 (chat mode; the headless launch clause is removed) |
 | D40 | partly superseded | D61 (the Hermes clause), D56 (the 180 s budget) |
 | D41 | partly superseded | D43 (CA rule), D52 (model clause), D61 (seed and key scan) |
@@ -39,6 +39,7 @@ Update this table in the same PR as any entry it lists.
 | D62, D63 | current | |
 | D64 | partly superseded | D65 (the disk watch pauses, never stops) |
 | D65, D66, D67 | current | |
+| D69 | current | |
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
@@ -758,3 +759,37 @@ that stops to ask for approval stalls until its deadline (lx-codex and lx-claude
   configure command or launch option sets them (D52, D57 stand).
 - **The test kit's own cells are the organiser's.** `scripts/kit_settle.py` sets them in the kit's
   tracker homes, like the cheapest-model rule: those are not participant homes.
+
+## D69. Goal Cup Proxy holds no keys; the agent pushes with the participant's own git login.
+
+23 Oct 2026, owner ruling ([plan](plans/2026-10-23-simple-setup.md)): "goalcup observes, it
+should not store any key and should not pass keys anywhere. The agent can push to any repo, that's
+ok." Goal Cup Proxy reads, stores, logs and passes no key, GitHub token included.
+
+- **`goalcup setup`** (once `goalcup prep`, still a hidden alias) has four steps: this computer
+  (it runs `goalcup login` when needed), the harness, signing in to it, and this machine. It needs
+  no GitHub. It makes `<work folder>/.env.local`, empty but for a comment, mode 0600, when it is
+  missing, for keys the participant gives their agent, and never reads it.
+- **GitHub at `goalcup start`, for a real run only.** Before the approval, start asks the name of a
+  new, empty, public repository (or takes `--repo`), finds the participant's GitHub user from
+  their own login (`ssh -T git@github.com`, then `gh api user`; with neither, it prints how to set
+  one up and looks again), opens `github.com/new` with the name filled in when it does not exist,
+  and checks it: public and empty by GitHub's open API with no login, pushable by a dry-run push
+  with the participant's own git. Each real run gets its own repository; `prep.json` keeps the
+  last name only to suggest the next.
+- **The clone is the participant's own git.** Over SSH when their SSH login works, otherwise
+  HTTPS. No credential helper and no token is written to it. `.env*` goes in its
+  `.git/info/exclude`. A practice run clones nothing: its folder is a new local repository with
+  no remote, and the server is told the organisers' practice repository as its `repo_url`.
+- **The environment is still built from nothing (D1, D36, D38, D61), plus exactly three ways to
+  the participant's git login**, as paths or a socket and only when set or present:
+  `SSH_AUTH_SOCK`; `GIT_CONFIG_GLOBAL`, their own or their `~/.gitconfig` (else
+  `~/.config/git/config`); and `GH_CONFIG_DIR`, their own or `~/.config/gh`. A token variable
+  such as `GH_TOKEN` is not carried.
+- **What it gives up.** The agent can push to any repository the participant's login can (the
+  owner accepts this). A push over SSH is not seen by the recording proxy; the judged commit is
+  read from GitHub's API, not from recorded traffic. A dry-run push is git's own check of the push
+  connection, made with no key of Goal Cup's; whether GitHub refuses it without write access was
+  not measured against GitHub here.
+- **Old clones.** The hidden `goalcup git-credential` still answers from `github.json` for clones
+  made before this, and nothing writes that file any more. It can be removed after the event.

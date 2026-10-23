@@ -18,7 +18,8 @@ stops at each step that needs you.
   every shipped connector and reports install status. It can exit 1 when an optional harness is
   not installed. See the [facts sheets](harnesses/README.md) for measured support
   and capture-only limits. Goal Cup Proxy records which harness build ran.
-- A GitHub account.
+- A GitHub account, and a git login to it on this computer: an SSH key GitHub knows, or
+  `gh auth login`. Section 5 says how to set one up if you have none.
 - An Agent Community account, signed up for the Goal Cup on the website,
   [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup). You also hand in your demo
   video and questionnaire there after the run.
@@ -46,6 +47,9 @@ not in Windows itself; native Windows comes later.
 
 ## 2. Log in: `goalcup login`
 
+`goalcup setup` (next section) does this for you when this computer is not connected yet. You can
+also run it by itself:
+
 ```sh
 goalcup login
 ```
@@ -62,7 +66,7 @@ Waiting for you to approve… (the code expires in 15 min; press Ctrl-C to cance
 
 Check that the page shows the same code, and approve. Then **return to the terminal now**. It
 prints `Approved. This computer is connected to your Goal Cup account (<your name>).` and
-`Next: goalcup prep`. Nothing secret is typed or stored: Goal Cup Proxy keeps the server's address and
+`Next: goalcup setup`. Nothing secret is typed or stored: Goal Cup Proxy keeps the server's address and
 your account's name. The server is `https://ingest.agentcommunity.org`; you do not need to name it.
 
 **Two approvals are normal.** You approve once here, and once at each `goalcup start`. They do
@@ -81,47 +85,43 @@ that first. A remote server or cloud sandbox you control is fine (RULES, "Where 
 everything there over SSH. On a machine with no browser, set `GOALCUP_NO_BROWSER=1`.
 `goalcup` then prints the address and the code and opens nothing: open the address on any device.
 
-## 3. Get ready: `goalcup prep`
+## 3. Get ready: `goalcup setup`
 
 ```sh
-goalcup prep
+goalcup setup
 ```
 
-Prep checks six steps, one line each: `[ok]`, `[todo]` and what to do, or `[fail]` and why. Run it
-again as often as you like. What prep has settled (your harness, its sign-in, your repository
-and token) is not asked again; the rest is checked each time. Prep never starts a run. When
-every step is ok it says `goalcup prep: ready.` and prints the start command. Otherwise its last
-line names the first step that needs you.
+Setup checks four steps, one line each: `[ok]`, `[todo]` and what to do, or `[fail]` and why.
+Ctrl-C stops it at any time; run it again to continue. What it has settled is not asked again.
+It never starts a run, needs no GitHub, and keeps no key. (`goalcup prep`, its old name, still
+works.)
 
-1. **login.** You have run `goalcup login`.
-2. **harness.** A shipped harness on your `PATH`, with its version. Prep discovers the installed
-   connectors. Choose one, for example `goalcup prep --harness codex-cli`; the current source
-   also has `claude-code-cli`, `hermes-cli` and `amp-cli`. Prep remembers your choice. The line
-   ends with a link to your harness's section of
-   [Set up your harness for a 168-hour run](HARNESS-SETUP.md). Read it before a long run.
-3. **harness_home.** Prep opens the harness once, in the home Goal Cup Proxy keeps for it. This is
-   never your own `~/.claude` or `~/.codex`. Sign in there, with a login or account you can
-   revoke (section 11 says why), and add the settings, MCP servers and skills you want your agent
-   to have. Then exit the harness normally. Your runs use this home.
-   Nothing is recorded while prep has it open. Prep first lists these steps and says `Press Enter
-   to open <harness>, or Ctrl-C to stop.` It opens the harness only after you press Enter.
-4. **github.** Create a new repository on GitHub: public and empty (create it without a README,
-   licence or `.gitignore`, so it has no commits). Then create a fine-grained token: give it
-   access to this repository only, and set Contents to read and write. Set its expiry to at
-   least 10 days after the day you plan to start. A token that expires stops your agent's pushes,
-   and work that is not pushed is not judged. Run
-   `goalcup prep --repo https://github.com/<owner>/<repo>` and paste the token when asked; it is not shown as you type.
-   Your agent pushes its work to this repository, and Goal Cup Proxy hands the token to `git` when it
-   pushes; it is never in the agent's environment.
-5. **machine.** Mains power, enough free disk (a run reserves 3 GiB and warns when less than 5 GiB
-   is free beyond that), the server and your model provider reachable, and `git` installed. It also
-   says whether Goal Cup Proxy can keep the machine awake. When it cannot (always under WSL2, and on
-   Linux without `systemd-inhibit`), the step still passes and tells you to keep the machine awake
-   yourself; under WSL2, set sleep to Never in Windows. Under WSL2 it also checks that you are on
-   WSL2 (not WSL1) and that Goal Cup Proxy's folders are not on a Windows drive such as `/mnt/c`. The
-   folder each run's clone is made in is `goalcup-work` in your home folder; choose another with
-   `--work-root <full path>`.
-6. **practice.** A practice run of this harness, sealed and uploaded (the next section).
+1. **login.** This computer is connected to your Goal Cup account. If not, setup logs in for you
+   (section 2).
+2. **harness.** It lists the harnesses installed on this computer, the other supported ones with
+   [how to install them](HARNESS-SETUP.md), and how to
+   [add your own](HARNESS-ONBOARDING.md). Pick one, or pass `--harness <id>`. The line ends with
+   a link to your harness's section of [Set up your harness for a 168-hour run](HARNESS-SETUP.md).
+3. **harness_home.** Press Enter and setup opens the harness once, in the home Goal Cup Proxy
+   keeps for it (never your own `~/.claude` or `~/.codex`). Sign in, or paste your API key when it
+   asks. That is the harness's own file; Goal Cup never sees it. Add the settings, MCP servers and
+   skills you want, set it not to ask for permission (below), then exit it normally. Your runs use
+   this home. Nothing is recorded while setup has it open.
+4. **machine.** Mains power, enough free disk (a run reserves 3 GiB and warns when less than 5 GiB
+   is free beyond that), the server and your model provider reachable, and `git` installed. It
+   also says whether Goal Cup Proxy can keep the machine awake. When it cannot (always under WSL2,
+   and on Linux without `systemd-inhibit`), keep the machine awake yourself; under WSL2, set sleep
+   to Never in Windows. Under WSL2 it also checks that you are on WSL2 (not WSL1) and that Goal Cup
+   Proxy's folders are not on a Windows drive such as `/mnt/c`. Each run's folder is made in
+   `goalcup-work` in your home folder; choose another with `--work-root <full path>`.
+
+**Keys for your agent (optional).** Setup makes `goalcup-work/.env.local`, empty but for a short
+comment, and offers to open it. Put keys your agent may use there, one per line, before your run
+starts. Goal Cup never reads it, and your agent can read anything you give it. Never put keys in
+your repository: `.env` files are never committed from a run's folder. The rules are in
+[RULES, Keys](RULES.md#keys).
+
+When all four steps are ok, setup prints `Ready.`, a practice command and the start command.
 
 If a firewall such as Little Snitch asks about `goalcup`, allow it: the machine step fails when
 the server or the provider cannot be reached. Each Goal Cup Proxy update is a new program file, so the
@@ -134,7 +134,7 @@ harness home that tells the agent so: it makes and approves every decision itsel
 wait for a reply. That tells the model only. Many harnesses also stop and ask you before they run
 a command, edit a file or push, and that is a harness setting. You may not answer those prompts
 during the run, so a harness that asks can wait for days. Set it before the run, in the harness
-home that prep opens. You choose how. For example, Claude Code has a permission mode that does
+home that setup opens. You choose how. For example, Claude Code has a permission mode that does
 not ask (`bypassPermissions`), and Codex can be set to never ask for approval
 (`approval_policy = "never"`). Try your setting in a practice run.
 [Set up your harness for a 168-hour run](HARNESS-SETUP.md) lists every setting per harness and
@@ -151,8 +151,8 @@ prompt that it may run `goalcup time-left`, or call the `time_left` tool if you
 goalcup start --harness <id> --practice
 ```
 
-A practice run goes through the whole path: approve it in the browser, the harness opens in your
-terminal in a fresh clone of your repository, you type a prompt, and the run records and uploads.
+A practice run goes through the whole path but GitHub: approve it in the browser, the harness opens
+in your terminal in a new, empty local folder, you type a prompt, and the run records and uploads.
 It lasts about ten minutes; then the server stops it, and Goal Cup Proxy seals and uploads it.
 
 This is the second approval. You approved the login in section 2. This one approves this one
@@ -166,10 +166,9 @@ Every run needs its own approval, so this is normal: login connected this comput
 Approve it in the browser, then **return to the terminal now**: the run starts there. Section 5
 walks through what you see.
 
-A practice run never pushes. Its clone has no way to push, so your repository stays empty until
-your competition run. Practice runs do not count, never replace your competition run, send no
-emails, and you can do as many as you like. Run `goalcup prep` afterwards: the practice step
-should now be ok.
+A practice run needs no GitHub repository and pushes nowhere: its folder has no remote. Practice
+runs do not count, never replace your competition run, send no emails, and you can do as many as
+you like.
 
 ## 5. Your run: `goalcup start`
 
@@ -185,18 +184,35 @@ Run it from your home folder or another folder of your own: `goalcup start` make
 run. Do not run it from any folder inside your work folder; Goal Cup Proxy refuses that. Under WSL2,
 do not run it from a Windows drive.
 
-1. **Approve.** `goalcup` prints `Approve your competition run of Claude Code in your browser.`
+1. **Your repository.** Each real run (a dry run or your cup run) gets its own new, empty, public
+   GitHub repository. `goalcup` asks you to name it, opens GitHub's "new repository" page with the
+   name filled in, and waits while you click "Create repository" (add no README). Then it checks
+   that the repository is public and empty, and that your own git can push to it (a dry-run push;
+   nothing is sent). You can also give it as `--repo <owner>/<name>`. Your agent pushes with
+   your own git login, as you do; Goal Cup keeps no token.
+
+   If this computer has no GitHub login, it says so and waits while you set one up:
+
+   ```
+   No GitHub login found on this computer. To set one up (about 5 minutes):
+     1. No account yet? Make one: https://github.com/signup
+     2. Install GitHub's command line tool: https://cli.github.com
+     3. Run: gh auth login   (choose GitHub.com, HTTPS, "Login with a web browser",
+        and say Yes to "Authenticate Git with your GitHub credentials")
+   Press Enter when done, or Ctrl-C to stop.
+   ```
+2. **Approve.** `goalcup` prints `Approve your competition run of Claude Code in your browser.`
    and the same line as above about the second approval, then opens your browser:
    `Your browser opened the approval page. Check that the page shows the code <code>.` Check the
    code, approve this run, and **return to the terminal now**. If you already have a competition
    run open, it first says so (`You already have a competition run open (started …). Approving
    replaces it: that run stops, and only the new run counts.`). Each competition run is approved
    this way. `goalcup` prints `Approved.` when the approval arrives.
-2. **Clone.** It prints `Cloning your repository…` and clones your repository into your work
+3. **Clone.** It prints `Cloning your repository…` and clones your repository into your work
    folder (`goalcup-` followed by a random name). That clone is the agent's workspace.
-3. **Open the run.** It opens the run on the server. Your 168 hours start here, on the server's
+4. **Open the run.** It opens the run on the server. Your 168 hours start here, on the server's
    clock.
-4. **The harness opens in this terminal.** Before it does, goalcup prints a short block. It says
+5. **The harness opens in this terminal.** Before it does, goalcup prints a short block. It says
    `Your competition run is open.` and `Claude Code opens now in this terminal.`, and then what to
    do:
 
@@ -240,8 +256,8 @@ When the harness exits, `goalcup` takes the terminal back:
 
 **One run counts.** Your account has one main run. If you start a second competition run inside
 the window, it replaces the first: the server stops the first run, and only the new one counts.
-The new run needs a new, empty repository: `goalcup start` refuses a repository that already has
-commits, so make one and point prep at it with `goalcup prep --repo <new URL>`.
+The new run needs a new, empty repository: `goalcup start` asks for one each time, and suggests a
+new name (`<last name>-2`) once the last one has commits.
 After the window closes you cannot start a new competition run; you can only `goalcup continue`
 the one you have. To replace a run on the same machine with the same harness, exit the first
 run's harness before you start again: a second `goalcup start` of that harness is refused while
@@ -340,7 +356,7 @@ question. You may answer them. If it asks you to sign in again, contact support 
 now: it is still your one prompt. Run `goalcup continue` from the same kind of folder as
 `goalcup start` (section 5), in a terminal you will leave open.
 
-Choose your model and model service in prep, before the run. Typing a harness command such as
+Choose your model and model service in setup, before the run. Typing a harness command such as
 `/model` after your prompt is typing like any other message: Goal Cup Proxy records it and it is
 reviewed. Nothing is blocked.
 
@@ -398,7 +414,7 @@ You may answer them again when `goalcup continue` opens the harness. Do not answ
 agent asks or an approval the agent needs. If the harness asks you to sign in again during the
 run, contact support before you answer.
 
-So set your harness up in prep to run without permission prompts: `goalcup prep` says which
+So set your harness up in setup to run without permission prompts: `goalcup setup` says which
 setting Goal Cup recommends when it is missing, and
 [Set up your harness for a 168-hour run](HARNESS-SETUP.md#1-run-without-permission-prompts) shows
 where it goes. Goal Cup never changes it for you.
@@ -467,4 +483,4 @@ the server together afterwards. It is not for participants: use `--practice` to 
 ## Help
 
 Write to goalcup@agentcommunity.org. Say which command you ran, and paste the `goalcup status`
-output and the run id it shows. Never paste your GitHub token.
+output and the run id it shows. Never paste a key or token.
