@@ -36,7 +36,12 @@ not prove: other platforms, other harness versions, model behaviour, or particip
 
 1. **Build tools.** `cargo fetch --locked`, Docker running, `python3`, `curl`, `zstd`, `psql`.
 2. **Staging test key.** The staging `TEST_APPROVAL_KEY` in a file only you can read
-   (`chmod 600`). Its path goes in `GOALCUP_TEST_APPROVAL_KEY_FILE`.
+   (`chmod 600`). Its path goes in `GOALCUP_TEST_APPROVAL_KEY_FILE`. The key is sent to the
+   campaign's `server`, so the kit accepts only the staging Worker
+   (`https://goalcup-ingest-staging.b-9a5.workers.dev`) and a server on this machine
+   (`http://localhost[:port]`, `http://127.0.0.1[:port]`); another `https://` server must be named
+   exactly in `MATRIX_ALLOW_SERVER`, and production is never accepted. A server that is neither
+   staging nor production needs `MATRIX_FETCH_BUCKET` for a long run's server copy.
    **GitHub login.** Every cell is a test run, and a test run asks for its own new, empty, public
    repository at its start (D69). The kit makes one per run (`gh repo create
    <user>/goalcup-kit-<cell>-<random> --public`) with the GitHub login already there, and the agent

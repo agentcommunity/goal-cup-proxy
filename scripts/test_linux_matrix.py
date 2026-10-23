@@ -713,6 +713,25 @@ class ContainerHalfTests(unittest.TestCase):
         self.assertTrue((secrets / "ready").exists())
         self.assertNotIn(DB_URL + CF_TOKEN, run.stdout + run.stderr)
 
+    def test_a_command_before_the_login_cannot_take_the_key_from_standard_input(self) -> None:
+        # Codex is asked what it lists for Luna (effort minimal) before the login starts; a codex
+        # that reads standard input must not be able to take the key: it is read first.
+        self.codex_stub(["minimal", "low"])
+        (self.bin / "codex").write_text((self.bin / "codex").read_text().replace(
+            "#!/bin/sh\n", "#!/bin/sh\ncat >/dev/null\n", 1))
+        goalcup, curl = self.bin / "goalcup", self.bin / "curl"
+        goalcup.write_text("#!/bin/sh\necho 'it shows the code ABCD-EFGH.'\nsleep 3\n")
+        curl.write_text("#!/bin/sh\ncat >/dev/null\nprintf 200\n")
+        for stub in (goalcup, curl):
+            stub.chmod(0o755)
+        tmpdir = self.base / "tmp"
+        tmpdir.mkdir()
+        run = self.inner("inner-login", "codex-cli", stdin=SENTINEL + "\n", TMPDIR=str(tmpdir),
+                         LINUX_MATRIX_CODEX_EFFORT="minimal", LINUX_MATRIX_SERVER="http://localhost:1",
+                         GOALCUP_TEST_MEMBER_ID="m1")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertNotIn("no secret on standard input", run.stdout)
+
     def test_an_empty_line_gives_no_file_for_that_credential(self) -> None:
         secrets = self.base / "fetch-secrets"
         secrets.mkdir(mode=0o700)

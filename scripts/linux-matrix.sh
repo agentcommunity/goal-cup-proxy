@@ -254,8 +254,7 @@ PY
 # `goalcup login`, its one device code approved through the test route: the key arrives on this
 # step's standard input into a private file, and goes from it straight into curl's standard input
 # as a header, as matrix.sh does it. The file is gone when this step ends.
-inner_login() {
-    secret_in keyfile
+inner_login() { # (the key's file is made first, by the dispatcher below)
     mkdir -p "$CFG" && chmod 700 "$CFG" || fail "login: config directory"
     out=$TMPDIR/login.$$
     rm -f "$out" "$out.rc"
@@ -326,7 +325,7 @@ inner_model_check() { # connector marker
 inner_run() { # connector [matrix.sh options]
     h=$1
     shift
-    # The approval key, from this step's standard input. matrix.sh removes the file once the run
+    # The approval key, from this step's standard input, before anything else can read it. matrix.sh removes the file once the run
     # is approved, before the harness works (MATRIX_FORGET_KEY); the fetch credentials are not
     # here at all: matrix.sh asks the host for them when it needs them (MATRIX_FETCH_REQUEST).
     secret_in keyfile
@@ -390,7 +389,7 @@ case ${1:-} in
 inner-fetch-creds) inner_fetch_creds; exit 0 ;;
 inner-home-config) inner_home_config "$2"; exit 0 ;;
 inner-home-files) inner_home_files "$2"; exit 0 ;;
-inner-login) inner_home_config "$2"; inner_login; exit 0 ;;
+inner-login) secret_in keyfile; inner_home_config "$2"; inner_login; exit 0 ;;
 inner-home-ready) inner_home_ready "$2"; exit 0 ;;
 inner-model-check) inner_model_check "$2" "$3"; exit $? ;;
 inner-settle) inner_settle; exit 0 ;;
