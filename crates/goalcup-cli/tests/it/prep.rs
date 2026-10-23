@@ -592,7 +592,7 @@ fn prep_fails_a_folder_on_an_unsupported_filesystem_and_says_how_to_move_it() {
             && machine.contains(&format!("work folder {}", work.display()))
             && machine.contains("btrfs")
             && machine.contains("ext4, XFS or APFS")
-            && machine.contains("goalcup prep --work-root"),
+            && machine.contains("goalcup setup --work-root"),
         "{text}"
     );
     // A refused work folder is not kept for `goalcup start` to find.
@@ -1222,7 +1222,7 @@ fn a_failing_configure_command_keeps_the_home_not_ready_and_launches_nothing() {
     assert!(
         shown.contains("could not be set up for recording")
             && shown.contains("Nothing was launched")
-            && shown.contains(&format!("goalcup prep --harness {CHAT_CONFIGURE_ID}")),
+            && shown.contains(&format!("goalcup setup --harness {CHAT_CONFIGURE_ID}")),
         "{shown}"
     );
     assert!(!shown.contains("tui: ready"), "{shown}");
@@ -1283,7 +1283,7 @@ fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
         assert!(home.starts_with("[fail] harness_home:"), "{what}");
         match holder {
             Some(run) => assert!(home.contains(run), "the holder is named: {what}"),
-            None => assert!(home.contains("another `goalcup prep`"), "{what}"),
+            None => assert!(home.contains("another `goalcup setup`"), "{what}"),
         }
         assert!(
             home.contains(&format!("share one {id} home")) || home.contains(&format!("{id} run")),

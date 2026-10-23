@@ -466,7 +466,7 @@ pub(super) fn create_and_gate<'a>(
                 &run.workspace,
                 &log,
                 &format!(
-                    "Nothing was launched. Run `goalcup prep --harness {}` again; it runs the same \
+                    "Nothing was launched. Run `goalcup setup --harness {}` again; it runs the same \
                      command and keeps what it prints in {}.",
                     c.loaded.manifest.id,
                     cfg.join(crate::commands::prep::PREP_LOG_NAME).display()

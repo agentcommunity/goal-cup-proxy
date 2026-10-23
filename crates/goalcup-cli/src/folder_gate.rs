@@ -206,7 +206,7 @@ mod tests {
             .expect("tmpfs is warned about");
         assert!(warned.contains("GOALCUP_CONFIG_DIR"), "{warned}");
         assert!(warned.contains("tmpfs"), "{warned}");
-        assert!(warned.contains("goalcup prep"), "{warned}");
+        assert!(warned.contains("goalcup setup"), "{warned}");
     }
 
     #[cfg(feature = "test-support")]

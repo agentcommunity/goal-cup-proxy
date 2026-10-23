@@ -420,7 +420,7 @@ fn the_status_next_line_is_the_one_thing_to_do() {
     assert!(status_next(&Next::Wait).contains("goalcup status"));
     // The refusal with no run starts with the command and keeps the phrase tests read.
     let none = no_run_yet();
-    assert!(none.starts_with("Run goalcup prep"), "{none}");
+    assert!(none.starts_with("Run goalcup setup"), "{none}");
     assert!(
         none.contains("no run has been started from this machine"),
         "{none}"

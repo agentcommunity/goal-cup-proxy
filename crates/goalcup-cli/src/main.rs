@@ -174,7 +174,7 @@ enum Command {
     /// Serve the time left as an MCP tool, `time_left`, for your agent to call.
     ///
     /// Your harness starts this command itself, by its full path, when you add it to the
-    /// harness's MCP servers (`goalcup prep` prints the lines for your harness). It speaks MCP
+    /// harness's MCP servers (`goalcup setup` prints the lines for your harness). It speaks MCP
     /// on standard input and output, answers what `goalcup time-left` prints, and only reads:
     /// it writes no file and opens no port. You never run it yourself.
     Mcp,
@@ -227,7 +227,7 @@ enum Command {
         #[arg(long)]
         json: bool,
         /// Check this harness only, and set the exit code from it alone. Without it the harness
-        /// you chose in `goalcup prep` is checked. `--harness all` checks every shipped harness,
+        /// you chose in `goalcup setup` is checked. `--harness all` checks every shipped harness,
         /// and any failure makes the exit code 1.
         #[arg(long, value_name = "ID")]
         harness: Option<String>,

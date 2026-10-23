@@ -460,7 +460,7 @@ fn a_workspace_inside_another_work_tree_is_refused() {
         !said.contains(&inner),
         "the clone's own path is named: {said}"
     );
-    assert!(said.contains("goalcup prep --work-root <"), "got {said}");
+    assert!(said.contains("goalcup setup --work-root <"), "got {said}");
     assert!(
         !said.contains("~/goalcup-work"),
         "a fixed default is named: {said}"
