@@ -254,6 +254,13 @@ leaves its mark.
   tail (this overrides the unsealed case); 3 usage or I/O failure with no usable report.
   Unsupported semantics alone never fails integrity. Report format:
   [m2-report-format](research/m2-report-format.md).
+- `goalcup-verify --stats TRACE [TRACE…] --output STATS.json` writes one run's numbers-only
+  summary (`type: run_stats`), its traces in segment order. Exit codes: 0 every trace complete and
+  valid and no decoder degraded; 1 a trace incomplete or unsealed, or a decoder degraded; 2 a trace
+  with invalid evidence; 3 no usable file (and none is left). Tokens come from one source per run,
+  named in `tokens.source` (the wire, else the native session files), and the other source's counts
+  stay beside them, never added. A count the decoders cannot state is `null`, not 0. Format:
+  [Run stats](research/m2-report-format.md#run-stats---stats).
 - A v5 line is byte-canonical: it equals the compact serialization of its decoded envelope.
 - A complete v5 trace holds at least one `Launch`, each binding a goal stream (opened with source
   `goal`) that ended `Complete`, in either order. The reader keeps the goal stream each `Launch`

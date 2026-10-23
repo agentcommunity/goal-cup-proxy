@@ -16,6 +16,8 @@ pub use capture_analysis::reader::{
 pub use capture_analysis::report::{
     ResearchResult, write_research_report, write_research_report_with,
 };
+/// `goalcup-verify --stats TRACE [TRACE…] --output STATS.json`: the numbers-only run summary.
+pub use capture_analysis::stats::{RunStatsResult, run_stats, run_stats_with};
 
 pub const VERIFIER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
