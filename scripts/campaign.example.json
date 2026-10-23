@@ -3,7 +3,6 @@
   "defaults": {
     "server": "https://goalcup-ingest-staging.b-9a5.workers.dev",
     "approval_key_file": "/Users/you/.goalcup-secrets/staging-test-approval-key",
-    "github_token_file": "/Users/you/.goalcup-secrets/kit-github-token",
     "connector": "codex-cli",
     "duration_s": 7200,
     "sample_every_s": 300,
@@ -15,6 +14,8 @@
     {
       "id": "linux-cut",
       "where": "docker",
+      "repo": "goalcup-kit/kit-linux-cut",
+      "github_token_file": "/Users/you/.goalcup-secrets/kit-github-token-linux-cut",
       "codex_effort": "low",
       "test_member_id": "00000000-0000-4000-8000-0000000c0de1",
       "drills": [
@@ -28,6 +29,8 @@
     {
       "id": "linux-pause",
       "where": "docker",
+      "repo": "goalcup-kit/kit-linux-pause",
+      "github_token_file": "/Users/you/.goalcup-secrets/kit-github-token-linux-pause",
       "codex_effort": "low",
       "test_member_id": "00000000-0000-4000-8000-0000000c0de2",
       "drills": [
@@ -46,6 +49,8 @@
     {
       "id": "mac-cut",
       "where": "host",
+      "repo": "goalcup-kit/kit-mac-cut",
+      "github_token_file": "/Users/you/.goalcup-secrets/kit-github-token-mac-cut",
       "test_member_id": "00000000-0000-4000-8000-0000000c0de3",
       "config_dir": "/Users/you/goalcup-campaign/mac-cut",
       "drills": [

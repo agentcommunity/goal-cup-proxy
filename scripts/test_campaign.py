@@ -161,28 +161,33 @@ class Base(unittest.TestCase):
         self.key.write_text(SENTINEL + "\n")
         self.prompt = self.root / "prompt.txt"
         self.prompt.write_text("build a thing\n")
-        self.token = self.root / "github-token"
-        self.token.write_text(TOKEN + "\n")
         os.environ.pop(campaign.KEY_ENV, None)
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def config(self, cells, **defaults):
-        d = {"approval_key_file": str(self.key), "github_token_file": str(self.token),
+        d = {"approval_key_file": str(self.key),
              "connector": "codex-cli", "duration_s": 3600, "prompt_file": str(self.prompt)}
         d.update(defaults)
         return campaign.normalize_config({"name": "t", "defaults": d, "cells": cells}, self.root)
 
+    def github(self, cid):
+        """A cell's own repository and token file (each cell has one of each)."""
+        token = self.root / f"github-token-{cid}"
+        token.write_text(TOKEN + "\n")
+        return {"repo": f"goalcup-kit/kit-{cid}", "github_token_file": str(token)}
+
     def host_cell(self, cid, member, **kw):
         cfgdir = self.root / f"cfg-{cid}"
         cfgdir.mkdir(exist_ok=True)
-        c = {"id": cid, "where": "host", "test_member_id": member, "config_dir": str(cfgdir)}
+        c = {"id": cid, "where": "host", "test_member_id": member, "config_dir": str(cfgdir),
+             **self.github(cid)}
         c.update(kw)
         return c
 
     def docker_cell(self, cid, member, **kw):
-        c = {"id": cid, "where": "docker", "test_member_id": member}
+        c = {"id": cid, "where": "docker", "test_member_id": member, **self.github(cid)}
         c.update(kw)
         return c
 
@@ -194,6 +199,20 @@ class ConfigValidation(Base):
     def test_valid_config_passes(self):
         cfg = self.config([self.docker_cell("a", "m1"), self.host_cell("b", "m2")])
         self.assertEqual(self.errors(cfg), [])
+
+    def test_each_cell_needs_a_repository_and_a_token_file_of_its_own(self):
+        a, b = self.docker_cell("a", "m1"), self.docker_cell("b", "m2")
+        shared = self.config([a, dict(b, repo=a["repo"].upper(),
+                                      github_token_file=a["github_token_file"])])
+        errs = self.errors(shared)
+        self.assertTrue(any("also cell a's; each cell needs its own" in e for e in errs), errs)
+        self.assertTrue(any("github_token_file is also cell a's" in e for e in errs), errs)
+        for repo in (None, "no-owner", "agentcommunity/goalcup-matrix-empty"):
+            with self.subTest(repo=repo):
+                errs = self.errors(self.config([dict(a, repo=repo)]))
+                self.assertTrue(any("repo" in e for e in errs), errs)
+        errs = self.errors(self.config([dict(a, github_token_file=None)]))
+        self.assertTrue(any("github_token_file is required" in e for e in errs), errs)
 
     def test_shared_member_refused_when_cells_run_together(self):
         cfg = self.config([self.docker_cell("a", "m1"), self.docker_cell("b", "m1")])
@@ -279,10 +298,10 @@ class ConfigValidation(Base):
 
     def test_check_command_json(self):
         path = self.root / "c.json"
-        path.write_text(json.dumps({"defaults": {"approval_key_file": str(self.key),
-                                                 "github_token_file": str(self.token)},
+        path.write_text(json.dumps({"defaults": {"approval_key_file": str(self.key)},
                                     "cells": [{"id": "a", "where": "docker", "connector": "codex-cli",
-                                               "test_member_id": "m1", "duration_s": 600}]}))
+                                               "test_member_id": "m1", "duration_s": 600,
+                                               **self.github("a")}]}))
         runner = FakeRunner()
         out = []
         args = campaign.build_parser().parse_args(["check", str(path), "--json"])
@@ -886,40 +905,43 @@ class CampaignRun(Base):
         self.assertNotIn(SENTINEL, text)
         self.assertNotIn(str(self.key), text)
 
-    def test_the_github_token_reaches_github_json_and_nowhere_else(self):
+    def test_each_cell_gets_its_repository_and_token_path_and_no_token_is_written(self):
         runner = FakeRunner()
         runner.real_kit = True
         cells = [self.docker_cell("lin", "m1"), self.host_cell("mac", "m2")]
         camp, said = self.make(cells, runner)
         camp.run()
         cfgdir = Path(cells[1]["config_dir"])
-        gh = json.loads((cfgdir / "github.json").read_text())
-        self.assertEqual(gh, {"repo_url": "https://github.com/agentcommunity/goalcup-matrix-empty",
-                              "token": TOKEN})
-        for name in ("github.json", "prep.json"):
-            self.assertEqual((cfgdir / name).stat().st_mode & 0o777, 0o600, name)
+        self.assertFalse((cfgdir / "github.json").exists())
+        self.assertEqual((cfgdir / "prep.json").stat().st_mode & 0o777, 0o600)
         # The host cell settled before its matrix.sh started.
         settle = next(i for i, c in enumerate(runner.calls) if str(campaign.KIT) in c)
         host = next(i for i, c in enumerate(runner.calls) if c[1].endswith("/matrix.sh"))
         self.assertLess(settle, host)
-        # The docker cell gets the path, for linux-matrix.sh to mount.
-        lin_env = next(e for e in runner.envs if e.get("LINUX_MATRIX_CELL") == "lin")
-        self.assertEqual(lin_env[campaign.TOKEN_ENV], str(self.token))
+        # Each cell's run gets its own repository and the path of its own token file, for
+        # matrix.sh (in the container for a docker cell) to make the run's git login from.
+        for cell in cells:
+            env = next(e for a, e in zip(runner.calls, runner.envs)
+                       if e.get("MATRIX_REPO") == cell["repo"])
+            self.assertEqual(env[campaign.TOKEN_ENV], cell["github_token_file"])
+        paths = [c["github_token_file"] for c in cells]
         for argv in runner.calls:
             self.assertNotIn(TOKEN, " ".join(argv))
-            self.assertNotIn(str(self.token), " ".join(argv))
+            for path in paths:
+                self.assertNotIn(path, " ".join(argv))
         for env in runner.envs:
             for k, v in env.items():
                 self.assertNotIn(TOKEN, v)
-                if str(self.token) in v:
+                if v in paths:
                     self.assertEqual(k, campaign.TOKEN_ENV)
         self.assertNotIn(TOKEN, self.all_text() + "\n".join(said))
 
     def test_a_host_cell_whose_settle_is_refused_never_starts(self):
-        self.token.write_text("short\n")  # not a token: the helper refuses it
+        cell = self.host_cell("mac", "m1")
+        (Path(cell["config_dir"]) / "prep.json").write_text("not JSON")  # the helper refuses it
         runner = FakeRunner()
         runner.real_kit = True
-        camp, _ = self.make([self.host_cell("mac", "m1")], runner)
+        camp, _ = self.make([cell], runner)
         self.assertEqual(camp.run(), 1)
         self.assertFalse(any(c[1].endswith("/matrix.sh") for c in runner.calls if len(c) > 1))
         res = json.loads((self.root / "out" / "mac" / "result.json").read_text())
@@ -1091,20 +1113,20 @@ class CampaignRun(Base):
 
 
 class Commands(Base):
-    def write(self, cells, token=True):
+    def write(self, cells, github=True):
         defaults = {"approval_key_file": str(self.key), "connector": "codex-cli",
                     "duration_s": 600}
-        if token:
-            defaults["github_token_file"] = str(self.token)
+        if github:
+            cells = [{**self.github(c["id"]), **c} for c in cells]
         path = self.root / "c.json"
         path.write_text(json.dumps({"defaults": defaults, "cells": cells}))
         return str(path)
 
     @staticmethod
     def fake_prep(rc=0, home_ready=True, harness="codex-cli"):
-        """An interactive `goalcup prep` that leaves prep.json as the real one does, exiting rc."""
+        """An interactive `goalcup setup` that leaves prep.json as the real one does, exiting rc."""
         def run(argv, env):
-            if argv[1:2] == ["prep"]:
+            if argv[1:2] == ["setup"]:
                 cfg = Path(env["GOALCUP_CONFIG_DIR"])
                 (cfg / "prep.json").write_text(json.dumps({"harness": harness,
                                                            "home_ready": home_ready}))
@@ -1130,7 +1152,6 @@ class Commands(Base):
         prep = json.loads((cfgdir / "prep.json").read_text())
         self.assertEqual(prep["work_root"], str(cfgdir / "work"))
         self.assertIs(prep["home_ready"], True)
-        self.assertTrue((cfgdir / "github.json").exists())
 
     def test_host_login_fails_when_prep_did_not_sign_the_home_in(self):
         for rc_prep, ready, harness in ((0, False, "codex-cli"), (1, False, "codex-cli"),
@@ -1143,7 +1164,6 @@ class Commands(Base):
                 self.assertNotEqual(rc, 0)
                 self.assertIn("home_ready", said)
                 self.assertFalse(any(str(campaign.KIT) in c for c in runner.calls))
-                self.assertFalse((cfgdir / "github.json").exists())
 
     def test_login_host_runs_login_then_prep_in_its_config_dir(self):
         cfgdir = self.root / "new-cfg"
@@ -1154,12 +1174,13 @@ class Commands(Base):
         rc = campaign.main(["login", path, "mac"], runner=runner)
         self.assertEqual(rc, 0)
         self.assertEqual(runner.calls[0][:3], ["goalcup", "login", "--server"])
-        self.assertEqual(runner.calls[1], ["goalcup", "prep", "--harness", "codex-cli"])
+        self.assertEqual(runner.calls[1], ["goalcup", "setup", "--harness", "codex-cli",
+                                           "--work-root", str(cfgdir / "work")])
         self.assertEqual(runner.envs[0]["GOALCUP_CONFIG_DIR"], str(cfgdir))
         self.assertTrue(cfgdir.is_dir())
         self.assertNotIn(campaign.KEY_ENV, runner.envs[0])
 
-    def test_host_login_leaves_prep_and_github_json(self):
+    def test_host_login_leaves_prep_json_and_no_token(self):
         cfgdir = self.root / "new-cfg"
         path = self.write([{"id": "mac", "where": "host", "test_member_id": "m1",
                             "config_dir": str(cfgdir)}])
@@ -1170,27 +1191,29 @@ class Commands(Base):
             rc = campaign.main(["login", path, "mac"], runner=runner)
         self.assertEqual(rc, 0, buf.getvalue())
         prep = json.loads((cfgdir / "prep.json").read_text())
-        self.assertEqual(prep["repo_url"], "https://github.com/agentcommunity/goalcup-matrix-empty")
+        self.assertNotIn("repo_url", prep)
         self.assertEqual(prep["work_root"], str(cfgdir / "work"))
         self.assertTrue((cfgdir / "work").is_dir())
-        self.assertEqual(json.loads((cfgdir / "github.json").read_text())["token"], TOKEN)
-        self.assertEqual((cfgdir / "github.json").stat().st_mode & 0o777, 0o600)
+        self.assertFalse((cfgdir / "github.json").exists())
+        # A login needs no repository or token: none reaches it.
+        self.assertNotIn(campaign.TOKEN_ENV, runner.envs[0])
         self.assertNotIn(TOKEN, buf.getvalue() + json.dumps(runner.calls))
 
-    def test_a_cell_without_the_token_file_is_refused_before_anything_starts(self):
+    def test_a_cell_without_its_repository_and_token_file_is_refused_before_anything_starts(self):
         for where in ("docker", "host"):
             with self.subTest(where=where):
                 cell = {"id": "a", "where": where, "test_member_id": "m1"}
                 if where == "host":
                     cell["config_dir"] = str(self.root)
-                path = self.write([cell], token=False)
+                path = self.write([cell], github=False)
                 runner = FakeRunner()
                 with redirect_stdout(io.StringIO()) as buf:
                     rc = campaign.main(["run", path, "--out", str(self.root / "o")],
                                        runner=runner, clock=FakeClock())
                 self.assertEqual(rc, 2)
                 self.assertEqual(runner.calls, [])
-                self.assertIn("no GitHub token file", buf.getvalue())
+                self.assertIn("repo is required", buf.getvalue())
+                self.assertIn("github_token_file is required", buf.getvalue())
                 with redirect_stdout(io.StringIO()):
                     self.assertEqual(campaign.main(["check", path, "--static"], runner=runner), 1)
 
@@ -1201,7 +1224,7 @@ class Commands(Base):
         self.assertEqual(runner.calls[0][2:], ["login", "codex-cli"])
         self.assertEqual(runner.envs[0]["LINUX_MATRIX_CELL"], "lin")
         self.assertEqual(runner.envs[0][campaign.KEY_ENV], str(self.key))
-        self.assertEqual(runner.envs[0][campaign.TOKEN_ENV], str(self.token))
+        self.assertNotIn(campaign.TOKEN_ENV, runner.envs[0])
 
     def test_build_runs_linux_matrix_build_once(self):
         path = self.write([{"id": "a", "where": "docker", "test_member_id": "m1"},

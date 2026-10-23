@@ -14,6 +14,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -22,7 +23,7 @@ from pathlib import Path
 SCRIPT = Path(__file__).with_name("linux-matrix.sh")
 SENTINEL = "SENTINEL-KEY-VALUE-never-printed-0123456789"
 TOKEN = "FAKE-GITHUB-TOKEN-for-tests-only-0123456789"
-PRACTICE = "https://github.com/agentcommunity/goalcup-matrix-empty"
+CELL_REPO = "goalcup-kit/kit-cell-1"
 DB_URL = "postgres://reader:db-secret-never-shown@db.invalid/postgres"
 CF_TOKEN = "cf-token-never-shown-0123456789"
 STUB = """#!/bin/sh
@@ -68,7 +69,7 @@ class LinuxMatrixTests(unittest.TestCase):
                      "LINUX_MATRIX_CELL", "LINUX_MATRIX_PREBUILT", "LINUX_MATRIX_CODEX_EFFORT",
                      "MATRIX_PROMPT", "MATRIX_PROMPT_FILE", "MATRIX_PROMPT_DELAY",
                      "MATRIX_SUBMIT_DELAY", "MATRIX_PRE_PROMPT_KEYS", "MATRIX_PRE_PROMPT_DELAY",
-                     "MATRIX_REPO_URL", "MATRIX_GITHUB_TOKEN_FILE", "MATRIX_EXPECT_FILES",
+                     "MATRIX_REPO", "MATRIX_GITHUB_TOKEN_FILE", "MATRIX_EXPECT_FILES",
                      "MATRIX_FETCH_INDEX", "MATRIX_FETCH_STORE", "MATRIX_FETCH_BUCKET",
                      "MATRIX_FETCH_TIMEOUT", "MATRIX_DATABASE_URL_FILE",
                      "MATRIX_CLOUDFLARE_TOKEN_FILE", "DATABASE_URL", "CLOUDFLARE_ACCOUNT_ID",
@@ -389,34 +390,42 @@ class LinuxMatrixTests(unittest.TestCase):
 
     def test_matrix_options_after_the_separator_reach_the_matrix(self) -> None:
         run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "7200", "--keep",
-                              MATRIX_GITHUB_TOKEN_FILE=str(self.token))
+                              MATRIX_GITHUB_TOKEN_FILE=str(self.token), MATRIX_REPO=CELL_REPO)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         [inner] = [x for x in self.docker_lines("exec") if "inner-run" in x]
         self.assertTrue(inner.endswith("inner-run codex-cli --test --duration 7200 --keep"), inner)
         self.assertNotIn(SENTINEL, self.log.read_text() + run.stdout + run.stderr)
 
-    def test_the_token_file_is_mounted_read_only_and_never_passes_its_value(self) -> None:
+    def test_a_test_run_mounts_its_token_file_read_only_and_names_its_repository(self) -> None:
         run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "60",
-                              MATRIX_GITHUB_TOKEN_FILE=str(self.token))
+                              MATRIX_GITHUB_TOKEN_FILE=str(self.token), MATRIX_REPO=CELL_REPO)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         [docker_run] = self.docker_lines("run")
         self.assertIn(f"-v {self.token}:/run/goalcup/github-token:ro", docker_run)
+        self.assertIn(f"-e MATRIX_REPO={CELL_REPO}", docker_run)
         [inner] = [x for x in self.docker_lines("exec") if "inner-run" in x]
         self.assertIn("-e MATRIX_GITHUB_TOKEN_FILE=/run/goalcup/github-token", inner)
         self.assertNotIn(TOKEN, self.log.read_text() + run.stdout + run.stderr)
 
-    def test_a_test_run_without_the_token_file_is_refused_before_docker(self) -> None:
-        run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "60")
+    def test_a_test_run_without_its_repository_or_token_file_is_refused_before_docker(self) -> None:
+        run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "60",
+                              MATRIX_GITHUB_TOKEN_FILE=str(self.token))
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("MATRIX_REPO is needed for --test", run.stdout)
+        run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "60",
+                              MATRIX_REPO=CELL_REPO)
         self.assertEqual(run.returncode, 1)
         self.assertIn("MATRIX_GITHUB_TOKEN_FILE is needed for --test", run.stdout)
         self.assertEqual(self.docker_lines("run"), [])
 
-    def test_login_settles_with_the_token_file(self) -> None:
-        run = self.run_script("login", "codex-cli", STUB_HOME_READY="yes",
-                              MATRIX_GITHUB_TOKEN_FILE=str(self.token))
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        [settle] = [x for x in self.docker_lines("exec") if "inner-settle" in x]
-        self.assertIn("-e MATRIX_GITHUB_TOKEN_FILE=/run/goalcup/github-token", settle)
+    def test_a_login_or_a_practice_run_never_gets_the_token(self) -> None:
+        for args in (("login", "codex-cli"), ("run", "codex-cli")):
+            with self.subTest(args=args):
+                self.log.write_text("")
+                run = self.run_script(*args, STUB_HOME_READY="yes",
+                                      MATRIX_GITHUB_TOKEN_FILE=str(self.token))
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                self.assertNotIn("github-token", self.log.read_text())
 
     def test_other_matrix_options_are_refused(self) -> None:
         for extra in (["--allow-production"], ["--log", "/x"], ["--duration", "2h"],
@@ -775,74 +784,21 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
     def settle(self, **env: str) -> subprocess.CompletedProcess:
         return self.inner("inner-settle", TMPDIR=str(self.base / "tmp"), **env)
 
-    def test_settle_writes_the_token_into_github_json_0600(self) -> None:
-        token = self.base / "github-token"
-        token.write_text(TOKEN + "\n")
+    def test_settle_sets_the_work_folder_and_writes_no_github_file(self) -> None:
         cfg = self.base / "vol/cfg"
         cfg.mkdir(parents=True)
         (cfg / "prep.json").write_text(json.dumps({"harness": "codex-cli", "home_ready": True}))
-        (cfg / "github.json").write_text(json.dumps({"repo_url": PRACTICE,
-                                                     "token": "ghp_matrixfaketoken00000000000000000000"}))
-        run = self.settle(MATRIX_GITHUB_TOKEN_FILE=str(token))
+        run = self.settle()
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertEqual(json.loads((cfg / "github.json").read_text()),
-                         {"repo_url": PRACTICE, "token": TOKEN})
         prep = json.loads((cfg / "prep.json").read_text())
-        self.assertEqual(prep, {"harness": "codex-cli", "home_ready": True, "repo_url": PRACTICE,
+        self.assertEqual(prep, {"harness": "codex-cli", "home_ready": True,
                                 "work_root": str(self.base / "vol/work")})
-        for name in ("github.json", "prep.json"):
-            self.assertEqual(stat.S_IMODE((cfg / name).stat().st_mode), 0o600, name)
-        self.assertEqual(sorted(p.name for p in cfg.iterdir()), ["github.json", "prep.json"])
-        self.assertNotIn(TOKEN, run.stdout + run.stderr)
-
-    def test_settle_keeps_a_prepared_full_flow_repository(self) -> None:
-        token = self.base / "github-token"
-        token.write_text(TOKEN + "\n")
-        cfg = self.base / "vol/cfg"
-        cfg.mkdir(parents=True)
-        prep = json.dumps({"harness": "codex-cli", "repo_url": "https://github.com/someone/entry",
-                           "work_root": "/vol/work", "home_ready": True})
-        gh = json.dumps({"repo_url": "https://github.com/someone/entry",
-                         "token": "FAKE-participant-token-for-tests-0000"})
-        (cfg / "prep.json").write_text(prep)
-        (cfg / "github.json").write_text(gh)
-        run = self.settle(MATRIX_GITHUB_TOKEN_FILE=str(token))
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertEqual((cfg / "prep.json").read_text(), prep)
-        self.assertEqual((cfg / "github.json").read_text(), gh)
-
-    def test_settle_without_a_token_file_never_overwrites_a_real_token(self) -> None:
-        cfg = self.base / "vol/cfg"
-        cfg.mkdir(parents=True)
-        prep = json.dumps({"harness": "codex-cli"})
-        gh = json.dumps({"repo_url": "https://github.com/someone/other", "token": SENTINEL})
-        (cfg / "prep.json").write_text(prep)
-        (cfg / "github.json").write_text(gh)
-        run = self.settle()
-        self.assertNotEqual(run.returncode, 0)
-        self.assertIn("FAIL settle", run.stdout)
-        self.assertNotIn(SENTINEL, run.stdout + run.stderr)
-        self.assertEqual((cfg / "github.json").read_text(), gh)
-        self.assertEqual((cfg / "prep.json").read_text(), prep)
-        # The placeholder itself is the kit's, and is replaced as before.
-        (cfg / "github.json").write_text(json.dumps(
-            {"repo_url": "https://github.com/someone/other",
-             "token": "ghp_matrixfaketoken00000000000000000000"}))
-        run = self.settle()
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertEqual(json.loads((cfg / "github.json").read_text())["repo_url"], PRACTICE)
-
-    def test_settle_refuses_a_token_file_without_a_token_and_never_prints_it(self) -> None:
-        token = self.base / "github-token"
-        token.write_text("not a token " + SENTINEL + "\n")
-        cfg = self.base / "vol/cfg"
-        cfg.mkdir(parents=True)
-        (cfg / "prep.json").write_text(json.dumps({"harness": "codex-cli"}))
-        run = self.settle(MATRIX_GITHUB_TOKEN_FILE=str(token))
-        self.assertNotEqual(run.returncode, 0)
-        self.assertIn("FAIL settle", run.stdout)
-        self.assertNotIn(SENTINEL, run.stdout + run.stderr)
-        self.assertFalse((cfg / "github.json").exists())
+        self.assertEqual(stat.S_IMODE((cfg / "prep.json").stat().st_mode), 0o600)
+        self.assertEqual(sorted(p.name for p in cfg.iterdir()), ["prep.json"])
+        # A work folder setup chose is kept.
+        (cfg / "prep.json").write_text(json.dumps({"harness": "codex-cli", "work_root": "/w"}))
+        self.assertEqual(self.settle().returncode, 0)
+        self.assertEqual(json.loads((cfg / "prep.json").read_text())["work_root"], "/w")
 
     def test_home_files_lists_names_never_contents(self) -> None:
         home = self.homes / "claude-code-cli"
@@ -854,6 +810,44 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
         self.assertIn(".credentials.json", run.stdout)
         self.assertIn("projects/p/s.jsonl", run.stdout)
         self.assertNotIn(SENTINEL, run.stdout + run.stderr)
+
+
+class KitGitLoginTests(unittest.TestCase):
+    """scripts/kit_settle.py git-login refuses before it makes a login, and never says the token.
+    (A login it makes is covered by the matrix's own tests, scripts/test_matrix.py.)"""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name)
+        self.bin = self.base / "bin"
+        self.bin.mkdir()
+
+    def git_login(self, token_text: str, with_gh: bool) -> subprocess.CompletedProcess:
+        token = self.base / "token"
+        token.write_text(token_text)
+        if with_gh:
+            gh = self.bin / "gh"
+            gh.write_text("#!/bin/sh\necho --insecure-storage\n")
+            gh.chmod(0o755)
+        return subprocess.run(
+            [sys.executable, str(SCRIPT.with_name("kit_settle.py")), "git-login",
+             str(self.base / "git")],
+            env={"PATH": str(self.bin), "MATRIX_GITHUB_TOKEN_FILE": str(token)},
+            capture_output=True, text=True, timeout=60)
+
+    def test_a_token_file_without_a_token_is_refused_and_never_printed(self) -> None:
+        run = self.git_login("not a token " + SENTINEL + "\n", with_gh=True)
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("holds no token", run.stdout)
+        self.assertNotIn(SENTINEL, run.stdout + run.stderr)
+        self.assertFalse((self.base / "git").exists())
+
+    def test_no_gh_is_refused_before_anything_is_made(self) -> None:
+        run = self.git_login(TOKEN + "\n", with_gh=False)
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("gh is needed", run.stdout)
+        self.assertFalse((self.base / "git").exists())
 
 
 class CodexModelCheckTests(unittest.TestCase):

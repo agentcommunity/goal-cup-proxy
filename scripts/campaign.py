@@ -36,14 +36,19 @@ drill is always undone (try/finally; on Ctrl-C too). Host: the campaign never ru
 command; it prints `DRILL-NOW cell=<id> kind=<kind> do: <command>` for the person or agent at the
 machine, then `DRILL-END ... do: <undo>` after `seconds`, and records both. `note` only prints.
 
+Repositories and git logins. Every cell is a test run, and a test run asks for its own new,
+empty, public GitHub repository at its start (D69): the cell's `repo` (<owner>/<name>), which
+scripts/matrix.sh passes as `goalcup start --repo`. The agent pushes with the cell's own git
+login, made by matrix.sh for that run from the cell's `github_token_file` (given to the children
+as MATRIX_GITHUB_TOKEN_FILE; scripts/kit_settle.py git-login) and removed when the run ends; never
+this machine's. That token must reach the cell's repository and nothing else (a fine-grained
+token, "Only select repositories"), so no two cells share a repository or a token file. Nothing
+writes a token into a cell's configuration. A cell whose agent pushes needs a new repository
+before its next run.
+
 Secrets. The approval key is only ever a FILE whose path goes to the child scripts in
 GOALCUP_TEST_APPROVAL_KEY_FILE. This script never opens it, and the path is never in an argument.
-The same holds for the GitHub token (`defaults.github_token_file`, MATRIX_GITHUB_TOKEN_FILE to the
-children): every cell is a test run, and a test start asks GitHub, with that token, whether the
-repository is empty. scripts/kit_settle.py writes it into the cell's github.json: in the container
-for a docker cell, from here after `login` and before each `run` for a host cell (so a token
-rotated later is picked up). It must not be able to push to the practice repository: one agent
-push there makes every later test start refuse it. Production (ingest.agentcommunity.org) is
+The same holds for each cell's GitHub token file. Production (ingest.agentcommunity.org) is
 refused.
 
 Before website migration 20261021100000 a test run replaces an earlier test run of the same
@@ -80,6 +85,10 @@ KIT = HERE / "kit_settle.py"
 # campaign starts at most one cell per this many seconds.
 START_SPACING_S = 30
 CELL_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+REPO_ID = re.compile(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}")
+# The organisers' practice repository (the server is told it for every practice run): no kit token
+# may reach it, so no cell may name it.
+PRACTICE_REPO = "agentcommunity/goalcup-matrix-empty"
 CONNECTOR_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 MEMBER_ID = re.compile(r"[A-Za-z0-9_-]+")
 EFFORTS = ("low", "minimal")  # what linux-matrix.sh accepts (LINUX_MATRIX_CODEX_EFFORT)
@@ -269,7 +278,6 @@ def normalize_config(doc, base, source="<config>"):
         "name": str(doc.get("name") or Path(source).stem),
         "server": str(defaults.get("server") or STAGING).rstrip("/"),
         "approval_key_file": _abs(base, defaults.get("approval_key_file") or os.environ.get(KEY_ENV)),
-        "github_token_file": _abs(base, defaults.get("github_token_file")),
         "sample_every_s": defaults.get("sample_every_s"),
         "matrix_timeout_slack_s": defaults.get("matrix_timeout_slack_s"),
         "goalcup": defaults.get("goalcup"),
@@ -278,7 +286,7 @@ def normalize_config(doc, base, source="<config>"):
         "cells": [],
     }
     cell_keys = ("where", "connector", "duration_s", "test_member_id", "prompt_file", "config_dir",
-                 "codex_effort", "drills")
+                 "codex_effort", "drills", "repo", "github_token_file")
     for raw in doc["cells"]:
         if not isinstance(raw, dict):
             raise ConfigError("every cell is an object")
@@ -287,6 +295,7 @@ def normalize_config(doc, base, source="<config>"):
         cell["id"] = str(raw.get("id", ""))
         cell["prompt_file"] = _abs(base, cell.get("prompt_file"))
         cell["config_dir"] = _abs(base, cell.get("config_dir"))
+        cell["github_token_file"] = _abs(base, cell.get("github_token_file"))
         cell["drills"] = [dict(d) for d in (cell.get("drills") or [])]
         cfg["cells"].append(cell)
     return cfg
@@ -303,8 +312,9 @@ def select_cells(cfg, names):
     return [known[n] for n in want]
 
 
-def validate(cfg, cells, parallel):
-    """Static checks (no docker, no network). Returns (errors, warnings)."""
+def validate(cfg, cells, parallel, github=True):
+    """Static checks (no docker, no network). Returns (errors, warnings). `github` False leaves out
+    each cell's repository and token file (a build or a login needs neither)."""
     errors, warnings = [], []
     server = cfg["server"]
     host = re.sub(r"^[a-z]+://", "", server).split("/")[0].split(":")[0].lower()
@@ -323,16 +333,6 @@ def validate(cfg, cells, parallel):
         errors.append("the approval key file must be an absolute path without : or ,")
     elif not (os.path.isfile(key) and os.access(key, os.R_OK)):
         errors.append("the approval key file is not a regular file this user can read")
-    # Every cell is a test run, and a test start asks GitHub, with this token, whether the
-    # repository is empty.
-    token = cfg.get("github_token_file")
-    if not token:
-        errors.append("no GitHub token file: set defaults.github_token_file (a test start asks "
-                      "GitHub, with that token, whether the repository is empty)")
-    elif not os.path.isabs(token) or ":" in token or "," in token:
-        errors.append("the GitHub token file must be an absolute path without : or ,")
-    elif not (os.path.isfile(token) and os.access(token, os.R_OK)):
-        errors.append("the GitHub token file is not a regular file this user can read")
     for name in ("sample_every_s",):
         v = cfg.get(name)
         if not isinstance(v, int) or isinstance(v, bool) or v < 1:
@@ -341,7 +341,7 @@ def validate(cfg, cells, parallel):
     if slack is not None and (not isinstance(slack, int) or isinstance(slack, bool) or slack < 0):
         errors.append("defaults.matrix_timeout_slack_s must be an integer of at least 0")
 
-    seen_ids, dirs, volumes, members = set(), {}, {}, {}
+    seen_ids, dirs, volumes, members, repos, tokens = set(), {}, {}, {}, {}, {}
     for cell in cells:
         cid = cell["id"]
         tag = f"cell {cid or '?'}"
@@ -364,6 +364,8 @@ def validate(cfg, cells, parallel):
             errors.append(f"{tag}: test_member_id is required (letters, digits, _ -)")
         else:
             members.setdefault(member, []).append(cid)
+        if github:
+            errors.extend(f"{tag}: {e}" for e in validate_github(cell, cid, repos, tokens))
         pf = cell.get("prompt_file")
         if pf and not (os.path.isfile(pf) and os.access(pf, os.R_OK)):
             errors.append(f"{tag}: prompt_file {pf} is not a readable file")
@@ -398,6 +400,36 @@ def validate(cfg, cells, parallel):
                     "same time; a test run replaces the same operator's earlier one. Give each "
                     "a distinct test operator, or use --parallel 1")
     return errors, warnings
+
+
+def validate_github(cell, cid, repos, tokens):
+    """A cell's repository and token file: its own, each. `repos` and `tokens` collect what earlier
+    cells named."""
+    errors = []
+    repo = str(cell.get("repo") or "")
+    if not REPO_ID.fullmatch(repo):
+        errors.append("repo is required: the cell's own new, empty, public repository, "
+                      "<owner>/<name> (a test run asks for one at its start)")
+    elif repo.lower() == PRACTICE_REPO:
+        errors.append("repo is the organisers' practice repository; give the cell one of its own")
+    elif repo.lower() in repos:
+        errors.append(f"repo {repo} is also cell {repos[repo.lower()]}'s; each cell needs its own")
+    else:
+        repos[repo.lower()] = cid
+    token = cell.get("github_token_file")
+    if not token:
+        errors.append("github_token_file is required: a token that can push to the cell's repo "
+                      "and nowhere else")
+    elif ":" in token or "," in token:
+        errors.append("the GitHub token file must be an absolute path without : or ,")
+    elif not (os.path.isfile(token) and os.access(token, os.R_OK)):
+        errors.append("the GitHub token file is not a regular file this user can read")
+    elif os.path.realpath(token) in tokens:
+        errors.append(f"github_token_file is also cell {tokens[os.path.realpath(token)]}'s; a "
+                      "cell's token reaches its own repo alone, so each cell has its own")
+    else:
+        tokens[os.path.realpath(token)] = cid
+    return errors
 
 
 def validate_drills(drills, duration):
@@ -471,9 +503,8 @@ def run_command(cfg, cell, cell_dir):
     slack = cfg.get("matrix_timeout_slack_s")
     if slack:
         extra = ["--timeout", str(d + int(slack))]
-    env = {KEY_ENV: cfg["approval_key_file"], "GOALCUP_TEST_MEMBER_ID": cell["test_member_id"]}
-    if cell["where"] == "docker":
-        env[TOKEN_ENV] = cfg["github_token_file"]
+    env = {KEY_ENV: cfg["approval_key_file"], "GOALCUP_TEST_MEMBER_ID": cell["test_member_id"],
+           TOKEN_ENV: cell["github_token_file"], "MATRIX_REPO": cell["repo"]}
     if cell.get("prompt_file"):
         env["MATRIX_PROMPT_FILE"] = cell["prompt_file"]
         env["MATRIX_PROMPT"] = None  # matrix.sh refuses both
@@ -499,14 +530,10 @@ def run_command(cfg, cell, cell_dir):
     return argv, env
 
 
-def settle_command(cfg, cell):
-    """(argv, env) of scripts/kit_settle.py for a host cell: its prep.json and github.json, the
-    token's path only in env."""
+def settle_command(cell):
+    """(argv, env) of scripts/kit_settle.py for a host cell: its prep.json's work folder."""
     cd = cell["config_dir"]
-    argv = [sys.executable, str(KIT), "settle", cd, os.path.join(cd, "work")]
-    if os.environ.get("MATRIX_REPO_URL"):
-        argv.append(os.environ["MATRIX_REPO_URL"])
-    return argv, child_env({TOKEN_ENV: cfg["github_token_file"]})
+    return [sys.executable, str(KIT), "settle", cd, os.path.join(cd, "work")], child_env({})
 
 
 def kit_command(cell, *args):
@@ -1146,9 +1173,9 @@ class CellRun:
         self.write_result(exit_code=rc, interrupted=camp.stopping.is_set())
 
     def _settle(self):
-        """A host cell's prep.json and github.json, before its run (a docker cell settles in its
-        container). A refusal ends the cell before anything starts."""
-        argv, env = settle_command(self.camp.cfg, self.cell)
+        """A host cell's prep.json, before its run (a docker cell settles in its container). A
+        refusal ends the cell before anything starts."""
+        argv, env = settle_command(self.cell)
         rc, out = self.camp.runner.run(argv, env=env, timeout=60)
         for line in out.splitlines():
             self.logline(line, own=True)
@@ -1628,10 +1655,10 @@ def cmd_check(args, runner, say=print):
 
 def cmd_build(args, runner):
     cfg = load_config(args.config)
-    errors, _ = validate(cfg, cfg["cells"], 1)
+    errors, _ = validate(cfg, cfg["cells"], 1, github=False)
     # Build comes before the sign-ins, and a host cell's configuration directory is made by its
-    # login. A build needs no token either.
-    errors = [e for e in errors if "does not exist" not in e and "GitHub token" not in e]
+    # login. A build needs no repository or token either.
+    errors = [e for e in errors if "does not exist" not in e]
     if errors:
         for m in errors:
             print(f"error {m}", file=sys.stderr)
@@ -1649,15 +1676,16 @@ def cmd_build(args, runner):
 def cmd_login(args, runner):
     cfg = load_config(args.config)
     cell = select_cells(cfg, args.cell)[0]
-    errors, _ = validate(cfg, [cell], 1)
-    # A host cell's configuration directory is made by this very login.
+    errors, _ = validate(cfg, [cell], 1, github=False)
+    # A host cell's configuration directory is made by this very login. A login needs no
+    # repository or token: a test run names its own at its start.
     errors = [e for e in errors if "does not exist" not in e]
     if errors:
         for m in errors:
             print(f"error {m}", file=sys.stderr)
         return 2
     if cell["where"] == "docker":
-        env = child_env({KEY_ENV: cfg["approval_key_file"], TOKEN_ENV: cfg["github_token_file"],
+        env = child_env({KEY_ENV: cfg["approval_key_file"],
                          "LINUX_MATRIX_CELL": cell["id"],
                          "LINUX_MATRIX_PREBUILT": "1", "LINUX_MATRIX_SERVER": cfg["server"],
                          "GOALCUP_TEST_MEMBER_ID": cell["test_member_id"],
@@ -1672,18 +1700,19 @@ def cmd_login(args, runner):
     rc = runner.interactive([goalcup, "login", "--server", cfg["server"]], env=env)
     if rc != 0:
         return rc
-    rc = runner.interactive([goalcup, "prep", "--harness", cell["connector"]], env=env)
-    # prep exits 1 while any of its steps is still to do, which a kit cell always has (no push
-    # helper, a practice repository): what this login needs is the harness home signed in.
+    rc = runner.interactive([goalcup, "setup", "--harness", cell["connector"], "--work-root",
+                             os.path.join(cell["config_dir"], "work")], env=env)
+    # setup exits 1 while any of its steps is still to do (this machine's power or network, say):
+    # what this login needs is the harness home signed in.
     prep = read_json(os.path.join(cell["config_dir"], "prep.json")) or {}
     if not (prep.get("harness") == cell["connector"] and prep.get("home_ready") is True):
-        print(f"error cell {cell['id']}: goalcup prep (exit {rc}) did not record the "
+        print(f"error cell {cell['id']}: goalcup setup (exit {rc}) did not record the "
               f"{cell['connector']} home as signed in (prep.json home_ready)", file=sys.stderr)
         return rc or 1
     if rc != 0:
-        print(f"note  cell {cell['id']}: goalcup prep exited {rc} with steps still to do; the "
+        print(f"note  cell {cell['id']}: goalcup setup exited {rc} with steps still to do; the "
               f"{cell['connector']} home is signed in, so the kit settles the rest")
-    argv, env = settle_command(cfg, cell)
+    argv, env = settle_command(cell)
     rc, out = runner.run(argv, env=env, timeout=60)
     print(out, end="")
     return rc
