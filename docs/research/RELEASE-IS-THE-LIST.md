@@ -134,4 +134,4 @@ Add to `docs/DECISIONS.md` once D68 (#243) and D69 (#257) are on `main`, and rep
 > `CONTROL_API_VERSION`. `--dev` never enters the competition, and the Worker refuses it for a
 > member who is not in `public.admins`. A connector may list known-bad harness versions, which
 > `setup` and `start` warn about. D43 ruling 4 (a server list of digests) is withdrawn. See
-> [RELEASE-IS-THE-LIST](research/RELEASE-IS-THE-LIST.md).
+> RELEASE-IS-THE-LIST (in `DECISIONS.md`, link it as `research/RELEASE-IS-THE-LIST.md`).
