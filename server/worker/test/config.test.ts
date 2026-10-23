@@ -109,7 +109,7 @@ test("TEST_APPROVAL_KEY is honoured only with the local backend or STAGING=on", 
 });
 
 test("repo_url shape", () => {
-  assert.ok(REPO_URL.test("https://github.com/agentcommunity/goal-cup-tracer"));
+  assert.ok(REPO_URL.test("https://github.com/agentcommunity/goal-cup-proxy"));
   assert.ok(REPO_URL.test("https://github.com/a-b/c.d_e"));
   for (const bad of [
     "http://github.com/a/b",

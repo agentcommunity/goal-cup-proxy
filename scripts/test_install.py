@@ -266,6 +266,48 @@ class InstallTests(unittest.TestCase):
             tool.chmod(0o755)
         return f"{fake}{os.pathsep}{self.base_path}"
 
+    def logging_curl(self, release: Path) -> tuple[str, Path]:
+        """A PATH whose `curl` logs each URL and serves the file of the same name from `release`."""
+        fake = Path(tempfile.mkdtemp(dir=self.root))
+        log = fake / "urls"
+        curl = fake / "curl"
+        curl.write_text(
+            "#!/bin/sh\n"
+            'out=""; url=""\n'
+            'while [ $# -gt 0 ]; do\n'
+            '    case "$1" in -o) out=$2; shift 2 ;; *) url=$1; shift ;; esac\n'
+            "done\n"
+            f'echo "$url" >> "{log}"\n'
+            f'cp "{release}/${{url##*/}}" "$out"\n'
+        )
+        curl.chmod(0o755)
+        return f"{fake}{os.pathsep}{os.environ['PATH']}", log
+
+    def test_downloads_come_from_the_goal_cup_proxy_releases(self) -> None:
+        # The repository was renamed from goal-cup-tracer. GitHub redirects the old URL, but the
+        # installer asks for the new one; GOALCUP_RELEASE_BASE still replaces it.
+        release = make_release(self.root, {"codex-cli": "a"})
+        github = "https://github.com/agentcommunity/goal-cup-proxy/releases"
+        cases = [
+            ([], {}, f"{github}/latest/download"),
+            (["--version", "v1.2.3"], {}, f"{github}/download/v1.2.3"),
+            ([], {"GOALCUP_VERSION": "1.2.4"}, f"{github}/download/v1.2.4"),
+            ([], {"GOALCUP_RELEASE_BASE": "https://mirror.example/r/"}, "https://mirror.example/r"),
+        ]
+        for args, env, base in cases:
+            with self.subTest(base=base):
+                path, log = self.logging_curl(release)
+                prefix = Path(tempfile.mkdtemp(dir=self.root))
+                result = subprocess.run(
+                    ["sh", str(INSTALL), "--prefix", str(prefix), *args],
+                    env={"PATH": path, "HOME": str(self.home), **env},
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                tarball = f"goalcup-{VERSION}-{this_target()}.tar.gz"
+                self.assertEqual(log.read_text().split(), [f"{base}/SHA256SUMS", f"{base}/{tarball}"])
+
     def test_unsupported_system_is_refused_before_any_download(self) -> None:
         result = self.install(self.root / "missing", PATH=self.fake_tools("FreeBSD", "amd64"))
         self.assertNotEqual(result.returncode, 0)

@@ -861,7 +861,7 @@ fn mixed_observations_end_in_one_bound_summary() {
 
     // Each decoder: its declared identity and version, and counts that are its own lines.
     let versions = [
-        "3",
+        "4",
         "2.1.259-2.1.283",
         openai::DECODER_VERSION,
         anthropic::DECODER_VERSION,
@@ -965,7 +965,7 @@ fn the_report_echoes_launch_keys_and_presents_connector_pin_provenance() {
     assert_eq!(summary["run"]["connector"], "Dev/unpinned");
     assert_eq!(
         hex::encode(Sha256::digest(unversioned(&bytes))),
-        "558ef7001261e52f93a575732216f23c01ed619cb07d03c09c366979433c7d2d"
+        "1dc81c319c1e7733fc57dc54709df6b079feaaf886f7b6d2969e2fa7f396012b"
     );
 
     let (pinned_id, pinned_digest) = CONNECTOR_DIR_SHA256S[0];

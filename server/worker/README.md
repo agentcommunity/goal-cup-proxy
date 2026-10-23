@@ -271,7 +271,7 @@ checkout (`agentCommunity_PAGE`), not in `server/worker`.
 6. Look at the rows: `psql "$DATABASE_URL_REMOTE" -X -c "select id, mode, start_window_opens,
    start_window_closes from goal_cup_tracer.events where staging = false order by id"`.
 7. Mirror the migration into this repository. Set `F` to the full path of
-   `server/worker/sql/goal-cup-tracer-upload.sql` in a goal-cup-tracer worktree, and run the regeneration command in
+   `server/worker/sql/goal-cup-tracer-upload.sql` in a goal-cup-proxy worktree, and run the regeneration command in
    the header of that file (the lines above `REGEN-END`) from the root of the website checkout at its
    `main`. Read `git diff` of the mirror: the only new part must be your migration. Commit it and open a pull
    request here.

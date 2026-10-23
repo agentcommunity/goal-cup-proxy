@@ -1550,7 +1550,7 @@ fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
 
 /// The setup guide (fix plan v8), as prep links to it.
 const SETUP_GUIDE: &str =
-    "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/HARNESS-SETUP.md";
+    "https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/HARNESS-SETUP.md";
 
 /// Fix plan v8: prep's harness step points to the setup guide on every prep, with nothing
 /// missing too, at the section the connector names, else at the guide; the step stays ok.

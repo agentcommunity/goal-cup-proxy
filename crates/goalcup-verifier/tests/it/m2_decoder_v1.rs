@@ -1057,12 +1057,12 @@ fn the_builtin_registry_lists_the_six_decoders_in_report_order() {
     assert_eq!(
         DecoderRegistry::builtin().ids(),
         [
-            ("codex-native", "3"),
+            ("codex-native", "4"),
             ("claude-code-native", "2.1.259-2.1.283"),
             ("openai-responses", "2"),
             ("anthropic-messages", "3"),
             ("openai-chat-completions", "2"),
-            ("amp-thread-jsonrpc", "2"),
+            ("amp-thread-jsonrpc", "3"),
         ]
     );
     assert!(DecoderRegistry::empty().ids().is_empty());

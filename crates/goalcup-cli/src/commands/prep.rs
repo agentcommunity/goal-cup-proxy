@@ -788,11 +788,11 @@ fn model_host_problem(cfg: &Path, connector: &HarnessConnector) -> Option<String
 
 /// The participant's harness setup guide (fix plan v8): every setting a 168-hour run needs.
 pub const SETUP_GUIDE: &str =
-    "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/HARNESS-SETUP.md";
+    "https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/HARNESS-SETUP.md";
 
 /// The setup guide's link for `connector`: its `participant.setup_section`, else the guide.
 /// The section comes from the connector's data, so this names no harness.
-fn setup_guide_link(connector: &HarnessConnector) -> String {
+pub(crate) fn setup_guide_link(connector: &HarnessConnector) -> String {
     match connector.loaded.manifest.setup_section() {
         Some(section) => format!("{SETUP_GUIDE}#{section}"),
         None => SETUP_GUIDE.to_string(),

@@ -178,6 +178,9 @@ pub(crate) struct CaptureEntry {
     cycles: Arc<CycleCounters>,
     /// `None` for an entry reopened after a restart: it admits no producer again.
     ingest: Option<Arc<IngestEntry>>,
+    /// The files its native source has admitted, as the owner last counted them. `None` without
+    /// a native reader (a reopened entry).
+    native_files: Option<Arc<AtomicU64>>,
     sink: Arc<OwnerSink>,
     writer: Arc<Mutex<ChainWriter>>,
     /// The baseline recorded the workspace's Git state, read or not: the seal reads it again and
@@ -292,6 +295,28 @@ pub(super) fn fresh_capture_id() -> String {
     hex::encode(bytes)
 }
 
+/// A continued run's workspace is the root of its own clone ([`workspace::clone_root`]), or the
+/// create is refused with what is there instead. A precondition, not a rule: it says nothing of
+/// what the agent did in the clone.
+fn check_existing_clone(workspace: &Path) -> Result<(), DaemonError> {
+    use workspace::CloneRoot;
+    let what = match workspace::clone_root(workspace) {
+        CloneRoot::Clone => return Ok(()),
+        CloneRoot::Missing => "is not there".to_string(),
+        CloneRoot::NotAFolder => "is not a folder".to_string(),
+        CloneRoot::NoGitDirectory => "has no .git directory".to_string(),
+        CloneRoot::InsideRepository(outer) => {
+            format!("is inside the Git repository {}", outer.display())
+        }
+        CloneRoot::Unreadable(kind) => format!("cannot be read ({kind})"),
+    };
+    Err(DaemonError::Guard(format!(
+        "the run's clone {} {what}: a continued run goes on in the clone it has, and it is not \
+         made again",
+        workspace.display()
+    )))
+}
+
 impl Daemon {
     /// Create a v5 local capture entry for `manifest`'s capture profile: preflight the
     /// profile's redaction, set the chain's quota, chain the v5 baseline of the fresh workspace,
@@ -310,7 +335,14 @@ impl Daemon {
         reserve_bytes: u64,
         native_since: Option<u64>,
         secrets: crate::redact::RunSecrets,
+        existing_clone: bool,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
+        // A continued run goes on in the clone it has (D4). Judged here, where the workspace is
+        // made, and before anything is: a clone that went between `goalcup continue`'s own look
+        // and this create is refused, never made again as a new, empty folder.
+        if existing_clone {
+            check_existing_clone(workspace)?;
+        }
         let config_home = isolated_config_home(config_home, every_loaded_real_dir)?;
         let run_home = &isolated_run_home(
             manifest.capture.home.run_home,
@@ -505,7 +537,10 @@ impl Daemon {
             sink: capture.sink.clone(),
             prior_producers: 0,
         })?);
-        let owner = Owner::new(
+        let native_files = native
+            .as_ref()
+            .map(|_| Arc::new(AtomicU64::new(owner::NATIVE_NOT_ADMITTED)));
+        let mut owner = Owner::new(
             capture.sink.clone(),
             capture.writer.clone(),
             clock,
@@ -515,6 +550,10 @@ impl Daemon {
             native,
         )
         .noting_to(self.inner.cycles.clone());
+        if let Some(files) = &native_files {
+            owner = owner.counting_native_files_to(files.clone());
+        }
+        capture.native_files = native_files;
         let thread = owner
             .spawn(capture.owner.clone())
             .map_err(|source| DaemonError::Io {
@@ -900,7 +939,7 @@ impl Daemon {
             return capture.signed_status(cycles).map(Some);
         }
         match self.sealed_capture(entry_id)? {
-            Some((row, sealed)) => sign_capture_status(&row, sealed, None, cycles).map(Some),
+            Some((row, sealed)) => sign_capture_status(&row, sealed, None, None, cycles).map(Some),
             None => Ok(None),
         }
     }
@@ -1035,12 +1074,14 @@ pub(super) struct ChainedFinish {
     pub(super) manifest: Option<SealManifest>,
 }
 
-/// Sign a v5 entry's status with `capture` as its capture projection and the receiver's
-/// `admission` counts, which only an entry still holding its ingest grant has.
+/// Sign a v5 entry's status with `capture` as its capture projection, the receiver's
+/// `admission` counts, which only an entry still holding its ingest grant has, and the files its
+/// native reader has admitted, which only a live entry has.
 fn sign_capture_status(
     entry: &Entry,
     capture: M2Status,
     admission: Option<EntrySnapshot>,
+    native_files: Option<u64>,
     cycles: CycleErrors,
 ) -> Result<SignedStatus, DaemonError> {
     let mut payload = status::build_payload(&status::StatusInputs {
@@ -1055,6 +1096,7 @@ fn sign_capture_status(
     });
     payload.producers_consumed = admission.map(|a| a.producers_consumed as u64);
     payload.admissions_refused = admission.map(|a| a.admissions_refused);
+    payload.native_files_admitted = native_files;
     status::sign_payload(payload, now_rfc3339(), &entry.keys.signing_key()?)
 }
 
@@ -1076,6 +1118,7 @@ impl CaptureEntry {
             clock,
             cycles: Arc::new(CycleCounters::default()),
             ingest: None,
+            native_files: None,
             sink: Arc::new(OwnerSink::default()),
             clone: read_manifest(&writer.export, FixedTraceDocument::Baseline).map_or_else(
                 || workspace::is_clone_root(&entry.workspace),
@@ -1250,9 +1293,14 @@ impl CaptureEntry {
     /// read before any capture lock, which a sink call never waits on.
     fn signed_status(&self, cycles: CycleErrors) -> Result<SignedStatus, DaemonError> {
         let admission = self.ingest.as_ref().map(|ingest| ingest.snapshot());
+        let native_files = self
+            .native_files
+            .as_ref()
+            .map(|files| files.load(Ordering::Acquire))
+            .filter(|files| *files != owner::NATIVE_NOT_ADMITTED);
         let run = self.lock();
         let snapshot = self.snapshot(run.finished(), run.launched());
-        sign_capture_status(&run.entry, snapshot, admission, cycles)
+        sign_capture_status(&run.entry, snapshot, admission, native_files, cycles)
     }
 
     /// The capture projection of the entry now, given its committed finish, if any.

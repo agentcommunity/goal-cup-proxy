@@ -520,6 +520,7 @@ fn a_problem_line_ends_with_its_fix() {
         harness: "Some Agent",
         run_id: "r1",
         until: Some("Sat 14 Nov, 10:12 UTC"),
+        guide: "https://example.test/HARNESS-SETUP.md",
     };
     assert!(
         problem_agent_exited(

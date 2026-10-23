@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 /// The upload server this run opens with: `None` with no `goalcup login`. With a server, `goalcup
 /// prep` must have run: its repository, its work folder and the GitHub token are checked here, all
 /// before the participant is asked for anything and before anything is created. A `--dev` run is
-/// uploaded like any other; the server refuses a connector it does not accept.
+/// uploaded like any other: the server records its connector id and directory digest and checks
+/// neither against a list (docs/CONNECTOR-SCHEMA.md, "Pinned, or `--dev` only").
 pub(super) fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,
@@ -503,7 +504,7 @@ impl Uploading {
         crate::upload::keep_run(cfg, &record, &receipt)?;
         let line = match opened.segment {
             Some(segment) => format!(
-                "run {} continued on {}: segment {segment}, deadline {}",
+                "run {} continued on {}: part {segment}, deadline {}",
                 record.run_id, record.server_url, record.deadline_at
             ),
             None => format!(

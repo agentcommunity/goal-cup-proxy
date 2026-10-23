@@ -8,13 +8,13 @@ first for anything large. Read [AGENTS.md](AGENTS.md) once: its rules bind peopl
 
 ## From fork to pull request
 
-The upstream repository is `https://github.com/agentcommunity/goal-cup-tracer.git`. Every pull
+The upstream repository is `https://github.com/agentcommunity/goal-cup-proxy.git`. Every pull
 request targets its `main` branch. Fork it under your own account, then:
 
 ```
-git clone https://github.com/<your-account>/goal-cup-tracer.git
-cd goal-cup-tracer
-git remote add upstream https://github.com/agentcommunity/goal-cup-tracer.git
+git clone https://github.com/<your-account>/goal-cup-proxy.git
+cd goal-cup-proxy
+git remote add upstream https://github.com/agentcommunity/goal-cup-proxy.git
 git fetch upstream
 git switch -c <topic> upstream/main
 # edit, then run the gate below
@@ -22,7 +22,7 @@ git commit -m "<area>: <what changed>"
 git push -u origin <topic>
 ```
 
-Open a pull request from `<your-account>:<topic>` into `agentcommunity/goal-cup-tracer:main` and
+Open a pull request from `<your-account>:<topic>` into `agentcommunity/goal-cup-proxy:main` and
 fill in the template. Keep a PR to one concern. Do not paste a credential, token or real
 transcript anywhere in a PR, issue or comment. If you did by accident, say so privately
 ([SECURITY.md](SECURITY.md)) and rotate it.

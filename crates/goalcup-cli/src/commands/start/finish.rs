@@ -184,10 +184,10 @@ pub(super) fn finish_run(
         let report = drain.wait(wrap_up);
         sent_whole &= report.caught_up;
         let line = if report.caught_up {
-            format!("uploaded: entry {entry}, an earlier segment of this run, acknowledged.")
+            format!("uploaded: part {entry}, an earlier part of this run, acknowledged.")
         } else {
             format!(
-                "upload of entry {entry}, an earlier segment, is incomplete ({}). {how_to_finish}",
+                "upload of part {entry}, an earlier part of this run, is incomplete ({}). {how_to_finish}",
                 report.why.as_deref().unwrap_or("the upload did not finish")
             )
         };

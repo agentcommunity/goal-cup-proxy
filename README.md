@@ -22,7 +22,7 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
 1. **Install** the latest release (macOS or Linux; on Windows, inside WSL2):
 
    ```sh
-   curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh
+   curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh
    goalcup --version
    ```
 
@@ -81,7 +81,7 @@ most runs have one, and `goalcup continue` starts the next. Every flag is in `go
 | `goalcup login [--server <URL>]` | Connect this computer to your Goal Cup account (once). |
 | `goalcup prep [--harness <ID>] [--repo <URL>] [--work-root <PATH>] [--json] [--dev]` | Check the six readiness steps. Never starts a run. |
 | `goalcup start --harness <ID> [--practice \| --test] [--dev]` | Start a run: open the harness here and record it. `--test` is for organizers. |
-| `goalcup status [<part-id>] [--json]` | Show the run: recording state, time left, upload, problems, `Next:`. |
+| `goalcup status [<part-id>] [--json]` | Show the run: recording state, time left, upload, problems, `Next:`. `--json` prints the signed status document, with this machine's `local` facts and a `problems` array (the `PROBLEM:` lines' sentences, left out when there are none) beside it. |
 | `goalcup time-left` | Show how much time the run has left. The agent may run it too. |
 | `goalcup mcp` | Serve the time left as an MCP tool (`time_left`) for the agent. The harness starts it; add it as in [HARNESS-SETUP](docs/HARNESS-SETUP.md#add-the-goal-cup-time-left-tool). |
 | `goalcup continue [<run-id>]` | Start the agent again in the same run, on the same computer. |
@@ -93,7 +93,9 @@ most runs have one, and `goalcup continue` starts the next. Every flag is in `go
 `goalcup-verify --capture-integrity <trace>` checks a sealed trace (0 complete and valid,
 1 incomplete or not sealed, 2 invalid, 3 no usable report). Exit 0 says the record is consistent,
 not that the run was good. `goalcup-verify --research-json <trace> --output <new.ndjson>` writes a
-private research report. Every command and exit code: [OPERATING](docs/OPERATING.md).
+private research report. `goalcup-verify --stats <trace>… --output <new.json>` writes one run's
+numbers (tokens, models, tool calls and errors, subagents, "keep going") and no text, with the same
+exit codes. Every command and exit code: [OPERATING](docs/OPERATING.md).
 
 ## How it works
 
@@ -111,7 +113,7 @@ harness  --HTTPS_PROXY-->  recording proxy (in goalcup, loopback)  -->  model pr
                   goalcup start uploads chunks and heartbeats  -->  Goal Cup server
                                                      (signs a start receipt and an ack per chunk)
 
-goalcup-verify reads a sealed trace offline: integrity check and research report.
+goalcup-verify reads a sealed trace offline: integrity check, research report and run stats.
 ```
 
 - **The wire leg.** The harness reaches its model through a local recording proxy, set by
@@ -260,7 +262,7 @@ A test that guards one of these is never deleted. It may move tier.
 The version is written only in the workspace `Cargo.toml` (`scripts/check-version.py` fails on
 any other copy). `sh scripts/release.sh prepare <x.y.z>` opens the version PR; after it merges, run
 the full gate and `sh scripts/linux-check.sh` on that commit, then `sh scripts/release.sh tag <x.y.z>`
-([details](packaging/README.md#cutting-a-release)). Release notes: [GitHub releases](https://github.com/agentcommunity/goal-cup-tracer/releases).
+([details](packaging/README.md#cutting-a-release)). Release notes: [GitHub releases](https://github.com/agentcommunity/goal-cup-proxy/releases).
 
 ## Docs map
 
@@ -278,7 +280,7 @@ Every doc, grouped by who reads it: [docs/README.md](docs/README.md). The key on
 
 - Participant support: goalcup@agentcommunity.org. Paste your `goalcup status` output and run id,
   never your GitHub token.
-- Public problems: [GitHub issues](https://github.com/agentcommunity/goal-cup-tracer/issues).
+- Public problems: [GitHub issues](https://github.com/agentcommunity/goal-cup-proxy/issues).
 - Security problems: report privately to goalcup@agentcommunity.org or through GitHub private
   vulnerability reporting ([SECURITY.md](SECURITY.md)). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md),
   [Code of Conduct](CODE_OF_CONDUCT.md). Maintainer: Balazs Nemethi.

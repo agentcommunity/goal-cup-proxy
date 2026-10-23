@@ -17,6 +17,12 @@
 //! private file outside the trace, and stdout stays empty. Its exits are the report's own:
 //! 0 complete, 1 incomplete or partial, 2 invalid evidence, 3 no usable report. A report
 //! that could not be finished has no summary line, and exits 3.
+//!
+//! `goalcup-verify --stats TRACE [TRACE…] --output STATS.json` writes one run's numbers-only
+//! summary (`type: run_stats`): the run's traces in segment order, one JSON object, a new
+//! private file outside every trace. Stdout stays empty. Its exits are the research report's:
+//! 0 complete and valid, 1 incomplete or degraded, 2 invalid evidence, 3 no usable file (and
+//! then no file is left behind).
 #![forbid(unsafe_code)]
 
 use clap::Parser;
@@ -30,8 +36,10 @@ use std::path::{Path, PathBuf};
     // The version this build carries, which is also the `verifier_version` every report
     // records.
     version,
-    // Exactly one of the two modes.
-    group(clap::ArgGroup::new("mode").required(true).args(["capture_integrity", "research_json"]))
+    // Exactly one of the three modes.
+    group(clap::ArgGroup::new("mode").required(true).args(["capture_integrity", "research_json", "stats"])),
+    // The modes that write a file.
+    group(clap::ArgGroup::new("writes").args(["research_json", "stats"]))
 )]
 struct Args {
     /// Check a protocol-v5 capture trace's integrity (bounded, streaming). The
@@ -43,9 +51,13 @@ struct Args {
     /// code is the report's.
     #[arg(long = "research-json", value_name = "TRACE", requires = "output")]
     research_json: Option<PathBuf>,
-    /// With --research-json: the report file to create, named *.ndjson and outside the
-    /// trace. An existing file is refused.
-    #[arg(long, value_name = "OUTPUT", requires = "research_json")]
+    /// Write one run's numbers-only stats to --output: its traces in segment order, one
+    /// JSON object. The exit code is the worst of the traces'.
+    #[arg(long = "stats", value_name = "TRACE", num_args = 1.., requires = "output")]
+    stats: Option<Vec<PathBuf>>,
+    /// With --research-json: the report file to create, named *.ndjson. With --stats: the
+    /// stats file, named *.json. Outside every trace; an existing file is refused.
+    #[arg(long, value_name = "OUTPUT", requires = "writes")]
     output: Option<PathBuf>,
     /// Development only, repeatable: accept signatures under this Ed25519 public key
     /// (64 hex characters) for this run alone.
@@ -78,7 +90,7 @@ fn server_public_key(value: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
-/// The options of either mode (`--capture-integrity` or `--research-json`).
+/// The options of every mode (`--capture-integrity`, `--research-json`, `--stats`).
 ///
 /// A supplied key says so on stderr, is accepted for this run and is reported as
 /// `key_source: "supplied"`.
@@ -146,7 +158,7 @@ fn research_json(trace: &Path, output: &Path, args: Args) -> std::process::ExitC
             return std::process::ExitCode::from(3);
         }
     };
-    let file = match create_report_file(&canonical, output) {
+    let file = match create_output_file(&[canonical], output, "ndjson") {
         Ok(file) => file,
         Err(e) => {
             eprintln!("goalcup-verify: {}: {e}", output.display());
@@ -180,27 +192,86 @@ fn research_json(trace: &Path, output: &Path, args: Args) -> std::process::ExitC
     }
 }
 
-/// Create the report file: named `*.ndjson`, outside the (canonical) trace directory, new
-/// (an existing file is refused, never overwritten) and readable by its owner only.
-fn create_report_file(trace: &Path, output: &Path) -> std::io::Result<std::fs::File> {
+/// `--stats TRACE… --output OUTPUT`: the run's stats into a new private file, its exit code.
+/// Nothing goes to stdout. A run with no usable document leaves no file.
+fn stats(traces: &[PathBuf], output: &Path, args: Args) -> std::process::ExitCode {
+    use std::io::Write as _;
+    let options = capture_options(args);
+    let mut canonical = Vec::with_capacity(traces.len());
+    for trace in traces {
+        match std::fs::canonicalize(trace) {
+            Ok(path) => canonical.push(path),
+            Err(e) => {
+                eprintln!("goalcup-verify: {}: {e}", trace.display());
+                return std::process::ExitCode::from(3);
+            }
+        }
+    }
+    let mut file = match create_output_file(&canonical, output, "json") {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("goalcup-verify: {}: {e}", output.display());
+            return std::process::ExitCode::from(3);
+        }
+    };
+    let written = goalcup_verifier::run_stats(traces, &options).and_then(|result| {
+        let mut bytes = serde_json::to_vec(&result.stats)?;
+        bytes.push(b'\n');
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        Ok(result)
+    });
+    match written {
+        Ok(result) => {
+            eprintln!(
+                "goalcup-verify: run stats -> {}: {} trace(s), tokens from {}, analysis {}, exit {}",
+                output.display(),
+                traces.len(),
+                result.stats["tokens"]["source"]
+                    .as_str()
+                    .unwrap_or("unknown"),
+                result.stats["analysis"]["state"]
+                    .as_str()
+                    .unwrap_or("unknown"),
+                result.exit_code
+            );
+            std::process::ExitCode::from(result.exit_code)
+        }
+        Err(e) => {
+            drop(file);
+            let _ = std::fs::remove_file(output);
+            eprintln!(
+                "goalcup-verify: {e}; no stats written to {}",
+                output.display()
+            );
+            std::process::ExitCode::from(3)
+        }
+    }
+}
+
+/// Create an output file: named `*.<extension>`, outside every (canonical) trace directory,
+/// new (an existing file is refused, never overwritten) and readable by its owner only.
+fn create_output_file(
+    traces: &[PathBuf],
+    output: &Path,
+    extension: &str,
+) -> std::io::Result<std::fs::File> {
     use std::io::{Error, ErrorKind};
-    if output
-        .extension()
-        .is_none_or(|extension| extension != "ndjson")
-    {
+    if output.extension().is_none_or(|found| found != extension) {
         return Err(Error::new(
             ErrorKind::InvalidInput,
-            "the research report is NDJSON: name the output *.ndjson",
+            format!("name the output *.{extension}"),
         ));
     }
     let parent = match output.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
     };
-    if std::fs::canonicalize(parent)?.starts_with(trace) {
+    let parent = std::fs::canonicalize(parent)?;
+    if traces.iter().any(|trace| parent.starts_with(trace)) {
         return Err(Error::new(
             ErrorKind::InvalidInput,
-            "the report must be written outside the trace it reads",
+            "the output must be written outside every trace it reads",
         ));
     }
     let mut options = std::fs::OpenOptions::new();
@@ -231,9 +302,13 @@ fn main() -> std::process::ExitCode {
     if let (Some(trace), Some(output)) = (args.research_json.clone(), args.output.clone()) {
         return research_json(&trace, &output, args);
     }
-    // The parser requires one of the two modes, and `--research-json` requires `--output`.
+    if let (Some(traces), Some(output)) = (args.stats.clone(), args.output.clone()) {
+        return stats(&traces, &output, args);
+    }
+    // The parser requires one of the three modes, and the two that write require `--output`.
     eprintln!(
-        "goalcup-verify: name --capture-integrity TRACE or --research-json TRACE --output OUTPUT"
+        "goalcup-verify: name --capture-integrity TRACE, --research-json TRACE --output OUTPUT \
+         or --stats TRACE... --output OUTPUT"
     );
     std::process::ExitCode::from(3)
 }

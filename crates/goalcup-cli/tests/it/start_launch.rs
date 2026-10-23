@@ -294,12 +294,16 @@ fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        child
+        // `store` answers without reading its input, so it may exit before the write ends: a
+        // broken pipe there is the command being quick, not a failure.
+        let written = child
             .stdin
             .take()
             .unwrap()
-            .write_all(format!("protocol=https\nhost=github.com\npath={path}\n\n").as_bytes())
-            .unwrap();
+            .write_all(format!("protocol=https\nhost=github.com\npath={path}\n\n").as_bytes());
+        if let Err(e) = written {
+            assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "{e}");
+        }
         let out = child.wait_with_output().unwrap();
         assert!(out.status.success(), "{out:?}");
         String::from_utf8(out.stdout).unwrap()

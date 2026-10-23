@@ -59,7 +59,12 @@ pub const STATUS_DOMAIN: &[u8] = b"goalcup-status-v1\0";
 /// bare seal answers a [`SealManifest`] or an error; `StatusPayload.finalization`; and the
 /// `native_scope` of the capture launch and finish requests, which the daemon never read once
 /// headless capture left (D54 amendment).
-pub const CONTROL_API_VERSION: u32 = 10;
+/// V11 adds `existing_clone` to the capture create: a continued run's part goes on in the run's
+/// clone, which must already be there, and the daemon refuses rather than make an empty folder.
+/// V12 adds `StatusPayload.native_files_admitted`, the files a live entry's native source has
+/// admitted; an older CLI would drop the field and fail to verify the document, so the pair is
+/// refused instead.
+pub const CONTROL_API_VERSION: u32 = 12;
 
 pub const ROUTE_ENTRIES: &str = "/v0/entries";
 pub const ROUTE_HEALTH: &str = "/v0/health";
@@ -335,6 +340,13 @@ pub struct StatusPayload {
     /// admitted before it spawns anything. Absent from every legacy payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admissions_refused: Option<u64>,
+    /// How many files a live v5 entry's native reader has admitted so far: a count, never a
+    /// verdict. `goalcup start` reads it to say early that the harness has written no session
+    /// file while its model requests are recorded (D3: the judgement is the CLI's). Absent while
+    /// the reader is not admitted (not yet, lost, or finished), when the daemon does not hold it
+    /// (a sealed or reopened entry), and from every legacy payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_files_admitted: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -516,8 +528,9 @@ pub struct DaemonHealth {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureWorkspaceRequest {
-    /// The absolute workspace directory, absent or empty and outside any Git worktree. The
-    /// daemon creates it and knows the run by its canonical spelling.
+    /// The absolute workspace directory, absent or empty and outside any Git worktree, or with
+    /// [`Self::existing_clone`] the run's clone. The daemon creates it and knows the run by its
+    /// canonical spelling.
     pub workspace: String,
     /// The connector whose `[capture]` profile the run is launched with.
     pub profile_id: String,
@@ -550,6 +563,12 @@ pub struct CaptureWorkspaceRequest {
     /// them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub run_secrets: Vec<crate::run_secret::RunSecret>,
+    /// The workspace is a continued run's clone, which must already be there: the daemon
+    /// refuses one that is not the root of its own clone (`goalcup_platform::clone`) instead of
+    /// creating it, so the next part never goes on in an empty folder (D4). `false`, and then
+    /// omitted, for a new run, whose workspace is absent or empty.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub existing_clone: bool,
 }
 
 fn lowercase_sha256<'de, D>(deserializer: D) -> Result<String, D::Error>

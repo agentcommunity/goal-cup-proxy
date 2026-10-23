@@ -688,6 +688,18 @@ impl NativeCapture {
         report
     }
 
+    /// How many files the sources have admitted so far. A file once admitted stays, so this
+    /// never falls. Discovery waits for the producer's admission, so it is zero before that.
+    pub fn tracked_files(&self) -> usize {
+        self.files.len()
+    }
+
+    /// The producer is admitted `Ready`: it reads, and [`Self::tracked_files`] says what it found.
+    /// Before its admission, after a loss and once finished it is not.
+    pub fn admitted(&self) -> bool {
+        self.admission() == NativeAdmission::Ready
+    }
+
     pub fn loss_report(&self) -> NativeLossReport {
         NativeLossReport {
             producer: self.emitter.producer.clone(),

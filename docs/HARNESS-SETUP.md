@@ -1,5 +1,9 @@
 # Set up your harness for a 168-hour run
 
+**For participants.** This page is about a harness that Goal Cup already ships. To add a harness
+that is not here, see [Add a harness](HARNESS-ONBOARDING.md), the contributors' guide: its
+connector PR adds the harness's section to this page.
+
 During your run you may type only "keep going" ([RULES](RULES.md#one-prompt-then-only-keep-going)).
 So your harness must work for 168 hours without you. This page tells you which harness settings
 to set before the start, and where they go.
@@ -8,6 +12,13 @@ Goal Cup never changes your harness settings
 ([D67](DECISIONS.md#d67-goal-cup-recommends-running-without-permission-prompts-the-participant-sets-it)).
 You set them yourself. `goalcup prep` tells you when a permission setting is missing, and links
 to this page.
+
+Goal Cup records two things: the model calls (on the wire) and the harness's own session file.
+One does not stand in for the other. If a run has recorded requests to the model service for ten
+minutes and the harness has still written no session file, `goalcup status` shows a `PROBLEM:`
+line that links to your harness's section here (the run's `host.log` has it too). Keep the agent
+running, and check the settings in that section and the harness version. The line goes away once
+a session file is recorded.
 
 The facts here come from Goal Cup's own runs, most of them from the
 [local test day of 22 October 2026](research/results/2026-10-22-local-test-day.md). "Not measured"
