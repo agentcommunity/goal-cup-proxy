@@ -460,6 +460,8 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
         "SSH_AUTH_SOCK",
         "GIT_CONFIG_GLOBAL",
         "GH_CONFIG_DIR",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
     ] {
         allowed.insert(pin.to_string());
     }
@@ -510,10 +512,11 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
     }
 }
 
-/// D69: the agent pushes with the participant's own git login. Every launch carries exactly
-/// three ways to it, as paths or a socket and only when they exist: `SSH_AUTH_SOCK`, their real
-/// git config as `GIT_CONFIG_GLOBAL`, and their `gh` folder as `GH_CONFIG_DIR`; never a token
-/// from their environment. With them, the agent's git, under the run's own `HOME`, gets a login
+/// D69: the agent pushes with the participant's own git login. Every launch but a practice
+/// run's carries exactly five ways to it, as paths or sockets and only when they exist:
+/// `SSH_AUTH_SOCK`, their real git config as `GIT_CONFIG_GLOBAL`, their `gh` folder as
+/// `GH_CONFIG_DIR`, and the keyring's `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`; never a
+/// token from their environment. A practice run pushes nowhere and gets none of them. With them, the agent's git, under the run's own `HOME`, gets a login
 /// from a `gh` credential helper the participant set up (`gh auth login`); here a fake `gh` that
 /// answers only from the folder `GH_CONFIG_DIR` names.
 #[test]
@@ -547,12 +550,14 @@ fn every_launch_carries_the_way_to_the_participants_git_login_and_no_key() {
         ("HOME", home.to_str().unwrap()),
         ("PATH", "/usr/bin:/bin"),
         ("SSH_AUTH_SOCK", "/private/tmp/agent.sock"),
+        ("XDG_RUNTIME_DIR", "/run/user/501"),
+        ("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/501/bus"),
         ("GH_TOKEN", KEY),
         ("GITHUB_TOKEN", KEY),
     ] {
         parent.insert(k.to_string(), v.to_string());
     }
-    let carried = |parent: &BTreeMap<String, String>| {
+    let carried = |parent: &BTreeMap<String, String>, git_login: bool| {
         let l = s::Layout::new();
         let exe = s::fake_harness(&l.bin);
         let resolved = s::resolved(&exe);
@@ -561,16 +566,24 @@ fn every_launch_carries_the_way_to_the_participants_git_login_and_no_key() {
             &load("codex-cli"),
             &s::vars(&l),
             &l.workspace,
-            &s::chat_launch(&l, &resolved, &proxy, parent),
+            &CaptureLaunch {
+                git_login,
+                ..s::chat_launch(&l, &resolved, &proxy, parent)
+            },
         )
         .unwrap();
         (plan, l)
     };
-    let (plan, l) = carried(&parent);
+    let (plan, l) = carried(&parent, true);
     let get = |k: &str| plan.env_set.get(k).map(String::as_str);
     assert_eq!(get("SSH_AUTH_SOCK"), Some("/private/tmp/agent.sock"));
     assert_eq!(get("GIT_CONFIG_GLOBAL"), home.join(".gitconfig").to_str());
     assert_eq!(get("GH_CONFIG_DIR"), gh_dir.to_str());
+    assert_eq!(get("XDG_RUNTIME_DIR"), Some("/run/user/501"));
+    assert_eq!(
+        get("DBUS_SESSION_BUS_ADDRESS"),
+        Some("unix:path=/run/user/501/bus")
+    );
     assert_eq!(
         get("HOME"),
         l.run_home.to_str(),
@@ -602,12 +615,20 @@ fn every_launch_carries_the_way_to_the_participants_git_login_and_no_key() {
     assert!(out.status.success(), "{out:?}");
     assert!(said.contains("password=from-gh-config\n"), "{said}");
 
-    // Nothing set and no such files: none of the three.
+    // Nothing set and no such files, or a practice run: none of the five.
     let mut bare = s::parent_env();
     bare.insert("HOME".into(), root.join("empty-home").display().to_string());
-    let (plan, _) = carried(&bare);
-    for k in ["SSH_AUTH_SOCK", "GIT_CONFIG_GLOBAL", "GH_CONFIG_DIR"] {
-        assert!(!plan.env_set.contains_key(k), "`{k}` was set: {plan:?}");
+    for (parent, git_login) in [(&bare, true), (&parent, false)] {
+        let (plan, _) = carried(parent, git_login);
+        for k in [
+            "SSH_AUTH_SOCK",
+            "GIT_CONFIG_GLOBAL",
+            "GH_CONFIG_DIR",
+            "XDG_RUNTIME_DIR",
+            "DBUS_SESSION_BUS_ADDRESS",
+        ] {
+            assert!(!plan.env_set.contains_key(k), "`{k}` was set: {plan:?}");
+        }
     }
 }
 

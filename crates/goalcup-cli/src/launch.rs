@@ -26,9 +26,10 @@
 //!   profile's home variable;
 //! * the participant's terminal environment ([`CHAT_PASSTHROUGH_ENV`] and `LC_*`), under the
 //!   connector's own values;
-//! * the way to the participant's own git login (D69), as paths or a socket and never a key:
-//!   [`participant_git_env`] (`SSH_AUTH_SOCK`, `GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`), each only when it
-//!   is set or its file exists;
+//! * the way to the participant's own git login (D69), as paths or sockets and never a key:
+//!   [`participant_git_env`] (`SSH_AUTH_SOCK`, `GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`,
+//!   `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`), each only when it is set or its file exists,
+//!   and never for a practice run, which pushes nowhere ([`CaptureLaunch::git_login`]);
 //! * the passive **loopback** recording proxy through process-scoped `HTTPS_PROXY`/
 //!   `https_proxy` — the M2 reservation AGENTS.md names, and the only proxy a launch may name,
 //!   checked by `loopback_proxy_url` — with `NO_PROXY`/`no_proxy` ([`CAPTURE_NO_PROXY`]) and
@@ -364,9 +365,11 @@ pub fn in_harness() -> bool {
 ///   keychain, Git Credential Manager, `gh`).
 /// - `GH_CONFIG_DIR`: their own, when set, else `$XDG_CONFIG_HOME/gh` (or `~/.config/gh`) when
 ///   it is a folder, for a helper that is `gh`.
+/// - `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, when set: the sockets a Linux keyring
+///   helper (libsecret) reaches the participant's keyring through.
 ///
 /// `~` is the participant's `HOME` from `parent_env`. A token in their environment (`GH_TOKEN`,
-/// `GITHUB_TOKEN`) is not carried: nothing outside these three is.
+/// `GITHUB_TOKEN`) is not carried: nothing outside these five is.
 pub fn participant_git_env(parent_env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let set = |key: &str| {
         parent_env
@@ -394,7 +397,13 @@ pub fn participant_git_env(parent_env: &BTreeMap<String, String>) -> BTreeMap<St
             env.insert(key.to_string(), value);
         }
     };
-    put("SSH_AUTH_SOCK", set("SSH_AUTH_SOCK"));
+    for key in [
+        "SSH_AUTH_SOCK",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+    ] {
+        put(key, set(key));
+    }
     put(
         "GIT_CONFIG_GLOBAL",
         set("GIT_CONFIG_GLOBAL").or_else(|| {
@@ -412,6 +421,47 @@ pub fn participant_git_env(parent_env: &BTreeMap<String, String>) -> BTreeMap<St
         set("GH_CONFIG_DIR")
             .or_else(|| first(vec![config.as_ref().map(|c| c.join("gh"))], Path::is_dir)),
     );
+    env
+}
+
+/// The participant's `$XDG_CONFIG_HOME/git/config` (or `~/.config/git/config`) when it is a file
+/// that [`participant_git_env`] does not hand on, because `~/.gitconfig` is there too and git
+/// reads one global file only when `GIT_CONFIG_GLOBAL` names it. `None` otherwise.
+pub fn unused_git_config(parent_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    let set = |key: &str| parent_env.get(key).filter(|v| v.starts_with('/'));
+    if set("GIT_CONFIG_GLOBAL").is_some() {
+        return None;
+    }
+    let home = PathBuf::from(set("HOME")?);
+    let config = set("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"))
+        .join("git")
+        .join("config");
+    (home.join(".gitconfig").is_file() && config.is_file()).then_some(config)
+}
+
+/// What every program the agent runs sees of the participant, beside the harness's own
+/// variables: [`CAPTURE_IDENTITY_ENV`], their `PATH` ([`harness_path`]), `HOME` set to `home`,
+/// and with `git_login` the way to their git login ([`participant_git_env`]). The launch
+/// builds the harness's environment from this, and `goalcup start`'s push test runs the
+/// participant's git in exactly this, so the test is of the git the agent will have.
+pub fn agent_base_env(
+    parent_env: &BTreeMap<String, String>,
+    home: &str,
+    git_login: bool,
+) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    for key in CAPTURE_IDENTITY_ENV {
+        if let Some(value) = parent_env.get(key) {
+            env.insert(key.to_string(), value.clone());
+        }
+    }
+    if git_login {
+        env.extend(participant_git_env(parent_env));
+    }
+    env.insert("HOME".into(), home.to_string());
+    env.insert("PATH".into(), harness_path(parent_env));
     env
 }
 
@@ -637,6 +687,9 @@ pub struct CaptureLaunch<'a> {
     /// The run's time-left file ([`crate::run::time_left::file_path`]), handed to the harness
     /// as [`crate::run::time_left::FILE_ENV`] (D66). `goalcup start` always gives one.
     pub time_left_file: Option<&'a Path>,
+    /// Hand on the way to the participant's git login ([`participant_git_env`], D69): every
+    /// run but a practice run, which pushes nowhere.
+    pub git_login: bool,
 }
 
 impl fmt::Debug for CaptureLaunch<'_> {
@@ -653,6 +706,7 @@ impl fmt::Debug for CaptureLaunch<'_> {
             .field("ca_bundle", &self.ca_bundle)
             .field("parent_env", &Keys(self.parent_env))
             .field("time_left_file", &self.time_left_file)
+            .field("git_login", &self.git_login)
             .finish()
     }
 }
@@ -775,6 +829,7 @@ struct Inputs<'a> {
     proxy: Option<(&'a str, &'a Path, Option<&'a Path>)>,
     parent_env: &'a BTreeMap<String, String>,
     time_left_file: Option<&'a Path>,
+    git_login: bool,
 }
 
 impl<'a> Inputs<'a> {
@@ -786,6 +841,7 @@ impl<'a> Inputs<'a> {
             proxy: Some((launch.proxy_url, launch.ca_certificate, launch.ca_bundle)),
             parent_env: launch.parent_env,
             time_left_file: launch.time_left_file,
+            git_login: launch.git_login,
         }
     }
 }
@@ -867,14 +923,11 @@ fn build_launch(
     for (key, template) in profile.resolved_env(platform) {
         env.insert(key, render(&template, &env_vars)?);
     }
-    for key in CAPTURE_IDENTITY_ENV {
-        if let Some(value) = launch.parent_env.get(key) {
-            env.insert(key.to_string(), value.clone());
-        }
-    }
-    env.extend(participant_git_env(launch.parent_env));
-    env.insert("HOME".into(), run_home.to_string());
-    env.insert("PATH".into(), harness_path(launch.parent_env));
+    env.extend(agent_base_env(
+        launch.parent_env,
+        run_home,
+        launch.git_login,
+    ));
     // A harness without a home variable keeps its state under the private `HOME` above.
     if let Some(home_env) = &profile.home.env {
         env.insert(home_env.clone(), config_home.to_string());
@@ -981,6 +1034,8 @@ pub fn build_prep_launch(
             proxy: None,
             parent_env: launch.parent_env,
             time_left_file: None,
+            // Setting the harness up pushes nothing.
+            git_login: false,
         },
         false,
     )
