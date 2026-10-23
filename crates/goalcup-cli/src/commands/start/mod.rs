@@ -526,7 +526,7 @@ impl Drop for DrainsOnDrop<'_> {
         let wrap_up = match self.over {
             Some((over, wrap_up)) if over.get() && !self.drains.is_empty() => {
                 crate::host_log::say(&format!(
-                    "the run is over: waiting for the earlier segment's upload (up to {} \
+                    "the run is over: waiting for the earlier part's upload (up to {} \
                      minutes).",
                     wrap_up.as_secs().div_ceil(60)
                 ));
@@ -540,11 +540,11 @@ impl Drop for DrainsOnDrop<'_> {
             let report = drain.wait(WrapUp::after(wrap_up));
             if report.caught_up {
                 crate::host_log::say(&format!(
-                    "uploaded: entry {entry}, an earlier segment of this run, acknowledged."
+                    "uploaded: part {entry}, an earlier part of this run, acknowledged."
                 ));
             } else {
                 crate::host_log::say(&format!(
-                    "upload of entry {entry}, an earlier segment, is incomplete ({}). {}",
+                    "upload of part {entry}, an earlier part of this run, is incomplete ({}). {}",
                     report.why.as_deref().unwrap_or("the upload did not finish"),
                     how_to_finish
                 ));

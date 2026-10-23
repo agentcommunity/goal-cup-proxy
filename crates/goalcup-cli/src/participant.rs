@@ -42,7 +42,10 @@ pub use refusals::{
     repository_not_empty, run_over, server_answer_unusable, still_recording,
     unsupported_filesystem,
 };
-pub use seal::{SealDone, seal_done, seal_inside_harness, seal_not_confirmed, seal_question};
+pub use seal::{
+    SealDone, seal_done, seal_inside_harness, seal_needs_terminal, seal_not_confirmed,
+    seal_question,
+};
 pub use status::{
     Agent, CHECK_NETWORK, End, Next, PROBLEM, Phase, Restart, STATUS_DETAILS, StatusHeader,
     UploadNow, Who, agent_finished, disk_resumed, disk_resumed_unread, ends_line, no_run_yet,
@@ -90,6 +93,10 @@ pub const NOT_STARTED_HERE: &str = "was not started on this computer";
 
 /// What a refusal says when the approval code must be asked for again.
 pub const RUN_AGAIN: &str = "Run the command again";
+
+/// Where to free disk space, and what never to delete: what the agent made is the run's work.
+pub const FREE_OUTSIDE: &str =
+    "outside your run's folders, and do not delete anything the agent made";
 
 /// Where a participant writes when something unexpected happened.
 pub const SUPPORT_ADDRESS: &str = "goalcup@agentcommunity.org";

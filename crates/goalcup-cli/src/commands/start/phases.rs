@@ -1070,11 +1070,11 @@ fn abandon_because(
     let _ = match (&abandoned, &removed) {
         (Ok(()), Ok(())) => say(out, sentence),
         _ => {
-            let mut said = format!("Entry {entry_id} could not be cleaned up:");
+            let mut said = format!("Part {entry_id} could not be cleaned up:");
             if let Err(e) = abandoned {
-                said.push_str(&format!("\n  the daemon refused the abandon: {e}"));
+                said.push_str(&format!("\n  goalcup's recorder refused to drop it: {e}"));
                 said.push_str(
-                    "\n  this machine's note of the entry has been kept, because the tracker \
+                    "\n  this machine's note of the part has been kept, because the recorder \
                      may still be holding it.",
                 );
             }
@@ -1144,7 +1144,7 @@ fn unmake(
 ) -> bool {
     let reason = format!("`goalcup start` failed before the launch: {cause}");
     let sentence = format!(
-        "Entry {entry_id} is abandoned: nothing was launched, and its chain and this \
+        "Part {entry_id} is abandoned: nothing was launched, and its record and this \
          machine's note of it are gone."
     );
     let abandoned = abandon_because(client, cfg, entry_id, &reason, &sentence, out);

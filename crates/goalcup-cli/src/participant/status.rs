@@ -386,14 +386,16 @@ pub fn this_computer(vitals: &crate::upload::api::HeartbeatVitals) -> Option<Str
 }
 
 pub fn problem_disk(free: &str) -> String {
-    format!("only {free} of disk is free. Free some space.")
+    format!("only {free} of disk is free. Free some space {FREE_OUTSIDE}.")
 }
 
 /// The agent is paused because the disk is nearly full (D65), on the terminal and in `goalcup
-/// status`. The words are the owner's.
+/// status`. The words are the owner's; where to free space comes from the participant review
+/// (A7).
 pub fn problem_disk_paused() -> &'static str {
-    "The disk is almost full, so your agent is paused. Free some disk space; it resumes by \
-     itself. If your agent seems stuck afterwards, type keep going."
+    "The disk is almost full, so your agent is paused. Free some disk space outside your run's \
+     folders, and do not delete anything the agent made; it resumes by itself. If your agent \
+     seems stuck afterwards, type keep going."
 }
 
 /// The paused agent was resumed because `free` is free again (D65).
@@ -404,8 +406,8 @@ pub fn disk_resumed(free: &str) -> String {
 /// The paused agent was resumed because the free disk space could not be read (D65): a pause
 /// must not outlast what it is for.
 pub fn disk_resumed_unread() -> &'static str {
-    "disk: if the disk is nearly full, free some space. Goal Cup Proxy could not read the free \
-     space, so your agent was resumed."
+    "disk: if the disk is nearly full, free some space outside your run's folders. Goal Cup \
+     Proxy could not read the free space, so your agent was resumed."
 }
 
 pub fn problem_sleep(why: &str) -> String {
@@ -427,7 +429,7 @@ pub fn problem_agent_exited(
     match restart {
         Restart::Continue { run_id } if disk_stop => format!(
             "{h} was stopped: the disk is almost full and uploads are failing.{until} Free some \
-             disk space, then run: {CONTINUE_HINT} {run_id}"
+             disk space {FREE_OUTSIDE}, then run: {CONTINUE_HINT} {run_id}"
         ),
         Restart::Continue { run_id } => {
             format!("{h} has exited ({how}).{until} To go on, run: {CONTINUE_HINT} {run_id}")

@@ -2087,11 +2087,11 @@ mod segments {
         assert_eq!(status.code(), Some(1), "{said}");
         assert!(said.contains("is over"), "{said}");
         assert!(
-            said.contains("the run is over: waiting for the earlier segment's upload"),
+            said.contains("the run is over: waiting for the earlier part's upload"),
             "{said}"
         );
         assert!(
-            said.contains("an earlier segment of this run, acknowledged"),
+            said.contains("an earlier part of this run, acknowledged"),
             "{said}"
         );
         assert_eq!(server.entry_ids(&run_id).len(), 1, "no segment was made");

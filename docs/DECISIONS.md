@@ -682,7 +682,9 @@ This is an exception to the hard rule "Goal Cup Proxy records and never manages 
   than 1 GiB is free beyond the run's reservation, and `SIGCONT` once more than 3 GiB is free
   again. Nothing is typed to the agent, nothing is killed, and the participant does nothing but
   free space. The terminal says once: "The disk is almost full, so your agent is paused. Free
-  some disk space; it resumes by itself. If your agent seems stuck afterwards, type keep going."
+  some disk space outside your run's folders, and do not delete anything the agent made; it
+  resumes by itself. If your agent seems stuck afterwards, type keep going." (The words on where
+  to free space were added on 22 Oct 2026, participant review A7.)
   `goalcup status` keeps it as a `PROBLEM:` line, and the run's `state.json` has
   `disk.disk_paused`, until the agent resumes.
 - **Best effort.** The processes paused are the ones the termination code reaches: the root process

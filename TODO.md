@@ -149,6 +149,14 @@ Status (22 Oct, same branch, [local test day](docs/research/results/2026-10-22-l
   Windows machine); fix plans v5 to v7 are not rerun; 8 h and 24 h steps. See
   [local next steps](docs/research/LOCAL-NEXT-STEPS.md#open-since-22-oct).
 
+Status (22 Oct, [participant review](docs/research/PARTICIPANT-REVIEW-2026-10-21.md) section A):
+- A1 to A10 done (most were on main already); see the review's status table. New: `goalcup seal`
+  with no terminal and no `--yes` refuses at once; every disk line says where to free space; the
+  terminal says "part", not entry or segment; the guide has the `GOALCUP.md` rule and the Hermes
+  API-key advice.
+- Open: A11's prep warning when Hermes uses an OAuth provider (needs a connector field for the
+  sign-in file); A10's video format (owner). Section B (B1 to B9) waits for owner rulings.
+
 ### WP0: Measure
 Status (17 Oct, with 22 Oct notes in the list below): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging
 practice runs: deadline stop, seal, matching uploaded server position and zero-gap research
@@ -248,6 +256,8 @@ These look odd but are right. Do not "fix" them.
   full-flow cell or judged-commit check runs.
 - Fix plan v9 (`goalcup mcp`, a read-only `time_left` tool): approve, change or drop.
 - A Windows machine or VM for the WSL2 cells.
+- Participant review section B (B1 to B9) and the demo video's format and length for the guide
+  ([review](docs/research/PARTICIPANT-REVIEW-2026-10-21.md)).
 
 ## Known issues
 
