@@ -96,8 +96,8 @@ The latest possible run ends 192 hours after the window opens.
   every message a human sends to the agent, by any channel, so the review can see it. Any other human
   message is reviewed, and it may remove the run at review. Harness commands typed after the prompt
   (for example `/model` to switch model) count as typing: they are recorded and reviewed, never
-  blocked. Choose your model in prep.
-- Answering a permission prompt is typing too, so set your harness up in prep to run without them.
+  blocked. Choose your model in setup.
+- Answering a permission prompt is typing too, so set your harness up in setup to run without them.
   Goal Cup recommends how, per harness, and never changes your harness's settings (D67;
   [Set up your harness for a 168-hour run](HARNESS-SETUP.md)).
 - The review works out who said each message from what the model saw and how the harness structures its

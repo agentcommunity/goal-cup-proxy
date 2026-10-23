@@ -183,8 +183,9 @@ run is enough to get ready.
 
 You can start a dry run on any day from 23 October to 6 November, 00:00 UTC
 ([RULES, "Timeline"](RULES.md#timeline)). During the dry run, the start window is open now, so
-you can run `goalcup start` right away. When prep says `Next: goalcup start --harness <id>, inside
-the start window.`, you do not need to wait for 7 November. Start it with
+you can run `goalcup start` right away. When setup ends with
+`The real run, inside the start window:  goalcup start --harness <id>`, you do not need to wait
+for 7 November. Start it with
 `goalcup start --harness <id>`, as in section 5. In this window that command starts a dry run.
 The approval page says `Start a dry run`, but `goalcup` calls it your competition run in the
 terminal. That is because a dry run uses the same steps as the cup run. The server
@@ -192,8 +193,8 @@ records it on the dry-run event, so it does not count for the cup. If you start 
 it replaces the first.
 
 A dry run needs a new, empty, public repository, like the cup run, and your agent pushes to it.
-So your cup run then needs another new, empty repository. Make one, and run
-`goalcup prep --repo <new URL>` with a token for it (prep, step 4).
+So your cup run then needs another one. You do not set it up in advance: each real run asks for
+its own new, empty, public repository when you run `goalcup start` (section 5, step 1).
 
 **A late dry run is still running at the cup.** A dry run started after 30 October, 12:00 UTC, is
 still running when the last release comes out (6 November, 12:00 UTC). One started after
@@ -218,7 +219,7 @@ goalcup start --harness <id>
 
 Run it from your home folder or another folder of your own: `goalcup start` makes a run folder
 named `goalcup-` and a random name in the folder you run it from, for the harness's home during the
-run. This run folder is not your clone: the clone goes in your work folder (step 2). Do not run it
+run. This run folder is not your clone: the clone goes in your work folder (step 3). Do not run it
 from any folder inside your work folder; Goal Cup Proxy refuses that. Under WSL2, do not run it
 from a Windows drive.
 
