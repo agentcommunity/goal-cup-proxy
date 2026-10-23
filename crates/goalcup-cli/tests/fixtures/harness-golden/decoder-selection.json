@@ -364,7 +364,7 @@
   "registered_decoders_in_order": [
     {
       "decoder": "codex-native",
-      "decoder_version": "3"
+      "decoder_version": "4"
     },
     {
       "decoder": "claude-code-native",
@@ -384,7 +384,7 @@
     },
     {
       "decoder": "amp-thread-jsonrpc",
-      "decoder_version": "2"
+      "decoder_version": "3"
     }
   ],
   "rule": "every combination of source, protocol_hint, payload and decoder not listed in active is zero: written, observations and unknown_records are 0 and failure is null"

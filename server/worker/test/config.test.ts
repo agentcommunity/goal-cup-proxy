@@ -8,7 +8,7 @@ import { getDb, readConfig } from "../src/context.ts";
 import { SupabaseDb } from "../src/db-supabase.ts";
 import type { Env } from "../src/env.ts";
 import { ApiError } from "../src/errors.ts";
-import { REPO_URL, parseSafeUint } from "../src/util.ts";
+import { REPO_URL, boolField, parseSafeUint, versionTriple } from "../src/util.ts";
 
 const baseEnv = { EVENT_ID: "cup", PRACTICE_EVENT_ID: "practice", RECEIPT_SIGNING_KEY: "07".repeat(32), TRACES: {} } as unknown as Env;
 
@@ -54,6 +54,8 @@ test("config defaults and validation", () => {
     runMaxCompressedBytes: 68_719_476_736,
     startWindow: undefined,
     githubCheck: false,
+    minCompetitionVersion: { kind: "none" },
+    localAdminMembers: [],
   });
   assert.equal(readConfig({ ...baseEnv, RUN_HOURS: "2" }).runSeconds, 7200);
   assert.equal(readConfig({ ...baseEnv, PRACTICE_RUN_MINUTES: "30" }).practiceRunSeconds, 1800);
@@ -107,7 +109,7 @@ test("TEST_APPROVAL_KEY is honoured only with the local backend or STAGING=on", 
 });
 
 test("repo_url shape", () => {
-  assert.ok(REPO_URL.test("https://github.com/agentcommunity/goal-cup-tracer"));
+  assert.ok(REPO_URL.test("https://github.com/agentcommunity/goal-cup-proxy"));
   assert.ok(REPO_URL.test("https://github.com/a-b/c.d_e"));
   for (const bad of [
     "http://github.com/a/b",
@@ -263,4 +265,42 @@ test("Workers Logs keep the Worker's own console lines and no invocation logs, i
   const tables = wranglerTables();
   assert.equal(tables["observability.logs"]!.invocation_logs, "false");
   assert.equal(tables["env.staging.observability.logs"]!.invocation_logs, "false"); // pinned here, not left to inheritance
+});
+
+test("an empty minimum is no limit", () => {
+  assert.deepEqual(readConfig({ ...baseEnv, MIN_COMPETITION_VERSION: "" }).minCompetitionVersion, { kind: "none" });
+  assert.deepEqual(readConfig({ ...baseEnv, MIN_COMPETITION_VERSION: "  " }).minCompetitionVersion, { kind: "none" });
+  assert.deepEqual(readConfig(baseEnv).minCompetitionVersion, { kind: "none" });
+  assert.deepEqual(readConfig({ ...baseEnv, MIN_COMPETITION_VERSION: "0.7.0" }).minCompetitionVersion, { kind: "set", v: [0, 7, 0] });
+  assert.deepEqual(readConfig({ ...baseEnv, MIN_COMPETITION_VERSION: "1.12.3-rc.1" }).minCompetitionVersion, { kind: "set", v: [1, 12, 3] });
+});
+
+test("a malformed minimum is reported, not thrown", () => {
+  for (const raw of ["0.7", "latest", "v1", "1.2", "x.y.z"]) {
+    assert.deepEqual(readConfig({ ...baseEnv, MIN_COMPETITION_VERSION: raw }).minCompetitionVersion, { kind: "malformed", raw }, raw);
+  }
+});
+
+test("LOCAL_ADMIN_MEMBERS is a trimmed comma list, honoured only with the local backend", () => {
+  const local = { ...baseEnv, DB_BACKEND: "local" };
+  assert.deepEqual(readConfig({ ...local, LOCAL_ADMIN_MEMBERS: " a, b ,,c " }).localAdminMembers, ["a", "b", "c"]);
+  assert.deepEqual(readConfig({ ...local, LOCAL_ADMIN_MEMBERS: "" }).localAdminMembers, []);
+  assert.throws(() => readConfig({ ...baseEnv, LOCAL_ADMIN_MEMBERS: "a" }), (e) => e instanceof ApiError && e.code === "misconfigured");
+});
+
+test("the version rule: the first x.y.z, whatever follows is ignored, none is unknown", () => {
+  assert.deepEqual(versionTriple("0.7.0"), [0, 7, 0]);
+  assert.deepEqual(versionTriple("0.7.0-dev"), [0, 7, 0]);
+  assert.deepEqual(versionTriple("goalcup v10.20.30+abc"), [10, 20, 30]);
+  assert.deepEqual(versionTriple("1.2.3.4"), [1, 2, 3]);
+  assert.deepEqual(versionTriple("1.2.3 then 4.5.6"), [1, 2, 3]);
+  for (const bad of ["", "0.7", "latest", "1..2", "a.b.c", "99999999999999999999.1.1"]) assert.equal(versionTriple(bad), null, bad);
+});
+
+test("boolField takes a boolean, null or nothing, and nothing else", () => {
+  assert.equal(boolField({}, "dev", false), false);
+  assert.equal(boolField({}, "dev", true), true);
+  assert.equal(boolField({ dev: true }, "dev", false), true);
+  assert.equal(boolField({ dev: false }, "dev", true), false);
+  for (const bad of ["yes", "true", 1, 0, null, [], {}]) assert.throws(() => boolField({ dev: bad }, "dev", false), (e) => e instanceof ApiError && e.code === "malformed");
 });

@@ -60,7 +60,7 @@ pub fn inside_work_folder(work_root: &Path, here: &Path) -> String {
 pub fn cannot_record_model_service(why: &str, id: &str) -> String {
     format!(
         "{why} Goal Cup records only an https model service that is not on this computer. Run \
-         goalcup prep --harness {id}, choose such a service there, then run the command again."
+         goalcup setup --harness {id}, choose such a service there, then run the command again."
     )
 }
 
@@ -81,7 +81,7 @@ pub fn repository_not_empty(repo: &str, kb: Option<u64>) -> String {
 /// configuration folder, beside which the records are kept.
 pub fn unsupported_filesystem(what: &str, path: &str, name: &str) -> String {
     let how = if what == "work folder" {
-        "for example: goalcup prep --work-root <a folder on that volume>"
+        "for example: goalcup setup --work-root <a folder on that volume>"
     } else {
         "for example: set GOALCUP_CONFIG_DIR to a folder on that volume, and the records are kept \
          beside it"
@@ -96,7 +96,7 @@ pub fn unsupported_filesystem(what: &str, path: &str, name: &str) -> String {
 /// more [`unsupported_filesystem`]): a warning, and the command goes on.
 pub fn filesystem_warning(why: &str) -> String {
     format!(
-        "Warning: {why}. This command goes on anyway and does not refuse the run, but goalcup prep \
+        "Warning: {why}. This command goes on anyway and does not refuse the run, but goalcup setup \
          fails its check for it."
     )
 }
@@ -133,6 +133,70 @@ pub fn run_over(run_id: &str) -> String {
     format!(
         "Nothing to continue: run {run_id} is over. Its time is up, or a newer run on your \
          account replaced it. Nothing was started."
+    )
+}
+
+/// The command that ends a run's last part and sends it, which works without the clone.
+fn end_last_part(entry_id: &str) -> String {
+    format!("goalcup seal {entry_id} --yes, then goalcup upload")
+}
+
+/// `goalcup continue` of a run whose clone is not where the run left it: moved, deleted, or on a
+/// disk that is not mounted. The agent's work is in that clone, so the next part needs it there;
+/// the part already recorded does not, and can still be ended and sent.
+pub fn clone_missing(run_id: &str, entry_id: &str, workspace: &Path) -> String {
+    format!(
+        "Put the run's folder back at {} (a link to it there is fine) and run {CONTINUE_HINT} \
+         again. If it is lost, end the run's last part so it still reaches the Goal Cup server: \
+         {}. The agent goes on with its work in that folder, and nothing is there. Write to \
+         {SUPPORT_ADDRESS} and name run {run_id} if you need help. Nothing was changed.",
+        workspace.display(),
+        end_last_part(entry_id)
+    )
+}
+
+/// Why a run's folder that is there is not its clone, for [`not_a_clone`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NotAClone<'a> {
+    /// A file, not a folder.
+    NotAFolder,
+    /// A folder with no `.git` directory: removed, or a `.git` file or link in its place.
+    NoGitDirectory,
+    /// A clone inside another Git repository, which a run's clone may not be.
+    InsideRepository(&'a Path),
+}
+
+/// `goalcup continue` of a run whose folder is there but is not its clone any more. Its Git
+/// history is what the next part goes on from, and is not there, so the only way on is to end the
+/// last part, which still reaches the server.
+pub fn not_a_clone(run_id: &str, entry_id: &str, workspace: &Path, why: NotAClone<'_>) -> String {
+    let ws = workspace.display();
+    let what = match why {
+        NotAClone::NotAFolder => format!("{ws} is a file, not the run's folder"),
+        NotAClone::NoGitDirectory => format!(
+            "the run's folder {ws} is there, but it has no .git directory: it was removed, or is \
+             a file or a link now"
+        ),
+        NotAClone::InsideRepository(outer) => format!(
+            "the run's folder {ws} is inside another Git repository, {}",
+            outer.display()
+        ),
+    };
+    format!(
+        "End the run's last part so it reaches the Goal Cup server: {}. Run {run_id} cannot go \
+         on: {what}, so it is not the run's clone any more. If you moved things, put the clone \
+         back as it was and run {CONTINUE_HINT} again. Nothing was changed.",
+        end_last_part(entry_id)
+    )
+}
+
+/// `goalcup continue` of a run whose folder this user cannot look in.
+pub fn clone_unreadable(workspace: &Path, why: &str) -> String {
+    format!(
+        "Make {} readable to you again, then run {CONTINUE_HINT} again. goalcup cannot look in \
+         the run's folder ({why}), so it cannot tell whether the run's clone is there. Nothing \
+         was changed.",
+        workspace.display()
     )
 }
 

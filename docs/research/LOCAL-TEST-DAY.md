@@ -1,7 +1,7 @@
 # Local test day (handover to the local agent)
 
 One working day, about 8 hours, on the owner's machines, to test branch `smart/zen-gates-d9tmbh`
-(draft PR [#226](https://github.com/agentcommunity/goal-cup-tracer/pull/226)) with real harnesses
+(draft PR [#226](https://github.com/agentcommunity/goal-cup-proxy/pull/226)) with real harnesses
 on staging. The owner is present for the first hours (sign-ins, approvals), then travels; after
 that only a cloud agent works, and it sees only what is pushed. So: push results early and often.
 

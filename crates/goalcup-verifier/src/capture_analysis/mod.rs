@@ -4,7 +4,8 @@
 //!
 //! The stable decoder contract is [`api::DecoderV1`]; a [`registry::DecoderRegistry`] holds
 //! the decoders, a [`session::DecodeSession`] runs them over records, and [`report`] writes
-//! the result as NDJSON.
+//! the result as NDJSON. [`stats`] counts the same observations into one numbers-only run
+//! summary.
 
 /// The Anthropic Messages decoder.
 pub mod anthropic;
@@ -28,6 +29,8 @@ pub mod registry;
 pub mod report;
 /// One decode of one trace, with per-decoder isolation.
 pub mod session;
+/// The numbers-only run summary (`--stats`).
+pub mod stats;
 /// The application thread WebSocket decoder.
 pub mod thread;
 /// The stream tracker shared by the OpenAI Responses and Chat Completions decoders.

@@ -4,6 +4,173 @@ What may `connectors/<id>/harness.toml` contain? This is the public field and va
 reference for harness authors and reviewers. The procedure for adding a harness is
 [HARNESS-ONBOARDING](HARNESS-ONBOARDING.md).
 
+## The connector contract
+
+Any harness can be added, not only the four that ship. A connector is data: one folder, no Rust.
+This section is what a connector may rely on, and what Goal Cup Proxy promises not to break
+while it reads schema 1 (proposed as [D68](DECISIONS.md#d68-the-connector-contract-is-locked-at-schema-1);
+the owner approves it). The rest of this page is the field-by-field detail.
+
+### What a connector may rely on
+
+- **Schema version.** `schema_version = 1`. This build reads `{1}` only. Any other value, an
+  unknown key and an unknown closed value are refused with one sentence: a newer schema needs a
+  newer `goalcup`, and a misspelling is never ignored ([Parse and load](#parse-and-load)).
+- **Fields.** Required: `schema_version`, `id` (the folder name), and in `[capture]`:
+  `interactive = true`, `continuation` and `args`; `[capture.executable]` with `program`;
+  `[capture.home]` with `run_home`, `config_home` and `real_dirs` (1 to 4 paths);
+  `[capture.ca]` with `env` and `mode`; `[capture.identity]` with `source = "none"`; exactly one
+  `[[capture.native]]` with `name`, `root`, `pattern` and `form`; and a model host (one to 16
+  `[[capture.hosts]]` or `providers` rows, each host row with `host` and at least one path, or
+  `model_host_from`). Some pairs are required together, such as `home.env` with a
+  `{config_home}` root ([Cross-field rules](#cross-field-rules)).
+  Optional, each with the default its table below gives: `[participant]`, `resume_args`,
+  `configure`, `auth_hosts`, `env`, `platform`, `reserved_env_prefixes`, `argv_guard`,
+  `termination`, `providers`, `model_host_from`, the home's `skills_dir`, `per_run_dir`, `dirs`
+  and `seed`, `version_args`, and `[redaction]`. The one-screen list is
+  [What a chat connector writes](#what-a-chat-connector-writes).
+- **The launch environment.** The harness starts from an empty environment
+  (`crates/goalcup-cli/src/launch.rs`, `build_launch`). It gets exactly:
+  - from the participant's shell: `PATH` (or `/usr/bin:/bin:/usr/sbin:/sbin` when there is none),
+    `TERM`, `COLORTERM`, `LANG`, `SHELL`, every `LC_*` name the env rules admit, and `USER`,
+    `LOGNAME`, `TMPDIR`. Nothing else: no proxy, base URL, key or token of theirs;
+  - the connector's `capture.env`, with the running platform's `capture.platform.<key>.env` over
+    it, rendered. An entry here wins over the same name from the shell;
+  - `HOME`, the run's home, and the connector's `capture.home.env` pointed at its config home;
+  - the way to the participant's own git login, for a real run (a test, dry or cup run) only, as
+    paths or sockets and only when set or present, never a key
+    ([D69](DECISIONS.md#d69-goal-cup-proxy-holds-no-keys-the-agent-pushes-with-the-participants-own-git-login)):
+    `SSH_AUTH_SOCK`, `GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`, `XDG_RUNTIME_DIR` and
+    `DBUS_SESSION_BUS_ADDRESS`. A practice run, and the launch `goalcup setup` makes, get none of
+    them and `GIT_CONFIG_NOSYSTEM=1` instead;
+  - for a recorded launch: `HTTPS_PROXY` and `https_proxy` (the loopback recording proxy, with
+    a per-run credential), `NO_PROXY` and `no_proxy` (`127.0.0.1,localhost`), each `capture.ca.env`
+    name pointed at the file its row names ([Credential and CA](#credential-and-ca)),
+    `GOALCUP_IN_HARNESS=1` (`goalcup seal` refuses under it) and `GOALCUP_TIME_LEFT_FILE` (the
+    run's time-left file, D66).
+
+  `goalcup setup` and `capture.configure` commands get the same environment with no proxy, no CA
+  variable and no `GOALCUP_*` variable: they record nothing. The `version_args` probe gets only
+  `PATH` and a throwaway `HOME`. The harness runs in the run's workspace, on the participant's
+  terminal (stdin, stdout and stderr inherited). Its argv is `args`, then `resume_args` on a
+  `goalcup continue` that finds a session file in its native store (or cannot read the store,
+  and so asks the harness for its last session). A connector never sets `GOALCUP_*`, a proxy, a
+  CA variable, `HOME` or `PATH` itself: each is refused in `capture.env`, among other names
+  ([Arguments and environment policy](#arguments-and-environment-policy)).
+- **Homes.** `config_home = "shared"` is `<config dir>/capture-homes/<id>/`, kept across runs,
+  and runs on it are serialized; `per_run` is made fresh in the run folder. `run_home` is
+  `empty` (a fresh private `HOME` each run), `keychain_link` (a fresh `HOME` whose one entry links
+  `Library/Keychains` to the participant's, for a macOS Keychain login) or `shared` (one kept
+  `HOME` per connector at `<config dir>/capture-homes/<id>.run-home/`, D59). Every run `HOME`
+  also gets a `.profile` that restores `PATH` for a login shell; in a shared run `HOME` Goal
+  Cup's own `.profile` is rewritten each run, and any other `.profile` there is kept. With `skills_dir`, the goal-cup skill is put in `<config home>/<skills_dir>/goal-cup/`
+  before each launch. See [`[capture.home]` and seeds](#capturehome-and-seeds).
+- **Native roots and templates.** A native root is `{config_home}/...` or `{run_home}/...`; a
+  missing `{config_home}` root (and a `{run_home}` root of a shared run home) is created mode 0700.
+  `since_run_start = true` records every matching file new or written since the run started.
+  Argument templates admit `{workspace}`; `capture.env` values also admit `{config_home}` and
+  `{run_home}`.
+- **Hosts.** Only the hosts the connector declares are opened and recorded: its `capture.hosts`
+  rows, the rows its `providers` names from the shared table (`providers.toml`), and, with
+  `model_host_from`, the host its own config names, read at each start and continue. Every other
+  host is an opaque tunnel. `auth_hosts` are always tunnels.
+- **`[participant]`.** `display_name`, `first_screen`, `setup_section`, `no_prompts` and
+  `time_left_tool`. Core messages name a harness only through these. Goal Cup Proxy reads the
+  `no_prompts` and `time_left_tool` files and never writes them (D67).
+- **Decoder hooks.** A connector names its byte format with `protocol_hint`, on a host row or an
+  `append_only` native row, in the open grammar `^[a-z][a-z0-9.-]{0,63}$` (`hints.rs`). It
+  needs no decoder. A hint that no decoder accepts is recorded as capture-only: the bytes are
+  sealed, `goalcup doctor` and the research report name the hint, and the integrity verdict is
+  unchanged (D43, D45). A decoder is a separate verifier PR: a `DecoderV1` registered in
+  `DecoderRegistry::builtin()` whose `accepts` sees the whole `StreamOpen` (source, hint, content
+  type) ([writing-a-decoder](../skills/adding-a-capture-harness/writing-a-decoder.md)). Adding
+  one changes no connector and no pin. `model_host_from` paths carry the built-in wire hints
+  (see below).
+
+### The compatibility promise
+
+While Goal Cup Proxy reads schema 1:
+
+1. A connector that loads today keeps loading, under the same rules (`Origin::Pinned` once it is
+   pinned, `Origin::Dev` under `--dev`). The one exception is a tightened core policy row (a
+   deny list or trust table, for safety): it follows [the deprecation rule](#the-deprecation-rule),
+   with notice and a warning before it refuses, unless the owner rules that waiting is unsafe.
+2. Every field above keeps its meaning and its default. A closed value is not removed.
+3. The launch keeps setting every name listed above with the same meaning, and takes nothing
+   more from the participant's shell than that list. A later Goal Cup variable goes under
+   `GOALCUP_`, which a connector cannot use.
+4. The home locations (`capture-homes/<id>/` for a shared config home,
+   `capture-homes/<id>.run-home/` for a shared run `HOME`) and the native root templates keep their meaning,
+   so a participant's login and settings survive an upgrade.
+5. A declared hint is recorded as declared. A new decoder never needs a connector change.
+6. A shipped `providers` row is not removed or narrowed.
+
+Schema 1 may still grow: a new optional field whose absence keeps today's behaviour, a wider
+bound, a new closed value or a newly admitted pair of values. None of those breaks a connector.
+
+The promise is held by tests. Every shipped connector, and four frozen fixtures for harnesses
+nobody ships (`crates/goalcup-cli/tests/fixtures/schema-1-connectors/`), take the connector
+contract. The fixtures are a plain chat shape (`schema1-chat`); a shared config home with
+`model_host_from`, `providers`, every `[participant]` field, `configure`, platform env, a
+reserved prefix, an argv guard, `native_pid` and redaction rows (`schema1-optional`); a per-run
+config home with `per_run_dir`, `dirs` and seeds, a `keychain_link` run home, a shared CA row
+and `prefix_paths` (`schema1-per-run`); and the required fields only, with no home variable and
+a shared run `HOME` (`schema1-minimal`, which pins the defaults). They they load, take the launch checks
+(`tests/it/connector_contract.rs`) and run once with a stand-in through the real binaries
+(`tests/full/connector_contract.rs`; the fixtures through `--dev`). A connector made from the
+[template](../skills/adding-a-capture-harness/templates/connector-harness.toml) loads with no
+Rust change (`goalcup-protocol` `connector_template.rs`), and no core string literal names a
+harness (`no_family_literals.rs`). A change that makes one of these fail is a break of the
+contract, not a test to update.
+
+### The deprecation rule
+
+A field, value, default or launch variable is retired only like this:
+
+1. **A DECISIONS entry** names it, why it goes, what replaces it and the release that stops
+   reading it. A tightened core policy row (a deny list, a trust table) follows the same rule; it
+   may skip the notice and the warning when the owner rules that waiting is unsafe.
+2. **Notice.** It keeps working for at least one released `goalcup` after the entry, and at
+   least 14 days. Nothing is retired between an event's last release and the end of its runs.
+3. **Warning.** During the notice, `goalcup doctor` and `scripts/check-connector.sh` say that the
+   connector uses it and what to write instead. (No connector field is deprecated today, so this
+   warning does not exist yet: the first deprecation adds it.)
+4. **Schema bump.** Removing or renaming a field, changing a default or narrowing a bound is
+   `schema_version = 2`. The same PR migrates every connector under `connectors/`, regenerates
+   the pins, makes the schema-1 refusal name the change, adds schema-2 fixtures, and turns the
+   schema-1 fixtures into checks that schema 1 is refused with that sentence. A tightened policy
+   row keeps schema 1: its PR migrates every connector under `connectors/` it would refuse. A
+   participant's connector outside the repository is covered only by the notice and the
+   warning, which is why they come first.
+
+Before this contract, three removals happened inside schema 1 with no notice: the executable pin
+keys (D53), `[capture.credential]` (D61) and headless mode (21 Oct). Each is refused with a
+sentence that names the field and says what to do. The rule above applies from D68 on.
+
+### Pinned, or `--dev` only
+
+A connector runs without `--dev` only when this `goalcup` build pins its folder
+([`connector-dirs.txt`](../crates/goalcup-protocol/pins/connector-dirs.txt), compiled in). So a
+participant's own harness needs its connector PR merged and a `goalcup` release that pins it.
+For Goal Cup 2026 the last release is **6 Nov 2026 12:00 UTC**
+([event qualification](HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)). An unpinned
+connector runs only through `goalcup start --dev`. That load (`Origin::Dev`,
+`harness/check.rs`) relaxes three rules: the interpreter refusal for `program`; the argument
+path rules (an absolute, home-relative, parent-relative or expanding path in `args` or
+`resume_args`), with the word rules skipped for an argument that is an absolute path; and the
+loopback and single-label host refusal for `hosts` and `auth_hosts`. Every other rule holds,
+and it refuses a directory whose id or digest a build pins. The start says "This run is a development run and its results are not a judged entry's", and the local
+entry record says `dev`. What the code does not do today: refuse a `--dev` run in competition
+mode, or tell the server. A `--dev` run opens a server run and uploads like any other
+(`commands/start/server.rs`); the server stores the connector id and directory digest and
+compares neither with a list. The verifier's research report labels the run `Dev/unpinned`
+(`run.connector`), and the integrity verdict does not change. Whether a `--dev` run can count
+is an open owner question (D68).
+
+To be pinned, a connector also needs what `harness_conformance.rs` checks for every folder under
+`connectors/`, beyond the schema: a `[participant]` table with `display_name`, a `setup_section`
+whose heading is in [HARNESS-SETUP](HARNESS-SETUP.md), and an `id` equal to its folder name.
+
 ## What a chat connector writes
 
 Every shipped connector runs its harness in chat mode (D57), and a new one does too. This is all
@@ -318,8 +485,9 @@ identity `none` needs `since_run_start = true`. It is refused with
 Every run `HOME` gets one file from Goal Cup Proxy, whatever the connector: `.profile`, mode
 `0600`, exporting the `PATH` the launch hands the harness (shell-quoted). A harness that runs its
 commands in a login shell (Codex's `/bin/sh -lc`) has them run `/etc/profile`, which on Debian and
-Ubuntu resets `PATH`; this puts the participant's back (D57). A `.profile` already there (a shared
-run home's) is kept as it is, so a shared run home keeps the `PATH` of the run that first wrote it.
+Ubuntu resets `PATH`; this puts the participant's back (D57). In a shared run home, a `.profile`
+Goal Cup wrote (its first line says so) is rewritten each run, so the latest run's `PATH` wins;
+any other `.profile` there (the participant's own, or a link) is kept as it is.
 
 ## Credential and CA
 
@@ -684,17 +852,17 @@ A `capture.providers` row lives in `providers.toml`, outside `connectors/<id>/`,
 digest does not cover it. The effective host set of a pinned connector is its digest plus the
 `goalcup` build's provider table, which is compiled in and changes only in a reviewed core PR.
 
-Schema evolution and pin evolution are separate. A new optional field whose absence preserves
-current behaviour, a widened bound, a new closed value or a newly admitted cross-field pair may
-remain schema 1. Removing or renaming a field, changing a default, or narrowing a bound requires
-schema 2, migration of every harness manifest and regenerated directory pins. Tightening a core
-policy row is not a schema bump, but it needs a DECISIONS entry and migrates every connector it
-would reject in the same PR.
+Schema evolution and pin evolution are separate. A pin changes with every connector edit; the
+schema changes only as [the compatibility promise](#the-compatibility-promise) and
+[the deprecation rule](#the-deprecation-rule) say: what may stay schema 1, and what needs
+schema 2.
 
 ## Examples
 
 Read the shipped connectors. Conformance tests load each as `Origin::Pinned` and compare its
-directory with its pin.
+directory with its pin. The four frozen
+[schema-1 fixtures](../crates/goalcup-cli/tests/fixtures/schema-1-connectors/) are complete
+connectors for harnesses nobody ships, one per shape ([what each covers](#the-compatibility-promise)).
 
 - [`connectors/hermes-cli/harness.toml`](../connectors/hermes-cli/harness.toml): chat mode with a
   `configure` command, its model host read from its own `config.yaml` (`model_host_from`, no

@@ -444,24 +444,38 @@ pub fn is_repo_name(name: &str) -> bool {
         && !name.ends_with(".git")
 }
 
-/// Whether the agent's git can push to `remote`: a dry-run push of a one-commit repository to a
-/// branch the repository does not have, run in the agent's own environment
-/// (`launch::agent_base_env`: the participant's `PATH` and the way to their git login, a scratch
-/// `HOME`, nothing else), so a login only the participant's shell has (a `store` or `cache`
-/// helper, an `include.path` under `~`, a `GH_TOKEN`) does not pass. Nothing is sent. A dry run
-/// still opens git's push connection, which GitHub gives only to a login with write access; a
-/// pass is git's exit 0 and nothing else. No hook or signing of theirs runs, and nothing may ask
-/// a question (no terminal). `scratch` is a new folder, removed afterwards. `Err` holds git's
-/// last lines.
+/// Why [`push_test`] did not pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushRefused {
+    /// The repository already has a branch (`git ls-remote --heads`), so it is not new and empty.
+    /// GitHub's API can still say `size` 0 right after a repository is created with a README.
+    HasBranches,
+    /// git could not reach the repository or push to it: its last lines.
+    Failed(String),
+}
+
+/// Whether the agent's git can push to `remote`, a repository with no branch yet. First `git
+/// ls-remote --heads`: a repository that lists a branch is [`PushRefused::HasBranches`]. Then a
+/// dry-run push of a one-commit repository to a branch the repository does not have. Both run in
+/// the agent's own environment (`launch::agent_base_env`: the participant's `PATH` and the way
+/// to their git login, a scratch `HOME`, nothing else), so a login only the participant's shell
+/// has (a `store` or `cache` helper, an `include.path` under `~`, a `GH_TOKEN`) does not pass.
+/// Nothing is sent. A dry run still opens git's push connection, which GitHub gives only to a
+/// login with write access; a pass is git's exit 0 and nothing else. No hook or signing of theirs
+/// runs, and nothing may ask a question (no terminal). `scratch` is a new folder, removed
+/// afterwards.
 pub fn push_test(
     git: &OsStr,
     remote: &str,
     scratch: &Path,
     parent_env: &BTreeMap<String, String>,
-) -> Result<(), String> {
+) -> Result<(), PushRefused> {
     let done = match agent_env(parent_env, &scratch.join("home")) {
         Some(env) => push_test_in(git, remote, &scratch.join("repo"), &env),
-        None => Err(format!("{} could not be made", scratch.display())),
+        None => Err(PushRefused::Failed(format!(
+            "{} could not be made",
+            scratch.display()
+        ))),
     };
     let _ = std::fs::remove_dir_all(scratch);
     done
@@ -472,11 +486,14 @@ fn push_test_in(
     remote: &str,
     repo: &Path,
     env: &BTreeMap<String, String>,
-) -> Result<(), String> {
+) -> Result<(), PushRefused> {
     let Some(dir) = repo.to_str() else {
-        return Err(format!("{} is not UTF-8", repo.display()));
+        return Err(PushRefused::Failed(format!(
+            "{} is not UTF-8",
+            repo.display()
+        )));
     };
-    let quiet = |args: &[&str]| -> Result<(), String> {
+    let run = |args: &[&str]| -> Result<String, PushRefused> {
         let mut full = vec![
             "-c",
             "core.hooksPath=/dev/null",
@@ -485,12 +502,22 @@ fn push_test_in(
         ];
         full.extend_from_slice(args);
         match run_bounded(git, &full, env, PUSH_TEST_TIMEOUT) {
-            Some((true, _)) => Ok(()),
-            Some((false, said)) => Err(last_lines(&said)),
-            None if crate::arming::interrupted() => Err("interrupted".to_string()),
-            None => Err("git did not finish within a minute".to_string()),
+            Some((true, said)) => Ok(said),
+            Some((false, said)) => Err(PushRefused::Failed(last_lines(&said))),
+            None if crate::arming::interrupted() => {
+                Err(PushRefused::Failed("interrupted".to_string()))
+            }
+            None => Err(PushRefused::Failed(
+                "git did not finish within a minute".to_string(),
+            )),
         }
     };
+    let quiet = |args: &[&str]| run(args).map(|_| ());
+    // `<id>\trefs/heads/<name>` per branch; anything else git says (a warning) is not one.
+    let heads = run(&["ls-remote", "--heads", remote])?;
+    if heads.lines().any(|l| l.contains("\trefs/heads/")) {
+        return Err(PushRefused::HasBranches);
+    }
     quiet(&["init", "--quiet", dir])?;
     quiet(&[
         "-C",
@@ -623,7 +650,10 @@ pub fn clone_repo(git: &OsStr, source: &str, remote: &str, dest: &Path) -> Resul
 /// A practice run's work folder: a new, empty git repository at `dest` with no remote. A practice
 /// run has no GitHub repository and pushes nowhere. Its agent reads no global or system git
 /// config (`launch::agent_base_env`), so the repository names an author of its own,
-/// [`PRACTICE_AUTHOR`], and the agent's commits work.
+/// [`PRACTICE_AUTHOR`], and the agent's commits work. It also gets no git login by default:
+/// OpenSSH reads `~/.ssh` from the user database, not from `HOME`, so the repository's own
+/// config gives git [`PRACTICE_SSH_COMMAND`], and an empty `credential.helper`, which empties any
+/// list of helpers read before it. An agent that tries hard can still get around this (D69).
 pub fn init_local(git: &OsStr, dest: &Path) -> Result<(), CliError> {
     run_git(
         git,
@@ -635,6 +665,8 @@ pub fn init_local(git: &OsStr, dest: &Path) -> Result<(), CliError> {
     for (key, value) in [
         ("user.name", PRACTICE_AUTHOR.0),
         ("user.email", PRACTICE_AUTHOR.1),
+        ("core.sshCommand", PRACTICE_SSH_COMMAND),
+        ("credential.helper", ""),
     ] {
         run_git(
             git,
@@ -649,6 +681,11 @@ pub fn init_local(git: &OsStr, dest: &Path) -> Result<(), CliError> {
 
 /// The author a practice run's commits carry: no person's name.
 pub const PRACTICE_AUTHOR: (&str, &str) = ("Goal Cup practice", "practice@goalcup.invalid");
+
+/// The `ssh` a practice folder's git runs: no config file (`~/.ssh/config` names keys too), no
+/// key offered, no agent key, and no question.
+pub const PRACTICE_SSH_COMMAND: &str =
+    "ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes";
 
 /// Add `.env*` to the repository's own ignore list, `.git/info/exclude`, which is never
 /// committed: a key file the participant gives their agent is not pushed by mistake.

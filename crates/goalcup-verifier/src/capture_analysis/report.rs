@@ -379,7 +379,7 @@ fn connector_presentation(launch: Option<&CaptureRecord>) -> Option<&'static str
 }
 
 /// Failed, dropped an observation over the line bound, or reported itself incomplete.
-fn degraded(decoder: &DecoderOutcome) -> bool {
+pub(super) fn degraded(decoder: &DecoderOutcome) -> bool {
     decoder.result.as_ref().map_or(true, |s| s.incomplete) || decoder.observations.over_budget > 0
 }
 

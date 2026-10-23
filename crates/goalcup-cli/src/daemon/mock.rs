@@ -169,6 +169,7 @@ impl MockDaemonClient {
             capture: Some(recording()),
             producers_consumed: Some(1),
             admissions_refused: Some(0),
+            native_files_admitted: None,
         };
         let state = MockState {
             status: signed(payload, &key),

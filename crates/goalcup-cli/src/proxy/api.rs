@@ -256,6 +256,8 @@ pub struct CaptureEmitter {
     /// See [`CaptureEmitter::record_model_request`]; shared, so the run's heartbeat can read it
     /// without asking the recording proxy.
     model_requests: Arc<AtomicU64>,
+    /// See [`CaptureEmitter::recorded_requests`]; shared like `model_requests`.
+    recorded_requests: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for CaptureEmitter {
@@ -302,6 +304,7 @@ impl CaptureEmitter {
             local_refusals: AtomicU64::new(0),
             opaque_fallbacks: AtomicU64::new(0),
             model_requests: Arc::new(AtomicU64::new(0)),
+            recorded_requests: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -334,6 +337,23 @@ impl CaptureEmitter {
     /// Count one request of a captured host.
     pub(crate) fn record_model_request(&self) {
         self.model_requests.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Requests the recording proxy selected for capture: each request to one of the connector's
+    /// evidence paths (its model endpoints), and each client-to-server message on a WebSocket
+    /// opened on one. Telemetry, login and other paths of a captured host are not counted.
+    pub fn recorded_requests(&self) -> u64 {
+        self.recorded_requests.load(Ordering::SeqCst)
+    }
+
+    /// The counter itself, for a reader that outlives the recording proxy's handle.
+    pub fn recorded_requests_counter(&self) -> Arc<AtomicU64> {
+        self.recorded_requests.clone()
+    }
+
+    /// Count one request selected for capture.
+    pub(crate) fn record_recorded_request(&self) {
+        self.recorded_requests.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Counts the fallback and records it in the stream ([`ProxyLoss::OpaqueFallback`]).

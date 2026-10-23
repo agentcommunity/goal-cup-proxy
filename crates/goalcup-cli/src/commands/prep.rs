@@ -434,6 +434,16 @@ pub fn prep_with(
         put(report.out, &format!("{text}\n"))?;
         return Ok(u8::from(!all_ok));
     }
+    // D69: nothing reads or writes `github.json` now but the old clones' helper. Its token stays
+    // valid on GitHub until the participant revokes it, so say where it is, never what it is.
+    let old_token = crate::account::github::github_path(cfg);
+    if old_token.exists() {
+        report.tell(&format!(
+            "An old GitHub token from an earlier goalcup is stored at {}. Goal Cup no longer uses \
+             it: delete the file and revoke the token on GitHub once your older dry run is over.",
+            old_token.display()
+        ))?;
+    }
     if let Some((keys, made)) = &keys {
         offer_keys_file(doors, keys, acting && *made, open, &mut report)?;
     }
@@ -600,7 +610,7 @@ fn loadable_connectors(connectors: &Path, dev: bool) -> Result<Vec<HarnessConnec
 
 /// The bring-your-own-harness guide: how a harness Goal Cup does not ship becomes a connector.
 pub const OWN_HARNESS_GUIDE: &str =
-    "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/HARNESS-ONBOARDING.md";
+    "https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/HARNESS-ONBOARDING.md";
 
 /// The chat-mode harnesses, as setup lists them: the installed ones (found on `PATH`), the other
 /// supported ones with where to read how to install them, and the guide for one of the
@@ -771,10 +781,16 @@ fn harness_step(
     (Some(connector), step(STEP_HARNESS, State::Ok, false, say))
 }
 
+/// The marker lines around the time-left tool's lines in prep's report. Copy what is between.
+const COPY_START: &str = "  ----- start of the lines to copy -----";
+const COPY_END: &str = "  ----- end of the lines to copy -----";
+
 /// Fix plan v9: when the connector names where its MCP servers are listed
 /// (`participant.time_left_tool`), the lines that add `goalcup mcp` there, with this binary's
-/// absolute path, so the agent can ask the time left whatever its `PATH`. Indented under the
-/// harness step. Never written: Goal Cup does not change the harness's settings (D67).
+/// absolute path, so the agent can ask the time left whatever its `PATH`. The lines are printed
+/// as they go in the file, with no indent, between [`COPY_START`] and [`COPY_END`] (review P4
+/// L3: YAML lines indented for display nest wrongly when pasted). Never written: Goal Cup does
+/// not change the harness's settings (D67).
 fn time_left_tool_advice(cfg: &Path, connector: &HarnessConnector) -> Option<String> {
     let tool = connector
         .loaded
@@ -786,22 +802,14 @@ fn time_left_tool_advice(cfg: &Path, connector: &HarnessConnector) -> Option<Str
     let file = crate::home::prep_home_leaf(cfg, connector)?.join(&tool.file);
     let goalcup = std::env::current_exe().ok()?;
     let lines = crate::commands::mcp::setup_lines(tool, goalcup.to_str()?);
-    let indented: Vec<String> = lines
-        .lines()
-        .map(|l| {
-            if l.is_empty() {
-                String::new()
-            } else {
-                format!("    {l}")
-            }
-        })
-        .collect();
     Some(format!(
         "  So your agent can ask how much time is left whatever its PATH, add Goal Cup's \
-         time-left tool to `{}` in {} (Goal Cup does not change that file):\n{}",
+         time-left tool to `{}` in {} (Goal Cup does not change that file). Copy the lines \
+         between the two marker lines exactly as shown, with no spaces added in front, {}.\n\
+         {COPY_START}\n{lines}\n{COPY_END}",
         tool.key,
         file.display(),
-        indented.join("\n")
+        crate::commands::mcp::setup_place(tool),
     ))
 }
 
@@ -926,11 +934,11 @@ fn model_host_problem(cfg: &Path, connector: &HarnessConnector) -> Option<String
 
 /// The participant's harness setup guide (fix plan v8): every setting a 168-hour run needs.
 pub const SETUP_GUIDE: &str =
-    "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/HARNESS-SETUP.md";
+    "https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/HARNESS-SETUP.md";
 
 /// The setup guide's link for `connector`: its `participant.setup_section`, else the guide.
 /// The section comes from the connector's data, so this names no harness.
-fn setup_guide_link(connector: &HarnessConnector) -> String {
+pub(crate) fn setup_guide_link(connector: &HarnessConnector) -> String {
     match connector.loaded.manifest.setup_section() {
         Some(section) => format!("{SETUP_GUIDE}#{section}"),
         None => SETUP_GUIDE.to_string(),

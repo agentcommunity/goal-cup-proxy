@@ -22,7 +22,7 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
 1. **Install** the latest release (macOS or Linux; on Windows, inside WSL2):
 
    ```sh
-   curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh
+   curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh
    goalcup --version
    ```
 
@@ -33,10 +33,14 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    harnesses and lets you pick one, opens it once in its own isolated home so you sign in (or
    paste your API key; Goal Cup never sees it) and set it never to stop for approval
    ([set up your harness for a 168-hour run](docs/HARNESS-SETUP.md)), and checks this machine.
-   Run it until every step says `[ok]`. It needs no GitHub and keeps no key.
+   Run it until every step says `[ok]`. It needs no GitHub and keeps no key. For Hermes, install
+   exactly `uv tool install hermes-agent==0.19.0`, not Hermes's own installer, which installs the
+   newest release (it writes no session file). See [Hermes setup](docs/HARNESS-SETUP.md#hermes).
 3. **Practice** (optional): `goalcup start --harness <id> --practice`. About ten minutes in an
    empty local folder, no GitHub, never counts. Do as many as you like.
-4. **Start** inside the start window: `goalcup start --harness <id>`. It asks you to name a new,
+4. **Start** inside the start window: `goalcup start --harness <id>`. A dry run is open from
+   23 October, so you can start a rehearsal now
+   ([the dry run](docs/PARTICIPANT-GUIDE.md#the-dry-run-optional)). It asks you to name a new,
    empty, public GitHub repository for this run, opens GitHub to create it, and checks that your
    own git can push to it. Then approve the run in the browser. The harness opens in a fresh
    clone of that repository and pushes with your own git login. Its own setup screens (sign-in,
@@ -47,7 +51,8 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
 **During the run.**
 
 - The server is the clock. The run ends 168 hours after the server's official start.
-- Check on it from a second terminal with `goalcup status`. Its last line, `Next:`, says what to do.
+- Check on it from a second terminal with `goalcup status`. Its `Next:` line, above the `Details:`
+  block, says what to do.
 - Your agent may run `goalcup time-left`, or call the `time_left` tool of `goalcup mcp` if you
   added it to your harness, to ask how much time is left. Goal Cup Proxy never sends
   anything to the agent: no reminders, no "keep going", no restarts.
@@ -76,7 +81,7 @@ most runs have one, and `goalcup continue` starts the next. Every flag is in `go
 | `goalcup setup [--harness <ID>] [--work-root <PATH>] [--json] [--dev]` | Check the four readiness steps. Never starts a run. `goalcup prep` is its old name. |
 | `goalcup login [--server <URL>]` | Connect this computer to your Goal Cup account (once; `setup` does it for you). |
 | `goalcup start --harness <ID> [--practice \| --test] [--repo <NAME>] [--dev]` | Start a run: open the harness here and record it. A real run first asks for its own new GitHub repository. `--test` is for organizers. |
-| `goalcup status [<part-id>] [--json]` | Show the run: recording state, time left, upload, problems, `Next:`. |
+| `goalcup status [<part-id>] [--json]` | Show the run: recording state, time left, upload, problems, `Next:`. `--json` prints the signed status document, with this machine's `local` facts and a `problems` array (the `PROBLEM:` lines' sentences, left out when there are none) beside it. |
 | `goalcup time-left` | Show how much time the run has left. The agent may run it too. |
 | `goalcup mcp` | Serve the time left as an MCP tool (`time_left`) for the agent. The harness starts it; add it as in [HARNESS-SETUP](docs/HARNESS-SETUP.md#add-the-goal-cup-time-left-tool). |
 | `goalcup continue [<run-id>]` | Start the agent again in the same run, on the same computer. |
@@ -88,7 +93,9 @@ most runs have one, and `goalcup continue` starts the next. Every flag is in `go
 `goalcup-verify --capture-integrity <trace>` checks a sealed trace (0 complete and valid,
 1 incomplete or not sealed, 2 invalid, 3 no usable report). Exit 0 says the record is consistent,
 not that the run was good. `goalcup-verify --research-json <trace> --output <new.ndjson>` writes a
-private research report. Every command and exit code: [OPERATING](docs/OPERATING.md).
+private research report. `goalcup-verify --stats <trace>… --output <new.json>` writes one run's
+numbers (tokens, models, tool calls and errors, subagents, "keep going") and no text, with the same
+exit codes. Every command and exit code: [OPERATING](docs/OPERATING.md).
 
 ## How it works
 
@@ -106,7 +113,7 @@ harness  --HTTPS_PROXY-->  recording proxy (in goalcup, loopback)  -->  model pr
                   goalcup start uploads chunks and heartbeats  -->  Goal Cup server
                                                      (signs a start receipt and an ack per chunk)
 
-goalcup-verify reads a sealed trace offline: integrity check and research report.
+goalcup-verify reads a sealed trace offline: integrity check, research report and run stats.
 ```
 
 - **The wire leg.** The harness reaches its model through a local recording proxy, set by
@@ -255,7 +262,7 @@ A test that guards one of these is never deleted. It may move tier.
 The version is written only in the workspace `Cargo.toml` (`scripts/check-version.py` fails on
 any other copy). `sh scripts/release.sh prepare <x.y.z>` opens the version PR; after it merges, run
 the full gate and `sh scripts/linux-check.sh` on that commit, then `sh scripts/release.sh tag <x.y.z>`
-([details](packaging/README.md#cutting-a-release)). Release notes: [GitHub releases](https://github.com/agentcommunity/goal-cup-tracer/releases).
+([details](packaging/README.md#cutting-a-release)). Release notes: [GitHub releases](https://github.com/agentcommunity/goal-cup-proxy/releases).
 
 ## Docs map
 
@@ -273,7 +280,7 @@ Every doc, grouped by who reads it: [docs/README.md](docs/README.md). The key on
 
 - Participant support: goalcup@agentcommunity.org. Paste your `goalcup status` output and run id,
   never your GitHub token.
-- Public problems: [GitHub issues](https://github.com/agentcommunity/goal-cup-tracer/issues).
+- Public problems: [GitHub issues](https://github.com/agentcommunity/goal-cup-proxy/issues).
 - Security problems: report privately to goalcup@agentcommunity.org or through GitHub private
   vulnerability reporting ([SECURITY.md](SECURITY.md)). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md),
   [Code of Conduct](CODE_OF_CONDUCT.md). Maintainer: Balazs Nemethi.

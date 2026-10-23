@@ -35,6 +35,7 @@ fn payload() -> StatusPayload {
         capture: None,
         producers_consumed: None,
         admissions_refused: None,
+        native_files_admitted: None,
     }
 }
 
@@ -374,10 +375,11 @@ fn the_remaining_types_round_trip() {
         serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap()
     );
     assert_eq!(
-        CONTROL_API_VERSION, 10,
-        "v10 removed the seal's workspace arm, the status finalization and the native scope; v9 \
-         added the run's exact secret values to a capture create; v8 removed the V1 vocabulary \
-         nothing produced",
+        CONTROL_API_VERSION, 12,
+        "v12 added the status document's native file count; v11 added a continued run's \
+         existing_clone to a capture create; v10 removed the seal's workspace arm, the status \
+         finalization and the native scope; v9 added the run's exact secret values to a capture \
+         create; v8 removed the V1 vocabulary nothing produced",
     );
 }
 

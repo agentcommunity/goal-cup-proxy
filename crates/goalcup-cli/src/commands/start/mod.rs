@@ -115,6 +115,9 @@ pub struct StartOptions {
     /// The sizes of the run's disk reservation and how often it is watched. The shipped values
     /// ([`DiskPolicy::default`]); only a test build can name others.
     pub disk: DiskPolicy,
+    /// When the watch tick says the harness has written no session file while model requests are
+    /// recorded ([`crate::run::NativeSilence::default`] in every shipped build).
+    pub native_silence: crate::run::NativeSilence,
     /// `--practice` / `--test`: a practice run, which the server keeps apart from the
     /// competition and which never replaces the account's competition run, or an organizer
     /// test run, which is a competition run in every way this build can see. Only meaningful
@@ -533,7 +536,7 @@ impl Drop for DrainsOnDrop<'_> {
         let wrap_up = match self.over {
             Some((over, wrap_up)) if over.get() && !self.drains.is_empty() => {
                 crate::host_log::say(&format!(
-                    "the run is over: waiting for the earlier segment's upload (up to {} \
+                    "the run is over: waiting for the earlier part's upload (up to {} \
                      minutes).",
                     wrap_up.as_secs().div_ceil(60)
                 ));
@@ -547,11 +550,11 @@ impl Drop for DrainsOnDrop<'_> {
             let report = drain.wait(WrapUp::after(wrap_up));
             if report.caught_up {
                 crate::host_log::say(&format!(
-                    "uploaded: entry {entry}, an earlier segment of this run, acknowledged."
+                    "uploaded: part {entry}, an earlier part of this run, acknowledged."
                 ));
             } else {
                 crate::host_log::say(&format!(
-                    "upload of entry {entry}, an earlier segment, is incomplete ({}). {}",
+                    "upload of part {entry}, an earlier part of this run, is incomplete ({}). {}",
                     report.why.as_deref().unwrap_or("the upload did not finish"),
                     how_to_finish
                 ));

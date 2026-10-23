@@ -26,6 +26,7 @@ You run the event, the server and the test runs.
 - [scripts README](../scripts/README.md): one line per script, and which ones CI and the gate run.
 - [Notifications](research/NOTIFICATIONS.md): every message a participant can get, and who sends it.
 - [How a run ends](research/HOW-A-RUN-ENDS.md): the plain-English plan for the end of a run.
+- [Restarts across session limits](research/RESTARTS-DESIGN.md): a run on a sandbox that stops every 24 hours, and `goalcup continue` after each stop.
 - [Event readiness plan](plans/2026-10-20-event-readiness.md): invariants and work packages from 20 Oct to 6 Nov.
 - [Local next steps](research/LOCAL-NEXT-STEPS.md): what to do on real machines next, in order.
 - [Local test day](research/LOCAL-TEST-DAY.md): the 8-hour plan and handover for one day of local testing on every surface.

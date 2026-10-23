@@ -1,5 +1,9 @@
 # Set up your harness for a 168-hour run
 
+**For participants.** This page is about a harness that Goal Cup already ships. To add a harness
+that is not here, see [Add a harness](HARNESS-ONBOARDING.md), the contributors' guide: its
+connector PR adds the harness's section to this page.
+
 During your run you may type only "keep going" ([RULES](RULES.md#one-prompt-then-only-keep-going)).
 So your harness must work for 168 hours without you. This page tells you which harness settings
 to set before the start, and where they go.
@@ -8,6 +12,13 @@ Goal Cup never changes your harness settings
 ([D67](DECISIONS.md#d67-goal-cup-recommends-running-without-permission-prompts-the-participant-sets-it)).
 You set them yourself. `goalcup prep` tells you when a permission setting is missing, and links
 to this page.
+
+Goal Cup records two things: the model calls (on the wire) and the harness's own session file.
+One does not stand in for the other. If a run has recorded requests to the model service for ten
+minutes and the harness has still written no session file, `goalcup status` shows a `PROBLEM:`
+line that links to your harness's section here (the run's `host.log` has it too). Keep the agent
+running, and check the settings in that section and the harness version. The line goes away once
+a session file is recorded.
 
 The facts here come from Goal Cup's own runs, most of them from the
 [local test day of 22 October 2026](research/results/2026-10-22-local-test-day.md). "Not measured"
@@ -98,6 +109,13 @@ Amp needs no setting to run without permission prompts.
 
 ### Hermes
 
+**Install Hermes 0.19.0 from PyPI:** `uv tool install hermes-agent==0.19.0`. Newer Hermes
+releases (0.21.1 and later) no longer write the session file Goal Cup records, so Goal Cup could
+record only the model traffic, not Hermes's own side of the run. Hermes's own installer
+(`curl … install.sh | bash`) installs the newest release, so do not use it for Goal Cup. Check
+with `hermes --version`; it should print `Hermes Agent v0.19.0`
+([facts sheet](harnesses/hermes-cli.md)).
+
 Add these keys to `hermes-cli/config.yaml`:
 
 ```yaml
@@ -131,10 +149,13 @@ tool `time_left`.
   `$GOALCUP_TIME_LEFT_FILE`.
 
 Goal Cup does not add the tool for you. `goalcup prep` prints the lines for your harness, with the
-full path of your `goalcup` filled in, and the file to put them in. Add them to that file in the
-harness's Goal Cup home, next to the MCP servers you already have. Below, `/path/to/goalcup` stands
-for the path prep prints (`command -v goalcup` shows it too), and `<capture-homes>` for the folder
-in [where the settings live](#where-the-settings-live).
+full path of your `goalcup` filled in, and the file to put them in. It prints them between two
+marker lines (`----- start of the lines to copy -----` and `----- end ...`). Copy the lines between
+the markers exactly as shown, with no spaces added in front, and put them where prep says, in that
+file in the harness's Goal Cup home. If the file already lists MCP servers, add only the `goalcup`
+entry to that list. Below, `/path/to/goalcup` stands for the path prep prints (`command -v goalcup`
+shows it too), and `<capture-homes>` for the folder in
+[where the settings live](#where-the-settings-live).
 
 In a practice run, ask the agent to call `time_left`. That shows the tool works in your harness.
 
@@ -193,7 +214,9 @@ Add to `amp-cli.run-home/.config/amp/settings.json`:
 
 ### Hermes: the time-left tool
 
-Add to `hermes-cli/config.yaml`:
+Add to the end of `hermes-cli/config.yaml`, at the top level: `mcp_servers:` starts at the left
+edge, with no spaces in front. In YAML the spaces are the structure, so indented lines would land
+under the key above them.
 
 ```yaml
 mcp_servers:
@@ -208,7 +231,8 @@ mcp_servers:
    `${GOALCUP_TIME_LEFT_FILE}` from its own environment. So keep the `env` lines (read from the
    source, `tools/mcp_tool.py`).
 2. Hermes needs its MCP support installed. Without it, `hermes mcp test goalcup` says to install
-   `hermes-agent[mcp]` (measured).
+   `hermes-agent[mcp]` (measured). Install it pinned, with the quotes, because zsh breaks on
+   unquoted brackets: `uv tool install 'hermes-agent[mcp]==0.19.0'`.
 3. Hermes starting the tool, and the agent calling it: not measured.
 
 ## 1. Run without permission prompts
@@ -239,9 +263,9 @@ Cup never pushes for your agent.
 
 1. Say in your prompt that the agent commits and pushes its work often.
 2. Let the agent write `.git`. For Codex, this needs `sandbox_mode = "danger-full-access"`.
-3. Goal Cup hands your GitHub token to `git` when the agent pushes. The token is never in the
-   agent's environment.
-4. A practice run cannot push. So a practice run shows commits, not pushes.
+3. The agent pushes with your own git login, as you do (D69). Goal Cup keeps no token.
+4. A practice run has no remote and gets no git login by default. So a practice run shows
+   commits, not pushes.
 
 | Harness | Commits on 22 October | Push from a competition run |
 |---|---|---|

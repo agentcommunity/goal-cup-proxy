@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 /// setup` must have run: its work folder is checked here, before the participant is asked for
 /// anything and before anything is created. A real run's GitHub repository is asked for later,
 /// once every other check has passed and before the approval ([`Serving::approved`]). A `--dev`
-/// run is uploaded like any other; the server refuses a connector it does not accept.
+/// run is uploaded like any other, and the server checks its connector against no list. Since D70
+/// the server refuses a run that sends `dev: true` in the competition or from a non-admin, but this
+/// CLI does not send `dev` yet (D70 Task 4).
 pub(super) fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,
@@ -106,7 +108,7 @@ impl crate::commands::run_repo::Doors for StartDoors<'_> {
         login
     }
 
-    fn push_test(&self, remote: &str) -> Result<(), String> {
+    fn push_test(&self, remote: &str) -> Result<(), crate::account::github::PushRefused> {
         let scratch = self.scratch("push-test");
         // A test's local stand-in (always `None` in a shipped build).
         let remote = self.clone_source.unwrap_or(remote);
@@ -422,13 +424,27 @@ impl Uploading {
             .map(|()| give)
         });
         match kept {
-            Ok(give_back) => Ok(OpenedRun {
-                run,
-                request,
-                opened_at,
-                give_back: std::cell::RefCell::new(Some(give_back)),
-                segment: None,
-            }),
+            Ok(give_back) => {
+                // Only now is the repository used: the next real run suggests a new name. A hint
+                // that cannot be written stops nothing.
+                if let Some(repo) = &new.repo
+                    && let Err(error) =
+                        crate::commands::run_repo::keep_for_next_run(cx.cfg, &repo.repo_url)
+                {
+                    crate::host_log::say(&format!(
+                        "the repository of run {} was not kept for the next run's suggestion: \
+                         {error}",
+                        run.run_id
+                    ));
+                }
+                Ok(OpenedRun {
+                    run,
+                    request,
+                    opened_at,
+                    give_back: std::cell::RefCell::new(Some(give_back)),
+                    segment: None,
+                })
+            }
             Err(error) => {
                 // The note of the open and the credential are deleted only once the server has
                 // taken the run back; while it is away they are the only way to give it back.
@@ -571,7 +587,7 @@ impl Uploading {
         crate::upload::keep_run(cfg, &record, &receipt)?;
         let line = match opened.segment {
             Some(segment) => format!(
-                "run {} continued on {}: segment {segment}, deadline {}",
+                "run {} continued on {}: part {segment}, deadline {}",
                 record.run_id, record.server_url, record.deadline_at
             ),
             None => format!(

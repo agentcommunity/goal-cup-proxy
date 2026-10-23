@@ -104,12 +104,11 @@ pub fn status_in(
     crate::upload::prune::clean_finished_runs(cfg);
     // First of everything, before the daemon is even asked: where the run is and what to do
     // about anything wrong with it. A `--json` caller gets the document.
-    let mut run_id = None;
+    let report = run_report(cfg, connectors, &record, now);
     if !json {
-        let (report, run) = run_report(cfg, connectors, &record, now);
-        put(out, &report)?;
-        run_id = run;
+        put(out, &report.text)?;
     }
+    let run_id = report.run_id;
     let document = retry_busy(|| client.status(&record.entry_id)).map_err(CliError::Control)?;
     if document.verify_with(&record.run_public_key).is_err() {
         // Something other than the daemon that opened this run may be answering on an
@@ -158,6 +157,7 @@ pub fn status_in(
         let shown = WithLocal {
             document: &document,
             local: local_facts(cfg, &record),
+            problems: report.problems,
         };
         put(out, &format!("{}\n", serde_json::to_string_pretty(&shown)?))?;
     } else {
@@ -177,13 +177,20 @@ pub fn status_in(
 /// facts ([`local_vitals`]). It is not signed: it comes from the run's files, not the daemon.
 pub const LOCAL_KEY: &str = "local";
 
-/// The signed document, its fields as they are, and [`LOCAL_KEY`] after them.
+/// The key of `goalcup status --json` beside the signed document that holds the run's problems,
+/// one sentence each, as the `PROBLEM:` lines say them. Left out when there is none.
+pub const PROBLEMS_KEY: &str = "problems";
+
+/// The signed document, its fields as they are, and [`LOCAL_KEY`] and [`PROBLEMS_KEY`] after
+/// them.
 #[derive(serde::Serialize)]
 struct WithLocal<'a> {
     #[serde(flatten)]
     document: &'a SignedStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     local: Option<crate::upload::api::HeartbeatVitals>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    problems: Vec<String>,
 }
 
 /// [`local_vitals`] for the run of `record`; `None` when this machine has no state for it.
@@ -212,26 +219,32 @@ fn local_vitals(
 /// The first line of the run section of an organizer test run (`goalcup start --test`).
 const TEST_RUN_BANNER: &str = "TEST RUN: an organizer test run, not a competition entry\n";
 
+/// What [`run_report`] found: the participant block, the run's id when this machine has the run,
+/// and its problems, one sentence each.
+struct RunReport {
+    text: String,
+    run_id: Option<String>,
+    problems: Vec<String>,
+}
+
 /// What this machine knows of the run the entry belongs to (its `state.json`), in the
 /// participant's words: where the run is, one `PROBLEM:` line for each thing that is wrong with
 /// the fix after it, and the one thing to do next. A run with no state yet is not a problem, and
-/// is said in plain words; a machine with no run record for the entry says nothing. The second
-/// value is the run's id, when the machine has the run.
-fn run_report(
-    cfg: &Path,
-    connectors: Option<&Path>,
-    record: &EntryRecord,
-    now: &str,
-) -> (String, Option<String>) {
+/// is said in plain words; a machine with no run record for the entry says nothing.
+fn run_report(cfg: &Path, connectors: Option<&Path>, record: &EntryRecord, now: &str) -> RunReport {
     // The run of the entry that was pinned, never the newest run: the newest entry and the
     // newest run can belong to different runs (a practice run continued after a competition
     // run was started).
     let Ok(Some(run)) = crate::run::of_entry(cfg, &record.entry_id) else {
-        return (String::new(), None);
+        return RunReport {
+            text: String::new(),
+            run_id: None,
+            problems: Vec::new(),
+        };
     };
     // An organizer test run says so first, before anything else in the run section.
     let banner = if run.test { TEST_RUN_BANNER } else { "" };
-    let name = harness_name(connectors, &run.connector_id, record.dev);
+    let (name, guide) = harness_words(connectors, &run.connector_id, record.dev);
     let now = parse_z(now).unwrap_or_else(crate::run::now_unix);
     let state = crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id));
     let over = crate::run::is_over(&run, state.as_ref(), now);
@@ -285,7 +298,11 @@ fn run_report(
             header.join("\n"),
             participant::status_next(&next)
         );
-        return (plain_lines(&text), Some(run.run_id));
+        return RunReport {
+            text: plain_lines(&text),
+            run_id: Some(run.run_id),
+            problems: Vec::new(),
+        };
     };
 
     // `goalcup continue` is advised only for a run it can restart.
@@ -298,6 +315,7 @@ fn run_report(
         harness: &name,
         run_id: &run.run_id,
         until: until.as_deref(),
+        guide: &guide,
     };
     let problems = state.problems(now, advice, &who);
     // A normal end of a run that cannot be continued is said plainly, after any problem.
@@ -421,17 +439,21 @@ fn run_report(
     {
         header.push(line);
     }
-    let problems: String = problems
+    let lines: String = problems
         .iter()
         .map(|problem| format!("{} {problem}\n", participant::PROBLEM))
         .collect();
     let finished = finished.map(|line| format!("{line}\n")).unwrap_or_default();
     let text = format!(
-        "{banner}{}\n{problems}{finished}{}\n",
+        "{banner}{}\n{lines}{finished}{}\n",
         header.join("\n"),
         participant::status_next(&next)
     );
-    (plain_lines(&text), Some(run.run_id))
+    RunReport {
+        text: plain_lines(&text),
+        run_id: Some(run.run_id),
+        problems: problems.iter().map(|problem| plain(problem)).collect(),
+    }
 }
 
 /// How long after its start a run may be without a state before it is called not started.
@@ -440,11 +462,27 @@ const NEW_RUN_SECS: u64 = 5 * 60;
 /// The harness's display name from its connector, or the connector id when the connector cannot
 /// be loaded here.
 pub(crate) fn harness_name(connectors: Option<&Path>, connector_id: &str, dev: bool) -> String {
+    harness_words(connectors, connector_id, dev).0
+}
+
+/// The harness's display name and its section of the setup guide, from its connector; the
+/// connector id and the whole guide when the connector cannot be loaded here.
+fn harness_words(connectors: Option<&Path>, connector_id: &str, dev: bool) -> (String, String) {
     connectors
         .and_then(|dir| crate::connector::load_harness(dir, connector_id, dev).ok())
         .map_or_else(
-            || connector_id.to_string(),
-            |connector| connector.display_name().to_string(),
+            || {
+                (
+                    connector_id.to_string(),
+                    crate::commands::prep::SETUP_GUIDE.to_string(),
+                )
+            },
+            |connector| {
+                (
+                    connector.display_name().to_string(),
+                    crate::commands::prep::setup_guide_link(&connector),
+                )
+            },
         )
 }
 

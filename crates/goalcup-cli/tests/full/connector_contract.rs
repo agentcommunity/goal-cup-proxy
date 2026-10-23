@@ -6,7 +6,9 @@
 //! own `harness.toml`: its version probe, the session file its first native source finds, its
 //! goal-cup skill folder and its CA variables. Every connector runs in chat mode (D57) on a
 //! terminal of its own. So a new connector folder is run here with no edit. The connector directory is copied byte for
-//! byte, so it loads as the pinned one without `--dev`; the provider-host probe is skipped
+//! byte, so it loads as the pinned one without `--dev`. The frozen schema-1 fixtures
+//! (`tests/fixtures/schema-1-connectors/`, harnesses nobody ships) take the same run through
+//! `--dev`, which pins the connector contract; the provider-host probe is skipped
 //! (`GOALCUP_TEST_OFFLINE_UPSTREAMS`), so no provider is reached and nothing goes over the wire.
 //! The static half is `tests/it/connector_contract.rs`.
 
@@ -74,20 +76,38 @@ fn stand_in_header(c: &CaptureSpec, out: &Path) -> String {
     )
 }
 
+/// Where a connector run comes from: a shipped connector, loaded as the pinned directory, or a
+/// frozen schema-1 fixture, which no build pins, run through `--dev`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Folder {
+    Shipped,
+    Schema1Fixture,
+}
+
 /// One connector, run the way a participant runs it, and judged.
-fn run_connector(id: &str) {
+fn run_connector(id: &str, from: Folder) {
     let world = Vertical::new("plain", serde_json::json!({}));
     // The world's development workload goes: without `--dev` every connector in the directory
     // is held to the pinned rules, and that one is a development connector.
     std::fs::remove_dir_all(world.connectors.join(m2_vertical_support::CONNECTOR)).unwrap();
     let connector_dir = world.connectors.join(id);
-    support::copy_tree(&support::connectors_dir().join(id), &connector_dir);
-    let pinned = goalcup_protocol::pins::pinned_connector_dir_sha256(id)
-        .expect("a shipped connector is pinned");
+    let source = match from {
+        Folder::Shipped => support::connectors_dir(),
+        Folder::Schema1Fixture => support::schema_1_fixtures_dir(),
+    };
+    support::copy_tree(&source.join(id), &connector_dir);
     let digest = goalcup_protocol::connector_dir::connector_dir_sha256(&connector_dir).unwrap();
-    assert_eq!(digest, pinned, "{id}: the copy is the pinned directory");
-    let manifest = goalcup_protocol::harness::load_dir(&connector_dir, Origin::Pinned)
-        .expect("the connector recipe validates as pinned data")
+    let origin = match from {
+        Folder::Shipped => {
+            let pinned = goalcup_protocol::pins::pinned_connector_dir_sha256(id)
+                .expect("a shipped connector is pinned");
+            assert_eq!(digest, pinned, "{id}: the copy is the pinned directory");
+            Origin::Pinned
+        }
+        Folder::Schema1Fixture => Origin::Dev,
+    };
+    let manifest = goalcup_protocol::harness::load_dir(&connector_dir, origin)
+        .unwrap_or_else(|e| panic!("{id}: the connector recipe no longer validates: {e}"))
         .manifest;
     let c = &manifest.capture;
 
@@ -123,8 +143,11 @@ fn run_connector(id: &str) {
 
     let runs = world.root.join("runs");
     let mut command = Command::new(env!("CARGO_BIN_EXE_goalcup"));
+    command.args(["start", "--harness", id]);
+    if from == Folder::Schema1Fixture {
+        command.arg("--dev");
+    }
     command
-        .args(["start", "--harness", id])
         .current_dir(&runs)
         .env_clear()
         .env(
@@ -284,7 +307,7 @@ fn run_connector(id: &str) {
     assert_eq!(
         launch,
         Some((id.to_string(), Some(digest))),
-        "{id}: Launch binds the pinned connector"
+        "{id}: Launch binds the connector directory that ran"
     );
     let streams = chain.streams();
     let goals: Vec<_> = streams
@@ -310,6 +333,43 @@ fn run_connector(id: &str) {
     assert_eq!(integrity["sealed"], true, "{id}: {integrity}");
     assert_eq!(integrity["integrity"], "valid", "{id}: {integrity}");
     assert_eq!(code, 0, "{id}: {integrity}");
+
+    // The session file is recorded under the hint the connector declared, as declared (D43). A
+    // hint no decoder accepts is capture-only: the research report lists it under
+    // `analysis.undecoded`, and the integrity verdict above is unchanged (D45).
+    let declared = c.native[0].protocol_hint.as_deref();
+    let registry = goalcup_verifier::capture_analysis::registry::DecoderRegistry::builtin();
+    let (_, summary) = world.research(&entry);
+    let undecoded = summary["analysis"]["undecoded"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{id}: no analysis.undecoded: {summary}"));
+    let mut native_streams = 0;
+    for (key, stream) in streams
+        .iter()
+        .filter(|(_, s)| s.source == CaptureSource::Native)
+    {
+        native_streams += 1;
+        assert_eq!(
+            stream.meta.protocol_hint.as_deref(),
+            declared,
+            "{id}: the native stream keeps its declared hint"
+        );
+        let open = goalcup_verifier::capture_analysis::api::StreamOpen::new(
+            key,
+            CaptureSource::Native,
+            declared,
+            stream.meta.content_type.as_deref(),
+        );
+        let listed = undecoded
+            .iter()
+            .any(|g| g["source"] == "native" && g["hint"].as_str() == declared);
+        assert_eq!(
+            listed,
+            registry.accepting(&open).is_empty(),
+            "{id}: capture-only exactly when no decoder accepts `{declared:?}`: {summary}"
+        );
+    }
+    assert!(native_streams > 0, "{id}: a native stream was recorded");
 }
 
 /// Every connector folder passes one participant-shaped run with no case of its own: it loads
@@ -323,7 +383,22 @@ fn every_connector_runs_once_as_a_participant_runs_it() {
     assert!(!ids.is_empty(), "connectors/ holds the shipped connectors");
     with_real_home_guard(|| {
         for id in &ids {
-            run_connector(id);
+            run_connector(id, Folder::Shipped);
+        }
+    });
+}
+
+/// The connector contract's launch promise: a connector written against schema 1 today, for a
+/// harness nobody ships (the frozen fixtures, docs/CONNECTOR-SCHEMA.md "The connector contract"),
+/// keeps launching with no Rust change. Through `--dev` it passes the same participant-shaped run
+/// as a shipped connector: its configure commands, its own environment and CA file, its argv, its
+/// session file recorded with a hint no decoder knows, and a sealed trace the verifier reads as
+/// valid.
+#[test]
+fn a_schema_1_connector_written_today_keeps_launching() {
+    with_real_home_guard(|| {
+        for id in support::schema_1_fixture_ids() {
+            run_connector(&id, Folder::Schema1Fixture);
         }
     });
 }

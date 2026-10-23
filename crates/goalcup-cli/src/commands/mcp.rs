@@ -198,14 +198,9 @@ pub fn setup_lines(tool: &TimeLeftTool, goalcup: &str) -> String {
     let q = |s: &str| serde_json::to_string(s).unwrap_or_default();
     let var = crate::run::time_left::FILE_ENV;
     let template = format!("${{{var}}}");
-    let extension = tool
-        .file
-        .rsplit_once('.')
-        .map(|(_, e)| e.to_ascii_lowercase())
-        .unwrap_or_default();
     let key = &tool.key;
     let (command, server) = (q(goalcup), SERVER_NAME);
-    match extension.as_str() {
+    match extension(tool).as_str() {
         "toml" => {
             let mut lines = format!("[{key}.{server}]\ncommand = {command}\nargs = [\"mcp\"]");
             match tool.pass_env {
@@ -241,6 +236,32 @@ pub fn setup_lines(tool: &TimeLeftTool, goalcup: &str) -> String {
             format!("{key}:\n  {server}:\n    command: {command}\n    args: [\"mcp\"]{env}")
         }
     }
+}
+
+/// Where the lines of [`setup_lines`] go in the harness's file, for `goalcup prep` to say. Each
+/// starts at the left edge: in YAML the indentation is the structure, so lines pasted with
+/// spaces in front would nest under the key above them.
+pub fn setup_place(tool: &TimeLeftTool) -> String {
+    let (key, server) = (&tool.key, SERVER_NAME);
+    match extension(tool).as_str() {
+        "toml" => "at the end of the file".to_string(),
+        "json" => format!(
+            "inside the file's outer {{ }}, with a comma after the entry before them. If the \
+             file already has \"{key}\", add only the \"{server}\" entry to it"
+        ),
+        _ => format!(
+            "at the end of the file, at its top level. If the file already has `{key}:`, add \
+             only the `{server}:` entry under it"
+        ),
+    }
+}
+
+/// The harness file's extension, lower case: its shape.
+fn extension(tool: &TimeLeftTool) -> String {
+    tool.file
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 fn io(path: &str, source: std::io::Error) -> CliError {

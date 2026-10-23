@@ -81,7 +81,7 @@ pub fn upload_not_sealed() -> String {
 pub fn upload_seal_missing(entry_id: &str) -> String {
     format!(
         "Run goalcup seal {entry_id}, then goalcup upload. This part of the run is uploaded, but \
-         it was not sealed. If the disk is full, free some space first."
+         it was not sealed. If the disk is full, free some space first, {FREE_OUTSIDE}."
     )
 }
 
@@ -89,7 +89,7 @@ pub fn upload_seal_missing(entry_id: &str) -> String {
 pub fn entries_intro(none: bool) -> Vec<String> {
     if none {
         vec![
-            "To start a run: goalcup prep, then goalcup start --harness <id> --practice."
+            "To start a run: goalcup setup, then goalcup start --harness <id> --practice."
                 .to_string(),
             "To show the newest run you started here, even a finished one: goalcup status"
                 .to_string(),

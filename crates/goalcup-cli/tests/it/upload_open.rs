@@ -812,15 +812,9 @@ mod server_runs {
         assert_eq!(upload.run_ids().len(), 1);
     }
 
-    /// GitHub's size lags a push, so a repository that reads as empty there may already have a
-    /// commit: the clone says so exactly, and a competition start is refused once it has cloned,
-    /// leaving nothing behind and opening no run.
-    #[test]
-    fn a_clone_with_a_commit_refuses_a_competition_start() {
-        let rig = Rig::new();
-        let server = server(&rig);
-        rig.prepare_for(&server.url());
-        // A source with one commit in it, standing in for a repository pushed to a moment ago.
+    /// A bare repository with one commit on one branch, standing in for a GitHub repository
+    /// created with a README, or pushed to a moment ago. Returns its path.
+    fn source_with_a_commit(rig: &Rig) -> std::path::PathBuf {
         let work = rig.root.join("pushed");
         let source = rig.root.join("pushed.git");
         let git = |args: &[&str]| {
@@ -851,6 +845,95 @@ mod server_runs {
             work.to_str().unwrap(),
             source.to_str().unwrap(),
         ]);
+        source
+    }
+
+    /// The last real run's repository is kept only once a run has opened with it: a start that
+    /// is denied at the approval leaves the name the next start suggests as it was, and a run
+    /// that opens keeps its own.
+    #[test]
+    fn the_repository_is_kept_only_once_the_run_opens() {
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let earlier = "https://github.com/goal-cup/earlier";
+        let mut file = goalcup_cli::prep_file::read_prep_lenient(&rig.cfg);
+        file.repo_url = earlier.to_string();
+        goalcup_cli::prep_file::write_prep(&rig.cfg, &file).unwrap();
+        server.set_approval(crate::common::upload_server::Approval::Deny);
+        let goal = rig.run_folder();
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let opts = rig.options(&goal, RESERVE);
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        result.expect_err("a denied approval started a run");
+        assert_eq!(server.device_requests().len(), 1, "{out}");
+        assert!(server.run_ids().is_empty());
+        assert_eq!(
+            goalcup_cli::prep_file::read_prep_lenient(&rig.cfg).repo_url,
+            earlier,
+            "{out}"
+        );
+        server.set_approval(crate::common::upload_server::Approval::Auto);
+        let ended = run_to_end_in(&rig, RunMode::Test, &goal);
+        assert_eq!(server.run_ids().len(), 1, "{}", ended.out);
+        assert_eq!(
+            goalcup_cli::prep_file::read_prep_lenient(&rig.cfg).repo_url,
+            PREP_REPO
+        );
+    }
+
+    /// GitHub's API can say a repository created with a README a moment ago has size 0. The
+    /// agent's git sees its branch, so the start is refused as not empty before the approval:
+    /// nothing is asked of the server, nothing is cloned and no harness starts.
+    #[test]
+    fn a_repository_with_a_branch_is_refused_before_the_approval() {
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let source = source_with_a_commit(&rig);
+        // The push test and the clone both reach the repository with a branch.
+        rig.with_env(
+            goalcup_cli::commands::start::TEST_CLONE_SOURCE,
+            &source.display().to_string(),
+        );
+        let goal = rig.run_folder();
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let opts = rig.options(&goal, RESERVE);
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("a repository with a branch was used");
+        assert_eq!(refused.exit_code(), 1, "{refused}");
+        let said = refused.to_string();
+        assert!(
+            said.contains("is not empty") && said.contains("--repo"),
+            "{said}"
+        );
+        assert!(server.device_requests().is_empty(), "approval was asked");
+        assert!(server.run_ids().is_empty(), "a run was opened");
+        assert!(client.book().creates.is_empty(), "{out}");
+        assert!(rig.run_dirs().is_empty());
+        assert!(rig.clones().is_empty(), "{:?}", rig.clones());
+        assert!(!rig.harness_started());
+    }
+
+    /// GitHub's size lags a push, so a repository that reads as empty there, and had no branch
+    /// at the push test, may have a commit by the time it is cloned: the clone says so exactly,
+    /// and a competition start is refused once it has cloned, leaving nothing behind and opening
+    /// no run.
+    #[test]
+    fn a_clone_with_a_commit_refuses_a_competition_start() {
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let source = source_with_a_commit(&rig);
+        // The push test, before the approval, still sees an empty repository.
+        rig.with_env(
+            goalcup_cli::commands::start::TEST_PUSH_REMOTE,
+            &rig.root.join("github-source.git").display().to_string(),
+        );
         rig.with_env(
             goalcup_cli::commands::start::TEST_CLONE_SOURCE,
             &source.display().to_string(),

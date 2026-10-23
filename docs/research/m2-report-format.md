@@ -76,7 +76,7 @@ shared convention is `session_id` (the source's own session), optional `parent_s
 overlong identities are omitted rather than guessed. This convention can be adopted by other
 native formats; their decoders document their own source mappings and versions.
 
-`codex-native` version `3` fixes authority and context from its first `session_meta`. A later
+`codex-native` version `4` fixes authority and context from its first `session_meta`. A later
 copied parent header cannot replace the child or turn child user-role records into typed human
 input. Own identity comes from `payload.id`; `payload.session_id` can still name the parent.
 IDs are nonempty strings of at most 256 UTF-8 bytes. Parent IDs must agree across the supplied
@@ -100,6 +100,15 @@ Version `3` adds: an assistant `response_item.message` is a `model_response` (`r
 attributes its records to that call. The other completed items (`AgentMessage`, `UserMessage`,
 `Reasoning`, `CommandExecution`, `FileChange`) repeat a `response_item` of the same stream and are
 `unknown` with `reason: "duplicate_view"`.
+
+Version `4` adds: a `user` or `developer` `response_item.message` without the `user.text` marker
+is an `unknown` with `reason: "unmarked_message"` that says what the record is: `role`,
+`content_types`, and the record's own `content_item_kinds` (for example
+`environments.environment_context`, `permissions.instructions`, `multi_agent.role_instructions`)
+when it supplies that list. At most 16 short tokens each; no text. `content_item_kinds_truncated`
+is true when the supplied list held more, or entries that are no token. It is never a
+`human_message`. A marked message that is still not counted as human (an `exec` goal, a child's
+copied prompt) keeps `reason: "unrecognized"`.
 
 ### Summary line
 
@@ -143,6 +152,88 @@ the pinned lower-case or snake-case JSON values. Consumers compare the serialize
 not Rust type or variant names. Any Rust field addition that would enter research-report JSON
 requires a research-report schema bump or an explicit projection layer; Rust's
 `#[non_exhaustive]` affects matching and construction, not serialized compatibility.
+
+## Run stats (`--stats`)
+
+`goalcup-verify --stats TRACE [TRACE…] --output STATS.json` reads one run's traces, in segment
+order, and writes one JSON object of numbers. The library function is
+`goalcup_verifier::run_stats(traces, options)`. It runs the same decoders as the research report,
+but its sink keeps only counters and bounded sets of hashed ids, shared across the run's traces, so
+an id repeated across a `continue` counts once. No observation is written. It is meant as the first
+output of the server's verify job (not built); a participant can run it on their own trace too.
+
+Invocation: `--output` names a new file ending in `.json`, outside every trace, created `0600`. An
+existing file is refused. At most 128 traces, each named once. Stdout stays empty; stderr gets one
+summary line. `--dev-key` keeps its meaning.
+
+Exit codes: 0 every trace complete and valid and no decoder degraded; 1 a trace incomplete or
+unsealed, or a decoder degraded; 2 a trace with invalid evidence (its validated prefix is still
+counted); 3 no usable file: a refused invocation, a trace that could not be read or is not v5, the
+same trace twice. On exit 3 no file is left behind.
+
+Schema 1, with example numbers:
+
+```json
+{
+  "type": "run_stats", "schema_version": 1, "verifier_version": "0.7.0",
+  "traces": [{"entry_id": "e0123456789abcdef", "exit_code": 1, "integrity": "incomplete",
+              "sealed": false, "validated_records": 812345, "validated_bytes": 4123456789}],
+  "analysis": {"state": "partial", "degraded": ["openai-chat-completions"]},
+  "tokens": {"source": "wire", "lower_bound": false, "responses": 4210,
+             "responses_without_usage": 3, "input": 1234567, "cache_read": 98765432,
+             "cache_write": 2345678, "output": 3456789, "reasoning": null, "children_flagged": 0,
+             "other_source": {"source": "native", "responses": 4100, "responses_without_usage": 0,
+                              "input": 1200000, "cache_read": 97000000, "cache_write": 2300000,
+                              "output": 3400000, "reasoning": null}},
+  "models": [{"model": "claude-opus-5-5", "responses": 4000}],
+  "models_omitted": 0, "models_counted_per": "response",
+  "tools": {"calls": 5210, "calls_without_id": 0, "results": 5190, "errors": 312,
+            "error_marking": "is_error"},
+  "subagents": {"spawned": 14},
+  "provider_errors": {"total": 12, "by_code": {"overloaded_error": 3, "rate_limit_error": 9}},
+  "human_messages": {"source": "native", "total": 9, "first_is_prompt": true,
+                     "keep_going": 7, "other": 1},
+  "bounds": {"ids_over_budget": false}
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `traces[]` | One per input trace, in input order: `entry_id` (`null` unless a short id of letters, digits and `._:-`), its own `exit_code`, `integrity`, `sealed`, `validated_records`, `validated_bytes`. |
+| `analysis` | `state` as in the research summary (`available`, `partial`, `unavailable`); `degraded` lists the decoders that failed or said `incomplete` in any trace. |
+| `tokens.source` | `wire` when a wire decoder stated usage and none degraded; else `native` when a session file did; else `wire` if it stated any; else `none`, and every count is `null` (unknown, not 0). |
+| `tokens` counts | `responses` (with usage), `responses_without_usage` (seen, never stated usage), `input` (input not served from cache), `cache_read`, `cache_write`, `output`, `reasoning`. A count the source never states is `null`, not 0: OpenAI, Chat Completions and Codex state no `cache_write`, Anthropic, Claude Code and Amp no `reasoning`. `reasoning` is a part of `output` (OpenAI, Codex), never added to it. Codex counts per session, not per response, so with Codex usage `responses` and `responses_without_usage` are `null`. |
+| `tokens.lower_bound` | `true` when the counts are "at least": the chosen source has a degraded decoder, or it is the native source and Codex child or fork sessions were left out. `null` with no source. |
+| `tokens.other_source` | The same counts from the other source, or `null`. Never added to the first. |
+| `tokens.children_flagged` | Codex child or fork sessions whose totals are left out of the native counts: whether they include the parent's context is unmeasured, so native Codex tokens are a lower bound when this is above 0. |
+| `models` | Model names of the token source (with no source, the wire if it decoded anything, else the session files), one per response id (Codex: per turn, and `models_counted_per` says `turn`); at most 16 by count then name. A name is kept only when it is 1 to 64 bytes of letters, digits and `._:/-`, does not start with `/` or `.`, and holds no `://`: a local server that reports a file path or a URL as its model never shows it. Claude Code's `<synthetic>` resume placeholder is no model call and is not counted. |
+| `models_omitted` | Responses whose model is not listed: a name not kept, or past the 16. |
+| `tools.calls` | Distinct supplied tool call ids over every decoder (native and wire share ids), plus `calls_without_id` from the token source. |
+| `tools.results` | Distinct tool call ids with a result, however often requests replay it. A result with no id is not counted. |
+| `tools.errors` | Distinct tool call ids with a result the harness marked an error: `is_error: true` (Claude Code, Anthropic wire) or a shell `exit_code` other than 0 (Amp). `null` when `error_marking` is `none`. |
+| `tools.error_marking` | `is_error`, `exit_code`, `both` or `none`: whether this run's decoders that emitted tool facts read an error flag at all. Codex and Hermes do not today. |
+| `subagents.spawned` | Distinct ids of `Task` and `Agent` calls (Claude Code, Anthropic wire, Amp) and of Codex `spawn_agent` calls. Codex writes one spawn as a `function_call`, on the wire and as a completed `CollabAgentToolCall` item, all with one call id, so it counts once; its other collab tools (`wait`) are not spawns. |
+| `provider_errors` | `error` observations of the token source, once per supplied id: `total`, and `by_code` (the safe `code`, `error_type`, `type` or `subtype` token, at most 16, the rest under `other`). A hook's blocked prompt is not counted. |
+| `human_messages` | Native session files only; `total` counts distinct supplied ids. Every shipped connector launches in chat mode (its `continuation` starts with `chat:`): the participant types the prompt, so the first human message is the prompt (`first_is_prompt: true`) and is in neither split. A launch in another mode delivered the goal itself, which the decoders never mark human, so every human message is a later one. `keep_going` counts those whose text is exactly "keep going" after trimming, lower-casing and dropping end punctuation; `other` the rest. `source: none` and `null` counts when no session file was decoded. |
+| `bounds.ids_over_budget` | `true` when the run's 1 million kept ids (over every set, responses included; about 100 MB at most) ran out. Counting then goes on without de-dup, so a later repeat counts again. |
+
+The token rules, per decoder, take each count's largest snapshot per key, so a repeated or
+cumulative snapshot counts once. A wire key is scoped to its producer and connection (and an Amp
+key to its thread), so two servers reusing short ids never share one; a native key is not, so a
+session file written again after a `continue` counts once.
+
+| Decoder | One count per | Counts |
+|---|---|---|
+| `anthropic-messages` | message id | `message_start`, then every `message_delta` (cumulative: its output, and any input or cache counts it carries). A delta with no id is not counted. |
+| `openai-responses` | response id | the terminal event's usage; `input` = `input_tokens` minus `input_tokens_details.cached_tokens`; `reasoning` from `output_tokens_details`. A retry the provider answers under a new id is its own response. |
+| `openai-chat-completions` | response id | the last usage chunk; `input` = `prompt_tokens` minus cached (`prompt_tokens_details.cached_tokens` or `prompt_cache_hit_tokens`). |
+| `amp-thread-jsonrpc` | thread and `messageId` | the last snapshot: `inputTokens`, `outputTokens`, `cacheCreationInputTokens`, `cacheReadInputTokens`. A snapshot with no id is not counted. |
+| `claude-code-native` | `message.id` | Claude Code repeats the usage on every content-block line; counted once. A line with no id is not counted. |
+| `codex-native` | session | the last cumulative `total_token_usage`; per-call `last_token_usage` is never summed. Child and fork sessions are left out (`children_flagged`). |
+
+Other usage with no id counts as a response of its own. Nothing in the file is text from the run:
+no prompt, message, tool name, path, host, URL or id other than `entry_id`. It is bounded (64 KiB)
+and its keys are sorted, so the same traces give the same bytes.
 
 ## Exit codes
 
@@ -235,14 +326,19 @@ recorded here because they change a summary:
   `message_complete`, or incomplete tool input remain provider detail; gaps, dropped bytes,
   bounds, recovery, and unterminated streams still degrade analysis.
 
-`amp-thread-jsonrpc` version `2` reads only WebSocket client/server messages with that exact
+`amp-thread-jsonrpc` version `3` reads only WebSocket client/server messages with that exact
 hint. It interprets complete server `message_added.params.message` snapshots, with
 `scope: "application_thread"`: assistant text/thinking as `model_response`, assistant
 `tool_use` as `tool_call`, and user `tool_result.run.result.output` (or a `run.result` that is
 the text itself, as a `Task` subagent's answer is) as the context-visible `tool_result`, with
 `subagent_tool_uses` counting a `Task` run's `progress[].tool_uses`. A snapshot whose
 `params.parentToolUseId` (or `parentToolCallId`) names a parent `Task` call is a subagent's: every
-fact from it carries `parent_tool_use_id` (version 2). Model-facing tool names stay as supplied; executor names do not replace them.
+fact from it carries `parent_tool_use_id` (version 2). A file edit's `run.result` object
+`{diff, lineRange}` is a `tool_result` with the bounded text `diff` (no `output`) and, when
+`lineRange` is two integers, `line_range`; a result with both `output` and `diff` keeps `output`
+(version 3; the shape comes from public readers of Amp's thread files and is synthetic-only until
+a capture measures it). Model-facing tool names stay as supplied; executor names do not replace
+them.
 Safe supplied `messageId`, `threadId`, block IDs and block indices identify each occurrence.
 Tool input is bounded serialized JSON; text/thinking and tool output use bounded text fields.
 A supplied assistant `usage.model` yields `model`; the integer `inputTokens`, `outputTokens`,
