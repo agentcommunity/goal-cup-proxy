@@ -99,15 +99,18 @@ applies to `continue`.
 - **Worker:** an old CLI never sends `dev`; a missing `dev` is `false`. `MIN_COMPETITION_VERSION`
   is a `wrangler.toml` var (a dashboard value is overwritten by the next deploy). It ships empty,
   then is set to the D70 release's version once that release is out, before 6 Nov 2026 12:00 UTC.
-  A malformed value refuses competition opens only (500 `misconfigured`); heartbeats and uploads
-  of running runs are never affected.
+  A malformed value refuses competition opens and competition device requests (500
+  `misconfigured`); heartbeats and uploads of running runs are never affected. A `dev` value that
+  is not a boolean (including `null`) is refused as malformed.
 - **CLI:** ships in the next release. Older CLIs simply do not nudge, do not warn about bad
   versions, and do not send `dev`; the Worker still refuses a non-admin `dev` run from a new CLI,
   and `MIN_COMPETITION_VERSION` can stop old CLIs from competing.
 - **Installer:** the guard asks the goalcup it is about to replace (the prefix's copy first, then
-  the one on `PATH`) for `goalcup status --json`. A run is recording when the payload says the
-  daemon is `online` with time left. "No run on record" is not recording. If it cannot tell, it
-  says so and goes on. `status` looks only at the newest run on record, so a newer finished
+  the one on `PATH`) for `goalcup status --json`. A run is recording when the payload's health
+  is `online` and the capture's run state is `starting`, `running` or `exited`; `sealed` does not
+  block. When no daemon answers (it exits about 30 s after the last seal) nothing is recording, so
+  the update goes on quietly, as it does for "no run on record". Anything else it cannot read gives
+  the unsure line and the update goes on. `status` looks only at the newest run on record, so a newer finished
   practice run can hide an older recording one; that case is accepted for this cup.
 - **Staging:** staging test members are synthetic (no `auth.users` row), so they are never admins.
   A `--dev` run against staging needs a real admin account.
