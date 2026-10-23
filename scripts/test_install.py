@@ -9,6 +9,7 @@ so nothing touches the network.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import platform
 import shutil
@@ -17,11 +18,53 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 INSTALL = Path(__file__).resolve().parent.parent / "packaging" / "install.sh"
 VERSION = "9.8.7"
+ROOT = Path(__file__).resolve().parent.parent
+STATUS_FIXTURES = ROOT / "crates" / "goalcup-protocol" / "tests" / "fixtures" / "m2-status"
+
+# The copy install.sh prints (docs/plans/2026-10-23-release-is-the-list.md, global constraints).
+INSTALL_BLOCKED = (
+    "A Goal Cup run is recording on this computer. Update after it ends, or run the installer "
+    "again with: curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/"
+    "download/install.sh | sh -s -- --force"
+)
+INSTALL_UNSURE = (
+    "Could not tell whether a Goal Cup run is recording. If one is, stop this update and run it "
+    "after the run ends."
+)
+# What `goalcup status` says on a computer that never started a run (participant::no_run_yet,
+# printed on stderr with the program's prefix, exit 1, nothing on stdout).
+NO_RUN_YET = (
+    "goalcup: Run goalcup prep, then goalcup start --harness <id> --practice: no run has been "
+    "started from this machine yet. Nothing to show."
+)
+
+
+def status_json(fixture: str, health: str | None = None, run: str | None = None,
+                compact: bool = False) -> str:
+    """`goalcup status --json` as the CLI prints it: {payload, public_key, signature, cached_at,
+    local}. The payload is a real fixture of the protocol crate (the daemon's StatusPayload, whose
+    `seconds_remaining` is null for every current run), with `health` and `capture.run` set."""
+    payload = json.loads((STATUS_FIXTURES / f"{fixture}.json").read_text())
+    if health is not None:
+        payload["health"] = health
+    if run is not None:
+        payload["capture"]["run"] = run
+    document = {
+        "payload": payload,
+        "public_key": "ab" * 32,
+        "signature": "cd" * 64,
+        "cached_at": "2026-10-23T10:00:00Z",
+        "local": {"disk_free_bytes": 123456789, "agent_paused": None},
+    }
+    if compact:
+        return json.dumps(document, separators=(",", ":")) + "\n"
+    return json.dumps(document, indent=2) + "\n"
 
 
 def this_target() -> str:
@@ -55,6 +98,12 @@ def make_release(
         path.parent.mkdir(parents=True, exist_ok=True)
         if binary == broken:
             path.write_text("#!/bin/sh\necho 'GLIBC_2.34 not found' >&2\nexit 1\n")
+        elif binary == "goalcup":
+            path.write_text(
+                "#!/bin/sh\n"
+                f'if [ "$1" = status ]; then echo {NO_RUN_YET!r} >&2; exit 1; fi\n'
+                f'echo "{binary} {version}"\n'
+            )
         else:
             path.write_text(f'#!/bin/sh\necho "{binary} {version}"\n')
         path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -81,12 +130,41 @@ class InstallTests(unittest.TestCase):
         self.root = Path(tmp.name)
         self.home = self.root / "home"
         self.home.mkdir()
+        # A goalcup first on PATH that has no run, so a real goalcup on the machine running the
+        # tests (possibly recording) is never asked.
+        self.pathbin = self.root / "pathbin"
+        self.pathbin.mkdir()
+        self.fake_goalcup(self.pathbin / "goalcup", stderr=NO_RUN_YET, rc=1)
+        self.base_path = f"{self.pathbin}{os.pathsep}{os.environ['PATH']}"
+
+    def fake_goalcup(self, path: Path, *, document: str | None = None, stderr: str = "",
+                     rc: int = 0, hang: bool = False, no_json: bool = False) -> Path:
+        """A goalcup that logs its arguments to the returned file and answers `status --json`.
+
+        Its own files live outside the install, which tests compare before and after."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        aux = Path(tempfile.mkdtemp(dir=self.root))
+        answer, log, errfile = aux / "answer", aux / "log", aux / "err"
+        answer.write_text(document or "")
+        errfile.write_text(stderr)
+        script = f'#!/bin/sh\necho "$@" >> "{log}"\n'
+        if no_json:
+            script += 'echo "error: unexpected argument \'--json\' found" >&2\nexit 2\n'
+        else:
+            script += 'if [ "$1 $2" != "status --json" ]; then exit 2; fi\n'
+            if hang:
+                script += "exec sleep 60\n"
+            else:
+                script += f'cat "{answer}"\ncat "{errfile}" >&2\nexit {rc}\n'
+        path.write_text(script)
+        path.chmod(0o755)
+        return log
 
     def install(self, release: Path, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["sh", str(INSTALL), *args],
             env={
-                "PATH": os.environ["PATH"],
+                "PATH": self.base_path,
                 "HOME": str(self.home),
                 "GOALCUP_RELEASE_BASE": release.as_uri(),
                 **env,
@@ -165,7 +243,7 @@ class InstallTests(unittest.TestCase):
             tool = fake / name
             tool.write_text(f"#!/bin/sh\necho '{output}'\n")
             tool.chmod(0o755)
-        return f"{fake}{os.pathsep}{os.environ['PATH']}"
+        return f"{fake}{os.pathsep}{self.base_path}"
 
     def test_unsupported_system_is_refused_before_any_download(self) -> None:
         result = self.install(self.root / "missing", PATH=self.fake_tools("FreeBSD", "amd64"))
@@ -244,7 +322,7 @@ class InstallTests(unittest.TestCase):
             "os.execv(real, [real, *args])\n"
         )
         wrapper.chmod(0o755)
-        return f"{fake}{os.pathsep}{os.environ['PATH']}"
+        return f"{fake}{os.pathsep}{self.base_path}"
 
     def assert_old_install(self, prefix: Path, before: dict[str, bytes | None]) -> None:
         self.assertEqual(self.tree(prefix), before)
@@ -322,6 +400,134 @@ class InstallTests(unittest.TestCase):
                 self.assertEqual(out.returncode, 0, out.stderr)
                 self.assertEqual(out.stdout.strip(), f"{binary} {version}")
             self.assertEqual((prefix / "share/goalcup/connectors/codex-cli/harness.toml").read_text(), version)
+
+
+    # --- never update over a recording run ---------------------------------------------------
+
+    def old_install(self, prefix: Path, goalcup_kwargs: dict) -> tuple[Path, dict[str, bytes | None]]:
+        """An existing install under `prefix` whose goalcup answers as `goalcup_kwargs` says."""
+        self.assertEqual(self.install(make_release(self.root, {"codex-cli": "old"}),
+                                      "--prefix", str(prefix)).returncode, 0)
+        log = self.fake_goalcup(prefix / "bin" / "goalcup", **goalcup_kwargs)
+        return log, self.tree(prefix)
+
+    def newer(self) -> Path:
+        return make_release(Path(tempfile.mkdtemp(dir=self.root)), {"codex-cli": "new"}, "9.8.8")
+
+    def assert_upgraded(self, result: subprocess.CompletedProcess[str], prefix: Path) -> None:
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = subprocess.run([str(prefix / "bin/goalcup"), "--version"], capture_output=True, text=True)
+        self.assertEqual(out.stdout.strip(), "goalcup 9.8.8")
+
+    def test_a_recording_run_blocks_the_install(self) -> None:
+        # health online and the capture run starting, running or exited: the daemon of this
+        # release is still needed (an exited run that is not sealed can be continued).
+        cases = [("starting", "starting", False), ("recording-pending", "running", False),
+                 ("exited", "exited", False), ("recording-pending", "running", True)]
+        for fixture, run, compact in cases:
+            with self.subTest(run=run, compact=compact):
+                prefix = Path(tempfile.mkdtemp(dir=self.root)) / "prefix"
+                doc = status_json(fixture, health="online", run=run, compact=compact)
+                log, before = self.old_install(prefix, {"document": doc})
+                result = self.install(self.newer(), "--prefix", str(prefix))
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertEqual(result.stderr.strip(), INSTALL_BLOCKED)
+                self.assertNotIn("Installed", result.stdout)
+                self.assertEqual(log.read_text().strip(), "status --json")
+                self.assertEqual(self.tree(prefix), before)
+
+    def test_a_run_that_is_not_recording_does_not_block(self) -> None:
+        cases = [("sealed run", status_json("sealed-with-gap")),
+                 ("recovery needed", status_json("recording-pending", health="sealing_recovery_needed")),
+                 ("unknown health", status_json("recording-pending", health="unknown"))]
+        for label, doc in cases:
+            with self.subTest(label):
+                prefix = Path(tempfile.mkdtemp(dir=self.root)) / "prefix"
+                self.old_install(prefix, {"document": doc})
+                result = self.install(self.newer(), "--prefix", str(prefix))
+                self.assert_upgraded(result, prefix)
+                self.assertNotIn("INSTALL_", result.stderr)
+                self.assertNotIn("recording", result.stderr)
+                self.assertNotIn("Could not tell", result.stderr)
+
+    def test_no_run_on_record_goes_on_quietly(self) -> None:
+        prefix = self.root / "prefix"
+        self.old_install(prefix, {"stderr": NO_RUN_YET, "rc": 1})
+        result = self.install(self.newer(), "--prefix", str(prefix))
+        self.assert_upgraded(result, prefix)
+        self.assertEqual(result.stderr, "")
+
+    def test_a_goalcup_without_status_json_gives_the_unsure_line_and_goes_on(self) -> None:
+        prefix = self.root / "prefix"
+        self.old_install(prefix, {"no_json": True})
+        result = self.install(self.newer(), "--prefix", str(prefix))
+        self.assert_upgraded(result, prefix)
+        self.assertEqual(result.stderr.strip(), INSTALL_UNSURE)
+
+    def test_output_that_cannot_be_read_gives_the_unsure_line_and_goes_on(self) -> None:
+        online_without_capture = json.loads(status_json("legacy-capture-none"))
+        self.assertNotIn("capture", online_without_capture["payload"])
+        cases = {"not json": ("goalcup 9.8.7\n", "", 0),
+                 "empty": ("", "", 0),
+                 "other error": ("", "goalcup: the control port is busy", 1),
+                 "online without a capture run": (status_json("legacy-capture-none"), "", 0)}
+        for label, (document, stderr, rc) in cases.items():
+            with self.subTest(label):
+                prefix = Path(tempfile.mkdtemp(dir=self.root)) / "prefix"
+                self.old_install(prefix, {"document": document, "stderr": stderr, "rc": rc})
+                result = self.install(self.newer(), "--prefix", str(prefix))
+                self.assert_upgraded(result, prefix)
+                self.assertEqual(result.stderr.strip(), INSTALL_UNSURE)
+
+    def test_a_hanging_status_is_stopped_after_10_seconds_and_gives_the_unsure_line(self) -> None:
+        prefix = self.root / "prefix"
+        self.old_install(prefix, {"hang": True})
+        started = time.monotonic()
+        result = self.install(self.newer(), "--prefix", str(prefix))
+        took = time.monotonic() - started
+        self.assert_upgraded(result, prefix)
+        self.assertEqual(result.stderr.strip(), INSTALL_UNSURE)
+        self.assertGreaterEqual(took, 9.5)
+        self.assertLess(took, 25)
+
+    def test_the_prefix_copy_is_asked_before_the_one_on_path(self) -> None:
+        recording = status_json("recording-pending", health="online", run="running")
+        idle = status_json("sealed-with-gap")
+        # Prefix copy recording, PATH copy not: blocked, and the PATH copy is never run.
+        prefix = self.root / "prefix"
+        prefix_log, before = self.old_install(prefix, {"document": recording})
+        path_log = self.fake_goalcup(self.pathbin / "goalcup", document=idle)
+        result = self.install(self.newer(), "--prefix", str(prefix))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr.strip(), INSTALL_BLOCKED)
+        self.assertEqual(self.tree(prefix), before)
+        self.assertTrue(prefix_log.exists())
+        self.assertFalse(path_log.exists())
+        # No goalcup in the prefix (a first install there): the one on PATH is asked.
+        fresh = self.root / "fresh"
+        path_log = self.fake_goalcup(self.pathbin / "goalcup", document=recording)
+        result = self.install(self.newer(), "--prefix", str(fresh))
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr.strip(), INSTALL_BLOCKED)
+        self.assertFalse(fresh.exists())
+        self.assertEqual(path_log.read_text().strip(), "status --json")
+
+    def test_force_skips_the_guard(self) -> None:
+        recording = status_json("recording-pending", health="online", run="running")
+        for label, args, env in (("flag", ("--force",), {}), ("environment", (), {"GOALCUP_FORCE": "1"})):
+            with self.subTest(label):
+                prefix = Path(tempfile.mkdtemp(dir=self.root)) / "prefix"
+                log, _ = self.old_install(prefix, {"document": recording})
+                result = self.install(self.newer(), "--prefix", str(prefix), *args, **env)
+                self.assert_upgraded(result, prefix)
+                self.assertEqual(result.stderr, "")
+                self.assertFalse(log.exists())
+
+    def test_the_installer_names_the_renamed_repository(self) -> None:
+        text = INSTALL.read_text()
+        self.assertIn('repo="agentcommunity/goal-cup-proxy"', text)
+        self.assertIn("github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh\n", text)
+        self.assertNotIn("goal-cup-tracer", text)
 
 
 if __name__ == "__main__":
