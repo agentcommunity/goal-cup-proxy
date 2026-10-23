@@ -448,20 +448,24 @@ pub fn open_url(url: &str) -> bool {
     if !url_allowed(url) {
         return false;
     }
-    open_with_system(std::ffi::OsStr::new(url))
+    open_with_system(std::ffi::OsStr::new(url), false)
 }
 
-/// Open the file at the absolute `path` in the program the system uses for it, with the same
-/// opener as [`open_url`] (`open` on macOS, `xdg-open` on Linux). Returns whether the opener
+/// Open the text file at the absolute `path` in an editor, with the same opener as [`open_url`]:
+/// `open -t` (the default text editor) on macOS, `xdg-open` on Linux. Returns whether the opener
 /// started; it is never waited on. A relative path starts nothing.
 pub fn open_file(path: &std::path::Path) -> bool {
-    path.is_absolute() && open_with_system(path.as_os_str())
+    path.is_absolute() && open_with_system(path.as_os_str(), cfg!(target_os = "macos"))
 }
 
-fn open_with_system(target: &std::ffi::OsStr) -> bool {
+fn open_with_system(target: &std::ffi::OsStr, text_editor: bool) -> bool {
     let (program, args) = opener(cfg!(target_os = "macos"), is_wsl(), &find_on_path);
     let mut command = Command::new(program);
-    command.args(args).arg(target);
+    command.args(args);
+    if text_editor {
+        command.arg("-t");
+    }
+    command.arg(target);
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
