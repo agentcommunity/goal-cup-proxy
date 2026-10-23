@@ -636,10 +636,16 @@ fn harness_step(
     (Some(connector), step(STEP_HARNESS, State::Ok, false, say))
 }
 
+/// The marker lines around the time-left tool's lines in prep's report. Copy what is between.
+const COPY_START: &str = "  ----- start of the lines to copy -----";
+const COPY_END: &str = "  ----- end of the lines to copy -----";
+
 /// Fix plan v9: when the connector names where its MCP servers are listed
 /// (`participant.time_left_tool`), the lines that add `goalcup mcp` there, with this binary's
-/// absolute path, so the agent can ask the time left whatever its `PATH`. Indented under the
-/// harness step. Never written: Goal Cup does not change the harness's settings (D67).
+/// absolute path, so the agent can ask the time left whatever its `PATH`. The lines are printed
+/// as they go in the file, with no indent, between [`COPY_START`] and [`COPY_END`] (review P4
+/// L3: YAML lines indented for display nest wrongly when pasted). Never written: Goal Cup does
+/// not change the harness's settings (D67).
 fn time_left_tool_advice(cfg: &Path, connector: &HarnessConnector) -> Option<String> {
     let tool = connector
         .loaded
@@ -651,22 +657,14 @@ fn time_left_tool_advice(cfg: &Path, connector: &HarnessConnector) -> Option<Str
     let file = crate::home::prep_home_leaf(cfg, connector)?.join(&tool.file);
     let goalcup = std::env::current_exe().ok()?;
     let lines = crate::commands::mcp::setup_lines(tool, goalcup.to_str()?);
-    let indented: Vec<String> = lines
-        .lines()
-        .map(|l| {
-            if l.is_empty() {
-                String::new()
-            } else {
-                format!("    {l}")
-            }
-        })
-        .collect();
     Some(format!(
         "  So your agent can ask how much time is left whatever its PATH, add Goal Cup's \
-         time-left tool to `{}` in {} (Goal Cup does not change that file):\n{}",
+         time-left tool to `{}` in {} (Goal Cup does not change that file). Copy the lines \
+         between the two marker lines exactly as shown, with no spaces added in front, {}.\n\
+         {COPY_START}\n{lines}\n{COPY_END}",
         tool.key,
         file.display(),
-        indented.join("\n")
+        crate::commands::mcp::setup_place(tool),
     ))
 }
 
