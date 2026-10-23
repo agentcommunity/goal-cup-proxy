@@ -100,3 +100,50 @@ covers Windows players today at a fraction of that cost.
   real machine.
 - Claude Code's sign-in over a 7-day run: "not measured" (HARNESS-SETUP section 4).
 - The `--dev` (unpinned connector) path: refuse it for competition, or let judges reject it?
+
+## 6. Real-key test plan (owner's machines)
+
+The cloud session could not test these: they need real sign-ins, real GitHub and a real desktop.
+Run them with **#257 (simple setup)** built locally, against **staging** only. Each test has a pass
+line written before it runs. Write down every stop and every confusing line; each one is a fix.
+
+### 6.1 Zero to started run (time each one)
+
+| # | Machine | Harness | GitHub login | Pass line |
+|---|---|---|---|---|
+| Z1 | Fresh macOS user account | Claude Code | SSH key (no passphrase) | setup under 5 min of your own time; `start` creates the repo and the agent's first `git push` lands |
+| Z2 | Same Mac, another fresh user | Codex | HTTPS, macOS keychain only (no `gh`, no SSH) | `start` asks `<user>/<name>`, the push check passes, the agent's push lands |
+| Z3 | Same Mac | Claude Code | `gh auth login` (HTTPS, "Authenticate Git" = Yes) | the agent's push lands through `gh` under its scratch HOME |
+| Z4 | Same Mac | any | none at all, no GitHub account | the guide is clear: sign up, install `gh`, log in, press Enter, done; time it |
+| Z5 | Linux desktop (Docker is not enough for keyrings) | Hermes 0.19.0 | HTTPS with libsecret or `gh` keyring | push works through `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS` |
+| Z6 | WSL2 | Amp | SSH key with a passphrase in `ssh-agent` | push works through `SSH_AUTH_SOCK` |
+
+### 6.2 Things only a real machine can answer
+
+1. **Does the push check fail without write access?** Make a repo you can read but not write (a
+   friend's public repo). `goalcup start --repo friend/repo` must refuse before the approval.
+2. **Practice with no GitHub at all:** `goalcup start --practice` on Z4 before any GitHub step. The
+   agent must not be able to push (try asking it to add a remote and push).
+3. **Keys file:** put a test key in `~/goalcup-work/.env.local` and prompt the agent to use it.
+   Check:
+   - the agent finds it with only the path in the prompt;
+   - `git status` in the clone never shows `.env.local` (the `.git/info/exclude` entry);
+   - the uploaded record has the key redacted, or note exactly where it shows.
+4. **API-key sign-in instead of a subscription:** for each harness, sign in with an API key in step 3.
+   The run must record and the key must not appear in the upload.
+5. **Claude Code over a long run:** a 24 h cell (dry run) to see whether the sign-in survives
+   ("not measured" in HARNESS-SETUP section 4).
+6. **Repo turned private mid-run:** make the dry-run repo private for 10 minutes, then public. Note
+   what the player sees (today: nothing until the end email). This decides whether to build the
+   "repo went private" email.
+7. **Ctrl-C** at "Name it" and at "Press Enter": nothing is created on the server.
+8. **Rate limit:** run `start` behind a busy shared network (or 61 quick checks); the start must
+   still go on.
+
+### 6.3 Keys and accounts for the test
+
+- Use throwaway GitHub repos and fine-grained tokens with access to one repo only. Revoke them
+  after.
+- Use cheap models (LOCAL-CAMPAIGN rules: Codex `gpt-5.6-luna` low, Claude `haiku`).
+- Never use a production model key or a production DB.
+- Staging only. Production refuses test runs by design.
