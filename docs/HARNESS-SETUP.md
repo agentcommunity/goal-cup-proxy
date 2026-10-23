@@ -98,6 +98,13 @@ Amp needs no setting to run without permission prompts.
 
 ### Hermes
 
+**Install Hermes 0.19.0 from PyPI:** `uv tool install hermes-agent==0.19.0`. Newer Hermes
+releases (0.21.1 and later) no longer write the session file Goal Cup records, so Goal Cup could
+record only the model traffic, not Hermes's own side of the run. Hermes's own installer
+(`curl … install.sh | bash`) installs the newest release, so do not use it for Goal Cup. Check
+with `hermes --version`; it should print `Hermes Agent v0.19.0`
+([facts sheet](harnesses/hermes-cli.md)).
+
 Add these keys to `hermes-cli/config.yaml`:
 
 ```yaml
@@ -131,10 +138,13 @@ tool `time_left`.
   `$GOALCUP_TIME_LEFT_FILE`.
 
 Goal Cup does not add the tool for you. `goalcup prep` prints the lines for your harness, with the
-full path of your `goalcup` filled in, and the file to put them in. Add them to that file in the
-harness's Goal Cup home, next to the MCP servers you already have. Below, `/path/to/goalcup` stands
-for the path prep prints (`command -v goalcup` shows it too), and `<capture-homes>` for the folder
-in [where the settings live](#where-the-settings-live).
+full path of your `goalcup` filled in, and the file to put them in. It prints them between two
+marker lines (`----- start of the lines to copy -----` and `----- end ...`). Copy the lines between
+the markers exactly as shown, with no spaces added in front, and put them where prep says, in that
+file in the harness's Goal Cup home. If the file already lists MCP servers, add only the `goalcup`
+entry to that list. Below, `/path/to/goalcup` stands for the path prep prints (`command -v goalcup`
+shows it too), and `<capture-homes>` for the folder in
+[where the settings live](#where-the-settings-live).
 
 In a practice run, ask the agent to call `time_left`. That shows the tool works in your harness.
 
@@ -193,7 +203,9 @@ Add to `amp-cli.run-home/.config/amp/settings.json`:
 
 ### Hermes: the time-left tool
 
-Add to `hermes-cli/config.yaml`:
+Add to the end of `hermes-cli/config.yaml`, at the top level: `mcp_servers:` starts at the left
+edge, with no spaces in front. In YAML the spaces are the structure, so indented lines would land
+under the key above them.
 
 ```yaml
 mcp_servers:

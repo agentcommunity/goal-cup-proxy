@@ -171,29 +171,64 @@ your competition run. Practice runs do not count, never replace your competition
 emails, and you can do as many as you like. Run `goalcup prep` afterwards: the practice step
 should now be ok.
 
+## The dry run (optional)
+
+A dry run is a full rehearsal of your run, on the real server. It works like the cup run in
+section 5 and lasts the same 168 hours. It does not count, and you do not need one: a practice
+run is enough to get ready.
+
+You can start a dry run on any day from 23 October to 6 November, 00:00 UTC
+([RULES, "Timeline"](RULES.md#timeline)). During the dry run, the start window is open now, so
+you can run `goalcup start` right away. When prep says `Next: goalcup start --harness <id>, inside
+the start window.`, you do not need to wait for 7 November. Start it with
+`goalcup start --harness <id>`, as in section 5. In this window that command starts a dry run.
+The approval page says `Start a dry run`, but `goalcup` calls it your competition run in the
+terminal. That is because a dry run uses the same steps as the cup run. The server
+records it on the dry-run event, so it does not count for the cup. If you start a second dry run,
+it replaces the first.
+
+A dry run needs a new, empty, public repository, like the cup run, and your agent pushes to it.
+So your cup run then needs another new, empty repository. Make one, and run
+`goalcup prep --repo <new URL>` with a token for it (prep, step 4).
+
+**A late dry run is still running at the cup.** A dry run started after 30 October, 12:00 UTC, is
+still running when the last release comes out (6 November, 12:00 UTC). One started after
+31 October, 00:00 UTC, is still running when the cup start window opens on 7 November. Do not
+upgrade `goalcup` during a run (section 1), and a second `goalcup start` of the same harness is
+refused while the first is still recording (section 5). So before you upgrade for the last
+release, and before you start your cup run, stop the dry run: exit its harness, or run
+`goalcup seal` from another terminal (it asks before it stops the agent). Keep the dry run's
+terminal open until it says `Upload done.` Your cup run then replaces the dry run. The approval
+says `You already have a competition run open (started …). Approving replaces it`. That run is
+your dry run, so approve.
+
 ## 5. Your run: `goalcup start`
 
 Start inside the 24-hour start window. It opens on 7 November 2026 at 00:00 UTC and closes at 00:00
-UTC on 8 November.
+UTC on 8 November. If a dry run is still running on this computer, stop it first
+([The dry run](#the-dry-run-optional)).
 
 ```sh
 goalcup start --harness <id>
 ```
 
-Run it from your home folder or another folder of your own: `goalcup start` makes a folder named
-`goalcup-` and a random name in the folder you run it from, for the harness's home during the
-run. Do not run it from any folder inside your work folder; Goal Cup Proxy refuses that. Under WSL2,
-do not run it from a Windows drive.
+Run it from your home folder or another folder of your own: `goalcup start` makes a run folder
+named `goalcup-` and a random name in the folder you run it from, for the harness's home during the
+run. This run folder is not your clone: the clone goes in your work folder (step 2). Do not run it
+from any folder inside your work folder; Goal Cup Proxy refuses that. Under WSL2, do not run it
+from a Windows drive.
 
 1. **Approve.** `goalcup` prints `Approve your competition run of Claude Code in your browser.`
    and the same line as above about the second approval, then opens your browser:
    `Your browser opened the approval page. Check that the page shows the code <code>.` Check the
-   code, approve this run, and **return to the terminal now**. If you already have a competition
-   run open, it first says so (`You already have a competition run open (started …). Approving
-   replaces it: that run stops, and only the new run counts.`). Each competition run is approved
-   this way. `goalcup` prints `Approved.` when the approval arrives.
-2. **Clone.** It prints `Cloning your repository…` and clones your repository into your work
-   folder (`goalcup-` followed by a random name). That clone is the agent's workspace.
+   code, approve this run, and **return to the terminal now**. If this computer already has a
+   competition run open, it first says so (`You already have a competition run open (started
+   …). Approving replaces it: that run stops, and only the new run counts.`). Each competition
+   run is approved this way. `goalcup` prints `Approved.` when the approval arrives.
+2. **Clone.** It prints `Cloning your repository…` and clones your repository into a new folder
+   in your work folder (`goalcup-work` in your home folder, unless you chose another in prep).
+   This folder is also named `goalcup-` followed by a random name, but it is not the run folder
+   above. That clone is the agent's workspace.
 3. **Open the run.** It opens the run on the server. Your 168 hours start here, on the server's
    clock.
 4. **The harness opens in this terminal.** Before it does, goalcup prints a short block. It says
@@ -290,16 +325,18 @@ Your competition run with Claude Code: recording.
   Claude Code: running.
   Upload: working, sent every 30 minutes (last sent 12 min ago; 2140 records wait for the next send).
   Problems: none.
+  This computer: 212.4 GiB of disk free; goalcup uses 38.2 MiB of memory, 4 min of CPU time so far.
 Next: nothing to do. The run ends by itself.
 ```
 
 The header says which run it is, its state, when it ends and how much time is left, whether the
-agent runs, how the upload stands, and how many problems there are. Goal Cup Proxy sends the
-record every 30 minutes, so records waiting between sends are normal; the line says `up to date`
-only when the server has acknowledged every record written. If there are problems, one
-`PROBLEM:` line each follows the header, and each says what to do. The last line is always
-`Next:`, and it says what to do now. A block headed `Details:` follows, for support. On a machine
-that has not started a run, `goalcup status` says `no run has been started from this machine yet`.
+agent runs, how the upload stands, how many problems there are, and, while the run records, the
+free disk and what goalcup itself uses. Goal Cup Proxy sends the record every 30 minutes, so
+records waiting between sends are normal; the line says `up to date` only when the server has
+acknowledged every record written. If there are problems, one `PROBLEM:` line each follows the
+header, and each says what to do. The last line of this block is always `Next:`, and it says what
+to do now. A block headed `Details:` follows, for support. On a machine that has not started a
+run, `goalcup status` says `no run has been started from this machine yet`.
 
 | The line says | What it means | What to do |
 |---|---|---|
@@ -331,8 +368,8 @@ When the agent stops before the deadline (a crash, a reboot, a closed window), t
 again in the same run: same deadline, same clone. The harness picks up its last session. If the
 run has no session yet (the harness closed before your first message), the harness starts a new
 one, and `goalcup` says so in one line. No approval is needed, and it says so: `Your run goes on.
-No approval is needed: this computer kept the approval for this run.` While it opens, it prints
-`The earlier part of this run uploads in the background.`
+No approval is needed: this computer kept the approval for this run.` If the earlier part was not
+fully uploaded yet, it also prints `The earlier part of this run uploads in the background.`
 
 The harness may show its setup screens again (section 5), such as Claude Code's folder-trust
 question. You may answer them. If it asks you to sign in again, contact support before you answer

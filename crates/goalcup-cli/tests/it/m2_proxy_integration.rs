@@ -7,6 +7,7 @@
 //! mocked between the listener and the sink, and nothing leaves loopback.
 
 use crate::common::m2_proxy_support;
+use crate::common::m2_tls_support::{client_config, client_hello};
 
 use goalcup_cli::proxy::api::CaptureEmitter;
 use goalcup_cli::proxy::tls::CA_CERT_FILE_NAME;
@@ -1104,6 +1105,50 @@ async fn a_client_that_closes_before_its_client_hello_is_no_loss() {
     assert_eq!(report.health.tunneled_fail_open, 1, "{report:?}");
     assert_eq!(report.health.fail_open_unparsed, 1, "{report:?}");
     assert_eq!(report.health.admission_failures.client_io, 2, "{report:?}");
+    assert!(report.capture_loss(), "{report:?}");
+    sink.settle().await;
+    assert_eq!(losses(&sink.frames()), vec![(0, GapReason::DecodeFailed)]);
+}
+
+/// Fix plan v10: a fail-open tunnel is counted by its reason, so `host.log` says why the loss
+/// happened. A complete ClientHello with no server name, to an approved host, is relayed
+/// uncaptured and counted as `fail_open_no_sni`, and only there (review P4 L4).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_client_hello_without_a_server_name_counts_as_fail_open_no_sni() {
+    let pki = TestPki::new("upstream test CA");
+    let upstream = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    upstream.set_nonblocking(true).unwrap();
+    let port = upstream.local_addr().unwrap().port();
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut config = RigConfig::new(&pki);
+    config.approved = vec![approved("localhost", policy(&[("/", true, None)]))];
+    let mut rig = Rig::start(config, sink.clone()).await;
+    let handle = rig.handle();
+
+    // rustls with SNI off: a real, complete ClientHello that names no server.
+    let hello = client_hello(client_config(&[], &[], false), "localhost");
+    let mut client = connect_via(rig.addr, &format!("localhost:{port}")).await;
+    client.write_all(&hello).await.unwrap();
+    eventually("the ClientHello is decided", || {
+        handle.health().tunneled_fail_open == 1
+    })
+    .await;
+    let (tunnelled, _) = upstream.accept().expect("the tunnel connected upstream");
+    drop(tunnelled);
+    drop(client);
+    let report = rig.stop().await;
+    let health = &report.health;
+    assert_eq!(health.tunneled_fail_open, 1, "{report:?}");
+    assert_eq!(
+        (
+            health.fail_open_no_sni,
+            health.fail_open_sni_mismatch,
+            health.fail_open_not_tls,
+            health.fail_open_unparsed,
+        ),
+        (1, 0, 0, 0),
+        "{report:?}"
+    );
     assert!(report.capture_loss(), "{report:?}");
     sink.settle().await;
     assert_eq!(losses(&sink.frames()), vec![(0, GapReason::DecodeFailed)]);
