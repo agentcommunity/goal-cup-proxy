@@ -1464,8 +1464,9 @@ class Campaign:
         self.say(f"campaign: summary {Path(self.out) / 'summary.json'}")
         made = [r.repo_made for r in self.runs if r.repo_made]
         if made:
-            self.say("campaign: test repositories made (the kit never deletes them; "
-                     "gh repo delete <name> --yes when done): " + ", ".join(made))
+            self.say("campaign: test repositories made (the kit never deletes them; when done, first "
+                     "`gh auth refresh -s delete_repo`, which the default gh login lacks, then "
+                     "`gh repo delete <name> --yes`): " + ", ".join(made))
         if interrupted:
             return 130
         ok = all(r.result and r.result["verdict"] == "PASS" and r.result["overall"] != "FAIL"

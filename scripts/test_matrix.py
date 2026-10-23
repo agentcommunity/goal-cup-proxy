@@ -707,8 +707,10 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(made[:2], ["repo", "create"])
         self.assertEqual(made[3:], ["--public"])
         self.assertTrue(w.seen("start.argv").endswith("--repo\n" + made[2]))
-        self.assertIn(f"test repository made by the kit (delete it when done: gh repo delete "
-                      f"{made[2]} --yes)", w.run.stderr)
+        # The default `gh auth login` lacks the delete_repo scope: the advice adds it first.
+        self.assertIn(f"test repository made by the kit (delete it when done: first `gh auth refresh -s "
+                      f"delete_repo`, which the default gh login lacks, then `gh repo delete {made[2]} --yes`)",
+                      w.run.stderr)
         git = w.seen_json("start.git")
         self.assertEqual(git["SSH_AUTH_SOCK"], HOST_SSH)
         self.assertEqual(git["GH_TOKEN"], "gh-token-of-this-machine")

@@ -960,6 +960,10 @@ class CampaignRun(Base):
         summary = json.loads((self.root / "out" / "summary.json").read_text())
         self.assertEqual(summary["cells"][0]["repo_made"], "kit-tester/goalcup-kit-lin-abc123")
         self.assertTrue(any("never deletes them" in l and "goalcup-kit-lin-abc123" in l for l in said))
+        # The default `gh auth login` cannot delete: the advice names the scope to add first.
+        [advice] = [l for l in said if "never deletes them" in l]
+        self.assertIn("gh auth refresh -s delete_repo", advice)
+        self.assertLess(advice.index("gh auth refresh -s delete_repo"), advice.index("gh repo delete"))
         self.assertFalse(any("delete" in " ".join(c) for c in runner.calls))
 
     def test_a_host_cell_whose_settle_is_refused_never_starts(self):

@@ -81,7 +81,8 @@ harness sign-in. Copy `scripts/campaign.example.json` and edit it: the key file 
 `config_dir`s and members. Each run gets a new repository the kit makes; a cell's `repo`
 (`<owner>/<name>`) names one instead. The kit never deletes a repository: each `result.json` and the
 summary list the ones made (`repo_made`), and the run prints them at the end; delete them with
-`gh repo delete <name> --yes`. Nothing writes a token into a cell's configuration; a `github.json`
+`gh repo delete <name> --yes`, after `gh auth refresh -s delete_repo` once (the default `gh auth
+login` lacks that scope, and the delete fails without it). Nothing writes a token into a cell's configuration; a `github.json`
 an older kit left there is no longer read for new runs and can be deleted. The default prompt is [campaign-workload.txt](campaign-workload.txt): a cheap, many-step
 coding task that stays in the workspace and stops on its own. An agent that finishes early and idles
 is still a valid infrastructure run; note the idle time in the report. Cells of an hour or more use
@@ -232,4 +233,5 @@ pass-line results.
 `sh server/worker/scripts/delete-test-runs.sh` (dry run first) removes staging test runs and their
 R2 objects. `docker volume rm goalcup-linux-matrix-<connector>-<cell>` forgets a cell's login. Host
 cells: delete the cell's config directory and its `-artifacts` and `-runs` siblings. Delete the test
-repositories the run listed (`gh repo delete <name> --yes`; the kit never deletes one).
+repositories the run listed (`gh auth refresh -s delete_repo` once, then `gh repo delete <name>
+--yes`; the kit never deletes one).
