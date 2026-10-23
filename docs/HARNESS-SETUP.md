@@ -263,9 +263,9 @@ Cup never pushes for your agent.
 
 1. Say in your prompt that the agent commits and pushes its work often.
 2. Let the agent write `.git`. For Codex, this needs `sandbox_mode = "danger-full-access"`.
-3. Goal Cup hands your GitHub token to `git` when the agent pushes. The token is never in the
-   agent's environment.
-4. A practice run cannot push. So a practice run shows commits, not pushes.
+3. The agent pushes with your own git login, as you do (D69). Goal Cup keeps no token.
+4. A practice run has no remote and gets no git login by default. So a practice run shows
+   commits, not pushes.
 
 | Harness | Commits on 22 October | Push from a competition run |
 |---|---|---|

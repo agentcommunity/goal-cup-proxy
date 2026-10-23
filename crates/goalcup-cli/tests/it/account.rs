@@ -802,6 +802,86 @@ fn a_practice_folder_has_no_remote_and_commits_with_no_config_of_the_participant
     );
 }
 
+/// A practice agent gets no git login by default. OpenSSH finds `~/.ssh` from the user database,
+/// not from `HOME`, so the folder's own config gives git an `ssh` that reads no config file and
+/// offers no key; and an empty `credential.helper` empties any list of helpers git read before
+/// it, so a keychain helper in a global config is not asked either.
+#[test]
+fn a_practice_folder_offers_no_ssh_key_and_asks_no_credential_helper() {
+    let rig = rig();
+    let dest = rig.root.join("practice");
+    goalcup_cli::account::github::init_local(OsStr::new("git"), &dest).unwrap();
+    let local = |key: &str| git_out(&rig, &dest, &["config", "--local", "--get-all", key]);
+    assert_eq!(
+        local("core.sshCommand").trim(),
+        "ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes"
+    );
+    assert_eq!(local("credential.helper"), "\n", "one empty helper");
+
+    // What git then does. A stand-in `ssh` on PATH says how it was called.
+    let bin = rig.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let said = rig.root.join("ssh-argv");
+    std::fs::write(
+        bin.join("ssh"),
+        format!(
+            "#!/bin/sh\necho \"$@\" > \"{}\"\nexit 255\n",
+            said.display()
+        ),
+    )
+    .unwrap();
+    make_executable(&bin.join("ssh"));
+    // A global config of the participant's with a helper that would hand over a login.
+    let global = rig.root.join("participants-gitconfig");
+    std::fs::write(
+        &global,
+        "[credential]\n\thelper = \"!f() { echo username=you; echo password=leaked; }; f\"\n",
+    )
+    .unwrap();
+    let git = |args: &[&str], input: &str| {
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(&dest)
+            .args(args)
+            .env_clear()
+            .env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            )
+            .env("HOME", rig.root.join("empty-home"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", &global)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let listed = git(&["ls-remote", "git@github.com:you/elsewhere.git"], "");
+    assert!(!listed.status.success(), "{listed:?}");
+    let argv = std::fs::read_to_string(&said).unwrap();
+    assert!(
+        argv.starts_with(
+            "-F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes"
+        ),
+        "{argv}"
+    );
+    let filled = git(
+        &["credential", "fill"],
+        "protocol=https\nhost=github.com\n\n",
+    );
+    let out = String::from_utf8_lossy(&filled.stdout);
+    assert!(!out.contains("leaked"), "a helper answered: {out}");
+}
+
 /// A clone an older version made names `goalcup git-credential` in its own configuration and
 /// pushes with the token in `github.json`. Those clones keep working: the hidden command still
 /// answers for that repository, from the stored file, and a helper of the participant's is

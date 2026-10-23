@@ -650,7 +650,10 @@ pub fn clone_repo(git: &OsStr, source: &str, remote: &str, dest: &Path) -> Resul
 /// A practice run's work folder: a new, empty git repository at `dest` with no remote. A practice
 /// run has no GitHub repository and pushes nowhere. Its agent reads no global or system git
 /// config (`launch::agent_base_env`), so the repository names an author of its own,
-/// [`PRACTICE_AUTHOR`], and the agent's commits work.
+/// [`PRACTICE_AUTHOR`], and the agent's commits work. It also gets no git login by default:
+/// OpenSSH reads `~/.ssh` from the user database, not from `HOME`, so the repository's own
+/// config gives git [`PRACTICE_SSH_COMMAND`], and an empty `credential.helper`, which empties any
+/// list of helpers read before it. An agent that tries hard can still get around this (D69).
 pub fn init_local(git: &OsStr, dest: &Path) -> Result<(), CliError> {
     run_git(
         git,
@@ -662,6 +665,8 @@ pub fn init_local(git: &OsStr, dest: &Path) -> Result<(), CliError> {
     for (key, value) in [
         ("user.name", PRACTICE_AUTHOR.0),
         ("user.email", PRACTICE_AUTHOR.1),
+        ("core.sshCommand", PRACTICE_SSH_COMMAND),
+        ("credential.helper", ""),
     ] {
         run_git(
             git,
@@ -676,6 +681,11 @@ pub fn init_local(git: &OsStr, dest: &Path) -> Result<(), CliError> {
 
 /// The author a practice run's commits carry: no person's name.
 pub const PRACTICE_AUTHOR: (&str, &str) = ("Goal Cup practice", "practice@goalcup.invalid");
+
+/// The `ssh` a practice folder's git runs: no config file (`~/.ssh/config` names keys too), no
+/// key offered, no agent key, and no question.
+pub const PRACTICE_SSH_COMMAND: &str =
+    "ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes";
 
 /// Add `.env*` to the repository's own ignore list, `.git/info/exclude`, which is never
 /// committed: a key file the participant gives their agent is not pushed by mistake.

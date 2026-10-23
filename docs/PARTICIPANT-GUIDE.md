@@ -228,7 +228,8 @@ from a Windows drive.
    that the repository is public and empty, and that your own git can push to it (a dry-run push;
    nothing is sent), run the way your agent's git will run, so a login only your shell has is
    found now. You can also give it as `--repo <owner>/<name>`. Your agent pushes with your own git
-   login, as you do; Goal Cup keeps no token. A practice run gets no git login at all.
+   login, as you do; Goal Cup keeps no token. A practice run gets no git login by default (an
+   agent that tries hard can still get around it).
 
    If this computer has no GitHub login, it says so and waits while you set one up:
 
