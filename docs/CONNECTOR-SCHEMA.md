@@ -37,13 +37,19 @@ the owner approves it). The rest of this page is the field-by-field detail.
   - the connector's `capture.env`, with the running platform's `capture.platform.<key>.env` over
     it, rendered. An entry here wins over the same name from the shell;
   - `HOME`, the run's home, and the connector's `capture.home.env` pointed at its config home;
+  - the way to the participant's own git login, for a real run (a test, dry or cup run) only, as
+    paths or sockets and only when set or present, never a key
+    ([D69](DECISIONS.md#d69-goal-cup-proxy-holds-no-keys-the-agent-pushes-with-the-participants-own-git-login)):
+    `SSH_AUTH_SOCK`, `GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`, `XDG_RUNTIME_DIR` and
+    `DBUS_SESSION_BUS_ADDRESS`. A practice run, and the launch `goalcup setup` makes, get none of
+    them and `GIT_CONFIG_NOSYSTEM=1` instead;
   - for a recorded launch: `HTTPS_PROXY` and `https_proxy` (the loopback recording proxy, with
     a per-run credential), `NO_PROXY` and `no_proxy` (`127.0.0.1,localhost`), each `capture.ca.env`
     name pointed at the file its row names ([Credential and CA](#credential-and-ca)),
     `GOALCUP_IN_HARNESS=1` (`goalcup seal` refuses under it) and `GOALCUP_TIME_LEFT_FILE` (the
     run's time-left file, D66).
 
-  `goalcup prep` and `capture.configure` commands get the same environment with no proxy, no CA
+  `goalcup setup` and `capture.configure` commands get the same environment with no proxy, no CA
   variable and no `GOALCUP_*` variable: they record nothing. The `version_args` probe gets only
   `PATH` and a throwaway `HOME`. The harness runs in the run's workspace, on the participant's
   terminal (stdin, stdout and stderr inherited). Its argv is `args`, then `resume_args` on a
