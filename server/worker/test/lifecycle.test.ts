@@ -8,9 +8,18 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { Signer } from "../src/sign.ts";
 import type { StartReceipt } from "../src/sign.ts";
-import { GENESIS, openBody, sha256, verifyReceipt } from "./helpers/client.ts";
+import { GENESIS, makeChunk, openBody, sha256, verifyReceipt } from "./helpers/client.ts";
 import { type Opened, T0, WINDOW, lifecycle, rig } from "./helpers/rig.ts";
 import { TEST_SEED } from "./helpers/worker.ts";
+
+// The chunk upload needs the Workers runtime's FixedLengthStream; a pass-through stands in for it
+// here (test/quota.test.ts does the same; test/integration.test.ts has the real one).
+const g = globalThis as unknown as { FixedLengthStream?: unknown };
+g.FixedLengthStream ??= class extends TransformStream<Uint8Array, Uint8Array> {
+  constructor(_length: number) {
+    super();
+  }
+};
 
 const publicKey = (await Signer.fromSeedHex(TEST_SEED)).publicKeyHex;
 /** The default run length (RUN_HOURS 168), in seconds. */
@@ -635,13 +644,16 @@ describe("--dev runs and the minimum competition version (D70)", () => {
     assertError(await r.open(alice, "other-session", { proxy_version: "0.1.0" }), 409, "conflict"); // not a lost reply: unchanged
   });
 
-  lifecycle("a malformed minimum refuses competition opens and leaves heartbeats alone", async (r) => {
+  lifecycle("a malformed minimum refuses competition opens and leaves heartbeats, get, chunk uploads and continue alone", async (r) => {
     const [alice, bob, carol] = [await r.cred("alice"), await r.cred("bob"), await r.cred("bob", "practice")];
     const a = await r.start(alice, "s1");
     r.env.MIN_COMPETITION_VERSION = "0.7";
     assertError(await r.open(bob, "s2"), 500, "misconfigured");
     assert.equal((await r.beat(alice, a.run_id, a.entry_id)).status, 200);
     assert.equal((await r.get(alice, a.run_id)).status, 200);
+    const chunk = makeChunk(a.entry_id, 0, 3, GENESIS, "m");
+    const put = await r.api.call("PUT", `/v1/runs/${a.run_id}/chunks/0`, { token: alice, body: chunk.body, headers: { ...chunk.headers, "content-length": String(chunk.body.length) } });
+    assert.equal(put.status, 200, JSON.stringify(put.body)); // a running run keeps uploading
     assert.equal((await r.open(carol, "s3")).status, 201); // practice is not a competition start
     assert.equal((await r.cont(alice, a.run_id, a.entry_id, "s-two")).status, 201);
   });
