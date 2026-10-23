@@ -1281,7 +1281,7 @@ fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
 
 /// The setup guide (fix plan v8), as prep links to it.
 const SETUP_GUIDE: &str =
-    "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/HARNESS-SETUP.md";
+    "https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/HARNESS-SETUP.md";
 
 /// Fix plan v8: prep's harness step points to the setup guide on every prep, with nothing
 /// missing too, at the section the connector names, else at the guide; the step stays ok.
@@ -1374,6 +1374,106 @@ fn prep_prints_the_time_left_tool_lines_with_the_absolute_path_and_writes_nothin
         }
     }
     assert!(!file.exists(), "prep wrote the harness's config");
+}
+
+/// Review P4 L3: the time-left lines prep prints, copied exactly as shown from between its two
+/// marker lines and put where it says, give the harness's file a `goalcup` server at the top
+/// level, next to what the file already had. In YAML the indentation is the structure: lines
+/// printed with spaces in front would nest under the key above them. TOML and JSON too.
+#[test]
+fn the_time_left_lines_pasted_where_prep_says_add_the_server_at_the_top_level() {
+    let goalcup = env!("CARGO_BIN_EXE_goalcup");
+    let var = "GOALCUP_TIME_LEFT_FILE";
+    type Paste = fn(&str, &str) -> String;
+    let at_the_end: Paste = |had, lines| format!("{had}{lines}\n");
+    let in_the_braces: Paste = |had, lines| {
+        let inside = had.trim_end().strip_suffix('}').unwrap().trim_end();
+        format!("{inside},\n{lines}\n}}\n")
+    };
+    // The file, how the harness passes the variable, what the file had, and where prep says the
+    // lines go.
+    let cases: [(&str, &str, &str, Paste); 3] = [
+        (
+            "config.yaml",
+            "env_template",
+            "model:\n  base_url: \"https://api.example.test\"\n  default: m\n",
+            at_the_end,
+        ),
+        (
+            "config.toml",
+            "env_vars",
+            "[model]\nbase_url = \"https://api.example.test\"\n",
+            at_the_end,
+        ),
+        (
+            "settings.json",
+            "inherited",
+            "{\n  \"model\": { \"base_url\": \"https://api.example.test\" }\n}\n",
+            in_the_braces,
+        ),
+    ];
+    for (name, pass_env, had, paste) in cases {
+        let rig = Rig::chat_only();
+        let path = rig.connectors.join(CHAT_ID).join("harness.toml");
+        let text = std::fs::read_to_string(&path).unwrap().replacen(
+            "[capture]\n",
+            &format!(
+                "[participant]\ndisplay_name = \"Fake Agent\"\n\n\
+                 [participant.time_left_tool]\nfile = \"{name}\"\nkey = \"mcp_servers\"\n\
+                 pass_env = \"{pass_env}\"\n\n[capture]\n"
+            ),
+            1,
+        );
+        std::fs::write(&path, text).unwrap();
+        let facts = facts(&[]);
+        all_but_the_harness(&rig);
+        let (_, out) = prep(&rig, &[], &facts);
+        let mut printed = out.lines();
+        printed
+            .find(|l| *l == "  ----- start of the lines to copy -----")
+            .unwrap_or_else(|| panic!("{name}: no start marker in:\n{out}"));
+        let lines: Vec<&str> = printed
+            .by_ref()
+            .take_while(|l| *l != "  ----- end of the lines to copy -----")
+            .collect();
+        if name == "config.yaml" {
+            let command = format!("    command: {}", serde_json::to_string(goalcup).unwrap());
+            let env = format!("      {var}: \"${{{var}}}\"");
+            assert_eq!(
+                lines,
+                [
+                    "mcp_servers:",
+                    "  goalcup:",
+                    &command,
+                    "    args: [\"mcp\"]",
+                    "    env:",
+                    &env,
+                ],
+                "the YAML lines, as they go in the file"
+            );
+        }
+        let file = rig.cfg.join(name);
+        std::fs::write(&file, paste(had, &lines.join("\n"))).unwrap();
+        let read = |key: &str| goalcup_cli::model_host::read_setting(&file, name, key);
+        let pasted = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(
+            read("mcp_servers.goalcup.command").as_deref(),
+            Some(goalcup),
+            "{name}:\n{pasted}"
+        );
+        assert_eq!(
+            read("model.base_url").as_deref(),
+            Some("https://api.example.test"),
+            "{name}: what the file had is unchanged:\n{pasted}"
+        );
+        if pass_env == "env_template" {
+            assert_eq!(
+                read(&format!("mcp_servers.goalcup.env.{var}")),
+                Some(format!("${{{var}}}")),
+                "{name}:\n{pasted}"
+            );
+        }
+    }
 }
 
 /// D67: the chat connector lists two `participant.no_prompts` settings. Prep reads them in the

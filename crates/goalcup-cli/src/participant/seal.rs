@@ -27,6 +27,12 @@ pub fn seal_not_confirmed() -> String {
         .to_string()
 }
 
+/// `goalcup seal` with no terminal to ask in, and no `--yes`.
+pub fn seal_needs_terminal() -> &'static str {
+    "To stop the agent from a script, run: goalcup seal --yes. goalcup seal asks before it stops \
+     the agent, and there is no terminal here to ask in. Nothing was stopped."
+}
+
 /// The facts of what `goalcup seal` says once it is done.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SealDone<'a> {
@@ -50,7 +56,7 @@ pub fn seal_done(d: &SealDone<'_>) -> Vec<String> {
     } else {
         format!(
             "{h} was stopped, but this part of your run could not be sealed: the disk may be \
-             full. Free some space, then run: goalcup seal {}",
+             full. Free some space {FREE_OUTSIDE}, then run: goalcup seal {}",
             d.part_id
         )
     }];

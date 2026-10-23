@@ -525,19 +525,22 @@ run. Neither makes a failing entry pass.
 ```sh
 goalcup-verify --capture-integrity "$TRACE_DIR"
 goalcup-verify --research-json "$TRACE_DIR" --output "$REPORT_PATH"
+goalcup-verify --stats "$TRACE_DIR" [MORE_TRACE_DIRS…] --output "$STATS_PATH"
 ```
 
 Set `TRACE_DIR` to a protocol-v5 trace directory (`chain.jsonl` and the files beside it), and
 `REPORT_PATH` to a new `.ndjson` path. For staging, append `--dev-key "$STAGING_PUBLIC_KEY"`
 to each command, with that variable set to the staging public key. `--capture-integrity`
 prints the integrity report on stdout and nothing else. `--research-json` writes the private research report
-to a new `*.ndjson` file outside the trace and leaves stdout empty. Notices, errors and the summary line are
-stderr.
+to a new `*.ndjson` file outside the trace and leaves stdout empty. `--stats` writes one run's numbers
+(its traces in segment order) to a new `*.json` file outside every trace: counts and model names, no
+text ([Run stats](research/m2-report-format.md#run-stats---stats)); it leaves no file on exit 3.
+Notices, errors and the summary line are stderr.
 
 | Exit | Meaning |
 |---|---|
 | 0 | Complete, valid evidence. The anchor is `signed` only when a pinned server key verified an acknowledgement; otherwise it stays `local_only`. |
-| 1 | Incomplete or unsealed coverage (for the research report: incomplete or partial). |
+| 1 | Incomplete or unsealed coverage (for the research report and the stats: incomplete or partial). |
 | 2 | Invalid evidence, a torn tail included. |
 | 3 | No usable report: the trace could not be read, its chain is not v5, or the invocation was refused. |
 

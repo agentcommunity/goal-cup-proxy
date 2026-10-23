@@ -246,7 +246,13 @@ leaves its mark.
 - The rest of the status document is small. `health` is `online`, `sealed` or
   `sealing_recovery_needed`; a registry row an older build wrote with another word reads as
   `unknown`. `arming` is `armed` (not launched yet) or `started`. There is no `event` block: the
-  round's dates are the upload server's, which owns the clock.
+  round's dates are the upload server's, which owns the clock. `native_files_admitted` is how many
+  files a live entry's native reader has admitted so far, a count and not a verdict; it is absent
+  while the reader is not admitted (not yet, lost, or finished) and when the daemon does not hold
+  it (a sealed or reopened entry). `goalcup start` reads it to say early that a harness writes no
+  session file while its model requests are recorded. `goalcup status --json` prints the signed
+  document unchanged, with two unsigned keys beside it: `local` (this machine's facts) and
+  `problems` (the `PROBLEM:` lines' sentences, left out when there are none).
 - Gap history is sticky across finish and upload. `assistance_observed = false` means no explicit
   intervention was recorded. It is never a finding of zero assistance.
 - `goalcup-verify --capture-integrity TRACE` reads protocol v5 only. Exit codes: 0 complete and
@@ -254,6 +260,13 @@ leaves its mark.
   tail (this overrides the unsealed case); 3 usage or I/O failure with no usable report.
   Unsupported semantics alone never fails integrity. Report format:
   [m2-report-format](research/m2-report-format.md).
+- `goalcup-verify --stats TRACE [TRACE…] --output STATS.json` writes one run's numbers-only
+  summary (`type: run_stats`), its traces in segment order. Exit codes: 0 every trace complete and
+  valid and no decoder degraded; 1 a trace incomplete or unsealed, or a decoder degraded; 2 a trace
+  with invalid evidence; 3 no usable file (and none is left). Tokens come from one source per run,
+  named in `tokens.source` (the wire, else the native session files), and the other source's counts
+  stay beside them, never added. A count the decoders cannot state is `null`, not 0. Format:
+  [Run stats](research/m2-report-format.md#run-stats---stats).
 - A v5 line is byte-canonical: it equals the compact serialization of its decoded envelope.
 - A complete v5 trace holds at least one `Launch`, each binding a goal stream (opened with source
   `goal`) that ended `Complete`, in either order. The reader keeps the goal stream each `Launch`
@@ -288,7 +301,10 @@ leaves its mark.
   `run_secrets` (omitted when empty): at most one value, 20 to 256 bytes of printable ASCII, the
   run's proxy credential (D60). The daemon keeps it in memory for the entry, redacts every form
   of it, and answers a bad value or a body of the wrong shape with a fixed `400 malformed` that
-  quotes no value. The daemon
+  quotes no value. `goalcup continue` also sends `existing_clone: true` (omitted when false): the
+  workspace is the run's clone and must already be the root of its own clone (a `.git` directory,
+  no work tree above; a workspace that is itself a link is followed), or the daemon refuses
+  `409 conflict` before it creates anything, rather than make an empty folder. The daemon
   rejects a config home at or below any loaded connector's `real_dirs`, and the participant's
   `HOME`, including symlink aliases, before it creates artifacts or reads a source. The answer
   carries `entry_id`, `process_generation`, `reserved_bytes`, `ingest_addr`, `ingest_secret`,
@@ -584,7 +600,7 @@ wins over this text.
   `Host` is refused `401` with code `unauthorized` and a fixed body that quotes nothing it was sent,
   on a public route and on a bearer route alike. This closes DNS rebinding. A client that builds its
   URL from `control.json` sends a matching `Host`.
-- **Control API version.** `CONTROL_API_VERSION` is 10. `goalcup` and `goalcup-daemon` ship
+- **Control API version.** `CONTROL_API_VERSION` is 12. `goalcup` and `goalcup-daemon` ship
   together in one release, so a pair from two releases is refused, never bridged: the CLI refuses a
   `control.json` of another version and an answer whose `x-goalcup-control-version` header differs,
   and the daemon answers a request that names another version `426 unsupported`. Version 5 added the
@@ -596,5 +612,8 @@ wins over this text.
   its answer. Version 8 removed the V1 vocabulary nothing produced: the
   `WorkspaceInfo` shape, `GET /v0/entries/current`, the status document's `event` and
   `event_status_source`, the `arming` values `start_signal_seen` and `refused`, and every `health`
-  value but the three above. Version 9 added `run_secrets` to workspace creation (D60). None of
+  value but the three above. Version 9 added `run_secrets` to workspace creation (D60). Version
+  10 removed what no writer produced (the seal answer's workspace arm, `finalization`,
+  `native_scope`). Version 11 added `existing_clone` to workspace creation. Version 12 added
+  `native_files_admitted` to the status document (C4). None of
   these changes the frozen v5 chain.

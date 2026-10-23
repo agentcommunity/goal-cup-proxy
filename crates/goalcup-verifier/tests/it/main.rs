@@ -20,6 +20,8 @@ mod m2_native_observations;
 mod m2_openai_decoder;
 #[cfg(unix)]
 mod m2_research_report;
+#[cfg(unix)]
+mod m2_run_stats;
 mod m2_thread_decoder;
 #[cfg(unix)]
 mod v5_corpus;

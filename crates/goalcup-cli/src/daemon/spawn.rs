@@ -194,7 +194,7 @@ pub fn ensure_daemon_waiting(
                         "a daemon started from the earlier {} is still running, reading another \
                          connectors directory than this goalcup's {}. The file now names this \
                          one; the running daemon exits 30 seconds after its last run is sealed. \
-                         Start again then.",
+                         Run the same command again then.",
                         config.display(),
                         connectors.display()
                     )));

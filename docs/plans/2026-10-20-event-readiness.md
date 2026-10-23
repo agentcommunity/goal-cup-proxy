@@ -176,7 +176,7 @@ in user text. Terms ID `goal-cup-tracer-2026-10-15` stays (opaque; nobody re-acc
 | 1 | User-facing text | low | done 21 Oct |
 | 2 | Code and comments; `tracer_version` to `proxy_version`, server accepts both | low | done 21 Oct (client sends both names) |
 | 3 | Connector comments; regenerate pins | low | done 21 Oct |
-| 4 | Repo rename `goal-cup-proxy`; test old install and release URLs | medium | next release |
+| 4 | Repo rename `goal-cup-proxy`; test old install and release URLs | medium | done 22 Oct (URLs; `install.sh` ships with the next release) |
 | 5 | DB schema rename with a Worker deploy in one window | medium | with the 26 Oct point release |
 
 Risk view: steps 2 to 5 protect no invariant; the owner chose to do them before the event.

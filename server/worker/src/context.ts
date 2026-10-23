@@ -6,7 +6,7 @@ import { SupabaseDb } from "./db-supabase.ts";
 import type { Env } from "./env.ts";
 import { ApiError } from "./errors.ts";
 import { Signer } from "./sign.ts";
-import { isTime, parseSafeUint } from "./util.ts";
+import { isTime, parseSafeUint, versionTriple } from "./util.ts";
 
 /** The default per-run size limit: 64 GiB of compressed chunks. */
 export const DEFAULT_RUN_MAX_COMPRESSED_BYTES = 68_719_476_736;
@@ -28,6 +28,19 @@ export interface Config {
   /** The competition start window (local backend only); undefined: the database's, or always open. */
   startWindow: { opens: string | null; closes: string | null } | undefined;
   githubCheck: boolean;
+  /** MIN_COMPETITION_VERSION. A malformed value is kept, not thrown: only competition starts refuse on it. */
+  minCompetitionVersion: MinVersion;
+  /** LOCAL_ADMIN_MEMBERS (local backend only): the members the local database calls admins. */
+  localAdminMembers: Array<string>;
+}
+
+export type MinVersion = { kind: "none" } | { kind: "set"; v: [number, number, number] } | { kind: "malformed"; raw: string };
+
+/** MIN_COMPETITION_VERSION: empty or unset is no limit; a value without `x.y.z` is reported, never thrown. */
+function minVersion(raw: string | undefined): MinVersion {
+  if (raw === undefined || raw.trim() === "") return { kind: "none" };
+  const v = versionTriple(raw);
+  return v === null ? { kind: "malformed", raw } : { kind: "set", v };
 }
 
 export interface Ctx {
@@ -60,7 +73,7 @@ function byteLimit(raw: string | undefined): number {
  * lifecycle in seconds. They are honoured only with DB_BACKEND=local; anywhere else their
  * presence is a mistake worth stopping for, not a value to ignore.
  */
-function testOnly(env: Env, name: "RUN_SECONDS" | "CLOSE_AFTER_SECONDS" | "START_WINDOW_OPENS" | "START_WINDOW_CLOSES"): string | undefined {
+function testOnly(env: Env, name: "RUN_SECONDS" | "CLOSE_AFTER_SECONDS" | "START_WINDOW_OPENS" | "START_WINDOW_CLOSES" | "LOCAL_ADMIN_MEMBERS"): string | undefined {
   const raw = env[name];
   if (raw === undefined || raw === "") return undefined;
   if (env.DB_BACKEND !== "local") throw misconfigured(`${name} is for DB_BACKEND=local (tests) only.`);
@@ -115,6 +128,8 @@ export function readConfig(env: Env): Config {
     runMaxCompressedBytes: byteLimit(env.RUN_MAX_COMPRESSED_BYTES),
     startWindow: opens === null && closes === null ? undefined : { opens, closes },
     githubCheck: env.GITHUB_CHECK === "on",
+    minCompetitionVersion: minVersion(env.MIN_COMPETITION_VERSION),
+    localAdminMembers: (testOnly(env, "LOCAL_ADMIN_MEMBERS") ?? "").split(",").map((m) => m.trim()).filter((m) => m !== ""),
   };
 }
 
@@ -139,7 +154,7 @@ export async function getDb(env: Env): Promise<Db> {
     if (backend === "supabase") return new SupabaseDb(env.SUPABASE_URL, env.SUPABASE_KEY);
     if (backend === "local") {
       const cfg = readConfig(env);
-      return LocalDb.create(env.TRACES, { closeAfterSeconds: cfg.closeAfterSeconds, startWindow: cfg.startWindow });
+      return LocalDb.create(env.TRACES, { closeAfterSeconds: cfg.closeAfterSeconds, startWindow: cfg.startWindow, admins: cfg.localAdminMembers });
     }
   } catch (e) {
     // The detail goes to the Worker's log only: a caller without a credential gets this answer too,

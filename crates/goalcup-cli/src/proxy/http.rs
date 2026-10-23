@@ -296,6 +296,9 @@ async fn relay_requests(
         shared.emitter.record_model_request();
         let at = src.at.clone();
         let capture = select(shared, &request, target.as_ref(), exchange);
+        if capture.is_some() {
+            shared.emitter.record_recorded_request();
+        }
         let request_ok = capture.as_ref().map(|c| c.request_ok.clone());
         let meta = capture
             .as_ref()
@@ -1918,7 +1921,10 @@ impl Zstd {
             // Zero: a frame just ended and everything it decoded was flushed.
             self.frame_done = result.map_err(|_| DecodeError::Invalid)? == 0;
             let rest = source.pos() < input.len();
-            if !rest && produced < self.out.len() {
+            // A frame that ended with no input left holds nothing back, even when its output
+            // filled `out` exactly: running zstd again would only ask for the next frame and
+            // clear `frame_done` (review P4 M1).
+            if !rest && (self.frame_done || produced < self.out.len()) {
                 return Ok(());
             }
             if rest && produced == 0 && source.pos() == before {

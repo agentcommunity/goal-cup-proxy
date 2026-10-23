@@ -13,7 +13,9 @@
 //! [`Recording::Unknown`], never a failure), and writes the run's `state.json` ([`Beat`]).
 //! That is where the disk's low-space warning, the upload's trouble and the recording's gaps
 //! are said; `goalcup status` reads them back. It also keeps the run's time-left file, which
-//! the agent may read with `goalcup time-left` (D66).
+//! the agent may read with `goalcup time-left` (D66), and says once per start or continue (in
+//! `host.log` while the harness owns the terminal), and keeps in the state, when the harness has
+//! written no session file while its model requests are recorded ([`super::NativeSilence`]).
 
 use super::pause::{AgentPause, Change};
 use super::reserve::{
@@ -38,8 +40,28 @@ const LOOK_EVERY: Duration = Duration::from_millis(100);
 /// is waited for this long and then read as not having answered.
 pub const RECORDING_WAIT: Duration = crate::daemon::CALL_TIMEOUT;
 
+/// What the daemon's status said to one tick. The default is no answer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Heard {
+    /// A status came back, signed for the entry.
+    pub answered: bool,
+    pub recording: Recording,
+    /// The files the entry's admitted native reader has taken; `None` when the status does not
+    /// say (no reader, or one that is not admitted).
+    pub native_files: Option<u64>,
+}
+
 /// Asks the daemon how the recording is: `None` when it cannot say.
-pub type AskRecording = Arc<dyn Fn() -> Option<Recording> + Send + Sync>;
+pub type AskRecording = Arc<dyn Fn() -> Option<Heard> + Send + Sync>;
+
+/// When the tick calls the native leg silent, and the harness's words for the line it says.
+pub struct NativeWatch {
+    pub silence: super::NativeSilence,
+    /// The harness's display name.
+    pub harness: String,
+    /// The harness's section of the setup guide.
+    pub guide: String,
+}
 
 /// What the tick writes to `state.json` and shares with the heartbeat.
 pub struct Beat {
@@ -49,12 +71,14 @@ pub struct Beat {
     /// The run's time-left file the agent may read (D66), written each tick from the count in
     /// `state.json` and removed when the count says nothing. `None` writes none.
     pub time_left_file: Option<std::path::PathBuf>,
+    /// Whether the native leg is watched for silence. `None` never says it.
+    pub native: Option<NativeWatch>,
 }
 
 /// Ask for the recording, waiting at most `within` (and not past `done`). The question runs on
 /// a thread of its own, so a daemon that does not answer holds nothing but its own call; no
-/// answer in time is [`Recording::Unknown`], never a verdict.
-pub fn recording_within(within: Duration, done: &AtomicBool, ask: AskRecording) -> Recording {
+/// answer in time is [`Recording::Unknown`] with no native count, never a verdict.
+pub fn recording_within(within: Duration, done: &AtomicBool, ask: AskRecording) -> Heard {
     let (tell, answer) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new()
         .name("goalcup-recording".into())
@@ -62,17 +86,17 @@ pub fn recording_within(within: Duration, done: &AtomicBool, ask: AskRecording) 
             let _ = tell.send(ask());
         });
     if spawned.is_err() {
-        return Recording::Unknown;
+        return Heard::default();
     }
     let wake = Instant::now() + within;
     while Instant::now() < wake && !done.load(Ordering::SeqCst) {
         match answer.recv_timeout(LOOK_EVERY.min(wake.saturating_duration_since(Instant::now()))) {
-            Ok(said) => return said.unwrap_or(Recording::Unknown),
+            Ok(said) => return said.unwrap_or_default(),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
-    Recording::Unknown
+    Heard::default()
 }
 
 /// Everything the tick needs.
@@ -148,6 +172,7 @@ pub fn watch_beside(watch: Watch) -> Watching {
         pause,
         tick: Tick::default(),
         pruner: Pruner::within(policy.reserve_bytes),
+        native: NativeTick::default(),
     };
     let thread = std::thread::Builder::new()
         .name("goalcup-disk-watch".into())
@@ -187,6 +212,7 @@ struct Ticker {
     pause: Option<AgentPause>,
     tick: Tick,
     pruner: Pruner,
+    native: NativeTick,
 }
 
 impl Ticker {
@@ -216,16 +242,29 @@ impl Ticker {
             self.pause.as_ref(),
             &mut crate::host_log::say,
         );
-        if let Some(beat) = &self.beat {
-            self.write_beat(beat, done);
+        if let Some(beat) = self.beat.take() {
+            self.write_beat(&beat, done);
+            self.beat = Some(beat);
         }
     }
 
     /// Ask the daemon how the recording is, write it with the upload, the heartbeats and the
     /// disk to `state.json`, and keep the time-left file from the count written there.
-    fn write_beat(&self, beat: &Beat, done: &AtomicBool) {
-        let recording = recording_within(RECORDING_WAIT, done, beat.ask.clone());
+    fn write_beat(&mut self, beat: &Beat, done: &AtomicBool) {
+        let heard = recording_within(RECORDING_WAIT, done, beat.ask.clone());
+        let recording = heard.recording;
         beat.vitals.set_recording(recording);
+        // Said once, the way every other line of the tick is: in `host.log` while the harness
+        // owns the terminal. `goalcup status` is where the participant reads it.
+        let native = beat.native.as_ref().and_then(|watch| {
+            self.native.see(
+                watch,
+                beat.vitals.recorded_requests(),
+                heard,
+                Instant::now(),
+                &mut crate::host_log::say,
+            )
+        });
         let problem = beat.vitals.upload_problem();
         let refused = beat.vitals.server_refusing();
         let last_ok_at = self
@@ -253,6 +292,9 @@ impl Ticker {
                 refused,
             };
             state.disk = disk;
+            if let Some(silent) = native {
+                state.native_silent = silent;
+            }
         });
         if let Some(file) = &beat.time_left_file
             && let Err(error) = super::time_left::keep_file(
@@ -267,6 +309,60 @@ impl Ticker {
                 "time-left: the file could not be written ({error})"
             ));
         }
+    }
+}
+
+/// What the tick keeps from one tick to the next about the native leg. It lives as long as one
+/// `goalcup start` or `goalcup continue`, so each of them says the line at most once.
+#[derive(Debug, Default)]
+struct NativeTick {
+    /// When the first recorded model request was seen: a harness writes its session at the
+    /// first prompt, so the wait starts there, not at the launch.
+    first_request: Option<Instant>,
+    /// The native reader has taken a file: its leg is not silent, for good.
+    seen: bool,
+    /// The silent native leg has been said.
+    said: bool,
+}
+
+impl NativeTick {
+    /// Whether the native leg is silent at `now` ([`super::NativeSilence`]), after `requests`
+    /// recorded model requests, with `heard` the daemon's answer: `Some(Some(requests))` when
+    /// it is, `Some(None)` when it is not (or the daemon does not say, such as for a reader that
+    /// is not admitted, whose loss the recording lines already say), and `None` when the
+    /// daemon did not answer, which keeps what the state says. The first time it is silent it
+    /// goes to `say`, once.
+    fn see(
+        &mut self,
+        watch: &NativeWatch,
+        requests: u64,
+        heard: Heard,
+        now: Instant,
+        say: &mut dyn FnMut(&str),
+    ) -> Option<Option<u64>> {
+        if requests > 0 && self.first_request.is_none() {
+            self.first_request = Some(now);
+        }
+        if !heard.answered {
+            return None;
+        }
+        let Some(files) = heard.native_files else {
+            return Some(None);
+        };
+        self.seen |= files > 0;
+        let waited = self
+            .first_request
+            .map_or(Duration::ZERO, |first| now.saturating_duration_since(first));
+        let silent = !self.seen && requests > 0 && watch.silence.holds(requests, waited, files);
+        if silent && !self.said {
+            self.said = true;
+            say(&crate::participant::problem_native_silent(
+                &watch.harness,
+                requests,
+                &watch.guide,
+            ));
+        }
+        Some(silent.then_some(requests))
     }
 }
 
@@ -1113,20 +1209,25 @@ mod tests {
     #[test]
     fn a_daemon_that_does_not_answer_is_unknown_not_failed() {
         let done = AtomicBool::new(false);
-        let ask = |answer: fn() -> Option<Recording>| -> AskRecording { Arc::new(answer) };
+        let ask = |answer: fn() -> Option<Heard>| -> AskRecording { Arc::new(answer) };
+        let said = |recording| Heard {
+            answered: true,
+            recording,
+            native_files: None,
+        };
         // Nobody to ask, or no answer: not a verdict.
         assert_eq!(
-            recording_within(Duration::from_secs(5), &done, ask(|| None)),
+            recording_within(Duration::from_secs(5), &done, ask(|| None)).recording,
             Recording::Unknown
         );
         // A daemon that is slow is waited for, but only so long.
-        let slow: AskRecording = Arc::new(|| {
+        let slow: AskRecording = Arc::new(move || {
             std::thread::sleep(Duration::from_secs(3));
-            Some(Recording::Failed)
+            Some(said(Recording::Failed))
         });
         let began = Instant::now();
         assert_eq!(
-            recording_within(Duration::from_millis(200), &done, slow.clone()),
+            recording_within(Duration::from_millis(200), &done, slow.clone()).recording,
             Recording::Unknown
         );
         assert!(
@@ -1138,22 +1239,91 @@ mod tests {
         let ended = AtomicBool::new(true);
         let began = Instant::now();
         assert_eq!(
-            recording_within(Duration::from_secs(60), &ended, slow),
+            recording_within(Duration::from_secs(60), &ended, slow).recording,
             Recording::Unknown
         );
         assert!(began.elapsed() < Duration::from_secs(2));
         // What the daemon says is what is recorded.
-        for (said, recording) in [
+        for (answered, recording) in [
             (Recording::Ok, Recording::Ok),
             (Recording::Gaps, Recording::Gaps),
             (Recording::Failed, Recording::Failed),
         ] {
-            let answer: AskRecording = Arc::new(move || Some(said));
+            let answer: AskRecording = Arc::new(move || Some(said(answered)));
             assert_eq!(
-                recording_within(Duration::from_secs(5), &done, answer),
+                recording_within(Duration::from_secs(5), &done, answer).recording,
                 recording
             );
         }
+    }
+
+    /// The native leg is called silent only past both thresholds with no file admitted, said
+    /// once however many ticks it lasts, and cleared for good once a file is admitted; a tick
+    /// with no count from the daemon changes nothing.
+    #[test]
+    fn a_silent_native_leg_is_said_once_and_cleared_by_a_session_file() {
+        let watch = NativeWatch {
+            silence: crate::run::NativeSilence {
+                requests: 3,
+                after: Duration::from_secs(60),
+            },
+            harness: "Some Agent".to_string(),
+            guide: "https://example.test/guide#some-agent".to_string(),
+        };
+        let count = |files| Heard {
+            answered: true,
+            recording: Recording::Ok,
+            native_files: files,
+        };
+        let mut said = Vec::new();
+        let mut say = |line: &str| said.push(line.to_string());
+        let t0 = Instant::now();
+        let later = t0 + Duration::from_secs(61);
+        let mut tick = NativeTick::default();
+        // No recorded request yet: the wait has not begun, however long the agent idles.
+        assert_eq!(
+            tick.see(&watch, 0, count(Some(0)), later, &mut say),
+            Some(None)
+        );
+        // The first request starts the wait: too early, then too few requests.
+        assert_eq!(
+            tick.see(&watch, 5, count(Some(0)), t0, &mut say),
+            Some(None)
+        );
+        let mut few = NativeTick::default();
+        few.see(&watch, 1, count(Some(0)), t0, &mut say);
+        assert_eq!(
+            few.see(&watch, 2, count(Some(0)), later, &mut say),
+            Some(None)
+        );
+        // Past both: silent, with the requests so far, on every tick; said once.
+        assert_eq!(
+            tick.see(&watch, 6, count(Some(0)), later, &mut say),
+            Some(Some(6))
+        );
+        assert_eq!(
+            tick.see(&watch, 7, count(Some(0)), later, &mut say),
+            Some(Some(7))
+        );
+        // No answer keeps what the state says; an answer with no admitted reader clears it.
+        assert_eq!(tick.see(&watch, 8, Heard::default(), later, &mut say), None);
+        assert_eq!(
+            tick.see(&watch, 8, count(None), later, &mut say),
+            Some(None)
+        );
+        // A session file clears it, and it does not come back.
+        assert_eq!(
+            tick.see(&watch, 9, count(Some(1)), later, &mut say),
+            Some(None)
+        );
+        assert_eq!(
+            tick.see(&watch, 20, count(Some(0)), later, &mut say),
+            Some(None)
+        );
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("6 "), "{said:?}");
+        assert!(said[0].contains("Some Agent"), "{said:?}");
+        assert!(said[0].ends_with(&watch.guide), "{said:?}");
     }
 
     #[test]

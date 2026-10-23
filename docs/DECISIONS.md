@@ -39,6 +39,7 @@ Update this table in the same PR as any entry it lists.
 | D62, D63 | current | |
 | D64 | partly superseded | D65 (the disk watch pauses, never stops) |
 | D65, D66, D67 | current | |
+| D68 | proposed, owner to approve | |
 | D69 | current | |
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
@@ -249,7 +250,8 @@ Goal Cup Proxy holds no key, so no run is scanned for one. The `masked_key` rule
 A harness is data: a connector manifest under a `schema_version`. Common cases need no Rust edit.
 A genuinely new capability (a new native-store form, a new credential) is a separate reviewed core
 PR. Anyone may send a harness PR; connectors are trusted code, so a code owner reviews each one.
-The public repository is `agentcommunity/goal-cup-tracer`, Apache-2.0, copyright AgentCommunity.
+The public repository is `agentcommunity/goal-cup-proxy` (named `goal-cup-tracer` until October
+2026; GitHub redirects the old URL), Apache-2.0, copyright AgentCommunity.
 The protocol freezes at v5 for v0.x. macOS is the measured platform, Linux next, Windows later.
 
 ## D43. Harness contract v1: owner rulings, and D41's CA rule generalised.
@@ -681,7 +683,9 @@ This is an exception to the hard rule "Goal Cup Proxy records and never manages 
   than 1 GiB is free beyond the run's reservation, and `SIGCONT` once more than 3 GiB is free
   again. Nothing is typed to the agent, nothing is killed, and the participant does nothing but
   free space. The terminal says once: "The disk is almost full, so your agent is paused. Free
-  some disk space; it resumes by itself. If your agent seems stuck afterwards, type keep going."
+  some disk space outside your run's folders, and do not delete anything the agent made; it
+  resumes by itself. If your agent seems stuck afterwards, type keep going." (The words on where
+  to free space were added on 22 Oct 2026, participant review A7.)
   `goalcup status` keeps it as a `PROBLEM:` line, and the run's `state.json` has
   `disk.disk_paused`, until the agent resumes.
 - **Best effort.** The processes paused are the ones the termination code reaches: the root process
@@ -759,6 +763,37 @@ that stops to ask for approval stalls until its deadline (lx-codex and lx-claude
   configure command or launch option sets them (D52, D57 stand).
 - **The test kit's own cells are the organiser's.** `scripts/kit_settle.py` sets them in the kit's
   tracker homes, like the cheapest-model rule: those are not participant homes.
+
+## D68. The connector contract is locked at schema 1.
+
+*Proposed 22 Oct 2026, owner to approve.* Owner: "bring your own harness, not limited to these
+four". Adding a harness must stay a data change that core changes do not break.
+
+- **The contract** is [CONNECTOR-SCHEMA, "The connector contract"](CONNECTOR-SCHEMA.md#the-connector-contract):
+  the fields, the launch environment, the homes, native roots, hosts, `[participant]` and the
+  decoder hooks a connector may rely on.
+- **Compatibility.** While schema 1 is read, a connector that loads today keeps loading and
+  launching with the same meaning. Schema 1 may only grow (a new optional field, a wider bound, a
+  new closed value). The one exception is a tightened core policy row (a deny list or trust
+  table): it keeps schema 1 but follows the deprecation rule, with notice and a warning before
+  it refuses, unless the owner rules that waiting is unsafe.
+- **Deprecation.** A field is retired by a DECISIONS entry, at least one release and 14 days of
+  notice (none during an event), a `doctor` warning, then `schema_version = 2` with every
+  in-tree connector migrated in the same PR. A security tightening follows the same rule; the
+  owner may waive the notice when waiting is unsafe.
+- **Held by tests.** Four frozen schema-1 fixtures for harnesses nobody ships
+  (`crates/goalcup-cli/tests/fixtures/schema-1-connectors/`) take the connector contract through
+  `--dev`, beside every shipped connector. A connector made from the contributor template loads
+  with no Rust change, and no core literal names a harness (`no_family_literals.rs`). A change
+  that fails one of them is a break, not a test to update.
+- **Open: the pin and the cutoff.** A connector runs without `--dev` only when the release pins
+  it (`connector-dirs.txt`, compiled in). So a participant's own harness needs a merged PR and a
+  release before 6 Nov 2026 12:00 UTC. `--dev` admits an unpinned connector and relaxes three
+  load rules (`Origin::Dev`): the interpreter refusal for `program`, the argument path rules, and
+  the loopback and single-label host refusal. A `--dev` run today opens a server run and uploads like
+  any other: the server checks no connector list (D43 ruling 4 is not built), and the report
+  labels it `Dev/unpinned`. The owner decides whether a `--dev` run may count, and if not, where
+  it is refused (the CLI in competition mode, or the server by digest).
 
 ## D69. Goal Cup Proxy holds no keys; the agent pushes with the participant's own git login.
 

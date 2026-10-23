@@ -5,7 +5,7 @@ A release is four tarballs, one per target, `SHA256SUMS` and `install.sh`, built
 Participants install with one command (macOS, Linux, or Windows inside WSL2):
 
 ```sh
-curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh
 ```
 
 [install.sh](install.sh) is plain POSIX `sh` and needs no `sudo`. It picks the build for macOS

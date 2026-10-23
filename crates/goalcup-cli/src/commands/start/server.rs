@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 /// setup` must have run: its work folder is checked here, before the participant is asked for
 /// anything and before anything is created. A real run's GitHub repository is asked for later,
 /// once every other check has passed and before the approval ([`Serving::approved`]). A `--dev`
-/// run is uploaded like any other; the server refuses a connector it does not accept.
+/// run is uploaded like any other, and the server checks its connector against no list. Since D70
+/// the server refuses a run that sends `dev: true` in the competition or from a non-admin, but this
+/// CLI does not send `dev` yet (D70 Task 4).
 pub(super) fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,
@@ -571,7 +573,7 @@ impl Uploading {
         crate::upload::keep_run(cfg, &record, &receipt)?;
         let line = match opened.segment {
             Some(segment) => format!(
-                "run {} continued on {}: segment {segment}, deadline {}",
+                "run {} continued on {}: part {segment}, deadline {}",
                 record.run_id, record.server_url, record.deadline_at
             ),
             None => format!(

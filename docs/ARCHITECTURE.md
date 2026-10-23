@@ -67,7 +67,7 @@ TypeScript).
 | Verifier | Integrity reader and research report. Six built-in decoders: native `codex-native` and `claude-code-native`; wire `openai-responses`, `anthropic-messages`, `openai-chat-completions`, and `amp-thread-jsonrpc` | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
 | Upload server | Checks the run credential, stores chunks in R2, signs receipts and acknowledgements, sends the run emails | [server/worker](../server/worker/README.md), [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DESIGN.md) |
 
-The control API (version `CONTROL_API_VERSION`, now 10) requires its version on mutating requests.
+The control API (version `CONTROL_API_VERSION`, now 12) requires its version on mutating requests.
 Create binds the connector-directory digest, may carry the server's entry id, and carries the
 run's own secret, the proxy credential (`run_secrets`, D60), which the daemon redacts by exact
 value and holds in memory for that entry only.
@@ -307,16 +307,17 @@ chain files "parts"; read that as chain files.
 **Names kept from "Goal Cup Tracer" on purpose.** The product is Goal Cup Proxy. These
 identifiers keep the old name, because changing them would break something that is already out:
 
-- the repository URL, `github.com/agentcommunity/goal-cup-tracer`, until the repository is renamed;
 - the server's database schema, `goal_cup_tracer`;
 - `server/worker/sql/goal-cup-tracer-upload.sql`, the mirror of the website's migrations;
 - the `tracer_version` field on the wire, which reports the `goalcup` version.
 
-**The rule for the repository rename.** Do it in one pull request that updates every copy of the
-URL together: `packaging/install.sh`, the `AFTER_HELP` guide URL in
-`crates/goalcup-cli/src/main.rs`, and the install URLs in README, RULES and the participant's
-guide. GitHub then sends the old URL to the new one. Never create a new repository under the old
-name: that would end the redirect, and old install commands would fetch from it.
+**The repository rename.** The repository is now `github.com/agentcommunity/goal-cup-proxy`. It
+was `goal-cup-tracer`, and GitHub sends the old URL to the new one, so old install commands and
+links still work. Every copy of the URL moved in one pull request: `packaging/install.sh` (tested
+by `scripts/test_install.py`), the `AFTER_HELP` guide URL in `crates/goalcup-cli/src/main.rs`,
+prep's setup guide link, and the URLs in the README, the rules, the guides and the skills. Archived
+and dated documents keep the old URL as history. Never create a new repository under the old name:
+that would end the redirect, and old install commands would fetch from it.
 
 ## 13. Where each guarantee is tested
 

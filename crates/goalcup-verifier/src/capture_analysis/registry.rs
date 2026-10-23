@@ -163,6 +163,7 @@ impl DecoderRegistry {
                 &[
                     "thinking blocks",
                     "complete message snapshots inside batch arrays",
+                    "file edit results ({diff, lineRange}, shape from public thread-file readers)",
                 ],
             ),
         ] {

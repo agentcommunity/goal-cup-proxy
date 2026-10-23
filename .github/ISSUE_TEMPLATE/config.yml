@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security problem privately
-    url: https://github.com/agentcommunity/goal-cup-tracer/security/advisories/new
+    url: https://github.com/agentcommunity/goal-cup-proxy/security/advisories/new
     about: A vulnerability, or a way to get around or forge the recording. Never open a public issue for it. See SECURITY.md.
   - name: Help with your run
     url: https://agentcommunity.org/goalcup
