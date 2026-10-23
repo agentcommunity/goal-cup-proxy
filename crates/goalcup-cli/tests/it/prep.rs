@@ -280,6 +280,34 @@ fn the_old_name_prep_runs_setup() {
     assert_eq!((code, text), report("setup"));
 }
 
+/// A version before D69 stored a GitHub token in `<cfg>/github.json`. Setup says where it is and
+/// what to do with it, every time, and never prints the token.
+#[test]
+fn setup_names_an_old_github_token_file_and_never_prints_the_token() {
+    let rig = Rig::chat_only();
+    let facts = facts(&[]);
+    let token = format!("github_pat_{}", "Z".repeat(60));
+    let stored = rig.cfg.join("github.json");
+    std::fs::create_dir_all(&rig.cfg).unwrap();
+    std::fs::write(
+        &stored,
+        format!(r#"{{"repo_url":"https://github.com/you/old","token":"{token}"}}"#),
+    )
+    .unwrap();
+    let (_, out) = prep(&rig, &[], &facts);
+    let want = format!(
+        "An old GitHub token from an earlier goalcup is stored at {}. Goal Cup no longer uses \
+         it: delete the file and revoke the token on GitHub once your older dry run is over.",
+        stored.display()
+    );
+    assert!(out.lines().any(|l| l == want), "{out}");
+    assert!(!out.contains(&token), "{out}");
+    // With no such file, nothing is said about one.
+    std::fs::remove_file(&stored).unwrap();
+    let (_, out) = prep(&rig, &[], &facts);
+    assert!(!out.contains("old GitHub token"), "{out}");
+}
+
 #[test]
 fn a_second_setup_skips_passed_steps() {
     let rig = Rig::chat_only();

@@ -434,6 +434,16 @@ pub fn prep_with(
         put(report.out, &format!("{text}\n"))?;
         return Ok(u8::from(!all_ok));
     }
+    // D69: nothing reads or writes `github.json` now but the old clones' helper. Its token stays
+    // valid on GitHub until the participant revokes it, so say where it is, never what it is.
+    let old_token = crate::account::github::github_path(cfg);
+    if old_token.exists() {
+        report.tell(&format!(
+            "An old GitHub token from an earlier goalcup is stored at {}. Goal Cup no longer uses \
+             it: delete the file and revoke the token on GitHub once your older dry run is over.",
+            old_token.display()
+        ))?;
+    }
     if let Some((keys, made)) = &keys {
         offer_keys_file(doors, keys, acting && *made, open, &mut report)?;
     }
