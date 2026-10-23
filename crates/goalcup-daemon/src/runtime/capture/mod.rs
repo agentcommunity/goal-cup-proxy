@@ -292,6 +292,28 @@ pub(super) fn fresh_capture_id() -> String {
     hex::encode(bytes)
 }
 
+/// A continued run's workspace is the root of its own clone ([`workspace::clone_root`]), or the
+/// create is refused with what is there instead. A precondition, not a rule: it says nothing of
+/// what the agent did in the clone.
+fn check_existing_clone(workspace: &Path) -> Result<(), DaemonError> {
+    use workspace::CloneRoot;
+    let what = match workspace::clone_root(workspace) {
+        CloneRoot::Clone => return Ok(()),
+        CloneRoot::Missing => "is not there".to_string(),
+        CloneRoot::NotAFolder => "is not a folder".to_string(),
+        CloneRoot::NoGitDirectory => "has no .git directory".to_string(),
+        CloneRoot::InsideRepository(outer) => {
+            format!("is inside the Git repository {}", outer.display())
+        }
+        CloneRoot::Unreadable(kind) => format!("cannot be read ({kind})"),
+    };
+    Err(DaemonError::Guard(format!(
+        "the run's clone {} {what}: a continued run goes on in the clone it has, and it is not \
+         made again",
+        workspace.display()
+    )))
+}
+
 impl Daemon {
     /// Create a v5 local capture entry for `manifest`'s capture profile: preflight the
     /// profile's redaction, set the chain's quota, chain the v5 baseline of the fresh workspace,
@@ -310,7 +332,14 @@ impl Daemon {
         reserve_bytes: u64,
         native_since: Option<u64>,
         secrets: crate::redact::RunSecrets,
+        existing_clone: bool,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
+        // A continued run goes on in the clone it has (D4). Judged here, where the workspace is
+        // made, and before anything is: a clone that went between `goalcup continue`'s own look
+        // and this create is refused, never made again as a new, empty folder.
+        if existing_clone {
+            check_existing_clone(workspace)?;
+        }
         let config_home = isolated_config_home(config_home, every_loaded_real_dir)?;
         let run_home = &isolated_run_home(
             manifest.capture.home.run_home,

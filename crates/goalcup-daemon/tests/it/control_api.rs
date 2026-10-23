@@ -88,6 +88,7 @@ fn capture_request(
         entry_id: None,
         native_since: None,
         run_secrets: Vec::new(),
+        existing_clone: false,
     }
 }
 
@@ -1009,6 +1010,7 @@ fn capture_create_request(
         entry_id: None,
         native_since: None,
         run_secrets: Vec::new(),
+        existing_clone: false,
     }
 }
 
@@ -1608,4 +1610,81 @@ async fn nothing_under_v0_assets_is_public() {
         );
         assert_eq!(h.get(path).await.status(), 404, "{path} is not a route");
     }
+}
+
+/// A continued run's create (`existing_clone`) goes on in the clone it has: the daemon, which
+/// makes the workspace, refuses one that is not there or is not a clone, before it makes
+/// anything, so a clone gone after `goalcup continue` looked is never made again as an empty
+/// folder. A clone, or a link to one (moved to a bigger disk and linked back), is taken.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_continued_capture_create_needs_the_clone_and_makes_nothing_without_it() {
+    let h = support::empty_control_harness().await;
+    let workspaces = h.root.join("workspaces");
+    std::fs::create_dir_all(&workspaces).unwrap();
+    let continued = |name: &str| {
+        let mut request = capture_create_request(&h, name);
+        request.existing_clone = true;
+        request
+    };
+    let entries = || {
+        std::fs::read_dir(h.config.artifact_root.join("artifacts"))
+            .map(|d| d.count())
+            .unwrap_or(0)
+    };
+
+    // Gone: refused, and not made.
+    let response = h
+        .post_body(protocol::ROUTE_CAPTURE_WORKSPACES, &continued("gone"))
+        .await;
+    assert_eq!(response.status(), 409, "{}", response.body());
+    assert!(
+        response.body().contains("is not there"),
+        "{}",
+        response.body()
+    );
+    assert!(
+        !workspaces.join("gone").exists(),
+        "the clone was made again"
+    );
+    assert_eq!(entries(), 0);
+
+    // There, but the agent removed `.git`: refused, and left as it is.
+    let bare = workspaces.join("no-git");
+    std::fs::create_dir_all(&bare).unwrap();
+    std::fs::write(bare.join("work.txt"), b"kept").unwrap();
+    let response = h
+        .post_body(protocol::ROUTE_CAPTURE_WORKSPACES, &continued("no-git"))
+        .await;
+    assert_eq!(response.status(), 409, "{}", response.body());
+    assert!(
+        response.body().contains("has no .git directory"),
+        "{}",
+        response.body()
+    );
+    assert_eq!(std::fs::read(bare.join("work.txt")).unwrap(), b"kept");
+    assert_eq!(entries(), 0);
+
+    // A clone is taken.
+    let git_init = |dir: &std::path::Path| {
+        std::fs::create_dir_all(dir).unwrap();
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    git_init(&workspaces.join("clone"));
+    let _: protocol::CaptureWorkspaceInfo = h
+        .post_json(protocol::ROUTE_CAPTURE_WORKSPACES, &continued("clone"))
+        .await;
+
+    // So is a link to one: the link is followed, as the clone rule says.
+    let moved = h.root.join("bigger-disk").join("clone");
+    git_init(&moved);
+    std::os::unix::fs::symlink(&moved, workspaces.join("linked")).unwrap();
+    let _: protocol::CaptureWorkspaceInfo = h
+        .post_json(protocol::ROUTE_CAPTURE_WORKSPACES, &continued("linked"))
+        .await;
 }

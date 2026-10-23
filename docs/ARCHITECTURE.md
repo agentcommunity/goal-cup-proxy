@@ -67,7 +67,7 @@ TypeScript).
 | Verifier | Integrity reader and research report. Six built-in decoders: native `codex-native` and `claude-code-native`; wire `openai-responses`, `anthropic-messages`, `openai-chat-completions`, and `amp-thread-jsonrpc` | [capture_analysis/](../crates/goalcup-verifier/src/capture_analysis/mod.rs) |
 | Upload server | Checks the run credential, stores chunks in R2, signs receipts and acknowledgements, sends the run emails | [server/worker](../server/worker/README.md), [UPLOAD-API](UPLOAD-API.md), [SERVER-DESIGN](SERVER-DESIGN.md) |
 
-The control API (version `CONTROL_API_VERSION`, now 10) requires its version on mutating requests.
+The control API (version `CONTROL_API_VERSION`, now 11) requires its version on mutating requests.
 Create binds the connector-directory digest, may carry the server's entry id, and carries the
 run's own secret, the proxy credential (`run_secrets`, D60), which the daemon redacts by exact
 value and holds in memory for that entry only.

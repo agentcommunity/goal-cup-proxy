@@ -549,6 +549,7 @@ fn launched_capture(
             entry_id: None,
             native_since: None,
             run_secrets: Vec::new(),
+            existing_clone: false,
         })
         .unwrap();
     let goal = client

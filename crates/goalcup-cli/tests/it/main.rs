@@ -38,6 +38,8 @@ mod per_run_home;
 mod preflight_doctor;
 mod prep;
 mod process_handoff;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod restarts;
 mod seal_scan;
 mod start_launch;
 mod status_views;

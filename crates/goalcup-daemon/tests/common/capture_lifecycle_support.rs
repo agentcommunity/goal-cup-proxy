@@ -124,6 +124,7 @@ impl Rig {
             entry_id: None,
             native_since: None,
             run_secrets: Vec::new(),
+            existing_clone: false,
         }
     }
 

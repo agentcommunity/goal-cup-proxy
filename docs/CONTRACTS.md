@@ -295,7 +295,10 @@ leaves its mark.
   `run_secrets` (omitted when empty): at most one value, 20 to 256 bytes of printable ASCII, the
   run's proxy credential (D60). The daemon keeps it in memory for the entry, redacts every form
   of it, and answers a bad value or a body of the wrong shape with a fixed `400 malformed` that
-  quotes no value. The daemon
+  quotes no value. `goalcup continue` also sends `existing_clone: true` (omitted when false): the
+  workspace is the run's clone and must already be the root of its own clone (a `.git` directory,
+  no work tree above; a workspace that is itself a link is followed), or the daemon refuses
+  `409 conflict` before it creates anything, rather than make an empty folder. The daemon
   rejects a config home at or below any loaded connector's `real_dirs`, and the participant's
   `HOME`, including symlink aliases, before it creates artifacts or reads a source. The answer
   carries `entry_id`, `process_generation`, `reserved_bytes`, `ingest_addr`, `ingest_secret`,
@@ -591,7 +594,7 @@ wins over this text.
   `Host` is refused `401` with code `unauthorized` and a fixed body that quotes nothing it was sent,
   on a public route and on a bearer route alike. This closes DNS rebinding. A client that builds its
   URL from `control.json` sends a matching `Host`.
-- **Control API version.** `CONTROL_API_VERSION` is 10. `goalcup` and `goalcup-daemon` ship
+- **Control API version.** `CONTROL_API_VERSION` is 11. `goalcup` and `goalcup-daemon` ship
   together in one release, so a pair from two releases is refused, never bridged: the CLI refuses a
   `control.json` of another version and an answer whose `x-goalcup-control-version` header differs,
   and the daemon answers a request that names another version `426 unsupported`. Version 5 added the
@@ -603,5 +606,7 @@ wins over this text.
   its answer. Version 8 removed the V1 vocabulary nothing produced: the
   `WorkspaceInfo` shape, `GET /v0/entries/current`, the status document's `event` and
   `event_status_source`, the `arming` values `start_signal_seen` and `refused`, and every `health`
-  value but the three above. Version 9 added `run_secrets` to workspace creation (D60). None of
+  value but the three above. Version 9 added `run_secrets` to workspace creation (D60). Version 10 removed the seal's
+  workspace arm, the status finalization and the native scope. Version 11 added
+  `existing_clone` to workspace creation. None of
   these changes the frozen v5 chain.

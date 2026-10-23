@@ -344,6 +344,9 @@ pub(super) fn create_and_gate<'a>(
         entry_id: opened.as_ref().map(|o| o.run.entry_id.clone()),
         native_since: Some(started_at_unix),
         run_secrets,
+        // A continued run's clone must still be there when the daemon makes the workspace:
+        // `goalcup continue` looked before it closed anything, and the daemon looks again.
+        existing_clone: cx.continuing.is_some(),
     };
     let info = match retry_busy(|| client.create_capture_workspace(&request)) {
         Ok(info) => info,
