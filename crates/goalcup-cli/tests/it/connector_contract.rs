@@ -456,6 +456,10 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
         "TMPDIR",
         "GOALCUP_IN_HARNESS",
         "GOALCUP_TIME_LEFT_FILE",
+        // D69: the way to the participant's own git login, as paths or a socket.
+        "SSH_AUTH_SOCK",
+        "GIT_CONFIG_GLOBAL",
+        "GH_CONFIG_DIR",
     ] {
         allowed.insert(pin.to_string());
     }
@@ -503,6 +507,107 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
     assert!(plan.argv.iter().all(|a| !a.contains(KEY)), "{id}");
     for text in [format!("{plan:?}"), format!("{plan:#?}")] {
         assert!(!text.contains(KEY) && !text.contains(&KEY[..8]), "{id}");
+    }
+}
+
+/// D69: the agent pushes with the participant's own git login. Every launch carries exactly
+/// three ways to it, as paths or a socket and only when they exist: `SSH_AUTH_SOCK`, their real
+/// git config as `GIT_CONFIG_GLOBAL`, and their `gh` folder as `GH_CONFIG_DIR`; never a token
+/// from their environment. With them, the agent's git, under the run's own `HOME`, gets a login
+/// from a `gh` credential helper the participant set up (`gh auth login`); here a fake `gh` that
+/// answers only from the folder `GH_CONFIG_DIR` names.
+#[test]
+fn every_launch_carries_the_way_to_the_participants_git_login_and_no_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let home = root.join("participant-home");
+    let gh_dir = home.join(".config/gh");
+    std::fs::create_dir_all(&gh_dir).unwrap();
+    std::fs::write(gh_dir.join("hosts.yml"), "oauth_token: from-gh-config\n").unwrap();
+    let gh = root.join("bin/gh");
+    std::fs::create_dir_all(gh.parent().unwrap()).unwrap();
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\n[ \"$1 $2 $3\" = \"auth git-credential get\" ] || exit 0\ncat >/dev/null\n\
+         t=$(sed -n 's/^oauth_token: //p' \"$GH_CONFIG_DIR/hosts.yml\")\n\
+         echo username=you\necho \"password=$t\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(
+        home.join(".gitconfig"),
+        format!(
+            "[credential \"https://github.com\"]\n\thelper = \n\thelper = !'{}' auth git-credential\n",
+            gh.display()
+        ),
+    )
+    .unwrap();
+    let mut parent = s::parent_env();
+    for (k, v) in [
+        ("HOME", home.to_str().unwrap()),
+        ("PATH", "/usr/bin:/bin"),
+        ("SSH_AUTH_SOCK", "/private/tmp/agent.sock"),
+        ("GH_TOKEN", KEY),
+        ("GITHUB_TOKEN", KEY),
+    ] {
+        parent.insert(k.to_string(), v.to_string());
+    }
+    let carried = |parent: &BTreeMap<String, String>| {
+        let l = s::Layout::new();
+        let exe = s::fake_harness(&l.bin);
+        let resolved = s::resolved(&exe);
+        let proxy = s::proxy_url();
+        let plan = build_capture_launch(
+            &load("codex-cli"),
+            &s::vars(&l),
+            &l.workspace,
+            &s::chat_launch(&l, &resolved, &proxy, parent),
+        )
+        .unwrap();
+        (plan, l)
+    };
+    let (plan, l) = carried(&parent);
+    let get = |k: &str| plan.env_set.get(k).map(String::as_str);
+    assert_eq!(get("SSH_AUTH_SOCK"), Some("/private/tmp/agent.sock"));
+    assert_eq!(get("GIT_CONFIG_GLOBAL"), home.join(".gitconfig").to_str());
+    assert_eq!(get("GH_CONFIG_DIR"), gh_dir.to_str());
+    assert_eq!(
+        get("HOME"),
+        l.run_home.to_str(),
+        "the run keeps its own HOME"
+    );
+    for k in ["GH_TOKEN", "GITHUB_TOKEN"] {
+        assert!(!plan.env_set.contains_key(k), "`{k}` was carried");
+    }
+    assert!(plan.env_set.values().all(|v| !v.contains(KEY)));
+
+    // The agent's git, in exactly that environment, gets the login from the participant's gh.
+    let mut fill = std::process::Command::new("git");
+    fill.args(["credential", "fill"])
+        .current_dir(&l.workspace)
+        .env_clear()
+        .envs(&plan.env_set)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = fill.spawn().unwrap();
+    std::io::Write::write_all(
+        &mut child.stdin.take().unwrap(),
+        b"protocol=https\nhost=github.com\npath=agentcommunity/my-goal-cup.git\n\n",
+    )
+    .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{out:?}");
+    assert!(said.contains("password=from-gh-config\n"), "{said}");
+
+    // Nothing set and no such files: none of the three.
+    let mut bare = s::parent_env();
+    bare.insert("HOME".into(), root.join("empty-home").display().to_string());
+    let (plan, _) = carried(&bare);
+    for k in ["SSH_AUTH_SOCK", "GIT_CONFIG_GLOBAL", "GH_CONFIG_DIR"] {
+        assert!(!plan.env_set.contains_key(k), "`{k}` was set: {plan:?}");
     }
 }
 

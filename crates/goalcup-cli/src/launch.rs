@@ -4,8 +4,9 @@
 //! # Building a plan is pure
 //!
 //! [`build_capture_launch`] takes a connector, a variable map, a directory and the
-//! environment the child will start from, and returns a [`LaunchPlan`]. It spawns nothing,
-//! reads no environment variable of its own and touches no disk. That is what lets every pin
+//! environment the child will start from, and returns a [`LaunchPlan`]. It spawns nothing and
+//! reads no environment variable of its own. The one look at the disk is whether the
+//! participant's git and `gh` settings exist ([`participant_git_env`]). That is what lets every pin
 //! in this file be tested on a machine with no harness installed. The V1 builder `plan` was
 //! pure the same way, which is what let the V1 `goalcup start --print-launch` print a line
 //! without running it; D48 removed both.
@@ -25,6 +26,9 @@
 //!   profile's home variable;
 //! * the participant's terminal environment ([`CHAT_PASSTHROUGH_ENV`] and `LC_*`), under the
 //!   connector's own values;
+//! * the way to the participant's own git login (D69), as paths or a socket and never a key:
+//!   [`participant_git_env`] (`SSH_AUTH_SOCK`, `GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`), each only when it
+//!   is set or its file exists;
 //! * the passive **loopback** recording proxy through process-scoped `HTTPS_PROXY`/
 //!   `https_proxy` — the M2 reservation AGENTS.md names, and the only proxy a launch may name,
 //!   checked by `loopback_proxy_url` — with `NO_PROXY`/`no_proxy` ([`CAPTURE_NO_PROXY`]) and
@@ -348,6 +352,69 @@ pub fn in_harness() -> bool {
     std::env::var_os(IN_HARNESS_ENV).is_some_and(|value| !value.is_empty())
 }
 
+/// D69: the agent pushes with the participant's own git login, so a launch carries the way to
+/// it, and only as paths or a socket, never a key value:
+///
+/// - `SSH_AUTH_SOCK`, when set: their SSH agent, so a key with a passphrase, or one in the macOS
+///   keychain, works. A key without a passphrase works anyway: SSH finds `~/.ssh` from the
+///   password database, not from `HOME`.
+/// - `GIT_CONFIG_GLOBAL`: their own, when set, else the first of `~/.gitconfig` and
+///   `$XDG_CONFIG_HOME/git/config` (or `~/.config/git/config`) that is a file. The run's `HOME`
+///   is not theirs, so without it git would not see their credential helper (the macOS
+///   keychain, Git Credential Manager, `gh`).
+/// - `GH_CONFIG_DIR`: their own, when set, else `$XDG_CONFIG_HOME/gh` (or `~/.config/gh`) when
+///   it is a folder, for a helper that is `gh`.
+///
+/// `~` is the participant's `HOME` from `parent_env`. A token in their environment (`GH_TOKEN`,
+/// `GITHUB_TOKEN`) is not carried: nothing outside these three is.
+pub fn participant_git_env(parent_env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let set = |key: &str| {
+        parent_env
+            .get(key)
+            .filter(|v| !v.is_empty() && !v.contains('\0'))
+            .cloned()
+    };
+    let home = set("HOME")
+        .filter(|h| h.starts_with('/'))
+        .map(PathBuf::from);
+    let config = set("XDG_CONFIG_HOME")
+        .filter(|x| x.starts_with('/'))
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|h| h.join(".config")));
+    let first = |paths: Vec<Option<PathBuf>>, is: fn(&Path) -> bool| {
+        paths
+            .into_iter()
+            .flatten()
+            .find(|p| is(p))
+            .and_then(|p| p.to_str().map(str::to_string))
+    };
+    let mut env = BTreeMap::new();
+    let mut put = |key: &str, value: Option<String>| {
+        if let Some(value) = value {
+            env.insert(key.to_string(), value);
+        }
+    };
+    put("SSH_AUTH_SOCK", set("SSH_AUTH_SOCK"));
+    put(
+        "GIT_CONFIG_GLOBAL",
+        set("GIT_CONFIG_GLOBAL").or_else(|| {
+            first(
+                vec![
+                    home.as_ref().map(|h| h.join(".gitconfig")),
+                    config.as_ref().map(|c| c.join("git").join("config")),
+                ],
+                Path::is_file,
+            )
+        }),
+    );
+    put(
+        "GH_CONFIG_DIR",
+        set("GH_CONFIG_DIR")
+            .or_else(|| first(vec![config.as_ref().map(|c| c.join("gh"))], Path::is_dir)),
+    );
+    env
+}
+
 /// The participant's variables a launch carries across ([`CHAT_PASSTHROUGH_ENV`] and every
 /// `LC_*` the schema would admit as a name).
 fn chat_passthrough(parent_env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
@@ -564,8 +631,8 @@ pub struct CaptureLaunch<'a> {
     /// to each [`SHARED_CA_ENV`](goalcup_protocol::capture_policy::SHARED_CA_ENV) row the profile
     /// names. `None` when it names none; a launch that needs it and has none is refused.
     pub ca_bundle: Option<&'a Path>,
-    /// The tracker's own environment. Only [`CAPTURE_IDENTITY_ENV`], [`CHAT_PASSTHROUGH_ENV`]
-    /// and `LC_*` are read from it.
+    /// The tracker's own environment. Only [`CAPTURE_IDENTITY_ENV`], [`CHAT_PASSTHROUGH_ENV`],
+    /// `LC_*` and what [`participant_git_env`] reads are read from it.
     pub parent_env: &'a BTreeMap<String, String>,
     /// The run's time-left file ([`crate::run::time_left::file_path`]), handed to the harness
     /// as [`crate::run::time_left::FILE_ENV`] (D66). `goalcup start` always gives one.
@@ -805,6 +872,7 @@ fn build_launch(
             env.insert(key.to_string(), value.clone());
         }
     }
+    env.extend(participant_git_env(launch.parent_env));
     env.insert("HOME".into(), run_home.to_string());
     env.insert("PATH".into(), harness_path(launch.parent_env));
     // A harness without a home variable keeps its state under the private `HOME` above.
