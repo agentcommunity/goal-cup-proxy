@@ -17,8 +17,8 @@ missing). It is not in CI.
 - Base URL: what `goalcup login --server` stored (default `https://ingest.agentcommunity.org`,
   the production server; staging is `https://goalcup-ingest-staging.b-9a5.workers.dev`). Every
   path below is under it. `GET /v1/health` answers `200 {"status":"ok"}` and touches nothing.
-- Every call except the three under "Sign in" carries `Authorization: Bearer gcr_<64 hex>`, the run
-  credential. A missing, unknown or expired credential is `401`. A credential sees one run, the
+- Every call except the three under "Sign in" and the public `GET /v1/live.json` carries
+  `Authorization: Bearer gcr_<64 hex>`, the run credential. A missing, unknown or expired credential is `401`. A credential sees one run, the
   one it opened; any other run id is `404`, so a credential cannot probe for other runs.
 - Request and response bodies are JSON (`Content-Type: application/json`), except the chunk body.
 - Times are RFC 3339 UTC to the second, `YYYY-MM-DDTHH:MM:SSZ`.
@@ -34,6 +34,7 @@ missing). It is not in CI.
   | 401 | `unauthorized` | No credential, or not one the server knows, or it has expired. | during a run and its wrap-up: keeps recording, retries (D64); `goalcup upload` gives up: `goalcup login` again |
   | 403 | `forbidden` | The member may not start a run now (terms not accepted, outside the start window), or a device request was denied. | stops, reports |
   | 404 | `not_found` | No such run for this credential, or not this run's entry. | during a run and its wrap-up: retries (D64); `goalcup upload` gives up, reports |
+  | 404 | `not_ready` | `GET /v1/live.json` only: the cron has not written the first snapshot yet. | not used by `goalcup` |
   | 409 | `conflict` | The request does not continue where the server is (offset, `prev`, seq), the credential already opened a run, `previous_entry_id` is not the run's latest entry, or a seal comes before the final heartbeat. | chunk: re-reads the position (`GET`), then continues |
   | 410 | `closed` | The run is abandoned, or closed 24 hours after it ended; the entry is sealed; the request goes past what the final heartbeat committed; or the run is over and cannot be continued. A device request has expired or was already picked up. | during a run and its wrap-up: retries (D64); `goalcup upload` gives up, reports; a refused `continue` marks the run over |
   | 413 | `too_large` | A body over its cap. | retries with backoff, reports (a `goalcup` bug) |
@@ -438,12 +439,141 @@ The previous entry is not sealed or closed by this; it may still upload its wrap
 - The same call again (the latest entry was made by a `continue` with this `session_id` after this
   `previous_entry_id`) is `200` with the same answer, so a lost reply is not a second segment.
 
+## `GET /v1/live.json` — public community totals
+
+No credential. For the website's live page (`/goalcup/live`) and anyone else. `goalcup` never calls
+it. The cron writes the totals of the current event (`EVENT_ID`) to R2 every 5 minutes
+(`live/{event_id}.json`); this call answers that copy, streamed with R2's `etag`, and never touches
+the database. Each data center keeps the answer for 60 seconds (the edge cache).
+
+| Status | Body | Headers |
+|---|---|---|
+| `200` | the snapshot below | `content-type: application/json`, `cache-control: public, max-age=60`, `access-control-allow-origin: *` |
+| `404` | `{"error": "not_ready", "message": …}`: no snapshot yet | `access-control-allow-origin: *` |
+| `503` | `maintenance`, as for every call (the cron writes nothing then either; after the switch the copy is as old as its `generated_at` until the next tick) | `retry-after` |
+
+What it counts: only competition runs (`mode` `competition`) of the event and of this deployment,
+never test or practice runs, and no run given back with `abandon`. "Entry" numbers count main runs
+only (a run a later start replaced is not an entry); "work" numbers count every competition run,
+replaced ones too. Nothing in it is about one run or one member: no member id, email, repository,
+IP address, country, machine fact, vitals, run id or entry id.
+
+**The group of 5.** A number is `null` unless at least `min_group` (5) runs feed it: a count of runs
+below 5 is `null` (0 too); a sum is `null` unless 5 runs added to it. A harness with fewer than 5
+started runs folds into `other`, and `other` is left out while it has fewer than 5. The Worker
+refuses to publish a snapshot with a count of 1 to 4 (it logs `live-snapshot-failed`).
+
+**Differencing.** Comparing two snapshots, or a total with its parts, must not show one run's numbers:
+`model_calls` is floored to a multiple of 100 and `data_bytes` to a whole MiB; when `other` is left
+out, every harness's `running` is `null` (its `started` still follows from the total minus the named
+harnesses, a count only). A run that starts, stops or goes quiet still shows as a change of 1 in a
+count of 5 or more: that is what a live count is.
+
+Schema 1 (example numbers; the field names and their meaning follow the live stats design):
+
+```json
+{
+  "schema_version": 1,
+  "event": {"id": "goalcup-cup-2026", "kind": "competition", "start_window_opens": "2026-11-07T00:00:00Z",
+            "start_window_closes": "2026-11-08T00:00:00Z", "run_hours": 168},
+  "generated_at": "2026-11-09T14:05:00Z",
+  "min_group": 5,
+  "entries": {"signed_up": null, "started": 298, "running": 251, "working": 233, "quiet": 19,
+              "finished": 28, "sealed": 25, "incomplete": null},
+  "harnesses": [{"id": "claude-code-cli", "started": 131, "running": 117},
+                {"id": "other", "started": 22, "running": 11}],
+  "work": {"agent_hours": 15873.5, "working_hours": null, "model_calls": 3184200,
+           "model_calls_last_hour": 41230, "restarts": 64, "data_bytes": 871234535424},
+  "notices": {"silence": 57, "idle_3h": 140, "idle_6h": 61, "disk_full": null},
+  "survival": null, "hourly": null, "trace": null,
+  "github": {"as_of": "2026-11-09T13:58:00Z", "repos": 281, "commits": 41200, "prs_opened": 512,
+             "lines_added": 18400000, "lines_removed": 6100000},
+  "server": null
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `event` | the event's row: `kind` is its mode (`competition`, `dry_run`, …), the start window, `run_hours` |
+| `generated_at` | the cron tick that wrote it |
+| `entries.started` | main runs that have started |
+| `entries.running` | not over, last heartbeat under 20 minutes old (the `silence` threshold) |
+| `entries.working` | running, and the last model request under 30 minutes old |
+| `entries.quiet` | not over, no heartbeat (or start) for 20 minutes or more |
+| `entries.finished`, `sealed`, `incomplete` | over: past their end, or stopped early (the current segment has its final heartbeat or seal); `sealed` and `incomplete` as the close wrote them |
+| `entries.signed_up` | always `null` for now (sign-ups are not read yet) |
+| `harnesses` | main runs by the connector of their first segment (`started`, `running`); `null` while fewer than 5 runs started |
+| `work.agent_hours` | per run, the time from its start to its last heartbeat (at most its end), summed (one decimal); a quiet gap inside a run counts too |
+| `work.working_hours` | `null` for now: an exact figure needs every heartbeat of the event read each tick, which the shared database must not do |
+| `work.model_calls` | the sum of each entry's highest reported `model_requests` (a `continue` adds, never doubles), floored to 100 |
+| `work.model_calls_last_hour` | per entry that beat in the last hour, its highest count there minus its last count before; fed by the runs whose count grew |
+| `work.restarts` | segments after the first (`goalcup continue`); fed by the runs that restarted |
+| `work.data_bytes` | compressed bytes stored in R2, floored to a MiB |
+| `notices` | emails queued per kind; each fed by the runs that got one |
+| `github` | the entries' public repositories, read by the cron ([below](#the-github-numbers)); `null` while fewer than 5 repositories have a reading |
+| `github.as_of` | the newest reading counted |
+| `github.repos` | repositories with a reading: the main runs' repositories, one each (two runs naming one repository count it once) |
+| `github.commits` | commits on the default branch since the run's start; after the end, those reachable from the judged commit |
+| `github.prs_opened` | pull requests the repository's owner opened during the run, by GitHub's timestamp; only the owner's own, so a repository owned by an organization, or PRs opened by a bot or app, count 0 |
+| `github.lines_added`, `lines_removed` | additions and deletions of the whole weeks the run touches (GitHub's `code_frequency`), floored to 100; every file counts, generated ones and lockfiles too |
+| `survival`, `hourly`, `trace`, `server` | `null`: later steps of the live stats design, not built yet |
+
+The cron writes the snapshot after its other steps, in its own `try`: a failure is the log line
+`live-snapshot-failed: …` and changes nothing else, and the last good copy keeps being served. The
+SQL reads per-run and per-entry columns, and heartbeats of the last hour only: about 20 ms at 400
+runs with a week of heartbeats (`check-sql.sh` checks it stays under 1 second with no temp spill). It
+needs website migration `20261022100000_goal_cup_tracer_live_stats.sql`
+([sql/pending](../server/worker/sql/pending/README.md)); until that is applied the GET answers
+`404 not_ready`.
+
+### The GitHub numbers
+
+Every entry's repository is public by rule and new at the start, so what is in it came from the run.
+With `GITHUB_STATS=on`, the cron's last step (after the snapshot, in its own `try`, so a slow or
+failing GitHub never delays the snapshot or the emails) reads at most 20 runs a tick, oldest due
+first: competition runs of the current event, main runs only, never test or practice runs. Three
+calls each, with the judged commit's headers, token and 8-second timeout:
+
+1. `GET /repos/{owner}/{repo}/commits?since=<official_start>&per_page=1`: the count is the `Link`
+   header's last page. After the end: `sha=<judged commit>`, so pushes GitHub timestamped after the
+   end are left out. `409` (an empty repository) is 0.
+2. `GET /search/issues?q=repo:{owner}/{repo} is:pr author:{owner} created:<start>..<end>`:
+   `total_count`. Anyone can open a pull request on a public repository, so only the repository
+   owner's own count: a repository owned by an organization, and pull requests opened by a bot or a
+   GitHub App, give 0.
+3. `GET /repos/{owner}/{repo}/stats/code_frequency`: the weeks the run touches, up to the week the
+   run ends in. GitHub counts lines per whole week (from Sunday 00:00 UTC), so lines committed before
+   the start in the start week, and after the deadline in the end week, can count. `202` (GitHub is
+   still computing, which it does after every push) is asked again next tick; `204` is 0.
+
+A run is read about hourly while it runs: 20 runs a tick is 240 an hour, so "hourly" holds up to
+about 240 main runs, and beyond that each run is read less often (at 300, about every 75 minutes;
+about 720 calls an hour). From 5 minutes after its end it gets one last reading, once the judged
+commit is decided; it is retried each tick while a number is missing, and an hour after the end it
+is made final with whatever it has (a judged commit of `none` or none at all keeps the last numbers),
+and then never read again. A number not read (an error status, a repository turned private or gone)
+keeps its last value.
+
+A rate limit ends the step for the tick, and the run being read is not stored and stays first in
+line: a `429`, any `403` from search (its secondary limit), or a `403` that GitHub marks as a rate
+limit (`x-ratelimit-remaining: 0` or `retry-after`). Any other `403` (a blocked repository) is that
+repository's only. A GitHub that cannot be reached (an error, or the 8-second timeout) costs only that
+run: it is stored as "nothing new" and asked again 5 minutes later, behind the runs already due, or
+made final after its hour; only when the tick's first call cannot reach GitHub does the step end for
+the tick. The step also stops once GitHub says fewer than 1,000 core calls are left in the hour,
+which the judged commits and the public-repo check of every start need more. The database
+keeps numbers only (`goal_cup_tracer.run_github`: no URL, owner, sha, message or author), and the
+snapshot sums them. A failure is the log line `github-stats-failed: …` and changes nothing else.
+It needs website migration `20261023100000_goal_cup_tracer_live_github.sql`, after `20261022100000`.
+
 ## What the server does on its own
 
-A cron runs every 5 minutes. It does four things, in this order, and a step that fails is logged
+A cron runs every 5 minutes. It does six things, in this order, and a step that fails is logged
 and does not stop the next: it closes runs that are over (so a run's status is final without any
 call naming it), it records the GitHub commit at each deadline, it queues the run emails in an
-outbox, and it sends them. A client sees none of this. Each outbox row is sent once through Resend
+outbox, it sends them, it writes the public live totals
+([`GET /v1/live.json`](#get-v1livejson--public-community-totals)), and it reads a few public
+repositories for the next totals ([the GitHub numbers](#the-github-numbers)). A client sees none of this. Each outbox row is sent once through Resend
 (`server/worker/src/mail.ts`); the database writes the email, picks the member's address and checks
 suppression. A staging Worker is never given an address by the database and sends every email to
 its test address. (While the maintenance switch is on the

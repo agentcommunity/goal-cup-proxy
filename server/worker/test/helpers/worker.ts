@@ -38,6 +38,7 @@ export async function startWorker(vars: Record<string, string>): Promise<Running
   const allVars: Record<string, string> = {
     DB_BACKEND: "local",
     GITHUB_CHECK: "off",
+    GITHUB_STATS: "off",
     RECEIPT_SIGNING_KEY: TEST_SEED,
     ...vars,
   };

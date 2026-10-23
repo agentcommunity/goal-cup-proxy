@@ -152,11 +152,43 @@ run replaces nothing and is never replaced, so an operator may run several at on
 are left out of every public number. `server/worker/scripts/delete-test-runs.sh` deletes all of them.
 See [OPERATING](OPERATING.md#test-runs).
 
+## Live totals
+
+Built, not yet live: it needs website migration 20261022100000 applied, then a Worker deploy
+([OPERATING](OPERATING.md#deploy)). `GET /v1/live.json` is the one public, unauthenticated read: the
+community totals of the current event, from the database the server already fills (agents started,
+running and quiet, harness mix, agent hours, model calls, restarts, data stored, notices). The cron's
+last step calls one SQL function (`goal_cup_upload_live_snapshot`) and writes the answer to R2 as
+`live/{event_id}.json`; the GET serves that copy (each data center keeps it for 60 seconds) and
+never calls the database, so traffic costs nothing there and a bad database minute only makes the
+copy older. The SQL reads per-run columns and the last hour of heartbeats only, never a whole week
+of them: about 20 ms at event scale. The Worker rebuilds the document
+key by key before it writes it, so only the published fields can exist. Test and practice runs are
+left out in the SQL. A number fed by fewer than 5 runs is `null`, a harness with fewer than 5 runs
+folds into `other`, and call and byte totals are rounded down so two snapshots cannot be compared
+to read one run. Nothing per run or per member is in it. Contract:
+[UPLOAD-API](UPLOAD-API.md#get-v1livejson--public-community-totals).
+
+The `github` block (website migration 20261023100000, `GITHUB_STATS=on`) adds commits, pull
+requests and lines from the entries' public repositories. The GitHub reader is one more cron step,
+after the snapshot and on its own: at most 20 runs a tick, three cheap calls each (the commit count
+from the `Link` header, a search count of the owner's pull requests, `code_frequency`), about
+hourly per run, and one last reading after the end, counted up to the judged commit, after which the
+run is never read again. It stops for the tick on a rate limit, when the tick's first call cannot
+reach GitHub, or when fewer than 1,000 calls are left in the hour, so the judged commits and the
+start check keep their share of the token; a run GitHub does not answer for goes to the back of the
+line. Production has it off until the migration is applied (staging is the canary). The database stores numbers only, one row per run (`run_github`), and the
+snapshot sums them per repository with the same group of 5; lines are floored to 100. Details:
+[UPLOAD-API](UPLOAD-API.md#the-github-numbers).
+
 ## Not built
 
 - The verify job that reassembles stored chunks and runs `goalcup-verify` over them. Until it exists,
   nothing downloads the stored chain; `scripts/matrix.sh --check-copy` compares positions instead.
-- Live totals in the heartbeat, outage windows, and the public `live.json`.
+- The rest of the [live stats design](research/LIVE-STATS-DESIGN.md): working hours (it needs a
+  stored counter), survival and the hourly strip, tokens and tool calls from the traces (the verify
+  job and its numbers-only summary), uptime and outage windows, the daily copies. Their fields in
+  `live.json` are `null`.
 - A separate organizer pause on new starts (`MAINTENANCE` stops everything).
 - A second pinned signing key for rotation.
 - Teams, and more than one main run per account.

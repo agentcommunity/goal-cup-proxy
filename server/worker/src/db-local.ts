@@ -10,6 +10,9 @@
 //   state/usercodes/{sha256}.json  {"device_sha256": …}: the request a user code belongs to
 //   state/credentials/{sha256}.json  a run credential, by its own hash
 //   state/notices/{run_id}.{kind}.{key}.json  a queued notice (the outbox); `key` is the dedupe key, URL-encoded, "-" when empty
+//   state/github/{run_id}.json   the GitHub reader's numbers for a run (`StoredGithub`, the database's run_github row)
+//
+// The cron's live snapshot (`liveSnapshot`) reads all of it and writes nothing.
 //
 // Not built for load: a run's whole state is one object. Fine for a developer and for tests.
 
@@ -28,8 +31,13 @@ import type {
   DevicePoll,
   EntryRow,
   FinalCommitDetail,
+  GithubDue,
+  GithubReading,
   HeartbeatArgs,
   HeartbeatResult,
+  LiveGithub,
+  LiveNumber,
+  LiveSnapshot,
   MachineFacts,
   NoticeKind,
   NoticeOutcome,
@@ -44,7 +52,20 @@ import type {
   TickRun,
   Vitals,
 } from "./db.ts";
-import { CLOSE_AFTER_SECONDS, DISK_NOTICE_GAP_SECONDS, FIRST_SEQ, GENESIS, NO_FINAL_DETAIL, TICK_LOOKBACK_SECONDS, UNBOUND_CREDENTIAL_SECONDS, endsAt, isPastEnd, statusAt } from "./db.ts";
+import {
+  CLOSE_AFTER_SECONDS,
+  DISK_NOTICE_GAP_SECONDS,
+  FIRST_SEQ,
+  GENESIS,
+  LIVE_MIN_GROUP,
+  NO_FINAL_DETAIL,
+  TICK_LOOKBACK_SECONDS,
+  UNBOUND_CREDENTIAL_SECONDS,
+  endsAt,
+  isPastEnd,
+  isReplaced,
+  statusAt,
+} from "./db.ts";
 import type { StartReceipt } from "./sign.ts";
 import { addSeconds, formatTime, sha256Hex, toHex } from "./util.ts";
 
@@ -57,6 +78,8 @@ interface StoredEntry extends EntryRow {
   chunk_count?: number;
   /** The highest `model_requests` a heartbeat of this entry has sent; null until one does. */
   model_requests?: number | null;
+  /** Every heartbeat's time and the `model_requests` it sent (the database's heartbeats rows), for the live snapshot. */
+  beats?: { at: string; model_requests: number | null }[];
   final_repo_head: string | null;
   last_heartbeat: {
     at: string;
@@ -110,12 +133,28 @@ interface StoredDevice extends CreateDeviceArgs {
 
 const MAX_CAS_TRIES = 10;
 
+/** The GitHub reader's numbers for one run: numbers only, no URL, name or sha. */
+interface StoredGithub {
+  commits: number | null;
+  prs_opened: number | null;
+  lines_added: number | null;
+  lines_removed: number | null;
+  read_at: string | null;
+  due_at: string | null;
+  final: boolean;
+}
+const GITHUB_NUMBERS = ["commits", "prs_opened", "lines_added", "lines_removed"] as const;
+
 /** What `wrangler dev` and the tests can set; production's equivalents are in the database. */
 export interface LocalOptions {
   /** Seconds after a run ends until it is closed (default 24 hours). Tests only. */
   closeAfterSeconds?: number;
   /** The competition start window; an unset edge is open. Unset: always open. */
   startWindow?: { opens: string | null; closes: string | null };
+  /** The run length, for the live snapshot's `event.run_hours` (the database has it on the event). */
+  runSeconds?: number;
+  /** The events this deployment has, by id, with their kind (the database's events rows); unset: none, so no live snapshot. */
+  events?: Record<string, string>;
 }
 
 const BEFORE_WINDOW = "The start window has not opened yet.";
@@ -159,11 +198,15 @@ export class LocalDb implements Db {
   readonly #bucket: R2Bucket;
   readonly #closeAfterSeconds: number;
   readonly #window: LocalOptions["startWindow"];
+  readonly #runSeconds: number | undefined;
+  readonly #events: Record<string, string> | undefined;
 
   private constructor(bucket: R2Bucket, options: LocalOptions) {
     this.#bucket = bucket;
     this.#closeAfterSeconds = options.closeAfterSeconds ?? CLOSE_AFTER_SECONDS;
     this.#window = options.startWindow;
+    this.#runSeconds = options.runSeconds;
+    this.#events = options.events;
   }
 
   static create(bucket: R2Bucket, options: LocalOptions = {}): LocalDb {
@@ -417,20 +460,218 @@ export class LocalDb implements Db {
     });
   }
 
-  async runsForTick(now: string): Promise<TickRun[]> {
-    const cutoff = formatTime(addSeconds(new Date(now), -TICK_LOOKBACK_SECONDS));
-    const runs: StoredRun[] = [];
+  /** Every stored object under `prefix`, parsed. */
+  async #all<T>(prefix: string): Promise<T[]> {
+    const out: T[] = [];
     let cursor: string | undefined;
     do {
-      const page = await this.#bucket.list({ prefix: "state/runs/", cursor });
+      const page = await this.#bucket.list({ prefix, cursor });
       for (const { key } of page.objects) {
-        const run = (await (await this.#bucket.get(key))?.json()) as StoredRun | undefined;
-        if (run === undefined || run.status === "abandoned") continue;
-        if (run.status === "open" || endsAt(run) >= cutoff) runs.push(run);
+        const v = (await (await this.#bucket.get(key))?.json()) as T | undefined;
+        if (v !== undefined) out.push(v);
       }
       cursor = page.truncated ? page.cursor : undefined;
     } while (cursor !== undefined);
+    return out;
+  }
+
+  async runsForTick(now: string): Promise<TickRun[]> {
+    const cutoff = formatTime(addSeconds(new Date(now), -TICK_LOOKBACK_SECONDS));
+    const runs = (await this.#all<StoredRun>("state/runs/")).filter((run) => run.status !== "abandoned" && (run.status === "open" || endsAt(run) >= cutoff));
     return runs.sort((x, y) => (x.official_start + x.run_id).localeCompare(y.official_start + y.run_id)).map(toTick);
+  }
+
+  /** Twin of public.goal_cup_upload_live_snapshot (sql/pending/20261022100000_goal_cup_tracer_live_stats.sql, its github block in 20261023100000): change both together. */
+  async liveSnapshot(eventId: string, now: string): Promise<Omit<LiveSnapshot, "server"> | null> {
+    const kind = this.#events?.[eventId];
+    if (kind === undefined) return null; // not an event of this deployment
+    const ago = (seconds: number) => formatTime(addSeconds(new Date(now), -seconds));
+    /** `n`, or null when fewer than LIVE_MIN_GROUP runs feed it (by default, the n runs it counts). */
+    const k = (n: number, feeders: number = n): LiveNumber => (feeders >= LIVE_MIN_GROUP ? n : null);
+    // Every competition run of the event that has started; test and practice runs never count.
+    const runs = (await this.#all<StoredRun>("state/runs/")).filter((r) => r.event_id === eventId && r.mode === "competition" && r.status !== "abandoned" && r.official_start <= now);
+
+    // The main runs (entries): what each is now, and its harness. A run is over at its end, or once
+    // its current entry has its final heartbeat or seal (the agent stopped).
+    const main = runs.filter((r) => !isReplaced(r)).map((r) => {
+      const cur = currentOf(r);
+      const over = now >= endsAt(r) || cur.final !== null || cur.sealed_at !== null;
+      const running = !over && r.last_heartbeat_at != null && r.last_heartbeat_at >= ago(20 * 60);
+      const connector = r.entries[0]!.connector_id;
+      return {
+        status: r.status,
+        over,
+        running,
+        working: running && r.last_model_request_at != null && r.last_model_request_at >= ago(30 * 60),
+        quiet: !over && (r.last_heartbeat_at ?? r.official_start) < ago(20 * 60),
+        harness: /^[a-z0-9][a-z0-9-]{0,63}$/.test(connector) ? connector : "other",
+      };
+    });
+    const count = (f: (m: (typeof main)[number]) => boolean) => k(main.filter(f).length);
+    const buckets = new Map<string, { started: number; running: number }>();
+    for (const m of main) {
+      const b = buckets.get(m.harness) ?? { started: 0, running: 0 };
+      buckets.set(m.harness, { started: b.started + 1, running: b.running + (m.running ? 1 : 0) });
+    }
+    const folded = new Map<string, { started: number; running: number }>();
+    for (const [id, b] of buckets) {
+      const to = b.started >= LIVE_MIN_GROUP ? id : "other";
+      const f = folded.get(to) ?? { started: 0, running: 0 };
+      folded.set(to, { started: f.started + b.started, running: f.running + b.running });
+    }
+    // A hidden "other" hides every harness's running count (differencing; see the SQL).
+    const otherHidden = (folded.get("other")?.started ?? LIVE_MIN_GROUP) < LIVE_MIN_GROUP;
+    const harnesses = [...folded]
+      .filter(([, b]) => b.started >= LIVE_MIN_GROUP)
+      .sort(([x, a], [y, b]) => Number(x === "other") - Number(y === "other") || b.started - a.started || x.localeCompare(y))
+      .map(([id, b]) => ({ id, started: b.started, running: otherHidden ? null : k(b.running) }));
+
+    // Work: every competition run, replaced ones too, from per-run and per-entry facts.
+    const entries = runs.flatMap((r) => r.entries);
+    const runsWith = (f: (e: StoredEntry) => boolean) => runs.filter((r) => r.entries.some(f)).length;
+    const seconds = runs.reduce((sum, r) => {
+      if (r.last_heartbeat_at == null) return sum;
+      const until = [r.last_heartbeat_at, endsAt(r), now].sort()[0]!;
+      return sum + Math.max(0, (Date.parse(until) - Date.parse(r.official_start)) / 1000);
+    }, 0);
+    // The last hour: per entry that beat in it, its highest count there minus its last count before.
+    const hourStart = ago(3600);
+    const grownRuns = new Set<string>();
+    let hourCalls = 0;
+    for (const e of entries) {
+      const reported = (e.beats ?? []).filter((b) => b.at <= now && b.model_requests !== null) as { at: string; model_requests: number }[];
+      const inHour = reported.filter((b) => b.at > hourStart);
+      if (inHour.length === 0) continue;
+      const before = reported.filter((b) => b.at <= hourStart).at(-1)?.model_requests ?? 0;
+      const grown = Math.max(0, Math.max(...inHour.map((b) => b.model_requests)) - before);
+      hourCalls += grown;
+      if (grown > 0) grownRuns.add(e.run_id);
+    }
+
+    const notices = (await this.#all<LocalNotice>("state/notices/")).filter((n) => n.created_at <= now && runs.some((r) => r.run_id === n.run_id));
+
+    // GitHub: the newest reading of each repository of a main run, read at or before now.
+    const readings = new Map<string, StoredGithub>();
+    for (const r of runs.filter((r) => !isReplaced(r))) {
+      const g = await this.#github(r.run_id);
+      if (g === null || g.read_at === null || g.read_at > now) continue;
+      const repo = r.repo_url.toLowerCase();
+      const had = readings.get(repo);
+      if (had === undefined || had.read_at! < g.read_at) readings.set(repo, g);
+    }
+    const read = [...readings.values()];
+    const githubSum = (key: (typeof GITHUB_NUMBERS)[number], floorTo = 1): LiveNumber => {
+      const fed = read.filter((g) => g[key] !== null);
+      return k(Math.floor(fed.reduce((sum, g) => sum + g[key]!, 0) / floorTo) * floorTo, fed.length);
+    };
+    const github: LiveGithub | null =
+      read.length < LIVE_MIN_GROUP
+        ? null
+        : {
+            as_of: read.map((g) => g.read_at!).sort().at(-1)!,
+            repos: read.length,
+            commits: githubSum("commits"),
+            prs_opened: githubSum("prs_opened"),
+            lines_added: githubSum("lines_added", 100),
+            lines_removed: githubSum("lines_removed", 100),
+          };
+    const noticeCount = (kind: NoticeKind) => {
+      const of = notices.filter((n) => n.kind === kind);
+      return k(of.length, new Set(of.map((n) => n.run_id)).size);
+    };
+
+    return {
+      schema_version: 1,
+      event: {
+        id: eventId,
+        kind,
+        start_window_opens: this.#window?.opens ?? null,
+        start_window_closes: this.#window?.closes ?? null,
+        run_hours: this.#runSeconds === undefined ? null : this.#runSeconds / 3600,
+      },
+      generated_at: now,
+      min_group: LIVE_MIN_GROUP,
+      entries: {
+        signed_up: null,
+        started: k(main.length),
+        running: count((m) => m.running),
+        working: count((m) => m.working),
+        quiet: count((m) => m.quiet),
+        finished: count((m) => m.over),
+        sealed: count((m) => m.over && m.status === "sealed"),
+        incomplete: count((m) => m.over && m.status === "incomplete"),
+      },
+      harnesses: main.length >= LIVE_MIN_GROUP ? harnesses : null,
+      work: {
+        agent_hours: k(Math.round(seconds / 360) / 10, runs.filter((r) => r.last_heartbeat_at != null).length),
+        working_hours: null,
+        model_calls: k(Math.floor(entries.reduce((sum, e) => sum + (e.model_requests ?? 0), 0) / 100) * 100, runsWith((e) => e.model_requests != null)),
+        model_calls_last_hour: k(hourCalls, grownRuns.size),
+        restarts: k(entries.filter((e) => e.segment > 0).length, runsWith((e) => e.segment > 0)),
+        data_bytes: k(Math.floor(entries.reduce((sum, e) => sum + (e.stored_bytes ?? 0), 0) / 1048576) * 1048576, runsWith((e) => (e.stored_bytes ?? 0) > 0)),
+      },
+      notices: { silence: noticeCount("silence"), idle_3h: noticeCount("idle_3h"), idle_6h: noticeCount("idle_6h"), disk_full: noticeCount("disk_full") },
+      survival: null,
+      hourly: null,
+      trace: null,
+      github,
+    };
+  }
+
+  #githubKey = (runId: string) => `state/github/${runId}.json`;
+
+  async #github(runId: string): Promise<StoredGithub | null> {
+    return ((await (await this.#bucket.get(this.#githubKey(runId)))?.json()) as StoredGithub | undefined) ?? null;
+  }
+
+  /** Twin of public.goal_cup_upload_github_due (sql/pending/20261023100000_goal_cup_tracer_live_github.sql). */
+  async githubDue(eventId: string, now: string, limit: number): Promise<GithubDue[]> {
+    const runs = (await this.#all<StoredRun>("state/runs/")).filter(
+      (r) => r.event_id === eventId && r.mode === "competition" && r.status !== "abandoned" && !isReplaced(r) && r.official_start <= now,
+    );
+    const due: (GithubDue & { due: string })[] = [];
+    for (const r of runs) {
+      const g = await this.#github(r.run_id);
+      if (g?.final === true) continue;
+      const at = g?.due_at ?? r.official_start;
+      if (at > now) continue;
+      due.push({ run_id: r.run_id, repo_url: r.repo_url, official_start: r.official_start, ends_at: r.deadline_at, final_commit: r.final_commit ?? null, due: at });
+    }
+    due.sort((x, y) => x.due.localeCompare(y.due) || x.run_id.localeCompare(y.run_id));
+    return due.slice(0, Math.max(1, Math.min(limit, 100))).map(({ due: _, ...d }) => d);
+  }
+
+  /** Twin of public.goal_cup_upload_record_github: the same checks, the same answers. */
+  async recordGithub(runId: string, reading: GithubReading, at: string, nextAt: string | null): Promise<boolean> {
+    const keys = Object.keys(reading).filter((key) => key !== "final" && !(GITHUB_NUMBERS as readonly string[]).includes(key));
+    if (keys.length > 0) throw new Error(`record_github: unknown key ${keys[0]}`);
+    if (typeof reading.final !== "boolean") throw new Error("record_github: final is not true or false");
+    for (const key of GITHUB_NUMBERS) {
+      const n = reading[key];
+      if (n !== null && !(Number.isSafeInteger(n) && n >= 0)) throw new Error(`record_github: ${key} is not a whole number of at least 0`);
+    }
+    if (!reading.final && nextAt === null) throw new Error("record_github: a reading that is not the last needs p_next_at");
+    const run = await this.#readRun(runId);
+    if (run === null || run.run.mode !== "competition") return false;
+    const read = GITHUB_NUMBERS.some((key) => reading[key] !== null);
+    const key = this.#githubKey(runId);
+    for (let i = 0; i < MAX_CAS_TRIES; i++) {
+      const obj = await this.#bucket.get(key);
+      const cur = obj === null ? null : ((await obj.json()) as StoredGithub);
+      if (cur?.final === true) return false;
+      const next: StoredGithub = {
+        commits: reading.commits ?? cur?.commits ?? null,
+        prs_opened: reading.prs_opened ?? cur?.prs_opened ?? null,
+        lines_added: reading.lines_added ?? cur?.lines_added ?? null,
+        lines_removed: reading.lines_removed ?? cur?.lines_removed ?? null,
+        read_at: read ? at : (cur?.read_at ?? null),
+        due_at: reading.final ? null : nextAt,
+        final: reading.final,
+      };
+      const put = await this.#bucket.put(key, JSON.stringify(next), { onlyIf: obj === null ? { etagDoesNotMatch: "*" } : { etagMatches: obj.etag } });
+      if (put !== null) return true;
+    }
+    throw new Error("local state is too contended; try again");
   }
 
   async queueNotices(notices: NoticeArgs[]): Promise<number> {
@@ -595,8 +836,9 @@ export class LocalDb implements Db {
 function withSignals(run: StoredRun, entry: StoredEntry, a: HeartbeatArgs): StoredRun {
   const flag = a.recording === "gaps" || a.recording === "failed" ? a.recording : null;
   const grew = a.model_requests !== null && (entry.model_requests == null || a.model_requests > entry.model_requests);
+  const beats = [...(entry.beats ?? []), { at: a.at, model_requests: a.model_requests }];
   return {
-    ...withEntry(run, grew ? { ...entry, model_requests: a.model_requests } : entry),
+    ...withEntry(run, grew ? { ...entry, beats, model_requests: a.model_requests } : { ...entry, beats }),
     last_heartbeat_at: a.at,
     last_client_ip: a.client_ip ?? run.last_client_ip ?? null,
     last_client_country: a.client_country ?? run.last_client_country ?? null,
@@ -652,6 +894,7 @@ const newEntry = (
   last_heartbeat: null,
   heartbeat_count: 0,
   model_requests: null,
+  beats: [],
 });
 
 /** The public shape of a run: what it says about itself, and its current entry. */
@@ -692,7 +935,7 @@ function toTick(r: StoredRun): TickRun {
 function toEntry(e: StoredEntry): EntryRow {
   const {
     harness_version: _h, tracer_version: _t, chunks: _c, final_repo_head: _f, last_heartbeat: _l, heartbeat_count: _n, model_requests: _m,
-    stored_bytes: _b, chunk_count: _k,
+    stored_bytes: _b, chunk_count: _k, beats: _bt,
     ...row
   } = e;
   return row;

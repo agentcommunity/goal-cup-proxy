@@ -1,5 +1,5 @@
 // Goal Cup upload Worker: routing, maintenance switch, authentication, error mapping, and the
-// 5-minute cron (notices.ts). Contract: docs/UPLOAD-API.md. No framework; eleven routes and a health check.
+// 5-minute cron (notices.ts). Contract: docs/UPLOAD-API.md. No framework; twelve routes and a health check.
 
 import { type Auth, authenticate } from "./auth.ts";
 import { putChunk } from "./chunks.ts";
@@ -7,12 +7,13 @@ import { type Ctx, makeCtx } from "./context.ts";
 import { approveDevice, createDevice, pollDevice } from "./device.ts";
 import type { Env } from "./env.ts";
 import { ApiError, errorResponse, json, notFound } from "./errors.ts";
+import { serveLive } from "./live.ts";
 import { runTick } from "./notices.ts";
 import { abandonRun, continueRun, getPosition, heartbeat, issueReceipt, openRun, sealRun } from "./runs.ts";
 import { RUN_ID } from "./util.ts";
 
 type Handler = (ctx: Ctx, auth: Auth, request: Request) => Promise<Response>;
-/** The device flow is how a credential comes to exist, so its calls carry none. */
+/** The device flow is how a credential comes to exist, so its calls carry none; nor does the public live.json. */
 type PublicHandler = (ctx: Ctx, request: Request) => Promise<Response>;
 type Route = { method: string } & (
   | { public: true; handler: PublicHandler }
@@ -24,6 +25,8 @@ type Route = { method: string } & (
 function route(path: string): Route | null {
   const parts = path.split("/"); // "/v1/runs/r…/seal" -> ["", "v1", "runs", "r…", "seal"]
   if (parts[0] !== "" || parts[1] !== "v1") return null;
+  // The public community totals: the cron's copy in R2, no credential, no database call (src/live.ts).
+  if (parts.length === 3 && parts[2] === "live.json") return { method: "GET", public: true, handler: serveLive };
   if (parts[2] === "device") {
     const open = (handler: PublicHandler): Route => ({ method: "POST", public: true, handler });
     if (parts.length === 3) return open(createDevice);

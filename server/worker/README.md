@@ -55,16 +55,18 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/notices.ts` | The 5-minute cron: close runs, record the judged GitHub commit, queue the run emails |
 | `src/github.ts` | The GitHub API: the judged commit (last push before the deadline) and the headers every GitHub call carries |
 | `src/mail.ts` | Sends each queued notice once through Resend |
+| `src/live.ts` | The public live totals: the cron's snapshot to R2 (`live/{event_id}.json`) and `GET /v1/live.json` |
+| `src/live-github.ts` | The cron's GitHub reader for the live totals: commits, pull requests and lines of a few runs' public repositories a tick, numbers only |
 | `src/sign.ts` | Ed25519 receipts and acknowledgements (byte-exact with the Rust formats) |
 | `src/db.ts` | The `Db` interface: one method per step, and the run-state rules (`endsAt`, `statusAt`) |
 | `src/db-supabase.ts` | Production: one Postgres function per step, through PostgREST RPC |
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
 | `src/context.ts`, `env.ts`, `errors.ts`, `util.ts` | Configuration, bindings, error types, helpers |
 | `sql/goal-cup-tracer-upload.sql` | Copy of the website's migration that `db-supabase.ts` calls. The website repo is the authority. |
-| `sql/pending/` | The migration written here first, not yet in the website repo nor applied (its README says how to land it) |
-| `scripts/check-sql.sh` | Applies the mirror and the pending migration to a throwaway local Postgres and smoke-calls the new functions |
+| `sql/pending/` | The migrations written here first, not yet in the website repo (its README says which is applied and how to land them) |
+| `scripts/check-sql.sh` | Applies the mirror and the pending migrations to a throwaway local Postgres and smoke-calls the new functions |
 | `scripts/delete-test-runs.sh` | Deletes all organizer test runs, rows and R2 objects ([OPERATING](../../docs/OPERATING.md#test-runs)) |
-| `test/` | `sign.test.ts` (the signing vectors shared with the Rust crate), `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
+| `test/` | `sign.test.ts` (the signing vectors shared with the Rust crate), `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode`, `live`, `live-github` (the Worker in this process on a clock the test moves) |
 
 ## Configuration
 
@@ -82,6 +84,7 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `APPROVAL_URL` | in `wrangler.toml` | The website page where a member approves a device request, without a query string. `verification_uri_complete` adds `?code=<user code>`. |
 | `STAGING` | off | `on` marks a staging deployment: the only place besides `DB_BACKEND=local` where `TEST_APPROVAL_KEY` may be set. Set only in `[env.staging.vars]`. |
 | `GITHUB_CHECK` | off | `on` makes `POST /v1/runs` ask GitHub that `repo_url` is a public repository (`wrangler.toml` sets `on`; `npm run dev` and the tests turn it off). A missing or private repository is `400`; GitHub unreachable or rate-limiting is `502`, which goalcup retries. |
+| `GITHUB_STATS` | off | `on` lets the cron read the competition runs' public repositories (commits, pull requests, lines; a few runs a tick, about hourly each) for the `github` block of `GET /v1/live.json` (`src/live-github.ts`). `wrangler.toml` sets `on` for staging (the canary) and `off` for production until website migration `20261023100000` is applied ([OPERATING](../../docs/OPERATING.md#deploy)); `npm run dev` and the tests turn it off. Needs `GITHUB_TOKEN` outside local tests. |
 | `MAINTENANCE`, `MAINTENANCE_RETRY_AFTER` | off, `300` | `on` makes every call answer `503 maintenance` with that `Retry-After`, before authentication and before any body is read. The cron does nothing while it is on. |
 | `DEVICE_START_PER_MINUTE`, `DEVICE_POLL_PER_MINUTE`, `DEVICE_TOKEN_PER_MINUTE` | `120`, `30`, `1200` | Device-flow limits: starts per client address, polls per device code, polls per client address (abuse cap). |
 | `NOTICE_FROM` | none | Sender of the run emails. Needed once `RESEND_API_KEY` is set. |
@@ -95,7 +98,7 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 | `RECEIPT_SIGNING_KEY` | The Ed25519 seed, 32 bytes as 64 hex characters, generated offline. Its public key is pinned in the verifier. |
 | `SUPABASE_URL`, `SUPABASE_KEY` | The project URL, and a Supabase secret API key whose role may only run `public.goal_cup_upload_*`. Not the community-wide service key. |
 | `RATE_LIMIT_KEY` | Random, at least 32 characters: the HMAC key of every rate-limit key. A deployment answers every device call `500 misconfigured` without it. |
-| `GITHUB_TOKEN` | Read-only token for public repositories. Required in production and staging: the cron reads each run's judged commit (repository, activity and possibly `commits/HEAD`), and the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses. Without it the cron logs `WARNING: GITHUB_TOKEN is not set` and carries on. |
+| `GITHUB_TOKEN` | Read-only token for public repositories. Required in production and staging: the cron reads each run's judged commit (repository, activity and possibly `commits/HEAD`) and, with `GITHUB_STATS=on`, the live totals' GitHub numbers; the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses. Without it the cron logs `WARNING: GITHUB_TOKEN is not set` and carries on. |
 | `RESEND_API_KEY` | Switches the run emails on. Send-only. |
 | `TEST_APPROVAL_KEY` | **Tests and staging only.** Switches on `POST /v1/device/approve`, which approves a device request as any member. Set anywhere else, every call answers `500 misconfigured`. Unset, the route is `404`. Never set it in production. |
 
@@ -370,9 +373,10 @@ or on production. Treat both as open. When you run one, write the date and the r
 
 ## The cron
 
-`scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes. Four steps, in this
+`scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes. Five steps, in this
 order, each in its own try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`, `sendNotices`
-(`src/mail.ts`). All take the time as a parameter. They read `Db.runsForTick(now)` (open runs, and runs
+(`src/mail.ts`), and `liveSnapshot` (`src/live.ts`: one database call, one R2 write; its failure is the
+log line `live-snapshot-failed`). All take the time as a parameter. They read `Db.runsForTick(now)` (open runs, and runs
 that ended in the last 48 hours; never abandoned ones). The constants (20 minutes of silence, idle at 3
 and 6 hours, an hour to wait for the commit, 5 minutes before GitHub is asked, an hour of grace for a
 `404` or a failing activity API, 50 runs asked of GitHub per tick, 20 emails per tick) are in

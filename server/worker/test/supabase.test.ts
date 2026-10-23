@@ -4,7 +4,7 @@
 // to its function and parameter names.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
@@ -391,6 +391,38 @@ test("recordFinalCommit -> upload_record_final_commit", async () => {
   });
 });
 
+test("liveSnapshot -> upload_live_snapshot(p_event_id, p_at); null for an event of another deployment, a non-object is a 502", async () => {
+  const doc = { schema_version: 1, generated_at: T };
+  const calls = stub(doc, null, [doc]);
+  assert.deepEqual(await db().liveSnapshot("cup", T), doc);
+  assert.equal(await db().liveSnapshot("cup", T), null);
+  assert.deepEqual(calls[0], { fn: "upload_live_snapshot", args: { p_event_id: "cup", p_at: T } });
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    await assert.rejects(db().liveSnapshot("cup", T), (e) => e instanceof ApiError && e.status === 502);
+  } finally {
+    console.error = quiet;
+  }
+});
+
+test("githubDue -> upload_github_due, rows checked; recordGithub -> upload_record_github(p_run_id, p_github, p_at, p_next_at)", async () => {
+  const due = { run_id: "r0000000000000001", repo_url: "https://github.com/a/b", official_start: T, ends_at: "2026-11-13T09:00:00Z", final_commit: null };
+  const reading = { commits: 3, prs_opened: null, lines_added: 10, lines_removed: 0, final: false };
+  const calls = stub([due], true, [{ ...due, final_commit: "main" }]);
+  assert.deepEqual(await db().githubDue("cup", T, 20), [due]);
+  assert.equal(await db().recordGithub("r0000000000000001", reading, T, "2026-11-06T10:00:00Z"), true);
+  assert.deepEqual(calls[0], { fn: "upload_github_due", args: { p_event_id: "cup", p_at: T, p_limit: 20 } });
+  assert.deepEqual(calls[1], { fn: "upload_record_github", args: { p_run_id: "r0000000000000001", p_github: reading, p_at: T, p_next_at: "2026-11-06T10:00:00Z" } });
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    await assert.rejects(db().githubDue("cup", T, 20), (e) => e instanceof ApiError && e.status === 502); // a final_commit that is not a sha
+  } finally {
+    console.error = quiet;
+  }
+});
+
 test("closeRun -> upload_close_run", async () => {
   const calls = stub("open", "sealed", "incomplete", null);
   assert.equal(await db().closeRun("m", "r1", "t"), "open");
@@ -443,6 +475,18 @@ test("a refused request logs PostgREST's code and message, not its details or hi
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+/**
+ * The SQL the Worker runs against: the mirror, then each file in sql/pending/ that the mirror does
+ * not hold yet (written here first; it joins the mirror when the website migration merges and the
+ * mirror is regenerated). scripts/check-sql.sh applies them in the same order.
+ */
+function sqlSource(): string {
+  const mirror = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
+  const pending = readdirSync(join(SRC, "sql", "pending")).filter((f) => f.endsWith(".sql")).sort();
+  const later = pending.filter((f) => !mirror.includes(`-- ======================== ${f} ========================`));
+  return [mirror, ...later.map((f) => readFileSync(join(SRC, "sql", "pending", f), "utf8"))].join("\n");
+}
+
 /** The `p_` keys written in a piece of an argument object. */
 const pKeys = (text: string) => [...text.matchAll(/\b(p_[a-z0-9_]+)\s*[:,}\n]/g)].map((k) => k[1] as string);
 
@@ -481,7 +525,7 @@ interface SqlFn {
  * same parameters replaces an earlier one (the last wins); different parameters are another overload.
  */
 function sqlFunctions(): Map<string, SqlFn[]> {
-  const sql = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
+  const sql = sqlSource();
   const fns = new Map<string, Map<string, SqlFn>>();
   for (const m of sql.matchAll(/CREATE (?:OR REPLACE )?FUNCTION public\.goal_cup_([a-z_]+)\(/g)) {
     let depth = 1;
@@ -548,7 +592,7 @@ test("every RPC the Worker calls exists in the SQL, with the same argument names
 
 /** The text of the last `CREATE [OR REPLACE] FUNCTION <name>(` in the mirror, up to its closing `$$;`. */
 function lastFunctionBody(name: string): string {
-  const sql = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
+  const sql = sqlSource();
   const at = [...sql.matchAll(new RegExp(`CREATE (?:OR REPLACE )?FUNCTION ${name.replace(".", "\\.")}\\(`, "g"))].at(-1)?.index;
   assert.ok(at !== undefined, `no ${name} in the SQL`);
   const open = sql.indexOf("$$", at);
@@ -556,7 +600,7 @@ function lastFunctionBody(name: string): string {
 }
 
 test("every notice kind the Worker queues is allowed by the notices CHECK constraint and has an email in notice_text", () => {
-  const sql = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
+  const sql = sqlSource();
   // The constraint as the last migration that touches it leaves it (the table's own, or a later ADD CONSTRAINT).
   const checks = [...sql.matchAll(/(?:ADD CONSTRAINT notices_kind_check\s+CHECK|kind\s+text NOT NULL CHECK) \(kind IN \(([^)]*)\)\)/g)];
   assert.ok(checks.length >= 2, "the scan found no widened notices_kind_check");

@@ -424,6 +424,78 @@ export interface ClaimedNotice {
 /** How sending one claimed notice ended: `detail` is the provider's message id, the skip reason, or a short error. */
 export type NoticeOutcome = "sent" | "skipped" | "failed";
 
+/**
+ * The fewest runs that may feed a public number (docs/UPLOAD-API.md, `GET /v1/live.json`): a count of
+ * runs, or a sum over runs, fed by fewer is null, and a harness with fewer folds into `other`.
+ */
+export const LIVE_MIN_GROUP = 5;
+/** A count or a sum over runs, or null when fewer than LIVE_MIN_GROUP runs feed it. */
+export type LiveNumber = number | null;
+
+/**
+ * The community totals of one event, as `GET /v1/live.json` serves them (schema 1). Competition runs
+ * of the event only, never test or practice runs; nothing about one run or one member.
+ */
+export interface LiveSnapshot {
+  schema_version: 1;
+  event: { id: string; kind: string; start_window_opens: string | null; start_window_closes: string | null; run_hours: number | null };
+  generated_at: string;
+  min_group: number;
+  /** Main runs (not replaced). `signed_up` stays null until the sign-up table is read. */
+  entries: Record<"started" | "running" | "working" | "quiet" | "finished" | "sealed" | "incomplete", LiveNumber> & { signed_up: null };
+  /** Main runs by the connector of their first segment; null while fewer than LIVE_MIN_GROUP runs started. */
+  harnesses: { id: string; started: number; running: LiveNumber }[] | null;
+  /** Every competition run of the event, replaced ones too. `model_calls_last_hour` is not in the design's example; the rest are. */
+  work: Record<"agent_hours" | "working_hours" | "model_calls" | "model_calls_last_hour" | "restarts" | "data_bytes", LiveNumber>;
+  notices: Record<"silence" | "idle_3h" | "idle_6h" | "disk_full", LiveNumber>;
+  /** Later steps of the live stats design (survival, the hourly strip, the verify job, uptime); null until built. */
+  survival: null;
+  hourly: null;
+  trace: null;
+  /** The entries' public repositories (src/live-github.ts); null while fewer than LIVE_MIN_GROUP repositories have a reading. */
+  github: LiveGithub | null;
+  /** Added by the Worker (src/live.ts), not the database. */
+  server: null;
+}
+
+/**
+ * The GitHub block of the live totals: sums over the main runs' repositories (one each), each null
+ * unless LIVE_MIN_GROUP repositories feed it; lines floored to a multiple of 100.
+ */
+export interface LiveGithub {
+  /** The newest reading counted. */
+  as_of: string;
+  /** Repositories with a reading. */
+  repos: number;
+  commits: LiveNumber;
+  prs_opened: LiveNumber;
+  lines_added: LiveNumber;
+  lines_removed: LiveNumber;
+}
+
+/** A run the GitHub reader is due to read (oldest due first): its repository, start, end and judged commit. */
+export interface GithubDue {
+  run_id: string;
+  repo_url: string;
+  official_start: string;
+  ends_at: string;
+  /** The judged commit once the cron decided it (40 hex, or `none`); null until then. */
+  final_commit: string | null;
+}
+
+/**
+ * One reading of a run's repository. A number is null when it was not read this time (GitHub was
+ * still computing it, or did not answer): the stored number stays. `final`: the last reading,
+ * after which the run is never read again.
+ */
+export interface GithubReading {
+  commits: number | null;
+  prs_opened: number | null;
+  lines_added: number | null;
+  lines_removed: number | null;
+  final: boolean;
+}
+
 export interface Db {
   /** Start a device request. The two hashes must be new. */
   createDevice(args: CreateDeviceArgs): Promise<void>;
@@ -482,4 +554,21 @@ export interface Db {
   commitChunk(args: CommitChunkArgs): Promise<CommitChunkResult>;
   /** Seal the entry. A repeat with the same hashes is `already_sealed`; different hashes once sealed are `conflict`. */
   sealRun(args: SealArgs): Promise<SealResult>;
+  /**
+   * The community totals of the event at `now` (see `LiveSnapshot`), or null when the event is not
+   * one of this deployment's. Only reads. The cron calls it once per tick; no request does.
+   */
+  liveSnapshot(eventId: string, now: string): Promise<Omit<LiveSnapshot, "server"> | null>;
+  /**
+   * The GitHub reader's work list: up to `limit` competition runs of the event (main runs, not
+   * abandoned, started) that have no last reading yet and are due at `now`, oldest due first. A run
+   * never read is due from its start.
+   */
+  githubDue(eventId: string, now: string, limit: number): Promise<GithubDue[]>;
+  /**
+   * Store a reading of the run's repository (a null number keeps the stored one) and when it is due
+   * again (`nextAt`; null when `reading.final`). False, and nothing changes, when the run is not a
+   * competition run of this deployment or its last reading was already stored.
+   */
+  recordGithub(runId: string, reading: GithubReading, at: string, nextAt: string | null): Promise<boolean>;
 }
