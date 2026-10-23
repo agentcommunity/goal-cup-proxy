@@ -610,7 +610,7 @@ fn loadable_connectors(connectors: &Path, dev: bool) -> Result<Vec<HarnessConnec
 
 /// The bring-your-own-harness guide: how a harness Goal Cup does not ship becomes a connector.
 pub const OWN_HARNESS_GUIDE: &str =
-    "https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/HARNESS-ONBOARDING.md";
+    "https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/HARNESS-ONBOARDING.md";
 
 /// The chat-mode harnesses, as setup lists them: the installed ones (found on `PATH`), the other
 /// supported ones with where to read how to install them, and the guide for one of the

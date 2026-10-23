@@ -814,8 +814,10 @@ fn the_harness_step_lists_every_supported_harness_and_asks_which_one() {
             && step.contains(CHAT_ID)
             && step.contains(CHAT_HOME_ID)
             && step.contains("Your own harness?")
-            && step.contains("HARNESS-ONBOARDING.md"),
-        "{text}"
+            && step.contains(
+                "https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/HARNESS-ONBOARDING.md"
+            ),
+        "the link to adding a harness is in this repository, under its name:\n{text}"
     );
     // None on the PATH: every one is "also supported", with where to read how to install it.
     let out = prep_command(&rig, &[], &facts)
