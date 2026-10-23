@@ -566,25 +566,11 @@ fn run_bounded(
             .take()
             .map(|p| Box::new(p) as Box<dyn Read + Send>),
     );
-    let deadline = std::time::Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if std::time::Instant::now() < deadline && !crate::arming::interrupted() => {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            _ => {
-                // Not yet reaped, so its pid still names its group: end the group, then it.
-                if let Ok(pgid) = libc::pid_t::try_from(child.id()) {
-                    // SAFETY: `killpg` takes plain integers and has no memory effects.
-                    unsafe { libc::killpg(pgid, libc::SIGKILL) };
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-        }
-    };
+    let status = crate::harness_version::wait_or_end_group_unless(
+        &mut child,
+        timeout,
+        &crate::arming::interrupted,
+    );
     let status = status?;
     let mut said = out.join().unwrap_or_default();
     said.extend(err.join().unwrap_or_default());
