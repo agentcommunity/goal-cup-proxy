@@ -462,6 +462,7 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
         "GH_CONFIG_DIR",
         "XDG_RUNTIME_DIR",
         "DBUS_SESSION_BUS_ADDRESS",
+        "GIT_CONFIG_NOSYSTEM",
     ] {
         allowed.insert(pin.to_string());
     }
@@ -516,7 +517,9 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
 /// run's carries exactly five ways to it, as paths or sockets and only when they exist:
 /// `SSH_AUTH_SOCK`, their real git config as `GIT_CONFIG_GLOBAL`, their `gh` folder as
 /// `GH_CONFIG_DIR`, and the keyring's `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`; never a
-/// token from their environment. A practice run pushes nowhere and gets none of them. With them, the agent's git, under the run's own `HOME`, gets a login
+/// token from their environment. A practice run pushes nowhere and gets none of them, and
+/// `GIT_CONFIG_NOSYSTEM=1` so the system git config (macOS: `credential.helper=osxkeychain`)
+/// cannot hand it a login either. With them, the agent's git, under the run's own `HOME`, gets a login
 /// from a `gh` credential helper the participant set up (`gh auth login`); here a fake `gh` that
 /// answers only from the folder `GH_CONFIG_DIR` names.
 #[test]
@@ -620,6 +623,8 @@ fn every_launch_carries_the_way_to_the_participants_git_login_and_no_key() {
     bare.insert("HOME".into(), root.join("empty-home").display().to_string());
     for (parent, git_login) in [(&bare, true), (&parent, false)] {
         let (plan, _) = carried(parent, git_login);
+        let nosystem = plan.env_set.get("GIT_CONFIG_NOSYSTEM").map(String::as_str);
+        assert_eq!(nosystem, (!git_login).then_some("1"), "{plan:?}");
         for k in [
             "SSH_AUTH_SOCK",
             "GIT_CONFIG_GLOBAL",

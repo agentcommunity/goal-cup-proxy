@@ -13,6 +13,7 @@ use goalcup_cli::account::github::{
 };
 use goalcup_cli::commands::run_repo;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -695,6 +696,41 @@ fn a_clone_names_no_helper_and_never_commits_env_files() {
     assert_eq!(
         git_out(&rig, &dest, &["status", "--porcelain"]).trim(),
         "?? work.txt"
+    );
+}
+
+/// A practice run's folder is a new repository with no remote, and the practice agent, which
+/// reads no global or system git config, can still commit in it: it names an author of its own.
+#[test]
+fn a_practice_folder_has_no_remote_and_commits_with_no_config_of_the_participants() {
+    let rig = rig();
+    let dest = rig.root.join("practice");
+    goalcup_cli::account::github::init_local(OsStr::new("git"), &dest).unwrap();
+    let empty_home = rig.root.join("empty-home");
+    std::fs::create_dir_all(&empty_home).unwrap();
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(&dest)
+            .args(args)
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap())
+            .env("HOME", &empty_home)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap()
+    };
+    let remotes = git(&["remote"]);
+    assert!(
+        remotes.status.success() && remotes.stdout.is_empty(),
+        "{remotes:?}"
+    );
+    let commit = git(&["commit", "--quiet", "--allow-empty", "-m", "practice"]);
+    assert!(commit.status.success(), "{commit:?}");
+    let author = git(&["log", "-1", "--format=%an <%ae>"]);
+    assert_eq!(
+        String::from_utf8_lossy(&author.stdout).trim(),
+        "Goal Cup practice <practice@goalcup.invalid>"
     );
 }
 
