@@ -7,8 +7,9 @@
 //! checks that it is public and empty (GitHub's open API, no login) and that the agent's git sees
 //! no branch in it and can push to it (`git ls-remote` and a dry-run push in the agent's own
 //! environment). Goal Cup reads, stores and passes
-//! no key. The name is kept in `prep.json` only so that the next real run can suggest one,
-//! `<name>-2`. A Ctrl-C at any question or check ends it, with nothing created.
+//! no key. Once the run has opened on the server ([`keep_for_next_run`]), the name is kept in
+//! `prep.json` only so that the next real run can suggest one, `<name>-2`; a denied approval or a
+//! Ctrl-C keeps nothing. A Ctrl-C at any question or check ends it, with nothing created.
 
 use crate::CliError;
 use crate::account::github::{self, Found, GithubLogin, PushRefused};
@@ -214,11 +215,6 @@ pub fn choose(
             )));
         }
     }
-    let mut file = crate::prep_file::read_prep_lenient(cfg);
-    if file.repo_url != repo_url {
-        file.repo_url = repo_url.clone();
-        crate::prep_file::write_prep(cfg, &file)?;
-    }
     say(
         out,
         &format!(
@@ -227,6 +223,18 @@ pub fn choose(
         ),
     )?;
     Ok(RunRepo { repo_url, remote })
+}
+
+/// Keep `repo_url` in `prep.json` as the last real run's repository, for [`suggestion`]: called
+/// once a run has opened with it, never before, so a start that ends at the approval suggests
+/// the same name again.
+pub fn keep_for_next_run(cfg: &Path, repo_url: &str) -> Result<(), CliError> {
+    let mut file = crate::prep_file::read_prep_lenient(cfg);
+    if file.repo_url == repo_url {
+        return Ok(());
+    }
+    file.repo_url = repo_url.to_string();
+    crate::prep_file::write_prep(cfg, &file)
 }
 
 /// The name to suggest after the last real run's repository, `<name>-2`: that one has been used.

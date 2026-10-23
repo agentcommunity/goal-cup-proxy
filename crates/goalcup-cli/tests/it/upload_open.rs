@@ -848,6 +848,42 @@ mod server_runs {
         source
     }
 
+    /// The last real run's repository is kept only once a run has opened with it: a start that
+    /// is denied at the approval leaves the name the next start suggests as it was, and a run
+    /// that opens keeps its own.
+    #[test]
+    fn the_repository_is_kept_only_once_the_run_opens() {
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let earlier = "https://github.com/goal-cup/earlier";
+        let mut file = goalcup_cli::prep_file::read_prep_lenient(&rig.cfg);
+        file.repo_url = earlier.to_string();
+        goalcup_cli::prep_file::write_prep(&rig.cfg, &file).unwrap();
+        server.set_approval(crate::common::upload_server::Approval::Deny);
+        let goal = rig.run_folder();
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let opts = rig.options(&goal, RESERVE);
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        result.expect_err("a denied approval started a run");
+        assert_eq!(server.device_requests().len(), 1, "{out}");
+        assert!(server.run_ids().is_empty());
+        assert_eq!(
+            goalcup_cli::prep_file::read_prep_lenient(&rig.cfg).repo_url,
+            earlier,
+            "{out}"
+        );
+        server.set_approval(crate::common::upload_server::Approval::Auto);
+        let ended = run_to_end_in(&rig, RunMode::Test, &goal);
+        assert_eq!(server.run_ids().len(), 1, "{}", ended.out);
+        assert_eq!(
+            goalcup_cli::prep_file::read_prep_lenient(&rig.cfg).repo_url,
+            PREP_REPO
+        );
+    }
+
     /// GitHub's API can say a repository created with a README a moment ago has size 0. The
     /// agent's git sees its branch, so the start is refused as not empty before the approval:
     /// nothing is asked of the server, nothing is cloned and no harness starts.

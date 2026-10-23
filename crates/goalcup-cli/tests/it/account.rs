@@ -374,10 +374,11 @@ fn a_real_run_names_its_repository_creates_it_and_checks_it() {
     );
     assert!(said.contains("you/my-goal-cup: public, empty"), "{said}");
     assert_eq!(api.requests.lock().unwrap().len(), 2);
-    // Kept only so the next real run can suggest a name.
-    assert_eq!(
-        goalcup_cli::prep_file::read_prep_lenient(&cfg).repo_url,
-        repo.repo_url
+    // Not kept yet: only a run that opens keeps its repository, for the next run's suggestion.
+    assert!(
+        goalcup_cli::prep_file::read_prep_lenient(&cfg)
+            .repo_url
+            .is_empty()
     );
     // Over HTTPS when SSH does not sign in.
     let api = FakeGithub::answers(&[EMPTY]);
@@ -496,6 +497,14 @@ fn the_next_real_run_suggests_a_new_name_once_the_last_is_used() {
     assert!(said.contains("Name it [my-goal-cup-2]"), "{said}");
     assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup-2");
     assert_eq!(api.requests.lock().unwrap().len(), 1);
+    // A start that ends here (denied at the approval, or a Ctrl-C) never used that repository:
+    // the next one suggests the same name again.
+    let api = FakeGithub::answers(&[EMPTY]);
+    let doors = self::doors(&rig, &api, vec![you(false)], vec![""]);
+    let mut out = Vec::new();
+    run_repo::choose(&doors, &cfg, None, &mut out).unwrap();
+    let said = String::from_utf8(out).unwrap();
+    assert!(said.contains("Name it [my-goal-cup-2]"), "{said}");
 }
 
 /// GitHub's open API allows 60 calls an hour per address. A rate limit (`403`) is not a used

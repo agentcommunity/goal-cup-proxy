@@ -424,13 +424,27 @@ impl Uploading {
             .map(|()| give)
         });
         match kept {
-            Ok(give_back) => Ok(OpenedRun {
-                run,
-                request,
-                opened_at,
-                give_back: std::cell::RefCell::new(Some(give_back)),
-                segment: None,
-            }),
+            Ok(give_back) => {
+                // Only now is the repository used: the next real run suggests a new name. A hint
+                // that cannot be written stops nothing.
+                if let Some(repo) = &new.repo
+                    && let Err(error) =
+                        crate::commands::run_repo::keep_for_next_run(cx.cfg, &repo.repo_url)
+                {
+                    crate::host_log::say(&format!(
+                        "the repository of run {} was not kept for the next run's suggestion: \
+                         {error}",
+                        run.run_id
+                    ));
+                }
+                Ok(OpenedRun {
+                    run,
+                    request,
+                    opened_at,
+                    give_back: std::cell::RefCell::new(Some(give_back)),
+                    segment: None,
+                })
+            }
             Err(error) => {
                 // The note of the open and the credential are deleted only once the server has
                 // taken the run back; while it is away they are the only way to give it back.
