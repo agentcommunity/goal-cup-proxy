@@ -188,8 +188,9 @@ do not run it from a Windows drive.
    GitHub repository. `goalcup` asks you to name it, opens GitHub's "new repository" page with the
    name filled in, and waits while you click "Create repository" (add no README). Then it checks
    that the repository is public and empty, and that your own git can push to it (a dry-run push;
-   nothing is sent). You can also give it as `--repo <owner>/<name>`. Your agent pushes with
-   your own git login, as you do; Goal Cup keeps no token.
+   nothing is sent), run the way your agent's git will run, so a login only your shell has is
+   found now. You can also give it as `--repo <owner>/<name>`. Your agent pushes with your own git
+   login, as you do; Goal Cup keeps no token. A practice run gets no git login at all.
 
    If this computer has no GitHub login, it says so and waits while you set one up:
 
@@ -199,6 +200,7 @@ do not run it from a Windows drive.
      2. Install GitHub's command line tool: https://cli.github.com
      3. Run: gh auth login   (choose GitHub.com, HTTPS, "Login with a web browser",
         and say Yes to "Authenticate Git with your GitHub credentials")
+     Or type <your-user>/<name> as the repo name if your git already pushes to GitHub over HTTPS.
    Press Enter when done, or Ctrl-C to stop.
    ```
 2. **Approve.** `goalcup` prints `Approve your competition run of Claude Code in your browser.`

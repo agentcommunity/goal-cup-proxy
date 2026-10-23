@@ -774,20 +774,26 @@ ok." Goal Cup Proxy reads, stores, logs and passes no key, GitHub token included
   new, empty, public repository (or takes `--repo`), finds the participant's GitHub user from
   their own login (`ssh -T git@github.com`, then `gh api user`; with neither, it prints how to set
   one up and looks again), opens `github.com/new` with the name filled in when it does not exist,
-  and checks it: public and empty by GitHub's open API with no login, pushable by a dry-run push
-  with the participant's own git. Each real run gets its own repository; `prep.json` keeps the
-  last name only to suggest the next.
+  and checks it: public and empty by GitHub's open API with no login (a rate limit is said and
+  passed on: the server checks public at open, the clone checks empty), pushable by a dry-run push
+  with the agent's own git, in the environment the launch builds (a scratch `HOME` and the
+  variables below), so a login only the participant's shell has fails here and not at the agent's
+  first push. Each real run gets its own repository; `prep.json` keeps the last name only to
+  suggest the next. A Ctrl-C at any of its questions or checks ends the start with nothing
+  created.
 - **The clone is the participant's own git.** Over SSH when their SSH login works, otherwise
   HTTPS. No credential helper and no token is written to it. `.env*` goes in its
   `.git/info/exclude`. A practice run clones nothing: its folder is a new local repository with
   no remote, and the server is told the organisers' practice repository as its `repo_url`.
-- **The environment is still built from nothing (D1, D36, D38, D61), plus exactly three ways to
-  the participant's git login**, as paths or a socket and only when set or present:
-  `SSH_AUTH_SOCK`; `GIT_CONFIG_GLOBAL`, their own or their `~/.gitconfig` (else
-  `~/.config/git/config`); and `GH_CONFIG_DIR`, their own or `~/.config/gh`. A token variable
-  such as `GH_TOKEN` is not carried.
+- **The environment is still built from nothing (D1, D36, D38, D61), plus exactly five ways to
+  the participant's git login**, as paths or sockets and only when set or present, and never for
+  a practice run: `SSH_AUTH_SOCK`; `GIT_CONFIG_GLOBAL`, their own or their `~/.gitconfig` (else
+  `~/.config/git/config`; with both, start says the second is not used); `GH_CONFIG_DIR`, their
+  own or `~/.config/gh`; and `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which a Linux
+  keyring helper needs. A token variable such as `GH_TOKEN` is not carried.
 - **What it gives up.** The agent can push to any repository the participant's login can (the
-  owner accepts this). A push over SSH is not seen by the recording proxy; the judged commit is
+  owner accepts this). A `git config --global` the agent runs writes the participant's real git
+  config, which `GIT_CONFIG_GLOBAL` names. A push over SSH is not seen by the recording proxy; the judged commit is
   read from GitHub's API, not from recorded traffic. A dry-run push is git's own check of the push
   connection, made with no key of Goal Cup's; whether GitHub refuses it without write access was
   not measured against GitHub here.
