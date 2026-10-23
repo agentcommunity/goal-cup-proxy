@@ -88,21 +88,15 @@ the cells first, then sign in.
 Two kinds of cells:
 
 - **Infrastructure cells** (most of them): test runs with
-  [campaign-workload.txt](campaign-workload.txt) (commit locally, never push). Each cell has its
-  own new, empty, public repository (`repo`) and a fine-grained token that reaches that repository
-  only (`github_token_file`, LOCAL-CAMPAIGN "Cells"); the start takes it as `--repo`, and the
-  agent's git login is the cell's own, made from that token for the run (D69). The repository stays
-  empty, so the cell may run again.
+  [campaign-workload.txt](campaign-workload.txt) (commit locally, never push). The kit makes each
+  run's public, empty repository with the GitHub login already on the machine (the container's for
+  a Docker cell, LOCAL-CAMPAIGN "One-time setup"), passes it as `--repo`, and lists it at the end;
+  the agent pushes with that same login (D69).
 - **Full-flow cells**: the agent pushes to its repository, so the judged-commit path is tested
-  end to end. A competition or test start refuses a repository that is not empty, so **each
-  full-flow run needs its own new empty repository**. The orchestrator creates them as public
-  repositories under one test owner (`gh repo create <owner>/gc-test-<cell>-<n> --public`, no
-  README, no licence: the start, the clone and the Worker all refuse a private one), and lists
-  them in the results file. The owner creates a fine-grained token for each (Contents read and
-  write, that repository only), saved as a file, and sets the cell's `repo` and
-  `github_token_file` before the run. Use [campaign-build-workload.txt](campaign-build-workload.txt):
-  it pushes after each step, keeps `GOALCUP.md`, calls `goalcup time-left` and uses subagents.
-  Watch the first full-flow smoke closely (10 minutes, one cell) before starting more.
+  end to end. Each run gets a new repository the same way. Use
+  [campaign-build-workload.txt](campaign-build-workload.txt): it pushes after each step, keeps
+  `GOALCUP.md`, calls `goalcup time-left` and uses subagents. Watch the first full-flow smoke
+  closely (10 minutes, one cell) before starting more.
   Check afterwards: staging's judged commit equals GitHub's last push before the deadline. The
   repositories are public, so the staging Worker's `GITHUB_TOKEN` needs no access to them beyond
   GitHub's API.

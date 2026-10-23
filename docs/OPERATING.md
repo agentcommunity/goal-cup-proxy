@@ -154,30 +154,33 @@ instead and seals it SECONDS after the prompt, so a bounded test of any length n
 connector id that is not the fake needs its
 `harness.toml` to be found (see Connectors below), or the row FAILs and says so.
 
-**Repositories and git logins (D69).** Three kinds of cell, and none ever uses this machine's own git
-login: goalcup always runs with `GIT_CONFIG_GLOBAL` and `GH_CONFIG_DIR` in the run's temporary
-folder, and without `SSH_AUTH_SOCK`, the keyring's variables, `GH_TOKEN` or `GITHUB_TOKEN`.
+**Repositories and git logins (D69).** A test run uses the GitHub login already on the machine,
+exactly as a player's run does. Practice and the refusals get none.
 
 | Cell | What it runs | Git login |
 |---|---|---|
-| practice (default) | `start --practice`: a local folder, no repository | none (empty) |
-| `--test --duration N` | `start --test --repo $MATRIX_REPO` | the cell's own, from `MATRIX_GITHUB_TOKEN_FILE` |
-| `--refusals` | five starts that must refuse before the approval | none (empty) |
+| practice (default) | `start --practice`: a local folder, no repository | none |
+| `--test --duration N` | `start --test --repo <the repository the kit made>` | this machine's own |
+| `--refusals` | six starts that must refuse before the approval | none |
 
-A test run needs `MATRIX_REPO` (`<owner>/<name>`: new, empty, public, the cell's own, never the
-practice repository) and `MATRIX_GITHUB_TOKEN_FILE`, a file holding a fine-grained token with
-Contents read and write on that repository only. `scripts/kit_settle.py git-login` makes the run's
-login from it with `gh auth login --with-token` (gh 2.40 or newer; the token goes to gh's standard
-input and stays in the run's folder, never a keyring), sets gh as git's helper for github.com,
-rewrites SSH addresses to HTTPS and turns SSH off for git. The folder is removed when the run ends,
-even with `--keep`. A run whose agent pushes leaves the repository not empty: the next test run needs
-a new one. A question the start asks before the approval (no login found, a repository GitHub does
-not show) FAILs the row at once. `ssh -T git@github.com`, which goalcup tries first for a user name,
-still reads this user's `~/.ssh` by itself; git never uses it.
+Before a test run's login, the kit makes its repository with the machine's GitHub login:
+`gh repo create <user>/goalcup-kit-<cell>-<6 hex> --public`, with no README, so it is empty
+(`MATRIX_CELL` names the cell; default the connector). `MATRIX_REPO=<owner>/<name>` names one instead.
+With no login, the row FAILs with one line: run `gh auth login` here (HTTPS, and Yes to authenticate
+Git). The kit never deletes a repository; it prints the name at the end (`gh repo delete <name> --yes`
+when done). A question the start asks before the approval (no login found, a repository GitHub does
+not show) also FAILs the row at once.
+
+"None" means goalcup runs with a git config of the run's own that resets `credential.helper`, an
+empty gh folder, `GIT_CONFIG_NOSYSTEM=1` (macOS's system git config names the keychain helper), and
+without `SSH_AUTH_SOCK`, the keyring's variables, `GH_TOKEN` or `GITHUB_TOKEN`. That reaches goalcup's
+own git and a test start's push test and clone. A practice run's agent gets no git variable from
+goalcup at all (D69), so its git still reads the system config: on macOS the keychain helper.
 
 `--refusals` checks, with no harness and no terminal, that a real run's start refuses before any
 approval or run record, and says "Nothing was created.": a repository with commits (`not-empty`), a
-private one, a missing one, no GitHub login (`no-login`: the setup guide is printed, then the start
+private one and a missing one (goalcup treats both alike), a public empty one the agent's git cannot
+push to (`push`), no GitHub login (`no-login`: the setup guide is printed, then the start
 refuses for want of a terminal to name a repository), and `--repo <name>` with no login to find the
 user in (`bare-name`). GitHub is a stand-in the script serves on 127.0.0.1, reached through the CLI's
 test doors, so it needs a test build of goalcup:
@@ -289,7 +292,7 @@ PASS does not prove the prompt was submitted; check the session in the kept dire
 trace. `m2-fake-tui` is the one connector that needs no harness.
 
 **Other environment.** `MATRIX_BIN_DIR`, `--keep`, `--timeout` (1800 s). It needs `curl` 7.55 or
-later, `python3` and `script(1)`, and `gh` for a test run.
+later, `python3` and `script(1)`, and `gh`, signed in, for a test run.
 
 **Linux, real harness, in Docker.** `scripts/linux-matrix.sh` runs the matrix for `codex-cli` in a
 container on a Mac. It builds the Linux binaries from the checkout, installs the harness
@@ -308,11 +311,12 @@ reasoning effort before each run; the run fails unless every Codex turn it recor
 The harness can read the checkout and the key files, so run it from a clean checkout. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
 It also installs `claude-code-cli` (set to `haiku` with thinking off, checked after the run), `amp-cli`
 and `hermes-cli`. For long runs in parallel: `linux-matrix.sh build` once, then
-`LINUX_MATRIX_CELL=<cell> LINUX_MATRIX_PREBUILT=1 MATRIX_REPO=<owner>/<name> MATRIX_GITHUB_TOKEN_FILE=<token file> sh scripts/linux-matrix.sh run <id> -- --test --duration <s>`
-gives each cell its own volume, sign-in and container; `--test` is refused without `MATRIX_REPO` and
-`MATRIX_GITHUB_TOKEN_FILE`. The token file is mounted read-only like the key, only for a test run, and
-matrix.sh in the container makes the run's git login from it (the image has gh); nothing writes it to
-the volume. `matrix.sh --test --duration <s>` does the same on a host. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
+`LINUX_MATRIX_CELL=<cell> LINUX_MATRIX_PREBUILT=1 sh scripts/linux-matrix.sh run <id> -- --test --duration <s>`
+gives each cell its own volume, sign-in and container. A test run in Docker uses the container's own
+GitHub login: sign in once with `LINUX_MATRIX_CELL=<cell> sh scripts/linux-matrix.sh github <id>`
+(`gh auth login` in the container; it stays on the cell's volume). The kit never copies or mounts this
+machine's login or a token. `matrix.sh --test --duration <s>` does the same on a host, with the host's
+login. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
 
 **`--check-copy`.** For a run you made by hand, verifies every entry of the run locally and compares each
 with the server's position, using the run's credential from the configuration directory. It starts and
