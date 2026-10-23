@@ -220,7 +220,8 @@ mcp_servers:
    `${GOALCUP_TIME_LEFT_FILE}` from its own environment. So keep the `env` lines (read from the
    source, `tools/mcp_tool.py`).
 2. Hermes needs its MCP support installed. Without it, `hermes mcp test goalcup` says to install
-   `hermes-agent[mcp]` (measured).
+   `hermes-agent[mcp]` (measured). Install it pinned, with the quotes, because zsh breaks on
+   unquoted brackets: `uv tool install 'hermes-agent[mcp]==0.19.0'`.
 3. Hermes starting the tool, and the agent calling it: not measured.
 
 ## 1. Run without permission prompts
