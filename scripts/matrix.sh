@@ -302,6 +302,11 @@ KEYFILE=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
 # The path leaves the environment too, so goalcup, the daemon and the harness never inherit where
 # the key file is.
 unset GOALCUP_TEST_APPROVAL_KEY_FILE
+# MATRIX_FORGET_KEY=1 (linux-matrix.sh sets it): KEYFILE is a private copy in a Docker cell's
+# container, where the agent runs as the same user; it is removed once the run is approved
+# (forget_key), before the harness works. It leaves the environment too.
+KEY_FORGET=${MATRIX_FORGET_KEY:-0}
+unset MATRIX_FORGET_KEY
 if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
   echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE must name a regular file this user can read" >&2
   exit 2
@@ -316,6 +321,16 @@ FETCH_INDEX=${MATRIX_FETCH_INDEX:-}
 FETCH_STORE=${MATRIX_FETCH_STORE:-}
 FETCH_SCRIPT=${MATRIX_FETCH_SCRIPT:-$HERE/fetch-run.sh}
 FETCH_TIMEOUT=${MATRIX_FETCH_TIMEOUT:-1800}
+# MATRIX_FETCH_REQUEST (linux-matrix.sh sets it in a Docker cell): the database URL and the R2
+# token are not in the container while the harness works. When the fetch needs them, this script
+# makes a private directory, makes this request file and waits for the host to put them there
+# (fetch_secrets_wait); MATRIX_FETCH_WILL_GIVE names which it will (db, cf).
+FETCH_REQUEST=${MATRIX_FETCH_REQUEST:-}
+FETCH_WILL_GIVE=${MATRIX_FETCH_WILL_GIVE:-}
+FETCH_SECRETS_DIR=${MATRIX_FETCH_SECRETS_DIR:-/tmp/goalcup-fetch-secrets}
+FETCH_SECRETS_WAIT=${MATRIX_FETCH_SECRETS_WAIT:-120}
+unset MATRIX_FETCH_REQUEST MATRIX_FETCH_WILL_GIVE MATRIX_FETCH_SECRETS_DIR MATRIX_FETCH_SECRETS_WAIT
+case $FETCH_SECRETS_WAIT in '' | *[!0-9]*) echo "matrix: MATRIX_FETCH_SECRETS_WAIT is a number of seconds" >&2; exit 2 ;; esac
 case $FETCH_TIMEOUT in '' | *[!0-9]*) echo "matrix: MATRIX_FETCH_TIMEOUT is a number of seconds" >&2; exit 2 ;; esac
 PRE_KEYS=${MATRIX_PRE_PROMPT_KEYS:-}
 case $PRE_KEYS in
@@ -687,6 +702,16 @@ codes_in() {
   tr -d '\r' 2>/dev/null <"$1" | sed -n 's/.*shows the code \([A-Z][A-Z][A-Z][A-Z]-[A-Z][A-Z][A-Z][A-Z]\)\..*/\1/p'
 }
 
+# The phase the approvals belong to: login, then start. In a Docker cell the key file is removed
+# once the start is approved (or, failing that, when the harness is up).
+PHASE=login
+forget_key() {
+  [ "$KEY_FORGET" = 1 ] && [ -n "$KEYFILE" ] || return 0
+  rm -f "$KEYFILE"
+  KEYFILE=""
+  log "the approval key's file is removed: nothing the harness can read holds the key"
+}
+
 # Approve the first user code goalcup prints in the log $1, and no other: one code per phase (the
 # login, the run). seen.txt is emptied at the start of each phase. With a key file the approval
 # goes through the test route, the key piped from the file straight into curl's standard input as
@@ -709,6 +734,7 @@ scan_and_approve() {
       log "the test approval was refused"
       return 1
     fi
+    [ "$PHASE" != start ] || forget_key
   else
     line=$(tr -d '\r' <"$1" | grep "shows the code $code" | tail -1)
     say "no GOALCUP_TEST_APPROVAL_KEY_FILE: approve this in a browser, as a member:"
@@ -1218,6 +1244,7 @@ PY
 
   # ---- start --practice (or --test)
   : >"$ROOT/seen.txt"
+  PHASE=start
   WRAP="$ROOT/start-wrapper.sh"
   if [ "$TEST" = 1 ]; then RUN_FLAG="--test --repo $(shq "$TEST_REPO")"; else RUN_FLAG=--practice; fi
   START_ARGS="start --harness $CONNECTOR $DEV_FLAG $RUN_FLAG"
@@ -1275,6 +1302,7 @@ PY
     if [ -z "$READY_AT" ] && grep -q "$READY_MARK" "$ROOT/start.out" 2>/dev/null; then
       READY_AT=$(date +%s)
       SCAN=0
+      forget_key
       log "the harness is up"
     fi
     return 0
@@ -1369,7 +1397,13 @@ PY
       FAIL_REASON="NOT VERIFIED: long run, server copy not fetched (give MATRIX_FETCH_INDEX or DATABASE_URL, and MATRIX_FETCH_STORE or CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, to rebuild it with scripts/fetch-run.sh)"
       return 1
     fi
+    if ! fetch_secrets_wait; then
+      RESULT=NOT-VERIFIED
+      FAIL_REASON="NOT VERIFIED: long run, server copy not fetched (the host did not hand over the fetch credentials within ${FETCH_SECRETS_WAIT}s)"
+      return 1
+    fi
     fetch_copy "$ENTRY_ID" || return 1
+    FETCH_DB="" FETCH_CF_TOKEN=""
     JUDGED=$ROOT/servercopy/$ENTRY_ID
     [ "$HV" != unreported ] || read_hv "$JUDGED/chain.jsonl"
     same_tail "$TRACE" "$JUDGED/chain.jsonl" || return 1
@@ -1520,8 +1554,35 @@ PY
 # Whether a long run's server copy can be fetched: an index (file or database) and the objects
 # (a bucket mirror or R2).
 fetch_configured() {
-  { [ -n "$FETCH_INDEX" ] || [ -n "$FETCH_DB" ]; } &&
-    { [ -n "$FETCH_STORE" ] || { [ -n "$FETCH_CF_ACCOUNT" ] && [ -n "$FETCH_CF_TOKEN" ]; }; }
+  fetch_gives() { [ -n "$FETCH_REQUEST" ] && case " $FETCH_WILL_GIVE " in *" $1 "*) true ;; *) false ;; esac; }
+  { [ -n "$FETCH_INDEX" ] || [ -n "$FETCH_DB" ] || fetch_gives db; } &&
+    { [ -n "$FETCH_STORE" ] || { [ -n "$FETCH_CF_ACCOUNT" ] && { [ -n "$FETCH_CF_TOKEN" ] || fetch_gives cf; }; }; }
+}
+
+# Ask the host for the fetch credentials (MATRIX_FETCH_REQUEST): make a private directory and the
+# request file, wait for the host to put the database URL and the R2 token in the directory, read
+# them into this script's variables, and remove the directory and the request at once. 1 when
+# they did not come in time.
+fetch_secrets_wait() {
+  [ -n "$FETCH_REQUEST" ] || return 0
+  rm -rf "$FETCH_SECRETS_DIR"
+  (umask 077 && mkdir "$FETCH_SECRETS_DIR") || return 1
+  : >"$FETCH_REQUEST" || { rm -rf "$FETCH_SECRETS_DIR"; return 1; }
+  fs_start=$(date +%s)
+  while [ ! -e "$FETCH_SECRETS_DIR/ready" ]; do
+    if [ $(($(date +%s) - fs_start)) -ge "$FETCH_SECRETS_WAIT" ]; then
+      rm -rf "$FETCH_SECRETS_DIR"
+      rm -f "$FETCH_REQUEST"
+      return 1
+    fi
+    sleep 1
+  done
+  if [ -s "$FETCH_SECRETS_DIR/db-url" ]; then FETCH_DB=$(cat "$FETCH_SECRETS_DIR/db-url"); fi
+  if [ -s "$FETCH_SECRETS_DIR/cf-token" ]; then FETCH_CF_TOKEN=$(cat "$FETCH_SECRETS_DIR/cf-token"); fi
+  rm -rf "$FETCH_SECRETS_DIR"
+  rm -f "$FETCH_REQUEST"
+  FETCH_REQUEST=""
+  return 0
 }
 
 # Rebuild the server's copy of one entry into $ROOT/servercopy/<entry> with fetch-run.sh (read

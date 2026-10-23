@@ -18,6 +18,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -42,7 +43,22 @@ if args == ["--version"]:
     print("goalcup 0.0.0-stub")
     sys.exit(0)
 
+def wait_approved(phase, count):
+    """With STUB_CODE=1 a login and a start show a device code and wait for the matrix's approval
+    (the curl stub counts them); then say whether the approval key's file is still there, a second
+    after the approval so the matrix has had time to act on it."""
+    if os.environ.get("STUB_CODE") != "1":
+        return
+    print("Open the page; it shows the code ABCD-EFGH.", flush=True)
+    t0 = time.time()
+    while len(list(out.glob("approved.*"))) < count and time.time() - t0 < 30:
+        time.sleep(0.2)
+    time.sleep(1)
+    key = os.environ.get("STUB_KEYFILE")
+    note("%s.keyfile_exists" % phase, str(bool(key) and os.path.exists(key)))
+
 if args[0] == "login":
+    wait_approved("login", 1)
     note("login.no_browser", os.environ.get("GOALCUP_NO_BROWSER", "unset"))
     print("Logged in as member.")
     sys.exit(0)
@@ -200,6 +216,7 @@ def write_run():
 if test:
     write_run()
 
+wait_approved("start", 2)
 # setraw flushes pending input: finish that transition before the feeder sees ready.
 tty.setraw(0)
 if os.environ.get("STUB_BRACKETED") == "1":
@@ -290,7 +307,10 @@ from pathlib import Path
 args = sys.argv[1:]
 out = Path(os.environ["STUB_OUT"])
 if "@-" in args:
-    sys.stdin.read()
+    header = sys.stdin.read()
+    if args[-1].endswith("/v1/device/approve"):
+        n = len(list(out.glob("approved.*")))
+        (out / ("approved.%d" % (n + 1))).write_text(header)
 target = args[args.index("-o") + 1]
 url = args[-1]
 if "/v1/runs/" in url:
@@ -392,7 +412,30 @@ class World:
             if value is None:
                 environment.pop(key, None)
             else:
-                environment[key] = value.replace("{bin}", str(self.bin))
+                environment[key] = value.replace("{bin}", str(self.bin)).replace("{root}", str(self.root))
+        if "{root}/approval-key" in (env or {}).get("GOALCUP_TEST_APPROVAL_KEY_FILE", ""):
+            (self.root / "approval-key").write_text(KEY_VALUE + "\n")
+        # The host half of a Docker cell's fetch credential handover (STUB_HOST_ANSWERS=1): when
+        # matrix.sh makes its request file, put the credentials in the private directory it made.
+        self.request_seen: dict[str, str] = {}
+        stop = threading.Event()
+        responder = None
+        if environment.get("STUB_HOST_ANSWERS") == "1":
+            request = Path(environment["MATRIX_FETCH_REQUEST"])
+            secrets = Path(environment["MATRIX_FETCH_SECRETS_DIR"])
+
+            def answer() -> None:
+                while not stop.is_set():
+                    if request.exists() and secrets.is_dir():
+                        self.request_seen["mode"] = oct(stat.S_IMODE(secrets.stat().st_mode))
+                        (secrets / "db-url").write_text(DB_URL)
+                        (secrets / "cf-token").write_text(CF_TOKEN)
+                        (secrets / "ready").write_text("")
+                        return
+                    time.sleep(0.1)
+
+            responder = threading.Thread(target=answer, daemon=True)
+            responder.start()
         log = self.root / "matrix.log"
         # A test run is left to its default budget (the duration plus 1800 s) unless it names one.
         budget = () if "--test" in args or "--refusals" in args else ("--timeout", "60")
@@ -402,6 +445,8 @@ class World:
              *budget, *args],
             env=environment, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120,
         )
+        stop.set()
+        self.elapsed = time.time() - self.started
         self.log = log.read_text() if log.exists() else ""
 
     def seen(self, name: str) -> str:
@@ -426,6 +471,7 @@ class World:
 
 
 DURATION = 4
+KEY_VALUE = "SENTINEL-KEY-VALUE-never-printed-0123456789"
 DB_URL = "postgres://reader:db-secret-never-shown@db.invalid/postgres"
 CF_TOKEN = "cf-token-never-shown"
 AMP_VERSION = "0.0.1792209635-g24a9fe (released 2026-10-17T04:00:35.000Z, 4d ago)"
@@ -473,6 +519,25 @@ SCENARIOS = {
                                      "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
                                      "MATRIX_FETCH_INDEX": "/index.json",
                                      "MATRIX_FETCH_STORE": "/bucket-mirror"}),
+    # A Docker cell's key: a private copy, removed once the start is approved (MATRIX_FORGET_KEY);
+    # the control keeps it. The stubs show a device code and say whether the file is still there.
+    "key_forgotten": ("stubchat", {"GOALCUP_TEST_APPROVAL_KEY_FILE": "{root}/approval-key",
+                                   "MATRIX_FORGET_KEY": "1", "STUB_CODE": "1",
+                                   "STUB_KEYFILE": "{root}/approval-key"}),
+    "key_kept": ("stubchat", {"GOALCUP_TEST_APPROVAL_KEY_FILE": "{root}/approval-key",
+                              "STUB_CODE": "1", "STUB_KEYFILE": "{root}/approval-key"}),
+    # A Docker cell's fetch credentials: not in the container; matrix.sh asks the host when the
+    # fetch needs them (the host answers, or does not).
+    "pruned_handoff": ("stubchat", {
+        "STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh", "CLOUDFLARE_ACCOUNT_ID": "acct",
+        "MATRIX_FETCH_BUCKET": "goalcup-traces-staging", "MATRIX_FETCH_REQUEST": "{root}/fetch-request",
+        "MATRIX_FETCH_WILL_GIVE": "db cf", "MATRIX_FETCH_SECRETS_DIR": "{root}/fetch-secrets",
+        "STUB_HOST_ANSWERS": "1"}),
+    "pruned_handoff_unanswered": ("stubchat", {
+        "STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh", "CLOUDFLARE_ACCOUNT_ID": "acct",
+        "MATRIX_FETCH_BUCKET": "goalcup-traces-staging", "MATRIX_FETCH_REQUEST": "{root}/fetch-request",
+        "MATRIX_FETCH_WILL_GIVE": "db cf", "MATRIX_FETCH_SECRETS_DIR": "{root}/fetch-secrets",
+        "MATRIX_FETCH_SECRETS_WAIT": "2"}),
     # A test run whose start asks for its repository: nobody can answer it.
     "test_asks": ("stubchat", {"STUB_ASK": "1"}, ("--test", "--duration", "30"), True),
     # A test run on a machine with no GitHub login.
@@ -655,7 +720,7 @@ class MatrixTests(unittest.TestCase):
         self.assertNotEqual(w.run.returncode, 0)
         self.assertIn("asked a question before the run's approval", w.run.stderr)
         self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ FAIL ")
-        self.assertLess(time.time() - w.started, 50)
+        self.assertLess(w.elapsed, 50)
 
     def test_every_refusal_is_checked_through_a_test_builds_doors(self) -> None:
         w = self.worlds["refusals"]
@@ -768,6 +833,48 @@ class MatrixTests(unittest.TestCase):
         for secret in ("db-secret-never-shown", CF_TOKEN):
             self.assertNotIn(secret, w.everything_matrix_wrote())
             self.assertNotIn(secret, w.seen("fetch.argv"))
+
+    def test_the_key_file_is_removed_once_the_start_is_approved_and_not_before(self) -> None:
+        w = self.worlds["key_forgotten"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        # Both approvals used the key, the login's and the start's.
+        self.assertIn(f"Bearer {KEY_VALUE}", w.seen("approved.1"))
+        self.assertIn(f"Bearer {KEY_VALUE}", w.seen("approved.2"))
+        # After the login's approval the file is still there; after the start's it is gone, before
+        # the harness (the stub's start) goes on.
+        self.assertEqual(w.seen("login.keyfile_exists"), "True")
+        self.assertEqual(w.seen("start.keyfile_exists"), "False")
+        self.assertFalse((w.root / "approval-key").exists())
+        self.assertIn("the approval key's file is removed", w.log)
+        self.assertNotIn(KEY_VALUE, w.everything_matrix_wrote())
+
+    def test_without_the_forget_setting_the_key_file_is_left_alone(self) -> None:
+        w = self.worlds["key_kept"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertEqual(w.seen("start.keyfile_exists"), "True")
+        self.assertTrue((w.root / "approval-key").exists())
+
+    def test_fetch_credentials_are_asked_of_the_host_and_removed_at_once(self) -> None:
+        w = self.worlds["pruned_handoff"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertEqual(json.loads(w.seen("fetch.env")), {
+            "DATABASE_URL": DB_URL, "CLOUDFLARE_ACCOUNT_ID": "acct", "CLOUDFLARE_API_TOKEN": CF_TOKEN})
+        # The harness (the stub's start) never had them, and the private directory was 0700.
+        self.assertEqual(json.loads(w.seen("start.env")), [])
+        self.assertEqual(w.request_seen["mode"], "0o700")
+        self.assertFalse((w.root / "fetch-secrets").exists(), "the credentials were left on disk")
+        self.assertFalse((w.root / "fetch-request").exists())
+        for secret in ("db-secret-never-shown", CF_TOKEN):
+            self.assertNotIn(secret, w.everything_matrix_wrote())
+
+    def test_credentials_the_host_never_hands_over_make_the_row_not_verified(self) -> None:
+        w = self.worlds["pruned_handoff_unanswered"]
+        self.assertEqual(w.run.returncode, 4, w.said())
+        self.assertIn("did not hand over the fetch credentials within 2s", w.run.stderr)
+        self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ NOT-VERIFIED \d{4}-")
+        self.assertFalse(w.has("fetch.argv"))
+        self.assertFalse((w.root / "fetch-secrets").exists())
+        self.assertFalse((w.root / "fetch-request").exists())
 
     def test_a_local_tail_that_differs_from_the_server_copy_fails(self) -> None:
         w = self.worlds["pruned_bad_tail"]

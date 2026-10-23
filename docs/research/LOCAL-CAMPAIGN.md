@@ -44,6 +44,11 @@ not prove: other platforms, other harness versions, model behaviour, or particip
    HTTPS, Yes to authenticate Git). Docker cells: the container's, made once per cell by
    `campaign.py login` (it runs `linux-matrix.sh github`, which opens `gh auth login` in the
    container; it stays on the cell's volume). The kit never copies or mounts a login or a token.
+   That Docker login is the owner's own GitHub login (accepted for this kit), and the agent in a
+   Docker cell runs as the same user, so it can read it from the cell's volume. Nothing else secret
+   is in the container while the harness works: the staging key and the fetch credentials stay on
+   this machine and reach a step only on its standard input ([OPERATING](../OPERATING.md), "A long
+   run" and the Docker cell).
 3. **Test members.** Until website migration `20261021100000` is on staging, a test run replaces
    the earlier test run of the same operator, so parallel cells need different members. Staging
    ships two synthetic members (`...0c0de1`, `...0c0de2`). Once the migration is applied, test runs

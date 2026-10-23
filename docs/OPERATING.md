@@ -233,10 +233,15 @@ read-only role), and `MATRIX_FETCH_STORE` (a bucket mirror) or `CLOUDFLARE_ACCOU
 Without them the row is `NOT-VERIFIED` (`NOT VERIFIED: long run, server copy not fetched`, exit 4): not a
 PASS, and not a FAIL of the run. `--check-copy` does the same for each pruned entry. A Docker cell
 (`linux-matrix.sh`) is verified the same way: it mounts `MATRIX_FETCH_INDEX` and `MATRIX_FETCH_STORE`
-read-only, or takes the database URL and the R2 token as files (`MATRIX_DATABASE_URL_FILE`,
-`MATRIX_CLOUDFLARE_TOKEN_FILE`, mounted read-only, never a value on Docker's command line) and passes
-`CLOUDFLARE_ACCOUNT_ID`, `MATRIX_FETCH_BUCKET` and `MATRIX_FETCH_TIMEOUT` on; its image holds `zstd` and
-`psql`. `DATABASE_URL` or `CLOUDFLARE_API_TOKEN` in its own environment is not passed in.
+read-only (no secret), and takes the database URL and the R2 token as files on this machine
+(`MATRIX_DATABASE_URL_FILE`, `MATRIX_CLOUDFLARE_TOKEN_FILE`). Those two are never mounted into the
+cell's container, where the agent runs as the same user and could read them: when a long run needs
+them, at its end, `matrix.sh` makes a private directory and a request file in the log directory, the
+script hands the two over in their own `docker exec` on its standard input, and `matrix.sh` reads and
+removes them at once. The weak point is that the agent could write the request file too (once per
+run); it would reach only the directory `matrix.sh` made. `CLOUDFLARE_ACCOUNT_ID`,
+`MATRIX_FETCH_BUCKET` and `MATRIX_FETCH_TIMEOUT` are passed on; its image holds `zstd` and `psql`.
+`DATABASE_URL` or `CLOUDFLARE_API_TOKEN` in its own environment is not passed in.
 
 A server whose signing key this build does not pin (a local Worker, staging) fails the first verification
 with `receipt_key_not_accepted`. The script then verifies again with `--dev-key` set to
@@ -303,12 +308,14 @@ so one sign-in serves every later run. Once per volume, in a terminal:
 approved with the key; then `goalcup setup` opens Codex in the container, and you choose "Sign in with
 Device Code", finish it in the Mac's browser, and type `/exit`. After that, unattended:
 `GOALCUP_TEST_APPROVAL_KEY_FILE=<key file> sh scripts/linux-matrix.sh run codex-cli` prints the row last.
-Key files are mounted read-only and only their container path is passed. The member is the synthetic
+The approval key is never mounted into the container: it goes in on the standard input of the login
+step and of the run step, into a private file in the container's own `/tmp`, and `matrix.sh` removes
+the run's file as soon as the start is approved, before the harness works. The member is the synthetic
 test member unless `GOALCUP_TEST_MEMBER_ID` says otherwise, and the server is staging. The script takes
 the heavy-run lock itself (never run it inside the lock: it refuses when `GOALCUP_HEAVY_LOCK_HELD=1` and
 gives up after 30 minutes), with `--cpus=6`. Codex's harness home is set to `gpt-5.6-luna` at low
 reasoning effort before each run; the run fails unless every Codex turn it recorded says exactly that.
-The harness can read the checkout and the key files, so run it from a clean checkout. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
+The harness can read the checkout, so run it from a clean checkout. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
 It also installs `claude-code-cli` (set to `haiku` with thinking off, checked after the run), `amp-cli`
 and `hermes-cli`. For long runs in parallel: `linux-matrix.sh build` once, then
 `LINUX_MATRIX_CELL=<cell> LINUX_MATRIX_PREBUILT=1 sh scripts/linux-matrix.sh run <id> -- --test --duration <s>`

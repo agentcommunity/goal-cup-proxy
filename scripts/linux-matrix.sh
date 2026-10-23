@@ -63,9 +63,15 @@
 # goalcup never hands a harness a provider key (D61): a harness signs in with its own login,
 # kept in its tracker home, as Codex does.
 #
-# Environment. A secret is only ever a FILE, mounted read-only; its path goes to the one command
-# that reads it, and its value is never in an argument, a `-e`, a log or this script's output.
-#   GOALCUP_TEST_APPROVAL_KEY_FILE  the server's test approval key (login and run).
+# Environment. A secret is only ever a FILE on this machine, and it is never mounted into the
+# cell's container (the harness runs there, as the same user as every step, with no sandbox, so it
+# could read a mounted file). Its value goes on the standard input of the one `docker exec` that
+# needs it, never in an argument, a `-e`, a log or this script's output.
+#   GOALCUP_TEST_APPROVAL_KEY_FILE  the server's test approval key (login and run). It is the
+#                                   standard input of the login step and of the run step, which
+#                                   keep it in a private file in the container's own /tmp;
+#                                   matrix.sh removes the run's file once the run is approved,
+#                                   before the harness works, and each step removes it on exit.
 #   MATRIX_REPO                     a test run's repository, <owner>/<name>, instead of the one
 #                                   matrix.sh makes (matrix.sh says what it must be).
 #   GOALCUP_TEST_MEMBER_ID          the member approved as
@@ -102,12 +108,19 @@
 #                                   directory (absolute paths), mounted read-only.
 #   MATRIX_DATABASE_URL_FILE, MATRIX_CLOUDFLARE_TOKEN_FILE
 #                                   or the read-only database URL and R2 token, each a file
-#                                   (absolute path) mounted read-only; matrix.sh in the container
-#                                   gets them as DATABASE_URL and CLOUDFLARE_API_TOKEN and hands them
-#                                   to fetch-run.sh alone. DATABASE_URL or CLOUDFLARE_API_TOKEN in
-#                                   this script's environment is never passed in. CLOUDFLARE_ACCOUNT_ID,
-#                                   MATRIX_FETCH_BUCKET and MATRIX_FETCH_TIMEOUT are passed on when
-#                                   set. The image holds zstd and psql for fetch-run.sh.
+#                                   (absolute path) on this machine, never mounted: they are not in
+#                                   the container while the harness works. When a long run needs
+#                                   them, at its end, matrix.sh there makes a private directory and a
+#                                   request file (MATRIX_FETCH_REQUEST, in the log directory); this
+#                                   script, polling for it, puts the two in that directory in a
+#                                   `docker exec` of their own (standard input), once per run, and
+#                                   matrix.sh reads them, removes them at once and hands them to
+#                                   fetch-run.sh alone. (The agent could make the request file too;
+#                                   it then reaches only that directory, once.) DATABASE_URL or
+#                                   CLOUDFLARE_API_TOKEN in this script's environment is never
+#                                   passed in. CLOUDFLARE_ACCOUNT_ID, MATRIX_FETCH_BUCKET and
+#                                   MATRIX_FETCH_TIMEOUT are passed on when set. The image holds zstd
+#                                   and psql for fetch-run.sh.
 #   LINUX_MATRIX_LOG_DIR            where matrix.sh's log lands on this machine
 #                                   (default $TMPDIR/goalcup-linux-matrix).
 #   GOALCUP_HEAVY_LOCK              the shared heavy-run lock (default /tmp/goalcup-heavy.lock).
@@ -121,10 +134,9 @@
 # The script has no drill of its own: an orchestrator acts on the named container from outside.
 #
 # What the harness can read. It runs as the same user as the script's own steps, so it can read
-# the mounted key files (/run/goalcup/*, read-only; staging's test key and any fetch credential
-# files, so give the fetch read-only ones). In a test run it pushes with the container's GitHub
-# login (D69).
-# and the whole checkout at /src, untracked files included. Run it from a clean checkout, never
+# everything in the container: the volume (the container's GitHub login among it, which a test run
+# pushes with, D69), the prompt file, the fetch index and bucket mirror when given, and the whole
+# checkout at /src, untracked files included. No key or credential file is mounted. Run it from a clean checkout, never
 # one holding secrets (a Worker .dev.vars, for example).
 #
 # Needs: Docker (no privileged container), `cargo fetch --locked` run on this machine first (the
@@ -143,12 +155,12 @@ VOL=/vol
 CFG=$VOL/cfg
 # The dev user's ~/.local/bin (HOME is $VOL/home), where the binaries are installed.
 BIN=$VOL/home/.local/bin
-KEY_IN=/run/goalcup/approval-key
 PROMPT_IN=/run/goalcup/prompt
 FETCH_INDEX_IN=/run/goalcup/fetch-index
 FETCH_STORE_IN=/run/goalcup/fetch-store
-DB_IN=/run/goalcup/database-url
-CF_TOKEN_IN=/run/goalcup/cloudflare-token
+# Where matrix.sh in the container asks the host for the fetch credentials, and the private
+# directory it makes for the answer (inner_fetch_creds); both are removed as soon as they are used.
+FETCH_SECRETS_DIR=/tmp/goalcup-fetch-secrets
 # The settle helper beside this script (/src/scripts in the container).
 KIT=$(dirname "$0")/kit_settle.py
 # matrix.sh's settings this script passes on when they are set.
@@ -183,6 +195,26 @@ codex_effort() {
 # ------------------------------------------------------------------ inside the container
 # These run as `dev` in the container, called by the host half below.
 
+# A secret from this command's standard input (the host half's `docker exec -i ... <file`) into a
+# new private file in the container's own /tmp, never the volume (which outlives the container);
+# its path goes into the variable named. Read before anything else runs, then standard input is
+# /dev/null, so no child inherits it. Every such file is removed on the way out (the EXIT trap):
+# no secret is in the container while the harness runs (a run's matrix.sh removes the key itself
+# once the run is approved).
+SECRET_DIRS=""
+secret_in() { # variable
+    sd=$(mktemp -d /tmp/goalcup-secret.XXXXXX) || fail "a private directory for a secret"
+    SECRET_DIRS="$SECRET_DIRS $sd"
+    (umask 077 && cat >"$sd/secret") || fail "reading a secret from standard input"
+    exec </dev/null
+    [ -s "$sd/secret" ] || fail "no secret on standard input"
+    eval "$1=\$sd/secret"
+}
+forget_secrets() {
+    for sd in $SECRET_DIRS; do rm -rf "$sd"; done
+    SECRET_DIRS=""
+}
+
 # The tracker home's config for a harness that has a model rule (scripts/kit_settle.py
 # home-config; minimal only if the installed codex lists it for the Luna model).
 inner_home_config() { # connector
@@ -216,12 +248,11 @@ for root in sys.argv[1:]:
 PY
 }
 
-# `goalcup login`, its one device code approved through the test route: the key goes from its
-# file straight into curl's standard input as a header, as matrix.sh does it.
+# `goalcup login`, its one device code approved through the test route: the key arrives on this
+# step's standard input into a private file, and goes from it straight into curl's standard input
+# as a header, as matrix.sh does it. The file is gone when this step ends.
 inner_login() {
-    keyfile=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
-    unset GOALCUP_TEST_APPROVAL_KEY_FILE
-    [ -f "$keyfile" ] && [ -r "$keyfile" ] || fail "login: the approval key file is not readable in the container"
+    secret_in keyfile
     mkdir -p "$CFG" && chmod 700 "$CFG" || fail "login: config directory"
     out=$TMPDIR/login.$$
     rm -f "$out" "$out.rc"
@@ -292,23 +323,19 @@ inner_model_check() { # connector marker
 inner_run() { # connector [matrix.sh options]
     h=$1
     shift
+    # The approval key, from this step's standard input. matrix.sh removes the file once the run
+    # is approved, before the harness works (MATRIX_FORGET_KEY); the fetch credentials are not
+    # here at all: matrix.sh asks the host for them when it needs them (MATRIX_FETCH_REQUEST).
+    secret_in keyfile
+    GOALCUP_TEST_APPROVAL_KEY_FILE=$keyfile
+    MATRIX_FORGET_KEY=1
+    export GOALCUP_TEST_APPROVAL_KEY_FILE MATRIX_FORGET_KEY
     inner_home_config "$h"
     # Every connector is chat mode (D57): it runs signed in, on this volume's home.
     [ "$(inner_home_ready "$h")" = yes ] ||
         fail "$h is not signed in on this volume: run scripts/linux-matrix.sh login $h first"
     inner_settle
     export MATRIX_CONFIG_DIR=$CFG
-    # The fetch credentials from their mounted files into matrix.sh's environment only (it takes
-    # them out of its own at once and gives them to fetch-run.sh alone); never an argument.
-    if [ -n "${MATRIX_DATABASE_URL_FILE:-}" ]; then
-        DATABASE_URL=$(cat "$MATRIX_DATABASE_URL_FILE") || fail "the database URL file is not readable in the container"
-        export DATABASE_URL
-    fi
-    if [ -n "${MATRIX_CLOUDFLARE_TOKEN_FILE:-}" ]; then
-        CLOUDFLARE_API_TOKEN=$(cat "$MATRIX_CLOUDFLARE_TOKEN_FILE") || fail "the Cloudflare token file is not readable in the container"
-        export CLOUDFLARE_API_TOKEN
-    fi
-    unset MATRIX_DATABASE_URL_FILE MATRIX_CLOUDFLARE_TOKEN_FILE
     # Claude Code asks whether it may trust each new workspace, "No, exit" selected: Down, Enter.
     if [ "$h" = claude-code-cli ] && [ -z "${MATRIX_PRE_PROMPT_KEYS+set}" ]; then
         MATRIX_PRE_PROMPT_KEYS='\033[B\r'
@@ -337,7 +364,27 @@ inner_run() { # connector [matrix.sh options]
     exit "$rc"
 }
 
+# The fetch credentials, handed over when matrix.sh asked for them: two lines on standard input
+# (the read-only database URL, the R2 token; either may be empty) into the private directory
+# matrix.sh made for them, which matrix.sh empties and removes as soon as it has read them.
+inner_fetch_creds() {
+    [ -d "$FETCH_SECRETS_DIR" ] && [ -O "$FETCH_SECRETS_DIR" ] ||
+        fail "fetch credentials: matrix.sh made no private directory for them"
+    db="" cf=""
+    IFS= read -r db
+    IFS= read -r cf
+    umask 077
+    [ -z "$db" ] || printf '%s' "$db" >"$FETCH_SECRETS_DIR/db-url" || fail "fetch credentials: the database URL"
+    [ -z "$cf" ] || printf '%s' "$cf" >"$FETCH_SECRETS_DIR/cf-token" || fail "fetch credentials: the R2 token"
+    : >"$FETCH_SECRETS_DIR/ready"
+    db="" cf=""
+}
+
 case ${1:-} in
+inner-*) trap forget_secrets EXIT ;;
+esac
+case ${1:-} in
+inner-fetch-creds) inner_fetch_creds; exit 0 ;;
 inner-home-config) inner_home_config "$2"; exit 0 ;;
 inner-home-files) inner_home_files "$2"; exit 0 ;;
 inner-login) inner_home_config "$2"; inner_login; exit 0 ;;
@@ -464,7 +511,9 @@ else
     case $member in *[!A-Za-z0-9_-]* | "") fail "GOALCUP_TEST_MEMBER_ID may hold only letters, digits, _ -" ;; esac
 fi
 
-# Secrets: files only, mounted read-only. A key in the environment is refused, as matrix.sh does.
+# Secrets: files on this machine only, never mounted into the container (the harness runs there,
+# as the same user, and could read a mounted file): each reaches the one `docker exec` that needs it
+# on its standard input. A key in the environment is refused, as matrix.sh does.
 [ -z "${GOALCUP_TEST_APPROVAL_KEY:-}" ] ||
     fail "GOALCUP_TEST_APPROVAL_KEY in the environment is refused: give the file as GOALCUP_TEST_APPROVAL_KEY_FILE"
 keyfile=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
@@ -489,7 +538,7 @@ set --
 if [ "$action" = login ] || [ "$action" = run ]; then
     [ -n "$keyfile" ] || fail "GOALCUP_TEST_APPROVAL_KEY_FILE is needed (the login and the run are approved with it)"
     mounted_file "$keyfile" "a secret file"
-    set -- -v "$keyfile:$KEY_IN:ro"
+    set --
     promptfile=${MATRIX_PROMPT_FILE:-}
     if [ -n "$promptfile" ]; then
         [ -z "${MATRIX_PROMPT:-}" ] || fail "set MATRIX_PROMPT or MATRIX_PROMPT_FILE, not both"
@@ -514,16 +563,10 @@ if [ "$action" = login ] || [ "$action" = run ]; then
         [ -d "$fetch_store" ] && [ -r "$fetch_store" ] || fail "$fetch_store is not a directory this user can read"
         set -- "$@" -v "$fetch_store:$FETCH_STORE_IN:ro" -e "MATRIX_FETCH_STORE=$FETCH_STORE_IN"
     fi
-    # Only the paths in the container travel; inner-run reads the values into the environment of
-    # matrix.sh, which hands them to fetch-run.sh alone.
-    if [ -n "$dbfile" ]; then
-        mounted_file "$dbfile" "MATRIX_DATABASE_URL_FILE"
-        set -- "$@" -v "$dbfile:$DB_IN:ro" -e "MATRIX_DATABASE_URL_FILE=$DB_IN"
-    fi
-    if [ -n "$cftokenfile" ]; then
-        mounted_file "$cftokenfile" "MATRIX_CLOUDFLARE_TOKEN_FILE"
-        set -- "$@" -v "$cftokenfile:$CF_TOKEN_IN:ro" -e "MATRIX_CLOUDFLARE_TOKEN_FILE=$CF_TOKEN_IN"
-    fi
+    # The database URL and the R2 token are checked here and handed over later, only when matrix.sh
+    # in the container asks for them at the end of a long run (deliver_fetch_creds); not mounted.
+    [ -z "$dbfile" ] || mounted_file "$dbfile" "MATRIX_DATABASE_URL_FILE"
+    [ -z "$cftokenfile" ] || mounted_file "$cftokenfile" "MATRIX_CLOUDFLARE_TOKEN_FILE"
     # The account id is no secret; the bucket and the fetch's time are settings.
     for v in CLOUDFLARE_ACCOUNT_ID MATRIX_FETCH_BUCKET MATRIX_FETCH_TIMEOUT; do
         eval "val=\${$v:-}"
@@ -683,17 +726,52 @@ fi
 # its login shells find goalcup where a real install puts it, not in the build's /target/debug.
 step "install" "$name" sh -c "mkdir -p $BIN && install -m 0755 /target/debug/goalcup /target/debug/goalcup-daemon /target/debug/goalcup-verify $BIN/"
 
+# The fetch credentials into the container for the one moment matrix.sh needs them: when it has
+# made the request file, once, as their own `docker exec`; matrix.sh reads them and removes them at
+# once. A request nobody asked for (the harness could write the file too) is the weak point of the
+# handover: it reaches only a directory matrix.sh made, and only ever once per run.
+deliver_fetch_creds() {
+    [ -e "$logdir/$fetch_request" ] || return 0
+    rm -f "$logdir/$fetch_request"
+    [ "$fetch_given" = 0 ] || return 0
+    fetch_given=1
+    echo "linux-matrix: matrix.sh asks for the fetch credentials: handing them over for that step"
+    {
+        [ -z "$dbfile" ] || tr -d '\n' <"$dbfile"
+        echo
+        [ -z "$cftokenfile" ] || tr -d '\n' <"$cftokenfile"
+        echo
+    } | docker exec -i -u dev "$name" sh /src/scripts/linux-matrix.sh inner-fetch-creds ||
+        echo "linux-matrix: the fetch credentials could not be handed over (the long run will say NOT-VERIFIED)"
+}
+
 if [ "$action" = run ]; then
     if [ -n "$extra" ]; then
         echo "linux-matrix: run (matrix.sh options:$extra)"
     else
         echo "linux-matrix: run (about 12 minutes; the practice run ends at the server's deadline)"
     fi
-    set -- -e GOALCUP_TEST_APPROVAL_KEY_FILE=$KEY_IN
+    set --
     [ -z "${MATRIX_PROMPT_FILE:-}" ] || set -- "$@" -e MATRIX_PROMPT_FILE=$PROMPT_IN
-    # $extra holds checked words only (options and digits), so it splits as meant.
-    docker exec -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" $extra &
+    # matrix.sh asks for the fetch credentials only when a long run needs them, by making this file
+    # in the log directory; they are named as wanted only when their files were given.
+    fetch_request=fetch-request-$name
+    given=""
+    [ -z "$dbfile" ] || given="db"
+    [ -z "$cftokenfile" ] || given="${given:+$given }cf"
+    if [ -n "$given" ]; then
+        rm -f "$logdir/$fetch_request"
+        set -- "$@" -e "MATRIX_FETCH_REQUEST=/logs/$fetch_request" -e "MATRIX_FETCH_WILL_GIVE=$given"
+    fi
+    # The approval key is this exec's standard input. $extra holds checked words only (options and
+    # digits), so it splits as meant.
+    docker exec -i -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" $extra <"$keyfile" &
     run_job=$!
+    fetch_given=0
+    while kill -0 "$run_job" 2>/dev/null; do
+        [ -z "$given" ] || deliver_fetch_creds
+        sleep 1
+    done
     wait "$run_job"
     exit $?
 fi
@@ -727,7 +805,10 @@ record_home_files() {
     docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-files "$h" | tee -a "$loginlog"
 }
 
-step "login" -e GOALCUP_TEST_APPROVAL_KEY_FILE=$KEY_IN "$name" sh /src/scripts/linux-matrix.sh inner-login "$h"
+# The login gets the key on its standard input for this step only.
+echo "linux-matrix: login"
+docker exec -i -u dev "$name" sh /src/scripts/linux-matrix.sh inner-login "$h" <"$keyfile" &
+wait $! || fail "login"
 if [ "$(docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-ready "$h")" = yes ]; then
     step "settle" "$name" sh /src/scripts/linux-matrix.sh inner-settle
     record_home_files
