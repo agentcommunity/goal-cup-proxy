@@ -185,9 +185,10 @@ snapshot sums them per repository with the same group of 5; lines are floored to
 
 - The verify job that reassembles stored chunks and runs `goalcup-verify` over them. Until it exists,
   nothing downloads the stored chain; `scripts/matrix.sh --check-copy` compares positions instead.
-- The rest of the live stats design: working hours (it needs a stored counter), survival and the
-  hourly strip, tokens and tool calls from the traces (the verify job), uptime and outage windows,
-  the daily copies. Their fields in `live.json` are `null`.
+- The rest of the [live stats design](research/LIVE-STATS-DESIGN.md): working hours (it needs a
+  stored counter), survival and the hourly strip, tokens and tool calls from the traces (the verify
+  job and its numbers-only summary), uptime and outage windows, the daily copies. Their fields in
+  `live.json` are `null`.
 - A separate organizer pause on new starts (`MAINTENANCE` stops everything).
 - A second pinned signing key for rotation.
 - Teams, and more than one main run per account.
