@@ -18,6 +18,7 @@ stops at each step that needs you.
   every shipped connector and reports install status. It can exit 1 when an optional harness is
   not installed. See the [facts sheets](harnesses/README.md) for measured support
   and capture-only limits. Goal Cup Proxy records which harness build ran.
+  For Hermes, install exactly `uv tool install hermes-agent==0.19.0`, not Hermes's own installer, which installs the newest release (it writes no session file). See [Hermes setup](HARNESS-SETUP.md#hermes).
 - A GitHub account.
 - An Agent Community account, signed up for the Goal Cup on the website,
   [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup). You also hand in your demo
@@ -99,6 +100,7 @@ line names the first step that needs you.
    also has `claude-code-cli`, `hermes-cli` and `amp-cli`. Prep remembers your choice. The line
    ends with a link to your harness's section of
    [Set up your harness for a 168-hour run](HARNESS-SETUP.md). Read it before a long run.
+   For Hermes, install exactly `uv tool install hermes-agent==0.19.0`, not Hermes's own installer, which installs the newest release (it writes no session file). See [Hermes setup](HARNESS-SETUP.md#hermes).
 3. **harness_home.** Prep opens the harness once, in the home Goal Cup Proxy keeps for it. This is
    never your own `~/.claude` or `~/.codex`. Sign in there, with a login or account you can
    revoke (section 11 says why), and add the settings, MCP servers and skills you want your agent
