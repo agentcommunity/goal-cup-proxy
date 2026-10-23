@@ -1,6 +1,6 @@
 //! The Codex rollout-JSONL format (`codex-jsonl`).
 //!
-//! Decoder version 3: measured on Codex CLI 0.153.0 CLI/exec rollouts, a 0.156.1 native child
+//! Decoder version 4: measured on Codex CLI 0.153.0 CLI/exec rollouts, a 0.156.1 native child
 //! containing inherited context, and a 0.156.1 parent with two `spawn_agent` children (22 Oct).
 //! Decoder version is independent of harness version.
 //!
@@ -12,6 +12,16 @@
 //! call that spawned it. The other completed items (`AgentMessage`, `UserMessage`, `Reasoning`,
 //! `CommandExecution`, `FileChange`) repeat what a `response_item` of the same stream already
 //! says: each is an `unknown` with reason `duplicate_view`, never a second fact.
+//!
+//! **Unmarked user and developer messages (version 4).** A `response_item.message` with role
+//! `user` or `developer` and no `user.text` marker (in the measured rollouts: environment
+//! context, permissions, skill, plugin and multi-agent instructions, a model switch note) is an
+//! `unknown` with reason `unmarked_message`, its `role`, the content item types, and the supplied
+//! `internal_chat_message_metadata_passthrough.content_item_kinds` as `content_item_kinds` when
+//! the record has that list. At most 16 of each, only short tokens; no text. When the supplied
+//! kinds list held more, or entries that are no token, `content_item_kinds_truncated` is true. It is never a human
+//! message, and the kinds are the record's own words, not a judgement of who wrote it. A marked
+//! message that is not counted as human (an `exec` goal, a child's copied prompt) is unchanged.
 //!
 //! **Authorship.** The first `session_meta` fixes source authority for this stream, even
 //! when malformed or ambiguous. A `cli`/`vscode` source with no child/fork indicators allows
@@ -56,7 +66,7 @@ pub struct CodexStream {
 impl NativeFormat for Codex {
     const HINT: &'static str = "codex-jsonl";
     const ID: &'static str = "codex-native";
-    const VERSION: &'static str = "3";
+    const VERSION: &'static str = "4";
     type Stream = CodexStream;
 
     fn lost_context(stream: &mut CodexStream) {
@@ -187,18 +197,7 @@ fn response_item(v: &Value, stream: &mut CodexStream, out: &mut NativeOut<'_>) {
                 if let Some(phase) = payload.get("phase").and_then(token) {
                     fields["phase"] = json!(phase);
                 }
-                let types: Vec<&str> = payload
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .map(|blocks| {
-                        blocks
-                            .iter()
-                            .filter_map(|b| b.get("type").and_then(token))
-                            .take(MAX_LISTED_TYPES)
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                fields["content_types"] = json!(types);
+                fields["content_types"] = json!(tokens(payload.get("content"), |b| b.get("type")));
                 let id = payload.get("id").and_then(context_id).map(String::from);
                 out.kind(kinds::MODEL_RESPONSE, id, fields);
                 return;
@@ -212,7 +211,11 @@ fn response_item(v: &Value, stream: &mut CodexStream, out: &mut NativeOut<'_>) {
             )
             .and_then(Value::as_array)
             .is_some_and(|kinds| kinds.iter().any(|k| k.as_str() == Some("user.text")));
-            if role != "user" || !has_marker {
+            if matches!(role, "user" | "developer") && !has_marker {
+                unmarked_message(payload, role, out);
+                return;
+            }
+            if role != "user" {
                 out.unrecognized(Some("response_item.message"));
                 return;
             }
@@ -334,6 +337,48 @@ fn event_msg(v: &Value, out: &mut NativeOut<'_>) {
         }
         other => out.unrecognized(other.map(|t| format!("event_msg.{t}")).as_deref()),
     }
+}
+
+/// A user- or developer-role message the source did not mark `user.text`: what the record says
+/// it is (its role, its content item types and supplied `content_item_kinds`), never its text,
+/// and never a human message. Version 4.
+fn unmarked_message(payload: &Value, role: &str, out: &mut NativeOut<'_>) {
+    let mut fields = json!({
+        "reason": "unmarked_message",
+        "record_type": "response_item.message",
+        "role": role,
+        "content_types": tokens(payload.get("content"), |b| b.get("type")),
+    });
+    let kinds = dotted(
+        payload,
+        "internal_chat_message_metadata_passthrough.content_item_kinds",
+    );
+    if let Some(supplied) = kinds.and_then(Value::as_array) {
+        let kept = tokens(kinds, Some);
+        if kept.len() < supplied.len() {
+            fields["content_item_kinds_truncated"] = json!(true);
+        }
+        fields["content_item_kinds"] = json!(kept);
+    }
+    let id = payload.get("id").and_then(context_id).map(String::from);
+    out.unknown_with(id, fields);
+}
+
+/// The first [`MAX_LISTED_TYPES`] tokens `pick` finds in the items of an array.
+fn tokens<'a>(
+    items: Option<&'a Value>,
+    pick: impl Fn(&'a Value) -> Option<&'a Value>,
+) -> Vec<&'a str> {
+    items
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| pick(item).and_then(token))
+                .take(MAX_LISTED_TYPES)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// At most this many content item types or receiver ids are listed.

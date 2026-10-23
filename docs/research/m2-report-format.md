@@ -76,7 +76,7 @@ shared convention is `session_id` (the source's own session), optional `parent_s
 overlong identities are omitted rather than guessed. This convention can be adopted by other
 native formats; their decoders document their own source mappings and versions.
 
-`codex-native` version `3` fixes authority and context from its first `session_meta`. A later
+`codex-native` version `4` fixes authority and context from its first `session_meta`. A later
 copied parent header cannot replace the child or turn child user-role records into typed human
 input. Own identity comes from `payload.id`; `payload.session_id` can still name the parent.
 IDs are nonempty strings of at most 256 UTF-8 bytes. Parent IDs must agree across the supplied
@@ -100,6 +100,15 @@ Version `3` adds: an assistant `response_item.message` is a `model_response` (`r
 attributes its records to that call. The other completed items (`AgentMessage`, `UserMessage`,
 `Reasoning`, `CommandExecution`, `FileChange`) repeat a `response_item` of the same stream and are
 `unknown` with `reason: "duplicate_view"`.
+
+Version `4` adds: a `user` or `developer` `response_item.message` without the `user.text` marker
+is an `unknown` with `reason: "unmarked_message"` that says what the record is: `role`,
+`content_types`, and the record's own `content_item_kinds` (for example
+`environments.environment_context`, `permissions.instructions`, `multi_agent.role_instructions`)
+when it supplies that list. At most 16 short tokens each; no text. `content_item_kinds_truncated`
+is true when the supplied list held more, or entries that are no token. It is never a
+`human_message`. A marked message that is still not counted as human (an `exec` goal, a child's
+copied prompt) keeps `reason: "unrecognized"`.
 
 ### Summary line
 
@@ -235,14 +244,19 @@ recorded here because they change a summary:
   `message_complete`, or incomplete tool input remain provider detail; gaps, dropped bytes,
   bounds, recovery, and unterminated streams still degrade analysis.
 
-`amp-thread-jsonrpc` version `2` reads only WebSocket client/server messages with that exact
+`amp-thread-jsonrpc` version `3` reads only WebSocket client/server messages with that exact
 hint. It interprets complete server `message_added.params.message` snapshots, with
 `scope: "application_thread"`: assistant text/thinking as `model_response`, assistant
 `tool_use` as `tool_call`, and user `tool_result.run.result.output` (or a `run.result` that is
 the text itself, as a `Task` subagent's answer is) as the context-visible `tool_result`, with
 `subagent_tool_uses` counting a `Task` run's `progress[].tool_uses`. A snapshot whose
 `params.parentToolUseId` (or `parentToolCallId`) names a parent `Task` call is a subagent's: every
-fact from it carries `parent_tool_use_id` (version 2). Model-facing tool names stay as supplied; executor names do not replace them.
+fact from it carries `parent_tool_use_id` (version 2). A file edit's `run.result` object
+`{diff, lineRange}` is a `tool_result` with the bounded text `diff` (no `output`) and, when
+`lineRange` is two integers, `line_range`; a result with both `output` and `diff` keeps `output`
+(version 3; the shape comes from public readers of Amp's thread files and is synthetic-only until
+a capture measures it). Model-facing tool names stay as supplied; executor names do not replace
+them.
 Safe supplied `messageId`, `threadId`, block IDs and block indices identify each occurrence.
 Tool input is bounded serialized JSON; text/thinking and tool output use bounded text fields.
 A supplied assistant `usage.model` yields `model`; the integer `inputTokens`, `outputTokens`,

@@ -258,6 +258,14 @@ These look odd but are right. Do not "fix" them.
 - A Windows machine or VM for the WSL2 cells.
 - Participant review section B (B1 to B9) and the demo video's format and length for the guide
   ([review](docs/research/PARTICIPANT-REVIEW-2026-10-21.md)).
+- Hermes's native leg: Hermes 0.21.1 (7 Sep) removed the opt-in `session_*.json` snapshot the
+  connector reads (its `write_json_snapshots: true` is now ignored). Hermes's own installer puts
+  the latest stable release on the machine (`v0.22.4` on 22 Oct), so a participant who follows
+  Hermes's documentation records no native file. PyPI stops at 0.19.0, which still writes it.
+  Require 0.19.0 from PyPI (or 0.21.0 or earlier from a git tag) for the event, accept a
+  wire-only Hermes (native leg empty, like the deferred wire-only core), or capture `state.db`
+  (SQLite: a core capability, not schema 1)? A snapshot decoder is planned only once this is
+  decided ([facts](docs/harnesses/hermes-cli.md#4-session-format-and-identity)).
 
 ## Known issues
 
