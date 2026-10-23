@@ -365,6 +365,7 @@ class World:
     def __init__(self, connector: str, env: dict[str, str | None] | None = None,
                  args: tuple[str, ...] = (), prepared: bool = False,
                  prompt_file: str | None = None) -> None:
+        server = (env or {}).get("WORLD_SERVER") or "http://localhost:8787"
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.bin = self.root / "bin"
@@ -409,6 +410,8 @@ class World:
             environment["MATRIX_PROMPT_FILE"] = str(path)
             del environment["MATRIX_PROMPT"]
         for key, value in (env or {}).items():
+            if key == "WORLD_SERVER":
+                continue
             if value is None:
                 environment.pop(key, None)
             else:
@@ -441,7 +444,7 @@ class World:
         budget = () if "--test" in args or "--refusals" in args else ("--timeout", "60")
         self.started = time.time()
         self.run = subprocess.run(
-            ["sh", str(MATRIX), connector, "http://localhost:8787", "--log", str(log), "--keep",
+            ["sh", str(MATRIX), connector, server, "--log", str(log), "--keep",
              *budget, *args],
             env=environment, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120,
         )
@@ -511,11 +514,21 @@ SCENARIOS = {
                                       "CLOUDFLARE_API_TOKEN": None}),
     "pruned_files": ("stubchat", {"STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
                                   "MATRIX_FETCH_INDEX": "/index.json",
-                                  "MATRIX_FETCH_STORE": "/bucket-mirror"}),
+                                  "MATRIX_FETCH_STORE": "/bucket-mirror",
+                                  "MATRIX_FETCH_BUCKET": "goalcup-traces-local"}),
+    # The bucket is known for the staging Worker; for any other server it must be named.
+    "pruned_staging": ("stubchat", {"STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
+                                    "MATRIX_FETCH_INDEX": "/index.json",
+                                    "MATRIX_FETCH_STORE": "/bucket-mirror",
+                                    "WORLD_SERVER": "https://goalcup-ingest-staging.b-9a5.workers.dev"}),
+    "pruned_no_bucket": ("stubchat", {"STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
+                                      "MATRIX_FETCH_INDEX": "/index.json",
+                                      "MATRIX_FETCH_STORE": "/bucket-mirror"}),
     "pruned_env": ("stubchat", {"STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
-                                "DATABASE_URL": DB_URL, "CLOUDFLARE_ACCOUNT_ID": "acct",
+                                "MATRIX_FETCH_BUCKET": "goalcup-traces-local", "DATABASE_URL": DB_URL, "CLOUDFLARE_ACCOUNT_ID": "acct",
                                 "CLOUDFLARE_API_TOKEN": CF_TOKEN}),
     "pruned_bad_tail": ("stubchat", {"STUB_PRUNED": "1", "STUB_FETCH_BAD": "1",
+                                     "MATRIX_FETCH_BUCKET": "goalcup-traces-local",
                                      "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
                                      "MATRIX_FETCH_INDEX": "/index.json",
                                      "MATRIX_FETCH_STORE": "/bucket-mirror"}),
@@ -814,13 +827,25 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(w.run.returncode, 0, w.said())
         self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ stub-harness_9\.9\.9 PASS ")
         argv = w.seen("fetch.argv").split("\n")
-        self.assertEqual(argv[:6], ["--bucket", "goalcup-traces-staging", "--index", "/index.json",
+        self.assertEqual(argv[:6], ["--bucket", "goalcup-traces-local", "--index", "/index.json",
                                     "--store", "/bucket-mirror"])
         self.assertEqual(argv[6], "e0123456789abcdef")
         # The verifier and the agent-work check judged the copy, and the tail matched it.
         self.assertIn("servercopy/e0123456789abcdef", w.seen("research.argv"))
         self.assertRegex(w.log, r"ok +local chain\.\d{20}\.jsonl")
         self.assertIn("ends where the server copy ends", w.log)
+
+    def test_the_staging_bucket_is_assumed_for_the_staging_worker_only(self) -> None:
+        w = self.worlds["pruned_staging"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertEqual(w.seen("fetch.argv").split("\n")[:2], ["--bucket", "goalcup-traces-staging"])
+
+    def test_a_long_run_on_another_server_needs_its_bucket_named(self) -> None:
+        w = self.worlds["pruned_no_bucket"]
+        self.assertEqual(w.run.returncode, 4, w.said())
+        self.assertIn("MATRIX_FETCH_BUCKET", w.run.stderr)
+        self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ NOT-VERIFIED \d{4}-")
+        self.assertFalse(w.has("fetch.argv"), "the staging bucket was assumed for an unknown server")
 
     def test_fetch_credentials_reach_only_the_fetch(self) -> None:
         w = self.worlds["pruned_env"]
@@ -915,6 +940,67 @@ class MatrixArgumentTests(unittest.TestCase):
         self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
         self.assertEqual(run.stdout, "")
         return run.stderr
+
+    def verdict(self, server: str, *args: str, **env: str) -> tuple[bool, str]:
+        """Whether the matrix refused the server for not being on the allowlist, and what it said.
+        A server that is allowed goes on to fail later (no tools, no binaries here), never on the
+        network: the binaries are looked for before the health check."""
+        run = subprocess.run(["sh", str(MATRIX), "m2-fake-tui", server, "--timeout", "5", *args],
+                             env={**self.env, "MATRIX_BIN_DIR": str(self.root / "no-bin"), **env},
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+        refused = run.returncode == 2 and "MATRIX_ALLOW_SERVER" in run.stderr
+        return refused, run.stderr
+
+    def test_only_staging_and_this_machine_are_servers_unless_one_is_named_exactly(self) -> None:
+        for server in ("https://goalcup-ingest-staging.b-9a5.workers.dev",
+                       "https://goalcup-ingest-staging.b-9a5.workers.dev/",
+                       "https://GOALCUP-INGEST-STAGING.b-9a5.workers.dev",
+                       "http://localhost:8787", "http://127.0.0.1:8787", "http://[::1]:8787",
+                       "http://localhost"):
+            with self.subTest(allowed=server):
+                refused, said = self.verdict(server)
+                self.assertFalse(refused, said)
+        for server in ("https://example.com", "https://staging.example.com",
+                       "https://goalcup-ingest-staging.b-9a5.workers.dev.evil.example",
+                       "https://evil.example/goalcup-ingest-staging.b-9a5.workers.dev",
+                       "https://goalcup-ingest-staging.b-9a5.workers.dev:8443",
+                       "https://localhost:8787", "http://localhost.evil.example:8787"):
+            with self.subTest(refused=server):
+                refused, said = self.verdict(server)
+                self.assertTrue(refused, said)
+
+    def test_a_server_off_the_list_is_allowed_only_when_named_exactly(self) -> None:
+        server = "https://staging.example.com"
+        for named in (server, server + "/", server.upper()):
+            with self.subTest(named=named):
+                refused, said = self.verdict(server, MATRIX_ALLOW_SERVER=named)
+                self.assertFalse(refused, said)
+        for named in ("https://other.example.com", "*", "staging.example.com", "https://example.com",
+                      server + ".evil.example", ""):
+            with self.subTest(named=named):
+                refused, said = self.verdict(server, MATRIX_ALLOW_SERVER=named)
+                self.assertTrue(refused, said)
+
+    def test_the_allowlist_never_lets_production_through(self) -> None:
+        prod = "https://ingest.agentcommunity.org"
+        for server in (prod, prod + "/", "https://INGEST.agentcommunity.org", "https://x.ingest.agentcommunity.org"):
+            with self.subTest(server=server):
+                refused, said = self.verdict(server, MATRIX_ALLOW_SERVER=server)
+                self.assertIn("refusing ingest.agentcommunity.org", said)
+
+    def test_the_production_flag_lets_only_the_production_address_through(self) -> None:
+        prod = "https://ingest.agentcommunity.org"
+        refused, said = self.verdict(prod, "--allow-production")
+        self.assertNotIn("refusing", said)
+        for server in (prod + ".evil.example", "https://evil.example/ingest.agentcommunity.org"):
+            with self.subTest(server=server):
+                refused, said = self.verdict(server, "--allow-production")
+                self.assertIn("refusing ingest.agentcommunity.org", said)
+
+    def test_the_allow_variable_does_not_reach_the_harness(self) -> None:
+        # It is read and removed like the key's path: nothing goalcup starts inherits it.
+        text = MATRIX.read_text()
+        self.assertIn("unset MATRIX_ALLOW_SERVER", text)
 
     def test_test_and_duration_go_together(self) -> None:
         cfg = {"MATRIX_CONFIG_DIR": str(self.cfg)}

@@ -77,7 +77,10 @@
 #   GOALCUP_TEST_MEMBER_ID          the member approved as
 #                                   (default 00000000-0000-4000-8000-0000000c0de1).
 #   LINUX_MATRIX_SERVER             default https://goalcup-ingest-staging.b-9a5.workers.dev;
-#                                   production is refused.
+#                                   the approval key is sent to it, so it is an allowlist: only
+#                                   staging, or the one https:// server MATRIX_ALLOW_SERVER names
+#                                   exactly (passed on to matrix.sh in the container).
+#                                   Production is refused either way.
 #   LINUX_MATRIX_CELL               a cell name ([a-z0-9-], at most 40, not starting with -) so
 #                                   that cells of one connector run side by side: the volume and
 #                                   the container are goalcup-linux-matrix-<connector>-<cell>
@@ -503,10 +506,19 @@ else
     https://*) ;;
     *) fail "LINUX_MATRIX_SERVER must be https://" ;;
     esac
-    # Host names are case-insensitive: compare the lowercased address.
-    case $(printf '%s' "$server" | tr '[:upper:]' '[:lower:]') in
+    # Host names are case-insensitive: compare the lowercased address, without a trailing /.
+    server_lc=$(printf '%s' "$server" | tr '[:upper:]' '[:lower:]' | sed 's:/*$::')
+    case $server_lc in
     *ingest.agentcommunity.org*) fail "production is never a matrix target" ;;
     esac
+    # An allowlist, not a refusal of production alone: the approval key is sent to the server.
+    # Only the staging Worker, or the one server MATRIX_ALLOW_SERVER names exactly. (A local
+    # server is no target from inside a container; matrix.sh accepts one on a host.)
+    allow_lc=$(printf '%s' "${MATRIX_ALLOW_SERVER:-}" | tr '[:upper:]' '[:lower:]' | sed 's:/*$::')
+    if [ "$server_lc" != "$STAGING" ] && { [ -z "$allow_lc" ] || [ "$allow_lc" != "$server_lc" ]; }; then
+        fail "server $server is not staging ($STAGING): the approval key is sent to the server, so name it exactly to use it anyway: MATRIX_ALLOW_SERVER=$server"
+    fi
+    allow_server=$([ "$server_lc" = "$STAGING" ] || printf '%s' "$server")
     member=${GOALCUP_TEST_MEMBER_ID:-$SYNTHETIC_MEMBER}
     case $member in *[!A-Za-z0-9_-]* | "") fail "GOALCUP_TEST_MEMBER_ID may hold only letters, digits, _ -" ;; esac
 fi
@@ -697,6 +709,8 @@ busy=$(docker ps -q --filter "label=$label")
 [ -z "$busy" ] || fail "another linux-matrix container of $h${cell:+ (cell $cell)} is running ($(docker ps --filter "label=$label" --format '{{.Names}}' | tr '\n' ' ')). Wait for it; if it is stale, docker rm -f it"
 old=$(docker ps -aq --filter "label=$label")
 [ -z "$old" ] || docker rm -f $old >/dev/null 2>&1
+# The matrix in the container applies the same server rule, so it is told the server it may use.
+[ -z "$allow_server" ] || set -- "$@" -e "MATRIX_ALLOW_SERVER=$allow_server"
 # --init: something must reap orphans, as on a real host. No --privileged: nothing is mounted
 # inside; the volume is the Docker host's own ext4.
 docker run -d --name "$name" --label "$label" --init --cpus="$cpus" \

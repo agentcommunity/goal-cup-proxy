@@ -219,6 +219,45 @@ class ConfigValidation(Base):
             cfg = self.config([self.docker_cell("a", "m1")], server=server)
             self.assertTrue(any("production" in e for e in self.errors(cfg)), server)
 
+    def server_errors(self, server, **env):
+        cfg = self.config([self.docker_cell("a", "m1")], server=server)
+        saved = os.environ.get("MATRIX_ALLOW_SERVER")
+        os.environ.pop("MATRIX_ALLOW_SERVER", None)
+        os.environ.update(env)
+        try:
+            return self.errors(cfg)
+        finally:
+            os.environ.pop("MATRIX_ALLOW_SERVER", None)
+            if saved is not None:
+                os.environ["MATRIX_ALLOW_SERVER"] = saved
+
+    def test_only_staging_and_this_machine_are_servers_unless_one_is_named_exactly(self):
+        for server in ("https://goalcup-ingest-staging.b-9a5.workers.dev",
+                       "https://goalcup-ingest-staging.b-9a5.workers.dev/",
+                       "https://GOALCUP-ingest-staging.b-9a5.workers.dev",
+                       "http://localhost:8787", "http://127.0.0.1:8787"):
+            with self.subTest(allowed=server):
+                self.assertEqual(self.server_errors(server), [])
+        for server in ("https://example.com", "https://staging.example.com",
+                       "https://goalcup-ingest-staging.b-9a5.workers.dev.evil.example",
+                       "https://evil.example/goalcup-ingest-staging.b-9a5.workers.dev",
+                       "https://goalcup-ingest-staging.b-9a5.workers.dev:8443",
+                       "http://localhost.evil.example:8787", "http://localhost:80/path"):
+            with self.subTest(refused=server):
+                errs = self.server_errors(server)
+                self.assertTrue(any("MATRIX_ALLOW_SERVER" in e for e in errs), errs)
+
+    def test_a_server_off_the_list_is_allowed_only_when_named_exactly(self):
+        server = "https://staging.example.com"
+        self.assertEqual(self.server_errors(server, MATRIX_ALLOW_SERVER=server), [])
+        self.assertEqual(self.server_errors(server, MATRIX_ALLOW_SERVER=server + "/"), [])
+        self.assertTrue(self.server_errors(server, MATRIX_ALLOW_SERVER="https://other.example.com"))
+        self.assertTrue(self.server_errors(server, MATRIX_ALLOW_SERVER="*"))
+        self.assertTrue(self.server_errors(server, MATRIX_ALLOW_SERVER="staging.example.com"))
+        # Production is refused even when it is named.
+        prod = "https://ingest.agentcommunity.org"
+        self.assertTrue(any("production" in e for e in self.server_errors(prod, MATRIX_ALLOW_SERVER=prod)))
+
     def test_plain_http_refused(self):
         cfg = self.config([self.docker_cell("a", "m1")], server="http://example.workers.dev")
         self.assertTrue(any("https" in e for e in self.errors(cfg)))

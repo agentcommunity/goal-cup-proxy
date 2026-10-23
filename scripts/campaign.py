@@ -47,7 +47,9 @@ cell's result.json and the summary list the ones made, and the run prints them a
 
 Secrets. The approval key is only ever a FILE whose path goes to the child scripts in
 GOALCUP_TEST_APPROVAL_KEY_FILE. This script never opens it, and the path is never in an argument.
-Production (ingest.agentcommunity.org) is refused.
+The server is an allowlist, because the key is sent to it: the staging Worker, a server on this
+machine, or the one https:// server MATRIX_ALLOW_SERVER names exactly. Production
+(ingest.agentcommunity.org) is refused whatever is named.
 
 Before website migration 20261021100000 a test run replaces an earlier test run of the same
 operator, so cells that can run at the same time must have distinct `test_member_id`s; `check` and
@@ -216,6 +218,21 @@ def read_json(path):
         return None
 
 
+ALLOW_SERVER_ENV = "MATRIX_ALLOW_SERVER"
+LOCAL_SERVER = re.compile(r"http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?")
+
+
+def server_allowed(server):
+    """Whether the approval key may be sent to `server`: the staging Worker, a server on this
+    machine, or the one https:// address MATRIX_ALLOW_SERVER names exactly (an allowlist, not a
+    refusal of production alone; matrix.sh and linux-matrix.sh apply the same rule)."""
+    s = server.rstrip("/").lower()
+    if s == STAGING or LOCAL_SERVER.fullmatch(s):
+        return True
+    named = os.environ.get(ALLOW_SERVER_ENV, "").rstrip("/").lower()
+    return bool(named) and named == s and s.startswith("https://")
+
+
 def child_env(extra):
     """The parent's environment without any approval-key or token-file variable, plus `extra`
     (a None value removes that variable)."""
@@ -315,12 +332,13 @@ def validate(cfg, cells, parallel):
     errors, warnings = [], []
     server = cfg["server"]
     host = re.sub(r"^[a-z]+://", "", server).split("/")[0].split(":")[0].lower()
-    if host == PRODUCTION_HOST or host.endswith("." + PRODUCTION_HOST) or PRODUCTION_HOST in server:
+    if host == PRODUCTION_HOST or host.endswith("." + PRODUCTION_HOST) or PRODUCTION_HOST in server.lower():
         errors.append(f"server {server} is production; a campaign runs on staging only")
-    elif not server.startswith("https://") and host not in ("localhost", "127.0.0.1"):
-        errors.append(f"server {server} must be https://")
-    elif "staging" not in host and host not in ("localhost", "127.0.0.1"):
-        warnings.append(f"server {server} does not look like staging")
+    elif not server_allowed(server):
+        errors.append(f"server {server} is neither staging ({STAGING}) nor this machine "
+                      f"(http://localhost[:port], http://127.0.0.1[:port]): the approval key goes to "
+                      f"the server, so name it exactly to use it anyway: {ALLOW_SERVER_ENV}={server} "
+                      "(https:// only)")
     if os.environ.get("GOALCUP_TEST_APPROVAL_KEY"):
         errors.append("GOALCUP_TEST_APPROVAL_KEY in the environment is refused; give a file")
     key = cfg.get("approval_key_file")

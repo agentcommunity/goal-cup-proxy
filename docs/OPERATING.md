@@ -273,9 +273,12 @@ invocation (`key_source: "supplied"`).
   m2-fake-tui http://localhost:8787`, then remove the key file and stop the Worker.
 - **Staging:** needs a file holding staging's test approval key and a member id it may approve as:
   `GOALCUP_TEST_APPROVAL_KEY_FILE=<key file> GOALCUP_TEST_MEMBER_ID=<member id> sh scripts/matrix.sh
-  <connector> https://goalcup-ingest-staging.b-9a5.workers.dev`. In Docker (the way to run Linux on a Mac),
-  mount the file read-only (`-v <key file>:/run/key:ro`, `GOALCUP_TEST_APPROVAL_KEY_FILE=/run/key`); never
-  pass the key with `-e`. A run takes about 12 minutes. With a per-app firewall such as Little Snitch, the
+  <connector> https://goalcup-ingest-staging.b-9a5.workers.dev`. The approval key is sent to the server, so
+  the matrix accepts only that address and `http://localhost`, `http://127.0.0.1` or `http://[::1]` (with an
+  optional `:port`); any other `https://` server must be named exactly in `MATRIX_ALLOW_SERVER`, and
+  production is refused whatever is named. In Docker (the way to run Linux on a Mac) use
+  `scripts/linux-matrix.sh` (below), which never mounts the key where the agent runs; never pass the key
+  with `-e`. A run takes about 12 minutes. With a per-app firewall such as Little Snitch, the
   new `goalcup` build is held until you allow its exact path; the row then FAILs with `goalcup login
   exited 1: … connection timed out`. Allow the binary and run again.
 - **Production:** never.

@@ -62,8 +62,16 @@
 #                              `npm run dev`, or staging). The path is not secret. Unset: the
 #                              approval is yours, in a browser (see below). The script takes the
 #                              variable out of its environment at once, so no child inherits the
-#                              path. A Docker run mounts
-#                              the file read-only (-v <file>:/run/key:ro) and never uses -e.
+#                              path. In a Docker cell (linux-matrix.sh) the file is a private copy
+#                              made from standard input, removed once the start is approved
+#                              (MATRIX_FORGET_KEY=1); never mount it where an agent runs, never -e.
+#   MATRIX_ALLOW_SERVER        the one https:// server, named exactly, to use although it is not
+#                              staging or this machine. The approval key is sent to the server, so
+#                              only the staging Worker
+#                              (https://goalcup-ingest-staging.b-9a5.workers.dev) and
+#                              http://localhost, http://127.0.0.1 or http://[::1] (optional :port)
+#                              are accepted; anything else is refused without this. It never lifts
+#                              the production refusal. Removed from the environment at once.
 #   GOALCUP_TEST_MEMBER_ID     the member the test approval approves as (default: member1).
 #   MATRIX_REPO                a test run's repository, <owner>/<name>, instead of the one the kit
 #                              makes: new, empty and public. Never the organisers' practice
@@ -113,7 +121,8 @@
 #                              this script's environment at once: only fetch-run.sh gets them, in
 #                              its environment, never on a command line.
 #   MATRIX_FETCH_BUCKET        the R2 bucket (default goalcup-traces for production,
-#                              goalcup-traces-staging otherwise).
+#                              goalcup-traces-staging for the staging Worker; for any other
+#                              server it is required: the row is NOT-VERIFIED without it).
 #   MATRIX_FETCH_TIMEOUT       seconds the fetch may take (default 1800).
 #   MATRIX_FETCH_SCRIPT        another fetch script with fetch-run.sh's arguments (tests).
 #
@@ -206,6 +215,13 @@ HERE=$(cd "$(dirname "$PROG")" && pwd) || exit 3
 REPO=$(dirname "$HERE")
 
 PRODUCTION_HOST="ingest.agentcommunity.org"
+# The only servers the approval key may be sent to: the staging Worker and this machine
+# (http://localhost, 127.0.0.1 or [::1], with an optional :port). Any other server is refused unless
+# MATRIX_ALLOW_SERVER names it exactly (an allowlist: a denylist of production alone sends the key
+# to whatever host was typed).
+STAGING_SERVER="https://goalcup-ingest-staging.b-9a5.workers.dev"
+ALLOW_SERVER=${MATRIX_ALLOW_SERVER:-}
+unset MATRIX_ALLOW_SERVER
 FAKE_ID="m2-fake-tui"
 # The organisers' practice repository: the server is told it for every practice run (D69), and
 # no test run may name it.
@@ -473,42 +489,42 @@ if [ -n "$PROMPT_FILE" ]; then
   fi
 fi
 
-# The server: https://..., or http:// to this machine. Never production without the flag.
+# The server: the staging Worker, a server on this machine (http:// only to localhost, 127.0.0.1 or
+# [::1]), or the one https:// address MATRIX_ALLOW_SERVER names exactly. Never production without
+# the flag, and MATRIX_ALLOW_SERVER does not lift that.
 validate_server() {
   SERVER=$(printf '%s' "$SERVER" | sed 's:/*$::')
   SERVER_LC=$(printf '%s' "$SERVER" | tr 'A-Z' 'a-z')
   case $SERVER_LC in
-    https://*) ;;
-    http://*)
-      # Plain http only to this machine: the host is exactly localhost, 127.0.0.1 or [::1], then
-      # an optional :port and an optional path.
-      auth=${SERVER_LC#http://}
-      auth=${auth%%/*}
-      case $auth in
-        localhost | 127.0.0.1 | "[::1]") ;;
-        localhost:* | 127.0.0.1:* | "[::1]":*)
-          case ${auth##*:} in "" | *[!0-9]*) auth="" ;; esac
-          ;;
-        *) auth="" ;;
-      esac
-      [ -n "$auth" ] || {
-        echo "matrix: plain http is allowed only to localhost, 127.0.0.1 or [::1] (with an optional :port)" >&2
-        exit 2
-      }
-      ;;
-    *)
-      echo "matrix: the server must be https://..., or http:// to localhost" >&2
-      exit 2
-      ;;
-  esac
-  case $SERVER_LC in
     *"$PRODUCTION_HOST"*)
-      if [ "$ALLOW_PRODUCTION" != 1 ]; then
+      # Only the production address itself, and only with the flag.
+      if [ "$ALLOW_PRODUCTION" != 1 ] || { [ "$SERVER_LC" != "https://$PRODUCTION_HOST" ] && [ "${SERVER_LC#https://$PRODUCTION_HOST/}" = "$SERVER_LC" ]; }; then
         echo "matrix: refusing $PRODUCTION_HOST: tests never run against production (--allow-production overrides)" >&2
         exit 2
       fi
+      return 0
       ;;
   esac
+  case $SERVER_LC in
+    "$STAGING_SERVER") return 0 ;;
+    http://localhost | http://127.0.0.1 | "http://[::1]") return 0 ;;
+    http://localhost:* | http://127.0.0.1:* | "http://[::1]":*)
+      # A port is digits only, and nothing follows it (no path, no user, no second host).
+      case ${SERVER_LC##*:} in "" | *[!0-9]*) ;; *) return 0 ;; esac
+      ;;
+  esac
+  allow_lc=$(printf '%s' "$ALLOW_SERVER" | sed 's:/*$::' | tr 'A-Z' 'a-z')
+  if [ -n "$allow_lc" ] && [ "$allow_lc" = "$SERVER_LC" ]; then
+    case $SERVER_LC in
+      https://*) return 0 ;;
+      *)
+        echo "matrix: MATRIX_ALLOW_SERVER names $SERVER, which is not https://; plain http is allowed only to localhost, 127.0.0.1 or [::1]" >&2
+        exit 2
+        ;;
+    esac
+  fi
+  echo "matrix: refusing server $SERVER: the approval key is sent to the server, so only $STAGING_SERVER and http://localhost, http://127.0.0.1 or http://[::1] (with an optional :port) are accepted; to use another https:// server, name it exactly: MATRIX_ALLOW_SERVER=$SERVER" >&2
+  exit 2
 }
 [ -n "$CHECK_CFG" ] || validate_server
 
@@ -1397,6 +1413,11 @@ PY
       FAIL_REASON="NOT VERIFIED: long run, server copy not fetched (give MATRIX_FETCH_INDEX or DATABASE_URL, and MATRIX_FETCH_STORE or CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, to rebuild it with scripts/fetch-run.sh)"
       return 1
     fi
+    if ! fetch_bucket; then
+      RESULT=NOT-VERIFIED
+      FAIL_REASON="NOT VERIFIED: long run, server copy not fetched (the R2 bucket of $SERVER is not known: name it with MATRIX_FETCH_BUCKET)"
+      return 1
+    fi
     if ! fetch_secrets_wait; then
       RESULT=NOT-VERIFIED
       FAIL_REASON="NOT VERIFIED: long run, server copy not fetched (the host did not hand over the fetch credentials within ${FETCH_SECRETS_WAIT}s)"
@@ -1585,17 +1606,25 @@ fetch_secrets_wait() {
   return 0
 }
 
+# The R2 bucket of the server's traces: MATRIX_FETCH_BUCKET, else the one known for the staging
+# Worker or production; for any other server (a local Worker, a server named with
+# MATRIX_ALLOW_SERVER) it is not known and not guessed. Sets FETCH_BUCKET; 1 when unknown.
+fetch_bucket() {
+  FETCH_BUCKET=${MATRIX_FETCH_BUCKET:-}
+  [ -z "$FETCH_BUCKET" ] || return 0
+  case $SERVER_LC in
+    "https://$PRODUCTION_HOST" | "https://$PRODUCTION_HOST"/*) FETCH_BUCKET=goalcup-traces ;;
+    "$STAGING_SERVER") FETCH_BUCKET=goalcup-traces-staging ;;
+    *) return 1 ;;
+  esac
+}
+
 # Rebuild the server's copy of one entry into $ROOT/servercopy/<entry> with fetch-run.sh (read
 # only), bounded by MATRIX_FETCH_TIMEOUT. The credentials reach it in its environment only.
 fetch_copy() { # entry
   fc_entry=$1
-  fc_bucket=${MATRIX_FETCH_BUCKET:-}
-  if [ -z "$fc_bucket" ]; then
-    case $SERVER_LC in
-      "https://$PRODUCTION_HOST" | "https://$PRODUCTION_HOST"/*) fc_bucket=goalcup-traces ;;
-      *) fc_bucket=goalcup-traces-staging ;;
-    esac
-  fi
+  fetch_bucket || fail "the R2 bucket of $SERVER is not known: name it with MATRIX_FETCH_BUCKET" || return 1
+  fc_bucket=$FETCH_BUCKET
   set -- --bucket "$fc_bucket"
   [ -z "$FETCH_INDEX" ] || set -- "$@" --index "$FETCH_INDEX"
   [ -z "$FETCH_STORE" ] || set -- "$@" --store "$FETCH_STORE"

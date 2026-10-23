@@ -73,7 +73,7 @@ class LinuxMatrixTests(unittest.TestCase):
         }
         for name in ("GOALCUP_TEST_APPROVAL_KEY", "LINUX_MATRIX_SERVER",
                      "GOALCUP_TEST_MEMBER_ID", "GOALCUP_HEAVY_LOCK_HELD", "LINUX_MATRIX_LOCK_WAIT",
-                     "LINUX_MATRIX_CELL", "LINUX_MATRIX_PREBUILT", "LINUX_MATRIX_CODEX_EFFORT",
+                     "MATRIX_ALLOW_SERVER", "LINUX_MATRIX_CELL", "LINUX_MATRIX_PREBUILT", "LINUX_MATRIX_CODEX_EFFORT",
                      "MATRIX_PROMPT", "MATRIX_PROMPT_FILE", "MATRIX_PROMPT_DELAY",
                      "MATRIX_SUBMIT_DELAY", "MATRIX_PRE_PROMPT_KEYS", "MATRIX_PRE_PROMPT_DELAY",
                      "MATRIX_REPO", "MATRIX_CELL", "MATRIX_EXPECT_FILES",
@@ -210,6 +210,51 @@ class LinuxMatrixTests(unittest.TestCase):
                 self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
                 self.assertIn("production", run.stdout)
                 self.assertEqual(self.log.read_text(), "")
+
+    def test_only_staging_is_a_server_unless_one_is_named_exactly(self) -> None:
+        ok = self.run_script("run", "codex-cli",
+                             LINUX_MATRIX_SERVER="https://GOALCUP-ingest-staging.b-9a5.workers.dev/")
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+        for server in ("https://example.com", "https://staging.example.com/",
+                       "https://goalcup-ingest-staging.b-9a5.workers.dev.evil.example",
+                       "https://evil.example/goalcup-ingest-staging.b-9a5.workers.dev",
+                       "https://goalcup-ingest-staging.b-9a5.workers.dev:8443"):
+            with self.subTest(server=server):
+                self.log.write_text("")
+                run = self.run_script("run", "codex-cli", LINUX_MATRIX_SERVER=server)
+                self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+                self.assertIn("MATRIX_ALLOW_SERVER", run.stdout)
+                self.assertEqual(self.log.read_text(), "")
+
+    def test_a_server_off_the_list_is_allowed_only_when_named_exactly(self) -> None:
+        server = "https://staging.example.com"
+        run = self.run_script("run", "codex-cli", LINUX_MATRIX_SERVER=server, MATRIX_ALLOW_SERVER=server)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        [docker_run] = self.docker_lines("run")
+        # The matrix in the container applies the same rule, so it is told the same server.
+        self.assertIn(f"-e LINUX_MATRIX_SERVER={server} ", docker_run)
+        self.assertIn(f"-e MATRIX_ALLOW_SERVER={server} ", docker_run)
+        for named in ("https://other.example.com", "*", "staging.example.com", server + ".evil.example"):
+            with self.subTest(named=named):
+                self.log.write_text("")
+                run = self.run_script("run", "codex-cli", LINUX_MATRIX_SERVER=server,
+                                      MATRIX_ALLOW_SERVER=named)
+                self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+                self.assertEqual(self.log.read_text(), "")
+
+    def test_the_allowlist_does_not_lift_the_production_refusal(self) -> None:
+        prod = "https://ingest.agentcommunity.org"
+        run = self.run_script("run", "codex-cli", LINUX_MATRIX_SERVER=prod, MATRIX_ALLOW_SERVER=prod)
+        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+        self.assertIn("production", run.stdout)
+        self.assertEqual(self.log.read_text(), "")
+
+    def test_plain_http_is_refused_even_when_named(self) -> None:
+        server = "http://staging.example.com"
+        run = self.run_script("run", "codex-cli", LINUX_MATRIX_SERVER=server, MATRIX_ALLOW_SERVER=server)
+        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+        self.assertIn("https://", run.stdout)
+        self.assertEqual(self.log.read_text(), "")
 
     def test_a_bad_command_line_names_the_problem_in_one_line(self) -> None:
         for args in ((), ("frobnicate",), ("run",), ("login", "codex-cli", "extra")):
