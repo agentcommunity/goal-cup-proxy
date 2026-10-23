@@ -784,7 +784,11 @@ ok." Goal Cup Proxy reads, stores, logs and passes no key, GitHub token included
 - **The clone is the participant's own git.** Over SSH when their SSH login works, otherwise
   HTTPS. No credential helper and no token is written to it. `.env*` goes in its
   `.git/info/exclude`. A practice run clones nothing: its folder is a new local repository with
-  no remote, and the server is told the organisers' practice repository as its `repo_url`.
+  no remote and an author of its own (`Goal Cup practice <practice@goalcup.invalid>`), and the
+  server is told the organisers' practice repository as its `repo_url`. Its agent gets no git
+  login: none of the variables below, and `GIT_CONFIG_NOSYSTEM=1`, because the system git config
+  (Apple's or Homebrew's git sets `credential.helper=osxkeychain`) would hand it the
+  participant's keychain login.
 - **The environment is still built from nothing (D1, D36, D38, D61), plus exactly five ways to
   the participant's git login**, as paths or sockets and only when set or present, and never for
   a practice run: `SSH_AUTH_SOCK`; `GIT_CONFIG_GLOBAL`, their own or their `~/.gitconfig` (else

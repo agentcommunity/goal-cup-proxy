@@ -443,7 +443,10 @@ pub fn unused_git_config(parent_env: &BTreeMap<String, String>) -> Option<PathBu
 
 /// What every program the agent runs sees of the participant, beside the harness's own
 /// variables: [`CAPTURE_IDENTITY_ENV`], their `PATH` ([`harness_path`]), `HOME` set to `home`,
-/// and with `git_login` the way to their git login ([`participant_git_env`]). The launch
+/// and with `git_login` the way to their git login ([`participant_git_env`]). Without it (a
+/// practice run) `GIT_CONFIG_NOSYSTEM=1` as well: the system git config (Apple's or Homebrew's
+/// git sets `credential.helper=osxkeychain` there) would otherwise hand the agent the
+/// participant's keychain login. The launch
 /// builds the harness's environment from this, and `goalcup start`'s push test runs the
 /// participant's git in exactly this, so the test is of the git the agent will have.
 pub fn agent_base_env(
@@ -459,6 +462,8 @@ pub fn agent_base_env(
     }
     if git_login {
         env.extend(participant_git_env(parent_env));
+    } else {
+        env.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
     }
     env.insert("HOME".into(), home.to_string());
     env.insert("PATH".into(), harness_path(parent_env));
@@ -688,7 +693,8 @@ pub struct CaptureLaunch<'a> {
     /// as [`crate::run::time_left::FILE_ENV`] (D66). `goalcup start` always gives one.
     pub time_left_file: Option<&'a Path>,
     /// Hand on the way to the participant's git login ([`participant_git_env`], D69): every
-    /// run but a practice run, which pushes nowhere.
+    /// run but a practice run, which pushes nowhere and gets `GIT_CONFIG_NOSYSTEM=1` instead
+    /// ([`agent_base_env`]).
     pub git_login: bool,
 }
 

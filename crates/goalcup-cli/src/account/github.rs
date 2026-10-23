@@ -621,7 +621,9 @@ pub fn clone_repo(git: &OsStr, source: &str, remote: &str, dest: &Path) -> Resul
 }
 
 /// A practice run's work folder: a new, empty git repository at `dest` with no remote. A practice
-/// run has no GitHub repository and pushes nowhere.
+/// run has no GitHub repository and pushes nowhere. Its agent reads no global or system git
+/// config (`launch::agent_base_env`), so the repository names an author of its own,
+/// [`PRACTICE_AUTHOR`], and the agent's commits work.
 pub fn init_local(git: &OsStr, dest: &Path) -> Result<(), CliError> {
     run_git(
         git,
@@ -630,8 +632,23 @@ pub fn init_local(git: &OsStr, dest: &Path) -> Result<(), CliError> {
         CliError::Refused,
         "git could not make the practice folder",
     )?;
+    for (key, value) in [
+        ("user.name", PRACTICE_AUTHOR.0),
+        ("user.email", PRACTICE_AUTHOR.1),
+    ] {
+        run_git(
+            git,
+            ["config", "--local", key, value].map(OsStr::new),
+            Some(dest),
+            CliError::Internal,
+            "git could not configure the practice folder",
+        )?;
+    }
     exclude_env_files(dest)
 }
+
+/// The author a practice run's commits carry: no person's name.
+pub const PRACTICE_AUTHOR: (&str, &str) = ("Goal Cup practice", "practice@goalcup.invalid");
 
 /// Add `.env*` to the repository's own ignore list, `.git/info/exclude`, which is never
 /// committed: a key file the participant gives their agent is not pushed by mistake.
