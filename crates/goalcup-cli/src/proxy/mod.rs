@@ -385,6 +385,12 @@ impl ProxyHandle {
         self.shared.emitter.model_requests_counter()
     }
 
+    /// The recording proxy's count of recorded model requests
+    /// ([`api::CaptureEmitter::recorded_requests`]), shared as [`ProxyHandle::model_requests`] is.
+    pub fn recorded_requests(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        self.shared.emitter.recorded_requests_counter()
+    }
+
     /// A snapshot of the counters. It never waits on a connection or the sink.
     pub fn health(&self) -> ProxyHealth {
         self.shared.health()

@@ -6,7 +6,9 @@
 # It reads lines from its terminal. The first line it reads creates a new session file under
 # its config home (`$CODEX_HOME/sessions/`, the connector's native root), as a measured harness
 # does when the first message is submitted, and every line is appended to that file as one JSON
-# record. `/exit` ends it with status 0 and writes no session file of its own. `/suspend` stops
+# record. `/call` runs $M2_FAKE_OUT/tui.call.sh (a model request the test wrote) and writes no
+# session file, then prints `tui: called`.
+# `/exit` ends it with status 0 and writes no session file of its own. `/suspend` stops
 # it (`kill -TSTP $$`) as a TUI's own Ctrl-Z handling does, and `/suspend-group` stops its whole
 # process group; each prints `tui: resumed` once it is continued.
 #
@@ -96,6 +98,11 @@ while :; do
       echo "tui: bye"
       echo exit > "$out/tui.end"
       exit 0
+      ;;
+    /call)
+      [ -f "$out/tui.call.sh" ] && . "$out/tui.call.sh"
+      echo "tui: called"
+      continue
       ;;
     /suspend)
       kill -TSTP $$

@@ -293,6 +293,8 @@ pub struct Who<'a> {
     pub run_id: &'a str,
     /// The run's end ([`end_words`]), when it has one.
     pub until: Option<&'a str>,
+    /// The harness's section of the setup guide (its connector's `participant.setup_section`).
+    pub guide: &'a str,
 }
 
 /// goalcup has not written the run's state for `silent` (words).
@@ -408,6 +410,28 @@ pub fn disk_resumed(free: &str) -> String {
 pub fn disk_resumed_unread() -> &'static str {
     "disk: if the disk is nearly full, free some space outside your run's folders. Goal Cup \
      Proxy could not read the free space, so your agent was resumed."
+}
+
+/// The words every silent-native-leg line carries, whatever the harness and the count. Tests and
+/// scripts look for them.
+pub const NATIVE_SILENT_MARK: &str = "session file yet";
+
+/// The native leg is silent: the recording proxy recorded `requests` requests to the model
+/// service and `harness` has written no session file Goal Cup could record. The run goes on;
+/// `guide` is the harness's section of the setup guide. Said once per start or continue (in
+/// `host.log` while the harness owns the terminal) and kept by `goalcup status` until a session
+/// file is recorded.
+pub fn problem_native_silent(harness: &str, requests: u64, guide: &str) -> String {
+    let requests = match requests {
+        1 => "1 request".to_string(),
+        n => format!("{n} requests"),
+    };
+    format!(
+        "Goal Cup has recorded {requests} to the model service but no {harness} \
+         {NATIVE_SILENT_MARK}. Your run is still recording the model traffic; keep the agent \
+         running. Check that {harness} is the supported version and set up as the guide says: \
+         {guide}"
+    )
 }
 
 pub fn problem_sleep(why: &str) -> String {

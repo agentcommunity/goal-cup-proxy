@@ -388,6 +388,7 @@ pub fn start_options(id: &str) -> goalcup_cli::commands::start::StartOptions {
         dev: false,
         run_folder: None,
         disk: disk_of(4 << 20),
+        native_silence: Default::default(),
         mode: goalcup_cli::account::device::RunMode::Competition,
         open_url: never_open,
         upload_policy: Default::default(),

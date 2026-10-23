@@ -59,6 +59,9 @@ pub struct ContinueOptions {
     /// The sizes of the run's disk reservation and how often it is watched
     /// ([`DiskPolicy::default`] in every shipped build).
     pub disk: DiskPolicy,
+    /// When the harness's silent native leg is said ([`crate::run::NativeSilence::default`] in
+    /// every shipped build).
+    pub native_silence: crate::run::NativeSilence,
     /// When the run's chunks go and how failures wait.
     pub upload_policy: Policy,
     /// How the machine is kept awake for the segment's life.
@@ -265,6 +268,7 @@ pub fn continue_with(
         dev: previous_entry.dev,
         run_folder: Some(folder),
         disk: opts.disk,
+        native_silence: opts.native_silence,
         mode: record.mode(),
         open_url: |_| false,
         upload_policy: opts.upload_policy,

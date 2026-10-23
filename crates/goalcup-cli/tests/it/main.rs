@@ -33,6 +33,8 @@ mod m2_tls_connect;
 mod m2_websocket_relay;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod model_host_from;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod native_silence;
 #[cfg(unix)]
 mod per_run_home;
 mod preflight_doctor;

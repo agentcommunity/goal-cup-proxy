@@ -93,6 +93,7 @@ pub fn build_payload(inputs: &StatusInputs) -> StatusPayload {
         // The receiver's admission counts; the caller sets them when it holds them.
         producers_consumed: None,
         admissions_refused: None,
+        native_files_admitted: None,
     }
 }
 

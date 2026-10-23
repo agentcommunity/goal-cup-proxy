@@ -827,7 +827,8 @@ pub(super) fn run_harness<'a>(
         launched,
     );
     let vitals = match forked.proxied.as_ref() {
-        Some(proxied) => crate::run::RunSignals::counting(proxied.proxy.model_requests()),
+        Some(proxied) => crate::run::RunSignals::counting(proxied.proxy.model_requests())
+            .recording_from(proxied.proxy.recorded_requests()),
         None => crate::run::RunSignals::default(),
     };
     // A run on a server reports its disk and goalcup's own processes in its heartbeats.
@@ -911,6 +912,11 @@ pub(super) fn run_harness<'a>(
                     Arc::new(move || ask_recording(&cfg, &entry_id, &key))
                 },
                 time_left_file: Some(crate::run::time_left::file_path(cfg, &forked.record.run_id)),
+                native: Some(crate::run::watch::NativeWatch {
+                    silence: cx.opts.native_silence,
+                    harness: forked.harness_name.clone(),
+                    guide: crate::commands::prep::setup_guide_link(cx.connector),
+                }),
             }),
             pause: Some(pause.clone()),
         })
@@ -1098,26 +1104,29 @@ fn ask_recording(
     cfg: &Path,
     entry_id: &str,
     run_public_key: &str,
-) -> Option<crate::run::Recording> {
+) -> Option<crate::run::watch::Heard> {
     let client = crate::daemon::HttpDaemonClient::from_config_dir(cfg).ok()?;
     recording_of(&client, entry_id, run_public_key)
 }
 
-/// The recording as the entry's own signed status says it. The status route is unauthenticated,
-/// so a document counts only when it is signed by the run key the entry's creation named and is
-/// about this entry: the heartbeat tells the server this word, and a forged "ok" must not.
+/// The recording, and the files the native source has admitted, as the entry's own signed
+/// status says them. The status route is unauthenticated, so a document counts only when it is
+/// signed by the run key the entry's creation named and is about this entry: the heartbeat tells
+/// the server this word, and a forged "ok" must not.
 fn recording_of(
     client: &dyn DaemonClient,
     entry_id: &str,
     run_public_key: &str,
-) -> Option<crate::run::Recording> {
+) -> Option<crate::run::watch::Heard> {
     let status = retry_busy(|| client.status(entry_id)).ok()?;
     if status.verify_with(run_public_key).is_err() || status.payload.entry_id != entry_id {
         return None;
     }
-    Some(crate::run::Recording::of_capture(
-        status.payload.capture?.capture,
-    ))
+    Some(crate::run::watch::Heard {
+        answered: true,
+        recording: crate::run::Recording::of_capture(status.payload.capture?.capture),
+        native_files: status.payload.native_files_admitted,
+    })
 }
 
 /// A fresh version-4 UUID, the form a pre-assigned harness session id takes.
@@ -1203,7 +1212,7 @@ mod tests {
         let key = info.run_public_key.clone();
         let entry = info.entry_id.clone();
         assert_eq!(
-            recording_of(&daemon, &entry, &key),
+            recording_of(&daemon, &entry, &key).map(|heard| heard.recording),
             Some(crate::run::Recording::Gaps),
             "signed by the entry's key, about the entry"
         );
