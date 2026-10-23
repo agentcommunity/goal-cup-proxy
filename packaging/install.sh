@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install Goal Cup Proxy from a GitHub release. One command, no sudo:
 #
-#   curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh
 #
 # It picks the build for this machine (macOS or Linux, arm64 or x86_64; WSL2 is Linux), checks the
 # download against the SHA256SUMS file of the same release, and installs into ~/.local:
@@ -16,13 +16,27 @@
 # Options (as arguments after `sh -s --`, or as environment variables):
 #   --version <x.y.z>   GOALCUP_VERSION   install that release instead of the latest
 #   --prefix <dir>      GOALCUP_PREFIX    install under <dir> instead of ~/.local
+#   --force             GOALCUP_FORCE=1   install even if a Goal Cup run is recording (see below)
 # For tests: GOALCUP_RELEASE_BASE is a URL (https:// or file://) that holds SHA256SUMS and the
 # tarballs; it replaces the GitHub release URL.
+#
+# A new goalcup cannot talk to the daemon of another release, so the script never replaces goalcup
+# while a run is recording. The new release is already downloaded and checked when the guard runs,
+# but nothing in the prefix has been touched. The guard asks the goalcup it would replace
+# (<prefix>/bin/goalcup, else the one on PATH) for `goalcup status --json`, and stops with
+# INSTALL_BLOCKED when the signed status says health "online" and the capture run is starting,
+# running or exited (an exited run that is not sealed can still be continued). A sealed run, a
+# machine with no run on record, a machine where no daemon answers (nothing is recording) and a
+# first install do not block. If the answer cannot be read (an old goalcup without --json, another
+# error, output it cannot parse, no answer within 10 s) it prints INSTALL_UNSURE and goes on.
+# --force or GOALCUP_FORCE=1 skips all of this. Two limits:
+# `goalcup status` may spend up to 3 s sending leftover uploads before it answers, and it looks
+# only at the newest run on record on this computer.
 #
 # The whole script is one function called on the last line, so a download cut short runs nothing.
 set -eu
 
-repo="agentcommunity/goal-cup-tracer"
+repo="agentcommunity/goal-cup-proxy"
 
 say() { printf '%s\n' "$*"; }
 die() {
@@ -87,6 +101,99 @@ sha256() {
     fi
 }
 
+# Ask the goalcup that would be replaced whether a run is recording; stop if one is. Called before
+# anything in the prefix is touched. The JSON is read with sh tools only (the player may have no
+# jq or python3): `goalcup status --json` pretty-prints one key per line, so the output is joined
+# into one line and sed pulls out the two values by key. That is safe here because the keys are
+# unique and a quote inside a JSON string is escaped, so a string value cannot hold a bare
+# "health": or "run": key. The run state is the "run" key of the "capture" object of the payload.
+guard_recording_run() {
+    [ "$force" != 1 ] || return 0
+    existing="$prefix/bin/goalcup"
+    if [ ! -f "$existing" ] || [ ! -x "$existing" ]; then
+        existing=$(command -v goalcup 2>/dev/null || true)
+    fi
+    case $existing in
+    /*) ;;
+    *) return 0 ;; # no goalcup to replace: a first install
+    esac
+
+    status_out="$work/status.out"
+    status_err="$work/status.err"
+    status_rc="$work/status.rc"
+    status_pid="$work/status.pid"
+    # macOS has no `timeout`: run it in the background and kill it after 10 s. The helper writes
+    # the exit status to a file when goalcup ends, so no job-control behaviour of the shell is
+    # needed. Its own output goes nowhere, so nothing it starts can hold this script's pipes.
+    (
+        "$existing" status --json >"$status_out" 2>"$status_err" </dev/null &
+        child=$!
+        printf '%s\n' "$child" >"$status_pid"
+        code=0
+        wait "$child" || code=$?
+        printf '%s\n' "$code" >"$status_rc.tmp" && mv "$status_rc.tmp" "$status_rc"
+    ) >/dev/null 2>&1 &
+    started=$(date +%s)
+    timed_out=0
+    while [ ! -f "$status_rc" ]; do
+        if [ $(($(date +%s) - started)) -gt 10 ]; then
+            timed_out=1
+            if [ -f "$status_pid" ]; then
+                kill -9 "$(cat "$status_pid")" 2>/dev/null || true
+            fi
+            break
+        fi
+        sleep 0.1 2>/dev/null || sleep 1
+    done
+
+    verdict=unsure
+    if [ "$timed_out" = 0 ]; then
+        rc=$(cat "$status_rc" 2>/dev/null || true)
+        if [ "$rc" = 0 ]; then
+            flat=$(tr -d '\r\n' <"$status_out")
+            health=$(printf '%s' "$flat" |
+                sed -n 's/.*"health"[[:space:]]*:[[:space:]]*"\([a-z_]*\)".*/\1/p' | head -n 1)
+            run=$(printf '%s' "$flat" |
+                sed -n 's/.*"capture"[[:space:]]*:[[:space:]]*{//p' |
+                sed -n 's/.*"run"[[:space:]]*:[[:space:]]*"\([a-z_]*\)".*/\1/p' | head -n 1)
+            case $health in
+            online)
+                case $run in
+                starting | running | exited) verdict=blocked ;;
+                sealed) verdict=clear ;;
+                esac
+                ;;
+            ?*) verdict=clear ;; # sealed, sealing_recovery_needed, unknown: not recording
+            esac
+        elif [ -n "$rc" ] && [ ! -s "$status_out" ]; then
+            # `goalcup status` prints one `goalcup: <reason>` line on stderr, exit 1, and nothing
+            # on stdout. Three reasons mean nothing is recording: no run on record; no control.json
+            # (ControlError text of config.rs, "no daemon is running: there is no ..."); a
+            # control.json whose daemon is gone (ControlError::Unreachable, "the daemon is not
+            # reachable: ..."), kept to a refused connection: a timed-out read could be a live
+            # daemon that is busy, which stays unsure. The daemon exits about 30 s after the last
+            # seal, and `status` starts one only for a computer that has a daemon.toml. The
+            # wording is the same in the latest release and in this tree.
+            if grep -q 'no run has been started from this machine' "$status_err" ||
+                grep -q 'no daemon is running: there is no ' "$status_err" ||
+                { grep -q 'the daemon is not reachable: ' "$status_err" &&
+                    grep -q 'Connection Failed' "$status_err"; }; then
+                verdict=clear
+            fi
+        fi
+    fi
+
+    case $verdict in
+    blocked)
+        printf '%s\n' "A Goal Cup run is recording on this computer. Update after it ends, or run the installer again with: curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh -s -- --force" >&2
+        exit 1
+        ;;
+    unsure)
+        printf '%s\n' "Could not tell whether a Goal Cup run is recording. If one is, stop this update and run it after the run ends." >&2
+        ;;
+    esac
+}
+
 # Restore one promoted destination. The staging files themselves record which renames
 # completed, including when a signal arrives between a rename and the next shell command.
 restore() {
@@ -136,6 +243,7 @@ cleanup() {
 main() {
     version="${GOALCUP_VERSION:-}"
     prefix="${GOALCUP_PREFIX:-}"
+    force="${GOALCUP_FORCE:-}"
     while [ $# -gt 0 ]; do
         case "$1" in
         --version)
@@ -148,7 +256,11 @@ main() {
             prefix=$2
             shift 2
             ;;
-        *) die "unknown option '$1' (known: --version <x.y.z>, --prefix <dir>)" ;;
+        --force)
+            force=1
+            shift
+            ;;
+        *) die "unknown option '$1' (known: --version <x.y.z>, --prefix <dir>, --force)" ;;
         esac
     done
     version=${version#v}
@@ -219,6 +331,9 @@ main() {
     if { [ -e "$share" ] || [ -L "$share" ]; } && [ ! -d "$share" ]; then
         die "$share is not a directory; nothing was installed"
     fi
+
+    # Last check before the first change: never replace goalcup while a run is recording.
+    guard_recording_run
 
     mkdir -p "$prefix/bin" "$prefix/share"
     # Stage every artifact before changing any installed file. Separate private directories

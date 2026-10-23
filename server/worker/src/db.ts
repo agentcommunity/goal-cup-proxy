@@ -440,6 +440,11 @@ export interface Db {
    * nothing and is never replaced, so an operator's test runs can run side by side.
    */
   openRun(args: OpenRunArgs): Promise<OpenRunResult>;
+  /**
+   * Is this member a Goal Cup admin (a confirmed email on the admins list)? False for an unknown
+   * member. Asked only for a `--dev` run: nothing else in the Worker depends on it.
+   */
+  memberIsAdmin(memberId: string): Promise<boolean>;
   /** Add the next segment. See `ContinueRunResult`. */
   continueRun(args: ContinueRunArgs): Promise<ContinueRunResult>;
   /** The run, and the entry named (null if it is not this run's) or the current one when none is named. Null if the run is not this member's. */

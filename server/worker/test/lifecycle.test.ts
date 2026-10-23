@@ -8,9 +8,18 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { Signer } from "../src/sign.ts";
 import type { StartReceipt } from "../src/sign.ts";
-import { GENESIS, openBody, sha256, verifyReceipt } from "./helpers/client.ts";
+import { GENESIS, makeChunk, openBody, sha256, verifyReceipt } from "./helpers/client.ts";
 import { type Opened, T0, WINDOW, lifecycle, rig } from "./helpers/rig.ts";
 import { TEST_SEED } from "./helpers/worker.ts";
+
+// The chunk upload needs the Workers runtime's FixedLengthStream; a pass-through stands in for it
+// here (test/quota.test.ts does the same; test/integration.test.ts has the real one).
+const g = globalThis as unknown as { FixedLengthStream?: unknown };
+g.FixedLengthStream ??= class extends TransformStream<Uint8Array, Uint8Array> {
+  constructor(_length: number) {
+    super();
+  }
+};
 
 const publicKey = (await Signer.fromSeedHex(TEST_SEED)).publicKeyHex;
 /** The default run length (RUN_HOURS 168), in seconds. */
@@ -520,5 +529,132 @@ describe("facts about the machine and the connection", () => {
     } finally {
       r.stop();
     }
+  });
+});
+
+describe("--dev runs and the minimum competition version (D70)", () => {
+  const ADMINS = { ...WINDOW, LOCAL_ADMIN_MEMBERS: "root, admin2" };
+  const INSTALL = "curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh";
+  const DEV_COMPETES = "A --dev run never enters the competition. Start without --dev.";
+  const DEV_NOT_ADMIN = "--dev is for Goal Cup admins only. Start without --dev.";
+  const tooOld = (version: string) => `This goalcup (${version}) is too old for the cup. Update it when no run is open: ${INSTALL}`;
+
+  lifecycle("a dev competition open is refused, also for an admin", async (r) => {
+    for (const member of ["alice", "root"]) {
+      const res = await r.open(await r.cred(member), `s-${member}`, { dev: true });
+      assertError(res, 403, "forbidden");
+      assert.equal(res.body.message, DEV_COMPETES);
+    }
+  }, ADMINS);
+
+  lifecycle("a dev practice open by a non-admin is refused", async (r) => {
+    const res = await r.open(await r.cred("alice", "practice"), "s1", { dev: true });
+    assertError(res, 403, "forbidden");
+    assert.equal(res.body.message, DEV_NOT_ADMIN);
+    assert.equal(r.adminCalls(), 1);
+  }, ADMINS);
+
+  lifecycle("a dev practice open by an admin opens", async (r) => {
+    assert.equal((await r.open(await r.cred("root", "practice"), "s1", { dev: true })).status, 201);
+    assert.equal((await r.open(await r.cred("admin2", "practice"), "s2", { dev: true })).status, 201); // the list is trimmed
+  }, ADMINS);
+
+  lifecycle("a dev continue of a competition run is refused", async (r) => {
+    const root = await r.cred("root");
+    const a = await r.start(root, "s1");
+    const res = await r.cont(root, a.run_id, a.entry_id, "s-two", { dev: true });
+    assertError(res, 403, "forbidden");
+    assert.equal(res.body.message, DEV_COMPETES);
+    assert.equal(r.adminCalls(), 0); // the mode is refused before anyone is asked about the member
+  }, ADMINS);
+
+  lifecycle("a dev continue of a practice run is for admins only", async (r) => {
+    const [alice, root] = [await r.cred("alice", "practice"), await r.cred("root", "practice")];
+    const a = await r.start(alice, "s1");
+    const b = await r.start(root, "s2");
+    const refused = await r.cont(alice, a.run_id, a.entry_id, "s-two", { dev: true });
+    assertError(refused, 403, "forbidden");
+    assert.equal(refused.body.message, DEV_NOT_ADMIN);
+    assert.equal((await r.cont(root, b.run_id, b.entry_id, "s-two", { dev: true })).status, 201);
+    assertError(await r.cont(root, "r0000000000000000", b.entry_id, "s-x", { dev: true }), 404, "not_found");
+  }, ADMINS);
+
+  lifecycle("an open without dev never asks whether the member is an admin", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    assert.equal((await r.open(await r.cred("bob", "practice"), "s2", { dev: false })).status, 201);
+    assert.equal((await r.cont(alice, a.run_id, a.entry_id, "x", { dev: false })).status, 201);
+    assert.equal(r.adminCalls(), 0);
+  }, ADMINS);
+
+  lifecycle("dev must be a boolean", async (r) => {
+    for (const bad of ["yes", 1, 0, "true", null, [], {}]) {
+      assertError(await r.open(await r.cred("root", "practice"), "s1", { dev: bad }), 400, "malformed");
+    }
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s2");
+    assertError(await r.cont(alice, a.run_id, a.entry_id, "s-two", { dev: "yes" }), 400, "malformed");
+    assert.equal(r.adminCalls(), 0);
+  }, ADMINS);
+
+  lifecycle("an old goalcup cannot open a competition run once a minimum is set", async (r) => {
+    const [alice, bob, carol] = [await r.cred("alice"), await r.cred("bob"), await r.cred("carol")];
+    r.env.MIN_COMPETITION_VERSION = "0.7.0";
+    const res = await r.open(alice, "s1", { proxy_version: "0.6.1" });
+    assertError(res, 403, "forbidden");
+    assert.equal(res.body.message, tooOld("0.6.1"));
+    assert.equal((await r.open(alice, "s1", { proxy_version: undefined, tracer_version: "0.6.9" })).status, 403); // the older name counts too
+    assertError(await r.open(alice, "s1", { proxy_version: "unknown" }), 403, "forbidden"); // unknown while a minimum is set
+    assert.equal((await r.open(alice, "s1", { proxy_version: "0.7.0" })).status, 201);
+    assert.equal((await r.open(bob, "s2", { proxy_version: "1.0.0" })).status, 201);
+    assert.equal((await r.open(carol, "s3", { proxy_version: "0.10.0" })).status, 201); // numbers, not text
+  }, ADMINS);
+
+  lifecycle("the TOO_OLD answer comes before the dev answers", async (r) => {
+    const alice = await r.cred("alice");
+    r.env.MIN_COMPETITION_VERSION = "0.7.0";
+    const res = await r.open(alice, "s1", { proxy_version: "0.6.1", dev: true });
+    assert.equal(res.body.message, tooOld("0.6.1"));
+    assert.equal(r.adminCalls(), 0);
+  }, ADMINS);
+
+  lifecycle("the minimum does not touch continue or practice", async (r) => {
+    const [alice, bob] = [await r.cred("alice"), await r.cred("bob", "practice")];
+    const a = await r.start(alice, "s1");
+    r.env.MIN_COMPETITION_VERSION = "0.7.0";
+    assert.equal((await r.cont(alice, a.run_id, a.entry_id, "s-two", { tracer_version: "0.6.1" })).status, 201);
+    assert.equal((await r.open(bob, "s2", { proxy_version: "0.6.1" })).status, 201);
+  });
+
+  lifecycle("a version with a suffix compares by its numbers", async (r) => {
+    const [alice, bob, carol] = [await r.cred("alice"), await r.cred("bob"), await r.cred("carol")];
+    r.env.MIN_COMPETITION_VERSION = "0.7.0";
+    assert.equal((await r.open(alice, "s1", { proxy_version: "0.7.0-dev" })).status, 201);
+    assert.equal((await r.open(bob, "s2", { proxy_version: "goalcup 0.8.2+abc" })).status, 201);
+    assertError(await r.open(carol, "s3", { proxy_version: "0.6.99-rc.1" }), 403, "forbidden");
+  });
+
+  lifecycle("a retried open of an existing run is answered even below the minimum", async (r) => {
+    const alice = await r.cred("alice");
+    const a = await r.start(alice, "s1");
+    r.env.MIN_COMPETITION_VERSION = "9.0.0";
+    const again = await r.open(alice, "s1", { proxy_version: "0.1.0" });
+    assert.equal(again.status, 200, JSON.stringify(again.body));
+    assert.equal(again.body.run_id, a.run_id);
+    assertError(await r.open(alice, "other-session", { proxy_version: "0.1.0" }), 409, "conflict"); // not a lost reply: unchanged
+  });
+
+  lifecycle("a malformed minimum refuses competition opens and leaves heartbeats, get, chunk uploads and continue alone", async (r) => {
+    const [alice, bob, carol] = [await r.cred("alice"), await r.cred("bob"), await r.cred("bob", "practice")];
+    const a = await r.start(alice, "s1");
+    r.env.MIN_COMPETITION_VERSION = "0.7";
+    assertError(await r.open(bob, "s2"), 500, "misconfigured");
+    assert.equal((await r.beat(alice, a.run_id, a.entry_id)).status, 200);
+    assert.equal((await r.get(alice, a.run_id)).status, 200);
+    const chunk = makeChunk(a.entry_id, 0, 3, GENESIS, "m");
+    const put = await r.api.call("PUT", `/v1/runs/${a.run_id}/chunks/0`, { token: alice, body: chunk.body, headers: { ...chunk.headers, "content-length": String(chunk.body.length) } });
+    assert.equal(put.status, 200, JSON.stringify(put.body)); // a running run keeps uploading
+    assert.equal((await r.open(carol, "s3")).status, 201); // practice is not a competition start
+    assert.equal((await r.cont(alice, a.run_id, a.entry_id, "s-two")).status, 201);
   });
 });
