@@ -45,6 +45,27 @@ NO_RUN_YET = (
 )
 
 
+# What `goalcup status` says when no daemon answers, on stderr with the program's prefix, exit 1,
+# nothing on stdout. The wording is the same in v0.6.1 and in the current source.
+# No control.json (config.rs read_control_file, a CliError::Refused):
+NO_DAEMON_FILE = (
+    "goalcup: no daemon is running: there is no /home/p/.config/goalcup/control.json. "
+    "`goalcup start` starts one for a run, and `goalcup seal` starts one to finish a run that "
+    "was not sealed."
+)
+# A control.json whose daemon is gone (ControlError::Unreachable, with ureq's transport text):
+DAEMON_GONE = (
+    "goalcup: the daemon is not reachable: http://127.0.0.1:41873/v0/entries/e1/status: "
+    "http://127.0.0.1:41873/v0/entries/e1/status: Connection Failed: Connect error: "
+    "Connection refused (os error 111)"
+)
+# The same sentence for a read that timed out, which can be a live daemon that is busy:
+DAEMON_SLOW = (
+    "goalcup: the daemon is not reachable: http://127.0.0.1:41873/v0/entries/e1/status: "
+    "http://127.0.0.1:41873/v0/entries/e1/status: Network Error: timed out reading response"
+)
+
+
 def status_json(fixture: str, health: str | None = None, run: str | None = None,
                 compact: bool = False) -> str:
     """`goalcup status --json` as the CLI prints it: {payload, public_key, signature, cached_at,
@@ -456,6 +477,23 @@ class InstallTests(unittest.TestCase):
         result = self.install(self.newer(), "--prefix", str(prefix))
         self.assert_upgraded(result, prefix)
         self.assertEqual(result.stderr, "")
+
+    def test_an_unreachable_daemon_goes_on_quietly(self) -> None:
+        # No daemon answers (it exits about 30 s after the last seal), so nothing is recording.
+        for label, stderr in {"no control.json": NO_DAEMON_FILE, "daemon gone": DAEMON_GONE}.items():
+            with self.subTest(label):
+                prefix = Path(tempfile.mkdtemp(dir=self.root)) / "prefix"
+                self.old_install(prefix, {"stderr": stderr, "rc": 1})
+                result = self.install(self.newer(), "--prefix", str(prefix))
+                self.assert_upgraded(result, prefix)
+                self.assertEqual(result.stderr, "")
+
+    def test_a_slow_daemon_is_not_taken_for_a_missing_one(self) -> None:
+        prefix = self.root / "prefix"
+        self.old_install(prefix, {"stderr": DAEMON_SLOW, "rc": 1})
+        result = self.install(self.newer(), "--prefix", str(prefix))
+        self.assert_upgraded(result, prefix)
+        self.assertEqual(result.stderr.strip(), INSTALL_UNSURE)
 
     def test_a_goalcup_without_status_json_gives_the_unsure_line_and_goes_on(self) -> None:
         prefix = self.root / "prefix"

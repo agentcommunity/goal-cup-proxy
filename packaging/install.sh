@@ -21,13 +21,15 @@
 # tarballs; it replaces the GitHub release URL.
 #
 # A new goalcup cannot talk to the daemon of another release, so the script never replaces goalcup
-# while a run is recording. Before it touches the prefix it asks the goalcup it would replace
+# while a run is recording. The new release is already downloaded and checked when the guard runs,
+# but nothing in the prefix has been touched. The guard asks the goalcup it would replace
 # (<prefix>/bin/goalcup, else the one on PATH) for `goalcup status --json`, and stops with
 # INSTALL_BLOCKED when the signed status says health "online" and the capture run is starting,
 # running or exited (an exited run that is not sealed can still be continued). A sealed run, a
-# machine with no run on record, and a first install do not block. If the answer cannot be read
-# (an old goalcup without --json, another error, output it cannot parse, no answer within 10 s) it
-# prints INSTALL_UNSURE and goes on. --force or GOALCUP_FORCE=1 skips all of this. Two limits:
+# machine with no run on record, a machine where no daemon answers (nothing is recording) and a
+# first install do not block. If the answer cannot be read (an old goalcup without --json, another
+# error, output it cannot parse, no answer within 10 s) it prints INSTALL_UNSURE and goes on.
+# --force or GOALCUP_FORCE=1 skips all of this. Two limits:
 # `goalcup status` may spend up to 3 s sending leftover uploads before it answers, and it looks
 # only at the newest run on record on this computer.
 #
@@ -163,9 +165,21 @@ guard_recording_run() {
                 ;;
             ?*) verdict=clear ;; # sealed, sealing_recovery_needed, unknown: not recording
             esac
-        elif [ -n "$rc" ] && [ ! -s "$status_out" ] &&
-            grep -q 'no run has been started from this machine' "$status_err"; then
-            verdict=clear # no run on record
+        elif [ -n "$rc" ] && [ ! -s "$status_out" ]; then
+            # `goalcup status` prints one `goalcup: <reason>` line on stderr, exit 1, and nothing
+            # on stdout. Three reasons mean nothing is recording: no run on record; no control.json
+            # (ControlError text of config.rs, "no daemon is running: there is no ..."); a
+            # control.json whose daemon is gone (ControlError::Unreachable, "the daemon is not
+            # reachable: ..."), kept to a refused connection: a timed-out read could be a live
+            # daemon that is busy, which stays unsure. The daemon exits about 30 s after the last
+            # seal, and `status` starts one only for a computer that has a daemon.toml. The
+            # wording is the same in the latest release and in this tree.
+            if grep -q 'no run has been started from this machine' "$status_err" ||
+                grep -q 'no daemon is running: there is no ' "$status_err" ||
+                { grep -q 'the daemon is not reachable: ' "$status_err" &&
+                    grep -q 'Connection Failed' "$status_err"; }; then
+                verdict=clear
+            fi
         fi
     fi
 
