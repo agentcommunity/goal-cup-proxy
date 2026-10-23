@@ -37,19 +37,17 @@ command; it prints `DRILL-NOW cell=<id> kind=<kind> do: <command>` for the perso
 machine, then `DRILL-END ... do: <undo>` after `seconds`, and records both. `note` only prints.
 
 Repositories and git logins. Every cell is a test run, and a test run asks for its own new,
-empty, public GitHub repository at its start (D69): the cell's `repo` (<owner>/<name>), which
-scripts/matrix.sh passes as `goalcup start --repo`. The agent pushes with the cell's own git
-login, made by matrix.sh for that run from the cell's `github_token_file` (given to the children
-as MATRIX_GITHUB_TOKEN_FILE; scripts/kit_settle.py git-login) and removed when the run ends; never
-this machine's. That token must reach the cell's repository and nothing else (a fine-grained
-token, "Only select repositories"), so no two cells share a repository or a token file. Nothing
-writes a token into a cell's configuration. A cell whose agent pushes needs a new repository
-before its next run.
+empty, public GitHub repository at its start (D69). scripts/matrix.sh makes one per run with the
+GitHub login already there, `gh repo create <user>/goalcup-kit-<cell>-<random> --public`, and the
+agent pushes with that same login, as on a player's machine: this machine's for a host cell, the
+container's for a docker cell (`campaign.py login` runs `linux-matrix.sh github`, which signs in
+with `gh auth login` once on the cell's volume; nothing copies or mounts a login or a token). A
+cell's `repo` (<owner>/<name>) names one instead. The kit never deletes a repository: each
+cell's result.json and the summary list the ones made, and the run prints them at the end.
 
 Secrets. The approval key is only ever a FILE whose path goes to the child scripts in
 GOALCUP_TEST_APPROVAL_KEY_FILE. This script never opens it, and the path is never in an argument.
-The same holds for each cell's GitHub token file. Production (ingest.agentcommunity.org) is
-refused.
+Production (ingest.agentcommunity.org) is refused.
 
 Before website migration 20261021100000 a test run replaces an earlier test run of the same
 operator, so cells that can run at the same time must have distinct `test_member_id`s; `check` and
@@ -79,16 +77,17 @@ REPO = HERE.parent
 STAGING = "https://goalcup-ingest-staging.b-9a5.workers.dev"
 PRODUCTION_HOST = "ingest.agentcommunity.org"
 KEY_ENV = "GOALCUP_TEST_APPROVAL_KEY_FILE"
-TOKEN_ENV = "MATRIX_GITHUB_TOKEN_FILE"
 KIT = HERE / "kit_settle.py"
 # Staging allows 5 device starts per minute per address (8 cells at once got HTTP 429): the
 # campaign starts at most one cell per this many seconds.
 START_SPACING_S = 30
 CELL_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 REPO_ID = re.compile(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}")
-# The organisers' practice repository (the server is told it for every practice run): no kit token
-# may reach it, so no cell may name it.
+# The organisers' practice repository (the server is told it for every practice run): no cell
+# may push to it, so no cell may name it.
 PRACTICE_REPO = "agentcommunity/goalcup-matrix-empty"
+# What scripts/matrix.sh says when it made a cell's repository.
+REPO_MADE = re.compile(r"test repository made: ([A-Za-z0-9-]+/[A-Za-z0-9._-]+)")
 CONNECTOR_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 MEMBER_ID = re.compile(r"[A-Za-z0-9_-]+")
 EFFORTS = ("low", "minimal")  # what linux-matrix.sh accepts (LINUX_MATRIX_CODEX_EFFORT)
@@ -221,7 +220,7 @@ def child_env(extra):
     """The parent's environment without any approval-key or token-file variable, plus `extra`
     (a None value removes that variable)."""
     env = {k: v for k, v in os.environ.items()
-           if k not in ("GOALCUP_TEST_APPROVAL_KEY", KEY_ENV, TOKEN_ENV)}
+           if k not in ("GOALCUP_TEST_APPROVAL_KEY", KEY_ENV)}
     for k, v in extra.items():
         if v is None:
             env.pop(k, None)
@@ -286,7 +285,7 @@ def normalize_config(doc, base, source="<config>"):
         "cells": [],
     }
     cell_keys = ("where", "connector", "duration_s", "test_member_id", "prompt_file", "config_dir",
-                 "codex_effort", "drills", "repo", "github_token_file")
+                 "codex_effort", "drills", "repo")
     for raw in doc["cells"]:
         if not isinstance(raw, dict):
             raise ConfigError("every cell is an object")
@@ -295,7 +294,6 @@ def normalize_config(doc, base, source="<config>"):
         cell["id"] = str(raw.get("id", ""))
         cell["prompt_file"] = _abs(base, cell.get("prompt_file"))
         cell["config_dir"] = _abs(base, cell.get("config_dir"))
-        cell["github_token_file"] = _abs(base, cell.get("github_token_file"))
         cell["drills"] = [dict(d) for d in (cell.get("drills") or [])]
         cfg["cells"].append(cell)
     return cfg
@@ -312,9 +310,8 @@ def select_cells(cfg, names):
     return [known[n] for n in want]
 
 
-def validate(cfg, cells, parallel, github=True):
-    """Static checks (no docker, no network). Returns (errors, warnings). `github` False leaves out
-    each cell's repository and token file (a build or a login needs neither)."""
+def validate(cfg, cells, parallel):
+    """Static checks (no docker, no network). Returns (errors, warnings)."""
     errors, warnings = [], []
     server = cfg["server"]
     host = re.sub(r"^[a-z]+://", "", server).split("/")[0].split(":")[0].lower()
@@ -341,7 +338,7 @@ def validate(cfg, cells, parallel, github=True):
     if slack is not None and (not isinstance(slack, int) or isinstance(slack, bool) or slack < 0):
         errors.append("defaults.matrix_timeout_slack_s must be an integer of at least 0")
 
-    seen_ids, dirs, volumes, members, repos, tokens = set(), {}, {}, {}, {}, {}
+    seen_ids, dirs, volumes, members, repos = set(), {}, {}, {}, {}
     for cell in cells:
         cid = cell["id"]
         tag = f"cell {cid or '?'}"
@@ -364,8 +361,7 @@ def validate(cfg, cells, parallel, github=True):
             errors.append(f"{tag}: test_member_id is required (letters, digits, _ -)")
         else:
             members.setdefault(member, []).append(cid)
-        if github:
-            errors.extend(f"{tag}: {e}" for e in validate_github(cell, cid, repos, tokens))
+        errors.extend(f"{tag}: {e}" for e in validate_repo(cell, cid, repos))
         pf = cell.get("prompt_file")
         if pf and not (os.path.isfile(pf) and os.access(pf, os.R_OK)):
             errors.append(f"{tag}: prompt_file {pf} is not a readable file")
@@ -402,34 +398,21 @@ def validate(cfg, cells, parallel, github=True):
     return errors, warnings
 
 
-def validate_github(cell, cid, repos, tokens):
-    """A cell's repository and token file: its own, each. `repos` and `tokens` collect what earlier
-    cells named."""
-    errors = []
-    repo = str(cell.get("repo") or "")
+def validate_repo(cell, cid, repos):
+    """A cell's `repo`, when it names one instead of the one matrix.sh makes: <owner>/<name>, not
+    the practice repository, and no other cell's. `repos` collects what earlier cells named."""
+    repo = cell.get("repo")
+    if repo is None:
+        return []
+    repo = str(repo)
     if not REPO_ID.fullmatch(repo):
-        errors.append("repo is required: the cell's own new, empty, public repository, "
-                      "<owner>/<name> (a test run asks for one at its start)")
-    elif repo.lower() == PRACTICE_REPO:
-        errors.append("repo is the organisers' practice repository; give the cell one of its own")
-    elif repo.lower() in repos:
-        errors.append(f"repo {repo} is also cell {repos[repo.lower()]}'s; each cell needs its own")
-    else:
-        repos[repo.lower()] = cid
-    token = cell.get("github_token_file")
-    if not token:
-        errors.append("github_token_file is required: a token that can push to the cell's repo "
-                      "and nowhere else")
-    elif ":" in token or "," in token:
-        errors.append("the GitHub token file must be an absolute path without : or ,")
-    elif not (os.path.isfile(token) and os.access(token, os.R_OK)):
-        errors.append("the GitHub token file is not a regular file this user can read")
-    elif os.path.realpath(token) in tokens:
-        errors.append(f"github_token_file is also cell {tokens[os.path.realpath(token)]}'s; a "
-                      "cell's token reaches its own repo alone, so each cell has its own")
-    else:
-        tokens[os.path.realpath(token)] = cid
-    return errors
+        return ["repo is <owner>/<name>"]
+    if repo.lower() == PRACTICE_REPO:
+        return ["repo is the organisers' practice repository; leave repo out and the kit makes one"]
+    if repo.lower() in repos:
+        return [f"repo {repo} is also cell {repos[repo.lower()]}'s; each run needs its own"]
+    repos[repo.lower()] = cid
+    return []
 
 
 def validate_drills(drills, duration):
@@ -504,7 +487,7 @@ def run_command(cfg, cell, cell_dir):
     if slack:
         extra = ["--timeout", str(d + int(slack))]
     env = {KEY_ENV: cfg["approval_key_file"], "GOALCUP_TEST_MEMBER_ID": cell["test_member_id"],
-           TOKEN_ENV: cell["github_token_file"], "MATRIX_REPO": cell["repo"]}
+           "MATRIX_CELL": cell["id"], "MATRIX_REPO": cell.get("repo")}
     if cell.get("prompt_file"):
         env["MATRIX_PROMPT_FILE"] = cell["prompt_file"]
         env["MATRIX_PROMPT"] = None  # matrix.sh refuses both
@@ -1079,6 +1062,7 @@ class CellRun:
         self.start_mono = None
         self.start_utc = None
         self.final_row = None
+        self.repo_made = None
         self.result = None
         self.write_state(force=True)
 
@@ -1215,6 +1199,9 @@ class CellRun:
                 row = row_of(text)
                 if row:
                     self.final_row = row
+                made = REPO_MADE.search(text)
+                if made:
+                    self.repo_made = made.group(1)
                 self.logline(text)
                 if text.strip():
                     self.set_state(last_line=text[-300:],
@@ -1318,6 +1305,7 @@ class CellRun:
             "run_log": str(self.dir / "run.log"),
             "container": container_name(cell) if cell["where"] == "docker" else None,
             "config_dir": cell.get("config_dir"),
+            "repo_made": self.repo_made,
         }
         info["pass_lines"] = evaluate_lines(info, self.sampler_info.get("path"), info["run_log"])
         info["upload"] = upload_facts_for(self.sampler_info.get("path"))
@@ -1411,7 +1399,7 @@ class Campaign:
                 if res:
                     entry = {k: res.get(k) for k in (
                         "cell", "where", "connector", "verdict", "overall", "final_row",
-                        "start_utc", "end_utc", "exit_code", "interrupted")}
+                        "start_utc", "end_utc", "exit_code", "interrupted", "repo_made")}
                     entry["lines"] = {l["name"]: {"status": l["status"], "value": l["value"]}
                                       for l in res["pass_lines"]}
                     entry["result"] = str(r.dir / "result.json")
@@ -1456,6 +1444,10 @@ class Campaign:
         finally:
             restore_signals(saved)
         self.say(f"campaign: summary {Path(self.out) / 'summary.json'}")
+        made = [r.repo_made for r in self.runs if r.repo_made]
+        if made:
+            self.say("campaign: test repositories made (the kit never deletes them; "
+                     "gh repo delete <name> --yes when done): " + ", ".join(made))
         if interrupted:
             return 130
         ok = all(r.result and r.result["verdict"] == "PASS" and r.result["overall"] != "FAIL"
@@ -1655,9 +1647,9 @@ def cmd_check(args, runner, say=print):
 
 def cmd_build(args, runner):
     cfg = load_config(args.config)
-    errors, _ = validate(cfg, cfg["cells"], 1, github=False)
+    errors, _ = validate(cfg, cfg["cells"], 1)
     # Build comes before the sign-ins, and a host cell's configuration directory is made by its
-    # login. A build needs no repository or token either.
+    # login.
     errors = [e for e in errors if "does not exist" not in e]
     if errors:
         for m in errors:
@@ -1676,9 +1668,8 @@ def cmd_build(args, runner):
 def cmd_login(args, runner):
     cfg = load_config(args.config)
     cell = select_cells(cfg, args.cell)[0]
-    errors, _ = validate(cfg, [cell], 1, github=False)
-    # A host cell's configuration directory is made by this very login. A login needs no
-    # repository or token: a test run names its own at its start.
+    errors, _ = validate(cfg, [cell], 1)
+    # A host cell's configuration directory is made by this very login.
     errors = [e for e in errors if "does not exist" not in e]
     if errors:
         for m in errors:
@@ -1690,7 +1681,13 @@ def cmd_login(args, runner):
                          "LINUX_MATRIX_PREBUILT": "1", "LINUX_MATRIX_SERVER": cfg["server"],
                          "GOALCUP_TEST_MEMBER_ID": cell["test_member_id"],
                          "LINUX_MATRIX_CODEX_EFFORT": cell.get("codex_effort")})
-        return runner.interactive(["sh", str(HERE / "linux-matrix.sh"), "login",
+        rc = runner.interactive(["sh", str(HERE / "linux-matrix.sh"), "login",
+                                 cell["connector"]], env=env, cwd=str(REPO))
+        if rc != 0:
+            return rc
+        # Every cell is a test run: the container's own GitHub login makes its repository and
+        # pushes to it. Once on the cell's volume; already signed in, it opens nothing.
+        return runner.interactive(["sh", str(HERE / "linux-matrix.sh"), "github",
                                    cell["connector"]], env=env, cwd=str(REPO))
     os.makedirs(cell["config_dir"], mode=0o700, exist_ok=True)
     env = child_env({"GOALCUP_CONFIG_DIR": cell["config_dir"]})

@@ -8,11 +8,11 @@
 #
 #     <connector> <os>-<arch> <harness_version> PASS|FAIL|NOT-VERIFIED <date>
 #
-# Three kinds of cell; none ever uses this machine's own git login ("The git login", below):
+# Three kinds of cell ("The git login", below):
 #   practice   (the default) no repository and no git login, as a participant's practice run.
-#   --test     a test run with a repository: `goalcup start --test --repo MATRIX_REPO`, and a git
-#              login that reaches only that repository, made from MATRIX_GITHUB_TOKEN_FILE.
-#   --refusals the start's refusals before the approval, with no harness (below).
+#   --test     a test run with a repository the kit makes (`gh repo create`) and passes as
+#              `goalcup start --test --repo`, and this machine's own git login, as a player's.
+#   --refusals the start's refusals before the approval, with no harness and no git login.
 #
 # The run is the real thing: `goalcup login`, `goalcup start --practice` (the device-flow
 # approval, the run's work folder, the harness), the end of the run, the seal and the upload.
@@ -65,19 +65,12 @@
 #                              path. A Docker run mounts
 #                              the file read-only (-v <file>:/run/key:ro) and never uses -e.
 #   GOALCUP_TEST_MEMBER_ID     the member the test approval approves as (default: member1).
-#   MATRIX_REPO                a test run's repository, <owner>/<name>: new, empty and public, the
-#                              cell's own (`goalcup start --repo`). Needed for --test; a practice
-#                              run has none and ignores it. Never the organisers' practice
-#                              repository (agentcommunity/goalcup-matrix-empty). A run whose agent
-#                              pushes leaves it not empty: the next test run needs a new one.
-#   MATRIX_GITHUB_TOKEN_FILE   a regular file holding a GitHub token for MATRIX_REPO, needed for
-#                              --test: a fine-grained token with Contents read and write on that
-#                              repository ONLY ("Only select repositories"), so the agent can push
-#                              there and nowhere else. scripts/kit_settle.py git-login makes the
-#                              run's own git login from it (gh reads the file on its standard
-#                              input) in the temporary directory, which is removed at the end even
-#                              with --keep. Needs gh 2.40 or newer. The path leaves this script's
-#                              environment at once, as the key file's does.
+#   MATRIX_REPO                a test run's repository, <owner>/<name>, instead of the one the kit
+#                              makes: new, empty and public. Never the organisers' practice
+#                              repository (agentcommunity/goalcup-matrix-empty). A practice run has
+#                              none and ignores it.
+#   MATRIX_CELL                the cell's name in the repository the kit makes,
+#                              goalcup-kit-<cell>-<6 hex digits> (default: the connector id).
 #   MATRIX_PROMPT              what is typed into the harness (default: one line asking for a
 #                              file matrix-ok.txt holding "ok").
 #   MATRIX_PROMPT_FILE         a regular file holding the prompt instead (UTF-8; long workloads).
@@ -148,23 +141,31 @@
 #                        and `stop` is not required (the server's 168-hour deadline is far off).
 #                        A run that FAILs after its entry was found and before it was sealed is
 #                        sealed on the way out (best effort, logged). Both options go together,
-#                        only with a real connector (not a fake), MATRIX_CONFIG_DIR, MATRIX_REPO
-#                        and MATRIX_GITHUB_TOKEN_FILE. The log names the mode and the duration
-#                        (`mode=test duration=<N>s`). A question goalcup asks before the run's
-#                        approval (no git login found, a repository it cannot see) FAILs the row
-#                        at once: nobody is at the terminal to answer it.
+#                        only with a real connector (not a fake) and MATRIX_CONFIG_DIR. Before the
+#                        login, unless MATRIX_REPO names one, the kit makes the run's repository
+#                        with the GitHub login on this machine: `gh repo create
+#                        <user>/goalcup-kit-<cell>-<random> --public`, no README, so it is empty.
+#                        No login found: one line says to run `gh auth login` here, and the row
+#                        FAILs. The kit never deletes a repository; it prints the name at the end.
+#                        The log names the mode and the duration (`mode=test duration=<N>s`). A
+#                        question goalcup asks before the run's approval (no git login found, a
+#                        repository it cannot see) FAILs the row at once: nobody is there.
 #   --refusals           only with m2-fake-tui: after the login, `goalcup start --test` is run
 #                        once per refusal, with no terminal, and each must refuse before any
 #                        approval or run record, saying "Nothing was created.":
 #                          not-empty   GitHub says the repository has commits;
 #                          private     GitHub says it is private;
-#                          missing     GitHub does not know it;
+#                          missing     GitHub does not know it (private and missing are one
+#                                      path in goalcup: GitHub answers both alike);
+#                          push        public and empty, but the agent's git cannot push to it
+#                                      (GOALCUP_TEST_PUSH_REMOTE names a folder that is not there);
 #                          no-login    no GitHub login found: the setup guide is printed, and
 #                                      with no terminal to name a repository the start refuses;
 #                          bare-name   `--repo <name>` with no login to find the user in.
 #                        GitHub is a stand-in this script serves on 127.0.0.1, reached through the
 #                        CLI's test doors (GOALCUP_TEST_GITHUB_API, GOALCUP_TEST_GITHUB_LOGIN,
-#                        GOALCUP_TEST_CHAT_WITHOUT_TERMINAL), so goalcup must be a test build:
+#                        GOALCUP_TEST_PUSH_REMOTE, GOALCUP_TEST_CHAT_WITHOUT_TERMINAL), so goalcup
+#                        must be a test build:
 #                        `cargo build -p goalcup-cli --features test-support --target-dir
 #                        target/kit-test`, then MATRIX_BIN_DIR=target/kit-test/debug. A shipped
 #                        build has no such doors and refuses for want of a terminal, which FAILs
@@ -180,21 +181,23 @@
 # printed (nothing else) and waits while you approve, in a browser, as a member. There are two
 # approvals: the login, then the run.
 #
-# Needs: sh, curl (7.55+), python3, script(1), mktemp; macOS or Linux (WSL2 too); gh for --test.
+# Needs: sh, curl (7.55+), python3, script(1), mktemp; macOS or Linux (WSL2 too); gh, signed in,
+# for --test (unless MATRIX_REPO is given).
 # It uses its own temporary configuration directory, work folder and HOME. It never reads or
 # writes the real goalcup configuration directory, ~/.codex, ~/.claude or ~/.hermes. The one
 # exception is MATRIX_CONFIG_DIR, a directory you name for a real harness, which also keeps your
 # own HOME (the harness's isolated home is made from it).
 #
-# The git login. goalcup hands the agent the participant's git login (D69): GIT_CONFIG_GLOBAL,
-# GH_CONFIG_DIR, SSH_AUTH_SOCK and the keyring's XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS. So
-# goalcup always runs with GIT_CONFIG_GLOBAL and GH_CONFIG_DIR in the run's own folder (empty for
-# practice and the refusals, the cell's token for --test), and without the other three or GH_TOKEN
-# and GITHUB_TOKEN: never this machine's ~/.gitconfig, ~/.config/gh, SSH agent or keyring. In a
-# test run every github.com address goes over HTTPS with the cell's token and SSH is off for git.
-# (`ssh -T git@github.com`, which goalcup tries first to find a user name, still finds an SSH key
-# in this user's ~/.ssh by itself; git never uses it. On a machine with one, the name it finds is
-# that key's user; --repo names the owner, so nothing depends on it.)
+# The git login. goalcup hands a real run's agent the participant's git login (D69):
+# GIT_CONFIG_GLOBAL, GH_CONFIG_DIR, SSH_AUTH_SOCK and the keyring's XDG_RUNTIME_DIR and
+# DBUS_SESSION_BUS_ADDRESS. A test run gets this machine's own, as a player's machine would (in
+# Docker, the container's: `gh auth login` there once, on the cell's volume; the kit never copies
+# or mounts a login or a token). Practice and the refusals get none: goalcup runs with an empty git
+# config and gh folder of the run's own whose `credential.helper` is reset, with
+# GIT_CONFIG_NOSYSTEM=1 (macOS's system git config names the keychain helper), and without
+# SSH_AUTH_SOCK, the keyring's variables, GH_TOKEN or GITHUB_TOKEN. goalcup's own git and a test
+# start's push test and clone read that config. A practice run's agent gets no git variable at all
+# from goalcup (D69), so its git still reads the system config, whatever the kit sets.
 
 set -u
 
@@ -205,10 +208,10 @@ REPO=$(dirname "$HERE")
 PRODUCTION_HOST="ingest.agentcommunity.org"
 FAKE_ID="m2-fake-tui"
 # The organisers' practice repository: the server is told it for every practice run (D69), and
-# no kit token may ever reach it.
+# no test run may name it.
 PRACTICE_REPO="agentcommunity/goalcup-matrix-empty"
 # The refusals --refusals checks, in order.
-REFUSALS="not-empty private missing no-login bare-name"
+REFUSALS="not-empty private missing push no-login bare-name"
 
 usage() {
   # The whole header: every comment line after the first, up to the first line that is not one.
@@ -305,14 +308,6 @@ if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
 fi
 # The read-only credentials of the long-run fetch leave the environment too: goalcup, the daemon
 # and the harness never inherit them; only fetch-run.sh gets them (fetch_copy).
-# The GitHub token of a test run's git login: only ever a FILE, its path out of the environment
-# at once, like the key's. Only scripts/kit_settle.py git-login opens it.
-TOKENFILE=${MATRIX_GITHUB_TOKEN_FILE:-}
-unset MATRIX_GITHUB_TOKEN_FILE
-if [ -n "$TOKENFILE" ] && { [ ! -f "$TOKENFILE" ] || [ ! -r "$TOKENFILE" ]; }; then
-  echo "matrix: MATRIX_GITHUB_TOKEN_FILE must name a regular file this user can read" >&2
-  exit 2
-fi
 FETCH_DB=${DATABASE_URL:-}
 FETCH_CF_ACCOUNT=${CLOUDFLARE_ACCOUNT_ID:-}
 FETCH_CF_TOKEN=${CLOUDFLARE_API_TOKEN:-}
@@ -353,6 +348,7 @@ case $PRE_DELAY in
 esac
 MEMBER=${GOALCUP_TEST_MEMBER_ID:-member1}
 TEST_REPO=${MATRIX_REPO:-}
+REPO_MADE=""
 
 case $CONNECTOR in
   *[!A-Za-z0-9._-]* | "")
@@ -420,13 +416,10 @@ if [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
     echo "matrix: --test needs MATRIX_CONFIG_DIR (a prepared configuration directory whose harness is signed in)" >&2
     exit 2
   fi
-  # A test run asks for its own repository at the start (D69): named here, with a git login that
-  # reaches it alone.
+  # A test run asks for its own repository at the start (D69): the kit makes one, or MATRIX_REPO
+  # names it.
   case $TEST_REPO in
-    "")
-      echo "matrix: --test needs MATRIX_REPO (the cell's new, empty, public repository, <owner>/<name>)" >&2
-      exit 2
-      ;;
+    "") ;;
     */*/* | /* | */ | *[!A-Za-z0-9._/-]*)
       echo "matrix: MATRIX_REPO is <owner>/<name>" >&2
       exit 2
@@ -441,10 +434,14 @@ if [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
     echo "matrix: MATRIX_REPO is the organisers' practice repository; a test run needs a repository of its own" >&2
     exit 2
   fi
-  if [ -z "$TOKENFILE" ]; then
-    echo "matrix: --test needs MATRIX_GITHUB_TOKEN_FILE (a token that can push to $TEST_REPO and nowhere else)" >&2
-    exit 2
-  fi
+  CELL=${MATRIX_CELL:-$CONNECTOR}
+  case $CELL in
+    *[!a-z0-9-]* | "" | -*)
+      echo "matrix: MATRIX_CELL may hold only a-z, 0-9 and - (and not start with -)" >&2
+      exit 2
+      ;;
+  esac
+  [ "${#CELL}" -le 40 ] || { echo "matrix: MATRIX_CELL is at most 40 characters" >&2; exit 2; }
   [ "$TIMEOUT_SET" = 1 ] || TIMEOUT=$((DURATION + 1800))
 fi
 
@@ -634,16 +631,18 @@ cleanup() {
       if [ "$STARTED_RUN" = 1 ]; then pkill -TERM -f "goalcup-daemon --config ${CFG:-/nonexistent}/" 2>/dev/null; fi
     fi
     sleep 1
-    # The run's git login holds a copy of the token: never kept.
-    rm -rf "$ROOT/git" 2>/dev/null
     if [ "$KEEP" = 1 ]; then
-      log "kept $ROOT (without its git login)"
+      log "kept $ROOT"
     else
       rm -rf "$ROOT" 2>/dev/null
       # The daemon's roots sit beside the configuration directory: ours only if ours.
       if [ "${OWN_CONFIG:-0}" = 1 ]; then rm -rf "$CFG-artifacts" "$CFG-runs" 2>/dev/null; fi
     fi
   }; fi
+  if [ -n "$REPO_MADE" ]; then
+    log "test repository made by the kit: $REPO_MADE"
+    printf 'matrix: test repository made by the kit (delete it when done: gh repo delete %s --yes): %s\n' "$REPO_MADE" "$REPO_MADE" >&3
+  fi
   print_row
 }
 on_signal() {
@@ -725,8 +724,9 @@ scan_and_approve() {
 # approves through the test route or prints the address for you. (GOALCUP_TEST_NO_BROWSER is the
 # same switch for a build with test-support.)
 #
-# The git login goalcup sees, and hands the agent in a test run (D69), is the run's own in
-# $GITDIR (git_login); the machine's SSH agent, keyring and token variables are taken away.
+# A test run's goalcup sees this machine's own git login, as a player's does (D69). Practice and
+# the refusals see none: the run's empty login in $GITDIR (git_login), the system git config off,
+# and this machine's SSH agent, keyring and token variables taken away.
 # WRAP_EXTRA holds further NAME=value words for one command (the refusals' test doors).
 WRAP_EXTRA=""
 write_wrapper() { # file name "goalcup arguments" [stty]
@@ -735,9 +735,13 @@ write_wrapper() { # file name "goalcup arguments" [stty]
     [ -z "${4:-}" ] || echo 'stty cols 120 rows 40 2>/dev/null'
     echo "echo \$\$ >$(shq "$ROOT/$2.pid")"
     echo "cd $(shq "$RUNS") || exit 1"
-    printf 'exec env -u SSH_AUTH_SOCK -u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS -u GH_TOKEN -u GITHUB_TOKEN'
+    if [ "$TEST" = 1 ]; then
+      printf 'exec env'
+    else
+      printf 'exec env -u SSH_AUTH_SOCK -u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS -u GH_TOKEN -u GITHUB_TOKEN'
+      printf ' GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=%s GH_CONFIG_DIR=%s' "$(shq "$GITDIR/gitconfig")" "$(shq "$GITDIR/gh")"
+    fi
     printf ' HOME=%s GOALCUP_CONFIG_DIR=%s' "$(shq "$HOME_DIR")" "$(shq "$CFG")"
-    printf ' GIT_CONFIG_GLOBAL=%s GH_CONFIG_DIR=%s' "$(shq "$GITDIR/gitconfig")" "$(shq "$GITDIR/gh")"
     [ -z "$CONNECTORS_ENV" ] || printf ' GOALCUP_CONNECTORS_DIR=%s' "$(shq "$CONNECTORS_ENV")"
     printf ' GOALCUP_NO_BROWSER=1 GOALCUP_TEST_NO_BROWSER=1 PATH=%s TERM=%s' "$(shq "$HARNESS_PATH")" "$MATRIX_TERM"
     [ -z "$WRAP_EXTRA" ] || printf ' %s' "$WRAP_EXTRA"
@@ -745,22 +749,40 @@ write_wrapper() { # file name "goalcup arguments" [stty]
   } >"$1"
 }
 
-# The run's git login, in $ROOT/git: for a test run, the cell's own, made from the token file by
-# scripts/kit_settle.py git-login (only it opens the file); otherwise none at all, an empty git
-# config and an empty gh folder. The folder is removed at the end, even with --keep.
+# Practice and the refusals: no git login, in $ROOT/git. An empty gh folder, and a git config
+# whose only setting resets `credential.helper`, so no helper of this machine's is reached through
+# it (git reads a system helper first, and an empty value clears the list).
 git_login() {
+  [ "$TEST" = 0 ] || return 0
   GITDIR="$ROOT/git"
-  if [ "$TEST" = 1 ]; then
-    say "git login for $TEST_REPO, from MATRIX_GITHUB_TOKEN_FILE (scripts/kit_settle.py git-login)"
-    MATRIX_GITHUB_TOKEN_FILE=$TOKENFILE python3 "$HERE/kit_settle.py" git-login "$GITDIR" >"$ROOT/git-login.out" 2>&1
-    glrc=$?
-    log_file "kit_settle.py git-login" "$ROOT/git-login.out"
-    [ "$glrc" = 0 ] || fail "the test run's git login could not be made: $(last_line "$ROOT/git-login.out")" || return 1
-  else
-    mkdir -p "$GITDIR/gh" && chmod 700 "$GITDIR" && : >"$GITDIR/gitconfig" ||
-      fail "cannot make the empty git login in $GITDIR" || return 1
-    log "git login: none (an empty git config and gh folder in $GITDIR)"
+  mkdir -p "$GITDIR/gh" && chmod 700 "$GITDIR" &&
+    printf '[credential]\n\thelper =\n' >"$GITDIR/gitconfig" ||
+    fail "cannot make the empty git login in $GITDIR" || return 1
+  log "git login: none (no helper, an empty gh folder, no system git config; in $GITDIR)"
+}
+
+# A test run's repository: MATRIX_REPO, or a new one the kit makes with this machine's GitHub
+# login, `gh repo create <user>/goalcup-kit-<cell>-<random> --public` (no README, so it is empty).
+# The kit never deletes it; its name is printed at the end.
+test_repo() {
+  if [ -n "$TEST_REPO" ]; then
+    say "test repository: $TEST_REPO (MATRIX_REPO)"
+    return 0
   fi
+  command -v gh >/dev/null 2>&1 ||
+    fail "gh is needed to make the test repository (https://cli.github.com), or set MATRIX_REPO" || return 1
+  owner=$(gh api user --jq .login 2>"$ROOT/gh.err" | tr -d '\r')
+  case $owner in
+    "" | *[!A-Za-z0-9-]*)
+      fail "no GitHub login found here: run \`gh auth login\` (HTTPS, and Yes to authenticate Git) in this environment, then run again" || return 1
+      ;;
+  esac
+  name="goalcup-kit-$CELL-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+  gh repo create "$owner/$name" --public >"$ROOT/gh.out" 2>&1 ||
+    fail "gh repo create $owner/$name --public: $(last_line "$ROOT/gh.out")" || return 1
+  TEST_REPO="$owner/$name"
+  REPO_MADE=$TEST_REPO
+  say "test repository made: $TEST_REPO (public and empty; the kit never deletes it)"
 }
 
 # Wait for the background job that writes its exit status to $1, scanning the output $2 for
@@ -950,19 +972,21 @@ asked_before_approval() {
   tr -d '\r' <"$ROOT/start.out" |
     grep -qF -e 'Press Enter when done' -e 'then press Enter' -e 'Name it' -e 'Type <your-user>/' ||
     return 0
-  fail "goalcup start asked a question before the run's approval, and nobody is there to answer it: $(last_line "$ROOT/start.out"). Check that MATRIX_REPO exists, public and empty, and the git login (gh on PATH, a token that reaches the repository; a test build of goalcup never asks gh)"
+  fail "goalcup start asked a question before the run's approval, and nobody is there to answer it: $(last_line "$ROOT/start.out"). Check that the repository exists, public and empty, and this machine's git login (\`gh auth login\`; a test build of goalcup never asks gh)"
 }
 
 # --refusals: a real run's start refuses before its approval (run_repo.rs), here with no terminal
 # and no harness, through the CLI's test doors. The GitHub API is a stand-in on 127.0.0.1 that
-# knows two repositories, one with commits and one private; it answers 404 for any other.
+# knows three repositories (one with commits, one private, one public and empty); it answers 404
+# for any other.
 run_refusals() {
   HV=refusals
   ( (python3 - "$ROOT/github.port" >"$ROOT/github.log" 2>&1 <<'PY'
 import http.server, json, os, sys
 
 REPOS = {"/repos/goalcup-kit/kit-not-empty": {"private": False, "size": 12},
-         "/repos/goalcup-kit/kit-private": {"private": True, "size": 0}}
+         "/repos/goalcup-kit/kit-private": {"private": True, "size": 0},
+         "/repos/goalcup-kit/kit-push": {"private": False, "size": 0}}
 
 
 class Api(http.server.BaseHTTPRequestHandler):
@@ -1018,6 +1042,8 @@ refusal() { # kind api
       doors="$doors GOALCUP_TEST_GITHUB_API=$2 GOALCUP_TEST_GITHUB_LOGIN=goalcup-kit"
       args="--repo goalcup-kit/kit-not-empty" want="goalcup-kit/kit-not-empty is not empty"
       ;;
+    # private and missing take one path in goalcup (GitHub answers a private repository with 404
+    # to a caller with no login); both are kept, as GitHub's two answers.
     private)
       doors="$doors GOALCUP_TEST_GITHUB_API=$2 GOALCUP_TEST_GITHUB_LOGIN=goalcup-kit"
       args="--repo goalcup-kit/kit-private" want="GitHub does not show goalcup-kit/kit-private"
@@ -1025,6 +1051,13 @@ refusal() { # kind api
     missing)
       doors="$doors GOALCUP_TEST_GITHUB_API=$2 GOALCUP_TEST_GITHUB_LOGIN=goalcup-kit"
       args="--repo goalcup-kit/kit-missing" want="GitHub does not show goalcup-kit/kit-missing"
+      ;;
+    push)
+      # Public and empty, but the agent's git cannot push: the dry-run push goes to a folder that
+      # is not there.
+      doors="$doors GOALCUP_TEST_GITHUB_API=$2 GOALCUP_TEST_GITHUB_LOGIN=goalcup-kit"
+      doors="$doors GOALCUP_TEST_PUSH_REMOTE=$ROOT/no-such-remote.git"
+      args="--repo goalcup-kit/kit-push" want="cannot push to goalcup-kit/kit-push"
       ;;
     no-login) guide=1 args="" want="A real run needs a new, empty, public GitHub repository" ;;
     bare-name) guide=1 args="--repo kit-bare-name" want="No GitHub login was found on this computer" ;;
@@ -1066,7 +1099,7 @@ run_matrix() {
   GOALCUP_VERSION=$("$GOALCUP" --version 2>&1 | head -1)
   log "matrix $CONNECTOR on $PLATFORM against $SERVER, $DATE"
   if [ "$TEST" = 1 ]; then
-    log "mode=test duration=${DURATION}s timeout=${TIMEOUT}s (an organizer test run, sealed by this script); repository: $TEST_REPO"
+    log "mode=test duration=${DURATION}s timeout=${TIMEOUT}s (an organizer test run, sealed by this script); repository: ${TEST_REPO:-made by the kit}"
   elif [ "$REFUSE" = 1 ]; then
     log "mode=refusals ($REFUSALS)"
   else
@@ -1159,6 +1192,7 @@ PY
     fi
   fi
   git_login || return 1
+  if [ "$TEST" = 1 ]; then test_repo || return 1; fi
 
   # ---- login
   STARTED_RUN=1

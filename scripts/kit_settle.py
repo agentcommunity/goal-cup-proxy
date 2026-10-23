@@ -3,22 +3,13 @@
 scripts/linux-matrix.sh inside the container) and a host cell (called by scripts/campaign.py) alike.
 
     kit_settle.py settle CFG WORK
-    kit_settle.py git-login DIR
     kit_settle.py home-config CFG CONNECTOR [EFFORT]
     kit_settle.py model-check CFG CONNECTOR MARKER [EFFORT]
 
 settle       prep.json gets `work_root` (kept when set, else WORK); its other keys are kept. 0600,
-             written atomically. goalcup keeps no GitHub key (D69): nothing writes github.json, and
-             a real run's repository is named at `goalcup start --repo` (scripts/matrix.sh).
-git-login    a git login of the cell's own in DIR, for a test run's repository: DIR/gh is its
-             GH_CONFIG_DIR, made by `gh auth login --with-token` from the token file named in
-             MATRIX_GITHUB_TOKEN_FILE (stored in that folder, never in a keyring), and
-             DIR/gitconfig its GIT_CONFIG_GLOBAL, with gh as git's credential helper for
-             github.com, every SSH address of github.com rewritten to HTTPS, and SSH itself off.
-             So the agent's git, and goalcup's checks before the run, use this token and never the
-             machine's own git login (~/.gitconfig, ~/.config/gh, an SSH key or agent). The token
-             must reach only the cell's test repository (a fine-grained token, "Only select
-             repositories"). Needs gh 2.40 or newer on PATH. Prints the GitHub user it names.
+             written atomically. goalcup keeps no GitHub key (D69): nothing writes github.json. A
+             test run's repository is named at `goalcup start --repo` (scripts/matrix.sh); its
+             git login is the machine's own.
 home-config  the owner's cheapest-model rules and the kit's no-permission-prompt setting, in the
              connector's tracker home (never ~/.codex or ~/.claude): codex-cli's config.toml gets
              `model = "gpt-5.6-luna"`, `model_reasoning_effort` = EFFORT (low, the default, or
@@ -41,24 +32,17 @@ model-check  after the run: every Codex turn (rollouts' `turn_context`) of the s
              transcripts under projects/ (subagents too) must name a haiku model (`<synthetic>`
              is no model call, counted apart). Finding none fails too. Exit 1 on a failure.
 
-The token is a FILE whose path is only in the environment; its value is never in an argument, an
-environment value, a log or this script's output: gh reads it on its standard input. Exit 0 when
-done, 1 when refused (one line saying why), 2 on a bad command line.
+Exit 0 when done, 1 when refused (one line saying why), 2 on a bad command line.
 """
 
 from collections import Counter
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
 
-TOKEN_ENV = "MATRIX_GITHUB_TOKEN_FILE"
-# The shortest and longest token taken: GitHub's are 40 (classic) to about 100 characters
-# (fine-grained); these bounds only catch a file holding the wrong thing.
-TOKEN_MIN, TOKEN_MAX = 20, 255
 LUNA = "gpt-5.6-luna"
 CLAUDE_MODEL = "haiku"
 # Claude Code (2.1.299) shows "Try the new fullscreen renderer?" until this count reaches 3;
@@ -123,23 +107,6 @@ def read_object(path, missing):
     return doc
 
 
-def read_token(path):
-    """The token in the file, checked as the CLI checks it. The refusal never repeats it."""
-    if not os.path.isabs(path):
-        raise Refused(f"{TOKEN_ENV} is given as an absolute path")
-    try:
-        with open(path, "rb") as f:
-            raw = f.read(TOKEN_MAX + 64)
-    except OSError as e:
-        raise Refused(f"the GitHub token file cannot be read: {e.strerror}")
-    token = raw.decode("ascii", "replace").strip()
-    if not (TOKEN_MIN <= len(token) <= TOKEN_MAX
-            and all(0x21 <= ord(c) <= 0x7e for c in token)):
-        raise Refused(f"the GitHub token file holds no token ({TOKEN_MIN} to {TOKEN_MAX} "
-                      "printable characters on one line)")
-    return token
-
-
 # --------------------------------------------------------------------------- settle
 
 def settle(cfg, work):
@@ -150,69 +117,6 @@ def settle(cfg, work):
         prep["work_root"] = work
     write_json(prep_path, prep)
     say(f"prep.json: work folder {prep['work_root']}")
-
-
-# --------------------------------------------------------------------------- git-login
-
-def git_login(folder):
-    """The cell's own git login in `folder` (see the module text). Returns the GitHub user."""
-    token_file = os.environ.get(TOKEN_ENV) or ""
-    if not token_file:
-        raise Refused(f"{TOKEN_ENV} is not set: a test run's git login comes from that token file")
-    token = read_token(token_file)
-    gh = shutil.which("gh")
-    if not gh:
-        raise Refused("gh is needed on PATH for a test run's git login (https://cli.github.com)")
-    folder = os.path.abspath(folder)
-    for d in (folder, os.path.join(folder, "gh"), os.path.join(folder, "home")):
-        os.makedirs(d, mode=0o700, exist_ok=True)
-    gitconfig = os.path.join(folder, "gitconfig")
-    # gh and git see the cell's folders only: nothing of the machine's own login, and nothing is
-    # written outside `folder`.
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.path.join(folder, "home"),
-           "GH_CONFIG_DIR": os.path.join(folder, "gh"), "GIT_CONFIG_GLOBAL": gitconfig,
-           "GIT_CONFIG_NOSYSTEM": "1", "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1",
-           "NO_COLOR": "1"}
-
-    def run(argv, stdin=None):
-        try:
-            out = subprocess.run(argv, input=stdin, env=env, capture_output=True, text=True,
-                                 timeout=120, check=False)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            raise Refused(f"{' '.join(argv[:3])}: {type(e).__name__}")
-        said = (out.stdout + out.stderr).replace(token, "<token>").strip().splitlines()
-        return out.returncode, out.stdout.strip(), (said[-1] if said else f"exit {out.returncode}")
-
-    rc, helptext, _ = run([gh, "auth", "login", "--help"])
-    if "--insecure-storage" not in helptext:
-        raise Refused("gh 2.40 or newer is needed (gh auth login --insecure-storage keeps the "
-                      "token in the cell's folder, not in this machine's keyring)")
-    rc, _, last = run([gh, "auth", "login", "--hostname", "github.com", "--git-protocol", "https",
-                       "--insecure-storage", "--with-token"], stdin=token + "\n")
-    if rc != 0:
-        raise Refused(f"gh auth login with the token from {TOKEN_ENV}: {last}")
-    hosts = os.path.join(folder, "gh", "hosts.yml")
-    try:
-        with open(hosts) as f:
-            stored = token in f.read()
-    except OSError:
-        stored = False
-    if not stored:
-        raise Refused(f"gh did not keep the token in {hosts}")
-    rc, _, last = run([gh, "auth", "setup-git", "--hostname", "github.com"])
-    if rc != 0:
-        raise Refused(f"gh auth setup-git: {last}")
-    for key, value in (("url.https://github.com/.insteadOf", "git@github.com:"),
-                       ("url.https://github.com/.insteadOf", "ssh://git@github.com/"),
-                       ("core.sshCommand", "false")):
-        rc, _, last = run(["git", "config", "--file", gitconfig, "--add", key, value])
-        if rc != 0:
-            raise Refused(f"git config {key}: {last}")
-    rc, user, last = run([gh, "api", "user", "--jq", ".login"])
-    if rc != 0 or not user:
-        raise Refused(f"gh api user with the cell's login: {last}")
-    say(f"git login: GitHub user {user}, from {TOKEN_ENV}, HTTPS only, in {folder}")
-    return user
 
 
 # --------------------------------------------------------------------------- home-config
@@ -393,16 +297,13 @@ def model_check(cfg, connector, marker, effort):
 
 def main(argv):
     usage = __doc__.split("\n\n")[1]
-    if len(argv) < 2 or argv[0] not in ("settle", "git-login", "home-config", "model-check"):
+    if len(argv) < 3 or argv[0] not in ("settle", "home-config", "model-check"):
         print(usage, file=sys.stderr)
         return 2
     cmd, cfg = argv[0], argv[1]
     try:
         if cmd == "settle" and len(argv) == 3:
             settle(cfg, argv[2])
-            return 0
-        if cmd == "git-login" and len(argv) == 2:
-            git_login(cfg)
             return 0
         if cmd == "home-config" and len(argv) in (3, 4):
             home_config(cfg, argv[2], argv[3] if len(argv) == 4 else "low")

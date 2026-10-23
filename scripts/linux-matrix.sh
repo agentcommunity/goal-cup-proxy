@@ -1,6 +1,7 @@
 #!/bin/sh
 # scripts/linux-matrix.sh build [<connector>...]
 # scripts/linux-matrix.sh login <connector>
+# scripts/linux-matrix.sh github <connector>
 # scripts/linux-matrix.sh run <connector> [-- <matrix.sh options>]
 #
 # The matrix (scripts/matrix.sh) for one real harness on Linux, in Docker, against staging.
@@ -29,14 +30,19 @@
 #         way it then prints the NAMES (never the contents) of the files in the tracker home, so
 #         the place a harness keeps its login is on record (Claude Code's on Linux is unmeasured),
 #         and writes them to login-<connector>[-<cell>]-<time>.log in the log directory.
+# github  `gh auth login` in this terminal, in the container, on the cell's volume (HOME is on
+#         it, so the login stays for every later run): what a test run's repository is made with
+#         and its agent pushes with, as on a player's machine. Choose HTTPS and say Yes to
+#         "Authenticate Git". The kit never copies or mounts this machine's login or a token.
+#         Signed in already: it says as whom and opens nothing. Needs no key.
 # run     scripts/matrix.sh <connector> <server> in the container, with MATRIX_CONFIG_DIR on the
 #         volume. Options after `--` go to matrix.sh as they are; only --test, --duration N,
 #         --timeout N and --keep are accepted (e.g. `-- --test --duration 7200`: an organizer test
-#         run sealed after two hours; the member must be a test operator, and MATRIX_REPO and
-#         MATRIX_GITHUB_TOKEN_FILE name the run's repository and its git login). Without --test, a
-#         practice run: no repository and no git login. Prints the matrix row last, and exits
-#         with matrix.sh's status. (matrix.sh --refusals needs no harness and a test build of
-#         goalcup: run it on the host.)
+#         run sealed after two hours; the member must be a test operator, and the container's
+#         GitHub login, from `github`, makes the run's repository and pushes to it). Without
+#         --test, a practice run: no repository and no git login. Prints the matrix row last,
+#         and exits with matrix.sh's status. (matrix.sh --refusals needs no harness and a test
+#         build of goalcup: run it on the host.)
 #
 # Owner rules (scripts/kit_settle.py, which campaign.py applies to host cells too), applied to the
 # tracker home before every login and run (never ~/.codex or ~/.claude, which are not touched):
@@ -60,14 +66,8 @@
 # Environment. A secret is only ever a FILE, mounted read-only; its path goes to the one command
 # that reads it, and its value is never in an argument, a `-e`, a log or this script's output.
 #   GOALCUP_TEST_APPROVAL_KEY_FILE  the server's test approval key (login and run).
-#   MATRIX_REPO                     a test run's repository, <owner>/<name> (needed for
-#                                   `-- --test`; matrix.sh says what it must be).
-#   MATRIX_GITHUB_TOKEN_FILE        the GitHub token of that run's git login (needed for
-#                                   `-- --test`): a fine-grained token that can push to
-#                                   MATRIX_REPO and nowhere else. Mounted read-only; matrix.sh in
-#                                   the container makes the run's own git login from it (gh, in
-#                                   the image) and removes that login when the run ends. Nothing
-#                                   writes it into the volume.
+#   MATRIX_REPO                     a test run's repository, <owner>/<name>, instead of the one
+#                                   matrix.sh makes (matrix.sh says what it must be).
 #   GOALCUP_TEST_MEMBER_ID          the member approved as
 #                                   (default 00000000-0000-4000-8000-0000000c0de1).
 #   LINUX_MATRIX_SERVER             default https://goalcup-ingest-staging.b-9a5.workers.dev;
@@ -121,9 +121,9 @@
 # The script has no drill of its own: an orchestrator acts on the named container from outside.
 #
 # What the harness can read. It runs as the same user as the script's own steps, so it can read
-# the mounted key files (/run/goalcup/*, read-only; staging's test key, the cell's GitHub token and
-# any fetch credential files, so give the fetch read-only ones). The agent pushes with that token
-# anyway (D69), which is why it must reach the cell's repository alone.
+# the mounted key files (/run/goalcup/*, read-only; staging's test key and any fetch credential
+# files, so give the fetch read-only ones). In a test run it pushes with the container's GitHub
+# login (D69).
 # and the whole checkout at /src, untracked files included. Run it from a clean checkout, never
 # one holding secrets (a Worker .dev.vars, for example).
 #
@@ -144,7 +144,6 @@ CFG=$VOL/cfg
 # The dev user's ~/.local/bin (HOME is $VOL/home), where the binaries are installed.
 BIN=$VOL/home/.local/bin
 KEY_IN=/run/goalcup/approval-key
-TOKEN_IN=/run/goalcup/github-token
 PROMPT_IN=/run/goalcup/prompt
 FETCH_INDEX_IN=/run/goalcup/fetch-index
 FETCH_STORE_IN=/run/goalcup/fetch-store
@@ -319,6 +318,8 @@ inner_run() { # connector [matrix.sh options]
     marker=$TMPDIR/run-start.$$
     : >"$marker"
     log=/logs/matrix-$h${LINUX_MATRIX_CELL:+-$LINUX_MATRIX_CELL}-$(date -u +%Y%m%dT%H%M%SZ).log
+    # A repository matrix.sh makes is named after the cell.
+    [ -z "${LINUX_MATRIX_CELL:-}" ] || export MATRIX_CELL="$LINUX_MATRIX_CELL"
     sh /src/scripts/matrix.sh "$h" "$LINUX_MATRIX_SERVER" --log "$log" "$@" >"$TMPDIR/matrix.$$.out"
     rc=$?
     row=$(grep "^$h " "$TMPDIR/matrix.$$.out" | tail -n 1)
@@ -348,7 +349,7 @@ esac
 
 # ------------------------------------------------------------------ on this machine
 
-[ $# -ge 1 ] || bad_usage "no command (build, login or run)"
+[ $# -ge 1 ] || bad_usage "no command (build, login, github or run)"
 action=$1
 shift
 h=""
@@ -356,7 +357,7 @@ extra=""
 case $action in
 -h | --help) usage ;;
 build) ;;
-login | run)
+login | github | run)
     [ $# -ge 1 ] || bad_usage "$action needs a connector"
     h=$1
     shift
@@ -468,8 +469,6 @@ fi
     fail "GOALCUP_TEST_APPROVAL_KEY in the environment is refused: give the file as GOALCUP_TEST_APPROVAL_KEY_FILE"
 keyfile=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
 unset GOALCUP_TEST_APPROVAL_KEY_FILE
-tokenfile=${MATRIX_GITHUB_TOKEN_FILE:-}
-unset MATRIX_GITHUB_TOKEN_FILE
 dbfile=${MATRIX_DATABASE_URL_FILE:-}
 cftokenfile=${MATRIX_CLOUDFLARE_TOKEN_FILE:-}
 unset MATRIX_DATABASE_URL_FILE MATRIX_CLOUDFLARE_TOKEN_FILE
@@ -487,20 +486,10 @@ mounted_file() { # path what
     [ -f "$1" ] && [ -r "$1" ] || fail "$1 is not a regular file this user can read"
 }
 set --
-if [ "$action" != build ]; then
+if [ "$action" = login ] || [ "$action" = run ]; then
     [ -n "$keyfile" ] || fail "GOALCUP_TEST_APPROVAL_KEY_FILE is needed (the login and the run are approved with it)"
     mounted_file "$keyfile" "a secret file"
     set -- -v "$keyfile:$KEY_IN:ro"
-    # A test run's repository and its git login; a practice run has neither.
-    case " $extra " in
-    *" --test "*)
-        [ -n "${MATRIX_REPO:-}" ] || fail "MATRIX_REPO is needed for --test (the run's own new, empty, public repository)"
-        [ -n "$tokenfile" ] || fail "MATRIX_GITHUB_TOKEN_FILE is needed for --test (the git login of the run's repository)"
-        mounted_file "$tokenfile" "MATRIX_GITHUB_TOKEN_FILE"
-        set -- "$@" -v "$tokenfile:$TOKEN_IN:ro"
-        ;;
-    *) tokenfile="" ;;
-    esac
     promptfile=${MATRIX_PROMPT_FILE:-}
     if [ -n "$promptfile" ]; then
         [ -z "${MATRIX_PROMPT:-}" ] || fail "set MATRIX_PROMPT or MATRIX_PROMPT_FILE, not both"
@@ -702,12 +691,34 @@ if [ "$action" = run ]; then
     fi
     set -- -e GOALCUP_TEST_APPROVAL_KEY_FILE=$KEY_IN
     [ -z "${MATRIX_PROMPT_FILE:-}" ] || set -- "$@" -e MATRIX_PROMPT_FILE=$PROMPT_IN
-    [ -z "$tokenfile" ] || set -- "$@" -e MATRIX_GITHUB_TOKEN_FILE=$TOKEN_IN
     # $extra holds checked words only (options and digits), so it splits as meant.
     docker exec -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" $extra &
     run_job=$!
     wait "$run_job"
     exit $?
+fi
+
+if [ "$action" = github ]; then
+    # The container's own GitHub login, on the volume's HOME: never this machine's.
+    if who=$(docker exec -u dev "$name" gh api user --jq .login 2>/dev/null) && [ -n "$who" ]; then
+        echo "linux-matrix: signed in to GitHub as $who (volume $volume)"
+        exit 0
+    fi
+    unlock
+    if ! [ -t 0 ] || ! [ -t 1 ]; then
+        echo "linux-matrix: OWNER STEP: in a terminal, from $PWD, run:"
+        echo "  ${cell:+LINUX_MATRIX_CELL=$cell }$([ "$prebuilt" = 1 ] && echo "LINUX_MATRIX_PREBUILT=1 ")sh scripts/linux-matrix.sh github $h"
+        exit 3
+    fi
+    echo "linux-matrix: the tester's step. gh asks how to sign in: choose GitHub.com, HTTPS, Yes to"
+    echo "\"Authenticate Git with your GitHub credentials\", and login with a web browser (open the address"
+    echo "it prints on this machine and enter the code). The login stays on volume $volume."
+    docker exec -it -u dev -e TERM=xterm-256color "$name" gh auth login --hostname github.com --git-protocol https ||
+        fail "gh auth login in the container"
+    who=$(docker exec -u dev "$name" gh api user --jq .login 2>/dev/null)
+    [ -n "$who" ] || fail "no GitHub login in the container after gh auth login"
+    echo "linux-matrix: signed in to GitHub as $who (volume $volume)"
+    exit 0
 fi
 
 loginlog=$logdir/login-$h${cell:+-$cell}-$(date -u +%Y%m%dT%H%M%SZ).log
