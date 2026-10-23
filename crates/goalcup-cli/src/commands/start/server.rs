@@ -94,7 +94,7 @@ impl crate::commands::run_repo::Doors for StartDoors<'_> {
 
     fn login(&self) -> crate::account::github::GithubLogin {
         #[cfg(feature = "test-support")]
-        let login = match self.env.get(TEST_GITHUB_LOGIN) {
+        let login = match self.env.get(TEST_GITHUB_LOGIN).filter(|s| !s.is_empty()) {
             Some(spec) => crate::account::github::GithubLogin {
                 user: Some(spec.trim_end_matches("+ssh").to_string()),
                 ssh: spec.ends_with("+ssh"),
@@ -102,14 +102,12 @@ impl crate::commands::run_repo::Doors for StartDoors<'_> {
             None => crate::account::github::GithubLogin::default(),
         };
         #[cfg(not(feature = "test-support"))]
-        let login = crate::account::github::find_login(self.env);
+        let login = crate::account::github::find_login(self.env, &self.scratch("login-look"));
         login
     }
 
     fn push_test(&self, remote: &str) -> Result<(), String> {
-        let scratch = self
-            .cfg
-            .join(format!("push-test-{:016x}", rand::random::<u64>()));
+        let scratch = self.scratch("push-test");
         // A test's local stand-in (always `None` in a shipped build).
         let remote = self.clone_source.unwrap_or(remote);
         #[cfg(feature = "test-support")]
@@ -117,7 +115,7 @@ impl crate::commands::run_repo::Doors for StartDoors<'_> {
             .env
             .get(TEST_PUSH_REMOTE)
             .map_or(remote, String::as_str);
-        crate::account::github::push_test(std::ffi::OsStr::new("git"), remote, &scratch)
+        crate::account::github::push_test(std::ffi::OsStr::new("git"), remote, &scratch, self.env)
     }
 
     fn read_line(&self) -> Option<String> {
@@ -125,15 +123,27 @@ impl crate::commands::run_repo::Doors for StartDoors<'_> {
         if !(is_foreground(libc::STDIN_FILENO) && is_terminal(libc::STDIN_FILENO)) {
             return None;
         }
-        let mut line = String::new();
-        match std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line) {
-            Ok(n) if n > 0 => Some(line),
-            _ => None,
-        }
+        crate::arming::read_stdin_line()
+    }
+
+    fn interrupted(&self) -> bool {
+        crate::arming::interrupted()
     }
 
     fn open(&self, url: &str) -> bool {
         (self.open)(url)
+    }
+
+    fn unused_git_config(&self) -> Option<PathBuf> {
+        crate::launch::unused_git_config(self.env)
+    }
+}
+
+impl StartDoors<'_> {
+    /// A new folder in the configuration directory for one look or test, which removes it.
+    fn scratch(&self, what: &str) -> PathBuf {
+        self.cfg
+            .join(format!("{what}-{:016x}", rand::random::<u64>()))
     }
 }
 

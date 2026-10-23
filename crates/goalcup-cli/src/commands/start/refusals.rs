@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 ///
 /// Rung 1 and not rung 4: nothing refused this run, the participant stopped it, and a script
 /// branching on the number must not read a cancellation as an arming gate that closed.
-pub(super) fn interrupted_refusal() -> CliError {
+pub(crate) fn interrupted_refusal() -> CliError {
     CliError::Refused(
         "Run the command again when you are ready. It was interrupted before the run began, so \
          nothing is left behind."

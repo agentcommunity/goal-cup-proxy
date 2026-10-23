@@ -76,7 +76,9 @@ pub use crate::home::validate_shared_capture_home_for_uid;
 pub use phases::CHAT_MODE_GOAL;
 #[cfg(feature = "test-support")]
 pub use refusals::{TEST_GITHUB_API, TEST_OFFLINE_UPSTREAMS};
-pub(crate) use refusals::{check_run_folders, continue_preflight, run_folder_for_continue};
+pub(crate) use refusals::{
+    check_run_folders, continue_preflight, interrupted_refusal, run_folder_for_continue,
+};
 pub use server::PRACTICE_REPO_URL;
 #[cfg(feature = "test-support")]
 pub use server::{TEST_CLONE_SOURCE, TEST_GITHUB_LOGIN, TEST_PUSH_REMOTE};
@@ -92,7 +94,7 @@ use finish::finish_run;
 use goalcup_protocol::control::DaemonClient;
 use goalcup_protocol::harness::CaptureSpec;
 use phases::{claim_shared_home, create_and_gate, prepare, register_and_release, run_harness};
-use refusals::{CLEANED_UP, interrupted_refusal, prepared_work_folder};
+use refusals::{CLEANED_UP, prepared_work_folder};
 use server::{Uploading, uploading};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

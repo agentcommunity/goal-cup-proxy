@@ -866,6 +866,31 @@ mod chat {
         assert!(home.is_dir(), "the shared run home is never removed");
     }
 
+    /// A Ctrl-C at a question a real run's start asks before the approval (here the no-login
+    /// guide's "Press Enter") ends the start at once, with nothing approved or created.
+    #[test]
+    fn a_ctrl_c_at_a_start_question_ends_it_with_nothing_created() {
+        let rig = Rig::chat();
+        let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+        rig.prepare_for(&server.url());
+        // No GitHub login on this computer: start shows the guide and waits for Enter.
+        rig.with_env(goalcup_cli::commands::start::TEST_GITHUB_LOGIN, "");
+        let mut start = rig.start_on_pty(&[DISK]);
+        start.wait_shown("Press Enter when done");
+        start.type_bytes("\u{3}");
+        let status = start.wait();
+        let shown = start.shown();
+        assert!(!status.success(), "{shown}");
+        assert!(
+            shown.contains("interrupted before the run began"),
+            "{shown}"
+        );
+        assert!(server.device_requests().is_empty(), "{shown}");
+        assert!(server.run_ids().is_empty(), "{shown}");
+        assert!(rig.clones().is_empty(), "{shown}");
+        assert!(!rig.harness_started(), "{shown}");
+    }
+
     /// A harness that closed before the first message (a trust question answered "no", a setup
     /// that ends the program) left no session. `goalcup continue` opens it the normal way, with
     /// no resume arguments, and says so in one line instead of promising the last session. Once

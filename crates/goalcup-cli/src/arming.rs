@@ -75,6 +75,47 @@ pub(crate) fn watch_for_interrupt() {
     });
 }
 
+/// One line typed on standard input, read so that a Ctrl-C ends the wait at once: the handler
+/// above sets no `SA_RESTART`, but `std`'s own read retries on `EINTR`, so this polls the
+/// descriptor and looks at [`interrupted`] between polls. `None` when the input ended, it could
+/// not be read, or a Ctrl-C came (the caller asks [`interrupted`] which). A line is at most
+/// 4 KiB.
+#[cfg(unix)]
+pub(crate) fn read_stdin_line() -> Option<String> {
+    let mut line = Vec::new();
+    loop {
+        if interrupted() {
+            return None;
+        }
+        let mut poll = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one `pollfd` this function owns, for its whole length.
+        if unsafe { libc::poll(&mut poll, 1, 100) } <= 0 {
+            // A timeout, or `EINTR` from the Ctrl-C: look at the flag and poll again.
+            continue;
+        }
+        let mut byte = [0u8; 1];
+        // SAFETY: reads at most one byte into a buffer of one byte this function owns.
+        let read = unsafe { libc::read(libc::STDIN_FILENO, byte.as_mut_ptr().cast(), 1) };
+        match read {
+            1 => {
+                line.push(byte[0]);
+                if byte[0] == b'\n' || line.len() >= 4096 {
+                    break;
+                }
+            }
+            0 if line.is_empty() => return None,
+            0 => break,
+            _ if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted => {}
+            _ => return None,
+        }
+    }
+    Some(String::from_utf8_lossy(&line).into_owned())
+}
+
 /// The handler itself: one atomic store, and nothing a signal handler may not do.
 #[cfg(unix)]
 extern "C" fn on_sigint(_signum: libc::c_int) {

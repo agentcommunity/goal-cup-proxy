@@ -12,6 +12,7 @@ use goalcup_cli::account::github::{
     Found, GithubLogin, GithubSetup, check_public_empty, clone_repo, credential_helper, push_test,
 };
 use goalcup_cli::commands::run_repo;
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -141,8 +142,9 @@ fn read_head(stream: &mut TcpStream) -> String {
 }
 
 /// GitHub's open API is asked with no login at all: a public, empty repository passes; one
-/// that cannot be seen (missing, or private) is `Missing`, for setup to create; a repository
-/// with commits, or an answer that is not one, is refused in a sentence of its own.
+/// that cannot be seen (missing, or private) is `Missing`, for start to create; a rate limit
+/// (`403`, `429`) is `Unchecked`, never "used"; a repository with commits, or an answer that is
+/// not one, is refused in a sentence of its own.
 #[test]
 fn the_repository_check_sends_no_login_and_tells_missing_from_used() {
     let cases = [
@@ -153,6 +155,16 @@ fn the_repository_check_sends_no_login_and_tells_missing_from_used() {
             200,
             r#"{"private":false,"size":12}"#,
             Err("not empty (12 KB)"),
+        ),
+        (
+            403,
+            r#"{"message":"API rate limit exceeded"}"#,
+            Ok(Found::Unchecked),
+        ),
+        (
+            429,
+            r#"{"message":"Too Many Requests"}"#,
+            Ok(Found::Unchecked),
         ),
         (500, r#"{"message":"Server Error"}"#, Err("could not check")),
     ];
@@ -173,14 +185,30 @@ fn the_repository_check_sends_no_login_and_tells_missing_from_used() {
     }
 }
 
-/// The push test is the participant's own git, pushing nothing: it passes for a repository
-/// git can push to, and fails, with git's words, for one it cannot reach. The repository is
-/// left as it was.
+/// The participant's environment as `goalcup start` reads it, for the push test: a `PATH`, their
+/// `HOME`, and what the test adds.
+fn participant(rig: &Rig, more: &[(&str, &str)]) -> BTreeMap<String, String> {
+    let home = rig.root.join("participant-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut env: BTreeMap<String, String> = [
+        ("PATH", std::env::var("PATH").unwrap()),
+        ("HOME", home.display().to_string()),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    env.extend(more.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+    env
+}
+
+/// The push test is git pushing nothing: it passes for a repository git can push to, and
+/// fails, with git's words, for one it cannot reach. The repository is left as it was.
 #[test]
 fn the_push_test_passes_only_where_git_can_push_and_sends_nothing() {
     let rig = rig();
     let scratch = rig.root.join("scratch");
-    push_test(rig.git.as_os_str(), &rig.source, &scratch).unwrap();
+    let env = participant(&rig, &[]);
+    push_test(rig.git.as_os_str(), &rig.source, &scratch, &env).unwrap();
     assert!(!scratch.exists(), "the scratch repository is removed");
     let refs = std::process::Command::new(&rig.git)
         .args(["--git-dir", rig.source.as_str(), "for-each-ref"])
@@ -188,8 +216,58 @@ fn the_push_test_passes_only_where_git_can_push_and_sends_nothing() {
         .unwrap();
     assert!(refs.stdout.is_empty(), "something was pushed: {refs:?}");
     let missing = rig.root.join("missing.git").display().to_string();
-    let why = push_test(rig.git.as_os_str(), &missing, &scratch).unwrap_err();
+    let why = push_test(rig.git.as_os_str(), &missing, &scratch, &env).unwrap_err();
     assert!(!why.is_empty() && !scratch.exists(), "{why}");
+}
+
+/// The push test runs the agent's git, not the participant's shell: the environment the launch
+/// builds (`launch::agent_base_env`), with a scratch `HOME` and the way to their git login, so a
+/// login only their shell has (a `GH_TOKEN`, a helper that reads `~`) cannot pass it.
+#[test]
+fn the_push_test_runs_in_the_agents_environment() {
+    let rig = rig();
+    let dump = rig.root.join("env.txt");
+    let git = rig.root.join("dumping-git");
+    std::fs::write(
+        &git,
+        format!(
+            "#!/bin/sh\nenv > \"{}\"\nexec \"{}\" \"$@\"\n",
+            dump.display(),
+            rig.git.display()
+        ),
+    )
+    .unwrap();
+    make_executable(&git);
+    let env = participant(
+        &rig,
+        &[
+            ("GH_TOKEN", "a-token-only-the-shell-has"),
+            ("SSH_AUTH_SOCK", "/private/tmp/agent.sock"),
+            ("GIT_CONFIG_PARAMETERS", "'credential.helper'='store'"),
+        ],
+    );
+    std::fs::write(rig.root.join("participant-home/.gitconfig"), "").unwrap();
+    push_test(
+        git.as_os_str(),
+        &rig.source,
+        &rig.root.join("scratch"),
+        &env,
+    )
+    .unwrap();
+    let seen: BTreeMap<String, String> = std::fs::read_to_string(&dump)
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let want = goalcup_cli::launch::agent_base_env(&env, &seen["HOME"], true);
+    for (key, value) in &want {
+        assert_eq!(seen.get(key), Some(value), "{key}");
+    }
+    assert_ne!(seen["HOME"], env["HOME"], "the participant's own HOME");
+    for key in ["GH_TOKEN", "GIT_CONFIG_PARAMETERS"] {
+        assert!(!seen.contains_key(key), "{key} reached the agent's git");
+    }
 }
 
 // ------------------------------------------------------------------ a real run's repository
@@ -219,15 +297,28 @@ impl run_repo::Doors for Doors {
         }
     }
     fn push_test(&self, _remote: &str) -> Result<(), String> {
-        push_test(std::ffi::OsStr::new("git"), &self.push_to, &self.scratch)
+        let env: BTreeMap<String, String> =
+            [("PATH".to_string(), std::env::var("PATH").unwrap())].into();
+        push_test(
+            std::ffi::OsStr::new("git"),
+            &self.push_to,
+            &self.scratch,
+            &env,
+        )
     }
     fn read_line(&self) -> Option<String> {
         let mut typed = self.typed.borrow_mut();
         (!typed.is_empty()).then(|| format!("{}\n", typed.remove(0)))
     }
+    fn interrupted(&self) -> bool {
+        false
+    }
     fn open(&self, url: &str) -> bool {
         self.opened.borrow_mut().push(url.to_string());
         true
+    }
+    fn unused_git_config(&self) -> Option<PathBuf> {
+        None
     }
 }
 
@@ -327,14 +418,30 @@ fn the_next_real_run_suggests_a_new_name_once_the_last_is_used() {
         },
     )
     .unwrap();
-    // The suggestion's look at the last repository, then the check of the chosen one.
-    let api = FakeGithub::answers(&[USED, EMPTY]);
+    // GitHub is asked once, about the chosen repository; the suggestion asks nothing.
+    let api = FakeGithub::answers(&[EMPTY]);
     let doors = doors(&rig, &api, vec![you(false)], vec![""]);
     let mut out = Vec::new();
     let repo = run_repo::choose(&doors, &cfg, None, &mut out).unwrap();
     let said = String::from_utf8(out).unwrap();
     assert!(said.contains("Name it [my-goal-cup-2]"), "{said}");
     assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup-2");
+    assert_eq!(api.requests.lock().unwrap().len(), 1);
+}
+
+/// GitHub's open API allows 60 calls an hour per address. A rate limit (`403`) is not a used
+/// repository: start says the server and the clone check it instead, and goes on.
+#[test]
+fn a_rate_limited_github_is_said_and_never_counts_as_used() {
+    let rig = rig();
+    let cfg = rig.root.join("cfg");
+    let api = FakeGithub::answers(&[(403, r#"{"message":"API rate limit exceeded"}"#)]);
+    let doors = doors(&rig, &api, vec![you(false)], vec![]);
+    let mut out = Vec::new();
+    let repo = run_repo::choose(&doors, &cfg, Some("you/my-goal-cup"), &mut out).unwrap();
+    let said = String::from_utf8(out).unwrap();
+    assert!(said.contains("GitHub's API is busy"), "{said}");
+    assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup");
 }
 
 /// With no GitHub login on the computer (no SSH key GitHub knows, no `gh` login), start says how

@@ -19,6 +19,7 @@
 use crate::CliError;
 use crate::upload::http::{ServerClient, ServerError};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
@@ -273,12 +274,17 @@ pub enum Found {
     Missing,
     /// It is public and has no commits.
     PublicEmpty,
+    /// GitHub would not answer just now: its open API allows 60 calls an hour from one address
+    /// (`403` or `429`). Not a sign the repository is used. The server checks that it is public
+    /// when the run opens, and the clone that it is empty ([`clone_has_commits`]).
+    Unchecked,
 }
 
 /// Ask GitHub's API (`api_base`, [`GITHUB_API`] in production) about `repo_url` with no login
 /// at all, so nothing of the participant's is sent. A public, empty repository is
-/// [`Found::PublicEmpty`]; one that cannot be seen is [`Found::Missing`]. A repository that is
-/// not empty, or cannot be asked about, is refused in a sentence of its own.
+/// [`Found::PublicEmpty`]; one that cannot be seen is [`Found::Missing`]; a rate limit is
+/// [`Found::Unchecked`]. A repository that is not empty, or any other failure, is refused in a
+/// sentence of its own.
 pub fn check_public_empty(api_base: &str, repo_url: &str) -> Result<Found, CliError> {
     let (owner, repo) = parse_repo_url(repo_url)?;
     let answer: RepoAnswer = match ServerClient::anonymous(api_base).json(
@@ -288,6 +294,9 @@ pub fn check_public_empty(api_base: &str, repo_url: &str) -> Result<Found, CliEr
     ) {
         Ok(answer) => answer,
         Err(ServerError::Status { status: 404, .. }) => return Ok(Found::Missing),
+        Err(ServerError::Status {
+            status: 403 | 429, ..
+        }) => return Ok(Found::Unchecked),
         Err(other) => {
             return Err(CliError::Refused(format!(
                 "could not check {owner}/{repo} on GitHub: {other}. Try again in a minute."
@@ -350,12 +359,23 @@ const LOOK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 /// How long the dry-run push may take.
 const PUSH_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// The participant's GitHub login, found with their own tools and nothing typed: first
-/// `ssh -T git@github.com`, which signs in with their SSH key and answers "Hi <user>!" (and exits
-/// 1, as GitHub gives no shell); then `gh api user --jq .login` when `gh` is on `PATH`. Each is
-/// bounded by a timeout, never asks a question (`BatchMode`), and none of what they print is kept
-/// but the user name. A first SSH connection records GitHub's host key (`accept-new`).
-pub fn find_login(env: &std::collections::BTreeMap<String, String>) -> GithubLogin {
+/// The participant's GitHub login as the agent will have it, found with their own tools and
+/// nothing typed, in the agent's environment (`launch::agent_base_env`, with `scratch` as its
+/// `HOME`): first `ssh -T git@github.com`, which signs in with their SSH key and answers
+/// "Hi <user>!" (and exits 1, as GitHub gives no shell); then `gh api user --jq .login` when
+/// `gh` is on `PATH`. Each is bounded by a timeout and a Ctrl-C, never asks a question, and none
+/// of what they print is kept but the user name. A first SSH connection records GitHub's host
+/// key (`accept-new`).
+pub fn find_login(parent_env: &BTreeMap<String, String>, scratch: &Path) -> GithubLogin {
+    let Some(env) = agent_env(parent_env, scratch) else {
+        return GithubLogin::default();
+    };
+    let found = find_login_in(&env);
+    let _ = std::fs::remove_dir_all(scratch);
+    found
+}
+
+fn find_login_in(env: &BTreeMap<String, String>) -> GithubLogin {
     let ssh = [
         "-T",
         "-o",
@@ -366,7 +386,7 @@ pub fn find_login(env: &std::collections::BTreeMap<String, String>) -> GithubLog
         "ConnectTimeout=10",
         "git@github.com",
     ];
-    if let Some((_, said)) = run_bounded(OsStr::new("ssh"), &ssh, &[], LOOK_TIMEOUT)
+    if let Some((_, said)) = run_bounded(OsStr::new("ssh"), &ssh, env, LOOK_TIMEOUT)
         && let Some(user) = ssh_greeting_user(&said)
     {
         return GithubLogin {
@@ -376,7 +396,7 @@ pub fn find_login(env: &std::collections::BTreeMap<String, String>) -> GithubLog
     }
     if crate::preflight::resolve_on_path("gh", env).is_some() {
         let gh = ["api", "user", "--jq", ".login"];
-        if let Some((true, said)) = run_bounded(OsStr::new("gh"), &gh, &[], LOOK_TIMEOUT) {
+        if let Some((true, said)) = run_bounded(OsStr::new("gh"), &gh, env, LOOK_TIMEOUT) {
             let user = said.lines().next().unwrap_or("").trim().to_string();
             if is_owner_name(&user) {
                 return GithubLogin {
@@ -387,6 +407,17 @@ pub fn find_login(env: &std::collections::BTreeMap<String, String>) -> GithubLog
         }
     }
     GithubLogin::default()
+}
+
+/// The agent's environment (`launch::agent_base_env`) with the new folder `scratch` as its
+/// `HOME`, or `None` when the folder cannot be made or named.
+fn agent_env(
+    parent_env: &BTreeMap<String, String>,
+    scratch: &Path,
+) -> Option<BTreeMap<String, String>> {
+    std::fs::create_dir_all(scratch).ok()?;
+    let home = scratch.to_str()?;
+    Some(crate::launch::agent_base_env(parent_env, home, true))
 }
 
 /// The user in GitHub's SSH greeting, `Hi <user>! You've successfully authenticated, ...`. A
@@ -413,35 +444,40 @@ pub fn is_repo_name(name: &str) -> bool {
         && !name.ends_with(".git")
 }
 
-/// Whether the participant's own git can push to `remote`: a dry-run push of a one-commit
-/// repository made in `scratch` (a new folder, removed afterwards) to a branch the repository
-/// does not have. Nothing is sent. A dry run still opens git's push connection, which GitHub
-/// gives only to a login with write access; a pass is git's exit 0 and nothing else. The
-/// participant's own settings and login apply, except that git and SSH may not ask a question
-/// (`GIT_TERMINAL_PROMPT=0`, SSH `BatchMode`, unless they set `GIT_SSH_COMMAND` themselves), and
-/// no hook or signing of theirs runs. `Err` holds git's last lines.
-pub fn push_test(git: &OsStr, remote: &str, scratch: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
-    let done = push_test_in(git, remote, scratch);
+/// Whether the agent's git can push to `remote`: a dry-run push of a one-commit repository to a
+/// branch the repository does not have, run in the agent's own environment
+/// (`launch::agent_base_env`: the participant's `PATH` and the way to their git login, a scratch
+/// `HOME`, nothing else), so a login only the participant's shell has (a `store` or `cache`
+/// helper, an `include.path` under `~`, a `GH_TOKEN`) does not pass. Nothing is sent. A dry run
+/// still opens git's push connection, which GitHub gives only to a login with write access; a
+/// pass is git's exit 0 and nothing else. No hook or signing of theirs runs, and nothing may ask
+/// a question (no terminal). `scratch` is a new folder, removed afterwards. `Err` holds git's
+/// last lines.
+pub fn push_test(
+    git: &OsStr,
+    remote: &str,
+    scratch: &Path,
+    parent_env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let done = match agent_env(parent_env, &scratch.join("home")) {
+        Some(env) => push_test_in(git, remote, &scratch.join("repo"), &env),
+        None => Err(format!("{} could not be made", scratch.display())),
+    };
     let _ = std::fs::remove_dir_all(scratch);
     done
 }
 
-fn push_test_in(git: &OsStr, remote: &str, scratch: &Path) -> Result<(), String> {
-    let Some(dir) = scratch.to_str() else {
-        return Err(format!("{} is not UTF-8", scratch.display()));
-    };
-    // SSH may not ask a question, unless the participant set their own SSH command.
-    let batch = [("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")];
-    let env: &[(&str, &str)] = if std::env::var_os("GIT_SSH_COMMAND").is_none() {
-        &batch
-    } else {
-        &[]
+fn push_test_in(
+    git: &OsStr,
+    remote: &str,
+    repo: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let Some(dir) = repo.to_str() else {
+        return Err(format!("{} is not UTF-8", repo.display()));
     };
     let quiet = |args: &[&str]| -> Result<(), String> {
         let mut full = vec![
-            "-C",
-            dir,
             "-c",
             "core.hooksPath=/dev/null",
             "-c",
@@ -451,11 +487,14 @@ fn push_test_in(git: &OsStr, remote: &str, scratch: &Path) -> Result<(), String>
         match run_bounded(git, &full, env, PUSH_TEST_TIMEOUT) {
             Some((true, _)) => Ok(()),
             Some((false, said)) => Err(last_lines(&said)),
+            None if crate::arming::interrupted() => Err("interrupted".to_string()),
             None => Err("git did not finish within a minute".to_string()),
         }
     };
-    quiet(&["init", "--quiet"])?;
+    quiet(&["init", "--quiet", dir])?;
     quiet(&[
+        "-C",
+        dir,
         "-c",
         "user.name=goalcup",
         "-c",
@@ -467,6 +506,8 @@ fn push_test_in(git: &OsStr, remote: &str, scratch: &Path) -> Result<(), String>
         "goalcup setup push test",
     ])?;
     quiet(&[
+        "-C",
+        dir,
         "push",
         "--dry-run",
         "--quiet",
@@ -475,26 +516,34 @@ fn push_test_in(git: &OsStr, remote: &str, scratch: &Path) -> Result<(), String>
     ])
 }
 
-/// Run `program args` (the participant's own `ssh`, `gh` or `git`), with `env` added, no stdin,
-/// no terminal prompt, in a process group of its own, for at most `timeout`: `(exit 0, stdout
-/// then stderr)`, or `None` when it could not start or did not finish (its group is then killed).
-/// Nothing passed here is a key.
+/// Run `program args` (the participant's own `ssh`, `gh` or `git`) in exactly `env` and no
+/// other variable, no stdin, no terminal prompt, in a session of its own with no controlling
+/// terminal (so nothing can stop to ask for a passphrase), for at most `timeout`: `(exit 0,
+/// stdout then stderr)`, or `None` when it could not start, did not finish, or a Ctrl-C came
+/// ([`crate::arming::interrupted`]); its group is then killed. Nothing passed here is a key.
 fn run_bounded(
     program: &OsStr,
     args: &[&str],
-    env: &[(&str, &str)],
+    env: &BTreeMap<String, String>,
     timeout: std::time::Duration,
 ) -> Option<(bool, String)> {
     use std::os::unix::process::CommandExt;
     let mut command = Command::new(program);
     command
         .args(args)
-        .envs(env.iter().copied())
+        .env_clear()
+        .envs(env)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
+    // SAFETY: `setsid` is async-signal-safe and touches nothing of this process's memory.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
     let mut child = command.spawn().ok()?;
     let read = |pipe: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
@@ -517,7 +566,26 @@ fn run_bounded(
             .take()
             .map(|p| Box::new(p) as Box<dyn Read + Send>),
     );
-    let status = crate::harness_version::wait_or_end_group(&mut child, timeout)?;
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if std::time::Instant::now() < deadline && !crate::arming::interrupted() => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            _ => {
+                // Not yet reaped, so its pid still names its group: end the group, then it.
+                if let Ok(pgid) = libc::pid_t::try_from(child.id()) {
+                    // SAFETY: `killpg` takes plain integers and has no memory effects.
+                    unsafe { libc::killpg(pgid, libc::SIGKILL) };
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let status = status?;
     let mut said = out.join().unwrap_or_default();
     said.extend(err.join().unwrap_or_default());
     Some((
