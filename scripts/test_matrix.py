@@ -612,9 +612,10 @@ class MatrixTests(unittest.TestCase):
         # A git config of the run's own that resets every credential helper, the system config
         # (macOS's names the keychain) off, and no SSH agent, keyring or token.
         self.assertEqual(git["gitconfig"], ["credential.helper="])
-        self.assertTrue(git["GIT_CONFIG_GLOBAL"].startswith(str(w.tmpdir)))
+        # The script works in `pwd -P` paths (/private/var/... on macOS): compare resolved paths.
+        self.assertTrue(Path(git["GIT_CONFIG_GLOBAL"]).resolve().is_relative_to(w.tmpdir.resolve()))
         self.assertEqual(git["GIT_CONFIG_NOSYSTEM"], "1")
-        self.assertTrue(git["GH_CONFIG_DIR"].startswith(str(w.tmpdir)))
+        self.assertTrue(Path(git["GH_CONFIG_DIR"]).resolve().is_relative_to(w.tmpdir.resolve()))
         for name in ("SSH_AUTH_SOCK", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "GH_TOKEN"):
             self.assertIsNone(git[name], name)
         self.assertNotIn("--repo", w.seen("start.argv"))
