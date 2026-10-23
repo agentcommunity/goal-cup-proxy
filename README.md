@@ -35,7 +35,9 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    (next step). Prep opens the harness once in its own
    isolated home: sign in there, and set it so it never stops to ask you for approval
    ([set up your harness for a 168-hour run](docs/HARNESS-SETUP.md)). Your repository must be
-   new, empty and public, with a fine-grained token for it.
+   new, empty and public, with a fine-grained token for it. For Hermes, install exactly
+   `uv tool install hermes-agent==0.19.0`, not Hermes's own installer, which installs the newest
+   release (it writes no session file). See [Hermes setup](docs/HARNESS-SETUP.md#hermes).
 4. **Practice**: `goalcup start --harness <id> --practice`. It lasts about ten minutes, never
    pushes and never counts. Do as many as you like.
 5. **Start** inside the start window: `goalcup start --harness <id>`. A dry run is open from
