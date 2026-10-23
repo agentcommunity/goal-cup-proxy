@@ -403,10 +403,14 @@ interface SqlFn {
   required: Set<string>;
 }
 
-/** The last `CREATE [OR REPLACE] FUNCTION public.goal_cup_<name>(…)` for each public function: that one wins. */
-function sqlFunctions(): Map<string, SqlFn> {
+/**
+ * Every overload of each `public.goal_cup_<name>` in the mirror. A later `CREATE OR REPLACE` with the
+ * same parameters replaces an earlier one (the last wins); different parameters are another overload
+ * (20261021100000 adds overloads of commit_chunk, heartbeat and record_final_commit).
+ */
+function sqlFunctions(): Map<string, SqlFn[]> {
   const sql = readFileSync(join(SRC, "sql", "goal-cup-tracer-upload.sql"), "utf8");
-  const fns = new Map<string, SqlFn>();
+  const fns = new Map<string, Map<string, SqlFn>>();
   for (const m of sql.matchAll(/CREATE (?:OR REPLACE )?FUNCTION public\.goal_cup_([a-z_]+)\(/g)) {
     let depth = 1;
     let i = (m.index ?? 0) + m[0].length;
@@ -435,12 +439,17 @@ function sqlFunctions(): Map<string, SqlFn> {
       params.add(name);
       if (!/\bDEFAULT\b/i.test(p)) required.add(name);
     }
-    fns.set(m[1] as string, { params, required });
+    const name = m[1] as string;
+    if (!fns.has(name)) fns.set(name, new Map());
+    fns.get(name)!.set([...params].join(","), { params, required });
   }
-  return fns;
+  return new Map([...fns].map(([name, overloads]) => [name, [...overloads.values()]]));
 }
 
-test("every RPC the Worker calls exists in the SQL, with the same argument names", () => {
+/** An overload answers a named call when it has every argument sent and gets every one it requires. */
+const answers = (fn: SqlFn, args: Set<string>) => [...args].every((a) => fn.params.has(a)) && [...fn.required].every((r) => args.has(r));
+
+test("every RPC the Worker calls exists in the SQL, with the same argument names, and each call matches exactly one overload", () => {
   const calls = workerCalls();
   const fns = sqlFunctions();
   // The scan must see every call site, or a call could hide from the check.
@@ -449,14 +458,16 @@ test("every RPC the Worker calls exists in the SQL, with the same argument names
   assert.ok(fns.size >= sites, `found only ${fns.size} SQL functions: the scan is broken`);
   const problems: string[] = [];
   for (const [name, args] of calls) {
-    const fn = fns.get(name);
-    if (!fn) {
+    const overloads = fns.get(name);
+    if (!overloads) {
       problems.push(`${name}: no CREATE FUNCTION public.goal_cup_${name}( in the SQL`);
       continue;
     }
     if (args.size === 0) problems.push(`${name}: no p_ argument was read from the Worker call: the scan is broken`);
-    for (const a of args) if (!fn.params.has(a)) problems.push(`${name}: the Worker sends ${a}; the SQL has no such parameter`);
-    for (const r of fn.required) if (!args.has(r)) problems.push(`${name}: the SQL requires ${r}; the Worker does not send it`);
+    const matched = overloads.filter((fn) => answers(fn, args));
+    if (matched.length !== 1) {
+      problems.push(`${name}(${[...args].join(", ")}): ${matched.length} overloads answer it, not exactly one`);
+    }
   }
   assert.deepEqual(problems, []);
 });
