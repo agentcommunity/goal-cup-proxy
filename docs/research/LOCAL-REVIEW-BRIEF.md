@@ -101,49 +101,69 @@ covers Windows players today at a fraction of that cost.
 - Claude Code's sign-in over a 7-day run: "not measured" (HARNESS-SETUP section 4).
 - The `--dev` (unpinned connector) path: refuse it for competition, or let judges reject it?
 
-## 6. Real-key test plan (owner's machines)
+## 6. What to test: the new setup and process (fast, real GitHub, staging)
 
-The cloud session could not test these: they need real sign-ins, real GitHub and a real desktop.
-Run them with **#257 (simple setup)** built locally, against **staging** only. Each test has a pass
-line written before it runs. Write down every stop and every confusing line; each one is a fix.
+This says **what** to test and what must be true. How to run it, and how to make it fast, is up to
+the local session.
 
-### 6.1 Zero to started run (time each one)
+**Scope:** the simple setup (#257) and short runs only. No long runs yet. Each case below stands
+alone, so it can be one subagent in parallel with the others. Every real run uses a throwaway
+public repo, staging, and a cheap model. Where a case says "DB", check the staging `goal_cup_tracer`
+tables (`runs`, `heartbeats`, `entries`/`chunks`, `notices`).
 
-| # | Machine | Harness | GitHub login | Pass line |
-|---|---|---|---|---|
-| Z1 | Fresh macOS user account | Claude Code | SSH key (no passphrase) | setup under 5 min of your own time; `start` creates the repo and the agent's first `git push` lands |
-| Z2 | Same Mac, another fresh user | Codex | HTTPS, macOS keychain only (no `gh`, no SSH) | `start` asks `<user>/<name>`, the push check passes, the agent's push lands |
-| Z3 | Same Mac | Claude Code | `gh auth login` (HTTPS, "Authenticate Git" = Yes) | the agent's push lands through `gh` under its scratch HOME |
-| Z4 | Same Mac | any | none at all, no GitHub account | the guide is clear: sign up, install `gh`, log in, press Enter, done; time it |
-| Z5 | Linux desktop (Docker is not enough for keyrings) | Hermes 0.19.0 | HTTPS with libsecret or `gh` keyring | push works through `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS` |
-| Z6 | WSL2 | Amp | SSH key with a passphrase in `ssh-agent` | push works through `SSH_AUTH_SOCK` |
+### A. Setup
 
-### 6.2 Things only a real machine can answer
+| # | Case | Must be true |
+|---|---|---|
+| A1 | `goalcup setup` on a machine that is not logged in | Login runs inline; 4 steps; no GitHub question; no token asked |
+| A2 | `goalcup prep` (old name) | Same as `setup` |
+| A3 | Setup twice | Second run asks nothing already done; the keys file is not recreated or reopened |
+| A4 | Keys file | `<work root>/.env.local` exists, empty plus comments, mode 0600; goalcup never reads it |
+| A5 | Harness list | Installed ones first, then "also supported", then "your own harness" link |
+| A6 | Sign-in with an API key instead of a subscription, each harness | The run later records; the key is not in any upload |
 
-1. **Does the push check fail without write access?** Make a repo you can read but not write (a
-   friend's public repo). `goalcup start --repo friend/repo` must refuse before the approval.
-2. **Practice with no GitHub at all:** `goalcup start --practice` on Z4 before any GitHub step. The
-   agent must not be able to push (try asking it to add a remote and push).
-3. **Keys file:** put a test key in `~/goalcup-work/.env.local` and prompt the agent to use it.
-   Check:
-   - the agent finds it with only the path in the prompt;
-   - `git status` in the clone never shows `.env.local` (the `.git/info/exclude` entry);
-   - the uploaded record has the key redacted, or note exactly where it shows.
-4. **API-key sign-in instead of a subscription:** for each harness, sign in with an API key in step 3.
-   The run must record and the key must not appear in the upload.
-5. **Claude Code over a long run:** a 24 h cell (dry run) to see whether the sign-in survives
-   ("not measured" in HARNESS-SETUP section 4).
-6. **Repo turned private mid-run:** make the dry-run repo private for 10 minutes, then public. Note
-   what the player sees (today: nothing until the end email). This decides whether to build the
-   "repo went private" email.
-7. **Ctrl-C** at "Name it" and at "Press Enter": nothing is created on the server.
-8. **Rate limit:** run `start` behind a busy shared network (or 61 quick checks); the start must
-   still go on.
+### B. GitHub at start (real runs only)
 
-### 6.3 Keys and accounts for the test
+| # | Case | Must be true |
+|---|---|---|
+| B1 | New repo through the prefilled GitHub link | Repo is public and empty; start goes on; approval comes after the repo check |
+| B2 | Repo made by hand, given with `--repo owner/name` | Same as B1, no question asked |
+| B3 | Repo not empty (has a README) | Refused before approval, with the fix in one line; nothing on the server |
+| B4 | Repo private | Refused before approval; nothing on the server |
+| B5 | Repo you can read but not write | Push check refuses before approval |
+| B6 | No GitHub login on the machine | Guide shown; after `gh auth login` and Enter, start goes on |
+| B7 | Login only in the macOS keychain (no `gh`, no SSH) | Typing `<user>/<name>` works; the agent's push lands |
+| B8 | SSH key, with and without passphrase | Agent's push lands |
+| B9 | Second real run | Suggests `<name>-2`; the used repo is refused |
+| B10 | Ctrl-C at each question | Nothing created on the server, no clone, no harness |
+| B11 | GitHub API rate-limited | Start still goes on; the server still refuses a private repo |
 
-- Use throwaway GitHub repos and fine-grained tokens with access to one repo only. Revoke them
-  after.
-- Use cheap models (LOCAL-CAMPAIGN rules: Codex `gpt-5.6-luna` low, Claude `haiku`).
-- Never use a production model key or a production DB.
-- Staging only. Production refuses test runs by design.
+### C. A mini run, end to end
+
+Prompt the agent to do a tiny task fast (create a file, commit, push, stop).
+
+| # | Case | Must be true |
+|---|---|---|
+| C1 | Practice run | No GitHub at all; the agent cannot push even if asked to add a remote; DB: a practice run, heartbeats, entries uploaded, sealed |
+| C2 | Test or dry run | DB: run row with the right `repo_url` and event; heartbeats while it runs; entries arrive; the agent's push is on GitHub |
+| C3 | Same run, after the end | Sealed; "Upload done."; DB: judged commit is the agent's last push before the deadline |
+| C4 | `.env.local` with a test key, path named in the prompt | Agent uses it; `.env.local` is never committed; the key is redacted in the upload (or note exactly where it shows) |
+| C5 | `goalcup status` during the run | Shows recording, upload state, no false problems |
+
+### D. Edge cases (short runs)
+
+| # | Case | Must be true |
+|---|---|---|
+| D1 | Harness writes no session file (wrong Hermes version) | The "no session file" warning shows (#243 bundle) |
+| D2 | Agent exits early | `goalcup continue` resumes the same run; DB: same run, a new part |
+| D3 | Clone folder deleted, then `continue` | Clear refusal (`clone_missing`), no new run |
+| D4 | Network off for a few minutes mid-run | Recording goes on; upload catches up; DB shows no lost entries |
+| D5 | Terminal closed mid-run | Daemon keeps recording; `status` from a new terminal shows it |
+| D6 | `goalcup seal` mid-run | Asks first; with `--yes` it seals; upload finishes |
+| D7 | Repo made private mid-run, then public again | What the player sees (today nothing); DB judged commit still found after |
+| D8 | Agent force-pushes | DB/judging flags it |
+| D9 | Disk nearly full (test override) | Agent paused, then resumed; no data lost |
+| D10 | A second start of the same harness while one records | Refused; the first run is untouched |
+
+### Not in this round
+Long runs (24 h and 168 h), sign-in expiry over days, restarts after a platform cap, native Windows.
