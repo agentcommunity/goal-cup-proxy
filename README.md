@@ -73,8 +73,8 @@ most runs have one, and `goalcup continue` starts the next. Every flag is in `go
 
 | Command | What it does |
 |---|---|
-| `goalcup login [--server <URL>]` | Connect this computer to your Goal Cup account (once; `setup` does it for you). |
 | `goalcup setup [--harness <ID>] [--work-root <PATH>] [--json] [--dev]` | Check the four readiness steps. Never starts a run. `goalcup prep` is its old name. |
+| `goalcup login [--server <URL>]` | Connect this computer to your Goal Cup account (once; `setup` does it for you). |
 | `goalcup start --harness <ID> [--practice \| --test] [--repo <NAME>] [--dev]` | Start a run: open the harness here and record it. A real run first asks for its own new GitHub repository. `--test` is for organizers. |
 | `goalcup status [<part-id>] [--json]` | Show the run: recording state, time left, upload, problems, `Next:`. |
 | `goalcup time-left` | Show how much time the run has left. The agent may run it too. |

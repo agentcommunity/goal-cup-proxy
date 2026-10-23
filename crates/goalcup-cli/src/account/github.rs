@@ -356,8 +356,7 @@ const PUSH_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60
 /// bounded by a timeout, never asks a question (`BatchMode`), and none of what they print is kept
 /// but the user name. A first SSH connection records GitHub's host key (`accept-new`).
 pub fn find_login(env: &std::collections::BTreeMap<String, String>) -> GithubLogin {
-    let mut ssh = Command::new("ssh");
-    ssh.args([
+    let ssh = [
         "-T",
         "-o",
         "BatchMode=yes",
@@ -366,8 +365,8 @@ pub fn find_login(env: &std::collections::BTreeMap<String, String>) -> GithubLog
         "-o",
         "ConnectTimeout=10",
         "git@github.com",
-    ]);
-    if let Some((_, said)) = run_bounded(ssh, LOOK_TIMEOUT)
+    ];
+    if let Some((_, said)) = run_bounded(OsStr::new("ssh"), &ssh, &[], LOOK_TIMEOUT)
         && let Some(user) = ssh_greeting_user(&said)
     {
         return GithubLogin {
@@ -376,9 +375,8 @@ pub fn find_login(env: &std::collections::BTreeMap<String, String>) -> GithubLog
         };
     }
     if crate::preflight::resolve_on_path("gh", env).is_some() {
-        let mut gh = Command::new("gh");
-        gh.args(["api", "user", "--jq", ".login"]);
-        if let Some((true, said)) = run_bounded(gh, LOOK_TIMEOUT) {
+        let gh = ["api", "user", "--jq", ".login"];
+        if let Some((true, said)) = run_bounded(OsStr::new("gh"), &gh, &[], LOOK_TIMEOUT) {
             let user = said.lines().next().unwrap_or("").trim().to_string();
             if is_owner_name(&user) {
                 return GithubLogin {
@@ -430,23 +428,27 @@ pub fn push_test(git: &OsStr, remote: &str, scratch: &Path) -> Result<(), String
 }
 
 fn push_test_in(git: &OsStr, remote: &str, scratch: &Path) -> Result<(), String> {
+    let Some(dir) = scratch.to_str() else {
+        return Err(format!("{} is not UTF-8", scratch.display()));
+    };
+    // SSH may not ask a question, unless the participant set their own SSH command.
+    let batch = [("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")];
+    let env: &[(&str, &str)] = if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+        &batch
+    } else {
+        &[]
+    };
     let quiet = |args: &[&str]| -> Result<(), String> {
-        let mut command = Command::new(git);
-        command
-            .arg("-C")
-            .arg(scratch)
-            .args([
-                "-c",
-                "core.hooksPath=/dev/null",
-                "-c",
-                "commit.gpgsign=false",
-            ])
-            .args(args)
-            .env("GIT_TERMINAL_PROMPT", "0");
-        if std::env::var_os("GIT_SSH_COMMAND").is_none() {
-            command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
-        }
-        match run_bounded(command, PUSH_TEST_TIMEOUT) {
+        let mut full = vec![
+            "-C",
+            dir,
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+        ];
+        full.extend_from_slice(args);
+        match run_bounded(git, &full, env, PUSH_TEST_TIMEOUT) {
             Some((true, _)) => Ok(()),
             Some((false, said)) => Err(last_lines(&said)),
             None => Err("git did not finish within a minute".to_string()),
@@ -473,12 +475,22 @@ fn push_test_in(git: &OsStr, remote: &str, scratch: &Path) -> Result<(), String>
     ])
 }
 
-/// Run `command` with no stdin, in a process group of its own, for at most `timeout`: `(exit
-/// 0, stdout then stderr)`, or `None` when it could not start or did not finish (its group is
-/// then killed).
-fn run_bounded(mut command: Command, timeout: std::time::Duration) -> Option<(bool, String)> {
+/// Run `program args` (the participant's own `ssh`, `gh` or `git`), with `env` added, no stdin,
+/// no terminal prompt, in a process group of its own, for at most `timeout`: `(exit 0, stdout
+/// then stderr)`, or `None` when it could not start or did not finish (its group is then killed).
+/// Nothing passed here is a key.
+fn run_bounded(
+    program: &OsStr,
+    args: &[&str],
+    env: &[(&str, &str)],
+    timeout: std::time::Duration,
+) -> Option<(bool, String)> {
     use std::os::unix::process::CommandExt;
+    let mut command = Command::new(program);
     command
+        .args(args)
+        .envs(env.iter().copied())
+        .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

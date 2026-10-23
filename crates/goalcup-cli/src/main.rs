@@ -80,18 +80,6 @@ installed then makes this command exit 1).";
 /// is deliberately absent: see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
-    /// Connect this computer to your Goal Cup account. `goalcup setup` does this for you.
-    ///
-    /// Your browser opens on a page with a short code. Check that the code is the same as in
-    /// your terminal, then approve. You do this once per computer. No password is typed or
-    /// stored: only the server's address and your account's name are saved. Without a login,
-    /// runs stay on this computer.
-    Login {
-        /// The server's address, for example `https://ingest.agentcommunity.org`. Without
-        /// it, the server of your last login, else the Goal Cup server.
-        #[arg(long, value_name = "URL")]
-        server: Option<String>,
-    },
     /// Step 1. Get this computer ready for your run.
     ///
     /// Four steps: this computer is connected to your Goal Cup account (it logs in if not);
@@ -119,6 +107,18 @@ enum Command {
         /// For connector developers: accept a connector directory this build does not pin.
         #[arg(long)]
         dev: bool,
+    },
+    /// Connect this computer to your Goal Cup account. `goalcup setup` does this for you.
+    ///
+    /// Your browser opens on a page with a short code. Check that the code is the same as in
+    /// your terminal, then approve. You do this once per computer. No password is typed or
+    /// stored: only the server's address and your account's name are saved. Without a login,
+    /// runs stay on this computer.
+    Login {
+        /// The server's address, for example `https://ingest.agentcommunity.org`. Without
+        /// it, the server of your last login, else the Goal Cup server.
+        #[arg(long, value_name = "URL")]
+        server: Option<String>,
     },
     /// Step 2. Start a run: open your agent here and record what it does.
     ///
