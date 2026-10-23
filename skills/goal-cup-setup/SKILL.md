@@ -45,7 +45,7 @@ Say these plainly, once, before the first human step:
 
 1. Check Goal Cup Proxy is installed: `goalcup --version`. If it is not, tell the person how to
    install it and stop. The guide's section 1 has the one command, for macOS, Linux and (inside
-   WSL2) Windows: `curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh`.
+   WSL2) Windows: `curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh`.
    If no release is published yet, follow the README's build-from-source steps.
 2. Run `goalcup prep --json`. It asks nothing and opens nothing. It prints one JSON array of six
    objects, in order, each `{"step", "state", "human", "say"}`:

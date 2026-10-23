@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install Goal Cup Proxy from a GitHub release. One command, no sudo:
 #
-#   curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh
 #
 # It picks the build for this machine (macOS or Linux, arm64 or x86_64; WSL2 is Linux), checks the
 # download against the SHA256SUMS file of the same release, and installs into ~/.local:
@@ -22,7 +22,7 @@
 # The whole script is one function called on the last line, so a download cut short runs nothing.
 set -eu
 
-repo="agentcommunity/goal-cup-tracer"
+repo="agentcommunity/goal-cup-proxy"
 
 say() { printf '%s\n' "$*"; }
 die() {

@@ -22,7 +22,7 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
 1. **Install** the latest release (macOS or Linux; on Windows, inside WSL2):
 
    ```sh
-   curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh
+   curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh
    goalcup --version
    ```
 
@@ -255,7 +255,7 @@ A test that guards one of these is never deleted. It may move tier.
 The version is written only in the workspace `Cargo.toml` (`scripts/check-version.py` fails on
 any other copy). `sh scripts/release.sh prepare <x.y.z>` opens the version PR; after it merges, run
 the full gate and `sh scripts/linux-check.sh` on that commit, then `sh scripts/release.sh tag <x.y.z>`
-([details](packaging/README.md#cutting-a-release)). Release notes: [GitHub releases](https://github.com/agentcommunity/goal-cup-tracer/releases).
+([details](packaging/README.md#cutting-a-release)). Release notes: [GitHub releases](https://github.com/agentcommunity/goal-cup-proxy/releases).
 
 ## Docs map
 
@@ -273,7 +273,7 @@ Every doc, grouped by who reads it: [docs/README.md](docs/README.md). The key on
 
 - Participant support: goalcup@agentcommunity.org. Paste your `goalcup status` output and run id,
   never your GitHub token.
-- Public problems: [GitHub issues](https://github.com/agentcommunity/goal-cup-tracer/issues).
+- Public problems: [GitHub issues](https://github.com/agentcommunity/goal-cup-proxy/issues).
 - Security problems: report privately to goalcup@agentcommunity.org or through GitHub private
   vulnerability reporting ([SECURITY.md](SECURITY.md)). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md),
   [Code of Conduct](CODE_OF_CONDUCT.md). Maintainer: Balazs Nemethi.

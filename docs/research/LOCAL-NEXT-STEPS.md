@@ -13,7 +13,7 @@ and the [local campaign](LOCAL-CAMPAIGN.md).
 
 ## 1. Review and merge
 
-- [x] Draft PR [#226](https://github.com/agentcommunity/goal-cup-tracer/pull/226) from
+- [x] Draft PR [#226](https://github.com/agentcommunity/goal-cup-proxy/pull/226) from
       `smart/zen-gates-d9tmbh` to `main`. CI (`check`) is green. Ignore the DCO check: no sign-off
       is required (D47).
 - [ ] One reviewer reads it once (AGENTS.md "Done"), ticks the PR boxes, marks it ready and merges
@@ -171,8 +171,9 @@ push, notice wording). Apply it **before** deploying the Worker that needs it.
 - [ ] Point release around 26 Oct: `scripts/release.sh prepare <x.y.z>`, merge, full gate and
       `linux-check.sh` on merged `main`, then `release.sh tag <x.y.z>`. Verify the published installer
       in a fresh prefix.
-- [ ] Rename step 4: rename the GitHub repo to `goal-cup-proxy`, then let an agent update the URLs
-      and test that old install and release links redirect.
+- [x] Rename step 4: rename the GitHub repo to `goal-cup-proxy`, then let an agent update the URLs
+      and test that old install and release links redirect (22 Oct: old `releases/latest/download/`
+      and `releases/download/v0.6.1/` URLs answer 301 to `goal-cup-proxy`).
 - [ ] Rename step 5 (database schema): decide before or after the event.
 
 ## 9. Record everything

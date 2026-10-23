@@ -249,7 +249,8 @@ Goal Cup Proxy holds no key, so no run is scanned for one. The `masked_key` rule
 A harness is data: a connector manifest under a `schema_version`. Common cases need no Rust edit.
 A genuinely new capability (a new native-store form, a new credential) is a separate reviewed core
 PR. Anyone may send a harness PR; connectors are trusted code, so a code owner reviews each one.
-The public repository is `agentcommunity/goal-cup-tracer`, Apache-2.0, copyright AgentCommunity.
+The public repository is `agentcommunity/goal-cup-proxy` (named `goal-cup-tracer` until October
+2026; GitHub redirects the old URL), Apache-2.0, copyright AgentCommunity.
 The protocol freezes at v5 for v0.x. macOS is the measured platform, Linux next, Windows later.
 
 ## D43. Harness contract v1: owner rulings, and D41's CA rule generalised.

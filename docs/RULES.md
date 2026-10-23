@@ -31,7 +31,7 @@ evidence about the current agent ecosystem.
 All times are UTC.
 
 - **Release availability:** install the latest published Goal Cup Proxy release on macOS, Linux or WSL2
-  with `curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh`
+  with `curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh`
   ([guide](PARTICIPANT-GUIDE.md#1-install)).
 - **23 October to 6 November, 00:00:** the dry-run window is open; you can start dry runs on any
   day. The last scheduled release is on 6 November, 12:00.

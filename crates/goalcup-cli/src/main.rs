@@ -57,7 +57,7 @@ Steps:
 While it runs: goalcup status (in another terminal). If the agent stopped early: goalcup continue.
 To check a finished run: goalcup-verify --capture-integrity <trace-dir>
 
-Guide: https://github.com/agentcommunity/goal-cup-tracer/blob/main/docs/PARTICIPANT-GUIDE.md
+Guide: https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/PARTICIPANT-GUIDE.md
 Help: goalcup@agentcommunity.org
 
 Exit codes: 0 done; 1 refused, and you can fix it; 3 the command could not do its job. This \

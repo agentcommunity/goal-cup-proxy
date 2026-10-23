@@ -307,16 +307,17 @@ chain files "parts"; read that as chain files.
 **Names kept from "Goal Cup Tracer" on purpose.** The product is Goal Cup Proxy. These
 identifiers keep the old name, because changing them would break something that is already out:
 
-- the repository URL, `github.com/agentcommunity/goal-cup-tracer`, until the repository is renamed;
 - the server's database schema, `goal_cup_tracer`;
 - `server/worker/sql/goal-cup-tracer-upload.sql`, the mirror of the website's migrations;
 - the `tracer_version` field on the wire, which reports the `goalcup` version.
 
-**The rule for the repository rename.** Do it in one pull request that updates every copy of the
-URL together: `packaging/install.sh`, the `AFTER_HELP` guide URL in
-`crates/goalcup-cli/src/main.rs`, and the install URLs in README, RULES and the participant's
-guide. GitHub then sends the old URL to the new one. Never create a new repository under the old
-name: that would end the redirect, and old install commands would fetch from it.
+**The repository rename.** The repository is now `github.com/agentcommunity/goal-cup-proxy`. It
+was `goal-cup-tracer`, and GitHub sends the old URL to the new one, so old install commands and
+links still work. Every copy of the URL moved in one pull request: `packaging/install.sh` (tested
+by `scripts/test_install.py`), the `AFTER_HELP` guide URL in `crates/goalcup-cli/src/main.rs`,
+prep's setup guide link, and the URLs in the README, the rules, the guides and the skills. Archived
+and dated documents keep the old URL as history. Never create a new repository under the old name:
+that would end the redirect, and old install commands would fetch from it.
 
 ## 13. Where each guarantee is tested
 

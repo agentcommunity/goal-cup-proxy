@@ -17,7 +17,7 @@ edition = "2024"
 # on any other hard-coded copy.
 version = "0.6.1"
 license = "Apache-2.0"
-repository = "https://github.com/agentcommunity/goal-cup-tracer"
+repository = "https://github.com/agentcommunity/goal-cup-proxy"
 homepage = "https://agentcommunity.org/goalcup"
 # 1.99: the latest stable release at the owner's decision of 2026-10-11. The code needs
 # less (atomic `try_update`); locked dependencies need 1.88. Clippy's
