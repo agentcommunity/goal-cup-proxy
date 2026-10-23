@@ -226,6 +226,10 @@ FAKE_ID="m2-fake-tui"
 # The organisers' practice repository: the server is told it for every practice run (D69), and
 # no test run may name it.
 PRACTICE_REPO="agentcommunity/goalcup-matrix-empty"
+# A repository name as GitHub reads it, for comparing: lowercase, no trailing / and no .git.
+repo_key() {
+  printf '%s' "$1" | tr 'A-Z' 'a-z' | sed -e 's:/*$::' -e 's:\.git$::' -e 's:/*$::'
+}
 # The refusals --refusals checks, in order.
 REFUSALS="not-empty private missing push no-login bare-name"
 
@@ -449,6 +453,12 @@ if [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
   fi
   # A test run asks for its own repository at the start (D69): the kit makes one, or MATRIX_REPO
   # names it.
+  # The practice repository is refused however it is written: GitHub reads the name without case,
+  # with or without a trailing .git, and with or without a trailing /.
+  if [ -n "$TEST_REPO" ] && [ "$(repo_key "$TEST_REPO")" = "$PRACTICE_REPO" ]; then
+    echo "matrix: MATRIX_REPO is the organisers' practice repository; a test run needs a repository of its own" >&2
+    exit 2
+  fi
   case $TEST_REPO in
     "") ;;
     */*/* | /* | */ | *[!A-Za-z0-9._/-]*)
@@ -461,10 +471,6 @@ if [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
       exit 2
       ;;
   esac
-  if [ "$(printf '%s' "$TEST_REPO" | tr 'A-Z' 'a-z')" = "$PRACTICE_REPO" ]; then
-    echo "matrix: MATRIX_REPO is the organisers' practice repository; a test run needs a repository of its own" >&2
-    exit 2
-  fi
   CELL=${MATRIX_CELL:-$CONNECTOR}
   case $CELL in
     *[!a-z0-9-]* | "" | -*)

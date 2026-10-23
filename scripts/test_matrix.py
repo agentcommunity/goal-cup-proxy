@@ -1038,8 +1038,16 @@ class MatrixArgumentTests(unittest.TestCase):
         for bad in ("just-a-name", "a/b/c", "a/b c"):
             with self.subTest(bad=bad):
                 self.assertIn("<owner>/<name>", self.refuse(*test, **cfg, MATRIX_REPO=bad))
-        self.assertIn("practice repository", self.refuse(
-            *test, **cfg, MATRIX_REPO="AgentCommunity/goalcup-matrix-empty"))
+        # The same repository however it is written: case, a trailing .git, a trailing /.
+        for same in ("agentcommunity/goalcup-matrix-empty", "AgentCommunity/goalcup-matrix-empty",
+                     "agentcommunity/goalcup-matrix-empty.git", "AgentCommunity/GoalCup-Matrix-Empty.GIT",
+                     "agentcommunity/goalcup-matrix-empty/", "agentcommunity/goalcup-matrix-empty.git/",
+                     "agentcommunity/goalcup-matrix-empty//"):
+            with self.subTest(same=same):
+                self.assertIn("practice repository", self.refuse(*test, **cfg, MATRIX_REPO=same))
+        # A different repository is not it.
+        self.assertNotIn("practice repository", self.refuse(
+            *test, **cfg, MATRIX_REPO="agentcommunity/goalcup-matrix-empty-2/x"))
         self.assertIn("MATRIX_CELL", self.refuse(*test, **cfg, MATRIX_CELL="Bad_Cell"))
 
     def test_refusals_go_alone_with_the_fake(self) -> None:

@@ -199,6 +199,16 @@ class ConfigValidation(Base):
         for repo in ("no-owner", "agentcommunity/goalcup-matrix-empty"):
             with self.subTest(repo=repo):
                 self.assertTrue(self.errors(self.config([dict(a, repo=repo)])))
+        # The practice repository however it is written: case, a trailing .git, a trailing /.
+        for repo in ("AgentCommunity/goalcup-matrix-empty", "agentcommunity/goalcup-matrix-empty.git",
+                     "AgentCommunity/GoalCup-Matrix-Empty.GIT", "agentcommunity/goalcup-matrix-empty/",
+                     "agentcommunity/goalcup-matrix-empty.git/"):
+            with self.subTest(practice=repo):
+                errs = self.errors(self.config([dict(a, repo=repo)]))
+                self.assertTrue(any("practice repository" in e for e in errs), errs)
+        # A neighbour is not it.
+        errs = self.errors(self.config([dict(a, repo="agentcommunity/goalcup-matrix-empty-2")]))
+        self.assertFalse(any("practice repository" in e for e in errs), errs)
 
     def test_shared_member_refused_when_cells_run_together(self):
         cfg = self.config([self.docker_cell("a", "m1"), self.docker_cell("b", "m1")])

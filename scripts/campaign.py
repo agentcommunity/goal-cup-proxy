@@ -416,6 +416,11 @@ def validate(cfg, cells, parallel):
     return errors, warnings
 
 
+def repo_key(repo):
+    """A repository name as GitHub reads it, for comparing: lowercase, no trailing / and no .git."""
+    return re.sub(r"/+$", "", re.sub(r"\.git$", "", re.sub(r"/+$", "", str(repo).lower())))
+
+
 def validate_repo(cell, cid, repos):
     """A cell's `repo`, when it names one instead of the one matrix.sh makes: <owner>/<name>, not
     the practice repository, and no other cell's. `repos` collects what earlier cells named."""
@@ -423,13 +428,15 @@ def validate_repo(cell, cid, repos):
     if repo is None:
         return []
     repo = str(repo)
+    # The practice repository however it is written: GitHub reads the name without case, with or
+    # without a trailing .git, and with or without a trailing /.
+    if repo_key(repo) == PRACTICE_REPO:
+        return ["repo is the organisers' practice repository; leave repo out and the kit makes one"]
     if not REPO_ID.fullmatch(repo):
         return ["repo is <owner>/<name>"]
-    if repo.lower() == PRACTICE_REPO:
-        return ["repo is the organisers' practice repository; leave repo out and the kit makes one"]
-    if repo.lower() in repos:
-        return [f"repo {repo} is also cell {repos[repo.lower()]}'s; each run needs its own"]
-    repos[repo.lower()] = cid
+    if repo_key(repo) in repos:
+        return [f"repo {repo} is also cell {repos[repo_key(repo)]}'s; each run needs its own"]
+    repos[repo_key(repo)] = cid
     return []
 
 
