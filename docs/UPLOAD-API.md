@@ -158,6 +158,16 @@ replaced learns it from `stop`.
 `PRACTICE_RUN_MINUTES` (10) for a practice run. The credential's `mode` decides which: a `practice`
 credential opens a practice run, in the practice event.
 
+`dev` is an optional boolean on the open and the continue call (missing is `false`; anything else, `null`
+included, is `400`). A `dev` run is for Goal Cup admins: `403` when the run's mode is `competition`
+("A --dev run never enters the competition. Start without --dev."), else `403` when the member is
+not an admin ("--dev is for Goal Cup admins only. Start without --dev."). The server asks the
+database about the member only when `dev` is true. The Worker's `MIN_COMPETITION_VERSION` also
+refuses a competition device request and a competition open from a goalcup older than it, or of
+unknown version, with `403` "This goalcup (<version>) is too old for the cup. Update it when no run
+is open: <install line>"; a retried open of a run that exists is still answered. A minimum that is not
+`x.y.z` is `500 misconfigured` for those two calls only.
+
 `machine` is optional: facts about the machine, a flat JSON object whose values are strings,
 numbers, booleans or `null`, at most 4 KiB serialized (else `400`; `null` means absent). The server
 keeps it on the run and never shows it. It also keeps the connection's IP address and country (from

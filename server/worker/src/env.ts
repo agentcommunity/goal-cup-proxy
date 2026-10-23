@@ -32,6 +32,18 @@ export interface Env {
 
   /** "supabase" (default) or "local" (wrangler dev and tests only). */
   DB_BACKEND?: string;
+  /**
+   * Tests and `wrangler dev` only, DB_BACKEND=local only: member ids, comma-separated, that the
+   * local database treats as Goal Cup admins (`--dev` runs). In production the database decides.
+   */
+  LOCAL_ADMIN_MEMBERS?: string;
+
+  /**
+   * The oldest goalcup (`x.y.z`, as in the version rule: the first three numbers) that may start a
+   * competition run or ask for a competition sign-in. Empty or unset: no minimum. Anything else
+   * that is not `x.y.z` makes those two calls answer 500 misconfigured and nothing else.
+   */
+  MIN_COMPETITION_VERSION?: string;
 
   /** Where the member approves a device request: the website's page, without a query string. */
   APPROVAL_URL?: string;

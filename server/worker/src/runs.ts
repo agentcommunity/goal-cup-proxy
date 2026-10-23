@@ -3,13 +3,14 @@
 
 import type { Auth } from "./auth.ts";
 import type { Ctx } from "./context.ts";
-import { type EntryRow, type MachineFacts, type RecordingState, type RunRow, type Vitals, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
+import { type EntryRow, type MachineFacts, type RecordingState, type RunMode, type RunRow, type Vitals, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
 import { githubHeaders } from "./github.ts";
 import {
   REPO_URL,
   addSeconds,
   asObject,
+  boolField,
   formatTime,
   hexField,
   isEntryId,
@@ -18,6 +19,7 @@ import {
   readBodyCapped,
   sha256Hex,
   strField,
+  versionTriple,
 } from "./util.ts";
 
 const JSON_BODY_MAX = 64 * 1024;
@@ -108,6 +110,41 @@ function answerStop(ctx: Ctx, run: RunRow) {
   return { stop, deadline_at: run.deadline_at, seconds_left: secondsLeft(run, now), reason };
 }
 
+// ---- D70: the minimum competition version, and --dev -------------------------------------
+
+export const INSTALL_LINE = "curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh";
+const DEV_COMPETES = "A --dev run never enters the competition. Start without --dev.";
+const DEV_NOT_ADMIN = "--dev is for Goal Cup admins only. Start without --dev.";
+
+/** `a` sorts before `b`, comparing major, then minor, then patch as numbers. */
+function isBelow(a: [number, number, number], b: [number, number, number]): boolean {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i]! < b[i]!;
+  return false;
+}
+
+/**
+ * A competition start (a device request or an open) from a goalcup older than MIN_COMPETITION_VERSION
+ * is 403, and from one whose version is unknown while a minimum is set. A minimum that is not
+ * `x.y.z` is 500 misconfigured, at these two calls only. `sent` is the version string as the client sent it.
+ */
+export function requireCompetitionVersion(ctx: Ctx, sent: string): void {
+  const min = ctx.cfg.minCompetitionVersion;
+  if (min.kind === "none") return;
+  if (min.kind === "malformed") {
+    console.error("misconfigured: MIN_COMPETITION_VERSION is not x.y.z");
+    throw new ApiError(500, "misconfigured", "The server's minimum goalcup version is not set correctly. Try again later.");
+  }
+  const have = versionTriple(sent);
+  const older = have === null || isBelow(have, min.v);
+  if (older) throw new ApiError(403, "forbidden", `This goalcup (${sent}) is too old for the cup. Update it when no run is open: ${INSTALL_LINE}`);
+}
+
+/** `dev` on a run in this mode: 403 for a competition run, and for anyone who is not an admin. Asks the database only when `dev` is true. */
+async function requireDevAllowed(ctx: Ctx, member: string, mode: RunMode): Promise<void> {
+  if (mode === "competition") throw new ApiError(403, "forbidden", DEV_COMPETES);
+  if (!(await ctx.db.memberIsAdmin(member))) throw new ApiError(403, "forbidden", DEV_NOT_ADMIN);
+}
+
 // ---- POST /v1/runs ------------------------------------------------------------------------
 
 const OPENED_ALREADY = "This credential already opened a run; run `goalcup continue`.";
@@ -154,6 +191,7 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
   const repo_url = strField(b, "repo_url", 200);
   if (!REPO_URL.test(repo_url)) throw malformed("repo_url must look like https://github.com/<owner>/<repo>.");
   const machine = machineField(b);
+  const dev = boolField(b, "dev", false);
 
   // A credential opens one run. Asking again with the same session_id is a lost reply: the same run.
   if (auth.run_id !== null) {
@@ -163,6 +201,9 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
     if (opened?.entry != null && opened.entry.session_id === fields.session_id) return json(200, runView(ctx, opened.run, opened.entry));
     throw conflict(OPENED_ALREADY);
   }
+
+  if (auth.mode === "competition") requireCompetitionVersion(ctx, fields.tracer_version);
+  if (dev) await requireDevAllowed(ctx, auth.member, auth.mode);
 
   if (ctx.cfg.githubCheck) await requirePublicGithubRepo(ctx, repo_url);
 
@@ -207,6 +248,12 @@ export async function continueRun(ctx: Ctx, auth: Auth, runId: string, request: 
   const previous_entry_id = b.previous_entry_id;
   if (!isEntryId(previous_entry_id)) throw malformed("previous_entry_id must be e and 16 lowercase hex digits.");
   const fields = connectorFields(b);
+  if (boolField(b, "dev", false)) {
+    // The run's own mode, not the credential's: a continued run keeps the rules it began under.
+    const found = await ctx.db.getRun(auth.member, runId, null);
+    if (found === null) throw notFound("No such run for this credential.");
+    await requireDevAllowed(ctx, auth.member, found.run.mode);
+  }
   const result = await ctx.db.continueRun({
     member_id: auth.member,
     run_id: runId,

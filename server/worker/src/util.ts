@@ -90,6 +90,25 @@ export function proxyVersionField(o: Record<string, unknown>): string {
   return version;
 }
 
+/** An optional boolean field: `fallback` when missing, 400 `malformed` for anything but true or false (null included). */
+export function boolField(o: Record<string, unknown>, name: string, fallback: boolean): boolean {
+  const v = o[name];
+  if (v === undefined) return fallback;
+  if (typeof v !== "boolean") throw malformed(`${name} must be true or false.`);
+  return v;
+}
+
+/**
+ * The version rule: the first `<digits>.<digits>.<digits>` in the text; whatever follows it
+ * (`-dev`, `+build`, a fourth number) is ignored. Null when there is none, i.e. the version is unknown.
+ */
+export function versionTriple(text: string): [number, number, number] | null {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(text);
+  if (m === null) return null;
+  const v = [Number(m[1]), Number(m[2]), Number(m[3])] as [number, number, number];
+  return v.every(Number.isSafeInteger) ? v : null;
+}
+
 export function hexField(o: Record<string, unknown>, name: string): string {
   const v = o[name];
   if (!isHex64(v)) throw malformed(`${name} must be 64 lowercase hex digits.`);
