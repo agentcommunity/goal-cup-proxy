@@ -89,7 +89,7 @@ pub fn upload_seal_missing(entry_id: &str) -> String {
 pub fn entries_intro(none: bool) -> Vec<String> {
     if none {
         vec![
-            "To start a run: goalcup prep, then goalcup start --harness <id> --practice."
+            "To start a run: goalcup setup, then goalcup start --harness <id> --practice."
                 .to_string(),
             "To show the newest run you started here, even a finished one: goalcup status"
                 .to_string(),

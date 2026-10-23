@@ -60,7 +60,7 @@ pub fn inside_work_folder(work_root: &Path, here: &Path) -> String {
 pub fn cannot_record_model_service(why: &str, id: &str) -> String {
     format!(
         "{why} Goal Cup records only an https model service that is not on this computer. Run \
-         goalcup prep --harness {id}, choose such a service there, then run the command again."
+         goalcup setup --harness {id}, choose such a service there, then run the command again."
     )
 }
 
@@ -70,9 +70,9 @@ pub fn cannot_record_model_service(why: &str, id: &str) -> String {
 pub fn repository_not_empty(repo: &str, kb: Option<u64>) -> String {
     let size = kb.map(|kb| format!(" ({kb} KB)")).unwrap_or_default();
     format!(
-        "Create a new repository with no README, license or .gitignore, then run: goalcup prep \
-         --repo <its address>. The repository {repo} is not empty{size}, and a new run needs a \
-         new empty one."
+        "Create a new repository with no README, license or .gitignore, then run goalcup start \
+         again and name it (or add --repo <owner>/<name>). The repository {repo} is not \
+         empty{size}, and a new run needs a new empty one."
     )
 }
 
@@ -81,7 +81,7 @@ pub fn repository_not_empty(repo: &str, kb: Option<u64>) -> String {
 /// configuration folder, beside which the records are kept.
 pub fn unsupported_filesystem(what: &str, path: &str, name: &str) -> String {
     let how = if what == "work folder" {
-        "for example: goalcup prep --work-root <a folder on that volume>"
+        "for example: goalcup setup --work-root <a folder on that volume>"
     } else {
         "for example: set GOALCUP_CONFIG_DIR to a folder on that volume, and the records are kept \
          beside it"
@@ -96,7 +96,7 @@ pub fn unsupported_filesystem(what: &str, path: &str, name: &str) -> String {
 /// more [`unsupported_filesystem`]): a warning, and the command goes on.
 pub fn filesystem_warning(why: &str) -> String {
     format!(
-        "Warning: {why}. This command goes on anyway and does not refuse the run, but goalcup prep \
+        "Warning: {why}. This command goes on anyway and does not refuse the run, but goalcup setup \
          fails its check for it."
     )
 }

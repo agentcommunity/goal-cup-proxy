@@ -1,14 +1,20 @@
-//! `goalcup prep`'s GitHub half: the repository check, the clone with its credential helper,
-//! and the helper that answers git for that one repository.
+//! A real run's GitHub half (D69): the open repository check, the participant's own git for the
+//! push test and the clone, and the older versions' credential helper, which still answers git
+//! for the clones they made.
 //!
 //! The GitHub API is a local fake on loopback and the clone source is a local bare
 //! repository; `git` is a wrapper script that logs its argv and runs the real one against a
-//! gitconfig of the test's own. Nothing here reads `$HOME`, `~/.gitconfig` or a real token.
+//! gitconfig of the test's own. Nothing here reads `$HOME`, `~/.gitconfig` or a real token,
+//! runs the real `ssh` or `gh`, or reaches GitHub.
 
 use goalcup_cli::CliError;
 use goalcup_cli::account::github::{
-    GithubSetup, check, clone_from, clone_readonly_from, credential_helper,
+    Found, GithubLogin, GithubSetup, PushRefused, check_public_empty, clone_repo,
+    credential_helper, push_test,
 };
+use goalcup_cli::commands::run_repo;
+use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -43,11 +49,18 @@ impl FakeGithub {
     /// Answers every request with `status` and `body`, and records its request line path and
     /// `Authorization` header.
     fn start(status: u16, body: &str) -> FakeGithub {
+        FakeGithub::answers(&[(status, body)])
+    }
+
+    /// Answers the n-th request with `answers[n]`, and every one after the last with the last.
+    fn answers(answers: &[(u16, &str)]) -> FakeGithub {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
-        let (log, halt, body) = (requests.clone(), stop.clone(), body.to_string());
+        let answers: Vec<(u16, String)> =
+            answers.iter().map(|(s, b)| (*s, b.to_string())).collect();
+        let (log, halt) = (requests.clone(), stop.clone());
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 if halt.load(Ordering::SeqCst) {
@@ -65,7 +78,12 @@ impl FakeGithub {
                     .filter_map(|l| l.split_once(':'))
                     .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
                     .map(|(_, v)| v.trim().to_string());
-                log.lock().unwrap().push((path, auth));
+                let n = {
+                    let mut seen = log.lock().unwrap();
+                    seen.push((path, auth));
+                    seen.len() - 1
+                };
+                let (status, body) = &answers[n.min(answers.len() - 1)];
                 let reply = format!(
                     "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -125,81 +143,415 @@ fn read_head(stream: &mut TcpStream) -> String {
     String::from_utf8_lossy(&head).into_owned()
 }
 
-fn refusal(result: Result<(), CliError>) -> String {
-    match result {
-        Err(CliError::Refused(sentence)) => sentence,
-        other => panic!("expected a refusal, got {other:?}"),
-    }
-}
-
+/// GitHub's open API is asked with no login at all: a public, empty repository passes; one
+/// that cannot be seen (missing, or private) is `Missing`, for start to create; a rate limit
+/// (`403`, `429`) is `Unchecked`, never "used"; a repository with commits, or an answer that is
+/// not one, is refused in a sentence of its own.
 #[test]
-fn private_non_empty_or_read_only_repos_are_refused_with_distinct_sentences() {
-    let ok = r#"{"private":false,"size":0,"permissions":{"admin":false,"push":true,"pull":true}}"#;
+fn the_repository_check_sends_no_login_and_tells_missing_from_used() {
     let cases = [
+        (200, r#"{"private":false,"size":0}"#, Ok(Found::PublicEmpty)),
+        (404, r#"{"message":"Not Found"}"#, Ok(Found::Missing)),
+        (200, r#"{"private":true,"size":0}"#, Ok(Found::Missing)),
         (
             200,
-            r#"{"private":true,"size":0,"permissions":{"push":true}}"#,
+            r#"{"private":false,"size":12}"#,
+            Err("not empty (12 KB)"),
         ),
         (
-            200,
-            r#"{"private":false,"size":12,"permissions":{"push":true}}"#,
+            403,
+            r#"{"message":"API rate limit exceeded"}"#,
+            Ok(Found::Unchecked),
         ),
         (
-            200,
-            r#"{"private":false,"size":0,"permissions":{"push":false}}"#,
+            429,
+            r#"{"message":"Too Many Requests"}"#,
+            Ok(Found::Unchecked),
         ),
-        (200, r#"{"private":false,"size":0}"#),
-        (404, r#"{"message":"Not Found"}"#),
-        (401, r#"{"message":"Bad credentials"}"#),
-        (
-            301,
-            r#"{"message":"Moved Permanently","url":"https://api.github.com/repositories/1"}"#,
-        ),
+        (500, r#"{"message":"Server Error"}"#, Err("could not check")),
     ];
-    let mut sentences = Vec::new();
-    for (status, body) in cases {
+    for (status, body, want) in cases {
         let fake = FakeGithub::start(status, body);
-        sentences.push(refusal(check(&fake.base, &setup())));
+        let got = check_public_empty(&fake.base, REPO_URL);
+        match (&got, want) {
+            (Ok(found), Ok(expected)) => assert_eq!(*found, expected, "{status} {body}"),
+            (Err(CliError::Refused(said)), Err(part)) => {
+                assert!(said.contains(part), "{status} {body}: {said}")
+            }
+            other => panic!("{status} {body}: {other:?}"),
+        }
         let seen = fake.requests.lock().unwrap().clone();
         assert_eq!(seen.len(), 1, "{seen:?}");
         assert_eq!(seen[0].0, "/repos/acme/empty-repo");
-        assert_eq!(
-            seen[0].1.as_deref(),
-            Some(format!("Bearer {}", token()).as_str())
-        );
+        assert_eq!(seen[0].1, None, "a login was sent");
     }
-    // Private, non-empty, read-only, not found, refused token, moved: six different sentences, and
-    // a missing `permissions` object reads as read-only.
-    assert!(sentences[0].contains("private"), "{}", sentences[0]);
-    assert!(sentences[1].contains("not empty"), "{}", sentences[1]);
-    assert!(sentences[2].contains("cannot push"), "{}", sentences[2]);
-    assert_eq!(sentences[2], sentences[3]);
-    assert!(sentences[4].contains("not found"), "{}", sentences[4]);
-    assert!(
-        sentences[5].contains("refused the token"),
-        "{}",
-        sentences[5]
-    );
-    let mut distinct = vec![
-        &sentences[0],
-        &sentences[1],
-        &sentences[2],
-        &sentences[4],
-        &sentences[5],
-    ];
-    distinct.sort();
-    distinct.dedup();
-    assert_eq!(distinct.len(), 5, "{sentences:#?}");
-    for sentence in &sentences {
-        assert!(
-            !sentence.contains(&token()),
-            "the token was repeated: {sentence}"
-        );
-    }
+}
 
-    // A public, empty, pushable repository passes.
-    let fake = FakeGithub::start(200, ok);
-    check(&fake.base, &setup()).unwrap();
+/// The participant's environment as `goalcup start` reads it, for the push test: a `PATH`, their
+/// `HOME`, and what the test adds.
+fn participant(rig: &Rig, more: &[(&str, &str)]) -> BTreeMap<String, String> {
+    let home = rig.root.join("participant-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut env: BTreeMap<String, String> = [
+        ("PATH", std::env::var("PATH").unwrap()),
+        ("HOME", home.display().to_string()),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    env.extend(more.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+    env
+}
+
+/// The push test is git pushing nothing: it passes for a repository git can push to, and
+/// fails, with git's words, for one it cannot reach. The repository is left as it was.
+#[test]
+fn the_push_test_passes_only_where_git_can_push_and_sends_nothing() {
+    let rig = rig();
+    let scratch = rig.root.join("scratch");
+    let env = participant(&rig, &[]);
+    push_test(rig.git.as_os_str(), &rig.source, &scratch, &env).unwrap();
+    assert!(!scratch.exists(), "the scratch repository is removed");
+    let refs = std::process::Command::new(&rig.git)
+        .args(["--git-dir", rig.source.as_str(), "for-each-ref"])
+        .output()
+        .unwrap();
+    assert!(refs.stdout.is_empty(), "something was pushed: {refs:?}");
+    let missing = rig.root.join("missing.git").display().to_string();
+    let why = push_test(rig.git.as_os_str(), &missing, &scratch, &env).unwrap_err();
+    assert!(
+        matches!(&why, PushRefused::Failed(said) if !said.is_empty()) && !scratch.exists(),
+        "{why:?}"
+    );
+    // A repository with a branch is not new and empty, whatever GitHub's API says.
+    seed_a_branch(&rig);
+    let why = push_test(rig.git.as_os_str(), &rig.source, &scratch, &env).unwrap_err();
+    assert_eq!(why, PushRefused::HasBranches);
+    assert!(!scratch.exists(), "the scratch repository is removed");
+}
+
+/// The push test runs the agent's git, not the participant's shell: the environment the launch
+/// builds (`launch::agent_base_env`), with a scratch `HOME` and the way to their git login, so a
+/// login only their shell has (a `GH_TOKEN`, a helper that reads `~`) cannot pass it.
+#[test]
+fn the_push_test_runs_in_the_agents_environment() {
+    let rig = rig();
+    let dump = rig.root.join("env.txt");
+    let git = rig.root.join("dumping-git");
+    std::fs::write(
+        &git,
+        format!(
+            "#!/bin/sh\nenv > \"{}\"\nexec \"{}\" \"$@\"\n",
+            dump.display(),
+            rig.git.display()
+        ),
+    )
+    .unwrap();
+    make_executable(&git);
+    let env = participant(
+        &rig,
+        &[
+            ("GH_TOKEN", "a-token-only-the-shell-has"),
+            ("SSH_AUTH_SOCK", "/private/tmp/agent.sock"),
+            ("GIT_CONFIG_PARAMETERS", "'credential.helper'='store'"),
+        ],
+    );
+    std::fs::write(rig.root.join("participant-home/.gitconfig"), "").unwrap();
+    push_test(
+        git.as_os_str(),
+        &rig.source,
+        &rig.root.join("scratch"),
+        &env,
+    )
+    .unwrap();
+    let seen: BTreeMap<String, String> = std::fs::read_to_string(&dump)
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let want = goalcup_cli::launch::agent_base_env(&env, &seen["HOME"], true);
+    for (key, value) in &want {
+        assert_eq!(seen.get(key), Some(value), "{key}");
+    }
+    assert_ne!(seen["HOME"], env["HOME"], "the participant's own HOME");
+    for key in ["GH_TOKEN", "GIT_CONFIG_PARAMETERS"] {
+        assert!(!seen.contains_key(key), "{key} reached the agent's git");
+    }
+}
+
+// ------------------------------------------------------------------ a real run's repository
+
+/// [`run_repo::Doors`] as a test states them: GitHub's API is a fake, the login is what the test
+/// says (one answer per look), the push test is the real one against a local repository, and
+/// what the participant types is a queue.
+struct Doors {
+    api: String,
+    logins: RefCell<Vec<GithubLogin>>,
+    push_to: String,
+    scratch: PathBuf,
+    typed: RefCell<Vec<&'static str>>,
+    opened: RefCell<Vec<String>>,
+}
+
+impl run_repo::Doors for Doors {
+    fn api(&self) -> Option<String> {
+        Some(self.api.clone())
+    }
+    fn login(&self) -> GithubLogin {
+        let mut logins = self.logins.borrow_mut();
+        if logins.len() > 1 {
+            logins.remove(0)
+        } else {
+            logins[0].clone()
+        }
+    }
+    fn push_test(&self, _remote: &str) -> Result<(), PushRefused> {
+        let env: BTreeMap<String, String> =
+            [("PATH".to_string(), std::env::var("PATH").unwrap())].into();
+        push_test(
+            std::ffi::OsStr::new("git"),
+            &self.push_to,
+            &self.scratch,
+            &env,
+        )
+    }
+    fn read_line(&self) -> Option<String> {
+        let mut typed = self.typed.borrow_mut();
+        (!typed.is_empty()).then(|| format!("{}\n", typed.remove(0)))
+    }
+    fn interrupted(&self) -> bool {
+        false
+    }
+    fn open(&self, url: &str) -> bool {
+        self.opened.borrow_mut().push(url.to_string());
+        true
+    }
+    fn unused_git_config(&self) -> Option<PathBuf> {
+        None
+    }
+}
+
+fn you(ssh: bool) -> GithubLogin {
+    GithubLogin {
+        user: Some("you".to_string()),
+        ssh,
+    }
+}
+
+fn doors(rig: &Rig, api: &FakeGithub, logins: Vec<GithubLogin>, typed: Vec<&'static str>) -> Doors {
+    Doors {
+        api: api.base.clone(),
+        logins: RefCell::new(logins),
+        push_to: rig.source.clone(),
+        scratch: rig.root.join("scratch"),
+        typed: RefCell::new(typed),
+        opened: RefCell::new(Vec::new()),
+    }
+}
+
+const EMPTY: (u16, &str) = (200, r#"{"private":false,"size":0}"#);
+const USED: (u16, &str) = (200, r#"{"private":false,"size":12}"#);
+const MISSING: (u16, &str) = (404, r#"{"message":"Not Found"}"#);
+
+/// A real run asks the repository's name, opens GitHub's "new repository" page with it when it
+/// does not exist yet, waits for Enter, and then checks it is public, empty and that the
+/// participant's own git can push to it. The remote is SSH when their SSH login works.
+#[test]
+fn a_real_run_names_its_repository_creates_it_and_checks_it() {
+    let rig = rig();
+    let cfg = rig.root.join("cfg");
+    let api = FakeGithub::answers(&[MISSING, EMPTY]);
+    let doors = doors(&rig, &api, vec![you(true)], vec!["my-goal-cup", ""]);
+    let mut out = Vec::new();
+    let repo = run_repo::choose(&doors, &cfg, None, &mut out).unwrap();
+    let said = String::from_utf8(out).unwrap();
+    assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup");
+    assert_eq!(repo.remote, "git@github.com:you/my-goal-cup.git");
+    assert_eq!(
+        *doors.opened.borrow(),
+        ["https://github.com/new?name=my-goal-cup&owner=you&visibility=public"]
+    );
+    assert!(said.contains("you/my-goal-cup: public, empty"), "{said}");
+    assert_eq!(api.requests.lock().unwrap().len(), 2);
+    // Not kept yet: only a run that opens keeps its repository, for the next run's suggestion.
+    assert!(
+        goalcup_cli::prep_file::read_prep_lenient(&cfg)
+            .repo_url
+            .is_empty()
+    );
+    // Over HTTPS when SSH does not sign in.
+    let api = FakeGithub::answers(&[EMPTY]);
+    let doors = self::doors(&rig, &api, vec![you(false)], vec![]);
+    let repo = run_repo::choose(&doors, &cfg, Some("you/other"), &mut Vec::new()).unwrap();
+    assert_eq!(repo.remote, "https://github.com/you/other.git");
+}
+
+/// A repository the participant's git cannot push to is refused before the approval, with one
+/// fix, and nothing is kept; one that is not empty is refused too.
+#[test]
+fn a_repository_git_cannot_push_to_or_that_is_used_is_refused() {
+    let rig = rig();
+    let cfg = rig.root.join("cfg");
+    let api = FakeGithub::answers(&[EMPTY]);
+    let mut doors = doors(&rig, &api, vec![you(false)], vec![]);
+    doors.push_to = rig.root.join("missing.git").display().to_string();
+    let refused = run_repo::choose(&doors, &cfg, Some("you/my-goal-cup"), &mut Vec::new())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("cannot push") && refused.contains("gh auth login"),
+        "{refused}"
+    );
+    assert!(
+        goalcup_cli::prep_file::read_prep_lenient(&cfg)
+            .repo_url
+            .is_empty()
+    );
+    let api = FakeGithub::answers(&[USED]);
+    let doors = self::doors(&rig, &api, vec![you(false)], vec![]);
+    let refused = run_repo::choose(&doors, &cfg, Some("you/my-goal-cup"), &mut Vec::new())
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("not empty"), "{refused}");
+}
+
+/// Give `rig`'s repository one branch with one commit, as GitHub does for a repository created
+/// with a README.
+fn seed_a_branch(rig: &Rig) {
+    let work = rig.root.join("seed-work");
+    for args in [
+        vec!["init", "--quiet", work.to_str().unwrap()],
+        vec![
+            "-C",
+            work.to_str().unwrap(),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.org",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "Initial commit",
+        ],
+        vec![
+            "-C",
+            work.to_str().unwrap(),
+            "push",
+            "--quiet",
+            rig.source.as_str(),
+            "HEAD:refs/heads/main",
+        ],
+    ] {
+        let out = Command::new(&rig.git).args(&args).output().unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+    }
+}
+
+/// Right after a repository is created with a README, GitHub's API can still say its `size` is
+/// 0. The agent's git asks the repository itself which branches it has: one with a branch is
+/// refused before the approval as not empty, with the same fix as GitHub's answer gives, and
+/// nothing is kept.
+#[test]
+fn a_repository_with_a_branch_is_refused_though_github_says_it_is_empty() {
+    let rig = rig();
+    seed_a_branch(&rig);
+    let cfg = rig.root.join("cfg");
+    let api = FakeGithub::answers(&[EMPTY]);
+    let doors = doors(&rig, &api, vec![you(false)], vec![]);
+    let refused = run_repo::choose(&doors, &cfg, Some("you/my-goal-cup"), &mut Vec::new())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("you/my-goal-cup is not empty") && refused.contains("--repo"),
+        "{refused}"
+    );
+    assert!(!refused.contains("cannot push"), "{refused}");
+    assert!(
+        goalcup_cli::prep_file::read_prep_lenient(&cfg)
+            .repo_url
+            .is_empty()
+    );
+}
+
+/// The next real run asks again and suggests a new name once the last run's repository is used.
+#[test]
+fn the_next_real_run_suggests_a_new_name_once_the_last_is_used() {
+    let rig = rig();
+    let cfg = rig.root.join("cfg");
+    goalcup_cli::prep_file::write_prep(
+        &cfg,
+        &goalcup_cli::prep_file::PrepFile {
+            repo_url: "https://github.com/you/my-goal-cup".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // GitHub is asked once, about the chosen repository; the suggestion asks nothing.
+    let api = FakeGithub::answers(&[EMPTY]);
+    let doors = doors(&rig, &api, vec![you(false)], vec![""]);
+    let mut out = Vec::new();
+    let repo = run_repo::choose(&doors, &cfg, None, &mut out).unwrap();
+    let said = String::from_utf8(out).unwrap();
+    assert!(said.contains("Name it [my-goal-cup-2]"), "{said}");
+    assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup-2");
+    assert_eq!(api.requests.lock().unwrap().len(), 1);
+    // A start that ends here (denied at the approval, or a Ctrl-C) never used that repository:
+    // the next one suggests the same name again.
+    let api = FakeGithub::answers(&[EMPTY]);
+    let doors = self::doors(&rig, &api, vec![you(false)], vec![""]);
+    let mut out = Vec::new();
+    run_repo::choose(&doors, &cfg, None, &mut out).unwrap();
+    let said = String::from_utf8(out).unwrap();
+    assert!(said.contains("Name it [my-goal-cup-2]"), "{said}");
+}
+
+/// GitHub's open API allows 60 calls an hour per address. A rate limit (`403`) is not a used
+/// repository: start says the server and the clone check it instead, and goes on.
+#[test]
+fn a_rate_limited_github_is_said_and_never_counts_as_used() {
+    let rig = rig();
+    let cfg = rig.root.join("cfg");
+    let api = FakeGithub::answers(&[(403, r#"{"message":"API rate limit exceeded"}"#)]);
+    let doors = doors(&rig, &api, vec![you(false)], vec![]);
+    let mut out = Vec::new();
+    let repo = run_repo::choose(&doors, &cfg, Some("you/my-goal-cup"), &mut out).unwrap();
+    let said = String::from_utf8(out).unwrap();
+    assert!(said.contains("GitHub's API is busy"), "{said}");
+    assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup");
+}
+
+/// With no GitHub login on the computer (no SSH key GitHub knows, no `gh` login), start says how
+/// to set one up, waits for Enter, and looks again; it never asks for a user name.
+#[test]
+fn with_no_github_login_start_shows_the_guide_and_looks_again() {
+    let rig = rig();
+    let cfg = rig.root.join("cfg");
+    let api = FakeGithub::answers(&[EMPTY]);
+    let doors = doors(
+        &rig,
+        &api,
+        vec![GithubLogin::default(), you(false)],
+        vec!["", "my-goal-cup"],
+    );
+    let mut out = Vec::new();
+    let repo = run_repo::choose(&doors, &cfg, None, &mut out).unwrap();
+    let said = String::from_utf8(out).unwrap();
+    assert!(said.contains(run_repo::NO_LOGIN_GUIDE), "{said}");
+    assert!(!said.to_lowercase().contains("user name"), "{said}");
+    assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup");
+    // Still none after Enter: a name alone cannot be placed, and nothing is asked for it.
+    let doors = self::doors(
+        &rig,
+        &api,
+        vec![GithubLogin::default()],
+        vec!["", "my-goal-cup"],
+    );
+    let refused = run_repo::choose(&doors, &cfg, None, &mut Vec::new())
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("No GitHub login"), "{refused}");
 }
 
 // ------------------------------------------------------------------ the helper
@@ -324,7 +676,7 @@ fn the_helper_answers_only_for_its_own_repository() {
         Err(CliError::Refused(sentence)) => sentence,
         other => panic!("{other:?}"),
     };
-    assert!(sentence.contains("goalcup prep"), "{sentence}");
+    assert!(sentence.contains("older goalcup"), "{sentence}");
 }
 
 // ------------------------------------------------------------------ the clone
@@ -333,7 +685,6 @@ struct Rig {
     _tmp: tempfile::TempDir,
     root: PathBuf,
     git: PathBuf,
-    log: PathBuf,
     gitconfig: PathBuf,
     source: String,
 }
@@ -378,7 +729,6 @@ fn rig() -> Rig {
         _tmp: tmp,
         root,
         git,
-        log,
         gitconfig,
         source: bare.display().to_string(),
     }
@@ -400,80 +750,175 @@ fn git_out(rig: &Rig, dir: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-fn all_files(dir: &Path, found: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_dir() {
-            all_files(&path, found);
-        } else {
-            found.push(path);
-        }
-    }
-}
-
+/// A new clone is made with the participant's own git (D69): its origin is the plain address,
+/// its configuration names no credential helper and holds no key, and `.env*` is on its own
+/// ignore list, so a key file is never committed.
 #[test]
-fn the_clone_has_a_helper_and_no_token_in_its_config() {
+fn a_clone_names_no_helper_and_never_commits_env_files() {
     let rig = rig();
     let dest = rig.root.join("work");
-    let cfg = rig.root.join("it's my cfg");
-    // A goalcup that answers the way the real helper does, to see git ask it.
-    let exe = rig.root.join("goalcup");
+    let remote = "git@github.com:acme/empty-repo.git";
+    clone_repo(rig.git.as_os_str(), &rig.source, remote, &dest).unwrap();
+    // As configured: `get-url` would apply this machine's own `insteadOf` rewrites.
+    assert_eq!(
+        git_out(&rig, &dest, &["config", "--get", "remote.origin.url"]).trim(),
+        remote
+    );
+    let config = std::fs::read_to_string(dest.join(".git/config")).unwrap();
+    assert!(!config.contains("credential"), "{config}");
+    for name in [".env", ".env.local", ".envrc"] {
+        std::fs::write(dest.join(name), "KEY=value\n").unwrap();
+    }
+    std::fs::write(dest.join("work.txt"), "work\n").unwrap();
+    assert_eq!(
+        git_out(&rig, &dest, &["status", "--porcelain"]).trim(),
+        "?? work.txt"
+    );
+}
+
+/// A practice run's folder is a new repository with no remote, and the practice agent, which
+/// reads no global or system git config, can still commit in it: it names an author of its own.
+#[test]
+fn a_practice_folder_has_no_remote_and_commits_with_no_config_of_the_participants() {
+    let rig = rig();
+    let dest = rig.root.join("practice");
+    goalcup_cli::account::github::init_local(OsStr::new("git"), &dest).unwrap();
+    let empty_home = rig.root.join("empty-home");
+    std::fs::create_dir_all(&empty_home).unwrap();
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(&dest)
+            .args(args)
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap())
+            .env("HOME", &empty_home)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap()
+    };
+    let remotes = git(&["remote"]);
+    assert!(
+        remotes.status.success() && remotes.stdout.is_empty(),
+        "{remotes:?}"
+    );
+    let commit = git(&["commit", "--quiet", "--allow-empty", "-m", "practice"]);
+    assert!(commit.status.success(), "{commit:?}");
+    let author = git(&["log", "-1", "--format=%an <%ae>"]);
+    assert_eq!(
+        String::from_utf8_lossy(&author.stdout).trim(),
+        "Goal Cup practice <practice@goalcup.invalid>"
+    );
+}
+
+/// A practice agent gets no git login by default. OpenSSH finds `~/.ssh` from the user database,
+/// not from `HOME`, so the folder's own config gives git an `ssh` that reads no config file and
+/// offers no key; and an empty `credential.helper` empties any list of helpers git read before
+/// it, so a keychain helper in a global config is not asked either.
+#[test]
+fn a_practice_folder_offers_no_ssh_key_and_asks_no_credential_helper() {
+    let rig = rig();
+    let dest = rig.root.join("practice");
+    goalcup_cli::account::github::init_local(OsStr::new("git"), &dest).unwrap();
+    let local = |key: &str| git_out(&rig, &dest, &["config", "--local", "--get-all", key]);
+    assert_eq!(
+        local("core.sshCommand").trim(),
+        "ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes"
+    );
+    assert_eq!(local("credential.helper"), "\n", "one empty helper");
+
+    // What git then does. A stand-in `ssh` on PATH says how it was called.
+    let bin = rig.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let said = rig.root.join("ssh-argv");
     std::fs::write(
-        &exe,
-        "#!/bin/sh\ncat >/dev/null\necho username=x-access-token\n\
-         echo \"password=ours:$GOALCUP_CONFIG_DIR\"\n",
+        bin.join("ssh"),
+        format!(
+            "#!/bin/sh\necho \"$@\" > \"{}\"\nexit 255\n",
+            said.display()
+        ),
     )
     .unwrap();
-    make_executable(&exe);
-
-    clone_from(&rig.git, &rig.source, &setup(), &dest, &exe, &cfg).unwrap();
-
-    // The clone looks like production's: origin is the public URL, with no user info.
-    assert_eq!(
-        git_out(&rig, &dest, &["remote", "get-url", "origin"]).trim(),
-        REPO_URL
+    make_executable(&bin.join("ssh"));
+    // A global config of the participant's with a helper that would hand over a login.
+    let global = rig.root.join("participants-gitconfig");
+    std::fs::write(
+        &global,
+        "[credential]\n\thelper = \"!f() { echo username=you; echo password=leaked; }; f\"\n",
+    )
+    .unwrap();
+    let git = |args: &[&str], input: &str| {
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(&dest)
+            .args(args)
+            .env_clear()
+            .env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            )
+            .env("HOME", rig.root.join("empty-home"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", &global)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let listed = git(&["ls-remote", "git@github.com:you/elsewhere.git"], "");
+    assert!(!listed.status.success(), "{listed:?}");
+    let argv = std::fs::read_to_string(&said).unwrap();
+    assert!(
+        argv.starts_with(
+            "-F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes"
+        ),
+        "{argv}"
     );
-    let helpers = git_out(
+    let filled = git(
+        &["credential", "fill"],
+        "protocol=https\nhost=github.com\n\n",
+    );
+    let out = String::from_utf8_lossy(&filled.stdout);
+    assert!(!out.contains("leaked"), "a helper answered: {out}");
+}
+
+/// A clone an older version made names `goalcup git-credential` in its own configuration and
+/// pushes with the token in `github.json`. Those clones keep working: the hidden command still
+/// answers for that repository, from the stored file, and a helper of the participant's is
+/// still reset for it.
+#[test]
+fn an_old_clone_with_the_goalcup_helper_still_gets_its_token() {
+    let rig = rig();
+    let dest = rig.root.join("old-clone");
+    let cfg = rig.root.join("it's my cfg");
+    setup().store(&cfg).unwrap();
+    clone_repo(rig.git.as_os_str(), &rig.source, REPO_URL, &dest).unwrap();
+    // What versions before D69 wrote into each clone.
+    let goalcup = env!("CARGO_BIN_EXE_goalcup");
+    let helper = format!(
+        "!GOALCUP_CONFIG_DIR='{}' '{goalcup}' git-credential",
+        cfg.display().to_string().replace('\'', "'\\''")
+    );
+    for (key, value) in [
+        ("credential.https://github.com.helper", ""),
+        ("credential.https://github.com.helper", helper.as_str()),
+    ] {
+        git_out(&rig, &dest, &["config", "--local", "--add", key, value]);
+    }
+    git_out(
         &rig,
         &dest,
-        &[
-            "config",
-            "--local",
-            "--get-all",
-            "credential.https://github.com.helper",
-        ],
+        &["config", "--local", "credential.useHttpPath", "true"],
     );
-    let ours = format!(
-        "!GOALCUP_CONFIG_DIR='{}/it'\\''s my cfg' '{}' git-credential",
-        rig.root.display(),
-        exe.display()
-    );
-    assert_eq!(helpers.lines().collect::<Vec<_>>(), vec!["", ours.as_str()]);
-    assert_eq!(
-        git_out(
-            &rig,
-            &dest,
-            &["config", "--local", "credential.useHttpPath"]
-        )
-        .trim(),
-        "true"
-    );
-
-    // (a) The token is in no file of the clone.
-    let mut files = Vec::new();
-    all_files(&dest.join(".git"), &mut files);
-    assert!(files.iter().any(|f| f.ends_with("config")));
-    for file in files {
-        let bytes = std::fs::read(&file).unwrap();
-        let needle = token();
-        assert!(
-            !bytes.windows(needle.len()).any(|w| w == needle.as_bytes()),
-            "the token is in {}",
-            file.display()
-        );
-    }
-
-    // (b) Only our helper answers: a global helper that would leak is reset for this clone.
     std::fs::write(
         &rig.gitconfig,
         "[credential]\n\thelper = \"!f() { echo username=leak; echo password=leaked; }; f\"\n",
@@ -497,76 +942,15 @@ fn the_clone_has_a_helper_and_no_token_in_its_config() {
     let out = asked.wait_with_output().unwrap();
     let said = String::from_utf8(out.stdout.clone()).unwrap();
     assert!(out.status.success(), "{out:?}");
-    // The configuration directory, with a space and a quote in its name, arrives intact.
-    assert!(
-        said.contains(&format!("password=ours:{}\n", cfg.display())),
-        "{said}"
-    );
+    assert!(said.contains(&format!("password={}\n", token())), "{said}");
     assert!(!said.contains("leaked"), "{said}");
-
-    // A relative goalcup is refused: the agent's git runs the helper from anywhere.
-    let other = rig.root.join("other");
-    let relative = clone_from(
-        &rig.git,
-        &rig.source,
-        &setup(),
-        &other,
-        Path::new("goalcup"),
-        &cfg,
-    );
-    assert!(
-        matches!(relative, Err(CliError::Refused(_))),
-        "{relative:?}"
-    );
-    assert!(!other.exists());
-    let relative_cfg = clone_from(
-        &rig.git,
-        &rig.source,
-        &setup(),
-        &other,
-        &exe,
-        Path::new("cfg"),
-    );
-    assert!(
-        matches!(relative_cfg, Err(CliError::Refused(_))),
-        "{relative_cfg:?}"
-    );
-    assert!(!other.exists());
-}
-
-#[test]
-fn the_token_never_appears_in_a_git_argv() {
-    let rig = rig();
-    let dest = rig.root.join("work");
-    clone_from(
-        &rig.git,
-        &rig.source,
-        &setup(),
-        &dest,
-        &rig.root.join("goalcup"),
-        &rig.root.join("cfg"),
-    )
-    .unwrap();
-    let argv = std::fs::read_to_string(&rig.log).unwrap();
-    assert!(argv.contains("[clone]"), "{argv}");
-    assert!(argv.contains("[--add]"), "{argv}");
-    assert!(argv.contains("[credential.useHttpPath][true]"), "{argv}");
-    for secret in [
-        token(),
-        "x-access-token@".to_string(),
-        "password=".to_string(),
-    ] {
-        assert!(
-            !argv.contains(&secret),
-            "{secret} is in a git argv:\n{argv}"
-        );
-    }
 }
 
 // ------------------------------------------------------------------ the stored form
 
+/// The older versions' stored form, which the hidden helper still reads (D69).
 #[test]
-fn the_setup_is_stored_for_the_owner_alone_and_checked_on_the_way_in_and_out() {
+fn the_old_setup_is_read_for_the_owner_alone_and_checked_on_the_way_out() {
     for good in [
         "https://github.com/acme/repo",
         "https://github.com/acme/repo.git",
@@ -586,7 +970,6 @@ fn the_setup_is_stored_for_the_owner_alone_and_checked_on_the_way_in_and_out() {
             .repo_url,
         "https://github.com/acme/repo"
     );
-    assert_eq!(setup().owner_repo(), ("acme", "empty-repo"));
     for bad in [
         "http://github.com/acme/repo",
         "git@github.com:acme/repo.git",
@@ -628,23 +1011,16 @@ fn the_setup_is_stored_for_the_owner_alone_and_checked_on_the_way_in_and_out() {
         other => panic!("{other:?}"),
     }
 
-    // The token is read as one bounded line.
-    let s = GithubSetup::read_token(
-        REPO_URL,
-        &mut format!("  {}  \nsecond line\n", token()).as_bytes(),
-    )
-    .unwrap();
+    let s = setup();
     assert!(
         !format!("{s:?}").contains(&token()),
         "Debug prints the token"
     );
-    let flood = "A".repeat(100_000);
-    assert!(GithubSetup::read_token(REPO_URL, &mut flood.as_bytes()).is_err());
 
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("cfg");
     let missing = GithubSetup::load(&cfg).unwrap_err().to_string();
-    assert!(missing.contains("goalcup prep"), "{missing}");
+    assert!(missing.contains("older goalcup"), "{missing}");
     let path = s.store(&cfg).unwrap();
     {
         use std::os::unix::fs::PermissionsExt;
@@ -652,7 +1028,6 @@ fn the_setup_is_stored_for_the_owner_alone_and_checked_on_the_way_in_and_out() {
         assert_eq!(mode & 0o077, 0, "github.json is mode {:o}", mode & 0o777);
         let back = GithubSetup::load(&cfg).unwrap();
         assert_eq!(back.repo_url, REPO_URL);
-        assert_eq!(back.owner_repo(), ("acme", "empty-repo"));
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(matches!(GithubSetup::load(&cfg), Err(CliError::Refused(_))));
@@ -772,7 +1147,7 @@ fn login_stores_the_handle_and_no_secret() {
     assert!(printed.contains("once per computer"), "{printed}");
     assert_eq!(
         printed.lines().last(),
-        Some("Next: goalcup prep"),
+        Some("Next: goalcup setup"),
         "{printed}"
     );
 
@@ -1170,59 +1545,4 @@ fn an_account_handle_that_is_blank_or_invisible_is_refused() {
             "{handle:?} was accepted"
         );
     }
-}
-
-/// A practice run never pushes: its clone has the empty reset and no goalcup helper, and git
-/// can get no login for the repository from anywhere, a helper of the participant's included.
-#[test]
-fn a_practice_clone_has_the_empty_reset_and_no_goalcup_helper() {
-    let rig = rig();
-    let dest = rig.root.join("practice-work");
-    clone_readonly_from(&rig.git, &rig.source, &setup(), &dest).unwrap();
-
-    assert_eq!(
-        git_out(&rig, &dest, &["remote", "get-url", "origin"]).trim(),
-        REPO_URL
-    );
-    let helpers = git_out(
-        &rig,
-        &dest,
-        &[
-            "config",
-            "--local",
-            "--get-all",
-            "credential.https://github.com.helper",
-        ],
-    );
-    assert_eq!(helpers.lines().collect::<Vec<_>>(), vec![""], "{helpers:?}");
-    let config = std::fs::read_to_string(dest.join(".git/config")).unwrap();
-    assert!(!config.contains("git-credential"), "{config}");
-    assert!(!config.contains("GOALCUP_CONFIG_DIR"), "{config}");
-
-    // What `git push` would ask for: a global helper that would leak is reset for this clone,
-    // and nothing else answers, so git has no password to send.
-    std::fs::write(
-        &rig.gitconfig,
-        "[credential]\n\thelper = \"!f() { echo username=leak; echo password=leaked; }; f\"\n",
-    )
-    .unwrap();
-    let mut asked = Command::new(&rig.git)
-        .args(["credential", "fill"])
-        .current_dir(&dest)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    asked
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(b"protocol=https\nhost=github.com\npath=acme/empty-repo.git\n\n")
-        .unwrap();
-    let out = asked.wait_with_output().unwrap();
-    let said = String::from_utf8_lossy(&out.stdout);
-    assert!(!out.status.success(), "git found a login: {said}");
-    assert!(!said.contains("password"), "{said}");
 }

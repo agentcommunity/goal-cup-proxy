@@ -1,7 +1,7 @@
 //! A run on the upload server: the prep checks, the participant's approval, the clone, and the
 //! run opened (or its next segment asked for) on the server.
 
-use super::refusals::{refuse_goal_folder_inside_work_root, refuse_used_repository};
+use super::refusals::refuse_goal_folder_inside_work_root;
 use super::{CaptureRun, Continuing, StartOptions};
 use crate::CliError;
 use crate::commands::say;
@@ -12,10 +12,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The upload server this run opens with: `None` with no `goalcup login`. With a server, `goalcup
-/// prep` must have run: its repository, its work folder and the GitHub token are checked here, all
-/// before the participant is asked for anything and before anything is created. A `--dev` run is
-/// uploaded like any other: the server records its connector id and directory digest and checks
-/// neither against a list (docs/CONNECTOR-SCHEMA.md, "Pinned, or `--dev` only").
+/// setup` must have run: its work folder is checked here, before the participant is asked for
+/// anything and before anything is created. A real run's GitHub repository is asked for later,
+/// once every other check has passed and before the approval ([`Serving::approved`]). A `--dev`
+/// run is uploaded like any other, and the server checks its connector against no list. Since D70
+/// the server refuses a run that sends `dev: true` in the competition or from a non-admin, but this
+/// CLI does not send `dev` yet (D70 Task 4).
 pub(super) fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,
@@ -33,75 +35,165 @@ pub(super) fn uploading(
     let Some(server) = crate::server::read_server_config(cfg)? else {
         return match flag {
             Some(flag) => Err(CliError::Refused(format!(
-                "`{flag}` needs `goalcup login` and `goalcup prep` first. Nothing was created."
+                "`{flag}` needs `goalcup login` and `goalcup setup` first. Nothing was created."
             ))),
             None => Ok(None),
         };
     };
-    // Each of these is the one sentence `run goalcup prep first`.
+    // Each of these is the one sentence `run goalcup setup first`.
     let prepared = crate::prep_file::read_prep(cfg)?;
-    let github = crate::account::github::GithubSetup::load(cfg)
-        .map_err(|_| CliError::Refused(crate::prep_file::PREP_FIRST.to_string()))?;
-    if same_repo(&prepared.repo_url) != same_repo(&github.repo_url) {
-        return Err(CliError::Refused(crate::prep_file::PREP_FIRST.to_string()));
-    }
     let work_root = PathBuf::from(&prepared.work_root);
     if !work_root.is_absolute() {
         return Err(CliError::Refused(crate::prep_file::PREP_FIRST.to_string()));
     }
     refuse_goal_folder_inside_work_root(&work_root, beside)?;
-    if !mode.is_practice() {
-        refuse_used_repository(env, &github)?;
-    }
     #[cfg(feature = "test-support")]
     let clone_source = env.get(TEST_CLONE_SOURCE).cloned();
     #[cfg(not(feature = "test-support"))]
-    let clone_source = {
-        let _ = env;
-        None
-    };
+    let clone_source = None;
     Ok(Some(Serving {
         url: server.url,
         cfg: std::fs::canonicalize(cfg).unwrap_or_else(|_| cfg.to_path_buf()),
-        github,
+        env: env.clone(),
         work_root,
         clone_source,
     }))
 }
 
-/// A repository address in the one spelling the two files are compared in.
-fn same_repo(url: &str) -> String {
-    let url = url.trim().trim_end_matches('/');
-    url.strip_suffix(".git").unwrap_or(url).to_ascii_lowercase()
+/// The `repo_url` a practice run is opened with. The server asks every run for a public GitHub
+/// repository; a practice run has none (D69), so it names the organisers' public, empty practice
+/// repository. Nothing is cloned from it or pushed to it.
+pub const PRACTICE_REPO_URL: &str = "https://github.com/agentcommunity/goalcup-matrix-empty";
+
+/// A test build's doors to GitHub for a real run's repository: the base address of a fake GitHub
+/// API (without it the API is not asked), and the participant's login as `<user>` or
+/// `<user>+ssh` (without it there is none; a test never runs the real `ssh` or `gh`).
+#[cfg(feature = "test-support")]
+pub const TEST_GITHUB_LOGIN: &str = "GOALCUP_TEST_GITHUB_LOGIN";
+
+/// A test build's door for the dry-run push before the approval: a local repository to push to,
+/// when it must differ from [`TEST_CLONE_SOURCE`] (a test of a clone that fails after it).
+#[cfg(feature = "test-support")]
+pub const TEST_PUSH_REMOTE: &str = "GOALCUP_TEST_PUSH_REMOTE";
+
+/// What `goalcup start` asks a real run's repository with ([`crate::commands::run_repo`]).
+struct StartDoors<'a> {
+    cfg: &'a Path,
+    env: &'a BTreeMap<String, String>,
+    open: super::OpenUrlFn,
+    /// A test's local repository: the dry-run push goes there instead of to GitHub.
+    clone_source: Option<&'a str>,
+}
+
+impl crate::commands::run_repo::Doors for StartDoors<'_> {
+    fn api(&self) -> Option<String> {
+        #[cfg(feature = "test-support")]
+        let api = self.env.get(super::TEST_GITHUB_API).cloned();
+        #[cfg(not(feature = "test-support"))]
+        let api = Some(crate::account::github::GITHUB_API.to_string());
+        api
+    }
+
+    fn login(&self) -> crate::account::github::GithubLogin {
+        #[cfg(feature = "test-support")]
+        let login = match self.env.get(TEST_GITHUB_LOGIN).filter(|s| !s.is_empty()) {
+            Some(spec) => crate::account::github::GithubLogin {
+                user: Some(spec.trim_end_matches("+ssh").to_string()),
+                ssh: spec.ends_with("+ssh"),
+            },
+            None => crate::account::github::GithubLogin::default(),
+        };
+        #[cfg(not(feature = "test-support"))]
+        let login = crate::account::github::find_login(self.env, &self.scratch("login-look"));
+        login
+    }
+
+    fn push_test(&self, remote: &str) -> Result<(), crate::account::github::PushRefused> {
+        let scratch = self.scratch("push-test");
+        // A test's local stand-in (always `None` in a shipped build).
+        let remote = self.clone_source.unwrap_or(remote);
+        #[cfg(feature = "test-support")]
+        let remote = self
+            .env
+            .get(TEST_PUSH_REMOTE)
+            .map_or(remote, String::as_str);
+        crate::account::github::push_test(std::ffi::OsStr::new("git"), remote, &scratch, self.env)
+    }
+
+    fn read_line(&self) -> Option<String> {
+        use goalcup_platform::terminal::{is_foreground, is_terminal};
+        if !(is_foreground(libc::STDIN_FILENO) && is_terminal(libc::STDIN_FILENO)) {
+            return None;
+        }
+        crate::arming::read_stdin_line()
+    }
+
+    fn interrupted(&self) -> bool {
+        crate::arming::interrupted()
+    }
+
+    fn open(&self, url: &str) -> bool {
+        (self.open)(url)
+    }
+
+    fn unused_git_config(&self) -> Option<PathBuf> {
+        crate::launch::unused_git_config(self.env)
+    }
+}
+
+impl StartDoors<'_> {
+    /// A new folder in the configuration directory for one look or test, which removes it.
+    fn scratch(&self, what: &str) -> PathBuf {
+        self.cfg
+            .join(format!("{what}-{:016x}", rand::random::<u64>()))
+    }
 }
 
 /// A test build's one door to the clone: a repository on this machine that stands in for the
-/// participant's repository on GitHub (`account::github::clone_from`). A shipped build compiles
-/// none of this.
+/// participant's repository on GitHub (`account::github::clone_repo`'s `source`). A shipped build
+/// compiles none of this.
 #[cfg(feature = "test-support")]
 pub const TEST_CLONE_SOURCE: &str = "GOALCUP_TEST_CLONE_SOURCE";
 
 /// A run on a server that has passed every check that needs no approval.
 pub(super) struct Serving {
     url: String,
-    /// The configuration directory, absolute: the clone's credential helper names it.
+    /// The configuration directory, absolute.
     cfg: PathBuf,
-    github: crate::account::github::GithubSetup,
+    /// The participant's environment, for finding their GitHub login.
+    env: BTreeMap<String, String>,
     work_root: PathBuf,
     /// A test's local repository to clone instead of GitHub; always `None` in a shipped build.
     clone_source: Option<String>,
 }
 
 impl Serving {
-    /// Ask the participant to approve this run in the browser, and wait for them. Nothing has
-    /// been created before this, and a denial, an expired code, a Ctrl-C or a server that
-    /// cannot be reached leaves it so (the refusal says so).
+    /// For a real run, ask for its GitHub repository and check it ([`crate::commands::run_repo`]);
+    /// then ask the participant to approve this run in the browser, and wait for them. Nothing has
+    /// been created before this, and a refused repository, a denial, an expired code, a Ctrl-C or
+    /// a server that cannot be reached leaves it so (the refusal says so).
     pub(super) fn approved(
         self,
         opts: &StartOptions,
         connector: &HarnessConnector,
         out: &mut dyn std::io::Write,
     ) -> Result<Uploading, CliError> {
+        let repo = if opts.mode.is_practice() {
+            None
+        } else {
+            let doors = StartDoors {
+                cfg: &self.cfg,
+                env: &self.env,
+                open: opts.open_url,
+                clone_source: self.clone_source.as_deref(),
+            };
+            Some(crate::commands::run_repo::choose(
+                &doors,
+                &self.cfg,
+                opts.repo.as_deref(),
+                out,
+            )?)
+        };
         // Approving a competition run replaces the account's open one: said before the browser
         // opens, when this computer has such a run on this server.
         if opts.mode == crate::account::device::RunMode::Competition
@@ -140,10 +232,8 @@ impl Serving {
             server: crate::upload::http::ServerClient::with_credential(&self.url, &credential),
             how: UploadHow::Fresh(Box::new(NewRun {
                 credential,
-                cfg: self.cfg,
-                github: self.github,
+                repo,
                 work_root: self.work_root,
-                practice: opts.mode.is_practice(),
                 clone_source: self.clone_source,
             })),
         })
@@ -196,55 +286,28 @@ pub(super) enum UploadHow {
 /// What a new run is cloned from and opened with.
 pub(super) struct NewRun {
     credential: crate::account::credential::RunCredential,
-    cfg: PathBuf,
-    github: crate::account::github::GithubSetup,
+    /// A real run's repository; `None` for a practice run, which has none.
+    repo: Option<crate::commands::run_repo::RunRepo>,
     pub(super) work_root: PathBuf,
-    /// A practice run never pushes: its clone is given no credential helper.
-    practice: bool,
-    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
     clone_source: Option<String>,
 }
 
-/// The clone of [`Uploading::clone_workspace`] for a new run, made in `new.work_root`.
+/// The work folder of [`Uploading::clone_workspace`] for a new run, made in `new.work_root` with
+/// the participant's own git (D69): a real run's clone of its repository, or a practice run's new
+/// local repository with no remote.
 fn clone_new_run(new: &NewRun, dest: &Path) -> Result<(), CliError> {
     std::fs::create_dir_all(&new.work_root).map_err(|source| CliError::Io {
         path: new.work_root.display().to_string(),
         source,
     })?;
-    let exe = std::env::current_exe().map_err(|source| CliError::Io {
-        path: "the goalcup executable".to_string(),
-        source,
-    })?;
-    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-    let cfg = &new.cfg;
-    // The owner's rule: a practice run never pushes, so the competition repository stays
-    // empty until the competition run. Its clone is anonymous and can only read.
-    #[cfg(feature = "test-support")]
-    if new.practice
-        && let Some(source) = &new.clone_source
-    {
-        return crate::account::github::clone_readonly_from(
-            Path::new("git"),
-            source,
-            &new.github,
-            dest,
-        );
+    let git = std::ffi::OsStr::new("git");
+    match &new.repo {
+        None => crate::account::github::init_local(git, dest),
+        Some(repo) => {
+            let source = new.clone_source.as_deref().unwrap_or(&repo.remote);
+            crate::account::github::clone_repo(git, source, &repo.remote, dest)
+        }
     }
-    if new.practice {
-        return crate::account::github::clone_readonly_into(&new.github, dest);
-    }
-    #[cfg(feature = "test-support")]
-    if let Some(source) = &new.clone_source {
-        return crate::account::github::clone_from(
-            Path::new("git"),
-            source,
-            &new.github,
-            dest,
-            &exe,
-            cfg,
-        );
-    }
-    crate::account::github::clone_into(&new.github, dest, &exe, cfg)
 }
 
 /// The run as the server opened it, what it was asked, and the give-back until the launch.
@@ -278,21 +341,23 @@ impl Uploading {
         })
     }
 
-    /// Clone the participant's repository into `dest`, which is this run's workspace. The
-    /// clone holds no token: its remote is the plain repository address, and its git asks
-    /// `goalcup git-credential` for one when it pushes (`account::github`). A practice run's
-    /// clone has no such helper and cannot push. A continued run has its clone already.
+    /// Clone the participant's repository into `dest`, which is this run's workspace, with
+    /// their own git and login (D69). The clone holds no key and names no credential helper. A
+    /// practice run's workspace is a new local repository with no remote. A continued run has its
+    /// clone already.
     ///
     /// A competition or test run's clone that has a commit is refused: GitHub's answer before
-    /// the approval (`refuse_used_repository`) can lag a push, the clone cannot.
+    /// the approval (`run_repo::choose`) can lag a push, the clone cannot.
     pub(super) fn clone_workspace(&self, dest: &Path) -> Result<(), CliError> {
         let UploadHow::Fresh(new) = &self.how else {
             return Ok(());
         };
         clone_new_run(new, dest)?;
-        if !new.practice && crate::account::github::clone_has_commits(dest) {
+        if let Some(repo) = &new.repo
+            && crate::account::github::clone_has_commits(dest)
+        {
             return Err(CliError::Refused(crate::participant::repository_not_empty(
-                &new.github.repo_url,
+                &repo.repo_url,
                 None,
             )));
         }
@@ -337,7 +402,11 @@ impl Uploading {
                 );
             }
         };
-        request.repo_url = new.github.repo_url.clone();
+        request.repo_url = new
+            .repo
+            .as_ref()
+            .map_or(PRACTICE_REPO_URL, |repo| repo.repo_url.as_str())
+            .to_string();
         request.machine = Some(goalcup_platform::machine::facts(&artifact_root(cx.cfg)));
         crate::upload::give_back_pending(self.server.base(), cx.cfg);
         // Taken before the first ask: a repeat after a lost reply answers the first
@@ -355,13 +424,27 @@ impl Uploading {
             .map(|()| give)
         });
         match kept {
-            Ok(give_back) => Ok(OpenedRun {
-                run,
-                request,
-                opened_at,
-                give_back: std::cell::RefCell::new(Some(give_back)),
-                segment: None,
-            }),
+            Ok(give_back) => {
+                // Only now is the repository used: the next real run suggests a new name. A hint
+                // that cannot be written stops nothing.
+                if let Some(repo) = &new.repo
+                    && let Err(error) =
+                        crate::commands::run_repo::keep_for_next_run(cx.cfg, &repo.repo_url)
+                {
+                    crate::host_log::say(&format!(
+                        "the repository of run {} was not kept for the next run's suggestion: \
+                         {error}",
+                        run.run_id
+                    ));
+                }
+                Ok(OpenedRun {
+                    run,
+                    request,
+                    opened_at,
+                    give_back: std::cell::RefCell::new(Some(give_back)),
+                    segment: None,
+                })
+            }
             Err(error) => {
                 // The note of the open and the credential are deleted only once the server has
                 // taken the run back; while it is away they are the only way to give it back.

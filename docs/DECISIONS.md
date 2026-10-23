@@ -25,7 +25,7 @@ Update this table in the same PR as any entry it lists.
 | D24 | current | |
 | D25 | partly superseded | D66 (the agent may ask for the time left) |
 | D26, D30, D36, D37 | current | |
-| D38 | partly superseded | D52 (the cheapest-model clause) |
+| D38 | partly superseded | D52 (the cheapest-model clause), D69 (the agent's git login) |
 | D39 | partly superseded | D57 (chat mode; the headless launch clause is removed) |
 | D40 | partly superseded | D61 (the Hermes clause), D56 (the 180 s budget) |
 | D41 | partly superseded | D43 (CA rule), D52 (model clause), D61 (seed and key scan) |
@@ -40,6 +40,7 @@ Update this table in the same PR as any entry it lists.
 | D64 | partly superseded | D65 (the disk watch pauses, never stops) |
 | D65, D66, D67 | current | |
 | D68 | proposed, owner to approve | |
+| D69 | current | |
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
@@ -793,3 +794,51 @@ four". Adding a harness must stay a data change that core changes do not break.
   any other: the server checks no connector list (D43 ruling 4 is not built), and the report
   labels it `Dev/unpinned`. The owner decides whether a `--dev` run may count, and if not, where
   it is refused (the CLI in competition mode, or the server by digest).
+
+## D69. Goal Cup Proxy holds no keys; the agent pushes with the participant's own git login.
+
+23 Oct 2026, owner ruling ([plan](plans/2026-10-23-simple-setup.md)): "goalcup observes, it
+should not store any key and should not pass keys anywhere. The agent can push to any repo, that's
+ok." Goal Cup Proxy reads, stores, logs and passes no key, GitHub token included.
+
+- **`goalcup setup`** (once `goalcup prep`, still a hidden alias) has four steps: this computer
+  (it runs `goalcup login` when needed), the harness, signing in to it, and this machine. It needs
+  no GitHub. It makes `<work folder>/.env.local`, empty but for a comment, mode 0600, when it is
+  missing, for keys the participant gives their agent, and never reads it.
+- **GitHub at `goalcup start`, for a real run only.** Before the approval, start asks the name of a
+  new, empty, public repository (or takes `--repo`), finds the participant's GitHub user from
+  their own login (`ssh -T git@github.com`, then `gh api user`; with neither, it prints how to set
+  one up and looks again), opens `github.com/new` with the name filled in when it does not exist,
+  and checks it: public and empty by GitHub's open API with no login (a rate limit is said and
+  passed on: the server checks public at open, the clone checks empty), then with no branch by
+  `git ls-remote --heads` (GitHub's `size` can read 0 just after a repository is created with a
+  README) and pushable by a dry-run push. Both run the agent's own git, in the environment the
+  launch builds (a scratch `HOME` and the variables below), so a login only the participant's
+  shell has fails here and not at the agent's first push. Each real run gets its own repository; `prep.json` keeps the last name only to
+  suggest the next. A Ctrl-C at any of its questions or checks ends the start with nothing
+  created.
+- **The clone is the participant's own git.** Over SSH when their SSH login works, otherwise
+  HTTPS. No credential helper and no token is written to it. `.env*` goes in its
+  `.git/info/exclude`. A practice run clones nothing: its folder is a new local repository with
+  no remote and an author of its own (`Goal Cup practice <practice@goalcup.invalid>`), and the
+  server is told the organisers' practice repository as its `repo_url`. Its agent gets no git
+  login by default: none of the variables below; `GIT_CONFIG_NOSYSTEM=1`, because the system git
+  config (Apple's or Homebrew's git sets `credential.helper=osxkeychain`) would hand it the
+  participant's keychain login; and, in the folder's own git config, an empty `credential.helper`
+  and `core.sshCommand = ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o
+  BatchMode=yes`, because OpenSSH reads `~/.ssh` from the user database, not from `HOME`. The
+  agent runs as the participant, so one that tries hard can still get around this.
+- **The environment is still built from nothing (D1, D36, D38, D61), plus exactly five ways to
+  the participant's git login**, as paths or sockets and only when set or present, and never for
+  a practice run: `SSH_AUTH_SOCK`; `GIT_CONFIG_GLOBAL`, their own or their `~/.gitconfig` (else
+  `~/.config/git/config`; with both, start says the second is not used); `GH_CONFIG_DIR`, their
+  own or `~/.config/gh`; and `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, which a Linux
+  keyring helper needs. A token variable such as `GH_TOKEN` is not carried.
+- **What it gives up.** The agent can push to any repository the participant's login can (the
+  owner accepts this). A `git config --global` the agent runs writes the participant's real git
+  config, which `GIT_CONFIG_GLOBAL` names. A push over SSH is not seen by the recording proxy; the judged commit is
+  read from GitHub's API, not from recorded traffic. A dry-run push is git's own check of the push
+  connection, made with no key of Goal Cup's; whether GitHub refuses it without write access was
+  not measured against GitHub here.
+- **Old clones.** The hidden `goalcup git-credential` still answers from `github.json` for clones
+  made before this, and nothing writes that file any more. It can be removed after the event.

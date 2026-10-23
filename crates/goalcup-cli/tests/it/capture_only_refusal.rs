@@ -151,7 +151,7 @@ fn doctor_defaults_to_the_harness_in_prep_json_and_all_checks_every_one() {
 
     let said = report(None);
     assert!(
-        said.contains(&format!("goalcup doctor — {prepped} (from goalcup prep)")),
+        said.contains(&format!("goalcup doctor — {prepped} (from goalcup setup)")),
         "{said}"
     );
     for id in ids.iter().filter(|id| *id != prepped) {
@@ -165,7 +165,7 @@ fn doctor_defaults_to_the_harness_in_prep_json_and_all_checks_every_one() {
             "`--harness all` reports {id}: {said}"
         );
     }
-    assert!(!said.contains("(from goalcup prep)"), "{said}");
+    assert!(!said.contains("(from goalcup setup)"), "{said}");
 
     let said = report(Some(explicit));
     assert!(
@@ -203,7 +203,7 @@ fn doctor_falls_back_to_every_connector_when_prep_names_an_unknown_harness() {
     run(None, &mut out).expect("bare doctor still reports");
     let said = String::from_utf8(out).unwrap();
     assert!(said.starts_with("goalcup doctor\n"), "{said}");
-    assert!(!said.contains("from goalcup prep"), "{said}");
+    assert!(!said.contains("from goalcup setup"), "{said}");
     for id in shipped_connector_ids() {
         assert!(said.contains(&id), "every connector is reported: {said}");
     }

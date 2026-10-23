@@ -390,6 +390,9 @@ pub fn start_options(id: &str) -> goalcup_cli::commands::start::StartOptions {
         disk: disk_of(4 << 20),
         native_silence: Default::default(),
         mode: goalcup_cli::account::device::RunMode::Competition,
+        // A real run on a server needs its repository; with none, or a practice run, it is
+        // not read. `Rig::prepare_for` stands a local repository in for it.
+        repo: Some("goal-cup/demo".to_string()),
         open_url: never_open,
         upload_policy: Default::default(),
         sleep_lock: goalcup_platform::awake::hold,

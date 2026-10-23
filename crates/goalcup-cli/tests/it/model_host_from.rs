@@ -225,7 +225,7 @@ fn a_missing_or_loopback_model_host_is_refused_at_start() {
         );
         assert!(error.contains(CANNOT_RECORD), "{error}");
         assert!(
-            error.contains(&format!("Run goalcup prep --harness {FAKE_ID}")),
+            error.contains(&format!("Run goalcup setup --harness {FAKE_ID}")),
             "{error}"
         );
         if let Some(hidden) = hidden {

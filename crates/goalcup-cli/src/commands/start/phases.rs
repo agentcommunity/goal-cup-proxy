@@ -466,7 +466,7 @@ pub(super) fn create_and_gate<'a>(
                 &run.workspace,
                 &log,
                 &format!(
-                    "Nothing was launched. Run `goalcup prep --harness {}` again; it runs the same \
+                    "Nothing was launched. Run `goalcup setup --harness {}` again; it runs the same \
                      command and keeps what it prints in {}.",
                     c.loaded.manifest.id,
                     cfg.join(crate::commands::prep::PREP_LOG_NAME).display()
@@ -493,6 +493,7 @@ pub(super) fn create_and_gate<'a>(
                 ca_bundle: ca_bundle.as_deref(),
                 parent_env: env,
                 time_left_file: Some(&crate::run::time_left::file_path(cfg, &record.run_id)),
+                git_login: !record.practice,
             },
         )?;
         // Offered once. `busy` is the daemon's refusal before it reads a request and is

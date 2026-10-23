@@ -89,7 +89,7 @@ fn each_approval_says_what_it_is_for_and_that_two_are_normal() {
     let done = login_done("member-1", None);
     assert!(done.join(" ").contains("member-1"));
     assert!(!done.join(" ").contains("upload to"));
-    assert_eq!(last(&done), "Next: goalcup prep");
+    assert_eq!(last(&done), "Next: goalcup setup");
     assert!(
         login_done("m", Some("https://s.example"))
             .join(" ")
@@ -244,7 +244,7 @@ fn a_run_that_is_over_never_offers_continue_and_ends_with_what_to_do() {
             assert!(
                 last_line.contains(NOTHING_MORE)
                     || last_line.starts_with("Part of the run")
-                    || last_line.starts_with("Next: goalcup prep"),
+                    || last_line.starts_with("Next: your real run"),
                 "{ending:?}: {text}"
             );
             if !all_sent {
@@ -256,11 +256,11 @@ fn a_run_that_is_over_never_offers_continue_and_ends_with_what_to_do() {
     assert!(up.contains(TIME_IS_UP), "{up}");
     let sent = after_upload(&Ending::TimeUp { practice: false }, true, false).join("\n");
     assert!(sent.contains("sealed and uploaded"), "{sent}");
-    // A practice run that is all uploaded points to prep, and does not also say there is
-    // nothing more to do.
+    // A practice run that is all uploaded points to the real run, and does not also say there
+    // is nothing more to do.
     let practice = after_upload(&Ending::TimeUp { practice: true }, true, false);
     assert!(
-        last(&practice).starts_with("Next: goalcup prep"),
+        last(&practice).starts_with("Next: your real run"),
         "{practice:?}"
     );
     assert!(!practice.join(" ").contains(NOTHING_MORE), "{practice:?}");
@@ -420,7 +420,7 @@ fn the_status_next_line_is_the_one_thing_to_do() {
     assert!(status_next(&Next::Wait).contains("goalcup status"));
     // The refusal with no run starts with the command and keeps the phrase tests read.
     let none = no_run_yet();
-    assert!(none.starts_with("Run goalcup prep"), "{none}");
+    assert!(none.starts_with("Run goalcup setup"), "{none}");
     assert!(
         none.contains("no run has been started from this machine"),
         "{none}"

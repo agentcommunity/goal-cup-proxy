@@ -485,8 +485,8 @@ fn goalcup_lists_the_eleven_commands_and_nothing_else() {
         assert_eq!(
             listed,
             [
+                "setup",
                 "login",
-                "prep",
                 "start",
                 "status",
                 "time-left",
