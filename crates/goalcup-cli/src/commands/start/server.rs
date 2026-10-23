@@ -108,7 +108,7 @@ impl crate::commands::run_repo::Doors for StartDoors<'_> {
         login
     }
 
-    fn push_test(&self, remote: &str) -> Result<(), String> {
+    fn push_test(&self, remote: &str) -> Result<(), crate::account::github::PushRefused> {
         let scratch = self.scratch("push-test");
         // A test's local stand-in (always `None` in a shipped build).
         let remote = self.clone_source.unwrap_or(remote);

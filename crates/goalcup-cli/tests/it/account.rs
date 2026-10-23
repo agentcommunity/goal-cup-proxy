@@ -9,7 +9,8 @@
 
 use goalcup_cli::CliError;
 use goalcup_cli::account::github::{
-    Found, GithubLogin, GithubSetup, check_public_empty, clone_repo, credential_helper, push_test,
+    Found, GithubLogin, GithubSetup, PushRefused, check_public_empty, clone_repo,
+    credential_helper, push_test,
 };
 use goalcup_cli::commands::run_repo;
 use std::collections::BTreeMap;
@@ -218,7 +219,15 @@ fn the_push_test_passes_only_where_git_can_push_and_sends_nothing() {
     assert!(refs.stdout.is_empty(), "something was pushed: {refs:?}");
     let missing = rig.root.join("missing.git").display().to_string();
     let why = push_test(rig.git.as_os_str(), &missing, &scratch, &env).unwrap_err();
-    assert!(!why.is_empty() && !scratch.exists(), "{why}");
+    assert!(
+        matches!(&why, PushRefused::Failed(said) if !said.is_empty()) && !scratch.exists(),
+        "{why:?}"
+    );
+    // A repository with a branch is not new and empty, whatever GitHub's API says.
+    seed_a_branch(&rig);
+    let why = push_test(rig.git.as_os_str(), &rig.source, &scratch, &env).unwrap_err();
+    assert_eq!(why, PushRefused::HasBranches);
+    assert!(!scratch.exists(), "the scratch repository is removed");
 }
 
 /// The push test runs the agent's git, not the participant's shell: the environment the launch
@@ -297,7 +306,7 @@ impl run_repo::Doors for Doors {
             logins[0].clone()
         }
     }
-    fn push_test(&self, _remote: &str) -> Result<(), String> {
+    fn push_test(&self, _remote: &str) -> Result<(), PushRefused> {
         let env: BTreeMap<String, String> =
             [("PATH".to_string(), std::env::var("PATH").unwrap())].into();
         push_test(
@@ -404,6 +413,65 @@ fn a_repository_git_cannot_push_to_or_that_is_used_is_refused() {
         .unwrap_err()
         .to_string();
     assert!(refused.contains("not empty"), "{refused}");
+}
+
+/// Give `rig`'s repository one branch with one commit, as GitHub does for a repository created
+/// with a README.
+fn seed_a_branch(rig: &Rig) {
+    let work = rig.root.join("seed-work");
+    for args in [
+        vec!["init", "--quiet", work.to_str().unwrap()],
+        vec![
+            "-C",
+            work.to_str().unwrap(),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.org",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "Initial commit",
+        ],
+        vec![
+            "-C",
+            work.to_str().unwrap(),
+            "push",
+            "--quiet",
+            rig.source.as_str(),
+            "HEAD:refs/heads/main",
+        ],
+    ] {
+        let out = Command::new(&rig.git).args(&args).output().unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+    }
+}
+
+/// Right after a repository is created with a README, GitHub's API can still say its `size` is
+/// 0. The agent's git asks the repository itself which branches it has: one with a branch is
+/// refused before the approval as not empty, with the same fix as GitHub's answer gives, and
+/// nothing is kept.
+#[test]
+fn a_repository_with_a_branch_is_refused_though_github_says_it_is_empty() {
+    let rig = rig();
+    seed_a_branch(&rig);
+    let cfg = rig.root.join("cfg");
+    let api = FakeGithub::answers(&[EMPTY]);
+    let doors = doors(&rig, &api, vec![you(false)], vec![]);
+    let refused = run_repo::choose(&doors, &cfg, Some("you/my-goal-cup"), &mut Vec::new())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("you/my-goal-cup is not empty") && refused.contains("--repo"),
+        "{refused}"
+    );
+    assert!(!refused.contains("cannot push"), "{refused}");
+    assert!(
+        goalcup_cli::prep_file::read_prep_lenient(&cfg)
+            .repo_url
+            .is_empty()
+    );
 }
 
 /// The next real run asks again and suggests a new name once the last run's repository is used.

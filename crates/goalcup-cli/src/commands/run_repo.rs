@@ -4,13 +4,14 @@
 //! repository of its own: [`choose`] asks its name (or takes `--repo`), finds the participant's
 //! GitHub user from their own login (and, with none, prints how to set one up and looks again),
 //! opens GitHub's "new repository" page with the name filled in when it does not exist yet, then
-//! checks that it is public and empty (GitHub's open API, no login) and that the agent's git can
-//! push to it (a dry-run push in the agent's own environment). Goal Cup reads, stores and passes
+//! checks that it is public and empty (GitHub's open API, no login) and that the agent's git sees
+//! no branch in it and can push to it (`git ls-remote` and a dry-run push in the agent's own
+//! environment). Goal Cup reads, stores and passes
 //! no key. The name is kept in `prep.json` only so that the next real run can suggest one,
 //! `<name>-2`. A Ctrl-C at any question or check ends it, with nothing created.
 
 use crate::CliError;
-use crate::account::github::{self, Found, GithubLogin};
+use crate::account::github::{self, Found, GithubLogin, PushRefused};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -21,8 +22,8 @@ pub trait Doors {
     fn api(&self) -> Option<String>;
     /// The participant's GitHub login as the agent will have it ([`github::find_login`]).
     fn login(&self) -> GithubLogin;
-    /// A dry-run push to `remote` with the agent's git ([`github::push_test`]).
-    fn push_test(&self, remote: &str) -> Result<(), String>;
+    /// Whether `remote` has no branch and the agent's git can push to it ([`github::push_test`]).
+    fn push_test(&self, remote: &str) -> Result<(), PushRefused>;
     /// One line typed by the participant, or `None` when there is no terminal, the input ended
     /// or a Ctrl-C came.
     fn read_line(&self) -> Option<String>;
@@ -198,10 +199,20 @@ pub fn choose(
     if let Some(refusal) = stop() {
         return Err(refusal);
     }
-    if let Err(why) = pushed {
-        return Err(refused(format!(
-            "The agent's git cannot push to {owner}/{repo} ({why}). {PUSH_FIX}"
-        )));
+    match pushed {
+        Ok(()) => {}
+        // GitHub's `size` can read 0 right after the repository was created with a README.
+        Err(PushRefused::HasBranches) => {
+            return Err(refused(crate::participant::repository_not_empty(
+                &format!("{owner}/{repo}"),
+                None,
+            )));
+        }
+        Err(PushRefused::Failed(why)) => {
+            return Err(refused(format!(
+                "The agent's git cannot push to {owner}/{repo} ({why}). {PUSH_FIX}"
+            )));
+        }
     }
     let mut file = crate::prep_file::read_prep_lenient(cfg);
     if file.repo_url != repo_url {

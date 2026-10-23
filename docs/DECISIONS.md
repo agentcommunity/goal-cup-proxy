@@ -810,10 +810,11 @@ ok." Goal Cup Proxy reads, stores, logs and passes no key, GitHub token included
   their own login (`ssh -T git@github.com`, then `gh api user`; with neither, it prints how to set
   one up and looks again), opens `github.com/new` with the name filled in when it does not exist,
   and checks it: public and empty by GitHub's open API with no login (a rate limit is said and
-  passed on: the server checks public at open, the clone checks empty), pushable by a dry-run push
-  with the agent's own git, in the environment the launch builds (a scratch `HOME` and the
-  variables below), so a login only the participant's shell has fails here and not at the agent's
-  first push. Each real run gets its own repository; `prep.json` keeps the last name only to
+  passed on: the server checks public at open, the clone checks empty), then with no branch by
+  `git ls-remote --heads` (GitHub's `size` can read 0 just after a repository is created with a
+  README) and pushable by a dry-run push. Both run the agent's own git, in the environment the
+  launch builds (a scratch `HOME` and the variables below), so a login only the participant's
+  shell has fails here and not at the agent's first push. Each real run gets its own repository; `prep.json` keeps the last name only to
   suggest the next. A Ctrl-C at any of its questions or checks ends the start with nothing
   created.
 - **The clone is the participant's own git.** Over SSH when their SSH login works, otherwise
