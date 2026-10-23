@@ -141,6 +141,7 @@ each platform (macOS arm64 and x86_64, Linux x86_64 and arm64, WSL2).
 
 ```
 scripts/matrix.sh <connector> <server-url> [--keep] [--log FILE] [--timeout SECONDS] [--test --duration SECONDS]
+scripts/matrix.sh m2-fake-tui <server-url> --refusals
 scripts/matrix.sh --check-copy <config-dir> [run-id]
 ```
 
@@ -149,13 +150,42 @@ It makes a temporary configuration directory, work folder and `HOME`, runs `goal
 connector runs in chat mode under a pseudo-terminal into which the script types one prompt; Goal Cup Proxy
 stops it at the practice deadline (10 minutes). `--test --duration SECONDS` runs an organizer test run
 instead and seals it SECONDS after the prompt, so a bounded test of any length needs no practice deadline.
-`--timeout` is one budget for the whole wait. A test start (`--test`) asks GitHub, with the token in
-the configuration directory's `github.json`, whether the repository is empty, so `--test` needs a
-real token there (practice starts skip that check, and the script's own configuration gets a
-placeholder). `scripts/kit_settle.py settle` writes it from the file named in
-`MATRIX_GITHUB_TOKEN_FILE`; the token must not be able to push to the practice repository. A
+`--timeout` is one budget for the whole wait. A
 connector id that is not the fake needs its
 `harness.toml` to be found (see Connectors below), or the row FAILs and says so.
+
+**Repositories and git logins (D69).** Three kinds of cell, and none ever uses this machine's own git
+login: goalcup always runs with `GIT_CONFIG_GLOBAL` and `GH_CONFIG_DIR` in the run's temporary
+folder, and without `SSH_AUTH_SOCK`, the keyring's variables, `GH_TOKEN` or `GITHUB_TOKEN`.
+
+| Cell | What it runs | Git login |
+|---|---|---|
+| practice (default) | `start --practice`: a local folder, no repository | none (empty) |
+| `--test --duration N` | `start --test --repo $MATRIX_REPO` | the cell's own, from `MATRIX_GITHUB_TOKEN_FILE` |
+| `--refusals` | five starts that must refuse before the approval | none (empty) |
+
+A test run needs `MATRIX_REPO` (`<owner>/<name>`: new, empty, public, the cell's own, never the
+practice repository) and `MATRIX_GITHUB_TOKEN_FILE`, a file holding a fine-grained token with
+Contents read and write on that repository only. `scripts/kit_settle.py git-login` makes the run's
+login from it with `gh auth login --with-token` (gh 2.40 or newer; the token goes to gh's standard
+input and stays in the run's folder, never a keyring), sets gh as git's helper for github.com,
+rewrites SSH addresses to HTTPS and turns SSH off for git. The folder is removed when the run ends,
+even with `--keep`. A run whose agent pushes leaves the repository not empty: the next test run needs
+a new one. A question the start asks before the approval (no login found, a repository GitHub does
+not show) FAILs the row at once. `ssh -T git@github.com`, which goalcup tries first for a user name,
+still reads this user's `~/.ssh` by itself; git never uses it.
+
+`--refusals` checks, with no harness and no terminal, that a real run's start refuses before any
+approval or run record, and says "Nothing was created.": a repository with commits (`not-empty`), a
+private one, a missing one, no GitHub login (`no-login`: the setup guide is printed, then the start
+refuses for want of a terminal to name a repository), and `--repo <name>` with no login to find the
+user in (`bare-name`). GitHub is a stand-in the script serves on 127.0.0.1, reached through the CLI's
+test doors, so it needs a test build of goalcup:
+`cargo build --offline -p goalcup-cli --features test-support --target-dir target/kit-test`, then
+`MATRIX_BIN_DIR=target/kit-test/debug sh scripts/matrix.sh m2-fake-tui <server> --refusals`. It still
+logs in to the server once. Each refusal prints `refusal <kind>: PASS|FAIL`; the row reads
+`m2-fake-tui <os>-<arch> refusals PASS <date>`. A shipped build refuses for want of a terminal
+instead, and the row FAILs.
 It prints the log path and one row:
 
 ```
@@ -247,7 +277,7 @@ invocation (`key_source: "supplied"`).
 login. A PASS proves the CLI, daemon, pseudo-terminal handling, server and verifier, and nothing about a
 real harness. A shipped connector id (`codex-cli`, `claude-code-cli`) runs that harness for real. It needs the
 harness installed and logged in inside a prepared configuration directory of its own:
-`GOALCUP_CONFIG_DIR=<dir> goalcup prep`, then `MATRIX_CONFIG_DIR=<dir> sh scripts/matrix.sh codex-cli <url>`.
+`GOALCUP_CONFIG_DIR=<dir> goalcup setup`, then `MATRIX_CONFIG_DIR=<dir> sh scripts/matrix.sh codex-cli <url>`.
 For a chat-mode connector the script types `MATRIX_PROMPT` once, `MATRIX_PROMPT_DELAY` seconds (30) after the
 harness is up, and sends the Enter `MATRIX_SUBMIT_DELAY` seconds (2) later in a write of its own: Codex reads
 text and Enter in one write as a paste and leaves the text in its composer. A first-run dialog that would
@@ -258,9 +288,8 @@ created or one you trust?" in every new workspace and selects "No, exit" first, 
 PASS does not prove the prompt was submitted; check the session in the kept directory (`--keep`) or the
 trace. `m2-fake-tui` is the one connector that needs no harness.
 
-**Other environment.** `MATRIX_REPO_URL` (default: the public empty repository
-`https://github.com/agentcommunity/goalcup-matrix-empty`), `MATRIX_BIN_DIR`, `--keep`, `--timeout`
-(1800 s). It needs `curl` 7.55 or later, `python3` and `script(1)`.
+**Other environment.** `MATRIX_BIN_DIR`, `--keep`, `--timeout` (1800 s). It needs `curl` 7.55 or
+later, `python3` and `script(1)`, and `gh` for a test run.
 
 **Linux, real harness, in Docker.** `scripts/linux-matrix.sh` runs the matrix for `codex-cli` in a
 container on a Mac. It builds the Linux binaries from the checkout, installs the harness
@@ -268,7 +297,7 @@ at the version the connector's first line names, and keeps the configuration dir
 home and the work folder on a Docker volume of the connector's own (`goalcup-linux-matrix-<id>`),
 so one sign-in serves every later run. Once per volume, in a terminal:
 `GOALCUP_TEST_APPROVAL_KEY_FILE=<key file> sh scripts/linux-matrix.sh login codex-cli`. The login is
-approved with the key; then `goalcup prep` opens Codex in the container, and you choose "Sign in with
+approved with the key; then `goalcup setup` opens Codex in the container, and you choose "Sign in with
 Device Code", finish it in the Mac's browser, and type `/exit`. After that, unattended:
 `GOALCUP_TEST_APPROVAL_KEY_FILE=<key file> sh scripts/linux-matrix.sh run codex-cli` prints the row last.
 Key files are mounted read-only and only their container path is passed. The member is the synthetic
@@ -279,11 +308,11 @@ reasoning effort before each run; the run fails unless every Codex turn it recor
 The harness can read the checkout and the key files, so run it from a clean checkout. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
 It also installs `claude-code-cli` (set to `haiku` with thinking off, checked after the run), `amp-cli`
 and `hermes-cli`. For long runs in parallel: `linux-matrix.sh build` once, then
-`LINUX_MATRIX_CELL=<cell> LINUX_MATRIX_PREBUILT=1 MATRIX_GITHUB_TOKEN_FILE=<token file> sh scripts/linux-matrix.sh run <id> -- --test --duration <s>`
-gives each cell its own volume, sign-in and container; `--test` is refused without
-`MATRIX_GITHUB_TOKEN_FILE`, which is mounted read-only like the key and written into the volume's
-`github.json`. `matrix.sh --test --duration <s>` does the same
-on a host. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
+`LINUX_MATRIX_CELL=<cell> LINUX_MATRIX_PREBUILT=1 MATRIX_REPO=<owner>/<name> MATRIX_GITHUB_TOKEN_FILE=<token file> sh scripts/linux-matrix.sh run <id> -- --test --duration <s>`
+gives each cell its own volume, sign-in and container; `--test` is refused without `MATRIX_REPO` and
+`MATRIX_GITHUB_TOKEN_FILE`. The token file is mounted read-only like the key, only for a test run, and
+matrix.sh in the container makes the run's git login from it (the image has gh); nothing writes it to
+the volume. `matrix.sh --test --duration <s>` does the same on a host. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
 
 **`--check-copy`.** For a run you made by hand, verifies every entry of the run locally and compares each
 with the server's position, using the run's credential from the configuration directory. It starts and

@@ -79,7 +79,7 @@ the cells first, then sign in.
 - **Amp.** The owner is signed in to Amp locally. Each Amp cell still signs in in its own home
   (`campaign.py login`). Record which mode the run used.
 - **Docker cells** sign in with `python3 scripts/campaign.py login CONFIG <cell>`; host cells the
-  same way (it runs `goalcup login` and `goalcup prep` in the cell's folder).
+  same way (it runs `goalcup login` and `goalcup setup` in the cell's folder).
 - Record each surface's facts as you go: where Claude Code keeps its login on Linux, whether Codex
   accepts `minimal` for Luna, whether Hermes or Amp load a skills folder (LOCAL-NEXT-STEPS step 6).
 
@@ -87,26 +87,22 @@ the cells first, then sign in.
 
 Two kinds of cells:
 
-- **Infrastructure cells** (most of them): test runs on the empty public
-  `agentcommunity/goalcup-matrix-empty`, with [campaign-workload.txt](campaign-workload.txt)
-  (commit locally, never push). A test start sends the kit's GitHub token
-  (`defaults.github_token_file`, LOCAL-CAMPAIGN "Cells") to GitHub to ask whether the repository is
-  empty. The repository stays empty, so every such run may use it. That token must not be able to
-  push to it: one agent push there would make every later test start refuse the repository.
-- **Full-flow cells**: the agent pushes to a real repository, so the judged-commit path is tested
+- **Infrastructure cells** (most of them): test runs with
+  [campaign-workload.txt](campaign-workload.txt) (commit locally, never push). Each cell has its
+  own new, empty, public repository (`repo`) and a fine-grained token that reaches that repository
+  only (`github_token_file`, LOCAL-CAMPAIGN "Cells"); the start takes it as `--repo`, and the
+  agent's git login is the cell's own, made from that token for the run (D69). The repository stays
+  empty, so the cell may run again.
+- **Full-flow cells**: the agent pushes to its repository, so the judged-commit path is tested
   end to end. A competition or test start refuses a repository that is not empty, so **each
   full-flow run needs its own new empty repository**. The orchestrator creates them as public
   repositories under one test owner (`gh repo create <owner>/gc-test-<cell>-<n> --public`, no
-  README, no licence: `prep`, the clone and the Worker all refuse a private one), and lists them
-  in the results file. The owner creates **one** fine-grained token for that test owner's
-  repositories (Contents read and write), saved as a file. For each full-flow cell, run
-  `goalcup prep --repo <url>` in the cell's config (host: with `GOALCUP_CONFIG_DIR`; Docker:
-  inside the cell's container) and paste the token when asked. The kit keeps a prep'd repository
-  and its token as they are (scripts/kit_settle.py); otherwise it settles the practice repository
-  with the kit's token. Use [campaign-build-workload.txt](campaign-build-workload.txt): it pushes
-  after each step, keeps `GOALCUP.md`, calls `goalcup time-left` and uses subagents.
-  The kit was built for the practice repository and has not yet run a prep'd one: watch the first
-  full-flow smoke closely (10 minutes, one cell) before starting more.
+  README, no licence: the start, the clone and the Worker all refuse a private one), and lists
+  them in the results file. The owner creates a fine-grained token for each (Contents read and
+  write, that repository only), saved as a file, and sets the cell's `repo` and
+  `github_token_file` before the run. Use [campaign-build-workload.txt](campaign-build-workload.txt):
+  it pushes after each step, keeps `GOALCUP.md`, calls `goalcup time-left` and uses subagents.
+  Watch the first full-flow smoke closely (10 minutes, one cell) before starting more.
   Check afterwards: staging's judged commit equals GitHub's last push before the deadline. The
   repositories are public, so the staging Worker's `GITHUB_TOKEN` needs no access to them beyond
   GitHub's API.
