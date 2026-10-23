@@ -262,14 +262,6 @@ These look odd but are right. Do not "fix" them.
 - A Windows machine or VM for the WSL2 cells.
 - Participant review section B (B1 to B9) and the demo video's format and length for the guide
   ([review](docs/research/PARTICIPANT-REVIEW-2026-10-21.md)).
-- Hermes's native leg: Hermes 0.21.1 (7 Sep) removed the opt-in `session_*.json` snapshot the
-  connector reads (its `write_json_snapshots: true` is now ignored). Hermes's own installer puts
-  the latest stable release on the machine (`v0.22.4` on 22 Oct), so a participant who follows
-  Hermes's documentation records no native file. PyPI stops at 0.19.0, which still writes it.
-  Require 0.19.0 from PyPI (or 0.21.0 or earlier from a git tag) for the event, accept a
-  wire-only Hermes (native leg empty, like the deferred wire-only core), or capture `state.db`
-  (SQLite: a core capability, not schema 1)? A snapshot decoder is planned only once this is
-  decided ([facts](docs/harnesses/hermes-cli.md#4-session-format-and-identity)).
 
 ## Known issues
 
@@ -320,8 +312,9 @@ These look odd but are right. Do not "fix" them.
   wrong config home, does the same. Now said early: ten minutes after the first recorded request to
   the model service, with at least ten of them and no file taken by the admitted native reader,
   `goalcup status` keeps a `PROBLEM:` line (and `--json` a `problems` entry) until a file is
-  taken, and `host.log` has it once per start or continue; nothing stops. Open: a Hermes 0.21
-  connector fix, or pinning the supported Hermes version in HARNESS-SETUP.
+  taken, and `host.log` has it once per start or continue; nothing stops. Hermes is pinned to
+  0.19.0 in HARNESS-SETUP, the guide and the setup skill (#249, #259); a setup warning for 0.21.1
+  and later is planned (D70, Task 6).
 - **T24:** the release tarballs are unsigned. They carry every connector since #164.
 - **H-26:** when a stop cannot be confirmed (`Unresolved`), record the final pushed Git commit as a
   "last known state" marker. Open question: which branch counts when the work is not on main.
