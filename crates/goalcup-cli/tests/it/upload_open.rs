@@ -240,11 +240,9 @@ mod server_runs {
         assert_eq!(record.entries[0].entry_id, ended.outcome.entry_id);
         assert_eq!(record.workspace, ended.workspace);
         assert_eq!(server.mode(run_id).as_deref(), Some("competition"));
-        // A competition run's clone keeps the helper: the reset, then goalcup's.
-        let helpers = helper_lines(&ended.workspace);
-        assert_eq!(helpers.len(), 2, "{helpers:?}");
-        assert_eq!(helpers[0], "");
-        assert!(helpers[1].ends_with("git-credential"), "{helpers:?}");
+        // A competition run's clone names no credential helper: it pushes with the
+        // participant's own git login (D69).
+        assert!(helper_lines(&ended.workspace).is_empty());
 
         // The machine's facts were sent with the open; a name or a serial number was not.
         let machine = server.machine(run_id).expect("machine facts were sent");
@@ -285,21 +283,31 @@ mod server_runs {
         );
         assert_eq!(server.mode(&run_id).as_deref(), Some("practice"));
         assert!(goalcup_cli::run::read(&rig.cfg, &run_id).unwrap().practice);
-        // A practice run never pushes: its clone has the empty reset and no goalcup helper.
-        let config = std::fs::read_to_string(ended.workspace.join(".git/config")).unwrap();
-        assert!(!config.contains("git-credential"), "{config}");
-        assert!(
-            config.contains("[credential \"https://github.com\"]"),
-            "{config}"
+        // A practice run has no GitHub repository (D69): its workspace is a new local git
+        // folder with no remote and no commit, cloned from nothing, and the server is told the
+        // organisers' practice placeholder.
+        let remotes = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&ended.workspace)
+            .arg("remote")
+            .output()
+            .unwrap();
+        assert!(remotes.status.success(), "{remotes:?}");
+        assert!(remotes.stdout.is_empty(), "{remotes:?}");
+        assert!(!goalcup_cli::account::github::clone_has_commits(
+            &ended.workspace
+        ));
+        assert_eq!(
+            server.repo_url(&run_id).as_deref(),
+            Some(goalcup_cli::commands::start::PRACTICE_REPO_URL)
         );
-        assert_eq!(helper_lines(&ended.workspace), [""], "{config}");
     }
 
     /// `--test` asks for a test approval; the run is a competition run in every other way: its
-    /// clone keeps the push helper (not the practice no-push rule), its deadline is the
-    /// server's, and `run.json` says it is a test run.
+    /// workspace is a clone of its repository (not the practice run's local folder), its
+    /// deadline is the server's, and `run.json` says it is a test run.
     #[test]
-    fn a_test_start_asks_for_test_mode_and_clones_with_the_push_helper() {
+    fn a_test_start_asks_for_test_mode_and_clones_its_repository() {
         let rig = Rig::new();
         let server = server(&rig);
         rig.prepare_for(&server.url());
@@ -325,10 +333,16 @@ mod server_runs {
             record.deadline_at.as_deref(),
             Some(kept.deadline_at.as_str())
         );
-        let helpers = helper_lines(&ended.workspace);
-        assert_eq!(helpers.len(), 2, "{helpers:?}");
-        assert_eq!(helpers[0], "");
-        assert!(helpers[1].ends_with("git-credential"), "{helpers:?}");
+        assert_eq!(
+            server.repo_url(&run_id).as_deref(),
+            Some(PREP_REPO),
+            "{}",
+            ended.out
+        );
+        assert!(!goalcup_cli::account::github::clone_has_commits(
+            &ended.workspace
+        ));
+        assert!(ended.workspace.join(".git/info/exclude").is_file());
     }
 
     /// Nothing of the credential, the GitHub token or the device code reaches the harness: not
@@ -394,10 +408,11 @@ mod server_runs {
         }
     }
 
-    /// The workspace is a clone of the participant's repository in their work folder, and its
-    /// remote and configuration hold no token: git asks `goalcup git-credential` for one.
+    /// The workspace is a clone of the participant's repository in their work folder, made with
+    /// their own git (D69): its remote is the plain address, its configuration names no
+    /// credential helper and holds no key, and `.env*` is on its own ignore list.
     #[test]
-    fn the_workspace_is_a_clone_whose_remote_holds_no_token() {
+    fn the_workspace_is_a_clone_with_no_helper_that_never_commits_env_files() {
         let rig = Rig::new();
         let server = server(&rig);
         rig.prepare_for(&server.url());
@@ -427,13 +442,16 @@ mod server_runs {
         };
         assert_eq!(
             git(&["config", "--get", "remote.origin.url"]).trim(),
-            PREP_REPO
+            format!("{PREP_REPO}.git")
         );
         let config = std::fs::read_to_string(ended.workspace.join(".git/config")).unwrap();
-        assert!(!config.contains(FAKE_GITHUB_TOKEN), "{config}");
         assert!(!config.contains("gcr_"), "{config}");
-        assert!(config.contains("git-credential"), "{config}");
-        assert!(config.contains("useHttpPath = true"), "{config}");
+        assert!(!config.contains("credential"), "{config}");
+        assert!(helper_lines(&ended.workspace).is_empty(), "{config}");
+        // A key file beside the work is never committed.
+        std::fs::write(ended.workspace.join(".env.local"), "KEY=value\n").unwrap();
+        std::fs::write(ended.workspace.join(".env"), "KEY=value\n").unwrap();
+        assert_eq!(git(&["status", "--porcelain", "--ignored=no"]).trim(), "");
         // The run record points at the clone, and the server was told the same workspace.
         let record = goalcup_cli::run::read(&rig.cfg, &server.run_ids()[0]).unwrap();
         assert_eq!(record.workspace, ended.workspace);
@@ -515,19 +533,15 @@ mod server_runs {
         assert_eq!(refused.exit_code(), 1, "{refused}");
     }
 
-    /// A server run needs `goalcup prep` first: its repository and work folder in `prep.json`
-    /// and the GitHub token in `github.json`. Whatever is missing, the refusal is the one
-    /// sentence, and it comes before the participant is asked to approve anything and before
-    /// anything is created.
+    /// A server run needs `goalcup setup` first: its work folder in `prep.json`. Whatever is
+    /// missing, the refusal is the one sentence, and it comes before the participant is asked to
+    /// approve anything and before anything is created.
     #[test]
-    fn start_without_prep_refuses_before_creating_anything() {
+    fn start_without_setup_refuses_before_creating_anything() {
         type Break = fn(&Rig);
-        let cases: [(&str, Break); 6] = [
+        let cases: [(&str, Break); 4] = [
             ("no prep.json", |rig| {
                 std::fs::remove_file(goalcup_cli::prep_file::prep_path(&rig.cfg)).unwrap();
-            }),
-            ("no github.json", |rig| {
-                std::fs::remove_file(goalcup_cli::account::github::github_path(&rig.cfg)).unwrap();
             }),
             ("no work_root", |rig| {
                 std::fs::write(
@@ -536,20 +550,10 @@ mod server_runs {
                 )
                 .unwrap();
             }),
-            ("no repo_url", |rig| {
-                std::fs::write(
-                    goalcup_cli::prep_file::prep_path(&rig.cfg),
-                    format!(
-                        r#"{{"harness":"x","work_root":"{}"}}"#,
-                        rig.work_root().display()
-                    ),
-                )
-                .unwrap();
-            }),
             ("a relative work_root", |rig| {
                 std::fs::write(
                     goalcup_cli::prep_file::prep_path(&rig.cfg),
-                    format!(r#"{{"harness":"x","repo_url":"{PREP_REPO}","work_root":"work"}}"#),
+                    r#"{"harness":"x","work_root":"work"}"#,
                 )
                 .unwrap();
             }),
@@ -571,7 +575,7 @@ mod server_runs {
             let refused = result.expect_err(what);
             assert_eq!(refused.exit_code(), 1, "{what}: {refused}");
             assert!(
-                refused.to_string().contains("goalcup prep"),
+                refused.to_string().contains("goalcup setup"),
                 "{what}: the refusal names the command: {refused}"
             );
             assert!(
@@ -594,6 +598,11 @@ mod server_runs {
         let rig = Rig::new();
         let server = server(&rig);
         rig.prepare_for(&server.url());
+        // The push test before the approval reaches the stand-in; the clone after it does not.
+        rig.with_env(
+            goalcup_cli::commands::start::TEST_PUSH_REMOTE,
+            &rig.root.join("github-source.git").display().to_string(),
+        );
         rig.with_env(
             goalcup_cli::commands::start::TEST_CLONE_SOURCE,
             &rig.root
@@ -691,7 +700,7 @@ mod server_runs {
         assert!(
             refused
                 .to_string()
-                .contains("`--practice` needs `goalcup login` and `goalcup prep` first"),
+                .contains("`--practice` needs `goalcup login` and `goalcup setup` first"),
             "{refused}"
         );
         assert!(client.book().creates.is_empty(), "{out}");
@@ -716,7 +725,7 @@ mod server_runs {
         assert!(
             refused
                 .to_string()
-                .contains("`--test` needs `goalcup login` and `goalcup prep` first"),
+                .contains("`--test` needs `goalcup login` and `goalcup setup` first"),
             "{refused}"
         );
         assert!(client.book().creates.is_empty(), "{out}");
@@ -773,7 +782,7 @@ mod server_runs {
             assert_eq!(refused.exit_code(), 1, "{mode:?}: {refused}");
             let said = refused.to_string();
             assert!(
-                said.contains("is not empty (12 KB)") && said.contains("goalcup prep --repo"),
+                said.contains("is not empty (12 KB)") && said.contains("--repo"),
                 "{mode:?}: {said}"
             );
             assert!(upload.device_requests().is_empty(), "{mode:?}: approval");
@@ -856,7 +865,7 @@ mod server_runs {
         assert_eq!(refused.exit_code(), 1, "{refused}");
         let said = refused.to_string();
         assert!(
-            said.contains("is not empty") && said.contains("goalcup prep --repo"),
+            said.contains("is not empty") && said.contains("--repo"),
             "{said}"
         );
         assert!(out.contains("what this start made was removed"), "{out}");

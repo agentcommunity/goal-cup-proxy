@@ -1,131 +1,33 @@
-//! `goalcup prep`: six steps from install to a practice run, re-runnable, and never starting a
-//! run.
+//! `goalcup setup` (and its old name, `goalcup prep`): four steps from install to ready,
+//! re-runnable, and never starting a run. No GitHub here: a real run asks for its repository at
+//! `goalcup start` (`account.rs`).
 //!
 //! The binary is run against a temporary configuration directory and the chat-mode development
 //! connector (`Rig::chat_only`, whose harness is `fixtures/m2-fake-tui.sh`). The machine's facts
 //! (mains power, free space, hosts, the sleep lock) are stated through the test door
-//! `GOALCUP_TEST_PREP` rather than read from the machine the test runs on, GitHub is a local
-//! fake, and a run on a terminal is a pseudo-terminal of the test's own.
+//! `GOALCUP_TEST_PREP` rather than read from the machine the test runs on, and a run on a
+//! terminal is a pseudo-terminal of the test's own.
 
 use crate::common::m2_cli_support::{
-    CHAT_CONFIGURE_ID, CHAT_HOME_ID, CHAT_ID, Launcher, OnPty, Rig,
+    CHAT_CONFIGURE_ID, CHAT_HOME_ID, CHAT_ID, FAKE_ID, Launcher, OnPty, Rig,
 };
 use crate::common::upload_server::{ServerOptions, UploadServer};
-use goalcup_cli::account::github::GithubSetup;
 use goalcup_cli::prep_file::{PrepFile, prep_path, read_prep_lenient};
-use goalcup_cli::run::{EntryRef, RunRecord};
 use goalcup_protocol::control::DaemonClient;
-use std::io::{Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
-const REPO: &str = "https://github.com/acme/empty-repo";
 const GIB: u64 = 1 << 30;
-
-/// A made-up token: the shape of a fine-grained one, and nothing GitHub would accept.
-fn token() -> String {
-    format!("github_pat_{}", "A".repeat(60))
-}
-
-// ------------------------------------------------------------------ the fake GitHub API
-
-struct FakeGithub {
-    base: String,
-    requests: Arc<Mutex<Vec<String>>>,
-    stop: Arc<AtomicBool>,
-    port: u16,
-}
-
-impl FakeGithub {
-    /// Answers every request as a repository that is public, empty and pushable.
-    fn good() -> FakeGithub {
-        FakeGithub::start(
-            r#"{"private":false,"size":0,"permissions":{"admin":false,"push":true,"pull":true}}"#,
-        )
-    }
-
-    fn start(body: &'static str) -> FakeGithub {
-        FakeGithub::serve(move |_| (200, body))
-    }
-
-    /// Answers each request as `answer` says for the bearer token it carried.
-    fn serve(answer: impl Fn(&str) -> (u16, &'static str) + Send + 'static) -> FakeGithub {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let stop = Arc::new(AtomicBool::new(false));
-        let (log, halt) = (requests.clone(), stop.clone());
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                if halt.load(Ordering::SeqCst) {
-                    break;
-                }
-                let Ok(mut stream) = stream else { continue };
-                let mut head = Vec::new();
-                let mut byte = [0u8; 1];
-                while !head.ends_with(b"\r\n\r\n") && head.len() < 16 * 1024 {
-                    match stream.read(&mut byte) {
-                        Ok(1) => head.push(byte[0]),
-                        _ => break,
-                    }
-                }
-                let head = String::from_utf8_lossy(&head).into_owned();
-                let path = head
-                    .lines()
-                    .next()
-                    .and_then(|l| l.split(' ').nth(1))
-                    .unwrap_or("")
-                    .to_string();
-                log.lock().unwrap().push(path);
-                let bearer = head
-                    .lines()
-                    .filter_map(|l| l.split_once(':'))
-                    .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
-                    .map(|(_, v)| v.trim().trim_start_matches("Bearer ").to_string())
-                    .unwrap_or_default();
-                let (status, body) = answer(&bearer);
-                let reply = format!(
-                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-                     Connection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(reply.as_bytes());
-                let _ = stream.shutdown(Shutdown::Both);
-            }
-        });
-        FakeGithub {
-            base: format!("http://127.0.0.1:{port}"),
-            requests,
-            stop,
-            port,
-        }
-    }
-
-    fn asked(&self) -> usize {
-        self.requests.lock().unwrap().len()
-    }
-}
-
-impl Drop for FakeGithub {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        let _ = TcpStream::connect(("127.0.0.1", self.port));
-    }
-}
 
 // ------------------------------------------------------------------ the binary
 
 /// The facts of a machine that is fine, plus anything the test changes (a later key wins).
-fn facts(github: &str, more: &[&str]) -> String {
+fn facts(more: &[&str]) -> String {
     let mut parts = vec![
         "ac=on".to_string(),
         format!("free={}", 100 * GIB),
         "hosts=ok".to_string(),
         "awake=ok".to_string(),
-        format!("github={github}"),
         // Every folder on ext4 unless the test says otherwise, whatever this machine's are.
         "fs=/=ext4".to_string(),
     ];
@@ -134,13 +36,18 @@ fn facts(github: &str, more: &[&str]) -> String {
     parts.join(",")
 }
 
-/// `goalcup prep --dev <args>` in `rig`'s world, with the machine as `facts` says.
+/// `goalcup setup --dev <args>` in `rig`'s world, with the machine as `facts` says.
 fn prep_command(rig: &Rig, args: &[&str], facts: &str) -> Command {
+    named_command(rig, "setup", args, facts)
+}
+
+/// [`prep_command`] under the command name `name`: `setup`, or its old name `prep`.
+fn named_command(rig: &Rig, name: &str, args: &[&str], facts: &str) -> Command {
     let home = rig.root.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_goalcup"));
     command
-        .arg("prep")
+        .arg(name)
         .arg("--dev")
         .args(args)
         .current_dir(&rig.root)
@@ -190,43 +97,22 @@ fn log_in(rig: &Rig, url: &str) {
     .unwrap();
 }
 
-/// A practice run of the chat connector with `entries`, each `(entry id, sent)`.
-fn practice_run(rig: &Rig, run_id: &str, entries: &[(&str, bool)]) {
-    kept_run(rig, run_id, entries, true, false);
-}
-
-/// A kept run of the chat connector: practice, test or (neither) competition.
-fn kept_run(rig: &Rig, run_id: &str, entries: &[(&str, bool)], practice: bool, test: bool) {
-    let record = RunRecord {
-        run_id: run_id.to_string(),
-        server_url: Some("http://127.0.0.1:1".to_string()),
-        practice,
-        test,
-        connector_id: CHAT_ID.to_string(),
-        workspace: rig.root.join("work").join(run_id),
-        started_at_unix: 1_700_000_000,
-        deadline_at: Some("2026-10-14T10:10:00Z".to_string()),
-        entries: entries
-            .iter()
-            .map(|(id, _)| EntryRef {
-                entry_id: id.to_string(),
-                trace_dir: rig.root.join("trace").join(id),
-            })
-            .collect(),
-    };
-    goalcup_cli::run::write(&rig.cfg, &record).unwrap();
-    let uploads = rig.cfg.join(goalcup_cli::upload::UPLOADS_DIR_NAME);
-    std::fs::create_dir_all(&uploads).unwrap();
-    for (id, sent) in entries {
-        if *sent {
-            std::fs::write(uploads.join(format!("{id}.sent")), "").unwrap();
-        }
-    }
-}
-
-/// Answer the pause before the harness opens: prep asks for Enter, then takes the terminal.
+/// Answer the pause before the harness opens: setup asks for Enter, then takes the terminal.
 fn press_enter(on_pty: &OnPty) {
     on_pty.wait_shown("Press Enter to open");
+    on_pty.type_line("");
+}
+
+/// The keys file an earlier setup made, so a setup on a terminal does not ask about it.
+fn keys_made_before(rig: &Rig) {
+    let work = rig.root.join("home/goalcup-work");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(work.join(".env.local"), "").unwrap();
+}
+
+/// Answer the question setup asks once it has made the keys file: do not open it.
+fn keep_keys_closed(on_pty: &OnPty) {
+    on_pty.wait_shown("Open it now? [y/N]");
     on_pty.type_line("");
 }
 
@@ -237,10 +123,9 @@ fn prep_file(cfg: &Path) -> PrepFile {
 // ------------------------------------------------------------------ the tests
 
 #[test]
-fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
+fn setup_reports_each_step_and_exits_1_until_all_are_ok() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
 
     // A machine that has done nothing: the harness is there, the machine is fine, the rest wait.
     let (code, text) = prep(&rig, &[], &facts);
@@ -255,24 +140,14 @@ fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
         "{text}"
     );
     assert!(
-        line(&text, "github").starts_with("[todo] github:"),
-        "{text}"
-    );
-    assert!(
         line(&text, "machine").starts_with("[ok] machine:"),
-        "{text}"
-    );
-    let practice = line(&text, "practice");
-    assert!(
-        practice.starts_with("[todo] practice:")
-            && practice.contains("goalcup start --harness m2-fake-tui --practice"),
         "{text}"
     );
     // The last line points at the next action: the first step that needs the person. What to
     // do is said once, on that step's own line.
     let last = text.lines().last().unwrap();
     assert_eq!(
-        last, "goalcup prep: 4 of 6 steps need you. Next: the login step above.",
+        last, "goalcup setup: 2 of 4 steps need you. Next: the login step above.",
         "{text}"
     );
     let login_say = line(&text, "login")
@@ -280,109 +155,47 @@ fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
         .map(|(_, say)| say)
         .unwrap();
     assert_eq!(text.matches(login_say).count(), 1, "{text}");
-    // The six steps are printed in order.
+    // The four steps are printed in order; GitHub and practice are not steps of setup.
     let order: Vec<&str> = text
         .lines()
+        .filter(|l| l.starts_with('['))
         .filter_map(|l| l.split(' ').nth(1))
-        .filter(|w| w.ends_with(':') && *w != "prep:")
         .collect();
     assert_eq!(
         order,
-        [
-            "login:",
-            "harness:",
-            "harness_home:",
-            "github:",
-            "machine:",
-            "practice:"
-        ],
+        ["login:", "harness:", "harness_home:", "machine:"],
         "{text}"
     );
 
-    // The person logs in, opens the harness once, gives the repository and its token, and a
-    // practice run is uploaded; each of those is what a later prep finds, one at a time.
+    // The person logs in, then opens the harness once; each is what a later setup finds.
     log_in(&rig, "http://127.0.0.1:1");
-    let (code, text) = prep(&rig, &["--repo", REPO], &facts);
-    assert_eq!(code, 1, "{text}");
-    assert!(line(&text, "login").starts_with("[ok] login:"), "{text}");
-    assert!(
-        line(&text, "github").starts_with("[todo] github:"),
-        "{text}"
-    );
-
-    GithubSetup::new(REPO, &token())
-        .unwrap()
-        .store(&rig.cfg)
-        .unwrap();
     let (code, text) = prep(&rig, &[], &facts);
     assert_eq!(code, 1, "{text}");
-    assert!(line(&text, "github").starts_with("[ok] github:"), "{text}");
-    assert!(line(&text, "harness_home").starts_with("[todo]"), "{text}");
-
+    assert!(line(&text, "login").starts_with("[ok] login:"), "{text}");
     let mut file = prep_file(&rig.cfg);
-    assert_eq!(file.repo_url, REPO);
     assert_eq!(file.harness, CHAT_ID);
     file.home_ready = true;
     // The person's word counts only while the home they set up is there.
-    let (_, text) = {
-        goalcup_cli::prep_file::write_prep(&rig.cfg, &file).unwrap();
-        prep(&rig, &[], &facts)
-    };
+    goalcup_cli::prep_file::write_prep(&rig.cfg, &file).unwrap();
+    let (_, text) = prep(&rig, &[], &facts);
     assert!(line(&text, "harness_home").starts_with("[todo]"), "{text}");
     std::fs::create_dir_all(rig.chat_home()).unwrap();
     goalcup_cli::prep_file::write_prep(&rig.cfg, &file).unwrap();
     let (code, text) = prep(&rig, &[], &facts);
-    assert_eq!(code, 1, "{text}");
-    assert!(line(&text, "harness_home").starts_with("[ok]"), "{text}");
-    assert!(line(&text, "practice").starts_with("[todo]"), "{text}");
-
-    // A fully uploaded organizer test run (and a competition run) is not the practice run.
-    kept_run(&rig, "run-test-1", &[("entry-test", true)], false, true);
-    kept_run(&rig, "run-comp-1", &[("entry-comp", true)], false, false);
-    let (code, text) = prep(&rig, &[], &facts);
-    assert_eq!(code, 1, "{text}");
-    assert!(line(&text, "practice").starts_with("[todo]"), "{text}");
-
-    // A practice run that is not all uploaded does not count, and says which entry to send.
-    practice_run(
-        &rig,
-        "run-practice-1",
-        &[("entry-one", true), ("entry-two", false)],
-    );
-    let (code, text) = prep(&rig, &[], &facts);
-    assert_eq!(code, 1, "{text}");
-    let practice = line(&text, "practice");
-    assert!(
-        practice.starts_with("[todo]") && practice.contains("goalcup upload entry-two"),
-        "{text}"
-    );
-
-    practice_run(
-        &rig,
-        "run-practice-1",
-        &[("entry-one", true), ("entry-two", true)],
-    );
-    let (code, text) = prep(&rig, &[], &facts);
     assert_eq!(code, 0, "{text}");
-    for step in [
-        "login",
-        "harness",
-        "harness_home",
-        "github",
-        "machine",
-        "practice",
-    ] {
+    for step in ["login", "harness", "harness_home", "machine"] {
         assert!(line(&text, step).starts_with("[ok]"), "{step}: {text}");
     }
-    let last = text.lines().last().unwrap();
+    // Ready, with the optional practice run and the real run, in that order.
+    let tail: Vec<&str> = text.lines().rev().take(3).collect();
     assert!(
-        last.starts_with("goalcup prep: ready.")
-            && last.contains("goalcup start --harness m2-fake-tui"),
+        tail[2] == "Ready."
+            && tail[1].contains("goalcup start --harness m2-fake-tui --practice")
+            && tail[0].ends_with("goalcup start --harness m2-fake-tui"),
         "{text}"
     );
     // And what was settled is what a run on a server reads.
     let kept = goalcup_cli::prep_file::read_prep(&rig.cfg).unwrap();
-    assert_eq!(kept.repo_url, REPO);
     assert_eq!(kept.harness, CHAT_ID);
     assert!(
         Path::new(&kept.work_root).is_absolute() && kept.work_root.ends_with("home/goalcup-work"),
@@ -390,36 +203,99 @@ fn prep_reports_each_step_and_exits_1_until_all_are_ok() {
     );
 }
 
+/// Setup makes the keys file in the work folder once (empty but for a comment, mode 0600), says
+/// where it is, never replaces it, and never reads it.
 #[test]
-fn a_second_prep_skips_passed_steps() {
+fn setup_makes_the_keys_file_once_for_the_owner_alone_and_never_replaces_it() {
+    use std::os::unix::fs::PermissionsExt;
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
+    let keys = rig.root.join("home/goalcup-work/.env.local");
+    let (_, text) = prep(&rig, &[], &facts);
+    assert!(
+        text.contains(&format!(
+            "Keys for your agent (optional): {}",
+            keys.display()
+        )),
+        "{text}"
+    );
+    let made = std::fs::read_to_string(&keys).unwrap();
+    assert!(
+        made.lines().count() == 3 && made.lines().all(|l| l.starts_with('#')),
+        "{made}"
+    );
+    let mode = std::fs::metadata(&keys).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    // The participant's own keys stay as they wrote them.
+    std::fs::write(&keys, "SOME_API_KEY=value\n").unwrap();
+    prep(&rig, &[], &facts);
+    assert_eq!(
+        std::fs::read_to_string(&keys).unwrap(),
+        "SOME_API_KEY=value\n"
+    );
+}
+
+#[test]
+fn setup_logs_in_inline_when_this_computer_is_not_connected() {
+    let rig = Rig::chat_only();
+    let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+    // A server is named but no account: `goalcup login`'s device flow runs inside setup.
+    goalcup_cli::server::write_server_config(
+        &rig.cfg,
+        &goalcup_cli::server::ServerConfig {
+            url: server.url(),
+            account: None,
+        },
+    )
+    .unwrap();
+    let mut on_pty = OnPty::spawn(prep_command(&rig, &[], &facts(&[])), None);
+    on_pty.wait_shown("[ok] login:");
+    press_enter(&on_pty);
+    on_pty.wait_shown("tui: ready");
+    on_pty.type_line("/exit");
+    keep_keys_closed(&on_pty);
+    on_pty.wait();
+    let shown = on_pty.shown();
+    assert!(shown.contains("not connected to Goal Cup yet"), "{shown}");
+    let stored = goalcup_cli::server::read_server_config(&rig.cfg)
+        .unwrap()
+        .unwrap();
+    assert!(stored.account.is_some(), "{shown}");
+}
+
+/// Old docs and players say `goalcup prep`: it is a hidden alias that runs setup itself.
+#[test]
+fn the_old_name_prep_runs_setup() {
+    let rig = Rig::chat_only();
+    let facts = facts(&[]);
+    let report = |name: &str| {
+        let out = named_command(&rig, name, &["--json"], &facts)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        (out.status.code(), String::from_utf8(out.stdout).unwrap())
+    };
+    let (code, text) = report("prep");
+    assert_eq!(code, Some(1), "{text}");
+    assert_eq!((code, text), report("setup"));
+}
+
+#[test]
+fn a_second_setup_skips_passed_steps() {
+    let rig = Rig::chat_only();
+    let facts = facts(&[]);
     log_in(&rig, "http://127.0.0.1:1");
 
-    // The first prep, on a terminal: it opens the harness and asks for the token.
-    let mut first = OnPty::spawn(prep_command(&rig, &["--repo", REPO], &facts), None);
+    // The first setup, on a terminal: it opens the harness.
+    let mut first = OnPty::spawn(prep_command(&rig, &[], &facts), None);
     press_enter(&first);
     first.wait_shown("tui: ready");
     first.type_line("/exit");
-    first.wait_shown("GitHub token for");
-    let secret = token();
-    first.type_line(&secret);
+    keep_keys_closed(&first);
     let status = first.wait();
     let shown = first.shown();
-    assert_eq!(
-        status.code(),
-        Some(1),
-        "the practice step is still to do:\n{shown}"
-    );
-    assert!(
-        !shown.contains(&secret),
-        "the token the person typed was shown on the terminal:\n{shown}"
-    );
+    assert_eq!(status.code(), Some(0), "{shown}");
     assert!(shown.contains("[ok] harness_home:"), "{shown}");
-    assert!(shown.contains("[ok] github:"), "{shown}");
-    // The token the person gave passed the whole check in one request.
-    assert_eq!(github.asked(), 1);
     // The harness ran with no goal, on the terminal, in the home a run uses, with no proxy.
     assert_eq!(
         rig.harness_file("tui.stdin").as_deref().map(str::trim),
@@ -431,44 +307,35 @@ fn a_second_prep_skips_passed_steps() {
         rig.harness_file("tui.argv")
     );
     assert!(rig.chat_home().is_dir(), "the harness home was made");
-    let file = prep_file(&rig.cfg);
-    assert!(file.home_ready, "{file:?}");
-    assert_eq!(file.repo_url, REPO);
-    // The token is stored where git's helper reads it, and nowhere the report shows.
-    assert!(GithubSetup::load(&rig.cfg).is_ok());
+    assert!(prep_file(&rig.cfg).home_ready);
 
-    // The second prep, on a terminal again, repeats neither: the harness is not opened, the
-    // token is not asked for, and GitHub is not asked again.
+    // The second setup, on a terminal again, does not open the harness again, and does not ask
+    // about the keys file it made before.
     std::fs::remove_file(rig.out.join("tui.pid")).unwrap();
     std::fs::remove_file(rig.out.join("tui.ready")).unwrap();
     let mut second = OnPty::spawn(prep_command(&rig, &[], &facts), None);
     let status = second.wait();
     let shown = second.shown();
-    assert_eq!(status.code(), Some(1), "{shown}");
+    assert_eq!(status.code(), Some(0), "{shown}");
     assert!(shown.contains("[ok] harness_home:"), "{shown}");
-    assert!(shown.contains("[ok] github:"), "{shown}");
     assert!(
         !shown.contains("tui: ready"),
         "the harness was opened again:\n{shown}"
     );
-    assert!(!shown.contains("GitHub token for"), "{shown}");
+    assert!(!shown.contains("Open it now?"), "{shown}");
     assert!(
         !rig.out.join("tui.pid").exists(),
         "the harness started again"
     );
-    // GitHub is asked again, for all three (public and pushable, then empty), and no token is
-    // wanted because the stored one passes.
-    assert_eq!(github.asked(), 3, "the repository is checked on every prep");
 }
 
 #[test]
-fn prep_waits_for_enter_before_it_opens_the_harness() {
+fn setup_waits_for_enter_before_it_opens_the_harness() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
     log_in(&rig, "http://127.0.0.1:1");
 
-    let mut on_pty = OnPty::spawn(prep_command(&rig, &["--repo", REPO], &facts), None);
+    let mut on_pty = OnPty::spawn(prep_command(&rig, &[], &facts), None);
     on_pty.wait_shown("Press Enter to open");
     // The pause is real: the harness has not started, and nothing is recorded as set up.
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -481,32 +348,27 @@ fn prep_waits_for_enter_before_it_opens_the_harness() {
     on_pty.type_line("");
     on_pty.wait_shown("tui: ready");
     on_pty.type_line("/exit");
-    on_pty.wait_shown("GitHub token for");
-    on_pty.type_line(&token());
+    keep_keys_closed(&on_pty);
     on_pty.wait();
     assert!(prep_file(&rig.cfg).home_ready);
 }
 
 #[test]
-fn prep_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
+fn setup_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
     log_in(&rig, "http://127.0.0.1:1");
 
-    let mut on_pty = OnPty::spawn(prep_command(&rig, &["--repo", REPO], &facts), None);
+    let mut on_pty = OnPty::spawn(prep_command(&rig, &[], &facts), None);
     on_pty.wait_shown("Press Enter to open");
     // Ctrl-D at the start of a line: the input ends with no Enter. Only that one byte is
-    // written. An Enter after it would sit in the terminal's queue, and the token prompt that
-    // follows would read it as an empty token whenever it arrived after the prompt cleared the
-    // queue.
+    // written, so nothing is left in the terminal's queue for the question that follows.
     on_pty.type_bytes("\u{4}");
-    on_pty.wait_shown("GitHub token for");
-    on_pty.type_line(&token());
+    keep_keys_closed(&on_pty);
     on_pty.wait();
     let shown = on_pty.shown();
     // The terminal echoes the typed Ctrl-D (`^D`, then backspaces on macOS) and no newline.
-    // Prep ends that line, so the report line is a line of its own, word for word.
+    // Setup ends that line, so the report line is a line of its own, word for word.
     let lines: Vec<&str> = shown.lines().map(|l| l.trim_end_matches('\r')).collect();
     let at = lines
         .iter()
@@ -515,7 +377,7 @@ fn prep_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
     assert_eq!(
         lines[at],
         format!(
-            "[todo] harness_home: {CHAT_ID} was not opened. Run `goalcup prep` again, then \
+            "[todo] harness_home: {CHAT_ID} was not opened. Run `goalcup setup` again, then \
              press Enter"
         ),
         "{shown}"
@@ -539,25 +401,20 @@ fn prep_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
 #[test]
 fn prep_refuses_a_work_folder_inside_a_git_repository_and_names_the_fix() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
     log_in(&rig, "http://127.0.0.1:1");
     let repo = rig.root.join("some-repo");
     std::fs::create_dir_all(repo.join(".git")).unwrap();
     let inside = repo.join("work");
 
-    let (code, text) = prep(
-        &rig,
-        &["--repo", REPO, "--work-root", inside.to_str().unwrap()],
-        &facts,
-    );
+    let (code, text) = prep(&rig, &["--work-root", inside.to_str().unwrap()], &facts);
     assert_eq!(code, 1, "{text}");
     let machine = line(&text, "machine");
     assert!(
         machine.starts_with("[fail] machine:")
             && machine.contains(&inside.display().to_string())
             && machine.contains(&repo.display().to_string())
-            && machine.contains("goalcup prep --work-root ~/goalcup-work"),
+            && machine.contains("goalcup setup --work-root ~/goalcup-work"),
         "{text}"
     );
     // A refused folder is not kept, so a later `goalcup start` cannot use it.
@@ -582,18 +439,14 @@ fn prep_refuses_a_work_folder_inside_a_git_repository_and_names_the_fix() {
 #[test]
 fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
     // The filesystem is judged by its type, not by where it is mounted: a Windows drive mounted
     // at an odd place is refused, and a Linux mount under `/mnt/c` is not.
-    let wsl = facts(
-        &github.base,
-        &[
-            "wsl=2",
-            "fs=/odd/place=9p",
-            "fs=/mnt/c/linux=ext4",
-            "fs=/mnt/c=drvfs",
-        ],
-    );
+    let wsl = facts(&[
+        "wsl=2",
+        "fs=/odd/place=9p",
+        "fs=/mnt/c/linux=ext4",
+        "fs=/mnt/c=drvfs",
+    ]);
     let on_drive = "/odd/place/goalcup-work";
 
     let (code, text) = prep(&rig, &["--work-root", on_drive], &wsl);
@@ -619,7 +472,7 @@ fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
     let (_, text) = prep(
         &rig,
         &["--work-root", on_drive],
-        &facts(&github.base, &["wsl=0", "fs=/odd/place=9p"]),
+        &facts(&["wsl=0", "fs=/odd/place=9p"]),
     );
     assert!(line(&text, "machine").starts_with("[ok]"), "{text}");
 
@@ -628,7 +481,7 @@ fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
     let (_, text) = prep(
         &rig,
         &["--work-root", "/home/me/goalcup-work"],
-        &facts(&github.base, &["wsl=2", "awake=no_inhibitor"]),
+        &facts(&["wsl=2", "awake=no_inhibitor"]),
     );
     let machine = line(&text, "machine");
     assert!(
@@ -642,11 +495,10 @@ fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
 #[test]
 fn prep_on_wsl2_the_machine_step_is_ok_without_a_sleep_lock() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
     let (_, text) = prep(
         &rig,
         &["--work-root", "/home/me/goalcup-work"],
-        &facts(&github.base, &["wsl=2", "awake=no_inhibitor"]),
+        &facts(&["wsl=2", "awake=no_inhibitor"]),
     );
     let machine = line(&text, "machine");
     assert!(
@@ -658,7 +510,7 @@ fn prep_on_wsl2_the_machine_step_is_ok_without_a_sleep_lock() {
     let (_, text) = prep(
         &rig,
         &["--work-root", "/home/me/goalcup-work"],
-        &facts(&github.base, &["wsl=2", "awake=no_inhibitor", "ac=battery"]),
+        &facts(&["wsl=2", "awake=no_inhibitor", "ac=battery"]),
     );
     let machine = line(&text, "machine");
     assert!(
@@ -672,11 +524,10 @@ fn prep_on_wsl2_the_machine_step_is_ok_without_a_sleep_lock() {
 #[test]
 fn prep_fails_wsl_artifact_root_and_config_folder_on_a_windows_host_filesystem() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
     let work = "/home/me/goalcup-work";
     let artifacts = format!("{}-artifacts", rig.cfg.display());
 
-    let on_artifacts = facts(&github.base, &["wsl=2", &format!("fs={artifacts}=9p")]);
+    let on_artifacts = facts(&["wsl=2", &format!("fs={artifacts}=9p")]);
     let (code, text) = prep(&rig, &["--work-root", work], &on_artifacts);
     assert_eq!(code, 1, "{text}");
     let machine = line(&text, "machine");
@@ -689,10 +540,7 @@ fn prep_fails_wsl_artifact_root_and_config_folder_on_a_windows_host_filesystem()
     // The work folder is fine, and is kept.
     assert_eq!(prep_file(&rig.cfg).work_root, work);
 
-    let on_config = facts(
-        &github.base,
-        &["wsl=2", &format!("fs={}=virtiofs", rig.cfg.display())],
-    );
+    let on_config = facts(&["wsl=2", &format!("fs={}=virtiofs", rig.cfg.display())]);
     let (_, text) = prep(&rig, &["--work-root", work], &on_config);
     let machine = line(&text, "machine");
     assert!(
@@ -706,12 +554,8 @@ fn prep_fails_wsl_artifact_root_and_config_folder_on_a_windows_host_filesystem()
 #[test]
 fn prep_fails_a_folder_on_an_unsupported_filesystem_and_says_how_to_move_it() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
     let work = rig.root.join("btrfs").join("goalcup-work");
-    let on_btrfs = facts(
-        &github.base,
-        &[&format!("fs={}=btrfs", rig.root.join("btrfs").display())],
-    );
+    let on_btrfs = facts(&[&format!("fs={}=btrfs", rig.root.join("btrfs").display())]);
     let (code, text) = prep(&rig, &["--work-root", work.to_str().unwrap()], &on_btrfs);
     assert_eq!(code, 1, "{text}");
     let machine = line(&text, "machine");
@@ -727,10 +571,7 @@ fn prep_fails_a_folder_on_an_unsupported_filesystem_and_says_how_to_move_it() {
     assert_ne!(prep_file(&rig.cfg).work_root, work.display().to_string());
 
     let elsewhere = rig.root.join("goalcup-work");
-    let on_overlay = facts(
-        &github.base,
-        &[&format!("fs={}=overlay", rig.cfg.display())],
-    );
+    let on_overlay = facts(&[&format!("fs={}=overlay", rig.cfg.display())]);
     let (code, text) = prep(
         &rig,
         &["--work-root", elsewhere.to_str().unwrap()],
@@ -754,11 +595,10 @@ fn prep_fails_a_folder_on_an_unsupported_filesystem_and_says_how_to_move_it() {
 #[test]
 fn prep_fails_wsl1_in_one_sentence() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
     let (code, text) = prep(
         &rig,
         &["--work-root", "/home/me/goalcup-work"],
-        &facts(&github.base, &["wsl=1"]),
+        &facts(&["wsl=1"]),
     );
     assert_eq!(code, 1, "{text}");
     let machine = line(&text, "machine");
@@ -779,16 +619,11 @@ fn prep_fails_wsl1_in_one_sentence() {
 fn prep_does_not_start_a_run() {
     let rig = Rig::chat_only();
     let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
-    let github = FakeGithub::good();
     log_in(&rig, &server.url());
-    GithubSetup::new(REPO, &token())
-        .unwrap()
-        .store(&rig.cfg)
-        .unwrap();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
 
     // With no terminal, with --json, and on a terminal.
-    let (_, text) = prep(&rig, &["--repo", REPO], &facts);
+    let (_, text) = prep(&rig, &[], &facts);
     assert!(line(&text, "login").starts_with("[ok]"), "{text}");
     let (_, text) = prep(&rig, &["--json"], &facts);
     json(&text);
@@ -821,24 +656,13 @@ fn prep_does_not_start_a_run() {
 #[test]
 fn prep_json_marks_the_human_steps() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
 
     let (code, text) = prep(&rig, &["--json"], &facts);
     assert_eq!(code, 1);
     let steps = json(&text);
     let ids: Vec<&str> = steps.iter().map(|s| s["step"].as_str().unwrap()).collect();
-    assert_eq!(
-        ids,
-        [
-            "login",
-            "harness",
-            "harness_home",
-            "github",
-            "machine",
-            "practice"
-        ]
-    );
+    assert_eq!(ids, ["login", "harness", "harness_home", "machine"]);
     for s in &steps {
         let mut keys: Vec<&str> = s.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort_unstable();
@@ -855,13 +679,11 @@ fn prep_json_marks_the_human_steps() {
             ("login", true),
             ("harness", false),
             ("harness_home", true),
-            ("github", true),
             ("machine", false),
-            ("practice", true),
         ]
     );
     let states: Vec<&str> = steps.iter().map(|s| s["state"].as_str().unwrap()).collect();
-    assert_eq!(states, ["todo", "ok", "todo", "todo", "ok", "todo"]);
+    assert_eq!(states, ["todo", "ok", "todo", "ok"]);
     // Nothing but the array is printed.
     assert!(text.trim_start().starts_with('[') && text.trim_end().ends_with(']'));
 
@@ -873,15 +695,12 @@ fn prep_json_marks_the_human_steps() {
     assert_eq!(steps[0]["human"], false);
 
     // On a terminal, --json still asks nothing and opens nothing.
-    let mut on_pty = OnPty::spawn(
-        prep_command(&rig, &["--json", "--repo", REPO], &facts),
-        None,
-    );
+    let mut on_pty = OnPty::spawn(prep_command(&rig, &["--json"], &facts), None);
     let status = on_pty.wait();
     let shown = on_pty.shown();
     assert_eq!(status.code(), Some(1), "{shown}");
     assert!(
-        !shown.contains("not shown):") && !shown.contains("tui: ready"),
+        !shown.contains("Press Enter") && !shown.contains("tui: ready"),
         "{shown}"
     );
     assert!(
@@ -889,36 +708,29 @@ fn prep_json_marks_the_human_steps() {
         "--json launched the harness"
     );
     let steps = json(shown.trim());
-    assert_eq!(steps[3]["state"], "todo");
-    assert_eq!(steps[3]["human"], true);
+    assert_eq!(steps[2]["state"], "todo");
+    assert_eq!(steps[2]["human"], true);
 }
 
 #[test]
 fn prep_refuses_what_the_flags_get_wrong_before_it_writes_anything() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
-    for args in [
-        &["--work-root", "relative/goalcup-work"][..],
-        &["--repo", "https://example.com/acme/empty-repo"][..],
-        &["--repo", "acme/empty-repo"][..],
-    ] {
-        let out = prep_command(&rig, args, &facts)
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
-        assert_eq!(out.status.code(), Some(1), "{args:?}");
-        assert!(out.stdout.is_empty(), "{args:?}");
-        assert!(!prep_path(&rig.cfg).exists(), "{args:?} wrote a prep file");
-    }
+    let facts = facts(&[]);
+    let args = ["--work-root", "relative/goalcup-work"];
+    let out = prep_command(&rig, &args, &facts)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{args:?}");
+    assert!(out.stdout.is_empty(), "{args:?}");
+    assert!(!prep_path(&rig.cfg).exists(), "{args:?} wrote a prep file");
 }
 
 #[test]
 fn the_machine_step_judges_power_space_git_and_the_network() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
     let machine = |more: &[&str]| {
-        let (code, text) = prep(&rig, &[], &facts(&github.base, more));
+        let (code, text) = prep(&rig, &[], &facts(more));
         assert_eq!(code, 1, "{text}");
         line(&text, "machine").to_string()
     };
@@ -941,7 +753,7 @@ fn the_machine_step_judges_power_space_git_and_the_network() {
     );
 
     // No git on PATH: the harness is still found (the rig's directory is on it), git is not.
-    let out = prep_command(&rig, &[], &facts(&github.base, &[]))
+    let out = prep_command(&rig, &[], &facts(&[]))
         .env("PATH", rig.root.join("bin"))
         .stdin(Stdio::null())
         .output()
@@ -954,11 +766,66 @@ fn the_machine_step_judges_power_space_git_and_the_network() {
     );
 }
 
+/// With more than one harness and none chosen, the harness step lists the installed ones, the
+/// other supported ones with where to read how to install them, and how to add one's own; in a
+/// terminal it asks which one, the first installed one by default.
+#[test]
+fn the_harness_step_lists_every_supported_harness_and_asks_which_one() {
+    let rig = Rig::chat_with_shared_run_home();
+    // Two chat-mode harnesses with homes to set up: the rig's own and the shared-home one.
+    std::fs::remove_dir_all(rig.connectors.join(FAKE_ID)).unwrap();
+    let facts = facts(&[]);
+    let (_, text) = prep(&rig, &[], &facts);
+    let step = text
+        .split("[todo] harness:")
+        .nth(1)
+        .and_then(|rest| rest.split("\n[").next())
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(
+        step.contains("Installed:")
+            && step.contains(CHAT_ID)
+            && step.contains(CHAT_HOME_ID)
+            && step.contains("Your own harness?")
+            && step.contains("HARNESS-ONBOARDING.md"),
+        "{text}"
+    );
+    // None on the PATH: every one is "also supported", with where to read how to install it.
+    let out = prep_command(&rig, &[], &facts)
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.contains("Installed: none yet")
+            && text.contains("Also supported:")
+            && text.contains("HARNESS-SETUP.md"),
+        "{text}"
+    );
+
+    // In a terminal it asks, and Enter takes the default it shows.
+    log_in(&rig, "http://127.0.0.1:1");
+    let mut on_pty = OnPty::spawn(prep_command(&rig, &[], &facts), None);
+    on_pty.wait_shown("Which one? [");
+    let shown = on_pty.shown();
+    let default = shown
+        .split("Which one? [")
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .unwrap()
+        .to_string();
+    on_pty.type_line("");
+    on_pty.wait_shown(&format!("[ok] harness: {default}"));
+    on_pty.wait_shown("Press Enter to open");
+    on_pty.type_bytes("\u{4}");
+    on_pty.wait();
+    assert_eq!(prep_file(&rig.cfg).harness, default);
+}
+
 #[test]
 fn the_harness_step_names_what_it_cannot_use() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
 
     let (_, text) = prep(&rig, &["--harness", "no-such-harness"], &facts);
     let harness = line(&text, "harness");
@@ -977,124 +844,6 @@ fn the_harness_step_names_what_it_cannot_use() {
     // And the choice is kept for the next prep.
     let (_, _) = prep(&rig, &["--harness", CHAT_ID], &facts);
     assert_eq!(prep_file(&rig.cfg).harness, CHAT_ID);
-}
-
-/// The repository answers as public, pushable and empty (`size` 0) or not, for the one token
-/// `good` and with a refusal for any other.
-fn github_that_only_takes(good: &'static str, size: u32) -> FakeGithub {
-    FakeGithub::serve(move |bearer| {
-        if bearer == good {
-            (
-                200,
-                Box::leak(
-                    format!(
-                        r#"{{"private":false,"size":{size},"permissions":{{"admin":false,"push":true,"pull":true}}}}"#
-                    )
-                    .into_boxed_str(),
-                ),
-            )
-        } else {
-            (401, r#"{"message":"Bad credentials"}"#)
-        }
-    })
-}
-
-#[test]
-fn a_revoked_token_is_found_on_the_next_prep_and_replaced_and_replaced() {
-    let rig = Rig::chat_only();
-    let new_token = format!("github_pat_{}", "B".repeat(60));
-    let new_token: &'static str = Box::leak(new_token.into_boxed_str());
-    let github = github_that_only_takes(new_token, 0);
-    let facts = facts(&github.base, &[]);
-    log_in(&rig, "http://127.0.0.1:1");
-    // Everything settled earlier, and the token stored since has been revoked.
-    GithubSetup::new(REPO, &token())
-        .unwrap()
-        .store(&rig.cfg)
-        .unwrap();
-    std::fs::create_dir_all(rig.chat_home()).unwrap();
-    goalcup_cli::prep_file::write_prep(
-        &rig.cfg,
-        &PrepFile {
-            harness: CHAT_ID.to_string(),
-            repo_url: REPO.to_string(),
-            work_root: rig.root.join("work").display().to_string(),
-            home_ready: true,
-        },
-    )
-    .unwrap();
-
-    // Without a terminal it is a failure that says what GitHub said, not an ok.
-    let (code, text) = prep(&rig, &[], &facts);
-    assert_eq!(code, 1, "{text}");
-    let github_line = line(&text, "github");
-    assert!(
-        github_line.starts_with("[fail] github:") && github_line.contains("refused the token"),
-        "{text}"
-    );
-
-    // On a terminal the person is asked for a new token, which passes the whole check and
-    // replaces the old one.
-    let mut on_pty = OnPty::spawn(prep_command(&rig, &[], &facts), None);
-    on_pty.wait_shown("not shown):");
-    on_pty.type_line(new_token);
-    on_pty.wait();
-    let shown = on_pty.shown();
-    assert!(shown.contains("[ok] github:"), "{shown}");
-    assert!(!shown.contains(new_token), "the token was shown:\n{shown}");
-    assert_eq!(
-        GithubSetup::load(&rig.cfg).unwrap(),
-        GithubSetup::new(REPO, new_token).unwrap()
-    );
-
-    // The next prep is not asked for anything: the stored token passes.
-    let (_, text) = prep(&rig, &[], &facts);
-    assert!(line(&text, "github").starts_with("[ok] github:"), "{text}");
-    let mut again = OnPty::spawn(prep_command(&rig, &[], &facts), None);
-    again.wait();
-    assert!(!again.shown().contains("not shown):"), "{}", again.shown());
-}
-
-#[test]
-fn a_repository_that_is_not_empty_is_a_failure_on_every_prep_and_no_reason_for_a_new_token() {
-    let rig = Rig::chat_only();
-    let token_in_use: &'static str = Box::leak(token().into_boxed_str());
-    let github = github_that_only_takes(token_in_use, 12);
-    log_in(&rig, "http://127.0.0.1:1");
-    GithubSetup::new(REPO, token_in_use)
-        .unwrap()
-        .store(&rig.cfg)
-        .unwrap();
-    let facts = facts(&github.base, &[]);
-    std::fs::create_dir_all(rig.chat_home()).unwrap();
-    goalcup_cli::prep_file::write_prep(
-        &rig.cfg,
-        &PrepFile {
-            harness: CHAT_ID.to_string(),
-            home_ready: true,
-            ..PrepFile::default()
-        },
-    )
-    .unwrap();
-    // Every prep says so, with the sentence of the repository check, however often it is run.
-    for _ in 0..2 {
-        let (code, text) = prep(&rig, &["--repo", REPO], &facts);
-        assert_eq!(code, 1, "{text}");
-        let github_line = line(&text, "github");
-        assert!(
-            github_line.starts_with("[fail] github:")
-                && github_line.contains("is not empty (12 KB)")
-                && github_line.contains("no README, license or .gitignore"),
-            "{text}"
-        );
-    }
-    // On a terminal too: the token is fine, so none is asked for.
-    let mut on_pty = OnPty::spawn(prep_command(&rig, &[], &facts), None);
-    on_pty.wait_shown("[fail] github:");
-    on_pty.wait();
-    let shown = on_pty.shown();
-    assert!(shown.contains("is not empty"), "{shown}");
-    assert!(!shown.contains("not shown):"), "{shown}");
 }
 
 // ------------------------------------------------------------------ the participant's environment
@@ -1123,25 +872,20 @@ fn npm_style_harness(rig: &Rig, with_interpreter: bool) -> String {
     )
 }
 
-/// What a participant who has done everything but open the harness has: a login, the repository
-/// and a token that passes.
+/// What a participant who has done everything but open the harness has: a login.
 fn all_but_the_harness(rig: &Rig) {
     log_in(rig, "http://127.0.0.1:1");
-    GithubSetup::new(REPO, &token())
-        .unwrap()
-        .store(&rig.cfg)
-        .unwrap();
 }
 
 #[test]
 fn prep_opens_a_harness_that_needs_its_interpreter_with_the_participants_environment() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
+    keys_made_before(&rig);
     all_but_the_harness(&rig);
     let path = npm_style_harness(&rig, true);
 
-    let mut command = prep_command(&rig, &["--repo", REPO], &facts);
+    let mut command = prep_command(&rig, &[], &facts);
     command
         .env("PATH", &path)
         .env("TERM", "xterm-256color")
@@ -1212,8 +956,7 @@ fn prep_opens_a_harness_that_needs_its_interpreter_with_the_participants_environ
 #[test]
 fn the_harness_step_checks_the_interpreter_on_the_participants_path() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
 
     let path = npm_style_harness(&rig, false);
     let out = prep_command(&rig, &[], &facts)
@@ -1249,8 +992,7 @@ fn the_harness_step_checks_the_interpreter_on_the_participants_path() {
 fn prep_logs_in_to_the_run_home_a_later_start_uses() {
     use std::os::unix::fs::PermissionsExt;
     let rig = Rig::chat_with_shared_run_home();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
     all_but_the_harness(&rig);
     let home = rig
         .cfg
@@ -1258,7 +1000,7 @@ fn prep_logs_in_to_the_run_home_a_later_start_uses() {
         .join(format!("{CHAT_HOME_ID}.run-home"));
 
     // Not set up yet: the step names the run home, and a prep with no terminal opens nothing.
-    let (_, text) = prep(&rig, &["--harness", CHAT_HOME_ID, "--repo", REPO], &facts);
+    let (_, text) = prep(&rig, &["--harness", CHAT_HOME_ID], &facts);
     let step = line(&text, "harness_home");
     assert!(
         step.starts_with("[todo] harness_home:") && step.contains(".run-home"),
@@ -1267,7 +1009,7 @@ fn prep_logs_in_to_the_run_home_a_later_start_uses() {
 
     // On a terminal, the harness opens with its HOME the kept run home, and writes there.
     let mut on_pty = OnPty::spawn(
-        prep_command(&rig, &["--harness", CHAT_HOME_ID, "--repo", REPO], &facts),
+        prep_command(&rig, &["--harness", CHAT_HOME_ID], &facts),
         None,
     );
     press_enter(&on_pty);
@@ -1341,17 +1083,13 @@ const CHAT_START_ENV: [(&str, &str); 2] = [
 #[test]
 fn prep_and_start_put_the_connectors_settings_into_its_home() {
     let rig = Rig::chat_with_configure();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
+    keys_made_before(&rig);
     all_but_the_harness(&rig);
     let home = rig.cfg.join("capture-homes").join(CHAT_CONFIGURE_ID);
 
     let mut on_pty = OnPty::spawn(
-        prep_command(
-            &rig,
-            &["--harness", CHAT_CONFIGURE_ID, "--repo", REPO],
-            &facts,
-        ),
+        prep_command(&rig, &["--harness", CHAT_CONFIGURE_ID], &facts),
         None,
     );
     press_enter(&on_pty);
@@ -1419,17 +1157,13 @@ fn prep_and_start_put_the_connectors_settings_into_its_home() {
 #[test]
 fn a_failing_configure_command_keeps_the_home_not_ready_and_launches_nothing() {
     let rig = Rig::chat_with_configure();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
+    keys_made_before(&rig);
     all_but_the_harness(&rig);
     std::fs::write(rig.out.join("tui.configure.fail"), "").unwrap();
 
     let mut on_pty = OnPty::spawn(
-        prep_command(
-            &rig,
-            &["--harness", CHAT_CONFIGURE_ID, "--repo", REPO],
-            &facts,
-        ),
+        prep_command(&rig, &["--harness", CHAT_CONFIGURE_ID], &facts),
         None,
     );
     press_enter(&on_pty);
@@ -1495,8 +1229,7 @@ fn hold_home_lock(rig: &Rig, id: &str, holder: Option<&str>) -> std::fs::File {
 
 #[test]
 fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
     // The config home kept across runs (D39) and the run HOME kept across runs (D59), each
     // held by a recording run that has said who it is, and by a holder that has not.
     for (id, kind, holder) in [
@@ -1507,12 +1240,10 @@ fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
     ] {
         let rig = Rig::chat_with_shared_run_home();
         all_but_the_harness(&rig);
+        keys_made_before(&rig);
         let _held = hold_home_lock(&rig, id, holder);
 
-        let mut on_pty = OnPty::spawn(
-            prep_command(&rig, &["--harness", id, "--repo", REPO], &facts),
-            None,
-        );
+        let mut on_pty = OnPty::spawn(prep_command(&rig, &["--harness", id], &facts), None);
         let status = on_pty.wait();
         let shown = on_pty.shown();
         let what = format!("{kind}, holder {holder:?}:\n{shown}");
@@ -1557,12 +1288,11 @@ const SETUP_GUIDE: &str =
 #[test]
 fn prep_points_the_harness_step_to_the_setup_guide() {
     let rig = Rig::chat_only();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
     all_but_the_harness(&rig);
 
     // The connector names no section: the guide itself.
-    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let (_, out) = prep(&rig, &[], &facts);
     let step = line(&out, "harness");
     assert!(step.starts_with("[ok] harness:"), "{out}");
     assert!(
@@ -1580,13 +1310,13 @@ fn prep_points_the_harness_step_to_the_setup_guide() {
     );
     std::fs::write(&path, text).unwrap();
     let want = format!("Before a long run, read {SETUP_GUIDE}#fake-agent");
-    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let (_, out) = prep(&rig, &[], &facts);
     let step = line(&out, "harness");
     assert!(
         step.starts_with("[ok] harness:") && step.ends_with(&want),
         "{out}"
     );
-    let (_, out) = prep(&rig, &["--repo", REPO, "--json"], &facts);
+    let (_, out) = prep(&rig, &["--json"], &facts);
     let steps = json(&out);
     let harness = steps.iter().find(|s| s["step"] == "harness").unwrap();
     assert_eq!(harness["state"], "ok", "{out}");
@@ -1608,15 +1338,14 @@ fn prep_prints_the_time_left_tool_lines_with_the_absolute_path_and_writes_nothin
         1,
     );
     std::fs::write(&path, text).unwrap();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
     all_but_the_harness(&rig);
     let home = rig.cfg.join("capture-homes").join(CHAT_ID);
     let file = home.join("config.toml");
     let goalcup = env!("CARGO_BIN_EXE_goalcup");
 
     for json_mode in [false, true] {
-        let mut args = vec!["--repo", REPO];
+        let mut args = Vec::<&str>::new();
         if json_mode {
             args.push("--json");
         }
@@ -1664,15 +1393,14 @@ fn prep_recommends_the_no_prompt_settings_and_never_writes_them() {
         1,
     );
     std::fs::write(&path, text).unwrap();
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
     all_but_the_harness(&rig);
     let home = rig.cfg.join("capture-homes").join(CHAT_ID);
     const ASKS: &str = "Fake Agent may stop to ask your permission";
     let link = format!("{SETUP_GUIDE}#fake-agent");
 
     // Not set up yet: the step is still todo for the set-up itself, and names both settings.
-    let (code, out) = prep(&rig, &["--repo", REPO], &facts);
+    let (code, out) = prep(&rig, &[], &facts);
     let step = line(&out, "harness_home");
     assert!(step.starts_with("[todo] harness_home:"), "{out}");
     assert!(step.contains(ASKS) && step.contains(&link), "{out}");
@@ -1689,7 +1417,7 @@ fn prep_recommends_the_no_prompt_settings_and_never_writes_them() {
     file.harness = CHAT_ID.to_string();
     file.home_ready = true;
     goalcup_cli::prep_file::write_prep(&rig.cfg, &file).unwrap();
-    let (_, out) = prep(&rig, &["--repo", REPO, "--json"], &facts);
+    let (_, out) = prep(&rig, &["--json"], &facts);
     let steps = json(&out);
     let home_step = steps.iter().find(|s| s["step"] == "harness_home").unwrap();
     assert_eq!(home_step["state"], "ok", "{out}");
@@ -1697,7 +1425,7 @@ fn prep_recommends_the_no_prompt_settings_and_never_writes_them() {
 
     // One set: only the other is named.
     std::fs::write(home.join("config.toml"), "approval_policy = \"never\"\n").unwrap();
-    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let (_, out) = prep(&rig, &[], &facts);
     let step = line(&out, "harness_home");
     assert!(step.starts_with("[ok] harness_home:"), "{out}");
     assert!(
@@ -1716,7 +1444,7 @@ fn prep_recommends_the_no_prompt_settings_and_never_writes_them() {
         r#"{"permissions":{"skip":true}}"#,
     )
     .unwrap();
-    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let (_, out) = prep(&rig, &[], &facts);
     let step = line(&out, "harness_home");
     assert!(
         step.contains("`approval_policy` to `never`") && !step.contains("`permissions.skip`"),
@@ -1725,7 +1453,7 @@ fn prep_recommends_the_no_prompt_settings_and_never_writes_them() {
 
     // All set: no recommendation, and prep wrote neither file.
     std::fs::write(home.join("config.toml"), "approval_policy = \"never\"\n").unwrap();
-    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let (_, out) = prep(&rig, &[], &facts);
     let step = line(&out, "harness_home");
     assert!(
         step.starts_with("[ok] harness_home:") && !step.contains(ASKS),
@@ -1750,12 +1478,12 @@ fn prep_keeps_the_home_not_ready_while_the_model_service_cannot_be_recorded() {
     let rig = Rig::chat_only();
     let from = crate::model_host_from::reads_model_host(&rig, CHAT_ID);
     let home = rig.cfg.join("capture-homes").join(CHAT_ID);
-    let github = FakeGithub::good();
-    let facts = facts(&github.base, &[]);
+    let facts = facts(&[]);
+    keys_made_before(&rig);
     all_but_the_harness(&rig);
     let set = |url: &str| crate::common::support::write_model_host_config(&home, &from, url);
     let open_and_exit = |fix: Option<&str>| {
-        let mut on_pty = OnPty::spawn(prep_command(&rig, &["--repo", REPO], &facts), None);
+        let mut on_pty = OnPty::spawn(prep_command(&rig, &[], &facts), None);
         press_enter(&on_pty);
         on_pty.wait_shown("tui: ready");
         if let Some(url) = fix {
@@ -1774,7 +1502,7 @@ fn prep_keeps_the_home_not_ready_while_the_model_service_cannot_be_recorded() {
     let step = line(&shown, "harness_home");
     assert!(step.starts_with("[todo] harness_home:"), "{shown}");
     assert!(
-        step.contains(LOCAL) && step.contains("goalcup prep"),
+        step.contains(LOCAL) && step.contains("goalcup setup"),
         "{shown}"
     );
     assert!(!prep_file(&rig.cfg).home_ready, "{shown}");
@@ -1792,7 +1520,7 @@ fn prep_keeps_the_home_not_ready_while_the_model_service_cannot_be_recorded() {
     // Changed back to the local server later: a prep with no terminal says why and clears the
     // mark; one on a terminal says why and opens the harness again.
     set("http://localhost:11434/v1");
-    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let (_, out) = prep(&rig, &[], &facts);
     let step = line(&out, "harness_home");
     assert!(
         step.starts_with("[todo] harness_home:") && step.contains(LOCAL),
@@ -1808,7 +1536,7 @@ fn prep_keeps_the_home_not_ready_while_the_model_service_cannot_be_recorded() {
     assert!(prep_file(&rig.cfg).home_ready, "{shown}");
 
     // With a service it can read, the machine step probes it too, and says so.
-    let (_, out) = prep(&rig, &["--repo", REPO], &facts);
+    let (_, out) = prep(&rig, &[], &facts);
     assert!(
         line(&out, "machine").contains("the server and the model service are reachable"),
         "{out}"

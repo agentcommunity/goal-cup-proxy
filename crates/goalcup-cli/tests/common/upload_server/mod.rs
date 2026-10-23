@@ -471,6 +471,11 @@ impl UploadServer {
         self.with_run(run_id, |r| r.replaced_at.clone()).flatten()
     }
 
+    /// The `repo_url` the open call sent.
+    pub fn repo_url(&self, run_id: &str) -> Option<String> {
+        self.with_run(run_id, |r| r.repo_url.clone())
+    }
+
     /// `competition` or `practice`.
     pub fn mode(&self, run_id: &str) -> Option<String> {
         self.with_run(run_id, |r| r.mode.clone())

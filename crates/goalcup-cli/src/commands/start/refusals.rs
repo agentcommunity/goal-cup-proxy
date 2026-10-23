@@ -72,36 +72,12 @@ pub(super) fn holds_the_terminal(name: &str, then: &str) -> Result<(), CliError>
     )))
 }
 
-/// A test build's door to GitHub for [`refuse_used_repository`]: the base address of a fake
-/// GitHub API. A test build without it skips that check, because its clone comes from a local
-/// stand-in ([`TEST_CLONE_SOURCE`]), not from GitHub. A shipped build always asks GitHub.
+/// A test build's door to GitHub for a real run's repository (`run_repo::choose`): the base
+/// address of a fake GitHub API. A test build without it does not ask the API, because its clone
+/// comes from a local stand-in ([`super::TEST_CLONE_SOURCE`]), not from GitHub. A shipped build
+/// always asks GitHub.
 #[cfg(feature = "test-support")]
 pub const TEST_GITHUB_API: &str = "GOALCUP_TEST_GITHUB_API";
-
-/// A competition or test run needs a repository of its own: a run that clones what an earlier
-/// run pushed would be seeded by it. So the repository must still be empty, by the same request,
-/// rule and sentence `goalcup prep` uses ([`crate::account::github::check_empty`]), asked before
-/// the approval and before anything is created. A practice run never pushes and is not asked.
-/// GitHub's answer can lag a push, so the clone is asked as well once it is made
-/// ([`crate::account::github::clone_has_commits`]).
-pub(super) fn refuse_used_repository(
-    env: &BTreeMap<String, String>,
-    github: &crate::account::github::GithubSetup,
-) -> Result<(), CliError> {
-    #[cfg(feature = "test-support")]
-    let Some(api) = env.get(TEST_GITHUB_API).cloned() else {
-        return Ok(());
-    };
-    #[cfg(not(feature = "test-support"))]
-    let api = {
-        let _ = env;
-        crate::account::github::GITHUB_API.to_string()
-    };
-    crate::account::github::check_empty(&api, github).map_err(|error| match error {
-        CliError::Refused(why) => CliError::Refused(format!("{why} Nothing was created.")),
-        other => other,
-    })
-}
 
 /// What a start that fails after the approval says once it has removed what it made (said once,
 /// by `capture`, for every failure of that phase): the run directory, the clone, and the run's

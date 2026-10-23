@@ -241,11 +241,12 @@ fn start_refuses_each_run_folder_on_a_windows_host_filesystem_under_wsl2() {
     assert!(said.contains("work folder /odd/place/work"), "{said}");
 }
 
-/// `goalcup git-credential` is what a run's clone calls; it is not for the participant, so
-/// `--help` does not list it, and `start` has no `--repo` any more (the repository comes from
-/// `goalcup prep`) but has `--practice`.
+/// `goalcup git-credential` is what an older version's clone calls; it is not for the
+/// participant, so `--help` does not list it, and it still answers for those clones (D69).
+/// `start` takes `--practice` and a real run's `--repo`. `goalcup setup` is listed, and its old
+/// name `goalcup prep` is a hidden alias that still runs it.
 #[test]
-fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
+fn the_git_credential_command_is_hidden_and_prep_is_a_hidden_alias_of_setup() {
     let goalcup = env!("CARGO_BIN_EXE_goalcup");
     let help = std::process::Command::new(goalcup)
         .arg("--help")
@@ -254,9 +255,22 @@ fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
     let help = String::from_utf8_lossy(&help.stdout);
     assert!(!help.contains("git-credential"), "{help}");
     for shown in [
-        "start", "status", "entries", "seal", "doctor", "login", "upload",
+        "setup", "start", "status", "entries", "seal", "doctor", "login", "upload",
     ] {
         assert!(help.contains(shown), "{shown}: {help}");
+    }
+    assert!(!help.contains("prep"), "{help}");
+    let help_of = |command: &str| {
+        let out = std::process::Command::new(goalcup)
+            .args([command, "--help"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    for command in ["setup", "prep"] {
+        let said = help_of(command);
+        assert!(said.contains("--work-root"), "{command}: {said}");
     }
     let start = std::process::Command::new(goalcup)
         .args(["start", "--help"])
@@ -265,7 +279,7 @@ fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
     let start = String::from_utf8_lossy(&start.stdout);
     assert!(start.contains("--practice"), "{start}");
     assert!(start.contains("--test"), "{start}");
-    assert!(!start.contains("--repo"), "{start}");
+    assert!(start.contains("--repo"), "{start}");
     // `--test` and `--practice` are two different kinds of run: clap refuses both together.
     let both = std::process::Command::new(goalcup)
         .args(["start", "--harness", "any-harness", "--test", "--practice"])

@@ -70,9 +70,9 @@ pub fn cannot_record_model_service(why: &str, id: &str) -> String {
 pub fn repository_not_empty(repo: &str, kb: Option<u64>) -> String {
     let size = kb.map(|kb| format!(" ({kb} KB)")).unwrap_or_default();
     format!(
-        "Create a new repository with no README, license or .gitignore, then run: goalcup prep \
-         --repo <its address>. The repository {repo} is not empty{size}, and a new run needs a \
-         new empty one."
+        "Create a new repository with no README, license or .gitignore, then run goalcup start \
+         again and name it (or add --repo <owner>/<name>). The repository {repo} is not \
+         empty{size}, and a new run needs a new empty one."
     )
 }
 

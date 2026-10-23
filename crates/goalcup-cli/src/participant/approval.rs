@@ -88,7 +88,7 @@ pub fn login_done(handle: &str, server: Option<&str>) -> Vec<String> {
     if let Some(server) = server {
         lines.push(format!("Runs upload to {server}."));
     }
-    lines.push("Next: goalcup prep".to_string());
+    lines.push("Next: goalcup setup".to_string());
     lines
 }
 

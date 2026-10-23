@@ -77,8 +77,9 @@ pub use phases::CHAT_MODE_GOAL;
 #[cfg(feature = "test-support")]
 pub use refusals::{TEST_GITHUB_API, TEST_OFFLINE_UPSTREAMS};
 pub(crate) use refusals::{check_run_folders, continue_preflight, run_folder_for_continue};
+pub use server::PRACTICE_REPO_URL;
 #[cfg(feature = "test-support")]
-pub use server::TEST_CLONE_SOURCE;
+pub use server::{TEST_CLONE_SOURCE, TEST_GITHUB_LOGIN, TEST_PUSH_REMOTE};
 
 use crate::CliError;
 use crate::commands::say;
@@ -117,6 +118,10 @@ pub struct StartOptions {
     /// test run, which is a competition run in every way this build can see. Only meaningful
     /// for a run on a server.
     pub mode: crate::account::device::RunMode,
+    /// `--repo`: a real run's GitHub repository (a name, `<owner>/<name>` or its address), so
+    /// `goalcup start` does not ask for it ([`crate::commands::run_repo`]). A practice run has
+    /// none.
+    pub repo: Option<String>,
     /// Opens the approval address in the participant's browser, and says whether a program
     /// started: [`goalcup_platform::machine::open_url`] in every shipped build.
     pub open_url: OpenUrlFn,

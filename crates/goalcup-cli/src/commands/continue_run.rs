@@ -262,6 +262,7 @@ pub fn continue_with(
         run_folder: Some(folder),
         disk: opts.disk,
         mode: record.mode(),
+        repo: None,
         open_url: |_| false,
         upload_policy: opts.upload_policy,
         sleep_lock: opts.sleep_lock,
