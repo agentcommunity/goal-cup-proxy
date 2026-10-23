@@ -165,8 +165,9 @@ not an admin ("--dev is for Goal Cup admins only. Start without --dev."). The se
 database about the member only when `dev` is true. The Worker's `MIN_COMPETITION_VERSION` also
 refuses a competition device request and a competition open from a goalcup older than it, or of
 unknown version, with `403` "This goalcup (<version>) is too old for the cup. Update it when no run
-is open: <install line>"; a retried open of a run that exists is still answered. A minimum that is not
-`x.y.z` is `500 misconfigured` for those two calls only.
+is open: <install line>"; a retried open of a run that exists is still answered. A minimum with no
+`x.y.z` in it is malformed (parsing is lenient: the first `x.y.z` counts) and is `500 misconfigured`
+for those two calls only.
 
 `machine` is optional: facts about the machine, a flat JSON object whose values are strings,
 numbers, booleans or `null`, at most 4 KiB serialized (else `400`; `null` means absent). The server

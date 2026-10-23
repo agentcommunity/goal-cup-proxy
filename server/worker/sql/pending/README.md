@@ -29,8 +29,9 @@ old-signature wrappers keep the live production Worker working.
 `public.goal_cup_upload_member_is_admin(p_member_id text) RETURNS boolean`. The Worker asks it before
 it opens a `--dev` run: true when the member's confirmed `auth.users` email matches a row of the
 website's `public.admins` (case and padding ignored); anything else, a non-uuid included, is false.
-Additive only (a function and its grants); it is applied the same way, after the file above, in the
-same step, and it needs no change to the Worker that is live.
+Additive only (a function and its grants). The earlier pending file above was already applied on
+22 Oct 2026, so this one is applied on its own, after it (same `psql` command, steps below), and it
+needs no change to the Worker that is live.
 
 Staging and production share ONE database, so applying the file applies it to both at once: there
 is no "staging first" for SQL. The order:
