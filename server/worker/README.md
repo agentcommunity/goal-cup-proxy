@@ -77,6 +77,8 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `TEST_EVENT_ID` | none | Event that organizer test runs (mode `test`) belong to. Unset: the server opens no test run (`403`). |
 | `RUN_HOURS` | `168` | A competition run's `deadline_at` = `official_start` + this many hours. |
 | `PRACTICE_RUN_MINUTES` | `10` | A practice run's length. |
+| `MIN_COMPETITION_VERSION` | empty (no minimum) | The oldest goalcup (`x.y.z`; the first three numbers of what it sends) that may sign in for, or start, a competition run. Older, or a version with no `x.y.z` while a minimum is set, is `403` with the update line. A value with no `x.y.z` in it is malformed (parsing is lenient: the first `x.y.z` counts) and makes those two calls `500 misconfigured`; heartbeats and everything else are untouched. |
+| `LOCAL_ADMIN_MEMBERS` | none | `DB_BACKEND=local` only: comma-separated member ids the local database calls admins, for `--dev` runs. In production the database decides (`goal_cup_upload_member_is_admin`). |
 | `RUN_MAX_COMPRESSED_BYTES` | `68719476736` (64 GiB) | The most compressed chunk bytes one run may hold in R2, over all its entries. A chunk that would pass it is `413 quota_exceeded`, nothing stored; goalcup retries, so raising it (a deploy) resumes the upload. Log lines `quota-half`, `quota-full`, `quota-exceeded <run_id>`. |
 | `DB_BACKEND` | `supabase` | `supabase` (production) or `local` (`wrangler dev` and tests only). Never set `local` in the deployed `wrangler.toml`. |
 | `APPROVAL_URL` | in `wrangler.toml` | The website page where a member approves a device request, without a query string. `verification_uri_complete` adds `?code=<user code>`. |

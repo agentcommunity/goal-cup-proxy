@@ -35,10 +35,14 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    (next step). Prep opens the harness once in its own
    isolated home: sign in there, and set it so it never stops to ask you for approval
    ([set up your harness for a 168-hour run](docs/HARNESS-SETUP.md)). Your repository must be
-   new, empty and public, with a fine-grained token for it.
+   new, empty and public, with a fine-grained token for it. For Hermes, install exactly
+   `uv tool install hermes-agent==0.19.0`, not Hermes's own installer, which installs the newest
+   release (it writes no session file). See [Hermes setup](docs/HARNESS-SETUP.md#hermes).
 4. **Practice**: `goalcup start --harness <id> --practice`. It lasts about ten minutes, never
    pushes and never counts. Do as many as you like.
-5. **Start** inside the start window: `goalcup start --harness <id>`. Approve this run in the
+5. **Start** inside the start window: `goalcup start --harness <id>`. A dry run is open from
+   23 October, so you can start a rehearsal now
+   ([the dry run](docs/PARTICIPANT-GUIDE.md#the-dry-run-optional)). Approve this run in the
    browser. The harness opens in a fresh clone of your repository. Its own setup screens (sign-in,
    folder trust, model choice) come before your prompt, and answering them is fine.
 6. **Type your one prompt** and press Enter. After it, the only message you may ever type is
@@ -47,7 +51,8 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
 **During the run.**
 
 - The server is the clock. The run ends 168 hours after the server's official start.
-- Check on it from a second terminal with `goalcup status`. Its last line, `Next:`, says what to do.
+- Check on it from a second terminal with `goalcup status`. Its `Next:` line, above the `Details:`
+  block, says what to do.
 - Your agent may run `goalcup time-left`, or call the `time_left` tool of `goalcup mcp` if you
   added it to your harness, to ask how much time is left. Goal Cup Proxy never sends
   anything to the agent: no reminders, no "keep going", no restarts.

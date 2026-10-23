@@ -270,3 +270,37 @@ describe("the test approval is switched off or refused where it must be", () => 
     }
   });
 });
+
+describe("the minimum competition version (D70)", () => {
+  const TOO_OLD = (v: string) =>
+    `This goalcup (${v}) is too old for the cup. Update it when no run is open: curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh`;
+
+  test("a competition device request below the minimum is refused with TOO_OLD", async () => {
+    const worker = await startWorker({ EVENT_ID: "practice", MIN_COMPETITION_VERSION: "0.7.0" });
+    try {
+      const api = new Client(worker.url);
+      const old = await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: "0.6.1" }) });
+      assertError(old, 403, "forbidden");
+      assert.equal(old.body.message, TOO_OLD("0.6.1"));
+      assert.equal((await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: undefined, tracer_version: "0.6.9-dev" }) })).body.message, TOO_OLD("0.6.9-dev"));
+      assertError(await api.call("POST", "/v1/device", { json: deviceBody({ proxy_version: "latest" }) }), 403, "forbidden"); // unknown while a minimum is set
+      // At the minimum, with a suffix, or newer: fine. Practice and test are not competition starts.
+      for (const over of [{ proxy_version: "0.7.0" }, { proxy_version: "0.7.0-dev" }, { proxy_version: "1.2.0" }, { proxy_version: "0.1.0", mode: "practice" }, { proxy_version: "0.1.0", mode: "test" }]) {
+        assert.equal((await api.call("POST", "/v1/device", { json: deviceBody(over) })).status, 200, JSON.stringify(over));
+      }
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  test("a malformed minimum is 500 misconfigured for a competition request only", async () => {
+    const worker = await startWorker({ EVENT_ID: "practice", MIN_COMPETITION_VERSION: "0.7" });
+    try {
+      const api = new Client(worker.url);
+      assertError(await api.call("POST", "/v1/device", { json: deviceBody() }), 500, "misconfigured");
+      assert.equal((await api.call("POST", "/v1/device", { json: deviceBody({ mode: "practice" }) })).status, 200);
+    } finally {
+      await worker.stop();
+    }
+  });
+});

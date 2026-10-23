@@ -70,7 +70,9 @@ Say these plainly, once, before the first human step:
      for anything inside your session. For the harness choice that is
      `goalcup prep --json --harness <id>`, after asking the person which harness they want when
      `say` lists more than one; it saves the choice. Install a missing harness or `git` only with
-     the person's agreement. When `say` names something only the person can do (plug the machine
+     the person's agreement. Install Hermes only as `uv tool install hermes-agent==0.19.0`, never
+     with Hermes's own installer, which installs the newest release (it writes no session file;
+     see the Hermes section of [HARNESS-SETUP](../../docs/HARNESS-SETUP.md#hermes)). When `say` names something only the person can do (plug the machine
      in, free disk space, allow `goalcup` in a firewall, set Windows power settings), show them
      `say` and wait.
    - **`"human": true`**: stop. Show the person the `say` text exactly as printed, word for word,
