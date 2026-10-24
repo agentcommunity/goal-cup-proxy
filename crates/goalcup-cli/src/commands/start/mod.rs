@@ -400,6 +400,24 @@ fn capture(
             source,
         })?,
     };
+    // A real run on a server works in the folder `goalcup start` is run from: the participant's
+    // project folder, which holds their `.env.local`. This run's own directory, which holds the
+    // harness's `HOME`, goes in the configuration directory instead, so nothing of goalcup's is
+    // made in the project. A practice run keeps its folder beside, and its workspace in the work
+    // folder.
+    let project = beside.clone();
+    let beside = if !opts.mode.is_practice()
+        && crate::server::read_server_config(cfg).ok().flatten().is_some()
+    {
+        let folders = cfg.join("run-folders");
+        std::fs::create_dir_all(&folders).map_err(|source| CliError::Io {
+            path: folders.display().to_string(),
+            source,
+        })?;
+        folders
+    } else {
+        beside
+    };
     // Under WSL: WSL1 cannot run this, and WSL2 cannot keep a run on a Windows drive. Judged
     // before anything is created or removed, over every folder the run writes to; a folder on a
     // filesystem a run cannot keep its records on is only warned about.
@@ -442,7 +460,7 @@ fn capture(
     // With a server: the prep checks, before any other work and before the participant is asked
     // for anything. A continued run was prepared when it started.
     let serving = match &continuing {
-        None => uploading(cfg, env, &beside, opts.mode)?,
+        None => uploading(cfg, env, &beside, &project, opts.mode)?,
         Some(_) => None,
     };
     let uncleaned = std::cell::Cell::new(false);

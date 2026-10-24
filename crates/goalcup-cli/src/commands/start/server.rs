@@ -22,6 +22,7 @@ pub(super) fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,
     beside: &Path,
+    project: &Path,
     mode: crate::account::device::RunMode,
 ) -> Result<Option<Serving>, CliError> {
     use crate::account::device::RunMode;
@@ -56,6 +57,7 @@ pub(super) fn uploading(
         cfg: std::fs::canonicalize(cfg).unwrap_or_else(|_| cfg.to_path_buf()),
         env: env.clone(),
         work_root,
+        project: project.to_path_buf(),
         clone_source,
     }))
 }
@@ -163,6 +165,8 @@ pub(super) struct Serving {
     /// The participant's environment, for finding their GitHub login.
     env: BTreeMap<String, String>,
     work_root: PathBuf,
+    /// The folder `goalcup start` was run from: a real run's workspace.
+    project: PathBuf,
     /// A test's local repository to clone instead of GitHub; always `None` in a shipped build.
     clone_source: Option<String>,
 }
@@ -234,6 +238,7 @@ impl Serving {
                 credential,
                 repo,
                 work_root: self.work_root,
+                project: self.project,
                 clone_source: self.clone_source,
             })),
         })
@@ -289,7 +294,17 @@ pub(super) struct NewRun {
     /// A real run's repository; `None` for a practice run, which has none.
     repo: Option<crate::commands::run_repo::RunRepo>,
     pub(super) work_root: PathBuf,
+    /// A real run's workspace: the participant's project folder, used as it is (no clone).
+    pub(super) project: PathBuf,
     clone_source: Option<String>,
+}
+
+impl NewRun {
+    /// Whether the run works in the participant's project folder: a real run. A practice run
+    /// has a new local repository in the work folder instead.
+    pub(super) fn works_in_project(&self) -> bool {
+        self.repo.is_some()
+    }
 }
 
 /// The work folder of [`Uploading::clone_workspace`] for a new run, made in `new.work_root` with
@@ -352,6 +367,11 @@ impl Uploading {
         let UploadHow::Fresh(new) = &self.how else {
             return Ok(());
         };
+        // A real run works in the participant's own folder: goalcup makes no clone and runs no
+        // git there; the agent sets up git and pushes.
+        if new.works_in_project() {
+            return Ok(());
+        }
         clone_new_run(new, dest)?;
         if let Some(repo) = &new.repo
             && crate::account::github::clone_has_commits(dest)
