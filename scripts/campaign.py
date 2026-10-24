@@ -354,6 +354,9 @@ def validate(cfg, cells, parallel):
         errors.append("the approval key file must be an absolute path without : or ,")
     elif not (os.path.isfile(key) and os.access(key, os.R_OK)):
         errors.append("the approval key file is not a regular file this user can read")
+    elif Path(os.path.realpath(key)).is_relative_to(os.path.realpath(REPO)):
+        errors.append(f"the approval key file is inside the checkout ({REPO}), which a Docker cell mounts "
+                      "for its agent and where a key is easily committed: keep it outside")
     for name in ("sample_every_s",):
         v = cfg.get(name)
         if not isinstance(v, int) or isinstance(v, bool) or v < 1:
@@ -562,7 +565,7 @@ def sampler_command(cfg, cell, cell_dir):
     """(argv, env, host path of the CSV)."""
     every = str(cfg["sample_every_s"])
     if cell["where"] == "docker":
-        argv = ["docker", "exec", "-u", "dev", container_name(cell), "python3",
+        argv = ["docker", "exec", "-u", "dev", container_name(cell), "python3", "-I",
                 "/src/scripts/research-sample.py", "--config", "/vol/cfg",
                 "--out", "/logs/samples.csv", "--every", every]
         return argv, child_env({}), str(Path(cell_dir) / "logs" / "samples.csv")

@@ -142,7 +142,7 @@
 # one holding secrets (a Worker .dev.vars, for example).
 #
 # Needs: Docker (no privileged container), `cargo fetch --locked` run on this machine first (the
-# container builds --offline from its registry), and network.
+# container builds --offline from a copy of its registry), and network.
 # Last line: `linux-matrix: <matrix row>`, `linux-matrix: FAIL <step>`, `linux-matrix: built ...`,
 # or for a login, `linux-matrix: signed in` or `linux-matrix: OWNER STEP ...`.
 set -u
@@ -198,13 +198,13 @@ codex_effort() {
 # home-config; minimal only if the installed codex lists it for the Luna model).
 inner_home_config() { # connector
     effort=$(codex_effort) || fail "LINUX_MATRIX_CODEX_EFFORT must be low or minimal"
-    python3 "$KIT" home-config "$CFG" "$1" "$effort" || fail "home config of $1 (left as it was)"
+    python3 -I "$KIT" home-config "$CFG" "$1" "$effort" || fail "home config of $1 (left as it was)"
 }
 
 # The names (never the contents) of the files in a connector's tracker home and its run home,
 # relative to them: where a harness keeps its login, on record.
 inner_home_files() { # connector
-    python3 - "$CFG/capture-homes/$1" "$CFG/capture-homes/$1.run-home" <<'PY'
+    python3 -I - "$CFG/capture-homes/$1" "$CFG/capture-homes/$1.run-home" <<'PY'
 import os, sys
 
 for root in sys.argv[1:]:
@@ -254,7 +254,7 @@ inner_login() {
 # What setup recorded (prep.json): `yes` once the owner has signed in to this connector's
 # tracker home.
 inner_home_ready() { # connector
-    python3 - "$CFG/prep.json" "$1" <<'PY'
+    python3 -I - "$CFG/prep.json" "$1" <<'PY'
 import json, sys
 
 try:
@@ -269,7 +269,7 @@ PY
 # repository at its start, and matrix.sh makes its git login; nothing about GitHub is kept here.
 inner_settle() {
     mkdir -p "$VOL/work" || fail "work folder"
-    python3 "$KIT" settle "$CFG" "$VOL/work" || fail "settle prep.json"
+    python3 -I "$KIT" settle "$CFG" "$VOL/work" || fail "settle prep.json"
 }
 
 # The rule the run is held to, in words.
@@ -285,7 +285,7 @@ rule_of() { # connector
 # confirmed.
 inner_model_check() { # connector marker
     effort=$(codex_effort) || fail "LINUX_MATRIX_CODEX_EFFORT must be low or minimal"
-    python3 "$KIT" model-check "$CFG" "$1" "$2" "$effort"
+    python3 -I "$KIT" model-check "$CFG" "$1" "$2" "$effort"
 }
 
 inner_run() { # connector [matrix.sh options]
@@ -488,10 +488,21 @@ mounted_file() { # path what
     case $1 in *:* | *,*) fail "the path of $2 may not hold : or ," ;; esac
     [ -f "$1" ] && [ -r "$1" ] || fail "$1 is not a regular file this user can read"
 }
+# This checkout is mounted into the container (at /src), where the agent reads everything: a secret
+# file must not be in it, whatever path or symlink names it.
+outside_checkout() { # path what
+    oc_real=$(python3 -I -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1") ||
+        fail "cannot resolve the path of $2"
+    oc_here=$(pwd -P)
+    case $oc_real in
+    "$oc_here" | "$oc_here"/*) fail "$2 ($1) is inside the checkout, which is mounted into the container: keep it outside $oc_here" ;;
+    esac
+}
 set --
 if [ "$action" = login ] || [ "$action" = run ]; then
     [ -n "$keyfile" ] || fail "GOALCUP_TEST_APPROVAL_KEY_FILE is needed (the login and the run are approved with it)"
-    mounted_file "$keyfile" "a secret file"
+    mounted_file "$keyfile" "the approval key file"
+    outside_checkout "$keyfile" "the approval key file"
     command -v curl >/dev/null 2>&1 || fail "curl is needed on this machine (it posts the approval)"
     set --
     promptfile=${MATRIX_PROMPT_FILE:-}
@@ -525,8 +536,13 @@ if [ "$action" = login ] || [ "$action" = run ]; then
     done
 fi
 
+# The host's cargo registry is only ever COPIED (docker cp) into a container that builds, never
+# mounted: cargo does not re-check extracted sources, so an agent edit to a crate's build.rs in a
+# mounted registry would run on this machine at its next build. A prebuilt run builds nothing.
 registry=$cargo_home/registry
-[ -d "$registry" ] || fail "registry (run cargo fetch --locked first)"
+if [ "$action" = build ] || [ "$prebuilt" = 0 ]; then
+    [ -d "$registry" ] || fail "registry (run cargo fetch --locked first)"
+fi
 logdir=${LINUX_MATRIX_LOG_DIR:-${TMPDIR:-/tmp}/goalcup-linux-matrix}
 mkdir -p "$logdir" || fail "log directory $logdir"
 logdir=$(cd "$logdir" && pwd -P)
@@ -609,6 +625,13 @@ step() {
     wait $! || fail "$s"
 }
 
+# The registry into a container's own filesystem (so what the container does to it is gone with it).
+copy_registry() { # container
+    docker exec -u 0 "$1" mkdir -p /usr/local/cargo/registry || fail "registry directory"
+    docker cp "$registry/." "$1:/usr/local/cargo/registry" || fail "registry copy"
+    docker exec -u 0 "$1" chown -R dev /usr/local/cargo/registry || fail "registry owner"
+}
+
 cpus=$(docker info --format '{{.NCPU}}' 2>/dev/null)
 case $cpus in '' | *[!0-9]* | 0) cpus=6 ;; esac
 [ "$cpus" -le 6 ] || cpus=6
@@ -621,10 +644,11 @@ if [ "$action" = build ]; then
         build_image
     done
     docker run -d --name "$name" --label "$label" --init --cpus="$cpus" \
-        -v "$PWD":/src:ro -v "$registry":/usr/local/cargo/registry -v "$target":/target \
+        -v "$PWD":/src:ro -v "$target":/target \
         "$img" sleep infinity >/dev/null || fail "container"
     created=1
     docker exec -u 0 "$name" chown dev /target || fail "target volume"
+    copy_registry "$name"
     step "build" -w /src "$name" cargo build --offline --locked --workspace
     echo "linux-matrix: built (images for $built; binaries in volume $target)"
     exit 0
@@ -653,7 +677,7 @@ old=$(docker ps -aq --filter "label=$label")
 # --init: something must reap orphans, as on a real host. No --privileged: nothing is mounted
 # inside; the volume is the Docker host's own ext4.
 docker run -d --name "$name" --label "$label" --init --cpus="$cpus" \
-    -v "$PWD":/src:ro -v "$registry":/usr/local/cargo/registry -v "$target_mount" \
+    -v "$PWD":/src:ro -v "$target_mount" \
     -v "$volume":$VOL -v "$logdir":/logs "$@" \
     -e HOME=$VOL/home -e TMPDIR=$VOL/tmp -e GOALCUP_CONFIG_DIR=$CFG \
     -e GOALCUP_CONNECTORS_DIR=/src/connectors -e LINUX_MATRIX_SERVER="$server" \
@@ -673,6 +697,7 @@ if [ "$prebuilt" = 1 ]; then
         fail "no prebuilt binaries in volume $target: run scripts/linux-matrix.sh build first"
     echo "linux-matrix: prebuilt binaries from volume $target (read-only)"
 else
+    copy_registry "$name"
     step "build" -w /src "$name" cargo build --offline --locked --workspace
 fi
 # Installed as a participant installs them (packaging/install.sh: ~/.local/bin), so the harness and

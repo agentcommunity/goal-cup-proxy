@@ -313,6 +313,18 @@ class ConfigValidation(Base):
                           approval_key_file=str(self.root / "missing"))
         self.assertTrue(any("approval key file" in e for e in self.errors(cfg)))
 
+    def test_a_key_file_inside_the_checkout_is_refused(self):
+        inside = campaign.REPO / "scratch-key-for-test"
+        inside.write_text("k\n")
+        self.addCleanup(lambda: inside.unlink(missing_ok=True))
+        link = self.root / "link-to-key"
+        link.symlink_to(inside)
+        for path in (inside, link):
+            with self.subTest(path=str(path)):
+                cfg = self.config([self.docker_cell("a", "m1")], approval_key_file=str(path))
+                errs = self.errors(cfg)
+                self.assertTrue(any("inside the checkout" in e for e in errs), errs)
+
     def test_key_in_environment_refused(self):
         os.environ["GOALCUP_TEST_APPROVAL_KEY"] = "x"
         try:
@@ -826,9 +838,9 @@ class CampaignRun(Base):
         camp, _ = self.make([self.docker_cell("lin", "m1")], runner)
         camp.run()
         exec_argv = next(c for c in runner.calls if c[:2] == ["docker", "exec"])
-        self.assertEqual(exec_argv[:8], ["docker", "exec", "-u", "dev",
-                                         "goalcup-linux-matrix-codex-cli-lin", "python3",
-                                         "/src/scripts/research-sample.py", "--config"])
+        self.assertEqual(exec_argv[:7], ["docker", "exec", "-u", "dev",
+                                         "goalcup-linux-matrix-codex-cli-lin", "python3", "-I"])
+        self.assertEqual(exec_argv[7:9], ["/src/scripts/research-sample.py", "--config"])
         self.assertIn("/logs/samples.csv", exec_argv)
         inspect_i = next(i for i, c in enumerate(runner.calls) if "{{.State.Running}}" in c)
         self.assertLess(inspect_i, runner.calls.index(exec_argv))

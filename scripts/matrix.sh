@@ -333,6 +333,21 @@ if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
   echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE must name a regular file this user can read" >&2
   exit 2
 fi
+# Not inside this checkout (a Docker cell mounts the checkout for its agent, and a key in a repository
+# is easily committed), by whatever path or symlink.
+if [ -n "$KEYFILE" ]; then
+  key_real=$(python3 -I -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$KEYFILE" 2>/dev/null) || {
+    echo "matrix: cannot resolve the path of GOALCUP_TEST_APPROVAL_KEY_FILE (python is needed)" >&2
+    exit 2
+  }
+  key_here=$(cd "$REPO" && pwd -P)
+  case $key_real in
+    "$key_here"/*)
+      echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE ($KEYFILE) is inside the checkout $key_here: keep it outside" >&2
+      exit 2
+      ;;
+  esac
+fi
 # The read-only credentials of the long-run fetch leave the environment too: goalcup, the daemon
 # and the harness never inherit them; only fetch-run.sh gets them (fetch_copy).
 FETCH_DB=${DATABASE_URL:-}
@@ -676,7 +691,13 @@ cleanup() {
   }; fi
   if [ -n "$REPO_MADE" ]; then
     log "test repository made by the kit: $REPO_MADE"
-    printf 'matrix: test repository made by the kit (delete it when done: first `gh auth refresh -s delete_repo`, which the default gh login lacks, then `gh repo delete %s --yes`, then `gh auth refresh -r delete_repo` to drop the scope again: this machine'"'"'s agents push with that login): %s\n' "$REPO_MADE" "$REPO_MADE" >&3
+    # Whose login the agent pushes with: this machine's on a host, the cell's own in a Docker cell.
+    if [ -n "$CODES_FILE" ]; then
+      who="the login stored in this cell is the one its agent pushes with"
+    else
+      who="this machine's agents push with that login"
+    fi
+    printf 'matrix: test repository made by the kit (delete it when done: first `gh auth refresh -s delete_repo`, which the default gh login lacks, then `gh repo delete %s --yes`, then `gh auth refresh -r delete_repo` to drop the scope again: %s): %s\n' "$REPO_MADE" "$who" "$REPO_MADE" >&3
   fi
   print_row
 }
@@ -888,7 +909,7 @@ resolve_entry() {
   [ "$n" = 1 ] ||
     fail "cannot tell this run's entry: $n run records under $CFG/runs are as new as this start (want exactly one); nothing was sealed" || return 1
   rj=$(cat "$ROOT/fresh.txt")
-  facts=$(python3 - "$rj" "$CONNECTOR" <<'PY'
+  facts=$(python3 -I - "$rj" "$CONNECTOR" <<'PY'
 import json, re, sys
 try:
     r = json.load(open(sys.argv[1]))
@@ -921,7 +942,7 @@ PY
   log_file "goalcup entries --json" "$ROOT/entries.out"
   log_file "goalcup entries --json (stderr)" "$ROOT/entries.err"
   [ "$erc" = 0 ] || fail "goalcup entries --json exited $erc; nothing was sealed" || return 1
-  listed=$(python3 - "$ROOT/entries.out" "$entry" "$CONNECTOR" <<'PY'
+  listed=$(python3 -I - "$ROOT/entries.out" "$entry" "$CONNECTOR" <<'PY'
 import json, sys
 try:
     items = json.load(open(sys.argv[1]))
@@ -1025,7 +1046,7 @@ asked_before_approval() {
 # for any other.
 run_refusals() {
   HV=refusals
-  ( (python3 - "$ROOT/github.port" >"$ROOT/github.log" 2>&1 <<'PY'
+  ( (python3 -I - "$ROOT/github.port" >"$ROOT/github.log" 2>&1 <<'PY'
 import http.server, json, os, sys
 
 REPOS = {"/repos/goalcup-kit/kit-not-empty": {"private": False, "size": 12},
@@ -1209,7 +1230,7 @@ run_matrix() {
   # The default writes one file, so that check 3 sees the workspace change.
   PROMPT=${MATRIX_PROMPT:-"Goal Cup matrix check: create a file named matrix-ok.txt in this folder holding the single word ok, then reply with the single word ok."}
   if [ -n "$PROMPT_FILE" ]; then
-    PROMPT=$(python3 - "$PROMPT_FILE" 2>"$ROOT/prompt.err" <<'PY'
+    PROMPT=$(python3 -I - "$PROMPT_FILE" 2>"$ROOT/prompt.err" <<'PY'
 import sys
 try:
     text = open(sys.argv[1], "rb").read().decode("utf-8")
@@ -1356,8 +1377,8 @@ PY
     fail "no run record under $CFG/runs; goalcup's last words: $(last_line "$ROOT/start.txt")" || return 1
   RUN_DIR=$(dirname "$RUN_JSON")
   RUN_ID=$(py_get "$RUN_JSON" run_id)
-  TRACE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["trace_dir"])' "$RUN_JSON")
-  ENTRY_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["entry_id"])' "$RUN_JSON")
+  TRACE=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["trace_dir"])' "$RUN_JSON")
+  ENTRY_ID=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["entry_id"])' "$RUN_JSON")
   log "run $RUN_ID, entry $ENTRY_ID, trace $TRACE"
   # Read before the end-of-run checks, so a FAIL row still names the harness version. A long
   # run's first records are pruned on this machine: its version is read from the server's copy.
@@ -1444,7 +1465,7 @@ PY
 
 # The harness version the chain at $1 names first ("unreported" when none does), into HV.
 read_hv() { # chain.jsonl
-  HV=$(python3 - "$1" <<'PY'
+  HV=$(python3 -I - "$1" <<'PY'
 import json, sys
 def find(o):
     if isinstance(o, dict):
@@ -1485,7 +1506,7 @@ agent_worked() { # trace
   log_file "goalcup-verify --research-json (stderr)" "$ROOT/research.err"
   [ -f "$ROOT/research.ndjson" ] ||
     fail "goalcup-verify --research-json wrote no report: $(last_line "$ROOT/research.err")" || return 1
-  worked=$(python3 - "$ROOT/research.ndjson" <<'PY'
+  worked=$(python3 -I - "$ROOT/research.ndjson" <<'PY'
 import json, sys
 
 OUT = ("output_tokens", "completion_tokens", "outputtokens", "completiontokens")
@@ -1534,7 +1555,7 @@ PY
 # started (committer time at or after the record's `started_at_unix`; a pushed commit counts too).
 # A model call alone (a title, an answer that stalled at a permission prompt) is not work.
 workspace_changed() { # run.json
-  worked=$(python3 - "$1" 2>"$ROOT/workspace.err" <<'PY'
+  worked=$(python3 -I - "$1" 2>"$ROOT/workspace.err" <<'PY'
 import json, os, subprocess, sys
 
 rec = json.load(open(sys.argv[1]))
@@ -1628,7 +1649,7 @@ fetch_copy() { # entry
 # Every chain part left on this machine is byte for byte the server copy's bytes at its offset,
 # and the last one ends where the copy ends.
 same_tail() { # trace copy_chain
-  python3 - "$1" "$2" >"$ROOT/tail.out" 2>&1 <<'PY'
+  python3 -I - "$1" "$2" >"$ROOT/tail.out" 2>&1 <<'PY'
 import os, re, sys
 trace, copy = sys.argv[1], sys.argv[2]
 parts = []
@@ -1702,7 +1723,7 @@ compare_copy() { # run_id entry_id trace credential_file strict
   tries=0
   while :; do
     # The credential goes to curl as a header on its stdin; it is in no argument, log or file.
-    status=$(python3 -c 'import json,sys; print("Authorization: Bearer " + json.load(open(sys.argv[1]))["credential"])' "$4" |
+    status=$(python3 -I -c 'import json,sys; print("Authorization: Bearer " + json.load(open(sys.argv[1]))["credential"])' "$4" |
       http GET "/v1/runs/$1?entry_id=$2" "$ROOT/server.json" -H @-)
     log "GET /v1/runs/$1?entry_id=$2: HTTP $status $(cat "$ROOT/server.json" 2>/dev/null)"
     [ "$status" = 200 ] || fail "GET /v1/runs/$1 with the run's credential answered HTTP $status" || return 1
@@ -1712,7 +1733,7 @@ compare_copy() { # run_id entry_id trace credential_file strict
     [ "$tries" -lt "${COPY_TRIES:-6}" ] || break
     sleep "${COPY_SLEEP:-5}"
   done
-  python3 - "$ROOT/server.json" "$ROOT/verify.out" "$3/chain.jsonl" "$5" >"$ROOT/compare.out" 2>&1 <<'PY'
+  python3 -I - "$ROOT/server.json" "$ROOT/verify.out" "$3/chain.jsonl" "$5" >"$ROOT/compare.out" 2>&1 <<'PY'
 import json, os, sys
 server = json.load(open(sys.argv[1]))
 verify = json.load(open(sys.argv[2]))
@@ -1777,7 +1798,7 @@ run_check() {
   n=0
   # One "entry_id=trace_dir" per line, read a line at a time so a path may hold spaces. (fd 4, so
   # nothing run inside the loop can read the list from standard input.)
-  python3 -c 'import json,sys
+  python3 -I -c 'import json,sys
 for e in json.load(open(sys.argv[1]))["entries"]:
     print(e["entry_id"] + "=" + e["trace_dir"])' "$RUN_JSON" >"$ROOT/entries.txt"
   while IFS= read -r pair <&4; do
@@ -1825,7 +1846,7 @@ last_line() { # file
 
 # The value of a top-level key of a JSON file ("" when absent).
 py_get() { # file key
-  python3 -c 'import json,sys
+  python3 -I -c 'import json,sys
 try:
     v = json.load(open(sys.argv[1])).get(sys.argv[2], "")
 except Exception:

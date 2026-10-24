@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import stat
@@ -232,6 +233,39 @@ class LinuxMatrixTests(unittest.TestCase):
         self.assertIn("approval (HTTP 403)", run.stdout)
         self.assertEqual(len(self.posts()), 1)
 
+    def test_the_host_cargo_registry_is_never_mounted_into_a_container(self) -> None:
+        # An agent that edits a crate's build.rs in a read-write mounted registry runs it on the host
+        # at the next cargo build: the registry is copied into a build container instead.
+        registry = str(self.base / "cargo/registry")
+        for prebuilt in ("0", "1"):
+            for action in ("run", "login", "build"):
+                with self.subTest(prebuilt=prebuilt, action=action):
+                    self.log.write_text("")
+                    self.run_script(action, "codex-cli", LINUX_MATRIX_PREBUILT=prebuilt)
+                    for line in self.docker_lines("run"):
+                        self.assertNotIn(registry, line)
+                        self.assertNotIn(str(self.base / "cargo"), line)
+                        self.assertNotIn("/usr/local/cargo/registry", line)
+                    copies = self.docker_lines("cp")
+                    if prebuilt == "1" and action != "build":
+                        self.assertEqual(copies, [])  # nothing is built, nothing is copied
+                    else:
+                        [copy] = copies
+                        self.assertTrue(copy.startswith(f"cp {registry}/. "), copy)
+                        self.assertIn(":/usr/local/cargo/registry", copy)
+                        # Before the build that needs it.
+                        lines = self.log.read_text().splitlines()
+                        cargo = [i for i, x in enumerate(lines) if "cargo build" in x]
+                        self.assertLess(lines.index(copy), cargo[0])
+
+    def test_a_prebuilt_run_does_not_need_the_registry_at_all(self) -> None:
+        shutil.rmtree(self.base / "cargo/registry")
+        run = self.run_script("run", "codex-cli", LINUX_MATRIX_PREBUILT="1")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        bad = self.run_script("run", "codex-cli")
+        self.assertEqual(bad.returncode, 1)
+        self.assertIn("registry", bad.stdout)
+
     def test_the_build_installs_the_connectors_codex_version_from_npm(self) -> None:
         run = self.run_script("run", "codex-cli")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
@@ -270,6 +304,24 @@ class LinuxMatrixTests(unittest.TestCase):
                     self.assertTrue(all(i < install for i in built))
                     first_use = [i for i, x in enumerate(execs) if " inner-" in x]
                     self.assertTrue(first_use and install < min(first_use))
+
+    def test_a_key_file_inside_the_checkout_is_refused_before_docker(self) -> None:
+        # $PWD is mounted at /src: a key file in it would be readable by the agent.
+        inside = SCRIPT.parent.parent / "scratch-key-for-test"
+        inside.write_text(SENTINEL + "\n")
+        self.addCleanup(lambda: inside.unlink(missing_ok=True))
+        link = self.base / "link-to-key"
+        link.symlink_to(inside)
+        for path in (inside, link, SCRIPT.parent / ".." / "scratch-key-for-test"):
+            for action in ("run", "login"):
+                with self.subTest(path=str(path), action=action):
+                    self.log.write_text("")
+                    run = self.run_script(action, "codex-cli", GOALCUP_TEST_APPROVAL_KEY_FILE=str(path))
+                    self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+                    self.assertIn("inside the checkout", run.stdout)
+                    self.assertEqual(run.stdout.strip().count("\n"), 0, "one clear line")
+                    self.assertEqual(self.log.read_text(), "")
+                    self.assertNotIn(SENTINEL, run.stdout + run.stderr)
 
     def test_a_key_in_the_environment_is_refused_before_docker_runs(self) -> None:
         run = self.run_script("run", "codex-cli", GOALCUP_TEST_APPROVAL_KEY=SENTINEL)
@@ -757,6 +809,35 @@ class ContainerHalfTests(unittest.TestCase):
         stub.write_text("#!/bin/sh\n[ \"$*\" = \"debug models --bundled\" ] || exit 2\n"
                         f"cat <<'EOF'\n{json.dumps(doc)}\nEOF\n")
         stub.chmod(0o755)
+
+    def test_the_container_half_runs_python_isolated(self) -> None:
+        # A usercustomize.py, sitecustomize.py or .pth planted on a reused cell volume by an
+        # earlier run's agent must not run in the container half: it could forge a device code.
+        planted = self.base / "planted"
+        planted.mkdir()
+        marker = self.base / "marker"
+        (planted / "sitecustomize.py").write_text(f"open({str(marker)!r}, 'w').write('ran')\n")
+        (planted / "usercustomize.py").write_text(f"open({str(marker)!r}, 'a').write('user')\n")
+        for args in (("inner-home-config", "codex-cli"), ("inner-home-ready", "codex-cli"),
+                     ("inner-home-files", "codex-cli"), ("inner-settle",)):
+            with self.subTest(args=args):
+                marker.unlink(missing_ok=True)
+                run = self.inner(*args, PYTHONPATH=str(planted), PYTHONUSERBASE=str(planted),
+                                 TMPDIR=str(self.base / "tmp"))
+                self.assertFalse(marker.exists(), run.stdout + run.stderr)
+        # (The planted file does run in a plain interpreter: the probe works.)
+        plain = subprocess.run([sys.executable, "-c", "pass"], env={**os.environ, "PYTHONPATH": str(planted)})
+        self.assertEqual(plain.returncode, 0)
+        self.assertTrue(marker.exists())
+
+    def test_every_python_in_the_cell_is_run_isolated(self) -> None:
+        pattern = re.compile(r"\bpython3 (?!-I\b)")
+        skip = ("command -v", "for tool in", "venv", "nodejs npm python3", "apt-get")
+        for name in ("linux-matrix.sh", "matrix.sh", "fetch-run.sh"):
+            for n, line in enumerate((SCRIPT.parent / name).read_text().splitlines(), 1):
+                if line.lstrip().startswith("#") or any(k in line for k in skip):
+                    continue
+                self.assertIsNone(pattern.search(line), f"{name}:{n}: {line}")
 
     def test_the_login_writes_its_device_code_for_the_host_and_approves_nothing(self) -> None:
         # Stubs: goalcup prints one device code and exits; curl records that it was called at all.

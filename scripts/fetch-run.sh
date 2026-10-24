@@ -90,7 +90,7 @@ if [ -n "$index" ]; then
   cp "$index" "$tmp/index.json"
 else
   # The URL goes into a private service file, not onto psql's command line (where `ps` shows it).
-  FETCH_RUN_URL=$DATABASE_URL python3 - "$tmp/pg_service.conf" <<'PY'
+  FETCH_RUN_URL=$DATABASE_URL python3 -I - "$tmp/pg_service.conf" <<'PY'
 import os, shlex, sys, urllib.parse
 
 url = os.environ["FETCH_RUN_URL"]
@@ -139,7 +139,7 @@ fi
 # baseline_sha" then "C entry offset length sha256 r2_key" for each chunk; "-" is absent. Keys are
 # held to a plain alphabet, so they are safe in a path and a URL. The receipt and the acks are
 # written here, from the index.
-python3 - "$tmp/index.json" "$tmp/plan" "$tmp/meta" "$id" <<'PY'
+python3 -I - "$tmp/index.json" "$tmp/plan" "$tmp/meta" "$id" <<'PY'
 import json, os, re, sys
 
 index_path, plan_path, meta_dir, wanted = sys.argv[1:5]
@@ -240,7 +240,7 @@ get_object() {
 }
 
 sha256_of() {
-  python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"
+  python3 -I -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"
 }
 
 # 4. Build each entry's directory inside $tmp. Only when every entry is whole are they moved into

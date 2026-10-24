@@ -483,6 +483,10 @@ SCENARIOS = {
     "chat": ("stubchat", {"MATRIX_PRE_PROMPT_KEYS": r"\033[B\r", "MATRIX_PRE_PROMPT_DELAY": "1"}),
     # Test runs: sealed by the script, the server's copy `sealed` with no `stop`.
     "test_chat": ("stubchat", {"STUB_STOP": "0", "STUB_PROMPT": TYPED}, TEST, True, MULTILINE),
+    # The same test run in a Docker cell (its device codes go to a codes file the host approves).
+    "test_chat_cell": ("stubchat", {"STUB_STOP": "0", "STUB_PROMPT": TYPED, "STUB_CODE": "1",
+                                    "MATRIX_CODES_FILE": "{root}/codes", "STUB_HOST_APPROVES": "1"},
+                       TEST, True, MULTILINE),
     "test_chat_early": ("stubchat",
                         {"STUB_STOP": "0", "STUB_EXIT_EARLY": "1", "STUB_NO_SEAL": "1",
                          "STUB_PROMPT": TYPED, "MATRIX_REPO": GIVEN_REPO},
@@ -694,11 +698,19 @@ class MatrixTests(unittest.TestCase):
                       f"delete_repo`, which the default gh login lacks, then `gh repo delete {made[2]} --yes`, "
                       "then `gh auth refresh -r delete_repo` to drop the scope again: this machine's agents "
                       "push with that login)", w.run.stderr)
+        # (A Docker cell says whose login its agent uses; see the cell test below.)
         git = w.seen_json("start.git")
         self.assertEqual(git["SSH_AUTH_SOCK"], HOST_SSH)
         self.assertEqual(git["GH_TOKEN"], "gh-token-of-this-machine")
         for name in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GH_CONFIG_DIR"):
             self.assertIsNone(git[name], name)
+
+    def test_in_a_docker_cell_the_scope_advice_names_the_cells_own_login(self) -> None:
+        w = self.worlds["test_chat_cell"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertIn("then `gh auth refresh -r delete_repo` to drop the scope again", w.run.stderr)
+        self.assertIn("the login stored in this cell", w.run.stderr)
+        self.assertNotIn("this machine's agents", w.run.stderr)
 
     def test_a_test_run_takes_the_repository_matrix_repo_names(self) -> None:
         w = self.worlds["test_chat_early"]
@@ -949,6 +961,19 @@ class MatrixArgumentTests(unittest.TestCase):
             with self.subTest(server=server):
                 refused, said = self.verdict(server, MATRIX_ALLOW_SERVER=server)
                 self.assertIn("refusing ingest.agentcommunity.org", said)
+
+    def test_a_key_file_inside_the_checkout_is_refused(self) -> None:
+        inside = MATRIX.parent.parent / "scratch-key-for-test"
+        inside.write_text("k\n")
+        self.addCleanup(lambda: inside.unlink(missing_ok=True))
+        link = self.root / "link-to-key"
+        link.symlink_to(inside)
+        for path in (inside, link, MATRIX.parent / ".." / "scratch-key-for-test"):
+            with self.subTest(path=str(path)):
+                said = self.refuse("m2-fake-tui", "http://localhost:8787",
+                                   GOALCUP_TEST_APPROVAL_KEY_FILE=str(path))
+                self.assertIn("inside the checkout", said)
+                self.assertEqual(said.count("\n"), 1, "one clear line")
 
     def test_the_production_flag_lets_only_the_production_address_through(self) -> None:
         prod = "https://ingest.agentcommunity.org"

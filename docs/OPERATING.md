@@ -320,7 +320,9 @@ test member unless `GOALCUP_TEST_MEMBER_ID` says otherwise, and the server is st
 the heavy-run lock itself (never run it inside the lock: it refuses when `GOALCUP_HEAVY_LOCK_HELD=1` and
 gives up after 30 minutes), with `--cpus=6`. Codex's harness home is set to `gpt-5.6-luna` at low
 reasoning effort before each run; the run fails unless every Codex turn it recorded says exactly that.
-The harness can read the checkout, so run it from a clean checkout. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
+The harness can read the checkout, so run it from a clean checkout; the script refuses an approval key
+file inside it. The host's cargo registry is never mounted into a container: a build copies it into the
+container's own filesystem (`docker cp`), and a prebuilt run needs no registry at all. `docker volume rm goalcup-linux-matrix-codex-cli` forgets the sign-in.
 It also installs `claude-code-cli` (set to `haiku` with thinking off, checked after the run), `amp-cli`
 and `hermes-cli`. For long runs in parallel: `linux-matrix.sh build` once, then
 `LINUX_MATRIX_CELL=<cell> LINUX_MATRIX_PREBUILT=1 sh scripts/linux-matrix.sh run <id> -- --test --duration <s>`
