@@ -59,7 +59,11 @@ not prove: other platforms, other harness versions, model behaviour, or particip
    **Before each campaign:** start it on new cell volumes (`docker volume rm
    goalcup-linux-matrix-<connector>-<cell>`, then log in again), because the agent of an earlier
    run could have written into a reused volume's home (its shell startup files, its git and `gh`
-   configuration) and the next run would execute that. And **rotate the staging approval key**
+   configuration) and the next run would execute that. A fresh volume for every run is the
+   strongest setting. The container half runs its own Python isolated (`python3 -I`: no user site,
+   no `PYTHON*` variables), so a planted `usercustomize.py` or `.pth` cannot forge a device code;
+   a volume reused within one campaign still accepts the remaining route, a planted git or `gh`
+   configuration (and shell startup file) that the next run's tools read. And **rotate the staging approval key**
    (`TEST_APPROVAL_KEY`) after any campaign run with an older kit: older kits mounted the key, and
    a database URL and R2 token, into the cell's container, where the agent could read them.
 3. **Test members.** Until website migration `20261021100000` is on staging, a test run replaces
