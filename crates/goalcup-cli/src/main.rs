@@ -565,12 +565,10 @@ fn start(opts: commands::start::StartOptions) -> Result<(), CliError> {
     // A harness that cannot be loaded is refused before a daemon is started or anything else
     // is done.
     goalcup_cli::connector::load_harness(&connectors, &opts.harness, opts.dev)?;
-    let client = ensure_daemon(
-        &cfg,
-        goalcup_cli::daemon::MissingConfig::WriteDefault {
-            connectors: &connectors,
-        },
-    )?;
+    // The daemon is started on the first call `start` makes to it, which comes after the repo
+    // questions and the approval: a daemon started before them would end itself (its 30 s idle
+    // grace) while the participant answers or approves in the browser.
+    let client = LazyDaemon::new(&cfg, &connectors);
     // Linux: before the gated spawn, so what the harness leaves behind is reparented here and
     // swept before the seal (`subreaper.rs`). Only this binary arms it, never an in-process start.
     if let Err(e) = goalcup_cli::subreaper::arm() {
@@ -796,6 +794,133 @@ fn ensure_daemon(
         goalcup_cli::daemon::spawn::Wait::SHIPPED,
         &mut say_waiting,
     )
+}
+
+/// `goalcup start`'s daemon, started on its first call ([`ensure_daemon`], with `daemon.toml`
+/// written with local defaults when it is missing) and reused after. A start that fails to reach
+/// one gives every later call the same refusal.
+struct LazyDaemon<'a> {
+    cfg: &'a std::path::Path,
+    connectors: &'a std::path::Path,
+    client: std::sync::OnceLock<Result<goalcup_cli::daemon::HttpDaemonClient, String>>,
+}
+
+impl<'a> LazyDaemon<'a> {
+    fn new(cfg: &'a std::path::Path, connectors: &'a std::path::Path) -> Self {
+        Self {
+            cfg,
+            connectors,
+            client: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn get(
+        &self,
+    ) -> Result<&goalcup_cli::daemon::HttpDaemonClient, goalcup_protocol::control::ControlError>
+    {
+        self.client
+            .get_or_init(|| {
+                ensure_daemon(
+                    self.cfg,
+                    goalcup_cli::daemon::MissingConfig::WriteDefault {
+                        connectors: self.connectors,
+                    },
+                )
+                .map_err(|e| e.to_string())
+            })
+            .as_ref()
+            .map_err(|why| goalcup_protocol::control::ControlError::Unreachable(why.clone()))
+    }
+}
+
+impl goalcup_protocol::control::DaemonClient for LazyDaemon<'_> {
+    fn status(
+        &self,
+        entry_id: &str,
+    ) -> Result<goalcup_protocol::control::SignedStatus, goalcup_protocol::control::ControlError>
+    {
+        self.get()?.status(entry_id)
+    }
+
+    fn entries(
+        &self,
+    ) -> Result<
+        Vec<goalcup_protocol::control::EntrySummary>,
+        goalcup_protocol::control::ControlError,
+    > {
+        self.get()?.entries()
+    }
+
+    fn seal(
+        &self,
+        entry_id: &str,
+    ) -> Result<goalcup_protocol::seal::SealManifest, goalcup_protocol::control::ControlError> {
+        self.get()?.seal(entry_id)
+    }
+
+    fn register_process(
+        &self,
+        entry_id: &str,
+        request: &goalcup_protocol::process::ProcessRegistration,
+    ) -> Result<(), goalcup_protocol::control::ControlError> {
+        self.get()?.register_process(entry_id, request)
+    }
+
+    fn health(
+        &self,
+    ) -> Result<goalcup_protocol::control::DaemonHealth, goalcup_protocol::control::ControlError>
+    {
+        self.get()?.health()
+    }
+
+    fn abandon(
+        &self,
+        entry_id: &str,
+        reason: &str,
+    ) -> Result<(), goalcup_protocol::control::ControlError> {
+        self.get()?.abandon(entry_id, reason)
+    }
+
+    fn create_capture_workspace(
+        &self,
+        request: &goalcup_protocol::control::CaptureWorkspaceRequest,
+    ) -> Result<
+        goalcup_protocol::control::CaptureWorkspaceInfo,
+        goalcup_protocol::control::ControlError,
+    > {
+        self.get()?.create_capture_workspace(request)
+    }
+
+    fn record_capture_goal(
+        &self,
+        entry_id: &str,
+        request: &goalcup_protocol::control::CaptureGoalRequest,
+    ) -> Result<goalcup_protocol::capture::StreamKey, goalcup_protocol::control::ControlError> {
+        self.get()?.record_capture_goal(entry_id, request)
+    }
+
+    fn record_capture_launch(
+        &self,
+        entry_id: &str,
+        request: &goalcup_protocol::control::CaptureLaunchRequest,
+    ) -> Result<(), goalcup_protocol::control::ControlError> {
+        self.get()?.record_capture_launch(entry_id, request)
+    }
+
+    fn seal_capture(
+        &self,
+        entry_id: &str,
+        request: &goalcup_protocol::control::CaptureSealRequest,
+        read_timeout: std::time::Duration,
+    ) -> Result<
+        goalcup_protocol::control::CaptureFinishReport,
+        goalcup_protocol::control::CaptureSealError,
+    > {
+        let client = self
+            .get()
+            .map_err(goalcup_protocol::control::CaptureSealError::NotAdmitted)?;
+        client.seal_capture(entry_id, request, read_timeout)
+    }
 }
 
 /// The daemon `status` and `entries` ask, if there is one to ask, with the same waits.

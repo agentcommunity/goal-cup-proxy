@@ -217,6 +217,9 @@ pub(super) fn create_and_gate<'a>(
         match (cx.continuing, upload.map(|u| &u.how)) {
             // A continued run goes on in the clone it has.
             (Some(continuing), _) => WorkspaceAt::Existing(&continuing.record.workspace),
+            (None, Some(UploadHow::Fresh(new))) if new.works_in_project() => {
+                WorkspaceAt::Existing(&new.project)
+            }
             (None, Some(UploadHow::Fresh(new))) => WorkspaceAt::Clone(&new.work_root),
             _ => WorkspaceAt::InRunDir,
         },
@@ -224,7 +227,7 @@ pub(super) fn create_and_gate<'a>(
     // The workspace of a run on a server is a fresh clone of the participant's repository. It
     // can take a while, so it is said first.
     if let Some(upload) = upload {
-        if matches!(upload.how, UploadHow::Fresh(_)) {
+        if matches!(&upload.how, UploadHow::Fresh(new) if !new.works_in_project()) {
             let _ = say(out, crate::participant::CLONING);
         }
         if let Err(error) = upload.clone_workspace(&run.workspace) {

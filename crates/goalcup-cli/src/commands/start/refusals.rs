@@ -101,7 +101,11 @@ pub(crate) fn run_folder_for_continue(
             source,
         })?,
     };
-    if let Some(work_root) = workspace.parent() {
+    // A run that works in the participant's project folder is continued from that folder; its
+    // own directory goes in the configuration directory (`capture`).
+    if let Some(work_root) = workspace.parent()
+        && !beside.starts_with(workspace)
+    {
         refuse_goal_folder_inside_work_root(work_root, &beside)?;
     }
     Ok(beside)

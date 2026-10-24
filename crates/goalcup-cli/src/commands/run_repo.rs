@@ -1,12 +1,12 @@
 //! The GitHub repository of one real run, asked for by `goalcup start` before the approval (D69).
 //!
 //! A practice run has none. A real run (a dry run or the cup run) gets a new, empty, public
-//! repository of its own: [`choose`] asks its name (or takes `--repo`), finds the participant's
-//! GitHub user from their own login (and, with none, prints how to set one up and looks again),
-//! opens GitHub's "new repository" page with the name filled in when it does not exist yet, then
-//! checks that it is public and empty (GitHub's open API, no login) and that the agent's git sees
-//! no branch in it and can push to it (`git ls-remote` and a dry-run push in the agent's own
-//! environment). Goal Cup reads, stores and passes no key. Once the run has opened on the server
+//! repository of its own: [`choose`] asks its name as `<owner>/<name>` (or takes `--repo`), opens
+//! GitHub's "new repository" page with the name filled in when it does not exist yet, then checks
+//! that it is public and empty (GitHub's open API, no login). It does not look for the
+//! participant's GitHub login and makes no test push: the agent pushes with whatever the
+//! participant set up (a `GH_TOKEN` in the project's `.env.local`, or their own git login). Goal
+//! Cup reads, stores and passes no key. Once the run has opened on the server
 //! ([`keep_for_next_run`]), the name is kept in `prep.json` only so that the next real run can
 //! suggest one, `<name>-2`; a denied approval or a Ctrl-C keeps nothing. A Ctrl-C at any question
 //! or check ends it, with nothing created.
@@ -93,38 +93,20 @@ pub fn choose(
         out,
         "Your run needs a new, empty, public GitHub repo. Each real run gets its own.",
     )?;
-    let mut login = doors.login();
-    if let Some(refusal) = stop() {
-        return Err(refusal);
-    }
-    if login.user.is_none() {
-        // No SSH login and no `gh` login: one short guide, then one more look once the
-        // participant says it is done. Goal Cup never makes an account for them.
-        say(out, NO_LOGIN_GUIDE)?;
-        if read()?.is_some() {
-            login = doors.login();
-        }
-    }
-    if let Some(unused) = doors.unused_git_config() {
-        say(
-            out,
-            &format!(
-                "  Your agent's git reads ~/.gitconfig; {} is not used.",
-                unused.display()
-            ),
-        )?;
-    }
-    let mut input = match given {
+    // No look for the participant's GitHub login and no test push: how the agent pushes is the
+    // participant's to set up (their key in `.env.local`, their own git login). Only the name is
+    // asked here, always with its owner.
+    let input = match given {
         Some(given) => given.trim().to_string(),
         None => {
             // A suggestion only when an earlier real run named one: its repository is used.
             let last = crate::prep_file::read_prep_lenient(cfg).repo_url;
-            let suggested = suggestion(&last, login.user.as_deref());
+            let suggested = suggestion(&last, None);
             let shown = suggested
                 .as_ref()
                 .map(|s| format!(" [{s}]"))
                 .unwrap_or_default();
-            ask(out, &format!("  Name it{shown}: "))?;
+            ask(out, &format!("  Name it, as <your-user>/<name>{shown}: "))?;
             match read()? {
                 Some(typed) if !typed.is_empty() => typed,
                 Some(_) if suggested.is_some() => suggested.unwrap_or_default(),
@@ -138,30 +120,13 @@ pub fn choose(
             }
         }
     };
-    if !input.contains('/') && login.user.is_none() {
-        // A name alone cannot be placed without a user: asked once more, with the user.
-        ask(out, &format!("  Type <your-user>/{input}: "))?;
-        if let Some(typed) = read()?.filter(|t| t.contains('/')) {
-            input = typed;
-        }
+    if !input.contains('/') {
+        return Err(refused(format!(
+            "Give the repository with its owner: <your-user>/{input}, or add --repo \
+             <owner>/<name>."
+        )));
     }
-    let repo_url = if input.contains('/') {
-        github::checked_repo_url(&input)?
-    } else {
-        if !github::is_repo_name(&input) {
-            return Err(refused(format!(
-                "{input:?} is not a GitHub repository name: use letters, digits, `.`, `_` and \
-                 `-`."
-            )));
-        }
-        let Some(owner) = login.user.clone() else {
-            return Err(refused(format!(
-                "No GitHub login was found on this computer. Set one up as the steps above say, \
-                 or give --repo <your user name>/{input}."
-            )));
-        };
-        github::checked_repo_url(&format!("{owner}/{input}"))?
-    };
+    let repo_url = github::checked_repo_url(&input)?;
     let (owner, repo) = github::owner_repo(&repo_url)?;
     if let Some(api) = doors.api() {
         let checked = |api: &str| {
@@ -195,33 +160,8 @@ pub fn choose(
             say(out, UNCHECKED)?;
         }
     }
-    let remote = github::remote_url(owner, repo, login.ssh);
-    let pushed = doors.push_test(&remote);
-    if let Some(refusal) = stop() {
-        return Err(refusal);
-    }
-    match pushed {
-        Ok(()) => {}
-        // GitHub's `size` can read 0 right after the repository was created with a README.
-        Err(PushRefused::HasBranches) => {
-            return Err(refused(crate::participant::repository_not_empty(
-                &format!("{owner}/{repo}"),
-                None,
-            )));
-        }
-        Err(PushRefused::Failed(why)) => {
-            return Err(refused(format!(
-                "The agent's git cannot push to {owner}/{repo} ({why}). {PUSH_FIX}"
-            )));
-        }
-    }
-    say(
-        out,
-        &format!(
-            "  {owner}/{repo}: public, empty, and your agent's git can push to it (a dry-run \
-             push; nothing was sent)."
-        ),
-    )?;
+    let remote = github::remote_url(owner, repo, false);
+    say(out, &format!("  {owner}/{repo}: public and empty."))?;
     Ok(RunRepo { repo_url, remote })
 }
 

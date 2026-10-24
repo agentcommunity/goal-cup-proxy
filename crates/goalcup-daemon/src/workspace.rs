@@ -328,6 +328,12 @@ pub(crate) fn measure(path: &Path, hash_limit: u64) -> (u64, String) {
     (total, hex::encode(hasher.finalize()))
 }
 
+/// A file a run's folder may hold before the run: the participant's keys (`.env`, `.env.local`,
+/// ...) and a `.gitignore` that keeps them out of the repository.
+fn is_starting_kit(name: &str) -> bool {
+    name == ".gitignore" || name == ".env" || name.starts_with(".env.")
+}
+
 /// Every reason a workspace is refused, in one place, and **without writing anything**.
 ///
 /// An artifact root the agent could enumerate, a directory inside a Git worktree, and a
@@ -367,8 +373,13 @@ pub fn check_workspace_available(roots: &Roots) -> Result<(), DaemonError> {
             repo.display()
         )));
     }
+    // The participant's starting kit is allowed: `.env*` files (their keys) and a `.gitignore`.
+    // The baseline records each by name, size and hash, so the start is still a checkable fact.
     let existing = match std::fs::read_dir(&roots.workspace) {
-        Ok(entries) => entries.count(),
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .filter(|e| !is_starting_kit(&e.file_name().to_string_lossy()))
+            .count(),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => 0,
         Err(source) => {
             return Err(DaemonError::Io {
