@@ -233,6 +233,12 @@ def server_allowed(server):
     return bool(named) and named == s and s.startswith("https://")
 
 
+# A Docker cell takes no database URL and no R2 token (linux-matrix.sh refuses them): the parent's
+# are taken out of its environment. Host cells keep them.
+NO_FETCH_CREDENTIALS = {"MATRIX_DATABASE_URL_FILE": None, "MATRIX_CLOUDFLARE_TOKEN_FILE": None,
+                        "DATABASE_URL": None, "CLOUDFLARE_API_TOKEN": None}
+
+
 def child_env(extra):
     """The parent's environment without any approval-key or token-file variable, plus `extra`
     (a None value removes that variable)."""
@@ -523,6 +529,7 @@ def run_command(cfg, cell, cell_dir):
             "LINUX_MATRIX_PREBUILT": "1",
             "LINUX_MATRIX_SERVER": cfg["server"],
             "LINUX_MATRIX_LOG_DIR": str(logs),
+            **NO_FETCH_CREDENTIALS,
         })
         if cell.get("codex_effort"):
             env["LINUX_MATRIX_CODEX_EFFORT"] = cell["codex_effort"]
@@ -917,7 +924,8 @@ def evaluate_lines(info, samples_path, run_log=None):
     elif info.get("verdict") == "NOT-VERIFIED":
         st = INSUFFICIENT
         detail += ("; NOT VERIFIED: long run, server copy not fetched (give the matrix "
-                   "MATRIX_FETCH_INDEX/MATRIX_FETCH_STORE or the read-only credentials)")
+                   "MATRIX_FETCH_INDEX/MATRIX_FETCH_STORE or, for a host cell, the read-only credentials; "
+                   "a Docker cell: run matrix.sh --check-copy on the host after the run)")
     else:
         st = "pass" if info.get("verdict") == "PASS" else "fail"
     lines.append({"name": "run_pass", "value": row, "unit": "matrix row",
@@ -1683,7 +1691,7 @@ def cmd_build(args, runner):
             print(f"error {m}", file=sys.stderr)
         return 2
     # A build needs no approval key, so none is passed.
-    env = child_env({"LINUX_MATRIX_SERVER": cfg["server"]})
+    env = child_env({"LINUX_MATRIX_SERVER": cfg["server"], **NO_FETCH_CREDENTIALS})
     connectors = sorted({c["connector"] for c in cfg["cells"] if c["where"] == "docker"})
     if not connectors:
         print("campaign: no docker cell; nothing to build")
@@ -1707,7 +1715,8 @@ def cmd_login(args, runner):
                          "LINUX_MATRIX_CELL": cell["id"],
                          "LINUX_MATRIX_PREBUILT": "1", "LINUX_MATRIX_SERVER": cfg["server"],
                          "GOALCUP_TEST_MEMBER_ID": cell["test_member_id"],
-                         "LINUX_MATRIX_CODEX_EFFORT": cell.get("codex_effort")})
+                         "LINUX_MATRIX_CODEX_EFFORT": cell.get("codex_effort"),
+                         **NO_FETCH_CREDENTIALS})
         rc = runner.interactive(["sh", str(HERE / "linux-matrix.sh"), "login",
                                  cell["connector"]], env=env, cwd=str(REPO))
         if rc != 0:

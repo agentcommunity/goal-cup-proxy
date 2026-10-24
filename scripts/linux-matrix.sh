@@ -110,20 +110,16 @@
 #                                   with fetch-run.sh): the chunk index file and the bucket mirror
 #                                   directory (absolute paths), mounted read-only.
 #   MATRIX_DATABASE_URL_FILE, MATRIX_CLOUDFLARE_TOKEN_FILE
-#                                   or the read-only database URL and R2 token, each a file
-#                                   (absolute path) on this machine, never mounted: they are not in
-#                                   the container while the harness works. When a long run needs
-#                                   them, at its end, matrix.sh there makes a private directory and a
-#                                   request file (MATRIX_FETCH_REQUEST, in the log directory); this
-#                                   script, polling for it, puts the two in that directory in a
-#                                   `docker exec` of their own (standard input), once per run, and
-#                                   matrix.sh reads them, removes them at once and hands them to
-#                                   fetch-run.sh alone. (The agent could make the request file too;
-#                                   it then reaches only that directory, once.) DATABASE_URL or
+#                                   REFUSED: a Docker cell takes no database URL and no R2 token (the
+#                                   agent in the cell runs as the same user, with no sandbox, and
+#                                   could read them; the database is shared with production). A long
+#                                   run's trace is pruned in the container, so its row says
+#                                   NOT-VERIFIED (exit 4) unless MATRIX_FETCH_INDEX and
+#                                   MATRIX_FETCH_STORE give the copy; after the run, check it on the
+#                                   host with matrix.sh --check-copy. DATABASE_URL or
 #                                   CLOUDFLARE_API_TOKEN in this script's environment is never
-#                                   passed in. CLOUDFLARE_ACCOUNT_ID, MATRIX_FETCH_BUCKET and
-#                                   MATRIX_FETCH_TIMEOUT are passed on when set. The image holds zstd
-#                                   and psql for fetch-run.sh.
+#                                   passed in. MATRIX_FETCH_BUCKET and MATRIX_FETCH_TIMEOUT are
+#                                   passed on when set.
 #   LINUX_MATRIX_LOG_DIR            where matrix.sh's log lands on this machine
 #                                   (default $TMPDIR/goalcup-linux-matrix).
 #   GOALCUP_HEAVY_LOCK              the shared heavy-run lock (default /tmp/goalcup-heavy.lock).
@@ -161,9 +157,6 @@ BIN=$VOL/home/.local/bin
 PROMPT_IN=/run/goalcup/prompt
 FETCH_INDEX_IN=/run/goalcup/fetch-index
 FETCH_STORE_IN=/run/goalcup/fetch-store
-# Where matrix.sh in the container asks the host for the fetch credentials, and the private
-# directory it makes for the answer (inner_fetch_creds); both are removed as soon as they are used.
-FETCH_SECRETS_DIR=/tmp/goalcup-fetch-secrets
 # The settle helper beside this script (/src/scripts in the container).
 KIT=$(dirname "$0")/kit_settle.py
 # matrix.sh's settings this script passes on when they are set.
@@ -326,8 +319,7 @@ inner_run() { # connector [matrix.sh options]
     h=$1
     shift
     # The approval key, from this step's standard input, before anything else can read it. matrix.sh removes the file once the run
-    # is approved, before the harness works (MATRIX_FORGET_KEY); the fetch credentials are not
-    # here at all: matrix.sh asks the host for them when it needs them (MATRIX_FETCH_REQUEST).
+    # is approved, before the harness works (MATRIX_FORGET_KEY). No database URL or R2 token is here.
     secret_in keyfile
     GOALCUP_TEST_APPROVAL_KEY_FILE=$keyfile
     MATRIX_FORGET_KEY=1
@@ -366,27 +358,10 @@ inner_run() { # connector [matrix.sh options]
     exit "$rc"
 }
 
-# The fetch credentials, handed over when matrix.sh asked for them: two lines on standard input
-# (the read-only database URL, the R2 token; either may be empty) into the private directory
-# matrix.sh made for them, which matrix.sh empties and removes as soon as it has read them.
-inner_fetch_creds() {
-    [ -d "$FETCH_SECRETS_DIR" ] && [ -O "$FETCH_SECRETS_DIR" ] ||
-        fail "fetch credentials: matrix.sh made no private directory for them"
-    db="" cf=""
-    IFS= read -r db
-    IFS= read -r cf
-    umask 077
-    [ -z "$db" ] || printf '%s' "$db" >"$FETCH_SECRETS_DIR/db-url" || fail "fetch credentials: the database URL"
-    [ -z "$cf" ] || printf '%s' "$cf" >"$FETCH_SECRETS_DIR/cf-token" || fail "fetch credentials: the R2 token"
-    : >"$FETCH_SECRETS_DIR/ready"
-    db="" cf=""
-}
-
 case ${1:-} in
 inner-*) trap forget_secrets EXIT ;;
 esac
 case ${1:-} in
-inner-fetch-creds) inner_fetch_creds; exit 0 ;;
 inner-home-config) inner_home_config "$2"; exit 0 ;;
 inner-home-files) inner_home_files "$2"; exit 0 ;;
 inner-login) secret_in keyfile; inner_home_config "$2"; inner_login; exit 0 ;;
@@ -529,15 +504,17 @@ fi
     fail "GOALCUP_TEST_APPROVAL_KEY in the environment is refused: give the file as GOALCUP_TEST_APPROVAL_KEY_FILE"
 keyfile=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
 unset GOALCUP_TEST_APPROVAL_KEY_FILE
-dbfile=${MATRIX_DATABASE_URL_FILE:-}
-cftokenfile=${MATRIX_CLOUDFLARE_TOKEN_FILE:-}
-unset MATRIX_DATABASE_URL_FILE MATRIX_CLOUDFLARE_TOKEN_FILE
-# The fetch credentials as values never enter the container (a -e value is on docker's command
-# line): they are files. Said once, so a long cell is not silently left unverifiable.
+# A Docker cell takes no database URL and no R2 token (the agent in the cell runs as the same user
+# and could read them, and the database is shared with production): refused, not ignored.
+if [ "$action" != build ] && [ -n "${MATRIX_DATABASE_URL_FILE:-}${MATRIX_CLOUDFLARE_TOKEN_FILE:-}" ]; then
+    fail "Docker cells take no database URL or R2 token: run matrix.sh --check-copy on the host after the run."
+fi
+# A database URL or R2 token in the environment is never passed into the container either (a -e
+# value is on docker's command line, and a Docker cell takes none). Said once.
 for v in DATABASE_URL CLOUDFLARE_API_TOKEN; do
     eval "isset=\${$v:+set}"
     [ -z "$isset" ] || [ "$action" = build ] ||
-        echo "linux-matrix: $v in the environment is not passed into the container; give it as a file (MATRIX_DATABASE_URL_FILE, MATRIX_CLOUDFLARE_TOKEN_FILE)"
+        echo "linux-matrix: $v in the environment is not passed into the container (Docker cells take no database URL or R2 token)"
     unset "$v"
 done
 mounted_file() { # path what
@@ -574,12 +551,8 @@ if [ "$action" = login ] || [ "$action" = run ]; then
         [ -d "$fetch_store" ] && [ -r "$fetch_store" ] || fail "$fetch_store is not a directory this user can read"
         set -- "$@" -v "$fetch_store:$FETCH_STORE_IN:ro" -e "MATRIX_FETCH_STORE=$FETCH_STORE_IN"
     fi
-    # The database URL and the R2 token are checked here and handed over later, only when matrix.sh
-    # in the container asks for them at the end of a long run (deliver_fetch_creds); not mounted.
-    [ -z "$dbfile" ] || mounted_file "$dbfile" "MATRIX_DATABASE_URL_FILE"
-    [ -z "$cftokenfile" ] || mounted_file "$cftokenfile" "MATRIX_CLOUDFLARE_TOKEN_FILE"
-    # The account id is no secret; the bucket and the fetch's time are settings.
-    for v in CLOUDFLARE_ACCOUNT_ID MATRIX_FETCH_BUCKET MATRIX_FETCH_TIMEOUT; do
+    # The bucket and the fetch's time are settings (the fetch itself has no credential here).
+    for v in MATRIX_FETCH_BUCKET MATRIX_FETCH_TIMEOUT; do
         eval "val=\${$v:-}"
         [ -z "$val" ] || set -- "$@" -e "$v=$val"
     done
@@ -739,25 +712,6 @@ fi
 # its login shells find goalcup where a real install puts it, not in the build's /target/debug.
 step "install" "$name" sh -c "mkdir -p $BIN && install -m 0755 /target/debug/goalcup /target/debug/goalcup-daemon /target/debug/goalcup-verify $BIN/"
 
-# The fetch credentials into the container for the one moment matrix.sh needs them: when it has
-# made the request file, once, as their own `docker exec`; matrix.sh reads them and removes them at
-# once. A request nobody asked for (the harness could write the file too) is the weak point of the
-# handover: it reaches only a directory matrix.sh made, and only ever once per run.
-deliver_fetch_creds() {
-    [ -e "$logdir/$fetch_request" ] || return 0
-    rm -f "$logdir/$fetch_request"
-    [ "$fetch_given" = 0 ] || return 0
-    fetch_given=1
-    echo "linux-matrix: matrix.sh asks for the fetch credentials: handing them over for that step"
-    {
-        [ -z "$dbfile" ] || tr -d '\n' <"$dbfile"
-        echo
-        [ -z "$cftokenfile" ] || tr -d '\n' <"$cftokenfile"
-        echo
-    } | docker exec -i -u dev "$name" sh /src/scripts/linux-matrix.sh inner-fetch-creds ||
-        echo "linux-matrix: the fetch credentials could not be handed over (the long run will say NOT-VERIFIED)"
-}
-
 if [ "$action" = run ]; then
     if [ -n "$extra" ]; then
         echo "linux-matrix: run (matrix.sh options:$extra)"
@@ -766,25 +720,10 @@ if [ "$action" = run ]; then
     fi
     set --
     [ -z "${MATRIX_PROMPT_FILE:-}" ] || set -- "$@" -e MATRIX_PROMPT_FILE=$PROMPT_IN
-    # matrix.sh asks for the fetch credentials only when a long run needs them, by making this file
-    # in the log directory; they are named as wanted only when their files were given.
-    fetch_request=fetch-request-$name
-    given=""
-    [ -z "$dbfile" ] || given="db"
-    [ -z "$cftokenfile" ] || given="${given:+$given }cf"
-    if [ -n "$given" ]; then
-        rm -f "$logdir/$fetch_request"
-        set -- "$@" -e "MATRIX_FETCH_REQUEST=/logs/$fetch_request" -e "MATRIX_FETCH_WILL_GIVE=$given"
-    fi
     # The approval key is this exec's standard input. $extra holds checked words only (options and
     # digits), so it splits as meant.
     docker exec -i -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" $extra <"$keyfile" &
     run_job=$!
-    fetch_given=0
-    while kill -0 "$run_job" 2>/dev/null; do
-        [ -z "$given" ] || deliver_fetch_creds
-        sleep 1
-    done
     wait "$run_job"
     exit $?
 fi

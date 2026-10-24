@@ -422,27 +422,7 @@ class World:
                 environment[key] = value.replace("{bin}", str(self.bin)).replace("{root}", str(self.root))
         if "{root}/approval-key" in (env or {}).get("GOALCUP_TEST_APPROVAL_KEY_FILE", ""):
             (self.root / "approval-key").write_text(KEY_VALUE + "\n")
-        # The host half of a Docker cell's fetch credential handover (STUB_HOST_ANSWERS=1): when
-        # matrix.sh makes its request file, put the credentials in the private directory it made.
-        self.request_seen: dict[str, str] = {}
         stop = threading.Event()
-        responder = None
-        if environment.get("STUB_HOST_ANSWERS") == "1":
-            request = Path(environment["MATRIX_FETCH_REQUEST"])
-            secrets = Path(environment["MATRIX_FETCH_SECRETS_DIR"])
-
-            def answer() -> None:
-                while not stop.is_set():
-                    if request.exists() and secrets.is_dir():
-                        self.request_seen["mode"] = oct(stat.S_IMODE(secrets.stat().st_mode))
-                        (secrets / "db-url").write_text(DB_URL)
-                        (secrets / "cf-token").write_text(CF_TOKEN)
-                        (secrets / "ready").write_text("")
-                        return
-                    time.sleep(0.1)
-
-            responder = threading.Thread(target=answer, daemon=True)
-            responder.start()
         log = self.root / "matrix.log"
         # A test run is left to its default budget (the duration plus 1800 s) unless it names one.
         budget = () if "--test" in args or "--refusals" in args else ("--timeout", "60")
@@ -543,18 +523,6 @@ SCENARIOS = {
                                    "STUB_KEYFILE": "{root}/approval-key"}),
     "key_kept": ("stubchat", {"GOALCUP_TEST_APPROVAL_KEY_FILE": "{root}/approval-key",
                               "STUB_CODE": "1", "STUB_KEYFILE": "{root}/approval-key"}),
-    # A Docker cell's fetch credentials: not in the container; matrix.sh asks the host when the
-    # fetch needs them (the host answers, or does not).
-    "pruned_handoff": ("stubchat", {
-        "STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh", "CLOUDFLARE_ACCOUNT_ID": "acct",
-        "MATRIX_FETCH_BUCKET": "goalcup-traces-staging", "MATRIX_FETCH_REQUEST": "{root}/fetch-request",
-        "MATRIX_FETCH_WILL_GIVE": "db cf", "MATRIX_FETCH_SECRETS_DIR": "{root}/fetch-secrets",
-        "STUB_HOST_ANSWERS": "1"}),
-    "pruned_handoff_unanswered": ("stubchat", {
-        "STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh", "CLOUDFLARE_ACCOUNT_ID": "acct",
-        "MATRIX_FETCH_BUCKET": "goalcup-traces-staging", "MATRIX_FETCH_REQUEST": "{root}/fetch-request",
-        "MATRIX_FETCH_WILL_GIVE": "db cf", "MATRIX_FETCH_SECRETS_DIR": "{root}/fetch-secrets",
-        "MATRIX_FETCH_SECRETS_WAIT": "2"}),
     # A test run whose start asks for its repository: nobody can answer it.
     "test_asks": ("stubchat", {"STUB_ASK": "1"}, ("--test", "--duration", "30"), True),
     # A test run on a machine with no GitHub login.
@@ -887,28 +855,6 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(w.run.returncode, 0, w.said())
         self.assertEqual(w.seen("start.keyfile_exists"), "True")
         self.assertTrue((w.root / "approval-key").exists())
-
-    def test_fetch_credentials_are_asked_of_the_host_and_removed_at_once(self) -> None:
-        w = self.worlds["pruned_handoff"]
-        self.assertEqual(w.run.returncode, 0, w.said())
-        self.assertEqual(json.loads(w.seen("fetch.env")), {
-            "DATABASE_URL": DB_URL, "CLOUDFLARE_ACCOUNT_ID": "acct", "CLOUDFLARE_API_TOKEN": CF_TOKEN})
-        # The harness (the stub's start) never had them, and the private directory was 0700.
-        self.assertEqual(json.loads(w.seen("start.env")), [])
-        self.assertEqual(w.request_seen["mode"], "0o700")
-        self.assertFalse((w.root / "fetch-secrets").exists(), "the credentials were left on disk")
-        self.assertFalse((w.root / "fetch-request").exists())
-        for secret in ("db-secret-never-shown", CF_TOKEN):
-            self.assertNotIn(secret, w.everything_matrix_wrote())
-
-    def test_credentials_the_host_never_hands_over_make_the_row_not_verified(self) -> None:
-        w = self.worlds["pruned_handoff_unanswered"]
-        self.assertEqual(w.run.returncode, 4, w.said())
-        self.assertIn("did not hand over the fetch credentials within 2s", w.run.stderr)
-        self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ NOT-VERIFIED \d{4}-")
-        self.assertFalse(w.has("fetch.argv"))
-        self.assertFalse((w.root / "fetch-secrets").exists())
-        self.assertFalse((w.root / "fetch-request").exists())
 
     def test_a_local_tail_that_differs_from_the_server_copy_fails(self) -> None:
         w = self.worlds["pruned_bad_tail"]

@@ -232,7 +232,10 @@ pass-line results.
   5 minutes, `sample_every_s: 300`, are enough to judge it).
 - RSS slope under 1 MiB per hour after the first hour; open files flat.
 - Local chain on disk under 2 GiB beyond the reserve in steady state.
-- Server copy equals the local chain (`--check-copy`, and `fetch-run.sh` for one cell per stage).
+- Server copy equals the local chain (`--check-copy`, and `fetch-run.sh` for one cell per stage). A
+  Docker cell takes no database URL or R2 token, so its long runs say `NOT-VERIFIED`; check them on
+  the host after the run with `matrix.sh --check-copy` (host cells may be given the read-only
+  credentials).
 
 ## Cleanup
 

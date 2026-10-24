@@ -15,6 +15,7 @@ import threading
 import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("campaign", HERE / "campaign.py")
@@ -980,6 +981,23 @@ class CampaignRun(Base):
         self.assertLess(advice.index("gh repo delete"), advice.index("gh auth refresh -r delete_repo"))
         self.assertFalse(any("delete" in " ".join(c) for c in runner.calls))
 
+    def test_a_docker_cell_is_given_no_database_url_or_r2_token_a_host_cell_keeps_them(self):
+        names = ("MATRIX_DATABASE_URL_FILE", "MATRIX_CLOUDFLARE_TOKEN_FILE", "DATABASE_URL",
+                 "CLOUDFLARE_API_TOKEN")
+        runner = FakeRunner()
+        cells = [self.docker_cell("lin", "m1"), self.host_cell("mac", "m2")]
+        camp, _ = self.make(cells, runner)
+        with mock.patch.dict(os.environ, {n: "/somewhere/" + n for n in names}):
+            camp.run()
+        docker = [e for c, e in zip(runner.calls, runner.envs) if "linux-matrix.sh" in " ".join(c)]
+        host = [e for c, e in zip(runner.calls, runner.envs) if c[1].endswith("/matrix.sh")]
+        self.assertTrue(docker and host)
+        for env in docker:
+            for n in names:
+                self.assertNotIn(n, env, n)
+        for n in names:
+            self.assertEqual(host[0][n], "/somewhere/" + n)
+
     def test_a_host_cell_whose_settle_is_refused_never_starts(self):
         cell = self.host_cell("mac", "m1")
         (Path(cell["config_dir"]) / "prep.json").write_text("not JSON")  # the helper refuses it
@@ -1241,7 +1259,13 @@ class Commands(Base):
     def test_login_docker_delegates_with_the_cell(self):
         path = self.write([{"id": "lin", "where": "docker", "test_member_id": "m1"}])
         runner = FakeRunner()
-        self.assertEqual(campaign.main(["login", path, "lin"], runner=runner), 0)
+        with mock.patch.dict(os.environ, {"MATRIX_DATABASE_URL_FILE": "/db", "DATABASE_URL": "x",
+                                          "MATRIX_CLOUDFLARE_TOKEN_FILE": "/cf", "CLOUDFLARE_API_TOKEN": "y"}):
+            self.assertEqual(campaign.main(["login", path, "lin"], runner=runner), 0)
+        for env in runner.envs:  # a Docker cell takes no database URL or R2 token
+            for n in ("MATRIX_DATABASE_URL_FILE", "DATABASE_URL", "MATRIX_CLOUDFLARE_TOKEN_FILE",
+                      "CLOUDFLARE_API_TOKEN"):
+                self.assertNotIn(n, env)
         self.assertEqual(runner.calls[0][2:], ["login", "codex-cli"])
         self.assertEqual(runner.envs[0]["LINUX_MATRIX_CELL"], "lin")
         self.assertEqual(runner.envs[0][campaign.KEY_ENV], str(self.key))

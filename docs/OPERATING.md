@@ -233,16 +233,15 @@ read-only role), and `MATRIX_FETCH_STORE` (a bucket mirror) or `CLOUDFLARE_ACCOU
 (`goalcup-traces-staging` unless the server is production). Only `fetch-run.sh` gets the credentials.
 Without them the row is `NOT-VERIFIED` (`NOT VERIFIED: long run, server copy not fetched`, exit 4): not a
 PASS, and not a FAIL of the run. `--check-copy` does the same for each pruned entry. A Docker cell
-(`linux-matrix.sh`) is verified the same way: it mounts `MATRIX_FETCH_INDEX` and `MATRIX_FETCH_STORE`
-read-only (no secret), and takes the database URL and the R2 token as files on this machine
-(`MATRIX_DATABASE_URL_FILE`, `MATRIX_CLOUDFLARE_TOKEN_FILE`). Those two are never mounted into the
-cell's container, where the agent runs as the same user and could read them: when a long run needs
-them, at its end, `matrix.sh` makes a private directory and a request file in the log directory, the
-script hands the two over in their own `docker exec` on its standard input, and `matrix.sh` reads and
-removes them at once. The weak point is that the agent could write the request file too (once per
-run); it would reach only the directory `matrix.sh` made. `CLOUDFLARE_ACCOUNT_ID`,
-`MATRIX_FETCH_BUCKET` and `MATRIX_FETCH_TIMEOUT` are passed on; its image holds `zstd` and `psql`.
-`DATABASE_URL` or `CLOUDFLARE_API_TOKEN` in its own environment is not passed in.
+(`linux-matrix.sh`) takes no database URL and no R2 token: the agent in the cell runs as the same
+user, with no sandbox, and could read them, and the database is shared with production. It refuses
+`MATRIX_DATABASE_URL_FILE` and `MATRIX_CLOUDFLARE_TOKEN_FILE` with one line (`Docker cells take no
+database URL or R2 token: run matrix.sh --check-copy on the host after the run.`), and
+`campaign.py` takes `DATABASE_URL`, `CLOUDFLARE_API_TOKEN` and those two variables out of a Docker
+cell's environment (host cells keep them). A Docker cell can still mount `MATRIX_FETCH_INDEX` and
+`MATRIX_FETCH_STORE` read-only (no secret), and passes `MATRIX_FETCH_BUCKET` and
+`MATRIX_FETCH_TIMEOUT` on; otherwise a long run's row is `NOT-VERIFIED` (exit 4), and you check it
+on the host after the run with `--check-copy` below. Its image holds `zstd` and `psql`.
 
 A server whose signing key this build does not pin (a local Worker, staging) fails the first verification
 with `receipt_key_not_accepted`. The script then verifies again with `--dev-key` set to

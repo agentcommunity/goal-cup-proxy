@@ -341,16 +341,6 @@ FETCH_INDEX=${MATRIX_FETCH_INDEX:-}
 FETCH_STORE=${MATRIX_FETCH_STORE:-}
 FETCH_SCRIPT=${MATRIX_FETCH_SCRIPT:-$HERE/fetch-run.sh}
 FETCH_TIMEOUT=${MATRIX_FETCH_TIMEOUT:-1800}
-# MATRIX_FETCH_REQUEST (linux-matrix.sh sets it in a Docker cell): the database URL and the R2
-# token are not in the container while the harness works. When the fetch needs them, this script
-# makes a private directory, makes this request file and waits for the host to put them there
-# (fetch_secrets_wait); MATRIX_FETCH_WILL_GIVE names which it will (db, cf).
-FETCH_REQUEST=${MATRIX_FETCH_REQUEST:-}
-FETCH_WILL_GIVE=${MATRIX_FETCH_WILL_GIVE:-}
-FETCH_SECRETS_DIR=${MATRIX_FETCH_SECRETS_DIR:-/tmp/goalcup-fetch-secrets}
-FETCH_SECRETS_WAIT=${MATRIX_FETCH_SECRETS_WAIT:-120}
-unset MATRIX_FETCH_REQUEST MATRIX_FETCH_WILL_GIVE MATRIX_FETCH_SECRETS_DIR MATRIX_FETCH_SECRETS_WAIT
-case $FETCH_SECRETS_WAIT in '' | *[!0-9]*) echo "matrix: MATRIX_FETCH_SECRETS_WAIT is a number of seconds" >&2; exit 2 ;; esac
 case $FETCH_TIMEOUT in '' | *[!0-9]*) echo "matrix: MATRIX_FETCH_TIMEOUT is a number of seconds" >&2; exit 2 ;; esac
 PRE_KEYS=${MATRIX_PRE_PROMPT_KEYS:-}
 case $PRE_KEYS in
@@ -1430,13 +1420,7 @@ PY
       FAIL_REASON="NOT VERIFIED: long run, server copy not fetched (the R2 bucket of $SERVER is not known: name it with MATRIX_FETCH_BUCKET)"
       return 1
     fi
-    if ! fetch_secrets_wait; then
-      RESULT=NOT-VERIFIED
-      FAIL_REASON="NOT VERIFIED: long run, server copy not fetched (the host did not hand over the fetch credentials within ${FETCH_SECRETS_WAIT}s)"
-      return 1
-    fi
     fetch_copy "$ENTRY_ID" || return 1
-    FETCH_DB="" FETCH_CF_TOKEN=""
     JUDGED=$ROOT/servercopy/$ENTRY_ID
     [ "$HV" != unreported ] || read_hv "$JUDGED/chain.jsonl"
     same_tail "$TRACE" "$JUDGED/chain.jsonl" || return 1
@@ -1587,35 +1571,8 @@ PY
 # Whether a long run's server copy can be fetched: an index (file or database) and the objects
 # (a bucket mirror or R2).
 fetch_configured() {
-  fetch_gives() { [ -n "$FETCH_REQUEST" ] && case " $FETCH_WILL_GIVE " in *" $1 "*) true ;; *) false ;; esac; }
-  { [ -n "$FETCH_INDEX" ] || [ -n "$FETCH_DB" ] || fetch_gives db; } &&
-    { [ -n "$FETCH_STORE" ] || { [ -n "$FETCH_CF_ACCOUNT" ] && { [ -n "$FETCH_CF_TOKEN" ] || fetch_gives cf; }; }; }
-}
-
-# Ask the host for the fetch credentials (MATRIX_FETCH_REQUEST): make a private directory and the
-# request file, wait for the host to put the database URL and the R2 token in the directory, read
-# them into this script's variables, and remove the directory and the request at once. 1 when
-# they did not come in time.
-fetch_secrets_wait() {
-  [ -n "$FETCH_REQUEST" ] || return 0
-  rm -rf "$FETCH_SECRETS_DIR"
-  (umask 077 && mkdir "$FETCH_SECRETS_DIR") || return 1
-  : >"$FETCH_REQUEST" || { rm -rf "$FETCH_SECRETS_DIR"; return 1; }
-  fs_start=$(date +%s)
-  while [ ! -e "$FETCH_SECRETS_DIR/ready" ]; do
-    if [ $(($(date +%s) - fs_start)) -ge "$FETCH_SECRETS_WAIT" ]; then
-      rm -rf "$FETCH_SECRETS_DIR"
-      rm -f "$FETCH_REQUEST"
-      return 1
-    fi
-    sleep 1
-  done
-  if [ -s "$FETCH_SECRETS_DIR/db-url" ]; then FETCH_DB=$(cat "$FETCH_SECRETS_DIR/db-url"); fi
-  if [ -s "$FETCH_SECRETS_DIR/cf-token" ]; then FETCH_CF_TOKEN=$(cat "$FETCH_SECRETS_DIR/cf-token"); fi
-  rm -rf "$FETCH_SECRETS_DIR"
-  rm -f "$FETCH_REQUEST"
-  FETCH_REQUEST=""
-  return 0
+  { [ -n "$FETCH_INDEX" ] || [ -n "$FETCH_DB" ]; } &&
+    { [ -n "$FETCH_STORE" ] || { [ -n "$FETCH_CF_ACCOUNT" ] && [ -n "$FETCH_CF_TOKEN" ]; }; }
 }
 
 # The R2 bucket of the server's traces: MATRIX_FETCH_BUCKET, else the one known for the staging
