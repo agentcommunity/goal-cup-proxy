@@ -22,12 +22,12 @@ details and the options.
 
 | Script | What it does | Who | Run by |
 |---|---|---|---|
-| `matrix.sh` | One practice run (or `--test --duration` test run) of one connector against one server, and one PASS/FAIL row. | organizer | by hand |
-| `linux-matrix.sh` | `matrix.sh` for a real harness on Linux, in Docker, against staging. | organizer | by hand |
+| `matrix.sh` | One practice run (no repository), `--test --duration` test run (a repository it makes with the machine's GitHub login) or `--refusals` check of one connector against one server, and one PASS/FAIL row. | organizer | by hand |
+| `linux-matrix.sh` | `matrix.sh` for a real harness on Linux, in Docker, against staging; `github` signs the container in to GitHub. | organizer | by hand |
 | `linux-harness-smoke.sh` | No-login smoke of the measured Linux Codex and Claude Code builds. | developer | Linux CI (`LINUX_CHECK_HARNESSES=1`) |
 | `campaign.py` | Runs many long test cells in parallel, with drills, and writes reports ([local campaign](../docs/research/LOCAL-CAMPAIGN.md)). | organizer | by hand |
 | `campaign.example.json` | An example campaign config for `campaign.py`. | organizer | `campaign.py` |
-| `kit_settle.py` | Settles a test cell's `prep.json` and `github.json` (the kit's GitHub token), the cheapest-model rules and the run's model check. | organizer | `linux-matrix.sh`; `campaign.py` |
+| `kit_settle.py` | Settles a test cell's `prep.json`, the cheapest-model rules and the run's model check. | organizer | `linux-matrix.sh`; `campaign.py` |
 | `t25-disk-full.sh` | Measures what a run does on a really full disk (needs `sudo` and a loop image). | developer | by hand |
 | `research-measure.py` | Sizes, counts, quiet gaps and compression of a trace's chain files; aggregates only. | researcher, organizer | by hand |
 | `research-sample.py` | One CSV row of soak measurements per interval (disk, chain, ACK lag, processes). | organizer | by hand; `campaign.py` |

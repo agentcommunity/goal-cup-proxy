@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Behavioral tests for the matrix, scripts/matrix.sh, against stand-ins for everything it drives.
 
-`goalcup`, `goalcup-verify`, `goalcup-daemon` and `curl` are stubs in a scratch directory (the real
-ones are covered by running the script, docs/OPERATING.md "The matrix"). The `goalcup` stub records
-what it was started with: its arguments, the parts of its environment that matter and what
-arrived on its standard input. Every connector is chat mode (D57), so every run is on a
-pseudo-terminal (script(1)). Every key here is synthetic.
+`goalcup`, `goalcup-verify`, `goalcup-daemon`, `gh` and `curl` are stubs in a scratch directory (the
+real ones are covered by running the script, docs/OPERATING.md "The matrix"). The `goalcup` stub
+records what it was started with: its arguments, the parts of its environment that matter (the git
+login it was given among them) and what arrived on its standard input. Every connector is chat mode
+(D57), so every run is on a pseudo-terminal (script(1)); the refusals run with no terminal. Every
+key here is synthetic.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -24,6 +26,8 @@ from pathlib import Path
 MATRIX = Path(__file__).with_name("matrix.sh")
 
 PROMPT = "Goal Cup test prompt: say ok."
+GIVEN_REPO = "goalcup-kit/kit-given"
+HOST_SSH = "/host/agent.sock"
 
 GOALCUP = r'''#!/usr/bin/env python3
 import json, os, select, subprocess, sys, termios, time, tty
@@ -39,7 +43,21 @@ if args == ["--version"]:
     print("goalcup 0.0.0-stub")
     sys.exit(0)
 
+def wait_approved(phase, count):
+    """With STUB_CODE=1 a login and a start show a device code and wait for the matrix's approval
+    (the curl stub counts them); then say whether the approval key's file is still there, a second
+    after the approval so the matrix has had time to act on it."""
+    if os.environ.get("STUB_CODE") != "1":
+        return
+    print("Open the page; it shows the code ABCD-EFGH.", flush=True)
+    t0 = time.time()
+    while len(list(out.glob("approved.*"))) < count and time.time() - t0 < 30:
+        time.sleep(0.2)
+    time.sleep(1)
+    note("%s.approved" % phase, "yes")
+
 if args[0] == "login":
+    wait_approved("login", 1)
     note("login.no_browser", os.environ.get("GOALCUP_NO_BROWSER", "unset"))
     print("Logged in as member.")
     sys.exit(0)
@@ -73,10 +91,72 @@ if args[0] == "upload":
     sys.exit(0)
 
 assert args[0] == "start", args
+
+def git_login():
+    """The git login this start was given: the variables goalcup reads it from, and the git config
+    the kit named."""
+    names = ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GH_CONFIG_DIR", "SSH_AUTH_SOCK",
+             "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "GH_TOKEN", "GITHUB_TOKEN")
+    seen = {k: os.environ.get(k) for k in names}
+    gc = Path(os.environ.get("GIT_CONFIG_GLOBAL", "/nonexistent"))
+    seen["gitconfig"] = subprocess.run(["git", "config", "--file", str(gc), "--list"],
+                                       capture_output=True, text=True).stdout.splitlines() if gc.is_file() else None
+    return seen
+
+if os.environ.get("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL") == "1":
+    # A refusal cell: the start's checks before the approval (run_repo.rs), as a test build makes
+    # them through its doors, with no terminal.
+    import urllib.error, urllib.request
+    repo = args[args.index("--repo") + 1] if "--repo" in args else None
+    kind = {None: "no-login"}.get(repo) or ("bare-name" if "/" not in repo else repo.split("/")[1][4:])
+    doors = {k: os.environ.get(k) for k in ("GOALCUP_TEST_GITHUB_API", "GOALCUP_TEST_GITHUB_LOGIN",
+                                            "GOALCUP_TEST_PUSH_REMOTE")}
+    note("refuse.%s" % kind, json.dumps({"argv": args, "doors": doors, "tty": os.isatty(0),
+                                         "git": git_login()}))
+    def refuse(why):
+        sys.stderr.write("goalcup: %s Nothing was created.\n" % why)
+        sys.exit(1)
+    if os.environ.get("STUB_SHIPPED") == "1":
+        refuse("stub needs a terminal of its own.")
+    if os.environ.get("STUB_NEVER_REFUSES") == "1":
+        print("Approve this run in your browser: the page shows the code ABCD-EFGH.", flush=True)
+        sys.exit(1)
+    login = doors["GOALCUP_TEST_GITHUB_LOGIN"] or None
+    if login is None:
+        print("No GitHub login found on this computer. To set one up (about 5 minutes):")
+    if repo is None:
+        refuse("A real run needs a new, empty, public GitHub repository. Run goalcup start in a "
+               "terminal and name it, or add --repo <owner>/<name>.")
+    if "/" not in repo and login is None:
+        refuse("No GitHub login was found on this computer. Give --repo <your user name>/%s." % repo)
+    api = doors["GOALCUP_TEST_GITHUB_API"]
+    if api:
+        try:
+            doc = json.load(urllib.request.urlopen(api + "/repos/" + repo, timeout=10))
+        except urllib.error.HTTPError:
+            doc = None
+        if doc is None or doc["private"]:
+            refuse("GitHub does not show %s: it is not created yet, or it is private." % repo)
+        if doc["size"]:
+            refuse("The repository %s is not empty (%d KB), and a new run needs a new empty one."
+                   % (repo, doc["size"]))
+    remote = doors["GOALCUP_TEST_PUSH_REMOTE"]
+    if remote and not os.path.exists(remote):
+        refuse("The agent's git cannot push to %s (no such remote)." % repo)
+    print("Approve this run in your browser: the page shows the code ABCD-EFGH.", flush=True)
+    sys.exit(1)
+
 note("start.argv", "\n".join(args))
 note("start.no_browser", os.environ.get("GOALCUP_NO_BROWSER", "unset"))
 note("start.stdin_is_tty", str(os.isatty(0)))
+note("start.git", json.dumps(git_login()))
 test = "--test" in args
+if os.environ.get("STUB_ASK") == "1":
+    # A real run's start asking for its repository, which nobody in the matrix can answer.
+    sys.stdout.write("Your run needs a new, empty, public GitHub repo. Each real run gets its own.\n  Name it: ")
+    sys.stdout.flush()
+    time.sleep(60)
+    sys.exit(1)
 
 run_dir = cfg / "runs" / "r1"
 trace = cfg / "artifacts" / ENTRY / "trace"
@@ -135,6 +215,7 @@ def write_run():
 if test:
     write_run()
 
+wait_approved("start", 2)
 # setraw flushes pending input: finish that transition before the feeder sees ready.
 tty.setraw(0)
 if os.environ.get("STUB_BRACKETED") == "1":
@@ -225,7 +306,10 @@ from pathlib import Path
 args = sys.argv[1:]
 out = Path(os.environ["STUB_OUT"])
 if "@-" in args:
-    sys.stdin.read()
+    header = sys.stdin.read()
+    if args[-1].endswith("/v1/device/approve"):
+        n = len(list(out.glob("approved.*")))
+        (out / ("approved.%d" % (n + 1))).write_text(header)
 target = args[args.index("-o") + 1]
 url = args[-1]
 if "/v1/runs/" in url:
@@ -241,6 +325,24 @@ Path(target).write_text(json.dumps(body))
 sys.stdout.write("200")
 '''
 
+# gh as the kit uses it to make a test run's repository with this machine's login (none with
+# STUB_GH_NO_LOGIN).
+GH = r'''#!/usr/bin/env python3
+import os, sys
+from pathlib import Path
+args = sys.argv[1:]
+out = Path(os.environ["STUB_OUT"])
+if args[:2] == ["api", "user"]:
+    if os.environ.get("STUB_GH_NO_LOGIN") == "1":
+        sys.exit("To get started with GitHub CLI, please run:  gh auth login")
+    print("kit-tester")
+elif args[:2] == ["repo", "create"]:
+    (out / "gh.repo_create").write_text("\n".join(args))
+    print("https://github.com/" + args[2])
+else:
+    sys.exit("gh stub: " + " ".join(args))
+'''
+
 CHAT = """schema_version = 1
 id = "{id}"
 
@@ -248,6 +350,10 @@ id = "{id}"
 interactive = true
 args = []
 """
+
+
+def refused_for_server(run: subprocess.CompletedProcess) -> bool:
+    return run.returncode == 2 and "MATRIX_ALLOW_SERVER" in run.stderr
 
 
 def executable(path: Path, text: str) -> None:
@@ -262,6 +368,7 @@ class World:
     def __init__(self, connector: str, env: dict[str, str | None] | None = None,
                  args: tuple[str, ...] = (), prepared: bool = False,
                  prompt_file: str | None = None) -> None:
+        server = (env or {}).get("WORLD_SERVER") or "http://localhost:8787"
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.bin = self.root / "bin"
@@ -274,6 +381,7 @@ class World:
         executable(self.bin / "goalcup-verify", VERIFY)
         executable(self.bin / "goalcup-daemon", "#!/bin/sh\nexit 0\n")
         executable(self.bin / "curl", CURL)
+        executable(self.bin / "gh", GH)
         executable(self.bin / "fake-fetch.sh", FETCH)
         self.connectors = self.root / "connectors"
         (self.connectors / "stubchat").mkdir(parents=True)
@@ -289,13 +397,15 @@ class World:
             "MATRIX_SUBMIT_DELAY": "1",
             "STUB_OUT": str(self.out),
             "STUB_PROMPT": PROMPT,
+            # This machine's own git login: a test run's goalcup sees it, no other cell's does.
+            "SSH_AUTH_SOCK": HOST_SSH,
+            "GH_TOKEN": "gh-token-of-this-machine",
         }
         if prepared:
-            # A configuration directory as `goalcup prep` leaves it (MATRIX_CONFIG_DIR).
+            # A configuration directory as `goalcup setup` leaves it (MATRIX_CONFIG_DIR).
             self.cfg = self.root / "prepared-cfg"
             self.cfg.mkdir()
             (self.cfg / "prep.json").write_text("{}")
-            (self.cfg / "github.json").write_text("{}")
             environment["MATRIX_CONFIG_DIR"] = str(self.cfg)
         if prompt_file is not None:
             path = self.root / "prompt.txt"
@@ -303,23 +413,46 @@ class World:
             environment["MATRIX_PROMPT_FILE"] = str(path)
             del environment["MATRIX_PROMPT"]
         for key, value in (env or {}).items():
+            if key == "WORLD_SERVER":
+                continue
             if value is None:
                 environment.pop(key, None)
             else:
-                environment[key] = value.replace("{bin}", str(self.bin))
+                environment[key] = value.replace("{bin}", str(self.bin)).replace("{root}", str(self.root))
+        # The host half of a Docker cell's approvals (STUB_HOST_APPROVES=1): approve each code that
+        # matrix.sh writes to its codes file, the way linux-matrix.sh does with the key.
+        stop = threading.Event()
+        if environment.get("STUB_HOST_APPROVES") == "1":
+            codes = Path(environment["MATRIX_CODES_FILE"])
+
+            def approve() -> None:
+                done = 0
+                while not stop.is_set():
+                    lines = codes.read_text().splitlines() if codes.exists() else []
+                    while done < len(lines):
+                        done += 1
+                        (self.out / f"approved.host.{done}").write_text(lines[done - 1])
+                    time.sleep(0.1)
+
+            threading.Thread(target=approve, daemon=True).start()
         log = self.root / "matrix.log"
         # A test run is left to its default budget (the duration plus 1800 s) unless it names one.
-        budget = () if "--test" in args else ("--timeout", "60")
+        budget = () if "--test" in args or "--refusals" in args else ("--timeout", "60")
         self.started = time.time()
         self.run = subprocess.run(
-            ["sh", str(MATRIX), connector, "http://localhost:8787", "--log", str(log), "--keep",
+            ["sh", str(MATRIX), connector, server, "--log", str(log), "--keep",
              *budget, *args],
             env=environment, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120,
         )
+        stop.set()
+        self.elapsed = time.time() - self.started
         self.log = log.read_text() if log.exists() else ""
 
     def seen(self, name: str) -> str:
         return (self.out / name).read_text()
+
+    def seen_json(self, name: str):
+        return json.loads(self.seen(name))
 
     def has(self, name: str) -> bool:
         return (self.out / name).exists()
@@ -350,9 +483,13 @@ SCENARIOS = {
     "chat": ("stubchat", {"MATRIX_PRE_PROMPT_KEYS": r"\033[B\r", "MATRIX_PRE_PROMPT_DELAY": "1"}),
     # Test runs: sealed by the script, the server's copy `sealed` with no `stop`.
     "test_chat": ("stubchat", {"STUB_STOP": "0", "STUB_PROMPT": TYPED}, TEST, True, MULTILINE),
+    # The same test run in a Docker cell (its device codes go to a codes file the host approves).
+    "test_chat_cell": ("stubchat", {"STUB_STOP": "0", "STUB_PROMPT": TYPED, "STUB_CODE": "1",
+                                    "MATRIX_CODES_FILE": "{root}/codes", "STUB_HOST_APPROVES": "1"},
+                       TEST, True, MULTILINE),
     "test_chat_early": ("stubchat",
                         {"STUB_STOP": "0", "STUB_EXIT_EARLY": "1", "STUB_NO_SEAL": "1",
-                         "STUB_PROMPT": TYPED},
+                         "STUB_PROMPT": TYPED, "MATRIX_REPO": GIVEN_REPO},
                         ("--test", "--duration", "30"), True, MULTILINE),
     "test_unlisted": ("stubchat", {"STUB_ENTRIES_EMPTY": "1", "STUB_STOP": "0"},
                       ("--test", "--duration", "30"), True),
@@ -376,14 +513,37 @@ SCENARIOS = {
                                       "CLOUDFLARE_API_TOKEN": None}),
     "pruned_files": ("stubchat", {"STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
                                   "MATRIX_FETCH_INDEX": "/index.json",
-                                  "MATRIX_FETCH_STORE": "/bucket-mirror"}),
+                                  "MATRIX_FETCH_STORE": "/bucket-mirror",
+                                  "MATRIX_FETCH_BUCKET": "goalcup-traces-local"}),
+    # The bucket is known for the staging Worker; for any other server it must be named.
+    "pruned_staging": ("stubchat", {"STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
+                                    "MATRIX_FETCH_INDEX": "/index.json",
+                                    "MATRIX_FETCH_STORE": "/bucket-mirror",
+                                    "WORLD_SERVER": "https://goalcup-ingest-staging.b-9a5.workers.dev"}),
+    "pruned_no_bucket": ("stubchat", {"STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
+                                      "MATRIX_FETCH_INDEX": "/index.json",
+                                      "MATRIX_FETCH_STORE": "/bucket-mirror"}),
     "pruned_env": ("stubchat", {"STUB_PRUNED": "1", "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
-                                "DATABASE_URL": DB_URL, "CLOUDFLARE_ACCOUNT_ID": "acct",
+                                "MATRIX_FETCH_BUCKET": "goalcup-traces-local", "DATABASE_URL": DB_URL, "CLOUDFLARE_ACCOUNT_ID": "acct",
                                 "CLOUDFLARE_API_TOKEN": CF_TOKEN}),
     "pruned_bad_tail": ("stubchat", {"STUB_PRUNED": "1", "STUB_FETCH_BAD": "1",
+                                     "MATRIX_FETCH_BUCKET": "goalcup-traces-local",
                                      "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
                                      "MATRIX_FETCH_INDEX": "/index.json",
                                      "MATRIX_FETCH_STORE": "/bucket-mirror"}),
+    # A Docker cell has no key: matrix.sh writes each device code to MATRIX_CODES_FILE and the
+    # host (the responder below) approves it. A forged extra line changes nothing in matrix.sh.
+    "codes_file": ("stubchat", {"MATRIX_CODES_FILE": "{root}/codes", "STUB_CODE": "1",
+                                "STUB_HOST_APPROVES": "1"}),
+    # A test run whose start asks for its repository: nobody can answer it.
+    "test_asks": ("stubchat", {"STUB_ASK": "1"}, ("--test", "--duration", "30"), True),
+    # A test run on a machine with no GitHub login.
+    "test_no_gh_login": ("stubchat", {"STUB_GH_NO_LOGIN": "1"}, ("--test", "--duration", "30"), True),
+    # The refusals, through a test build's doors; then a build without them; then a start that
+    # gets past them to the approval.
+    "refusals": ("m2-fake-tui", {}, ("--refusals",)),
+    "refusals_shipped": ("m2-fake-tui", {"STUB_SHIPPED": "1"}, ("--refusals",)),
+    "refusals_pass_through": ("m2-fake-tui", {"STUB_NEVER_REFUSES": "1"}, ("--refusals",)),
 }
 
 
@@ -486,11 +646,14 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(w.run.returncode, 0, w.said())
         # The row keeps its shape.
         self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ stub-harness_9\.9\.9 PASS \d{4}-\d\d-\d\d$")
-        self.assertEqual(w.seen("start.argv"), "start\n--harness\nstubchat\n--test")
+        self.assertRegex(w.seen("start.argv"),
+                         r"^start\n--harness\nstubchat\n--test\n--repo\nkit-tester/goalcup-kit-stubchat-[0-9a-f]{6}$")
         # The exact entry of this run, sealed no earlier than the duration after the Enter.
         self.assertEqual(w.seen("seal.argv"), "seal\n--yes\ne0123456789abcdef")
         waited = float(w.seen("seal.at")) - float(w.seen("start.submitted_at"))
-        self.assertGreaterEqual(waited, DURATION)
+        # matrix.sh counts whole seconds (date +%s) from when it sees the Enter's marker, so the
+        # seal can come up to a second short of DURATION by the stub's own stamp.
+        self.assertGreaterEqual(waited, DURATION - 1)
         self.assertLess(waited, DURATION + 20)
         # `goalcup start` reported the seal uploaded, so no upload was needed; the server's copy
         # passed without `stop`.
@@ -506,11 +669,115 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(chunks[0][1], TYPED)
         self.assertEqual(chunks[1][1], "\r")
 
+    def test_a_practice_run_has_no_git_login_and_never_the_machines(self) -> None:
+        w = self.worlds["chat"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        git = w.seen_json("start.git")
+        # A git config of the run's own that resets every credential helper, the system config
+        # (macOS's names the keychain) off, and no SSH agent, keyring or token.
+        self.assertEqual(git["gitconfig"], ["credential.helper="])
+        # The script works in `pwd -P` paths (/private/var/... on macOS): compare resolved paths.
+        self.assertTrue(Path(git["GIT_CONFIG_GLOBAL"]).resolve().is_relative_to(w.tmpdir.resolve()))
+        self.assertEqual(git["GIT_CONFIG_NOSYSTEM"], "1")
+        self.assertTrue(Path(git["GH_CONFIG_DIR"]).resolve().is_relative_to(w.tmpdir.resolve()))
+        for name in ("SSH_AUTH_SOCK", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "GH_TOKEN"):
+            self.assertIsNone(git[name], name)
+        self.assertNotIn("--repo", w.seen("start.argv"))
+        self.assertFalse(w.has("gh.repo_create"))
+
+    def test_a_test_run_makes_its_repository_and_uses_the_machines_own_login(self) -> None:
+        w = self.worlds["test_chat"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        made = w.seen("gh.repo_create").split("\n")
+        # Public and with no README, so it stays empty; passed to the start; named at the end.
+        self.assertEqual(made[:2], ["repo", "create"])
+        self.assertEqual(made[3:], ["--public"])
+        self.assertTrue(w.seen("start.argv").endswith("--repo\n" + made[2]))
+        # The default `gh auth login` lacks the delete_repo scope: the advice adds it first.
+        self.assertIn(f"test repository made by the kit (delete it when done: first `gh auth refresh -s "
+                      f"delete_repo`, which the default gh login lacks, then `gh repo delete {made[2]} --yes`, "
+                      "then `gh auth refresh -r delete_repo` to drop the scope again: this machine's agents "
+                      "push with that login)", w.run.stderr)
+        # (A Docker cell says whose login its agent uses; see the cell test below.)
+        git = w.seen_json("start.git")
+        self.assertEqual(git["SSH_AUTH_SOCK"], HOST_SSH)
+        self.assertEqual(git["GH_TOKEN"], "gh-token-of-this-machine")
+        for name in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GH_CONFIG_DIR"):
+            self.assertIsNone(git[name], name)
+
+    def test_in_a_docker_cell_the_scope_advice_names_the_cells_own_login(self) -> None:
+        w = self.worlds["test_chat_cell"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertIn("then `gh auth refresh -r delete_repo` to drop the scope again", w.run.stderr)
+        self.assertIn("the login stored in this cell", w.run.stderr)
+        self.assertNotIn("this machine's agents", w.run.stderr)
+
+    def test_a_test_run_takes_the_repository_matrix_repo_names(self) -> None:
+        w = self.worlds["test_chat_early"]
+        self.assertTrue(w.seen("start.argv").endswith("--repo\n" + GIVEN_REPO))
+        self.assertFalse(w.has("gh.repo_create"))
+        self.assertNotIn("made by the kit", w.run.stderr)
+
+    def test_a_test_run_with_no_github_login_says_to_sign_in_and_stops(self) -> None:
+        w = self.worlds["test_no_gh_login"]
+        self.assertNotEqual(w.run.returncode, 0)
+        self.assertIn("no GitHub login found here: run `gh auth login`", w.run.stderr)
+        self.assertFalse(w.has("start.argv"))
+        self.assertFalse(w.has("gh.repo_create"))
+
+    def test_a_question_before_the_approval_fails_the_row_at_once(self) -> None:
+        w = self.worlds["test_asks"]
+        self.assertNotEqual(w.run.returncode, 0)
+        self.assertIn("asked a question before the run's approval", w.run.stderr)
+        self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ FAIL ")
+        self.assertLess(w.elapsed, 50)
+
+    def test_every_refusal_is_checked_through_a_test_builds_doors(self) -> None:
+        w = self.worlds["refusals"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertRegex(w.run.stdout, r"(?m)^m2-fake-tui \S+ refusals PASS \d{4}-\d\d-\d\d$")
+        for kind in ("not-empty", "private", "missing", "push", "no-login", "bare-name"):
+            self.assertIn(f"refusal {kind}: PASS", w.run.stderr)
+            seen = w.seen_json(f"refuse.{kind}")
+            self.assertFalse(seen["tty"], kind)
+            self.assertEqual(seen["argv"][:5], ["start", "--harness", "m2-fake-tui", "--dev", "--test"])
+            # No git login of any kind reaches a refusal cell.
+            self.assertEqual(seen["git"]["gitconfig"], ["credential.helper="], kind)
+            self.assertEqual(seen["git"]["GIT_CONFIG_NOSYSTEM"], "1", kind)
+            self.assertIsNone(seen["git"]["SSH_AUTH_SOCK"], kind)
+        # GitHub is asked only where the refusal is GitHub's answer; the login door is open only
+        # where a login is found.
+        for kind in ("not-empty", "private", "missing", "push"):
+            doors = w.seen_json(f"refuse.{kind}")["doors"]
+            self.assertTrue(doors["GOALCUP_TEST_GITHUB_API"].startswith("http://127.0.0.1:"))
+            self.assertEqual(doors["GOALCUP_TEST_GITHUB_LOGIN"], "goalcup-kit")
+        # Only the push refusal points the dry-run push at a remote that is not there.
+        self.assertFalse(Path(w.seen_json("refuse.push")["doors"]["GOALCUP_TEST_PUSH_REMOTE"]).exists())
+        self.assertIsNone(w.seen_json("refuse.missing")["doors"]["GOALCUP_TEST_PUSH_REMOTE"])
+        for kind in ("no-login", "bare-name"):
+            self.assertEqual(w.seen_json(f"refuse.{kind}")["doors"],
+                             {"GOALCUP_TEST_GITHUB_API": None, "GOALCUP_TEST_GITHUB_LOGIN": None,
+                              "GOALCUP_TEST_PUSH_REMOTE": None})
+
+    def test_a_build_without_the_test_doors_fails_the_refusals(self) -> None:
+        w = self.worlds["refusals_shipped"]
+        self.assertNotEqual(w.run.returncode, 0)
+        self.assertRegex(w.run.stdout, r"(?m)^m2-fake-tui \S+ refusals FAIL ")
+        self.assertIn("refusal not-empty: FAIL: it refused for another reason", w.run.stderr)
+        self.assertIn("no test doors", w.run.stderr)
+
+    def test_a_start_that_reaches_the_approval_fails_its_refusal(self) -> None:
+        w = self.worlds["refusals_pass_through"]
+        self.assertNotEqual(w.run.returncode, 0)
+        self.assertIn("refusal missing: FAIL: the run's approval was asked for", w.run.stderr)
+        self.assertNotIn(": PASS", w.run.stderr)
+
     def test_a_test_run_whose_harness_ends_first_is_sealed_then_uploaded(self) -> None:
         w = self.worlds["test_chat_early"]
         self.assertEqual(w.run.returncode, 0, w.said())
         self.assertRegex(w.run.stdout, r"stubchat \S+ stub-harness_9\.9\.9 PASS ")
-        self.assertEqual(w.seen("start.argv"), "start\n--harness\nstubchat\n--test")
+        self.assertEqual(w.seen("start.argv"),
+                         f"start\n--harness\nstubchat\n--test\n--repo\n{GIVEN_REPO}")
         # Sealed when the harness ended, before the 30 s duration: counted from the Enter, as the
         # duration is, so a slow start on a loaded machine does not count against it.
         self.assertEqual(w.seen("seal.argv"), "seal\n--yes\ne0123456789abcdef")
@@ -557,13 +824,25 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(w.run.returncode, 0, w.said())
         self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ stub-harness_9\.9\.9 PASS ")
         argv = w.seen("fetch.argv").split("\n")
-        self.assertEqual(argv[:6], ["--bucket", "goalcup-traces-staging", "--index", "/index.json",
+        self.assertEqual(argv[:6], ["--bucket", "goalcup-traces-local", "--index", "/index.json",
                                     "--store", "/bucket-mirror"])
         self.assertEqual(argv[6], "e0123456789abcdef")
         # The verifier and the agent-work check judged the copy, and the tail matched it.
         self.assertIn("servercopy/e0123456789abcdef", w.seen("research.argv"))
         self.assertRegex(w.log, r"ok +local chain\.\d{20}\.jsonl")
         self.assertIn("ends where the server copy ends", w.log)
+
+    def test_the_staging_bucket_is_assumed_for_the_staging_worker_only(self) -> None:
+        w = self.worlds["pruned_staging"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertEqual(w.seen("fetch.argv").split("\n")[:2], ["--bucket", "goalcup-traces-staging"])
+
+    def test_a_long_run_on_another_server_needs_its_bucket_named(self) -> None:
+        w = self.worlds["pruned_no_bucket"]
+        self.assertEqual(w.run.returncode, 4, w.said())
+        self.assertIn("MATRIX_FETCH_BUCKET", w.run.stderr)
+        self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ NOT-VERIFIED \d{4}-")
+        self.assertFalse(w.has("fetch.argv"), "the staging bucket was assumed for an unknown server")
 
     def test_fetch_credentials_reach_only_the_fetch(self) -> None:
         w = self.worlds["pruned_env"]
@@ -576,6 +855,17 @@ class MatrixTests(unittest.TestCase):
         for secret in ("db-secret-never-shown", CF_TOKEN):
             self.assertNotIn(secret, w.everything_matrix_wrote())
             self.assertNotIn(secret, w.seen("fetch.argv"))
+
+    def test_a_device_code_is_written_for_the_host_and_the_matrix_approves_nothing(self) -> None:
+        w = self.worlds["codes_file"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        # One code per phase, in order, as `<phase> <code>` lines; no key, no approval call.
+        self.assertEqual((w.root / "codes").read_text(), "login ABCD-EFGH\nstart ABCD-EFGH\n")
+        self.assertEqual(sorted(p.name for p in w.out.glob("approved.*")), ["approved.host.1", "approved.host.2"])
+        self.assertEqual(w.seen("login.approved"), "yes")
+        self.assertEqual(w.seen("start.approved"), "yes")
+        self.assertIn("written for the host to approve", w.log)
+        self.assertIn("key file supplied: no", w.log)
 
     def test_a_local_tail_that_differs_from_the_server_copy_fails(self) -> None:
         w = self.worlds["pruned_bad_tail"]
@@ -617,6 +907,88 @@ class MatrixArgumentTests(unittest.TestCase):
         self.assertEqual(run.stdout, "")
         return run.stderr
 
+    def verdict(self, server: str, *args: str, **env: str) -> tuple[bool, str]:
+        """Whether the matrix refused the server for not being on the allowlist, and what it said.
+        A server that is allowed goes on to the health check, which fails here on a curl stub that
+        reaches no network (it must never touch a real server)."""
+        stubs = self.root / "stub-bin"
+        stubs.mkdir(exist_ok=True)
+        executable(stubs / "curl", "#!/bin/sh\nprintf 000\nexit 7\n")
+        run = subprocess.run(["sh", str(MATRIX), "m2-fake-tui", server, "--timeout", "5", *args],
+                             env={**self.env, "PATH": f"{stubs}:{self.env['PATH']}", **env},
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+        if run.returncode != 2:
+            self.assertIn("did not answer /v1/health", run.stderr, run.stdout + run.stderr)
+        return refused_for_server(run), run.stderr
+
+    def test_only_staging_and_this_machine_are_servers_unless_one_is_named_exactly(self) -> None:
+        for server in ("https://goalcup-ingest-staging.b-9a5.workers.dev",
+                       "https://goalcup-ingest-staging.b-9a5.workers.dev/",
+                       "https://GOALCUP-INGEST-STAGING.b-9a5.workers.dev",
+                       "http://localhost:8787", "http://127.0.0.1:8787", "http://[::1]:8787",
+                       "http://localhost"):
+            with self.subTest(allowed=server):
+                refused, said = self.verdict(server)
+                self.assertFalse(refused, said)
+        for server in ("https://example.com", "https://staging.example.com",
+                       "https://goalcup-ingest-staging.b-9a5.workers.dev.evil.example",
+                       "https://evil.example/goalcup-ingest-staging.b-9a5.workers.dev",
+                       "https://goalcup-ingest-staging.b-9a5.workers.dev:8443",
+                       "https://localhost:8787", "http://localhost.evil.example:8787",
+                       # Userinfo: the host is what follows the @.
+                       "http://localhost:1@evil.example:80", "http://127.0.0.1@evil.example",
+                       "http://127.0.0.1:1@evil.example", "http://[::1]:1@evil.example:80",
+                       "http://localhost:80/path", "http://localhost:8787?x=1", "http://localhost:"):
+            with self.subTest(refused=server):
+                refused, said = self.verdict(server)
+                self.assertTrue(refused, said)
+
+    def test_a_server_off_the_list_is_allowed_only_when_named_exactly(self) -> None:
+        server = "https://staging.example.com"
+        for named in (server, server + "/", server.upper()):
+            with self.subTest(named=named):
+                refused, said = self.verdict(server, MATRIX_ALLOW_SERVER=named)
+                self.assertFalse(refused, said)
+        for named in ("https://other.example.com", "*", "staging.example.com", "https://example.com",
+                      server + ".evil.example", ""):
+            with self.subTest(named=named):
+                refused, said = self.verdict(server, MATRIX_ALLOW_SERVER=named)
+                self.assertTrue(refused, said)
+
+    def test_the_allowlist_never_lets_production_through(self) -> None:
+        prod = "https://ingest.agentcommunity.org"
+        for server in (prod, prod + "/", "https://INGEST.agentcommunity.org", "https://x.ingest.agentcommunity.org"):
+            with self.subTest(server=server):
+                refused, said = self.verdict(server, MATRIX_ALLOW_SERVER=server)
+                self.assertIn("refusing ingest.agentcommunity.org", said)
+
+    def test_a_key_file_inside_the_checkout_is_refused(self) -> None:
+        inside = MATRIX.parent.parent / "scratch-key-for-test"
+        inside.write_text("k\n")
+        self.addCleanup(lambda: inside.unlink(missing_ok=True))
+        link = self.root / "link-to-key"
+        link.symlink_to(inside)
+        for path in (inside, link, MATRIX.parent / ".." / "scratch-key-for-test"):
+            with self.subTest(path=str(path)):
+                said = self.refuse("m2-fake-tui", "http://localhost:8787",
+                                   GOALCUP_TEST_APPROVAL_KEY_FILE=str(path))
+                self.assertIn("inside the checkout", said)
+                self.assertEqual(said.count("\n"), 1, "one clear line")
+
+    def test_the_production_flag_lets_only_the_production_address_through(self) -> None:
+        prod = "https://ingest.agentcommunity.org"
+        refused, said = self.verdict(prod, "--allow-production")
+        self.assertNotIn("refusing", said)
+        for server in (prod + ".evil.example", "https://evil.example/ingest.agentcommunity.org"):
+            with self.subTest(server=server):
+                refused, said = self.verdict(server, "--allow-production")
+                self.assertIn("refusing ingest.agentcommunity.org", said)
+
+    def test_the_allow_variable_does_not_reach_the_harness(self) -> None:
+        # It is read and removed like the key's path: nothing goalcup starts inherits it.
+        text = MATRIX.read_text()
+        self.assertIn("unset MATRIX_ALLOW_SERVER", text)
+
     def test_test_and_duration_go_together(self) -> None:
         cfg = {"MATRIX_CONFIG_DIR": str(self.cfg)}
         self.assertIn("go together", self.refuse("codex-cli", "https://x.example", "--test", **cfg))
@@ -644,6 +1016,30 @@ class MatrixArgumentTests(unittest.TestCase):
     def test_a_test_run_needs_a_prepared_configuration_directory(self) -> None:
         self.assertIn("MATRIX_CONFIG_DIR", self.refuse(
             "codex-cli", "https://x.example", "--test", "--duration", "60"))
+
+    def test_a_named_test_repository_is_owner_slash_name_and_never_the_practice_one(self) -> None:
+        test = ("codex-cli", "https://x.example", "--test", "--duration", "60")
+        cfg = {"MATRIX_CONFIG_DIR": str(self.cfg)}
+        for bad in ("just-a-name", "a/b/c", "a/b c"):
+            with self.subTest(bad=bad):
+                self.assertIn("<owner>/<name>", self.refuse(*test, **cfg, MATRIX_REPO=bad))
+        # The same repository however it is written: case, a trailing .git, a trailing /.
+        for same in ("agentcommunity/goalcup-matrix-empty", "AgentCommunity/goalcup-matrix-empty",
+                     "agentcommunity/goalcup-matrix-empty.git", "AgentCommunity/GoalCup-Matrix-Empty.GIT",
+                     "agentcommunity/goalcup-matrix-empty/", "agentcommunity/goalcup-matrix-empty.git/",
+                     "agentcommunity/goalcup-matrix-empty//"):
+            with self.subTest(same=same):
+                self.assertIn("practice repository", self.refuse(*test, **cfg, MATRIX_REPO=same))
+        # A different repository is not it.
+        self.assertNotIn("practice repository", self.refuse(
+            *test, **cfg, MATRIX_REPO="agentcommunity/goalcup-matrix-empty-2/x"))
+        self.assertIn("MATRIX_CELL", self.refuse(*test, **cfg, MATRIX_CELL="Bad_Cell"))
+
+    def test_refusals_go_alone_with_the_fake(self) -> None:
+        self.assertIn("m2-fake-tui only", self.refuse("codex-cli", "https://x.example", "--refusals"))
+        self.assertIn("goes alone", self.refuse("m2-fake-tui", "https://x.example", "--refusals",
+                                                "--test", "--duration", "60",
+                                                MATRIX_CONFIG_DIR=str(self.cfg)))
 
     def test_check_copy_takes_no_test_options(self) -> None:
         self.refuse("--check-copy", str(self.cfg), "--test", "--duration", "60")
