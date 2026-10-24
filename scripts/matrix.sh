@@ -513,12 +513,18 @@ validate_server() {
   esac
   case $SERVER_LC in
     "$STAGING_SERVER") return 0 ;;
-    http://localhost | http://127.0.0.1 | "http://[::1]") return 0 ;;
-    http://localhost:* | http://127.0.0.1:* | "http://[::1]":*)
-      # A port is digits only, and nothing follows it (no path, no user, no second host).
-      case ${SERVER_LC##*:} in "" | *[!0-9]*) ;; *) return 0 ;; esac
-      ;;
   esac
+  # A server on this machine: the WHOLE address is http://localhost, http://127.0.0.1 or
+  # http://[::1] with an optional :digits, nothing else (no user@, no path, no query).
+  for local_host in localhost 127.0.0.1 "[::1]"; do
+    case $SERVER_LC in
+      "http://$local_host") return 0 ;;
+      "http://$local_host":*)
+        local_port=${SERVER_LC#"http://$local_host":}
+        case $local_port in "" | *[!0-9]*) ;; *) return 0 ;; esac
+        ;;
+    esac
+  done
   allow_lc=$(printf '%s' "$ALLOW_SERVER" | sed 's:/*$::' | tr 'A-Z' 'a-z')
   if [ -n "$allow_lc" ] && [ "$allow_lc" = "$SERVER_LC" ]; then
     case $SERVER_LC in

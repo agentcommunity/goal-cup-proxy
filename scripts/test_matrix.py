@@ -976,7 +976,11 @@ class MatrixArgumentTests(unittest.TestCase):
                        "https://goalcup-ingest-staging.b-9a5.workers.dev.evil.example",
                        "https://evil.example/goalcup-ingest-staging.b-9a5.workers.dev",
                        "https://goalcup-ingest-staging.b-9a5.workers.dev:8443",
-                       "https://localhost:8787", "http://localhost.evil.example:8787"):
+                       "https://localhost:8787", "http://localhost.evil.example:8787",
+                       # Userinfo: the host is what follows the @.
+                       "http://localhost:1@evil.example:80", "http://127.0.0.1@evil.example",
+                       "http://127.0.0.1:1@evil.example", "http://[::1]:1@evil.example:80",
+                       "http://localhost:80/path", "http://localhost:8787?x=1", "http://localhost:"):
             with self.subTest(refused=server):
                 refused, said = self.verdict(server)
                 self.assertTrue(refused, said)

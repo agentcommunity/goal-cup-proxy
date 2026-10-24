@@ -252,7 +252,8 @@ class ConfigValidation(Base):
                        "https://goalcup-ingest-staging.b-9a5.workers.dev.evil.example",
                        "https://evil.example/goalcup-ingest-staging.b-9a5.workers.dev",
                        "https://goalcup-ingest-staging.b-9a5.workers.dev:8443",
-                       "http://localhost.evil.example:8787", "http://localhost:80/path"):
+                       "http://localhost.evil.example:8787", "http://localhost:80/path",
+                       "http://localhost:1@evil.example:80", "http://127.0.0.1@evil.example"):
             with self.subTest(refused=server):
                 errs = self.server_errors(server)
                 self.assertTrue(any("MATRIX_ALLOW_SERVER" in e for e in errs), errs)
