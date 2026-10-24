@@ -311,9 +311,11 @@ so one sign-in serves every later run. Once per volume, in a terminal:
 approved with the key; then `goalcup setup` opens Codex in the container, and you choose "Sign in with
 Device Code", finish it in the Mac's browser, and type `/exit`. After that, unattended:
 `GOALCUP_TEST_APPROVAL_KEY_FILE=<key file> sh scripts/linux-matrix.sh run codex-cli` prints the row last.
-The approval key is never mounted into the container: it goes in on the standard input of the login
-step and of the run step, into a private file in the container's own `/tmp`, and `matrix.sh` removes
-the run's file as soon as the start is approved, before the harness works. The member is the synthetic
+The approval key never enters the container: the container half writes each device code to a
+codes file in the log directory (`MATRIX_CODES_FILE`), and the script approves it on this machine,
+with the key on curl's standard input. It posts only a well-formed code (four capital letters, a
+dash, four capital letters) for the phase it expects, once per phase (the login, then the run's
+start), and reads nothing after the start's; anything else ends the step with nothing posted. The member is the synthetic
 test member unless `GOALCUP_TEST_MEMBER_ID` says otherwise, and the server is staging. The script takes
 the heavy-run lock itself (never run it inside the lock: it refuses when `GOALCUP_HEAVY_LOCK_HELD=1` and
 gives up after 30 minutes), with `--cpus=6`. Codex's harness home is set to `gpt-5.6-luna` at low

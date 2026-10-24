@@ -63,15 +63,18 @@
 # goalcup never hands a harness a provider key (D61): a harness signs in with its own login,
 # kept in its tracker home, as Codex does.
 #
-# Environment. A secret is only ever a FILE on this machine, and it is never mounted into the
+# Environment. A secret is only ever a FILE on this machine, and nothing secret is ever in the
 # cell's container (the harness runs there, as the same user as every step, with no sandbox, so it
-# could read a mounted file). Its value goes on the standard input of the one `docker exec` that
-# needs it, never in an argument, a `-e`, a log or this script's output.
-#   GOALCUP_TEST_APPROVAL_KEY_FILE  the server's test approval key (login and run). It is the
-#                                   standard input of the login step and of the run step, which
-#                                   keep it in a private file in the container's own /tmp;
-#                                   matrix.sh removes the run's file once the run is approved,
-#                                   before the harness works, and each step removes it on exit.
+# could read it): not mounted, not piped, not in an argument or a `-e`, a log or this script's output.
+#   GOALCUP_TEST_APPROVAL_KEY_FILE  the server's test approval key (login and run). It never enters
+#                                   the container. The container half writes each device code to a
+#                                   codes file in the log directory (`login <code>`, then for a run
+#                                   `start <code>`; MATRIX_CODES_FILE) and this script approves it
+#                                   on this machine, the key piped into curl's standard input as a
+#                                   header. The code is checked first: only the next expected phase,
+#                                   exactly four capital letters, a dash and four capital letters,
+#                                   once per phase, and nothing after the last; anything else ends
+#                                   the step with nothing posted. Needs curl on this machine.
 #   MATRIX_REPO                     a test run's repository, <owner>/<name>, instead of the one
 #                                   matrix.sh makes (matrix.sh says what it must be).
 #   GOALCUP_TEST_MEMBER_ID          the member approved as
@@ -191,26 +194,6 @@ codex_effort() {
 # ------------------------------------------------------------------ inside the container
 # These run as `dev` in the container, called by the host half below.
 
-# A secret from this command's standard input (the host half's `docker exec -i ... <file`) into a
-# new private file in the container's own /tmp, never the volume (which outlives the container);
-# its path goes into the variable named. Read before anything else runs, then standard input is
-# /dev/null, so no child inherits it. Every such file is removed on the way out (the EXIT trap):
-# no secret is in the container while the harness runs (a run's matrix.sh removes the key itself
-# once the run is approved).
-SECRET_DIRS=""
-secret_in() { # variable
-    sd=$(mktemp -d /tmp/goalcup-secret.XXXXXX) || fail "a private directory for a secret"
-    SECRET_DIRS="$SECRET_DIRS $sd"
-    (umask 077 && cat >"$sd/secret") || fail "reading a secret from standard input"
-    exec </dev/null
-    [ -s "$sd/secret" ] || fail "no secret on standard input"
-    eval "$1=\$sd/secret"
-}
-forget_secrets() {
-    for sd in $SECRET_DIRS; do rm -rf "$sd"; done
-    SECRET_DIRS=""
-}
-
 # The tracker home's config for a harness that has a model rule (scripts/kit_settle.py
 # home-config; minimal only if the installed codex lists it for the Luna model).
 inner_home_config() { # connector
@@ -244,10 +227,9 @@ for root in sys.argv[1:]:
 PY
 }
 
-# `goalcup login`, its one device code approved through the test route: the key arrives on this
-# step's standard input into a private file, and goes from it straight into curl's standard input
-# as a header, as matrix.sh does it. The file is gone when this step ends.
-inner_login() { # (the key's file is made first, by the dispatcher below)
+# `goalcup login`, its one device code written to MATRIX_CODES_FILE (as `login <code>`) for the host
+# half, which approves it where the key is (poll_codes). The key never enters the container.
+inner_login() {
     mkdir -p "$CFG" && chmod 700 "$CFG" || fail "login: config directory"
     out=$TMPDIR/login.$$
     rm -f "$out" "$out.rc"
@@ -258,16 +240,7 @@ inner_login() { # (the key's file is made first, by the dispatcher below)
         code=$(tr -d '\r' <"$out" | sed -n 's/.*shows the code \([A-Z]\{4\}-[A-Z]\{4\}\)\..*/\1/p' | head -n 1)
         if [ -z "$approved" ] && [ -n "$code" ]; then
             approved=$code
-            status=$({
-                printf 'Authorization: Bearer '
-                tr -d '\n' <"$keyfile"
-                printf '\n'
-            } | curl -sS --max-time 30 -o /dev/null -w '%{http_code}' -X POST -H @- \
-                -H 'Content-Type: application/json' \
-                -d "{\"user_code\":\"$code\",\"member_id\":\"$GOALCUP_TEST_MEMBER_ID\",\"approve\":true}" \
-                "$LINUX_MATRIX_SERVER/v1/device/approve")
-            echo "linux-matrix: login code approved as $GOALCUP_TEST_MEMBER_ID: HTTP $status"
-            [ "$status" = 200 ] || { kill "$job" 2>/dev/null; fail "login approval (HTTP $status)"; }
+            printf 'login %s\n' "$code" >>"$MATRIX_CODES_FILE" || { kill "$job" 2>/dev/null; fail "login: the codes file"; }
         fi
         [ "$waited" -lt 300 ] || { kill "$job" 2>/dev/null; cat "$out"; fail "login timed out"; }
         sleep 2
@@ -318,12 +291,8 @@ inner_model_check() { # connector marker
 inner_run() { # connector [matrix.sh options]
     h=$1
     shift
-    # The approval key, from this step's standard input, before anything else can read it. matrix.sh removes the file once the run
-    # is approved, before the harness works (MATRIX_FORGET_KEY). No database URL or R2 token is here.
-    secret_in keyfile
-    GOALCUP_TEST_APPROVAL_KEY_FILE=$keyfile
-    MATRIX_FORGET_KEY=1
-    export GOALCUP_TEST_APPROVAL_KEY_FILE MATRIX_FORGET_KEY
+    # No key and no database URL or R2 token is here: matrix.sh writes its device codes to
+    # MATRIX_CODES_FILE and the host half approves them.
     inner_home_config "$h"
     # Every connector is chat mode (D57): it runs signed in, on this volume's home.
     [ "$(inner_home_ready "$h")" = yes ] ||
@@ -359,12 +328,9 @@ inner_run() { # connector [matrix.sh options]
 }
 
 case ${1:-} in
-inner-*) trap forget_secrets EXIT ;;
-esac
-case ${1:-} in
 inner-home-config) inner_home_config "$2"; exit 0 ;;
 inner-home-files) inner_home_files "$2"; exit 0 ;;
-inner-login) secret_in keyfile; inner_home_config "$2"; inner_login; exit 0 ;;
+inner-login) inner_home_config "$2"; inner_login; exit 0 ;;
 inner-home-ready) inner_home_ready "$2"; exit 0 ;;
 inner-model-check) inner_model_check "$2" "$3"; exit $? ;;
 inner-settle) inner_settle; exit 0 ;;
@@ -497,9 +463,9 @@ else
     case $member in *[!A-Za-z0-9_-]* | "") fail "GOALCUP_TEST_MEMBER_ID may hold only letters, digits, _ -" ;; esac
 fi
 
-# Secrets: files on this machine only, never mounted into the container (the harness runs there,
-# as the same user, and could read a mounted file): each reaches the one `docker exec` that needs it
-# on its standard input. A key in the environment is refused, as matrix.sh does.
+# Secrets: files on this machine only, never in the container (the harness runs there, as the same
+# user, and could read them): the key is used here (watch_codes), and a database URL or R2 token is
+# refused. A key in the environment is refused, as matrix.sh does.
 [ -z "${GOALCUP_TEST_APPROVAL_KEY:-}" ] ||
     fail "GOALCUP_TEST_APPROVAL_KEY in the environment is refused: give the file as GOALCUP_TEST_APPROVAL_KEY_FILE"
 keyfile=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
@@ -526,6 +492,7 @@ set --
 if [ "$action" = login ] || [ "$action" = run ]; then
     [ -n "$keyfile" ] || fail "GOALCUP_TEST_APPROVAL_KEY_FILE is needed (the login and the run are approved with it)"
     mounted_file "$keyfile" "a secret file"
+    command -v curl >/dev/null 2>&1 || fail "curl is needed on this machine (it posts the approval)"
     set --
     promptfile=${MATRIX_PROMPT_FILE:-}
     if [ -n "$promptfile" ]; then
@@ -712,6 +679,53 @@ fi
 # its login shells find goalcup where a real install puts it, not in the build's /target/debug.
 step "install" "$name" sh -c "mkdir -p $BIN && install -m 0755 /target/debug/goalcup /target/debug/goalcup-daemon /target/debug/goalcup-verify $BIN/"
 
+# The container half writes each device code to a codes file in the log directory, one line
+# `<phase> <code>` (login, then start for a run), and this half approves it with the key, which is
+# only ever on this machine: curl's standard input as a header, as matrix.sh does it. The file is
+# written by the container, so the agent could write to it too: a line is read only when complete,
+# only the next expected phase is accepted, its code must be exactly four capital letters, a dash and
+# four capital letters, each phase is posted once, and nothing is read after the last phase. Anything
+# else before then ends the step with nothing posted.
+codes_file=$logdir/codes-$name
+codes_in_container=/logs/codes-$name
+posted=0 read_lines=0
+watch_codes() { # pid of the exec job, phases expected ("login" or "login start")
+    wc_job=$1 wc_phases=$2
+    wc_total=0
+    for _ in $wc_phases; do wc_total=$((wc_total + 1)); done
+    while kill -0 "$wc_job" 2>/dev/null; do
+        poll_codes "$wc_phases" "$wc_total"
+        sleep 1
+    done
+}
+poll_codes() { # phases total
+    [ "$posted" -lt "$2" ] && [ -f "$codes_file" ] || return 0
+    pc_complete=$(wc -l <"$codes_file" | tr -d ' ')
+    while [ "$read_lines" -lt "$pc_complete" ] && [ "$posted" -lt "$2" ]; do
+        read_lines=$((read_lines + 1))
+        pc_line=$(sed -n "${read_lines}p" "$codes_file" | tr -d '\r')
+        [ -n "$pc_line" ] || continue
+        pc_phase=$(printf '%s\n' $1 | sed -n "$((posted + 1))p")
+        if ! printf '%s\n' "$pc_line" | LC_ALL=C grep -Eqx "$pc_phase [A-Z]{4}-[A-Z]{4}"; then
+            fail "a malformed device code line in the codes file (expected \`$pc_phase <CODE>\`); nothing was approved from it"
+        fi
+        approve_code "${pc_line#* }" "$pc_phase"
+        posted=$((posted + 1))
+    done
+}
+approve_code() { # code phase
+    ac_status=$({
+        printf 'Authorization: Bearer '
+        tr -d '\n' <"$keyfile"
+        printf '\n'
+    } | curl -sS --max-time 30 -o /dev/null -w '%{http_code}' -X POST -H @- \
+        -H 'Content-Type: application/json' \
+        -d "{\"user_code\":\"$1\",\"member_id\":\"$member\",\"approve\":true}" \
+        "$server/v1/device/approve")
+    echo "linux-matrix: $2 code approved as $member: HTTP $ac_status"
+    [ "$ac_status" = 200 ] || fail "$2 approval (HTTP $ac_status)"
+}
+
 if [ "$action" = run ]; then
     if [ -n "$extra" ]; then
         echo "linux-matrix: run (matrix.sh options:$extra)"
@@ -720,10 +734,12 @@ if [ "$action" = run ]; then
     fi
     set --
     [ -z "${MATRIX_PROMPT_FILE:-}" ] || set -- "$@" -e MATRIX_PROMPT_FILE=$PROMPT_IN
-    # The approval key is this exec's standard input. $extra holds checked words only (options and
-    # digits), so it splits as meant.
-    docker exec -i -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" $extra <"$keyfile" &
+    rm -f "$codes_file"
+    set -- "$@" -e "MATRIX_CODES_FILE=$codes_in_container"
+    # $extra holds checked words only (options and digits), so it splits as meant.
+    docker exec -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" $extra &
     run_job=$!
+    watch_codes "$run_job" "login start"
     wait "$run_job"
     exit $?
 fi
@@ -757,10 +773,12 @@ record_home_files() {
     docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-files "$h" | tee -a "$loginlog"
 }
 
-# The login gets the key on its standard input for this step only.
 echo "linux-matrix: login"
-docker exec -i -u dev "$name" sh /src/scripts/linux-matrix.sh inner-login "$h" <"$keyfile" &
-wait $! || fail "login"
+rm -f "$codes_file"
+docker exec -u dev -e "MATRIX_CODES_FILE=$codes_in_container" "$name" sh /src/scripts/linux-matrix.sh inner-login "$h" &
+login_job=$!
+watch_codes "$login_job" "login"
+wait "$login_job" || fail "login"
 if [ "$(docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-ready "$h")" = yes ]; then
     step "settle" "$name" sh /src/scripts/linux-matrix.sh inner-settle
     record_home_files

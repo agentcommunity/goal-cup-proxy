@@ -62,9 +62,11 @@
 #                              `npm run dev`, or staging). The path is not secret. Unset: the
 #                              approval is yours, in a browser (see below). The script takes the
 #                              variable out of its environment at once, so no child inherits the
-#                              path. In a Docker cell (linux-matrix.sh) the file is a private copy
-#                              made from standard input, removed once the start is approved
-#                              (MATRIX_FORGET_KEY=1); never mount it where an agent runs, never -e.
+#                              path. A Docker cell (linux-matrix.sh) has no key at all (below).
+#   MATRIX_CODES_FILE          a file to append each device code to, as `login <code>` and then
+#                              `start <code>`, instead of approving it (no key is given): the host
+#                              approves them (linux-matrix.sh, for a Docker cell, where the key
+#                              must never be in the container the agent runs in).
 #   MATRIX_ALLOW_SERVER        the one https:// server, named exactly, to use although it is not
 #                              staging or this machine. The approval key is sent to the server, so
 #                              only the staging Worker
@@ -322,11 +324,11 @@ KEYFILE=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
 # The path leaves the environment too, so goalcup, the daemon and the harness never inherit where
 # the key file is.
 unset GOALCUP_TEST_APPROVAL_KEY_FILE
-# MATRIX_FORGET_KEY=1 (linux-matrix.sh sets it): KEYFILE is a private copy in a Docker cell's
-# container, where the agent runs as the same user; it is removed once the run is approved
-# (forget_key), before the harness works. It leaves the environment too.
-KEY_FORGET=${MATRIX_FORGET_KEY:-0}
-unset MATRIX_FORGET_KEY
+# MATRIX_CODES_FILE (linux-matrix.sh sets it in a Docker cell, which has no key at all): each
+# device code goalcup prints is appended to it as `<phase> <code>` (login, then start) for the host
+# to approve with the key; this script approves nothing then.
+CODES_FILE=${MATRIX_CODES_FILE:-}
+unset MATRIX_CODES_FILE
 if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
   echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE must name a regular file this user can read" >&2
   exit 2
@@ -720,15 +722,8 @@ codes_in() {
   tr -d '\r' 2>/dev/null <"$1" | sed -n 's/.*shows the code \([A-Z][A-Z][A-Z][A-Z]-[A-Z][A-Z][A-Z][A-Z]\)\..*/\1/p'
 }
 
-# The phase the approvals belong to: login, then start. In a Docker cell the key file is removed
-# once the start is approved (or, failing that, when the harness is up).
+# The phase the approvals belong to: login, then start.
 PHASE=login
-forget_key() {
-  [ "$KEY_FORGET" = 1 ] && [ -n "$KEYFILE" ] || return 0
-  rm -f "$KEYFILE"
-  KEYFILE=""
-  log "the approval key's file is removed: nothing the harness can read holds the key"
-}
 
 # Approve the first user code goalcup prints in the log $1, and no other: one code per phase (the
 # login, the run). seen.txt is emptied at the start of each phase. With a key file the approval
@@ -740,7 +735,13 @@ scan_and_approve() {
   code=$(codes_in "$1" | head -1)
   [ -n "$code" ] || return 0
   printf '%s\n' "$code" >>"$ROOT/seen.txt"
-  if [ -n "$KEYFILE" ]; then
+  if [ -n "$CODES_FILE" ]; then
+    printf '%s %s\n' "$PHASE" "$code" >>"$CODES_FILE" || {
+      log "cannot write the device code to MATRIX_CODES_FILE"
+      return 1
+    }
+    log "the $PHASE device code $code is written for the host to approve"
+  elif [ -n "$KEYFILE" ]; then
     status=$({
       printf 'Authorization: Bearer '
       tr -d '\n' <"$KEYFILE"
@@ -752,7 +753,6 @@ scan_and_approve() {
       log "the test approval was refused"
       return 1
     fi
-    [ "$PHASE" != start ] || forget_key
   else
     line=$(tr -d '\r' <"$1" | grep "shows the code $code" | tail -1)
     say "no GOALCUP_TEST_APPROVAL_KEY_FILE: approve this in a browser, as a member:"
@@ -1320,7 +1320,6 @@ PY
     if [ -z "$READY_AT" ] && grep -q "$READY_MARK" "$ROOT/start.out" 2>/dev/null; then
       READY_AT=$(date +%s)
       SCAN=0
-      forget_key
       log "the harness is up"
     fi
     return 0

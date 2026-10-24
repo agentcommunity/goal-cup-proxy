@@ -34,8 +34,22 @@ case "$*" in *"gh api user"*) echo "kit-tester" ;; esac
 case "$*" in "ps -q "*) [ -z "${STUB_BUSY:-}" ] || echo "$STUB_BUSY" ;; esac
 if [ -n "${STUB_SLEEP:-}" ]; then case "$*" in *"$STUB_SLEEP"*) sleep "${STUB_SLEEP_S:-15}" ;; esac; fi
 case "$*" in *" pgrep "*) [ -z "${STUB_PGREP_NONE:-}" ] || exit 1 ;; esac
+# The container half writes its device codes to the codes file in /logs (STUB_CODES, lines); the
+# host reads them while the exec runs, so the stub stays a while.
+if [ -n "${STUB_CODES:-}" ]; then case "$*" in *inner-login*|*inner-run*)
+    for a in "$@"; do case "$a" in MATRIX_CODES_FILE=*)
+        f=${a#MATRIX_CODES_FILE=}; printf '%b' "$STUB_CODES" >> "$LINUX_MATRIX_LOG_DIR/${f#/logs/}"; sleep "${STUB_CODES_WAIT:-4}" ;;
+    esac; done ;;
+esac; fi
 if [ -n "${STUB_FAIL:-}" ]; then case "$*" in *"$STUB_FAIL"*) exit 1 ;; esac; fi
 exit 0
+"""
+
+
+# The host's curl (the approval POST): what it was given, and the standard input (the header file).
+CURL_STUB = """#!/bin/sh
+{ echo "== $*"; cat; echo "== end"; } >> "$STUB_LOG.curl"
+printf '%s' "${STUB_CURL_STATUS:-200}"
 """
 
 
@@ -51,6 +65,9 @@ class LinuxMatrixTests(unittest.TestCase):
         stub = bindir / "docker"
         stub.write_text(STUB)
         stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+        curl = bindir / "curl"
+        curl.write_text(CURL_STUB)
+        curl.chmod(curl.stat().st_mode | stat.S_IXUSR)
         (self.base / "cargo/registry").mkdir(parents=True)
         self.key = self.base / "approval-key"
         self.key.write_text(SENTINEL + "\n")
@@ -101,55 +118,119 @@ class LinuxMatrixTests(unittest.TestCase):
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                 stdin=subprocess.DEVNULL)
 
-    def stdin_of(self, needle: str) -> list[str]:
-        """The standard input each `docker exec -i` whose command holds `needle` was given."""
-        path = Path(str(self.log) + ".stdin")
+    def posts(self) -> list[tuple[str, str]]:
+        """The approval POSTs the host made: (curl arguments, its standard input)."""
+        path = Path(str(self.log) + ".curl")
         if not path.exists():
             return []
         out = []
         for block in path.read_text().split("== end\n"):
             head, _, body = block.partition("\n")
-            if head.startswith("== ") and needle in head:
-                out.append(body)
+            if head.startswith("== "):
+                out.append((head[3:], body))
         return out
 
-    def test_no_secret_is_mounted_or_named_in_the_cells_container(self) -> None:
+    def test_no_secret_is_mounted_passed_or_piped_into_the_cells_container(self) -> None:
         run = self.run_script("run", "codex-cli")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         [docker_run] = self.docker_lines("run")
-        # The agent runs in this container as the same user: nothing it could read is mounted.
+        # The agent runs in this container as the same user: the key is not in it in any form.
         self.assertNotIn("/run/goalcup/approval-key", docker_run)
         self.assertNotIn(str(self.key), docker_run)
-        self.assertNotIn("GOALCUP_TEST_APPROVAL_KEY_FILE", docker_run)
-        self.assertNotIn(":/run/goalcup/database-url", docker_run)
-        self.assertNotIn(":/run/goalcup/cloudflare-token", docker_run)
+        self.assertNotIn("GOALCUP_TEST_APPROVAL_KEY", docker_run)
+        self.assertNotIn("/run/goalcup/database-url", docker_run)
+        self.assertNotIn("/run/goalcup/cloudflare-token", docker_run)
         self.assertIn("--cpus=", docker_run)
         self.assertIn("-v goalcup-linux-matrix-codex-cli:/vol", docker_run)
         self.assertIn("-e GOALCUP_TEST_MEMBER_ID=00000000-0000-4000-8000-0000000c0de1", docker_run)
         self.assertIn("-e LINUX_MATRIX_SERVER=https://goalcup-ingest-staging.", docker_run)
         self.assertNotIn("--privileged", docker_run)
-        # The key reaches the one exec that runs the matrix on its standard input, not as a path.
+        # No exec is given standard input at all, and none names the key or its file.
+        for line in self.docker_lines("exec"):
+            self.assertNotIn(" -i ", f" {line} ", line)
+            self.assertNotIn("APPROVAL_KEY", line)
+            self.assertNotIn(str(self.key), line)
+        self.assertFalse(Path(str(self.log) + ".stdin").exists())
+        # The container half is told where to write its device codes, and nothing else.
         [inner] = [x for x in self.docker_lines("exec") if "inner-run codex-cli" in x]
-        self.assertIn(" -i ", f" {inner} ")
-        self.assertNotIn("APPROVAL_KEY", inner)
-        self.assertNotIn(str(self.key), inner)
-        self.assertEqual(self.stdin_of("inner-run codex-cli"), [SENTINEL + "\n"])
-        # And on no other command's line, in no output.
+        self.assertRegex(inner, r"-e MATRIX_CODES_FILE=/logs/codes-goalcup-linux-matrix-codex-cli-\d+ ")
         everything = self.log.read_text() + run.stdout + run.stderr
         self.assertNotIn(SENTINEL, everything)
         self.assertFalse(self.lock.exists(), "the heavy lock was left held")
 
-    def test_the_login_gets_the_key_on_standard_input_for_that_step_only(self) -> None:
-        run = self.run_script("login", "codex-cli")
+    def approvals(self) -> list[tuple[str, str]]:
+        """(user code, key header) of each approval POST, checked to be well-formed."""
+        out = []
+        for args, stdin in self.posts():
+            self.assertIn("https://goalcup-ingest-staging.b-9a5.workers.dev/v1/device/approve", args)
+            self.assertIn("-X POST", args)
+            self.assertNotIn(SENTINEL, args)
+            doc = json.loads(args.split(" -d ", 1)[1].rsplit(" https://", 1)[0])
+            self.assertEqual(doc["member_id"], "00000000-0000-4000-8000-0000000c0de1")
+            self.assertIs(doc["approve"], True)
+            out.append((doc["user_code"], stdin))
+        return out
+
+    def test_the_host_approves_the_login_code_with_the_key_on_its_own_curl(self) -> None:
+        run = self.run_script("login", "codex-cli", STUB_CODES="login ABCD-EFGH\n")
         self.assertEqual(run.returncode, 3, run.stdout + run.stderr)
+        [(code, stdin)] = self.approvals()
+        self.assertEqual(code, "ABCD-EFGH")
+        # The key is curl's standard input, as a header file (matrix.sh does it the same way).
+        self.assertEqual(stdin, f"Authorization: Bearer {SENTINEL}\n")
         [login] = [x for x in self.docker_lines("exec") if "inner-login codex-cli" in x]
-        self.assertIn(" -i ", f" {login} ")
-        self.assertNotIn("APPROVAL_KEY", login)
-        self.assertEqual(self.stdin_of("inner-login codex-cli"), [SENTINEL + "\n"])
-        # No other step was given it.
-        others = [h for h in (self.stdin_of(""))]
-        self.assertEqual(len(others), 1, others)
+        self.assertNotIn(" -i ", f" {login} ")
         self.assertNotIn(SENTINEL, self.log.read_text() + run.stdout + run.stderr)
+
+    def test_a_second_code_for_a_phase_already_approved_ends_the_step_unposted(self) -> None:
+        run = self.run_script("run", "codex-cli", STUB_CODES="login ABCD-EFGH\nlogin ABCD-IJKL\n",
+                              STUB_CODES_WAIT="2")
+        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+        self.assertIn("malformed device code", run.stdout)
+        self.assertEqual([c for c, _ in self.approvals()], ["ABCD-EFGH"])
+
+    def test_the_host_approves_one_code_per_phase_in_order_and_nothing_after(self) -> None:
+        # Blank lines are skipped; what is written after the start's code (the agent may run by
+        # then) is never read.
+        run = self.run_script(
+            "run", "codex-cli",
+            STUB_CODES="login ABCD-EFGH\n\nstart WXYZ-QRST\nstart AAAA-BBBB\nlogin CCCC-DDDD\nx\n")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual([c for c, _ in self.approvals()], ["ABCD-EFGH", "WXYZ-QRST"])
+        for _, stdin in self.approvals():
+            self.assertEqual(stdin, f"Authorization: Bearer {SENTINEL}\n")
+
+    def test_a_malformed_device_code_is_refused_and_nothing_is_posted(self) -> None:
+        for bad in ("login abcd-efgh", "login ABCD-EFGH-IJKL", "login ABCD-EFGH;touch /x",
+                    "login ABCD-EFGH\"}", "login  ABCD-EFGH", "ABCD-EFGH",
+                    # The wrong phase for the moment: the run's start code before the login's.
+                    "start ABCD-EFGH", "login \u0410BCD-EFGH"):
+            with self.subTest(bad=bad):
+                self.log.write_text("")
+                Path(str(self.log) + ".curl").unlink(missing_ok=True)
+                run = self.run_script("run", "codex-cli", STUB_CODES=bad + "\n", STUB_CODES_WAIT="2")
+                self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+                self.assertIn("malformed device code", run.stdout)
+                self.assertEqual(self.posts(), [])
+                self.assertNotIn(SENTINEL, run.stdout + run.stderr)
+
+    def test_the_login_action_takes_only_a_login_code(self) -> None:
+        run = self.run_script("login", "codex-cli", STUB_CODES="start ABCD-EFGH\n", STUB_CODES_WAIT="2")
+        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+        self.assertEqual(self.posts(), [])
+
+    def test_a_partly_written_line_is_not_read_yet(self) -> None:
+        # No newline yet: the line may still be growing, so nothing is posted from it.
+        run = self.run_script("login", "codex-cli", STUB_CODES="login ABCD-EF", STUB_CODES_WAIT="2")
+        self.assertEqual(self.posts(), [])
+        self.assertNotIn("malformed", run.stdout)
+
+    def test_a_refused_approval_fails_the_step(self) -> None:
+        run = self.run_script("run", "codex-cli", STUB_CODES="login ABCD-EFGH\n", STUB_CURL_STATUS="403",
+                              STUB_CODES_WAIT="2")
+        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+        self.assertIn("approval (HTTP 403)", run.stdout)
+        self.assertEqual(len(self.posts()), 1)
 
     def test_the_build_installs_the_connectors_codex_version_from_npm(self) -> None:
         run = self.run_script("run", "codex-cli")
@@ -677,28 +758,26 @@ class ContainerHalfTests(unittest.TestCase):
                         f"cat <<'EOF'\n{json.dumps(doc)}\nEOF\n")
         stub.chmod(0o755)
 
-    def test_the_login_reads_the_key_from_standard_input_and_leaves_no_file(self) -> None:
-        # Stubs: goalcup prints one device code and exits; curl records the header file it is given
-        # on its standard input (the key as a bearer header) and answers 200.
-        seen = self.base / "curl-stdin"
+    def test_the_login_writes_its_device_code_for_the_host_and_approves_nothing(self) -> None:
+        # Stubs: goalcup prints one device code and exits; curl records that it was called at all.
+        called = self.base / "curl-called"
         goalcup = self.bin / "goalcup"
         goalcup.write_text("#!/bin/sh\necho 'Open the page; it shows the code ABCD-EFGH.'\n"
                            "sleep 3\necho 'signed in'\n")
         curl = self.bin / "curl"
-        curl.write_text(f"#!/bin/sh\ncat >{seen}\nprintf 200\n")
+        curl.write_text(f"#!/bin/sh\ntouch {called}\nprintf 200\n")
         for stub in (goalcup, curl):
             stub.chmod(0o755)
         tmpdir = self.base / "tmp"
         tmpdir.mkdir()
-        before = set(Path("/tmp").glob("goalcup-secret.*"))
-        run = self.inner("inner-login", "codex-cli", stdin=SENTINEL + "\n", TMPDIR=str(tmpdir),
-                         LINUX_MATRIX_SERVER="http://localhost:1", GOALCUP_TEST_MEMBER_ID="m1")
+        codes = self.base / "codes"
+        run = self.inner("inner-login", "codex-cli", TMPDIR=str(tmpdir),
+                         LINUX_MATRIX_SERVER="http://localhost:1", GOALCUP_TEST_MEMBER_ID="m1",
+                         MATRIX_CODES_FILE=str(codes))
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertIn("HTTP 200", run.stdout)
-        self.assertEqual(seen.read_text().strip(), f"Authorization: Bearer {SENTINEL}")
-        self.assertEqual(set(Path("/tmp").glob("goalcup-secret.*")) - before, set(),
-                         "the key's private file outlived the step")
-        self.assertNotIn(SENTINEL, run.stdout + run.stderr)
+        self.assertEqual(codes.read_text(), "login ABCD-EFGH\n")
+        self.assertFalse(called.exists(), "the container half called the server's approve route")
+        self.assertNotIn("Authorization", run.stdout + run.stderr)
 
     def test_claude_settings_are_merged_keeping_other_keys(self) -> None:
         home = self.homes / "claude-code-cli"
@@ -843,7 +922,7 @@ class ContainerHalfTests(unittest.TestCase):
         (src / "scripts").mkdir()
         got = self.base / "matrix-got.json"
         (src / "scripts/matrix.sh").write_text(f"""#!/bin/sh
-python3 -c 'import json, os, sys; json.dump({{"argv": sys.argv[1:], "keys": os.environ.get("MATRIX_PRE_PROMPT_KEYS"), "cfg": os.environ.get("MATRIX_CONFIG_DIR"), "fetch": {{k: os.environ.get(k) for k in ("DATABASE_URL", "CLOUDFLARE_API_TOKEN", "MATRIX_DATABASE_URL_FILE", "MATRIX_CLOUDFLARE_TOKEN_FILE")}}, "forget": os.environ.get("MATRIX_FORGET_KEY"), "keyfile": os.environ.get("GOALCUP_TEST_APPROVAL_KEY_FILE"), "key": open(os.environ["GOALCUP_TEST_APPROVAL_KEY_FILE"]).read()}}, open("{got}", "w"))' "$@"
+python3 -c 'import json, os, sys; json.dump({{"argv": sys.argv[1:], "keys": os.environ.get("MATRIX_PRE_PROMPT_KEYS"), "cfg": os.environ.get("MATRIX_CONFIG_DIR"), "fetch": {{k: os.environ.get(k) for k in ("DATABASE_URL", "CLOUDFLARE_API_TOKEN", "MATRIX_DATABASE_URL_FILE", "MATRIX_CLOUDFLARE_TOKEN_FILE")}}, "codes": os.environ.get("MATRIX_CODES_FILE"), "secrets": sorted(k for k in ("GOALCUP_TEST_APPROVAL_KEY", "GOALCUP_TEST_APPROVAL_KEY_FILE", "MATRIX_FORGET_KEY", "DATABASE_URL", "CLOUDFLARE_API_TOKEN", "MATRIX_DATABASE_URL_FILE", "MATRIX_CLOUDFLARE_TOKEN_FILE") if k in os.environ)}}, open("{got}", "w"))' "$@"
 d="$MATRIX_CONFIG_DIR/capture-homes/claude-code-cli/projects/-w"
 mkdir -p "$d"
 echo '{{"type":"assistant","message":{{"model":"{model}"}}}}' > "$d/s.jsonl"
@@ -857,7 +936,7 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
 
     def test_inner_run_passes_matrix_options_and_the_claude_trust_keys(self) -> None:
         got = self.inner_run_world()
-        run = self.inner("inner-run", "claude-code-cli", "--test", "--duration", "7200", stdin=SENTINEL + "\n",
+        run = self.inner("inner-run", "claude-code-cli", "--test", "--duration", "7200",
                          TMPDIR=str(self.base / "tmp"), LINUX_MATRIX_SERVER="https://s.example")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         seen = json.loads(got.read_text())
@@ -871,44 +950,30 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
 
     def test_inner_run_that_broke_the_owner_rule_prints_no_pass_row(self) -> None:
         self.inner_run_world(model="claude-sonnet-4-5")
-        run = self.inner("inner-run", "claude-code-cli", stdin=SENTINEL + "\n",
+        run = self.inner("inner-run", "claude-code-cli",
                          TMPDIR=str(self.base / "tmp"), LINUX_MATRIX_SERVER="https://s.example")
         self.assertNotEqual(run.returncode, 0)
         self.assertNotIn("PASS", run.stdout)
         self.assertIn("claude-code-cli linux-x86_64 2.1.283 FAIL 2026-10-20", run.stdout)
         self.assertTrue(run.stdout.rstrip().splitlines()[-1].startswith("linux-matrix: FAIL owner rule"))
 
-    def test_inner_run_gives_matrix_the_key_as_a_private_file_and_no_fetch_credential(self) -> None:
+    def test_inner_run_gives_matrix_a_codes_file_and_no_key_or_credential(self) -> None:
         got = self.inner_run_world()
-        before = set(Path("/tmp").glob("goalcup-secret.*"))
-        run = self.inner("inner-run", "claude-code-cli", stdin=SENTINEL + "\n",
-                         TMPDIR=str(self.base / "tmp"), LINUX_MATRIX_SERVER="https://s.example")
+        run = self.inner("inner-run", "claude-code-cli", TMPDIR=str(self.base / "tmp"),
+                         LINUX_MATRIX_SERVER="https://s.example", MATRIX_CODES_FILE="/logs/codes-x")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         seen = json.loads(got.read_text())
-        # The key is a file only matrix.sh is told of, in the container's own /tmp, 0600; matrix.sh
-        # is asked to remove it once the run is approved.
-        self.assertEqual(seen["key"].strip(), SENTINEL)
-        self.assertTrue(seen["keyfile"].startswith("/tmp/goalcup-secret."), seen["keyfile"])
-        self.assertEqual(seen["forget"], "1")
-        # No database URL or R2 token in its environment, in any form.
+        # matrix.sh writes its device codes there for the host to approve; nothing secret is in its
+        # environment: no key (or its path), no database URL, no R2 token.
+        self.assertEqual(seen["codes"], "/logs/codes-x")
+        self.assertEqual(seen["secrets"], [])
         self.assertEqual(seen["fetch"], {
             "DATABASE_URL": None, "CLOUDFLARE_API_TOKEN": None, "MATRIX_DATABASE_URL_FILE": None,
             "MATRIX_CLOUDFLARE_TOKEN_FILE": None})
-        # Whatever happens to matrix.sh, the key's file is gone when the step ends.
-        self.assertEqual(set(Path("/tmp").glob("goalcup-secret.*")) - before, set())
-        self.assertNotIn(SENTINEL, run.stdout + run.stderr)
-
-    def test_inner_run_without_a_key_on_standard_input_fails_before_matrix_runs(self) -> None:
-        got = self.inner_run_world()
-        run = self.inner("inner-run", "claude-code-cli", TMPDIR=str(self.base / "tmp"),
-                         LINUX_MATRIX_SERVER="https://s.example")
-        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
-        self.assertIn("no secret on standard input", run.stdout)
-        self.assertFalse(got.exists(), "matrix.sh ran without a key")
 
     def test_inner_run_keeps_trust_keys_that_were_set_even_empty(self) -> None:
         got = self.inner_run_world()
-        run = self.inner("inner-run", "claude-code-cli", MATRIX_PRE_PROMPT_KEYS="", stdin=SENTINEL + "\n",
+        run = self.inner("inner-run", "claude-code-cli", MATRIX_PRE_PROMPT_KEYS="",
                          TMPDIR=str(self.base / "tmp"), LINUX_MATRIX_SERVER="https://s.example")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(json.loads(got.read_text())["keys"], "")

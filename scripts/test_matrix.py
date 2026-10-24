@@ -54,8 +54,7 @@ def wait_approved(phase, count):
     while len(list(out.glob("approved.*"))) < count and time.time() - t0 < 30:
         time.sleep(0.2)
     time.sleep(1)
-    key = os.environ.get("STUB_KEYFILE")
-    note("%s.keyfile_exists" % phase, str(bool(key) and os.path.exists(key)))
+    note("%s.approved" % phase, "yes")
 
 if args[0] == "login":
     wait_approved("login", 1)
@@ -420,9 +419,22 @@ class World:
                 environment.pop(key, None)
             else:
                 environment[key] = value.replace("{bin}", str(self.bin)).replace("{root}", str(self.root))
-        if "{root}/approval-key" in (env or {}).get("GOALCUP_TEST_APPROVAL_KEY_FILE", ""):
-            (self.root / "approval-key").write_text(KEY_VALUE + "\n")
+        # The host half of a Docker cell's approvals (STUB_HOST_APPROVES=1): approve each code that
+        # matrix.sh writes to its codes file, the way linux-matrix.sh does with the key.
         stop = threading.Event()
+        if environment.get("STUB_HOST_APPROVES") == "1":
+            codes = Path(environment["MATRIX_CODES_FILE"])
+
+            def approve() -> None:
+                done = 0
+                while not stop.is_set():
+                    lines = codes.read_text().splitlines() if codes.exists() else []
+                    while done < len(lines):
+                        done += 1
+                        (self.out / f"approved.host.{done}").write_text(lines[done - 1])
+                    time.sleep(0.1)
+
+            threading.Thread(target=approve, daemon=True).start()
         log = self.root / "matrix.log"
         # A test run is left to its default budget (the duration plus 1800 s) unless it names one.
         budget = () if "--test" in args or "--refusals" in args else ("--timeout", "60")
@@ -458,7 +470,6 @@ class World:
 
 
 DURATION = 4
-KEY_VALUE = "SENTINEL-KEY-VALUE-never-printed-0123456789"
 DB_URL = "postgres://reader:db-secret-never-shown@db.invalid/postgres"
 CF_TOKEN = "cf-token-never-shown"
 AMP_VERSION = "0.0.1792209635-g24a9fe (released 2026-10-17T04:00:35.000Z, 4d ago)"
@@ -516,13 +527,10 @@ SCENARIOS = {
                                      "MATRIX_FETCH_SCRIPT": "{bin}/fake-fetch.sh",
                                      "MATRIX_FETCH_INDEX": "/index.json",
                                      "MATRIX_FETCH_STORE": "/bucket-mirror"}),
-    # A Docker cell's key: a private copy, removed once the start is approved (MATRIX_FORGET_KEY);
-    # the control keeps it. The stubs show a device code and say whether the file is still there.
-    "key_forgotten": ("stubchat", {"GOALCUP_TEST_APPROVAL_KEY_FILE": "{root}/approval-key",
-                                   "MATRIX_FORGET_KEY": "1", "STUB_CODE": "1",
-                                   "STUB_KEYFILE": "{root}/approval-key"}),
-    "key_kept": ("stubchat", {"GOALCUP_TEST_APPROVAL_KEY_FILE": "{root}/approval-key",
-                              "STUB_CODE": "1", "STUB_KEYFILE": "{root}/approval-key"}),
+    # A Docker cell has no key: matrix.sh writes each device code to MATRIX_CODES_FILE and the
+    # host (the responder below) approves it. A forged extra line changes nothing in matrix.sh.
+    "codes_file": ("stubchat", {"MATRIX_CODES_FILE": "{root}/codes", "STUB_CODE": "1",
+                                "STUB_HOST_APPROVES": "1"}),
     # A test run whose start asks for its repository: nobody can answer it.
     "test_asks": ("stubchat", {"STUB_ASK": "1"}, ("--test", "--duration", "30"), True),
     # A test run on a machine with no GitHub login.
@@ -836,25 +844,16 @@ class MatrixTests(unittest.TestCase):
             self.assertNotIn(secret, w.everything_matrix_wrote())
             self.assertNotIn(secret, w.seen("fetch.argv"))
 
-    def test_the_key_file_is_removed_once_the_start_is_approved_and_not_before(self) -> None:
-        w = self.worlds["key_forgotten"]
+    def test_a_device_code_is_written_for_the_host_and_the_matrix_approves_nothing(self) -> None:
+        w = self.worlds["codes_file"]
         self.assertEqual(w.run.returncode, 0, w.said())
-        # Both approvals used the key, the login's and the start's.
-        self.assertIn(f"Bearer {KEY_VALUE}", w.seen("approved.1"))
-        self.assertIn(f"Bearer {KEY_VALUE}", w.seen("approved.2"))
-        # After the login's approval the file is still there; after the start's it is gone, before
-        # the harness (the stub's start) goes on.
-        self.assertEqual(w.seen("login.keyfile_exists"), "True")
-        self.assertEqual(w.seen("start.keyfile_exists"), "False")
-        self.assertFalse((w.root / "approval-key").exists())
-        self.assertIn("the approval key's file is removed", w.log)
-        self.assertNotIn(KEY_VALUE, w.everything_matrix_wrote())
-
-    def test_without_the_forget_setting_the_key_file_is_left_alone(self) -> None:
-        w = self.worlds["key_kept"]
-        self.assertEqual(w.run.returncode, 0, w.said())
-        self.assertEqual(w.seen("start.keyfile_exists"), "True")
-        self.assertTrue((w.root / "approval-key").exists())
+        # One code per phase, in order, as `<phase> <code>` lines; no key, no approval call.
+        self.assertEqual((w.root / "codes").read_text(), "login ABCD-EFGH\nstart ABCD-EFGH\n")
+        self.assertEqual(sorted(p.name for p in w.out.glob("approved.*")), ["approved.host.1", "approved.host.2"])
+        self.assertEqual(w.seen("login.approved"), "yes")
+        self.assertEqual(w.seen("start.approved"), "yes")
+        self.assertIn("written for the host to approve", w.log)
+        self.assertIn("key file supplied: no", w.log)
 
     def test_a_local_tail_that_differs_from_the_server_copy_fails(self) -> None:
         w = self.worlds["pruned_bad_tail"]
