@@ -975,6 +975,9 @@ class CampaignRun(Base):
         [advice] = [l for l in said if "never deletes them" in l]
         self.assertIn("gh auth refresh -s delete_repo", advice)
         self.assertLess(advice.index("gh auth refresh -s delete_repo"), advice.index("gh repo delete"))
+        # And the scope comes off again afterwards: host cells' agents push with that login.
+        self.assertIn("gh auth refresh -r delete_repo", advice)
+        self.assertLess(advice.index("gh repo delete"), advice.index("gh auth refresh -r delete_repo"))
         self.assertFalse(any("delete" in " ".join(c) for c in runner.calls))
 
     def test_a_host_cell_whose_settle_is_refused_never_starts(self):

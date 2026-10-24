@@ -168,7 +168,8 @@ Before a test run's login, the kit makes its repository with the machine's GitHu
 (`MATRIX_CELL` names the cell; default the connector). `MATRIX_REPO=<owner>/<name>` names one instead.
 With no login, the row FAILs with one line: run `gh auth login` here (HTTPS, and Yes to authenticate
 Git). The kit never deletes a repository; it prints the name at the end (`gh repo delete <name> --yes`
-when done, after `gh auth refresh -s delete_repo` once: the default `gh auth login` lacks that scope). A question the start asks before the approval (no login found, a repository GitHub does
+when done, after `gh auth refresh -s delete_repo`: the default `gh auth login` lacks that scope; then
+`gh auth refresh -r delete_repo` to drop it again, because host cells' agents push with that login). A question the start asks before the approval (no login found, a repository GitHub does
 not show) also FAILs the row at once.
 
 "None" means goalcup runs with a git config of the run's own that resets `credential.helper`, an

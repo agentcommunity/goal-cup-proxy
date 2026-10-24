@@ -1473,7 +1473,8 @@ class Campaign:
         if made:
             self.say("campaign: test repositories made (the kit never deletes them; when done, first "
                      "`gh auth refresh -s delete_repo`, which the default gh login lacks, then "
-                     "`gh repo delete <name> --yes`): " + ", ".join(made))
+                     "`gh repo delete <name> --yes`, then `gh auth refresh -r delete_repo` to drop the "
+                     "scope again: host cells' agents push with that login): " + ", ".join(made))
         if interrupted:
             return 130
         ok = all(r.result and r.result["verdict"] == "PASS" and r.result["overall"] != "FAIL"

@@ -684,7 +684,7 @@ cleanup() {
   }; fi
   if [ -n "$REPO_MADE" ]; then
     log "test repository made by the kit: $REPO_MADE"
-    printf 'matrix: test repository made by the kit (delete it when done: first `gh auth refresh -s delete_repo`, which the default gh login lacks, then `gh repo delete %s --yes`): %s\n' "$REPO_MADE" "$REPO_MADE" >&3
+    printf 'matrix: test repository made by the kit (delete it when done: first `gh auth refresh -s delete_repo`, which the default gh login lacks, then `gh repo delete %s --yes`, then `gh auth refresh -r delete_repo` to drop the scope again: this machine'"'"'s agents push with that login): %s\n' "$REPO_MADE" "$REPO_MADE" >&3
   fi
   print_row
 }
