@@ -49,11 +49,19 @@ not prove: other platforms, other harness versions, model behaviour, or particip
    HTTPS, Yes to authenticate Git). Docker cells: the container's, made once per cell by
    `campaign.py login` (it runs `linux-matrix.sh github`, which opens `gh auth login` in the
    container; it stays on the cell's volume). The kit never copies or mounts a login or a token.
-   That Docker login is the owner's own GitHub login (accepted for this kit), and the agent in a
-   Docker cell runs as the same user, so it can read it from the cell's volume. Nothing else secret
-   is in the container while the harness works: the staging key and the fetch credentials stay on
-   this machine and reach a step only on its standard input ([OPERATING](../OPERATING.md), "A long
-   run" and the Docker cell).
+   **The agent in a Docker cell can use the GitHub login stored on the cell's volume, with all of
+   that login's scopes** (it runs as the same user, with no sandbox, and `gh` reads the login from
+   the volume's home). That login is the owner's own (accepted for this kit); use a login whose
+   scopes you are willing to let an agent use. Nothing else secret is in a Docker cell's container:
+   the staging key never enters it (the host approves the device codes the container writes down),
+   and a Docker cell takes no database URL or R2 token ([OPERATING](../OPERATING.md), the Docker
+   cell and "A long run").
+   **Before each campaign:** start it on new cell volumes (`docker volume rm
+   goalcup-linux-matrix-<connector>-<cell>`, then log in again), because the agent of an earlier
+   run could have written into a reused volume's home (its shell startup files, its git and `gh`
+   configuration) and the next run would execute that. And **rotate the staging approval key**
+   (`TEST_APPROVAL_KEY`) after any campaign run with an older kit: older kits mounted the key, and
+   a database URL and R2 token, into the cell's container, where the agent could read them.
 3. **Test members.** Until website migration `20261021100000` is on staging, a test run replaces
    the earlier test run of the same operator, so parallel cells need different members. Staging
    ships two synthetic members (`...0c0de1`, `...0c0de2`). Once the migration is applied, test runs
