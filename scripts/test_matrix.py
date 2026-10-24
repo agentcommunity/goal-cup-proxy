@@ -353,6 +353,10 @@ args = []
 """
 
 
+def refused_for_server(run: subprocess.CompletedProcess) -> bool:
+    return run.returncode == 2 and "MATRIX_ALLOW_SERVER" in run.stderr
+
+
 def executable(path: Path, text: str) -> None:
     path.write_text(text)
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -667,7 +671,9 @@ class MatrixTests(unittest.TestCase):
         # The exact entry of this run, sealed no earlier than the duration after the Enter.
         self.assertEqual(w.seen("seal.argv"), "seal\n--yes\ne0123456789abcdef")
         waited = float(w.seen("seal.at")) - float(w.seen("start.submitted_at"))
-        self.assertGreaterEqual(waited, DURATION)
+        # matrix.sh counts whole seconds (date +%s) from when it sees the Enter's marker, so the
+        # seal can come up to a second short of DURATION by the stub's own stamp.
+        self.assertGreaterEqual(waited, DURATION - 1)
         self.assertLess(waited, DURATION + 20)
         # `goalcup start` reported the seal uploaded, so no upload was needed; the server's copy
         # passed without `stop`.
@@ -945,13 +951,17 @@ class MatrixArgumentTests(unittest.TestCase):
 
     def verdict(self, server: str, *args: str, **env: str) -> tuple[bool, str]:
         """Whether the matrix refused the server for not being on the allowlist, and what it said.
-        A server that is allowed goes on to fail later (no tools, no binaries here), never on the
-        network: the binaries are looked for before the health check."""
+        A server that is allowed goes on to the health check, which fails here on a curl stub that
+        reaches no network (it must never touch a real server)."""
+        stubs = self.root / "stub-bin"
+        stubs.mkdir(exist_ok=True)
+        executable(stubs / "curl", "#!/bin/sh\nprintf 000\nexit 7\n")
         run = subprocess.run(["sh", str(MATRIX), "m2-fake-tui", server, "--timeout", "5", *args],
-                             env={**self.env, "MATRIX_BIN_DIR": str(self.root / "no-bin"), **env},
+                             env={**self.env, "PATH": f"{stubs}:{self.env['PATH']}", **env},
                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
-        refused = run.returncode == 2 and "MATRIX_ALLOW_SERVER" in run.stderr
-        return refused, run.stderr
+        if run.returncode != 2:
+            self.assertIn("did not answer /v1/health", run.stderr, run.stdout + run.stderr)
+        return refused_for_server(run), run.stderr
 
     def test_only_staging_and_this_machine_are_servers_unless_one_is_named_exactly(self) -> None:
         for server in ("https://goalcup-ingest-staging.b-9a5.workers.dev",
