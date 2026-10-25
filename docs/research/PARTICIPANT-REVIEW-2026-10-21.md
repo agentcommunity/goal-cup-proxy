@@ -22,6 +22,24 @@ the review commit; re-check before editing.
 | A10 | Guide gaps: no website address, no video format, "or CLI" for the X-post URL where no command exists; GitHub token expiry not mentioned (an expired token stops pushes mid-run); the MIT License rule and the no-side-channel rule are not in the guide; no tip to paste the prompt whole; "Recording does not need the network" (the agent does). | Add the address and format, drop "or CLI"; token: custom expiry after 16 Nov, this repo only, Contents read and write; add the two rules and the paste tip; reword the network line. | small |
 | A11 | Hermes's default Quick Setup uses a browser login whose token refresh fails behind the recording proxy, so a run can die mid-week. | Guide and prep: "use an API-key provider with Hermes"; prep warns on an OAuth provider (later). | small |
 
+### Status of A (22 Oct)
+
+Checked against `main` at 9ec8c87 (release 0.6.1). "On main" means the fix was already there.
+
+| # | Status | Where |
+|---|---|---|
+| A1 | Done in code. The silence email has the new words and is sent only when the server itself was well for the whole silence. | Worker `notices.ts` (on main); the words are in the event-readiness migration (`server/worker/sql/pending/`), applied to the shared database on 22 Oct. Live once that Worker is deployed to production. |
+| A2 | Done. `goalcup seal` asks first, says the run stays open and how to go on, keeps the technical lines in `host.log`; RULES is corrected (on main). New: with no terminal and no `--yes`, it refuses at once and names `--yes`, instead of waiting on an input that may never answer. | on main; 8fe2add |
+| A3 | Done. One rule (`goalcup upload`); a part nothing records any more and that was never sealed says `goalcup seal <part>, then goalcup upload`; the ended email names the close. | on main |
+| A4 | Done. `goalcup start` refuses a competition or test run on a repository that is not empty (GitHub's size before the approval, the clone's commits after it), with the fix command. It refuses rather than warns. | on main |
+| A5 | Done. `goalcup time-left` in your own terminal reads the newest open run. | on main |
+| A6 | Done. The preflight refusal during `continue` names `goalcup continue <run>` and says the run is still open; status names the firewall; the guide says not to upgrade during a run. New: the daemon refusal after an upgrade no longer says "Start again". | on main; e95b39d |
+| A7 | Done. Every disk line in the terminal and status now says where to free space and not to delete the agent's work; the email already did. | 1401137 |
+| A8 | Done. Prep's machine step checks the work, configuration and artifact folders' filesystems with the start-time check (`folder_gate.rs`). | on main |
+| A9 | Done. "Parts of runs" in `goalcup entries`, the plain earlier-part sentence in `continue` (on main). New: the wrap-up, "continued on" and abandon lines say "part", not entry, segment or tracker. Technical lines in `host.log` keep their words. | on main; e95b39d |
+| A10 | Done, except the video format: no doc says what it is (owner question). Website address, token expiry, MIT License, no side channels, paste tip and the network line are on main. New: the `GOALCUP.md` rule. | on main; e29ad7a |
+| A11 | Partly done. The setup guide and the participant's guide say to use an API key with Hermes. Open: prep does not warn when Hermes uses an OAuth provider (the review said "later"; it needs a connector field for the sign-in file, so a connector schema change). | on main; e29ad7a |
+
 ## B. Needs an owner ruling
 
 | # | Question | Context |

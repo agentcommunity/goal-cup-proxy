@@ -37,18 +37,22 @@ pub use ending::{
 };
 pub use launch::{Launch, Opens, RUN_GOES_ON, launch_block};
 pub use refusals::{
-    cannot_record_model_service, continued_elsewhere, filesystem_warning, home_busy,
-    inside_work_folder, last_part_closing, local_only, needs_terminal, not_started_here,
-    repository_not_empty, run_over, server_answer_unusable, still_recording,
-    unsupported_filesystem,
+    NotAClone, cannot_record_model_service, clone_missing, clone_unreadable, continued_elsewhere,
+    filesystem_warning, home_busy, inside_work_folder, last_part_closing, local_only,
+    needs_terminal, not_a_clone, not_started_here, repository_not_empty, run_over,
+    server_answer_unusable, still_recording, unsupported_filesystem,
 };
-pub use seal::{SealDone, seal_done, seal_inside_harness, seal_not_confirmed, seal_question};
+pub use seal::{
+    SealDone, seal_done, seal_inside_harness, seal_needs_terminal, seal_not_confirmed,
+    seal_question,
+};
 pub use status::{
-    Agent, CHECK_NETWORK, End, Next, PROBLEM, Phase, Restart, STATUS_DETAILS, StatusHeader,
-    UploadNow, Who, agent_finished, disk_resumed, disk_resumed_unread, ends_line, no_run_yet,
-    problem_agent_exited, problem_disk, problem_disk_paused, problem_heartbeats,
-    problem_recording_failed, problem_recording_gaps, problem_server_refuses, problem_sleep,
-    problem_state_stale, problem_upload, status_header, status_next, this_computer,
+    Agent, CHECK_NETWORK, End, NATIVE_SILENT_MARK, Next, PROBLEM, Phase, Restart, STATUS_DETAILS,
+    StatusHeader, UploadNow, Who, agent_finished, disk_resumed, disk_resumed_unread, ends_line,
+    no_run_yet, problem_agent_exited, problem_disk, problem_disk_paused, problem_heartbeats,
+    problem_native_silent, problem_recording_failed, problem_recording_gaps,
+    problem_server_refuses, problem_sleep, problem_state_stale, problem_upload, status_header,
+    status_next, this_computer,
 };
 pub use times::{
     clock_words, end_words, left_words, local_clock, no_open_run_time_left, run_seconds_left,
@@ -90,6 +94,10 @@ pub const NOT_STARTED_HERE: &str = "was not started on this computer";
 
 /// What a refusal says when the approval code must be asked for again.
 pub const RUN_AGAIN: &str = "Run the command again";
+
+/// Where to free disk space, and what never to delete: what the agent made is the run's work.
+pub const FREE_OUTSIDE: &str =
+    "outside your run's folders, and do not delete anything the agent made";
 
 /// Where a participant writes when something unexpected happened.
 pub const SUPPORT_ADDRESS: &str = "goalcup@agentcommunity.org";

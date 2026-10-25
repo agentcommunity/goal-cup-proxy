@@ -5,6 +5,7 @@ mod capture_storage;
 mod capture_terminals;
 mod chain_golden;
 mod connector_pins;
+mod connector_template;
 mod control_consumer;
 mod control_shapes;
 mod harness_conformance;

@@ -45,7 +45,7 @@ Say these plainly, once, before the first human step:
 
 1. Check Goal Cup Proxy is installed: `goalcup --version`. If it is not, tell the person how to
    install it and stop. The guide's section 1 has the one command, for macOS, Linux and (inside
-   WSL2) Windows: `curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh`.
+   WSL2) Windows: `curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh`.
    If no release is published yet, follow the README's build-from-source steps.
 2. Run `goalcup prep --json`. It asks nothing and opens nothing. It prints one JSON array of six
    objects, in order, each `{"step", "state", "human", "say"}`:
@@ -70,7 +70,9 @@ Say these plainly, once, before the first human step:
      for anything inside your session. For the harness choice that is
      `goalcup prep --json --harness <id>`, after asking the person which harness they want when
      `say` lists more than one; it saves the choice. Install a missing harness or `git` only with
-     the person's agreement. When `say` names something only the person can do (plug the machine
+     the person's agreement. Install Hermes only as `uv tool install hermes-agent==0.19.0`, never
+     with Hermes's own installer, which installs the newest release (it writes no session file;
+     see the Hermes section of [HARNESS-SETUP](../../docs/HARNESS-SETUP.md#hermes)). When `say` names something only the person can do (plug the machine
      in, free disk space, allow `goalcup` in a firewall, set Windows power settings), show them
      `say` and wait.
    - **`"human": true`**: stop. Show the person the `say` text exactly as printed, word for word,

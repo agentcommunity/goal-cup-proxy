@@ -236,6 +236,13 @@ impl NativeOut<'_> {
         self.counts.unknown += 1;
     }
 
+    /// A recognised record that is still no decoded fact: an `unknown` whose `fields` (a JSON
+    /// object with its `reason`) say what the record is, with the record's supplied id.
+    fn unknown_with(&mut self, supplied_id: Option<String>, fields: Value) {
+        self.kind(kinds::UNKNOWN, supplied_id, fields);
+        self.counts.unknown += 1;
+    }
+
     /// A parseable record whose shape the format does not extract meaning from. Counted and
     /// source-referenced, never silently dropped, never guessed at.
     fn unrecognized(&mut self, record_type: Option<&str>) {

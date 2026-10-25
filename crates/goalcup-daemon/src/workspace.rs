@@ -112,28 +112,9 @@ pub fn check_machine_roots(workspace: &Path, roots: &[(&str, &Path)]) -> Result<
     Ok(())
 }
 
-/// The nearest ancestor holding a `.git` entry, file or directory, or `None`. A `.git`
-/// *file* counts: that is what a linked worktree has.
-pub fn git_worktree_of(path: &Path) -> Option<PathBuf> {
-    let mut cur = Some(path);
-    while let Some(dir) = cur {
-        if dir.join(".git").symlink_metadata().is_ok() {
-            return Some(dir.to_path_buf());
-        }
-        cur = dir.parent();
-    }
-    None
-}
-
-/// `workspace` holds a `.git` directory, not a file or a link, and no ancestor is a work tree:
-/// the root of its own clone (D56).
-pub fn is_clone_root(workspace: &Path) -> bool {
-    workspace
-        .join(".git")
-        .symlink_metadata()
-        .is_ok_and(|meta| meta.is_dir())
-        && workspace.parent().and_then(git_worktree_of).is_none()
-}
+/// The clone rule (D56), one definition shared with `goalcup continue`: a `.git` directory, not a
+/// file or a link, and no work tree above; a workspace that is itself a link is followed.
+pub use goalcup_platform::clone::{CloneRoot, clone_root, git_worktree_of, is_clone_root};
 
 /// Walk `workspace`, applying [`is_excluded`] with `excluded`, and return a sorted
 /// manifest. One walker for the baseline and for the seal, so the zero-entry proof and the

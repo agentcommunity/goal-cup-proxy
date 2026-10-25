@@ -102,6 +102,10 @@ WP1 to WP9, WP11 and WP12 are done; their checklists and ticket IDs are in the
 package; `sh scripts/gate.sh fast` before every commit.
 
 Status (21 Oct, branch `smart/zen-gates-d9tmbh`, not yet released):
+- Restarts across session limits (cloud brief item 6): design and a two-stop test in
+  [restarts](docs/research/RESTARTS-DESIGN.md). Open: the owner's three rules questions there
+  (platform caps, what a participant may do around a restart, a new machine), and the host
+  catching SIGTERM to send its backlog before a graceful stop.
 - WP-A done (D64): no server error stops a run or ends its upload. Follow-up: a `410` answer to
   `continue` still marks the run over; a bad deploy of that route would refuse continues.
 - WP-B part 1 done: acknowledged parts are deleted at once when the disk is short. The quiet-time
@@ -121,7 +125,7 @@ Status (21 Oct, branch `smart/zen-gates-d9tmbh`, not yet released):
 - WP-C, small version (owner, 21 Oct): pause the agent below 1 GiB free, resume above 3 GiB (D65),
   no disk stop verdict, vitals in heartbeats and status, cleanup of sent parts after a run. The
   daemon recorder-hold rework is dropped: the pause comes first.
-- WP-H steps 1 to 3 done (Goal Cup Proxy; the client sends proxy_version and tracer_version). Open: step 4 repo rename (owner, on GitHub), step 5 schema rename.
+- WP-H steps 1 to 3 done (Goal Cup Proxy; the client sends proxy_version and tracer_version). Step 4: the owner renamed the repo to `goal-cup-proxy`; every URL now names it (old release URLs redirect, checked 22 Oct), and the next release ships the new `install.sh`. Open: step 5 schema rename.
 - Cloud checks (21 Oct, draft PR #226, CI green): six test races under plain `cargo test` and the
   Worker's clock fixed; the root-only and full-tier tests pass as a normal user; the SQL file, script
   tests, release package and CLI smoke pass. Left for the owner's machines: [local next steps](docs/research/LOCAL-NEXT-STEPS.md).
@@ -148,6 +152,14 @@ Status (22 Oct, same branch, [local test day](docs/research/results/2026-10-22-l
 - Not run: test runs, full-flow cells and the judged-commit check (no GitHub token yet); WSL2 (no
   Windows machine); fix plans v5 to v7 are not rerun; 8 h and 24 h steps. See
   [local next steps](docs/research/LOCAL-NEXT-STEPS.md#open-since-22-oct).
+
+Status (22 Oct, [participant review](docs/research/PARTICIPANT-REVIEW-2026-10-21.md) section A):
+- A1 to A10 done (most were on main already); see the review's status table. New: `goalcup seal`
+  with no terminal and no `--yes` refuses at once; every disk line says where to free space; the
+  terminal says "part", not entry or segment; the guide has the `GOALCUP.md` rule and the Hermes
+  API-key advice.
+- Open: A11's prep warning when Hermes uses an OAuth provider (needs a connector field for the
+  sign-in file); A10's video format (owner). Section B (B1 to B9) waits for owner rulings.
 
 ### WP0: Measure
 Status (17 Oct, with 22 Oct notes in the list below): macOS and Linux Codex (luna/low) and Hermes (DeepSeek) passed staging
@@ -248,6 +260,8 @@ These look odd but are right. Do not "fix" them.
   full-flow cell or judged-commit check runs.
 - Fix plan v9 (`goalcup mcp`, a read-only `time_left` tool): approve, change or drop.
 - A Windows machine or VM for the WSL2 cells.
+- Participant review section B (B1 to B9) and the demo video's format and length for the guide
+  ([review](docs/research/PARTICIPANT-REVIEW-2026-10-21.md)).
 
 ## Known issues
 
@@ -292,6 +306,15 @@ These look odd but are right. Do not "fix" them.
 - **H-28 (before any research access; clean-up 14):** Anthropic usage objects pass through the private research
   observations. Allowlist token fields and strip plan, credit and billing data (D26) before anything
   is published or read from R2.
+- **Silent native leg (found 22 Oct):** Hermes 0.21.1 ignores `sessions.write_json_snapshots` and
+  writes no `session_*.json`, so a run on it records model calls on the wire and nothing native
+  (D2: the wire does not stand in for it). A harness update that moves its session folder, or a
+  wrong config home, does the same. Now said early: ten minutes after the first recorded request to
+  the model service, with at least ten of them and no file taken by the admitted native reader,
+  `goalcup status` keeps a `PROBLEM:` line (and `--json` a `problems` entry) until a file is
+  taken, and `host.log` has it once per start or continue; nothing stops. Hermes is pinned to
+  0.19.0 in HARNESS-SETUP, the guide and the setup skill (#249, #259); a setup warning for 0.21.1
+  and later is planned (D70, Task 6).
 - **T24:** the release tarballs are unsigned. They carry every connector since #164.
 - **H-26:** when a stop cannot be confirmed (`Unresolved`), record the final pushed Git commit as a
   "last known state" marker. Open question: which branch counts when the work is not on main.

@@ -129,7 +129,7 @@ fine-grained token. Practice runs last about ten minutes, never push and never c
 3. **Install** (~2 min). Start tmux first so the run survives a dropped connection:
    ```sh
    tmux new -s gc
-   curl -fsSL https://github.com/agentcommunity/goal-cup-tracer/releases/latest/download/install.sh | sh
+   curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh
    export PATH="$HOME/.local/bin:$PATH"
    goalcup --version
    ```
