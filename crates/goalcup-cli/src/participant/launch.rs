@@ -93,9 +93,9 @@ pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
         }
     }
     if l.opens == Opens::LastSession {
+        // The harness picks up the conversation the prompt is in (D73).
         lines.push(format!(
-            "If the agent has stopped, type \"{KEEP_GOING}\" and press Enter. If you never sent \
-             your prompt, send it now: it is still your one prompt."
+            "If the agent has stopped, type only \"{KEEP_GOING}\" and press Enter."
         ));
     } else {
         lines.push(format!(

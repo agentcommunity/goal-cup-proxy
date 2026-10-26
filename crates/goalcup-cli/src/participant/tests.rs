@@ -146,7 +146,9 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         "{continued}"
     );
     assert!(continued.contains(KEEP_GOING), "{continued}");
-    assert!(continued.contains("never sent your prompt"), "{continued}");
+    // A resumed conversation already holds the prompt: only "keep going" (D73).
+    assert!(continued.contains("type only"), "{continued}");
+    assert!(!continued.contains("one prompt"), "{continued}");
     // What this computer kept is the approval, never a "key" a reader takes for an API key.
     assert!(!continued.contains("key"), "{continued}");
 

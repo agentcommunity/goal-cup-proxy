@@ -275,9 +275,21 @@ pub(super) fn create_and_gate<'a>(
         Some(continuing) => continuing.record.started_at_unix,
         None => crate::run::now_unix(),
     };
+    // The model calls the run's earlier parts recorded, by the last part's `state.json`; none
+    // for a run started by a build that did not count them (D73).
+    let model_calls_before = cx
+        .continuing
+        .and_then(|continuing| {
+            crate::run::read_state(&crate::run::run_dir(cfg, &continuing.record.run_id))
+        })
+        .and_then(|state| state.model_calls)
+        .unwrap_or(0);
     // A continued run picks up the harness's last session only when the run has one; one whose
     // harness closed before the first message opens the normal way, and the launch block says so.
     // A store that cannot be read cannot tell: the harness is resumed, and the run's log says why.
+    // A harness that may write no session file (a native row with `warn_missing = false`, D72)
+    // is resumed when the run's earlier parts recorded model calls: there is a conversation to
+    // pick up, which its own store keeps (D73).
     let mut session_note = None;
     let opens = match cx.continuing {
         None => crate::participant::Opens::First,
@@ -289,6 +301,14 @@ pub(super) fn create_and_gate<'a>(
                 started_at_unix,
             ) {
                 Ok(true) => crate::participant::Opens::LastSession,
+                Ok(false) if resumes_without_a_file(profile, model_calls_before) => {
+                    session_note = Some(format!(
+                        "no session file was found, and the run's earlier parts recorded \
+                         {model_calls_before} model calls, so the harness is asked to pick up \
+                         its last session"
+                    ));
+                    crate::participant::Opens::LastSession
+                }
                 Ok(false) => crate::participant::Opens::NewSession,
                 Err(why) => {
                     session_note = Some(format!(
@@ -629,6 +649,7 @@ pub(super) fn create_and_gate<'a>(
         prompt,
         prompt_file,
         on_clipboard,
+        model_calls_before,
         details,
     };
     let gate = Gate {
@@ -638,6 +659,13 @@ pub(super) fn create_and_gate<'a>(
         gated,
     };
     Ok((forked, gate))
+}
+
+/// Whether a continue resumes a harness that left no session file (D73): the connector says a
+/// missing file is no problem (a native row with `warn_missing = false`, D72), and the run's
+/// earlier parts recorded model calls. Every other connector keeps the file rule.
+fn resumes_without_a_file(profile: &goalcup_protocol::harness::CaptureSpec, calls: u64) -> bool {
+    calls > 0 && profile.native.iter().any(|native| !native.warn_missing)
 }
 
 /// The run's secrets for the redactor: the proxy credential, and for a run on a server the
@@ -903,6 +931,8 @@ pub(super) fn run_harness<'a>(
     launched.continuable = forked.record.server_url.is_some();
     // What is left of the run, by the server's answer: the uploader keeps it from here (WP11).
     launched.time_left = forked.time_left();
+    // The run's model calls so far, which the tick adds this part's to (D73).
+    launched.model_calls = Some(forked.model_calls_before);
     let keeper = crate::run::StateKeeper::begin(
         &crate::run::run_dir(forked.cfg, &forked.record.run_id),
         launched,
@@ -915,7 +945,8 @@ pub(super) fn run_harness<'a>(
             .generations_from(proxied.proxy.generation_requests())
             .client_tls_from(proxied.proxy.client_tls_failures()),
         None => crate::run::RunSignals::default(),
-    };
+    }
+    .model_calls_before(forked.model_calls_before);
     // A run on a server reports its disk and goalcup's own processes in its heartbeats.
     let vitals = match forked.upload.as_ref() {
         Some(start) => vitals.probing(crate::vitals::Probe::new(
@@ -1100,6 +1131,8 @@ pub(super) fn run_harness<'a>(
     );
     keeper.update(|state| {
         state.disk.disk_paused = false;
+        // The count at the harness's exit, which the tick's last look may be behind (D73).
+        state.model_calls = Some(vitals.model_calls());
         state.harness = crate::run::HarnessState::Exited {
             status: match &status {
                 Ok(status) => describe_exit(status),
@@ -1272,6 +1305,47 @@ fn unmake(
 mod tests {
     use super::*;
     use crate::daemon::MockDaemonClient;
+
+    /// A continue resumes Hermes, whose native row says a missing file is no problem, once the
+    /// run has recorded model calls; a connector that always writes its file keeps the file
+    /// rule (D73).
+    #[test]
+    fn a_harness_with_no_session_file_is_resumed_only_after_model_calls() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
+        let hermes = crate::connector::load_harness(&dir, "hermes-cli", false).unwrap();
+        let codex = crate::connector::load_harness(&dir, "codex-cli", false).unwrap();
+        let hermes = &hermes.loaded.manifest.capture;
+        let codex = &codex.loaded.manifest.capture;
+        assert!(resumes_without_a_file(hermes, 3));
+        assert!(!resumes_without_a_file(hermes, 0));
+        assert!(!resumes_without_a_file(codex, 3));
+    }
+
+    /// The count of model calls survives in `state.json` across parts, and a state an older
+    /// build wrote reads as none (D73).
+    #[test]
+    fn the_runs_model_calls_are_counted_across_parts() {
+        let counter = Arc::new(std::sync::atomic::AtomicU64::new(2));
+        let signals = crate::run::RunSignals::default()
+            .generations_from(counter)
+            .model_calls_before(5);
+        assert_eq!(signals.model_calls(), 7);
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = crate::run::RunState::launched("e1", Ok(()));
+        state.model_calls = Some(7);
+        crate::run::StateKeeper::begin(dir.path(), state);
+        let read = crate::run::read_state(dir.path()).unwrap();
+        assert_eq!(read.model_calls, Some(7));
+        let file = dir.path().join(crate::run::STATE_FILE_NAME);
+        let mut old: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        old.as_object_mut().unwrap().remove("model_calls");
+        std::fs::write(&file, serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(
+            crate::run::read_state(dir.path()).unwrap().model_calls,
+            None
+        );
+    }
 
     /// The interrupt flag is process-global; the tests that move it take turns.
     static FLAG: std::sync::Mutex<()> = std::sync::Mutex::new(());

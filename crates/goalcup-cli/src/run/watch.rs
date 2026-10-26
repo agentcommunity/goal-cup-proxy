@@ -310,6 +310,7 @@ impl Ticker {
         disk.disk_paused = self.pause.as_ref().is_some_and(AgentPause::is_paused);
         let heartbeat = beat.vitals.heartbeat_trouble();
         let time_left = beat.vitals.time_left();
+        let model_calls = beat.vitals.model_calls();
         let mut count = None;
         beat.keeper.update(|state| {
             if time_left.is_some() {
@@ -332,6 +333,7 @@ impl Ticker {
             if let Some(silent) = no_calls {
                 state.no_model_calls = silent;
             }
+            state.model_calls = Some(model_calls);
         });
         if let Some(file) = &beat.time_left_file
             && let Err(error) = super::time_left::keep_file(
