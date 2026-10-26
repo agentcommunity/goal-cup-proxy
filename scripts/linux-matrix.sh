@@ -77,6 +77,8 @@
 #                                   exactly four capital letters, a dash and four capital letters,
 #                                   once per phase, and nothing after the last; anything else ends
 #                                   the step with nothing posted. Needs curl on this machine.
+#   MATRIX_GH_TOKEN_FILE            IGNORED (a host-cell option of matrix.sh): the container uses its own
+#                                   gh login, and no token file of this machine is mounted or passed.
 #   MATRIX_REPO                     a test run's repository, <owner>/<name>, instead of the one
 #                                   matrix.sh makes (matrix.sh says what it must be).
 #   GOALCUP_TEST_MEMBER_ID          the member approved as
@@ -463,6 +465,10 @@ fi
     fail "GOALCUP_TEST_APPROVAL_KEY in the environment is refused: give the file as GOALCUP_TEST_APPROVAL_KEY_FILE"
 keyfile=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
 unset GOALCUP_TEST_APPROVAL_KEY_FILE
+if [ -n "${MATRIX_GH_TOKEN_FILE:-}" ] && [ "$action" != build ]; then
+    echo "linux-matrix: MATRIX_GH_TOKEN_FILE is for host cells and is not passed into the container (its own gh login is used)"
+fi
+unset MATRIX_GH_TOKEN_FILE
 # A Docker cell takes no database URL and no R2 token (the agent in the cell runs as the same user
 # and could read them, and the database is shared with production): refused, not ignored.
 if [ "$action" != build ] && [ -n "${MATRIX_DATABASE_URL_FILE:-}${MATRIX_CLOUDFLARE_TOKEN_FILE:-}" ]; then

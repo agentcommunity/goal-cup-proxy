@@ -24,9 +24,9 @@
 #
 #   1. `goalcup-verify --capture-integrity` on the local trace exits 0 (integrity valid, anchor
 #      signed by the server's acknowledgement);
-#   2. the server's copy: `GET /v1/runs/<id>` with the run's own credential says `sealed`, `stop`,
-#      and holds exactly the bytes, records and head the local chain ends with, and the entry's
-#      committed end (`final`) is that same record;
+#   2. the server's copy: `GET /v1/runs/<id>` with the run's own credential holds exactly the bytes,
+#      records and head the local chain ends with, and the entry's committed end (`final`) is that
+#      same record; a practice run's also says `sealed` and `stop` (a test run's does not: F2);
 #   3. for a real harness, the agent worked: `goalcup-verify --research-json` on the trace shows
 #      at least one model exchange that carries output (a usage observation with output or
 #      completion tokens above 0, or a decoded assistant message). A prompt swallowed by a
@@ -82,6 +82,16 @@
 #                              repository (agentcommunity/goalcup-matrix-empty). A practice run has
 #                              none and ignores it. The agent pushes to it with the token in the
 #                              project's .env.local, so that login must be able to.
+#   MATRIX_GH_TOKEN_FILE       a --test cell's GitHub token for the agent, from this file instead of
+#                              `gh auth token`: a regular file, mode 0600, outside the checkout,
+#                              holding one line, `GH_TOKEN=<value>` or just the value (visible
+#                              ASCII, no quotes). Never echoed, never in an argument. The log says
+#                              which source was used. A fine-grained token for the one repository
+#                              (Contents: read and write) is the safer choice: the agent can read
+#                              .env.local, and `gh auth token` is the whole login, with the scopes
+#                              to reach all your repositories, which a staging trace could hold.
+#                              Removed from the environment at once. A Docker cell ignores it (the
+#                              container's own gh login is used).
 #   MATRIX_CELL                the cell's name in the repository the kit makes,
 #                              goalcup-kit-<cell>-<6 hex digits> (default: the connector id).
 #   MATRIX_PROMPT              what is typed into the harness (default: one line asking for a
@@ -151,8 +161,10 @@
 #                        is sealed (never a guess). Then `goalcup start` finishes its wrap-up; if
 #                        it did not report the seal uploaded, `goalcup upload <entry>` runs. The
 #                        checks are the practice ones, except that the end is the seal, not the
-#                        deadline: the server's copy must say `sealed` and equal the local chain,
-#                        and `stop` is not required (the server's 168-hour deadline is far off).
+#                        deadline: the server's copy must equal the local chain and hold the
+#                        committed end (`final`); its run `status` (`open`: a run is sealed on the
+#                        server only once its deadline has passed) and `stop` are not required, the
+#                        server's 168-hour deadline being far off.
 #                        A run that FAILs after its entry was found and before it was sealed is
 #                        sealed on the way out (best effort, logged). Both options go together,
 #                        only with a real connector (not a fake) and MATRIX_CONFIG_DIR. Before the
@@ -339,6 +351,9 @@ unset GOALCUP_TEST_APPROVAL_KEY_FILE
 # to approve with the key; this script approves nothing then.
 CODES_FILE=${MATRIX_CODES_FILE:-}
 unset MATRIX_CODES_FILE
+# A --test cell's token file (project_token): the path leaves the environment too.
+TOKEN_FILE=${MATRIX_GH_TOKEN_FILE:-}
+unset MATRIX_GH_TOKEN_FILE
 if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
   echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE must name a regular file this user can read" >&2
   exit 2
@@ -813,7 +828,11 @@ write_wrapper() { # file name "goalcup arguments" [stty]
     [ -z "${4:-}" ] || echo 'stty cols 120 rows 40 2>/dev/null'
     echo "echo \$\$ >$(shq "$ROOT/$2.pid")"
     echo "cd $(shq "${WRAP_DIR:-$RUNS}") || exit 1"
-    printf 'exec env HOME=%s GOALCUP_CONFIG_DIR=%s' "$(shq "$HOME_DIR")" "$(shq "$CFG")"
+    # Nothing of this machine's git login: its SSH agent, keyring, tokens and git/gh configuration.
+    printf 'exec env -u SSH_AUTH_SOCK -u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS -u GH_TOKEN -u GITHUB_TOKEN'
+    printf ' -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM'
+    printf ' -u GIT_CONFIG_NOSYSTEM -u GIT_ASKPASS -u GIT_SSH -u GIT_SSH_COMMAND -u GH_CONFIG_DIR'
+    printf ' HOME=%s GOALCUP_CONFIG_DIR=%s' "$(shq "$HOME_DIR")" "$(shq "$CFG")"
     [ -z "$CONNECTORS_ENV" ] || printf ' GOALCUP_CONNECTORS_DIR=%s' "$(shq "$CONNECTORS_ENV")"
     printf ' GOALCUP_NO_BROWSER=1 GOALCUP_TEST_NO_BROWSER=1 PATH=%s TERM=%s' "$(shq "$HARNESS_PATH")" "$MATRIX_TERM"
     [ -z "$WRAP_EXTRA" ] || printf ' %s' "$WRAP_EXTRA"
@@ -835,26 +854,77 @@ project_gitignore() {
     fail "cannot write $PROJECT/.gitignore" || return 1
 }
 
-# A .env.local holding `GH_TOKEN=<gh auth token>`: mode 0600 (umask 077), the token going from gh
-# into the file and nowhere else, and checked without being read out: one non-empty value.
+# A .env.local holding `GH_TOKEN=<token>`: mode 0600 (umask 077), the token going into the file and
+# nowhere else (never an argument, a variable or the log), and checked without being read out: one
+# non-empty plain value. The token comes from MATRIX_GH_TOKEN_FILE when it is set, else from
+# `gh auth token` (the whole login: see the header). A private copy is kept under $ROOT/private
+# (mode 0600, deleted at cleanup) so the log can be scrubbed even if the agent deletes or rewrites
+# .env.local. The log names the source, never the value.
 project_token() {
-  command -v gh >/dev/null 2>&1 ||
-    fail "gh is needed (https://cli.github.com): the test run's agent pushes with its token, from the project's .env.local" || return 1
-  (
-    umask 077
-    { printf 'GH_TOKEN='; gh auth token 2>"$ROOT/gh-token.err"; } >"$PROJECT/.env.local"
-  ) 2>>"$LOG"
-  python3 -I - "$PROJECT/.env.local" <<'PY' ||
+  mkdir -p "$ROOT/private" && chmod 700 "$ROOT/private" ||
+    fail "cannot make $ROOT/private" || return 1
+  if [ -n "$TOKEN_FILE" ]; then
+    project_token_from_file || return 1
+  else
+    command -v gh >/dev/null 2>&1 ||
+      fail "gh is needed (https://cli.github.com): the test run's agent pushes with its token, from the project's .env.local (or give MATRIX_GH_TOKEN_FILE)" || return 1
+    (
+      umask 077
+      { printf 'GH_TOKEN='; gh auth token 2>"$ROOT/gh-token.err"; } >"$PROJECT/.env.local"
+    ) 2>>"$LOG"
+    token_plain "$PROJECT/.env.local" ||
+      { rm -f "$PROJECT/.env.local"; fail "no GitHub login found here: run \`gh auth login\` (HTTPS, and Yes to authenticate Git) in this environment, then run again (its token goes to the project's .env.local), or give MATRIX_GH_TOKEN_FILE" || return 1; }
+    say "GitHub token for the agent: from gh auth token (this machine's login, with all its scopes; a one-repository token via MATRIX_GH_TOKEN_FILE is safer)"
+  fi
+  (umask 077 && cp "$PROJECT/.env.local" "$ROOT/private/gh-token") ||
+    fail "cannot keep a private copy of the token for the log scrub" || return 1
+  log "project folder $PROJECT: .gitignore and .env.local (GH_TOKEN, mode 0600; never printed)"
+}
+
+# $1 is exactly one line GH_TOKEN=<plain value>, mode 0600 (nothing is printed).
+token_plain() {
+  python3 -I - "$1" <<'PY'
 import os, re, stat, sys
 path = sys.argv[1]
 text = open(path).read()
-if not re.fullmatch(r"GH_TOKEN=\S+\n", text):
+if not re.fullmatch(r"GH_TOKEN=[!#-&(-~]+\n", text):
     sys.exit(1)
 if stat.S_IMODE(os.stat(path).st_mode) != 0o600:
     sys.exit(1)
 PY
-    { rm -f "$PROJECT/.env.local"; fail "no GitHub login found here: run \`gh auth login\` (HTTPS, and Yes to authenticate Git) in this environment, then run again (its token goes to the project's .env.local)" || return 1; }
-  log "project folder $PROJECT: .gitignore and .env.local (GH_TOKEN from gh auth token, mode 0600; never printed)"
+}
+
+# MATRIX_GH_TOKEN_FILE into .env.local: a regular file (not a link), mode 0600, outside this
+# checkout, one line `GH_TOKEN=<value>` or the value alone. Nothing of it is printed.
+project_token_from_file() {
+  python3 -I - "$TOKEN_FILE" "$REPO" "$PROJECT/.env.local" <<'PY' 2>"$ROOT/token-file.err" ||
+import os, re, stat, sys
+src, repo, dest = sys.argv[1:4]
+def no(why):
+    sys.exit("MATRIX_GH_TOKEN_FILE %s" % why)
+if os.path.islink(src) or not os.path.isfile(src):
+    no("must name a regular file (not a link)")
+if stat.S_IMODE(os.stat(src).st_mode) != 0o600:
+    no("must be mode 0600 (chmod 600 it)")
+real, here = os.path.realpath(src), os.path.realpath(repo)
+if real == here or real.startswith(here + os.sep):
+    no("is inside the checkout: keep it outside")
+if os.path.getsize(src) > 4096:
+    no("is not a token file (over 4 KiB)")
+lines = [l for l in open(src).read().split("\n") if l.strip()]
+if len(lines) != 1:
+    no("must hold one line")
+value = lines[0].strip()
+if value.startswith("GH_TOKEN="):
+    value = value[len("GH_TOKEN="):]
+if not re.fullmatch(r"[!#-&(-~]+", value):
+    no("must hold a token of visible characters, with no quote or space")
+fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w") as f:
+    f.write("GH_TOKEN=%s\n" % value)
+PY
+    fail "$(last_line "$ROOT/token-file.err")" || return 1
+  say "GitHub token for the agent: from MATRIX_GH_TOKEN_FILE $TOKEN_FILE"
 }
 
 # What the starting kit holds, by name, for the "agent changed something" check.
@@ -863,11 +933,12 @@ project_kit_names() {
 }
 
 # The token must never stay in the log: if anything printed it (the agent's own terminal), it is
-# replaced where it stands, in the log and in the files directly in $ROOT (the terminal's capture),
-# and .env.local is deleted even with --keep. Nothing is read out.
+# replaced where it stands, in the log and in the files directly in $ROOT (the terminal's capture).
+# The token is read from the private copy made when .env.local was (the agent may have deleted or
+# rewritten .env.local since). Both are deleted, even with --keep. Nothing is read out.
 scrub_token() {
-  [ -f "$PROJECT/.env.local" ] || return 0
-  python3 -I - "$PROJECT/.env.local" "$LOG" "$ROOT" <<'PY' 2>/dev/null
+  if [ -f "$ROOT/private/gh-token" ]; then
+    python3 -I - "$ROOT/private/gh-token" "$LOG" "$ROOT" <<'PY' 2>/dev/null
 import os, sys
 try:
     token = open(sys.argv[1]).read().strip().split("=", 1)[1]
@@ -888,7 +959,9 @@ if len(token) >= 8:
         except OSError:
             pass
 PY
-  rm -f "$PROJECT/.env.local"
+  fi
+  rm -f "$ROOT/private/gh-token"
+  [ "$PROJECT" = /nonexistent ] || rm -f "$PROJECT/.env.local"
 }
 
 # A test run's repository: MATRIX_REPO, or a new one the kit makes with this machine's GitHub
@@ -1183,18 +1256,18 @@ refusal() { # kind api
   new_project "refuse-$1" || return 1
   kit=1
   case $1 in
-    folder-not-empty) printf 'readme\n' >"$PROJECT/README.md"; want="empty folder" ;;
-    git-present) mkdir "$PROJECT/.git" && printf 'ref: refs/heads/main\n' >"$PROJECT/.git/HEAD"; want="empty folder" ;;
-    env-no-gitignore) kit=env; want=".gitignore" ;;
+    folder-not-empty) printf 'readme\n' >"$PROJECT/README.md"; want="also holds README.md" ;;
+    git-present) mkdir "$PROJECT/.git" && printf 'ref: refs/heads/main\n' >"$PROJECT/.git/HEAD"; want="also holds .git" ;;
+    env-no-gitignore) kit=env; want="does not cover .env.local" ;;
     repo-has-size)
       doors="$doors GOALCUP_TEST_GITHUB_API=$2"
-      args="--repo goalcup-kit/kit-has-size" want="not empty|must be empty"
+      args="--repo goalcup-kit/kit-has-size" want="already has commits \(12 KB\)"
       ;;
     # The size of a repository GitHub has just made with a README can still read 0; only the
     # commits call tells.
     readme-repo)
       doors="$doors GOALCUP_TEST_GITHUB_API=$2"
-      args="--repo goalcup-kit/kit-readme" want="not empty|must be empty"
+      args="--repo goalcup-kit/kit-readme" want="already has commits; name"
       ;;
     # private and missing take one path in goalcup (GitHub answers a private repository with 404
     # to a caller with no login).
