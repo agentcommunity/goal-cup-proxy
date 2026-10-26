@@ -203,7 +203,9 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
   if (auth.mode === "competition") requireCompetitionVersion(ctx, fields.tracer_version);
   if (dev) requireDevAllowed(auth.mode);
 
-  if (ctx.cfg.githubCheck) {
+  // A practice run judges nothing, so its repository is never asked about: 0.7 practice runs all
+  // name one shared repository, and one commit there must not stop every practice start.
+  if (ctx.cfg.githubCheck && auth.mode !== "practice") {
     await requirePublicGithubRepo(ctx, repo_url);
     await requireEmptyGithubRepo(ctx, repo_url);
   }

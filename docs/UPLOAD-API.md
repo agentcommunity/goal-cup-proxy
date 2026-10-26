@@ -189,8 +189,10 @@ repository and the open goes on; `200` means the repository already has a commit
 `400 malformed` ("The repository must be empty when the run opens. Create a new one with no README,
 .gitignore or license, and start again."). Any other answer, or no answer, is `502 upstream_error`,
 which goalcup retries, so a GitHub outage never refuses a player; nothing is created in any of these
-cases. The check applies to every mode, and to the first open only: a retried open of a run that
-exists is answered before GitHub is asked, and `continue` never asks.
+cases. The check applies to competition and test runs, and to the first open only: a retried open
+of a run that exists is answered before GitHub is asked, and `continue` never asks. A practice run
+skips both GitHub checks, because it judges nothing (0.7 practice runs all name one shared
+repository, and one commit there must not stop every practice start).
 
 **One main run per account.** A competition start by the account replaces its other open competition
 run: that run gets `replaced_at` = this run's `official_start`, in the same step, and ends then
