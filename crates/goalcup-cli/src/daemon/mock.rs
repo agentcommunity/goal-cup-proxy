@@ -191,6 +191,7 @@ impl MockDaemonClient {
                 excluded: Vec::new(),
                 git: None,
                 home: None,
+                capped: None,
             },
             sealed: false,
             processes: Vec::new(),

@@ -8,14 +8,15 @@
 //! carries or a hash of bytes on disk; what a mismatch *means* is `goalcup-verifier`'s.
 
 use crate::DaemonError;
-use goalcup_protocol::seal::{GitState, SealManifest, SealedFile, is_excluded};
+use goalcup_protocol::seal::{GitState, SealManifest, SealedFile, WalkCap, is_excluded};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 /// The 64-zero digest that stands for "this file did not exist when we looked".
 ///
-/// What [`list_workspace`] records for a file it could not open or read through. The CLI's
-/// `seal` mirror spells the same sentinel, so the two walks agree about such a file.
+/// What [`list_workspace`] records for a file it could not open or read through, and beside the
+/// size of a file it does not read: one over [`HASH_LIMIT`], or a key file ([`is_key_file`]). The
+/// CLI's `seal` mirror spells the same sentinel, so the two walks agree about such a file.
 pub(crate) const ABSENT: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// Bytes read per hashing step. A workspace file can be arbitrarily large and bounded
@@ -52,31 +53,32 @@ pub struct Roots {
 pub fn check_artifact_placement(artifact_root: &Path, workspace: &Path) -> Result<(), DaemonError> {
     if artifact_root == workspace {
         return Err(DaemonError::Guard(format!(
-            "artifact root {} is identical to the workspace: the run's own evidence would \
-             be the first thing the agent lists",
+            "the project folder {} is identical to goalcup's own folder for this run: use a \
+             folder of its own",
             artifact_root.display()
         )));
     }
     if workspace.starts_with(artifact_root) {
         return Err(DaemonError::Guard(format!(
-            "artifact root {} is an ancestor of workspace {}",
+            "goalcup's own folder {} is an ancestor of the project folder {}: use a folder of \
+             its own",
             artifact_root.display(),
             workspace.display()
         )));
     }
     if artifact_root.starts_with(workspace) {
         return Err(DaemonError::Guard(format!(
-            "artifact root {} is inside workspace {}",
+            "goalcup's own folder {} is inside the project folder {}: use a folder of its own",
             artifact_root.display(),
             workspace.display()
         )));
     }
     if artifact_root.parent() == workspace.parent() {
         return Err(DaemonError::Guard(format!(
-            "artifact root {} is a sibling of workspace {}; the agent enumerates the \
-             parent folder on its first tool call",
-            artifact_root.display(),
-            workspace.display()
+            "the project folder {} is next to goalcup's own folder {}, and the agent lists the \
+             folder above its project on its first tool call; use a folder of its own",
+            workspace.display(),
+            artifact_root.display()
         )));
     }
     // The config check, applied a second time to the two concrete directories: the clauses
@@ -84,8 +86,8 @@ pub fn check_artifact_placement(artifact_root: &Path, workspace: &Path) -> Resul
     // reads as. This is the pass that resolves them, and it is called rather than copied.
     if crate::config::nests(artifact_root, workspace) {
         return Err(DaemonError::Guard(format!(
-            "artifact root {} and workspace {} are entangled once symlinks are resolved: \
-             the directory the agent actually enumerates is not the one either path spells",
+            "goalcup's own folder {} and the project folder {} overlap once links are \
+             followed: use a folder of its own",
             artifact_root.display(),
             workspace.display()
         )));
@@ -93,17 +95,17 @@ pub fn check_artifact_placement(artifact_root: &Path, workspace: &Path) -> Resul
     Ok(())
 }
 
-/// The machine-wide roots against the workspace (review R4 I5): `check_artifact_placement`
-/// compares it with this entry's own artifact directory only, which a workspace inside the
+/// The machine-wide roots against the project folder (review R4 I5): `check_artifact_placement`
+/// compares it with this entry's own artifact directory only, which a project folder inside the
 /// artifact root's other subtrees, or inside the configuration directory (`control.json` and
-/// its bearer), passes. Refused: the workspace equal to, inside, or an ancestor of a root
-/// (symlinks resolved), or its sibling, since an agent enumerates its parent first.
+/// its bearer), passes. Refused: the project folder equal to, inside, or an ancestor of a root
+/// (symlinks resolved), or next to it, since an agent lists the folder above its project first.
 pub fn check_machine_roots(workspace: &Path, roots: &[(&str, &Path)]) -> Result<(), DaemonError> {
     for (name, root) in roots {
         if crate::config::nests(workspace, root) || workspace.parent() == root.parent() {
             return Err(DaemonError::Guard(format!(
-                "workspace {} is nested in, or beside, the tracker's {name} {}: the agent would \
-                 enumerate the tracker's own files",
+                "the project folder {} is in, around, or next to the tracker's {name} {}: use a \
+                 folder of its own",
                 workspace.display(),
                 root.display()
             )));
@@ -116,6 +118,10 @@ pub fn check_machine_roots(workspace: &Path, roots: &[(&str, &Path)]) -> Result<
 /// file or a link, and no work tree above; a workspace that is itself a link is followed.
 pub use goalcup_platform::clone::{CloneRoot, clone_root, git_worktree_of, is_clone_root};
 
+/// The most files the walk of a workspace that is not its own clone lists (D71). Past it the
+/// manifest says [`WalkCap::FileLimit`] and the seal goes on.
+pub const WORKSPACE_FILE_LIMIT: usize = 50_000;
+
 /// Walk `workspace`, applying [`is_excluded`] with `excluded`, and return a sorted
 /// manifest. One walker for the baseline and for the seal, so the zero-entry proof and the
 /// seal can never disagree about what was left out.
@@ -123,38 +129,55 @@ pub use goalcup_platform::clone::{CloneRoot, clone_root, git_worktree_of, is_clo
 /// The exclusion rule is root-anchored: a pattern matches a path that equals it or lies
 /// beneath it, and nothing else. `mkdir src/.git` therefore hides nothing — a nested `.git`
 /// is the agent's work until a connector writes `**/.git` and means it.
+///
+/// Bounded (D71): at most [`WORKSPACE_FILE_LIMIT`] files, a file over [`HASH_LIMIT`] by its size,
+/// a key file ([`is_key_file`]) by its size, and nothing read past `deadline`. A walk that stops
+/// short records why in `capped`; it is never an error.
 pub fn list_workspace(
     workspace: &Path,
     entry_id: &str,
     at: &str,
     excluded: &[String],
+    deadline: Option<std::time::Instant>,
 ) -> Result<SealManifest, DaemonError> {
+    let walked = walk(
+        workspace,
+        excluded,
+        Bounds {
+            limit: WORKSPACE_FILE_LIMIT,
+            hash_limit: HASH_LIMIT,
+            deadline,
+            keys_unhashed: true,
+        },
+    )?;
     Ok(SealManifest {
         entry_id: entry_id.to_string(),
         sealed_at: at.to_string(),
         workspace: workspace.to_string_lossy().to_string(),
-        files: walk(workspace, excluded, usize::MAX, u64::MAX, None)?,
+        files: walked.files,
         excluded: excluded.to_vec(),
         git: None,
         home: None,
+        capped: walked.capped,
     }
     .sorted())
 }
 
-/// The workspace's seal (D56). A `clone` is never walked: its Git state, read within `budget`, or
-/// why it could not be read, at most [`UNREADABLE_LIMIT`] characters. Whether the workspace is a
-/// clone is the baseline's answer ([`is_clone_root`] at the create), never asked again of a
-/// workspace the agent has had: a removed or swapped `.git` is unreadable, not a walk. Any other
-/// workspace is walked, as before.
+/// The workspace's baseline or seal. Whether it is a clone is asked of the workspace as it is
+/// now ([`is_clone_root`]), at the create and again at the finish (D71 withdraws D56's answer
+/// fixed at the create): an agent that ran `git init` is sealed by its Git state, and one whose
+/// `.git` is gone is walked. A clone is never walked: its Git state, read within `budget`, or why
+/// it could not be read, at most [`UNREADABLE_LIMIT`] characters. Any other workspace is walked
+/// by [`list_workspace`], with `budget` as its deadline.
 pub fn seal_workspace(
     workspace: &Path,
-    clone: bool,
     entry_id: &str,
     at: &str,
     budget: std::time::Duration,
 ) -> Result<SealManifest, DaemonError> {
-    if !clone {
-        return list_workspace(workspace, entry_id, at, &[]);
+    if !is_clone_root(workspace) {
+        let deadline = std::time::Instant::now().checked_add(budget);
+        return list_workspace(workspace, entry_id, at, &[], deadline);
     }
     let git = match crate::workspace_git::state(workspace, budget) {
         Ok(git) => GitState::Read(git),
@@ -170,6 +193,7 @@ pub fn seal_workspace(
         excluded: Vec::new(),
         git: Some(git),
         home: None,
+        capped: None,
     })
 }
 
@@ -179,35 +203,74 @@ const UNREADABLE_LIMIT: usize = 200;
 /// The most files the baseline lists of the harness home (D56).
 pub const HOME_FILE_LIMIT: usize = 10_000;
 
-/// A file larger than this is described by its size alone: in the Git digest, and in the
-/// baseline's harness-home listing, where it carries the absent digest beside its size (D56).
+/// A file larger than this is described by its size alone: in the Git digest, in the
+/// baseline's harness-home listing and in a workspace walk, where it carries the absent digest
+/// beside its size (D56, D71).
 pub(crate) const HASH_LIMIT: u64 = 64 * 1024 * 1024;
 
 /// The connector's config home for the baseline (D56): every file the walk meets, without
 /// `excluded` (its native roots), symlinks unfollowed, stopping at [`HOME_FILE_LIMIT`] files,
 /// sorted. A file over [`HASH_LIMIT`] is not read. `None` when the home cannot be read.
 pub fn list_home(home: &Path, excluded: &[String]) -> Option<Vec<SealedFile>> {
-    let mut files = walk(home, excluded, HOME_FILE_LIMIT, HASH_LIMIT, None).ok()?;
+    let mut files = walk(
+        home,
+        excluded,
+        Bounds {
+            limit: HOME_FILE_LIMIT,
+            hash_limit: HASH_LIMIT,
+            deadline: None,
+            keys_unhashed: true,
+        },
+    )
+    .ok()?
+    .files;
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Some(files)
 }
 
-/// Every file below `workspace` the exclusions leave, at most `limit` of them, in walk order. A
-/// regular file over `hash_limit` bytes is listed with its size and the absent digest, unread.
-/// Past `deadline`, checked before each file, the walk is refused.
+/// What one [`walk`] may take.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Bounds {
+    /// The most files listed. One more found makes the walk [`WalkCap::FileLimit`].
+    pub(crate) limit: usize,
+    /// A regular file over this many bytes is listed with its size and the absent digest, unread.
+    pub(crate) hash_limit: u64,
+    /// Checked before each entry: past it the walk stops as [`WalkCap::Deadline`].
+    pub(crate) deadline: Option<std::time::Instant>,
+    /// A key file ([`is_key_file`]) is listed with its size and the absent digest, unread: a
+    /// digest of a low-entropy secret file would be a confirmation oracle for it (D71; the
+    /// redactor's own rule, `redact.rs`). Every walk sets it: a key file is never hashed.
+    pub(crate) keys_unhashed: bool,
+}
+
+/// What a [`walk`] found, in walk order, and why it stopped short, if it did.
+#[derive(Debug)]
+pub(crate) struct Walked {
+    pub(crate) files: Vec<SealedFile>,
+    pub(crate) capped: Option<WalkCap>,
+}
+
+/// Every file below `workspace` the exclusions leave, within `bounds`, in walk order.
 pub(crate) fn walk(
     workspace: &Path,
     excluded: &[String],
-    limit: usize,
-    hash_limit: u64,
-    deadline: Option<std::time::Instant>,
-) -> Result<Vec<SealedFile>, DaemonError> {
-    let mut files = Vec::new();
-    let mut stack = vec![workspace.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        if files.len() >= limit {
-            break;
+    bounds: Bounds,
+) -> Result<Walked, DaemonError> {
+    let mut walked = Walked {
+        files: Vec::new(),
+        capped: None,
+    };
+    // Lists `file`, or, with the limit reached, records that the walk is capped and says stop.
+    let list = |walked: &mut Walked, file: SealedFile| {
+        if walked.files.len() >= bounds.limit {
+            walked.capped = Some(WalkCap::FileLimit);
+            return false;
         }
+        walked.files.push(file);
+        true
+    };
+    let mut stack = vec![workspace.to_path_buf()];
+    'walk: while let Some(dir) = stack.pop() {
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
             // The workspace itself must be readable: without it there is nothing to seal.
@@ -222,11 +285,14 @@ pub(crate) fn walk(
             // What it holds is not listed: an absent digest on a directory means "contents
             // unseen" (CHEAT-CHECKLIST).
             Err(_) => {
-                files.push(SealedFile {
+                let unseen = SealedFile {
                     path: relative_to(workspace, &dir),
                     bytes: 0,
                     sha256: ABSENT.to_string(),
-                });
+                };
+                if !list(&mut walked, unseen) {
+                    break 'walk;
+                }
                 continue;
             }
         };
@@ -234,11 +300,14 @@ pub(crate) fn walk(
             let Ok(entry) = entry else {
                 // The listing failed part-way: the directory is listed with the absent digest
                 // beside whatever was read, and the walk leaves it.
-                files.push(SealedFile {
+                let unseen = SealedFile {
                     path: relative_to(workspace, &dir),
                     bytes: 0,
                     sha256: ABSENT.to_string(),
-                });
+                };
+                if !list(&mut walked, unseen) {
+                    break 'walk;
+                }
                 break;
             };
             let path = entry.path();
@@ -249,32 +318,45 @@ pub(crate) fn walk(
             // `file_type()` comes from the directory read and does not follow a symlink,
             // so a link pointing at an ancestor cannot make this walk loop.
             let Ok(kind) = entry.file_type() else {
-                files.push(SealedFile {
+                let unseen = SealedFile {
                     path: rel,
                     bytes: 0,
                     sha256: ABSENT.to_string(),
-                });
+                };
+                if !list(&mut walked, unseen) {
+                    break 'walk;
+                }
                 continue;
             };
+            // Before each entry, a folder too: a tree of empty folders must not outlast it.
+            if bounds
+                .deadline
+                .is_some_and(|end| std::time::Instant::now() >= end)
+            {
+                walked.capped = Some(WalkCap::Deadline);
+                break 'walk;
+            }
             if kind.is_dir() {
                 stack.push(path);
                 continue;
             }
-            if deadline.is_some_and(|end| std::time::Instant::now() >= end) {
-                return Err(DaemonError::Refused("the walk ran out of time".into()));
-            }
-            let (bytes, sha256) = measure(&path, hash_limit);
-            files.push(SealedFile {
+            let (bytes, sha256) =
+                if bounds.keys_unhashed && is_key_file(&entry.file_name().to_string_lossy()) {
+                    (measure(&path, 0).0, ABSENT.to_string())
+                } else {
+                    measure(&path, bounds.hash_limit)
+                };
+            let file = SealedFile {
                 path: rel,
                 bytes,
                 sha256,
-            });
-            if files.len() >= limit {
-                break;
+            };
+            if !list(&mut walked, file) {
+                break 'walk;
             }
         }
     }
-    Ok(files)
+    Ok(walked)
 }
 
 /// A workspace-relative path with forward slashes.
@@ -328,41 +410,40 @@ pub(crate) fn measure(path: &Path, hash_limit: u64) -> (u64, String) {
     (total, hex::encode(hasher.finalize()))
 }
 
-/// A file a run's folder may hold before the run: the participant's keys (`.env`, `.env.local`,
-/// ...) and a `.gitignore` that keeps them out of the repository.
+/// A key file: `.env` or `.env.<anything>`. The workspace walk lists it by name and size and
+/// never hashes it (D71).
+pub(crate) fn is_key_file(name: &str) -> bool {
+    name == ".env" || name.starts_with(".env.")
+}
+
+/// A name a new run's folder may hold before the run, as a regular file (OD6): the
+/// participant's keys ([`is_key_file`]) and a `.gitignore` that keeps them out of the repository.
 fn is_starting_kit(name: &str) -> bool {
-    name == ".gitignore" || name == ".env" || name.starts_with(".env.")
+    name == ".gitignore" || is_key_file(name)
 }
 
 /// Every reason a workspace is refused, in one place, and **without writing anything**.
 ///
-/// An artifact root the agent could enumerate, a directory inside a Git worktree, and a
-/// directory that already has entries — "the workspace started empty" as a checkable fact
-/// rather than a claim.
-///
 /// It creates no directory, not even the workspace: the capture runtime asks "would this be
 /// refused?" before it creates the entry's artifact directory.
 ///
-/// A workspace that does not exist yet has zero entries; that is the normal case. The root of
-/// its own clone (a `.git` directory, no work tree above it) is admitted with its files (D56).
-pub fn check_workspace_available(roots: &Roots) -> Result<(), DaemonError> {
+/// Always: an artifact root the agent could enumerate. For a new run (`continued` false), also
+/// (D71): a folder that already holds `.git` (B1: the agent makes the repository during the
+/// run, so a prepared one is refused), a folder inside a Git work tree, and a folder holding
+/// anything but the starting kit, regular files only ("the workspace started empty" as a
+/// checkable fact). A folder that does not exist yet holds nothing; the baseline lists the kit
+/// by name and size. A continued run's folder (`continued`) holds the run's work, with or
+/// without `.git`, and is admitted as it is; that it is there is checked by the caller.
+pub fn check_workspace_available(roots: &Roots, continued: bool) -> Result<(), DaemonError> {
     check_artifact_placement(&roots.artifact_root, &roots.workspace)?;
-    if is_clone_root(&roots.workspace) {
+    if continued {
         return Ok(());
     }
-    // A folder that already holds its own `.git` is a clone `goalcup start` made in the
-    // participant's work folder, its parent. It always finds its own `.git`, so the repository
-    // to name is the one above it, and the folder to name is the work folder as configured.
-    let own_git = roots.workspace.join(".git").symlink_metadata().is_ok();
-    if own_git
-        && let Some(work_root) = roots.workspace.parent()
-        && let Some(outer) = git_worktree_of(work_root)
-    {
+    if roots.workspace.join(".git").symlink_metadata().is_ok() {
         return Err(DaemonError::Guard(format!(
-            "Your work folder {} is inside a Git repository ({}). Choose a folder outside any \
-             repository: goalcup setup --work-root <full path of a folder outside any repository>",
-            work_root.display(),
-            outer.display()
+            "the run's folder {} already holds .git: a new run starts in a folder with no Git \
+             repository, and the agent makes one during the run",
+            roots.workspace.display()
         )));
     }
     if let Some(repo) = git_worktree_of(&roots.workspace) {
@@ -373,12 +454,15 @@ pub fn check_workspace_available(roots: &Roots) -> Result<(), DaemonError> {
             repo.display()
         )));
     }
-    // The participant's starting kit is allowed: `.env*` files (their keys) and a `.gitignore`.
-    // The baseline records each by name, size and hash, so the start is still a checkable fact.
     let existing = match std::fs::read_dir(&roots.workspace) {
         Ok(entries) => entries
-            .filter_map(Result::ok)
-            .filter(|e| !is_starting_kit(&e.file_name().to_string_lossy()))
+            .filter(|entry| {
+                // A kit name that is a folder, a link or anything but a regular file is not kit.
+                !entry.as_ref().is_ok_and(|e| {
+                    is_starting_kit(&e.file_name().to_string_lossy())
+                        && e.file_type().is_ok_and(|kind| kind.is_file())
+                })
+            })
             .count(),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => 0,
         Err(source) => {
@@ -390,7 +474,8 @@ pub fn check_workspace_available(roots: &Roots) -> Result<(), DaemonError> {
     };
     if existing > 0 {
         return Err(DaemonError::Guard(format!(
-            "the run's folder {} is not empty ({existing} entries); it must be new and empty",
+            "the run's folder {} is not empty ({existing} entries); it may hold only .gitignore \
+             and .env files",
             roots.workspace.display()
         )));
     }

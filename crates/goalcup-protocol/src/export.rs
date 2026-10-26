@@ -1919,6 +1919,7 @@ mod tests {
             excluded: Vec::new(),
             git: None,
             home: None,
+            capped: None,
         }
     }
 

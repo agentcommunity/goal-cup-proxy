@@ -104,6 +104,7 @@ fn manifest() -> SealManifest {
         excluded: Vec::new(),
         git: None,
         home: None,
+        capped: None,
     }
 }
 

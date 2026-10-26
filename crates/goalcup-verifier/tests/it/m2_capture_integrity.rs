@@ -32,7 +32,7 @@ use goalcup_protocol::export::{
 use goalcup_protocol::provenance::{Rfc3339Utc, TerminationMethodV1, TerminationOutcomeV1};
 use goalcup_protocol::receipt::{StartReceipt, StartReceiptClaims};
 use goalcup_protocol::redaction::{RedactionAudit, RedactionAuditSpan};
-use goalcup_protocol::seal::{SealManifest, SealedFile};
+use goalcup_protocol::seal::{SealManifest, SealedFile, WalkCap};
 use goalcup_verifier::VerifyOptions;
 use goalcup_verifier::capture_analysis::api::{
     DecoderFailure, DecoderSummary, DecoderV1, Disposition, Observation, StreamOpen,
@@ -117,6 +117,7 @@ fn manifest() -> SealManifest {
         excluded: vec!["target".to_string()],
         git: None,
         home: None,
+        capped: None,
     }
 }
 
@@ -1731,6 +1732,39 @@ fn gap_cannot_be_cleared_by_end_or_upload() {
     assert!(has(&report, "gap_recorded"), "{:?}", report.findings);
 }
 
+/// A seal whose workspace walk stopped short is reported with its reason, as a warning for
+/// judges: the integrity and the exit do not change (D71).
+#[test]
+fn a_capped_seal_walk_is_reported_and_a_whole_one_is_not() {
+    let seal_with = |capped| {
+        let dir = tempfile::tempdir().unwrap();
+        let mut export = capture_export(dir.path());
+        for record in launched(complete_wire(None)) {
+            append(&mut export, &record);
+        }
+        let mut sealed = manifest();
+        sealed.capped = capped;
+        export
+            .write_local_finish(&sealed, finish_time(), "participant_stop", confirmed())
+            .unwrap();
+        drop(export);
+        scan(dir.path()).0
+    };
+    let whole = seal_with(None);
+    assert!(!has(&whole, "seal_walk_capped"), "{:?}", whole.findings);
+    assert_eq!(whole.seal_capped, None);
+
+    let capped = seal_with(Some(WalkCap::FileLimit));
+    assert!(has(&capped, "seal_walk_capped"), "{:?}", capped.findings);
+    assert_eq!(capped.seal_capped, Some(WalkCap::FileLimit));
+    assert_eq!(
+        capped.exit_code(),
+        whole.exit_code(),
+        "a warning, not damage"
+    );
+    assert_eq!(capped.integrity, whole.integrity);
+}
+
 fn key_of(producer: &str, stream: u64) -> StreamKey {
     key(producer, stream)
 }
@@ -3060,6 +3094,7 @@ fn exit_code_follows_canonical_precedence() {
         key_source: KeySource::None,
         findings: vec![],
         git_unreadable: vec![],
+        seal_capped: None,
         verified_ack: None,
         receipt_clock: None,
         terminal: None,
@@ -3134,6 +3169,7 @@ fn typed_reader_statuses_keep_their_words_and_the_report_bytes() {
         key_source: KeySource::None,
         findings: vec![],
         git_unreadable: vec![],
+        seal_capped: None,
         verified_ack: None,
         receipt_clock: None,
         terminal: None,
