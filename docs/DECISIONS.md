@@ -1024,9 +1024,10 @@ model calls with no certificate error.
 
 *26 Oct 2026, the 0.7.1 patch.* Amends D71 (how the push lines reach the agent) and D72 (the
 Hermes continue clause). The start screen was the only place the push lines were said, and a
-continue that opened a new conversation did not say them. Measured on 26 Oct 2026 (Mac, Hermes
-v0.22.5, Codex, Amp): Hermes reads the goal-cup skill's body unprompted, Codex and Amp see only its name and description; `hermes chat
---continue` resumes the last session in a `HERMES_HOME` and exits 1 when there is none.
+continue that opened a new conversation did not say them. Owner, 26 Oct 2026: Goal Cup writes no
+file into the project folder (no `AGENTS.md` or `CLAUDE.md`), and the push lines reach the agent
+only through the participant pasting them. Measured on 26 Oct 2026 (Mac, Hermes v0.22.5): `hermes
+chat --continue` resumes the last session in a `HERMES_HOME` and exits 1 when there is none.
 
 - **Delivery of the push lines.** For a run with a repository, `goalcup start` writes the lines
   of D71 (`prompt_block`) to `push-lines.txt` in the run's directory (`<cfg>/runs/<run_id>/`, mode
@@ -1036,13 +1037,10 @@ v0.22.5, Codex, Amp): Hermes reads the goal-cup skill's body unprompted, Codex a
   missing or failing tool never fails the start. `goalcup status` shows them for an open run.
   Every `continue` that does not resume the conversation prints them again (and copies them).
   The lines name the token file, never its value.
-- **The skill.** At each start and continue of a run with a repository, the installed goal-cup
-  skill ends with a section of the same lines. `skills/goal-cup/SKILL.md` stays the template and
-  names no repository; a practice run's copy is the template alone; each launch replaces the
-  folder, so a section never reaches another run. It reaches only a connector with
-  `[capture.home] skills_dir` (Codex and Claude Code today). The description line stays generic:
-  a repository there did not reach Codex or Amp (measured), and a project `AGENTS.md` that did is
-  an open owner question, not built.
+- **Not in the skill.** The goal-cup skill stays the same for every run and names no
+  repository. A run-specific section was tried and dropped: it reaches only a connector with
+  `[capture.home] skills_dir` (Codex and Claude Code), and Codex did not open the skill's body
+  (measured), so it would not have carried the lines where they are needed.
 - **The resume rule.** `state.json` keeps `model_calls`, the model calls recorded in the run so
   far (every part), local to the CLI like `no_model_calls`; the daemon and the control API
   (v12) are unchanged, so a running 0.7.0 daemon keeps working. At `continue`, a connector with
@@ -1057,6 +1055,5 @@ v0.22.5, Codex, Amp): Hermes reads the goal-cup skill's body unprompted, Codex a
   doctor` warn of a private key in `~/.ssh` (the user database's home) that `ssh-keygen -y -P ""`
   opens, and note keys an SSH agent lists (`ssh-add -l`): local only, no connection, no signing,
   a warning and never a refusal (D71's planned warning).
-- **Not in 0.7.1:** a goal-cup skill for Hermes or Amp (their connectors name no `skills_dir`;
-  adding one changes the pinned digests a running 0.7.0 daemon checks), writing `AGENTS.md` or
-  `CLAUDE.md` into the project folder, and a post-run gateway stop.
+- **Not in 0.7.1:** push lines in the skill or in any file in the project folder, and a post-run
+  gateway stop.

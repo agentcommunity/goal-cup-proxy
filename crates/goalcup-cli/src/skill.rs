@@ -7,11 +7,6 @@
 //!
 //! [`install`] replaces `<config_home>/<skills_dir>/goal-cup/` and nothing else in the harness's
 //! home: the participant's own skills, settings and sessions there are not read or changed.
-//!
-//! For a run with a repository the installed copy ends with a section of that run's push lines
-//! ([`run_text`], D73), at each start and continue. The shipped file stays the template and holds
-//! no run's repository; a practice run's copy is the template alone. Each launch replaces the
-//! folder, so one run's section never reaches another run.
 
 use crate::CliError;
 use std::path::Path;
@@ -22,36 +17,12 @@ pub const SKILL_DIR_NAME: &str = "goal-cup";
 /// The skill's one file, as shipped.
 pub const SKILL_TEXT: &str = include_str!("../../../skills/goal-cup/SKILL.md");
 
-/// The heading of the run-specific section ([`run_text`]).
-pub const RUN_SECTION_HEADING: &str = "## This run's repository";
-
-/// The skill as this run installs it: the shipped text, and for a run with a repository a last
-/// section with its push lines ([`crate::participant::prompt_block`]), the same lines the
-/// participant was given. They name the token file, never the token.
-pub fn run_text(push: &[String]) -> String {
-    if push.is_empty() {
-        return SKILL_TEXT.to_string();
-    }
-    let mut text = SKILL_TEXT.trim_end().to_string();
-    text.push_str(&format!(
-        "\n\n{RUN_SECTION_HEADING}\n\nThis run has a repository. Push your work there, and \
-         set git up in the project folder as these lines say:\n\n```text\n"
-    ));
-    for line in push {
-        text.push_str(line);
-        text.push('\n');
-    }
-    text.push_str("```\n");
-    text
-}
-
 /// Put the skill at `<config_home>/<skills_dir>/goal-cup/SKILL.md`, replacing whatever that one
-/// folder held. `push` is the run's push lines, empty for a run with no repository
-/// ([`run_text`]). The new folder is written beside it under a name of its own and renamed into
+/// folder held. The new folder is written beside it under a name of its own and renamed into
 /// place, so the harness never sees half a skill. A link where the folder goes is removed, never
 /// followed. `skills_dir` is the connector's, which the schema holds to a relative path below the
 /// home.
-pub fn install(config_home: &Path, skills_dir: &str, push: &[String]) -> Result<(), CliError> {
+pub fn install(config_home: &Path, skills_dir: &str) -> Result<(), CliError> {
     let skills = config_home.join(skills_dir);
     let io = |path: &Path| {
         let path = path.display().to_string();
@@ -60,7 +31,7 @@ pub fn install(config_home: &Path, skills_dir: &str, push: &[String]) -> Result<
     private_dirs(&skills).map_err(io(&skills))?;
     let target = skills.join(SKILL_DIR_NAME);
     let staging = skills.join(format!(".{SKILL_DIR_NAME}-{:016x}", rand::random::<u64>()));
-    let staged = stage(&staging, &run_text(push));
+    let staged = stage(&staging);
     let placed = staged.and_then(|()| {
         match std::fs::symlink_metadata(&target) {
             Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&target)?,
@@ -81,7 +52,7 @@ pub fn install(config_home: &Path, skills_dir: &str, push: &[String]) -> Result<
 }
 
 /// The new folder and its one file, both private to the participant.
-fn stage(staging: &Path, text: &str) -> std::io::Result<()> {
+fn stage(staging: &Path) -> std::io::Result<()> {
     use std::io::Write;
     let mut dir = std::fs::DirBuilder::new();
     #[cfg(unix)]
@@ -98,7 +69,7 @@ fn stage(staging: &Path, text: &str) -> std::io::Result<()> {
         options.mode(0o600);
     }
     let mut file = options.open(staging.join("SKILL.md"))?;
-    file.write_all(text.as_bytes())?;
+    file.write_all(SKILL_TEXT.as_bytes())?;
     file.sync_all()
 }
 
@@ -146,7 +117,7 @@ mod tests {
         std::fs::create_dir_all(skills.join("goal-cup")).unwrap();
         std::fs::write(skills.join("goal-cup/old.md"), "old").unwrap();
 
-        install(home.path(), "skills", &[]).unwrap();
+        install(home.path(), "skills").unwrap();
 
         assert_eq!(
             std::fs::read_to_string(skills.join("goal-cup/SKILL.md")).unwrap(),
@@ -174,7 +145,7 @@ mod tests {
         std::fs::create_dir_all(home.path().join("skills")).unwrap();
         std::os::unix::fs::symlink(elsewhere.path(), home.path().join("skills/goal-cup")).unwrap();
 
-        install(home.path(), "skills", &[]).unwrap();
+        install(home.path(), "skills").unwrap();
 
         assert!(home.path().join("skills/goal-cup/SKILL.md").is_file());
         assert!(
@@ -186,35 +157,6 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(elsewhere.path().join("keep.md")).unwrap(),
             "keep"
-        );
-    }
-
-    /// A run with a repository gets its push lines in the skill, after the shipped text; the
-    /// next run's install, a practice run's, has the template alone.
-    #[test]
-    fn the_run_section_is_there_for_a_run_with_a_repository_and_gone_at_the_next_install() {
-        let home = tempfile::tempdir().unwrap();
-        let file = home.path().join("skills/goal-cup/SKILL.md");
-        let push = crate::participant::prompt_block(
-            "https://github.com/someone/cup",
-            "someone",
-            "1+someone@users.noreply.github.com",
-            ".env.local",
-            Path::new("/w/.env.local"),
-        );
-        install(home.path(), "skills", &push).unwrap();
-        let text = std::fs::read_to_string(&file).unwrap();
-        assert!(text.starts_with(SKILL_TEXT.trim_end()), "{text}");
-        assert!(text.contains(RUN_SECTION_HEADING), "{text}");
-        for line in &push {
-            assert!(text.contains(line.as_str()), "{line}: {text}");
-        }
-
-        install(home.path(), "skills", &[]).unwrap();
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), SKILL_TEXT);
-        assert!(
-            !SKILL_TEXT.contains("github.com/"),
-            "the template names no repository"
         );
     }
 }

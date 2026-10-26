@@ -479,10 +479,9 @@ pub(super) fn create_and_gate<'a>(
         let ca_bundle =
             crate::ca_bundle::bundle_for(profile, &run.ca, proxied.proxy.ca_certificate_der())?;
         admitted(client, &info)?;
-        // The goal-cup skill, in the harness's own skills folder (D57), replacing only its own,
-        // with this run's push lines for a run with a repository (D73).
+        // The goal-cup skill, in the harness's own skills folder (D57), replacing only its own.
         if let Some(skills_dir) = &profile.home.skills_dir {
-            crate::skill::install(&config_home, skills_dir, &prompt)?;
+            crate::skill::install(&config_home, skills_dir)?;
         }
         // The settings the capture needs, put into the harness home again before each launch
         // (D61): the participant's own setup may have turned one off. Their output goes to the
