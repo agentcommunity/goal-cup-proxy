@@ -4,8 +4,9 @@
 -- the deadline job would then judge that member's pushed commit as theirs (0.7.0 security review,
 -- I2). Now goal_cup_upload_open_run refuses a competition open whose repo_url is already the
 -- repository of a competition run of another member in the same event:
---   * the URLs compare by goal_cup_tracer.repo_key: lower case, with a trailing ".git" and trailing
---     "/" removed;
+--   * the URLs compare by goal_cup_tracer.repo_key: lower case, with a trailing ".git" removed. The
+--     Worker accepts only https://github.com/<owner>/<repo> with no trailing "/", so nothing else
+--     can differ;
 --   * every run of the other member counts, whatever its state (open, replaced, sealed, incomplete,
 --     abandoned);
 --   * the same member may name the repository again (a new start after a replaced run), and a
@@ -46,7 +47,7 @@ END $$;
 -- The form of a repository URL that two runs are compared by.
 CREATE FUNCTION goal_cup_tracer.repo_key(p_repo_url text) RETURNS text
 LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp
-AS $$ SELECT regexp_replace(lower(p_repo_url), '(\.git)?/*$', '') $$;
+AS $$ SELECT regexp_replace(lower(p_repo_url), '\.git$', '') $$;
 
 CREATE OR REPLACE FUNCTION public.goal_cup_upload_open_run(
   p_member_id text, p_event_id text, p_mode text, p_run_id text, p_entry_id text,

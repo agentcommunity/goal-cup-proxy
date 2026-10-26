@@ -197,7 +197,7 @@ repository, and one commit there must not stop every practice start).
 **One competition repository, one member.** A competition open is `403` ("Another member's run in
 this event already uses this repository. Create a new empty public repository and start again.") when its
 `repo_url` is already the repository of another member's competition run in the same event, in any
-state. URLs compare in lower case with a trailing `.git` and `/` removed. The same member may name it
+state. URLs compare in lower case with a trailing `.git` removed (a trailing `/` is already `400`). The same member may name it
 again, and a retried open of a run that exists is answered as before. Practice and test runs are not
 checked. An open the sign-up gate refuses gets the sign-up message first. The database decides it
 (website migration `20261027100000`, on top of the sign-up gate `20261021120200`, pending the owner's OK to

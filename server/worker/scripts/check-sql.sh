@@ -266,7 +266,7 @@ BEGIN
   ASSERT r ->> 'result' = 'forbidden' AND r ->> 'message' LIKE '%already uses this repository%', 'repo: other member: ' || r::text;
   ASSERT (SELECT run_id IS NULL FROM goal_cup_tracer.run_credentials WHERE credential_hash = repeat('e', 64)), 'repo: refused open bound its credential';
   r := public.goal_cup_upload_open_run(m, 'smoke-cup', 'competition', 'r0000000000000013', 'e0000000000000013', t0::text,
-         (t0 + interval '7 days')::text, 'c', z, z, 'w', 's13', '1', '1', 'https://github.com/o/shared/', 'null'::jsonb,
+         (t0 + interval '7 days')::text, 'c', z, z, 'w', 's13', '1', '1', 'https://github.com/o/SHARED', 'null'::jsonb,
          NULL, NULL, repeat('f', 64), (t0 + interval '8 days')::text);
   ASSERT r ->> 'result' = 'created', 'repo: same member again: ' || r::text;
   -- A lost reply: the first open again, same credential and session, gets its own run back.
