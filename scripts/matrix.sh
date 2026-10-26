@@ -739,6 +739,12 @@ cleanup() {
     fi
     sleep 1
     check_token_pushed
+    # The scrub finds the token by its value only in a copy that is still the token given to the
+    # agent (made again from its source if not); otherwise by its shape alone, and the log says so.
+    if [ "$TEST" = 1 ] && [ -n "$TOKEN_SHA" ] && ! token_copy_ready; then
+      rm -rf "$ROOT/private/gh-token"
+      log "the token's private copy is gone or changed and could not be made again: scrub by shape only"
+    fi
     scrub_token
     if [ "$KEEP" = 1 ]; then
       log "kept $ROOT (the project's .env.local is deleted)"
@@ -1055,16 +1061,19 @@ project_kit_names() {
 # are deleted, even with --keep. Nothing is read out.
 scrub_token() {
   if [ "$TEST" = 1 ]; then
-    python3 -I - "$ROOT/private/gh-token" "$ROOT/start-marker" "$LOG" "$ROOT" "$CFG-runs" "$CFG/capture-homes" <<'PY' 2>/dev/null
-import os, re, sys
+    python3 -I - "$TOKEN_SHA" "$ROOT/private/gh-token" "$ROOT/start-marker" "$LOG" "$ROOT" "$CFG-runs" "$CFG/capture-homes" <<'PY' 2>/dev/null
+import hashlib, os, re, sys
 
-copy, marker, log, root = sys.argv[1:5]
-dirs = sys.argv[5:]
+want, copy, marker, log, root = sys.argv[1:6]
+dirs = sys.argv[6:]
 MARK = b"<GH_TOKEN removed>"
 SHAPES = [rb"gh[opusr]_(?:\s*[A-Za-z0-9]){20,}", rb"github_pat_(?:\s*[A-Za-z0-9_]){20,}"]
 try:
     token = open(copy, "rb").read().strip().split(b"=", 1)[1]
 except (OSError, IndexError):
+    token = b""
+# Only the token given to the agent (a copy changed after token_copy_ready is not it).
+if hashlib.sha256(token).hexdigest() != want:
     token = b""
 pats = list(SHAPES)
 if len(token) >= 8:
@@ -1128,14 +1137,16 @@ PY
 }
 
 # I1: after the seal, the token must not be in what the agent pushed. Every object of every git
-# repository in the project folder (any .git, any directory holding HEAD and objects/: nested,
-# bare, and submodule repositories under .git/modules; found without following a link), and of a
+# repository in the project folder (any .git, any directory holding HEAD and objects/, its objects
+# a folder or a link to one: nested, bare, and submodule repositories under .git/modules; the search
+# follows no link, git reads through an objects link), and of a
 # fresh mirror clone of the cell's repository (public: anonymous, into $ROOT/clone), is read raw
 # (`git cat-file --batch-all-objects --batch`: blobs binary or not, trees, commits of any shape,
 # annotated tags and their messages, unreachable objects too; no diff, no textconv, no external
 # driver, so nothing of the agent's .git/config runs) and searched for the token, its base64 forms
 # (three alignments, standard and URL alphabets) and its percent-encoded forms. A hit FAILs the
-# cell, loudly; the value is never printed. A project folder that is gone or a link, a clone or a
+# cell, loudly; the value is never printed. A project folder that is gone or a link or holds a
+# name with a line break, a clone or a
 # repository that cannot be read, and a token copy that cannot be made good (token_copy_ready, and
 # again in the matcher itself) FAIL too: the check was not done.
 check_token_pushed() {
@@ -1156,16 +1167,23 @@ check_token_pushed() {
     unread="$unread the project folder (it is gone or a link);"
   else
     # Listed into a variable, not a file the agent could rewrite: .git entries that are files or
-    # links (a gitdir file, a link to a repository elsewhere), and every objects/ directory whose
-    # folder is a repository (it holds HEAD, or it is a .git or *.git folder or a submodule
-    # repository under .git/modules: one of those that git cannot read FAILs the check). Named by number, never by path (the agent names
-    # its folders: a name could be the token).
-    gitdirs=$(find -P "$PROJECT" \( -name .git ! -type d -print \) -o \( -type d -name objects -print \) 2>/dev/null) ||
+    # links (a gitdir file, a link to a repository elsewhere), and every objects entry, a directory
+    # or a link to one elsewhere (git reads through it), whose folder is a repository (it holds HEAD,
+    # or it is a .git or *.git folder or a submodule repository under .git/modules: one of those
+    # that git cannot read FAILs the check; a Git LFS store, <repository>/lfs, is none). The list
+    # is split on line breaks, so a name holding one (it could hide a repository) FAILs the check.
+    # Named by number, never by path (the agent names its folders: a name could be the token).
+    gitdirs=$(find -P "$PROJECT" \( -name .git ! -type d -print \) -o \( \( -type d -o -type l \) -name objects -print \) 2>/dev/null) ||
       unread="$unread the project folder (it could not be listed);"
+    nl='
+'
+    if [ -n "$(find -P "$PROJECT" -name "*$nl*" -print -quit 2>/dev/null)" ]; then
+      unread="$unread the project folder (a name in it holds a line break);"
+      gitdirs=""
+    fi
     gn=0
     ls_ifs=$IFS
-    IFS='
-'
+    IFS=$nl
     set -f
     for gd in $gitdirs; do
       IFS=$ls_ifs
@@ -1173,7 +1191,17 @@ check_token_pushed() {
       case $gd in
         */objects)
           gd=${gd%/objects}
-          case $gd in *.git | */.git/modules/*) ;; *) [ -f "$gd/HEAD" ] || continue ;; esac
+          case $gd in
+            # A submodule repository's Git LFS store (no HEAD; its folder is a repository, not
+            # a modules folder: a submodule named lfs is read).
+            */.git/modules/*/lfs)
+              if [ ! -e "$gd/HEAD" ] && [ -f "${gd%/lfs}/HEAD" ]; then
+                case ${gd%/lfs} in */modules) ;; *) continue ;; esac
+              fi
+              ;;
+            *.git | */.git/modules/*) ;;
+            *) [ -f "$gd/HEAD" ] || continue ;;
+          esac
           ;;
       esac
       gn=$((gn + 1))

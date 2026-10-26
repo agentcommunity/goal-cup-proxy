@@ -220,6 +220,31 @@ def make_workspace(ws):
         subprocess.run(["git", "init", "-q", "--bare", str(sub)], check=True)
         subprocess.run(["git", "--git-dir", str(sub), "hash-object", "-w", "--stdin"],
                        input=("GH_TOKEN=" + STUB_TOKEN + "\n").encode(), check=True, capture_output=True)
+    elif mode == "leak-objects-link":
+        # ...in a repository whose .git/objects is a link to a folder outside the project folder.
+        (ws / "leak.txt").write_text("GH_TOKEN=" + STUB_TOKEN + "\n")
+        git("init", "-q")
+        git("add", "leak.txt")
+        git("commit", "-q", "-m", "oops")
+        away = ws.with_name(ws.name + "-objects")
+        (ws / ".git" / "objects").rename(away)
+        (ws / ".git" / "objects").symlink_to(away)
+    elif mode == "leak-newline":
+        # ...in a bare repository whose folder name holds a line break: "x<newline>y", beside a
+        # clean bare repository "x", so a search split on lines reads only the clean one.
+        for name in ("x", "x\ny"):
+            subprocess.run(["git", "init", "-q", "--bare", str(ws / name)], check=True)
+        subprocess.run(["git", "--git-dir", str(ws / "x\ny"), "hash-object", "-w", "--stdin"],
+                       input=("GH_TOKEN=" + STUB_TOKEN + "\n").encode(), check=True, capture_output=True)
+    elif mode == "lfs-submodule":
+        # A clean submodule repository with a Git LFS store inside it (not a git repository).
+        (ws / "matrix-ok.txt").write_text("ok\n")
+        git("init", "-q")
+        sub = ws / ".git" / "modules" / "sub"
+        subprocess.run(["git", "init", "-q", "--bare", str(sub)], check=True)
+        lfs = sub / "lfs" / "objects" / "ab" / "cd"
+        lfs.mkdir(parents=True)
+        (lfs / ("abcd" + "0" * 60)).write_bytes(b"large file\n")
     elif mode == "project-link":
         # The agent moves its folder away and leaves a link in its place.
         (ws / "matrix-ok.txt").write_text("ok\n")
@@ -781,6 +806,11 @@ SCENARIOS = {
     # where the kit writes its own files.
     "test_leak_submodule": ("stubchat", {"STUB_STOP": "0", "STUB_WS": "leak-submodule"}, TEST, True),
     "test_project_link": ("stubchat", {"STUB_STOP": "0", "STUB_WS": "project-link"}, TEST, True),
+    # The token in a repository whose objects folder is a link; or in one hidden behind a folder
+    # name with a line break. A Git LFS store in a clean submodule repository.
+    "test_leak_objects_link": ("stubchat", {"STUB_STOP": "0", "STUB_WS": "leak-objects-link"}, TEST, True),
+    "test_leak_newline": ("stubchat", {"STUB_STOP": "0", "STUB_WS": "leak-newline"}, TEST, True),
+    "test_lfs_submodule": ("stubchat", {"STUB_STOP": "0", "STUB_WS": "lfs-submodule"}, TEST, True),
     "test_planted_links": ("stubchat", {"STUB_STOP": "0", "STUB_PLANT_LINKS": "{root}/victim.txt"},
                            TEST, True),
     # Leftovers of dead runs in the temporary directory.
@@ -1027,7 +1057,9 @@ class MatrixTests(unittest.TestCase):
                             # A rewritten private copy is made again from the token's source.
                             ("test_copy_rewritten", "the pushed repository"),
                             # A submodule's repository under .git/modules is read too.
-                            ("test_leak_submodule", "the project folder")):
+                            ("test_leak_submodule", "the project folder"),
+                            # ...and one whose .git/objects is a link to a folder elsewhere.
+                            ("test_leak_objects_link", "the project folder")):
             w = self.worlds[name]
             self.assertEqual(w.run.returncode, 1, (name, w.said()))
             self.assertIn("the token was pushed: revoke it now", w.run.stderr)
@@ -1055,6 +1087,8 @@ class MatrixTests(unittest.TestCase):
         self.assertIn("push check not run: the token copy is missing", w.run.stderr)
         self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ FAIL ")
         self.assertNotIn(TOKEN, w.said())
+        # The log scrub then knows the token only by its shape, and says so.
+        self.assertIn("scrub by shape only", w.log)
         # A copy swapped after it was found good (while the clone ran) is never searched with:
         # the scan says it could not check, it never says "not found".
         w = self.worlds["test_copy_swapped"]
@@ -1067,6 +1101,15 @@ class MatrixTests(unittest.TestCase):
         w = self.worlds["test_project_link"]
         self.assertEqual(w.run.returncode, 1, w.said())
         self.assertIn("the project folder (it is gone or a link)", w.run.stderr)
+        # A folder name with a line break could hide a repository from the search: not checked.
+        w = self.worlds["test_leak_newline"]
+        self.assertEqual(w.run.returncode, 1, w.said())
+        self.assertIn("could not be checked for the token", w.run.stderr)
+        self.assertIn("line break", w.run.stderr)
+        # A Git LFS store inside a clean submodule repository is no repository: the cell passes.
+        w = self.worlds["test_lfs_submodule"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertIn("searched for the token: not found", w.log)
 
     def test_the_kit_never_writes_through_a_link_the_agent_planted_in_its_folder(self) -> None:
         w = self.worlds["test_planted_links"]
