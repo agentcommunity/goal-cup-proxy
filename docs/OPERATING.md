@@ -50,7 +50,7 @@ All times UTC.
 | Release cut | Prepare the version PR if needed, merge under the `main` ruleset, run the full gate and separate `scripts/linux-check.sh` on merged `origin/main`, then tag that commit with `scripts/release.sh tag` |
 | 23 Oct to 6 Nov 00:00 | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
 | 4 Nov 00:00 | Feature stop: fixes only |
-| 6 Nov | `EVENT_ID` switch and last release (12:00). See [EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026-with-the-last-release). |
+| 6 Nov | `EVENT_ID` switch. A release is planned for 12:00; it is not a cutoff (D70). See [EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026-with-the-last-release). |
 | 7 Nov 00:00 | Start window opens. It lasts 24 hours. |
 | 8 Nov 00:00 | Start window closes |
 | 168 hours after each start | That run's deadline. The latest run ends 192 hours after the window opens. |
@@ -132,6 +132,18 @@ privileged-container support. A release
 tarball carries every folder under `connectors/`; a merged connector ships by being merged, but the
 pins are compiled in, so a connector merged after a release needs a point release.
 
+**Setting `MIN_COMPETITION_VERSION` (D70).** Once 0.7.0 is released, and its own `install.sh` has
+been seen to refuse an update over a recording run, set `MIN_COMPETITION_VERSION = "0.7.0"` in
+`server/worker/wrangler.toml` for production and staging (a dashboard value is overwritten by the
+next deploy), merge, and deploy production. Then check on staging that a competition device
+request from 0.6.1 is refused with the update line (`TOO_OLD`). `continue` is never checked.
+
+**Point releases during the cup.** Releases continue through the event (D70), so a connector merged
+during it ships in the next point release. A point release must not change `CONTROL_API_VERSION`
+(12) from 0.7.0 to 15 Nov: two tests pin it, so a forced update still talks to a running daemon.
+0.6.1 shipped API 10, so 0.6.1 and 0.7 refuse each other, which is why `MIN_COMPETITION_VERSION`
+and the dry-run player's "seal, then update" matter.
+
 ## The matrix
 
 Does a run of this connector, on this machine, against this server, record, stop on the server's
@@ -144,16 +156,17 @@ scripts/matrix.sh <connector> <server-url> [--keep] [--log FILE] [--timeout SECO
 scripts/matrix.sh --check-copy <config-dir> [run-id]
 ```
 
-It makes a temporary configuration directory, work folder and `HOME`, runs `goalcup login` and
-`goalcup start --practice` in them, waits for the run to end, and deletes the temporary directory. The
+It makes a temporary configuration directory, project folder and `HOME`, runs `goalcup login` and
+`goalcup start --practice` in them (the project folder is empty for a practice run), waits for the run to end, and deletes the temporary directory. The
 connector runs in chat mode under a pseudo-terminal into which the script types one prompt; Goal Cup Proxy
 stops it at the practice deadline (10 minutes). `--test --duration SECONDS` runs an organizer test run
 instead and seals it SECONDS after the prompt, so a bounded test of any length needs no practice deadline.
-`--timeout` is one budget for the whole wait. A test start (`--test`) asks GitHub, with the token in
-the configuration directory's `github.json`, whether the repository is empty, so `--test` needs a
-real token there (practice starts skip that check, and the script's own configuration gets a
-placeholder). `scripts/kit_settle.py settle` writes it from the file named in
-`MATRIX_GITHUB_TOKEN_FILE`; the token must not be able to push to the practice repository. A
+`--timeout` is one budget for the whole wait. A test run is a real run: it needs a repository that
+is empty, and the script passes it as `--repo` (the default is `MATRIX_REPO_URL`). The script makes
+the project folder with a `.gitignore` holding `.env*` and a `.env.local` holding `GH_TOKEN`, read
+from the file named in `MATRIX_GITHUB_TOKEN_FILE` (or `gh auth token`), mode 0600 and never printed,
+and starts in that folder. Practice starts need none of it: an empty folder. The token must be a
+fine-grained token for that one repository, as a participant's is. A
 connector id that is not the fake needs its
 `harness.toml` to be found (see Connectors below), or the row FAILs and says so.
 It prints the log path and one row:
@@ -173,8 +186,9 @@ stderr and in the log. PASS means:
 4. for a real harness, the agent worked: `goalcup-verify --research-json <trace>` shows a usage
    observation with output or completion tokens above 0, or a decoded assistant message (else the
    row FAILs with "the agent never answered the prompt"), and its workspace changed: in the run
-   record's `workspace` (the clone), `git status --porcelain --untracked-files=all` is not empty or
-   a commit was made since the run started (a run that only named its session, or stalled at a
+   record's `workspace` (the project folder), `git status --porcelain --untracked-files=all` is not empty or
+   a commit was made since the run started (an agent that never ran `git init` counts if it left a
+   file besides `.gitignore` and `.env.local`) (a run that only named its session, or stalled at a
    permission prompt, FAILs with "the agent changed nothing in its workspace"). The default prompt
    asks for one file; `MATRIX_EXPECT_FILES=0` drops this for a custom prompt that writes nothing;
 5. the server's copy agrees with the local chain.
@@ -247,7 +261,7 @@ invocation (`key_source: "supplied"`).
 login. A PASS proves the CLI, daemon, pseudo-terminal handling, server and verifier, and nothing about a
 real harness. A shipped connector id (`codex-cli`, `claude-code-cli`) runs that harness for real. It needs the
 harness installed and logged in inside a prepared configuration directory of its own:
-`GOALCUP_CONFIG_DIR=<dir> goalcup prep`, then `MATRIX_CONFIG_DIR=<dir> sh scripts/matrix.sh codex-cli <url>`.
+`GOALCUP_CONFIG_DIR=<dir> goalcup setup`, then `MATRIX_CONFIG_DIR=<dir> sh scripts/matrix.sh codex-cli <url>`.
 For a chat-mode connector the script types `MATRIX_PROMPT` once, `MATRIX_PROMPT_DELAY` seconds (30) after the
 harness is up, and sends the Enter `MATRIX_SUBMIT_DELAY` seconds (2) later in a write of its own: Codex reads
 text and Enter in one write as a paste and leaves the text in its composer. A first-run dialog that would
@@ -265,10 +279,10 @@ trace. `m2-fake-tui` is the one connector that needs no harness.
 **Linux, real harness, in Docker.** `scripts/linux-matrix.sh` runs the matrix for `codex-cli` in a
 container on a Mac. It builds the Linux binaries from the checkout, installs the harness
 at the version the connector's first line names, and keeps the configuration directory, the harness's
-home and the work folder on a Docker volume of the connector's own (`goalcup-linux-matrix-<id>`),
+home and the project folder on a Docker volume of the connector's own (`goalcup-linux-matrix-<id>`),
 so one sign-in serves every later run. Once per volume, in a terminal:
 `GOALCUP_TEST_APPROVAL_KEY_FILE=<key file> sh scripts/linux-matrix.sh login codex-cli`. The login is
-approved with the key; then `goalcup prep` opens Codex in the container, and you choose "Sign in with
+approved with the key; then `goalcup setup` opens Codex in the container, and you choose "Sign in with
 Device Code", finish it in the Mac's browser, and type `/exit`. After that, unattended:
 `GOALCUP_TEST_APPROVAL_KEY_FILE=<key file> sh scripts/linux-matrix.sh run codex-cli` prints the row last.
 Key files are mounted read-only and only their container path is passed. The member is the synthetic
@@ -304,7 +318,7 @@ and says nothing about a harness.
 Each case is a run you start yourself and break on purpose, to find what goes wrong in a week.
 
 - **Run.** Practice runs last 10 minutes, enough for the quick cases. The long ones need an organizer test
-  run on staging, in a configuration directory of its own, after `goalcup prep`. Never on production.
+  run on staging, in a configuration directory of its own, after `goalcup setup`. Never on production.
 - **Watch** from a second terminal with the same `GOALCUP_CONFIG_DIR`: `goalcup status` (a `PROBLEM:` line
   for anything the participant must act on) and `goalcup entries`.
 - **Check the server copy** when the case ends and uploads have caught up:
@@ -489,7 +503,7 @@ goalcup-verify --capture-integrity <trace-dir>       # the line `start` printed
 Every flag is in `goalcup <command> --help`. Run the `verify:` line `start` printed, not one typed from
 memory. `goalcup doctor` checks, per connector, that the files are the pinned ones and finds the harness
 executable on `PATH` (hashed, never started). Any build passes. Without `--harness` it checks the harness
-`goalcup prep` settled (every shipped connector before `prep` has run). `goalcup doctor --harness <id>` scopes
+`goalcup setup` settled (every shipped connector before `setup` has run). `goalcup doctor --harness <id>` scopes
 the report and the exit code to one connector; with `--harness all`, any shipped connector that fails makes
 the exit 1.
 
@@ -516,8 +530,9 @@ to relay: it is counted as `client_io`, no upstream connection is opened, and it
 | 2 | Never this binary's. It is "invalid evidence", and only `goalcup-verify` leaves under it. |
 | 3 | The CLI could not do its job: a file it could not read, an answer it could not parse. |
 
-`--dev` on `start` and `prep` admits a connector directory this build does not pin; the run says so and does
-not count as an entry. `goalcup-verify --dev-key <hex>` accepts a server key this build does not pin, for one
+`--dev` on `start` and `setup` admits a connector directory this build does not pin; the run says so and does
+not count as an entry. Any member may use it for a practice or test run; the server refuses a `--dev`
+competition run (D70). `goalcup-verify --dev-key <hex>` accepts a server key this build does not pin, for one
 run. Neither makes a failing entry pass.
 
 ## Running the verifier

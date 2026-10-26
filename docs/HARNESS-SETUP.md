@@ -10,7 +10,7 @@ to set before the start, and where they go.
 
 Goal Cup never changes your harness settings
 ([D67](DECISIONS.md#d67-goal-cup-recommends-running-without-permission-prompts-the-participant-sets-it)).
-You set them yourself. `goalcup prep` tells you when a permission setting is missing, and links
+You set them yourself. `goalcup setup` tells you when a permission setting is missing, and links
 to this page.
 
 Goal Cup records two things: the model calls (on the wire) and the harness's own session file.
@@ -27,13 +27,16 @@ means that nobody at Goal Cup has tried it. The details are in each
 
 ## Before your run
 
-1. Run `goalcup prep --harness <id>`. Prep opens your harness once, in its Goal Cup home.
-2. Sign in there. Answer the harness's first-run screens there ([section 7](#7-first-run-screens)).
+1. Run `goalcup setup --harness <id>`. Setup opens your harness once, in its Goal Cup home.
+2. Sign in there, or paste your API key into the harness's own prompt. Answer the harness's
+   first-run screens there ([section 7](#7-first-run-screens)). The `.env.local` in your project
+   folder is not for this: model keys there are for your agent's own product, and the harness's
+   sign-in happens here, in setup ([guide, section 4](PARTICIPANT-GUIDE.md#4-your-run)).
 3. Exit the harness.
 4. Open the settings file of your harness ([where the settings live](#where-the-settings-live)).
 5. Add the settings from your harness's section below.
 6. Add the Goal Cup time-left tool ([how](#add-the-goal-cup-time-left-tool)).
-7. Run `goalcup prep` again. It names each permission setting that is still missing.
+7. Run `goalcup setup` again. It names each permission setting that is still missing.
 8. Do a practice run: `goalcup start --harness <id> --practice`.
 9. In the practice run, check that the agent commits without asking you anything, and ask it to
    call its `time_left` tool.
@@ -100,8 +103,8 @@ Add these keys to `claude-code-cli/settings.json`:
 Amp needs no setting to run without permission prompts.
 
 1. Do not add `amp.permissions` rules that ask, in `amp-cli.run-home/.config/amp/settings.json`.
-2. Sign in when `goalcup prep` opens Amp ([section 4](#4-sign-in-lifetime)).
-3. Choose your mode in prep. Amp keeps the mode you chose last (`agentMode` in
+2. Sign in when `goalcup setup` opens Amp ([section 4](#4-sign-in-lifetime)).
+3. Choose your mode in setup. Amp keeps the mode you chose last (`agentMode` in
    `.local/share/amp/session.json` of its home).
 4. Read [section 5](#5-subagents-and-their-models) before you choose a cheap mode: Amp's
    subagents used a larger model.
@@ -115,6 +118,11 @@ record only the model traffic, not Hermes's own side of the run. Hermes's own in
 (`curl … install.sh | bash`) installs the newest release, so do not use it for Goal Cup. Check
 with `hermes --version`; it should print `Hermes Agent v0.19.0`
 ([facts sheet](harnesses/hermes-cli.md)).
+
+Goal Cup does not catch a newer Hermes. Setup and start check no Hermes version, and Hermes's own
+installer takes the newest. The only sign is a practice run: when Hermes makes model calls but
+writes no session file, `goalcup status` shows the no-session-file `PROBLEM:` line, within about
+three minutes in a practice run (ten in a real one). So install exactly 0.19.0 and do a practice run.
 
 Add these keys to `hermes-cli/config.yaml`:
 
@@ -148,12 +156,12 @@ tool `time_left`.
 - If it is missing, the agent can still run `goalcup time-left`, or read the file named in
   `$GOALCUP_TIME_LEFT_FILE`.
 
-Goal Cup does not add the tool for you. `goalcup prep` prints the lines for your harness, with the
+Goal Cup does not add the tool for you. `goalcup setup` prints the lines for your harness, with the
 full path of your `goalcup` filled in, and the file to put them in. It prints them between two
 marker lines (`----- start of the lines to copy -----` and `----- end ...`). Copy the lines between
-the markers exactly as shown, with no spaces added in front, and put them where prep says, in that
+the markers exactly as shown, with no spaces added in front, and put them where setup says, in that
 file in the harness's Goal Cup home. If the file already lists MCP servers, add only the `goalcup`
-entry to that list. Below, `/path/to/goalcup` stands for the path prep prints (`command -v goalcup`
+entry to that list. Below, `/path/to/goalcup` stands for the path setup prints (`command -v goalcup`
 shows it too), and `<capture-homes>` for the folder in
 [where the settings live](#where-the-settings-live).
 
@@ -249,8 +257,8 @@ approval" until its deadline.
 | Amp | Nothing. Do not add `amp.permissions` rules that ask. | By default Amp runs tools and commands without asking (read from the binary). A Mac run made 19 commits with no prompt (measured). Files on Amp's guarded list can still need an approval (read from the binary, not measured). |
 | Hermes | `approvals.mode: "off"` in `config.yaml` | By default (`smart`) a helper model approves low-risk commands, and the rest get a prompt with a 60-second timeout (read from the source, not measured). What happens after the timeout: not measured. The test-day runs made their commits with no stall (measured). |
 
-`goalcup prep` reads the Codex, Claude Code and Hermes settings above. When one is missing, prep
-names it in its `harness_home` step. Prep never changes it, and never fails because of it.
+`goalcup setup` reads the Codex, Claude Code and Hermes settings above. When one is missing, setup
+names it in its `harness_home` step. Setup never changes it, and never fails because of it.
 
 Claude Code's `claude --dangerously-skip-permissions` writes `skipDangerousModePermissionPrompt`
 into the home it was started with, usually `~/.claude`. That is not the Goal Cup home. So set the
@@ -263,9 +271,12 @@ Cup never pushes for your agent.
 
 1. Say in your prompt that the agent commits and pushes its work often.
 2. Let the agent write `.git`. For Codex, this needs `sandbox_mode = "danger-full-access"`.
-3. The agent pushes with your own git login, as you do (D69). Goal Cup keeps no token.
-4. A practice run has no remote and gets no git login by default. So a practice run shows
-   commits, not pushes.
+3. The agent pushes with the GitHub token in your project folder's `.env.local`
+   ([guide, section 4](PARTICIPANT-GUIDE.md#4-your-run)). Goal Cup passes it nothing of your git
+   login (D71), so it has no global git config: the agent must set `git config user.name` and
+   `git config user.email` in its repository. The block `goalcup start` prints says so. Put it at
+   the start of your prompt.
+4. A practice run has no repository and no token. So a practice run shows commits, not pushes.
 
 | Harness | Commits on 22 October | Push from a competition run |
 |---|---|---|
@@ -291,9 +302,9 @@ work to do.
 
 ## 4. Sign-in lifetime
 
-1. Sign in when `goalcup prep` opens the harness. Use a login or account that you can revoke.
+1. Sign in when `goalcup setup` opens the harness. Use a login or account that you can revoke.
 2. Do not sign in again during the run. If the harness asks you to sign in again, contact
-   support before you answer ([participant's guide](PARTICIPANT-GUIDE.md#10-the-keep-going-rule)).
+   support before you answer ([RULES](RULES.md#one-prompt-then-only-keep-going)).
 
 | Harness | Where the sign-in is kept | What we know about a long run |
 |---|---|---|
@@ -305,7 +316,7 @@ work to do.
 ## 5. Subagents and their models
 
 Your agent may start subagents of its own harness. It must not start a different harness
-([participant's guide](PARTICIPANT-GUIDE.md#10-the-keep-going-rule)). A subagent can use a
+([RULES](RULES.md#one-prompt-then-only-keep-going)). A subagent can use a
 different model from the main agent. Your account pays for both.
 
 | Harness | What we saw |
@@ -342,19 +353,19 @@ Before your prompt, your harness may show its own screens: a sign-in, a folder-t
 offer or a setup wizard. Answering them is allowed. It is not a message to the agent. After your
 prompt, the "keep going" rule holds.
 
-1. Answer what you can in `goalcup prep`, when prep opens the harness.
+1. Answer what you can in `goalcup setup`, when setup opens the harness.
 2. Some screens come back at each start. Answer them before you type your prompt.
 3. Wait for the chat input before you paste your prompt. A screen that is open can take the
    prompt, and the prompt is lost (measured with Claude Code and Amp).
 
 | Harness | Screen | When | Choose |
 |---|---|---|---|
-| Claude Code | "Quick safety check: Is this a project you created or one you trust?" | Every run, because each run is a fresh clone (measured) | "Yes, I trust this folder". The cursor starts on "No, exit". |
+| Claude Code | "Quick safety check: Is this a project you created or one you trust?" | Every run, because each run opens in a new folder (measured) | "Yes, I trust this folder". The cursor starts on "No, exit". |
 | Claude Code | "Yes, set auto mode as my default permission mode / No, keep bypass permissions" | With the bypass settings, version 2.1.299 (measured) | "No, keep bypass permissions" |
 | Claude Code | "Try the new fullscreen renderer?" | From the second start on (measured) | "Not now", or as you like. Enter picks "Yes, try it", which restarts Claude Code's display. |
 | Claude Code | "1 MCP server needs authentication" | When your account syncs MCP servers into the home (measured, 2.1.283) | Answer it before your prompt. |
 | Codex | "Update available" | Goal Cup's launch turns the update check off, which stops this screen (measured) | Nothing to do |
 | Codex | "Approaching rate limits - switch model?" and two model-migration offers | Codex 0.153.0 can show them in a session. Whether one stops an agent during a run: not measured. | The `[tui]` keys `hide_rate_limit_model_nudge`, `hide_gpt5_1_migration_prompt` and `"hide_gpt-5.1-codex-max_migration_prompt"` exist in the 0.153.0 binary (measured). Their effect in a run: not measured. |
-| Amp | "Would you like to log in to Amp?" | A home with no sign-in (measured) | Sign in during `goalcup prep`. |
-| Amp | Welcome screens | First start in a new home (measured in Docker) | Answer them during `goalcup prep`. Amp keeps the answer in its home. |
-| Hermes | "Run setup now? [Y/n]" | A home with no model service (measured) | Answer Y during `goalcup prep`, and choose your service and model. If it comes in a run, do the setup; Hermes then closes. Run `goalcup continue`, then type your prompt. |
+| Amp | "Would you like to log in to Amp?" | A home with no sign-in (measured) | Sign in during `goalcup setup`. |
+| Amp | Welcome screens | First start in a new home (measured in Docker) | Answer them during `goalcup setup`. Amp keeps the answer in its home. |
+| Hermes | "Run setup now? [Y/n]" | A home with no model service (measured) | Answer Y during `goalcup setup`, and choose your service and model. If it comes in a run, do the setup; Hermes then closes. Run `goalcup continue`, then type your prompt. |

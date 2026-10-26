@@ -17,7 +17,7 @@ day works through). This page is the plan and the order; those are the reference
   `secrets.json`, Keychain). Never write `~/.codex`, `~/.claude`, `~/.hermes`, `~/.local/share/amp` or
   app-wide config. Goal Cup never sets a model base URL on a harness (the only wire path is the
   recording proxy). Hermes's own `config.yaml` does need `model.base_url`, its provider's address
-  (D62): `goalcup prep` asks for it in Hermes's setup, and that is the participant's setting, not ours.
+  (D62): `goalcup setup` asks for it in Hermes's setup, and that is the participant's setting, not ours.
 - **Cheapest models.** Codex `gpt-5.6-luna` at `low`; Claude Code `haiku`, thinking off; Hermes on
   the cheapest provider model the owner's key allows (DeepSeek flash was used before); Amp in its
   cheapest mode the owner approves. A run on a stronger model needs the owner's yes.
@@ -79,7 +79,7 @@ the cells first, then sign in.
 - **Amp.** The owner is signed in to Amp locally. Each Amp cell still signs in in its own home
   (`campaign.py login`). Record which mode the run used.
 - **Docker cells** sign in with `python3 scripts/campaign.py login CONFIG <cell>`; host cells the
-  same way (it runs `goalcup login` and `goalcup prep` in the cell's folder).
+  same way (it runs `goalcup login` and `goalcup setup` in the cell's folder).
 - Record each surface's facts as you go: where Claude Code keeps its login on Linux, whether Codex
   accepts `minimal` for Luna, whether Hermes or Amp load a skills folder (LOCAL-NEXT-STEPS step 6).
 
@@ -97,15 +97,14 @@ Two kinds of cells:
   end to end. A competition or test start refuses a repository that is not empty, so **each
   full-flow run needs its own new empty repository**. The orchestrator creates them as public
   repositories under one test owner (`gh repo create <owner>/gc-test-<cell>-<n> --public`, no
-  README, no licence: `prep`, the clone and the Worker all refuse a private one), and lists them
+  README, no licence: `goalcup start` and the Worker both refuse a private one), and lists them
   in the results file. The owner creates **one** fine-grained token for that test owner's
-  repositories (Contents read and write), saved as a file. For each full-flow cell, run
-  `goalcup prep --repo <url>` in the cell's config (host: with `GOALCUP_CONFIG_DIR`; Docker:
-  inside the cell's container) and paste the token when asked. The kit keeps a prep'd repository
-  and its token as they are (scripts/kit_settle.py); otherwise it settles the practice repository
-  with the kit's token. Use [campaign-build-workload.txt](campaign-build-workload.txt): it pushes
+  repositories (Contents read and write), saved as a file. For each full-flow cell, make a project
+  folder holding a `.gitignore` with `.env*` and a `.env.local` with `GH_TOKEN=` and that token
+  (host: beside the cell's `GOALCUP_CONFIG_DIR`; Docker: inside the cell's container), and start
+  from it with `--repo <owner>/<name>`. Use [campaign-build-workload.txt](campaign-build-workload.txt): it pushes
   after each step, keeps `GOALCUP.md`, calls `goalcup time-left` and uses subagents.
-  The kit was built for the practice repository and has not yet run a prep'd one: watch the first
+  The kit's full-flow cell is new: watch the first
   full-flow smoke closely (10 minutes, one cell) before starting more.
   Check afterwards: staging's judged commit equals GitHub's last push before the deadline. The
   repositories are public, so the staging Worker's `GITHUB_TOKEN` needs no access to them beyond

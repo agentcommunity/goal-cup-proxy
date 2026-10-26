@@ -301,10 +301,13 @@ leaves its mark.
   `run_secrets` (omitted when empty): at most one value, 20 to 256 bytes of printable ASCII, the
   run's proxy credential (D60). The daemon keeps it in memory for the entry, redacts every form
   of it, and answers a bad value or a body of the wrong shape with a fixed `400 malformed` that
-  quotes no value. `goalcup continue` also sends `existing_clone: true` (omitted when false): the
-  workspace is the run's clone and must already be the root of its own clone (a `.git` directory,
-  no work tree above; a workspace that is itself a link is followed), or the daemon refuses
-  `409 conflict` before it creates anything, rather than make an empty folder. The daemon
+  quotes no value. `goalcup continue` also sends `existing_clone: true` (omitted when false; the field keeps its
+  version-11 name, and it now means "a continued entry", D71): the workspace is the run's project
+  folder and must already exist as a directory (a workspace that is itself a link is followed),
+  with or without a `.git`, or the daemon refuses `409 conflict` before it creates anything,
+  rather than make an empty folder. A new entry (the flag absent) is admitted only if the folder
+  is empty but for `.gitignore` and `.env*` files, which the baseline lists by name and size and
+  never hashes, and holds no `.git`. The daemon
   rejects a config home at or below any loaded connector's `real_dirs`, and the participant's
   `HOME`, including symlink aliases, before it creates artifacts or reads a source. The answer
   carries `entry_id`, `process_generation`, `reserved_bytes`, `ingest_addr`, `ingest_secret`,

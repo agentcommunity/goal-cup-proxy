@@ -26,7 +26,7 @@ none.
 - `scripts/t25-disk-full.sh [row ...]` (Linux, root). For each row it makes a fresh 5 GiB ext4
   image (`mkfs.ext4 -m 0`, so root's reserved blocks cannot hide the fill), loop-mounts it, and
   runs one ignored test in `crates/goalcup-cli/tests/full/t25_disk_full.rs` with `TMPDIR` on the
-  image. The configuration directory, the daemon's artifacts, the run directory, the run's clone,
+  image. The configuration directory, the daemon's artifacts, the run directory, the run's project folder,
   `state.json`, the upload staging file and the reserve are all on the image. Logs, the workload's
   report and the upload stand-in's store are written to `$T25_WORK/out/<row>/` off the image. The
   script unmounts and deletes the image after each row and on any exit. It also adds the

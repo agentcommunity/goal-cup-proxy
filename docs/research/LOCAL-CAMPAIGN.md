@@ -60,8 +60,8 @@ not prove: other platforms, other harness versions, model behaviour, or particip
    on conflict do nothing;
    ```
 
-4. **A disposable empty public repository** for practice clones (default
-   `agentcommunity/goalcup-matrix-empty`).
+4. **A disposable empty public repository** that the kit's practice checks name (default
+   `agentcommunity/goalcup-matrix-empty`). A practice run pushes nowhere.
 5. **Build once,** before the logins (a build needs neither a host cell's `config_dir`, which its
    login makes, nor the token). `python3 scripts/campaign.py build CONFIG` builds the Linux image
    and binaries one time. Runs never build, so cells can run side by side. On the Mac, `cargo build --offline
@@ -103,8 +103,8 @@ API-key provider the owner approves.
 
 The default workload never pushes. A **full-flow cell** tests pushes and the judged commit: give
 it a new empty repository of its own (a test start refuses one that is not empty), run
-`goalcup prep --repo <url>` in the cell's config with a real token before the run (the kit keeps
-a prep'd repository and its token as they are), and use [campaign-build-workload.txt](campaign-build-workload.txt). The
+make the cell's project folder with a `.gitignore` (`.env*`) and a `.env.local` holding a
+fine-grained token for that repository, start from inside it with `--repo`, and use [campaign-build-workload.txt](campaign-build-workload.txt). The
 [local test day](LOCAL-TEST-DAY.md) plans a day of such cells across every surface.
 
 ## Logins: one per cell
@@ -115,7 +115,7 @@ copies it:
 
 ```sh
 python3 scripts/campaign.py login CONFIG lx-codex     # Docker: opens the harness in the cell's volume
-python3 scripts/campaign.py login CONFIG mac-codex    # host: goalcup login + goalcup prep
+python3 scripts/campaign.py login CONFIG mac-codex    # host: goalcup login + goalcup setup
 ```
 
 A Docker cell's login lives on its volume `goalcup-linux-matrix-<connector>-<cell>` and survives

@@ -37,12 +37,11 @@ the owner approves it). The rest of this page is the field-by-field detail.
   - the connector's `capture.env`, with the running platform's `capture.platform.<key>.env` over
     it, rendered. An entry here wins over the same name from the shell;
   - `HOME`, the run's home, and the connector's `capture.home.env` pointed at its config home;
-  - the way to the participant's own git login, for a real run (a test, dry or cup run) only, as
-    paths or sockets and only when set or present, never a key
-    ([D69](DECISIONS.md#d69-goal-cup-proxy-holds-no-keys-the-agent-pushes-with-the-participants-own-git-login)):
-    `SSH_AUTH_SOCK`, `GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`, `XDG_RUNTIME_DIR` and
-    `DBUS_SESSION_BUS_ADDRESS`. A practice run, and the launch `goalcup setup` makes, get none of
-    them and `GIT_CONFIG_NOSYSTEM=1` instead;
+  - nothing of the participant's git login, for any run. No `SSH_AUTH_SOCK`, `GIT_CONFIG_GLOBAL`,
+    `GH_CONFIG_DIR`, `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS` reaches the harness
+    ([D71](DECISIONS.md#d71-the-project-folder-is-the-workspace-the-agent-pushes-with-the-participants-one-repo-token),
+    which ends the D69 pass-throughs). The agent pushes with the token in the project folder's
+    `.env.local`, and sets its own git identity in its repository;
   - for a recorded launch: `HTTPS_PROXY` and `https_proxy` (the loopback recording proxy, with
     a per-run credential), `NO_PROXY` and `no_proxy` (`127.0.0.1,localhost`), each `capture.ca.env`
     name pointed at the file its row names ([Credential and CA](#credential-and-ca)),

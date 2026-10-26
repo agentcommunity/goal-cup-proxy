@@ -313,8 +313,9 @@ These look odd but are right. Do not "fix" them.
   the model service, with at least ten of them and no file taken by the admitted native reader,
   `goalcup status` keeps a `PROBLEM:` line (and `--json` a `problems` entry) until a file is
   taken, and `host.log` has it once per start or continue; nothing stops. Hermes is pinned to
-  0.19.0 in HARNESS-SETUP, the guide and the setup skill (#249, #259); a setup warning for 0.21.1
-  and later is planned (D70, Task 6).
+  0.19.0 in HARNESS-SETUP, the guide and the setup skill (#249, #259). A setup warning for 0.21.1
+  and later was cut (D70): the practice run, with its shorter thresholds (five requests, three
+  minutes), is what catches it.
 - **T24:** the release tarballs are unsigned. They carry every connector since #164.
 - **H-26:** when a stop cannot be confirmed (`Unresolved`), record the final pushed Git commit as a
   "last known state" marker. Open question: which branch counts when the work is not on main.

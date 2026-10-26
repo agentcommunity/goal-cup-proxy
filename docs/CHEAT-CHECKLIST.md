@@ -105,16 +105,26 @@ consistent, not that the participant followed the rules.
   at the stop is not counted, so `accepted` less `intercepted` can exceed the line. A connection
   the stop cut is counted as `cut`. A decided tunnel still open at
   stop (a dev server that outlived the harness) is cut without a loss.
-- **The seal lists what it cannot read, and has no time bound inside a file walk.** A local run
-  walks the workspace. A symlink, FIFO, socket or device is listed with the absent digest and never
+- **The seal lists what it cannot read.** A workspace that is not a clone is walked, up to 50,000
+  files and the finish deadline; a walk that hits either is recorded as capped, never as an error
+  (D71). Inside the walk there is no time bound for one file. A symlink, FIFO, socket or device is listed with the absent digest and never
   followed. A directory the agent made unreadable (`chmod 000`) is listed the same way and its
   contents are not: an absent digest on a directory means "contents unseen". A regular file is
   hashed whole, so a huge file or one on a stalled mount holds the run lock while it is read.
-- **A clone is sealed by Git, and `.gitignore` hides files (D56).** A run on the server seals the
+- **A clone is sealed by Git, and `.gitignore` hides files (D56, D71).** Whether the workspace is a
+  clone is decided at finish: the agent makes the repository (`git init`), so a run that began as
+  an empty folder may end as a clone. A run on the server seals the
   commit and a digest of uncommitted and untracked work. Only `.gitignore` files hide a path.
   `.git/info/exclude` and `core.excludesFile` are outside the digest, so an agent could hide work
   with them. A clone whose checkout converts files (LFS, eol, smudge) does not digest to the empty
   value even when unchanged. If Git cannot be read the trace is incomplete, never invalid.
+- **The push token sits beside the agent, and the baseline cannot show its content (D71).** The
+  project folder starts with a `.gitignore` and `.env.local`, which holds the participant's
+  one-repo GitHub token. The baseline lists each `.env*` file by name and size and never hashes it,
+  so the record is no oracle for a secret. The agent can read the token and use it; it can push to
+  that one repository only. `goalcup start` refuses a `.env*` file that `.gitignore` does not
+  cover, but `git add -f` still publishes one, and a token the model repeats is redacted by
+  pattern (`github_pat_`, `ghp_`) and not by value. The participant revokes it after the run.
 - **Two faults can leave a harness running on a sealed entry (H-10).** The spawn gate and the finish
   budget close the common windows. A CLI crash after the gate released the child, together with a
   raced manual `goalcup seal`, can still leave a harness running. It needs both faults.
