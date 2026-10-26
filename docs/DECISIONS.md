@@ -924,15 +924,25 @@ approval (R1).
   (Apple's and Homebrew's system git config name a keychain helper) and a `GIT_SSH_COMMAND` that
   reads no config and offers no key, since `ssh` finds `~/.ssh` from the user database and not
   from `HOME`; a connector cannot name a `GIT_` variable. So the token limits what the
-  agent can push with it to one repository. The agent still runs as the participant and can read
+  agent can push with it to one repository. It does not limit what the agent can push with
+  the participant's own SSH key (see the correction below). The agent still runs as the participant and can read
   what the participant's programs can read (RULES, Privacy). The agent has no global git config and sets `git config user.name` and
   `user.email` in its repository. `start` prints, for the participant's prompt, the repository, the
   token file, the owner's name and GitHub private commit address (an organization's, when it owns
   the repository), a credential helper line scoped to `https://github.com` that reads
   `GH_TOKEN` from the key file at each push, and `git remote add`. The helper reads only a plain
   `GH_TOKEN=<value>` line, so `start` refuses any other form before the approval.
-  D69's "agent can push to any repo" cost is gone for pushes. D69's no-keys rule for Goal Cup
-  Proxy, the four-step setup and its lack of GitHub stand. Setup no longer makes a keys file.
+  D69's no-keys rule for Goal Cup Proxy, the four-step setup and its lack of GitHub stand.
+  **Corrected 26 Oct 2026: D69's "agent can push to any repo" cost is not gone.** The token is
+  limited to one repository, and Goal Cup passes no git login. But the agent runs as the
+  participant, and OpenSSH reads `~/.ssh` from the account, not from `HOME`. On a Mac with an
+  SSH key, the agent overrode `GIT_SSH_COMMAND` unprompted within about two minutes and used
+  the participant's own key; a dry-run push to any of the participant's repositories, a private
+  one the token cannot reach included, would have succeeded. Nothing was pushed
+  ([results](research/results/2026-10-26-mac-retest.md)). So no document may say the agent can
+  reach only the run's repository. Mitigations today: a passphrase or per-use confirmation on
+  the SSH key (for example the 1Password SSH agent with approval), or the Docker cell. Planned:
+  a start-time warning (0.7.x) and a macOS sandbox for the agent (later). Setup no longer makes a keys file.
   The hidden `goalcup git-credential` and the `github.json` loader stay until after 15 Nov for
   runs started on 0.6.1.
 - **The repository must be empty when the run opens.** The CLI checks before the approval with

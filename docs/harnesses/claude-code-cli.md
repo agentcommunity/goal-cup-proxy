@@ -92,7 +92,7 @@ Retention: vendor docs say transcripts are deleted after `cleanupPeriodDays` (de
 - **Shared config dir.** All runs share one isolated `CLAUDE_CONFIG_DIR`; it carries older sessions and writes `.claude.json`, backups, `plugins/synced` and `skills/synced`.
 - **Account state.** claude.ai connectors and account-synced plugins and skills (31 skills listed, measured) arrive from the account.
 - **Managed settings.** Vendor docs say only managed settings override `--settings`. Their path per OS: unknown.
-- **User shell files.** With the real `HOME` the Bash tool sources `~/.zshrc`; no environment variable stopped it (measured). Only the replaced `HOME` does, and it hides the user's git identity and ssh keys.
+- **User shell files.** With the real `HOME` the Bash tool sources `~/.zshrc`; no environment variable stopped it (measured). Only the replaced `HOME` does, and it hides the user's git identity. It does not hide ssh keys: `ssh` reads `~/.ssh` from the account, not from `HOME` ([26 Oct 2026 results](../research/results/2026-10-26-mac-retest.md)).
 - **A second Claude.** A separate `claude` under another config dir is detectable only indirectly (a second project slug, vendor docs).
 
 ## 9. Quirks and open questions

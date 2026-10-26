@@ -161,9 +161,12 @@ configuration directory. The kit strips this machine's git login variables from 
 (`SSH_AUTH_SOCK`, `SSH_AGENT_PID`, `SSH_ASKPASS`, `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`, `XDG_CONFIG_HOME`,
 the keyring variables and every git/gh configuration variable, `GIT_CONFIG_KEY_n` and `GIT_CONFIG_VALUE_n`
 included). Goalcup builds the agent's environment from nothing (its own `HOME`, `GIT_CONFIG_NOSYSTEM=1`, a
-no-key ssh command), so the agent gets only the token in `.env.local`. A `--test` cell keeps the real `HOME`
+no-key ssh command), so goalcup gives the agent only the token in `.env.local`. A `--test` cell keeps the real `HOME`
 (`MATRIX_CONFIG_DIR`), so goalcup's own process can still see `~/.gitconfig` and `~/.config/gh`; the agent
-cannot.
+is not given them. That is not a wall: the agent runs as the same user, and `ssh` reads `~/.ssh` from the
+account, not from `HOME`. On a Mac with an SSH key the agent used it (26 Oct 2026, nothing pushed, see
+[the results](research/results/2026-10-26-mac-retest.md)), so a test machine's SSH keys need a
+passphrase or a per-use confirmation, or the cell runs in Docker.
 
 | Cell | What it runs | The project folder |
 |---|---|---|

@@ -51,9 +51,13 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    `goalcup` checks the folder and the repository before it asks for the browser approval. The
    harness opens in the folder, and your agent runs `git init` and pushes with the token. Its own
    setup screens (sign-in, folder trust, model choice) come before your prompt, and answering them
-   is fine. Delete the token after your run.
-6. **Paste the block `goalcup` prints** (the repository, the token file, the git lines) at the
-   start of your prompt, **type your one prompt** and press Enter. After it, the only message you
+   is fine. Delete the token after your run. The token reaches that one repository, but your agent
+   runs as you: if you have an SSH key it can use, it can push to any repository that key
+   reaches. Give the key a passphrase or a per-use confirmation
+   ([details](docs/PARTICIPANT-GUIDE.md#5-your-run)).
+6. **Paste the block `goalcup` prints** (it starts with "Push to": the repository, the token file,
+   the git lines) at the very start of your first prompt. It is how the agent learns the
+   repository. Then **type your one prompt** and press Enter. After it, the only message you
    may ever type is "keep going".
 
 **During the run.**

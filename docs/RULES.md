@@ -149,7 +149,11 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
   itself (`git init`) and pushes.
 - The agent pushes its work to the repository with the token you made for it (see Keys). Goal Cup
   Proxy passes the agent no git login, SSH agent or `gh` configuration. It does not claim the agent
-  cannot reach one: the agent runs as you. The commit the server records at the deadline is what is judged.
+  cannot reach one: the agent runs as you, and `ssh` reads `~/.ssh` from your account whatever
+  `HOME` says. In a test on 26 Oct 2026 the agent used the tester's own SSH key unprompted, so
+  with an SSH key it can push to any repository that key reaches. Give the key a passphrase or a
+  per-use confirmation (for example the 1Password SSH agent with approval), or run in a Docker
+  container ([results](research/results/2026-10-26-mac-retest.md)). The commit the server records at the deadline is what is judged.
 - Prepared capabilities may help the agent work. A prebuilt product, substantial product code or an
   existing application may not be smuggled in as "context". The judged result must be a fresh build.
 - Participant-controlled instructions and task context available to the agent at the start are frozen
@@ -256,7 +260,7 @@ disclosure and no-side-channel rules.
   GitHub when it opens the run, and again at judging to read the last push. Nothing of your git
   login is passed to the agent: not your SSH agent, your `gh` configuration or your credential
   helper. Your agent runs as you, so it can still read what any program of yours can read (next
-  bullets).
+  bullets), including an SSH key in `~/.ssh` (see Keys).
 - **Platforms.** macOS (Apple silicon and Intel) and Linux (x86_64 and arm64). On Windows, use WSL2
   for the event. Native Windows comes later.
 - **Desktop apps are not supported.** The Codex desktop app and Claude Desktop cannot be launched with
