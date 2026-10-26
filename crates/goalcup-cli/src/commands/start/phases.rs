@@ -121,6 +121,12 @@ pub(super) fn prepare(
     // harness wrote, its own login included.
     let per_run = profile.home.config_home == ConfigHome::PerRun;
     if per_run {
+        // A run on a server makes `<config>-runs` only once approved: until then it is judged by
+        // the folder it will be made in.
+        let beside = beside
+            .ancestors()
+            .find(|folder| folder.exists())
+            .unwrap_or(beside);
         crate::per_run_home::refuse_inside_git_work_tree(beside)?;
         crate::per_run_home::refuse_synced_folder_under(beside, env.get("HOME").map(Path::new))?;
     }
@@ -215,26 +221,13 @@ pub(super) fn create_and_gate<'a>(
         shared_run_home.as_deref(),
         env,
         match (cx.continuing, upload.map(|u| &u.how)) {
-            // A continued run goes on in the clone it has.
+            // A continued run goes on in the folder it started in.
             (Some(continuing), _) => WorkspaceAt::Existing(&continuing.record.workspace),
-            (None, Some(UploadHow::Fresh(new))) if new.works_in_project() => {
-                WorkspaceAt::Existing(&new.project)
-            }
-            (None, Some(UploadHow::Fresh(new))) => WorkspaceAt::Clone(&new.work_root),
+            // A new run on a server works in the participant's project folder, as it is.
+            (None, Some(UploadHow::Fresh(new))) => WorkspaceAt::Existing(&new.project),
             _ => WorkspaceAt::InRunDir,
         },
     )?;
-    // The workspace of a run on a server is a fresh clone of the participant's repository. It
-    // can take a while, so it is said first.
-    if let Some(upload) = upload {
-        if matches!(&upload.how, UploadHow::Fresh(new) if !new.works_in_project()) {
-            let _ = say(out, crate::participant::CLONING);
-        }
-        if let Err(error) = upload.clone_workspace(&run.workspace) {
-            let _ = run.remove();
-            return Err(error);
-        }
-    }
     let config_home = match shared_home {
         Some(home) => home,
         // Seeded from the connector's own files, which the manifest gate has pinned.
@@ -496,7 +489,6 @@ pub(super) fn create_and_gate<'a>(
                 ca_bundle: ca_bundle.as_deref(),
                 parent_env: env,
                 time_left_file: Some(&crate::run::time_left::file_path(cfg, &record.run_id)),
-                git_login: !record.practice,
             },
         )?;
         // Offered once. `busy` is the daemon's refusal before it reads a request and is
@@ -644,7 +636,7 @@ pub(super) fn register_and_release<'a>(
     // command prints there, and from here the terminal's signals are absorbed and every message
     // goes to `host.log` until the harness exits.
     {
-        // Moved to the background, or its terminal gone, while the run was approved and cloned:
+        // Moved to the background, or its terminal gone, while the run was approved and opened:
         // the harness is never released onto a terminal it cannot read.
         if let Err(e) = holds_the_terminal(
             &forked.harness_name,

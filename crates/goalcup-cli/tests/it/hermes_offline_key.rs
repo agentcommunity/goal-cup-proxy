@@ -558,7 +558,6 @@ fn the_real_hermes_writes_its_session_file_once_configured_and_keeps_its_key_out
             ca_bundle: None,
             parent_env: &parent,
             time_left_file: None,
-            git_login: true,
         },
     )
     .expect("the capture plan");

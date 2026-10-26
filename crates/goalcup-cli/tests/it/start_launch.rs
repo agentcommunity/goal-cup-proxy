@@ -145,13 +145,15 @@ fn a_run_that_cannot_take_its_reserve_is_refused_before_anything_is_created() {
 }
 
 /// What `start` does on a stated WSL machine: the refusal, and that nothing was made or asked.
-fn start_on_wsl(wsl: &str, with_work_folder: Option<&str>) -> String {
+/// `on_server`: logged in, so the folder it is run from is the run's project folder and the
+/// run's own folder is made in `<cfg>-runs`.
+fn start_on_wsl(wsl: &str, on_server: bool) -> String {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("cfg");
     std::fs::create_dir(&cfg).unwrap();
     let beside = tmp.path().join("run-folder");
     std::fs::create_dir(&beside).unwrap();
-    if let Some(work) = with_work_folder {
+    if on_server {
         goalcup_cli::server::write_server_config(
             &cfg,
             &goalcup_cli::server::ServerConfig {
@@ -160,14 +162,7 @@ fn start_on_wsl(wsl: &str, with_work_folder: Option<&str>) -> String {
             },
         )
         .unwrap();
-        goalcup_cli::prep_file::write_prep(
-            &cfg,
-            &goalcup_cli::prep_file::PrepFile {
-                work_root: work.to_string(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        goalcup_cli::prep_file::write_prep(&cfg, &Default::default()).unwrap();
     }
     let m = support::mock_armed(&tmp, "codex-cli");
     let mut o = support::start_options("codex-cli");
@@ -208,7 +203,7 @@ fn start_on_wsl(wsl: &str, with_work_folder: Option<&str>) -> String {
 /// WSL1 cannot run Goal Cup: one sentence, and nothing created.
 #[test]
 fn start_refuses_wsl1_before_anything_is_created() {
-    let said = start_on_wsl("wsl=1", None);
+    let said = start_on_wsl("wsl=1", false);
     assert!(
         said.starts_with("WSL1 cannot run Goal Cup: convert this distribution to WSL2 with")
             && said.contains("`wsl --set-version <distro> 2`"),
@@ -219,26 +214,28 @@ fn start_refuses_wsl1_before_anything_is_created() {
 /// On WSL2 each folder the run writes to is judged by its filesystem type.
 #[test]
 fn start_refuses_each_run_folder_on_a_windows_host_filesystem_under_wsl2() {
-    let said = start_on_wsl("wsl=2,fs={beside}=9p", None);
+    let said = start_on_wsl("wsl=2,fs={beside}=9p", false);
     assert!(
         said.contains("run folder") && said.contains("(9p)"),
         "{said}"
     );
-    let said = start_on_wsl("wsl=2,fs={cfg}=drvfs", None);
+    let said = start_on_wsl("wsl=2,fs={cfg}=drvfs", false);
     assert!(
         said.contains("config folder") && said.contains("(drvfs)"),
         "{said}"
     );
     // The artifact root is beside the configuration folder, not inside it.
-    let said = start_on_wsl("wsl=2,fs={cfg}-artifacts=virtiofs", None);
+    let said = start_on_wsl("wsl=2,fs={cfg}-artifacts=virtiofs", false);
     assert!(
         said.contains("artifact root") && said.contains("(virtiofs)"),
         "{said}"
     );
     assert!(!said.contains("config folder"), "{said}");
-    // The work folder `goalcup prep` kept (a run on the server has one).
-    let said = start_on_wsl("wsl=2,fs=/odd/place=9p", Some("/odd/place/work"));
-    assert!(said.contains("work folder /odd/place/work"), "{said}");
+    // A run on a server: the project folder it is run from, and its own folder in `<cfg>-runs`.
+    let said = start_on_wsl("wsl=2,fs={beside}=9p", true);
+    assert!(said.contains("project folder"), "{said}");
+    let said = start_on_wsl("wsl=2,fs={cfg}-runs=9p", true);
+    assert!(said.contains("run folder"), "{said}");
 }
 
 /// `goalcup git-credential` is what an older version's clone calls; it is not for the
@@ -270,7 +267,7 @@ fn the_git_credential_command_is_hidden_and_prep_is_a_hidden_alias_of_setup() {
     };
     for command in ["setup", "prep"] {
         let said = help_of(command);
-        assert!(said.contains("--work-root"), "{command}: {said}");
+        assert!(said.contains("--harness"), "{command}: {said}");
     }
     let start = std::process::Command::new(goalcup)
         .args(["start", "--help"])
@@ -768,7 +765,7 @@ mod chat {
         let home = env.get("HOME").expect("a HOME");
         assert_ne!(home, &participant_home, "{env:?}");
         assert!(
-            home.starts_with(&rig.root.join("runs").display().to_string()),
+            home.starts_with(&rig.run_folder().display().to_string()),
             "{home}"
         );
         assert_eq!(
@@ -870,17 +867,23 @@ mod chat {
         assert!(home.is_dir(), "the shared run home is never removed");
     }
 
-    /// A Ctrl-C at a question a real run's start asks before the approval (here the no-login
-    /// guide's "Press Enter") ends the start at once, with nothing approved or created.
+    /// A Ctrl-C at a question a real run's start asks before the approval (here the repository's
+    /// name) ends the start at once, with nothing approved or created.
     #[test]
     fn a_ctrl_c_at_a_start_question_ends_it_with_nothing_created() {
         let rig = Rig::chat();
         let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
         rig.prepare_for(&server.url());
-        // No GitHub login on this computer: start shows the guide and waits for Enter.
-        rig.with_env(goalcup_cli::commands::start::TEST_GITHUB_LOGIN, "");
-        let mut start = rig.start_on_pty(&[DISK]);
-        start.wait_shown("Press Enter when done");
+        // No `--repo`: start asks for the repository's name.
+        let args = ["start", "--harness", CHAT_ID, "--dev"];
+        let mut start = OnPty::spawn(
+            rig.chat_command(
+                &[DISK],
+                Launcher::Args(args.iter().map(|a| a.to_string()).collect()),
+            ),
+            None,
+        );
+        start.wait_shown("Name it");
         start.type_bytes("\u{3}");
         let status = start.wait();
         let shown = start.shown();
@@ -891,8 +894,59 @@ mod chat {
         );
         assert!(server.device_requests().is_empty(), "{shown}");
         assert!(server.run_ids().is_empty(), "{shown}");
-        assert!(rig.clones().is_empty(), "{shown}");
+        assert!(rig.run_dirs().is_empty(), "{shown}");
         assert!(!rig.harness_started(), "{shown}");
+    }
+
+    /// The pids of every `goalcup-daemon` started from this rig's `daemon.toml`.
+    fn daemons_of(rig: &Rig) -> Vec<String> {
+        let table = std::process::Command::new("/bin/ps")
+            .args(["-axww", "-o", "pid=,command="])
+            .output()
+            .expect("ps");
+        let config = rig.cfg.join(goalcup_cli::daemon::spawn::DAEMON_CONFIG_NAME);
+        let needle = format!("--config {} ", config.display());
+        String::from_utf8_lossy(&table.stdout)
+            .lines()
+            .filter(|line| line.contains("goalcup-daemon") && line.contains(&needle))
+            .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+            .collect()
+    }
+
+    /// R1: the recorder starts only once the run is approved. While `goalcup start` waits for
+    /// the participant in the browser no `goalcup-daemon` runs, so a slow approval cannot
+    /// outlast the daemon's idle wait; once approved, one starts and the run goes on.
+    #[test]
+    fn no_daemon_runs_before_the_approval() {
+        let rig = Rig::chat_run_scoped();
+        let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+        rig.prepare_for(&server.url());
+        server.set_approval(crate::common::upload_server::Approval::Hold);
+        let mut start = rig.start_on_pty(&[DISK, BEATING]);
+        crate::common::support::wait_for("the approval is asked for", || {
+            server
+                .calls()
+                .iter()
+                .any(|c| c == "POST /v1/device/token")
+                .then_some(())
+        });
+        let waiting = daemons_of(&rig);
+        let control = goalcup_cli::config::control_path(&rig.cfg).exists();
+        server.set_approval(crate::common::upload_server::Approval::Auto);
+        start.wait_shown("tui: ready");
+        let approved = daemons_of(&rig);
+        start.type_line("/exit");
+        let status = start.wait();
+        for pid in &approved {
+            let _ = std::process::Command::new("kill").arg(pid).status();
+        }
+        assert!(
+            waiting.is_empty(),
+            "a daemon before the approval: {waiting:?}"
+        );
+        assert!(!control, "control.json before the approval");
+        assert!(!approved.is_empty(), "no daemon once approved");
+        assert!(status.success(), "{status:?}\n{}", start.shown());
     }
 
     /// A harness that closed before the first message (a trust question answered "no", a setup

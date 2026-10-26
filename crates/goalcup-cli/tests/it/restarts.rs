@@ -307,14 +307,14 @@ fn a_run_crosses_two_platform_stops_and_each_continue_keeps_it_whole() {
         "{shown}"
     );
 
-    // One run, one approval, one clone, three segments in order, here and on the server.
+    // One run, one approval, one project folder, three segments in order, here and on the
+    // server.
     let record = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap();
     let entries: Vec<String> = record.entries.iter().map(|e| e.entry_id.clone()).collect();
     assert_eq!(entries, [entry0.clone(), entry1.clone(), entry2.clone()]);
     assert_eq!(server.entry_ids(&run_id), entries);
     assert_eq!(server.run_ids(), std::slice::from_ref(&run_id));
     assert_eq!(server.device_requests().len(), 1, "one approval");
-    assert_eq!(rig.clones(), std::slice::from_ref(&started.workspace));
     assert_eq!(record.workspace, started.workspace);
     // The deadline never moved: the record, and every segment's signed receipt.
     assert_eq!(record.deadline_at.as_deref(), Some(deadline_at.as_str()));
@@ -428,5 +428,4 @@ fn a_continue_whose_clone_is_gone_is_refused_and_changes_nothing() {
     again.type_line("/exit");
     assert!(again.wait().success(), "{}", again.shown());
     assert_eq!(server.entry_ids(&run_id).len(), 2);
-    assert_eq!(rig.clones(), [workspace]);
 }

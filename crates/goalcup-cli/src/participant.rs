@@ -29,18 +29,18 @@ mod times;
 mod upload;
 
 pub use approval::{
-    APPROVED, Approving, CLONING, approval_code, approval_denied, approval_expired,
-    approval_interrupted, approval_intro, login_done, replaces_open_run, server_unreachable,
+    APPROVED, Approving, approval_code, approval_denied, approval_expired, approval_interrupted,
+    approval_intro, login_done, replaces_open_run, server_unreachable,
 };
 pub use ending::{
     Ending, UPLOAD_DONE, UPLOADING_REST, after_upload, details_heading, ending_block,
 };
 pub use launch::{Launch, Opens, RUN_GOES_ON, launch_block};
 pub use refusals::{
-    NotAClone, cannot_record_model_service, clone_missing, clone_unreadable, continued_elsewhere,
-    filesystem_warning, home_busy, inside_work_folder, last_part_closing, local_only,
-    needs_terminal, not_a_clone, not_started_here, repository_not_empty, run_over,
-    server_answer_unusable, still_recording, unsupported_filesystem,
+    NotAClone, PROJECT_FOLDER, cannot_record_model_service, clone_missing, clone_unreadable,
+    continued_elsewhere, filesystem_warning, home_busy, last_part_closing, local_only,
+    needs_terminal, not_a_clone, not_started_here, project_not_empty, repository_not_empty,
+    run_over, server_answer_unusable, still_recording, unsupported_filesystem,
 };
 pub use seal::{
     SealDone, seal_done, seal_inside_harness, seal_needs_terminal, seal_not_confirmed,

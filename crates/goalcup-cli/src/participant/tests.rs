@@ -552,7 +552,7 @@ fn every_refusal_says_what_to_do_first_and_has_no_rule_code() {
         home_busy("Some Agent", false),
         still_recording("Some Agent", "r1"),
         needs_terminal("Some Agent", "Nothing was created."),
-        inside_work_folder(tmp, &tmp.join("x")),
+        project_not_empty(tmp, &["README.md".to_string()]),
         not_started_here(Some("r1")),
         not_started_here(None),
         local_only("r1"),
@@ -565,7 +565,7 @@ fn every_refusal_says_what_to_do_first_and_has_no_rule_code() {
         server_unreachable("https://s.example", "refused"),
     ];
     let verbs = [
-        "Your", "Use", "Run", "Start", "Nothing", "Try", "Continue", "Check",
+        "Your", "Use", "Run", "Start", "Nothing", "Try", "Continue", "Check", "Make",
     ];
     for refusal in refusals {
         let first = refusal.split(' ').next().unwrap();

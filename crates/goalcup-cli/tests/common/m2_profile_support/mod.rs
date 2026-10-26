@@ -167,6 +167,5 @@ pub fn chat_launch<'a>(
         ca_bundle: None,
         parent_env: parent,
         time_left_file: Some(&layout.time_left),
-        git_login: true,
     }
 }

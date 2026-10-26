@@ -395,7 +395,6 @@ fn upload_worker_a_denied_approval_starts_nothing() {
     assert!(error.to_string().contains("denied"), "{error}\n{out}");
     assert!(client.book().creates.is_empty(), "{out}");
     assert!(rig.run_dirs().is_empty());
-    assert!(rig.clones().is_empty());
 }
 
 /// The Worker ends a run at its deadline: its heartbeat answer says stop, goalcup stops the

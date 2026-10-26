@@ -95,9 +95,6 @@ pub fn login_done(handle: &str, server: Option<&str>) -> Vec<String> {
 /// Said once a run's approval came back.
 pub const APPROVED: &str = "Approved.";
 
-/// Said before the participant's repository is cloned for a new run.
-pub const CLONING: &str = "Cloning your repository…";
-
 /// A denied approval.
 pub fn approval_denied() -> String {
     format!(

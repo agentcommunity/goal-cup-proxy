@@ -22,7 +22,7 @@
 //!   watch tick at 1 s instead of 30 s;
 //! - `GOALCUP_TEST_UPLOAD_POLICY`: a chunk every 5 s (or at 4 MiB), heartbeats every 10 s,
 //!   retries 1 to 5 s, a 60 s wrap-up;
-//! - `GOALCUP_TEST_UPSTREAM_ROOTS`, `GOALCUP_TEST_NO_BROWSER`, `GOALCUP_TEST_CLONE_SOURCE`,
+//! - `GOALCUP_TEST_UPSTREAM_ROOTS`, `GOALCUP_TEST_NO_BROWSER`,
 //!   `GOALCUP_TEST_FINISH_BUDGET_MS` as in the other full rows.
 //!
 //! `UPLOAD_FAILING_AFTER` (30 min) has no test door. It no longer stops a run (D65): it only
@@ -225,7 +225,9 @@ struct World {
     server: Option<UploadServer>,
     server_store: PathBuf,
     server_port: Option<u16>,
-    clone_source: PathBuf,
+    /// The folder `goalcup start` runs in: a run on the server's project folder. Not beside the
+    /// configuration folder or the artifact root, which the daemon refuses as a workspace.
+    project: PathBuf,
     log: Timeline,
 }
 
@@ -246,7 +248,8 @@ impl World {
         let v = Vertical::new_logging_to(mode, config, Some(out.join("logs")));
         let log = Timeline::new(&out);
         let server_store = out.join("server");
-        let clone_source = v.root.join("github-source.git");
+        let project = v.root.join("projects").join("runs");
+        std::fs::create_dir_all(&project).unwrap();
         let mut world = World {
             v,
             out,
@@ -255,7 +258,7 @@ impl World {
             server: None,
             server_store,
             server_port: None,
-            clone_source,
+            project,
             log,
         };
         if with_server {
@@ -288,7 +291,7 @@ impl World {
     }
 
     /// `Rig::prepare_for` for this world: logged in to the stand-in, prepared for the
-    /// controlled workload's connector.
+    /// controlled workload's connector (no `work_root`: 0.7's setup writes none).
     fn prepare(&self) {
         let cfg = &self.v.cfg;
         goalcup_cli::server::write_server_config(
@@ -299,20 +302,9 @@ impl World {
             },
         )
         .unwrap();
-        let git = Command::new("git")
-            .args(["init", "--quiet", "--bare"])
-            .arg(&self.clone_source)
-            .output()
-            .unwrap();
-        assert!(git.status.success(), "{git:?}");
-        let work = self.v.root.join("work");
-        std::fs::create_dir_all(&work).unwrap();
         std::fs::write(
             goalcup_cli::prep_file::prep_path(cfg),
-            serde_json::to_vec(&json!({
-                "harness": CONNECTOR, "work_root": work,
-            }))
-            .unwrap(),
+            serde_json::to_vec(&json!({ "harness": CONNECTOR })).unwrap(),
         )
         .unwrap();
     }
@@ -327,23 +319,31 @@ impl World {
                 "GOALCUP_TEST_UPSTREAM_ROOTS",
                 self.v.root.join("upstream-ca.pem"),
             )
-            .env("GOALCUP_TEST_NO_BROWSER", "1")
-            .env(
-                goalcup_cli::commands::start::TEST_CLONE_SOURCE,
-                &self.clone_source,
-            )
-            .env(goalcup_cli::commands::start::TEST_GITHUB_LOGIN, "goal-cup");
+            .env("GOALCUP_TEST_NO_BROWSER", "1");
         command
     }
 
     /// A long-running `goalcup` command (`start`, `continue`), its output in `logs/<name>.*`.
     fn spawn(&self, name: &str, args: &[&str]) -> Running {
         use std::os::unix::process::CommandExt;
+        // A run on the server works in its project folder, where a real agent runs `git init`
+        // first; this goalcup still needs that before a continue.
+        if args.first() == Some(&"continue")
+            && self.server_port.is_some()
+            && !self.project.join(".git").exists()
+        {
+            let init = Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(&self.project)
+                .output()
+                .unwrap();
+            assert!(init.status.success(), "{init:?}");
+        }
         let logs = self.out.join("logs");
         let child = self
             .goalcup()
             .args(args)
-            .current_dir(&self.v.runs)
+            .current_dir(&self.project)
             .env("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL", "1")
             .stdout(std::fs::File::create(logs.join(format!("{name}.out"))).unwrap())
             .stderr(std::fs::File::create(logs.join(format!("{name}.err"))).unwrap())

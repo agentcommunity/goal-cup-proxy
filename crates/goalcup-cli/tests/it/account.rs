@@ -1,20 +1,13 @@
-//! A real run's GitHub half (D69): the open repository check, the participant's own git for the
-//! push test and the clone, and the older versions' credential helper, which still answers git
-//! for the clones they made.
+//! A real run's GitHub half (D69): the open repository check, the repository question, and the
+//! older versions' credential helper, which still answers git for the clones they made.
 //!
-//! The GitHub API is a local fake on loopback and the clone source is a local bare
-//! repository; `git` is a wrapper script that logs its argv and runs the real one against a
-//! gitconfig of the test's own. Nothing here reads `$HOME`, `~/.gitconfig` or a real token,
-//! runs the real `ssh` or `gh`, or reaches GitHub.
+//! The GitHub API is a local fake on loopback; `git` is a wrapper script that runs the real one
+//! against a gitconfig of the test's own. Nothing here reads `$HOME`, `~/.gitconfig` or a real
+//! token, or reaches GitHub.
 
 use goalcup_cli::CliError;
-use goalcup_cli::account::github::{
-    Found, GithubLogin, GithubSetup, PushRefused, check_public_empty, clone_repo,
-    credential_helper, push_test,
-};
+use goalcup_cli::account::github::{Found, GithubSetup, check_public_empty, credential_helper};
 use goalcup_cli::commands::run_repo;
-use std::collections::BTreeMap;
-use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -187,109 +180,12 @@ fn the_repository_check_sends_no_login_and_tells_missing_from_used() {
     }
 }
 
-/// The participant's environment as `goalcup start` reads it, for the push test: a `PATH`, their
-/// `HOME`, and what the test adds.
-fn participant(rig: &Rig, more: &[(&str, &str)]) -> BTreeMap<String, String> {
-    let home = rig.root.join("participant-home");
-    std::fs::create_dir_all(&home).unwrap();
-    let mut env: BTreeMap<String, String> = [
-        ("PATH", std::env::var("PATH").unwrap()),
-        ("HOME", home.display().to_string()),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_string(), v))
-    .collect();
-    env.extend(more.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-    env
-}
-
-/// The push test is git pushing nothing: it passes for a repository git can push to, and
-/// fails, with git's words, for one it cannot reach. The repository is left as it was.
-#[test]
-fn the_push_test_passes_only_where_git_can_push_and_sends_nothing() {
-    let rig = rig();
-    let scratch = rig.root.join("scratch");
-    let env = participant(&rig, &[]);
-    push_test(rig.git.as_os_str(), &rig.source, &scratch, &env).unwrap();
-    assert!(!scratch.exists(), "the scratch repository is removed");
-    let refs = std::process::Command::new(&rig.git)
-        .args(["--git-dir", rig.source.as_str(), "for-each-ref"])
-        .output()
-        .unwrap();
-    assert!(refs.stdout.is_empty(), "something was pushed: {refs:?}");
-    let missing = rig.root.join("missing.git").display().to_string();
-    let why = push_test(rig.git.as_os_str(), &missing, &scratch, &env).unwrap_err();
-    assert!(
-        matches!(&why, PushRefused::Failed(said) if !said.is_empty()) && !scratch.exists(),
-        "{why:?}"
-    );
-    // A repository with a branch is not new and empty, whatever GitHub's API says.
-    seed_a_branch(&rig);
-    let why = push_test(rig.git.as_os_str(), &rig.source, &scratch, &env).unwrap_err();
-    assert_eq!(why, PushRefused::HasBranches);
-    assert!(!scratch.exists(), "the scratch repository is removed");
-}
-
-/// The push test runs the agent's git, not the participant's shell: the environment the launch
-/// builds (`launch::agent_base_env`), with a scratch `HOME` and the way to their git login, so a
-/// login only their shell has (a `GH_TOKEN`, a helper that reads `~`) cannot pass it.
-#[test]
-fn the_push_test_runs_in_the_agents_environment() {
-    let rig = rig();
-    let dump = rig.root.join("env.txt");
-    let git = rig.root.join("dumping-git");
-    std::fs::write(
-        &git,
-        format!(
-            "#!/bin/sh\nenv > \"{}\"\nexec \"{}\" \"$@\"\n",
-            dump.display(),
-            rig.git.display()
-        ),
-    )
-    .unwrap();
-    make_executable(&git);
-    let env = participant(
-        &rig,
-        &[
-            ("GH_TOKEN", "a-token-only-the-shell-has"),
-            ("SSH_AUTH_SOCK", "/private/tmp/agent.sock"),
-            ("GIT_CONFIG_PARAMETERS", "'credential.helper'='store'"),
-        ],
-    );
-    std::fs::write(rig.root.join("participant-home/.gitconfig"), "").unwrap();
-    push_test(
-        git.as_os_str(),
-        &rig.source,
-        &rig.root.join("scratch"),
-        &env,
-    )
-    .unwrap();
-    let seen: BTreeMap<String, String> = std::fs::read_to_string(&dump)
-        .unwrap()
-        .lines()
-        .filter_map(|l| l.split_once('='))
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-    let want = goalcup_cli::launch::agent_base_env(&env, &seen["HOME"], true);
-    for (key, value) in &want {
-        assert_eq!(seen.get(key), Some(value), "{key}");
-    }
-    assert_ne!(seen["HOME"], env["HOME"], "the participant's own HOME");
-    for key in ["GH_TOKEN", "GIT_CONFIG_PARAMETERS"] {
-        assert!(!seen.contains_key(key), "{key} reached the agent's git");
-    }
-}
-
 // ------------------------------------------------------------------ a real run's repository
 
-/// [`run_repo::Doors`] as a test states them: GitHub's API is a fake, the login is what the test
-/// says (one answer per look), the push test is the real one against a local repository, and
-/// what the participant types is a queue.
+/// [`run_repo::Doors`] as a test states them: GitHub's API is a fake, and what the participant
+/// types is a queue.
 struct Doors {
     api: String,
-    logins: RefCell<Vec<GithubLogin>>,
-    push_to: String,
-    scratch: PathBuf,
     typed: RefCell<Vec<&'static str>>,
     opened: RefCell<Vec<String>>,
 }
@@ -297,24 +193,6 @@ struct Doors {
 impl run_repo::Doors for Doors {
     fn api(&self) -> Option<String> {
         Some(self.api.clone())
-    }
-    fn login(&self) -> GithubLogin {
-        let mut logins = self.logins.borrow_mut();
-        if logins.len() > 1 {
-            logins.remove(0)
-        } else {
-            logins[0].clone()
-        }
-    }
-    fn push_test(&self, _remote: &str) -> Result<(), PushRefused> {
-        let env: BTreeMap<String, String> =
-            [("PATH".to_string(), std::env::var("PATH").unwrap())].into();
-        push_test(
-            std::ffi::OsStr::new("git"),
-            &self.push_to,
-            &self.scratch,
-            &env,
-        )
     }
     fn read_line(&self) -> Option<String> {
         let mut typed = self.typed.borrow_mut();
@@ -327,24 +205,11 @@ impl run_repo::Doors for Doors {
         self.opened.borrow_mut().push(url.to_string());
         true
     }
-    fn unused_git_config(&self) -> Option<PathBuf> {
-        None
-    }
 }
 
-fn you(ssh: bool) -> GithubLogin {
-    GithubLogin {
-        user: Some("you".to_string()),
-        ssh,
-    }
-}
-
-fn doors(rig: &Rig, api: &FakeGithub, logins: Vec<GithubLogin>, typed: Vec<&'static str>) -> Doors {
+fn doors(api: &FakeGithub, typed: Vec<&'static str>) -> Doors {
     Doors {
         api: api.base.clone(),
-        logins: RefCell::new(logins),
-        push_to: rig.source.clone(),
-        scratch: rig.root.join("scratch"),
         typed: RefCell::new(typed),
         opened: RefCell::new(Vec::new()),
     }
@@ -354,120 +219,64 @@ const EMPTY: (u16, &str) = (200, r#"{"private":false,"size":0}"#);
 const USED: (u16, &str) = (200, r#"{"private":false,"size":12}"#);
 const MISSING: (u16, &str) = (404, r#"{"message":"Not Found"}"#);
 
-/// A real run asks the repository's name, opens GitHub's "new repository" page with it when it
-/// does not exist yet, waits for Enter, and then checks it is public, empty and that the
-/// participant's own git can push to it. The remote is SSH when their SSH login works.
+/// A real run asks the repository's name with its owner, opens GitHub's "new repository" page
+/// with it when it does not exist yet, waits for Enter, and then checks it is public and empty.
+/// Nothing is kept until a run opens with it.
 #[test]
 fn a_real_run_names_its_repository_creates_it_and_checks_it() {
-    let rig = rig();
-    let cfg = rig.root.join("cfg");
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("cfg");
     let api = FakeGithub::answers(&[MISSING, EMPTY]);
-    let doors = doors(&rig, &api, vec![you(true)], vec!["my-goal-cup", ""]);
+    let doors = doors(&api, vec!["you/my-goal-cup", ""]);
     let mut out = Vec::new();
     let repo = run_repo::choose(&doors, &cfg, None, &mut out).unwrap();
     let said = String::from_utf8(out).unwrap();
     assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup");
-    assert_eq!(repo.remote, "git@github.com:you/my-goal-cup.git");
     assert_eq!(
         *doors.opened.borrow(),
         ["https://github.com/new?name=my-goal-cup&owner=you&visibility=public"]
     );
-    assert!(said.contains("you/my-goal-cup: public, empty"), "{said}");
+    assert!(said.contains("you/my-goal-cup: public and empty"), "{said}");
     assert_eq!(api.requests.lock().unwrap().len(), 2);
-    // Not kept yet: only a run that opens keeps its repository, for the next run's suggestion.
     assert!(
         goalcup_cli::prep_file::read_prep_lenient(&cfg)
             .repo_url
             .is_empty()
     );
-    // Over HTTPS when SSH does not sign in.
-    let api = FakeGithub::answers(&[EMPTY]);
-    let doors = self::doors(&rig, &api, vec![you(false)], vec![]);
-    let repo = run_repo::choose(&doors, &cfg, Some("you/other"), &mut Vec::new()).unwrap();
-    assert_eq!(repo.remote, "https://github.com/you/other.git");
 }
 
-/// A repository the participant's git cannot push to is refused before the approval, with one
-/// fix, and nothing is kept; one that is not empty is refused too.
+/// A name without its owner is refused with the form to type, and GitHub is not asked.
 #[test]
-fn a_repository_git_cannot_push_to_or_that_is_used_is_refused() {
-    let rig = rig();
-    let cfg = rig.root.join("cfg");
+fn a_repository_name_without_its_owner_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
     let api = FakeGithub::answers(&[EMPTY]);
-    let mut doors = doors(&rig, &api, vec![you(false)], vec![]);
-    doors.push_to = rig.root.join("missing.git").display().to_string();
-    let refused = run_repo::choose(&doors, &cfg, Some("you/my-goal-cup"), &mut Vec::new())
+    let doors = doors(&api, vec!["my-goal-cup"]);
+    let refused = run_repo::choose(&doors, &tmp.path().join("cfg"), None, &mut Vec::new())
         .unwrap_err()
         .to_string();
-    assert!(
-        refused.contains("cannot push") && refused.contains("gh auth login"),
-        "{refused}"
-    );
-    assert!(
-        goalcup_cli::prep_file::read_prep_lenient(&cfg)
-            .repo_url
-            .is_empty()
-    );
+    assert!(refused.contains("<your-user>/my-goal-cup"), "{refused}");
+    assert!(api.requests.lock().unwrap().is_empty());
+}
+
+/// A repository that is not empty is refused before the approval, naming `--repo`, and nothing is
+/// kept.
+#[test]
+fn a_repository_that_is_used_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("cfg");
     let api = FakeGithub::answers(&[USED]);
-    let doors = self::doors(&rig, &api, vec![you(false)], vec![]);
-    let refused = run_repo::choose(&doors, &cfg, Some("you/my-goal-cup"), &mut Vec::new())
-        .unwrap_err()
-        .to_string();
-    assert!(refused.contains("not empty"), "{refused}");
-}
-
-/// Give `rig`'s repository one branch with one commit, as GitHub does for a repository created
-/// with a README.
-fn seed_a_branch(rig: &Rig) {
-    let work = rig.root.join("seed-work");
-    for args in [
-        vec!["init", "--quiet", work.to_str().unwrap()],
-        vec![
-            "-C",
-            work.to_str().unwrap(),
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@example.org",
-            "commit",
-            "--quiet",
-            "--allow-empty",
-            "-m",
-            "Initial commit",
-        ],
-        vec![
-            "-C",
-            work.to_str().unwrap(),
-            "push",
-            "--quiet",
-            rig.source.as_str(),
-            "HEAD:refs/heads/main",
-        ],
-    ] {
-        let out = Command::new(&rig.git).args(&args).output().unwrap();
-        assert!(out.status.success(), "{args:?}: {out:?}");
-    }
-}
-
-/// Right after a repository is created with a README, GitHub's API can still say its `size` is
-/// 0. The agent's git asks the repository itself which branches it has: one with a branch is
-/// refused before the approval as not empty, with the same fix as GitHub's answer gives, and
-/// nothing is kept.
-#[test]
-fn a_repository_with_a_branch_is_refused_though_github_says_it_is_empty() {
-    let rig = rig();
-    seed_a_branch(&rig);
-    let cfg = rig.root.join("cfg");
-    let api = FakeGithub::answers(&[EMPTY]);
-    let doors = doors(&rig, &api, vec![you(false)], vec![]);
-    let refused = run_repo::choose(&doors, &cfg, Some("you/my-goal-cup"), &mut Vec::new())
-        .unwrap_err()
-        .to_string();
+    let refused = run_repo::choose(
+        &doors(&api, vec![]),
+        &cfg,
+        Some("you/my-goal-cup"),
+        &mut Vec::new(),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(
-        refused.contains("you/my-goal-cup is not empty") && refused.contains("--repo"),
+        refused.contains("not empty") && refused.contains("--repo"),
         "{refused}"
     );
-    assert!(!refused.contains("cannot push"), "{refused}");
     assert!(
         goalcup_cli::prep_file::read_prep_lenient(&cfg)
             .repo_url
@@ -478,8 +287,8 @@ fn a_repository_with_a_branch_is_refused_though_github_says_it_is_empty() {
 /// The next real run asks again and suggests a new name once the last run's repository is used.
 #[test]
 fn the_next_real_run_suggests_a_new_name_once_the_last_is_used() {
-    let rig = rig();
-    let cfg = rig.root.join("cfg");
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("cfg");
     goalcup_cli::prep_file::write_prep(
         &cfg,
         &goalcup_cli::prep_file::PrepFile {
@@ -490,68 +299,31 @@ fn the_next_real_run_suggests_a_new_name_once_the_last_is_used() {
     .unwrap();
     // GitHub is asked once, about the chosen repository; the suggestion asks nothing.
     let api = FakeGithub::answers(&[EMPTY]);
-    let doors = doors(&rig, &api, vec![you(false)], vec![""]);
     let mut out = Vec::new();
-    let repo = run_repo::choose(&doors, &cfg, None, &mut out).unwrap();
+    let repo = run_repo::choose(&doors(&api, vec![""]), &cfg, None, &mut out).unwrap();
     let said = String::from_utf8(out).unwrap();
-    assert!(said.contains("Name it [my-goal-cup-2]"), "{said}");
+    assert!(said.contains("[you/my-goal-cup-2]"), "{said}");
     assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup-2");
     assert_eq!(api.requests.lock().unwrap().len(), 1);
-    // A start that ends here (denied at the approval, or a Ctrl-C) never used that repository:
-    // the next one suggests the same name again.
-    let api = FakeGithub::answers(&[EMPTY]);
-    let doors = self::doors(&rig, &api, vec![you(false)], vec![""]);
-    let mut out = Vec::new();
-    run_repo::choose(&doors, &cfg, None, &mut out).unwrap();
-    let said = String::from_utf8(out).unwrap();
-    assert!(said.contains("Name it [my-goal-cup-2]"), "{said}");
 }
 
 /// GitHub's open API allows 60 calls an hour per address. A rate limit (`403`) is not a used
-/// repository: start says the server and the clone check it instead, and goes on.
+/// repository: start says so and goes on.
 #[test]
 fn a_rate_limited_github_is_said_and_never_counts_as_used() {
-    let rig = rig();
-    let cfg = rig.root.join("cfg");
+    let tmp = tempfile::tempdir().unwrap();
     let api = FakeGithub::answers(&[(403, r#"{"message":"API rate limit exceeded"}"#)]);
-    let doors = doors(&rig, &api, vec![you(false)], vec![]);
     let mut out = Vec::new();
-    let repo = run_repo::choose(&doors, &cfg, Some("you/my-goal-cup"), &mut out).unwrap();
+    let repo = run_repo::choose(
+        &doors(&api, vec![]),
+        &tmp.path().join("cfg"),
+        Some("you/my-goal-cup"),
+        &mut out,
+    )
+    .unwrap();
     let said = String::from_utf8(out).unwrap();
     assert!(said.contains("GitHub's API is busy"), "{said}");
     assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup");
-}
-
-/// With no GitHub login on the computer (no SSH key GitHub knows, no `gh` login), start says how
-/// to set one up, waits for Enter, and looks again; it never asks for a user name.
-#[test]
-fn with_no_github_login_start_shows_the_guide_and_looks_again() {
-    let rig = rig();
-    let cfg = rig.root.join("cfg");
-    let api = FakeGithub::answers(&[EMPTY]);
-    let doors = doors(
-        &rig,
-        &api,
-        vec![GithubLogin::default(), you(false)],
-        vec!["", "my-goal-cup"],
-    );
-    let mut out = Vec::new();
-    let repo = run_repo::choose(&doors, &cfg, None, &mut out).unwrap();
-    let said = String::from_utf8(out).unwrap();
-    assert!(said.contains(run_repo::NO_LOGIN_GUIDE), "{said}");
-    assert!(!said.to_lowercase().contains("user name"), "{said}");
-    assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup");
-    // Still none after Enter: a name alone cannot be placed, and nothing is asked for it.
-    let doors = self::doors(
-        &rig,
-        &api,
-        vec![GithubLogin::default()],
-        vec!["", "my-goal-cup"],
-    );
-    let refused = run_repo::choose(&doors, &cfg, None, &mut Vec::new())
-        .unwrap_err()
-        .to_string();
-    assert!(refused.contains("No GitHub login"), "{refused}");
 }
 
 // ------------------------------------------------------------------ the helper
@@ -679,18 +451,16 @@ fn the_helper_answers_only_for_its_own_repository() {
     assert!(sentence.contains("older goalcup"), "{sentence}");
 }
 
-// ------------------------------------------------------------------ the clone
+// ------------------------------------------------------------------ an old clone
 
 struct Rig {
     _tmp: tempfile::TempDir,
     root: PathBuf,
     git: PathBuf,
     gitconfig: PathBuf,
-    source: String,
 }
 
-/// A `git` wrapper that logs its argv and runs the real git against a gitconfig of its own,
-/// and an empty bare repository to clone from.
+/// A `git` wrapper that runs the real git against a gitconfig of its own.
 fn rig() -> Rig {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
@@ -700,37 +470,23 @@ fn rig() -> Rig {
         .unwrap();
     let real = String::from_utf8(real.stdout).unwrap().trim().to_string();
     assert!(real.starts_with('/'), "no git on PATH: {real:?}");
-    let log = root.join("git-argv.log");
     let gitconfig = root.join("gitconfig");
     std::fs::write(&gitconfig, "").unwrap();
     let git = root.join("git");
     std::fs::write(
         &git,
         format!(
-            "#!/bin/sh\n\
-             for a in \"$@\"; do printf '[%s]' \"$a\" >> \"{log}\"; done\n\
-             printf '\\n' >> \"{log}\"\n\
-             GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=\"{cfg}\" exec \"{real}\" \"$@\"\n",
-            log = log.display(),
+            "#!/bin/sh\nGIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=\"{cfg}\" exec \"{real}\" \"$@\"\n",
             cfg = gitconfig.display(),
         ),
     )
     .unwrap();
     make_executable(&git);
-    let bare = root.join("source.git");
-    let init = Command::new(&git)
-        .args(["init", "--bare", "--quiet"])
-        .arg(&bare)
-        .output()
-        .unwrap();
-    assert!(init.status.success(), "{init:?}");
-    std::fs::write(&log, "").unwrap();
     Rig {
         _tmp: tmp,
         root,
         git,
         gitconfig,
-        source: bare.display().to_string(),
     }
 }
 
@@ -750,147 +506,6 @@ fn git_out(rig: &Rig, dir: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-/// A new clone is made with the participant's own git (D69): its origin is the plain address,
-/// its configuration names no credential helper and holds no key, and `.env*` is on its own
-/// ignore list, so a key file is never committed.
-#[test]
-fn a_clone_names_no_helper_and_never_commits_env_files() {
-    let rig = rig();
-    let dest = rig.root.join("work");
-    let remote = "git@github.com:acme/empty-repo.git";
-    clone_repo(rig.git.as_os_str(), &rig.source, remote, &dest).unwrap();
-    // As configured: `get-url` would apply this machine's own `insteadOf` rewrites.
-    assert_eq!(
-        git_out(&rig, &dest, &["config", "--get", "remote.origin.url"]).trim(),
-        remote
-    );
-    let config = std::fs::read_to_string(dest.join(".git/config")).unwrap();
-    assert!(!config.contains("credential"), "{config}");
-    for name in [".env", ".env.local", ".envrc"] {
-        std::fs::write(dest.join(name), "KEY=value\n").unwrap();
-    }
-    std::fs::write(dest.join("work.txt"), "work\n").unwrap();
-    assert_eq!(
-        git_out(&rig, &dest, &["status", "--porcelain"]).trim(),
-        "?? work.txt"
-    );
-}
-
-/// A practice run's folder is a new repository with no remote, and the practice agent, which
-/// reads no global or system git config, can still commit in it: it names an author of its own.
-#[test]
-fn a_practice_folder_has_no_remote_and_commits_with_no_config_of_the_participants() {
-    let rig = rig();
-    let dest = rig.root.join("practice");
-    goalcup_cli::account::github::init_local(OsStr::new("git"), &dest).unwrap();
-    let empty_home = rig.root.join("empty-home");
-    std::fs::create_dir_all(&empty_home).unwrap();
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(&dest)
-            .args(args)
-            .env_clear()
-            .env("PATH", std::env::var("PATH").unwrap())
-            .env("HOME", &empty_home)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap()
-    };
-    let remotes = git(&["remote"]);
-    assert!(
-        remotes.status.success() && remotes.stdout.is_empty(),
-        "{remotes:?}"
-    );
-    let commit = git(&["commit", "--quiet", "--allow-empty", "-m", "practice"]);
-    assert!(commit.status.success(), "{commit:?}");
-    let author = git(&["log", "-1", "--format=%an <%ae>"]);
-    assert_eq!(
-        String::from_utf8_lossy(&author.stdout).trim(),
-        "Goal Cup practice <practice@goalcup.invalid>"
-    );
-}
-
-/// A practice agent gets no git login by default. OpenSSH finds `~/.ssh` from the user database,
-/// not from `HOME`, so the folder's own config gives git an `ssh` that reads no config file and
-/// offers no key; and an empty `credential.helper` empties any list of helpers git read before
-/// it, so a keychain helper in a global config is not asked either.
-#[test]
-fn a_practice_folder_offers_no_ssh_key_and_asks_no_credential_helper() {
-    let rig = rig();
-    let dest = rig.root.join("practice");
-    goalcup_cli::account::github::init_local(OsStr::new("git"), &dest).unwrap();
-    let local = |key: &str| git_out(&rig, &dest, &["config", "--local", "--get-all", key]);
-    assert_eq!(
-        local("core.sshCommand").trim(),
-        "ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes"
-    );
-    assert_eq!(local("credential.helper"), "\n", "one empty helper");
-
-    // What git then does. A stand-in `ssh` on PATH says how it was called.
-    let bin = rig.root.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let said = rig.root.join("ssh-argv");
-    std::fs::write(
-        bin.join("ssh"),
-        format!(
-            "#!/bin/sh\necho \"$@\" > \"{}\"\nexit 255\n",
-            said.display()
-        ),
-    )
-    .unwrap();
-    make_executable(&bin.join("ssh"));
-    // A global config of the participant's with a helper that would hand over a login.
-    let global = rig.root.join("participants-gitconfig");
-    std::fs::write(
-        &global,
-        "[credential]\n\thelper = \"!f() { echo username=you; echo password=leaked; }; f\"\n",
-    )
-    .unwrap();
-    let git = |args: &[&str], input: &str| {
-        let mut child = Command::new("git")
-            .arg("-C")
-            .arg(&dest)
-            .args(args)
-            .env_clear()
-            .env(
-                "PATH",
-                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
-            )
-            .env("HOME", rig.root.join("empty-home"))
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", &global)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-        child.wait_with_output().unwrap()
-    };
-    let listed = git(&["ls-remote", "git@github.com:you/elsewhere.git"], "");
-    assert!(!listed.status.success(), "{listed:?}");
-    let argv = std::fs::read_to_string(&said).unwrap();
-    assert!(
-        argv.starts_with(
-            "-F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes"
-        ),
-        "{argv}"
-    );
-    let filled = git(
-        &["credential", "fill"],
-        "protocol=https\nhost=github.com\n\n",
-    );
-    let out = String::from_utf8_lossy(&filled.stdout);
-    assert!(!out.contains("leaked"), "a helper answered: {out}");
-}
-
 /// A clone an older version made names `goalcup git-credential` in its own configuration and
 /// pushes with the token in `github.json`. Those clones keep working: the hidden command still
 /// answers for that repository, from the stored file, and a helper of the participant's is
@@ -901,7 +516,12 @@ fn an_old_clone_with_the_goalcup_helper_still_gets_its_token() {
     let dest = rig.root.join("old-clone");
     let cfg = rig.root.join("it's my cfg");
     setup().store(&cfg).unwrap();
-    clone_repo(rig.git.as_os_str(), &rig.source, REPO_URL, &dest).unwrap();
+    let init = Command::new(&rig.git)
+        .args(["init", "--quiet"])
+        .arg(&dest)
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "{init:?}");
     // What versions before D69 wrote into each clone.
     let goalcup = env!("CARGO_BIN_EXE_goalcup");
     let helper = format!(

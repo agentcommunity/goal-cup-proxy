@@ -70,9 +70,8 @@ pub struct FinalCommit {
     pub repo_head: Option<String>,
 }
 
-/// What the stand-in does with a device request the moment it is created. The Worker also has
-/// a pending state, between creation and the member's decision; the stand-in has none, so a
-/// test sees the decision on its first poll.
+/// What the stand-in does with a device request the moment it is created. Every decision but
+/// `Hold` is seen on the first poll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Approval {
     /// The test member approves it: the first poll returns the credential.
@@ -81,6 +80,9 @@ pub enum Approval {
     Deny,
     /// It ran out of time: every poll is `410`.
     Expire,
+    /// The member has not decided yet: every poll is `202` pending until the test sets another
+    /// approval, which the next poll then follows.
+    Hold,
 }
 
 /// What `POST /v1/device` asked for, as a test can see it afterwards.

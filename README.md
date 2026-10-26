@@ -78,9 +78,9 @@ most runs have one, and `goalcup continue` starts the next. Every flag is in `go
 
 | Command | What it does |
 |---|---|
-| `goalcup setup [--harness <ID>] [--work-root <PATH>] [--json] [--dev]` | Check the four readiness steps. Never starts a run. `goalcup prep` is its old name. |
+| `goalcup setup [--harness <ID>] [--json] [--dev]` | Check the four readiness steps. Never starts a run. `goalcup prep` is its old name. |
 | `goalcup login [--server <URL>]` | Connect this computer to your Goal Cup account (once; `setup` does it for you). |
-| `goalcup start --harness <ID> [--practice \| --test] [--repo <NAME>] [--dev]` | Start a run: open the harness here and record it. A real run first asks for its own new GitHub repository. `--test` is for organizers. |
+| `goalcup start --harness <ID> [--practice \| --test] [--repo <OWNER/NAME>] [--dev]` | Start a run in your project folder (empty but for `.gitignore` and `.env*` files): open the harness there and record it. A real run first asks for its own new GitHub repository. `--test` is for organizers. |
 | `goalcup status [<part-id>] [--json]` | Show the run: recording state, time left, upload, problems, `Next:`. `--json` prints the signed status document, with this machine's `local` facts and a `problems` array (the `PROBLEM:` lines' sentences, left out when there are none) beside it. |
 | `goalcup time-left` | Show how much time the run has left. The agent may run it too. |
 | `goalcup mcp` | Serve the time left as an MCP tool (`time_left`) for the agent. The harness starts it; add it as in [HARNESS-SETUP](docs/HARNESS-SETUP.md#add-the-goal-cup-time-left-tool). |

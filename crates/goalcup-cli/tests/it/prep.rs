@@ -12,7 +12,7 @@ use crate::common::m2_cli_support::{
     CHAT_CONFIGURE_ID, CHAT_HOME_ID, CHAT_ID, FAKE_ID, Launcher, OnPty, Rig,
 };
 use crate::common::upload_server::{ServerOptions, UploadServer};
-use goalcup_cli::prep_file::{PrepFile, prep_path, read_prep_lenient};
+use goalcup_cli::prep_file::{PrepFile, read_prep_lenient};
 use goalcup_protocol::control::DaemonClient;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -103,19 +103,6 @@ fn press_enter(on_pty: &OnPty) {
     on_pty.type_line("");
 }
 
-/// The keys file an earlier setup made, so a setup on a terminal does not ask about it.
-fn keys_made_before(rig: &Rig) {
-    let work = rig.root.join("home/goalcup-work");
-    std::fs::create_dir_all(&work).unwrap();
-    std::fs::write(work.join(".env.local"), "").unwrap();
-}
-
-/// Answer the question setup asks once it has made the keys file: do not open it.
-fn keep_keys_closed(on_pty: &OnPty) {
-    on_pty.wait_shown("Open it now? [y/N]");
-    on_pty.type_line("");
-}
-
 fn prep_file(cfg: &Path) -> PrepFile {
     read_prep_lenient(cfg)
 }
@@ -197,42 +184,6 @@ fn setup_reports_each_step_and_exits_1_until_all_are_ok() {
     // And what was settled is what a run on a server reads.
     let kept = goalcup_cli::prep_file::read_prep(&rig.cfg).unwrap();
     assert_eq!(kept.harness, CHAT_ID);
-    assert!(
-        Path::new(&kept.work_root).is_absolute() && kept.work_root.ends_with("home/goalcup-work"),
-        "{kept:?}"
-    );
-}
-
-/// Setup makes the keys file in the work folder once (empty but for a comment, mode 0600), says
-/// where it is, never replaces it, and never reads it.
-#[test]
-fn setup_makes_the_keys_file_once_for_the_owner_alone_and_never_replaces_it() {
-    use std::os::unix::fs::PermissionsExt;
-    let rig = Rig::chat_only();
-    let facts = facts(&[]);
-    let keys = rig.root.join("home/goalcup-work/.env.local");
-    let (_, text) = prep(&rig, &[], &facts);
-    assert!(
-        text.contains(&format!(
-            "Keys for your agent (optional): {}",
-            keys.display()
-        )),
-        "{text}"
-    );
-    let made = std::fs::read_to_string(&keys).unwrap();
-    assert!(
-        made.lines().count() == 3 && made.lines().all(|l| l.starts_with('#')),
-        "{made}"
-    );
-    let mode = std::fs::metadata(&keys).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o600);
-    // The participant's own keys stay as they wrote them.
-    std::fs::write(&keys, "SOME_API_KEY=value\n").unwrap();
-    prep(&rig, &[], &facts);
-    assert_eq!(
-        std::fs::read_to_string(&keys).unwrap(),
-        "SOME_API_KEY=value\n"
-    );
 }
 
 #[test]
@@ -253,7 +204,6 @@ fn setup_logs_in_inline_when_this_computer_is_not_connected() {
     press_enter(&on_pty);
     on_pty.wait_shown("tui: ready");
     on_pty.type_line("/exit");
-    keep_keys_closed(&on_pty);
     on_pty.wait();
     let shown = on_pty.shown();
     assert!(shown.contains("not connected to Goal Cup yet"), "{shown}");
@@ -319,7 +269,6 @@ fn a_second_setup_skips_passed_steps() {
     press_enter(&first);
     first.wait_shown("tui: ready");
     first.type_line("/exit");
-    keep_keys_closed(&first);
     let status = first.wait();
     let shown = first.shown();
     assert_eq!(status.code(), Some(0), "{shown}");
@@ -337,8 +286,7 @@ fn a_second_setup_skips_passed_steps() {
     assert!(rig.chat_home().is_dir(), "the harness home was made");
     assert!(prep_file(&rig.cfg).home_ready);
 
-    // The second setup, on a terminal again, does not open the harness again, and does not ask
-    // about the keys file it made before.
+    // The second setup, on a terminal again, does not open the harness again.
     std::fs::remove_file(rig.out.join("tui.pid")).unwrap();
     std::fs::remove_file(rig.out.join("tui.ready")).unwrap();
     let mut second = OnPty::spawn(prep_command(&rig, &[], &facts), None);
@@ -350,7 +298,6 @@ fn a_second_setup_skips_passed_steps() {
         !shown.contains("tui: ready"),
         "the harness was opened again:\n{shown}"
     );
-    assert!(!shown.contains("Open it now?"), "{shown}");
     assert!(
         !rig.out.join("tui.pid").exists(),
         "the harness started again"
@@ -376,7 +323,6 @@ fn setup_waits_for_enter_before_it_opens_the_harness() {
     on_pty.type_line("");
     on_pty.wait_shown("tui: ready");
     on_pty.type_line("/exit");
-    keep_keys_closed(&on_pty);
     on_pty.wait();
     assert!(prep_file(&rig.cfg).home_ready);
 }
@@ -392,7 +338,6 @@ fn setup_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
     // Ctrl-D at the start of a line: the input ends with no Enter. Only that one byte is
     // written, so nothing is left in the terminal's queue for the question that follows.
     on_pty.type_bytes("\u{4}");
-    keep_keys_closed(&on_pty);
     on_pty.wait();
     let shown = on_pty.shown();
     // The terminal echoes the typed Ctrl-D (`^D`, then backspaces on macOS) and no newline.
@@ -427,107 +372,9 @@ fn setup_does_not_open_the_harness_when_the_input_ends_at_the_pause() {
 }
 
 #[test]
-fn prep_refuses_a_work_folder_inside_a_git_repository_and_names_the_fix() {
-    let rig = Rig::chat_only();
-    let facts = facts(&[]);
-    log_in(&rig, "http://127.0.0.1:1");
-    let repo = rig.root.join("some-repo");
-    std::fs::create_dir_all(repo.join(".git")).unwrap();
-    let inside = repo.join("work");
-
-    let (code, text) = prep(&rig, &["--work-root", inside.to_str().unwrap()], &facts);
-    assert_eq!(code, 1, "{text}");
-    let machine = line(&text, "machine");
-    assert!(
-        machine.starts_with("[fail] machine:")
-            && machine.contains(&inside.display().to_string())
-            && machine.contains(&repo.display().to_string())
-            && machine.contains("goalcup setup --work-root ~/goalcup-work"),
-        "{text}"
-    );
-    // A refused folder is not kept, so a later `goalcup start` cannot use it.
-    assert!(prep_file(&rig.cfg).work_root.is_empty());
-
-    // A `.git` file (a linked worktree) counts too, and a folder outside any repository passes.
-    let linked = rig.root.join("linked");
-    std::fs::create_dir_all(&linked).unwrap();
-    std::fs::write(linked.join(".git"), "gitdir: /elsewhere\n").unwrap();
-    let (_, text) = prep(
-        &rig,
-        &["--work-root", linked.join("w").to_str().unwrap()],
-        &facts,
-    );
-    assert!(line(&text, "machine").starts_with("[fail]"), "{text}");
-    let outside = rig.root.join("outside/work");
-    let (_, text) = prep(&rig, &["--work-root", outside.to_str().unwrap()], &facts);
-    assert!(line(&text, "machine").starts_with("[ok]"), "{text}");
-    assert_eq!(prep_file(&rig.cfg).work_root, outside.display().to_string());
-}
-
-#[test]
-fn prep_fails_a_wsl_work_root_on_a_windows_host_filesystem() {
-    let rig = Rig::chat_only();
-    // The filesystem is judged by its type, not by where it is mounted: a Windows drive mounted
-    // at an odd place is refused, and a Linux mount under `/mnt/c` is not.
-    let wsl = facts(&[
-        "wsl=2",
-        "fs=/odd/place=9p",
-        "fs=/mnt/c/linux=ext4",
-        "fs=/mnt/c=drvfs",
-    ]);
-    let on_drive = "/odd/place/goalcup-work";
-
-    let (code, text) = prep(&rig, &["--work-root", on_drive], &wsl);
-    assert_eq!(code, 1, "{text}");
-    let machine = line(&text, "machine");
-    assert!(
-        machine.starts_with("[fail] machine:")
-            && machine.contains("work folder /odd/place/goalcup-work")
-            && machine.contains("Windows-host filesystem (9p)"),
-        "{text}"
-    );
-    // A refused folder is not kept for `goalcup start` to find.
-    assert_ne!(prep_file(&rig.cfg).work_root, on_drive);
-
-    let (_, text) = prep(&rig, &["--work-root", "/mnt/c/Users/me/work"], &wsl);
-    assert!(line(&text, "machine").contains("(drvfs)"), "{text}");
-    let (_, text) = prep(&rig, &["--work-root", "/mnt/c/linux/work"], &wsl);
-    assert!(!line(&text, "machine").contains("Windows-host"), "{text}");
-
-    // The Linux home is fine on WSL2; the same folder is fine on a machine that is not WSL.
-    let (_, text) = prep(&rig, &["--work-root", "/home/me/goalcup-work"], &wsl);
-    assert!(!line(&text, "machine").contains("Windows-host"), "{text}");
-    let (_, text) = prep(
-        &rig,
-        &["--work-root", on_drive],
-        &facts(&["wsl=0", "fs=/odd/place=9p"]),
-    );
-    assert!(line(&text, "machine").starts_with("[ok]"), "{text}");
-
-    // On WSL2 the machine cannot be kept awake by the tracker: Windows decides. That alone never
-    // holds the step back; prep says what to set in Windows.
-    let (_, text) = prep(
-        &rig,
-        &["--work-root", "/home/me/goalcup-work"],
-        &facts(&["wsl=2", "awake=no_inhibitor"]),
-    );
-    let machine = line(&text, "machine");
-    assert!(
-        machine.starts_with("[ok] machine:")
-            && machine.contains("Windows decides")
-            && machine.contains("set sleep to Never"),
-        "{text}"
-    );
-}
-
-#[test]
 fn prep_on_wsl2_the_machine_step_is_ok_without_a_sleep_lock() {
     let rig = Rig::chat_only();
-    let (_, text) = prep(
-        &rig,
-        &["--work-root", "/home/me/goalcup-work"],
-        &facts(&["wsl=2", "awake=no_inhibitor"]),
-    );
+    let (_, text) = prep(&rig, &[], &facts(&["wsl=2", "awake=no_inhibitor"]));
     let machine = line(&text, "machine");
     assert!(
         machine.starts_with("[ok] machine:")
@@ -537,7 +384,7 @@ fn prep_on_wsl2_the_machine_step_is_ok_without_a_sleep_lock() {
     // On battery the step still waits for the plug, and the sleep sentence is still said.
     let (_, text) = prep(
         &rig,
-        &["--work-root", "/home/me/goalcup-work"],
+        &[],
         &facts(&["wsl=2", "awake=no_inhibitor", "ac=battery"]),
     );
     let machine = line(&text, "machine");
@@ -552,11 +399,10 @@ fn prep_on_wsl2_the_machine_step_is_ok_without_a_sleep_lock() {
 #[test]
 fn prep_fails_wsl_artifact_root_and_config_folder_on_a_windows_host_filesystem() {
     let rig = Rig::chat_only();
-    let work = "/home/me/goalcup-work";
     let artifacts = format!("{}-artifacts", rig.cfg.display());
 
     let on_artifacts = facts(&["wsl=2", &format!("fs={artifacts}=9p")]);
-    let (code, text) = prep(&rig, &["--work-root", work], &on_artifacts);
+    let (code, text) = prep(&rig, &[], &on_artifacts);
     assert_eq!(code, 1, "{text}");
     let machine = line(&text, "machine");
     assert!(
@@ -565,11 +411,9 @@ fn prep_fails_wsl_artifact_root_and_config_folder_on_a_windows_host_filesystem()
             && !machine.contains("config folder"),
         "{text}"
     );
-    // The work folder is fine, and is kept.
-    assert_eq!(prep_file(&rig.cfg).work_root, work);
 
     let on_config = facts(&["wsl=2", &format!("fs={}=virtiofs", rig.cfg.display())]);
-    let (_, text) = prep(&rig, &["--work-root", work], &on_config);
+    let (_, text) = prep(&rig, &[], &on_config);
     let machine = line(&text, "machine");
     assert!(
         machine.contains("config folder") && machine.contains("(virtiofs)"),
@@ -577,57 +421,28 @@ fn prep_fails_wsl_artifact_root_and_config_folder_on_a_windows_host_filesystem()
     );
 }
 
-/// A run keeps its records on APFS, ext4 or XFS only: prep says so for the work folder, the
-/// artifact root and the configuration folder, with the way to move each, on any machine.
+/// A run keeps its records on APFS, ext4 or XFS only: prep says so for the artifact root and the
+/// configuration folder, with the way to move them, on any machine.
 #[test]
 fn prep_fails_a_folder_on_an_unsupported_filesystem_and_says_how_to_move_it() {
     let rig = Rig::chat_only();
-    let work = rig.root.join("btrfs").join("goalcup-work");
-    let on_btrfs = facts(&[&format!("fs={}=btrfs", rig.root.join("btrfs").display())]);
-    let (code, text) = prep(&rig, &["--work-root", work.to_str().unwrap()], &on_btrfs);
+    let on_overlay = facts(&[&format!("fs={}=overlay", rig.cfg.display())]);
+    let (code, text) = prep(&rig, &[], &on_overlay);
     assert_eq!(code, 1, "{text}");
     let machine = line(&text, "machine");
     assert!(
         machine.starts_with("[fail] machine:")
-            && machine.contains(&format!("work folder {}", work.display()))
-            && machine.contains("btrfs")
-            && machine.contains("ext4, XFS or APFS")
-            && machine.contains("goalcup setup --work-root"),
-        "{text}"
-    );
-    // A refused work folder is not kept for `goalcup start` to find.
-    assert_ne!(prep_file(&rig.cfg).work_root, work.display().to_string());
-
-    let elsewhere = rig.root.join("goalcup-work");
-    let on_overlay = facts(&[&format!("fs={}=overlay", rig.cfg.display())]);
-    let (code, text) = prep(
-        &rig,
-        &["--work-root", elsewhere.to_str().unwrap()],
-        &on_overlay,
-    );
-    assert_eq!(code, 1, "{text}");
-    let machine = line(&text, "machine");
-    assert!(
-        machine.contains("config folder")
+            && machine.contains("config folder")
             && machine.contains("overlayfs")
-            && machine.contains("GOALCUP_CONFIG_DIR")
-            && !machine.contains("work folder"),
+            && machine.contains("GOALCUP_CONFIG_DIR"),
         "{text}"
-    );
-    assert_eq!(
-        prep_file(&rig.cfg).work_root,
-        elsewhere.display().to_string()
     );
 }
 
 #[test]
 fn prep_fails_wsl1_in_one_sentence() {
     let rig = Rig::chat_only();
-    let (code, text) = prep(
-        &rig,
-        &["--work-root", "/home/me/goalcup-work"],
-        &facts(&["wsl=1"]),
-    );
+    let (code, text) = prep(&rig, &[], &facts(&["wsl=1"]));
     assert_eq!(code, 1, "{text}");
     let machine = line(&text, "machine");
     assert!(
@@ -635,11 +450,6 @@ fn prep_fails_wsl1_in_one_sentence() {
             && machine.contains("WSL1 cannot run Goal Cup: convert this distribution to WSL2 with")
             && machine.contains("`wsl --set-version <distro> 2`"),
         "{text}"
-    );
-    assert_ne!(
-        prep_file(&rig.cfg).work_root,
-        "/home/me/goalcup-work",
-        "a work folder is not kept on WSL1"
     );
 }
 
@@ -667,7 +477,6 @@ fn prep_does_not_start_a_run() {
     assert!(!goalcup_cli::entries::entries_dir(&rig.cfg).exists());
     assert_eq!(rig.client().health().unwrap().entries_open, 0);
     assert!(rig.run_dirs().is_empty());
-    assert!(rig.clones().is_empty());
     let calls = server.calls();
     assert!(
         !calls.iter().any(|c| c.starts_with("POST /v1/runs")),
@@ -738,20 +547,6 @@ fn prep_json_marks_the_human_steps() {
     let steps = json(shown.trim());
     assert_eq!(steps[2]["state"], "todo");
     assert_eq!(steps[2]["human"], true);
-}
-
-#[test]
-fn prep_refuses_what_the_flags_get_wrong_before_it_writes_anything() {
-    let rig = Rig::chat_only();
-    let facts = facts(&[]);
-    let args = ["--work-root", "relative/goalcup-work"];
-    let out = prep_command(&rig, &args, &facts)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(1), "{args:?}");
-    assert!(out.stdout.is_empty(), "{args:?}");
-    assert!(!prep_path(&rig.cfg).exists(), "{args:?} wrote a prep file");
 }
 
 #[test]
@@ -911,7 +706,6 @@ fn all_but_the_harness(rig: &Rig) {
 fn prep_opens_a_harness_that_needs_its_interpreter_with_the_participants_environment() {
     let rig = Rig::chat_only();
     let facts = facts(&[]);
-    keys_made_before(&rig);
     all_but_the_harness(&rig);
     let path = npm_style_harness(&rig, true);
 
@@ -1114,7 +908,6 @@ const CHAT_START_ENV: [(&str, &str); 2] = [
 fn prep_and_start_put_the_connectors_settings_into_its_home() {
     let rig = Rig::chat_with_configure();
     let facts = facts(&[]);
-    keys_made_before(&rig);
     all_but_the_harness(&rig);
     let home = rig.cfg.join("capture-homes").join(CHAT_CONFIGURE_ID);
 
@@ -1188,7 +981,6 @@ fn prep_and_start_put_the_connectors_settings_into_its_home() {
 fn a_failing_configure_command_keeps_the_home_not_ready_and_launches_nothing() {
     let rig = Rig::chat_with_configure();
     let facts = facts(&[]);
-    keys_made_before(&rig);
     all_but_the_harness(&rig);
     std::fs::write(rig.out.join("tui.configure.fail"), "").unwrap();
 
@@ -1270,7 +1062,6 @@ fn prep_refuses_a_home_another_process_holds_and_opens_nothing() {
     ] {
         let rig = Rig::chat_with_shared_run_home();
         all_but_the_harness(&rig);
-        keys_made_before(&rig);
         let _held = hold_home_lock(&rig, id, holder);
 
         let mut on_pty = OnPty::spawn(prep_command(&rig, &["--harness", id], &facts), None);
@@ -1609,7 +1400,6 @@ fn prep_keeps_the_home_not_ready_while_the_model_service_cannot_be_recorded() {
     let from = crate::model_host_from::reads_model_host(&rig, CHAT_ID);
     let home = rig.cfg.join("capture-homes").join(CHAT_ID);
     let facts = facts(&[]);
-    keys_made_before(&rig);
     all_but_the_harness(&rig);
     let set = |url: &str| crate::common::support::write_model_host_config(&home, &from, url);
     let open_and_exit = |fix: Option<&str>| {

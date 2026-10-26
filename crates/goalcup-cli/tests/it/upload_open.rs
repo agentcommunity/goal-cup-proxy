@@ -41,7 +41,8 @@ fn only_a_transient_failure_is_retried() {
 
 /// `goalcup start` for a run on the server, against the stand-in (which approves at once) and a
 /// real in-process daemon: the approval comes first, the credential is the run's own and stays
-/// out of the harness, the workspace is a clone, and a start that cannot begin leaves nothing.
+/// out of the harness, the workspace is the project folder, and a start that cannot begin leaves
+/// nothing.
 #[cfg(unix)]
 mod server_runs {
     use crate::common::m2_cli_support::{FAKE_GITHUB_TOKEN, Hooked, PREP_REPO, Rig};
@@ -110,26 +111,6 @@ mod server_runs {
             out,
             workspace,
         }
-    }
-
-    /// The clone's own `credential.https://github.com.helper` values, in order.
-    fn helper_lines(workspace: &Path) -> Vec<String> {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(workspace)
-            .args([
-                "config",
-                "--local",
-                "--get-all",
-                "credential.https://github.com.helper",
-            ])
-            .output()
-            .unwrap();
-        String::from_utf8(out.stdout)
-            .unwrap()
-            .lines()
-            .map(str::to_string)
-            .collect()
     }
 
     /// Every file below `dir`, with its bytes.
@@ -240,9 +221,6 @@ mod server_runs {
         assert_eq!(record.entries[0].entry_id, ended.outcome.entry_id);
         assert_eq!(record.workspace, ended.workspace);
         assert_eq!(server.mode(run_id).as_deref(), Some("competition"));
-        // A competition run's clone names no credential helper: it pushes with the
-        // participant's own git login (D69).
-        assert!(helper_lines(&ended.workspace).is_empty());
 
         // The machine's facts were sent with the open; a name or a serial number was not.
         let machine = server.machine(run_id).expect("machine facts were sent");
@@ -283,31 +261,18 @@ mod server_runs {
         );
         assert_eq!(server.mode(&run_id).as_deref(), Some("practice"));
         assert!(goalcup_cli::run::read(&rig.cfg, &run_id).unwrap().practice);
-        // A practice run has no GitHub repository (D69): its workspace is a new local git
-        // folder with no remote and no commit, cloned from nothing, and the server is told the
-        // organisers' practice placeholder.
-        let remotes = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&ended.workspace)
-            .arg("remote")
-            .output()
-            .unwrap();
-        assert!(remotes.status.success(), "{remotes:?}");
-        assert!(remotes.stdout.is_empty(), "{remotes:?}");
-        assert!(!goalcup_cli::account::github::clone_has_commits(
-            &ended.workspace
-        ));
+        // A practice run has no GitHub repository (D69): the server is told the organisers'
+        // practice placeholder.
         assert_eq!(
             server.repo_url(&run_id).as_deref(),
             Some(goalcup_cli::commands::start::PRACTICE_REPO_URL)
         );
     }
 
-    /// `--test` asks for a test approval; the run is a competition run in every other way: its
-    /// workspace is a clone of its repository (not the practice run's local folder), its
-    /// deadline is the server's, and `run.json` says it is a test run.
+    /// `--test` asks for a test approval; the run is a competition run in every other way: it
+    /// names its repository, its deadline is the server's, and `run.json` says it is a test run.
     #[test]
-    fn a_test_start_asks_for_test_mode_and_clones_its_repository() {
+    fn a_test_start_asks_for_test_mode() {
         let rig = Rig::new();
         let server = server(&rig);
         rig.prepare_for(&server.url());
@@ -339,19 +304,22 @@ mod server_runs {
             "{}",
             ended.out
         );
-        assert!(!goalcup_cli::account::github::clone_has_commits(
-            &ended.workspace
-        ));
-        assert!(ended.workspace.join(".git/info/exclude").is_file());
     }
 
-    /// Nothing of the credential, the GitHub token or the device code reaches the harness: not
-    /// its environment, not its arguments; not the trace; not what `start` printed.
+    /// Nothing of the credential, the GitHub token in the project folder's `.env.local` or the
+    /// device code reaches the harness: not its environment, not its arguments; not the trace
+    /// that is uploaded; not what `start` printed.
     #[test]
     fn the_credential_never_reaches_the_harness() {
         let rig = Rig::new();
         let server = server(&rig);
         rig.prepare_for(&server.url());
+        std::fs::write(
+            rig.run_folder().join(".env.local"),
+            format!("GH_TOKEN={FAKE_GITHUB_TOKEN}\n"),
+        )
+        .unwrap();
+        std::fs::write(rig.run_folder().join(".gitignore"), ".env*\n").unwrap();
         let ended = run_to_end(&rig, false);
         let run_id = server.run_ids()[0].clone();
         let secret = saved_secret(&rig.cfg, &run_id);
@@ -397,66 +365,112 @@ mod server_runs {
             ended.out
         );
         assert!(!ended.out.contains(&secret), "{}", ended.out);
+    }
 
-        // Nor is it in the clone the harness works in.
-        for (path, bytes) in files_below(&ended.workspace.join(".git")) {
-            assert!(
-                !contains(&bytes, &secret) && !contains(&bytes, FAKE_GITHUB_TOKEN),
-                "{} holds a secret",
-                path.display()
+    /// A run on the server, real or practice, works in the folder `goalcup start` was run from,
+    /// with the participant's starting kit in it (`.gitignore`, `.env*` files): the harness
+    /// opens there, and the run's own folder, with the harness's `HOME`, is made in
+    /// `<cfg>-runs`, outside the project. Goal Cup runs no git there and leaves the kit as it
+    /// was.
+    #[test]
+    fn a_run_works_in_the_project_folder_with_its_kit() {
+        for practice in [false, true] {
+            let rig = Rig::new();
+            let server = server(&rig);
+            rig.prepare_for(&server.url());
+            let project = rig.run_folder();
+            let kit = [
+                (".gitignore", ".env*\n"),
+                (".env", "A=1\n"),
+                (".env.local", "GH_TOKEN=x\n"),
+            ];
+            for (name, text) in kit {
+                std::fs::write(project.join(name), text).unwrap();
+            }
+            rig.tell("steps.sh", "pwd -P > \"$out/cwd\"\n");
+            let ended = run_to_end(&rig, practice);
+            assert_eq!(server.run_ids().len(), 1, "{practice}: {}", ended.out);
+            assert_eq!(ended.workspace, project, "{practice}");
+            assert_eq!(
+                rig.harness_file("cwd").unwrap().trim(),
+                project.display().to_string(),
+                "{practice}: the harness opens in the project folder"
             );
+            let env = rig.harness_file("env").unwrap();
+            let home = env
+                .lines()
+                .find_map(|l| l.strip_prefix("HOME="))
+                .expect("the harness has a HOME");
+            assert!(
+                Path::new(home).starts_with(goalcup_cli::commands::start::run_folders(&rig.cfg)),
+                "{practice}: {home}"
+            );
+            assert!(!project.join(".git").exists(), "{practice}");
+            for (name, text) in kit {
+                assert_eq!(
+                    std::fs::read_to_string(project.join(name)).unwrap(),
+                    text,
+                    "{practice}"
+                );
+            }
         }
     }
 
-    /// The workspace is a clone of the participant's repository in their work folder, made with
-    /// their own git (D69): its remote is the plain address, its configuration names no
-    /// credential helper and holds no key, and `.env*` is on its own ignore list.
+    /// A new run on the server starts in a folder that holds nothing but the starting kit: one
+    /// with anything else in it (a README, a `.git`, a folder named like a key file) is refused
+    /// before the approval is asked for, and nothing is created.
     #[test]
-    fn the_workspace_is_a_clone_with_no_helper_that_never_commits_env_files() {
+    fn a_start_in_a_folder_that_is_not_empty_is_refused_before_the_approval() {
+        let leftovers: [(&str, bool); 3] = [("README.md", false), (".git", true), (".env.d", true)];
+        for (name, is_dir) in leftovers {
+            let rig = Rig::new();
+            let server = server(&rig);
+            rig.prepare_for(&server.url());
+            let project = rig.run_folder();
+            std::fs::write(project.join(".env.local"), "GH_TOKEN=x\n").unwrap();
+            if is_dir {
+                std::fs::create_dir(project.join(name)).unwrap();
+            } else {
+                std::fs::write(project.join(name), "hi\n").unwrap();
+            }
+            let http = rig.client();
+            let client = Hooked::new(&http, &rig);
+            let opts = rig.options(&project, RESERVE);
+            let (result, out) =
+                std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+            let refused = result.expect_err(name);
+            assert_eq!(refused.exit_code(), 1, "{name}: {refused}");
+            assert!(refused.to_string().contains(name), "{name}: {refused}");
+            assert!(server.device_requests().is_empty(), "{name}: {out}");
+            assert!(server.calls().is_empty(), "{name}: {:?}", server.calls());
+            assert!(client.book().creates.is_empty(), "{name}");
+            assert!(rig.run_dirs().is_empty(), "{name}");
+            assert!(!rig.harness_started(), "{name}");
+        }
+    }
+
+    /// Setup no longer writes a work folder, and one an older setup wrote in `prep.json` is
+    /// ignored: the run starts in the project folder and makes nothing in the old work folder.
+    #[test]
+    fn a_prep_file_with_an_old_work_folder_still_starts() {
         let rig = Rig::new();
         let server = server(&rig);
         rig.prepare_for(&server.url());
+        let old = rig.root.join("goalcup-work");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(
+            goalcup_cli::prep_file::prep_path(&rig.cfg),
+            format!(
+                r#"{{"harness":"{}","work_root":"{}"}}"#,
+                crate::common::m2_cli_support::FAKE_ID,
+                old.display()
+            ),
+        )
+        .unwrap();
         let ended = run_to_end(&rig, false);
-
-        assert_eq!(ended.workspace.parent(), Some(rig.work_root().as_path()));
-        assert!(
-            ended
-                .workspace
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("goalcup-"),
-            "{}",
-            ended.workspace.display()
-        );
-        assert!(ended.workspace.join(".git").is_dir(), "a clone has a .git");
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&ended.workspace)
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "git {args:?}: {out:?}");
-            String::from_utf8(out.stdout).unwrap()
-        };
-        assert_eq!(
-            git(&["config", "--get", "remote.origin.url"]).trim(),
-            format!("{PREP_REPO}.git")
-        );
-        let config = std::fs::read_to_string(ended.workspace.join(".git/config")).unwrap();
-        assert!(!config.contains("gcr_"), "{config}");
-        assert!(!config.contains("credential"), "{config}");
-        assert!(helper_lines(&ended.workspace).is_empty(), "{config}");
-        // A key file beside the work is never committed.
-        std::fs::write(ended.workspace.join(".env.local"), "KEY=value\n").unwrap();
-        std::fs::write(ended.workspace.join(".env"), "KEY=value\n").unwrap();
-        assert_eq!(git(&["status", "--porcelain", "--ignored=no"]).trim(), "");
-        // The run record points at the clone, and the server was told the same workspace.
-        let record = goalcup_cli::run::read(&rig.cfg, &server.run_ids()[0]).unwrap();
-        assert_eq!(record.workspace, ended.workspace);
-        // Nothing else is in the folder beside the goal file but the run's own directory.
-        assert_eq!(rig.clones(), std::slice::from_ref(&ended.workspace));
+        assert_eq!(server.run_ids().len(), 1, "{}", ended.out);
+        assert_eq!(ended.workspace, rig.run_folder());
+        assert_eq!(std::fs::read_dir(&old).unwrap().count(), 0);
     }
 
     /// `goalcup upload <entry>` finds the run's credential from the entry id alone: no login, no
@@ -533,29 +547,15 @@ mod server_runs {
         assert_eq!(refused.exit_code(), 1, "{refused}");
     }
 
-    /// A server run needs `goalcup setup` first: its work folder in `prep.json`. Whatever is
-    /// missing, the refusal is the one sentence, and it comes before the participant is asked to
-    /// approve anything and before anything is created.
+    /// A server run needs `goalcup setup` first: a `prep.json`. Missing or unreadable, the
+    /// refusal is the one sentence, and it comes before the participant is asked to approve
+    /// anything and before anything is created.
     #[test]
     fn start_without_setup_refuses_before_creating_anything() {
         type Break = fn(&Rig);
-        let cases: [(&str, Break); 4] = [
+        let cases: [(&str, Break); 2] = [
             ("no prep.json", |rig| {
                 std::fs::remove_file(goalcup_cli::prep_file::prep_path(&rig.cfg)).unwrap();
-            }),
-            ("no work_root", |rig| {
-                std::fs::write(
-                    goalcup_cli::prep_file::prep_path(&rig.cfg),
-                    format!(r#"{{"harness":"x","repo_url":"{PREP_REPO}"}}"#),
-                )
-                .unwrap();
-            }),
-            ("a relative work_root", |rig| {
-                std::fs::write(
-                    goalcup_cli::prep_file::prep_path(&rig.cfg),
-                    r#"{"harness":"x","work_root":"work"}"#,
-                )
-                .unwrap();
             }),
             ("a prep.json that is not json", |rig| {
                 std::fs::write(goalcup_cli::prep_file::prep_path(&rig.cfg), "{ nope").unwrap();
@@ -585,102 +585,9 @@ mod server_runs {
             assert!(server.calls().is_empty(), "{what}: {:?}", server.calls());
             assert!(client.book().creates.is_empty(), "{what}: {out}");
             assert!(rig.run_dirs().is_empty(), "{what}");
-            assert!(rig.clones().is_empty(), "{what}");
             assert!(!goalcup_cli::run::runs_dir(&rig.cfg).exists(), "{what}");
             assert!(!rig.harness_started(), "{what}");
         }
-    }
-
-    /// A clone that fails ends the start with a sentence and leaves nothing: no run directory,
-    /// no half clone, and no run opened on the server (the clone comes before the open).
-    #[test]
-    fn a_clone_that_fails_leaves_nothing_and_opens_no_run() {
-        let rig = Rig::new();
-        let server = server(&rig);
-        rig.prepare_for(&server.url());
-        // The push test before the approval reaches the stand-in; the clone after it does not.
-        rig.with_env(
-            goalcup_cli::commands::start::TEST_PUSH_REMOTE,
-            &rig.root.join("github-source.git").display().to_string(),
-        );
-        rig.with_env(
-            goalcup_cli::commands::start::TEST_CLONE_SOURCE,
-            &rig.root
-                .join("no-such-repository.git")
-                .display()
-                .to_string(),
-        );
-        let goal = rig.run_folder();
-        let http = rig.client();
-        let client = Hooked::new(&http, &rig);
-        let opts = rig.options(&goal, RESERVE);
-        let (result, out) =
-            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
-        let refused = result.expect_err("the clone did not fail");
-        assert_eq!(refused.exit_code(), 1, "{refused}");
-        let said = refused.to_string();
-        assert!(said.contains("could not clone"), "{said}");
-        assert!(out.contains("what this start made was removed"), "{out}");
-        assert!(!said.contains(FAKE_GITHUB_TOKEN), "{said}");
-        assert!(client.book().creates.is_empty(), "{out}");
-        assert!(rig.run_dirs().is_empty());
-        assert!(rig.clones().is_empty(), "{:?}", rig.clones());
-        assert!(server.run_ids().is_empty(), "no run was opened");
-        assert!(!goalcup_cli::run::runs_dir(&rig.cfg).exists());
-    }
-
-    /// The run may be started from the work folder itself (`~/goalcup`, which holds the clones):
-    /// the run directory and the clone get names of their own, and the harness's home is in the run
-    /// directory, not in the clone the agent works in.
-    #[test]
-    fn a_run_from_the_work_folder_keeps_the_run_directory_out_of_the_clone() {
-        let rig = Rig::new();
-        let server = server(&rig);
-        rig.prepare_for(&server.url());
-        let folder = rig.work_root();
-        let ended = run_to_end_with(&rig, false, &folder);
-        assert_eq!(server.run_ids().len(), 1, "{}", ended.out);
-        assert!(ended.workspace.join(".git").is_dir());
-        let env = rig.harness_file("env").unwrap();
-        let home = env
-            .lines()
-            .find_map(|l| l.strip_prefix("HOME="))
-            .expect("the harness has a HOME");
-        assert!(
-            !Path::new(home).starts_with(&ended.workspace),
-            "the harness home {home} is inside the clone {}",
-            ended.workspace.display()
-        );
-        // Two folders of their own in the work folder: the run directory and the clone.
-        assert_eq!(rig.clones().len(), 2, "{:?}", rig.clones());
-        let run_dir = Path::new(home).parent().unwrap();
-        assert_ne!(run_dir, ended.workspace);
-        assert_eq!(run_dir.parent(), ended.workspace.parent());
-    }
-
-    /// A run started from a folder below the work folder (inside a clone, say) is refused before
-    /// the participant is asked: its run directory would sit inside that clone.
-    #[test]
-    fn a_run_folder_below_the_work_folder_is_refused_before_the_approval() {
-        let rig = Rig::new();
-        let server = server(&rig);
-        rig.prepare_for(&server.url());
-        let below = rig.work_root().join("goalcup-0123456789abcdef");
-        std::fs::create_dir_all(&below).unwrap();
-        let http = rig.client();
-        let client = Hooked::new(&http, &rig);
-        let opts = rig.options(&below, RESERVE);
-        let (result, out) =
-            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
-        let refused = result.expect_err("refused");
-        assert_eq!(refused.exit_code(), 1, "{refused}");
-        assert!(
-            refused.to_string().contains("inside the work folder"),
-            "{refused}"
-        );
-        assert!(server.device_requests().is_empty(), "{out}");
-        assert!(client.book().creates.is_empty());
-        assert_eq!(rig.clones(), [below]);
     }
 
     /// `--practice` is a run on the server: without a login (no `server.json`) it is refused
@@ -788,7 +695,6 @@ mod server_runs {
             assert!(upload.device_requests().is_empty(), "{mode:?}: approval");
             assert!(client.book().creates.is_empty(), "{mode:?}: {out}");
             assert!(rig.run_dirs().is_empty(), "{mode:?}");
-            assert!(rig.clones().is_empty(), "{mode:?}");
             assert!(!rig.harness_started(), "{mode:?}");
         }
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2);
@@ -810,42 +716,6 @@ mod server_runs {
         rig.with_env(goalcup_cli::commands::start::TEST_GITHUB_API, &empty);
         run_to_end(&rig, false);
         assert_eq!(upload.run_ids().len(), 1);
-    }
-
-    /// A bare repository with one commit on one branch, standing in for a GitHub repository
-    /// created with a README, or pushed to a moment ago. Returns its path.
-    fn source_with_a_commit(rig: &Rig) -> std::path::PathBuf {
-        let work = rig.root.join("pushed");
-        let source = rig.root.join("pushed.git");
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args(args)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@example.org")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@example.org")
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "{out:?}");
-        };
-        git(&["init", "--quiet", work.to_str().unwrap()]);
-        git(&[
-            "-C",
-            work.to_str().unwrap(),
-            "commit",
-            "--quiet",
-            "--allow-empty",
-            "-m",
-            "seed",
-        ]);
-        git(&[
-            "clone",
-            "--quiet",
-            "--bare",
-            work.to_str().unwrap(),
-            source.to_str().unwrap(),
-        ]);
-        source
     }
 
     /// The last real run's repository is kept only once a run has opened with it: a start that
@@ -882,80 +752,6 @@ mod server_runs {
             goalcup_cli::prep_file::read_prep_lenient(&rig.cfg).repo_url,
             PREP_REPO
         );
-    }
-
-    /// GitHub's API can say a repository created with a README a moment ago has size 0. The
-    /// agent's git sees its branch, so the start is refused as not empty before the approval:
-    /// nothing is asked of the server, nothing is cloned and no harness starts.
-    #[test]
-    fn a_repository_with_a_branch_is_refused_before_the_approval() {
-        let rig = Rig::new();
-        let server = server(&rig);
-        rig.prepare_for(&server.url());
-        let source = source_with_a_commit(&rig);
-        // The push test and the clone both reach the repository with a branch.
-        rig.with_env(
-            goalcup_cli::commands::start::TEST_CLONE_SOURCE,
-            &source.display().to_string(),
-        );
-        let goal = rig.run_folder();
-        let http = rig.client();
-        let client = Hooked::new(&http, &rig);
-        let opts = rig.options(&goal, RESERVE);
-        let (result, out) =
-            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
-        let refused = result.expect_err("a repository with a branch was used");
-        assert_eq!(refused.exit_code(), 1, "{refused}");
-        let said = refused.to_string();
-        assert!(
-            said.contains("is not empty") && said.contains("--repo"),
-            "{said}"
-        );
-        assert!(server.device_requests().is_empty(), "approval was asked");
-        assert!(server.run_ids().is_empty(), "a run was opened");
-        assert!(client.book().creates.is_empty(), "{out}");
-        assert!(rig.run_dirs().is_empty());
-        assert!(rig.clones().is_empty(), "{:?}", rig.clones());
-        assert!(!rig.harness_started());
-    }
-
-    /// GitHub's size lags a push, so a repository that reads as empty there, and had no branch
-    /// at the push test, may have a commit by the time it is cloned: the clone says so exactly,
-    /// and a competition start is refused once it has cloned, leaving nothing behind and opening
-    /// no run.
-    #[test]
-    fn a_clone_with_a_commit_refuses_a_competition_start() {
-        let rig = Rig::new();
-        let server = server(&rig);
-        rig.prepare_for(&server.url());
-        let source = source_with_a_commit(&rig);
-        // The push test, before the approval, still sees an empty repository.
-        rig.with_env(
-            goalcup_cli::commands::start::TEST_PUSH_REMOTE,
-            &rig.root.join("github-source.git").display().to_string(),
-        );
-        rig.with_env(
-            goalcup_cli::commands::start::TEST_CLONE_SOURCE,
-            &source.display().to_string(),
-        );
-        let goal = rig.run_folder();
-        let http = rig.client();
-        let client = Hooked::new(&http, &rig);
-        let opts = rig.options(&goal, RESERVE);
-        let (result, out) =
-            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
-        let refused = result.expect_err("a clone with a commit was used");
-        assert_eq!(refused.exit_code(), 1, "{refused}");
-        let said = refused.to_string();
-        assert!(
-            said.contains("is not empty") && said.contains("--repo"),
-            "{said}"
-        );
-        assert!(out.contains("what this start made was removed"), "{out}");
-        assert!(rig.run_dirs().is_empty());
-        assert!(rig.clones().is_empty(), "{:?}", rig.clones());
-        assert!(server.run_ids().is_empty(), "no run was opened");
-        assert!(!rig.harness_started());
     }
 
     /// A start that fails after the run opened, with the server away so the run cannot be given
@@ -1008,8 +804,9 @@ mod server_runs {
         );
     }
 
-    /// A failure after the approval that is not the clone (here the server refusing the open,
-    /// its start window being shut) ends with the same sentence about what was removed.
+    /// A failure after the approval (here the server refusing the open, its start window being
+    /// shut) ends with the sentence about what was removed, which never includes the project
+    /// folder.
     #[test]
     fn a_refused_open_ends_with_the_cleanup_sentence() {
         let rig = Rig::new();
@@ -1036,7 +833,7 @@ mod server_runs {
         );
         assert!(client.book().creates.is_empty());
         assert!(rig.run_dirs().is_empty());
-        assert!(rig.clones().is_empty(), "{:?}", rig.clones());
+        assert!(goal.is_dir(), "the project folder stays");
         assert!(!goalcup_cli::run::runs_dir(&rig.cfg).exists());
     }
 
@@ -1231,7 +1028,7 @@ mod server_runs {
     }
 
     /// A Ctrl-C while the participant has not yet approved ends the start with one sentence:
-    /// no run directory, no clone, no daemon entry, and no run opened on the server. A real
+    /// no run directory, no daemon entry, and no run opened on the server. A real
     /// SIGINT, which `goalcup start` catches into a process-global flag, so the case runs in a
     /// process of its own (this test binary, re-run on [`CTRL_C_CHILD`] alone). Under plain
     /// `cargo test` every other start in this binary shares the flag: one closing or clearing
@@ -1302,7 +1099,7 @@ mod server_runs {
         assert!(said.contains("Nothing was created"), "{said}");
         assert!(client.book().creates.is_empty(), "{out}");
         assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
-        assert!(rig.clones().is_empty(), "{:?}", rig.clones());
+        assert!(!goalcup_cli::commands::start::run_folders(&rig.cfg).exists());
         assert!(!goalcup_cli::run::runs_dir(&rig.cfg).exists());
         assert!(!rig.harness_started());
         assert_eq!(waiting.asked("POST /v1/runs"), 0, "a run was opened");

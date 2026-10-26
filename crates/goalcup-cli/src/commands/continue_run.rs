@@ -8,10 +8,11 @@
 //! - the run's saved credential (`<cfg>/runs/<run_id>/credential`). There is no browser and no
 //!   approval: a run stays on the machine that started it, and a run with no record or no
 //!   credential here is refused, whoever asks;
-//! - the run's clone as the workspace, the harness started with its `args` followed by its
-//!   `resume_args` when the run has a saved session (a file in one of the connector's native
-//!   stores; otherwise with its `args` alone), and the run's one disk reservation (a reserve
-//!   file is not taken again).
+//! - the folder the run started in as the workspace (the participant's project folder, or the
+//!   clone of a run started before 0.7), the segment's own folder in `<config>-runs`, the harness
+//!   started with its `args` followed by its `resume_args` when the run has a saved session (a
+//!   file in one of the connector's native stores; otherwise with its `args` alone), and the
+//!   run's one disk reservation (a reserve file is not taken again).
 //!
 //! In this order, each step settled before the next: the run and its credential are found; every
 //! refusal that needs no server is made (the connector is a chat-mode one, the terminal is
@@ -30,7 +31,6 @@ use crate::CliError;
 use crate::commands::say;
 use crate::commands::start::{
     Continuing, SleepLockFn, StartOptions, check_run_folders, continue_preflight, continue_segment,
-    run_folder_for_continue,
 };
 use crate::connector::HarnessConnector;
 use crate::entries::{EntryRecord, read_entry};
@@ -47,15 +47,12 @@ use crate::upload::uploader::{
 use goalcup_protocol::control::{ControlError, DaemonClient};
 use goalcup_protocol::process::termination_bound;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// What one `goalcup continue` was asked to do.
 pub struct ContinueOptions {
     /// The run to continue; `None` is the run most recently started on this machine.
     pub run: Option<String>,
-    /// Where the segment's own folder is made: the directory `goalcup continue` was run from,
-    /// which `main.rs` reads. `None` reads this process's current directory.
-    pub run_folder: Option<PathBuf>,
     /// The sizes of the run's disk reservation and how often it is watched
     /// ([`DiskPolicy::default`] in every shipped build).
     pub disk: DiskPolicy,
@@ -145,15 +142,15 @@ pub fn continue_with(
     let previous_entry = read_entry(cfg, &previous.entry_id)?;
     let connector =
         crate::connector::load_harness(connectors, &record.connector_id, previous_entry.dev)?;
-    let folder = run_folder_for_continue(opts.run_folder.as_deref(), &record.workspace)?;
     // WSL1 cannot run this, and WSL2 cannot keep a run on a Windows drive: judged here, over every
     // folder the segment writes to, before the home is locked or anything is closed or changed.
-    // A folder on a filesystem a run cannot keep its records on is only warned about.
+    // A folder on a filesystem a run cannot keep its records on is only warned about. The
+    // segment's own folder is made in `<config>-runs`, wherever `goalcup continue` is run from.
     check_run_folders(
         env,
         cfg,
-        &folder,
-        record.workspace.parent(),
+        &crate::home::run_folders(cfg),
+        Some(&record.workspace),
         "Nothing was changed.",
     )?;
 
@@ -266,7 +263,7 @@ pub fn continue_with(
     let start = StartOptions {
         harness: record.connector_id.clone(),
         dev: previous_entry.dev,
-        run_folder: Some(folder),
+        run_folder: None,
         disk: opts.disk,
         native_silence: opts.native_silence,
         mode: record.mode(),

@@ -450,21 +450,25 @@ pub fn validate_shared_capture_home_for_uid(path: &Path, uid: u32) -> Result<(),
     SharedCaptureHome::load(path, uid).map(|_| ())
 }
 
-/// This run's own directory, made in the folder `goalcup start` is run from: `workspace/` (the
-/// daemon makes it), `home/` (the harness's `HOME`) and `ca/` (the recording proxy's CA
-/// certificate).
+/// The folder a run on a server makes its own directory in (its harness `HOME`, the recording
+/// proxy's CA): `<config>-runs`, beside the configuration folder and outside it, as the artifact
+/// root is beside it. Never the participant's project folder, which is the run's workspace.
+pub fn run_folders(cfg: &Path) -> PathBuf {
+    let mut leaf = cfg.file_name().unwrap_or_default().to_os_string();
+    leaf.push("-runs");
+    cfg.with_file_name(leaf)
+}
+
+/// This run's own directory, `goalcup-<16 hex digits>`: `home/` (the harness's `HOME`), `ca/`
+/// (the recording proxy's CA certificate) and, for a run with no server, `workspace/` (the daemon
+/// makes it). A run with no server makes it in the folder `goalcup start` is run from; a run on a
+/// server, in [`run_folders`], and its workspace is the participant's project folder.
 ///
-/// A run on a server has its workspace elsewhere: a clone of the participant's repository in
-/// their work folder, `<work_root>/goalcup-<16 hex digits>`, **a random name of its own**, never
-/// this directory's (the folder it is run from may be the work folder, and the two must not
-/// meet).
 /// It is named before the server has issued the run id (the server and the daemon are told the
 /// path), so the id cannot be in it.
 pub(crate) struct RunDir {
     pub(crate) dir: PathBuf,
     pub(crate) workspace: PathBuf,
-    /// The workspace is outside `dir`, so [`RunDir::remove`] must remove it too.
-    separate_workspace: bool,
     pub(crate) home: PathBuf,
     pub(crate) ca: PathBuf,
 }
@@ -473,9 +477,8 @@ pub(crate) struct RunDir {
 pub(crate) enum WorkspaceAt<'a> {
     /// A folder the daemon makes inside the run directory (a run with no server).
     InRunDir,
-    /// A fresh clone, under a random name of its own, in this work folder.
-    Clone(&'a Path),
-    /// A clone that is there already: a continued run's. It is not this directory's to remove.
+    /// A folder that is there already: a run on a server's project folder, new or continued. It
+    /// is never this directory's to remove.
     Existing(&'a Path),
 }
 
@@ -501,17 +504,12 @@ impl RunDir {
         let name = format!("goalcup-{:016x}", rand::random::<u64>());
         let dir = beside.join(&name);
         private_dir(&dir, false)?;
-        let (workspace, separate_workspace) = match workspace_at {
-            WorkspaceAt::Clone(root) => (
-                root.join(format!("goalcup-{:016x}", rand::random::<u64>())),
-                true,
-            ),
-            WorkspaceAt::Existing(workspace) => (workspace.to_path_buf(), false),
-            WorkspaceAt::InRunDir => (dir.join("workspace"), false),
+        let workspace = match workspace_at {
+            WorkspaceAt::Existing(workspace) => workspace.to_path_buf(),
+            WorkspaceAt::InRunDir => dir.join("workspace"),
         };
         let run = RunDir {
             workspace,
-            separate_workspace,
             // Outside `dir`, so `remove` never touches it.
             home: shared_home.map_or_else(|| dir.join("home"), Path::to_path_buf),
             ca: dir.join("ca"),
@@ -545,22 +543,13 @@ impl RunDir {
         Ok(run)
     }
 
-    /// Only ever before the spawn, when nothing but this command has written here. A clone
-    /// outside the directory goes with it (and a failure to remove either is the error).
+    /// Only ever before the spawn, when nothing but this command has written here.
     ///
-    /// A continued run's workspace ([`WorkspaceAt::Existing`]) is the run's clone, with the
-    /// participant's agent's work in it, and is never this directory's to remove: only the
-    /// segment's own folder goes.
+    /// A project folder ([`WorkspaceAt::Existing`]) is the participant's, with their starting
+    /// kit and their agent's work in it, and is never this directory's to remove: only the
+    /// run's own folder goes.
     pub(crate) fn remove(&self) -> std::io::Result<()> {
-        let clone = if self.separate_workspace {
-            match std::fs::remove_dir_all(&self.workspace) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
-                _ => Ok(()),
-            }
-        } else {
-            Ok(())
-        };
-        std::fs::remove_dir_all(&self.dir).and(clone)
+        std::fs::remove_dir_all(&self.dir)
     }
 }
 
@@ -704,18 +693,6 @@ mod tests {
             b"the agent's work"
         );
         assert!(clone.join(".git").is_dir());
-        // A fresh run's own clone is its to remove.
-        let fresh = RunDir::create(
-            &beside,
-            RunHome::Empty,
-            None,
-            &env,
-            WorkspaceAt::Clone(tmp.path()),
-        )
-        .unwrap();
-        std::fs::create_dir_all(&fresh.workspace).unwrap();
-        fresh.remove().unwrap();
-        assert!(!fresh.workspace.exists());
     }
 
     /// A folder with an executable `goalcup-marker` in it, and a run made with that folder first

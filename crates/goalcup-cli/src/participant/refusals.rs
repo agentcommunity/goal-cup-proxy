@@ -44,14 +44,24 @@ pub fn needs_terminal(harness: &str, then: &str) -> String {
     )
 }
 
-/// The run's folder would be made inside the work folder.
-pub fn inside_work_folder(work_root: &Path, here: &Path) -> String {
+/// What the folder checks call the folder `goalcup start` is run from, the run's workspace.
+pub const PROJECT_FOLDER: &str = "project folder";
+
+/// A new run's project folder holds more than the starting kit (`extra`, sorted): the run must
+/// start in a new, empty folder of its own.
+pub fn project_not_empty(project: &Path, extra: &[String]) -> String {
+    let shown: Vec<&str> = extra.iter().take(3).map(String::as_str).collect();
+    let more = if extra.len() > shown.len() {
+        format!(" and {} more", extra.len() - shown.len())
+    } else {
+        String::new()
+    };
     format!(
-        "Run the command from your home folder or another folder of your own, not from inside \
-         the work folder {} (the run's own folder would be made in {}). A run's own folder must \
-         never be inside a clone. Nothing was created.",
-        work_root.display(),
-        here.display()
+        "Make a new, empty folder for this run, put your .gitignore and .env.local in it, and run \
+         goalcup start there. This folder ({}) also holds {}{more}. A run starts in a folder \
+         with nothing but .gitignore and .env files in it. Nothing was created.",
+        project.display(),
+        shown.join(", ")
     )
 }
 
@@ -65,8 +75,7 @@ pub fn cannot_record_model_service(why: &str, id: &str) -> String {
 }
 
 /// The participant's repository has commits, so a competition or test run cannot use it: by
-/// GitHub's size in KB (`kb`), or, once cloned, by the clone's own commits (`None`). `goalcup
-/// prep` says it too.
+/// GitHub's size in KB (`kb`), or `None` when the size is not known.
 pub fn repository_not_empty(repo: &str, kb: Option<u64>) -> String {
     let size = kb.map(|kb| format!(" ({kb} KB)")).unwrap_or_default();
     format!(
@@ -77,11 +86,11 @@ pub fn repository_not_empty(repo: &str, kb: Option<u64>) -> String {
 }
 
 /// A folder of a run is on a filesystem a run cannot keep its records on (`name`): what to do
-/// first, with no full stop at the end. The work folder moves by its flag, the others with the
-/// configuration folder, beside which the records are kept.
+/// first, with no full stop at the end. The project folder is made anew on another volume, the
+/// others move with the configuration folder, beside which the records are kept.
 pub fn unsupported_filesystem(what: &str, path: &str, name: &str) -> String {
-    let how = if what == "work folder" {
-        "for example: goalcup setup --work-root <a folder on that volume>"
+    let how = if what == PROJECT_FOLDER {
+        "for example: make your project folder on that volume and run goalcup start there"
     } else {
         "for example: set GOALCUP_CONFIG_DIR to a folder on that volume, and the records are kept \
          beside it"

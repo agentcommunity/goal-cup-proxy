@@ -1,7 +1,6 @@
-//! A run on the upload server: the prep checks, the participant's approval, the clone, and the
-//! run opened (or its next segment asked for) on the server.
+//! A run on the upload server: the prep checks, the participant's approval, and the run opened
+//! (or its next segment asked for) on the server.
 
-use super::refusals::refuse_goal_folder_inside_work_root;
 use super::{CaptureRun, Continuing, StartOptions};
 use crate::CliError;
 use crate::commands::say;
@@ -12,8 +11,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The upload server this run opens with: `None` with no `goalcup login`. With a server, `goalcup
-/// setup` must have run: its work folder is checked here, before the participant is asked for
-/// anything and before anything is created. A real run's GitHub repository is asked for later,
+/// setup` must have run (`prep.json` is there; a `work_root` an older setup wrote in it is
+/// ignored), and the project folder, the folder `goalcup start` is run from and the run's
+/// workspace, must hold nothing but the participant's starting kit ([`refuse_unready_project`]).
+/// Both are checked here, before the participant is asked for anything and before anything is
+/// created. A real run's GitHub repository is asked for later,
 /// once every other check has passed and before the approval ([`Serving::approved`]). A `--dev`
 /// run is uploaded like any other, and the server checks its connector against no list. Since D70
 /// the server refuses a run that sends `dev: true` in the competition or from a non-admin, but this
@@ -21,7 +23,6 @@ use std::path::{Path, PathBuf};
 pub(super) fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,
-    beside: &Path,
     project: &Path,
     mode: crate::account::device::RunMode,
 ) -> Result<Option<Serving>, CliError> {
@@ -41,25 +42,46 @@ pub(super) fn uploading(
             None => Ok(None),
         };
     };
-    // Each of these is the one sentence `run goalcup setup first`.
-    let prepared = crate::prep_file::read_prep(cfg)?;
-    let work_root = PathBuf::from(&prepared.work_root);
-    if !work_root.is_absolute() {
-        return Err(CliError::Refused(crate::prep_file::PREP_FIRST.to_string()));
-    }
-    refuse_goal_folder_inside_work_root(&work_root, beside)?;
-    #[cfg(feature = "test-support")]
-    let clone_source = env.get(TEST_CLONE_SOURCE).cloned();
-    #[cfg(not(feature = "test-support"))]
-    let clone_source = None;
+    // The one sentence `run goalcup setup first`.
+    crate::prep_file::read_prep(cfg)?;
+    refuse_unready_project(project)?;
     Ok(Some(Serving {
         url: server.url,
         cfg: std::fs::canonicalize(cfg).unwrap_or_else(|_| cfg.to_path_buf()),
         env: env.clone(),
-        work_root,
         project: project.to_path_buf(),
-        clone_source,
     }))
+}
+
+/// Whether `name` is part of the participant's starting kit, which a new run's project folder may
+/// hold: their `.gitignore` and their keys (`.env`, `.env.local`, ...), as files.
+fn is_starting_kit(name: &str, entry: &std::fs::DirEntry) -> bool {
+    (name == ".gitignore" || name == ".env" || name.starts_with(".env."))
+        && entry.file_type().is_ok_and(|t| t.is_file())
+}
+
+/// A new run on a server works in its project folder, which must start empty but for the
+/// starting kit ([`is_starting_kit`]): what the agent finds there is then its own work. Refused
+/// before the approval, so a folder that is not ready costs no approval.
+fn refuse_unready_project(project: &Path) -> Result<(), CliError> {
+    let entries = std::fs::read_dir(project).map_err(|source| CliError::Io {
+        path: project.display().to_string(),
+        source,
+    })?;
+    let mut extra: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            (!is_starting_kit(&name, &entry)).then_some(name)
+        })
+        .collect();
+    if extra.is_empty() {
+        return Ok(());
+    }
+    extra.sort();
+    Err(CliError::Refused(crate::participant::project_not_empty(
+        project, &extra,
+    )))
 }
 
 /// The `repo_url` a practice run is opened with. The server asks every run for a public GitHub
@@ -67,24 +89,10 @@ pub(super) fn uploading(
 /// repository. Nothing is cloned from it or pushed to it.
 pub const PRACTICE_REPO_URL: &str = "https://github.com/agentcommunity/goalcup-matrix-empty";
 
-/// A test build's doors to GitHub for a real run's repository: the base address of a fake GitHub
-/// API (without it the API is not asked), and the participant's login as `<user>` or
-/// `<user>+ssh` (without it there is none; a test never runs the real `ssh` or `gh`).
-#[cfg(feature = "test-support")]
-pub const TEST_GITHUB_LOGIN: &str = "GOALCUP_TEST_GITHUB_LOGIN";
-
-/// A test build's door for the dry-run push before the approval: a local repository to push to,
-/// when it must differ from [`TEST_CLONE_SOURCE`] (a test of a clone that fails after it).
-#[cfg(feature = "test-support")]
-pub const TEST_PUSH_REMOTE: &str = "GOALCUP_TEST_PUSH_REMOTE";
-
 /// What `goalcup start` asks a real run's repository with ([`crate::commands::run_repo`]).
 struct StartDoors<'a> {
-    cfg: &'a Path,
     env: &'a BTreeMap<String, String>,
     open: super::OpenUrlFn,
-    /// A test's local repository: the dry-run push goes there instead of to GitHub.
-    clone_source: Option<&'a str>,
 }
 
 impl crate::commands::run_repo::Doors for StartDoors<'_> {
@@ -92,34 +100,11 @@ impl crate::commands::run_repo::Doors for StartDoors<'_> {
         #[cfg(feature = "test-support")]
         let api = self.env.get(super::TEST_GITHUB_API).cloned();
         #[cfg(not(feature = "test-support"))]
-        let api = Some(crate::account::github::GITHUB_API.to_string());
-        api
-    }
-
-    fn login(&self) -> crate::account::github::GithubLogin {
-        #[cfg(feature = "test-support")]
-        let login = match self.env.get(TEST_GITHUB_LOGIN).filter(|s| !s.is_empty()) {
-            Some(spec) => crate::account::github::GithubLogin {
-                user: Some(spec.trim_end_matches("+ssh").to_string()),
-                ssh: spec.ends_with("+ssh"),
-            },
-            None => crate::account::github::GithubLogin::default(),
+        let api = {
+            let _ = self.env;
+            Some(crate::account::github::GITHUB_API.to_string())
         };
-        #[cfg(not(feature = "test-support"))]
-        let login = crate::account::github::find_login(self.env, &self.scratch("login-look"));
-        login
-    }
-
-    fn push_test(&self, remote: &str) -> Result<(), crate::account::github::PushRefused> {
-        let scratch = self.scratch("push-test");
-        // A test's local stand-in (always `None` in a shipped build).
-        let remote = self.clone_source.unwrap_or(remote);
-        #[cfg(feature = "test-support")]
-        let remote = self
-            .env
-            .get(TEST_PUSH_REMOTE)
-            .map_or(remote, String::as_str);
-        crate::account::github::push_test(std::ffi::OsStr::new("git"), remote, &scratch, self.env)
+        api
     }
 
     fn read_line(&self) -> Option<String> {
@@ -137,38 +122,17 @@ impl crate::commands::run_repo::Doors for StartDoors<'_> {
     fn open(&self, url: &str) -> bool {
         (self.open)(url)
     }
-
-    fn unused_git_config(&self) -> Option<PathBuf> {
-        crate::launch::unused_git_config(self.env)
-    }
 }
-
-impl StartDoors<'_> {
-    /// A new folder in the configuration directory for one look or test, which removes it.
-    fn scratch(&self, what: &str) -> PathBuf {
-        self.cfg
-            .join(format!("{what}-{:016x}", rand::random::<u64>()))
-    }
-}
-
-/// A test build's one door to the clone: a repository on this machine that stands in for the
-/// participant's repository on GitHub (`account::github::clone_repo`'s `source`). A shipped build
-/// compiles none of this.
-#[cfg(feature = "test-support")]
-pub const TEST_CLONE_SOURCE: &str = "GOALCUP_TEST_CLONE_SOURCE";
 
 /// A run on a server that has passed every check that needs no approval.
 pub(super) struct Serving {
     url: String,
     /// The configuration directory, absolute.
     cfg: PathBuf,
-    /// The participant's environment, for finding their GitHub login.
+    /// The participant's environment (a test build's fake GitHub API is named there).
     env: BTreeMap<String, String>,
-    work_root: PathBuf,
-    /// The folder `goalcup start` was run from: a real run's workspace.
+    /// The folder `goalcup start` was run from: the run's workspace.
     project: PathBuf,
-    /// A test's local repository to clone instead of GitHub; always `None` in a shipped build.
-    clone_source: Option<String>,
 }
 
 impl Serving {
@@ -186,10 +150,8 @@ impl Serving {
             None
         } else {
             let doors = StartDoors {
-                cfg: &self.cfg,
                 env: &self.env,
                 open: opts.open_url,
-                clone_source: self.clone_source.as_deref(),
             };
             Some(crate::commands::run_repo::choose(
                 &doors,
@@ -237,9 +199,7 @@ impl Serving {
             how: UploadHow::Fresh(Box::new(NewRun {
                 credential,
                 repo,
-                work_root: self.work_root,
                 project: self.project,
-                clone_source: self.clone_source,
             })),
         })
     }
@@ -275,7 +235,7 @@ pub(super) struct Uploading {
 }
 
 pub(super) enum UploadHow {
-    /// A new run: approved, cloned, opened.
+    /// A new run: approved, opened.
     Fresh(Box<NewRun>),
     /// A new segment of a run that is open.
     Continue {
@@ -288,41 +248,14 @@ pub(super) enum UploadHow {
     },
 }
 
-/// What a new run is cloned from and opened with.
+/// What a new run is opened with.
 pub(super) struct NewRun {
     credential: crate::account::credential::RunCredential,
     /// A real run's repository; `None` for a practice run, which has none.
     repo: Option<crate::commands::run_repo::RunRepo>,
-    pub(super) work_root: PathBuf,
-    /// A real run's workspace: the participant's project folder, used as it is (no clone).
+    /// The run's workspace: the participant's project folder, used as it is. Goal Cup makes no
+    /// clone and runs no git there; the agent sets git up and pushes.
     pub(super) project: PathBuf,
-    clone_source: Option<String>,
-}
-
-impl NewRun {
-    /// Whether the run works in the participant's project folder: a real run. A practice run
-    /// has a new local repository in the work folder instead.
-    pub(super) fn works_in_project(&self) -> bool {
-        self.repo.is_some()
-    }
-}
-
-/// The work folder of [`Uploading::clone_workspace`] for a new run, made in `new.work_root` with
-/// the participant's own git (D69): a real run's clone of its repository, or a practice run's new
-/// local repository with no remote.
-fn clone_new_run(new: &NewRun, dest: &Path) -> Result<(), CliError> {
-    std::fs::create_dir_all(&new.work_root).map_err(|source| CliError::Io {
-        path: new.work_root.display().to_string(),
-        source,
-    })?;
-    let git = std::ffi::OsStr::new("git");
-    match &new.repo {
-        None => crate::account::github::init_local(git, dest),
-        Some(repo) => {
-            let source = new.clone_source.as_deref().unwrap_or(&repo.remote);
-            crate::account::github::clone_repo(git, source, &repo.remote, dest)
-        }
-    }
 }
 
 /// The run as the server opened it, what it was asked, and the give-back until the launch.
@@ -354,34 +287,6 @@ impl Uploading {
                 known_entries: record.entries.iter().map(|e| e.entry_id.clone()).collect(),
             },
         })
-    }
-
-    /// Clone the participant's repository into `dest`, which is this run's workspace, with
-    /// their own git and login (D69). The clone holds no key and names no credential helper. A
-    /// practice run's workspace is a new local repository with no remote. A continued run has its
-    /// clone already.
-    ///
-    /// A competition or test run's clone that has a commit is refused: GitHub's answer before
-    /// the approval (`run_repo::choose`) can lag a push, the clone cannot.
-    pub(super) fn clone_workspace(&self, dest: &Path) -> Result<(), CliError> {
-        let UploadHow::Fresh(new) = &self.how else {
-            return Ok(());
-        };
-        // A real run works in the participant's own folder: goalcup makes no clone and runs no
-        // git there; the agent sets up git and pushes.
-        if new.works_in_project() {
-            return Ok(());
-        }
-        clone_new_run(new, dest)?;
-        if let Some(repo) = &new.repo
-            && crate::account::github::clone_has_commits(dest)
-        {
-            return Err(CliError::Refused(crate::participant::repository_not_empty(
-                &repo.repo_url,
-                None,
-            )));
-        }
-        Ok(())
     }
 
     /// Open the run on the server, before the daemon creates anything; for a continued run, ask
