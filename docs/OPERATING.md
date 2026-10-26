@@ -145,8 +145,9 @@ scripts/matrix.sh m2-fake-tui <server-url> --refusals
 scripts/matrix.sh --check-copy <config-dir> [run-id]
 ```
 
-It makes a temporary configuration directory, work folder and `HOME`, runs `goalcup login` and
-`goalcup start --practice` in them, waits for the run to end, and deletes the temporary directory. The
+It makes a temporary configuration directory, project folder and `HOME`, runs `goalcup login` and
+`goalcup start --practice` (from the project folder) in them, waits for the run to end, and deletes the
+temporary directory. The
 connector runs in chat mode under a pseudo-terminal into which the script types one prompt; Goal Cup Proxy
 stops it at the practice deadline (10 minutes). `--test --duration SECONDS` runs an organizer test run
 instead and seals it SECONDS after the prompt, so a bounded test of any length needs no practice deadline.
@@ -154,37 +155,41 @@ instead and seals it SECONDS after the prompt, so a bounded test of any length n
 connector id that is not the fake needs its
 `harness.toml` to be found (see Connectors below), or the row FAILs and says so.
 
-**Repositories and git logins (D69).** A test run uses the GitHub login already on the machine,
-exactly as a player's run does. Practice and the refusals get none.
+**The project folder and the token (D69, D71).** `goalcup start` works in the folder it is run from, as a
+player's does, and the kit makes that folder: `<temporary directory>/projects/<name>`, never beside the
+configuration directory. The kit passes goalcup no git login (no git configuration, SSH agent or
+`GH_TOKEN`), and goalcup passes the agent none.
 
-| Cell | What it runs | Git login |
+| Cell | What it runs | The project folder |
 |---|---|---|
-| practice (default) | `start --practice`: a local folder, no repository | none |
-| `--test --duration N` | `start --test --repo <the repository the kit made>` | this machine's own |
-| `--refusals` | six starts that must refuse before the approval | none |
+| practice (default) | `start --practice` | empty; no repository |
+| `--test --duration N` | `start --test --repo <the repository the kit made>` | `.gitignore` (`.env*`) and `.env.local` (`GH_TOKEN` from `gh auth token`) |
+| `--refusals` | seven starts that must refuse before the approval | one folder per row |
 
-Before a test run's login, the kit makes its repository with the machine's GitHub login:
+Before a test run's login, the kit writes the `.env.local` (made with umask 077, so mode 0600; the token
+goes from `gh auth token` straight into the file, never through an argument, a variable or the log), then
+makes the repository with the machine's GitHub login:
 `gh repo create <user>/goalcup-kit-<cell>-<6 hex> --public`, with no README, so it is empty
-(`MATRIX_CELL` names the cell; default the connector). `MATRIX_REPO=<owner>/<name>` names one instead.
-With no login, the row FAILs with one line: run `gh auth login` here (HTTPS, and Yes to authenticate
-Git). The kit never deletes a repository; it prints the name at the end (`gh repo delete <name> --yes`
-when done, after `gh auth refresh -s delete_repo`: the default `gh auth login` lacks that scope; then
-`gh auth refresh -r delete_repo` to drop it again, because host cells' agents push with that login). A question the start asks before the approval (no login found, a repository GitHub does
-not show) also FAILs the row at once.
-
-"None" means goalcup runs with a git config of the run's own that resets `credential.helper`, an
-empty gh folder, `GIT_CONFIG_NOSYSTEM=1` (macOS's system git config names the keychain helper), and
-without `SSH_AUTH_SOCK`, the keyring's variables, `GH_TOKEN` or `GITHUB_TOKEN`. That reaches goalcup's
-own git and a test start's push test and clone. A practice run's agent gets no git variable from
-goalcup at all (D69), so its git still reads the system config: on macOS the keychain helper.
+(`MATRIX_CELL` names the cell; default the connector). `MATRIX_REPO=<owner>/<name>` names one instead (the
+token must be able to push to it). With no login, the row FAILs with one line: run `gh auth login` here
+(HTTPS, and Yes to authenticate Git). The token is taken out of the log (and the terminal capture) if the
+agent printed it, and `.env.local` is deleted at the end even with `--keep`. The kit never deletes a
+repository; it prints the name at the end (`gh repo delete <name> --yes` when done, after
+`gh auth refresh -s delete_repo`: the default `gh auth login` lacks that scope; then
+`gh auth refresh -r delete_repo` to drop it again, because host cells' agents are given that login's
+token). A question the start asks before the approval (a repository GitHub does not show) also FAILs the
+row at once.
 
 `--refusals` checks, with no harness and no terminal, that a real run's start refuses before any
-approval or run record, and says "Nothing was created.": a repository with commits (`not-empty`), a
-private one and a missing one (goalcup treats both alike), a public empty one the agent's git cannot
-push to (`push`), no GitHub login (`no-login`: the setup guide is printed, then the start
-refuses for want of a terminal to name a repository), and `--repo <name>` with no login to find the
-user in (`bare-name`). GitHub is a stand-in the script serves on 127.0.0.1, reached through the CLI's
-test doors, so it needs a test build of goalcup:
+approval or run record, says "Nothing was created.", and leaves the project folder as it was. Each row
+matches one short phrase. The folder rows: it holds a README (`folder-not-empty`), a `.git`
+(`git-present`), a `.env.local` and no `.gitignore` (`env-no-gitignore`). The repository rows: GitHub says
+it has commits (`repo-has-size`); GitHub reports size 0 but its commits call answers 200, a repository
+made with a README (`readme-repo`); GitHub does not show it (`private`: private and missing look alike);
+and `--repo <name>` with no owner (`bare-name`). `env-no-gitignore` and `readme-repo` need goalcup with
+the task 2b-CLI checks; on an older goalcup they FAIL with "the run's approval was asked for". GitHub is
+a stand-in the script serves on 127.0.0.1, reached through the CLI's test doors, so it needs a test build
+of goalcup:
 `cargo build --offline -p goalcup-cli --features test-support --target-dir target/kit-test`, then
 `MATRIX_BIN_DIR=target/kit-test/debug sh scripts/matrix.sh m2-fake-tui <server> --refusals`. It still
 logs in to the server once. Each refusal prints `refusal <kind>: PASS|FAIL`; the row reads
@@ -206,10 +211,10 @@ stderr and in the log. PASS means:
 3. `goalcup-verify --capture-integrity <trace>` exited 0 with `integrity: valid` and `anchor: signed`;
 4. for a real harness, the agent worked: `goalcup-verify --research-json <trace>` shows a usage
    observation with output or completion tokens above 0, or a decoded assistant message (else the
-   row FAILs with "the agent never answered the prompt"), and its workspace changed: in the run
-   record's `workspace` (the clone), `git status --porcelain --untracked-files=all` is not empty or
-   a commit was made since the run started (a run that only named its session, or stalled at a
-   permission prompt, FAILs with "the agent changed nothing in its workspace"). The default prompt
+   row FAILs with "the agent never answered the prompt"), and its workspace changed: the run
+   record's `workspace` (the project folder) holds a path beyond the starting kit it began with
+   (`.git` aside), or a commit was made since the run started (a run that only named its session, or
+   stalled at a permission prompt, FAILs with "the agent changed nothing in its workspace"). The default prompt
    asks for one file; `MATRIX_EXPECT_FILES=0` drops this for a custom prompt that writes nothing;
 5. the server's copy agrees with the local chain.
 
@@ -217,8 +222,10 @@ stderr and in the log. PASS means:
 download it. It asks `GET /v1/runs/{id}?entry_id=…` with the run's own credential and requires the answer
 to equal the local chain the verifier just checked: `offset` equal to the bytes of `chain.jsonl`,
 `next_seq` to the record count, `head` and the last acknowledgement's `hash` to the verifier's
-`validated_head`, `final` to the last record, `status: sealed` and `stop: true` (for `--test`, `stop`
-is not required: the server's deadline has not come). The server stores a chunk
+`validated_head`, `final` to the last record, `status: sealed` and `stop: true`. For `--test` the run's
+`status` and `stop` are not required: the server calls a run sealed only once its deadline has passed
+(168 hours for a test run), so a test run sealed by the script reads `open` there; its `final` (the end
+the seal needs committed) is the proof, with goalcup's own "uploaded ... the seal" line. The server stores a chunk
 only if its SHA-256 matches, at the offset, previous hash and sequence it holds, and signs an
 acknowledgement the verifier checks. Equal positions therefore mean the server holds the chain Goal Cup Proxy
 sent, in order. It does not prove the stored bytes; only the verify job (not built) would.
@@ -300,12 +307,12 @@ PASS does not prove the prompt was submitted; check the session in the kept dire
 trace. `m2-fake-tui` is the one connector that needs no harness.
 
 **Other environment.** `MATRIX_BIN_DIR`, `--keep`, `--timeout` (1800 s). It needs `curl` 7.55 or
-later, `python3` and `script(1)`, and `gh`, signed in, for a test run.
+later, `python3` and `script(1)`, and `gh`, signed in, for a test run (its token goes to `.env.local`).
 
 **Linux, real harness, in Docker.** `scripts/linux-matrix.sh` runs the matrix for `codex-cli` in a
 container on a Mac. It builds the Linux binaries from the checkout, installs the harness
-at the version the connector's first line names, and keeps the configuration directory, the harness's
-home and the work folder on a Docker volume of the connector's own (`goalcup-linux-matrix-<id>`),
+at the version the connector's first line names, and keeps the configuration directory and the harness's
+home on a Docker volume of the connector's own (`goalcup-linux-matrix-<id>`),
 so one sign-in serves every later run. Once per volume, in a terminal:
 `GOALCUP_TEST_APPROVAL_KEY_FILE=<key file> sh scripts/linux-matrix.sh login codex-cli`. The login is
 approved with the key; then `goalcup setup` opens Codex in the container, and you choose "Sign in with
@@ -327,10 +334,10 @@ It also installs `claude-code-cli` (set to `haiku` with thinking off, checked af
 and `hermes-cli`. For long runs in parallel: `linux-matrix.sh build` once, then
 `LINUX_MATRIX_CELL=<cell> LINUX_MATRIX_PREBUILT=1 sh scripts/linux-matrix.sh run <id> -- --test --duration <s>`
 gives each cell its own volume, sign-in and container. A test run in Docker uses the container's own
-GitHub login: sign in once with `LINUX_MATRIX_CELL=<cell> sh scripts/linux-matrix.sh github <id>`
+GitHub login (its token goes to the project's `.env.local` in the container): sign in once with `LINUX_MATRIX_CELL=<cell> sh scripts/linux-matrix.sh github <id>`
 (`gh auth login` in the container; it stays on the cell's volume). The kit never copies or mounts this
 machine's login or a token. `matrix.sh --test --duration <s>` does the same on a host, with the host's
-login. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
+login and token. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
 
 **`--check-copy`.** For a run you made by hand, verifies every entry of the run locally and compares each
 with the server's position, using the run's credential from the configuration directory. It starts and

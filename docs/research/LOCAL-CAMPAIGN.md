@@ -42,17 +42,20 @@ not prove: other platforms, other harness versions, model behaviour, or particip
    (`http://localhost[:port]`, `http://127.0.0.1[:port]`); another `https://` server must be named
    exactly in `MATRIX_ALLOW_SERVER`, and production is never accepted. A server that is neither
    staging nor production needs `MATRIX_FETCH_BUCKET` for a long run's server copy.
-   **GitHub login.** Every cell is a test run, and a test run asks for its own new, empty, public
-   repository at its start (D69). The kit makes one per run (`gh repo create
-   <user>/goalcup-kit-<cell>-<random> --public`) with the GitHub login already there, and the agent
-   pushes with that login, as on a player's machine. Host cells: this machine's (`gh auth login`,
-   HTTPS, Yes to authenticate Git). Docker cells: the container's, made once per cell by
-   `campaign.py login` (it runs `linux-matrix.sh github`, which opens `gh auth login` in the
-   container; it stays on the cell's volume). The kit never copies or mounts a login or a token.
-   **The agent in a Docker cell can use the GitHub login stored on the cell's volume, with all of
-   that login's scopes** (it runs as the same user, with no sandbox, and `gh` reads the login from
-   the volume's home). That login is the owner's own (accepted for this kit); use a login whose
-   scopes you are willing to let an agent use. Nothing else secret is in a Docker cell's container:
+   **GitHub login and the project folder.** Every cell is a test run, and a test run asks for its own
+   new, empty, public repository at its start (D69). The kit makes one per run (`gh repo create
+   <user>/goalcup-kit-<cell>-<random> --public`) with the GitHub login already there, then makes the
+   project folder a player makes (a `.gitignore` holding `.env*` and a `.env.local` holding
+   `GH_TOKEN=<gh auth token>`, mode 0600, never printed) and runs `goalcup start --test --repo` from
+   it. The agent pushes with that token (D71); goalcup passes it no git login. Host cells: this
+   machine's login (`gh auth login`, HTTPS, Yes to authenticate Git). Docker cells: the container's,
+   made once per cell by `campaign.py login` (it runs `linux-matrix.sh github`, which opens `gh auth
+   login` in the container; it stays on the cell's volume). The kit never copies or mounts a login
+   or a token. **The agent in a Docker cell can use the GitHub login stored on the cell's volume,
+   and the token in its project's `.env.local`, with all of that login's scopes** (it runs as the
+   same user, with no sandbox, and `gh` reads the login from the volume's home). That login is the
+   owner's own (accepted for this kit); use a login whose scopes you are willing to let an agent
+   use. Nothing else secret is in a Docker cell's container:
    the staging key never enters it (the host approves the device codes the container writes down),
    and a Docker cell takes no database URL or R2 token ([OPERATING](../OPERATING.md), the Docker
    cell and "A long run").
@@ -84,8 +87,8 @@ not prove: other platforms, other harness versions, model behaviour, or particip
    on conflict do nothing;
    ```
 
-4. **No practice repository is needed.** A practice run clones nothing (D69); the server is told
-   `agentcommunity/goalcup-matrix-empty` for it.
+4. **No practice repository is needed.** A practice run starts in an empty project folder and
+   pushes nothing (D69); the server is told `agentcommunity/goalcup-matrix-empty` for it.
 5. **Build once,** before the logins (a build needs neither a host cell's `config_dir`, which its
    login makes, nor a GitHub login). `python3 scripts/campaign.py build CONFIG` builds the Linux image
    and binaries one time. Runs never build, so cells can run side by side. On the Mac, `cargo build --offline
@@ -100,7 +103,7 @@ harness sign-in. Copy `scripts/campaign.example.json` and edit it: the key file 
 summary list the ones made (`repo_made`), and the run prints them at the end; delete them with
 `gh repo delete <name> --yes`, after `gh auth refresh -s delete_repo` (the default `gh auth
 login` lacks that scope, and the delete fails without it); afterwards `gh auth refresh -r delete_repo`
-takes the scope off again, because host cells' agents push with that same login. Nothing writes a token into a cell's configuration; a `github.json`
+takes the scope off again, because host cells' agents are given that login's token. Nothing writes a token into a cell's configuration; a `github.json`
 an older kit left there is no longer read for new runs and can be deleted. The default prompt is [campaign-workload.txt](campaign-workload.txt): a cheap, many-step
 coding task that stays in the workspace and stops on its own. An agent that finishes early and idles
 is still a valid infrastructure run; note the idle time in the report. Cells of an hour or more use
@@ -137,9 +140,9 @@ The default workload never pushes, so its repository stays empty and the cell ca
 
 | Scenario | Command | Needs |
 |---|---|---|
-| Practice: no repository, no git login | `sh scripts/matrix.sh <connector> <server>` (Docker: `linux-matrix.sh run <id>`) | a signed-in harness (`MATRIX_CONFIG_DIR`), or `m2-fake-tui` |
+| Practice: an empty project folder, no repository | `sh scripts/matrix.sh <connector> <server>` (Docker: `linux-matrix.sh run <id>`) | a signed-in harness (`MATRIX_CONFIG_DIR`), or `m2-fake-tui` |
 | Test run with a repository | `python3 scripts/campaign.py run CONFIG`, or `MATRIX_CONFIG_DIR=<dir> sh scripts/matrix.sh <id> <server> --test --duration <s>` | gh signed in (Docker: `linux-matrix.sh github <id>` once per cell) |
-| Refusals: not empty, private, missing, cannot push, no login, bare name | `MATRIX_BIN_DIR=target/kit-test/debug sh scripts/matrix.sh m2-fake-tui <server> --refusals` | a test build (`cargo build --offline -p goalcup-cli --features test-support --target-dir target/kit-test`), no harness |
+| Refusals: folder not empty, `.git` present, `.env.local` without `.gitignore`, repository with commits (also a README-only one), private, bare name | `MATRIX_BIN_DIR=target/kit-test/debug sh scripts/matrix.sh m2-fake-tui <server> --refusals` | a test build (`cargo build --offline -p goalcup-cli --features test-support --target-dir target/kit-test`), no harness |
 
 [OPERATING, The matrix](../OPERATING.md#the-matrix) says what each one checks.
 
