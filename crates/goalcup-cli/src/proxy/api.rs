@@ -258,6 +258,8 @@ pub struct CaptureEmitter {
     model_requests: Arc<AtomicU64>,
     /// See [`CaptureEmitter::recorded_requests`]; shared like `model_requests`.
     recorded_requests: Arc<AtomicU64>,
+    /// See [`CaptureEmitter::generation_requests`]; shared like `recorded_requests`.
+    generation_requests: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for CaptureEmitter {
@@ -305,6 +307,7 @@ impl CaptureEmitter {
             opaque_fallbacks: AtomicU64::new(0),
             model_requests: Arc::new(AtomicU64::new(0)),
             recorded_requests: Arc::new(AtomicU64::new(0)),
+            generation_requests: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -349,6 +352,26 @@ impl CaptureEmitter {
     /// The counter itself, for a reader that outlives the recording proxy's handle.
     pub fn recorded_requests_counter(&self) -> Arc<AtomicU64> {
         self.recorded_requests.clone()
+    }
+
+    /// Requests the recording proxy selected that are model calls: each on a path that carries a
+    /// protocol hint (`/chat/completions`, `/messages`, `/responses`, a provider's reviewed
+    /// paths), and each POST on a recorded path without one (a provider's own generate route,
+    /// such as `:streamGenerateContent`). A GET under a model host's base path (a model list, a
+    /// health probe) is recorded ([`CaptureEmitter::recorded_requests`]) but is not counted
+    /// here, so this is what "the agent made a model call" means.
+    pub fn generation_requests(&self) -> u64 {
+        self.generation_requests.load(Ordering::SeqCst)
+    }
+
+    /// The counter itself, for a reader that outlives the recording proxy's handle.
+    pub fn generation_requests_counter(&self) -> Arc<AtomicU64> {
+        self.generation_requests.clone()
+    }
+
+    /// Count one request selected on a path with a protocol hint.
+    pub(crate) fn record_generation_request(&self) {
+        self.generation_requests.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Count one request selected for capture.

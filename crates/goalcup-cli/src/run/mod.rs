@@ -253,6 +253,29 @@ pub struct RunState {
     /// `state.json` an older build wrote.
     #[serde(default)]
     pub native_silent: Option<u64>,
+    /// The recording proxy has recorded no model call since the harness started, past
+    /// [`no_model_calls_after`]. The tick sets it and clears it once a call is recorded; it
+    /// never stops or pauses anything. Local to `state.json`: the daemon and the control API
+    /// know nothing of it. Absent from a `state.json` an older build wrote.
+    #[serde(default)]
+    pub no_model_calls: Option<NoModelCalls>,
+}
+
+/// What the watch tick saw when it called the run's harness silent: no model call recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoModelCalls {
+    /// Whole minutes the harness had run when the tick last looked.
+    pub minutes: u64,
+    /// Connections from the harness had failed the recording proxy's TLS handshake (the harness
+    /// does not trust its certificate).
+    #[serde(default)]
+    pub tls_failing: bool,
+}
+
+/// How long a harness may run with no model call recorded before the tick says so: three
+/// minutes for a practice run, which the participant is still watching, ten for any other.
+pub fn no_model_calls_after(practice: bool) -> std::time::Duration {
+    std::time::Duration::from_secs(if practice { 3 * 60 } else { 10 * 60 })
 }
 
 /// When the watch tick calls a run's native leg silent: the recording proxy has recorded at
@@ -410,6 +433,7 @@ impl RunState {
             continuable: false,
             time_left: None,
             native_silent: None,
+            no_model_calls: None,
         }
     }
 
@@ -518,6 +542,17 @@ impl RunState {
                 who.guide,
             ));
         }
+        if let Some(silent) = self.no_model_calls
+            && !self.ended
+        {
+            lines.push(participant::problem_no_model_calls(
+                who.harness,
+                silent.minutes,
+                silent.tls_failing,
+                advice.restart(who),
+                true,
+            ));
+        }
         // An agent the host ended because the run is over (its deadline, a newer run) is not a
         // problem; one that left while the run is open, or that a full disk stopped, is.
         if let HarnessState::Exited { status } = &self.harness
@@ -560,6 +595,10 @@ pub struct RunSignals {
     model_requests: Arc<AtomicU64>,
     /// The recording proxy's count of requests it selected for capture (the model endpoints).
     recorded_requests: Arc<AtomicU64>,
+    /// The recording proxy's count of requests on a path with a protocol hint (model calls).
+    generation_requests: Arc<AtomicU64>,
+    /// The recording proxy's count of harness connections that failed its TLS handshake.
+    client_tls: Arc<AtomicU64>,
     upload: Arc<Mutex<UploadVital>>,
     /// The uploader's count of what is left of the run, each time it is set.
     time_left: Arc<Mutex<Option<TimeLeft>>>,
@@ -607,6 +646,8 @@ impl RunSignals {
             recording: Arc::new(AtomicU8::new(Recording::Unknown as u8)),
             model_requests: counter,
             recorded_requests: Arc::default(),
+            generation_requests: Arc::default(),
+            client_tls: Arc::default(),
             upload: Arc::default(),
             time_left: Arc::default(),
             probe: None,
@@ -616,6 +657,20 @@ impl RunSignals {
     /// These signals, with recorded model requests read from `counter` (the recording proxy's).
     pub fn recording_from(mut self, counter: Arc<AtomicU64>) -> RunSignals {
         self.recorded_requests = counter;
+        self
+    }
+
+    /// These signals, with model calls (requests on a hinted path) read from `counter` (the
+    /// recording proxy's).
+    pub fn generations_from(mut self, counter: Arc<AtomicU64>) -> RunSignals {
+        self.generation_requests = counter;
+        self
+    }
+
+    /// These signals, with failed harness TLS handshakes read from `counter` (the recording
+    /// proxy's).
+    pub fn client_tls_from(mut self, counter: Arc<AtomicU64>) -> RunSignals {
+        self.client_tls = counter;
         self
     }
 
@@ -646,6 +701,17 @@ impl RunSignals {
     /// Requests to the connector's model endpoints the recording proxy recorded so far.
     pub fn recorded_requests(&self) -> u64 {
         self.recorded_requests.load(Ordering::SeqCst)
+    }
+
+    /// Requests on a path with a protocol hint the recording proxy recorded so far: the model
+    /// calls, not a model list or a probe.
+    pub fn generation_requests(&self) -> u64 {
+        self.generation_requests.load(Ordering::SeqCst)
+    }
+
+    /// Harness connections the recording proxy could not complete a TLS handshake with so far.
+    pub fn client_tls_failures(&self) -> u64 {
+        self.client_tls.load(Ordering::SeqCst)
     }
 
     /// The uploader set its count of what is left of the run.
@@ -1467,6 +1533,51 @@ mod tests {
     fn no_runs_is_none_not_an_error() {
         let cfg = tempfile::tempdir().unwrap();
         assert!(newest(cfg.path()).unwrap().is_none());
+    }
+
+    /// The "no model calls recorded" line: shown while the state holds the tick's verdict, with
+    /// the certificate sentence only when connections failed their handshake; the fix follows
+    /// the run's advice; a run that has ended does not show it; a `state.json` an older build
+    /// wrote reads as no verdict.
+    #[test]
+    fn no_recorded_model_call_is_a_problem_and_names_the_certificate_only_when_it_failed() {
+        let now = 1_000_000;
+        let who = who();
+        let mut state = RunState::launched("e1", Ok(()));
+        let mark = participant::NO_MODEL_CALLS_MARK;
+        assert!(state.problems(now, Advice::Continue, &who).is_empty());
+        state.no_model_calls = Some(NoModelCalls {
+            minutes: 10,
+            tls_failing: false,
+        });
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains(mark), "{lines:?}");
+        assert!(lines[0].contains("10 minutes"), "{lines:?}");
+        assert!(
+            lines[0].contains("goalcup continue r0123456789abcdef"),
+            "{lines:?}"
+        );
+        assert!(lines[0].contains("goalcup doctor"), "{lines:?}");
+        assert!(!lines[0].contains("certificate"), "{lines:?}");
+        let cannot = state.problems(now, Advice::Cannot, &who);
+        assert!(!cannot[0].contains("goalcup continue"), "{cannot:?}");
+        state.no_model_calls = Some(NoModelCalls {
+            minutes: 10,
+            tls_failing: true,
+        });
+        let lines = state.problems(now, Advice::Continue, &who);
+        assert!(
+            lines[0]
+                .contains("may fail because it does not trust Goal Cup's recording certificate"),
+            "{lines:?}"
+        );
+        state.ended = true;
+        assert!(state.problems(now, Advice::Continue, &who).is_empty());
+        let mut old = serde_json::to_value(RunState::launched("e1", Ok(()))).unwrap();
+        old.as_object_mut().unwrap().remove("no_model_calls");
+        let old: RunState = serde_json::from_value(old).unwrap();
+        assert_eq!(old.no_model_calls, None);
     }
 
     #[test]

@@ -487,8 +487,11 @@ impl<'c> Direction<'c> {
                     {
                         emitter.record_model_request();
                         // A message on a WebSocket opened on an evidence path is recorded.
-                        if self.capture.is_some() {
+                        if let Some(capture) = &self.capture {
                             emitter.record_recorded_request();
+                            if capture.connection.base.protocol_hint.is_some() {
+                                emitter.record_generation_request();
+                            }
                         }
                     }
                 }

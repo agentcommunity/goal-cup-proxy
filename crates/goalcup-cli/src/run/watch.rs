@@ -13,9 +13,12 @@
 //! [`Recording::Unknown`], never a failure), and writes the run's `state.json` ([`Beat`]).
 //! That is where the disk's low-space warning, the upload's trouble and the recording's gaps
 //! are said; `goalcup status` reads them back. It also keeps the run's time-left file, which
-//! the agent may read with `goalcup time-left` (D66), and says once per start or continue (in
-//! `host.log` while the harness owns the terminal), and keeps in the state, when the harness has
-//! written no session file while its model requests are recorded ([`super::NativeSilence`]).
+//! the agent may read with `goalcup time-left` (D66).
+//!
+//! Twice the tick also says something once per start or continue (in `host.log` while the harness
+//! owns the terminal) and keeps it in the state: when the harness has written no session file
+//! while its model requests are recorded ([`super::NativeSilence`]), and when no model call has
+//! been recorded at all after a wait ([`super::no_model_calls_after`]).
 
 use super::pause::{AgentPause, Change};
 use super::reserve::{
@@ -73,6 +76,18 @@ pub struct Beat {
     pub time_left_file: Option<std::path::PathBuf>,
     /// Whether the native leg is watched for silence. `None` never says it.
     pub native: Option<NativeWatch>,
+    /// When the harness has run this long with no model call recorded, the tick says so
+    /// ([`NoCallsTick`]). `None` never says it.
+    pub no_calls: Option<NoCallsWatch>,
+}
+
+/// When the tick calls a harness silent for want of any recorded model call, and the harness's
+/// display name for the line it says.
+pub struct NoCallsWatch {
+    /// How long the harness may run with none recorded.
+    pub after: Duration,
+    /// The harness's display name.
+    pub harness: String,
 }
 
 /// Ask for the recording, waiting at most `within` (and not past `done`). The question runs on
@@ -173,6 +188,7 @@ pub fn watch_beside(watch: Watch) -> Watching {
         tick: Tick::default(),
         pruner: Pruner::within(policy.reserve_bytes),
         native: NativeTick::default(),
+        no_calls: NoCallsTick::begin(Instant::now()),
     };
     let thread = std::thread::Builder::new()
         .name("goalcup-disk-watch".into())
@@ -213,6 +229,7 @@ struct Ticker {
     tick: Tick,
     pruner: Pruner,
     native: NativeTick,
+    no_calls: NoCallsTick,
 }
 
 impl Ticker {
@@ -265,6 +282,23 @@ impl Ticker {
                 &mut crate::host_log::say,
             )
         });
+        // Once the harness has exited, the wait is over: a harness that left before the wait ran
+        // out never gets the line, and what the tick last said stands.
+        let exited = matches!(
+            beat.keeper.snapshot().harness,
+            super::HarnessState::Exited { .. }
+        );
+        let no_calls = beat.no_calls.as_ref().filter(|_| !exited).map(|watch| {
+            self.no_calls.see(
+                watch,
+                // Model calls, not every request under the base path: a harness that only lists
+                // models through the proxy has made no call Goal Cup could read.
+                beat.vitals.generation_requests(),
+                beat.vitals.client_tls_failures(),
+                Instant::now(),
+                &mut crate::host_log::say,
+            )
+        });
         let problem = beat.vitals.upload_problem();
         let refused = beat.vitals.server_refusing();
         let last_ok_at = self
@@ -294,6 +328,9 @@ impl Ticker {
             state.disk = disk;
             if let Some(silent) = native {
                 state.native_silent = silent;
+            }
+            if let Some(silent) = no_calls {
+                state.no_model_calls = silent;
             }
         });
         if let Some(file) = &beat.time_left_file
@@ -363,6 +400,60 @@ impl NativeTick {
             ));
         }
         Some(silent.then_some(requests))
+    }
+}
+
+/// What the tick keeps from one tick to the next about a harness whose model calls are not
+/// recorded. It lives as long as one `goalcup start` or `goalcup continue`, and its wait starts
+/// with the tick, so a continued segment is timed from its own launch.
+#[derive(Debug)]
+struct NoCallsTick {
+    /// When the tick began: the harness is launched at about this time.
+    began: Instant,
+    /// The line has been said.
+    said: bool,
+}
+
+impl NoCallsTick {
+    fn begin(now: Instant) -> NoCallsTick {
+        NoCallsTick {
+            began: now,
+            said: false,
+        }
+    }
+
+    /// Whether the harness is silent at `now`: `Some(..)` when the tick began at least
+    /// `watch.after` ago and `requests` (the model calls recorded) is zero. The first time it
+    /// is, the line goes to `say`, once. It clears as soon as a request is recorded.
+    fn see(
+        &mut self,
+        watch: &NoCallsWatch,
+        requests: u64,
+        client_tls: u64,
+        now: Instant,
+        say: &mut dyn FnMut(&str),
+    ) -> Option<crate::run::NoModelCalls> {
+        let waited = now.saturating_duration_since(self.began);
+        if requests > 0 || waited < watch.after {
+            return None;
+        }
+        let silent = crate::run::NoModelCalls {
+            minutes: waited.as_secs() / 60,
+            tls_failing: client_tls > 0,
+        };
+        if !self.said {
+            self.said = true;
+            // The restart words are `goalcup status`'s to give: it knows whether the run can be
+            // continued. Here only that nothing is recorded, and why when the proxy knows.
+            say(&crate::participant::problem_no_model_calls(
+                &watch.harness,
+                silent.minutes,
+                silent.tls_failing,
+                crate::participant::Restart::Cannot,
+                true,
+            ));
+        }
+        Some(silent)
     }
 }
 
@@ -1324,6 +1415,45 @@ mod tests {
         assert!(said[0].contains("6 "), "{said:?}");
         assert!(said[0].contains("Some Agent"), "{said:?}");
         assert!(said[0].ends_with(&watch.guide), "{said:?}");
+    }
+
+    /// A harness with no recorded model call is called silent once it has run for the wait, and
+    /// not before; one recorded request clears it; the line is said once, with the TLS sentence
+    /// only when the proxy has seen the harness fail its handshake.
+    #[test]
+    fn no_recorded_model_call_is_called_silent_after_the_wait() {
+        let watch = NoCallsWatch {
+            after: Duration::from_secs(180),
+            harness: "Some Agent".to_string(),
+        };
+        let t0 = Instant::now();
+        let mut said = Vec::new();
+        let mut say = |line: &str| said.push(line.to_string());
+        let mut tick = NoCallsTick::begin(t0);
+        assert_eq!(
+            tick.see(&watch, 0, 0, t0 + Duration::from_secs(179), &mut say),
+            None,
+            "too early"
+        );
+        let at = t0 + Duration::from_secs(185);
+        let silent = tick.see(&watch, 0, 0, at, &mut say).expect("silent");
+        assert_eq!(silent.minutes, 3);
+        assert!(!silent.tls_failing);
+        assert_eq!(
+            tick.see(&watch, 1, 0, at, &mut say),
+            None,
+            "one request clears it"
+        );
+        // Failed handshakes show in the verdict, and the line is said once however many ticks.
+        let later = t0 + Duration::from_secs(250);
+        assert!(
+            tick.see(&watch, 0, 5, later, &mut say)
+                .expect("silent")
+                .tls_failing
+        );
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("Some Agent"), "{said:?}");
+        assert!(said[0].contains("3 minutes"), "{said:?}");
     }
 
     #[test]
