@@ -194,12 +194,13 @@ of a run that exists is answered before GitHub is asked, and `continue` never as
 skips both GitHub checks, because it judges nothing (0.7 practice runs all name one shared
 repository, and one commit there must not stop every practice start).
 
-**One competition repository, one member.** A competition open is `403` ("Another member's cup run
-already uses this repository. Create a new empty public repository and start again.") when its
+**One competition repository, one member.** A competition open is `403` ("Another member's run in
+this event already uses this repository. Create a new empty public repository and start again.") when its
 `repo_url` is already the repository of another member's competition run in the same event, in any
 state. URLs compare in lower case with a trailing `.git` and `/` removed. The same member may name it
 again, and a retried open of a run that exists is answered as before. Practice and test runs are not
-checked. The database decides it (website migration `20261027100000`, pending the owner's OK to
+checked. An open the sign-up gate refuses gets the sign-up message first. The database decides it
+(website migration `20261027100000`, on top of the sign-up gate `20261021120200`, pending the owner's OK to
 apply: `server/worker/sql/pending/README.md`); until it is applied, there is no such check.
 
 **One main run per account.** A competition start by the account replaces its other open competition

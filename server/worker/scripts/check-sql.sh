@@ -237,17 +237,25 @@ BEGIN
 
   -- 7. One competition repository, one member (20261027100000). Member m2 cannot open a competition
   --    run on m's repository, in any spelling; m may open it again, and a retried open is answered;
-  --    another event does not count.
-  INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, staging)
-  VALUES ('smoke-cup', 'competition', t0 - interval '1 hour', t0 + interval '1 hour', false),
-         ('smoke-cup-2', 'competition', t0 - interval '1 hour', t0 + interval '1 hour', false);
+  --    another event, and staging, do not count. The sign-up gate of 20261021120200 stays, before the
+  --    repository check. (Test and practice runs cannot share an event with competition runs: open_run
+  --    refuses a mode that is not the event's kind, so they never count.)
+  INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, staging, requires_signup)
+  VALUES ('smoke-cup', 'competition', t0 - interval '1 hour', t0 + interval '1 hour', false, true),
+         ('smoke-cup-2', 'competition', t0 - interval '1 hour', t0 + interval '1 hour', false, false),
+         ('smoke-cup-st', 'competition', t0 - interval '1 hour', t0 + interval '1 hour', true, false);
   INSERT INTO goal_cup_tracer.consents (member_id, terms_version)
-  VALUES ('22222222-2222-2222-2222-222222222222'::uuid, goal_cup_tracer.current_terms_version());
+  VALUES ('22222222-2222-2222-2222-222222222222'::uuid, goal_cup_tracer.current_terms_version()),
+         ('33333333-3333-3333-3333-333333333333'::uuid, goal_cup_tracer.current_terms_version());
+  INSERT INTO goal_cup_tracer.signups (event_id, member_id, entry_no, name)
+  VALUES ('smoke-cup', m::uuid, 1, 'M'), ('smoke-cup', '22222222-2222-2222-2222-222222222222'::uuid, 2, 'M2');
   INSERT INTO goal_cup_tracer.run_credentials (credential_hash, member_id, mode, expires_at, staging)
   VALUES (repeat('d', 64), m::uuid, 'competition', t0 + interval '1 hour', false),
          (repeat('e', 64), '22222222-2222-2222-2222-222222222222'::uuid, 'competition', t0 + interval '1 hour', false),
          (repeat('f', 64), m::uuid, 'competition', t0 + interval '1 hour', false),
-         (repeat('9', 64), '22222222-2222-2222-2222-222222222222'::uuid, 'competition', t0 + interval '1 hour', false);
+         (repeat('9', 64), '22222222-2222-2222-2222-222222222222'::uuid, 'competition', t0 + interval '1 hour', false),
+         (repeat('8', 64), '33333333-3333-3333-3333-333333333333'::uuid, 'competition', t0 + interval '1 hour', false),
+         (repeat('7', 64), '22222222-2222-2222-2222-222222222222'::uuid, 'competition', t0 + interval '1 hour', true);
   r := public.goal_cup_upload_open_run(m, 'smoke-cup', 'competition', 'r0000000000000011', 'e0000000000000011', t0::text,
          (t0 + interval '7 days')::text, 'c', z, z, 'w', 's11', '1', '1', 'https://github.com/O/Shared', 'null'::jsonb,
          NULL, NULL, repeat('d', 64), (t0 + interval '8 days')::text);
@@ -270,7 +278,20 @@ BEGIN
          'e0000000000000014', t0::text, (t0 + interval '7 days')::text, 'c', z, z, 'w', 's14', '1', '1',
          'https://github.com/o/shared', 'null'::jsonb, NULL, NULL, repeat('9', 64), (t0 + interval '8 days')::text);
   ASSERT r ->> 'result' = 'created', 'repo: another event: ' || r::text;
+  -- Not signed up: the sign-up message, not the repository one.
+  r := public.goal_cup_upload_open_run('33333333-3333-3333-3333-333333333333', 'smoke-cup', 'competition', 'r0000000000000016',
+         'e0000000000000016', t0::text, (t0 + interval '7 days')::text, 'c', z, z, 'w', 's16', '1', '1',
+         'https://github.com/o/shared', 'null'::jsonb, NULL, NULL, repeat('8', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'forbidden' AND r ->> 'message' LIKE 'Sign up for Goal Cup%', 'repo: sign-up gate: ' || r::text;
+  -- Staging: the staging Worker's own event, the same repository, opens.
+  PERFORM set_config('request.jwt.claims', '{"role": "goal_cup_ingest_staging"}', true);
+  r := public.goal_cup_upload_open_run('22222222-2222-2222-2222-222222222222', 'smoke-cup-st', 'competition', 'r0000000000000017',
+         'e0000000000000017', t0::text, (t0 + interval '7 days')::text, 'c', z, z, 'w', 's17', '1', '1',
+         'https://github.com/o/shared', 'null'::jsonb, NULL, NULL, repeat('7', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'created', 'repo: staging: ' || r::text;
+  PERFORM set_config('request.jwt.claims', '', true);
   ASSERT NOT has_function_privilege('anon', 'goal_cup_tracer.repo_key(text)', 'EXECUTE'), 'anon can call repo_key';
+  ASSERT NOT has_function_privilege('authenticated', 'goal_cup_tracer.repo_key(text)', 'EXECUTE'), 'authenticated can call repo_key';
   ASSERT NOT has_function_privilege('public', 'goal_cup_tracer.repo_key(text)', 'EXECUTE'), 'PUBLIC can call repo_key';
 
 END $$;

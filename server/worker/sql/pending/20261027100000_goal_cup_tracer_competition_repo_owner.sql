@@ -14,7 +14,13 @@
 --   * the answer is "forbidden" with a message, which every deployed Worker already turns into 403
 --     with that message. No Worker change is needed for it to work.
 -- Two opens of one repository by two members take turns on a transaction-scoped advisory lock keyed
--- by the event and the repo_key, so they cannot both pass.
+-- by the event and the repo_key. Lock order: credential (FOR UPDATE), sign-up (FOR SHARE), then this
+-- lock; erasure and sign-up never take it, so the order stays acyclic.
+--
+-- Builds on 20261021120200_goal_cup_signup_gate.sql (applied to production on 2026-10-23): the body
+-- below is that one, unchanged but for the new block after the sign-up gate. The guard first makes
+-- the apply fail, and its transaction roll back, unless 20261021120200 is in place, so this can
+-- never silently remove the sign-up gate.
 --
 -- Staging and production share this database and this function. The check is scoped by event and by
 -- the runs' staging flag, so a staging run never blocks a production run, or the reverse.
@@ -22,7 +28,20 @@
 -- Additive: one new private function and a new body for one function with the same signature
 -- (grants stay). No table or row changes.
 --
--- Apply: psql "$DATABASE_URL_REMOTE" -X -1 -v ON_ERROR_STOP=1 -f <this file>; then pnpm db:check.
+-- Apply: as server/worker/sql/pending/README.md in goal-cup-proxy says (the read-only check first,
+-- then one transaction after SET lock_timeout = '5s'); then pnpm db:check.
+
+-- ---- guard: the sign-up gate first ----------------------------------------------------------------
+-- The body below starts from 20261021120200. On a database without it, it would bring back an
+-- open_run with no sign-up gate. seed_staging_signup is created only by 20261021120200, and the live
+-- open_run must already check requires_signup.
+DO $$
+BEGIN
+  IF to_regprocedure('goal_cup_tracer.seed_staging_signup(uuid,text)') IS NULL
+     OR position('requires_signup' in pg_get_functiondef('public.goal_cup_upload_open_run'::regproc)) = 0 THEN
+    RAISE EXCEPTION '20261027100000 needs 20261021120200_goal_cup_signup_gate.sql: apply 20261021120200 first';
+  END IF;
+END $$;
 
 -- The form of a repository URL that two runs are compared by.
 CREATE FUNCTION goal_cup_tracer.repo_key(p_repo_url text) RETURNS text
@@ -96,17 +115,32 @@ BEGIN
     RETURN jsonb_build_object('result', 'conflict');
   END IF;
 
+  -- The sign-up gate (20261021120200): an official start in an event that requires a sign-up needs the operator's
+  -- active sign-up. FOR SHARE holds the row until this transaction ends, so a withdrawal (FOR UPDATE) cannot commit
+  -- in between; a start that waited on a withdrawal re-reads the row, finds it withdrawn and is refused. Nothing has
+  -- been written yet, so the refusal leaves no trace.
+  IF p_mode = 'competition' AND v_event.mode = 'competition' AND v_event.requires_signup THEN
+    PERFORM 1 FROM signups
+     WHERE event_id = p_event_id AND member_id = v_member AND withdrawn_at IS NULL
+       FOR SHARE;
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object('result', 'forbidden',
+                                'message', 'Sign up for Goal Cup at agentcommunity.org/goalcup before your official start.');
+    END IF;
+  END IF;
+
   -- One repository, one member (20261027100000): a competition run may not name a repository that a
   -- competition run of another member in this event already names, in any state. The same member
-  -- may name it again. The lock makes two members' opens of one repository take turns, so both
-  -- cannot pass the check at once; it is held to the end of this transaction.
+  -- may name it again. After the sign-up gate, so a member who has not signed up gets that message
+  -- and only an eligible open takes the lock. The lock makes two members' opens of one repository
+  -- take turns, so both cannot pass the check at once; it is held to the end of this transaction.
   IF p_mode = 'competition' THEN
     PERFORM pg_advisory_xact_lock(hashtextextended('goal_cup_tracer.repo ' || p_event_id || ' ' || repo_key(p_repo_url), 0));
     IF EXISTS (SELECT 1 FROM runs r
                 WHERE r.event_id = p_event_id AND r.mode = 'competition' AND r.staging = v_staging
                   AND r.member_id <> v_member AND repo_key(r.repo_url) = repo_key(p_repo_url)) THEN
       RETURN jsonb_build_object('result', 'forbidden', 'message',
-        'Another member''s cup run already uses this repository. Create a new empty public repository and start again.');
+        'Another member''s run in this event already uses this repository. Create a new empty public repository and start again.');
     END IF;
   END IF;
 
