@@ -116,8 +116,6 @@ export interface LocalOptions {
   closeAfterSeconds?: number;
   /** The competition start window; an unset edge is open. Unset: always open. */
   startWindow?: { opens: string | null; closes: string | null };
-  /** The members this database calls admins (`--dev` runs). Default: none. */
-  admins?: Iterable<string>;
 }
 
 const BEFORE_WINDOW = "The start window has not opened yet.";
@@ -161,13 +159,11 @@ export class LocalDb implements Db {
   readonly #bucket: R2Bucket;
   readonly #closeAfterSeconds: number;
   readonly #window: LocalOptions["startWindow"];
-  readonly #admins: ReadonlySet<string>;
 
   private constructor(bucket: R2Bucket, options: LocalOptions) {
     this.#bucket = bucket;
     this.#closeAfterSeconds = options.closeAfterSeconds ?? CLOSE_AFTER_SECONDS;
     this.#window = options.startWindow;
-    this.#admins = new Set(options.admins ?? []);
   }
 
   static create(bucket: R2Bucket, options: LocalOptions = {}): LocalDb {
@@ -505,10 +501,6 @@ export class LocalDb implements Db {
             answer: undefined,
           },
     );
-  }
-
-  async memberIsAdmin(memberId: string): Promise<boolean> {
-    return this.#admins.has(memberId);
   }
 
   async getRun(memberId: string, runId: string, entryId: string | null): Promise<{ run: RunRow; entry: EntryRow | null } | null> {
