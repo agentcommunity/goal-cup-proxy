@@ -277,12 +277,13 @@ pub(super) fn create_and_gate<'a>(
     };
     // The model calls the run's earlier parts recorded, by the last part's `state.json`; none
     // for a run started by a build that did not count them (D73).
-    let model_calls_before = cx
-        .continuing
-        .and_then(|continuing| {
-            crate::run::read_state(&crate::run::run_dir(cfg, &continuing.record.run_id))
-        })
-        .and_then(|state| state.model_calls);
+    let previous = cx.continuing.and_then(|continuing| {
+        crate::run::read_state(&crate::run::run_dir(cfg, &continuing.record.run_id))
+    });
+    let model_calls_before = previous.as_ref().and_then(|state| state.model_calls);
+    // The last part resumed and its harness failed at once (D73): this one opens a new
+    // conversation rather than fail the same way again.
+    let resume_failed = previous.as_ref().is_some_and(|state| state.resume_failed);
     // A continued run picks up the harness's last session only when the run has one; one whose
     // harness closed before the first message opens the normal way, and the launch block says so.
     // A store that cannot be read cannot tell: the harness is resumed, and the run's log says why.
@@ -292,6 +293,14 @@ pub(super) fn create_and_gate<'a>(
     let mut session_note = None;
     let opens = match cx.continuing {
         None => crate::participant::Opens::First,
+        Some(_) if resume_failed => {
+            session_note = Some(
+                "the last part asked the harness to pick up its last session and it exited at \
+                 once, so this part opens a new one"
+                    .to_string(),
+            );
+            crate::participant::Opens::NewSession
+        }
         Some(_) => {
             match crate::launch::has_native_session(
                 profile,
@@ -300,7 +309,14 @@ pub(super) fn create_and_gate<'a>(
                 started_at_unix,
             ) {
                 Ok(true) => crate::participant::Opens::LastSession,
-                Ok(false) if resumes_without_a_file(profile, model_calls_before.unwrap_or(0)) => {
+                Ok(false)
+                    if resumes_without_a_file(
+                        profile,
+                        model_calls_before.unwrap_or(0),
+                        &config_home,
+                        started_at_unix,
+                    ) =>
+                {
                     session_note = Some(format!(
                         "no session file was found, and the run's earlier parts recorded \
                          {} model calls, so the harness is asked to pick up its last session",
@@ -660,10 +676,51 @@ pub(super) fn create_and_gate<'a>(
 }
 
 /// Whether a continue resumes a harness that left no session file (D73): the connector says a
-/// missing file is no problem (a native row with `warn_missing = false`, D72), and the run's
-/// earlier parts recorded model calls. Every other connector keeps the file rule.
-fn resumes_without_a_file(profile: &goalcup_protocol::harness::CaptureSpec, calls: u64) -> bool {
-    calls > 0 && profile.native.iter().any(|native| !native.warn_missing)
+/// missing file is no problem (a native row with `warn_missing = false`, D72), the run's earlier
+/// parts recorded model calls, and the harness home's conversation database was written since
+/// the run started. Every other connector keeps the file rule.
+fn resumes_without_a_file(
+    profile: &goalcup_protocol::harness::CaptureSpec,
+    calls: u64,
+    config_home: &Path,
+    since_unix: u64,
+) -> bool {
+    calls > 0
+        && profile.native.iter().any(|native| !native.warn_missing)
+        && session_db_written_since(config_home, since_unix)
+}
+
+/// The conversation database a harness with no session file keeps in its home (Hermes 0.21.1
+/// and later: `state.db`, with its write-ahead log beside it), D73.
+const SESSION_DB_FILES: &[&str] = &["state.db", "state.db-wal"];
+
+/// Whether one of [`SESSION_DB_FILES`] in `config_home` was modified at or after `since_unix`
+/// (whole seconds, as D57's native floor), never through a link.
+fn session_db_written_since(config_home: &Path, since_unix: u64) -> bool {
+    SESSION_DB_FILES.iter().any(|name| {
+        std::fs::symlink_metadata(config_home.join(name))
+            .ok()
+            .filter(std::fs::Metadata::is_file)
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .is_some_and(|at| at.as_secs() >= since_unix)
+    })
+}
+
+/// How soon after its release a resumed harness that exits non-zero counts as a failed resume
+/// (D73): `hermes chat --continue` with no session to pick up exits 1 at once.
+const RESUME_FAILS_WITHIN: Duration = Duration::from_secs(10);
+
+/// Whether this part's exit was a failed resume: it was asked to pick up its last session and
+/// ended non-zero within [`RESUME_FAILS_WITHIN`].
+fn failed_resume(
+    opens: crate::participant::Opens,
+    status: &Result<std::process::ExitStatus, CliError>,
+    ran: Duration,
+) -> bool {
+    opens == crate::participant::Opens::LastSession
+        && status.as_ref().is_ok_and(|status| !status.success())
+        && ran < RESUME_FAILS_WITHIN
 }
 
 /// The run's secrets for the redactor: the proxy credential, and for a run on a server the
@@ -867,6 +924,8 @@ pub(super) fn run_harness<'a>(
     // and is swept between the root's exit and the seal. Armed first, while the root is certainly
     // unreaped.
     let sweep = crate::subreaper::Sweep::for_root(handed.pid);
+    // How long the harness ran, for a failed resume (D73).
+    let released_at = std::time::Instant::now();
     let (client, entry_id) = (forked.client, forked.info.entry_id.clone());
     // A seal that raced in between the registration and the release cannot have ended a
     // harness that was still parked, so one that is sealed now is a harness running on a
@@ -1132,6 +1191,8 @@ pub(super) fn run_harness<'a>(
         state.disk.disk_paused = false;
         // The count at the harness's exit, which the tick's last look may be behind (D73).
         state.model_calls = Some(vitals.model_calls());
+        // A resume that failed at once makes the next continue open a new conversation.
+        state.resume_failed = failed_resume(forked.opens, &status, released_at.elapsed());
         state.harness = crate::run::HarnessState::Exited {
             status: match &status {
                 Ok(status) => describe_exit(status),
@@ -1306,8 +1367,8 @@ mod tests {
     use crate::daemon::MockDaemonClient;
 
     /// A continue resumes Hermes, whose native row says a missing file is no problem, once the
-    /// run has recorded model calls; a connector that always writes its file keeps the file
-    /// rule (D73).
+    /// run has recorded model calls and its home's `state.db` was written since the run started;
+    /// a connector that always writes its file keeps the file rule (D73).
     #[test]
     fn a_harness_with_no_session_file_is_resumed_only_after_model_calls() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
@@ -1315,9 +1376,42 @@ mod tests {
         let codex = crate::connector::load_harness(&dir, "codex-cli", false).unwrap();
         let hermes = &hermes.loaded.manifest.capture;
         let codex = &codex.loaded.manifest.capture;
-        assert!(resumes_without_a_file(hermes, 3));
-        assert!(!resumes_without_a_file(hermes, 0));
-        assert!(!resumes_without_a_file(codex, 3));
+        let home = tempfile::tempdir().unwrap();
+        let now = crate::run::now_unix();
+        assert!(
+            !resumes_without_a_file(hermes, 3, home.path(), now - 5),
+            "no state.db"
+        );
+        std::fs::write(home.path().join("state.db"), b"").unwrap();
+        assert!(resumes_without_a_file(hermes, 3, home.path(), now - 5));
+        assert!(
+            !resumes_without_a_file(hermes, 3, home.path(), now + 60),
+            "written before"
+        );
+        assert!(!resumes_without_a_file(hermes, 0, home.path(), now - 5));
+        assert!(!resumes_without_a_file(codex, 3, home.path(), now - 5));
+    }
+
+    /// A resumed harness that exits non-zero at once is a failed resume, and the next continue
+    /// opens a new conversation; a slow or clean exit, or a part that did not resume, is not
+    /// (D73).
+    #[test]
+    fn a_resume_that_fails_at_once_is_recorded() {
+        use crate::participant::Opens;
+        use std::os::unix::process::ExitStatusExt;
+        let failed: Result<std::process::ExitStatus, CliError> =
+            Ok(std::process::ExitStatus::from_raw(1 << 8));
+        let clean: Result<std::process::ExitStatus, CliError> =
+            Ok(std::process::ExitStatus::from_raw(0));
+        let soon = Duration::from_secs(2);
+        assert!(failed_resume(Opens::LastSession, &failed, soon));
+        assert!(!failed_resume(Opens::LastSession, &clean, soon));
+        assert!(!failed_resume(
+            Opens::LastSession,
+            &failed,
+            Duration::from_secs(600)
+        ));
+        assert!(!failed_resume(Opens::NewSession, &failed, soon));
     }
 
     /// The count of model calls survives in `state.json` across parts, and a state an older

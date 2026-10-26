@@ -1045,7 +1045,11 @@ chat --continue` resumes the last session in a `HERMES_HOME` and exits 1 when th
   far (every part), local to the CLI like `no_model_calls`; the daemon and the control API
   (v12) are unchanged, so a running 0.7.0 daemon keeps working. At `continue`, a connector with
   a native row of `warn_missing = false` (Hermes) is launched with its `resume_args` when no
-  session file exists and the earlier parts recorded a model call. Every other connector keeps
+  session file exists, the earlier parts recorded a model call, and the home's conversation
+  database (`state.db` or `state.db-wal` in the config home) was modified at or after the run's
+  start. A part that resumed and exited non-zero within 10 s is recorded in `state.json`
+  (`resume_failed`), and the next `continue` opens a new conversation (and prints the block)
+  instead of failing the same way; this holds for every connector. Every other connector keeps
   the file rule (D57's `has_native_session`). A run started on 0.7.0 has no count and keeps that
   rule. A launch that resumes says to type only "keep going" when the run has recorded model
   calls. With none recorded (Claude Code writes its session file at startup, before any

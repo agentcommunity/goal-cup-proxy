@@ -141,7 +141,9 @@ the v0.22.5 checkout) changed two things the 0.19.0 recipe relied on. The connec
   `sessions.write_json_snapshots` configure command stay for Hermes up to 0.21.0.
 - **`goalcup continue`** resumes on 0.22 too (D73, goalcup 0.7.1). With no session file,
   goalcup asks for `--continue` once the run's earlier parts recorded model calls (it keeps the
-  count in the run's `state.json`); then there is a conversation to pick up. Measured with
+  count in the run's `state.json`) and Hermes's `state.db` (or its `-wal`) in the home was
+  written since the run started; then there is a conversation to pick up. A resumed Hermes that
+  exits non-zero within 10 s is noted, and the next `goalcup continue` opens a new conversation. Measured with
   v0.22.5 on 26 Oct 2026: `hermes chat --continue` resumes the last session in a `HERMES_HOME`
   (`Resumed session <id>`), and with no earlier session exits 1 (`No previous CLI session to
   continue.`), which is why a part with no recorded model call still opens without it. A whole

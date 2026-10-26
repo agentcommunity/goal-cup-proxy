@@ -264,6 +264,11 @@ pub struct RunState {
     /// to `state.json`, like `no_model_calls`. Absent from a `state.json` an older build wrote.
     #[serde(default)]
     pub model_calls: Option<u64>,
+    /// This part asked the harness to pick up its last session and the harness exited non-zero
+    /// at once: the next `goalcup continue` opens a new conversation (D73). Absent from a
+    /// `state.json` an older build wrote.
+    #[serde(default)]
+    pub resume_failed: bool,
 }
 
 /// What the watch tick saw when it called the run's harness silent: no model call recorded.
@@ -440,6 +445,7 @@ impl RunState {
             native_silent: None,
             no_model_calls: None,
             model_calls: None,
+            resume_failed: false,
         }
     }
 
