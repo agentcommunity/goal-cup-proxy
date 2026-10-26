@@ -872,7 +872,9 @@ cutoff; a merged connector ships in the next point release.
   set) refuses a competition device request and a competition open from an older goalcup
   (`TOO_OLD`, with the install line). It is set to `0.7.0` once 0.7.0 is released, because 0.6.1
   clients use the clone flow and never send `dev`. `continue` is not checked, so a running run is
-  never cut off.
+  never cut off. *26 Oct 2026:* the cup's minimum will be `0.7.1`, not `0.7.0`. It is set through a
+  PR only once `releases/latest` serves 0.7.1, then deployed
+  ([worker README](../server/worker/README.md#set-the-minimum-competition-version)).
 - **Never update over a run.** `install.sh` refuses to replace a goalcup that is recording a run
   (`--force` overrides). The released 0.6.1 installer has no such guard, so a 0.6.1 dry-run player
   is told to seal before they update. From 0.7.0 to 15 Nov 2026 a release keeps
