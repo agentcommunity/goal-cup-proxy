@@ -157,8 +157,9 @@ connector id that is not the fake needs its
 
 **The project folder and the token (D69, D71).** `goalcup start` works in the folder it is run from, as a
 player's does, and the kit makes that folder: `<temporary directory>/projects/<name>`, never beside the
-configuration directory. The kit passes goalcup no git login (no git configuration, SSH agent or
-`GH_TOKEN`), and goalcup passes the agent none.
+configuration directory. The kit strips this machine's git login from goalcup's environment
+(`SSH_AUTH_SOCK`, `GH_TOKEN`, `GITHUB_TOKEN`, the keyring and git/gh configuration variables), and goalcup
+passes the agent none.
 
 | Cell | What it runs | The project folder |
 |---|---|---|
@@ -167,13 +168,18 @@ configuration directory. The kit passes goalcup no git login (no git configurati
 | `--refusals` | seven starts that must refuse before the approval | one folder per row |
 
 Before a test run's login, the kit writes the `.env.local` (made with umask 077, so mode 0600; the token
-goes from `gh auth token` straight into the file, never through an argument, a variable or the log), then
-makes the repository with the machine's GitHub login:
+goes straight into the file, never through an argument, a variable or the log), then makes the repository with the machine's GitHub login:
 `gh repo create <user>/goalcup-kit-<cell>-<6 hex> --public`, with no README, so it is empty
 (`MATRIX_CELL` names the cell; default the connector). `MATRIX_REPO=<owner>/<name>` names one instead (the
-token must be able to push to it). With no login, the row FAILs with one line: run `gh auth login` here
+token must be able to push to it). The token is `gh auth token`, which is the whole login, or the file
+`MATRIX_GH_TOKEN_FILE=<path>` names (mode 0600, outside the checkout, one line `GH_TOKEN=<value>` or the
+value alone; the log says which source was used, never the value). **Prefer a fine-grained token for the one
+repository** (Contents: read and write): the agent can read `.env.local`, and the account-wide `gh` token
+reaches all of the owner's repositories and could end up in a staging trace. Host cells only; a Docker cell
+uses the container's own login. With no login, the row FAILs with one line: run `gh auth login` here
 (HTTPS, and Yes to authenticate Git). The token is taken out of the log (and the terminal capture) if the
-agent printed it, and `.env.local` is deleted at the end even with `--keep`. The kit never deletes a
+agent printed it (the kit keeps a private copy of it from the start, so this holds even if the agent deleted
+or rewrote `.env.local`), and `.env.local` is deleted at the end even with `--keep`. The kit never deletes a
 repository; it prints the name at the end (`gh repo delete <name> --yes` when done, after
 `gh auth refresh -s delete_repo`: the default `gh auth login` lacks that scope; then
 `gh auth refresh -r delete_repo` to drop it again, because host cells' agents are given that login's
@@ -182,13 +188,14 @@ row at once.
 
 `--refusals` checks, with no harness and no terminal, that a real run's start refuses before any
 approval or run record, says "Nothing was created.", and leaves the project folder as it was. Each row
-matches one short phrase. The folder rows: it holds a README (`folder-not-empty`), a `.git`
+matches one short phrase of goalcup's refusal ("also holds README.md", "also holds .git", "does not cover
+.env.local", "already has commits (12 KB)", "already has commits; name", "GitHub does not show", "with its
+owner"). The folder rows: it holds a README (`folder-not-empty`), a `.git`
 (`git-present`), a `.env.local` and no `.gitignore` (`env-no-gitignore`). The repository rows: GitHub says
 it has commits (`repo-has-size`); GitHub reports size 0 but its commits call answers 200, a repository
 made with a README (`readme-repo`); GitHub does not show it (`private`: private and missing look alike);
-and `--repo <name>` with no owner (`bare-name`). `env-no-gitignore` and `readme-repo` need goalcup with
-the task 2b-CLI checks; on an older goalcup they FAIL with "the run's approval was asked for". GitHub is
-a stand-in the script serves on 127.0.0.1, reached through the CLI's test doors, so it needs a test build
+and `--repo <name>` with no owner (`bare-name`). A goalcup older than the 0.7 start checks
+(`env-no-gitignore`, `readme-repo`) FAILs those rows with "the run's approval was asked for". GitHub is a stand-in the script serves on 127.0.0.1, reached through the CLI's test doors, so it needs a test build
 of goalcup:
 `cargo build --offline -p goalcup-cli --features test-support --target-dir target/kit-test`, then
 `MATRIX_BIN_DIR=target/kit-test/debug sh scripts/matrix.sh m2-fake-tui <server> --refusals`. It still

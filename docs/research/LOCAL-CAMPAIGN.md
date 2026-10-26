@@ -55,7 +55,12 @@ not prove: other platforms, other harness versions, model behaviour, or particip
    and the token in its project's `.env.local`, with all of that login's scopes** (it runs as the
    same user, with no sandbox, and `gh` reads the login from the volume's home). That login is the
    owner's own (accepted for this kit); use a login whose scopes you are willing to let an agent
-   use. Nothing else secret is in a Docker cell's container:
+   use. **Prefer a fine-grained token for the one repository** (Contents: read and write) on host cells:
+   `MATRIX_GH_TOKEN_FILE=<file>` (mode 0600, outside the checkout, one line `GH_TOKEN=<value>`) gives
+   `matrix.sh` that token instead of `gh auth token`. The agent can read `.env.local`, and the account-wide
+   `gh` token reaches all the owner's repositories and could end up in a staging trace. The repository is
+   made first, so name it with `MATRIX_REPO` (or a cell's `repo`) to match the token. A Docker cell ignores
+   the variable. Nothing else secret is in a Docker cell's container:
    the staging key never enters it (the host approves the device codes the container writes down),
    and a Docker cell takes no database URL or R2 token ([OPERATING](../OPERATING.md), the Docker
    cell and "A long run").
