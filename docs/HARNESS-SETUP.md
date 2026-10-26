@@ -37,7 +37,9 @@ means that nobody at Goal Cup has tried it. The details are in each
 5. Add the settings from your harness's section below.
 6. Add the Goal Cup time-left tool ([how](#add-the-goal-cup-time-left-tool)).
 7. Run `goalcup setup` again. It names each permission setting that is still missing.
-8. Do a practice run: `goalcup start --harness <id> --practice`.
+8. Do a practice run. `goalcup setup` prints the command; it is
+   `d=$(mktemp -d ~/goalcup-practice-XXXX) && cd "$d" && goalcup start --harness <id> --practice`
+   (each paste makes a new empty folder in your home).
 9. In the practice run, check that the agent commits without asking you anything, and ask it to
    call its `time_left` tool.
 

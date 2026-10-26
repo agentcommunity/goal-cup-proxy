@@ -190,8 +190,8 @@ facts sheet. No `.rs` file and no test of your own. Start with the
 6. **Run it for real**: a local smoke run, then a practice run on the server
    (`goalcup start --harness <id> --practice`), checked with `goalcup-verify --capture-integrity`.
 
-A harness can join the event until the last release. The organizers run a test run before it
-ships ([getting a harness into the event](docs/HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)).
+A harness can join the event at any time: releases continue during the cup, and a merged connector
+ships in the next one. A maintainer does a practice run of it first ([getting a harness into the event](docs/HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)).
 
 ## For developers
 

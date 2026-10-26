@@ -118,7 +118,7 @@ repository to exist first.
    the `.gitignore`:
 
    ```sh
-   mkdir my-cup-run && cd my-cup-run
+   mkdir -p ~/code/my-cup-run && cd ~/code/my-cup-run
    printf '.env*\n' > .gitignore
    ```
 
@@ -132,7 +132,8 @@ repository to exist first.
    ```
 
    If it prints `0`, copy the token again and repeat. `pbpaste` is the Mac clipboard; on Linux use
-   `xclip -o` or `wl-paste`, or write the file in an editor. The line must be exactly
+   `xclip -o -selection clipboard` (or `wl-paste` on Wayland). Under WSL2 use
+   `powershell.exe Get-Clipboard`, or write the file in an editor. The line must be exactly
    `GH_TOKEN=<token>`: no `export`, no quotes, no spaces. Have it in the file before you start:
    the recorder redacts that value everywhere, and a token added later is covered by its
    `github_pat_` pattern only.
@@ -140,7 +141,8 @@ repository to exist first.
    Keys your agent's own product needs may go in `.env.local` too, one `NAME=value` per line, but
    not the harness's sign-in. `goalcup` refuses an `.env` file that `.gitignore` does not cover, so
    the agent's first `git add .` cannot publish the token. Keep the folder out of any git
-   repository, and off a Windows drive under WSL2.
+   repository, and off a Windows drive under WSL2. Do not use Desktop, Documents or any synced
+   folder (iCloud Drive, Dropbox, OneDrive, Google Drive): the service would upload `.env.local`.
 4. **Start.** In that folder:
 
    ```sh
@@ -221,14 +223,17 @@ output with the run id it shows. Never paste your GitHub token.
 ## Appendix: if `goalcup start` stops
 
 All but the outage row stop before the approval and say "Nothing was created". Fix it and run
-`start` again.
+`start` again. The folder is checked once more right after you approve: if it changed meanwhile
+(an editor added a folder), the start stops before anything opens, with the same kind of message.
 
 | It says | Do this |
 |---|---|
 | The folder also holds other files | Make a new folder with only `.gitignore`, `.env` and `.env.*` files (and a macOS `.DS_Store`). |
-| No `GH_TOKEN` line (a real run only) | Put `GH_TOKEN=<token>` in `.env.local`. A practice run needs no token. |
+| No `GH_TOKEN` line (a real run only) | Put `GH_TOKEN=<token>` in `.env.local`. A practice run needs no token. If there is no `.gitignore` either, it also prints the two lines to put in one (`.env` and `.env.*`). |
 | `.gitignore` does not cover an `.env` file | Add the line `.env*` (or `.env` and `.env.*`). |
 | Write your token as one line, exactly `GH_TOKEN=<token>` | Remove `export`, quotes and spaces, and any second `GH_TOKEN` line in any `.env` file. |
+| This folder belongs to run `<id>` | You started a run here and it is not over. `goalcup status` shows it; if the agent has exited, `goalcup continue`. A new run needs a new folder (a new competition run also needs a new repository, and replaces the old run). |
+| A service syncs this folder | Dropbox, OneDrive, Google Drive or iCloud (Desktop and Documents too, when iCloud syncs them) would upload `.env.local`. Use a folder outside it, for example under `~/code`. |
 | The folder is inside a Git repository | Use a folder outside any repository. If it names `GOALCUP_CONFIG_DIR`, goalcup's own folder is inside a repository: set that variable to a folder outside it. |
 | The folder is goalcup's own, or next to one | Use a folder somewhere else, for example in your home folder. |
 | The repository is not empty (a README counts) | Make a new repository with no README, `.gitignore` or licence. |
