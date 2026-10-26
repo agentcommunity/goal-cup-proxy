@@ -76,8 +76,8 @@ Without `--harness` it checks the harness you chose in `goalcup setup`; pass `--
 check another one, or `--harness all` to check every shipped harness (one you have not \
 installed then makes this command exit 1).";
 
-/// The sub-commands: eleven, and the hidden `git-credential` that a run's clone calls. `verify`
-/// is deliberately absent: see `AFTER_HELP`.
+/// The sub-commands: eleven, and the hidden `git-credential` that a clone made before 0.7
+/// calls. `verify` is deliberately absent: see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
     /// Step 1. Get this computer ready for your run.
@@ -85,21 +85,16 @@ enum Command {
     /// Four steps: this computer is connected to your Goal Cup account (it logs in if not);
     /// you choose your agent (the harness) and it is installed; you open it once here, sign in
     /// or paste your API key, and add your settings, MCP servers and skills; and this computer
-    /// has the power, the disk, the network and a work folder outside any Git repository that a
-    /// week-long run needs. Each step prints `[ok]`, `[todo]` or `[fail]`, and the last line
-    /// says what to do next. Run it again as often as you like: what passed is not repeated. It
-    /// never starts a run, and Goal Cup keeps no key.
+    /// has the power, the disk and the network that a week-long run needs. Each step prints
+    /// `[ok]`, `[todo]` or `[fail]`, and the last line says what to do next. Run it again as
+    /// often as you like: what passed is not repeated. It never starts a run, and Goal Cup keeps
+    /// no key.
     #[command(alias = "prep")]
     Setup {
         /// Your agent, for example `codex-cli` or `claude-code-cli`. Without it, the one you
         /// chose before, or it asks.
         #[arg(long, value_name = "ID")]
         harness: Option<String>,
-        /// The folder each run's clone is made in, as a full path. It must be outside any Git
-        /// repository. Default: `goalcup-work` in your home folder. Under WSL2 it must not be
-        /// on a Windows drive.
-        #[arg(long, value_name = "PATH")]
-        work_root: Option<std::path::PathBuf>,
         /// Print the four steps as one JSON array (`step`, `state`, `human`, `say`), and nothing
         /// else. It asks nothing and opens nothing.
         #[arg(long)]
@@ -122,11 +117,11 @@ enum Command {
     },
     /// Step 2. Start a run: open your agent here and record what it does.
     ///
-    /// A real run first asks for its own new, empty, public GitHub repository and checks that
-    /// your git can push to it; a practice run needs none. Your agent opens in this terminal.
-    /// Type your prompt there, and after it only "keep going". Until the agent exits, goalcup
-    /// prints nothing here; open a second terminal and run `goalcup status` to see the run. The
-    /// run's folder is created in the folder you run `goalcup start` from.
+    /// Run it in your project folder: a new, empty folder holding only your `.gitignore` and
+    /// `.env.local`. Your agent works there. A real run first asks for its own new, empty, public
+    /// GitHub repository; a practice run needs none. Your agent opens in this terminal. Type your
+    /// prompt there, and after it only "keep going". Until the agent exits, goalcup prints
+    /// nothing here; open a second terminal and run `goalcup status` to see the run.
     Start {
         /// Which harness to run, for example `claude-code-cli` or `codex-cli` (`goalcup doctor`
         /// lists every one this build ships).
@@ -137,12 +132,12 @@ enum Command {
         #[arg(long)]
         dev: bool,
         /// A practice run: the server keeps it apart from the competition, and it never
-        /// replaces your competition run. The agent works in a new local folder with no GitHub
-        /// repository. Needs `goalcup setup` first, like a competition run.
+        /// replaces your competition run. The agent works in this folder, as in a real run, with
+        /// no GitHub repository. Needs `goalcup setup` first, like a competition run.
         #[arg(long, conflicts_with = "test")]
         practice: bool,
-        /// This run's new, empty, public GitHub repository: its name, `<owner>/<name>` or its
-        /// address. Without it, a real run asks. A practice run has none, and ignores it.
+        /// This run's new, empty, public GitHub repository: `<owner>/<name>` or its address.
+        /// Without it, a real run asks. A practice run has none, and ignores it.
         #[arg(long, value_name = "NAME")]
         repo: Option<String>,
         /// An organizer test run: full length like a competition run, opened only by
@@ -325,17 +320,9 @@ fn run(command: Command) -> Result<u8, CliError> {
             doctor(commands::doctor::DoctorOptions { json, harness })
         }
         Command::Login { server } => login(server).map(|()| 0),
-        Command::Setup {
-            harness,
-            work_root,
-            json,
-            dev,
-        } => prep(commands::prep::PrepOptions {
-            harness,
-            work_root,
-            json,
-            dev,
-        }),
+        Command::Setup { harness, json, dev } => {
+            prep(commands::prep::PrepOptions { harness, json, dev })
+        }
         Command::GitCredential { operation } => {
             let cfg = goalcup_cli::config::config_dir()?;
             goalcup_cli::account::github::credential_helper(
@@ -480,17 +467,11 @@ fn browser_opener_unless(no_browser: bool) -> fn(&str) -> bool {
     goalcup_platform::machine::open_url
 }
 
-/// What `goalcup setup` opens: the login's approval address, and the keys file. Both are off
-/// when [`browser_opener`] is.
+/// What `goalcup setup` opens: the login's approval address. It is off when [`browser_opener`]
+/// is.
 fn openers() -> commands::prep::Openers {
-    let off = browsers_off();
     commands::prep::Openers {
-        url: browser_opener_unless(off),
-        file: if off {
-            |_| false
-        } else {
-            goalcup_platform::machine::open_file
-        },
+        url: browser_opener_unless(browsers_off()),
     }
 }
 
@@ -565,12 +546,10 @@ fn start(opts: commands::start::StartOptions) -> Result<(), CliError> {
     // A harness that cannot be loaded is refused before a daemon is started or anything else
     // is done.
     goalcup_cli::connector::load_harness(&connectors, &opts.harness, opts.dev)?;
-    let client = ensure_daemon(
-        &cfg,
-        goalcup_cli::daemon::MissingConfig::WriteDefault {
-            connectors: &connectors,
-        },
-    )?;
+    // The daemon is started on the first call `start` makes to it, which comes after the repo
+    // questions and the approval: a daemon started before them would end itself (its 30 s idle
+    // grace) while the participant answers or approves in the browser.
+    let client = LazyDaemon::new(&cfg, &connectors);
     // Linux: before the gated spawn, so what the harness leaves behind is reparented here and
     // swept before the seal (`subreaper.rs`). Only this binary arms it, never an in-process start.
     if let Err(e) = goalcup_cli::subreaper::arm() {
@@ -628,7 +607,6 @@ fn continue_run(run: Option<String>) -> Result<(), CliError> {
         &env,
         &commands::continue_run::ContinueOptions {
             run,
-            run_folder: std::env::current_dir().ok(),
             disk: disk_policy()?,
             native_silence: native_silence()?,
             upload_policy: upload_policy()?,
@@ -796,6 +774,130 @@ fn ensure_daemon(
         goalcup_cli::daemon::spawn::Wait::SHIPPED,
         &mut say_waiting,
     )
+}
+
+/// `goalcup start`'s daemon, started on its first call ([`ensure_daemon`], with `daemon.toml`
+/// written with local defaults when it is missing) and reused after. A start that fails to reach
+/// one gives every later call the same refusal.
+struct LazyDaemon<'a> {
+    cfg: &'a std::path::Path,
+    connectors: &'a std::path::Path,
+    client: std::sync::OnceLock<Result<goalcup_cli::daemon::HttpDaemonClient, String>>,
+}
+
+impl<'a> LazyDaemon<'a> {
+    fn new(cfg: &'a std::path::Path, connectors: &'a std::path::Path) -> Self {
+        Self {
+            cfg,
+            connectors,
+            client: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn get(
+        &self,
+    ) -> Result<&goalcup_cli::daemon::HttpDaemonClient, goalcup_protocol::control::ControlError>
+    {
+        self.client
+            .get_or_init(|| {
+                ensure_daemon(
+                    self.cfg,
+                    goalcup_cli::daemon::MissingConfig::WriteDefault {
+                        connectors: self.connectors,
+                    },
+                )
+                .map_err(|e| e.to_string())
+            })
+            .as_ref()
+            .map_err(|why| goalcup_protocol::control::ControlError::Unreachable(why.clone()))
+    }
+}
+
+impl goalcup_protocol::control::DaemonClient for LazyDaemon<'_> {
+    fn status(
+        &self,
+        entry_id: &str,
+    ) -> Result<goalcup_protocol::control::SignedStatus, goalcup_protocol::control::ControlError>
+    {
+        self.get()?.status(entry_id)
+    }
+
+    fn entries(
+        &self,
+    ) -> Result<Vec<goalcup_protocol::control::EntrySummary>, goalcup_protocol::control::ControlError>
+    {
+        self.get()?.entries()
+    }
+
+    fn seal(
+        &self,
+        entry_id: &str,
+    ) -> Result<goalcup_protocol::seal::SealManifest, goalcup_protocol::control::ControlError> {
+        self.get()?.seal(entry_id)
+    }
+
+    fn register_process(
+        &self,
+        entry_id: &str,
+        request: &goalcup_protocol::process::ProcessRegistration,
+    ) -> Result<(), goalcup_protocol::control::ControlError> {
+        self.get()?.register_process(entry_id, request)
+    }
+
+    fn health(
+        &self,
+    ) -> Result<goalcup_protocol::control::DaemonHealth, goalcup_protocol::control::ControlError>
+    {
+        self.get()?.health()
+    }
+
+    fn abandon(
+        &self,
+        entry_id: &str,
+        reason: &str,
+    ) -> Result<(), goalcup_protocol::control::ControlError> {
+        self.get()?.abandon(entry_id, reason)
+    }
+
+    fn create_capture_workspace(
+        &self,
+        request: &goalcup_protocol::control::CaptureWorkspaceRequest,
+    ) -> Result<
+        goalcup_protocol::control::CaptureWorkspaceInfo,
+        goalcup_protocol::control::ControlError,
+    > {
+        self.get()?.create_capture_workspace(request)
+    }
+
+    fn record_capture_goal(
+        &self,
+        entry_id: &str,
+        request: &goalcup_protocol::control::CaptureGoalRequest,
+    ) -> Result<goalcup_protocol::capture::StreamKey, goalcup_protocol::control::ControlError> {
+        self.get()?.record_capture_goal(entry_id, request)
+    }
+
+    fn record_capture_launch(
+        &self,
+        entry_id: &str,
+        request: &goalcup_protocol::control::CaptureLaunchRequest,
+    ) -> Result<(), goalcup_protocol::control::ControlError> {
+        self.get()?.record_capture_launch(entry_id, request)
+    }
+
+    fn seal_capture(
+        &self,
+        entry_id: &str,
+        request: &goalcup_protocol::control::CaptureSealRequest,
+        read_timeout: std::time::Duration,
+    ) -> Result<
+        goalcup_protocol::control::CaptureFinishReport,
+        goalcup_protocol::control::CaptureSealError,
+    > {
+        self.get()
+            .map_err(goalcup_protocol::control::CaptureSealError::NotAdmitted)?
+            .seal_capture(entry_id, request, read_timeout)
+    }
 }
 
 /// The daemon `status` and `entries` ask, if there is one to ask, with the same waits.

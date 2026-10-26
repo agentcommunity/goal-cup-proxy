@@ -15,7 +15,7 @@
 //! | Path | Written by | Held here |
 //! |---|---|---|
 //! | `server.json` | `goalcup login` | the upload server's URL and the account's handle, mode 0600; no secret (`crate::server`) |
-//! | `prep.json` | `goalcup setup`, and `goalcup start` for the repository | the harness and the work folder setup settled, and the last real run's repository, kept only to suggest the next name (`crate::prep_file`) |
+//! | `prep.json` | `goalcup setup`, and `goalcup start` for the repository | the harness setup settled, and the last real run's repository, kept only to suggest the next name (`crate::prep_file`) |
 //! | `prep.log` | `goalcup setup` | what the connector's `capture.configure` commands printed (D61), appended, mode 0600 |
 //! | `github.json` | versions before D69 (nothing writes it now) | the repository URL and GitHub token of an older clone, mode 0600, read only by that clone's `goalcup git-credential`; `goalcup setup` names it so the participant can delete it (`crate::account::github`) |
 //! | `entries/<id>.json` | `goalcup start` | one record per entry, the pin a status is checked against (`crate::entries`) |

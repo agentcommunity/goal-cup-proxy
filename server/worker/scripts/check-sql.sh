@@ -227,26 +227,6 @@ BEGIN
     ASSERT NOT has_function_privilege('public', k, 'EXECUTE'), 'PUBLIC can call ' || k;
   END LOOP;
 
-  -- 7. The admin check: a confirmed user whose email is in public.admins (any case, any padding).
-  INSERT INTO auth.users (id, email, email_confirmed_at) VALUES
-    ('22222222-2222-2222-2222-222222222222', 'admin@example.org', t0),
-    ('33333333-3333-3333-3333-333333333333', 'unconfirmed@example.org', NULL),
-    ('44444444-4444-4444-4444-444444444444', 'member@example.org', t0);
-  INSERT INTO public.admins (email) VALUES (' Admin@Example.org '), ('unconfirmed@example.org');
-  ASSERT public.goal_cup_upload_member_is_admin('22222222-2222-2222-2222-222222222222') IS TRUE, 'admin is not admin';
-  ASSERT public.goal_cup_upload_member_is_admin('33333333-3333-3333-3333-333333333333') IS FALSE, 'unconfirmed admin email counted';
-  ASSERT public.goal_cup_upload_member_is_admin('44444444-4444-4444-4444-444444444444') IS FALSE, 'non-admin counted';
-  ASSERT public.goal_cup_upload_member_is_admin('55555555-5555-5555-5555-555555555555') IS FALSE, 'unknown uuid counted';
-  ASSERT public.goal_cup_upload_member_is_admin('not-a-uuid') IS FALSE, 'a non-uuid raised or counted';
-  ASSERT public.goal_cup_upload_member_is_admin('') IS FALSE, 'an empty id counted';
-  ASSERT public.goal_cup_upload_member_is_admin(NULL) IS FALSE, 'a null id counted';
-  k := 'public.goal_cup_upload_member_is_admin(text)';
-  ASSERT has_function_privilege('goal_cup_ingest_staging', k, 'EXECUTE'), 'staging Worker cannot call ' || k;
-  ASSERT has_function_privilege('goal_cup_ingest_production', k, 'EXECUTE'), 'production Worker cannot call ' || k;
-  ASSERT has_function_privilege('service_role', k, 'EXECUTE'), 'service_role cannot call ' || k;
-  ASSERT NOT has_function_privilege('anon', k, 'EXECUTE'), 'anon can call ' || k;
-  ASSERT NOT has_function_privilege('authenticated', k, 'EXECUTE'), 'authenticated can call ' || k;
-  ASSERT NOT has_function_privilege('public', k, 'EXECUTE'), 'PUBLIC can call ' || k;
 END $$;
 SQL
 echo "check-sql: smoke calls passed"

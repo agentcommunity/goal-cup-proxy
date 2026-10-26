@@ -197,6 +197,8 @@ impl Vertical {
                 "GOALCUP_TEST_FINISH_BUDGET_MS",
                 TEST_FINISH_BUDGET_MS.to_string(),
             )
+            // The test connector runs through `--dev`; this stands in for a pinned one.
+            .env(goalcup_cli::commands::start::TEST_DEV_COMPETES, "1")
             .stdin(Stdio::null());
         for key in ["USER", "LOGNAME", "TMPDIR"] {
             if let Ok(value) = std::env::var(key) {

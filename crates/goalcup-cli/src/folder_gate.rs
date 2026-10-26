@@ -176,9 +176,9 @@ mod tests {
         let c = Path::new("/mnt/c/Users/me");
         let linux = Path::new("/mnt/c/linux/work");
         let home = Path::new("/home/me");
-        assert!(host.check(&[("work folder", c)]).is_err());
-        assert!(host.check(&[("work folder", linux)]).is_ok());
-        assert!(host.check(&[("work folder", home)]).is_ok());
+        assert!(host.check(&[("project folder", c)]).is_err());
+        assert!(host.check(&[("project folder", linux)]).is_ok());
+        assert!(host.check(&[("project folder", home)]).is_ok());
     }
 
     #[test]
@@ -216,7 +216,7 @@ mod tests {
         assert!(host.state("wsl", "2") && host.state("fs", "/mnt/c=9p"));
         assert_eq!(host.version(), Some(2));
         assert!(
-            host.check(&[("work folder", Path::new("/mnt/c/x"))])
+            host.check(&[("project folder", Path::new("/mnt/c/x"))])
                 .is_err()
         );
         assert!(!host.state("wsl", "3") && !host.state("fs", "mnt=9p") && !host.state("x", "1"));

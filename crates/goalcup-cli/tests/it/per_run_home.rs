@@ -9,7 +9,8 @@
 use crate::common::support;
 use goalcup_cli::CliError;
 use goalcup_cli::per_run_home::{
-    create_per_run_home, icloud_folder_synced, refuse_inside_git_work_tree, refuse_synced_folder,
+    RunFolder, create_per_run_home, icloud_folder_synced, refuse_inside_git_work_tree,
+    refuse_synced_folder,
 };
 #[cfg(target_os = "macos")]
 use goalcup_cli::per_run_home::{
@@ -270,7 +271,7 @@ fn a_goal_directory_inside_a_git_work_tree_is_refused() {
     let root = std::fs::canonicalize(tmp.path()).unwrap();
     let plain = root.join("plain/deeper");
     std::fs::create_dir_all(&plain).unwrap();
-    refuse_inside_git_work_tree(&plain).expect("no repository above it");
+    refuse_inside_git_work_tree(&plain, RunFolder::ConfigRuns).expect("no repository above it");
 
     // A `.git` directory above, at any depth.
     let repo = root.join("repo");
@@ -278,21 +279,30 @@ fn a_goal_directory_inside_a_git_work_tree_is_refused() {
     let inside = repo.join("a/b/c");
     std::fs::create_dir_all(&inside).unwrap();
     for dir in [&repo, &repo.join("a"), &inside] {
-        let err = refuse_inside_git_work_tree(dir).expect_err("inside a work tree");
+        let err = refuse_inside_git_work_tree(dir, RunFolder::ConfigRuns)
+            .expect_err("inside a work tree");
         assert!(matches!(err, CliError::Refused(_)), "{err:?}");
         assert_eq!(err.exit_code(), 1);
         assert!(err.to_string().contains("Git work tree"), "{err}");
+        assert!(err.to_string().contains("GOALCUP_CONFIG_DIR"), "{err}");
         assert!(err.to_string().contains("Nothing was created"), "{err}");
     }
+    // A run with no server is made where it is started: the hint is to start somewhere else.
+    let err = refuse_inside_git_work_tree(&repo, RunFolder::StartedFrom).expect_err("inside");
+    assert!(
+        err.to_string().contains("Start from a folder outside"),
+        "{err}"
+    );
+    assert!(!err.to_string().contains("GOALCUP_CONFIG_DIR"), "{err}");
 
     // A linked work tree has a `.git` FILE, which is as much a work tree.
     let linked = root.join("linked");
     std::fs::create_dir_all(linked.join("sub")).unwrap();
     std::fs::write(linked.join(".git"), "gitdir: /elsewhere/.git/worktrees/x\n").unwrap();
-    assert!(refuse_inside_git_work_tree(&linked.join("sub")).is_err());
+    assert!(refuse_inside_git_work_tree(&linked.join("sub"), RunFolder::ConfigRuns).is_err());
 
     // A sibling of the repository is not inside it.
-    refuse_inside_git_work_tree(&root.join("plain")).expect("a sibling");
+    refuse_inside_git_work_tree(&root.join("plain"), RunFolder::ConfigRuns).expect("a sibling");
 }
 
 /// "Stays local" is not only a Git matter. A goal file under a folder a client

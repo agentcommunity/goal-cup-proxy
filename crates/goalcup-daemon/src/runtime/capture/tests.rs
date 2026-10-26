@@ -22,6 +22,7 @@ fn chain(dir: &Path, quota: u64) -> ChainWriter {
         excluded: Vec::new(),
         git: None,
         home: None,
+        capped: None,
     };
     export
         .write_baseline_for_protocol(M2_PROTOCOL_VERSION, &baseline)

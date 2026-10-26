@@ -565,13 +565,10 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
         "TMPDIR",
         "GOALCUP_IN_HARNESS",
         "GOALCUP_TIME_LEFT_FILE",
-        // D69: the way to the participant's own git login, as paths or a socket.
-        "SSH_AUTH_SOCK",
-        "GIT_CONFIG_GLOBAL",
-        "GH_CONFIG_DIR",
-        "XDG_RUNTIME_DIR",
-        "DBUS_SESSION_BUS_ADDRESS",
+        // OD9: no system git config and no ssh key of the participant's.
         "GIT_CONFIG_NOSYSTEM",
+        "GIT_SSH_COMMAND",
+        "GIT_TERMINAL_PROMPT",
     ] {
         allowed.insert(pin.to_string());
     }
@@ -642,46 +639,28 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
     }
 }
 
-/// D69: the agent pushes with the participant's own git login. Every launch but a practice
-/// run's carries exactly five ways to it, as paths or sockets and only when they exist:
-/// `SSH_AUTH_SOCK`, their real git config as `GIT_CONFIG_GLOBAL`, their `gh` folder as
-/// `GH_CONFIG_DIR`, and the keyring's `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`; never a
-/// token from their environment. A practice run pushes nowhere and gets none of them, and
-/// `GIT_CONFIG_NOSYSTEM=1` so the system git config (macOS: `credential.helper=osxkeychain`)
-/// cannot hand it a login either. With them, the agent's git, under the run's own `HOME`, gets a login
-/// from a `gh` credential helper the participant set up (`gh auth login`); here a fake `gh` that
-/// answers only from the folder `GH_CONFIG_DIR` names.
+/// OD9: the agent pushes with the token the participant puts in the project folder's
+/// `.env.local`, for the run's one repository, and nothing else of their git login. A launch
+/// carries none of it, even when the participant has every piece of it set up: no SSH agent, no
+/// git config, no `gh` folder, no keyring sockets, and no token from their environment; and it
+/// turns off the system git config and the participant's ssh keys.
 #[test]
-fn every_launch_carries_the_way_to_the_participants_git_login_and_no_key() {
+fn a_launch_carries_nothing_of_the_participants_git_login() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().canonicalize().unwrap();
-    let home = root.join("participant-home");
-    let gh_dir = home.join(".config/gh");
-    std::fs::create_dir_all(&gh_dir).unwrap();
-    std::fs::write(gh_dir.join("hosts.yml"), "oauth_token: from-gh-config\n").unwrap();
-    let gh = root.join("bin/gh");
-    std::fs::create_dir_all(gh.parent().unwrap()).unwrap();
-    std::fs::write(
-        &gh,
-        "#!/bin/sh\n[ \"$1 $2 $3\" = \"auth git-credential get\" ] || exit 0\ncat >/dev/null\n\
-         t=$(sed -n 's/^oauth_token: //p' \"$GH_CONFIG_DIR/hosts.yml\")\n\
-         echo username=you\necho \"password=$t\"\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::write(
-        home.join(".gitconfig"),
-        format!(
-            "[credential \"https://github.com\"]\n\thelper = \n\thelper = !'{}' auth git-credential\n",
-            gh.display()
-        ),
-    )
-    .unwrap();
+    let home = tmp.path().canonicalize().unwrap().join("participant-home");
+    std::fs::create_dir_all(home.join(".config/gh")).unwrap();
+    std::fs::create_dir_all(home.join(".config/git")).unwrap();
+    std::fs::write(home.join(".gitconfig"), "[user]\n\tname = You\n").unwrap();
+    std::fs::write(home.join(".config/git/config"), "").unwrap();
     let mut parent = s::parent_env();
     for (k, v) in [
         ("HOME", home.to_str().unwrap()),
-        ("PATH", "/usr/bin:/bin"),
         ("SSH_AUTH_SOCK", "/private/tmp/agent.sock"),
+        (
+            "GIT_CONFIG_GLOBAL",
+            home.join(".gitconfig").to_str().unwrap(),
+        ),
+        ("GH_CONFIG_DIR", home.join(".config/gh").to_str().unwrap()),
         ("XDG_RUNTIME_DIR", "/run/user/501"),
         ("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/501/bus"),
         ("GH_TOKEN", KEY),
@@ -689,81 +668,38 @@ fn every_launch_carries_the_way_to_the_participants_git_login_and_no_key() {
     ] {
         parent.insert(k.to_string(), v.to_string());
     }
-    let carried = |parent: &BTreeMap<String, String>, git_login: bool| {
-        let l = s::Layout::new();
-        let exe = s::fake_harness(&l.bin);
-        let resolved = s::resolved(&exe);
-        let proxy = s::proxy_url();
-        let plan = build_capture_launch(
-            &load("codex-cli"),
-            &s::vars(&l),
-            &l.workspace,
-            &CaptureLaunch {
-                git_login,
-                ..s::chat_launch(&l, &resolved, &proxy, parent)
-            },
-        )
-        .unwrap();
-        (plan, l)
-    };
-    let (plan, l) = carried(&parent, true);
-    let get = |k: &str| plan.env_set.get(k).map(String::as_str);
-    assert_eq!(get("SSH_AUTH_SOCK"), Some("/private/tmp/agent.sock"));
-    assert_eq!(get("GIT_CONFIG_GLOBAL"), home.join(".gitconfig").to_str());
-    assert_eq!(get("GH_CONFIG_DIR"), gh_dir.to_str());
-    assert_eq!(get("XDG_RUNTIME_DIR"), Some("/run/user/501"));
-    assert_eq!(
-        get("DBUS_SESSION_BUS_ADDRESS"),
-        Some("unix:path=/run/user/501/bus")
-    );
-    assert_eq!(
-        get("HOME"),
-        l.run_home.to_str(),
-        "the run keeps its own HOME"
-    );
-    for k in ["GH_TOKEN", "GITHUB_TOKEN"] {
+    let l = s::Layout::new();
+    let exe = s::fake_harness(&l.bin);
+    let resolved = s::resolved(&exe);
+    let proxy = s::proxy_url();
+    let plan = build_capture_launch(
+        &load("codex-cli"),
+        &s::vars(&l),
+        &l.workspace,
+        &s::chat_launch(&l, &resolved, &proxy, &parent),
+    )
+    .unwrap();
+    for k in [
+        "SSH_AUTH_SOCK",
+        "GIT_CONFIG_GLOBAL",
+        "GH_CONFIG_DIR",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+    ] {
         assert!(!plan.env_set.contains_key(k), "`{k}` was carried");
     }
     assert!(plan.env_set.values().all(|v| !v.contains(KEY)));
-
-    // The agent's git, in exactly that environment, gets the login from the participant's gh.
-    let mut fill = std::process::Command::new("git");
-    fill.args(["credential", "fill"])
-        .current_dir(&l.workspace)
-        .env_clear()
-        .envs(&plan.env_set)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut child = fill.spawn().unwrap();
-    std::io::Write::write_all(
-        &mut child.stdin.take().unwrap(),
-        b"protocol=https\nhost=github.com\npath=agentcommunity/my-goal-cup.git\n\n",
-    )
-    .unwrap();
-    let out = child.wait_with_output().unwrap();
-    let said = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "{out:?}");
-    assert!(said.contains("password=from-gh-config\n"), "{said}");
-
-    // Nothing set and no such files, or a practice run: none of the five.
-    let mut bare = s::parent_env();
-    bare.insert("HOME".into(), root.join("empty-home").display().to_string());
-    for (parent, git_login) in [(&bare, true), (&parent, false)] {
-        let (plan, _) = carried(parent, git_login);
-        let nosystem = plan.env_set.get("GIT_CONFIG_NOSYSTEM").map(String::as_str);
-        assert_eq!(nosystem, (!git_login).then_some("1"), "{plan:?}");
-        for k in [
-            "SSH_AUTH_SOCK",
-            "GIT_CONFIG_GLOBAL",
-            "GH_CONFIG_DIR",
-            "XDG_RUNTIME_DIR",
-            "DBUS_SESSION_BUS_ADDRESS",
-        ] {
-            assert!(!plan.env_set.contains_key(k), "`{k}` was set: {plan:?}");
-        }
-    }
+    let get = |k: &str| plan.env_set.get(k).map(String::as_str);
+    assert_eq!(get("HOME"), l.run_home.to_str());
+    // No system git config (a keychain helper) and no ssh key of the participant's.
+    assert_eq!(get("GIT_CONFIG_NOSYSTEM"), Some("1"));
+    assert_eq!(get("GIT_TERMINAL_PROMPT"), Some("0"));
+    assert_eq!(
+        get("GIT_SSH_COMMAND"),
+        Some("ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes")
+    );
 }
 
 #[test]

@@ -472,6 +472,7 @@ mod tests {
             excluded: vec![],
             git: None,
             home: None,
+            capped: None,
         };
         let mut export = TraceExport::create(root).unwrap();
         export.configure_capture_quota(1 << 30).unwrap();

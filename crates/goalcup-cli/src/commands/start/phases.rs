@@ -121,7 +121,18 @@ pub(super) fn prepare(
     // harness wrote, its own login included.
     let per_run = profile.home.config_home == ConfigHome::PerRun;
     if per_run {
-        crate::per_run_home::refuse_inside_git_work_tree(beside)?;
+        // A run on a server makes `<config>-runs` only once approved: until then it is judged by
+        // the folder it will be made in.
+        let whose = if beside == crate::home::run_folders(cx.cfg) {
+            crate::per_run_home::RunFolder::ConfigRuns
+        } else {
+            crate::per_run_home::RunFolder::StartedFrom
+        };
+        let beside = beside
+            .ancestors()
+            .find(|folder| folder.exists())
+            .unwrap_or(beside);
+        crate::per_run_home::refuse_inside_git_work_tree(beside, whose)?;
         crate::per_run_home::refuse_synced_folder_under(beside, env.get("HOME").map(Path::new))?;
     }
     Ok(CapturePrep {
@@ -215,23 +226,13 @@ pub(super) fn create_and_gate<'a>(
         shared_run_home.as_deref(),
         env,
         match (cx.continuing, upload.map(|u| &u.how)) {
-            // A continued run goes on in the clone it has.
+            // A continued run goes on in the folder it started in.
             (Some(continuing), _) => WorkspaceAt::Existing(&continuing.record.workspace),
-            (None, Some(UploadHow::Fresh(new))) => WorkspaceAt::Clone(&new.work_root),
+            // A new run on a server works in the participant's project folder, as it is.
+            (None, Some(UploadHow::Fresh(new))) => WorkspaceAt::Existing(&new.project),
             _ => WorkspaceAt::InRunDir,
         },
     )?;
-    // The workspace of a run on a server is a fresh clone of the participant's repository. It
-    // can take a while, so it is said first.
-    if let Some(upload) = upload {
-        if matches!(upload.how, UploadHow::Fresh(_)) {
-            let _ = say(out, crate::participant::CLONING);
-        }
-        if let Err(error) = upload.clone_workspace(&run.workspace) {
-            let _ = run.remove();
-            return Err(error);
-        }
-    }
     let config_home = match shared_home {
         Some(home) => home,
         // Seeded from the connector's own files, which the manifest gate has pinned.
@@ -325,7 +326,7 @@ pub(super) fn create_and_gate<'a>(
     // everything it records (D60). It goes to the daemon in memory only.
     let credential = ProxyCredential::generate();
     let run_secrets = match RunSecret::new(credential.expose_secret().as_bytes()) {
-        Some(secret) => vec![secret],
+        Some(secret) => with_project_token(secret, upload.is_some().then_some(&run.workspace)),
         None => {
             let error =
                 CliError::Internal("the proxy credential is not one the daemon takes".to_string());
@@ -493,7 +494,6 @@ pub(super) fn create_and_gate<'a>(
                 ca_bundle: ca_bundle.as_deref(),
                 parent_env: env,
                 time_left_file: Some(&crate::run::time_left::file_path(cfg, &record.run_id)),
-                git_login: !record.practice,
             },
         )?;
         // Offered once. `busy` is the daemon's refusal before it reads a request and is
@@ -584,6 +584,10 @@ pub(super) fn create_and_gate<'a>(
         harness_name: c.display_name().to_string(),
         first_screen: c.first_screen().map(str::to_string),
         opens,
+        prompt: match upload.map(|u| &u.how) {
+            Some(UploadHow::Fresh(new)) => prompt_for(new),
+            _ => Vec::new(),
+        },
         details,
     };
     let gate = Gate {
@@ -593,6 +597,38 @@ pub(super) fn create_and_gate<'a>(
         gated,
     };
     Ok((forked, gate))
+}
+
+/// The run's secrets for the redactor: the proxy credential, and for a run on a server the
+/// GitHub token the participant keeps in the project folder (`GH_TOKEN` in a key file), which the
+/// agent reads to push and might print. A token the redactor cannot take by value (too short,
+/// or with a space) is left to its patterns.
+fn with_project_token(credential: RunSecret, project: Option<&PathBuf>) -> Vec<RunSecret> {
+    let mut secrets = vec![credential];
+    if let Some((_, Some(token))) = project.and_then(|p| super::project::token(p))
+        && secrets.len() < goalcup_protocol::run_secret::MAX_RUN_SECRETS
+        && !secrets.contains(&token)
+    {
+        secrets.push(token);
+    }
+    secrets
+}
+
+/// A real run's prompt lines (E1): its repository, the key file that holds the token (the
+/// guide's `.env.local` when none does yet) and the owner's private commit identity.
+fn prompt_for(new: &super::server::NewRun) -> Vec<String> {
+    let Some(repo) = &new.repo else {
+        return Vec::new();
+    };
+    let file = super::project::token(&new.project)
+        .map_or_else(|| super::project::TOKEN_FILE.to_string(), |(file, _)| file);
+    crate::participant::prompt_block(
+        &repo.repo_url,
+        repo.owner(),
+        &repo.commit_email(),
+        &file,
+        &new.project.join(&file),
+    )
 }
 
 /// Phase three, from the fork: take the parked child's handle, register it durably, and only
@@ -641,7 +677,7 @@ pub(super) fn register_and_release<'a>(
     // command prints there, and from here the terminal's signals are absorbed and every message
     // goes to `host.log` until the harness exits.
     {
-        // Moved to the background, or its terminal gone, while the run was approved and cloned:
+        // Moved to the background, or its terminal gone, while the run was approved and opened:
         // the harness is never released onto a terminal it cannot read.
         if let Err(e) = holds_the_terminal(
             &forked.harness_name,
@@ -674,6 +710,7 @@ pub(super) fn register_and_release<'a>(
             opens: forked.opens,
             ends,
             first_screen: forked.first_screen.as_deref(),
+            prompt: &forked.prompt,
         });
         let _ = block
             .iter()
@@ -914,7 +951,7 @@ pub(super) fn run_harness<'a>(
                 },
                 time_left_file: Some(crate::run::time_left::file_path(cfg, &forked.record.run_id)),
                 native: Some(crate::run::watch::NativeWatch {
-                    silence: cx.opts.native_silence,
+                    silence: cx.opts.native_silence.for_run(forked.record.practice),
                     harness: forked.harness_name.clone(),
                     guide: crate::commands::prep::setup_guide_link(cx.connector),
                 }),

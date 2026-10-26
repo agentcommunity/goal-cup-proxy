@@ -25,14 +25,6 @@ transaction (its header has the detail):
 All additive: functions, columns and one widened CHECK constraint, no row changes. The
 old-signature wrappers keep the live production Worker working.
 
-`20261024100000_goal_cup_tracer_member_is_admin.sql` (D70) adds one function,
-`public.goal_cup_upload_member_is_admin(p_member_id text) RETURNS boolean`. The Worker asks it before
-it opens a `--dev` run: true when the member's confirmed `auth.users` email matches a row of the
-website's `public.admins` (case and padding ignored); anything else, a non-uuid included, is false.
-Additive only (a function and its grants). The earlier pending file above was already applied on
-22 Oct 2026, so this one is applied on its own, after it (same `psql` command, steps below), and it
-needs no change to the Worker that is live.
-
 Staging and production share ONE database, so applying the file applies it to both at once: there
 is no "staging first" for SQL. The order:
 

@@ -2,8 +2,7 @@
 // again and again: a credential, an open, a heartbeat, a seal, a continue.
 
 import assert from "node:assert/strict";
-import { mock, test } from "node:test";
-import { LocalDb } from "../../src/db-local.ts";
+import { test } from "node:test";
 import { Client, GENESIS, credentialFor, openBody, sha256 } from "./client.ts";
 import { type InProcess, inProcess } from "./inproc.ts";
 
@@ -21,8 +20,6 @@ export interface Opened {
 /** The Worker, a clock, and the calls a test makes again and again. */
 export function rig(vars: Record<string, string> = WINDOW, start = T0, cf?: Record<string, unknown>) {
   const p: InProcess = inProcess(start, vars, cf);
-  // The admin-call counter: how often the Worker asked its database whether a member is an admin.
-  const adminAsks = mock.method(LocalDb.prototype, "memberIsAdmin");
   const api: Client = p.api;
   const cred = (member: string, mode: "competition" | "practice" = "competition") => credentialFor(api, member, mode);
   const open = (token: string, session: string, extra: Record<string, unknown> = {}, headers: Record<string, string> = {}) =>
@@ -73,11 +70,7 @@ export function rig(vars: Record<string, string> = WINDOW, start = T0, cf?: Reco
     assert.equal(f.status, 200, JSON.stringify(f.body));
   };
   const storedRun = (run: string) => JSON.parse(p.bucket.map.get(`state/runs/${run}.json`)!.text) as Record<string, unknown>;
-  const stop = () => {
-    adminAsks.mock.restore();
-    p.stop();
-  };
-  return { ...p, stop, adminCalls: () => adminAsks.mock.callCount(), cred, open, start: start_, beat, get, seal, cont, hold, finish, storedRun };
+  return { ...p, cred, open, start: start_, beat, get, seal, cont, hold, finish, storedRun };
 }
 export type Rig = ReturnType<typeof rig>;
 

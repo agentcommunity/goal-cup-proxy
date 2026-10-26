@@ -528,9 +528,10 @@ pub struct DaemonHealth {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureWorkspaceRequest {
-    /// The absolute workspace directory, absent or empty and outside any Git worktree, or with
-    /// [`Self::existing_clone`] the run's clone. The daemon creates it and knows the run by its
-    /// canonical spelling.
+    /// The absolute workspace directory: for a new run absent, or holding only the starting kit
+    /// (`.gitignore` and `.env` files), with no `.git` and outside any Git worktree; with
+    /// [`Self::existing_clone`] the continued run's folder. The daemon creates it and knows the
+    /// run by its canonical spelling.
     pub workspace: String,
     /// The connector whose `[capture]` profile the run is launched with.
     pub profile_id: String,
@@ -556,17 +557,19 @@ pub struct CaptureWorkspaceRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_since: Option<u64>,
     /// The run's own exact secret values, at most [`crate::run_secret::MAX_RUN_SECRETS`]: the
-    /// proxy credential the launch puts in the harness's `HTTPS_PROXY`. The daemon holds them in
+    /// proxy credential the launch puts in the harness's `HTTPS_PROXY`, and for a run on a
+    /// server the GitHub token in the project folder's key file. The daemon holds them in
     /// memory for this entry only and redacts every
     /// form of each ([`crate::run_secret::encoded_forms`]) from every recorded body (D60). They
     /// are never written to a file, a log, the registry or the chain, and `Debug` never shows
     /// them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub run_secrets: Vec<crate::run_secret::RunSecret>,
-    /// The workspace is a continued run's clone, which must already be there: the daemon
-    /// refuses one that is not the root of its own clone (`goalcup_platform::clone`) instead of
-    /// creating it, so the next part never goes on in an empty folder (D4). `false`, and then
-    /// omitted, for a new run, whose workspace is absent or empty.
+    /// The workspace is a continued run's folder, which must already be there, with or without
+    /// `.git` (D71; the name is from when it was always a clone): the daemon refuses one that is
+    /// not a folder instead of creating it, so the next part never goes on in an empty folder
+    /// (D4). `false`, and then omitted, for a new run, whose workspace is refused if it holds
+    /// `.git`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub existing_clone: bool,
 }

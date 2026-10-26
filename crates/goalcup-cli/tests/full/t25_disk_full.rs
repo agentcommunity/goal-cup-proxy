@@ -22,7 +22,7 @@
 //!   watch tick at 1 s instead of 30 s;
 //! - `GOALCUP_TEST_UPLOAD_POLICY`: a chunk every 5 s (or at 4 MiB), heartbeats every 10 s,
 //!   retries 1 to 5 s, a 60 s wrap-up;
-//! - `GOALCUP_TEST_UPSTREAM_ROOTS`, `GOALCUP_TEST_NO_BROWSER`, `GOALCUP_TEST_CLONE_SOURCE`,
+//! - `GOALCUP_TEST_UPSTREAM_ROOTS`, `GOALCUP_TEST_NO_BROWSER`,
 //!   `GOALCUP_TEST_FINISH_BUDGET_MS` as in the other full rows.
 //!
 //! `UPLOAD_FAILING_AFTER` (30 min) has no test door. It no longer stops a run (D65): it only
@@ -225,7 +225,9 @@ struct World {
     server: Option<UploadServer>,
     server_store: PathBuf,
     server_port: Option<u16>,
-    clone_source: PathBuf,
+    /// The folder `goalcup start` runs in: a run on the server's project folder. Not beside the
+    /// configuration folder or the artifact root, which the daemon refuses as a workspace.
+    project: PathBuf,
     log: Timeline,
 }
 
@@ -246,7 +248,8 @@ impl World {
         let v = Vertical::new_logging_to(mode, config, Some(out.join("logs")));
         let log = Timeline::new(&out);
         let server_store = out.join("server");
-        let clone_source = v.root.join("github-source.git");
+        let project = v.root.join("projects").join("runs");
+        std::fs::create_dir_all(&project).unwrap();
         let mut world = World {
             v,
             out,
@@ -255,7 +258,7 @@ impl World {
             server: None,
             server_store,
             server_port: None,
-            clone_source,
+            project,
             log,
         };
         if with_server {
@@ -288,7 +291,7 @@ impl World {
     }
 
     /// `Rig::prepare_for` for this world: logged in to the stand-in, prepared for the
-    /// controlled workload's connector.
+    /// controlled workload's connector (no `work_root`: 0.7's setup writes none).
     fn prepare(&self) {
         let cfg = &self.v.cfg;
         goalcup_cli::server::write_server_config(
@@ -299,22 +302,14 @@ impl World {
             },
         )
         .unwrap();
-        let git = Command::new("git")
-            .args(["init", "--quiet", "--bare"])
-            .arg(&self.clone_source)
-            .output()
-            .unwrap();
-        assert!(git.status.success(), "{git:?}");
-        let work = self.v.root.join("work");
-        std::fs::create_dir_all(&work).unwrap();
         std::fs::write(
             goalcup_cli::prep_file::prep_path(cfg),
-            serde_json::to_vec(&json!({
-                "harness": CONNECTOR, "work_root": work,
-            }))
-            .unwrap(),
+            serde_json::to_vec(&json!({ "harness": CONNECTOR })).unwrap(),
         )
         .unwrap();
+        // A real run's folder holds the participant's token, ignored by Git.
+        std::fs::write(self.project.join(".env.local"), "GH_TOKEN=x\n").unwrap();
+        std::fs::write(self.project.join(".gitignore"), ".env*\n").unwrap();
     }
 
     /// `goalcup` with this world's environment and every test-build door these rows use.
@@ -327,12 +322,7 @@ impl World {
                 "GOALCUP_TEST_UPSTREAM_ROOTS",
                 self.v.root.join("upstream-ca.pem"),
             )
-            .env("GOALCUP_TEST_NO_BROWSER", "1")
-            .env(
-                goalcup_cli::commands::start::TEST_CLONE_SOURCE,
-                &self.clone_source,
-            )
-            .env(goalcup_cli::commands::start::TEST_GITHUB_LOGIN, "goal-cup");
+            .env("GOALCUP_TEST_NO_BROWSER", "1");
         command
     }
 
@@ -343,7 +333,7 @@ impl World {
         let child = self
             .goalcup()
             .args(args)
-            .current_dir(&self.v.runs)
+            .current_dir(&self.project)
             .env("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL", "1")
             .stdout(std::fs::File::create(logs.join(format!("{name}.out"))).unwrap())
             .stderr(std::fs::File::create(logs.join(format!("{name}.err"))).unwrap())

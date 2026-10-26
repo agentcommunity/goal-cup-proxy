@@ -79,7 +79,7 @@ fn a_logged_in_start_runs_under_the_servers_entry_and_keeps_its_receipt() {
 }
 
 /// An approval the participant denies, or lets expire, starts nothing: no run on the server, no
-/// entry, no run directory, no clone, no credential.
+/// entry, no run directory, no credential.
 #[test]
 fn a_denied_or_expired_approval_starts_nothing() {
     use crate::common::upload_server::Approval;
@@ -100,7 +100,6 @@ fn a_denied_or_expired_approval_starts_nothing() {
         assert!(error.to_string().contains("Nothing was created"), "{error}");
         assert!(client.book().creates.is_empty(), "{out}");
         assert!(rig.run_dirs().is_empty(), "{:?}", rig.run_dirs());
-        assert!(rig.clones().is_empty(), "{:?}", rig.clones());
         assert!(!goalcup_cli::run::runs_dir(&rig.cfg).exists());
         assert!(!rig.harness_started());
         assert!(server.run_ids().is_empty());
@@ -127,7 +126,6 @@ fn an_unreachable_server_starts_nothing() {
     assert!(said.contains("Nothing was created"), "{said}");
     assert!(client.book().creates.is_empty(), "{out}");
     assert!(rig.run_dirs().is_empty());
-    assert!(rig.clones().is_empty());
 }
 
 /// A start that fails after the run opened and before the launch gives the run back, so the
@@ -250,6 +248,7 @@ fn a_run_left_open_by_a_killed_start_is_given_back_by_the_next() {
         proxy_version: "0.1.0".into(),
         repo_url: REPO.into(),
         machine: None,
+        dev: false,
     };
     let killed = goalcup_cli::upload::open_run(&client, &request).unwrap();
     goalcup_cli::account::credential::store(
@@ -1161,7 +1160,7 @@ mod segments {
                 "resume",
                 "--last"
             ],
-            "the profile's arguments, then its resume arguments, in the run's clone"
+            "the profile's arguments, then its resume arguments, in the run's project folder"
         );
         second.type_line("again");
         second.wait_shown("tui: noted again");
@@ -1183,10 +1182,9 @@ mod segments {
         );
         assert!(before.contains(&until), "{shown}");
 
-        // No second approval, no second clone; one run with two segments, both sent.
+        // No second approval; one run with two segments, both sent.
         assert_eq!(server.device_requests().len(), 1);
         assert_eq!(server.run_ids(), std::slice::from_ref(&run_id));
-        assert_eq!(rig.clones().len(), 1);
         let entries = server.entry_ids(&run_id);
         assert_eq!(entries.len(), 2, "{entries:?}");
         for entry in &entries {
@@ -1277,7 +1275,7 @@ mod segments {
     }
 
     /// A run that was over before `continue` is refused, and nothing is made for it: no entry
-    /// on the server, none here, no clone, no run directory, no second agent.
+    /// on the server, none here, no run directory, no second agent.
     #[test]
     fn continue_after_the_deadline_is_refused_and_creates_nothing() {
         let rig = Rig::chat();
@@ -1315,7 +1313,6 @@ mod segments {
                 .len(),
             1
         );
-        assert_eq!(rig.clones().len(), 1);
         assert_eq!(rig.run_dirs(), folders);
         assert_eq!(uploads(), kept);
         assert_eq!(harness(&rig, "tui.pid"), agent, "no second agent");
@@ -1369,7 +1366,6 @@ mod segments {
         assert!(server.calls().is_empty(), "{:?}", server.calls());
         assert!(!rig.harness_started());
         assert!(rig.run_dirs().is_empty());
-        assert!(rig.clones().is_empty());
     }
 
     /// While the run's agent is recording, `continue` is refused, by the run's name, and the
@@ -1559,6 +1555,7 @@ mod segments {
                 proxy_version: "0.1.0".into(),
                 repo_url: REPO.into(),
                 machine: None,
+                dev: false,
             },
         )
         .unwrap();
@@ -1712,12 +1709,16 @@ mod segments {
         let kept = uploads_dir_names(&rig);
         let calls = server.calls();
         let record = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap();
-        let work = record.workspace.parent().unwrap().display().to_string();
+        let project = record.workspace.display().to_string();
         let artifacts = format!("{}-artifacts", rig.cfg.display());
+        let runs = goalcup_cli::commands::start::run_folders(&rig.cfg);
 
         for (wsl, expected) in [
             ("wsl=1".to_string(), "WSL1 cannot run Goal Cup".to_string()),
-            (format!("wsl=2,fs={work}=9p"), "work folder".to_string()),
+            (
+                format!("wsl=2,fs={project}=9p"),
+                "project folder".to_string(),
+            ),
             (
                 format!("wsl=2,fs={}=drvfs", rig.cfg.display()),
                 "config folder".to_string(),
@@ -1727,7 +1728,7 @@ mod segments {
                 "artifact root".to_string(),
             ),
             (
-                format!("wsl=2,fs={}=9p", rig.root.join("runs").display()),
+                format!("wsl=2,fs={}=9p", runs.display()),
                 "run folder".to_string(),
             ),
         ] {
@@ -1766,7 +1767,7 @@ mod segments {
         let port = first_server.port();
         let (run_id, entry) = crashed_host(&rig, &first_server);
         first_server.stop();
-        let (folders, clones) = (rig.run_dirs(), rig.clones());
+        let folders = rig.run_dirs();
 
         let mut away = rig.continue_on_pty(&[DISK, BEATING], None);
         let status = away.wait();
@@ -1776,7 +1777,6 @@ mod segments {
         assert!(said.contains("did not continue run"), "{said}");
         // Nothing was made for the segment that was not started.
         assert_eq!(rig.run_dirs(), folders);
-        assert_eq!(rig.clones(), clones);
         let record = goalcup_cli::run::read(&rig.cfg, &run_id).unwrap();
         assert_eq!(record.entries.len(), 1, "no segment was recorded");
         // The earlier segment was closed on this machine: sealed.
@@ -1836,6 +1836,7 @@ mod segments {
                 session_id: "00000000-0000-4000-8000-0000000000aa".into(),
                 harness_version: "1".into(),
                 proxy_version: "0.1.0".into(),
+                dev: false,
             },
         )
         .unwrap();
@@ -1927,8 +1928,8 @@ mod segments {
         said
     }
 
-    /// Every file of a clone, with its bytes, and its checked-out commit.
-    fn clone_contents(rig: &Rig) -> Vec<(PathBuf, Vec<u8>)> {
+    /// Every file of the run's project folder ([`Rig::run_folder`]), with its bytes.
+    fn project_contents(rig: &Rig) -> Vec<(PathBuf, Vec<u8>)> {
         fn walk(dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
             let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().collect();
             names.sort_by_key(|e| e.file_name());
@@ -1941,19 +1942,17 @@ mod segments {
                 }
             }
         }
-        let clones = rig.clones();
-        assert_eq!(clones.len(), 1, "{clones:?}");
         let mut files = Vec::new();
-        walk(&clones[0], &mut files);
-        assert!(!files.is_empty(), "the clone has files");
+        walk(&rig.run_folder(), &mut files);
+        assert!(!files.is_empty(), "the project folder has files");
         files
     }
 
     /// Review round 2, findings 1 and 3. A continued launch that fails after the server made its
-    /// segment (here before the fork, and after it) leaves the run's clone with every file it
-    /// had, and the run's one reserve file where it was; the run then continues.
+    /// segment (here before the fork, and after it) leaves the run's project folder with every
+    /// file it had, and the run's one reserve file where it was; the run then continues.
     #[test]
-    fn a_continued_launch_that_fails_leaves_the_clone_and_the_reserve() {
+    fn a_continued_launch_that_fails_leaves_the_project_and_the_reserve() {
         use std::os::unix::fs::MetadataExt;
         for point in ["capture-shared-home-pre-create", "capture-gate-forked"] {
             let rig = Rig::chat();
@@ -1963,13 +1962,21 @@ mod segments {
             kill_agent(&rig);
             assert!(first.wait().success());
             let run_id = the_run(&server);
-            let (files, reserves) = (clone_contents(&rig), reserve_files(&rig));
+            // What the agent made in the project folder: its repository and a file.
+            let init = std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(rig.run_folder())
+                .output()
+                .unwrap();
+            assert!(init.status.success(), "{init:?}");
+            std::fs::write(rig.run_folder().join("agent-work.txt"), "work").unwrap();
+            let (files, reserves) = (project_contents(&rig), reserve_files(&rig));
             assert_eq!(reserves.len(), 1);
             let identity = std::fs::metadata(&reserves[0]).map(|m| (m.dev(), m.ino()));
 
             let said = continue_interrupted_at(&rig, point);
             assert!(said.contains("interrupted"), "{point}: {said}");
-            assert_eq!(clone_contents(&rig), files, "{point}: the clone");
+            assert_eq!(project_contents(&rig), files, "{point}: the project");
             assert_eq!(reserve_files(&rig), reserves, "{point}: the reserve");
             assert_eq!(
                 std::fs::metadata(&reserves[0])
@@ -2016,7 +2023,8 @@ mod segments {
                 .unwrap();
             assert!(status.success(), "git {args:?}");
         };
-        // The first segment's agent had committed its work.
+        // The first segment's agent had made the project folder a repository and committed.
+        git(&["init", "--quiet"]);
         git(&["commit", "--allow-empty", "-m", "the first segment's work"]);
         let sealed = rig
             .client()
@@ -2031,7 +2039,7 @@ mod segments {
             .unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(sealed.entry_id, entry);
         let ended_with =
-            goalcup_cli::upload::uploader::repo_head(&workspace).expect("the clone has a commit");
+            goalcup_cli::upload::uploader::repo_head(&workspace).expect("the project has a commit");
 
         let mut second = rig.continue_on_pty(&[DISK, BEATING], None);
         second.wait_shown("tui: ready");

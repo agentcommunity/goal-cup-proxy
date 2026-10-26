@@ -243,7 +243,6 @@ fn launch_uses_the_harness_bytes_captured_at_load_time() {
             ca_bundle: None,
             parent_env: &parent,
             time_left_file: None,
-            git_login: true,
         },
     )
     .unwrap();
@@ -320,7 +319,6 @@ fn the_env_follows_the_running_platform() {
             ca_bundle: None,
             parent_env: &parent,
             time_left_file: None,
-            git_login: true,
         },
     )
     .expect("the plan builds for any build");
@@ -376,7 +374,6 @@ fn handed_ca_files(
             ca_bundle: bundle.as_deref(),
             parent_env: &parent,
             time_left_file: None,
-            git_login: true,
         },
     )
     .unwrap();
@@ -446,7 +443,6 @@ fn a_shared_ca_row_gets_the_roots_and_an_own_variable_beside_it_does_not() {
         ca_bundle,
         parent_env: &parent,
         time_left_file: None,
-        git_login: true,
     };
     let workspace = root.join("workspace");
     let refused = build_capture_launch(&connector, &vars, &workspace, &launch(None))
@@ -512,7 +508,6 @@ fn a_harness_without_a_home_variable_gets_only_the_private_home() {
             ca_bundle: None,
             parent_env: &parent,
             time_left_file: None,
-            git_login: true,
         },
     )
     .unwrap();

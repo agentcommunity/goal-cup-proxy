@@ -6,7 +6,7 @@ use crate::connector::HarnessConnector;
 use crate::preflight::Level;
 use crate::run::reserve::artifact_root;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// One line, because a participant who pressed Ctrl-C is not reading a page.
 ///
@@ -73,49 +73,22 @@ pub(super) fn holds_the_terminal(name: &str, then: &str) -> Result<(), CliError>
 }
 
 /// A test build's door to GitHub for a real run's repository (`run_repo::choose`): the base
-/// address of a fake GitHub API. A test build without it does not ask the API, because its clone
-/// comes from a local stand-in ([`super::TEST_CLONE_SOURCE`]), not from GitHub. A shipped build
+/// address of a fake GitHub API. A test build without it does not ask the API. A shipped build
 /// always asks GitHub.
 #[cfg(feature = "test-support")]
 pub const TEST_GITHUB_API: &str = "GOALCUP_TEST_GITHUB_API";
 
 /// What a start that fails after the approval says once it has removed what it made (said once,
-/// by `capture`, for every failure of that phase): the run directory, the clone, and the run's
-/// credential directory. It does not remove the work folder itself (the participant's folder,
-/// left in place once created) or the shared harness-home folder of a connector under
-/// `<cfg>/capture-homes/` (one per connector, persistent, and reused by every run of it).
+/// by `capture`, for every failure of that phase): the run directory and the run's credential
+/// directory. It never removes the project folder (the participant's, the run's workspace), the
+/// `<config>-runs` folder the run directory was made in, or the shared harness-home folder of a
+/// connector under `<cfg>/capture-homes/` (one per connector, persistent, and reused by every run
+/// of it).
 pub(super) const CLEANED_UP: &str = "Nothing was started, and what this start made was removed.";
 
-/// The folder a continued run's own folder is made in: `requested` (the folder `goalcup
-/// continue` was run from), or this process's current directory. It is refused inside the work
-/// folder the run's clone is in, for the reason a new run's is
-/// ([`refuse_goal_folder_inside_work_root`]).
-pub(crate) fn run_folder_for_continue(
-    requested: Option<&Path>,
-    workspace: &Path,
-) -> Result<PathBuf, CliError> {
-    let beside = match requested {
-        Some(folder) => folder.to_path_buf(),
-        None => std::env::current_dir().map_err(|source| CliError::Io {
-            path: "the current directory".to_string(),
-            source,
-        })?,
-    };
-    if let Some(work_root) = workspace.parent() {
-        refuse_goal_folder_inside_work_root(work_root, &beside)?;
-    }
-    Ok(beside)
-}
-
-/// The work folder `goalcup prep` kept, when a server is set up (a run with none makes no clone).
-pub(super) fn prepared_work_folder(cfg: &Path) -> Option<PathBuf> {
-    crate::server::read_server_config(cfg).ok().flatten()?;
-    let kept = crate::prep_file::read_prep_lenient(cfg).work_root;
-    (!kept.is_empty()).then(|| PathBuf::from(kept))
-}
-
-/// The folder checks over every folder a run writes to: the work folder (when there is one), the
-/// folder the run's own directory is made in, the artifact root and the configuration folder.
+/// The folder checks over every folder a run writes to: the project folder (a run on a server's
+/// workspace), the folder the run's own directory is made in, the artifact root and the
+/// configuration folder.
 /// WSL1, or a folder on a Windows drive under WSL2, is refused; a folder on a filesystem a run
 /// cannot keep its records on is warned about on the terminal and the command goes on (`goalcup
 /// prep` fails its step for it). See [`crate::folder_gate`]. `env` states the machine in a test
@@ -124,7 +97,7 @@ pub(crate) fn check_run_folders(
     env: &BTreeMap<String, String>,
     cfg: &Path,
     run_folder: &Path,
-    work_folder: Option<&Path>,
+    project: Option<&Path>,
     untouched: &str,
 ) -> Result<(), CliError> {
     #[cfg(feature = "test-support")]
@@ -140,8 +113,8 @@ pub(crate) fn check_run_folders(
         ("artifact root", artifacts.as_path()),
         ("config folder", cfg),
     ];
-    if let Some(work_folder) = work_folder {
-        folders.insert(0, ("work folder", work_folder));
+    if let Some(project) = project {
+        folders.insert(0, (crate::participant::PROJECT_FOLDER, project));
     }
     host.refuse(&folders, untouched)?;
     if let Some(warning) = host.warn_filesystems(&folders) {
@@ -150,26 +123,21 @@ pub(crate) fn check_run_folders(
     Ok(())
 }
 
-/// The run directory is made in the folder `goalcup start` is run from and holds the harness's
-/// `HOME`; the clone is made in the work folder, under a name of its own. They cannot be the same
-/// folder, but a folder *below* the work folder would put the run directory (and so the
-/// harness's home) inside some other clone, or inside an older run's folder. So: `beside` may be
-/// the work folder itself, or anywhere outside it, and is refused anywhere inside it.
-pub(super) fn refuse_goal_folder_inside_work_root(
-    work_root: &Path,
-    beside: &Path,
-) -> Result<(), CliError> {
-    let beside = std::fs::canonicalize(beside);
-    let root = std::fs::canonicalize(work_root).unwrap_or_else(|_| work_root.to_path_buf());
-    if let Ok(beside) = beside
-        && beside != root
-        && beside.starts_with(&root)
-    {
-        return Err(CliError::Refused(crate::participant::inside_work_folder(
-            work_root, &beside,
-        )));
-    }
-    Ok(())
+/// A test build's door past the local refusal of `--dev` in the competition
+/// ([`crate::participant::dev_competes`]): the test connectors are pinned by no build, so they
+/// run through `--dev`, and most tests are competition runs. It stands in for a pinned connector;
+/// the server's own refusal is not affected. A shipped build compiles none of this.
+#[cfg(feature = "test-support")]
+pub const TEST_DEV_COMPETES: &str = "GOALCUP_TEST_DEV_COMPETES";
+
+#[cfg(feature = "test-support")]
+pub(super) fn dev_competes_for_test(env: &BTreeMap<String, String>) -> bool {
+    env.get(TEST_DEV_COMPETES).is_some_and(|v| v == "1")
+}
+
+#[cfg(not(feature = "test-support"))]
+pub(super) fn dev_competes_for_test(_env: &BTreeMap<String, String>) -> bool {
+    false
 }
 
 /// A test build's door past the provider-host probe, so the harness contract kit can run the
