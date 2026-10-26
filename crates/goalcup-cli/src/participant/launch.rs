@@ -123,6 +123,11 @@ pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
             "If the agent has stopped, type \"{KEEP_GOING}\" and press Enter. If you never sent \
              your prompt, send it now: it is still your one prompt."
         ));
+    } else if l.opens == Opens::NewSession && l.calls_before.is_none() {
+        // A run started before 0.7.1 kept no count: the prompt may have been sent already.
+        lines.push(format!(
+            "If you never sent your prompt, send it now. Otherwise type only \"{KEEP_GOING}\"."
+        ));
     } else {
         lines.push(format!(
             "Type your one prompt and press Enter. After that you may only type \"{KEEP_GOING}\", \

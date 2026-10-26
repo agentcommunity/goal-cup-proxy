@@ -1062,7 +1062,8 @@ chat --continue` resumes the last session in a `HERMES_HOME` and exits 1 when th
   whether it resumes or opens a new conversation. With none recorded (Claude Code writes its session file at startup, before any
   message), the prompt may not have been sent: it keeps the 0.7.0 sentence ("If you never sent
   your prompt, send it now") and shows and copies the push block. A run with no count (started
-  on 0.7.0) keeps the 0.7.0 text.
+  on 0.7.0) keeps the 0.7.0 text on a resume; on a new conversation it says "If you never sent
+  your prompt, send it now. Otherwise type only "keep going"", never "Type your one prompt".
 - **Also in 0.7.1.** `goalcup setup` deletes a connector's `[launch_prep] ca_file` from the
   config home before it opens the harness, and says nothing: it only ever held a past run's CA,
   and Hermes falls back to the system's trust when the file `ssl_ca_cert` names is missing. A

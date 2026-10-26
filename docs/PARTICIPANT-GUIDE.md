@@ -226,8 +226,10 @@ in a terminal you will leave open. It needs no new approval and keeps the same d
 same folder. Once the run has recorded model calls, your prompt was sent, and from then on you
 type only "keep going" when the agent has stopped: also when the harness opens a new conversation
 instead of picking up its last one. Do not paste the push block or your prompt again. The
-agent's git setup does not live in the conversation: `git config` and `git remote add` saved it
-in the repository's `.git/config`, so an agent in a new conversation can still push. Hermes picks
+agent's git setup does not live in the conversation: if the agent ran the push block's `git
+config` and `git remote add` lines in the repository, they are saved in its `.git/config`, and an
+agent in a new conversation can still push. If it did not, the new conversation has no remote to
+push to. Hermes picks
 up its last conversation too, once the run has recorded model calls. If no model call was
 recorded yet, your prompt may never have been sent: the screen then shows the push block again
 and says to send your one prompt, block first. Do not delete or move the project folder. `goalcup seal` stops the agent and ends the

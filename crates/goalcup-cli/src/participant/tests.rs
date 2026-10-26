@@ -181,10 +181,13 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         ),
         "{text}"
     );
+    // With no count (a run started before 0.7.1) the prompt may have been sent: never "Type
+    // your one prompt" (D73).
     assert!(
-        text.contains("Type your one prompt and press Enter"),
+        text.contains("If you never sent your prompt, send it now. Otherwise type only"),
         "{text}"
     );
+    assert!(!text.contains("Type your one prompt"), "{text}");
 
     let practice = launch_block(&Launch {
         harness: "A",
