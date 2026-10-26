@@ -761,7 +761,7 @@ fn home_step(
             format!(
                 "run `goalcup setup` in a terminal. It opens {id} in its Goal Cup home ({}). \
                  Sign in there (or paste your API key; Goal Cup never sees it), add your \
-                 settings, MCP servers and skills, then exit {id} the normal way",
+                 settings, MCP servers and skills, then quit {id} (most agents: /quit, /exit or Ctrl-C twice)",
                 home.display()
             ),
         ));

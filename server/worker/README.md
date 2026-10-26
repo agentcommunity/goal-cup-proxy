@@ -348,16 +348,15 @@ here, in the same pull request.
   with Python's default User-Agent is refused by Cloudflare with `error code: 1010` before it reaches
   the Worker; send a `goalcup/` User-Agent when testing by hand.)
 
-- **R2 checksum failure.** The Worker maps a failed `sha256` put to `422 digest_mismatch` by matching
-  the error text (`10037`, "checksum", "did not match"). That wording is proven only in the local
-  simulator. On a deployed Worker, upload a chunk with a wrong `Goalcup-Sha256` against real R2 and
-  confirm `422` and nothing stored. If it comes back `502`, the Worker log has a line starting
-  `r2-put-unrecognised-error` with the real wording: add it to the pattern in `src/chunks.ts`. (A
-  recognised failure logs `r2-put-digest-mismatch`.) Staging has a real R2 bucket, so staging can prove it.
-- **Create-only puts** (`onlyIf: { etagDoesNotMatch: "*" }`) must refuse to overwrite on real R2,
-  including under the bucket lock. Staging can prove the refusal. Staging has no bucket lock, so only
-  production can prove the lock case, and only on the locked prefix `traces/goalcup-cup-2026/`, which holds
-  data only after the EVENT_ID switch. Test runs use `traces/test/`, which is never locked.
+- **R2 checksum failure** (proven on staging, 26 Oct). The Worker maps a failed `sha256` put to
+  `422 digest_mismatch` by matching the error text (`10037`, "checksum", "did not match"). If R2 ever
+  changes that wording, uploads come back `502` and the Worker log has a line starting
+  `r2-put-unrecognised-error` with the new wording: add it to the pattern in `src/chunks.ts`. (A
+  recognised failure logs `r2-put-digest-mismatch`.)
+- **Create-only puts under the bucket lock** (still open). The refusal to overwrite is proven on
+  staging (26 Oct), which has no bucket lock. Only production can prove the lock case, and only on
+  the locked prefix `traces/goalcup-cup-2026/`, which holds data only after the EVENT_ID switch. Test
+  runs use `traces/test/`, which is never locked.
 
 ## Decisions where the contract is silent
 
