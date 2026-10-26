@@ -36,12 +36,52 @@ not prove: other platforms, other harness versions, model behaviour, or particip
 
 1. **Build tools.** `cargo fetch --locked`, Docker running, `python3`, `curl`, `zstd`, `psql`.
 2. **Staging test key.** The staging `TEST_APPROVAL_KEY` in a file only you can read
-   (`chmod 600`). Its path goes in `GOALCUP_TEST_APPROVAL_KEY_FILE`.
-   **Kit GitHub token.** Every cell is a test run, and a test start asks GitHub, with the token in
-   the cell's `github.json`, whether the repository is empty. Put one GitHub token in a file only
-   you can read (`chmod 600`); its path goes in `defaults.github_token_file` ("Cells"). It must not
-   be able to push to the practice repository: one agent push there would make every later test
-   start refuse it. A fine-grained token with read-only access to public repositories is enough.
+   (`chmod 600`). Its path goes in `GOALCUP_TEST_APPROVAL_KEY_FILE`. The key is sent to the
+   campaign's `server`, so the kit accepts only the staging Worker
+   (`https://goalcup-ingest-staging.b-9a5.workers.dev`) and a server on this machine
+   (`http://localhost[:port]`, `http://127.0.0.1[:port]`); another `https://` server must be named
+   exactly in `MATRIX_ALLOW_SERVER`, and production is never accepted. A server that is neither
+   staging nor production needs `MATRIX_FETCH_BUCKET` for a long run's server copy.
+   **GitHub login and the project folder.** Every cell is a test run, and a test run asks for its own
+   new, empty, public repository at its start (D69). The kit makes one per run (`gh repo create
+   <user>/goalcup-kit-<cell>-<random> --public`) with the GitHub login already there, then makes the
+   project folder a player makes (a `.gitignore` holding `.env*` and a `.env.local` holding
+   `GH_TOKEN=<gh auth token>`, mode 0600, never printed) and runs `goalcup start --test --repo` from
+   it. The agent pushes with that token (D71): goalcup builds its environment from nothing, and the kit
+   strips this machine's git login variables from goalcup's own (a `--test` host cell keeps the real
+   `HOME`, so goalcup, not the agent, can still see `~/.gitconfig`). Host cells: this
+   machine's login (`gh auth login`, HTTPS, Yes to authenticate Git) makes the repository. Docker cells: the
+   container's, made once per cell by `campaign.py login` (it runs `linux-matrix.sh github`, which opens
+   `gh auth login` in the container; it stays on the cell's volume). The kit never copies or mounts a login
+   or a token.
+   **Which token the agent gets.** The agent can read `.env.local`, and a staging trace could keep what it
+   prints. The owner's whole gh login is never given by default: **`campaign.py check` and `run` refuse a
+   cell without a token source.** Host cells: `MATRIX_GH_TOKEN_FILE=<file>` (mode 0600, outside the
+   checkout, one line `GH_TOKEN=<value>`), a **fine-grained token (`github_pat_`; a `gho_`/`ghp_` token is
+   refused) whose resource owner is a throwaway account or organisation, Contents read and write only**,
+   with each cell's repository created under that owner and named by the cell's `repo` (required: a
+   `MATRIX_REPO` in the campaign's shell does not reach the cells), since the kit cannot make one that
+   token can reach. Otherwise `MATRIX_ALLOW_LOGIN_TOKEN=1` explicitly gives the agent `gh auth token`, the whole
+   login, and a loud line says so. A Docker cell has only the container's own login, so it needs
+   `MATRIX_ALLOW_LOGIN_TOKEN=1`: **the agent in a Docker cell can use the GitHub login stored on the
+   cell's volume, and the token in its project's `.env.local`, with all of that login's scopes** (it runs as
+   the same user, with no sandbox, and `gh` reads the login from the volume's home), so sign the container
+   in with a throwaway account. After each run the kit searches every git object of the project's
+   repositories and of a fresh mirror clone of the cell's repository for the token (`the token was pushed: revoke it now` FAILs the cell) and scrubs
+   it from the log, captures and run folders ([OPERATING](../OPERATING.md#the-matrix) says how). Nothing else secret is in a Docker cell's container:
+   the staging key never enters it (the host approves the device codes the container writes down),
+   and a Docker cell takes no database URL or R2 token ([OPERATING](../OPERATING.md), the Docker
+   cell and "A long run").
+   **Before each campaign:** start it on new cell volumes (`docker volume rm
+   goalcup-linux-matrix-<connector>-<cell>`, then log in again), because the agent of an earlier
+   run could have written into a reused volume's home (its shell startup files, its git and `gh`
+   configuration) and the next run would execute that. A fresh volume for every run is the
+   strongest setting. The container half runs its own Python isolated (`python3 -I`: no user site,
+   no `PYTHON*` variables), so a planted `usercustomize.py` or `.pth` cannot forge a device code;
+   a volume reused within one campaign still accepts the remaining route, a planted git or `gh`
+   configuration (and shell startup file) that the next run's tools read. And **rotate the staging approval key**
+   (`TEST_APPROVAL_KEY`) after any campaign run with an older kit: older kits mounted the key, and
+   a database URL and R2 token, into the cell's container, where the agent could read them.
 3. **Test members.** Until website migration `20261021100000` is on staging, a test run replaces
    the earlier test run of the same operator, so parallel cells need different members. Staging
    ships two synthetic members (`...0c0de1`, `...0c0de2`). Once the migration is applied, test runs
@@ -60,21 +100,24 @@ not prove: other platforms, other harness versions, model behaviour, or particip
    on conflict do nothing;
    ```
 
-4. **A disposable empty public repository** for practice clones (default
-   `agentcommunity/goalcup-matrix-empty`).
+4. **No practice repository is needed.** A practice run starts in an empty project folder and
+   pushes nothing (D69); the server is told `agentcommunity/goalcup-matrix-empty` for it.
 5. **Build once,** before the logins (a build needs neither a host cell's `config_dir`, which its
-   login makes, nor the token). `python3 scripts/campaign.py build CONFIG` builds the Linux image
+   login makes, nor a GitHub login). `python3 scripts/campaign.py build CONFIG` builds the Linux image
    and binaries one time. Runs never build, so cells can run side by side. On the Mac, `cargo build --offline
    --workspace` and put `target/debug` first on `PATH`; allow the rebuilt `goalcup` in Little Snitch.
 
 ## Cells
 
 A cell is one harness, on one machine kind, for one duration, with one test member and its own
-login. Copy `scripts/campaign.example.json` and edit it: the key file path, the GitHub token file
-path (`github_token_file`), host `config_dir`s and members. `scripts/kit_settle.py` writes that
-token into each cell's `github.json` (0600) with the practice repository: in the container for a
-Docker cell (linux-matrix.sh mounts the file read-only), after `login` and before every `run` for a
-host cell, so a token rotated later is picked up. The default prompt is [campaign-workload.txt](campaign-workload.txt): a cheap, many-step
+harness sign-in. Copy `scripts/campaign.example.json` and edit it: the key file path, host
+`config_dir`s and members. Each run gets a new repository the kit makes; a cell's `repo`
+(`<owner>/<name>`) names one instead. The kit never deletes a repository: each `result.json` and the
+summary list the ones made (`repo_made`), and the run prints them at the end; delete them with
+`gh repo delete <name> --yes`, after `gh auth refresh -s delete_repo` (the default `gh auth
+login` lacks that scope, and the delete fails without it); afterwards `gh auth refresh -r delete_repo`
+takes the scope off again, because host cells' agents are given that login's token. Nothing writes a token into a cell's configuration; a `github.json`
+an older kit left there is no longer read for new runs and can be deleted. The default prompt is [campaign-workload.txt](campaign-workload.txt): a cheap, many-step
 coding task that stays in the workspace and stops on its own. An agent that finishes early and idles
 is still a valid infrastructure run; note the idle time in the report. Cells of an hour or more use
 [campaign-long-workload.txt](campaign-long-workload.txt) instead: the same steps, then items from
@@ -84,8 +127,8 @@ on an idle chain proves little). A long Hermes cell also needs `agent.max_turns`
 own `config.yaml` (default 90; Hermes stopped there after about 7 minutes on 22 Oct), see
 [hermes-cli.md](../harnesses/hermes-cli.md#9-quirks-and-open-questions). Codex effort `minimal` is
 refused unless the installed Codex lists it for Luna; use `low` until that is checked. `python3 scripts/campaign.py check CONFIG`
-refuses duplicate members among parallel cells, shared config directories, production, and an
-unreadable key or token file.
+refuses duplicate members among parallel cells, shared config directories, a `repo` two cells name
+or the practice repository, production, and an unreadable key file.
 
 Suggested first campaign:
 
@@ -101,21 +144,30 @@ Suggested first campaign:
 Claude cells start at 2 h: the subscription hit its weekly quota before. Add Hermes only with an
 API-key provider the owner approves.
 
-The default workload never pushes. A **full-flow cell** tests pushes and the judged commit: give
-it a new empty repository of its own (a test start refuses one that is not empty), run
-`goalcup prep --repo <url>` in the cell's config with a real token before the run (the kit keeps
-a prep'd repository and its token as they are), and use [campaign-build-workload.txt](campaign-build-workload.txt). The
+The default workload never pushes, so its repository stays empty and the cell can run again. A
+**full-flow cell** tests pushes and the judged commit: use
+[campaign-build-workload.txt](campaign-build-workload.txt); each run gets a new repository anyway. The
 [local test day](LOCAL-TEST-DAY.md) plans a day of such cells across every surface.
+
+### Every scenario, and how to run it
+
+| Scenario | Command | Needs |
+|---|---|---|
+| Practice: an empty project folder, no repository | `sh scripts/matrix.sh <connector> <server>` (Docker: `linux-matrix.sh run <id>`) | a signed-in harness (`MATRIX_CONFIG_DIR`), or `m2-fake-tui` |
+| Test run with a repository | `python3 scripts/campaign.py run CONFIG`, or `MATRIX_CONFIG_DIR=<dir> sh scripts/matrix.sh <id> <server> --test --duration <s>` | gh signed in (Docker: `linux-matrix.sh github <id>` once per cell) |
+| Refusals: folder not empty, `.git` present, `.env.local` without `.gitignore`, repository with commits (also a README-only one), private, bare name | `MATRIX_BIN_DIR=target/kit-test/debug sh scripts/matrix.sh m2-fake-tui <server> --refusals` | a test build (`cargo build --offline -p goalcup-cli --features test-support --target-dir target/kit-test`), no harness |
+
+[OPERATING, The matrix](../OPERATING.md#the-matrix) says what each one checks.
 
 ## Logins: one per cell
 
 Codex rotates its refresh token and writes `auth.json` back (measured); a copied login breaks the
 original (`refresh_token_reused`). So every cell signs in once in its own home and never shares or
-copies it:
+copies it. A Docker cell's login also signs in to GitHub in the container (once, on its volume):
 
 ```sh
-python3 scripts/campaign.py login CONFIG lx-codex     # Docker: opens the harness in the cell's volume
-python3 scripts/campaign.py login CONFIG mac-codex    # host: goalcup login + goalcup prep
+python3 scripts/campaign.py login CONFIG lx-codex     # Docker: the harness, then gh auth login, in the cell's volume
+python3 scripts/campaign.py login CONFIG mac-codex    # host: goalcup login + goalcup setup
 ```
 
 A Docker cell's login lives on its volume `goalcup-linux-matrix-<connector>-<cell>` and survives
@@ -208,10 +260,15 @@ pass-line results.
   5 minutes, `sample_every_s: 300`, are enough to judge it).
 - RSS slope under 1 MiB per hour after the first hour; open files flat.
 - Local chain on disk under 2 GiB beyond the reserve in steady state.
-- Server copy equals the local chain (`--check-copy`, and `fetch-run.sh` for one cell per stage).
+- Server copy equals the local chain (`--check-copy`, and `fetch-run.sh` for one cell per stage). A
+  Docker cell takes no database URL or R2 token, so its long runs say `NOT-VERIFIED`; check them on
+  the host after the run with `matrix.sh --check-copy` (host cells may be given the read-only
+  credentials).
 
 ## Cleanup
 
 `sh server/worker/scripts/delete-test-runs.sh` (dry run first) removes staging test runs and their
 R2 objects. `docker volume rm goalcup-linux-matrix-<connector>-<cell>` forgets a cell's login. Host
-cells: delete the cell's config directory and its `-artifacts` and `-runs` siblings.
+cells: delete the cell's config directory and its `-artifacts` and `-runs` siblings. Delete the test
+repositories the run listed (`gh auth refresh -s delete_repo`, then `gh repo delete <name> --yes`,
+then `gh auth refresh -r delete_repo` to remove the scope again; the kit never deletes one).
