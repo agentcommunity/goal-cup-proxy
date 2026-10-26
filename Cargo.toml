@@ -70,7 +70,7 @@ hex = "0.4"
 # The upload chunks (`goalcup-cli`'s `upload::uploader`): one zstd frame per chunk, at the
 # library's default level, no long window. The C library through `zstd-sys`, built by `cc`.
 zstd = { version = "0.13", default-features = false }
-ed25519-dalek = "2"
+ed25519-dalek = "3"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
