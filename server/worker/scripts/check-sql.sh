@@ -2,10 +2,13 @@
 # Try the pending website migration on a throwaway Postgres before anyone applies it to the shared
 # database (sql/pending/README.md). It:
 #   1. starts a private PostgreSQL in a temporary directory (unix socket only, trust auth);
-#   2. stubs what Supabase provides (the anon, authenticated, service_role and authenticator roles,
-#      auth.users, public.admins, public.email_suppression_list, public.member_profiles);
+#   2. stubs what Supabase and the website provide (the anon, authenticated, service_role and
+#      authenticator roles, auth.users, public.admins, public.email_suppression_list,
+#      public.member_profiles, public.email_tracking, public.email_queue, public.registrations);
 #   3. applies the mirror sql/goal-cup-tracer-upload.sql up to its first pending section, in one
-#      transaction: the database as it is today;
+#      transaction: every website *goal_cup* migration, so each mirrored function has its latest
+#      body (the sign-up gate in open_run included). That is production plus 20261021120400 (terms
+#      version and sign-up switch only), which the base holds though production has not applied it;
 #   4. checks that the mirror's pending sections are the files in sql/pending/, byte for byte;
 #   5. applies each pending file with the production command (psql -X -1 -v ON_ERROR_STOP=1 -f);
 #   6. smoke-calls the new and the old-signature functions, then stops and deletes everything.
@@ -67,6 +70,11 @@ CREATE TABLE auth.users (id uuid PRIMARY KEY, email text, email_confirmed_at tim
 CREATE TABLE public.admins (email text NOT NULL);
 CREATE TABLE public.email_suppression_list (email text NOT NULL, expires_at timestamptz);
 CREATE TABLE public.member_profiles (user_id uuid NOT NULL, slug text, is_listed boolean);
+CREATE TABLE public.email_tracking (email_type text CONSTRAINT email_tracking_email_type_check CHECK (email_type IN ('welcome')));
+CREATE TABLE public.email_queue (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, template text, recipient_email text,
+  data jsonb, source text, user_id uuid, metadata jsonb, writer text, kind text, list_key text, content_id text);
+CREATE TABLE public.registrations (id uuid PRIMARY KEY, user_id uuid, full_name text, organization_name text,
+  registration_type text, created_at timestamptz);
 SQL
 
 # The mirror up to the line before its first pending section, and the check that the rest of it is
