@@ -79,6 +79,9 @@
 #                                   the step with nothing posted. Needs curl on this machine.
 #   MATRIX_GH_TOKEN_FILE            IGNORED (a host-cell option of matrix.sh): the container uses its own
 #                                   gh login, and no token file of this machine is mounted or passed.
+#   MATRIX_ALLOW_LOGIN_TOKEN        1: REQUIRED for `run -- --test`. The agent in the cell is given
+#                                   `gh auth token` of the container's login, the whole login: sign the
+#                                   container in (`github`) with a throwaway account. Passed to matrix.sh.
 #   MATRIX_REPO                     a test run's repository, <owner>/<name>, instead of the one
 #                                   matrix.sh makes (matrix.sh says what it must be).
 #   GOALCUP_TEST_MEMBER_ID          the member approved as
@@ -469,6 +472,17 @@ if [ -n "${MATRIX_GH_TOKEN_FILE:-}" ] && [ "$action" != build ]; then
     echo "linux-matrix: MATRIX_GH_TOKEN_FILE is for host cells and is not passed into the container (its own gh login is used)"
 fi
 unset MATRIX_GH_TOKEN_FILE
+# A Docker cell's --test run gives its agent the container's whole gh login (`gh auth token`; a token
+# file of this machine is never mounted): only on an explicit say-so, passed on to matrix.sh.
+allow_login_token=0
+[ "${MATRIX_ALLOW_LOGIN_TOKEN:-}" != 1 ] || allow_login_token=1
+unset MATRIX_ALLOW_LOGIN_TOKEN
+case " $extra " in
+*" --test "*)
+    [ "$action" != run ] || [ "$allow_login_token" = 1 ] ||
+        bad_usage "a --test cell gives its agent a GitHub token, and a Docker cell has only the container's own gh login (the whole login, every scope): set MATRIX_ALLOW_LOGIN_TOKEN=1 to allow it, and sign the container in with a throwaway account"
+    ;;
+esac
 # A Docker cell takes no database URL and no R2 token (the agent in the cell runs as the same user
 # and could read them, and the database is shared with production): refused, not ignored.
 if [ "$action" != build ] && [ -n "${MATRIX_DATABASE_URL_FILE:-}${MATRIX_CLOUDFLARE_TOKEN_FILE:-}" ]; then
@@ -760,6 +774,7 @@ if [ "$action" = run ]; then
     [ -z "${MATRIX_PROMPT_FILE:-}" ] || set -- "$@" -e MATRIX_PROMPT_FILE=$PROMPT_IN
     rm -f "$codes_file"
     set -- "$@" -e "MATRIX_CODES_FILE=$codes_in_container"
+    [ "$allow_login_token" = 0 ] || set -- "$@" -e MATRIX_ALLOW_LOGIN_TOKEN=1
     # $extra holds checked words only (options and digits), so it splits as meant.
     docker exec -u dev "$@" "$name" sh /src/scripts/linux-matrix.sh inner-run "$h" $extra &
     run_job=$!

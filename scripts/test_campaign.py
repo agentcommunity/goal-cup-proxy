@@ -162,6 +162,11 @@ class Base(unittest.TestCase):
         self.prompt = self.root / "prompt.txt"
         self.prompt.write_text("build a thing\n")
         os.environ.pop(campaign.KEY_ENV, None)
+        # Every cell's agent is given a token; the tests allow the login's (see the token tests).
+        patch = mock.patch.dict(os.environ, {campaign.ALLOW_LOGIN_ENV: "1"})
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop(campaign.TOKEN_FILE_ENV, None)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -189,6 +194,25 @@ class Base(unittest.TestCase):
 
 
 class ConfigValidation(Base):
+    def test_a_cell_needs_a_token_file_or_the_explicit_login_token_say_so(self):
+        cells = [self.docker_cell("a", "m1"), self.host_cell("b", "m2", repo="throwaway/cell-b")]
+        cfg = self.config(cells)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(campaign.ALLOW_LOGIN_ENV)
+            errors = self.errors(cfg)
+            self.assertEqual(len(errors), 2, errors)
+            self.assertTrue(all(campaign.ALLOW_LOGIN_ENV in e for e in errors))
+            # A token file satisfies a host cell, not a docker cell (its token is the container's).
+            tok = self.root / "tok"
+            tok.write_text("GH_TOKEN=x\n")
+            tok.chmod(0o600)
+            os.environ[campaign.TOKEN_FILE_ENV] = str(tok)
+            errors = self.errors(cfg)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("cell a", errors[0])
+            tok.chmod(0o644)
+            self.assertTrue(any("mode 0600" in e for e in self.errors(cfg)))
+
     def test_valid_config_passes(self):
         cfg = self.config([self.docker_cell("a", "m1"), self.host_cell("b", "m2")])
         self.assertEqual(self.errors(cfg), [])

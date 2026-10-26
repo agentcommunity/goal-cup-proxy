@@ -82,6 +82,8 @@ class LinuxMatrixTests(unittest.TestCase):
             "GOALCUP_HEAVY_LOCK": str(self.lock),
             "LINUX_MATRIX_LOG_DIR": str(self.base / "logs"),
             "GOALCUP_TEST_APPROVAL_KEY_FILE": str(self.key),
+            # A Docker --test cell gives its agent the container's whole gh login: only when allowed.
+            "MATRIX_ALLOW_LOGIN_TOKEN": "1",
         }
         for name in ("GOALCUP_TEST_APPROVAL_KEY", "LINUX_MATRIX_SERVER",
                      "GOALCUP_TEST_MEMBER_ID", "GOALCUP_HEAVY_LOCK_HELD", "LINUX_MATRIX_LOCK_WAIT",
@@ -602,6 +604,23 @@ class LinuxMatrixTests(unittest.TestCase):
         [inner] = [x for x in self.docker_lines("exec") if "inner-run" in x]
         self.assertTrue(inner.endswith("inner-run codex-cli --test --duration 7200 --keep"), inner)
         self.assertNotIn(SENTINEL, self.log.read_text() + run.stdout + run.stderr)
+
+    def test_a_docker_test_cell_needs_the_explicit_login_token_say_so(self) -> None:
+        env = {k: v for k, v in self.env.items() if k != "MATRIX_ALLOW_LOGIN_TOKEN"}
+        run = subprocess.run(["sh", str(SCRIPT), "run", "codex-cli", "--", "--test", "--duration", "60"],
+                             env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
+        self.assertIn("MATRIX_ALLOW_LOGIN_TOKEN=1", run.stderr)
+        self.assertEqual(self.docker_lines("run"), [])
+        # A practice cell needs none; with the say-so it is passed on to the matrix in the container.
+        practice = subprocess.run(["sh", str(SCRIPT), "run", "codex-cli"], env=env, capture_output=True,
+                                  text=True, stdin=subprocess.DEVNULL)
+        self.assertEqual(practice.returncode, 0, practice.stdout + practice.stderr)
+        self.log.write_text("")
+        run = self.run_script("run", "codex-cli", "--", "--test", "--duration", "60", MATRIX_REPO="a/b")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        [inner] = [x for x in self.docker_lines("exec") if "inner-run" in x]
+        self.assertIn("-e MATRIX_ALLOW_LOGIN_TOKEN=1", inner)
 
     def test_no_github_login_or_token_of_this_machine_is_mounted_or_passed(self) -> None:
         home = Path.home()

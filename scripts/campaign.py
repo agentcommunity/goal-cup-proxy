@@ -391,6 +391,7 @@ def validate(cfg, cells, parallel):
         else:
             members.setdefault(member, []).append(cid)
         errors.extend(f"{tag}: {e}" for e in validate_repo(cell, cid, repos))
+        errors.extend(f"{tag}: {e}" for e in validate_token_source(cell))
         pf = cell.get("prompt_file")
         if pf and not (os.path.isfile(pf) and os.access(pf, os.R_OK)):
             errors.append(f"{tag}: prompt_file {pf} is not a readable file")
@@ -430,6 +431,41 @@ def validate(cfg, cells, parallel):
 def repo_key(repo):
     """A repository name as GitHub reads it, for comparing: lowercase, no trailing / and no .git."""
     return re.sub(r"/+$", "", re.sub(r"\.git$", "", re.sub(r"/+$", "", str(repo).lower())))
+
+
+TOKEN_FILE_ENV = "MATRIX_GH_TOKEN_FILE"
+ALLOW_LOGIN_ENV = "MATRIX_ALLOW_LOGIN_TOKEN"
+
+
+def validate_token_source(cell):
+    """Every cell is a test run, and its agent is given a GitHub token it can read and could
+    publish. Never the owner's whole login by default: a host cell needs MATRIX_GH_TOKEN_FILE (a
+    fine-grained token of a throwaway account or organisation, Contents read and write only; its
+    cells' repositories named with `repo`) or an explicit MATRIX_ALLOW_LOGIN_TOKEN=1; a docker cell,
+    which has only the container's own gh login, needs the explicit say-so."""
+    allow = os.environ.get(ALLOW_LOGIN_ENV) == "1"
+    path = os.environ.get(TOKEN_FILE_ENV)
+    if cell.get("where") == "docker":
+        if allow:
+            return []
+        return [f"a docker cell gives its agent the container's whole gh login (`gh auth token`): set "
+                f"{ALLOW_LOGIN_ENV}=1 to allow it, and sign the container in with a throwaway account"]
+    if path:
+        if not cell.get("repo") and not os.environ.get("MATRIX_REPO"):
+            return [f"{TOKEN_FILE_ENV} needs the cell's own repository under the token's owner: set `repo` "
+                    "(<owner>/<name>, new, empty and public)"]
+        if not os.path.isabs(path) or not os.path.isfile(path) or os.path.islink(path):
+            return [f"{TOKEN_FILE_ENV} must be an absolute path to a regular file (not a link)"]
+        if os.stat(path).st_mode & 0o777 != 0o600:
+            return [f"{TOKEN_FILE_ENV} must be mode 0600"]
+        if Path(os.path.realpath(path)).is_relative_to(os.path.realpath(REPO)):
+            return [f"{TOKEN_FILE_ENV} is inside the checkout: keep it outside"]
+        return []
+    if allow:
+        return []
+    return [f"no token for the agent: set {TOKEN_FILE_ENV}=<file> (a fine-grained token of a throwaway "
+            f"account or organisation, Contents read and write only, mode 0600; name the cells' "
+            f"repositories with `repo`), or {ALLOW_LOGIN_ENV}=1 to give it `gh auth token`, the whole login"]
 
 
 def validate_repo(cell, cid, repos):

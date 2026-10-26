@@ -82,15 +82,22 @@
 #                              repository (agentcommunity/goalcup-matrix-empty). A practice run has
 #                              none and ignores it. The agent pushes to it with the token in the
 #                              project's .env.local, so that login must be able to.
-#   MATRIX_GH_TOKEN_FILE       a --test cell's GitHub token for the agent, from this file instead of
-#                              `gh auth token`: a regular file, mode 0600, outside the checkout,
+#   MATRIX_ALLOW_LOGIN_TOKEN   1: a --test cell may give the agent `gh auth token`, the WHOLE gh login
+#                              (every scope, every repository of the account), when no
+#                              MATRIX_GH_TOKEN_FILE is given. Without either, a --test cell refuses
+#                              to start (exit 2). One loud line says the login token is being given.
+#                              Removed from the environment at once.
+#   MATRIX_GH_TOKEN_FILE       a --test cell's GitHub token for the agent, from this file: the way to
+#                              run a test cell. A fine-grained token whose resource owner is a
+#                              throwaway account or organisation, Contents read and write only, with
+#                              the cell's repository under that owner, named in MATRIX_REPO (required
+#                              with this variable: the kit makes no repository for it). A regular
+#                              file, mode 0600, outside the checkout,
 #                              holding one line, `GH_TOKEN=<value>` or just the value (visible
 #                              ASCII, no quotes). Never echoed, never in an argument. The log says
-#                              which source was used. A fine-grained token for the one repository
-#                              (Contents: read and write) is the safer choice: the agent can read
-#                              .env.local, and `gh auth token` is the whole login, with the scopes
-#                              to reach all your repositories, which a staging trace could hold.
-#                              Removed from the environment at once. A Docker cell ignores it (the
+#                              which source was used. The agent can read .env.local, and a trace
+#                              could hold the token; `gh auth token` is the whole login, which
+#                              reaches all your repositories. Removed from the environment at once. A Docker cell ignores it (the
 #                              container's own gh login is used).
 #   MATRIX_CELL                the cell's name in the repository the kit makes,
 #                              goalcup-kit-<cell>-<6 hex digits> (default: the connector id).
@@ -355,6 +362,10 @@ unset MATRIX_CODES_FILE
 # A --test cell's token file (project_token): the path leaves the environment too.
 TOKEN_FILE=${MATRIX_GH_TOKEN_FILE:-}
 unset MATRIX_GH_TOKEN_FILE
+# Only an explicit 1 lets a --test cell hand the agent the whole gh login (see the header).
+ALLOW_LOGIN_TOKEN=0
+[ "${MATRIX_ALLOW_LOGIN_TOKEN:-}" != 1 ] || ALLOW_LOGIN_TOKEN=1
+unset MATRIX_ALLOW_LOGIN_TOKEN
 if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
   echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE must name a regular file this user can read" >&2
   exit 2
@@ -512,6 +523,16 @@ if [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
       ;;
   esac
   [ "${#CELL}" -le 40 ] || { echo "matrix: MATRIX_CELL is at most 40 characters" >&2; exit 2; }
+  # The agent is given a token it can read and could publish: never the owner's whole login by
+  # default. A fine-grained token file, or an explicit say-so.
+  if [ -n "$TOKEN_FILE" ] && [ -z "$TEST_REPO" ]; then
+    echo "matrix: MATRIX_GH_TOKEN_FILE needs MATRIX_REPO=<owner>/<name>: a repository under the token's resource owner, new, empty and public (the kit would make one with your gh login, which the token cannot push to)" >&2
+    exit 2
+  fi
+  if [ -z "$TOKEN_FILE" ] && [ "$ALLOW_LOGIN_TOKEN" != 1 ]; then
+    echo "matrix: a --test cell gives its agent a GitHub token: set MATRIX_GH_TOKEN_FILE=<file> (a fine-grained token for a throwaway account or organisation, Contents read and write only, mode 0600), or MATRIX_ALLOW_LOGIN_TOKEN=1 to give it \`gh auth token\`, the whole login (every scope, every repository)" >&2
+    exit 2
+  fi
   [ "$TIMEOUT_SET" = 1 ] || TIMEOUT=$((DURATION + 1800))
 fi
 
@@ -607,7 +628,8 @@ STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 [ -n "$LOG" ] || LOG="${TMPDIR:-/tmp}/goalcup-matrix-$CONNECTOR-$STAMP.log"
 LOG_DIR=$(dirname "$LOG")
 mkdir -p "$LOG_DIR" 2>/dev/null
-: >"$LOG" || {
+# The log can hold raw terminal bytes of the run: the owner's alone (0600), also when it exists.
+(umask 077 && : >"$LOG") && chmod 600 "$LOG" || {
   echo "matrix: cannot write the log $LOG" >&2
   exit 2
 }
@@ -640,6 +662,7 @@ SEAL_ENTRY=""
 SEAL_ASKED_AT=""
 EARLY=0
 START_LAUNCHED=0
+TOKEN_PUSHED=0
 
 print_row() {
   [ "$ROW_PRINTED" = 0 ] || return 0
@@ -707,6 +730,7 @@ cleanup() {
       if [ "$STARTED_RUN" = 1 ]; then pkill -TERM -f "goalcup-daemon --config ${CFG:-/nonexistent}/" 2>/dev/null; fi
     fi
     sleep 1
+    check_token_pushed
     scrub_token
     if [ "$KEEP" = 1 ]; then
       log "kept $ROOT (the project's .env.local is deleted)"
@@ -720,18 +744,17 @@ cleanup() {
     log "test repository made by the kit: $REPO_MADE"
     # Whose token the agent was given: a file's (MATRIX_GH_TOKEN_FILE), the cell's own login in a
     # Docker cell, or this machine's gh token on a host.
-    if [ -n "$TOKEN_FILE" ]; then
-      printf 'matrix: test repository made by the kit (delete it when done: first `gh auth refresh -s delete_repo`, which the default gh login lacks, then `gh repo delete %s --yes`; the agent was given the token in MATRIX_GH_TOKEN_FILE, not this login'"'"'s, so the scope may stay): %s\n' "$REPO_MADE" "$REPO_MADE" >&3
+    # (The kit makes a repository only for a cell that was given the login's token.)
+    if [ -n "$CODES_FILE" ]; then
+      who="the login stored in this cell gave its agent its token"
     else
-      if [ -n "$CODES_FILE" ]; then
-        who="the login stored in this cell gave its agent its token"
-      else
-        who="this machine's gh token was given to the agent, so the login it came from can push"
-      fi
-      printf 'matrix: test repository made by the kit (delete it when done: first `gh auth refresh -s delete_repo`, which the default gh login lacks, then `gh repo delete %s --yes`, then `gh auth refresh -r delete_repo` to drop the scope again: %s): %s\n' "$REPO_MADE" "$who" "$REPO_MADE" >&3
+      who="this machine's gh token was given to the agent, so the login it came from can push"
     fi
+    printf 'matrix: test repository made by the kit (delete it when done: first `gh auth refresh -s delete_repo`, which the default gh login lacks, then `gh repo delete %s --yes`, then `gh auth refresh -r delete_repo` to drop the scope again: %s): %s\n' "$REPO_MADE" "$who" "$REPO_MADE" >&3
   fi
   print_row
+  # A pushed token is a failed cell whatever else happened.
+  [ "$TOKEN_PUSHED" = 0 ] || exit 1
 }
 on_signal() {
   FAIL_REASON="interrupted"
@@ -881,6 +904,7 @@ project_token() {
   if [ -n "$TOKEN_FILE" ]; then
     project_token_from_file || return 1
   else
+    [ "$ALLOW_LOGIN_TOKEN" = 1 ] || fail "no token source (MATRIX_GH_TOKEN_FILE or MATRIX_ALLOW_LOGIN_TOKEN=1)" || return 1
     command -v gh >/dev/null 2>&1 ||
       fail "gh is needed (https://cli.github.com): the test run's agent pushes with its token, from the project's .env.local (or give MATRIX_GH_TOKEN_FILE)" || return 1
     (
@@ -889,7 +913,7 @@ project_token() {
     ) 2>>"$LOG"
     token_plain "$PROJECT/.env.local" ||
       { rm -f "$PROJECT/.env.local"; fail "no GitHub login found here: run \`gh auth login\` (HTTPS, and Yes to authenticate Git) in this environment, then run again (its token goes to the project's .env.local), or give MATRIX_GH_TOKEN_FILE" || return 1; }
-    say "GitHub token for the agent: from gh auth token (this machine's login, with all its scopes; a one-repository token via MATRIX_GH_TOKEN_FILE is safer)"
+    say "WARNING: the agent is given the ACCOUNT-WIDE gh login token (MATRIX_ALLOW_LOGIN_TOKEN=1): every scope, every repository of this login. A fine-grained token in MATRIX_GH_TOKEN_FILE is safer."
   fi
   (umask 077 && cp "$PROJECT/.env.local" "$ROOT/private/gh-token") ||
     fail "cannot keep a private copy of the token for the log scrub" || return 1
@@ -947,36 +971,200 @@ project_kit_names() {
   ls -A "$PROJECT" 2>/dev/null >"$ROOT/kit.txt"
 }
 
-# The token must never stay in the log: if anything printed it (the agent's own terminal), it is
-# replaced where it stands, in the log and in the files directly in $ROOT (the terminal's capture).
-# The token is read from the private copy made when .env.local was (the agent may have deleted or
-# rewritten .env.local since). Both are deleted, even with --keep. Nothing is read out.
+# The token must never stay in what the kit keeps. If anything printed it (the agent's terminal),
+# it is replaced where it stands in: the log and the files directly in $ROOT (the terminal's
+# capture), the run folders (<config>-runs) and the harness's tracker homes under the config
+# folder (native session files), the files of the last two newer than this run's start. It is
+# found by its value (the private copy made when .env.local was: the agent may have deleted or
+# rewritten .env.local) and by its shape (gh[opusr]_..., github_pat_...), so a missing copy still
+# scrubs; terminal escape sequences and line wraps inside it are looked through (the file is then
+# rewritten without its escape sequences). Chain files are never touched. The copy and .env.local
+# are deleted, even with --keep. Nothing is read out.
 scrub_token() {
-  if [ -f "$ROOT/private/gh-token" ]; then
-    python3 -I - "$ROOT/private/gh-token" "$LOG" "$ROOT" <<'PY' 2>/dev/null
-import os, sys
+  if [ "$TEST" = 1 ]; then
+    python3 -I - "$ROOT/private/gh-token" "$ROOT/start-marker" "$LOG" "$ROOT" "$CFG-runs" "$CFG/capture-homes" <<'PY' 2>/dev/null
+import os, re, sys
+
+copy, marker, log, root = sys.argv[1:5]
+dirs = sys.argv[5:]
+MARK = b"<GH_TOKEN removed>"
+SHAPES = [rb"gh[opusr]_(?:\s*[A-Za-z0-9]){20,}", rb"github_pat_(?:\s*[A-Za-z0-9_]){20,}"]
 try:
-    token = open(sys.argv[1]).read().strip().split("=", 1)[1]
+    token = open(copy, "rb").read().strip().split(b"=", 1)[1]
 except (OSError, IndexError):
-    sys.exit(0)
+    token = b""
+pats = list(SHAPES)
 if len(token) >= 8:
-    files = [sys.argv[2]] + [os.path.join(sys.argv[3], n) for n in os.listdir(sys.argv[3])]
-    for path in files:
-        if not os.path.isfile(path) or os.path.islink(path):
-            continue
-        try:
-            with open(path, "r+b") as f:
-                data = f.read()
-                if token.encode() in data:
-                    f.seek(0)
-                    f.write(data.replace(token.encode(), b"<GH_TOKEN removed>"))
-                    f.truncate()
-        except OSError:
-            pass
+    # The token with white space allowed between its characters: a terminal wraps lines in it,
+    # and the log prefixes each line.
+    pats.append(rb"\s*".join(re.escape(bytes([c])) for c in token))
+RX = re.compile(b"|".join(b"(?:" + p + b")" for p in pats))
+ESC = re.compile(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
+
+
+def clean(data):
+    new = RX.sub(MARK, data)
+    plain = ESC.sub(b"", data)
+    # Escape sequences between its characters hide it from the first pass: look at the text
+    # without them (the file is then rewritten without its escape sequences).
+    if plain != data and RX.search(plain):
+        new = RX.sub(MARK, plain)
+    return new
+
+
+def scrub(path):
+    try:
+        with open(path, "r+b") as f:
+            data = f.read()
+            new = clean(data)
+            if new != data:
+                f.seek(0)
+                f.write(new)
+                f.truncate()
+    except OSError:
+        pass
+
+
+try:
+    since = os.stat(marker).st_mtime - 2
+except OSError:
+    since = 0
+files = [log]
+files += [os.path.join(root, n) for n in os.listdir(root)]
+for top in dirs:
+    for d, subdirs, names in os.walk(top):
+        subdirs[:] = [n for n in subdirs if n not in ("artifacts",)]
+        for n in names:
+            if n.startswith("chain"):
+                continue
+            path = os.path.join(d, n)
+            try:
+                st = os.lstat(path)
+            except OSError:
+                continue
+            if st.st_mtime >= since and st.st_size <= 32 * 1024 * 1024:
+                files.append(path)
+for path in files:
+    if os.path.isfile(path) and not os.path.islink(path):
+        scrub(path)
 PY
   fi
   rm -f "$ROOT/private/gh-token"
   [ "$PROJECT" = /nonexistent ] || rm -f "$PROJECT/.env.local"
+}
+
+# I1: after the seal, the token must not be in what the agent pushed. The project folder's history
+# (`git log --all -p`) and a fresh clone of the cell's repository (public: anonymous, into
+# $ROOT/clone) are searched for the token, its base64 forms (three alignments, standard and URL
+# alphabets) and its percent-encoded forms. A hit FAILs the cell, loudly; the value is never
+# printed. A clone that cannot be made FAILs too: the check was not done.
+check_token_pushed() {
+  [ "$TEST" = 1 ] && [ "$START_LAUNCHED" = 1 ] && [ -f "$ROOT/private/gh-token" ] || return 0
+  leaked=""
+  unread=""
+  mkdir -p "$ROOT/clone-home"
+  if [ -d "$PROJECT/.git" ]; then
+    leak_scan "the project folder's history" -C "$PROJECT" log --all -p
+    case $? in 1) leaked="$leaked the project folder's history;" ;; 2) unread="$unread the project folder's history;" ;; esac
+  fi
+  if [ -n "$TEST_REPO" ]; then
+    tries=0
+    until leak_git clone --quiet "https://github.com/$TEST_REPO.git" "$ROOT/clone" >/dev/null 2>"$ROOT/clone.err"; do
+      tries=$((tries + 1))
+      rm -rf "$ROOT/clone"
+      if [ "$tries" -ge 3 ]; then
+        log "push check: git clone of $TEST_REPO failed: $(last_line "$ROOT/clone.err")"
+        unread="$unread the pushed repository $TEST_REPO (it could not be cloned);"
+        break
+      fi
+      sleep 3
+    done
+    if [ -d "$ROOT/clone" ]; then
+      leak_scan "the pushed repository $TEST_REPO" -C "$ROOT/clone" log --all -p
+      case $? in 1) leaked="$leaked the pushed repository $TEST_REPO;" ;; 2) unread="$unread the pushed repository $TEST_REPO (its history could not be read);" ;; esac
+    fi
+  fi
+  if [ -n "$leaked" ]; then
+    RESULT=FAIL
+    FAIL_REASON="the token was pushed: revoke it now (found in:$leaked)"
+    TOKEN_PUSHED=1
+    printf 'matrix: *** %s ***\n' "$FAIL_REASON" >&3
+  elif [ -n "$unread" ]; then
+    RESULT=FAIL
+    FAIL_REASON="the pushed repository could not be checked for the token (not checked:$unread); check it by hand, and revoke the token if in doubt"
+    TOKEN_PUSHED=1
+    printf 'matrix: *** %s ***\n' "$FAIL_REASON" >&3
+  fi
+}
+
+# git with none of this machine's login: its own HOME, no system config, no prompt.
+leak_git() {
+  env -u SSH_AUTH_SOCK -u GH_TOKEN -u GITHUB_TOKEN -u GIT_CONFIG_GLOBAL -u GIT_ASKPASS \
+    HOME="$ROOT/clone-home" GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 git \
+    -c credential.helper= -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 "$@"
+}
+
+# Search the output of a git command (its arguments after the name) for the token in
+# $ROOT/private/gh-token. Returns 0 when it is not there, 1 when it is, 2 when git could not be read
+# (an empty repository is read: it has nothing). $1 is only a name for the log.
+leak_scan() { # name git-args...
+  ls_name=$1
+  shift
+  leak_git "$@" >"$ROOT/leak.out" 2>"$ROOT/leak.err"
+  ls_git=$?
+  if [ "$ls_git" != 0 ] && ! grep -q 'does not have any commits' "$ROOT/leak.err"; then
+    log "push check: $ls_name could not be read: $(last_line "$ROOT/leak.err")"
+    rm -f "$ROOT/leak.out"
+    return 2
+  fi
+  python3 -I -c '
+import base64, sys, urllib.parse
+tok = open(sys.argv[1], "rb").read().strip().split(b"=", 1)[1]
+forms = {tok, urllib.parse.quote(tok.decode(), safe="").encode(),
+         urllib.parse.quote_plus(tok.decode()).encode()}
+for pad in range(3):
+    raw = b"\0" * pad + tok
+    whole = (pad + len(tok)) // 3 * 4
+    skip = (0, 2, 3)[pad]
+    for enc in (base64.b64encode(raw), base64.urlsafe_b64encode(raw)):
+        forms.add(enc.rstrip(b"=")[skip:whole])
+forms = [f for f in forms if len(f) >= 8]
+keep = max(len(f) for f in forms)
+tail = b""
+with open(sys.argv[2], "rb") as src:
+    while True:
+        chunk = src.read(1 << 20)
+        if not chunk:
+            break
+        data = tail + chunk
+        if any(f in data for f in forms):
+            sys.exit(3)
+        tail = data[-keep:]
+' "$ROOT/private/gh-token" "$ROOT/leak.out"
+  ls_rc=$?
+  rm -f "$ROOT/leak.out"
+  log "push check: $ls_name searched for the token: $([ "$ls_rc" = 3 ] && echo FOUND || echo not found)"
+  [ "$ls_rc" != 3 ] || return 1
+  [ "$ls_rc" = 0 ] || return 2
+  return 0
+}
+
+# Crash leftovers: a dead kit's temporary directory (its kit.pid names no live matrix.sh) may hold
+# the token's private copy and a cell's .env.local. Deleted here, at the next start, and only those
+# two things, only under this user's own goalcup-matrix.XXXXXX directories, never through a link.
+sweep_stale() {
+  for sw in "${TMPDIR:-/tmp}"/goalcup-matrix.??????; do
+    [ -d "$sw" ] && [ ! -L "$sw" ] && [ -O "$sw" ] && [ "$sw" != "$ROOT" ] && [ -f "$sw/kit.pid" ] || continue
+    sw_pid=$(cat "$sw/kit.pid" 2>/dev/null)
+    case $sw_pid in "" | *[!0-9]*) continue ;; esac
+    if kill -0 "$sw_pid" 2>/dev/null && ps -p "$sw_pid" -o command= 2>/dev/null | grep -q 'matrix\.sh'; then continue; fi
+    swept=""
+    if [ -d "$sw/private" ] && [ ! -L "$sw/private" ]; then rm -rf "$sw/private" && swept="private copy"; fi
+    for sw_env in "$sw"/projects/*/.env.local; do
+      if [ -f "$sw_env" ] && [ ! -L "$sw_env" ]; then rm -f "$sw_env" && swept="$swept .env.local"; fi
+    done
+    [ -z "$swept" ] || log "swept the leftovers of a dead run in $sw:$swept"
+  done
 }
 
 # A test run's repository: MATRIX_REPO, or a new one the kit makes with this machine's GitHub
@@ -1362,6 +1550,10 @@ run_matrix() {
   RUNS="$ROOT/runs"
   mkdir -p "$RUNS"
   : >"$ROOT/seen.txt"
+  # Who owns this directory (a later kit sweeps the leftovers of a dead one), and when the run began.
+  echo $$ >"$ROOT/kit.pid"
+  : >"$ROOT/start-marker"
+  if [ "$TEST" = 1 ] || [ "$REFUSE" = 1 ]; then sweep_stale; fi
 
   if [ -n "${MATRIX_CONFIG_DIR:-}" ]; then
     CFG=${MATRIX_CONFIG_DIR%/}
