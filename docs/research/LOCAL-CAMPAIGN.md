@@ -43,15 +43,16 @@ not prove: other platforms, other harness versions, model behaviour, or particip
    exactly in `MATRIX_ALLOW_SERVER`, and production is never accepted. A server that is neither
    staging nor production needs `MATRIX_FETCH_BUCKET` for a long run's server copy.
    **GitHub login and the project folder.** Every cell is a test run, and a test run asks for its own
-   new, empty, public repository at its start (D69). The kit makes one per run (`gh repo create
-   <user>/goalcup-kit-<cell>-<random> --public`) with the GitHub login already there, then makes the
-   project folder a player makes (a `.gitignore` holding `.env*` and a `.env.local` holding
-   `GH_TOKEN=<gh auth token>`, mode 0600, never printed) and runs `goalcup start --test --repo` from
-   it. The agent pushes with that token (D71): goalcup builds its environment from nothing, and the kit
+   new, empty, public repository at its start (D69). With a token file (below), the cell's `repo`
+   names it. Only in a login-token cell (`MATRIX_ALLOW_LOGIN_TOKEN=1`) does the kit make one per run
+   (`gh repo create <user>/goalcup-kit-<cell>-<random> --public`) with the GitHub login already there.
+   The kit then makes the project folder a player makes (a `.gitignore` holding `.env*` and a
+   `.env.local` holding `GH_TOKEN=<the token>`, mode 0600, never printed) and runs
+   `goalcup start --test --repo` from it. The agent pushes with that token (D71): goalcup builds its environment from nothing, and the kit
    strips this machine's git login variables from goalcup's own (a `--test` host cell keeps the real
-   `HOME`, so goalcup, not the agent, can still see `~/.gitconfig`). Host cells: this
-   machine's login (`gh auth login`, HTTPS, Yes to authenticate Git) makes the repository. Docker cells: the
-   container's, made once per cell by `campaign.py login` (it runs `linux-matrix.sh github`, which opens
+   `HOME`, so goalcup, not the agent, can still see `~/.gitconfig`). In a login-token cell, the login
+   makes the repository. Host cells: this machine's login (`gh auth login`, HTTPS, Yes to authenticate
+   Git). Docker cells: the container's, made once per cell by `campaign.py login` (it runs `linux-matrix.sh github`, which opens
    `gh auth login` in the container; it stays on the cell's volume). The kit never copies or mounts a login
    or a token.
    **Which token the agent gets.** The agent can read `.env.local`, and a staging trace could keep what it
@@ -116,7 +117,7 @@ harness sign-in. Copy `scripts/campaign.example.json` and edit it: the key file 
 summary list the ones made (`repo_made`), and the run prints them at the end; delete them with
 `gh repo delete <name> --yes`, after `gh auth refresh -s delete_repo` (the default `gh auth
 login` lacks that scope, and the delete fails without it); afterwards `gh auth refresh -r delete_repo`
-takes the scope off again, because host cells' agents are given that login's token. Nothing writes a token into a cell's configuration; a `github.json`
+takes the scope off again, because a login-token cell's agent is given that login's token. Nothing writes a token into a cell's configuration; a `github.json`
 an older kit left there is no longer read for new runs and can be deleted. The default prompt is [campaign-workload.txt](campaign-workload.txt): a cheap, many-step
 coding task that stays in the workspace and stops on its own. An agent that finishes early and idles
 is still a valid infrastructure run; note the idle time in the report. Cells of an hour or more use

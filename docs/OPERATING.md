@@ -232,8 +232,8 @@ What the kit does about the token it handed over:
   skipped, and files are listed with `find -P`.
 
 The kit never deletes a repository; it prints the name of one it made at the end (`gh repo delete <name> --yes`
-when done, after `gh auth refresh -s delete_repo`: the default `gh auth login` lacks that scope; the agent
-was given that login's token, so drop the scope again afterwards with `gh auth refresh -r delete_repo`). A question the start asks before the approval (a repository GitHub does
+when done, after `gh auth refresh -s delete_repo`: the default `gh auth login` lacks that scope; in a
+login-token cell the agent was given that login's token, so drop the scope again afterwards with `gh auth refresh -r delete_repo`). A question the start asks before the approval (a repository GitHub does
 not show) also FAILs the row at once.
 
 `--refusals` checks, with no harness and no terminal, that a real run's start refuses before any
@@ -393,8 +393,8 @@ and `hermes-cli`. For long runs in parallel: `linux-matrix.sh build` once, then
 gives each cell its own volume, sign-in and container. A test run in Docker uses the container's own
 GitHub login (its token goes to the project's `.env.local` in the container; it needs `MATRIX_ALLOW_LOGIN_TOKEN=1`, because it is the whole login, so sign the container in with a throwaway account): sign in once with `LINUX_MATRIX_CELL=<cell> sh scripts/linux-matrix.sh github <id>`
 (`gh auth login` in the container; it stays on the cell's volume). The kit never copies or mounts this
-machine's login or a token. `matrix.sh --test --duration <s>` does the same on a host, with the host's
-login and token. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
+machine's login or a token. `matrix.sh --test --duration <s>` does the same on a host, with the token from
+`MATRIX_GH_TOKEN_FILE`, or the host's whole login only with `MATRIX_ALLOW_LOGIN_TOKEN=1`. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
 
 **`--check-copy`.** For a run you made by hand, verifies every entry of the run locally and compares each
 with the server's position, using the run's credential from the configuration directory. It starts and
