@@ -252,11 +252,12 @@ pub const LAUNCH_PREP_CA_FILE: &str = "{ca_file}";
 /// The template `[launch_prep]` commands may name for the model service's URL as goalcup read
 /// it (`capture.model_host_from`): `https://`, the host, the port unless 443, and the path.
 pub const LAUNCH_PREP_MODEL_BASE_URL: &str = "{model_base_url}";
-/// The two `[launch_prep]` templates, each with the word (lower case, no `-` or `_`) the key
-/// argument before it must hold, which the deny lists then admit in that key alone (D72).
-pub const LAUNCH_PREP_TOKENS: &[(&str, &str)] = &[
-    (LAUNCH_PREP_MODEL_BASE_URL, "baseurl"),
-    (LAUNCH_PREP_CA_FILE, "cacert"),
+/// The two `[launch_prep]` templates (D72), each with the deny-list word (lower case, no `-` or
+/// `_`) the deny lists then admit in the key argument before it, and the last `.`-separated part
+/// that key must have, exactly. The key holds no `=`, so it carries no value of its own.
+pub const LAUNCH_PREP_TOKENS: &[(&str, &str, &str)] = &[
+    (LAUNCH_PREP_MODEL_BASE_URL, "baseurl", "base_url"),
+    (LAUNCH_PREP_CA_FILE, "cacert", "ssl_ca_cert"),
 ];
 
 /// The most commands `capture.configure` may hold.

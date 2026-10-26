@@ -684,9 +684,10 @@ impl HarnessManifest {
 
     /// `[launch_prep]` (D72): `ca_file` is one `.pem` file name, and each command follows the
     /// `capture.configure` rules, with one exception. A whole argument `{model_base_url}` or
-    /// `{ca_file}` is admitted only right after a key argument that holds its word (`base_url`,
-    /// `cacert`), and that key is then admitted although the deny lists refuse that word: the
-    /// only value such a key can get is goalcup's own. Any other brace is refused.
+    /// `{ca_file}` is admitted only right after its key: an argument with no `=` whose last
+    /// `.`-separated part is exactly `base_url` or `ssl_ca_cert`. That key is then admitted
+    /// although the deny lists refuse its word (`baseurl`, `cacert`): the only value such a key
+    /// can get is goalcup's own. Any other brace is refused.
     fn check_launch_prep(&self, origin: Origin) -> Result<(), ProtocolError> {
         const FIELD: &str = "launch_prep.commands";
         let Some(prep) = &self.launch_prep else {
@@ -712,18 +713,16 @@ impl HarnessManifest {
                 format!("holds more than {MAX_CONFIGURE_COMMANDS} commands"),
             ));
         }
-        let word_of = |a: &str| {
+        // The template `a` is, with its deny-list word and the last part its key must have.
+        let token_of = |a: &str| {
             LAUNCH_PREP_TOKENS
                 .iter()
-                .find(|(token, _)| *token == a)
-                .map(|(_, word)| *word)
+                .find(|(token, _, _)| *token == a)
+                .map(|(_, word, key)| (*word, *key))
         };
-        let normal = |a: &str| -> String {
-            a.to_ascii_lowercase()
-                .chars()
-                .filter(|c| *c != '-' && *c != '_')
-                .collect()
-        };
+        // A key the template fills: no `=` (no value of its own), and its last `.`-separated
+        // part is exactly the one the template names.
+        let is_key_for = |a: &str, key: &str| !a.contains('=') && a.rsplit('.').next() == Some(key);
         for command in &prep.commands {
             if command.is_empty() || command.len() > MAX_CONFIGURE_ARGS {
                 return Err(refuse(
@@ -738,16 +737,14 @@ impl HarnessManifest {
                         format!("an argument must be 1 to {MAX_CONFIGURE_ARG_BYTES} bytes"),
                     ));
                 }
-                if let Some(word) = word_of(a) {
-                    let after_key = i > 0
-                        && word_of(&command[i - 1]).is_none()
-                        && normal(&command[i - 1]).contains(word);
+                if let Some((word, key)) = token_of(a) {
+                    let after_key = i > 0 && is_key_for(&command[i - 1], key);
                     if !after_key {
                         return Err(refuse(
                             FIELD,
                             format!(
                                 "`{a}` must come right after the key it fills, an argument \
-                                 that holds `{word}`"
+                                 whose last `.` part is `{key}`, with no `=`"
                             ),
                         ));
                     }
@@ -780,8 +777,9 @@ impl HarnessManifest {
                 // The key of a pair: the next argument is the template its word stands for.
                 let admitted = command
                     .get(i + 1)
-                    .and_then(|next| word_of(next))
-                    .filter(|word| normal(a).contains(word));
+                    .and_then(|next| token_of(next))
+                    .filter(|(_, key)| is_key_for(a, key))
+                    .map(|(word, _)| word);
                 check_configure_arg(FIELD, origin, a, admitted)?;
             }
         }

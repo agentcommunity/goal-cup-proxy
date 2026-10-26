@@ -973,12 +973,15 @@ model calls with no certificate error.
   continue. `commands` (at most 4) run as `capture.configure` runs (D61: the harness home, no
   proxy, stdin `/dev/null`, 60 s each, output to `host.log`), after it and before the launch, at
   every start and continue, never at setup. A command that fails is logged in its template form
-  and the run goes on, because an older harness may lack the command.
+  and the run goes on, because an older harness may lack the command. goalcup's own log line
+  never holds the URL or the path; the harness's own output, also in `host.log` (local, 0600,
+  never uploaded), may.
 - **Two templates, one narrow exception.** A command argument may be exactly `{model_base_url}`
   (the `https` URL `capture.model_host_from` read: host, port unless 443, path; no userinfo or
-  query) or `{ca_file}` (that file's absolute path), and only right after a key argument that holds
-  `base_url` or `cacert` respectively. The deny lists admit that one word in that key and nothing
-  else. So the only value such a key can get is goalcup's own.
+  query) or `{ca_file}` (that file's absolute path), and only right after its key: an argument
+  with no `=` whose last `.`-separated part is exactly `base_url` or `ssl_ca_cert` respectively.
+  The deny lists admit that one word (`baseurl`, `cacert`) in that key and nothing else. So the
+  only value such a key can get is goalcup's own.
 - **Why D1 stands.** The `base_url` written is the one the participant's own config already
   names, as the key of a trust entry: where the harness sends its calls does not change, and the
   harness still reaches the model service only through `HTTPS_PROXY`. The CA file is the trust
@@ -996,8 +999,11 @@ model calls with no certificate error.
   participant's own provider entry for the same URL is matched first; a bare `provider: custom`
   may treat the `recorder` entry as the URL's owner (not verified); Hermes's native Anthropic
   client ignores `ssl_ca_cert`, so Hermes 0.21.6 and later on the Anthropic provider record
-  nothing; a model URL with a query does not match. `goalcup continue` opens a new Hermes session
+  nothing; a model URL with a query or a `user@` part does not match. `goalcup continue` opens a new Hermes session
   on 0.21.1 and later, which write no session file. A gateway another process starts between the
   stop and the launch keeps its old environment (CHEAT-CHECKLIST).
+- **The entry stays.** The `recorder` entry stays in Goal Cup's Hermes home after a run, naming
+  that run's CA. Hermes opened there outside a run cannot reach the model address; the next
+  start rewrites it.
 - **Not in 0.7.0:** reading Hermes's `state.db`, a post-run gateway stop, a per-run Hermes home, a
   Hermes version gate, a verifier finding, and setup writing Hermes's other keys itself.

@@ -350,10 +350,11 @@ commands = [
   to every `capture.configure` rule, with one exception. Two templates exist, and each must be a
   whole argument: `{model_base_url}` (the URL `capture.model_host_from` read: `https://`, the
   host, `:port` unless 443, and the path; never a userinfo or a query) and `{ca_file}` (the
-  absolute path of `ca_file`). A template is admitted only right after a key argument that holds
-  its word: `base_url` (any case, `-` and `_` ignored) before `{model_base_url}`, `cacert` before
-  `{ca_file}`. That key is then admitted although the deny lists refuse that word, and only that
-  word: `model.base_url` is still refused for `model`. `{model_base_url}` needs
+  absolute path of `ca_file`). A template is admitted only right after its key: an argument with
+  no `=` whose last `.`-separated part is exactly `base_url` (before `{model_base_url}`) or
+  `ssl_ca_cert` (before `{ca_file}`). That key is then admitted although the deny lists refuse its
+  word (`baseurl`, `cacert`), and only that word: `model.base_url` is still refused for `model`,
+  and `providers.x.base_url=evil.example` or `--base-url` is refused as before. `{model_base_url}` needs
   `capture.model_host_from`, and `{ca_file}` needs `ca_file`. Any other brace is refused.
 - **When and how.** At every `goalcup start` and `goalcup continue`, after `capture.configure`
   and before the launch, never at `goalcup setup`: the CA file first, then each command in order,
@@ -361,7 +362,8 @@ commands = [
   output to `host.log`).
 - **Failure.** A command that cannot start, ends non-zero, is ended by a signal or outlives its
   60 seconds does not stop the run: one line in `host.log` names it in its template form (never
-  with the URL or the path filled in) and the launch goes on. An older harness may lack a
+  with the URL or the path filled in) and the launch goes on. The harness's own output, which also
+  goes to `host.log`, may repeat the URL or the path. An older harness may lack a
   command (Hermes 0.19.0 has no `-y` on `gateway stop`).
 - **What it may change.** Only the harness's trust of the recording proxy for the URL its own
   config already names, and processes of its own that would keep an old environment. The pair

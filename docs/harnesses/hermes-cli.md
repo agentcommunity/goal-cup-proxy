@@ -33,7 +33,7 @@ Headless (the recipe before D61, frozen at [`frozen-connectors/hermes-cli`](../.
 
 ## 2. Install and record a version
 
-- Distribution: the Python package `hermes-agent`. Goal Cup installs Hermes with `uv tool install hermes-agent==0.19.0` (see [Hermes setup](../HARNESS-SETUP.md#hermes)). PyPI's newest `hermes-agent` is 0.19.0 (20 Jul 2026); later releases (0.20 to 0.22) exist only as git tags (checked 22 Oct 2026). Hermes 0.21.0 (tag `v2026.8.31`) still writes the session file Goal Cup records; 0.21.1 (tag `v2026.9.7`) removed it (section 4). Hermes's own installer installs the newest release (`v0.22.4` on 21 Oct 2026, `v0.22.5` measured on 26 Oct); since D72 that is fine, with the limits in [Hermes 0.22](#hermes-022-the-gateway-and-certificate-trust). `harnesses/install.sh`, a research script, installs the latest PyPI version unpinned, and its `git clone --depth 1` fallback gets the source's `main`. `hermes-agent==0.19.0` is the measured version. The `==` spelling is standard uv/pip syntax, not run for this sheet. No build is pinned (D53). The connector's `version_args` is `--version`: `hermes --version` prints `Hermes Agent v0.19.0 (2026.7.20)` in under a second with a fresh HOME (measured 22 Oct 2026, macOS and Docker).
+- Distribution: the Python package `hermes-agent`, or Hermes's own installer. Since D72 the default is Hermes's own installer (the newest release); `uv tool install hermes-agent==0.19.0` is the fallback for the setups [Hermes setup](../HARNESS-SETUP.md#hermes) lists. PyPI's newest `hermes-agent` is 0.19.0 (20 Jul 2026); later releases (0.20 to 0.22) exist only as git tags (checked 22 Oct 2026). Hermes 0.21.0 (tag `v2026.8.31`) still writes the session file Goal Cup records; 0.21.1 (tag `v2026.9.7`) removed it (section 4). Hermes's own installer installs the newest release (`v0.22.4` on 21 Oct 2026, `v0.22.5` measured on 26 Oct); since D72 that is fine, with the limits in [Hermes 0.22](#hermes-022-the-gateway-and-certificate-trust). `harnesses/install.sh`, a research script, installs the latest PyPI version unpinned, and its `git clone --depth 1` fallback gets the source's `main`. `hermes-agent==0.19.0` is the measured version. The `==` spelling is standard uv/pip syntax, not run for this sheet. No build is pinned (D53). The connector's `version_args` is `--version`: `hermes --version` prints `Hermes Agent v0.19.0 (2026.7.20)` in under a second with a fresh HOME (measured 22 Oct 2026, macOS and Docker).
 - Requires Python `>=3.11,<3.14`; measured with CPython 3.13.13 (source; metadata).
 - Binary: `$UV_TOOL_BIN_DIR/hermes` is a 372-byte console script whose entry point is `hermes_cli.main:main`. The daemon records its SHA-256 (D53). Whether those bytes are the same on every install, OS and interpreter path: unknown.
 - Print the version: unknown (the connector does not use a version command; the installed distribution name and version are read from the package metadata).
@@ -127,7 +127,8 @@ the v0.22.5 checkout) changed two things the 0.19.0 recipe relied on. The connec
   goalcup writes the run's proxy CA to `recorder-ca.pem` in the home (mode 0600) and runs
   `hermes config set providers.recorder.base_url <the model.base_url goalcup read>` and
   `hermes config set providers.recorder.ssl_ca_cert <that file>`. Both exit 0 and start no
-  gateway (measured). The entry covers the main chat client and the auxiliary client (titles,
+  gateway (measured). Hermes prints the value it set, so the URL and the path appear in the run's
+  `host.log` (local, never uploaded). The entry covers the main chat client and the auxiliary client (titles,
   compression). It does not change which provider or model Hermes uses: it has no key, model or
   `api_mode`, and is picked only by its name. It does show in the `/model` picker and in
   `hermes doctor`; picking it gives a provider with no key.
@@ -151,8 +152,13 @@ silent):
 - Hermes's native Anthropic client ignores `ssl_ca_cert` (`agent/anthropic_adapter.py`), so Hermes
   with the Anthropic provider records nothing on 0.21.6 and later. Use another provider, or Hermes
   0.21.0 or older.
-- A model URL with a query string (Azure's `?api-version=`) does not match the entry, which holds
-  the host, port and path only.
+- A model URL with a query string (Azure's `?api-version=`) or a `user@` part does not match the
+  entry, which holds the host, port and path only (Hermes keeps the userinfo in its route
+  identity, `hermes_cli/route_identity.py`).
+- The `recorder` entry stays in Goal Cup's Hermes home after a run, naming that run's CA. Hermes
+  opened there outside a run (by hand, or by `goalcup setup`) cannot reach the model address
+  through it, and picking `recorder` in `/model` gives a provider with no key. The next start
+  rewrites it.
 - A gateway another Hermes process starts between the stop and the launch (a kanban or cron
   worker, or a launchd unit from `hermes gateway install`) keeps its old environment
   ([CHEAT-CHECKLIST](../CHEAT-CHECKLIST.md)).

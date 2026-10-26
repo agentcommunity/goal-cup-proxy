@@ -660,6 +660,20 @@ commands = [
     let pem = std::fs::read_to_string(&ca_path).unwrap();
     assert!(pem.starts_with("-----BEGIN CERTIFICATE-----\n"), "{pem}");
     assert!(pem.ends_with("-----END CERTIFICATE-----\n"), "{pem}");
+    // The one block's body is the run's proxy CA, byte for byte (the stand-in DER is not a
+    // parseable certificate, so the body is decoded here rather than by `ca_bundle`).
+    let body: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
+    assert_eq!(pem.matches("-----BEGIN").count(), 1, "{pem}");
+    {
+        use base64::Engine as _;
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(body)
+                .unwrap(),
+            der,
+            "the file holds the run's proxy CA alone"
+        );
+    }
 
     let url = "https://api.models.example.test:8443/v1";
     let ca = ca_path.display().to_string();

@@ -3799,6 +3799,43 @@ fn launch_prep_admits_its_two_templates_only_after_their_keys() {
     for (ca_file, command, needles) in cases {
         refused(&with_launch_prep(ca_file, &[command]), PINNED, needles);
     }
+    // A key that carries its own value (`=`), or whose last part is not exactly the one its
+    // template names, is not a key the template fills: the deny lists refuse it as usual.
+    let carrying: [&[&str]; 6] = [
+        &[
+            "config",
+            "set",
+            "providers.x.base_url=evil.example",
+            "{model_base_url}",
+        ],
+        &[
+            "config",
+            "set",
+            "providers.x.ssl_ca_cert=evil.pem",
+            "{ca_file}",
+        ],
+        &["--base-url=evil.example", "{model_base_url}"],
+        &["--base-url", "{model_base_url}"],
+        &[
+            "config",
+            "set",
+            "providers.x.base_url_alt",
+            "{model_base_url}",
+        ],
+        &["config", "set", "providers.x.cacert", "{ca_file}"],
+    ];
+    for command in carrying {
+        refused(
+            &with_launch_prep(Some("ca.pem"), &[command]),
+            PINNED,
+            &[FIELD],
+        );
+        let refusal = outcome(&with_launch_prep(Some("ca.pem"), &[command]), PINNED).unwrap();
+        assert!(
+            refusal.contains("endpoint") || refusal.contains("certificates"),
+            "{command:?}: {refusal}"
+        );
+    }
     // `{model_base_url}` needs `capture.model_host_from`.
     let mut t = with_launch_prep(None, &[hermes[0]]);
     tbl(&mut t, &["capture"]).remove("model_host_from");
