@@ -354,11 +354,12 @@ impl CaptureEmitter {
         self.recorded_requests.clone()
     }
 
-    /// Requests the recording proxy selected on a path that carries a protocol hint: the
-    /// connector's model-turn endpoints (`/chat/completions`, `/messages`, `/responses`, a
-    /// provider's reviewed paths). A request under a model host's base path that carries no hint
-    /// (a model list, a health probe) is recorded ([`CaptureEmitter::recorded_requests`]) but
-    /// is not counted here, so this is what "the agent made a model call" means.
+    /// Requests the recording proxy selected that are model calls: each on a path that carries a
+    /// protocol hint (`/chat/completions`, `/messages`, `/responses`, a provider's reviewed
+    /// paths), and each POST on a recorded path without one (a provider's own generate route,
+    /// such as `:streamGenerateContent`). A GET under a model host's base path (a model list, a
+    /// health probe) is recorded ([`CaptureEmitter::recorded_requests`]) but is not counted
+    /// here, so this is what "the agent made a model call" means.
     pub fn generation_requests(&self) -> u64 {
         self.generation_requests.load(Ordering::SeqCst)
     }

@@ -282,7 +282,13 @@ impl Ticker {
                 &mut crate::host_log::say,
             )
         });
-        let no_calls = beat.no_calls.as_ref().map(|watch| {
+        // Once the harness has exited, the wait is over: a harness that left before the wait ran
+        // out never gets the line, and what the tick last said stands.
+        let exited = matches!(
+            beat.keeper.snapshot().harness,
+            super::HarnessState::Exited { .. }
+        );
+        let no_calls = beat.no_calls.as_ref().filter(|_| !exited).map(|watch| {
             self.no_calls.see(
                 watch,
                 // Model calls, not every request under the base path: a harness that only lists

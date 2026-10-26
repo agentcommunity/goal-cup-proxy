@@ -298,7 +298,10 @@ async fn relay_requests(
         let capture = select(shared, &request, target.as_ref(), exchange);
         if let Some(capture) = &capture {
             shared.emitter.record_recorded_request();
-            if capture.meta.protocol_hint.is_some() {
+            // A model call is a request on a hinted path, or a POST on any other recorded path
+            // (a provider's own generate route under the base path); a GET there is a model
+            // list or a probe.
+            if capture.meta.protocol_hint.is_some() || capture.meta.method == "POST" {
                 shared.emitter.record_generation_request();
             }
         }
