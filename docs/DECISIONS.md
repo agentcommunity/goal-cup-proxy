@@ -10,7 +10,7 @@ retained for references; some have been superseded or retired.
 
 ## Status
 
-Where each entry stands on 22 Oct 2026. "Current" means follow it as written. "Partly superseded"
+Where each entry stands on 25 Oct 2026. "Current" means follow it as written. "Partly superseded"
 means some clauses are replaced; the entry names which. Read the replacing entry for those clauses.
 Update this table in the same PR as any entry it lists.
 
@@ -25,22 +25,25 @@ Update this table in the same PR as any entry it lists.
 | D24 | current | |
 | D25 | partly superseded | D66 (the agent may ask for the time left) |
 | D26, D30, D36, D37 | current | |
-| D38 | partly superseded | D52 (the cheapest-model clause), D69 (the agent's git login) |
+| D38 | partly superseded | D52 (the cheapest-model clause), D69 and D71 (the agent's git login) |
 | D39 | partly superseded | D57 (chat mode; the headless launch clause is removed) |
 | D40 | partly superseded | D61 (the Hermes clause), D56 (the 180 s budget) |
 | D41 | partly superseded | D43 (CA rule), D52 (model clause), D61 (seed and key scan) |
 | D42 | current | |
-| D43 | partly superseded | D61 (ruling 2); ruling 3 amended by WP12 |
+| D43 | partly superseded | D61 (ruling 2); ruling 3 amended by WP12; ruling 4 withdrawn by D70 |
 | D44 to D48 | current | |
 | D49 | superseded | D60, D61 |
 | D50 | superseded | D61 |
-| D51 to D60 | current | |
+| D51 to D55, D57 to D60 | current | |
+| D56 | partly superseded | D71 (a clone is decided at finish; the workspace admission rule) |
 | D61 | partly superseded | D62 (model traffic for listed providers only) |
 | D62, D63 | current | |
 | D64 | partly superseded | D65 (the disk watch pauses, never stops) |
 | D65, D66, D67 | current | |
-| D68 | proposed, owner to approve | |
-| D69 | current | |
+| D68 | proposed, owner to approve | The open pin question is settled by D70 |
+| D69 | partly superseded | D71 (the clone, the practice folder, the five login variables and the push check are gone; no keys held, the four-step setup and no GitHub in setup stand) |
+| D70 | current | |
+| D71 | current | |
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
@@ -277,6 +280,8 @@ The contract is `connectors/<id>/harness.toml`, schema 1.
    variable of their own; D41's proxy-only trust for a replace-mode variable is unchanged.
 4. The server keeps acceptable connector directory digests as data. The compiled pins in
    `pins/connector-dirs.txt` stay the local gate. A harness PR has no `.rs` file (D51).
+   *Withdrawn by D70: the release is the list and the server keeps no digests. The rest of this
+   ruling stands.*
 5. Stranger harness PRs are accepted once the conformance and pin tests run in CI, the
    code-execution guards are validation rules, and the reviewer checklist covers the rest.
 6. `Launch.run_public_key` and `Launch.connector_dir_sha256` are optional, skip-if-none fields in
@@ -416,6 +421,13 @@ exit 1: verify the server copy) and reports a missing middle part as `chain_part
 writer never starts a fresh chain over any part file.
 
 ## D56. The seal of a clone records its commit and an uncommitted digest.
+
+*Amended by D71 (25 Oct 2026). Goal Cup Proxy no longer clones, and the workspace is the folder the
+participant starts from. The admission rule in the paragraph below and the "decided at create"
+sentence in the second bullet are replaced: a new entry is admitted if the folder is empty but for
+the kit files and holds no `.git`; whether the workspace is a clone is decided at finish, with a
+walk budget for a non-clone. The manifest, the digest, the no-program rule and the time budget
+stand.*
 
 A participant works in a clone of their own GitHub repository. The workspace is admitted if it is
 the root of its own clone (`<workspace>/.git` is a directory and no work tree lies above).
@@ -607,7 +619,7 @@ records that service and nothing else.
   refresh fails (`docs/harnesses/hermes-cli.md`, known gaps; TODO Known issues).
 - **A switch mid-run.** The file is not read during a run. A service switched to inside a session
   (Hermes's `/model`) is a tunnel until the next segment: the participant exits the harness and
-  runs `goalcup continue`, which reads the config again (PARTICIPANT-GUIDE, section 8).
+  runs `goalcup continue`, which reads the config again (PARTICIPANT-GUIDE, section 5).
 - **Hermes.** `{ file = "config.yaml", key = "model.base_url" }`, which Hermes's setup and
   `/model` write. API-key services are what this delivers; an OAuth-login service may fail its
   token refresh (above), pending a test-round run. `providers = ["deepseek"]` is removed: with `HERMES_CA_BUNDLE` in replace mode
@@ -725,8 +737,8 @@ the agent pulls, and nothing is sent to it.
   (after a reboot) the file is removed.
 - **The agent asks.** `goalcup time-left` reads the file through the variable and prints one line
   ("About 41 h 12 min left (the run stops at 2026-11-14 00:00 UTC). Push your work often; work not
-  pushed when the run stops is lost."; a practice run, whose clone cannot push, gets "This is a
-  practice run: its clone cannot push, so there is nothing to push." instead) and exits 0; a
+  pushed when the run stops is lost."; a practice run, which has no repository and no token, gets a line saying
+  there is nothing to push, instead) and exits 0; a
   missing file, or one written more than 5 minutes ago, is "unknown right now" and exit 1. The goal-cup skill tells the agent the command
   exists. The skill reaches only harnesses with a `skills_dir` (Codex, Claude Code); Hermes and Amp
   need a skills folder measured locally before their connectors get one.
@@ -786,18 +798,22 @@ four". Adding a harness must stay a data change that core changes do not break.
   `--dev`, beside every shipped connector. A connector made from the contributor template loads
   with no Rust change, and no core literal names a harness (`no_family_literals.rs`). A change
   that fails one of them is a break, not a test to update.
-- **Open: the pin and the cutoff.** A connector runs without `--dev` only when the release pins
-  it (`connector-dirs.txt`, compiled in). So a participant's own harness needs a merged PR and a
-  release before 6 Nov 2026 12:00 UTC. `--dev` admits an unpinned connector and relaxes three
-  load rules (`Origin::Dev`): the interpreter refusal for `program`, the argument path rules, and
-  the loopback and single-label host refusal. A `--dev` run today opens a server run and uploads like
-  any other: the server checks no connector list (D43 ruling 4 is not built), and the report
-  labels it `Dev/unpinned`. The owner decides whether a `--dev` run may count, and if not, where
-  it is refused (the CLI in competition mode, or the server by digest).
+- **Settled by D70.** A connector runs without `--dev` only when a release pins it, and the
+  release is the list: a participant's own harness needs a merged PR and a release, and releases
+  continue through the cup. `--dev` admits an unpinned connector and relaxes three load rules
+  (`Origin::Dev`): the interpreter refusal for `program`, the argument path rules, and the loopback
+  and single-label host refusal. A `--dev` run never competes, and any member may run one for
+  practice or test.
 
 ## D69. Goal Cup Proxy holds no keys; the agent pushes with the participant's own git login.
 
-23 Oct 2026, owner ruling ([plan](plans/2026-10-23-simple-setup.md)): "goalcup observes, it
+*Partly superseded by D71 (25 Oct 2026). The git login, the clone, the push check at start, the
+practice folder's git isolation, the five login variables, the work folder and its keys file are
+gone: the agent pushes with the participant's one-repo token from the project folder. Goal Cup Proxy
+still holds no key, setup still has four steps and no GitHub, and a real run still names its
+own repository at start. Read D71 for those clauses.*
+
+23 Oct 2026, owner ruling ([plan](archive/2026-10-23-simple-setup.md), archived): "goalcup observes, it
 should not store any key and should not pass keys anywhere. The agent can push to any repo, that's
 ok." Goal Cup Proxy reads, stores, logs and passes no key, GitHub token included.
 
@@ -842,3 +858,70 @@ ok." Goal Cup Proxy reads, stores, logs and passes no key, GitHub token included
   not measured against GitHub here.
 - **Old clones.** The hidden `goalcup git-credential` still answers from `github.json` for clones
   made before this, and nothing writes that file any more. It can be removed after the event.
+
+## D70. The release is the list; the server refuses old versions in the competition; `--dev` never competes.
+
+*Owner, 23 Oct 2026; cut down 25 Oct 2026.* Settles D68's open pin question
+([design](research/RELEASE-IS-THE-LIST.md)). A connector is accepted by being merged and shipped in
+a release, as before. Releases may continue through the cup, and the 6 Nov release is not a
+cutoff; a merged connector ships in the next point release.
+
+- **Old versions.** The Worker's `MIN_COMPETITION_VERSION` (a `wrangler.toml` var, empty until
+  set) refuses a competition device request and a competition open from an older goalcup
+  (`TOO_OLD`, with the install line). It is set to `0.7.0` once 0.7.0 is released, because 0.6.1
+  clients use the clone flow and never send `dev`. `continue` is not checked, so a running run is
+  never cut off.
+- **Never update over a run.** `install.sh` refuses to replace a goalcup that is recording a run
+  (`--force` overrides). The released 0.6.1 installer has no such guard, so a 0.6.1 dry-run player
+  is told to seal before they update. From 0.7.0 to 15 Nov 2026 a release keeps
+  `CONTROL_API_VERSION` (12), pinned by tests, so a forced update still talks to the running
+  daemon.
+- **`--dev` never competes, and anyone may use it for practice or test.** The Worker refuses a
+  `dev` competition run (`DEV_COMPETES`); the CLI sends `dev` on open and continue, and refuses
+  `--dev` on a competition start before the approval. There is no admin check: a harness author
+  who is any member can try an unpinned connector with `--dev --practice`, which counts for
+  nothing.
+- **Practice proves the harness.** Practice runs use shorter "no session file" thresholds (five
+  requests, three minutes), so a silent harness shows within minutes.
+- **Cut from the 23 Oct design:** the latest-release nudge, known-bad harness versions
+  (`bad_versions`; HARNESS-SETUP names Hermes 0.19.0 and the practice thresholds catch the rest),
+  the practice reminder at start, and admin-only `--dev` (it would block the authors the owner
+  wants). D43 ruling 4 (a server list of digests) is withdrawn.
+
+## D71. The project folder is the workspace; the agent pushes with the participant's one-repo token.
+
+*Owner, 25 Oct 2026 (the 0.7 plan, OD1 to OD9).* Amends D69 and D56. The 24 Oct real-machine round
+failed in D69's git work at start (R2: the login hunt, the dry-run push and the clone on a real
+Mac), and in the recorder's 30 s idle timer, which ran out while a participant waited at the
+approval (R1).
+
+- **The workspace is the folder `goalcup start` runs in**, for real and practice runs. Goal Cup
+  Proxy does no git there: no clone, no `.git/info/exclude`, no push test. The agent runs
+  `git init` and pushes. Its run folders (the harness `HOME`) go to `<config>-runs/`, outside the
+  project, and `--work-root` and the `work_root` field are gone (an old `prep.json` holding one is
+  read and ignored). The recorder starts after the approval, not before.
+- **The folder rule**, checked before the device request so a bad folder costs no approval: empty
+  but for `.gitignore` and `.env*` files; not inside a git worktree; not beside goalcup's own
+  folders; every `.env*` file covered by a `.gitignore` line. The baseline records each `.env*`
+  file by name and size, never a hash. A new entry with a `.git` is refused. A continued run needs
+  only that the folder exists, because the agent may exit before it runs `git init`.
+- **One documented push path.** A GitHub fine-grained token for the one cup repository, Contents
+  read and write, 30 days, saved as `GH_TOKEN` in the folder's `.env.local`, made after the
+  repository exists. The participant deletes it after the run. `git add -f` of `.env.local` is a
+  named residual (RULES, Keys).
+- **Nothing of the participant's git login is passed.** The five variables (`SSH_AUTH_SOCK`,
+  `GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`),
+  `GIT_CONFIG_NOSYSTEM` and the practice git isolation are removed, so the token really limits the
+  agent to one repository. The agent has no global git config and sets `git config user.name` and
+  `user.email` in its repository; `start` prints the repository, the token file and those lines.
+  D69's "agent can push to any repo" cost no longer applies. D69's no-keys rule for Goal Cup
+  Proxy, the four-step setup and its lack of GitHub stand. Setup no longer makes a keys file.
+  The hidden `goalcup git-credential` and the `github.json` loader stay until after 15 Nov for
+  runs started on 0.6.1.
+- **The repository must be empty when the run opens.** The CLI checks before the approval with
+  GitHub's commits API (409 is empty, 200 is not) and the Worker checks again at open. There is no
+  pre-start push flag.
+- **Amends D56.** Whether the workspace is a clone is decided at finish, not at creation. A
+  workspace with a `.git` directory at its root seals by Git within the existing budget. Any other
+  seals by walking, with a limit of 50,000 files and the finish deadline; a capped walk is recorded
+  as capped, never as an error.

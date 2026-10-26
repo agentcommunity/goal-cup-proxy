@@ -1,5 +1,11 @@
 # Plan: clean, simple `goalcup setup`
 
+> **Archived 25 Oct 2026. Partly overtaken by D71.** The four-step `goalcup setup` with no GitHub
+> stands. Everything below about the player's own git login (finding the GitHub user, the push
+> test, the clone, the five login variables, the practice git isolation, the work folder and its
+> keys file) was cut for 0.7: the project folder is the workspace and the agent pushes with the
+> player's one-repo token. Read [D71](../DECISIONS.md#d71-the-project-folder-is-the-workspace-the-agent-pushes-with-the-participants-one-repo-token).
+
 Goal: a player goes from zero to a started run in about 5 minutes of their own time.
 Principle: goalcup observes. It stores no key and passes no key. The agent pushes with
 the player's own git login, the same way the player's laptop already does.
