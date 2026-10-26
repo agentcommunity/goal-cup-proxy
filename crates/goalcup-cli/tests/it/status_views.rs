@@ -1826,3 +1826,44 @@ fn upload_with_no_id_picks_the_newest_runs_unsent_entries() {
         "{error}"
     );
 }
+
+/// An open run with a repository shows its push lines and where they are kept (D73); a run
+/// that is over does not.
+#[test]
+fn status_shows_the_push_lines_of_an_open_run_only() {
+    use goalcup_cli::run::RunState;
+    let tmp = tempfile::tempdir().unwrap();
+    let m = support::mock_armed(&tmp, "claude-code-cli");
+    let info = m.info();
+    let cfg = support::cfg_with_entry(tmp.path(), &info);
+    run_with_state_on(
+        &cfg,
+        &info.entry_id,
+        RunState::launched(&info.entry_id, Ok(())),
+        Some("https://server.example"),
+        Some("2099-01-01T00:00:00Z"),
+    );
+    let lines = participant::prompt_block(
+        "https://github.com/someone/cup",
+        "someone",
+        "1+someone@users.noreply.github.com",
+        ".env.local",
+        std::path::Path::new("/w/.env.local"),
+    );
+    let file = goalcup_cli::push_lines::path(&cfg, &info.entry_id);
+    goalcup_cli::push_lines::write(&file, &lines).unwrap();
+
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    let block = participant_block(&text);
+    assert!(
+        block.contains("Push to https://github.com/someone/cup"),
+        "{text}"
+    );
+    assert!(block.contains(&file.display().to_string()), "{text}");
+
+    let mut record = goalcup_cli::run::read(&cfg, &info.entry_id).unwrap();
+    record.deadline_at = Some("2000-01-01T00:00:00Z".to_string());
+    goalcup_cli::run::write(&cfg, &record).unwrap();
+    let text = status_text(&m, &cfg, &info.entry_id, false);
+    assert!(!participant_block(&text).contains("Push to"), "{text}");
+}

@@ -106,6 +106,8 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         opens: Opens::First,
         ends: Some(ends.clone()),
         prompt: &[],
+        prompt_file: None,
+        on_clipboard: false,
         first_screen: Some("It asks whether you trust this folder. Choose Yes."),
     });
     let text = block.join("\n");
@@ -133,6 +135,8 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         opens: Opens::LastSession,
         ends: Some(ends.clone()),
         prompt: &[],
+        prompt_file: None,
+        on_clipboard: false,
         first_screen: None,
     })
     .join("\n");
@@ -154,6 +158,8 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         opens: Opens::NewSession,
         ends: Some(ends),
         prompt: &[],
+        prompt_file: None,
+        on_clipboard: false,
         first_screen: None,
     });
     let text = fresh.join("\n");
@@ -182,6 +188,8 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         opens: Opens::First,
         ends: None,
         prompt: &[],
+        prompt_file: None,
+        on_clipboard: false,
         first_screen: None,
     })
     .join("\n");
@@ -597,4 +605,36 @@ fn every_refusal_says_what_to_do_first_and_has_no_rule_code() {
     assert!(home_busy("A", true).contains("replaces your current competition run"));
     assert!(needs_terminal("A", "").contains("foreground of a terminal"));
     assert!(not_started_here(None).contains(NOT_STARTED_HERE));
+}
+
+/// A continue that opens a new conversation says the push lines again, with where they are kept
+/// and the clipboard when the copy worked; one that picks up the conversation does not (D73).
+#[test]
+fn a_new_conversation_gets_the_push_lines_again() {
+    let prompt = vec!["Push to https://github.com/someone/cup".to_string()];
+    let file = std::path::Path::new("/cfg/runs/r1/push-lines.txt");
+    let launch = |opens, on_clipboard| {
+        launch_block(&Launch {
+            harness: "Some Agent",
+            mode: Some(RunMode::Competition),
+            opens,
+            ends: None,
+            prompt: &prompt,
+            prompt_file: Some(file),
+            on_clipboard,
+            first_screen: None,
+        })
+        .join("\n")
+    };
+    for opens in [Opens::First, Opens::NewSession] {
+        let text = launch(opens, true);
+        assert!(
+            text.contains("  Push to https://github.com/someone/cup"),
+            "{text}"
+        );
+        assert!(text.contains("/cfg/runs/r1/push-lines.txt"), "{text}");
+        assert!(text.contains("on your clipboard"), "{text}");
+        assert!(!launch(opens, false).contains("clipboard"));
+    }
+    assert!(!launch(Opens::LastSession, true).contains("Push to"));
 }

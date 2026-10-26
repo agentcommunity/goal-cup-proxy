@@ -17,8 +17,12 @@ pub struct Launch<'a> {
     /// The manifest's `participant.first_screen`.
     pub first_screen: Option<&'a str>,
     /// What the participant puts at the start of their prompt ([`prompt_block`]); empty for a
-    /// run with no repository.
+    /// run with no repository. Shown when the harness opens a new conversation (D73).
     pub prompt: &'a [String],
+    /// Where the run keeps those lines ([`crate::push_lines`]), when they were written.
+    pub prompt_file: Option<&'a std::path::Path>,
+    /// The lines were copied to the clipboard.
+    pub on_clipboard: bool,
 }
 
 /// How the harness opens for one part of a run.
@@ -71,13 +75,22 @@ pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
     if let Some(first) = l.first_screen {
         lines.push(first.to_string());
     }
-    if l.opens == Opens::First && !l.prompt.is_empty() {
+    // A new conversation does not know where to push: the lines are said again (D73).
+    if l.opens != Opens::LastSession && !l.prompt.is_empty() {
         lines.push(
             "Put these lines at the start of your prompt, so the agent knows where to push and \
              as whom:"
                 .to_string(),
         );
         lines.extend(l.prompt.iter().map(|line| format!("  {line}")));
+        if let Some(file) = l.prompt_file {
+            lines.push(format!("These lines are also in {}.", file.display()));
+        }
+        if l.on_clipboard {
+            lines.push(
+                "It is on your clipboard: paste it at the start of your first prompt.".to_string(),
+            );
+        }
     }
     if l.opens == Opens::LastSession {
         lines.push(format!(

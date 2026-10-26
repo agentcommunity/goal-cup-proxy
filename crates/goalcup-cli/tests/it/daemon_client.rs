@@ -1099,6 +1099,8 @@ fn pause_points_exist_only_under_test_support() {
 /// `run_scoped_daemon::the_started_daemon_inherits_none_of_the_clis_secrets_or_descriptors`
 /// observes for the daemon and `harness_version_probe` for the probe. Goal Cup runs no `git`,
 /// `ssh` or `gh` of the participant's (OD9): the agent sets up git in the project folder itself.
+/// D73 adds the clipboard tool (`push_lines.rs`), given the push lines (which name the token
+/// file, never the token) and a short list of the participant's variables, never all of them.
 #[test]
 fn the_only_command_site_is_the_launch_builder() {
     fn sites(dir: &std::path::Path, found: &mut Vec<String>) {
@@ -1135,6 +1137,7 @@ fn the_only_command_site_is_the_launch_builder() {
             "ca_bundle.rs",
             "harness_version.rs",
             "launch.rs",
+            "push_lines.rs",
             "spawn.rs"
         ],
         "{found:?}"
@@ -1148,6 +1151,11 @@ fn the_only_command_site_is_the_launch_builder() {
     assert!(
         spawn.contains(".env_clear()"),
         "the daemon starts from nothing"
+    );
+    let clipboard = include_str!("../../src/push_lines.rs");
+    assert!(
+        clipboard.contains(".env_clear()") && clipboard.contains("CLIPBOARD_ENV.contains"),
+        "the clipboard tool gets a short list of variables, never the whole environment"
     );
     let probe = include_str!("../../src/harness_version.rs");
     assert!(

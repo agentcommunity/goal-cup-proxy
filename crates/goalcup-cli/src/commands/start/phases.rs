@@ -400,6 +400,18 @@ pub(super) fn create_and_gate<'a>(
             entries: vec![new_entry],
         },
     };
+    // What the participant puts at the start of their prompt, for a run with a repository: made
+    // at the first launch, and read back from the run's file at a continue (D73).
+    let prompt = match (cx.continuing, upload.map(|u| &u.how)) {
+        (Some(continuing), _) => {
+            crate::push_lines::read(&crate::push_lines::path(cfg, &continuing.record.run_id))
+                .unwrap_or_default()
+        }
+        (None, Some(UploadHow::Fresh(new))) => prompt_for(new),
+        _ => Vec::new(),
+    };
+    let mut prompt_file = (cx.continuing.is_some() && !prompt.is_empty())
+        .then(|| crate::push_lines::path(cfg, &record.run_id));
     // The run's one reservation, taken here and released when the launch fails or the run ends.
     let mut reserve = None::<RunReserve>;
     // The run's ids and folders, kept for its `host.log` and `goalcup status`, so the launch
@@ -409,6 +421,15 @@ pub(super) fn create_and_gate<'a>(
     let launched = write_entry(cfg, &template).and_then(|()| {
         // The record first: a reservation always has a record to say whose it is.
         crate::run::write(cfg, &record)?;
+        // The push lines, kept in the run's directory so they are never lost (D73). A write
+        // that fails costs only the path on the screen.
+        if cx.continuing.is_none() && !prompt.is_empty() {
+            let file = crate::push_lines::path(cfg, &record.run_id);
+            match crate::push_lines::write(&file, &prompt) {
+                Ok(()) => prompt_file = Some(file),
+                Err(e) => details.push(format!("the push lines could not be kept: {e}")),
+            }
+        }
         #[cfg(unix)]
         if let Some(lock) = &prep.shared_home_lock {
             note_home_holder(lock, &record.run_id);
@@ -566,6 +587,11 @@ pub(super) fn create_and_gate<'a>(
             return Err(error);
         }
     };
+    // On the clipboard too, when the block is shown and a clipboard tool is there (D73).
+    let on_clipboard = opens != crate::participant::Opens::LastSession
+        && !prompt.is_empty()
+        && !crate::chat_without_terminal()
+        && crate::push_lines::copy_to_clipboard(&crate::push_lines::text(&prompt), env);
     let forked = Forked {
         client,
         cfg,
@@ -599,10 +625,9 @@ pub(super) fn create_and_gate<'a>(
         harness_name: c.display_name().to_string(),
         first_screen: c.first_screen().map(str::to_string),
         opens,
-        prompt: match upload.map(|u| &u.how) {
-            Some(UploadHow::Fresh(new)) => prompt_for(new),
-            _ => Vec::new(),
-        },
+        prompt,
+        prompt_file,
+        on_clipboard,
         details,
     };
     let gate = Gate {
@@ -726,6 +751,8 @@ pub(super) fn register_and_release<'a>(
             ends,
             first_screen: forked.first_screen.as_deref(),
             prompt: &forked.prompt,
+            prompt_file: forked.prompt_file.as_deref(),
+            on_clipboard: forked.on_clipboard,
         });
         let _ = block
             .iter()
