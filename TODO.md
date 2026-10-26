@@ -40,7 +40,7 @@ The 22 Oct local test day (Mac and Docker, four harnesses, staging) is in the
 | Release cut | Version PR (if needed), merge under the `main` ruleset, full gate and separate `scripts/linux-check.sh` on merged `origin/main`, then tag |
 | 23 Oct to 6 Nov 00:00 | Dry-run window; dry runs can start on any day |
 | 4 Nov 00:00 | Feature stop: after this, fixes only |
-| 6 Nov 12:00 | Last release, including the last connectors (connector cut-off) |
+| 6 Nov | `EVENT_ID` switch, between 00:00 and the start of 7 Nov. A release is planned for 12:00; it is not a cutoff (D70) |
 | 7 Nov 00:00 | Start window opens. It lasts 24 hours. Each run then has 168 hours |
 
 Owner decisions of 16 Oct 2026:
@@ -66,8 +66,9 @@ Owner decisions of 16 Oct 2026:
 - Demo and questionnaire: due 24 hours after each run's 168 hours end (a later start gets a later
   due time). They go through the website portal, not Goal Cup Proxy; the website may close it leniently.
 - Harnesses: 15+ expected, Hermes Agent among them. All shipped connectors go to participants.
-  Harnesses can still be added until the last release (6 Nov 12:00 UTC): the builder sends a
-  practice-run verifier report, and the organizers run a 1-hour test run before it ships
+  Harnesses can be added at any time: releases continue during the cup, and a merged connector
+  ships in the next point release (D70). The builder sends a practice-run verifier report, and
+  the organizers run a 1-hour test run before it ships
   ([HARNESS-ONBOARDING](docs/HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)). For testing,
   the owner has API access for harnesses whose model provider is free to choose; for a harness whose
   model comes only through its own subscription, ask the owner or the builder.
@@ -180,7 +181,7 @@ passed with zero gaps (#206); its trace does not confirm process-tree terminatio
 The 16 Oct WP0 findings list (27 small bugs, all fixed or kept by design) is in the
 [October archive](docs/archive/TODO-2026-10.md#wp0-findings-16-oct).
 
-### WP10: Release cut (next version; last scheduled release 6 Nov 12:00 UTC)
+### WP10: Release cut (next version; a release is planned for 6 Nov 12:00 UTC, not a cutoff)
 - If the version is not already on `origin/main`, run `scripts/release.sh prepare <x.y.z>` and
   merge its PR under the `main` ruleset. On merged, versioned `origin/main`, run
   `sh scripts/gate.sh full` and the separate `sh scripts/linux-check.sh`; then run
@@ -194,8 +195,8 @@ The 16 Oct WP0 findings list (27 small bugs, all fixed or kept by design) is in 
 ## Feature stop
 
 Until 4 Nov 00:00 UTC anything on this list may land. From 4 Nov, only fixes: bugs from dry runs and
-10-minute tests, flakes and docs. Connectors may still land until the last release on 6 Nov 12:00
-UTC. Every change passes `gate.sh fast`; Worker changes also pass `npm test`; every release passes
+10-minute tests, flakes and docs. Connectors may still land at any time, also during the cup, and
+ship in the next point release (D70). Every change passes `gate.sh fast`; Worker changes also pass `npm test`; every release passes
 `gate.sh full` and `scripts/linux-check.sh`.
 
 ## Parked

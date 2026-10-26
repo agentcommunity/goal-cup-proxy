@@ -128,15 +128,22 @@ repository to exist first.
 
    ```sh
    (umask 077; printf 'GH_TOKEN=%s\n' "$(pbpaste)" > .env.local)
-   grep -c '^GH_TOKEN=github_pat_' .env.local
+   grep -c '^GH_TOKEN=github_pat_[A-Za-z0-9_]*$' .env.local
    ```
 
    If it prints `0`, copy the token again and repeat. `pbpaste` is the Mac clipboard; on Linux use
-   `xclip -o -selection clipboard` (or `wl-paste` on Wayland). Under WSL2 use
-   `powershell.exe Get-Clipboard`, or write the file in an editor. The line must be exactly
-   `GH_TOKEN=<token>`: no `export`, no quotes, no spaces. Have it in the file before you start:
-   the recorder redacts that value everywhere, and a token added later is covered by its
-   `github_pat_` pattern only.
+   `xclip -o -selection clipboard` (or `wl-paste` on Wayland) in its place. Under WSL2 the Windows
+   clipboard adds a hidden carriage return, which `goalcup start` refuses, so use this first line
+   instead (or write the file in an editor):
+
+   ```sh
+   (umask 077; printf 'GH_TOKEN=%s\n' "$(powershell.exe Get-Clipboard | tr -d '\r')" > .env.local)
+   ```
+
+   The check also prints `0` for anything after the token, such as a space or a carriage return.
+   The line must be exactly `GH_TOKEN=<token>`: no `export`, no quotes, no spaces. Have it in the
+   file before you start: the recorder redacts that value everywhere, and a token added later is
+   covered by its `github_pat_` pattern only.
 
    Keys your agent's own product needs may go in `.env.local` too, one `NAME=value` per line, but
    not the harness's sign-in. `goalcup` refuses an `.env` file that `.gitignore` does not cover, so
@@ -222,9 +229,10 @@ output with the run id it shows. Never paste your GitHub token.
 
 ## Appendix: if `goalcup start` stops
 
-All but the outage row stop before the approval and say "Nothing was created". Fix it and run
-`start` again. The folder is checked once more right after you approve: if it changed meanwhile
-(an editor added a folder), the start stops before anything opens, with the same kind of message.
+Every row but the outage row stops the start and says "Nothing was created". Fix it and run
+`start` again. Most stop before the approval. The folder is checked once more right after you
+approve: if it changed meanwhile (an editor added a folder), the start stops there, before the run
+is opened, with the same message.
 
 | It says | Do this |
 |---|---|
@@ -232,7 +240,7 @@ All but the outage row stop before the approval and say "Nothing was created". F
 | No `GH_TOKEN` line (a real run only) | Put `GH_TOKEN=<token>` in `.env.local`. A practice run needs no token. If there is no `.gitignore` either, it also prints the two lines to put in one (`.env` and `.env.*`). |
 | `.gitignore` does not cover an `.env` file | Add the line `.env*` (or `.env` and `.env.*`). |
 | Write your token as one line, exactly `GH_TOKEN=<token>` | Remove `export`, quotes and spaces, and any second `GH_TOKEN` line in any `.env` file. |
-| This folder belongs to run `<id>` | You started a run here and it is not over. `goalcup status` shows it; if the agent has exited, `goalcup continue`. A new run needs a new folder (a new competition run also needs a new repository, and replaces the old run). |
+| This folder belongs to run `<id>` | You started a run here and it is not over. `goalcup status` shows it; if the agent has exited, `goalcup continue`. A new run needs a new folder. If the run here is a competition run, the message also asks for a new repository: a new competition run replaces that run. |
 | A service syncs this folder | Dropbox, OneDrive, Google Drive or iCloud (Desktop and Documents too, when iCloud syncs them) would upload `.env.local`. Use a folder outside it, for example under `~/code`. |
 | The folder is inside a Git repository | Use a folder outside any repository. If it names `GOALCUP_CONFIG_DIR`, goalcup's own folder is inside a repository: set that variable to a folder outside it. |
 | The folder is goalcup's own, or next to one | Use a folder somewhere else, for example in your home folder. |
