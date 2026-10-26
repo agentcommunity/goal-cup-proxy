@@ -348,11 +348,23 @@ pub fn in_harness() -> bool {
     std::env::var_os(IN_HARNESS_ENV).is_some_and(|value| !value.is_empty())
 }
 
+/// The `ssh` the agent's git runs ([`agent_base_env`]): no config file (`~/.ssh/config` names
+/// keys), no key offered, no agent key, and no question.
+pub const AGENT_GIT_SSH_COMMAND: &str =
+    "ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes";
+
 /// What every program the agent runs sees of the participant, beside the harness's own
 /// variables: [`CAPTURE_IDENTITY_ENV`], their `PATH` ([`harness_path`]) and `HOME` set to `home`.
-/// Nothing of the participant's git login is handed on (no `SSH_AUTH_SOCK`, `GIT_CONFIG_GLOBAL`
-/// or `GH_CONFIG_DIR`): the agent pushes with the token the participant puts in their project
-/// folder's `.env.local`, for the one repository of the run.
+///
+/// The agent pushes with the token the participant puts in their project folder's `.env.local`,
+/// for the one repository of the run, and with no other login of theirs (OD9). Nothing of their
+/// git login is handed on (no `SSH_AUTH_SOCK`, `GIT_CONFIG_GLOBAL` or `GH_CONFIG_DIR`), and two
+/// ways it would still reach the agent are closed: `GIT_CONFIG_NOSYSTEM=1`, because the system
+/// git config (Homebrew's and Apple's set `credential.helper=osxkeychain`) would hand git the
+/// participant's keychain login to any repository; and [`AGENT_GIT_SSH_COMMAND`] as
+/// `GIT_SSH_COMMAND`, because OpenSSH finds `~/.ssh` from the user database, not from `HOME`, and
+/// would offer a key without a passphrase. A connector cannot name either (`GIT_` is refused in
+/// `capture.env`), and they are set after the connector's own values.
 pub fn agent_base_env(
     parent_env: &BTreeMap<String, String>,
     home: &str,
@@ -365,6 +377,8 @@ pub fn agent_base_env(
     }
     env.insert("HOME".into(), home.to_string());
     env.insert("PATH".into(), harness_path(parent_env));
+    env.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
+    env.insert("GIT_SSH_COMMAND".into(), AGENT_GIT_SSH_COMMAND.into());
     env
 }
 

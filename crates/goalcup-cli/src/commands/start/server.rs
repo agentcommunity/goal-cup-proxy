@@ -68,11 +68,15 @@ fn refuse_unready_project(project: &Path) -> Result<(), CliError> {
         path: project.display().to_string(),
         source,
     })?;
+    // An entry that cannot be read, or whose type cannot be, is not known to be the kit: refused
+    // like anything else in the folder.
     let mut extra: Vec<String> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            (!is_starting_kit(&name, &entry)).then_some(name)
+        .filter_map(|entry| match entry {
+            Ok(entry) => {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                (!is_starting_kit(&name, &entry)).then_some(name)
+            }
+            Err(_) => Some("an entry that could not be read".to_string()),
         })
         .collect();
     if extra.is_empty() {
