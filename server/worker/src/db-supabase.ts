@@ -303,10 +303,6 @@ export class SupabaseDb implements Db {
     return { kind: result };
   }
 
-  async memberIsAdmin(memberId: string): Promise<boolean> {
-    return this.#flag("upload_member_is_admin", await this.#rpc("upload_member_is_admin", { p_member_id: memberId }));
-  }
-
   async getRun(memberId: string, runId: string, entryId: string | null): Promise<{ run: RunRow; entry: EntryRow | null } | null> {
     const v = (await this.#rpc("upload_run_position", { p_member_id: memberId, p_run_id: runId, p_entry_id: entryId })) as { run?: unknown; entry?: unknown } | null;
     if (v === null) return null;

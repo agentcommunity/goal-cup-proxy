@@ -55,7 +55,6 @@ test("config defaults and validation", () => {
     startWindow: undefined,
     githubCheck: false,
     minCompetitionVersion: { kind: "none" },
-    localAdminMembers: [],
   });
   assert.equal(readConfig({ ...baseEnv, RUN_HOURS: "2" }).runSeconds, 7200);
   assert.equal(readConfig({ ...baseEnv, PRACTICE_RUN_MINUTES: "30" }).practiceRunSeconds, 1800);
@@ -279,13 +278,6 @@ test("a malformed minimum is reported, not thrown", () => {
   for (const raw of ["0.7", "latest", "v1", "1.2", "x.y.z"]) {
     assert.deepEqual(readConfig({ ...baseEnv, MIN_COMPETITION_VERSION: raw }).minCompetitionVersion, { kind: "malformed", raw }, raw);
   }
-});
-
-test("LOCAL_ADMIN_MEMBERS is a trimmed comma list, honoured only with the local backend", () => {
-  const local = { ...baseEnv, DB_BACKEND: "local" };
-  assert.deepEqual(readConfig({ ...local, LOCAL_ADMIN_MEMBERS: " a, b ,,c " }).localAdminMembers, ["a", "b", "c"]);
-  assert.deepEqual(readConfig({ ...local, LOCAL_ADMIN_MEMBERS: "" }).localAdminMembers, []);
-  assert.throws(() => readConfig({ ...baseEnv, LOCAL_ADMIN_MEMBERS: "a" }), (e) => e instanceof ApiError && e.code === "misconfigured");
 });
 
 test("the version rule: the first x.y.z, whatever follows is ignored, none is unknown", () => {
