@@ -196,8 +196,9 @@ the block indented by two spaces; paste it as it is. An example (yours differs; 
 ```
 
 **The block is never lost.** It is also on your clipboard when `goalcup` could copy it there (the
-screen says "It is on your clipboard" only then; it uses `pbcopy` on a Mac, `wl-copy` or `xclip`
-on Linux, `clip.exe` under WSL2), in the file `push-lines.txt` in the run's folder (the screen
+screen then says "The push block is on your clipboard. Paste it (Cmd-V, or Ctrl-Shift-V on Linux)
+at the very start of your first prompt."; it uses `pbcopy` on a Mac, `wl-copy` or `xclip` on
+Linux, `clip.exe` under WSL2; otherwise it says to copy the block from the screen), in the file `push-lines.txt` in the run's folder (the screen
 gives its path), and in `goalcup status` while the run is open. Pasting it is the only way the
 agent learns them: Goal Cup writes nothing into your project folder.
 

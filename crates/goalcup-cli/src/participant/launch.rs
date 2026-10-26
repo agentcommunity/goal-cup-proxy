@@ -38,6 +38,10 @@ pub enum Opens {
     NewSession,
 }
 
+/// What the launch block says when the push block was copied to the clipboard (D73).
+pub const PUSH_BLOCK_ON_CLIPBOARD: &str = "The push block is on your clipboard. Paste it (Cmd-V, or \
+     Ctrl-Shift-V on Linux) at the very start of your first prompt.";
+
 /// The first line of a continued run's launch block.
 pub const RUN_GOES_ON: &str =
     "Your run goes on. No approval is needed: this computer kept the approval for this run.";
@@ -77,20 +81,24 @@ pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
     }
     // A new conversation does not know where to push: the lines are said again (D73).
     if l.opens != Opens::LastSession && !l.prompt.is_empty() {
-        lines.push(
-            "Put these lines at the start of your prompt, so the agent knows where to push and \
-             as whom:"
-                .to_string(),
-        );
-        lines.extend(l.prompt.iter().map(|line| format!("  {line}")));
-        if let Some(file) = l.prompt_file {
-            lines.push(format!("These lines are also in {}.", file.display()));
-        }
         if l.on_clipboard {
-            lines.push(
-                "It is on your clipboard: paste it at the start of your first prompt.".to_string(),
-            );
+            lines.push(PUSH_BLOCK_ON_CLIPBOARD.to_string());
+            if let Some(file) = l.prompt_file {
+                lines.push(format!("The push block, also in {}:", file.display()));
+            }
+        } else {
+            lines.push(match l.prompt_file {
+                Some(file) => format!(
+                    "Copy the push block below (also in {}) to the very start of your first \
+                     prompt.",
+                    file.display()
+                ),
+                None => {
+                    "Copy the push block below to the very start of your first prompt.".to_string()
+                }
+            });
         }
+        lines.extend(l.prompt.iter().map(|line| format!("  {line}")));
     }
     if l.opens == Opens::LastSession {
         // The harness picks up the conversation the prompt is in (D73).

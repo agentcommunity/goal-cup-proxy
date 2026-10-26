@@ -635,8 +635,16 @@ fn a_new_conversation_gets_the_push_lines_again() {
             "{text}"
         );
         assert!(text.contains("/cfg/runs/r1/push-lines.txt"), "{text}");
-        assert!(text.contains("on your clipboard"), "{text}");
-        assert!(!launch(opens, false).contains("clipboard"));
+        assert!(text.contains(PUSH_BLOCK_ON_CLIPBOARD), "{text}");
+        let copy = launch(opens, false);
+        assert!(!copy.contains("clipboard"), "{copy}");
+        assert!(
+            copy.contains(
+                "Copy the push block below (also in /cfg/runs/r1/push-lines.txt) to the very \
+                 start of your first prompt."
+            ),
+            "{copy}"
+        );
     }
     assert!(!launch(Opens::LastSession, true).contains("Push to"));
 }
