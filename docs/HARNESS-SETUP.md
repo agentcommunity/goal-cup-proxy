@@ -130,7 +130,10 @@ What to expect from a recent Hermes:
 
 1. Hermes 0.21.1 and later write no session file, so Goal Cup records the model calls only, as
    for Amp. `goalcup status` does not warn about the missing file.
-2. `goalcup continue` opens a new Hermes conversation. Your earlier one stays in Hermes.
+2. `goalcup continue` picks up your last Hermes conversation once the run has recorded model
+   calls: type only "keep going". Hermes 0.22.5 resumes with `--continue` (measured); a whole
+   `goalcup continue` of a Hermes run has not been tried yet. Before any call is recorded it
+   opens a new conversation and prints your push lines again.
 3. Recording works with an API-key service on an OpenAI-compatible endpoint, such as DeepSeek
    or OpenRouter. It does not work with the setups below. For them, install Hermes 0.19.0
    instead (`uv tool install hermes-agent==0.19.0`):
@@ -140,10 +143,11 @@ What to expect from a recent Hermes:
    - a model address with a `?` query part (such as Azure's `?api-version=`) or a `user@` part.
 4. The `recorder` entry stays in Goal Cup's Hermes home after a run. Do not pick it in `/model`.
    After a run, the run's Hermes gateway may also stay up, pointed at Goal Cup's recorder, which
-   has closed, and the certificate file is out of date. So Hermes opened from Goal Cup's home
-   outside a run (for example when you run `goalcup setup` again) may not reach your model
-   service. Run `HERMES_HOME="<your capture-homes folder>/hermes-cli" hermes gateway stop -y`
-   first. The next start fixes both by itself.
+   has closed. `goalcup setup` deletes the out-of-date certificate file before it opens Hermes,
+   so Hermes trusts your system's certificates again. If Hermes opened from Goal Cup's home
+   outside a run still cannot reach your model service, run
+   `HERMES_HOME="<your capture-homes folder>/hermes-cli" hermes gateway stop -y` first. The next
+   start fixes both by itself.
 
 Do a practice run first. If Goal Cup records no model calls, `goalcup status` shows a `PROBLEM:`
 line after about three minutes in a practice run (ten in a real one).

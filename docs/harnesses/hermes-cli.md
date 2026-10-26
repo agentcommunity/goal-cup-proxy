@@ -139,8 +139,15 @@ the v0.22.5 checkout) changed two things the 0.19.0 recipe relied on. The connec
   `warn_missing = false`, so `goalcup status` does not print the "no session file" line for them.
   Old Hermes still writes and records its file. `HERMES_CA_BUNDLE` and the
   `sessions.write_json_snapshots` configure command stay for Hermes up to 0.21.0.
-- **`goalcup continue`** opens a new Hermes session on 0.21.1 and later: with no session file it
-  cannot ask for `--continue`. The earlier conversation stays in Hermes's own `state.db`.
+- **`goalcup continue`** resumes on 0.22 too (D73, goalcup 0.7.1). With no session file,
+  goalcup asks for `--continue` once the run's earlier parts recorded model calls (it keeps the
+  count in the run's `state.json`); then there is a conversation to pick up. Measured with
+  v0.22.5 on 26 Oct 2026: `hermes chat --continue` resumes the last session in a `HERMES_HOME`
+  (`Resumed session <id>`), and with no earlier session exits 1 (`No previous CLI session to
+  continue.`), which is why a part with no recorded model call still opens without it. A whole
+  `goalcup continue` of a Hermes 0.22 run on this rule is not measured yet. A run
+  started by goalcup 0.7.0 has no count and keeps the old rule (a new session). goalcup 0.7.0
+  opened a new session here; the earlier conversation stays in Hermes's own `state.db`.
 
 Known limits (each shows up as the "no model calls recorded" line in `goalcup status`, none is
 silent):
@@ -161,7 +168,11 @@ silent):
   (goalcup does not stop it after a run, D72). So Hermes opened from that home outside a run (by
   hand, or by a second `goalcup setup`) may not reach the model service until
   `HERMES_HOME=<home> hermes gateway stop -y`. The next start stops the gateway and rewrites the
-  file by itself.
+  file by itself. A stale `recorder-ca.pem` alone made Hermes hang outside a run (measured, 26
+  Oct 2026): from goalcup 0.7.1, `goalcup setup` deletes that file before it opens Hermes, and
+  with the file named by `ssl_ca_cert` missing Hermes falls back to the system's trust
+  (`agent/ssl_verify.py` `resolve_httpx_verify`). A gateway left up from a run still needs the
+  stop above.
 - A gateway another Hermes process starts between the stop and the launch (a kanban or cron
   worker, or a launchd unit from `hermes gateway install`) keeps its old environment
   ([CHEAT-CHECKLIST](../CHEAT-CHECKLIST.md)).

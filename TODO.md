@@ -205,10 +205,15 @@ From the [26 Oct re-test](docs/research/results/2026-10-26-mac-retest.md). The a
 player's own SSH key, so "only the run's repository" is not a promise we can make
 ([D71](docs/DECISIONS.md)). Order is by risk.
 
-- **Start-time SSH warning (0.7.x).** At start, say plainly when the player has an SSH key the agent
-  can use, and what to do (passphrase or per-use confirmation, or Docker).
+- **SSH warning at start too.** Since 0.7.1 `goalcup setup` and `goalcup doctor` warn of a key in
+  `~/.ssh` with no passphrase and note keys an SSH agent holds (D73); `goalcup start` does not
+  say it yet. Whether `ssh-add -l` against a locked 1Password agent asks to unlock is not measured.
 - **A macOS sandbox for the agent (later).** The real fix: the agent cannot read `~/.ssh`.
-- **Make the "Push to" block harder to miss.** For example, copy it to the clipboard when it prints.
+- **The push lines in the project's `AGENTS.md` (owner to decide).** Since 0.7.1 the lines are on
+  the clipboard, in the run's `push-lines.txt`, in `goalcup status`, said again at a continue that
+  opens a new conversation, and in the installed skill (D73). The skill reaches Codex and Claude
+  Code only (Hermes and Amp connectors name no `skills_dir`; adding one changes their pins), and
+  Codex and Amp do not open its body. A project `AGENTS.md` reached Codex and Amp in a probe.
 - **A simpler setup screen.**
 - **Read Hermes's `state.db`** (the native record on 0.21.1 and later; not in 0.7.0).
 - **Hermes with Gemini is untested on a real run.** Since #268 its `:streamGenerateContent` POSTs count as model calls, so the "no model calls" line should stay quiet; one practice run would confirm it and that the `recorder` CA entry covers its client.

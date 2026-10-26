@@ -44,7 +44,8 @@ Update this table in the same PR as any entry it lists.
 | D69 | partly superseded | D71 (the clone, the practice folder, the five login variables and the push check are gone; no keys held, the four-step setup and no GitHub in setup stand) |
 | D70 | current | |
 | D71 | current | |
-| D72 | current | |
+| D72 | partly superseded | D73 (`goalcup continue` resumes Hermes once model calls are recorded; setup removes the stale CA file) |
+| D73 | current | |
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
@@ -1018,3 +1019,44 @@ model calls with no certificate error.
   until `HERMES_HOME=<home> hermes gateway stop -y`; the next start fixes both by itself.
 - **Not in 0.7.0:** reading Hermes's `state.db`, a post-run gateway stop, a per-run Hermes home, a
   Hermes version gate, a verifier finding, and setup writing Hermes's other keys itself.
+
+## D73. The push lines are never lost, and `continue` resumes a harness with no session file.
+
+*26 Oct 2026, the 0.7.1 patch.* Amends D71 (how the push lines reach the agent) and D72 (the
+Hermes continue clause). The start screen was the only place the push lines were said, and a
+continue that opened a new conversation did not say them. Measured on 26 Oct 2026 (Mac, Hermes
+v0.22.5, Codex, Amp): Hermes reads the goal-cup skill's body unprompted, Codex and Amp see only its name and description; `hermes chat
+--continue` resumes the last session in a `HERMES_HOME` and exits 1 when there is none.
+
+- **Delivery of the push lines.** For a run with a repository, `goalcup start` writes the lines
+  of D71 (`prompt_block`) to `push-lines.txt` in the run's directory (`<cfg>/runs/<run_id>/`, mode
+  0600) and says its path; copies them to the clipboard when a clipboard tool is there (`pbcopy`;
+  `wl-copy` with a Wayland display, else `xclip -selection clipboard`; `clip.exe` under WSL),
+  given a short list of the participant's variables, and says so only when the copy worked; a
+  missing or failing tool never fails the start. `goalcup status` shows them for an open run.
+  Every `continue` that does not resume the conversation prints them again (and copies them).
+  The lines name the token file, never its value.
+- **The skill.** At each start and continue of a run with a repository, the installed goal-cup
+  skill ends with a section of the same lines. `skills/goal-cup/SKILL.md` stays the template and
+  names no repository; a practice run's copy is the template alone; each launch replaces the
+  folder, so a section never reaches another run. It reaches only a connector with
+  `[capture.home] skills_dir` (Codex and Claude Code today). The description line stays generic:
+  a repository there did not reach Codex or Amp (measured), and a project `AGENTS.md` that did is
+  an open owner question, not built.
+- **The resume rule.** `state.json` keeps `model_calls`, the model calls recorded in the run so
+  far (every part), local to the CLI like `no_model_calls`; the daemon and the control API
+  (v12) are unchanged, so a running 0.7.0 daemon keeps working. At `continue`, a connector with
+  a native row of `warn_missing = false` (Hermes) is launched with its `resume_args` when no
+  session file exists and the earlier parts recorded a model call. Every other connector keeps
+  the file rule (D57's `has_native_session`). A run started on 0.7.0 has no count and keeps that
+  rule. A launch that resumes says to type only "keep going".
+- **Also in 0.7.1.** `goalcup setup` deletes a connector's `[launch_prep] ca_file` from the
+  config home before it opens the harness, and says nothing: it only ever held a past run's CA,
+  and Hermes falls back to the system's trust when the file `ssl_ca_cert` names is missing. A
+  gateway left up from a run (D72) still needs `gateway stop`. `goalcup setup` and `goalcup
+  doctor` warn of a private key in `~/.ssh` (the user database's home) that `ssh-keygen -y -P ""`
+  opens, and note keys an SSH agent lists (`ssh-add -l`): local only, no connection, no signing,
+  a warning and never a refusal (D71's planned warning).
+- **Not in 0.7.1:** a goal-cup skill for Hermes or Amp (their connectors name no `skills_dir`;
+  adding one changes the pinned digests a running 0.7.0 daemon checks), writing `AGENTS.md` or
+  `CLAUDE.md` into the project folder, and a post-run gateway stop.
