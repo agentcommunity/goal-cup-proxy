@@ -60,7 +60,7 @@ TypeScript).
 | Part | Does | Code |
 |---|---|---|
 | `goalcup start` | Preflight; creates the entry; runs the recording proxy in process; gates and launches the harness; seals when it exits; uploads | [commands/start/](../crates/goalcup-cli/src/commands/start/) |
-| `goalcup login`, `prep`, `continue`, `upload` | Device-flow login; machine and repository readiness; next segment of a run; finish an upload | [commands/](../crates/goalcup-cli/src/commands/), [account/](../crates/goalcup-cli/src/account/), [upload/](../crates/goalcup-cli/src/upload/) |
+| `goalcup login`, `setup`, `continue`, `upload` | Device-flow login; machine and repository readiness; next segment of a run; finish an upload | [commands/](../crates/goalcup-cli/src/commands/), [account/](../crates/goalcup-cli/src/account/), [upload/](../crates/goalcup-cli/src/upload/) |
 | `goalcup seal`, `status`, `entries`, `doctor` | End a run early; read status; list runs; check the machine | [commands/](../crates/goalcup-cli/src/commands/) |
 | Recording proxy | Loopback CONNECT proxy. Relays bytes unchanged; tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
 | Daemon | Control API on loopback; ingest; per-producer redaction; chain append; native-file capture; finish; termination | [runtime/capture/](../crates/goalcup-daemon/src/runtime/capture/mod.rs) |

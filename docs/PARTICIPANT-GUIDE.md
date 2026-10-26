@@ -54,16 +54,15 @@ GitHub.
 4. **This machine.** Mains power, free disk, network. Keep the machine awake yourself where it
    says so (always under WSL2).
 
-It ends with `Ready.` and the two start commands. If a firewall such as Little Snitch asks about
+It ends with `Ready.`, the practice command, and a pointer to the folder step for your real run. If a firewall such as Little Snitch asks about
 `goalcup`, allow it, and again after each update.
 
 ## 3. A practice run
 
-Make an empty folder and start there:
+Make an empty folder and start there. `Ready.` printed this line:
 
 ```sh
-mkdir practice && cd practice
-goalcup start --harness <id> --practice
+mkdir ~/goalcup-practice && cd ~/goalcup-practice && goalcup start --harness <id> --practice
 ```
 
 Approve the run in the browser and return to the terminal. The harness opens in that folder. Type
@@ -72,7 +71,7 @@ A practice run needs no repository and no token, so the agent has nowhere to pus
 Do as many as you like. It is not the dry run: a practice run lasts ten minutes and needs no
 repository; a [dry run](#the-dry-run-optional) is a full 168-hour rehearsal that needs both.
 If the harness makes five model requests and writes no session file, `goalcup status` says so
-within three minutes. Fix it now.
+after three minutes. Fix it now.
 
 <a id="the-dry-run-optional"></a>
 
@@ -108,11 +107,13 @@ repository to exist first.
    - Expiration: **30 days**.
 
    Copy it (it starts `github_pat_`). Your agent pushes with this token. Goal Cup passes the
-   agent none of your git login, SSH agent or `gh` settings, so the token is the one thing that
-   lets it push. The token itself reaches this repository only. The agent still runs as you and
+   agent none of your git login, SSH agent or `gh` settings, so the token is the one push login
+   Goal Cup gives it. The token itself reaches this repository only. A real run needs it: `start` refuses
+   a folder with no `GH_TOKEN` line. The agent still runs as you and
    can read what your programs can read, so keep no other secrets in the project folder.
 3. **Make the project folder.** This is where the agent works. Make a new folder that will hold
-   only a `.gitignore` and a `.env.local`. First the folder and the `.gitignore`:
+   only a `.gitignore` and a `.env.local` (a macOS `.DS_Store` is allowed). First the folder and
+   the `.gitignore`:
 
    ```sh
    mkdir my-cup-run && cd my-cup-run
@@ -147,26 +148,27 @@ repository to exist first.
    `goalcup` checks the folder and that the repository is public and empty. A wrong folder or
    repository costs you nothing: it stops before the approval and says what to fix
    ([appendix](#appendix-if-goalcup-start-stops)). Then it opens the approval page. Check the
-   code, approve, and **return to the terminal now**. If you already have a competition run open, approving replaces it. Your 168 hours start when the
-   server opens the run.
+   code, approve, and **return to the terminal now**. If you already have a competition run open,
+   approving replaces it. Your 168 hours start when the server opens the run.
 
 The harness then opens in the project folder. It may first show its own screens (a sign-in, a
 trust question: answer Yes); answering them is allowed. `goalcup` then prints a block of lines. Put
-them at the start of your prompt: they tell the agent where to push and as whom. An example;
-`goalcup` prints yours (copy the long `credential` line whole):
+them at the start of your prompt: they tell the agent where to push and as whom. `goalcup` prints
+them indented by two spaces; paste them as they are. An example (yours differs; the long
+`credential` line is one line, so copy it whole):
 
 ```
-Push to https://github.com/<user>/<name>
-The token is GH_TOKEN in .env.local in this folder. Never print it, and never write it into a file, a git setting or a remote address.
-After git init, run:
-  git config user.name "<user>"
-  git config user.email "<id>+<user>@users.noreply.github.com"
-  git config credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$(sed -n s/^GH_TOKEN=//p "/full/path/to/my-cup-run/.env.local")"; }; f'
-  git remote add origin https://github.com/<user>/<name>.git
+  Push to https://github.com/<user>/<name>
+  The token is GH_TOKEN in .env.local in this folder. Never print it, and never write it into a file, a git setting or a remote address.
+  After git init, run:
+    git config user.name "<user>"
+    git config user.email "<id>+<user>@users.noreply.github.com"
+    git config credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$(sed -n s/^GH_TOKEN=//p "/full/path/to/my-cup-run/.env.local")"; }; f'
+    git remote add origin https://github.com/<user>/<name>.git
 ```
 
-The agent runs `git init` and those lines, then pushes with the token. Goal Cup never runs git for
-it. Never paste the token into your prompt, and do not ask the agent to force-add `.env.local`.
+The agent runs `git init` and those lines, then pushes with the token. Goal Cup makes no commit and
+no push for it. Never paste the token into your prompt, and do not ask the agent to force-add `.env.local`.
 
 Your prompt should also ask for the MIT License and a `GOALCUP.md` (what the project is, how to run
 it, what works). Write it in a file first, then paste it and press Enter once. After it, you may
@@ -216,11 +218,13 @@ output with the run id it shows. Never paste your GitHub token.
 
 ## Appendix: if `goalcup start` stops
 
-These stop before the approval, and say "Nothing was created". Fix it and run `start` again.
+All but the outage row stop before the approval and say "Nothing was created". Fix it and run
+`start` again.
 
 | It says | Do this |
 |---|---|
-| The folder also holds other files | Make a new folder with only `.gitignore` and `.env` files. |
+| The folder also holds other files | Make a new folder with only `.gitignore`, `.env` and `.env.*` files (and a macOS `.DS_Store`). |
+| No `GH_TOKEN` line (a real run only) | Put `GH_TOKEN=<token>` in `.env.local`. A practice run needs no token. |
 | `.gitignore` does not cover an `.env` file | Add the line `.env*` (or `.env` and `.env.*`). |
 | Write your token as one line, exactly `GH_TOKEN=<token>` | Remove `export`, quotes and spaces, and any second `GH_TOKEN` line in any `.env` file. |
 | The folder is inside a Git repository | Use a folder outside any repository. |

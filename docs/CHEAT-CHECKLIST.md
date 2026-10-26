@@ -120,7 +120,7 @@ consistent, not that the participant followed the rules.
   value even when unchanged. If Git cannot be read the trace is incomplete, never invalid.
 - **The push token sits beside the agent, and the baseline cannot show its content (D71).** The
   project folder starts with a `.gitignore` and `.env.local`, which holds the participant's
-  one-repo GitHub token. The baseline lists each `.env` and `.env.*` file by name and size and never
+  one-repo GitHub token. The baseline lists each `.env` and `.env.*` file (and `.git-credentials`) by name and size and never
   hashes it (nor does the seal, nor a clone's uncommitted digest, where it counts as `size:<n>`),
   so the record is no oracle for a secret. The agent can read the token and use it; the token
   reaches that one repository only, but the agent runs as the participant and can read what the

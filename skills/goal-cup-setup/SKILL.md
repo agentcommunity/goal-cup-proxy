@@ -47,7 +47,7 @@ Say these plainly, once, before the first human step:
   read and write, 30 days), and a new folder holding `.env.local` (`GH_TOKEN=...`) and a
   `.gitignore` with `.env*`. Then `goalcup start --harness <id> --repo <user>/<name>` runs in that
   folder. The person does all of it themselves, from the guide's section 5; never make the
-  repository, the token or an account for them. A practice run needs none of it: an empty folder.
+  repository, the token or an account for them. A practice run needs none of it: an empty folder (`setup` prints the command).
   The person deletes the token after their run.
 
 ## The loop

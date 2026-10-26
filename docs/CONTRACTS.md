@@ -307,8 +307,9 @@ leaves its mark.
   folder and must already exist as a directory (a workspace that is itself a link is followed),
   with or without a `.git`, or the daemon refuses `409 conflict` before it creates anything,
   rather than make an empty folder. A new entry (the flag absent) is admitted only if the folder
-  is empty but for `.gitignore` and `.env*` files, which the baseline lists by name and size and
-  never hashes, and holds no `.git`. The daemon
+  is empty but for a `.gitignore`, a macOS `.DS_Store` and key files (`.env` and `.env.*` only, so
+  `.envrc` is refused), which the baseline lists by name and size and never hashes (nor a
+  `.git-credentials`, which is a key file wherever it is found), and holds no `.git`. The daemon
   rejects a config home at or below any loaded connector's `real_dirs`, and the participant's
   `HOME`, including symlink aliases, before it creates artifacts or reads a source. The answer
   carries `entry_id`, `process_generation`, `reserved_bytes`, `ingest_addr`, `ingest_secret`,

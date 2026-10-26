@@ -40,7 +40,7 @@ the owner approves it). The rest of this page is the field-by-field detail.
   - nothing of the participant's git login, for any run. No `SSH_AUTH_SOCK`, `GIT_CONFIG_GLOBAL`,
     `GH_CONFIG_DIR`, `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS` reaches the harness
     ([D71](DECISIONS.md#d71-the-project-folder-is-the-workspace-the-agent-pushes-with-the-participants-one-repo-token),
-    which ends the D69 pass-throughs). Every launch also sets `GIT_CONFIG_NOSYSTEM=1` (the system
+    which ends the D69 pass-throughs). Every launch also sets `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1` (the system
     git config can name a keychain helper) and `GIT_SSH_COMMAND` as an `ssh` that reads no config
     and offers no key; a connector cannot name a `GIT_` variable. The agent pushes with the token in
     the project folder's `.env.local`, and sets its own git identity in its repository;

@@ -36,7 +36,7 @@ Update this table in the same PR as any entry it lists.
 | D50 | superseded | D61 |
 | D51 to D55, D57 to D60 | current | |
 | D56 | partly superseded | D71 (a clone is decided at finish; the workspace admission rule) |
-| D61 | partly superseded | D62 (model traffic for listed providers only) |
+| D61 | partly superseded | D62 (model traffic for listed providers only), D71 (the home's `.env` is not hashed) |
 | D62, D63 | current | |
 | D64 | partly superseded | D65 (the disk watch pauses, never stops) |
 | D65, D66, D67 | current | |
@@ -611,8 +611,8 @@ records that service and nothing else.
   would bypass the recorder), a loopback name, an address literal, a single-label name, a Goal Cup
   host or an authentication host: "`<display name>` is set to use `<scheme>://<host>:<port>`,
   which Goal Cup cannot record: `<reason>`. Goal Cup records only an https model service that is not on
-  this computer. Run goalcup prep --harness `<id>`, choose such a service there, then run the
-  command again." `goalcup prep` makes the same check: while the value cannot be recorded the
+  this computer. Run goalcup setup --harness `<id>`, choose such a service there, then run the
+  command again." `goalcup setup` makes the same check: while the value cannot be recorded the
   home is not ready, and prep says why and opens the harness again. What is checked is the
   address the config names, so a run never starts with that address tunnelled unrecorded. It is
   not a check of every host the harness reaches: a login the harness refreshes at another host
@@ -897,14 +897,17 @@ Mac), and in the recorder's 30 s idle timer, which ran out while a participant w
 approval (R1).
 
 - **The workspace is the folder `goalcup start` runs in**, for real and practice runs. Goal Cup
-  Proxy does no git there: no clone, no `.git/info/exclude`, no push test. The agent runs
+  Proxy makes no commit or push there and runs no git but a read to seal it: no clone, no
+  `.git/info/exclude`, no push test. The agent runs
   `git init` and pushes. Its run folders (the harness `HOME`) go to `<config>-runs/`, outside the
   project, and `--work-root` and the `work_root` field are gone (an old `prep.json` holding one is
   read and ignored). The recorder starts after the approval, not before.
 - **The folder rule**, checked before the device request so a bad folder costs no approval, for a
-  practice run too: empty but for `.gitignore` and `.env` or `.env.*` files; not inside a git worktree; not beside goalcup's own
+  practice run too: empty but for a `.gitignore`, a macOS `.DS_Store` and key files (`.env`,
+  `.env.*`; `.envrc` is not one); not inside a git worktree; not beside goalcup's own
   folders; every `.env` file covered by a `.gitignore` line (`.env*` does it; the refusal prints
-  `.env` and `.env.*`). A key file (`.env`, `.env.*`) is listed by name and size and never hashed:
+  `.env` and `.env.*`). A real run's folder must also hold exactly one plain `GH_TOKEN=<value>` line; a practice run needs
+  none. A key file (`.env`, `.env.*`, and git's `.git-credentials`) is listed by name and size and never hashed:
   in the baseline, in the seal's walk, in a clone's uncommitted digest (where its entry is
   `size:<n>`) and in the harness home's baseline. That withdraws the part of D61 that hashed the
   home's `.env`. A new entry with a `.git` is refused. A continued run needs
@@ -915,7 +918,8 @@ approval (R1).
   named residual (RULES, Keys).
 - **Nothing of the participant's git login is passed.** The five variables (`SSH_AUTH_SOCK`,
   `GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`),
-  and the practice git isolation are removed. Every launch instead sets `GIT_CONFIG_NOSYSTEM=1`
+  and the practice git isolation are removed. Every launch instead sets `GIT_TERMINAL_PROMPT=0` (git fails rather than asking on the harness's
+  screen), `GIT_CONFIG_NOSYSTEM=1`
   (Apple's and Homebrew's system git config name a keychain helper) and a `GIT_SSH_COMMAND` that
   reads no config and offers no key, since `ssh` finds `~/.ssh` from the user database and not
   from `HOME`; a connector cannot name a `GIT_` variable. So the token limits what the
@@ -945,6 +949,9 @@ approval (R1).
   exit code.
 - **Two run secrets.** The recorder redacts, by value and in every common encoding, the run's
   proxy credential and, for a run on a server, the token in the key file (`MAX_RUN_SECRETS` is 2).
-  A token added to the file after the start is covered by its pattern only.
+  A token added to the file after the start is covered by its pattern only, and so is every token
+  after a daemon restart, since a reopened entry has no run secrets; fine-grained tokens start with
+  `github_pat_`, which the patterns cover. Goal Cup passes the agent no git login but does not
+  claim it cannot reach one: the agent runs as the participant.
 - **`--dev` and old versions.** A `--dev` competition start is refused before the approval when a
   server is configured, and the server refuses it too (D70).

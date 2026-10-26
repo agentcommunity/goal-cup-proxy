@@ -138,16 +138,18 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
   it before the approval, and the server checks again when it opens the run, by asking GitHub
   whether the repository has any commit. A repository with one is refused.
 - **The workspace is the folder you start from.** It starts with no README, source, configuration,
-  hidden starter files or existing product. It may hold only a `.gitignore` and `.env` or `.env.*`
-  files (your token and your agent's keys), must be outside any Git repository and not beside
+  hidden starter files or existing product. It may hold only a `.gitignore`, a macOS `.DS_Store` and `.env` or
+  `.env.*` files (your token and your agent's keys; `.envrc` is not one), must be outside any Git repository and not beside
   goalcup's own folders, and every `.env` file must be covered by the `.gitignore`;
   `goalcup start` checks all of this before the approval. The record lists each such key file by
-  name and size, never its content or a hash of it, in the folder and in the harness's home. Goal Cup Proxy adds nothing to the folder and runs no git in it: its own
+  name and size, never its content or a hash of it, in the folder and in the harness's home; git's
+  `.git-credentials` is treated the same. Goal Cup Proxy adds nothing to the folder and makes no
+  commit or push in it (at the stop it only reads the repository, to seal it): its own
   `goal-cup` skill goes in the harness's home, not the workspace. Your agent makes the repository
   itself (`git init`) and pushes.
-- The agent pushes its work to the repository with the token you made for it (see Keys), and with
-  nothing else of yours: Goal Cup Proxy passes the agent no git login, SSH agent or `gh`
-  configuration. The commit the server records at the deadline is what is judged.
+- The agent pushes its work to the repository with the token you made for it (see Keys). Goal Cup
+  Proxy passes the agent no git login, SSH agent or `gh` configuration. It does not claim the agent
+  cannot reach one: the agent runs as you. The commit the server records at the deadline is what is judged.
 - Prepared capabilities may help the agent work. A prebuilt product, substantial product code or an
   existing application may not be smuggled in as "context". The judged result must be a fresh build.
 - Participant-controlled instructions and task context available to the agent at the start are frozen
@@ -179,14 +181,16 @@ disclosure and no-side-channel rules.
 
 ## Keys
 
-- Never put keys in your repository. Your project folder's `.gitignore` must cover every `.env*`
-  file in it, and `goalcup start` refuses to start otherwise. Residual: the agent can still force
+- Never put keys in your repository. Your project folder's `.gitignore` must cover every `.env` and `.env.*`
+  file in it (`.env*` does), and `goalcup start` refuses to start otherwise. Residual: the agent can still force
   a file in (`git add -f`). Goal Cup Proxy cannot stop that, and a token published that way is
   yours to revoke.
 - Keys go in the project folder's `.env.local`. Set them up before the start; changing them during
   the run is outside help. The GitHub token must be one line, exactly `GH_TOKEN=<token>`. The
   recorder redacts the token's value from everything it records (every common encoding) if it was
-  in the folder at the start; a token added later is covered by its `github_pat_` pattern only. Model keys there are for your agent's own product. The harness's own
+  in the folder at the start; a token added later is covered by its `github_pat_` pattern only. So is a token after a
+  recorder restart: a reopened entry has no run secrets, and the pattern covers fine-grained
+  tokens. A real run needs the token line (a practice run does not). Model keys there are for your agent's own product. The harness's own
   sign-in happened in setup and does not go there.
 - **One token kind: a GitHub fine-grained personal access token for the one cup repository, with
   Contents read and write and an expiry of 30 days,** saved as `GH_TOKEN=...` in `.env.local`. You
@@ -245,7 +249,7 @@ disclosure and no-side-channel rules.
   approve it in the browser.
 - `goalcup start` is a terminal command. It checks the folder you run it in and your repository,
   opens the run on the server after you approve it, starts the recording proxy, and opens the
-  harness in chat mode in that folder. It runs no git in your folder.
+  harness in chat mode in that folder. It makes no commit or push there; it only reads git, to seal.
 - **GitHub calls.** `goalcup setup` makes none. `goalcup start` makes a few public, unauthenticated
   calls to `api.github.com` for the repository check (public, and no commits). If GitHub cannot
   be asked, it says so and goes on, and the server checks when it opens the run. The Worker calls
