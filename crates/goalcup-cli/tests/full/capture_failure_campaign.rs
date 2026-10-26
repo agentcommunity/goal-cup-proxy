@@ -39,7 +39,7 @@ use capture_campaign_support::{
     OBSERVE, RUN, Row, capture, delivered, ps_started, running, signal_owned_daemon, wait_capture,
     wait_delivered,
 };
-use capture_failure_support::{Alias, bytes_through, line_at};
+use capture_failure_support::{Alias, launch_baseline_bytes, line_at};
 use goalcup_protocol::capture::{
     CaptureRecord, CaptureState, DeliveryState, GapReason, MAX_ENVELOPE_BYTES, RunState,
     TERMINAL_RESERVE_BYTES,
@@ -53,14 +53,16 @@ use table_lock::TableLock;
 const EVIDENCE: &str = "phase1-task2-evidence";
 
 /// The small reserve of the exhaustion row: two MiB, of which one MiB is the protected terminal
-/// allowance. Qualified from the observed baseline, not assumed: the chain through the Launch
-/// record is a few KiB (see `BASELINE_LIMIT`), so about 1 MiB of payload room is spent by the
-/// `stream` workload's roughly 0.5 MiB/s within a few seconds, and nothing close to the host's
-/// free space is ever allocated.
+/// allowance. Qualified from the observed baseline, not assumed: the Baseline, goal stream and
+/// Launch records together are a few KiB (see `BASELINE_LIMIT`), so about 1 MiB of payload room
+/// is spent by the `stream` workload's roughly 0.5 MiB/s within a few seconds, and nothing close
+/// to the host's free space is ever allocated.
 const SMALL_RESERVE: u64 = 2 * 1024 * 1024;
 
-/// The most the pre-traffic chain (Baseline, Goal stream, Launch) may weigh for `SMALL_RESERVE`
-/// to leave the payload room the row means to spend on real wire traffic.
+/// The most the Baseline, goal stream and Launch records together may weigh for `SMALL_RESERVE`
+/// to leave the payload room the row means to spend on real wire traffic. They are summed
+/// record by record (`launch_baseline_bytes`), not read as the chain prefix through `Launch`:
+/// the harness's own traffic can be chained before `Launch` is, and that is not baseline.
 const BASELINE_LIMIT: u64 = (SMALL_RESERVE - TERMINAL_RESERVE_BYTES) / 8;
 
 /// The metadata row's reserve: far more than the row's few seconds of traffic can reach.
@@ -173,8 +175,8 @@ fn chain_budget_exhaustion_preserves_bounded_terminal_gap() {
 
     // The reserve was qualified: a small baseline, then real wire traffic filled the room.
     let chain = v.chain(&entry);
-    let baseline = bytes_through(&chain, |r| matches!(r, CaptureRecord::Launch { .. }));
-    row.note("baseline_bytes_through_launch", baseline);
+    let baseline = launch_baseline_bytes(&chain);
+    row.note("baseline_bytes", baseline);
     assert!(
         baseline > 0 && baseline < BASELINE_LIMIT,
         "baseline {baseline} against limit {BASELINE_LIMIT}"

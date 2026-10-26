@@ -5,10 +5,11 @@
 //!
 //! - the one filesystem fault the campaign injects: a second hard link to `chain.jsonl`, created
 //!   and removed outside the trace directory ([`Alias`]);
-//! - readers of the chain's lines and bytes ([`line_at`], [`bytes_through`]).
+//! - readers of the chain's lines and bytes ([`line_at`], [`launch_baseline_bytes`]).
 
 use super::m2_vertical_support::Chain;
-use goalcup_protocol::envelope::Envelope;
+use goalcup_protocol::capture::{CaptureRecord, CaptureSource, StreamKey};
+use goalcup_protocol::envelope::{Envelope, EventBody};
 use std::path::{Path, PathBuf};
 
 /// A second hard link to the live `chain.jsonl`, held outside the trace directory. While it
@@ -76,22 +77,76 @@ pub fn line_at(chain: &Chain, seq: u64) -> Option<(String, u64)> {
     None
 }
 
-/// Chain bytes through the last complete line holding a record for which `pick` is true.
-pub fn bytes_through(
-    chain: &Chain,
-    pick: impl Fn(&goalcup_protocol::capture::CaptureRecord) -> bool,
-) -> u64 {
-    let mut through = 0u64;
-    let mut found = 0u64;
-    for (raw, line) in chain
+/// The bytes of what the run itself writes before the harness runs: the Baseline link, the goal
+/// stream (its `Open`, segments and `End`, and the goal producer's `ProducerClosed`) and the
+/// `Launch` record. Summed line by line, not taken as a chain prefix: the daemon appends `Launch`
+/// only after it has hashed the harness binaries (D53), and the harness is already running and
+/// chaining its own traffic and native-file records by then. How many land before `Launch` is a
+/// race (a few KiB on macOS, tens to over a hundred KiB on a Linux debug build hashing a 6.6 MB
+/// interpreter), and none of it is baseline.
+///
+/// It fails loudly rather than return a smaller sum: the goal `Open` must exist, there must be
+/// exactly one Baseline and one Launch line, the goal stream must have a segment and an `End`,
+/// its producer a `ProducerClosed`, and the Launch record must name the goal stream found.
+pub fn launch_baseline_bytes(chain: &Chain) -> u64 {
+    let envelopes: Vec<(u64, Envelope)> = chain
         .bytes
         .split_inclusive(|b| *b == b'\n')
-        .zip(chain.lines.iter())
-    {
-        through += raw.len() as u64;
-        if line.record.as_ref().is_some_and(&pick) {
-            found = through;
+        .filter(|raw| raw.ends_with(b"\n"))
+        .map(|raw| {
+            let envelope = serde_json::from_slice(raw).expect("a complete chain line");
+            (raw.len() as u64, envelope)
+        })
+        .collect();
+    let goal: StreamKey = envelopes
+        .iter()
+        .find_map(|(_, e)| match &e.body {
+            EventBody::Capture {
+                record:
+                    CaptureRecord::Open {
+                        stream,
+                        source: CaptureSource::Goal,
+                        ..
+                    },
+            } => Some(stream.clone()),
+            _ => None,
+        })
+        .expect("the goal stream's Open record is in the chain");
+    let (mut sum, mut baselines, mut launches) = (0u64, 0u32, 0u32);
+    let (mut segments, mut ends, mut closes) = (0u32, 0u32, 0u32);
+    for (len, envelope) in &envelopes {
+        let EventBody::Capture { record } = &envelope.body else {
+            if matches!(envelope.body, EventBody::Baseline { .. }) {
+                baselines += 1;
+                sum += len;
+            }
+            continue;
+        };
+        match record {
+            CaptureRecord::Launch { goal_stream, .. } => {
+                assert_eq!(
+                    goal_stream, &goal,
+                    "the Launch record names a different goal stream than the one opened"
+                );
+                launches += 1;
+            }
+            CaptureRecord::Open { stream, .. } if *stream == goal => {}
+            CaptureRecord::Segment { stream, .. } if *stream == goal => segments += 1,
+            CaptureRecord::End { stream, .. } if *stream == goal => ends += 1,
+            CaptureRecord::ProducerClosed { producer, .. } if *producer == goal.producer => {
+                closes += 1;
+            }
+            _ => continue,
         }
+        sum += len;
     }
-    found
+    assert_eq!(baselines, 1, "exactly one Baseline line");
+    assert_eq!(launches, 1, "exactly one Launch line");
+    assert!(segments >= 1, "the goal stream has no Segment record");
+    assert!(ends >= 1, "the goal stream has no End record");
+    assert!(
+        closes >= 1,
+        "the goal producer has no ProducerClosed record"
+    );
+    sum
 }

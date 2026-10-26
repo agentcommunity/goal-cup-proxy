@@ -50,6 +50,8 @@ impl Wrangler {
             ("DB_BACKEND", "local".to_string()),
             ("GITHUB_CHECK", "off".to_string()),
             ("EVENT_ID", "practice".to_string()),
+            // The event an organizer test run (`--test`) belongs to. See `worker_options`.
+            ("TEST_EVENT_ID", "test".to_string()),
             ("RECEIPT_SIGNING_KEY", SEED_HEX.to_string()),
             ("TEST_APPROVAL_KEY", APPROVAL_KEY.to_string()),
         ];
@@ -200,8 +202,15 @@ fn log_in(rig: &Rig, url: &str) {
 }
 
 /// The options of a start whose approval the test gives with [`Wrangler::decide_next`].
+///
+/// An organizer test run (`--test`, D70). The rig's `m2-fake` connector is pinned by no build, so
+/// the run needs `--dev`, and the Worker refuses a `dev` competition run (`DEV_COMPETES`). A test
+/// run is the one `dev` mode that keeps every competition rule these tests check (the same repo
+/// and project folder, `RUN_SECONDS` for its deadline, the Worker's stop at that deadline); a
+/// practice run would take its length from `PRACTICE_RUN_MINUTES` and skip the repository.
 fn worker_options(rig: &Rig, goal: &Path) -> goalcup_cli::commands::start::StartOptions {
     let mut opts = rig.options(goal, RESERVE);
+    opts.mode = goalcup_cli::account::device::RunMode::Test;
     opts.open_url = remember_code;
     opts
 }
