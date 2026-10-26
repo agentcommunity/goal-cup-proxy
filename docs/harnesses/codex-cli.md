@@ -214,7 +214,7 @@ PENDING (need a logged-in home, which the owner must restore; nobody on our side
 During a run you may type only "keep going" ([RULES](../RULES.md)), so a Codex that stops to ask for
 an approval waits until the deadline. Goal Cup recommends these two settings and never sets them
 for you (D67). They go in `config.toml` in Codex's Goal Cup home (`CODEX_HOME`, under
-`capture-homes/codex-cli/` in your Goal Cup configuration folder; `goalcup prep` prints the full path
+`capture-homes/codex-cli/` in your Goal Cup configuration folder; `goalcup setup` prints the full path
 when one is missing):
 
 ```toml
@@ -232,7 +232,7 @@ sandbox_mode = "danger-full-access"
   the agent cannot commit.
 - Without a sandbox the agent's commands can change anything your user can. Run it on a machine
   or in a container you are content to let it change.
-- `goalcup prep` reads both keys and, while one is not set this way, adds the recommendation to its
+- `goalcup setup` reads both keys and, while one is not set this way, adds the recommendation to its
   harness home step. It never changes them and never fails for them. The test kit
   (`scripts/kit_settle.py`) sets both in its own cells.
 - Evidence: [local test day](../research/results/2026-10-22-local-test-day.md),

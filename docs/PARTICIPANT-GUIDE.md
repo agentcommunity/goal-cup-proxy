@@ -71,12 +71,14 @@ any prompt. After about ten minutes the server stops the run, and `goalcup` seal
 A practice run needs no repository and no token, so the agent has nowhere to push. It never counts.
 Do as many as you like. It is not the dry run: a practice run lasts ten minutes and needs no
 repository; a [dry run](#the-dry-run-optional) is a full 168-hour rehearsal that needs both.
-If the harness never writes a session file, `goalcup` tells you within
-minutes. Fix it now.
+If the harness makes five model requests and writes no session file, `goalcup status` says so
+within three minutes. Fix it now.
 
-## The dry run (optional)
+<a id="the-dry-run-optional"></a>
 
-From 23 October to 6 November you may start a full rehearsal, with the steps of section 4 in the
+## 4. A dry run (optional)
+
+From 23 October to 6 November you may start a full rehearsal, with the steps of section 5 in the
 same order. It lasts 168 hours and does not count. It needs its own new repository and token; your cup run then
 needs another pair. A second dry run replaces the first.
 
@@ -89,7 +91,7 @@ section 1 downloads now does. Still seal first.
 A dry run that is still recording when the cup start window opens must be sealed the same way
 before you start your cup run.
 
-## 4. Your run
+## 5. Your run
 
 Start inside the 24-hour start window (7 Nov 2026, 00:00 to 8 Nov, 00:00 UTC). Steps 1 to 3 can
 be done before it opens. For a [dry run](#the-dry-run-optional) the window is open now, so use
@@ -110,32 +112,32 @@ repository to exist first.
    lets it push. The token itself reaches this repository only. The agent still runs as you and
    can read what your programs can read, so keep no other secrets in the project folder.
 3. **Make the project folder.** This is where the agent works. Make a new folder that will hold
-   only two files:
+   only a `.gitignore` and a `.env.local`. First the folder and the `.gitignore`:
 
    ```sh
    mkdir my-cup-run && cd my-cup-run
-   ```
-
-   Make `.gitignore` first, with one line:
-
-   ```sh
    printf '.env*\n' > .gitignore
    ```
 
-   Then copy the token on GitHub, and write `.env.local` from the clipboard, so the token never
-   enters your shell history:
+   Now copy the token on GitHub. It stays on your clipboard: copy nothing else until the next two
+   commands are done. The first writes `.env.local` private from the start and keeps the token out
+   of your shell history. The second must print `1`:
 
    ```sh
-   printf 'GH_TOKEN=%s\n' "$(pbpaste)" > .env.local && chmod 600 .env.local
+   (umask 077; printf 'GH_TOKEN=%s\n' "$(pbpaste)" > .env.local)
+   grep -c '^GH_TOKEN=github_pat_' .env.local
    ```
 
-   `pbpaste` is the Mac clipboard. On Linux, use your own clipboard tool (`xclip -o`, `wl-paste`)
-   in its place, or write the file in an editor with one line, `GH_TOKEN=github_pat_...`.
+   If it prints `0`, copy the token again and repeat. `pbpaste` is the Mac clipboard; on Linux use
+   `xclip -o` or `wl-paste`, or write the file in an editor. The line must be exactly
+   `GH_TOKEN=<token>`: no `export`, no quotes, no spaces. Have it in the file before you start:
+   the recorder redacts that value everywhere, and a token added later is covered by its
+   `github_pat_` pattern only.
 
-   Keys your agent's own product needs may go in `.env.local` too, one `NAME=value` per line. Do
-   not put the harness's sign-in there; you did that in setup. `goalcup` refuses a `.env*` file
-   that `.gitignore` does not cover, so the token cannot be published by the agent's first
-   `git add .`. Keep the folder out of any git repository, and off a Windows drive under WSL2.
+   Keys your agent's own product needs may go in `.env.local` too, one `NAME=value` per line, but
+   not the harness's sign-in. `goalcup` refuses an `.env` file that `.gitignore` does not cover, so
+   the agent's first `git add .` cannot publish the token. Keep the folder out of any git
+   repository, and off a Windows drive under WSL2.
 4. **Start.** In that folder:
 
    ```sh
@@ -143,34 +145,34 @@ repository to exist first.
    ```
 
    `goalcup` checks the folder and that the repository is public and empty. A wrong folder or
-   repository costs you nothing: it stops before the approval and says what to fix. Then it
-   opens the approval page. Check the code, approve, and **return to the terminal now**. If you
-   already have a competition run open, approving replaces it. Your 168 hours start when the
+   repository costs you nothing: it stops before the approval and says what to fix
+   ([appendix](#appendix-if-goalcup-start-stops)). Then it opens the approval page. Check the
+   code, approve, and **return to the terminal now**. If you already have a competition run open, approving replaces it. Your 168 hours start when the
    server opens the run.
 
-The harness then opens in the project folder. First it may show its own screens (a sign-in, a
-trust question: Claude Code asks whether you created or trust the folder; answer Yes).
-Answering them is allowed. `goalcup` prints a block with the repository, the token file and the git identity. Put
-that block at the start of your prompt, so the agent knows where to push and as whom. An example;
-`goalcup` prints yours:
+The harness then opens in the project folder. It may first show its own screens (a sign-in, a
+trust question: answer Yes); answering them is allowed. `goalcup` then prints a block of lines. Put
+them at the start of your prompt: they tell the agent where to push and as whom. An example;
+`goalcup` prints yours (copy the long `credential` line whole):
 
 ```
 Push to https://github.com/<user>/<name>
-The token is GH_TOKEN in .env.local in this folder.
-Before the first commit, run:
-  git config user.name "<a name>"
-  git config user.email "<an email>"
+The token is GH_TOKEN in .env.local in this folder. Never print it, and never write it into a file, a git setting or a remote address.
+After git init, run:
+  git config user.name "<user>"
+  git config user.email "<id>+<user>@users.noreply.github.com"
+  git config credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$(sed -n s/^GH_TOKEN=//p "/full/path/to/my-cup-run/.env.local")"; }; f'
+  git remote add origin https://github.com/<user>/<name>.git
 ```
 
-The agent runs `git init` itself and pushes with the token. Goal Cup never runs git for it. Never
-paste the token itself into your prompt; the agent reads it from `.env.local`. Do not ask the agent
-to force-add `.env.local`.
+The agent runs `git init` and those lines, then pushes with the token. Goal Cup never runs git for
+it. Never paste the token into your prompt, and do not ask the agent to force-add `.env.local`.
 
 Your prompt should also ask for the MIT License and a `GOALCUP.md` (what the project is, how to run
 it, what works). Write it in a file first, then paste it and press Enter once. After it, you may
 type only "keep going", when the agent has stopped. See [RULES](RULES.md#one-prompt-then-only-keep-going).
 
-## 5. Check on it, and restart it
+## 6. Check on it, and restart it
 
 Leave the terminal open. In another one:
 
@@ -193,7 +195,7 @@ See [RULES, During the run](RULES.md#during-the-run).
 run inside `tmux`. Keep disk free: under 1 GiB free beyond the run's reservation, `goalcup` pauses
 the agent until you free space outside the run's folders. Never delete anything the agent made.
 
-## 6. The end
+## 7. The end
 
 At 168 hours, on the server's clock, `goalcup` stops the agent, seals the record and uploads the
 rest, with no grace period. Keep the terminal open until `Upload done.` What is judged is the last
@@ -211,6 +213,25 @@ Then:
 
 Write to goalcup@agentcommunity.org. Say which command you ran, and paste the `goalcup status`
 output with the run id it shows. Never paste your GitHub token.
+
+## Appendix: if `goalcup start` stops
+
+These stop before the approval, and say "Nothing was created". Fix it and run `start` again.
+
+| It says | Do this |
+|---|---|
+| The folder also holds other files | Make a new folder with only `.gitignore` and `.env` files. |
+| `.gitignore` does not cover an `.env` file | Add the line `.env*` (or `.env` and `.env.*`). |
+| Write your token as one line, exactly `GH_TOKEN=<token>` | Remove `export`, quotes and spaces, and any second `GH_TOKEN` line in any `.env` file. |
+| The folder is inside a Git repository | Use a folder outside any repository. |
+| The folder is goalcup's own, or next to one | Use a folder somewhere else, for example in your home folder. |
+| The repository is not empty (a README counts) | Make a new repository with no README, `.gitignore` or licence. |
+| GitHub does not show the repository | It is not created yet, or it is private. Make it public. |
+| GitHub could not be asked just now | Nothing to do. The start goes on, and the server checks when it opens the run. A repository with a commit is refused then, after your approval. |
+| A `--dev` run never enters the competition | Add `--practice`. |
+
+If the repository belongs to an organization, the agent commits under the organization's private
+GitHub address, not yours.
 
 ## Appendix: what `goalcup status` says
 
@@ -237,7 +258,7 @@ acknowledged every record. A `PROBLEM:` line says what to do.
 | `the server has not heard from this run for about … min` | The server has heard nothing for about a quarter of an hour. | Check the network. |
 | `only … of disk is free. Free some space outside your run's folders, …` | Less than 5 GiB is free beyond the run's reservation. | Free space outside the run's folders. Never delete anything the agent made. |
 | `The disk is almost full, so your agent is paused. …` | Under 1 GiB is free, so `goalcup` froze the agent. | Free space. Above 3 GiB free the agent resumes by itself. If it seems stuck, type `keep going`. |
-| `Goal Cup has recorded … requests to the model service but no … session file yet. …` | The harness made model calls but wrote no session file `goalcup` could record. Its setting may be off, or it may be another version. | Keep the agent running. Check the harness version and setup in [HARNESS-SETUP](HARNESS-SETUP.md). |
+| `Goal Cup has recorded … requests to the model service but no … session file yet. …` | The harness made model calls but wrote no session file `goalcup` could record. A practice run says so after 5 requests and 3 minutes, a real run after 10 and 10. Its setting may be off, or it may be another version. | Keep the agent running. Check the harness version and setup in [HARNESS-SETUP](HARNESS-SETUP.md). |
 | `this computer may go to sleep (…)` | `goalcup` could not keep the machine awake (always so under WSL2). | Mains power, lid open, or turn sleep off yourself. |
 | `… has exited (…). Your run is still open until … To go on, run: goalcup continue <run id>` | The agent ended before the deadline. | Run the command it names. |
 | `… has exited (…) and the run is over.` or `… and this run cannot be continued.` | The deadline passed, or the run cannot be restarted. | Nothing. |

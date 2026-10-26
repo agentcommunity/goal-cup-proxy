@@ -21,20 +21,20 @@ display_name = "<HARNESS NAME>"         # 1 to 40 printable ASCII characters, as
 # before the harness opens. At most 200 printable ASCII characters, one line. Delete if it asks nothing.
 # first_screen = "<HARNESS NAME> may ask <QUESTION>. Choose <ANSWER>."
 # The anchor of this harness's section in docs/HARNESS-SETUP.md (lower-case letters and digits
-# joined by "-"): `goalcup prep` links there. Required for a shipped connector; add the
+# joined by "-"): `goalcup setup` links there. Required for a shipped connector; add the
 # `### <Harness name>` section to that guide in the same PR (docs/HARNESS-ONBOARDING.md, step 5).
 setup_section = "<harness-name>"
 # Where the participant adds `goalcup mcp`, the time-left tool, in the harness's own config:
 # the file (relative to the shared config home, else the shared run HOME; one of the two is
 # needed), the key of its MCP server table, and how the harness hands a server
 # GOALCUP_TIME_LEFT_FILE: "inherited", "env_vars" or "env_template".
-# `goalcup prep` prints the lines; Goal Cup never writes them (D67). Delete if it has no MCP.
+# `goalcup setup` prints the lines; Goal Cup never writes them (D67). Delete if it has no MCP.
 # [participant.time_left_tool]
 # file = "<config.toml>"
 # key = "<mcp_servers>"
 # pass_env = "inherited"
 # A setting in the harness's own config that stops its permission prompts (D67), and the values
-# that mean so (the first is the one recommended). `goalcup prep` recommends it when it is not
+# that mean so (the first is the one recommended). `goalcup setup` recommends it when it is not
 # set, and never sets it. Up to 4 rows; needs config_home = "shared". Describe it in the facts
 # sheet's "Run without permission prompts" section. Delete if the harness never asks.
 # [[participant.no_prompts]]
@@ -61,7 +61,7 @@ resume_args = ["<RESUME-FLAG>"]
 # session, never how the agent behaves (model, provider, tools, prompts, compression on or off):
 # an argument with model, provider, base_url, api_key, key, token or secret as a dotted part is
 # refused. Run in the harness home after
-# the participant's setup in `goalcup prep`, and again before each launch, so each must be safe to
+# the participant's setup in `goalcup setup`, and again before each launch, so each must be safe to
 # run twice. Chat mode only. At most 4 commands of 1 to 16 arguments; the args rules apply; no
 # {template}. Their output goes to a log, never the terminal. Delete if the harness needs none.
 # configure = [["config", "set", "<sessions.save_transcripts>", "true"]]

@@ -31,7 +31,7 @@ means that nobody at Goal Cup has tried it. The details are in each
 2. Sign in there, or paste your API key into the harness's own prompt. Answer the harness's
    first-run screens there ([section 7](#7-first-run-screens)). The `.env.local` in your project
    folder is not for this: model keys there are for your agent's own product, and the harness's
-   sign-in happens here, in setup ([guide, section 4](PARTICIPANT-GUIDE.md#4-your-run)).
+   sign-in happens here, in setup ([guide, section 5](PARTICIPANT-GUIDE.md#5-your-run)).
 3. Exit the harness.
 4. Open the settings file of your harness ([where the settings live](#where-the-settings-live)).
 5. Add the settings from your harness's section below.
@@ -272,7 +272,7 @@ Cup never pushes for your agent.
 1. Say in your prompt that the agent commits and pushes its work often.
 2. Let the agent write `.git`. For Codex, this needs `sandbox_mode = "danger-full-access"`.
 3. The agent pushes with the GitHub token in your project folder's `.env.local`
-   ([guide, section 4](PARTICIPANT-GUIDE.md#4-your-run)). Goal Cup passes it nothing of your git
+   ([guide, section 5](PARTICIPANT-GUIDE.md#5-your-run)). Goal Cup passes it nothing of your git
    login (D71), so it has no global git config: the agent must set `git config user.name` and
    `git config user.email` in its repository. The block `goalcup start` prints says so. Put it at
    the start of your prompt.

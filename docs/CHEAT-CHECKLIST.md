@@ -120,11 +120,15 @@ consistent, not that the participant followed the rules.
   value even when unchanged. If Git cannot be read the trace is incomplete, never invalid.
 - **The push token sits beside the agent, and the baseline cannot show its content (D71).** The
   project folder starts with a `.gitignore` and `.env.local`, which holds the participant's
-  one-repo GitHub token. The baseline lists each `.env*` file by name and size and never hashes it,
-  so the record is no oracle for a secret. The agent can read the token and use it; it can push to
-  that one repository only. `goalcup start` refuses a `.env*` file that `.gitignore` does not
-  cover, but `git add -f` still publishes one, and a token the model repeats is redacted by
-  pattern (`github_pat_`, `ghp_`) and not by value. The participant revokes it after the run.
+  one-repo GitHub token. The baseline lists each `.env` and `.env.*` file by name and size and never
+  hashes it (nor does the seal, nor a clone's uncommitted digest, where it counts as `size:<n>`),
+  so the record is no oracle for a secret. The agent can read the token and use it; the token
+  reaches that one repository only, but the agent runs as the participant and can read what the
+  participant's programs can. `goalcup start` refuses a `.env` file that `.gitignore` does not
+  cover, but `git add -f` still publishes one. A token in the file at the start is redacted from
+  the record by value, in every common encoding; one added later, or one the agent encodes some
+  other way, is covered by pattern only (`github_pat_`, `ghp_`). The participant revokes the token
+  after the run.
 - **Two faults can leave a harness running on a sealed entry (H-10).** The spawn gate and the finish
   budget close the common windows. A CLI crash after the gate released the child, together with a
   raced manual `goalcup seal`, can still leave a harness running. It needs both faults.

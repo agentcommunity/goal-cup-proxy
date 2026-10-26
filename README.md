@@ -41,8 +41,8 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
 4. **Make the repository, the token and the folder**, in this order. Create a new, empty, public
    GitHub repository (no README, `.gitignore` or licence). Make a fine-grained token for that one
    repository: Contents read and write, expiry 30 days. Make a new folder holding `.env.local`
-   (`GH_TOKEN=...`) and a `.gitignore` with the line `.env*`. Details:
-   [the guide, section 4](docs/PARTICIPANT-GUIDE.md#4-your-run).
+   (exactly one line, `GH_TOKEN=<token>`) and a `.gitignore` with the line `.env*`. Details:
+   [the guide, section 5](docs/PARTICIPANT-GUIDE.md#5-your-run).
 5. **Start** inside the start window, in that folder:
    `goalcup start --harness <id> --repo <user>/<name>`. A dry run is open from 23 October, so you
    can start a rehearsal now ([the dry run](docs/PARTICIPANT-GUIDE.md#the-dry-run-optional)).
@@ -50,8 +50,9 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    harness opens in the folder, and your agent runs `git init` and pushes with the token. Its own
    setup screens (sign-in, folder trust, model choice) come before your prompt, and answering them
    is fine. Delete the token after your run.
-6. **Type your one prompt** and press Enter. After it, the only message you may ever type is
-   "keep going".
+6. **Paste the block `goalcup` prints** (the repository, the token file, the git lines) at the
+   start of your prompt, **type your one prompt** and press Enter. After it, the only message you
+   may ever type is "keep going".
 
 **During the run.**
 
@@ -73,7 +74,7 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
 rest. You do nothing. What is judged is the last push to your repository's default branch that
 GitHub received before the deadline, by GitHub's timestamp. Your agent must push its own work;
 Goal Cup Proxy never pushes. Then hand in your demo video and questionnaire on the event site
-within 24 hours. More: [the end](docs/PARTICIPANT-GUIDE.md#6-the-end).
+within 24 hours. More: [the end](docs/PARTICIPANT-GUIDE.md#7-the-end).
 
 ## Commands
 

@@ -118,7 +118,7 @@ push, notice wording). Apply it **before** deploying the Worker that needs it.
       (22 Oct: nine cells signed in, one login each, never copied: mac-codex, mac-claude, mac-amp,
       mac-hermes, mac-disk, lx-codex, lx-claude, lx-amp, lx-hermes. Hermes needs no browser sign-in.)
 - [ ] Sandbox for participants: run `goalcup doctor` in one sandbox and send the output. Without
-      `goalcup prep` first, `doctor` checks every harness and exits 1 unless all are installed. goalcup refuses
+      `goalcup setup` first, `doctor` checks every harness and exits 1 unless all are installed. goalcup refuses
       overlayfs, btrfs, ZFS, NFS, SMB, tmpfs and FUSE; a container sandbox may need an ext4 or XFS volume.
 
 ## 6. Measure what the cloud could not

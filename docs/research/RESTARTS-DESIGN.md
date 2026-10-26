@@ -107,7 +107,7 @@ across several stops.
 ## Advice for a sandbox with a 24-hour cap (if the owner allows it)
 
 1. Before the run: put `$HOME` on a persistent volume that is mounted at the same path for the
-   same user after each stop. Run `goalcup prep` there. Start the run inside `tmux`.
+   same user after each stop. Run `goalcup setup` there. Start the run inside `tmux`.
 2. After each stop: open a terminal, `cd` to the folder you ran `goalcup start` from (not inside
    the work folder), run `goalcup status`, then `goalcup continue`. Answer the harness's start-up
    screens. If the agent has stopped, type `keep going`.

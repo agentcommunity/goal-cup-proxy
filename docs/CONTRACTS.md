@@ -298,9 +298,10 @@ leaves its mark.
 - `POST /v0/capture-workspaces` (`CaptureWorkspaceRequest`): creates the entry. It carries the
   workspace, `profile_id`, the 64-character `connector_dir_sha256`, `reserve_bytes`, `run_home`,
   `config_home`, an optional upload-issued `entry_id`, an optional `native_since`, and
-  `run_secrets` (omitted when empty): at most one value, 20 to 256 bytes of printable ASCII, the
-  run's proxy credential (D60). The daemon keeps it in memory for the entry, redacts every form
-  of it, and answers a bad value or a body of the wrong shape with a fixed `400 malformed` that
+  `run_secrets` (omitted when empty): at most two values (`MAX_RUN_SECRETS`), each 20 to 256 bytes
+  of printable ASCII: the run's proxy credential (D60) and, for a run on a server, the GitHub token
+  in the project folder's key file (D71). The daemon keeps them in memory for the entry, redacts
+  every form of each, and answers a bad value or a body of the wrong shape with a fixed `400 malformed` that
   quotes no value. `goalcup continue` also sends `existing_clone: true` (omitted when false; the field keeps its
   version-11 name, and it now means "a continued entry", D71): the workspace is the run's project
   folder and must already exist as a directory (a workspace that is itself a link is followed),
@@ -396,7 +397,8 @@ reports `seal_write_failed`, and the status is `Failed`, never `Sealed`.
   until the shifted `drain_end`; expiry cuts with `ShutdownDeadline` gaps and is never a refusal.
   (5) owner stop, with native finish using the shifted drain share. (6) carried proxy-counter
   and latched gaps are appended. (7) workspace into the seal manifest (a clone's Git state, else
-  a walk). (8) `LocalFinish`, sync, `seal.json`, registry row. Stages 1, 2, 3, 5, 7 and 8 begin only
+  a walk of at most 50,000 files that stops at `D` less `FINISH_COMMIT_RESERVE`; a walk that stops
+  early sets `capped`, D71). (8) `LocalFinish`, sync, `seal.json`, registry row. Stages 1, 2, 3, 5, 7 and 8 begin only
   while more than `FINISH_RESPONSE_MARGIN` remains of the shifted deadline. Once stage 8 begins
   it completes under the no-retry terminal rule. A refusal is `DaemonError::FinishDeadline { stage }`,
   writes no terminal, and uses the unchanged tokens `not_started`, `blocking_permit`, `run_lock`,
@@ -508,6 +510,11 @@ Every capture child of `goalcup start` is spawned through `launch::spawn_gated`.
   `image_sha256`, `platform`; optional, skip-if-none) joined v5 after the tag, so Goal Cup Proxy records
   the build that ran instead of pinning one. A released v0.5.0 verifier refuses a trace that carries
   it. A second such field opens v6.
+- **The second exception (D71).** `SealManifest.capped` (`file_limit` or `deadline`; optional,
+  skip-if-none, absent from a whole walk and from a clone) joined v5 without a v6, as `harness_build`
+  did, because a seal without it keeps its bytes. A verifier older than 0.7 reports
+  `seal_manifest_mismatch` (exit 2) on a capped seal; the 0.7 verifier reports `seal_capped` and the
+  informational finding `seal_walk_capped`. A third such field opens v6.
 - **What is frozen.** `M2_PROTOCOL_VERSION = 5` is the only switch. Frozen: the `Envelope`, the
   bodies a v5 chain carries, the ten `CaptureRecord` kinds and their sub-types, the trace files
   `chain.jsonl`, `baseline.json` and `seal.json`, and `Launch` including `harness_build`. Two shapes

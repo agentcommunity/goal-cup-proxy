@@ -711,6 +711,7 @@ More than 128 distinct codes end with `findings_omitted:<n>`.
 | `seal_manifest_mismatch` | 2 | `seal.json` does not match the terminal record. |
 | `baseline_git_unreadable`, `seal_git_unreadable` | 1 | Git could not be read in the workspace at that point. The report's `git_unreadable` says why. |
 | `seal_git_missing` | 1 | The baseline recorded Git state, but the seal did not. |
+| `seal_walk_capped` | - | Informational (D71). The seal's walk of a workspace that is not a clone stopped at 50,000 files or at its deadline, so `files` lists part of the folder. The report's `seal_capped` says `file_limit` or `deadline`. It changes neither the integrity nor the exit. A verifier older than 0.7 reports `seal_manifest_mismatch` on such a seal. |
 | `launch_missing` | 1 | The chain has no `Launch` record. |
 | `launch_goal_unbound` | 1 | A `Launch` names a goal stream that did not end `Complete`. |
 

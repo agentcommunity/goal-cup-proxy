@@ -20,7 +20,7 @@ the rules are [docs/RULES.md](../../docs/RULES.md). This skill gets them as far 
   into a recorded harness is reviewed.
 - Never ask for, read, print or store a key or token. Goal Cup keeps none. The person's GitHub
   token and any key their agent's product needs go in the `.env.local` of their own project folder
-  (guide, section 4), which they make and fill in themselves; never open it, create it for them or
+  (guide, section 5), which they make and fill in themselves; never open it, create it for them or
   copy a token anywhere.
 - Never write to `~/.claude`, `~/.codex` or any harness's own config, and never set a model base
   URL or a proxy variable. Goal Cup Proxy keeps its own home for each harness.
@@ -46,7 +46,7 @@ Say these plainly, once, before the first human step:
   this order, a new empty public repository, a fine-grained token for that one repository (Contents
   read and write, 30 days), and a new folder holding `.env.local` (`GH_TOKEN=...`) and a
   `.gitignore` with `.env*`. Then `goalcup start --harness <id> --repo <user>/<name>` runs in that
-  folder. The person does all of it themselves, from the guide's section 4; never make the
+  folder. The person does all of it themselves, from the guide's section 5; never make the
   repository, the token or an account for them. A practice run needs none of it: an empty folder.
   The person deletes the token after their run.
 
@@ -69,7 +69,7 @@ Say these plainly, once, before the first human step:
    plain sentence instead and exits non-zero. Show that sentence to the person verbatim.
 3. If every `state` is `ok`, tell the person they are ready: they may try a practice run
    themselves, in an empty folder (`goalcup start --harness <id> --practice`, no GitHub), and they
-   make the repository, the token and the project folder as the guide's section 4 says, then start
+   make the repository, the token and the project folder as the guide's section 5 says, then start
    their run with `goalcup start --harness <id> --repo <user>/<name>` inside the start window. The window opens on 7 November 2026 at
    00:00 UTC and lasts 24 hours. `goalcup start` asks for its own browser approval; that is the
    second approval, and it is normal. If the `machine` step's `say` asks them

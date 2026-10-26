@@ -570,8 +570,9 @@ Hermes runs however the participant set it up, as Codex does (D39, D57).
   remote model catalogue. Model traffic is recorded for the `providers` rows only (DeepSeek) while
   `HERMES_CA_BUNDLE` replaces Hermes's roots, so another service the participant picks fails its
   TLS handshake until the connector reads the model host from Hermes's own config.
-- **Baseline.** The home's `.env` and `auth.json` are listed in the uploaded baseline by name,
-  size and SHA-256 only (D56), as Codex's `auth.json` is: their bytes are hashed, never copied.
+- **Baseline.** The home's `auth.json` is listed in the uploaded baseline by name, size and SHA-256
+  only (D56), as Codex's `auth.json` is: its bytes are hashed, never copied. The home's `.env` is
+  listed by name and size only, never hashed (D71 withdraws the hash).
 
 - **No credential mechanism.** The schema refuses `[capture.credential]` (in the base profile
   and in a platform override) with "a connector may not pass a provider key; the harness keeps
@@ -619,7 +620,7 @@ records that service and nothing else.
   refresh fails (`docs/harnesses/hermes-cli.md`, known gaps; TODO Known issues).
 - **A switch mid-run.** The file is not read during a run. A service switched to inside a session
   (Hermes's `/model`) is a tunnel until the next segment: the participant exits the harness and
-  runs `goalcup continue`, which reads the config again (PARTICIPANT-GUIDE, section 5).
+  runs `goalcup continue`, which reads the config again (PARTICIPANT-GUIDE, section 6).
 - **Hermes.** `{ file = "config.yaml", key = "model.base_url" }`, which Hermes's setup and
   `/model` write. API-key services are what this delivers; an OAuth-login service may fail its
   token refresh (above), pending a test-round run. `providers = ["deepseek"]` is removed: with `HERMES_CA_BUNDLE` in replace mode
@@ -798,7 +799,7 @@ four". Adding a harness must stay a data change that core changes do not break.
   `--dev`, beside every shipped connector. A connector made from the contributor template loads
   with no Rust change, and no core literal names a harness (`no_family_literals.rs`). A change
   that fails one of them is a break, not a test to update.
-- **Settled by D70.** A connector runs without `--dev` only when a release pins it, and the
+- **Settled by [D70](#d70-the-release-is-the-list-the-server-refuses-old-versions-in-the-competition---dev-never-competes).** A connector runs without `--dev` only when a release pins it, and the
   release is the list: a participant's own harness needs a merged PR and a release, and releases
   continue through the cup. `--dev` admits an unpinned connector and relaxes three load rules
   (`Origin::Dev`): the interpreter refusal for `program`, the argument path rules, and the loopback
@@ -900,10 +901,13 @@ approval (R1).
   `git init` and pushes. Its run folders (the harness `HOME`) go to `<config>-runs/`, outside the
   project, and `--work-root` and the `work_root` field are gone (an old `prep.json` holding one is
   read and ignored). The recorder starts after the approval, not before.
-- **The folder rule**, checked before the device request so a bad folder costs no approval: empty
-  but for `.gitignore` and `.env*` files; not inside a git worktree; not beside goalcup's own
-  folders; every `.env*` file covered by a `.gitignore` line. The baseline records each `.env*`
-  file by name and size, never a hash. A new entry with a `.git` is refused. A continued run needs
+- **The folder rule**, checked before the device request so a bad folder costs no approval, for a
+  practice run too: empty but for `.gitignore` and `.env` or `.env.*` files; not inside a git worktree; not beside goalcup's own
+  folders; every `.env` file covered by a `.gitignore` line (`.env*` does it; the refusal prints
+  `.env` and `.env.*`). A key file (`.env`, `.env.*`) is listed by name and size and never hashed:
+  in the baseline, in the seal's walk, in a clone's uncommitted digest (where its entry is
+  `size:<n>`) and in the harness home's baseline. That withdraws the part of D61 that hashed the
+  home's `.env`. A new entry with a `.git` is refused. A continued run needs
   only that the folder exists, because the agent may exit before it runs `git init`.
 - **One documented push path.** A GitHub fine-grained token for the one cup repository, Contents
   read and write, 30 days, saved as `GH_TOKEN` in the folder's `.env.local`, made after the
@@ -911,10 +915,17 @@ approval (R1).
   named residual (RULES, Keys).
 - **Nothing of the participant's git login is passed.** The five variables (`SSH_AUTH_SOCK`,
   `GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`),
-  `GIT_CONFIG_NOSYSTEM` and the practice git isolation are removed, so the token limits what the
+  and the practice git isolation are removed. Every launch instead sets `GIT_CONFIG_NOSYSTEM=1`
+  (Apple's and Homebrew's system git config name a keychain helper) and a `GIT_SSH_COMMAND` that
+  reads no config and offers no key, since `ssh` finds `~/.ssh` from the user database and not
+  from `HOME`; a connector cannot name a `GIT_` variable. So the token limits what the
   agent can push with it to one repository. The agent still runs as the participant and can read
   what the participant's programs can read (RULES, Privacy). The agent has no global git config and sets `git config user.name` and
-  `user.email` in its repository; `start` prints the repository, the token file and those lines.
+  `user.email` in its repository. `start` prints, for the participant's prompt, the repository, the
+  token file, the owner's name and GitHub private commit address (an organization's, when it owns
+  the repository), a credential helper line scoped to `https://github.com` that reads
+  `GH_TOKEN` from the key file at each push, and `git remote add`. The helper reads only a plain
+  `GH_TOKEN=<value>` line, so `start` refuses any other form before the approval.
   D69's "agent can push to any repo" cost is gone for pushes. D69's no-keys rule for Goal Cup
   Proxy, the four-step setup and its lack of GitHub stand. Setup no longer makes a keys file.
   The hidden `goalcup git-credential` and the `github.json` loader stay until after 15 Nov for
@@ -924,5 +935,16 @@ approval (R1).
   pre-start push flag.
 - **Amends D56.** Whether the workspace is a clone is decided at finish, not at creation. A
   workspace with a `.git` directory at its root seals by Git within the existing budget. Any other
-  seals by walking, with a limit of 50,000 files and the finish deadline; a capped walk is recorded
-  as capped, never as an error.
+  seals by walking, with a limit of 50,000 files and a deadline, which is the finish deadline less
+  `FINISH_COMMIT_RESERVE`; a walk that hits either is recorded as capped, never as an error.
+  The record is an optional `capped` field of `seal.json` (`file_limit` or `deadline`), absent
+  from a whole walk and a clone, so a seal without it keeps its bytes. It joins v5 without a v6,
+  as D56 did, and the cost is accepted: a verifier older than 0.7 reports
+  `seal_manifest_mismatch` on a capped seal. The 0.7 verifier reports the field as `seal_capped`
+  and the informational finding `seal_walk_capped`, which changes neither the integrity nor the
+  exit code.
+- **Two run secrets.** The recorder redacts, by value and in every common encoding, the run's
+  proxy credential and, for a run on a server, the token in the key file (`MAX_RUN_SECRETS` is 2).
+  A token added to the file after the start is covered by its pattern only.
+- **`--dev` and old versions.** A `--dev` competition start is refused before the approval when a
+  server is configured, and the server refuses it too (D70).
