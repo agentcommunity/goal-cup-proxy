@@ -168,27 +168,51 @@ cannot.
 | Cell | What it runs | The project folder |
 |---|---|---|
 | practice (default) | `start --practice` | empty; no repository |
-| `--test --duration N` | `start --test --repo <the repository the kit made>` | `.gitignore` (`.env*`) and `.env.local` (`GH_TOKEN` from `gh auth token`) |
+| `--test --duration N` | `start --test --repo <the repository the kit made>` | `.gitignore` (`.env*`) and `.env.local` (`GH_TOKEN`, from `MATRIX_GH_TOKEN_FILE` or, if allowed, `gh auth token`) |
 | `--refusals` | seven starts that must refuse before the approval | one folder per row |
 
+**Which token the agent gets (never the whole login by default).** The agent can read `.env.local` and
+could publish or print the token it holds, and a staging trace could keep it. So a `--test` cell **refuses
+to start** (exit 2) unless it is told where the token comes from:
+- `MATRIX_GH_TOKEN_FILE=<path>`: the way to run. A **fine-grained personal access token whose resource owner
+  is a throwaway GitHub account or organisation, with Contents read and write only**, and the cells'
+  repositories created under that owner (new, empty, public) and named with `MATRIX_REPO=<owner>/<name>`,
+  required with the file (the kit makes no repository for it: it would make one with your gh login, which
+  that token cannot reach). The file is a regular file (not a link), mode
+  0600, outside the checkout, with one line `GH_TOKEN=<value>` or the value alone. The log names the source,
+  never the value.
+- `MATRIX_ALLOW_LOGIN_TOKEN=1`: the explicit say-so to give the agent `gh auth token`, the **whole login**
+  (every scope, every repository of the account). One loud line says so. A Docker cell has only this
+  (the container's own login): sign it in with a throwaway account, not the owner's.
+
 Before a test run's login, the kit writes the `.env.local` (made with umask 077, so mode 0600; the token
-goes straight into the file, never through an argument, a variable or the log), then makes the repository with the machine's GitHub login:
+goes straight into the file, never through an argument, a variable or the log), then makes the repository
+with the machine's GitHub login unless `MATRIX_REPO` names one (a cell with `MATRIX_ALLOW_LOGIN_TOKEN=1`):
 `gh repo create <user>/goalcup-kit-<cell>-<6 hex> --public`, with no README, so it is empty
-(`MATRIX_CELL` names the cell; default the connector). `MATRIX_REPO=<owner>/<name>` names one instead (the
-token must be able to push to it). The token is `gh auth token`, which is the whole login, or the file
-`MATRIX_GH_TOKEN_FILE=<path>` names (mode 0600, outside the checkout, one line `GH_TOKEN=<value>` or the
-value alone; the log says which source was used, never the value). **Prefer a fine-grained token for the one
-repository** (Contents: read and write): the agent can read `.env.local`, and the account-wide `gh` token
-reaches all of the owner's repositories and could end up in a staging trace. Host cells only; a Docker cell
-uses the container's own login. With no login, the row FAILs with one line: run `gh auth login` here
-(HTTPS, and Yes to authenticate Git). The token is taken out of the log (and the terminal capture) if the
-agent printed it (the kit keeps a private copy of it from the start, so this holds even if the agent deleted
-or rewrote `.env.local`), and `.env.local` is deleted at the end even with `--keep`. The kit never deletes a
-repository; it prints the name at the end (`gh repo delete <name> --yes` when done, after
-`gh auth refresh -s delete_repo`: the default `gh auth login` lacks that scope; then
-`gh auth refresh -r delete_repo` to drop it again, because host cells' agents are given that login's
-token). A question the start asks before the approval (a repository GitHub does not show) also FAILs the
-row at once.
+(`MATRIX_CELL` names the cell; default the connector). With no login and no token file, the row FAILs with
+one line: run `gh auth login` here (HTTPS, and Yes to authenticate Git).
+
+What the kit does about the token it handed over:
+- **After the seal it looks for it.** `git log --all -p` of the project folder, and a fresh anonymous clone of
+  the cell's repository (into the temporary directory), are searched for the token, its base64 forms (three
+  alignments, both alphabets) and its percent-encoded forms. A hit FAILs the cell, loudly:
+  `the token was pushed: revoke it now`. A repository that cannot be cloned or read FAILs the cell too (the
+  check was not done). The value is never printed.
+- **It scrubs what the kit keeps.** A token the agent printed is replaced in the log, the terminal capture,
+  the run folders (`<config>-runs`) and the harness homes under the config folder (files newer than the
+  run's start), found by its value (a private 0600 copy made when `.env.local` was, so this holds if the
+  agent deleted or rewrote `.env.local`) and by its shape (`gh[opusr]_...`, `github_pat_...`), through
+  terminal escape sequences and line wraps (a file with a token behind an escape sequence is rewritten
+  without its escape sequences). The trace's chain files are not touched, and cannot be: a token the agent
+  printed is in them. The log is created mode 0600.
+- **It cleans up.** `.env.local` and the private copy are deleted at the end even with `--keep`, and at the
+  next start the kit deletes those two things (nothing else) from the temporary directories of dead runs
+  (`goalcup-matrix.XXXXXX` of this user whose `kit.pid` names no live `matrix.sh`).
+
+The kit never deletes a repository; it prints the name of one it made at the end (`gh repo delete <name> --yes`
+when done, after `gh auth refresh -s delete_repo`: the default `gh auth login` lacks that scope; the agent
+was given that login's token, so drop the scope again afterwards with `gh auth refresh -r delete_repo`). A question the start asks before the approval (a repository GitHub does
+not show) also FAILs the row at once.
 
 `--refusals` checks, with no harness and no terminal, that a real run's start refuses before any
 approval or run record, says "Nothing was created.", and leaves the project folder as it was. Each row
@@ -345,7 +369,7 @@ It also installs `claude-code-cli` (set to `haiku` with thinking off, checked af
 and `hermes-cli`. For long runs in parallel: `linux-matrix.sh build` once, then
 `LINUX_MATRIX_CELL=<cell> LINUX_MATRIX_PREBUILT=1 sh scripts/linux-matrix.sh run <id> -- --test --duration <s>`
 gives each cell its own volume, sign-in and container. A test run in Docker uses the container's own
-GitHub login (its token goes to the project's `.env.local` in the container): sign in once with `LINUX_MATRIX_CELL=<cell> sh scripts/linux-matrix.sh github <id>`
+GitHub login (its token goes to the project's `.env.local` in the container; it needs `MATRIX_ALLOW_LOGIN_TOKEN=1`, because it is the whole login, so sign the container in with a throwaway account): sign in once with `LINUX_MATRIX_CELL=<cell> sh scripts/linux-matrix.sh github <id>`
 (`gh auth login` in the container; it stays on the cell's volume). The kit never copies or mounts this
 machine's login or a token. `matrix.sh --test --duration <s>` does the same on a host, with the host's
 login and token. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
