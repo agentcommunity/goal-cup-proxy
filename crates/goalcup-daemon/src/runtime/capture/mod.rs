@@ -575,12 +575,14 @@ impl Daemon {
     }
 
     /// Remove what a v5 entry holds on disk: its artifact tree with the reserved chain, then
-    /// its row, then `workspace` if that directory is still empty.
+    /// its row, then `created` if that directory is still empty. `created` is only a folder
+    /// this very create made; an abandon passes none, because the project folder is the
+    /// player's, even when empty.
     fn discard_capture(
         &self,
         entry_id: &str,
         artifact: &EntryArtifactRoot,
-        workspace: Option<&Path>,
+        created: Option<&Path>,
     ) -> Result<(), DaemonError> {
         artifact.remove_recursively().map_err(|error| {
             DaemonError::Refused(format!(
@@ -589,14 +591,15 @@ impl Daemon {
             ))
         })?;
         self.registry().remove(entry_id)?;
-        if let Some(workspace) = workspace {
-            let _ = std::fs::remove_dir(workspace);
+        if let Some(created) = created {
+            let _ = std::fs::remove_dir(created);
         }
         Ok(())
     }
 
     /// Abandon a v5 entry before its launch and before any process handoff is prepared: its
-    /// reservation, row, artifacts and still-empty workspace go, as for a refused create, and
+    /// reservation, row and artifacts go, as for a refused create (the project folder stays, even
+    /// when empty), and
     /// only then its owner and ingest grant. After a launch or a handoff, it is sealed instead.
     ///
     /// A recovered entry may be abandoned too: what makes an abandon safe is that nothing was
@@ -622,7 +625,7 @@ impl Daemon {
                 "entry {entry_id}'s artifact authority cannot be acquired: {error}"
             ))
         })?;
-        self.discard_capture(entry_id, &artifact, Some(&row.workspace))?;
+        self.discard_capture(entry_id, &artifact, None)?;
         self.captures().remove(entry_id);
         Ok(())
     }

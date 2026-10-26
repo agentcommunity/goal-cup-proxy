@@ -74,10 +74,10 @@ pub fn check_artifact_placement(artifact_root: &Path, workspace: &Path) -> Resul
     }
     if artifact_root.parent() == workspace.parent() {
         return Err(DaemonError::Guard(format!(
-            "artifact root {} is a sibling of workspace {}; the agent enumerates the \
-             parent folder on its first tool call",
-            artifact_root.display(),
-            workspace.display()
+            "the project folder {} is next to goalcup's own folder {}, and the agent lists the \
+             folder above its project on its first tool call; use a folder of its own",
+            workspace.display(),
+            artifact_root.display()
         )));
     }
     // The config check, applied a second time to the two concrete directories: the clauses

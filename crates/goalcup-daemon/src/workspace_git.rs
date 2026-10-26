@@ -12,7 +12,7 @@
 //! (`an_agent_written_clean_filter_is_never_run`). Content is hashed here, never through a diff
 //! driver.
 
-use crate::workspace::{ABSENT, Bounds, HASH_LIMIT, measure, walk};
+use crate::workspace::{ABSENT, Bounds, HASH_LIMIT, is_key_file, measure, walk};
 use goalcup_protocol::seal::{WalkCap, WorkspaceGit};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -344,7 +344,7 @@ fn collapsed_files(
             limit: left,
             hash_limit: HASH_LIMIT,
             deadline: Some(deadline),
-            keys_unhashed: false,
+            keys_unhashed: true,
         },
     )
     .map_err(|e| match e {
@@ -366,7 +366,8 @@ fn collapsed_files(
     Ok(files
         .into_iter()
         .map(|file| {
-            let value = if file.bytes > HASH_LIMIT {
+            let name = file.path.rsplit('/').next().unwrap_or_default();
+            let value = if file.bytes > HASH_LIMIT || is_key_file(name) {
                 format!("size:{}", file.bytes)
             } else {
                 file.sha256
@@ -385,10 +386,15 @@ fn split_tab(entry: &[u8]) -> Result<(&[u8], &[u8]), String> {
     Ok((&entry[..tab], &entry[tab + 1..]))
 }
 
-/// A file's value in the digest: `size:<n>` above [`HASH_LIMIT`], else what the seal walk
-/// records for it (the absent digest for anything but a readable regular file).
+/// A file's value in the digest: `size:<n>` above [`HASH_LIMIT`] or for a key file
+/// ([`is_key_file`], by name at any depth: its bytes are never read, so its content cannot
+/// move the digest), else what the seal walk records for it (the absent digest for anything
+/// but a readable regular file).
 fn describe(full: &Path, meta: &std::fs::Metadata) -> Vec<u8> {
-    if meta.is_file() && meta.len() > HASH_LIMIT {
+    let key = full
+        .file_name()
+        .is_some_and(|name| is_key_file(&name.to_string_lossy()));
+    if meta.is_file() && (meta.len() > HASH_LIMIT || key) {
         return format!("size:{}", meta.len()).into_bytes();
     }
     measure(full, u64::MAX).1.into_bytes()

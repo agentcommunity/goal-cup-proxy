@@ -132,6 +132,15 @@ fn capture_integrity(trace: &Path, args: Args) -> std::process::ExitCode {
             for why in &report.git_unreadable {
                 eprintln!("goalcup-verify: {why}");
             }
+            if let Some(cap) = report.seal_capped {
+                let why = match cap {
+                    goalcup_protocol::seal::WalkCap::FileLimit => {
+                        "it holds more files than the walk lists"
+                    }
+                    goalcup_protocol::seal::WalkCap::Deadline => "the time to read it ran out",
+                };
+                eprintln!("goalcup-verify: the seal lists only part of the workspace ({why})");
+            }
             if report.findings.iter().any(|f| f == "chain_pruned_locally") {
                 eprintln!(
                     "goalcup-verify: the chain's first parts were pruned on this machine: \

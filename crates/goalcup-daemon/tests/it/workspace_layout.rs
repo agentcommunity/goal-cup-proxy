@@ -40,7 +40,7 @@ fn each_refused_relationship_says_which_one_it_was() {
 
     let err = check_artifact_placement(Path::new("/Users/team/goalcup-spikes/artifacts"), ws)
         .expect_err("M0 §2.4: the agent ran `ls -la ..` on its first tool call");
-    assert!(format!("{err}").contains("sibling"), "got {err}");
+    assert!(format!("{err}").contains("folder of its own"), "got {err}");
 
     let err = check_artifact_placement(ws, ws).expect_err("identical paths");
     assert!(format!("{err}").contains("identical"), "got {err}");

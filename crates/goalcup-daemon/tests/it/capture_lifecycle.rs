@@ -1065,7 +1065,10 @@ async fn abandon_before_launch_leaves_nothing_and_later_is_refused() {
         "the chain is gone"
     );
     assert!(rig.daemon.registry().get(&info.entry_id).unwrap().is_none());
-    assert!(!workspace.exists(), "the still-empty workspace is gone");
+    assert!(
+        workspace.is_dir(),
+        "an abandon never removes the player's project folder, even when empty"
+    );
     let status = rig
         .client
         .get_no_token(&entry_route(&info.entry_id, SUFFIX_STATUS))
@@ -2996,6 +2999,63 @@ async fn the_starting_kit_is_admitted_and_a_key_file_is_never_hashed() {
             refused.body()
         );
     }
+}
+
+/// A key file is never hashed, a clone's Git digest included (D71): an untracked, un-ignored
+/// `.env.local`, and one inside an untracked nested repository, count by name and size, so the
+/// digest is the same whatever their bytes are. An empty one is listed with the absent digest.
+#[tokio::test]
+async fn a_key_file_in_a_clone_never_moves_the_dirty_digest() {
+    let rig = Rig::start().await;
+    let home = rig.root.join("git-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut digests = Vec::new();
+    for (name, secret) in [
+        ("clone-a", b"KEY=aaaaaaaaaaaa\n"),
+        ("clone-b", b"KEY=bbbbbbbbbbbb\n"),
+    ] {
+        let ws = rig.workspace(name);
+        std::fs::create_dir_all(ws.join("nested")).unwrap();
+        for dir in [&ws, &ws.join("nested")] {
+            let out = goalcup_daemon::workspace_git::command(dir, &home)
+                .expect("git on PATH")
+                .args(["init", "-q"])
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            std::fs::write(dir.join(".env.local"), secret).unwrap();
+        }
+        let created = rig.create_continued("codex-cli", &ws, RESERVE).await;
+        assert_eq!(created.status(), 200, "{}", created.body());
+        let info: CaptureWorkspaceInfo = created.json().unwrap();
+        let sealed = rig.seal(&info.entry_id, None).await;
+        assert_eq!(sealed.status(), 200, "{}", sealed.body());
+        let seal = read_manifest(&rig.trace_dir(&info.entry_id).join("seal.json"));
+        let Some(goalcup_protocol::seal::GitState::Read(git)) = seal.git else {
+            panic!("the seal records the Git state: {:?}", seal.git);
+        };
+        digests.push(git.dirty_sha256);
+    }
+    assert_eq!(
+        digests[0], digests[1],
+        "the bytes of a key file moved the digest"
+    );
+
+    let ws = rig.workspace("empty-key");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join(".env.local"), b"").unwrap();
+    let created = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let info: CaptureWorkspaceInfo = created.json().unwrap();
+    let baseline = read_manifest(&rig.trace_dir(&info.entry_id).join("baseline.json"));
+    assert_eq!(
+        baseline.files,
+        [goalcup_protocol::seal::SealedFile {
+            path: ".env.local".to_string(),
+            bytes: 0,
+            sha256: "0".repeat(64),
+        }]
+    );
 }
 
 /// The seal of a folder that is not a clone walks at most 50 000 files (D71): past them it seals
