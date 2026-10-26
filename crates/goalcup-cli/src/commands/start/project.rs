@@ -42,9 +42,10 @@ pub(super) fn refuse_unready_project(
     })?;
     // The folder of a run still going is that run's: the way back to it is `goalcup status` or
     // `goalcup continue`, never a new, empty folder, which the checks below would advise.
-    if let Some(run_id) = open_run_in(cfg, &real) {
+    if let Some(run) = open_run_in(cfg, &real) {
         return Err(CliError::Refused(crate::participant::project_of_open_run(
-            &run_id,
+            &run.run_id,
+            !run.practice && !run.test,
         )));
     }
     refuse_beside_goalcup(cfg, project)?;
@@ -72,20 +73,20 @@ pub(super) fn refuse_unready_project(
     refuse_unreadable_token_line(project, &names, needs_token)
 }
 
-/// The id of a run on this computer that is not over and works in the resolved folder `real`.
-fn open_run_in(cfg: &Path, real: &Path) -> Option<String> {
+/// The run on this computer, opened on a server and not over, that works in the resolved folder
+/// `real`. A run with no server is never one: it has no deadline, so it is never over, replaces
+/// nothing, and `goalcup continue` cannot restart it, so it must not hold the folder.
+fn open_run_in(cfg: &Path, real: &Path) -> Option<crate::run::RunRecord> {
     let now = crate::run::now_unix();
-    crate::run::all(cfg)
-        .into_iter()
-        .find(|run| {
-            std::fs::canonicalize(&run.workspace).is_ok_and(|workspace| workspace == real)
-                && !crate::run::is_over(
-                    run,
-                    crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id)).as_ref(),
-                    now,
-                )
-        })
-        .map(|run| run.run_id)
+    crate::run::all(cfg).into_iter().find(|run| {
+        run.server_url.is_some()
+            && std::fs::canonicalize(&run.workspace).is_ok_and(|workspace| workspace == real)
+            && !crate::run::is_over(
+                run,
+                crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id)).as_ref(),
+                now,
+            )
+    })
 }
 
 /// The push line the launch block prints reads the token with `sed -n s/^GH_TOKEN=//p`, so a key

@@ -841,30 +841,46 @@ mod server_runs {
         let said = refused_before_the_approval(&rig, &upload, &beside);
         assert!(said.contains("next to it"), "{said}");
 
-        // The folder of a run that is not over, with the agent's work in it: the way back is
-        // that run, not a new, empty folder.
-        let rig = Rig::new();
-        let upload = self::server(&rig);
-        rig.prepare_for(&upload.url());
-        let project = rig.run_folder();
-        std::fs::write(project.join("README.md"), "the agent's work\n").unwrap();
-        goalcup_cli::run::write(
-            &rig.cfg,
-            &goalcup_cli::run::RunRecord {
-                run_id: "r00000000000000aa".to_string(),
-                server_url: Some(upload.url()),
-                practice: false,
-                test: false,
-                connector_id: crate::common::m2_cli_support::FAKE_ID.to_string(),
-                workspace: project.clone(),
-                started_at_unix: goalcup_cli::run::now_unix(),
-                deadline_at: Some("2099-01-01T00:00:00Z".to_string()),
-                entries: Vec::new(),
-            },
-        )
-        .unwrap();
-        let said = refused_before_the_approval(&rig, &upload, &project);
-        assert!(said.contains("belongs to run r00000000000000aa"), "{said}");
+        // The folder of a run on the server that is not over, with the agent's work in it: the
+        // way back is that run, not a new, empty folder. Only a competition run is replaced by a
+        // new one. A run with no server holds no folder: the next check speaks.
+        let rows: [(&str, Option<&str>, bool, &str); 3] = [
+            ("competition", Some("x"), false, "and replaces this one"),
+            (
+                "practice",
+                Some("x"),
+                true,
+                "belongs to run r00000000000000aa",
+            ),
+            ("no server", None, false, "Make a new, empty folder"),
+        ];
+        for (name, server, practice, phrase) in rows {
+            let rig = Rig::new();
+            let upload = self::server(&rig);
+            rig.prepare_for(&upload.url());
+            let project = rig.run_folder();
+            std::fs::write(project.join("README.md"), "the agent's work\n").unwrap();
+            goalcup_cli::run::write(
+                &rig.cfg,
+                &goalcup_cli::run::RunRecord {
+                    run_id: "r00000000000000aa".to_string(),
+                    server_url: server.map(|_| upload.url()),
+                    practice,
+                    test: false,
+                    connector_id: crate::common::m2_cli_support::FAKE_ID.to_string(),
+                    workspace: project.clone(),
+                    started_at_unix: goalcup_cli::run::now_unix(),
+                    deadline_at: server.map(|_| "2099-01-01T00:00:00Z".to_string()),
+                    entries: Vec::new(),
+                },
+            )
+            .unwrap();
+            let said = refused_before_the_approval(&rig, &upload, &project);
+            assert!(said.contains(phrase), "{name}: {said}");
+            if practice {
+                assert!(!said.contains("replaces"), "{name}: {said}");
+            }
+        }
 
         // A folder a sync client uploads would upload `.env.local`, token and all.
         let rig = Rig::new();

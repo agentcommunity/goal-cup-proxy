@@ -47,13 +47,19 @@ pub fn needs_terminal(harness: &str, then: &str) -> String {
 /// What the folder checks call the folder `goalcup start` is run from, the run's workspace.
 pub const PROJECT_FOLDER: &str = "project folder";
 
-/// A new run's project folder is the workspace of run `run_id`, which is not over: the folder is
-/// that run's, and a new run there would be the wrong way back to it.
-pub fn project_of_open_run(run_id: &str) -> String {
+/// A new run's project folder is the workspace of run `run_id`, opened on a server and not over:
+/// the folder is that run's, and a new run there would be the wrong way back to it.
+/// `competition`: that run is a competition run, which a new competition run replaces when it
+/// opens (a practice or test run is never replaced), and which needs a repository of its own.
+pub fn project_of_open_run(run_id: &str, competition: bool) -> String {
+    let new_run = if competition {
+        "A new run needs a new folder and a new repository, and replaces this one."
+    } else {
+        "A new run needs a new folder."
+    };
     format!(
         "This folder belongs to run {run_id}. To see it: goalcup status. If the agent has \
-         exited: {CONTINUE_HINT}. A new run needs a new folder and a new repository, and \
-         replaces this one. Nothing was created."
+         exited: {CONTINUE_HINT}. {new_run} Nothing was created."
     )
 }
 
