@@ -1003,7 +1003,8 @@ model calls with no certificate error.
   on 0.21.1 and later, which write no session file. A gateway another process starts between the
   stop and the launch keeps its old environment (CHEAT-CHECKLIST).
 - **The entry stays.** The `recorder` entry stays in Goal Cup's Hermes home after a run, naming
-  that run's CA. Hermes opened there outside a run cannot reach the model address; the next
-  start rewrites it.
+  that run's now stale CA, and the run's gateway may stay up pointed at the closed recording
+  proxy. Hermes opened there outside a run (a second `goalcup setup`) may not reach the model
+  until `HERMES_HOME=<home> hermes gateway stop -y`; the next start fixes both by itself.
 - **Not in 0.7.0:** reading Hermes's `state.db`, a post-run gateway stop, a per-run Hermes home, a
   Hermes version gate, a verifier finding, and setup writing Hermes's other keys itself.

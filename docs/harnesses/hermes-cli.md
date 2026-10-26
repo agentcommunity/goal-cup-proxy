@@ -155,10 +155,13 @@ silent):
 - A model URL with a query string (Azure's `?api-version=`) or a `user@` part does not match the
   entry, which holds the host, port and path only (Hermes keeps the userinfo in its route
   identity, `hermes_cli/route_identity.py`).
-- The `recorder` entry stays in Goal Cup's Hermes home after a run, naming that run's CA. Hermes
-  opened there outside a run (by hand, or by `goalcup setup`) cannot reach the model address
-  through it, and picking `recorder` in `/model` gives a provider with no key. The next start
-  rewrites it.
+- The `recorder` entry stays in Goal Cup's Hermes home after a run, naming that run's CA, which
+  is now stale; picking `recorder` in `/model` gives a provider with no key. The run's gateway may
+  also stay up after the run, its `HTTPS_PROXY` pointed at the recording proxy's closed port
+  (goalcup does not stop it after a run, D72). So Hermes opened from that home outside a run (by
+  hand, or by a second `goalcup setup`) may not reach the model service until
+  `HERMES_HOME=<home> hermes gateway stop -y`. The next start stops the gateway and rewrites the
+  file by itself.
 - A gateway another Hermes process starts between the stop and the launch (a kanban or cron
   worker, or a launchd unit from `hermes gateway install`) keeps its old environment
   ([CHEAT-CHECKLIST](../CHEAT-CHECKLIST.md)).

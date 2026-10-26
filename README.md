@@ -27,7 +27,9 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    ```
 
    It checks the download against the release's `SHA256SUMS` and installs into `~/.local/bin`
-   and `~/.local/share/goalcup`, with no sudo. Run it again to upgrade, never during your run.
+   and `~/.local/share/goalcup`, with no sudo. Run it again to upgrade, only with no run open.
+   If a start is refused right after an update, wait a minute (the old recorder exits when idle)
+   and start again.
    For one particular release, add `-s -- --version <x.y.z>` after `sh`.
 2. **Set up**: `goalcup setup`. Four steps: it connects this computer to your account, lists the
    harnesses and lets you pick one, opens it once in its own isolated home so you sign in (or

@@ -29,8 +29,9 @@ goalcup --version
 ```
 
 It installs the latest release into `~/.local/bin`, with no `sudo`. If it says that folder is not
-on your `PATH`, run the `export` line it prints. Update later by running the same line, but never
-during a run: the installer refuses while a run is recording.
+on your `PATH`, run the `export` line it prints. Update later by running the same line, but only
+with no run open: the installer refuses while a run is recording. If a start is refused right
+after an update, wait a minute (the old recorder exits when idle) and start again.
 
 ## 2. Set up: `goalcup setup`
 
