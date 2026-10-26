@@ -184,8 +184,8 @@ pub fn left_line(seconds: u64, deadline: Option<u64>, practice: bool) -> String 
     format!("{left}{stops}. {}", advice(practice))
 }
 
-/// The advice a `goalcup time-left` line ends with: [`PUSH_OFTEN`], or for a practice run, whose
-/// clone cannot push, [`PRACTICE_NO_PUSH`].
+/// The advice a `goalcup time-left` line ends with: [`PUSH_OFTEN`], or for a practice run, which
+/// needs no repository, [`PRACTICE_NO_PUSH`].
 pub fn advice(practice: bool) -> &'static str {
     if practice {
         PRACTICE_NO_PUSH
@@ -206,8 +206,8 @@ pub fn file_from_env() -> Option<PathBuf> {
 /// The advice a competition run's `goalcup time-left` line ends with.
 pub const PUSH_OFTEN: &str = "Push your work often; work not pushed when the run stops is lost.";
 
-/// The advice a practice run's line ends with: a practice clone cannot push.
-pub const PRACTICE_NO_PUSH: &str = "This is a practice run: its clone cannot push, so there is \
+/// The advice a practice run's line ends with: a practice run has no repository (D69).
+pub const PRACTICE_NO_PUSH: &str = "This is a practice run: it needs no repository, so there is \
                                     nothing to push.";
 
 /// Whether the run's time is up: by `left`, the count the host kept, while it holds. With no
@@ -400,7 +400,7 @@ mod tests {
         assert!(!file.exists());
     }
 
-    /// A practice run's clone cannot push, so its time-left line does not tell the agent to push;
+    /// A practice run needs no repository, so its time-left line does not tell the agent to push;
     /// a competition run's line does.
     #[test]
     fn a_practice_runs_time_left_line_does_not_say_push() {
