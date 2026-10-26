@@ -12,24 +12,22 @@ use std::path::{Path, PathBuf};
 
 /// The upload server this run opens with: `None` with no `goalcup login`. With a server, `goalcup
 /// setup` must have run (`prep.json` is there; a `work_root` an older setup wrote in it is
-/// ignored), and the project folder, the folder `goalcup start` is run from and the run's
-/// workspace, must hold nothing but the participant's starting kit ([`refuse_unready_project`]).
-/// Both are checked here, before the participant is asked for anything and before anything is
-/// created. A real run's GitHub repository is asked for later,
-/// once every other check has passed and before the approval ([`Serving::approved`]). A `--dev`
-/// run is uploaded like any other, and the server checks its connector against no list. Since D70
-/// the server refuses a run that sends `dev: true` in the competition or from a non-admin, but this
-/// CLI does not send `dev` yet (D70 Task 4).
+/// ignored), a `--dev` run must be a practice or test run (the server refuses `dev` in the
+/// competition), and the project folder, the folder `goalcup start` is run from and the run's
+/// workspace, must pass every check of [`super::project`]. All are checked here, before the
+/// participant is asked for anything and before anything is created. A real run's GitHub
+/// repository is asked for later, once every other check has passed and before the approval
+/// ([`Serving::approved`]).
 pub(super) fn uploading(
     cfg: &Path,
     env: &BTreeMap<String, String>,
     project: &Path,
-    mode: crate::account::device::RunMode,
+    opts: &StartOptions,
 ) -> Result<Option<Serving>, CliError> {
     use crate::account::device::RunMode;
     // A practice run or an organizer test run is a run on the server: without one there is
     // nothing to practise on, and a test run that never reaches the server is no test.
-    let flag = match mode {
+    let flag = match opts.mode {
         RunMode::Practice => Some("--practice"),
         RunMode::Test => Some("--test"),
         RunMode::Competition => None,
@@ -42,46 +40,19 @@ pub(super) fn uploading(
             None => Ok(None),
         };
     };
+    if opts.dev && opts.mode == RunMode::Competition && !super::refusals::dev_competes_for_test(env)
+    {
+        return Err(CliError::Refused(crate::participant::dev_competes()));
+    }
     // The one sentence `run goalcup setup first`.
     crate::prep_file::read_prep(cfg)?;
-    refuse_unready_project(project)?;
+    super::project::refuse_unready_project(cfg, project)?;
     Ok(Some(Serving {
         url: server.url,
         cfg: std::fs::canonicalize(cfg).unwrap_or_else(|_| cfg.to_path_buf()),
         env: env.clone(),
         project: project.to_path_buf(),
     }))
-}
-
-/// Whether `name` is part of the participant's starting kit, which a new run's project folder may
-/// hold: their `.gitignore` and their keys (`.env`, `.env.local`, ...), as files.
-fn is_starting_kit(name: &str, entry: &std::fs::DirEntry) -> bool {
-    (name == ".gitignore" || name == ".env" || name.starts_with(".env."))
-        && entry.file_type().is_ok_and(|t| t.is_file())
-}
-
-/// A new run on a server works in its project folder, which must start empty but for the
-/// starting kit ([`is_starting_kit`]): what the agent finds there is then its own work. Refused
-/// before the approval, so a folder that is not ready costs no approval.
-fn refuse_unready_project(project: &Path) -> Result<(), CliError> {
-    let entries = std::fs::read_dir(project).map_err(|source| CliError::Io {
-        path: project.display().to_string(),
-        source,
-    })?;
-    let mut extra: Vec<String> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            (!is_starting_kit(&name, &entry)).then_some(name)
-        })
-        .collect();
-    if extra.is_empty() {
-        return Ok(());
-    }
-    extra.sort();
-    Err(CliError::Refused(crate::participant::project_not_empty(
-        project, &extra,
-    )))
 }
 
 /// The `repo_url` a practice run is opened with. The server asks every run for a public GitHub
@@ -146,6 +117,7 @@ impl Serving {
         connector: &HarnessConnector,
         out: &mut dyn std::io::Write,
     ) -> Result<Uploading, CliError> {
+        // What the participant puts at the start of their prompt (E1), for a real run.
         let repo = if opts.mode.is_practice() {
             None
         } else {
@@ -252,7 +224,7 @@ pub(super) enum UploadHow {
 pub(super) struct NewRun {
     credential: crate::account::credential::RunCredential,
     /// A real run's repository; `None` for a practice run, which has none.
-    repo: Option<crate::commands::run_repo::RunRepo>,
+    pub(super) repo: Option<crate::commands::run_repo::RunRepo>,
     /// The run's workspace: the participant's project folder, used as it is. Goal Cup makes no
     /// clone and runs no git there; the agent sets git up and pushes.
     pub(super) project: PathBuf,
@@ -309,6 +281,7 @@ impl Uploading {
             proxy_version: crate::upload::api::ProxyVersion::current(),
             repo_url: String::new(),
             machine: None,
+            dev: cx.opts.dev,
         };
         let new = match &self.how {
             UploadHow::Fresh(new) => new,
@@ -434,6 +407,7 @@ impl Uploading {
                 session_id: carried.session_id.clone(),
                 harness_version: carried.harness_version.clone(),
                 proxy_version: carried.proxy_version.clone(),
+                dev: carried.dev,
             };
             match crate::upload::continue_run(&self.server, run_id, &request)? {
                 Continued::Segment(segment) => break segment,

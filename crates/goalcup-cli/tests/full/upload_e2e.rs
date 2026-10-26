@@ -248,6 +248,7 @@ fn a_run_left_open_by_a_killed_start_is_given_back_by_the_next() {
         proxy_version: "0.1.0".into(),
         repo_url: REPO.into(),
         machine: None,
+        dev: false,
     };
     let killed = goalcup_cli::upload::open_run(&client, &request).unwrap();
     goalcup_cli::account::credential::store(
@@ -1554,6 +1555,7 @@ mod segments {
                 proxy_version: "0.1.0".into(),
                 repo_url: REPO.into(),
                 machine: None,
+                dev: false,
             },
         )
         .unwrap();
@@ -1834,6 +1836,7 @@ mod segments {
                 session_id: "00000000-0000-4000-8000-0000000000aa".into(),
                 harness_version: "1".into(),
                 proxy_version: "0.1.0".into(),
+                dev: false,
             },
         )
         .unwrap();

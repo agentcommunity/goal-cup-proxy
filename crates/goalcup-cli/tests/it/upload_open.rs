@@ -640,8 +640,12 @@ mod server_runs {
         assert!(!rig.harness_started());
     }
 
-    /// A fake GitHub API that answers every request with `body`, and counts the requests.
-    fn fake_github(body: &'static str) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    /// A fake GitHub API that answers the repository with `body` and its list of commits with
+    /// `commits` (`409`: empty; `200`: a commit), and counts the requests.
+    fn fake_github(
+        body: &'static str,
+        commits: u16,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -655,8 +659,13 @@ mod server_runs {
                     head.push(byte[0]);
                 }
                 count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let listed = String::from_utf8_lossy(&head)
+                    .lines()
+                    .next()
+                    .is_some_and(|line| line.contains("/commits"));
+                let (status, body) = if listed { (commits, "[]") } else { (200, body) };
                 let reply = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
                      Connection: close\r\n\r\n{body}",
                     body.len()
                 );
@@ -671,8 +680,10 @@ mod server_runs {
     /// practice run never pushes, and is not asked.
     #[test]
     fn a_competition_or_test_start_refuses_a_repository_with_commits_and_practice_does_not() {
-        let (used, asked) =
-            fake_github(r#"{"private":false,"size":12,"permissions":{"push":true}}"#);
+        let (used, asked) = fake_github(
+            r#"{"private":false,"size":12,"permissions":{"push":true}}"#,
+            200,
+        );
         for mode in [RunMode::Competition, RunMode::Test] {
             let rig = Rig::new();
             let upload = server(&rig);
@@ -689,7 +700,7 @@ mod server_runs {
             assert_eq!(refused.exit_code(), 1, "{mode:?}: {refused}");
             let said = refused.to_string();
             assert!(
-                said.contains("is not empty (12 KB)") && said.contains("--repo"),
+                said.contains("must be empty when the run opens") && said.contains("--repo"),
                 "{mode:?}: {said}"
             );
             assert!(upload.device_requests().is_empty(), "{mode:?}: approval");
@@ -709,7 +720,7 @@ mod server_runs {
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2);
 
         // An empty repository lets a competition run start.
-        let (empty, _) = fake_github(r#"{"private":false,"size":0,"permissions":{"push":true}}"#);
+        let (empty, _) = fake_github(r#"{"private":false,"size":0}"#, 409);
         let rig = Rig::new();
         let upload = server(&rig);
         rig.prepare_for(&upload.url());

@@ -471,6 +471,11 @@ impl UploadServer {
         self.with_run(run_id, |r| r.replaced_at.clone()).flatten()
     }
 
+    /// The `dev` field the open or continue call that made `entry_id` sent (`None`: left out).
+    pub fn dev_of(&self, entry_id: &str) -> Option<bool> {
+        self.with_entry(entry_id, |e| e.dev).flatten()
+    }
+
     /// The `repo_url` the open call sent.
     pub fn repo_url(&self, run_id: &str) -> Option<String> {
         self.with_run(run_id, |r| r.repo_url.clone())

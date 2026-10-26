@@ -184,23 +184,12 @@ impl Rig {
     }
 
     /// The command [`Rig::continue_on_pty`] runs, without its terminal. The fake agent never
-    /// runs `git init` in its project folder ([`Rig::run_folder`]), which a real one does first,
-    /// as the guide tells it, and which this goalcup still needs before a continue: so it is
-    /// done here, when the folder is there and is not a repository yet.
+    /// runs `git init` in its project folder, and a continue does not need it to.
     pub fn continue_command(
         &self,
         env: &[(&str, &str)],
         run: Option<&str>,
     ) -> std::process::Command {
-        let project = self.run_folder_path();
-        if project.is_dir() && !project.join(".git").exists() {
-            let init = std::process::Command::new("git")
-                .args(["init", "--quiet"])
-                .arg(&project)
-                .output()
-                .unwrap();
-            assert!(init.status.success(), "{init:?}");
-        }
         self.chat_command(
             env,
             Launcher::Continue {
@@ -268,6 +257,7 @@ impl Rig {
             .env("GOALCUP_CONFIG_DIR", &self.cfg)
             .env("GOALCUP_CONNECTORS_DIR", &self.capture_connectors)
             .env("GOALCUP_TEST_NO_BROWSER", "1")
+            .env(goalcup_cli::commands::start::TEST_DEV_COMPETES, "1")
             .env("GOALCUP_TEST_FINISH_BUDGET_MS", "10000")
             .env("TERM", "dumb");
         for key in ["USER", "LOGNAME", "TMPDIR", "HOME"] {

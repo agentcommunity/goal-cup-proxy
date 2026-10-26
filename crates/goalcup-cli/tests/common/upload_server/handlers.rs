@@ -335,6 +335,9 @@ struct ConnectorFields {
     harness_version: String,
     proxy_version: Option<String>,
     tracer_version: Option<String>,
+    /// Sent only by a `--dev` run; kept as sent (absent is `None`), not judged.
+    #[serde(default)]
+    dev: Option<bool>,
 }
 
 /// The client's version: `proxy_version`, or `tracer_version`, its name from before the rename
@@ -399,6 +402,7 @@ impl ConnectorFields {
                 .proxy_version
                 .or(self.tracer_version)
                 .unwrap_or_default(),
+            dev: self.dev,
             receipt: None,
             chunks: Vec::new(),
             seal: None,

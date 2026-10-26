@@ -35,12 +35,14 @@ pub use approval::{
 pub use ending::{
     Ending, UPLOAD_DONE, UPLOADING_REST, after_upload, details_heading, ending_block,
 };
-pub use launch::{Launch, Opens, RUN_GOES_ON, launch_block};
+pub use launch::{Launch, Opens, RUN_GOES_ON, launch_block, prompt_block};
 pub use refusals::{
-    NotAClone, PROJECT_FOLDER, cannot_record_model_service, clone_missing, clone_unreadable,
-    continued_elsewhere, filesystem_warning, home_busy, last_part_closing, local_only,
-    needs_terminal, not_a_clone, not_started_here, project_not_empty, repository_not_empty,
-    run_over, server_answer_unusable, still_recording, unsupported_filesystem,
+    GITIGNORE_LINES, PROJECT_FOLDER, cannot_record_model_service, continued_elsewhere,
+    dev_competes, env_not_ignored, filesystem_warning, home_busy, last_part_closing, local_only,
+    needs_terminal, not_started_here, project_beside_goalcup, project_inside_repository,
+    project_missing, project_not_a_folder, project_not_empty, project_unreadable,
+    repository_not_empty, run_over, server_answer_unusable, still_recording,
+    unsupported_filesystem,
 };
 pub use seal::{
     SealDone, seal_done, seal_inside_harness, seal_needs_terminal, seal_not_confirmed,

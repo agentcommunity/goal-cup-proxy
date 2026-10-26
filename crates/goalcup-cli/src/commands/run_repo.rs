@@ -34,6 +34,26 @@ pub trait Doors {
 pub struct RunRepo {
     /// `https://github.com/<owner>/<repo>`, what the server is told.
     pub repo_url: String,
+    /// The owner's GitHub id, when GitHub said it: the agent commits as the owner's private
+    /// commit address ([`RunRepo::commit_email`]).
+    pub owner_id: Option<u64>,
+}
+
+impl RunRepo {
+    /// The repository's owner, the name the agent commits under.
+    pub fn owner(&self) -> &str {
+        github::owner_repo(&self.repo_url).map_or("", |(owner, _)| owner)
+    }
+
+    /// GitHub's private commit address for the owner (`<id>+<owner>@users.noreply.github.com`,
+    /// or `<owner>@users.noreply.github.com` when the id is not known), so the agent's commits
+    /// carry no one's real email.
+    pub fn commit_email(&self) -> String {
+        match self.owner_id {
+            Some(id) => format!("{id}+{}@users.noreply.github.com", self.owner()),
+            None => format!("{}@users.noreply.github.com", self.owner()),
+        }
+    }
 }
 
 /// Said when GitHub's open API would not answer (its limit is 60 calls an hour per address).
@@ -102,6 +122,7 @@ pub fn choose(
     }
     let repo_url = github::checked_repo_url(&input)?;
     let (owner, repo) = github::owner_repo(&repo_url)?;
+    let mut owner_id = None;
     if let Some(api) = doors.api() {
         let checked = |api: &str| {
             github::check_public_empty(api, &repo_url).map_err(|e| refused(e.to_string()))
@@ -130,12 +151,14 @@ pub fn choose(
                 )));
             }
         }
-        if found == Found::Unchecked {
-            say(out, UNCHECKED)?;
+        match found {
+            Found::Unchecked => say(out, UNCHECKED)?,
+            Found::PublicEmpty { owner_id: id } => owner_id = id,
+            Found::Missing => {}
         }
     }
     say(out, &format!("  {owner}/{repo}: public and empty."))?;
-    Ok(RunRepo { repo_url })
+    Ok(RunRepo { repo_url, owner_id })
 }
 
 /// Keep `repo_url` in `prep.json` as the last real run's repository, for [`suggestion`]: called

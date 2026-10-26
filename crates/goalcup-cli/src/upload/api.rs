@@ -82,6 +82,10 @@ pub struct OpenRunRequest {
     /// when a caller has none to send.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<goalcup_platform::machine::MachineFacts>,
+    /// The run came through `--dev` (a connector this build does not pin). Sent only when true;
+    /// the server refuses it for a competition run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dev: bool,
 }
 
 /// `POST /v1/runs/{run_id}/continue`: a new segment of a run that is still open.
@@ -97,6 +101,9 @@ pub struct ContinueRequest {
     pub harness_version: String,
     #[serde(flatten)]
     pub proxy_version: ProxyVersion,
+    /// As [`OpenRunRequest::dev`]: the segment came through `--dev`. Sent only when true.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dev: bool,
 }
 
 /// The answer to [`ContinueRequest`]: the new entry, and the run's own start and deadline.
@@ -291,6 +298,7 @@ mod tests {
             workspace: "/w".into(),
             session_id: "s".into(),
             harness_version: "h".into(),
+            dev: false,
             proxy_version: version.into(),
         }
     }

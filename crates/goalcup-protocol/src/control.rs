@@ -556,7 +556,8 @@ pub struct CaptureWorkspaceRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_since: Option<u64>,
     /// The run's own exact secret values, at most [`crate::run_secret::MAX_RUN_SECRETS`]: the
-    /// proxy credential the launch puts in the harness's `HTTPS_PROXY`. The daemon holds them in
+    /// proxy credential the launch puts in the harness's `HTTPS_PROXY`, and for a run on a
+    /// server the GitHub token in the project folder's key file. The daemon holds them in
     /// memory for this entry only and redacts every
     /// form of each ([`crate::run_secret::encoded_forms`]) from every recorded body (D60). They
     /// are never written to a file, a log, the registry or the chain, and `Debug` never shows

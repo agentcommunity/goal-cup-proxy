@@ -280,6 +280,24 @@ impl Default for NativeSilence {
 }
 
 impl NativeSilence {
+    /// A practice run's thresholds: five recorded model requests and three minutes, so a harness
+    /// that writes no session file shows while the participant is still watching the practice.
+    pub const PRACTICE: NativeSilence = NativeSilence {
+        requests: 5,
+        after: std::time::Duration::from_secs(3 * 60),
+    };
+
+    /// These thresholds for a run, practice or not (a continued practice run too): a practice
+    /// run's shipped thresholds are [`NativeSilence::PRACTICE`]. Thresholds a test build named
+    /// are kept as named.
+    pub fn for_run(self, practice: bool) -> NativeSilence {
+        if practice && self == NativeSilence::default() {
+            NativeSilence::PRACTICE
+        } else {
+            self
+        }
+    }
+
     /// Whether the native leg is silent after `requests` recorded model requests, `waited` since
     /// the first of them, with `native_files` taken.
     pub fn holds(self, requests: u64, waited: std::time::Duration, native_files: u64) -> bool {

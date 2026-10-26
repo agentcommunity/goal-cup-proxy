@@ -171,6 +171,9 @@ pub struct EntryRecord {
     pub workspace: String,
     pub harness_version: String,
     pub proxy_version: String,
+    /// The `dev` field as the open or continue call sent it; `None` when it was left out.
+    #[serde(default)]
+    pub dev: Option<bool>,
     pub receipt: Option<StartReceipt>,
     pub chunks: Vec<StoredChunk>,
     /// `(seal_json, baseline_json)`, verbatim.

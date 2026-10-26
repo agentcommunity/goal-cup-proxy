@@ -105,6 +105,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         mode: Some(RunMode::Competition),
         opens: Opens::First,
         ends: Some(ends.clone()),
+        prompt: &[],
         first_screen: Some("It asks whether you trust this folder. Choose Yes."),
     });
     let text = block.join("\n");
@@ -131,6 +132,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         mode: Some(RunMode::Competition),
         opens: Opens::LastSession,
         ends: Some(ends.clone()),
+        prompt: &[],
         first_screen: None,
     })
     .join("\n");
@@ -151,6 +153,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         mode: Some(RunMode::Competition),
         opens: Opens::NewSession,
         ends: Some(ends),
+        prompt: &[],
         first_screen: None,
     });
     let text = fresh.join("\n");
@@ -178,6 +181,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         mode: Some(RunMode::Practice),
         opens: Opens::First,
         ends: None,
+        prompt: &[],
         first_screen: None,
     })
     .join("\n");
