@@ -1,5 +1,6 @@
 #!/bin/sh
 # scripts/matrix.sh <connector> <server-url> [options]
+# scripts/matrix.sh m2-fake-tui <server-url> --refusals
 # scripts/matrix.sh --check-copy <config-dir> [run-id]
 #
 # One practice run (or, with --test, one organizer test run sealed after --duration) of one
@@ -7,9 +8,15 @@
 #
 #     <connector> <os>-<arch> <harness_version> PASS|FAIL|NOT-VERIFIED <date>
 #
+# Three kinds of cell ("The git login", below):
+#   practice   (the default) no repository and no git login, as a participant's practice run.
+#   --test     a test run with a repository the kit makes (`gh repo create`) and passes as
+#              `goalcup start --test --repo`, and this machine's own git login, as a player's.
+#   --refusals the start's refusals before the approval, with no harness and no git login.
+#
 # The run is the real thing: `goalcup login`, `goalcup start --practice` (the device-flow
-# approval, the clone of the matrix repository, the harness), the end of the run, the seal and
-# the upload. Every connector is a chat-mode one (`interactive = true`, D57): it runs under a
+# approval, the run's work folder, the harness), the end of the run, the seal and the upload.
+# Every connector is a chat-mode one (`interactive = true`, D57): it runs under a
 # pseudo-terminal, gets one typed prompt, and is stopped by goalcup at the practice deadline.
 # Then it checks:
 #
@@ -55,11 +62,25 @@
 #                              `npm run dev`, or staging). The path is not secret. Unset: the
 #                              approval is yours, in a browser (see below). The script takes the
 #                              variable out of its environment at once, so no child inherits the
-#                              path. A Docker run mounts
-#                              the file read-only (-v <file>:/run/key:ro) and never uses -e.
+#                              path. A Docker cell (linux-matrix.sh) has no key at all (below).
+#   MATRIX_CODES_FILE          a file to append each device code to, as `login <code>` and then
+#                              `start <code>`, instead of approving it (no key is given): the host
+#                              approves them (linux-matrix.sh, for a Docker cell, where the key
+#                              must never be in the container the agent runs in).
+#   MATRIX_ALLOW_SERVER        the one https:// server, named exactly, to use although it is not
+#                              staging or this machine. The approval key is sent to the server, so
+#                              only the staging Worker
+#                              (https://goalcup-ingest-staging.b-9a5.workers.dev) and
+#                              http://localhost, http://127.0.0.1 or http://[::1] (optional :port)
+#                              are accepted; anything else is refused without this. It never lifts
+#                              the production refusal. Removed from the environment at once.
 #   GOALCUP_TEST_MEMBER_ID     the member the test approval approves as (default: member1).
-#   MATRIX_REPO_URL            the empty public repository (default:
-#                              https://github.com/agentcommunity/goalcup-matrix-empty).
+#   MATRIX_REPO                a test run's repository, <owner>/<name>, instead of the one the kit
+#                              makes: new, empty and public. Never the organisers' practice
+#                              repository (agentcommunity/goalcup-matrix-empty). A practice run has
+#                              none and ignores it.
+#   MATRIX_CELL                the cell's name in the repository the kit makes,
+#                              goalcup-kit-<cell>-<6 hex digits> (default: the connector id).
 #   MATRIX_PROMPT              what is typed into the harness (default: one line asking for a
 #                              file matrix-ok.txt holding "ok").
 #   MATRIX_PROMPT_FILE         a regular file holding the prompt instead (UTF-8; long workloads).
@@ -88,8 +109,8 @@
 #   MATRIX_EXPECT_FILES        1 (default): a real harness's run must change its workspace (check
 #                              3); 0: a custom prompt that writes nothing, the model check only.
 #   MATRIX_CONFIG_DIR          a prepared goalcup configuration directory for a real harness
-#                              (made with `GOALCUP_CONFIG_DIR=<dir> goalcup prep`, its logins in
-#                              place). Never the platform default. Left in place afterwards.
+#                              (made with `GOALCUP_CONFIG_DIR=<dir> goalcup setup`, the harness
+#                              signed in). Never the platform default. Left in place afterwards.
 #   MATRIX_SERVER_KEY          the server's Ed25519 public key (64 hex), for goalcup-verify
 #                              --dev-key. Default: the key in the run's receipt.
 #   MATRIX_BIN_DIR             where goalcup, goalcup-daemon and goalcup-verify are.
@@ -102,7 +123,8 @@
 #                              this script's environment at once: only fetch-run.sh gets them, in
 #                              its environment, never on a command line.
 #   MATRIX_FETCH_BUCKET        the R2 bucket (default goalcup-traces for production,
-#                              goalcup-traces-staging otherwise).
+#                              goalcup-traces-staging for the staging Worker; for any other
+#                              server it is required: the row is NOT-VERIFIED without it).
 #   MATRIX_FETCH_TIMEOUT       seconds the fetch may take (default 1800).
 #   MATRIX_FETCH_SCRIPT        another fetch script with fetch-run.sh's arguments (tests).
 #
@@ -130,8 +152,36 @@
 #                        and `stop` is not required (the server's 168-hour deadline is far off).
 #                        A run that FAILs after its entry was found and before it was sealed is
 #                        sealed on the way out (best effort, logged). Both options go together,
-#                        only with a real connector (not a fake) and MATRIX_CONFIG_DIR. The log
-#                        names the mode and the duration (`mode=test duration=<N>s`).
+#                        only with a real connector (not a fake) and MATRIX_CONFIG_DIR. Before the
+#                        login, unless MATRIX_REPO names one, the kit makes the run's repository
+#                        with the GitHub login on this machine: `gh repo create
+#                        <user>/goalcup-kit-<cell>-<random> --public`, no README, so it is empty.
+#                        No login found: one line says to run `gh auth login` here, and the row
+#                        FAILs. The kit never deletes a repository; it prints the name at the end.
+#                        The log names the mode and the duration (`mode=test duration=<N>s`). A
+#                        question goalcup asks before the run's approval (no git login found, a
+#                        repository it cannot see) FAILs the row at once: nobody is there.
+#   --refusals           only with m2-fake-tui: after the login, `goalcup start --test` is run
+#                        once per refusal, with no terminal, and each must refuse before any
+#                        approval or run record, saying "Nothing was created.":
+#                          not-empty   GitHub says the repository has commits;
+#                          private     GitHub says it is private;
+#                          missing     GitHub does not know it (private and missing are one
+#                                      path in goalcup: GitHub answers both alike);
+#                          push        public and empty, but the agent's git cannot push to it
+#                                      (GOALCUP_TEST_PUSH_REMOTE names a folder that is not there);
+#                          no-login    no GitHub login found: the setup guide is printed, and
+#                                      with no terminal to name a repository the start refuses;
+#                          bare-name   `--repo <name>` with no login to find the user in.
+#                        GitHub is a stand-in this script serves on 127.0.0.1, reached through the
+#                        CLI's test doors (GOALCUP_TEST_GITHUB_API, GOALCUP_TEST_GITHUB_LOGIN,
+#                        GOALCUP_TEST_PUSH_REMOTE, GOALCUP_TEST_CHAT_WITHOUT_TERMINAL), so goalcup
+#                        must be a test build:
+#                        `cargo build -p goalcup-cli --features test-support --target-dir
+#                        target/kit-test`, then MATRIX_BIN_DIR=target/kit-test/debug. A shipped
+#                        build has no such doors and refuses for want of a terminal, which FAILs
+#                        the row. Every line says `refusal <kind>: PASS|FAIL`; the row's version
+#                        column says `refusals`.
 #   --check-copy DIR [RUN]
 #                        only the server-copy check, for a run you made by hand (the edge cases
 #                        in docs/OPERATING.md): every entry of RUN (default: the newest) in the
@@ -142,11 +192,23 @@
 # printed (nothing else) and waits while you approve, in a browser, as a member. There are two
 # approvals: the login, then the run.
 #
-# Needs: sh, curl (7.55+), python3, script(1), mktemp; macOS or Linux (WSL2 too).
+# Needs: sh, curl (7.55+), python3, script(1), mktemp; macOS or Linux (WSL2 too); gh, signed in,
+# for --test (unless MATRIX_REPO is given).
 # It uses its own temporary configuration directory, work folder and HOME. It never reads or
 # writes the real goalcup configuration directory, ~/.codex, ~/.claude or ~/.hermes. The one
 # exception is MATRIX_CONFIG_DIR, a directory you name for a real harness, which also keeps your
 # own HOME (the harness's isolated home is made from it).
+#
+# The git login. goalcup hands a real run's agent the participant's git login (D69):
+# GIT_CONFIG_GLOBAL, GH_CONFIG_DIR, SSH_AUTH_SOCK and the keyring's XDG_RUNTIME_DIR and
+# DBUS_SESSION_BUS_ADDRESS. A test run gets this machine's own, as a player's machine would (in
+# Docker, the container's: `gh auth login` there once, on the cell's volume; the kit never copies
+# or mounts a login or a token). Practice and the refusals get none: goalcup runs with an empty git
+# config and gh folder of the run's own whose `credential.helper` is reset, with
+# GIT_CONFIG_NOSYSTEM=1 (macOS's system git config names the keychain helper), and without
+# SSH_AUTH_SOCK, the keyring's variables, GH_TOKEN or GITHUB_TOKEN. goalcup's own git and a test
+# start's push test and clone read that config. A practice run's agent gets no git variable at all
+# from goalcup (D69), so its git still reads the system config, whatever the kit sets.
 
 set -u
 
@@ -155,8 +217,23 @@ HERE=$(cd "$(dirname "$PROG")" && pwd) || exit 3
 REPO=$(dirname "$HERE")
 
 PRODUCTION_HOST="ingest.agentcommunity.org"
+# The only servers the approval key may be sent to: the staging Worker and this machine
+# (http://localhost, 127.0.0.1 or [::1], with an optional :port). Any other server is refused unless
+# MATRIX_ALLOW_SERVER names it exactly (an allowlist: a denylist of production alone sends the key
+# to whatever host was typed).
+STAGING_SERVER="https://goalcup-ingest-staging.b-9a5.workers.dev"
+ALLOW_SERVER=${MATRIX_ALLOW_SERVER:-}
+unset MATRIX_ALLOW_SERVER
 FAKE_ID="m2-fake-tui"
-DEFAULT_REPO_URL="https://github.com/agentcommunity/goalcup-matrix-empty"
+# The organisers' practice repository: the server is told it for every practice run (D69), and
+# no test run may name it.
+PRACTICE_REPO="agentcommunity/goalcup-matrix-empty"
+# A repository name as GitHub reads it, for comparing: lowercase, no trailing / and no .git.
+repo_key() {
+  printf '%s' "$1" | tr 'A-Z' 'a-z' | sed -e 's:/*$::' -e 's:\.git$::' -e 's:/*$::'
+}
+# The refusals --refusals checks, in order.
+REFUSALS="not-empty private missing push no-login bare-name"
 
 usage() {
   # The whole header: every comment line after the first, up to the first line that is not one.
@@ -182,12 +259,14 @@ TIMEOUT=1800
 TIMEOUT_SET=0
 TEST=0
 DURATION=""
+REFUSE=0
 while [ $# -gt 0 ]; do
   case $1 in
     -h | --help) usage ;;
     --allow-production) ALLOW_PRODUCTION=1 ;;
     --keep) KEEP=1 ;;
     --test) TEST=1 ;;
+    --refusals) REFUSE=1 ;;
     --duration)
       [ $# -ge 2 ] || bad_usage "--duration needs a number of seconds"
       DURATION=$2
@@ -245,9 +324,29 @@ KEYFILE=${GOALCUP_TEST_APPROVAL_KEY_FILE:-}
 # The path leaves the environment too, so goalcup, the daemon and the harness never inherit where
 # the key file is.
 unset GOALCUP_TEST_APPROVAL_KEY_FILE
+# MATRIX_CODES_FILE (linux-matrix.sh sets it in a Docker cell, which has no key at all): each
+# device code goalcup prints is appended to it as `<phase> <code>` (login, then start) for the host
+# to approve with the key; this script approves nothing then.
+CODES_FILE=${MATRIX_CODES_FILE:-}
+unset MATRIX_CODES_FILE
 if [ -n "$KEYFILE" ] && { [ ! -f "$KEYFILE" ] || [ ! -r "$KEYFILE" ]; }; then
   echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE must name a regular file this user can read" >&2
   exit 2
+fi
+# Not inside this checkout (a Docker cell mounts the checkout for its agent, and a key in a repository
+# is easily committed), by whatever path or symlink.
+if [ -n "$KEYFILE" ]; then
+  key_real=$(python3 -I -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$KEYFILE" 2>/dev/null) || {
+    echo "matrix: cannot resolve the path of GOALCUP_TEST_APPROVAL_KEY_FILE (python is needed)" >&2
+    exit 2
+  }
+  key_here=$(cd "$REPO" && pwd -P)
+  case $key_real in
+    "$key_here"/*)
+      echo "matrix: GOALCUP_TEST_APPROVAL_KEY_FILE ($KEYFILE) is inside the checkout $key_here: keep it outside" >&2
+      exit 2
+      ;;
+  esac
 fi
 # The read-only credentials of the long-run fetch leave the environment too: goalcup, the daemon
 # and the harness never inherit them; only fetch-run.sh gets them (fetch_copy).
@@ -290,7 +389,8 @@ case $PRE_DELAY in
     ;;
 esac
 MEMBER=${GOALCUP_TEST_MEMBER_ID:-member1}
-REPO_URL=${MATRIX_REPO_URL:-$DEFAULT_REPO_URL}
+TEST_REPO=${MATRIX_REPO:-}
+REPO_MADE=""
 
 case $CONNECTOR in
   *[!A-Za-z0-9._-]* | "")
@@ -310,6 +410,22 @@ case $TIMEOUT in
     exit 2
     ;;
 esac
+
+# --refusals: the fake harness, a configuration of its own, and nothing else.
+if [ "$REFUSE" = 1 ]; then
+  if [ -n "$CHECK_CFG" ] || [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
+    echo "matrix: --refusals goes alone (not with --test, --duration or --check-copy)" >&2
+    exit 2
+  fi
+  if [ "$CONNECTOR" != "$FAKE_ID" ]; then
+    echo "matrix: --refusals runs with $FAKE_ID only (no harness is started)" >&2
+    exit 2
+  fi
+  if [ -n "${MATRIX_CONFIG_DIR:-}" ]; then
+    echo "matrix: --refusals makes its own configuration; unset MATRIX_CONFIG_DIR" >&2
+    exit 2
+  fi
+fi
 
 # --test and --duration: a test run of a real harness, in a prepared configuration directory,
 # sealed by this script. Never one without the other: a test run left to the server lasts 168 h.
@@ -342,6 +458,34 @@ if [ "$TEST" = 1 ] || [ -n "$DURATION" ]; then
     echo "matrix: --test needs MATRIX_CONFIG_DIR (a prepared configuration directory whose harness is signed in)" >&2
     exit 2
   fi
+  # A test run asks for its own repository at the start (D69): the kit makes one, or MATRIX_REPO
+  # names it.
+  # The practice repository is refused however it is written: GitHub reads the name without case,
+  # with or without a trailing .git, and with or without a trailing /.
+  if [ -n "$TEST_REPO" ] && [ "$(repo_key "$TEST_REPO")" = "$PRACTICE_REPO" ]; then
+    echo "matrix: MATRIX_REPO is the organisers' practice repository; a test run needs a repository of its own" >&2
+    exit 2
+  fi
+  case $TEST_REPO in
+    "") ;;
+    */*/* | /* | */ | *[!A-Za-z0-9._/-]*)
+      echo "matrix: MATRIX_REPO is <owner>/<name>" >&2
+      exit 2
+      ;;
+    */*) ;;
+    *)
+      echo "matrix: MATRIX_REPO is <owner>/<name>" >&2
+      exit 2
+      ;;
+  esac
+  CELL=${MATRIX_CELL:-$CONNECTOR}
+  case $CELL in
+    *[!a-z0-9-]* | "" | -*)
+      echo "matrix: MATRIX_CELL may hold only a-z, 0-9 and - (and not start with -)" >&2
+      exit 2
+      ;;
+  esac
+  [ "${#CELL}" -le 40 ] || { echo "matrix: MATRIX_CELL is at most 40 characters" >&2; exit 2; }
   [ "$TIMEOUT_SET" = 1 ] || TIMEOUT=$((DURATION + 1800))
 fi
 
@@ -358,42 +502,48 @@ if [ -n "$PROMPT_FILE" ]; then
   fi
 fi
 
-# The server: https://..., or http:// to this machine. Never production without the flag.
+# The server: the staging Worker, a server on this machine (http:// only to localhost, 127.0.0.1 or
+# [::1]), or the one https:// address MATRIX_ALLOW_SERVER names exactly. Never production without
+# the flag, and MATRIX_ALLOW_SERVER does not lift that.
 validate_server() {
   SERVER=$(printf '%s' "$SERVER" | sed 's:/*$::')
   SERVER_LC=$(printf '%s' "$SERVER" | tr 'A-Z' 'a-z')
   case $SERVER_LC in
-    https://*) ;;
-    http://*)
-      # Plain http only to this machine: the host is exactly localhost, 127.0.0.1 or [::1], then
-      # an optional :port and an optional path.
-      auth=${SERVER_LC#http://}
-      auth=${auth%%/*}
-      case $auth in
-        localhost | 127.0.0.1 | "[::1]") ;;
-        localhost:* | 127.0.0.1:* | "[::1]":*)
-          case ${auth##*:} in "" | *[!0-9]*) auth="" ;; esac
-          ;;
-        *) auth="" ;;
-      esac
-      [ -n "$auth" ] || {
-        echo "matrix: plain http is allowed only to localhost, 127.0.0.1 or [::1] (with an optional :port)" >&2
-        exit 2
-      }
-      ;;
-    *)
-      echo "matrix: the server must be https://..., or http:// to localhost" >&2
-      exit 2
-      ;;
-  esac
-  case $SERVER_LC in
     *"$PRODUCTION_HOST"*)
-      if [ "$ALLOW_PRODUCTION" != 1 ]; then
+      # Only the production address itself, and only with the flag.
+      if [ "$ALLOW_PRODUCTION" != 1 ] || { [ "$SERVER_LC" != "https://$PRODUCTION_HOST" ] && [ "${SERVER_LC#https://$PRODUCTION_HOST/}" = "$SERVER_LC" ]; }; then
         echo "matrix: refusing $PRODUCTION_HOST: tests never run against production (--allow-production overrides)" >&2
         exit 2
       fi
+      return 0
       ;;
   esac
+  case $SERVER_LC in
+    "$STAGING_SERVER") return 0 ;;
+  esac
+  # A server on this machine: the WHOLE address is http://localhost, http://127.0.0.1 or
+  # http://[::1] with an optional :digits, nothing else (no user@, no path, no query).
+  for local_host in localhost 127.0.0.1 "[::1]"; do
+    case $SERVER_LC in
+      "http://$local_host") return 0 ;;
+      "http://$local_host":*)
+        local_port=${SERVER_LC#"http://$local_host":}
+        case $local_port in "" | *[!0-9]*) ;; *) return 0 ;; esac
+        ;;
+    esac
+  done
+  allow_lc=$(printf '%s' "$ALLOW_SERVER" | sed 's:/*$::' | tr 'A-Z' 'a-z')
+  if [ -n "$allow_lc" ] && [ "$allow_lc" = "$SERVER_LC" ]; then
+    case $SERVER_LC in
+      https://*) return 0 ;;
+      *)
+        echo "matrix: MATRIX_ALLOW_SERVER names $SERVER, which is not https://; plain http is allowed only to localhost, 127.0.0.1 or [::1]" >&2
+        exit 2
+        ;;
+    esac
+  fi
+  echo "matrix: refusing server $SERVER: the approval key is sent to the server, so only $STAGING_SERVER and http://localhost, http://127.0.0.1 or http://[::1] (with an optional :port) are accepted; to use another https:// server, name it exactly: MATRIX_ALLOW_SERVER=$SERVER" >&2
+  exit 2
 }
 [ -n "$CHECK_CFG" ] || validate_server
 
@@ -452,6 +602,7 @@ log_file() {
 RESULT=FAIL
 FAIL_REASON=""
 HV=unreported
+GITDIR=/nonexistent
 ROW_PRINTED=0
 ROOT=""
 CFG=""
@@ -538,6 +689,16 @@ cleanup() {
       if [ "${OWN_CONFIG:-0}" = 1 ]; then rm -rf "$CFG-artifacts" "$CFG-runs" 2>/dev/null; fi
     fi
   }; fi
+  if [ -n "$REPO_MADE" ]; then
+    log "test repository made by the kit: $REPO_MADE"
+    # Whose login the agent pushes with: this machine's on a host, the cell's own in a Docker cell.
+    if [ -n "$CODES_FILE" ]; then
+      who="the login stored in this cell is the one its agent pushes with"
+    else
+      who="this machine's agents push with that login"
+    fi
+    printf 'matrix: test repository made by the kit (delete it when done: first `gh auth refresh -s delete_repo`, which the default gh login lacks, then `gh repo delete %s --yes`, then `gh auth refresh -r delete_repo` to drop the scope again: %s): %s\n' "$REPO_MADE" "$who" "$REPO_MADE" >&3
+  fi
   print_row
 }
 on_signal() {
@@ -582,6 +743,9 @@ codes_in() {
   tr -d '\r' 2>/dev/null <"$1" | sed -n 's/.*shows the code \([A-Z][A-Z][A-Z][A-Z]-[A-Z][A-Z][A-Z][A-Z]\)\..*/\1/p'
 }
 
+# The phase the approvals belong to: login, then start.
+PHASE=login
+
 # Approve the first user code goalcup prints in the log $1, and no other: one code per phase (the
 # login, the run). seen.txt is emptied at the start of each phase. With a key file the approval
 # goes through the test route, the key piped from the file straight into curl's standard input as
@@ -592,7 +756,13 @@ scan_and_approve() {
   code=$(codes_in "$1" | head -1)
   [ -n "$code" ] || return 0
   printf '%s\n' "$code" >>"$ROOT/seen.txt"
-  if [ -n "$KEYFILE" ]; then
+  if [ -n "$CODES_FILE" ]; then
+    printf '%s %s\n' "$PHASE" "$code" >>"$CODES_FILE" || {
+      log "cannot write the device code to MATRIX_CODES_FILE"
+      return 1
+    }
+    log "the $PHASE device code $code is written for the host to approve"
+  elif [ -n "$KEYFILE" ]; then
     status=$({
       printf 'Authorization: Bearer '
       tr -d '\n' <"$KEYFILE"
@@ -618,17 +788,66 @@ scan_and_approve() {
 # GOALCUP_NO_BROWSER keeps goalcup from opening a browser page for each approval: the script
 # approves through the test route or prints the address for you. (GOALCUP_TEST_NO_BROWSER is the
 # same switch for a build with test-support.)
+#
+# A test run's goalcup sees this machine's own git login, as a player's does (D69). Practice and
+# the refusals see none: the run's empty login in $GITDIR (git_login), the system git config off,
+# and this machine's SSH agent, keyring and token variables taken away.
+# WRAP_EXTRA holds further NAME=value words for one command (the refusals' test doors).
+WRAP_EXTRA=""
 write_wrapper() { # file name "goalcup arguments" [stty]
   {
     echo '#!/bin/sh'
     [ -z "${4:-}" ] || echo 'stty cols 120 rows 40 2>/dev/null'
     echo "echo \$\$ >$(shq "$ROOT/$2.pid")"
     echo "cd $(shq "$RUNS") || exit 1"
-    printf 'exec env HOME=%s GOALCUP_CONFIG_DIR=%s' "$(shq "$HOME_DIR")" "$(shq "$CFG")"
+    if [ "$TEST" = 1 ]; then
+      printf 'exec env'
+    else
+      printf 'exec env -u SSH_AUTH_SOCK -u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS -u GH_TOKEN -u GITHUB_TOKEN'
+      printf ' GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=%s GH_CONFIG_DIR=%s' "$(shq "$GITDIR/gitconfig")" "$(shq "$GITDIR/gh")"
+    fi
+    printf ' HOME=%s GOALCUP_CONFIG_DIR=%s' "$(shq "$HOME_DIR")" "$(shq "$CFG")"
     [ -z "$CONNECTORS_ENV" ] || printf ' GOALCUP_CONNECTORS_DIR=%s' "$(shq "$CONNECTORS_ENV")"
     printf ' GOALCUP_NO_BROWSER=1 GOALCUP_TEST_NO_BROWSER=1 PATH=%s TERM=%s' "$(shq "$HARNESS_PATH")" "$MATRIX_TERM"
+    [ -z "$WRAP_EXTRA" ] || printf ' %s' "$WRAP_EXTRA"
     printf ' %s %s\n' "$(shq "$GOALCUP")" "$3"
   } >"$1"
+}
+
+# Practice and the refusals: no git login, in $ROOT/git. An empty gh folder, and a git config
+# whose only setting resets `credential.helper`, so no helper of this machine's is reached through
+# it (git reads a system helper first, and an empty value clears the list).
+git_login() {
+  [ "$TEST" = 0 ] || return 0
+  GITDIR="$ROOT/git"
+  mkdir -p "$GITDIR/gh" && chmod 700 "$GITDIR" &&
+    printf '[credential]\n\thelper =\n' >"$GITDIR/gitconfig" ||
+    fail "cannot make the empty git login in $GITDIR" || return 1
+  log "git login: none (no helper, an empty gh folder, no system git config; in $GITDIR)"
+}
+
+# A test run's repository: MATRIX_REPO, or a new one the kit makes with this machine's GitHub
+# login, `gh repo create <user>/goalcup-kit-<cell>-<random> --public` (no README, so it is empty).
+# The kit never deletes it; its name is printed at the end.
+test_repo() {
+  if [ -n "$TEST_REPO" ]; then
+    say "test repository: $TEST_REPO (MATRIX_REPO)"
+    return 0
+  fi
+  command -v gh >/dev/null 2>&1 ||
+    fail "gh is needed to make the test repository (https://cli.github.com), or set MATRIX_REPO" || return 1
+  owner=$(gh api user --jq .login 2>"$ROOT/gh.err" | tr -d '\r')
+  case $owner in
+    "" | *[!A-Za-z0-9-]*)
+      fail "no GitHub login found here: run \`gh auth login\` (HTTPS, and Yes to authenticate Git) in this environment, then run again" || return 1
+      ;;
+  esac
+  name="goalcup-kit-$CELL-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+  gh repo create "$owner/$name" --public >"$ROOT/gh.out" 2>&1 ||
+    fail "gh repo create $owner/$name --public: $(last_line "$ROOT/gh.out")" || return 1
+  TEST_REPO="$owner/$name"
+  REPO_MADE=$TEST_REPO
+  say "test repository made: $TEST_REPO (public and empty; the kit never deletes it)"
 }
 
 # Wait for the background job that writes its exit status to $1, scanning the output $2 for
@@ -690,7 +909,7 @@ resolve_entry() {
   [ "$n" = 1 ] ||
     fail "cannot tell this run's entry: $n run records under $CFG/runs are as new as this start (want exactly one); nothing was sealed" || return 1
   rj=$(cat "$ROOT/fresh.txt")
-  facts=$(python3 - "$rj" "$CONNECTOR" <<'PY'
+  facts=$(python3 -I - "$rj" "$CONNECTOR" <<'PY'
 import json, re, sys
 try:
     r = json.load(open(sys.argv[1]))
@@ -723,7 +942,7 @@ PY
   log_file "goalcup entries --json" "$ROOT/entries.out"
   log_file "goalcup entries --json (stderr)" "$ROOT/entries.err"
   [ "$erc" = 0 ] || fail "goalcup entries --json exited $erc; nothing was sealed" || return 1
-  listed=$(python3 - "$ROOT/entries.out" "$entry" "$CONNECTOR" <<'PY'
+  listed=$(python3 -I - "$ROOT/entries.out" "$entry" "$CONNECTOR" <<'PY'
 import json, sys
 try:
     items = json.load(open(sys.argv[1]))
@@ -809,23 +1028,150 @@ after_scan() { :; }
 # harness is up, so nothing the harness itself prints can ever be approved.
 SCAN=1
 
+# A question `goalcup start` asks before the run's approval (crates/goalcup-cli/src/commands/
+# run_repo.rs: no git login found, a repository GitHub does not show, a name to type). Nobody is at
+# the terminal to answer it, so the row FAILs at once, in goalcup's words, instead of at the
+# timeout. Only goalcup's own output is read: the harness is not up yet.
+asked_before_approval() {
+  [ -z "$READY_AT" ] && [ -f "$ROOT/start.out" ] || return 0
+  tr -d '\r' <"$ROOT/start.out" |
+    grep -qF -e 'Press Enter when done' -e 'then press Enter' -e 'Name it' -e 'Type <your-user>/' ||
+    return 0
+  fail "goalcup start asked a question before the run's approval, and nobody is there to answer it: $(last_line "$ROOT/start.out"). Check that the repository exists, public and empty, and this machine's git login (\`gh auth login\`; a test build of goalcup never asks gh)"
+}
+
+# --refusals: a real run's start refuses before its approval (run_repo.rs), here with no terminal
+# and no harness, through the CLI's test doors. The GitHub API is a stand-in on 127.0.0.1 that
+# knows three repositories (one with commits, one private, one public and empty); it answers 404
+# for any other.
+run_refusals() {
+  HV=refusals
+  ( (python3 -I - "$ROOT/github.port" >"$ROOT/github.log" 2>&1 <<'PY'
+import http.server, json, os, sys
+
+REPOS = {"/repos/goalcup-kit/kit-not-empty": {"private": False, "size": 12},
+         "/repos/goalcup-kit/kit-private": {"private": True, "size": 0},
+         "/repos/goalcup-kit/kit-push": {"private": False, "size": 0}}
+
+
+class Api(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        doc = REPOS.get(self.path.split("?")[0])
+        body = json.dumps(doc or {"message": "Not Found"}).encode()
+        self.send_response(200 if doc else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, form, *args):
+        sys.stderr.write("github stand-in: " + form % args + "\n")
+
+
+server = http.server.HTTPServer(("127.0.0.1", 0), Api)
+with open(sys.argv[1] + ".tmp", "w") as f:
+    f.write(str(server.server_port))
+os.replace(sys.argv[1] + ".tmp", sys.argv[1])
+server.serve_forever()
+PY
+  ) & )
+  rw=0
+  while [ ! -s "$ROOT/github.port" ] && [ "$rw" -lt 20 ]; do
+    sleep 1
+    rw=$((rw + 1))
+  done
+  [ -s "$ROOT/github.port" ] || fail "the GitHub stand-in did not start: $(last_line "$ROOT/github.log")" || return 1
+  api="http://127.0.0.1:$(cat "$ROOT/github.port")"
+  failed=""
+  for kind in $REFUSALS; do
+    if refusal "$kind" "$api"; then
+      say "refusal $kind: PASS"
+    else
+      say "refusal $kind: FAIL: $FAIL_REASON"
+      failed="$failed $kind"
+    fi
+  done
+  log_file "the GitHub stand-in's requests" "$ROOT/github.log"
+  [ -z "$failed" ] || fail "refusals that failed:$failed (each line above says why)" || return 1
+  RESULT=PASS
+}
+
+# One refusal (see the header): `goalcup start --test` with its doors, no terminal, at most 60 s.
+# It must exit non-zero with its own words and "Nothing was created.", and leave no approval asked,
+# no run record and nothing in the work folder.
+refusal() { # kind api
+  doors="GOALCUP_TEST_CHAT_WITHOUT_TERMINAL=1"
+  guide=0
+  case $1 in
+    not-empty)
+      doors="$doors GOALCUP_TEST_GITHUB_API=$2 GOALCUP_TEST_GITHUB_LOGIN=goalcup-kit"
+      args="--repo goalcup-kit/kit-not-empty" want="goalcup-kit/kit-not-empty is not empty"
+      ;;
+    # private and missing take one path in goalcup (GitHub answers a private repository with 404
+    # to a caller with no login); both are kept, as GitHub's two answers.
+    private)
+      doors="$doors GOALCUP_TEST_GITHUB_API=$2 GOALCUP_TEST_GITHUB_LOGIN=goalcup-kit"
+      args="--repo goalcup-kit/kit-private" want="GitHub does not show goalcup-kit/kit-private"
+      ;;
+    missing)
+      doors="$doors GOALCUP_TEST_GITHUB_API=$2 GOALCUP_TEST_GITHUB_LOGIN=goalcup-kit"
+      args="--repo goalcup-kit/kit-missing" want="GitHub does not show goalcup-kit/kit-missing"
+      ;;
+    push)
+      # Public and empty, but the agent's git cannot push: the dry-run push goes to a folder that
+      # is not there.
+      doors="$doors GOALCUP_TEST_GITHUB_API=$2 GOALCUP_TEST_GITHUB_LOGIN=goalcup-kit"
+      doors="$doors GOALCUP_TEST_PUSH_REMOTE=$ROOT/no-such-remote.git"
+      args="--repo goalcup-kit/kit-push" want="cannot push to goalcup-kit/kit-push"
+      ;;
+    no-login) guide=1 args="" want="A real run needs a new, empty, public GitHub repository" ;;
+    bare-name) guide=1 args="--repo kit-bare-name" want="No GitHub login was found on this computer" ;;
+  esac
+  WRAP_EXTRA=$doors
+  run_bounded "refuse-$1" 60 "start --harness $CONNECTOR $DEV_FLAG --test $args"
+  rrc=$?
+  WRAP_EXTRA=""
+  said="$ROOT/refuse-$1.txt"
+  cat "$ROOT/refuse-$1.out" "$ROOT/refuse-$1.err" 2>/dev/null | tr -d '\r' >"$said"
+  log_file "goalcup start --test $args (refusal $1, exit $rrc)" "$said"
+  case $rrc in
+    124) fail "goalcup start did not refuse within 60s" || return 1 ;;
+    0) fail "goalcup start exited 0" || return 1 ;;
+  esac
+  ! grep -q 'shows the code' "$said" || fail "the run's approval was asked for" || return 1
+  ! ls "$CFG"/runs/*/run.json >/dev/null 2>&1 || fail "a run record was made" || return 1
+  [ -z "$(ls -A "$ROOT/work" 2>/dev/null)" ] || fail "something was made in the work folder" || return 1
+  grep -qF "$want" "$said" ||
+    fail "it refused for another reason: $(last_line "$said") (a shipped build has no test doors and wants a terminal: see --refusals)" || return 1
+  grep -qF "Nothing was created." "$said" || fail "the refusal does not say that nothing was created" || return 1
+  [ "$guide" = 0 ] || grep -qF "No GitHub login found on this computer" "$said" ||
+    fail "the guide to setting up a GitHub login was not printed" || return 1
+}
+
 # ------------------------------------------------------------------------------ the matrix
 
 run_matrix() {
   GOALCUP=$(find_bin goalcup)
   VERIFY=$(find_bin goalcup-verify)
   DAEMON=$(find_bin goalcup-daemon)
-  [ -n "$GOALCUP" ] && [ -n "$VERIFY" ] && [ -n "$DAEMON" ] ||
-    fail "goalcup, goalcup-daemon and goalcup-verify are needed (cargo build --workspace, or MATRIX_BIN_DIR)" || return 1
+  if [ "$REFUSE" = 1 ]; then
+    # The refusals come before any launch: goalcup alone.
+    [ -n "$GOALCUP" ] || fail "goalcup is needed (a test build; see --refusals)" || return 1
+  else
+    [ -n "$GOALCUP" ] && [ -n "$VERIFY" ] && [ -n "$DAEMON" ] ||
+      fail "goalcup, goalcup-daemon and goalcup-verify are needed (cargo build --workspace, or MATRIX_BIN_DIR)" || return 1
+  fi
   GOALCUP_VERSION=$("$GOALCUP" --version 2>&1 | head -1)
   log "matrix $CONNECTOR on $PLATFORM against $SERVER, $DATE"
   if [ "$TEST" = 1 ]; then
-    log "mode=test duration=${DURATION}s timeout=${TIMEOUT}s (an organizer test run, sealed by this script)"
+    log "mode=test duration=${DURATION}s timeout=${TIMEOUT}s (an organizer test run, sealed by this script); repository: ${TEST_REPO:-made by the kit}"
+  elif [ "$REFUSE" = 1 ]; then
+    log "mode=refusals ($REFUSALS)"
   else
-    log "mode=practice timeout=${TIMEOUT}s"
+    log "mode=practice timeout=${TIMEOUT}s; no repository and no git login"
   fi
   log "goalcup: $GOALCUP ($GOALCUP_VERSION); verifier: $VERIFY; daemon: $DAEMON"
-  log "key file supplied: $([ -n "$KEYFILE" ] && echo yes || echo no); member: $MEMBER; repository: $REPO_URL"
+  log "key file supplied: $([ -n "$KEYFILE" ] && echo yes || echo no); member: $MEMBER"
 
   code=$(http GET /v1/health "$LOG.health")
   health=$(cat "$LOG.health" 2>/dev/null)
@@ -849,10 +1195,10 @@ run_matrix() {
     CFG=${MATRIX_CONFIG_DIR%/}
     case $CFG in
       "$HOME/Library/Application Support/goalcup" | "${XDG_CONFIG_HOME:-$HOME/.config}/goalcup" | "$HOME/.config/goalcup")
-        fail "MATRIX_CONFIG_DIR is the real goalcup configuration directory; make a separate one with GOALCUP_CONFIG_DIR=<dir> goalcup prep" || return 1
+        fail "MATRIX_CONFIG_DIR is the real goalcup configuration directory; make a separate one with GOALCUP_CONFIG_DIR=<dir> goalcup setup" || return 1
         ;;
     esac
-    [ -f "$CFG/prep.json" ] && [ -f "$CFG/github.json" ] || fail "MATRIX_CONFIG_DIR $CFG is not prepared (no prep.json and github.json): run GOALCUP_CONFIG_DIR=$CFG goalcup prep" || return 1
+    [ -f "$CFG/prep.json" ] || fail "MATRIX_CONFIG_DIR $CFG is not prepared (no prep.json): run GOALCUP_CONFIG_DIR=$CFG goalcup setup" || return 1
     HOME_DIR=$HOME
     OWN_CONFIG=0
   else
@@ -884,7 +1230,7 @@ run_matrix() {
   # The default writes one file, so that check 3 sees the workspace change.
   PROMPT=${MATRIX_PROMPT:-"Goal Cup matrix check: create a file named matrix-ok.txt in this folder holding the single word ok, then reply with the single word ok."}
   if [ -n "$PROMPT_FILE" ]; then
-    PROMPT=$(python3 - "$PROMPT_FILE" 2>"$ROOT/prompt.err" <<'PY'
+    PROMPT=$(python3 -I - "$PROMPT_FILE" 2>"$ROOT/prompt.err" <<'PY'
 import sys
 try:
     text = open(sys.argv[1], "rb").read().decode("utf-8")
@@ -903,17 +1249,15 @@ PY
   fi
 
   if [ "$OWN_CONFIG" = 1 ]; then
-    # What `goalcup prep` would have settled. A practice clone is anonymous and installs no push
-    # helper, so the token is format-valid and fake: it is never sent anywhere.
-    printf '{\n  "harness": "%s",\n  "repo_url": "%s",\n  "work_root": "%s"\n}\n' \
-      "$CONNECTOR" "$REPO_URL" "$ROOT/work" >"$CFG/prep.json"
-    printf '{\n  "repo_url": "%s",\n  "token": "ghp_matrixfaketoken00000000000000000000"\n}\n' \
-      "$REPO_URL" >"$CFG/github.json"
-    chmod 600 "$CFG/prep.json" "$CFG/github.json"
+    # What `goalcup setup` would have settled. goalcup keeps no GitHub key (D69).
+    printf '{\n  "harness": "%s",\n  "work_root": "%s"\n}\n' "$CONNECTOR" "$ROOT/work" >"$CFG/prep.json"
+    chmod 600 "$CFG/prep.json"
     if [ "$IS_FAKE" = 0 ]; then
       log "note: a real harness without MATRIX_CONFIG_DIR has no login in a fresh configuration"
     fi
   fi
+  git_login || return 1
+  if [ "$TEST" = 1 ]; then test_repo || return 1; fi
 
   # ---- login
   STARTED_RUN=1
@@ -932,10 +1276,16 @@ PY
   [ "$(cat "$ROOT/login.rc")" = 0 ] ||
     fail "goalcup login exited $(cat "$ROOT/login.rc"): $(last_line "$ROOT/login.out")" || return 1
 
+  if [ "$REFUSE" = 1 ]; then
+    run_refusals
+    return $?
+  fi
+
   # ---- start --practice (or --test)
   : >"$ROOT/seen.txt"
+  PHASE=start
   WRAP="$ROOT/start-wrapper.sh"
-  if [ "$TEST" = 1 ]; then RUN_FLAG=--test; else RUN_FLAG=--practice; fi
+  if [ "$TEST" = 1 ]; then RUN_FLAG="--test --repo $(shq "$TEST_REPO")"; else RUN_FLAG=--practice; fi
   START_ARGS="start --harness $CONNECTOR $DEV_FLAG $RUN_FLAG"
   write_wrapper "$WRAP" start "$START_ARGS" stty
   # The feeder holds the terminal's input open until the run is over (an end of input would be
@@ -996,6 +1346,7 @@ PY
     return 0
   }
   after_scan() {
+    asked_before_approval || return 1
     chat_tick
     [ "$TEST" = 0 ] || test_tick
   }
@@ -1026,8 +1377,8 @@ PY
     fail "no run record under $CFG/runs; goalcup's last words: $(last_line "$ROOT/start.txt")" || return 1
   RUN_DIR=$(dirname "$RUN_JSON")
   RUN_ID=$(py_get "$RUN_JSON" run_id)
-  TRACE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["trace_dir"])' "$RUN_JSON")
-  ENTRY_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["entry_id"])' "$RUN_JSON")
+  TRACE=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["trace_dir"])' "$RUN_JSON")
+  ENTRY_ID=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["entries"][-1]["entry_id"])' "$RUN_JSON")
   log "run $RUN_ID, entry $ENTRY_ID, trace $TRACE"
   # Read before the end-of-run checks, so a FAIL row still names the harness version. A long
   # run's first records are pruned on this machine: its version is read from the server's copy.
@@ -1084,6 +1435,11 @@ PY
       FAIL_REASON="NOT VERIFIED: long run, server copy not fetched (give MATRIX_FETCH_INDEX or DATABASE_URL, and MATRIX_FETCH_STORE or CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, to rebuild it with scripts/fetch-run.sh)"
       return 1
     fi
+    if ! fetch_bucket; then
+      RESULT=NOT-VERIFIED
+      FAIL_REASON="NOT VERIFIED: long run, server copy not fetched (the R2 bucket of $SERVER is not known: name it with MATRIX_FETCH_BUCKET)"
+      return 1
+    fi
     fetch_copy "$ENTRY_ID" || return 1
     JUDGED=$ROOT/servercopy/$ENTRY_ID
     [ "$HV" != unreported ] || read_hv "$JUDGED/chain.jsonl"
@@ -1109,7 +1465,7 @@ PY
 
 # The harness version the chain at $1 names first ("unreported" when none does), into HV.
 read_hv() { # chain.jsonl
-  HV=$(python3 - "$1" <<'PY'
+  HV=$(python3 -I - "$1" <<'PY'
 import json, sys
 def find(o):
     if isinstance(o, dict):
@@ -1150,7 +1506,7 @@ agent_worked() { # trace
   log_file "goalcup-verify --research-json (stderr)" "$ROOT/research.err"
   [ -f "$ROOT/research.ndjson" ] ||
     fail "goalcup-verify --research-json wrote no report: $(last_line "$ROOT/research.err")" || return 1
-  worked=$(python3 - "$ROOT/research.ndjson" <<'PY'
+  worked=$(python3 -I - "$ROOT/research.ndjson" <<'PY'
 import json, sys
 
 OUT = ("output_tokens", "completion_tokens", "outputtokens", "completiontokens")
@@ -1199,7 +1555,7 @@ PY
 # started (committer time at or after the record's `started_at_unix`; a pushed commit counts too).
 # A model call alone (a title, an answer that stalled at a permission prompt) is not work.
 workspace_changed() { # run.json
-  worked=$(python3 - "$1" 2>"$ROOT/workspace.err" <<'PY'
+  worked=$(python3 -I - "$1" 2>"$ROOT/workspace.err" <<'PY'
 import json, os, subprocess, sys
 
 rec = json.load(open(sys.argv[1]))
@@ -1239,17 +1595,25 @@ fetch_configured() {
     { [ -n "$FETCH_STORE" ] || { [ -n "$FETCH_CF_ACCOUNT" ] && [ -n "$FETCH_CF_TOKEN" ]; }; }
 }
 
+# The R2 bucket of the server's traces: MATRIX_FETCH_BUCKET, else the one known for the staging
+# Worker or production; for any other server (a local Worker, a server named with
+# MATRIX_ALLOW_SERVER) it is not known and not guessed. Sets FETCH_BUCKET; 1 when unknown.
+fetch_bucket() {
+  FETCH_BUCKET=${MATRIX_FETCH_BUCKET:-}
+  [ -z "$FETCH_BUCKET" ] || return 0
+  case $SERVER_LC in
+    "https://$PRODUCTION_HOST" | "https://$PRODUCTION_HOST"/*) FETCH_BUCKET=goalcup-traces ;;
+    "$STAGING_SERVER") FETCH_BUCKET=goalcup-traces-staging ;;
+    *) return 1 ;;
+  esac
+}
+
 # Rebuild the server's copy of one entry into $ROOT/servercopy/<entry> with fetch-run.sh (read
 # only), bounded by MATRIX_FETCH_TIMEOUT. The credentials reach it in its environment only.
 fetch_copy() { # entry
   fc_entry=$1
-  fc_bucket=${MATRIX_FETCH_BUCKET:-}
-  if [ -z "$fc_bucket" ]; then
-    case $SERVER_LC in
-      "https://$PRODUCTION_HOST" | "https://$PRODUCTION_HOST"/*) fc_bucket=goalcup-traces ;;
-      *) fc_bucket=goalcup-traces-staging ;;
-    esac
-  fi
+  fetch_bucket || fail "the R2 bucket of $SERVER is not known: name it with MATRIX_FETCH_BUCKET" || return 1
+  fc_bucket=$FETCH_BUCKET
   set -- --bucket "$fc_bucket"
   [ -z "$FETCH_INDEX" ] || set -- "$@" --index "$FETCH_INDEX"
   [ -z "$FETCH_STORE" ] || set -- "$@" --store "$FETCH_STORE"
@@ -1285,7 +1649,7 @@ fetch_copy() { # entry
 # Every chain part left on this machine is byte for byte the server copy's bytes at its offset,
 # and the last one ends where the copy ends.
 same_tail() { # trace copy_chain
-  python3 - "$1" "$2" >"$ROOT/tail.out" 2>&1 <<'PY'
+  python3 -I - "$1" "$2" >"$ROOT/tail.out" 2>&1 <<'PY'
 import os, re, sys
 trace, copy = sys.argv[1], sys.argv[2]
 parts = []
@@ -1359,7 +1723,7 @@ compare_copy() { # run_id entry_id trace credential_file strict
   tries=0
   while :; do
     # The credential goes to curl as a header on its stdin; it is in no argument, log or file.
-    status=$(python3 -c 'import json,sys; print("Authorization: Bearer " + json.load(open(sys.argv[1]))["credential"])' "$4" |
+    status=$(python3 -I -c 'import json,sys; print("Authorization: Bearer " + json.load(open(sys.argv[1]))["credential"])' "$4" |
       http GET "/v1/runs/$1?entry_id=$2" "$ROOT/server.json" -H @-)
     log "GET /v1/runs/$1?entry_id=$2: HTTP $status $(cat "$ROOT/server.json" 2>/dev/null)"
     [ "$status" = 200 ] || fail "GET /v1/runs/$1 with the run's credential answered HTTP $status" || return 1
@@ -1369,7 +1733,7 @@ compare_copy() { # run_id entry_id trace credential_file strict
     [ "$tries" -lt "${COPY_TRIES:-6}" ] || break
     sleep "${COPY_SLEEP:-5}"
   done
-  python3 - "$ROOT/server.json" "$ROOT/verify.out" "$3/chain.jsonl" "$5" >"$ROOT/compare.out" 2>&1 <<'PY'
+  python3 -I - "$ROOT/server.json" "$ROOT/verify.out" "$3/chain.jsonl" "$5" >"$ROOT/compare.out" 2>&1 <<'PY'
 import json, os, sys
 server = json.load(open(sys.argv[1]))
 verify = json.load(open(sys.argv[2]))
@@ -1434,7 +1798,7 @@ run_check() {
   n=0
   # One "entry_id=trace_dir" per line, read a line at a time so a path may hold spaces. (fd 4, so
   # nothing run inside the loop can read the list from standard input.)
-  python3 -c 'import json,sys
+  python3 -I -c 'import json,sys
 for e in json.load(open(sys.argv[1]))["entries"]:
     print(e["entry_id"] + "=" + e["trace_dir"])' "$RUN_JSON" >"$ROOT/entries.txt"
   while IFS= read -r pair <&4; do
@@ -1482,7 +1846,7 @@ last_line() { # file
 
 # The value of a top-level key of a JSON file ("" when absent).
 py_get() { # file key
-  python3 -c 'import json,sys
+  python3 -I -c 'import json,sys
 try:
     v = json.load(open(sys.argv[1])).get(sys.argv[2], "")
 except Exception:
