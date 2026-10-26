@@ -748,29 +748,49 @@ mod server_runs {
     }
 
     /// A key file that no `.gitignore` line covers would be published by the agent's first
-    /// `git add .`, token and all: the start is refused before the approval and prints the two
-    /// lines to add. Covered, it starts.
+    /// `git add .`, token and all: the start is refused before the approval and prints the lines
+    /// to add. A token line the printed push line cannot read (here `export`, quotes and a CR) is
+    /// refused too, showing the form and never the value. Covered and plain, it starts.
     #[test]
     fn a_key_file_no_gitignore_line_covers_is_refused_before_the_approval() {
-        let rows: [(&str, Option<&str>); 3] = [
-            ("no .gitignore", None),
-            ("another file ignored", Some("node_modules\n.env\n")),
-            ("ignored, then re-included", Some(".env*\n!.env.local\n")),
+        const VALUE: &str = "SECRET-VALUE-0123";
+        let quoted = format!("export GH_TOKEN=\"{VALUE}\"\r\n");
+        let rows: [(&str, Option<&str>, &str, &str); 4] = [
+            ("no .gitignore", None, "GH_TOKEN=x\n", ".env.*"),
+            (
+                "another file ignored",
+                Some("node_modules\n.env\n"),
+                "GH_TOKEN=x\n",
+                ".env.*",
+            ),
+            (
+                "ignored, then re-included",
+                Some(".env*\n!.env.local\n"),
+                "GH_TOKEN=x\n",
+                ".env.*",
+            ),
+            (
+                "a token line in another form",
+                Some(".env*\n"),
+                &quoted,
+                "GH_TOKEN=<",
+            ),
         ];
-        for (name, ignore) in rows {
+        for (name, ignore, key_file, phrase) in rows {
             let rig = Rig::new();
             let server = server(&rig);
             rig.prepare_for(&server.url());
             let project = rig.run_folder();
-            std::fs::write(project.join(".env.local"), "GH_TOKEN=x\n").unwrap();
+            std::fs::write(project.join(".env.local"), key_file).unwrap();
             if let Some(ignore) = ignore {
                 std::fs::write(project.join(".gitignore"), ignore).unwrap();
             }
             let said = refused_before_the_approval(&rig, &server, &project);
             assert!(
-                said.contains(".env.local") && said.contains("\n  .env.*"),
+                said.contains(".env.local") && said.contains(phrase),
                 "{name}: {said}"
             );
+            assert!(!said.contains(VALUE), "{name}: {said}");
         }
         let rig = Rig::new();
         let server = server(&rig);
@@ -876,7 +896,15 @@ mod server_runs {
             .map(str::trim)
             .filter(|l| l.starts_with("git "))
             .collect();
-        assert_eq!(lines.len(), 4, "{out}");
+        for wanted in [
+            "git config credential.https://github.com.helper",
+            "git config user.email",
+        ] {
+            assert!(
+                lines.iter().any(|l| l.starts_with(wanted)),
+                "{wanted}: {out}"
+            );
+        }
         for line in &lines {
             let ran = std::process::Command::new("/bin/sh")
                 .args(["-c", line])

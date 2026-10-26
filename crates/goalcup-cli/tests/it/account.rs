@@ -159,8 +159,8 @@ fn read_head(stream: &mut TcpStream) -> String {
 
 /// GitHub's open API is asked with no login at all: a public, empty repository passes; one
 /// that cannot be seen (missing, or private) is `Missing`, for start to create; a rate limit
-/// (`403`, `429`) is `Unchecked`, never "used"; a repository with commits, or an answer that is
-/// not one, is refused in a sentence of its own.
+/// (`403`, `429`), an outage (`5xx`) or no answer at all is `Unchecked`, never "used", so GitHub
+/// being down never blocks a start; a repository with commits is refused in a sentence of its own.
 #[test]
 fn the_repository_check_sends_no_login_and_tells_missing_from_used() {
     let cases = [
@@ -186,7 +186,7 @@ fn the_repository_check_sends_no_login_and_tells_missing_from_used() {
             r#"{"message":"Too Many Requests"}"#,
             Ok(Found::Unchecked),
         ),
-        (500, r#"{"message":"Server Error"}"#, Err("could not check")),
+        (500, r#"{"message":"Server Error"}"#, Ok(Found::Unchecked)),
     ];
     for (status, body, want) in cases {
         let fake = FakeGithub::start(status, body);
@@ -349,7 +349,7 @@ fn a_rate_limited_github_is_said_and_never_counts_as_used() {
     )
     .unwrap();
     let said = String::from_utf8(out).unwrap();
-    assert!(said.contains("GitHub's API is busy"), "{said}");
+    assert!(said.contains("was not checked"), "{said}");
     assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup");
 }
 

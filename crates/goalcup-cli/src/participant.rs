@@ -41,7 +41,7 @@ pub use refusals::{
     dev_competes, env_not_ignored, filesystem_warning, home_busy, last_part_closing, local_only,
     needs_terminal, not_started_here, project_beside_goalcup, project_inside_repository,
     project_missing, project_not_a_folder, project_not_empty, project_unreadable,
-    repository_not_empty, run_over, server_answer_unusable, still_recording,
+    repository_not_empty, run_over, server_answer_unusable, still_recording, token_line_form,
     unsupported_filesystem,
 };
 pub use seal::{

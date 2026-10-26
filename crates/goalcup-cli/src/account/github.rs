@@ -268,17 +268,23 @@ pub enum Found {
     /// It is public and has no commits. `owner_id` is its owner's GitHub id, for the owner's
     /// private commit address (`<id>+<owner>@users.noreply.github.com`), when GitHub said it.
     PublicEmpty { owner_id: Option<u64> },
-    /// GitHub would not answer just now: its open API allows 60 calls an hour from one address
-    /// (`403` or `429`). Not a sign the repository is used. The server checks that it is public
-    /// and empty when the run opens.
+    /// GitHub could not be asked just now: a rate limit (its open API allows 60 calls an hour
+    /// from one address), an outage, or no answer at all. Not a sign the repository is used, and
+    /// never a reason to stop a start: the server checks that it is public and empty when the run
+    /// opens.
     Unchecked,
 }
 
+/// How long one call to GitHub's open API may take before the check gives up on it: a GitHub
+/// that does not answer is not asked again, and the start goes on ([`Found::Unchecked`]).
+const GITHUB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Ask GitHub's API (`api_base`, [`GITHUB_API`] in production) about `repo_url` with no login
 /// at all, so nothing of the participant's is sent. A public, empty repository is
-/// [`Found::PublicEmpty`]; one that cannot be seen is [`Found::Missing`]; a rate limit is
-/// [`Found::Unchecked`]. A repository that is not empty, or any other failure, is refused in a
-/// sentence of its own.
+/// [`Found::PublicEmpty`]; one GitHub says is not there (`404`: missing, or private) is
+/// [`Found::Missing`]; any other failure to ask (another status, no answer, an answer that is not
+/// one) is [`Found::Unchecked`], so a GitHub outage never blocks a start. A repository that is not
+/// empty is refused in a sentence of its own.
 ///
 /// Empty is asked twice. GitHub's `size` says 0 for a repository whose only commit is the README
 /// it made, so its list of commits is asked too (`GET /repos/{owner}/{repo}/commits?per_page=1`,
@@ -287,19 +293,16 @@ pub enum Found {
 pub fn check_public_empty(api_base: &str, repo_url: &str) -> Result<Found, CliError> {
     let (owner, repo) = parse_repo_url(repo_url)?;
     let github = ServerClient::anonymous(api_base);
-    let answer: RepoAnswer =
-        match github.json("GET", &format!("/repos/{owner}/{repo}"), None::<&()>) {
-            Ok(answer) => answer,
-            Err(ServerError::Status { status: 404, .. }) => return Ok(Found::Missing),
-            Err(ServerError::Status {
-                status: 403 | 429, ..
-            }) => return Ok(Found::Unchecked),
-            Err(other) => {
-                return Err(CliError::Refused(format!(
-                    "could not check {owner}/{repo} on GitHub: {other}. Try again in a minute."
-                )));
-            }
-        };
+    let answer: RepoAnswer = match github.json_timed(
+        "GET",
+        &format!("/repos/{owner}/{repo}"),
+        None::<&()>,
+        GITHUB_TIMEOUT,
+    ) {
+        Ok(answer) => answer,
+        Err(ServerError::Status { status: 404, .. }) => return Ok(Found::Missing),
+        Err(_) => return Ok(Found::Unchecked),
+    };
     // GitHub answers a private repository with 404 to a caller with no login; this is a
     // belt-and-braces check of the answer.
     if answer.private {
@@ -315,10 +318,11 @@ pub fn check_public_empty(api_base: &str, repo_url: &str) -> Result<Found, CliEr
         return Err(not_empty(Some(answer.size)));
     }
     if github
-        .json::<serde::de::IgnoredAny>(
+        .json_timed::<serde::de::IgnoredAny>(
             "GET",
             &format!("/repos/{owner}/{repo}/commits?per_page=1"),
             None::<&()>,
+            GITHUB_TIMEOUT,
         )
         .is_ok()
     {
