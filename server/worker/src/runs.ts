@@ -114,7 +114,6 @@ function answerStop(ctx: Ctx, run: RunRow) {
 
 export const INSTALL_LINE = "curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh";
 const DEV_COMPETES = "A --dev run never enters the competition. Start without --dev.";
-const DEV_NOT_ADMIN = "--dev is for Goal Cup admins only. Start without --dev.";
 
 /** `a` sorts before `b`, comparing major, then minor, then patch as numbers. */
 function isBelow(a: [number, number, number], b: [number, number, number]): boolean {
@@ -139,10 +138,9 @@ export function requireCompetitionVersion(ctx: Ctx, sent: string): void {
   if (older) throw new ApiError(403, "forbidden", `This goalcup (${sent}) is too old for the cup. Update it when no run is open: ${INSTALL_LINE}`);
 }
 
-/** `dev` on a run in this mode: 403 for a competition run, and for anyone who is not an admin. Asks the database only when `dev` is true. */
-async function requireDevAllowed(ctx: Ctx, member: string, mode: RunMode): Promise<void> {
+/** `dev` on a run in this mode: 403 for a competition run. Practice and test runs count for nothing, so anyone may use it there. */
+function requireDevAllowed(mode: RunMode): void {
   if (mode === "competition") throw new ApiError(403, "forbidden", DEV_COMPETES);
-  if (!(await ctx.db.memberIsAdmin(member))) throw new ApiError(403, "forbidden", DEV_NOT_ADMIN);
 }
 
 // ---- POST /v1/runs ------------------------------------------------------------------------
@@ -203,9 +201,12 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
   }
 
   if (auth.mode === "competition") requireCompetitionVersion(ctx, fields.tracer_version);
-  if (dev) await requireDevAllowed(ctx, auth.member, auth.mode);
+  if (dev) requireDevAllowed(auth.mode);
 
-  if (ctx.cfg.githubCheck) await requirePublicGithubRepo(ctx, repo_url);
+  if (ctx.cfg.githubCheck) {
+    await requirePublicGithubRepo(ctx, repo_url);
+    await requireEmptyGithubRepo(ctx, repo_url);
+  }
 
   const now = ctx.now();
   const practice = auth.mode === "practice";
@@ -252,7 +253,7 @@ export async function continueRun(ctx: Ctx, auth: Auth, runId: string, request: 
     // The run's own mode, not the credential's: a continued run keeps the rules it began under.
     const found = await ctx.db.getRun(auth.member, runId, null);
     if (found === null) throw notFound("No such run for this credential.");
-    await requireDevAllowed(ctx, auth.member, found.run.mode);
+    requireDevAllowed(found.run.mode);
   }
   const result = await ctx.db.continueRun({
     member_id: auth.member,
@@ -296,6 +297,27 @@ async function requirePublicGithubRepo(ctx: Ctx, repoUrl: string): Promise<void>
   if (!res.ok) throw new ApiError(502, "upstream_error", "GitHub could not check the repository right now.");
   const info = (await res.json()) as { private?: unknown };
   if (info.private !== false) throw malformed("repo_url must be a public GitHub repository.");
+}
+
+const REPO_NOT_EMPTY = "The repository must be empty when the run opens. Create a new one with no README, .gitignore or license, and start again.";
+
+/**
+ * The repository has no commits yet (OD7). `GET /repos/<owner>/<repo>/commits?per_page=1` answers 409
+ * for an empty repository and 200 for one with a commit. Any other answer, or no answer, is 502 so
+ * goalcup retries; a GitHub blip never refuses a player.
+ */
+async function requireEmptyGithubRepo(ctx: Ctx, repoUrl: string): Promise<void> {
+  const path = repoUrl.slice("https://github.com/".length); // owner/repo, shape already checked
+  let res: Response;
+  try {
+    res = await fetch(`https://api.github.com/repos/${path}/commits?per_page=1`, { headers: githubHeaders(ctx.env), signal: AbortSignal.timeout(8000) });
+  } catch {
+    throw new ApiError(502, "upstream_error", "GitHub could not be reached to check the repository.");
+  }
+  await res.body?.cancel().catch(() => {});
+  if (res.status === 409) return;
+  if (res.status === 200) throw malformed(REPO_NOT_EMPTY);
+  throw new ApiError(502, "upstream_error", "GitHub could not check the repository right now.");
 }
 
 // ---- POST /v1/runs/{id}/receipt -----------------------------------------------------------

@@ -105,14 +105,6 @@ test("approveDevice -> upload_approve_device(p_user_code, ...)", async () => {
   assert.deepEqual(calls[0], { fn: "upload_approve_device", args: { p_user_code: "BCDFGHJK", p_member_id: "m", p_approve: true, p_now: "t" } });
 });
 
-test("memberIsAdmin -> upload_member_is_admin(p_member_id); anything but a boolean is a 502", async () => {
-  const calls = stub(true, false, "yes");
-  assert.equal(await db().memberIsAdmin("member-1"), true);
-  assert.equal(await db().memberIsAdmin("member-2"), false);
-  assert.deepEqual(calls[0], { fn: "upload_member_is_admin", args: { p_member_id: "member-1" } });
-  await assert.rejects(db().memberIsAdmin("member-3"), (e) => e instanceof ApiError && e.status === 502);
-});
-
 const openArgs: OpenRunArgs = {
   member_id: "m", event_id: "cup", mode: "competition", run_id: "r1", entry_id: "e1", official_start: "s", deadline_at: "d", connector_id: "c",
   manifest_sha256: "ms", connector_dir_sha256: "cd", workspace: "w", session_id: "sid", harness_version: "h", tracer_version: "t", repo_url: "u",

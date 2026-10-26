@@ -30,8 +30,6 @@ export interface Config {
   githubCheck: boolean;
   /** MIN_COMPETITION_VERSION. A malformed value is kept, not thrown: only competition starts refuse on it. */
   minCompetitionVersion: MinVersion;
-  /** LOCAL_ADMIN_MEMBERS (local backend only): the members the local database calls admins. */
-  localAdminMembers: Array<string>;
 }
 
 export type MinVersion = { kind: "none" } | { kind: "set"; v: [number, number, number] } | { kind: "malformed"; raw: string };
@@ -73,7 +71,7 @@ function byteLimit(raw: string | undefined): number {
  * lifecycle in seconds. They are honoured only with DB_BACKEND=local; anywhere else their
  * presence is a mistake worth stopping for, not a value to ignore.
  */
-function testOnly(env: Env, name: "RUN_SECONDS" | "CLOSE_AFTER_SECONDS" | "START_WINDOW_OPENS" | "START_WINDOW_CLOSES" | "LOCAL_ADMIN_MEMBERS"): string | undefined {
+function testOnly(env: Env, name: "RUN_SECONDS" | "CLOSE_AFTER_SECONDS" | "START_WINDOW_OPENS" | "START_WINDOW_CLOSES"): string | undefined {
   const raw = env[name];
   if (raw === undefined || raw === "") return undefined;
   if (env.DB_BACKEND !== "local") throw misconfigured(`${name} is for DB_BACKEND=local (tests) only.`);
@@ -129,7 +127,6 @@ export function readConfig(env: Env): Config {
     startWindow: opens === null && closes === null ? undefined : { opens, closes },
     githubCheck: env.GITHUB_CHECK === "on",
     minCompetitionVersion: minVersion(env.MIN_COMPETITION_VERSION),
-    localAdminMembers: (testOnly(env, "LOCAL_ADMIN_MEMBERS") ?? "").split(",").map((m) => m.trim()).filter((m) => m !== ""),
   };
 }
 
@@ -154,7 +151,7 @@ export async function getDb(env: Env): Promise<Db> {
     if (backend === "supabase") return new SupabaseDb(env.SUPABASE_URL, env.SUPABASE_KEY);
     if (backend === "local") {
       const cfg = readConfig(env);
-      return LocalDb.create(env.TRACES, { closeAfterSeconds: cfg.closeAfterSeconds, startWindow: cfg.startWindow, admins: cfg.localAdminMembers });
+      return LocalDb.create(env.TRACES, { closeAfterSeconds: cfg.closeAfterSeconds, startWindow: cfg.startWindow });
     }
   } catch (e) {
     // The detail goes to the Worker's log only: a caller without a credential gets this answer too,

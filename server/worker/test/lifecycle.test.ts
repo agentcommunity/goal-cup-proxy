@@ -533,31 +533,24 @@ describe("facts about the machine and the connection", () => {
 });
 
 describe("--dev runs and the minimum competition version (D70)", () => {
-  const ADMINS = { ...WINDOW, LOCAL_ADMIN_MEMBERS: "root, admin2" };
   const INSTALL = "curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh";
   const DEV_COMPETES = "A --dev run never enters the competition. Start without --dev.";
-  const DEV_NOT_ADMIN = "--dev is for Goal Cup admins only. Start without --dev.";
   const tooOld = (version: string) => `This goalcup (${version}) is too old for the cup. Update it when no run is open: ${INSTALL}`;
 
-  lifecycle("a dev competition open is refused, also for an admin", async (r) => {
+  lifecycle("a dev competition open is refused, for everyone", async (r) => {
     for (const member of ["alice", "root"]) {
       const res = await r.open(await r.cred(member), `s-${member}`, { dev: true });
       assertError(res, 403, "forbidden");
       assert.equal(res.body.message, DEV_COMPETES);
     }
-  }, ADMINS);
+  }, WINDOW);
 
-  lifecycle("a dev practice open by a non-admin is refused", async (r) => {
-    const res = await r.open(await r.cred("alice", "practice"), "s1", { dev: true });
-    assertError(res, 403, "forbidden");
-    assert.equal(res.body.message, DEV_NOT_ADMIN);
-    assert.equal(r.adminCalls(), 1);
-  }, ADMINS);
-
-  lifecycle("a dev practice open by an admin opens", async (r) => {
-    assert.equal((await r.open(await r.cred("root", "practice"), "s1", { dev: true })).status, 201);
-    assert.equal((await r.open(await r.cred("admin2", "practice"), "s2", { dev: true })).status, 201); // the list is trimmed
-  }, ADMINS);
+  lifecycle("a dev practice open from any member opens", async (r) => {
+    for (const member of ["alice", "bob", "root"]) {
+      const res = await r.open(await r.cred(member, "practice"), `s-${member}`, { dev: true });
+      assert.equal(res.status, 201, JSON.stringify(res.body));
+    }
+  }, WINDOW);
 
   lifecycle("a dev continue of a competition run is refused", async (r) => {
     const root = await r.cred("root");
@@ -565,27 +558,21 @@ describe("--dev runs and the minimum competition version (D70)", () => {
     const res = await r.cont(root, a.run_id, a.entry_id, "s-two", { dev: true });
     assertError(res, 403, "forbidden");
     assert.equal(res.body.message, DEV_COMPETES);
-    assert.equal(r.adminCalls(), 0); // the mode is refused before anyone is asked about the member
-  }, ADMINS);
+  }, WINDOW);
 
-  lifecycle("a dev continue of a practice run is for admins only", async (r) => {
-    const [alice, root] = [await r.cred("alice", "practice"), await r.cred("root", "practice")];
+  lifecycle("a dev continue of a practice run is open to any member, and of an unknown run is 404", async (r) => {
+    const alice = await r.cred("alice", "practice");
     const a = await r.start(alice, "s1");
-    const b = await r.start(root, "s2");
-    const refused = await r.cont(alice, a.run_id, a.entry_id, "s-two", { dev: true });
-    assertError(refused, 403, "forbidden");
-    assert.equal(refused.body.message, DEV_NOT_ADMIN);
-    assert.equal((await r.cont(root, b.run_id, b.entry_id, "s-two", { dev: true })).status, 201);
-    assertError(await r.cont(root, "r0000000000000000", b.entry_id, "s-x", { dev: true }), 404, "not_found");
-  }, ADMINS);
+    assert.equal((await r.cont(alice, a.run_id, a.entry_id, "s-two", { dev: true })).status, 201);
+    assertError(await r.cont(alice, "r0000000000000000", a.entry_id, "s-x", { dev: true }), 404, "not_found");
+  }, WINDOW);
 
-  lifecycle("an open without dev never asks whether the member is an admin", async (r) => {
+  lifecycle("an open or continue without dev is unchanged", async (r) => {
     const alice = await r.cred("alice");
     const a = await r.start(alice, "s1");
     assert.equal((await r.open(await r.cred("bob", "practice"), "s2", { dev: false })).status, 201);
     assert.equal((await r.cont(alice, a.run_id, a.entry_id, "x", { dev: false })).status, 201);
-    assert.equal(r.adminCalls(), 0);
-  }, ADMINS);
+  }, WINDOW);
 
   lifecycle("dev must be a boolean", async (r) => {
     for (const bad of ["yes", 1, 0, "true", null, [], {}]) {
@@ -594,8 +581,7 @@ describe("--dev runs and the minimum competition version (D70)", () => {
     const alice = await r.cred("alice");
     const a = await r.start(alice, "s2");
     assertError(await r.cont(alice, a.run_id, a.entry_id, "s-two", { dev: "yes" }), 400, "malformed");
-    assert.equal(r.adminCalls(), 0);
-  }, ADMINS);
+  }, WINDOW);
 
   lifecycle("an old goalcup cannot open a competition run once a minimum is set", async (r) => {
     const [alice, bob, carol] = [await r.cred("alice"), await r.cred("bob"), await r.cred("carol")];
@@ -608,15 +594,14 @@ describe("--dev runs and the minimum competition version (D70)", () => {
     assert.equal((await r.open(alice, "s1", { proxy_version: "0.7.0" })).status, 201);
     assert.equal((await r.open(bob, "s2", { proxy_version: "1.0.0" })).status, 201);
     assert.equal((await r.open(carol, "s3", { proxy_version: "0.10.0" })).status, 201); // numbers, not text
-  }, ADMINS);
+  }, WINDOW);
 
   lifecycle("the TOO_OLD answer comes before the dev answers", async (r) => {
     const alice = await r.cred("alice");
     r.env.MIN_COMPETITION_VERSION = "0.7.0";
     const res = await r.open(alice, "s1", { proxy_version: "0.6.1", dev: true });
     assert.equal(res.body.message, tooOld("0.6.1"));
-    assert.equal(r.adminCalls(), 0);
-  }, ADMINS);
+  }, WINDOW);
 
   lifecycle("the minimum does not touch continue or practice", async (r) => {
     const [alice, bob] = [await r.cred("alice"), await r.cred("bob", "practice")];
