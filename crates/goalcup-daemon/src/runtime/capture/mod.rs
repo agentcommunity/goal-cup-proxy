@@ -156,10 +156,10 @@ use self::writer::*;
 /// The longest the owner waits for a queue item before checking its timers.
 const IDLE_WAIT: Duration = Duration::from_millis(25);
 
-/// What reading a clone's Git state may take at the baseline (D56): inside the CLI's 30 s
-/// create call. A clone not read in it is admitted with the reason in place of the state, never
-/// walked.
-const BASELINE_GIT_BUDGET: Duration = Duration::from_secs(20);
+/// What the baseline may take (D56, D71): inside the CLI's 30 s create call. A clone not read in
+/// it is admitted with the reason in place of the state, never walked; a continued folder's walk
+/// that runs out of it is recorded as capped.
+const BASELINE_BUDGET: Duration = Duration::from_secs(20);
 
 /// One v5 capture entry of this daemon.
 pub(crate) struct CaptureEntry {
@@ -183,11 +183,9 @@ pub(crate) struct CaptureEntry {
     native_files: Option<Arc<AtomicU64>>,
     sink: Arc<OwnerSink>,
     writer: Arc<Mutex<ChainWriter>>,
-    /// The baseline recorded the workspace's Git state, read or not: the seal reads it again and
-    /// never walks (D56). Fixed at creation: a finish reads it without the run lock, which
-    /// another finish may hold. Taken from `baseline.json`, at the create and at a reopen alike; a
-    /// trace without a readable one asks the workspace.
-    clone: bool,
+    /// The entry's workspace, as its row names it: a finish asks it whether it is a clone without
+    /// the run lock, which another finish may hold (D71).
+    workspace: PathBuf,
     /// Taken before `writer` whenever both are held.
     run: Mutex<CaptureRun>,
     owner: Arc<OwnerControl>,
@@ -295,23 +293,20 @@ pub(super) fn fresh_capture_id() -> String {
     hex::encode(bytes)
 }
 
-/// A continued run's workspace is the root of its own clone ([`workspace::clone_root`]), or the
-/// create is refused with what is there instead. A precondition, not a rule: it says nothing of
-/// what the agent did in the clone.
-fn check_existing_clone(workspace: &Path) -> Result<(), DaemonError> {
-    use workspace::CloneRoot;
-    let what = match workspace::clone_root(workspace) {
-        CloneRoot::Clone => return Ok(()),
-        CloneRoot::Missing => "is not there".to_string(),
-        CloneRoot::NotAFolder => "is not a folder".to_string(),
-        CloneRoot::NoGitDirectory => "has no .git directory".to_string(),
-        CloneRoot::InsideRepository(outer) => {
-            format!("is inside the Git repository {}", outer.display())
-        }
-        CloneRoot::Unreadable(kind) => format!("cannot be read ({kind})"),
+/// A continued run's folder is there and is a folder (D71), with or without `.git`: an agent may
+/// not have run `git init` yet, and a 0.6.1 run's clone has one. Otherwise the create is refused
+/// with what is there instead. A precondition, not a rule: it says nothing of what the agent did
+/// in the folder. A link to a folder is followed: a folder moved to a bigger disk and linked back
+/// is still the run's.
+fn check_continued_folder(workspace: &Path) -> Result<(), DaemonError> {
+    let what = match std::fs::metadata(workspace) {
+        Ok(meta) if meta.is_dir() => return Ok(()),
+        Ok(_) => "is not a folder".to_string(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "is not there".to_string(),
+        Err(error) => format!("cannot be read ({})", error.kind()),
     };
     Err(DaemonError::Guard(format!(
-        "the run's clone {} {what}: a continued run goes on in the clone it has, and it is not \
+        "the run's folder {} {what}: a continued run goes on in the folder it has, and it is not \
          made again",
         workspace.display()
     )))
@@ -337,11 +332,12 @@ impl Daemon {
         secrets: crate::redact::RunSecrets,
         existing_clone: bool,
     ) -> Result<CaptureWorkspaceInfo, DaemonError> {
-        // A continued run goes on in the clone it has (D4). Judged here, where the workspace is
-        // made, and before anything is: a clone that went between `goalcup continue`'s own look
-        // and this create is refused, never made again as a new, empty folder.
+        // A continued run goes on in the folder it has (D4). Judged here, where the workspace is
+        // made, and before anything is: a folder that went between `goalcup continue`'s own look
+        // and this create is refused, never made again as a new, empty folder. The wire calls a
+        // continued run's folder `existing_clone`; with or without `.git` it is the run's (D71).
         if existing_clone {
-            check_existing_clone(workspace)?;
+            check_continued_folder(workspace)?;
         }
         let config_home = isolated_config_home(config_home, every_loaded_real_dir)?;
         let run_home = &isolated_run_home(
@@ -364,10 +360,13 @@ impl Daemon {
             .artifact_root
             .join("artifacts")
             .join(&entry_id);
-        workspace::check_workspace_available(&Roots {
-            workspace: workspace.to_path_buf(),
-            artifact_root: artifact_dir.clone(),
-        })?;
+        workspace::check_workspace_available(
+            &Roots {
+                workspace: workspace.to_path_buf(),
+                artifact_root: artifact_dir.clone(),
+            },
+            existing_clone,
+        )?;
         workspace::check_machine_roots(
             workspace,
             &[
@@ -456,13 +455,8 @@ impl Daemon {
             path: workspace.display().to_string(),
             source,
         })?;
-        let mut baseline = workspace::seal_workspace(
-            &workspace,
-            workspace::is_clone_root(&workspace),
-            entry_id,
-            &now_rfc3339(),
-            BASELINE_GIT_BUDGET,
-        )?;
+        let mut baseline =
+            workspace::seal_workspace(&workspace, entry_id, &now_rfc3339(), BASELINE_BUDGET)?;
         baseline.home = listed_home(&manifest.capture, run_home, config_home);
         export.write_baseline_for_protocol(M2_PROTOCOL_VERSION, &baseline)?;
         export.sync_capture()?;
@@ -1120,10 +1114,7 @@ impl CaptureEntry {
             ingest: None,
             native_files: None,
             sink: Arc::new(OwnerSink::default()),
-            clone: read_manifest(&writer.export, FixedTraceDocument::Baseline).map_or_else(
-                || workspace::is_clone_root(&entry.workspace),
-                |b| b.git.is_some(),
-            ),
+            workspace: entry.workspace.clone(),
             writer: Arc::new(Mutex::new(writer)),
             run: Mutex::new(CaptureRun { entry, goal }),
             owner: Arc::new(OwnerControl::default()),

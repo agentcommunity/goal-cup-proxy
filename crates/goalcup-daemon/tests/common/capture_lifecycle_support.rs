@@ -75,6 +75,19 @@ impl Rig {
             .await
     }
 
+    /// A continued run's create, as `goalcup continue` sends it (`existing_clone`): the folder is
+    /// the run's, with or without `.git` (D71).
+    pub async fn create_continued(
+        &self,
+        profile_id: &str,
+        workspace: &Path,
+        reserve_bytes: u64,
+    ) -> Response {
+        let mut request = self.request(profile_id, workspace, reserve_bytes);
+        request.existing_clone = true;
+        self.create_request(&request).await
+    }
+
     /// The per-run `HOME` every create request of this rig names.
     pub fn run_home(&self) -> PathBuf {
         self.root.join("run-home")
