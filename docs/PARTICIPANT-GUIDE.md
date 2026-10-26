@@ -62,8 +62,10 @@ It ends with `Ready.`, the practice command, and a pointer to the folder step fo
 Make an empty folder and start there. `Ready.` printed this line:
 
 ```sh
-mkdir ~/goalcup-practice && cd ~/goalcup-practice && goalcup start --harness <id> --practice
+d=$(mktemp -d ~/goalcup-practice-XXXX) && cd "$d" && goalcup start --harness <id> --practice
 ```
+
+Each paste makes a new folder in your home, so it is safe to paste twice.
 
 Approve the run in the browser and return to the terminal. The harness opens in that folder. Type
 any prompt. After about ten minutes the server stops the run, and `goalcup` seals and uploads it.
@@ -227,7 +229,7 @@ All but the outage row stop before the approval and say "Nothing was created". F
 | No `GH_TOKEN` line (a real run only) | Put `GH_TOKEN=<token>` in `.env.local`. A practice run needs no token. |
 | `.gitignore` does not cover an `.env` file | Add the line `.env*` (or `.env` and `.env.*`). |
 | Write your token as one line, exactly `GH_TOKEN=<token>` | Remove `export`, quotes and spaces, and any second `GH_TOKEN` line in any `.env` file. |
-| The folder is inside a Git repository | Use a folder outside any repository. |
+| The folder is inside a Git repository | Use a folder outside any repository. If it names `GOALCUP_CONFIG_DIR`, goalcup's own folder is inside a repository: set that variable to a folder outside it. |
 | The folder is goalcup's own, or next to one | Use a folder somewhere else, for example in your home folder. |
 | The repository is not empty (a README counts) | Make a new repository with no README, `.gitignore` or licence. |
 | GitHub does not show the repository | It is not created yet, or it is private. Make it public. |
