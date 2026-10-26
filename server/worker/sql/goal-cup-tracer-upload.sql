@@ -5,7 +5,7 @@
 -- (the header above the REGEN-END line is kept, the rest is regenerated):
 --   F=<tracer>/server/worker/sql/goal-cup-tracer-upload.sql; { sed '/^-- REGEN-END/q' "$F"; for m in supabase/migrations/*goal_cup*.sql; do printf '\n-- ======================== %s ========================\n' "${m##*/}"; cat "$m"; done; } > "$F.new" && mv "$F.new" "$F"
 -- Change a migration there first, then regenerate here.
--- Scope (widened 2026-10-27 from *goal_cup_tracer*.sql): the sign-up migrations (20261021120000 to
+-- Scope (widened 2026-10-26 from *goal_cup_tracer*.sql): the sign-up migrations (20261021120000 to
 -- 20261021120400) and 20261017150200 replace goal_cup_upload_open_run and goal_cup_upload_claim_notices,
 -- so a mirror without them held bodies production no longer has. One website migration outside the
 -- glob also replaces a mirrored function: 20261017110000_email_delivery_rules.sql replaces
@@ -15,9 +15,9 @@
 -- It must print only 20261017110000_email_delivery_rules.sql. A new name there means a mirrored
 -- function may have a newer body outside this file: widen the glob or stop.
 -- Applied to the shared database: everything up to 20261021100000 (the last on 2026-10-22), and
--- 20261021120000 to 20261021120200 (2026-10-23). NOT applied as of 2026-10-27:
+-- 20261021120000 to 20261021120200 (2026-10-23). NOT applied as of 2026-10-26:
 -- 20261021120400_goal_cup_terms_2026_10_23.sql (website GOAL-CUP-SIGNUP-RUNBOOK, step 4).
--- PENDING (2026-10-27): the last section, 20261027100000_goal_cup_tracer_competition_repo_owner.sql,
+-- PENDING (2026-10-26): the last section, 20261027100000_goal_cup_tracer_competition_repo_owner.sql,
 -- was written here first and is not yet in the website repo nor applied anywhere: see sql/pending/README.md.
 -- Once it merges there, regenerate as above; the output must equal this file below REGEN-END.
 -- REGEN-END
@@ -4283,7 +4283,8 @@ BEGIN
 END $open$;
 
 -- ======================== 20261027100000_goal_cup_tracer_competition_repo_owner.sql ========================
--- Goal Cup Proxy: one competition repository, one member (2026-10-27).
+-- Goal Cup Proxy: one competition repository, one member (2026-10-26). The name is dated 27 Oct so it
+-- sorts after the website's latest migration.
 --
 -- A member could open a competition run naming another member's new, empty, public repository, and
 -- the deadline job would then judge that member's pushed commit as theirs (0.7.0 security review,

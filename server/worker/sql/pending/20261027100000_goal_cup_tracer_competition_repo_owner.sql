@@ -1,4 +1,5 @@
--- Goal Cup Proxy: one competition repository, one member (2026-10-27).
+-- Goal Cup Proxy: one competition repository, one member (2026-10-26). The name is dated 27 Oct so it
+-- sorts after the website's latest migration.
 --
 -- A member could open a competition run naming another member's new, empty, public repository, and
 -- the deadline job would then judge that member's pushed commit as theirs (0.7.0 security review,
