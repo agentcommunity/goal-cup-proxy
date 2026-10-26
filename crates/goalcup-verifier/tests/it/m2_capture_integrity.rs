@@ -117,6 +117,7 @@ fn manifest() -> SealManifest {
         excluded: vec!["target".to_string()],
         git: None,
         home: None,
+        capped: None,
     }
 }
 
