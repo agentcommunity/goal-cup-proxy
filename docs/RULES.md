@@ -36,7 +36,7 @@ All times are UTC.
 - **23 October to 6 November, 00:00:** the dry-run window is open; you can start dry runs on any
   day. The last scheduled release is on 6 November, 12:00. A dry run is a 168-hour rehearsal
   that does not count ([guide](PARTICIPANT-GUIDE.md#the-dry-run-optional)).
-- **Before the window:** you prepare with `goalcup prep` and practice runs. Practice is not limited
+- **Before the window:** you prepare with `goalcup setup` and practice runs. Practice is not limited
   to the window.
 - **7 November 2026, 00:00:** the 24-hour start window opens. It closes at 00:00 on 8 November.
 - **During the window:** you finalize your prompt and start your run.
@@ -69,8 +69,8 @@ The latest possible run ends 192 hours after the window opens.
   the deadline (a crash, a reboot, a closed window), `goalcup continue` starts the next part of the
   same run, with the same deadline, on the same machine.
 - **Practice runs** (`goalcup start --practice`) are short, unlimited, separate from the competition,
-  and never replace your main run. A practice run never pushes, so your repository stays empty until
-  the competition run.
+  and never replace your main run. A practice run needs no GitHub repository: the agent works in an
+  empty local folder, and nothing is pushed.
 - **Organizer test runs** (`goalcup start --test`) are opened only by organizer accounts. They do not
   count, and they are deleted from the server afterwards.
 - Your run needs its own prompt, root agent and empty repository.
@@ -96,8 +96,8 @@ The latest possible run ends 192 hours after the window opens.
   every message a human sends to the agent, by any channel, so the review can see it. Any other human
   message is reviewed, and it may remove the run at review. Harness commands typed after the prompt
   (for example `/model` to switch model) count as typing: they are recorded and reviewed, never
-  blocked. Choose your model in prep.
-- Answering a permission prompt is typing too, so set your harness up in prep to run without them.
+  blocked. Choose your model in setup.
+- Answering a permission prompt is typing too, so set your harness up in setup to run without them.
   Goal Cup recommends how, per harness, and never changes your harness's settings (D67;
   [Set up your harness for a 168-hour run](HARNESS-SETUP.md)).
 - The review works out who said each message from what the model saw and how the harness structures its
@@ -129,13 +129,13 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
 - Models, skills, rules files, memory, MCP servers, custom tools, services, accounts, compute and
   external websites may be prepared before the run. You keep full freedom of model, effort and
   settings, and the network is on.
-- **A GitHub repository is required.** Before the run you create a new, empty, public repository and a
-  token that can push only to it; `goalcup prep` checks both. The run's workspace is a clone of that
-  repository, so it starts with no README, source, configuration, hidden starter files or existing
-  product. Goal Cup Proxy adds nothing to it: its own `goal-cup` skill goes in the harness's home, not the
-  workspace.
-- The agent pushes its work to that repository; Goal Cup Proxy gives the token to `git` only. The commit
-  the server records at the deadline is what is judged.
+- **A GitHub repository is required for each real run.** `goalcup start` asks you to name a new,
+  empty, public repository, opens GitHub to create it, and checks that your own git can push to it.
+  The run's workspace is a clone of that repository, so it starts with no README, source,
+  configuration, hidden starter files or existing product. Goal Cup Proxy adds nothing to it: its own
+  `goal-cup` skill goes in the harness's home, not the workspace.
+- The agent pushes its work to that repository with your own git login, as you do. The commit the
+  server records at the deadline is what is judged.
 - Prepared capabilities may help the agent work. A prebuilt product, substantial product code or an
   existing application may not be smuggled in as "context". The judged result must be a fresh build.
 - Participant-controlled instructions and task context available to the agent at the start are frozen
@@ -164,6 +164,14 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
 
 The direct prompt is the only live human instruction. Prepared resources remain subject to the
 disclosure and no-side-channel rules.
+
+## Keys
+
+- Never put keys in your repository.
+- You may give your agent keys in `~/goalcup-work/.env.local`. Set them up before the start;
+  changing them during the run is outside help.
+- Your agent can use any service and make its own accounts. What it does is in the record and is
+  what counts.
 
 ## During the run
 
@@ -232,10 +240,10 @@ disclosure and no-side-channel rules.
 - **Your agent is not limited the same way.** It runs with full access as your user, so it can read
   and write anything you can, those folders and your Keychain included. Codex and Claude Code each use
   one config home in Goal Cup Proxy's own config directory, shared by that connector's runs. Goal Cup Proxy
-  never copies your own settings into it: `goalcup prep` opens the harness there so you sign in and add
+  never copies your own settings into it: `goalcup setup` opens the harness there so you sign in and add
   the settings, MCP servers and skills you want. Claude Code's run `HOME` on macOS holds a link to your
   `~/Library/Keychains`, for your subscription login. Hermes uses one such home too, set up by its
-  own wizard when `goalcup prep` opens it. Goal Cup Proxy never sees, forwards or stores your provider
+  own wizard when `goalcup setup` opens it. Goal Cup Proxy never sees, forwards or stores your provider
   key: each harness keeps its own login in its home.
 - **Your agent can read your logins, and one recording gap remains.** The harness must read and
   refresh its own login all run, and its tools run as your user. So Goal Cup Proxy cannot stop your

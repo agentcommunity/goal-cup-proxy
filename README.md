@@ -29,23 +29,23 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    It checks the download against the release's `SHA256SUMS` and installs into `~/.local/bin`
    and `~/.local/share/goalcup`, with no sudo. Run it again to upgrade, never during your run.
    For one particular release, add `-s -- --version <x.y.z>` after `sh`.
-2. **Log in** once per computer: `goalcup login`. Check the code in the browser and approve.
-3. **Prep**: `goalcup prep --harness <id>`, then `goalcup prep --repo https://github.com/<owner>/<repo>`.
-   Run `goalcup prep` until steps 1 to 5 say `[ok]`; step 6 turns `[ok]` after your practice run
-   (next step). Prep opens the harness once in its own
-   isolated home: sign in there, and set it so it never stops to ask you for approval
-   ([set up your harness for a 168-hour run](docs/HARNESS-SETUP.md)). Your repository must be
-   new, empty and public, with a fine-grained token for it. For Hermes, install exactly
-   `uv tool install hermes-agent==0.19.0`, not Hermes's own installer, which installs the newest
-   release (it writes no session file). See [Hermes setup](docs/HARNESS-SETUP.md#hermes).
-4. **Practice**: `goalcup start --harness <id> --practice`. It lasts about ten minutes, never
-   pushes and never counts. Do as many as you like.
-5. **Start** inside the start window: `goalcup start --harness <id>`. A dry run is open from
+2. **Set up**: `goalcup setup`. Four steps: it connects this computer to your account, lists the
+   harnesses and lets you pick one, opens it once in its own isolated home so you sign in (or
+   paste your API key; Goal Cup never sees it) and set it never to stop for approval
+   ([set up your harness for a 168-hour run](docs/HARNESS-SETUP.md)), and checks this machine.
+   Run it until every step says `[ok]`. It needs no GitHub and keeps no key. For Hermes, install
+   exactly `uv tool install hermes-agent==0.19.0`, not Hermes's own installer, which installs the
+   newest release (it writes no session file). See [Hermes setup](docs/HARNESS-SETUP.md#hermes).
+3. **Practice** (optional): `goalcup start --harness <id> --practice`. About ten minutes in an
+   empty local folder, no GitHub, never counts. Do as many as you like.
+4. **Start** inside the start window: `goalcup start --harness <id>`. A dry run is open from
    23 October, so you can start a rehearsal now
-   ([the dry run](docs/PARTICIPANT-GUIDE.md#the-dry-run-optional)). Approve this run in the
-   browser. The harness opens in a fresh clone of your repository. Its own setup screens (sign-in,
+   ([the dry run](docs/PARTICIPANT-GUIDE.md#the-dry-run-optional)). It asks you to name a new,
+   empty, public GitHub repository for this run, opens GitHub to create it, and checks that your
+   own git can push to it. Then approve the run in the browser. The harness opens in a fresh
+   clone of that repository and pushes with your own git login. Its own setup screens (sign-in,
    folder trust, model choice) come before your prompt, and answering them is fine.
-6. **Type your one prompt** and press Enter. After it, the only message you may ever type is
+5. **Type your one prompt** and press Enter. After it, the only message you may ever type is
    "keep going".
 
 **During the run.**
@@ -78,9 +78,9 @@ most runs have one, and `goalcup continue` starts the next. Every flag is in `go
 
 | Command | What it does |
 |---|---|
-| `goalcup login [--server <URL>]` | Connect this computer to your Goal Cup account (once). |
-| `goalcup prep [--harness <ID>] [--repo <URL>] [--work-root <PATH>] [--json] [--dev]` | Check the six readiness steps. Never starts a run. |
-| `goalcup start --harness <ID> [--practice \| --test] [--dev]` | Start a run: open the harness here and record it. `--test` is for organizers. |
+| `goalcup setup [--harness <ID>] [--work-root <PATH>] [--json] [--dev]` | Check the four readiness steps. Never starts a run. `goalcup prep` is its old name. |
+| `goalcup login [--server <URL>]` | Connect this computer to your Goal Cup account (once; `setup` does it for you). |
+| `goalcup start --harness <ID> [--practice \| --test] [--repo <NAME>] [--dev]` | Start a run: open the harness here and record it. A real run first asks for its own new GitHub repository. `--test` is for organizers. |
 | `goalcup status [<part-id>] [--json]` | Show the run: recording state, time left, upload, problems, `Next:`. `--json` prints the signed status document, with this machine's `local` facts and a `problems` array (the `PROBLEM:` lines' sentences, left out when there are none) beside it. |
 | `goalcup time-left` | Show how much time the run has left. The agent may run it too. |
 | `goalcup mcp` | Serve the time left as an MCP tool (`time_left`) for the agent. The harness starts it; add it as in [HARNESS-SETUP](docs/HARNESS-SETUP.md#add-the-goal-cup-time-left-tool). |
@@ -151,7 +151,7 @@ Worker). The details and the glossary (run, part, segment, chain file, seal, rec
 | Linux, x86_64 | Reservation tests and a no-login harness smoke pass on a hosted runner. Full suites not measured. |
 | Windows | Use WSL2 (below). Real-machine validation is pending. Native Windows is planned. |
 
-The trace folder must be on APFS, ext4 or XFS: `goalcup prep` fails its step otherwise, and
+The trace folder must be on APFS, ext4 or XFS: `goalcup setup` fails its step otherwise, and
 `start` and `continue` warn. On Linux, install the
 harness as a native binary first on `PATH` (not an npm wrapper). On a machine with no browser, set
 `GOALCUP_NO_BROWSER=1`: `login` and `start` print the approval address instead. Known issues:
@@ -206,7 +206,7 @@ A binary copied out of `target/release` needs `GOALCUP_CONNECTORS_DIR="<checkout
 
 ```sh
 export GOALCUP_CONFIG_DIR="$(mktemp -d "$HOME/goalcup-local.XXXXXX")"
-goalcup prep --harness claude-code-cli    # sign in to the harness; the [todo] lines are fine locally
+goalcup setup --harness claude-code-cli   # sign in to the harness; the [todo] lines are fine locally
 cd "$(mktemp -d "$HOME/goalcup-run.XXXXXX")"   # outside any Git repository
 goalcup start --harness claude-code-cli   # type a prompt, then exit the harness to seal
 ```

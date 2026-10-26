@@ -306,11 +306,11 @@ pub(crate) fn claim_home_for_prep(
             return Err(CliError::Refused(match holder {
                 Some(run) => format!(
                     "run {run} is recording on this machine, and runs share one {id} home. \
-                     Wait for it to end, then run `goalcup prep` again."
+                     Wait for it to end, then run `goalcup setup` again."
                 ),
                 None => format!(
-                    "a {id} run is recording on this machine, or another `goalcup prep` has \
-                     the {id} home open. Wait for it to end, then run `goalcup prep` again."
+                    "a {id} run is recording on this machine, or another `goalcup setup` has \
+                     the {id} home open. Wait for it to end, then run `goalcup setup` again."
                 ),
             }));
         }

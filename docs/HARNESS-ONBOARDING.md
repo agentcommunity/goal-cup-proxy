@@ -98,14 +98,16 @@ server that accepts the new connector:
 
 ```sh
 goalcup login --server <approved-server-url>
-goalcup prep --harness <id> --repo https://github.com/<owner>/<empty-public-repo> --work-root <absolute-folder-outside-git>
+goalcup setup --harness <id> --work-root <absolute-folder-outside-git>
 goalcup start --harness <id> --practice
 ```
 
-Finish prep's human steps and the separate login/run approvals; the [participant guide](PARTICIPANT-GUIDE.md)
-explains them. Let the server's practice deadline stop, seal and upload the run. Use `goalcup entries`
+Finish setup's human steps and the run approval; the [participant guide](PARTICIPANT-GUIDE.md)
+explains them. A practice run needs no GitHub repository. A real run (a dry run or the cup run)
+asks for its own new, empty, public repository at `goalcup start`, or takes
+`--repo <owner>/<name>`. Let the server's practice deadline stop, seal and upload the run. Use `goalcup entries`
 and `goalcup upload <entry>` if delivery is pending, verify the resulting trace, and check signed
-acknowledgement through the terminal. Run prep again to check its practice step. See
+acknowledgement through the terminal. See
 [event qualification](#getting-a-harness-into-the-event) for the contributor report and organizer run.
 
 ## What Goal Cup Proxy does

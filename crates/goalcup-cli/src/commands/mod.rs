@@ -11,6 +11,7 @@ pub mod entries;
 pub mod login;
 pub mod mcp;
 pub mod prep;
+pub mod run_repo;
 pub mod seal;
 pub mod start;
 pub mod status;

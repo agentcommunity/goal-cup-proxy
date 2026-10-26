@@ -270,6 +270,7 @@ pub fn continue_with(
         disk: opts.disk,
         native_silence: opts.native_silence,
         mode: record.mode(),
+        repo: None,
         open_url: |_| false,
         upload_policy: opts.upload_policy,
         sleep_lock: opts.sleep_lock,

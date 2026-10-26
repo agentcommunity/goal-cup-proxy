@@ -11,6 +11,10 @@ pub fn details_heading(host_log: Option<&Path>) -> String {
     }
 }
 
+/// What a practice run that is sealed and uploaded points to: the real run.
+pub const PRACTICE_NEXT: &str =
+    "Next: your real run, inside the start window: goalcup start --harness <your harness>.";
+
 /// Said before the wait for the rest of the upload, which can take minutes.
 pub const UPLOADING_REST: &str =
     "Uploading the rest of the run… keep this terminal open until it says the upload is done.";
@@ -103,14 +107,12 @@ pub fn after_upload(ending: &Ending<'_>, all_sent: bool, server_closed: bool) ->
         }),
         Ending::TimeUp { practice } => {
             if all_sent {
-                // The prep pointer is a next step, so it replaces "Nothing more to do": the two
-                // would contradict each other. It is given only when the upload is complete,
-                // because prep's practice step needs every part uploaded.
+                // The pointer to the real run is a next step, so it replaces "Nothing more to
+                // do": the two would contradict each other. It is given only when the upload is
+                // complete.
                 if *practice {
                     lines.push("Your practice run is sealed and uploaded.".to_string());
-                    lines.push(
-                        "Next: goalcup prep (its practice step should now be ok).".to_string(),
-                    );
+                    lines.push(PRACTICE_NEXT.to_string());
                 } else {
                     lines.push(format!("Your run is sealed and uploaded. {NOTHING_MORE}"));
                 }

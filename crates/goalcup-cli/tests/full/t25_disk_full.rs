@@ -29,7 +29,7 @@
 //! decides when `goalcup status` calls the upload failing, so the server-down row waits it out to
 //! see that line.
 
-use crate::common::m2_cli_support::{FAKE_GITHUB_TOKEN, PREP_REPO};
+use crate::common::m2_cli_support::PREP_REPO;
 use crate::common::m2_vertical_support::{CONNECTOR, Vertical};
 use crate::common::support;
 use crate::common::upload_server::{ServerOptions, UploadServer};
@@ -307,14 +307,10 @@ impl World {
         assert!(git.status.success(), "{git:?}");
         let work = self.v.root.join("work");
         std::fs::create_dir_all(&work).unwrap();
-        goalcup_cli::account::github::GithubSetup::new(PREP_REPO, FAKE_GITHUB_TOKEN)
-            .unwrap()
-            .store(cfg)
-            .unwrap();
         std::fs::write(
             goalcup_cli::prep_file::prep_path(cfg),
             serde_json::to_vec(&json!({
-                "harness": CONNECTOR, "repo_url": PREP_REPO, "work_root": work,
+                "harness": CONNECTOR, "work_root": work,
             }))
             .unwrap(),
         )
@@ -335,7 +331,8 @@ impl World {
             .env(
                 goalcup_cli::commands::start::TEST_CLONE_SOURCE,
                 &self.clone_source,
-            );
+            )
+            .env(goalcup_cli::commands::start::TEST_GITHUB_LOGIN, "goal-cup");
         command
     }
 
@@ -363,7 +360,17 @@ impl World {
     }
 
     fn start(&self) -> Running {
-        self.spawn("start", &["start", "--harness", CONNECTOR, "--dev"])
+        self.spawn(
+            "start",
+            &[
+                "start",
+                "--harness",
+                CONNECTOR,
+                "--dev",
+                "--repo",
+                PREP_REPO,
+            ],
+        )
     }
 
     /// One short command to completion, recorded whole.
