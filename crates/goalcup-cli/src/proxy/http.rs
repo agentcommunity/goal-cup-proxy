@@ -296,8 +296,11 @@ async fn relay_requests(
         shared.emitter.record_model_request();
         let at = src.at.clone();
         let capture = select(shared, &request, target.as_ref(), exchange);
-        if capture.is_some() {
+        if let Some(capture) = &capture {
             shared.emitter.record_recorded_request();
+            if capture.meta.protocol_hint.is_some() {
+                shared.emitter.record_generation_request();
+            }
         }
         let request_ok = capture.as_ref().map(|c| c.request_ok.clone());
         let meta = capture

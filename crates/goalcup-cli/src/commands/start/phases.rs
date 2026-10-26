@@ -869,6 +869,7 @@ pub(super) fn run_harness<'a>(
     let vitals = match forked.proxied.as_ref() {
         Some(proxied) => crate::run::RunSignals::counting(proxied.proxy.model_requests())
             .recording_from(proxied.proxy.recorded_requests())
+            .generations_from(proxied.proxy.generation_requests())
             .client_tls_from(proxied.proxy.client_tls_failures()),
         None => crate::run::RunSignals::default(),
     };

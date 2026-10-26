@@ -13,10 +13,12 @@
 //! [`Recording::Unknown`], never a failure), and writes the run's `state.json` ([`Beat`]).
 //! That is where the disk's low-space warning, the upload's trouble and the recording's gaps
 //! are said; `goalcup status` reads them back. It also keeps the run's time-left file, which
-//! the agent may read with `goalcup time-left` (D66), and says once per start or continue (in
-//! `host.log` while the harness owns the terminal), and keeps in the state, when the harness has
-//! written no session file while its model requests are recorded ([`super::NativeSilence`])., and keeps in the state
-//! when no model request has been recorded at all after a wait ([`super::no_model_calls_after`]).
+//! the agent may read with `goalcup time-left` (D66).
+//!
+//! Twice the tick also says something once per start or continue (in `host.log` while the harness
+//! owns the terminal) and keeps it in the state: when the harness has written no session file
+//! while its model requests are recorded ([`super::NativeSilence`]), and when no model call has
+//! been recorded at all after a wait ([`super::no_model_calls_after`]).
 
 use super::pause::{AgentPause, Change};
 use super::reserve::{
@@ -283,7 +285,9 @@ impl Ticker {
         let no_calls = beat.no_calls.as_ref().map(|watch| {
             self.no_calls.see(
                 watch,
-                beat.vitals.recorded_requests(),
+                // Model calls, not every request under the base path: a harness that only lists
+                // models through the proxy has made no call Goal Cup could read.
+                beat.vitals.generation_requests(),
                 beat.vitals.client_tls_failures(),
                 Instant::now(),
                 &mut crate::host_log::say,
@@ -413,7 +417,7 @@ impl NoCallsTick {
     }
 
     /// Whether the harness is silent at `now`: `Some(..)` when the tick began at least
-    /// `watch.after` ago and `requests` (the recorded model requests) is zero. The first time it
+    /// `watch.after` ago and `requests` (the model calls recorded) is zero. The first time it
     /// is, the line goes to `say`, once. It clears as soon as a request is recorded.
     fn see(
         &mut self,
@@ -440,6 +444,7 @@ impl NoCallsTick {
                 silent.minutes,
                 silent.tls_failing,
                 crate::participant::Restart::Cannot,
+                true,
             ));
         }
         Some(silent)

@@ -550,6 +550,7 @@ impl RunState {
                 silent.minutes,
                 silent.tls_failing,
                 advice.restart(who),
+                true,
             ));
         }
         // An agent the host ended because the run is over (its deadline, a newer run) is not a
@@ -594,6 +595,8 @@ pub struct RunSignals {
     model_requests: Arc<AtomicU64>,
     /// The recording proxy's count of requests it selected for capture (the model endpoints).
     recorded_requests: Arc<AtomicU64>,
+    /// The recording proxy's count of requests on a path with a protocol hint (model calls).
+    generation_requests: Arc<AtomicU64>,
     /// The recording proxy's count of harness connections that failed its TLS handshake.
     client_tls: Arc<AtomicU64>,
     upload: Arc<Mutex<UploadVital>>,
@@ -643,6 +646,7 @@ impl RunSignals {
             recording: Arc::new(AtomicU8::new(Recording::Unknown as u8)),
             model_requests: counter,
             recorded_requests: Arc::default(),
+            generation_requests: Arc::default(),
             client_tls: Arc::default(),
             upload: Arc::default(),
             time_left: Arc::default(),
@@ -653,6 +657,13 @@ impl RunSignals {
     /// These signals, with recorded model requests read from `counter` (the recording proxy's).
     pub fn recording_from(mut self, counter: Arc<AtomicU64>) -> RunSignals {
         self.recorded_requests = counter;
+        self
+    }
+
+    /// These signals, with model calls (requests on a hinted path) read from `counter` (the
+    /// recording proxy's).
+    pub fn generations_from(mut self, counter: Arc<AtomicU64>) -> RunSignals {
+        self.generation_requests = counter;
         self
     }
 
@@ -690,6 +701,12 @@ impl RunSignals {
     /// Requests to the connector's model endpoints the recording proxy recorded so far.
     pub fn recorded_requests(&self) -> u64 {
         self.recorded_requests.load(Ordering::SeqCst)
+    }
+
+    /// Requests on a path with a protocol hint the recording proxy recorded so far: the model
+    /// calls, not a model list or a probe.
+    pub fn generation_requests(&self) -> u64 {
+        self.generation_requests.load(Ordering::SeqCst)
     }
 
     /// Harness connections the recording proxy could not complete a TLS handshake with so far.
@@ -1551,7 +1568,8 @@ mod tests {
         });
         let lines = state.problems(now, Advice::Continue, &who);
         assert!(
-            lines[0].contains("does not trust Goal Cup's recording certificate"),
+            lines[0]
+                .contains("may fail because it does not trust Goal Cup's recording certificate"),
             "{lines:?}"
         );
         state.ended = true;

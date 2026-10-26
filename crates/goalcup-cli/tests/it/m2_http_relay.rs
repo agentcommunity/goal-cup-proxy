@@ -1428,6 +1428,42 @@ async fn two_requests_on_one_connection_count_two() {
     );
 }
 
+/// The run's "no model calls" line counts model calls, not every recorded request: a model list
+/// under the same base path (a `model_host_from` host records the whole base, without a hint) is
+/// recorded but is no call, and a request on a hinted path is both.
+#[tokio::test]
+async fn only_a_request_on_a_hinted_path_counts_as_a_model_call() {
+    let sink = RecordingSink::new();
+    let mut h = start(
+        emitter_for(sink.clone()),
+        policy(&[
+            (
+                "/v1/chat/completions",
+                false,
+                Some("openai-chat-completions"),
+            ),
+            ("/v1/", true, None),
+        ]),
+    );
+    let ok = response("HTTP/1.1 200 OK", &["Content-Length: 0"], b"");
+    round_trip(&mut h, &request("GET", "/v1/models", &[], b""), &ok).await;
+    assert_eq!(h.emitter.recorded_requests(), 1);
+    assert_eq!(
+        h.emitter.generation_requests(),
+        0,
+        "a model list is no call"
+    );
+    round_trip(
+        &mut h,
+        &request("POST", "/v1/chat/completions", &[&length(b"{}")], b"{}"),
+        &ok,
+    )
+    .await;
+    assert_eq!(h.emitter.recorded_requests(), 2);
+    assert_eq!(h.emitter.generation_requests(), 1);
+    close_both(h).await;
+}
+
 // ---------------------------------------------------------------------------------------
 // Upgrades.
 // ---------------------------------------------------------------------------------------

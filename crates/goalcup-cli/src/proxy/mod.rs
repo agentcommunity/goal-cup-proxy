@@ -391,6 +391,13 @@ impl ProxyHandle {
         self.shared.emitter.recorded_requests_counter()
     }
 
+    /// The recording proxy's count of requests on a path with a protocol hint
+    /// ([`api::CaptureEmitter::generation_requests`]), shared as [`ProxyHandle::model_requests`]
+    /// is: the model calls, not a model list or a probe under the same base path.
+    pub fn generation_requests(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        self.shared.emitter.generation_requests_counter()
+    }
+
     /// The recording proxy's count of harness connections whose TLS handshake failed
     /// ([`AdmissionFailureCounts::client_tls`]), shared as [`ProxyHandle::model_requests`] is. A
     /// harness that does not trust the recording certificate shows here.
