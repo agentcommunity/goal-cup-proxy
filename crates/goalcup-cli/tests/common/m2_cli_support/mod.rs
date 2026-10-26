@@ -409,6 +409,10 @@ impl Rig {
             serde_json::to_vec(&serde_json::json!({ "harness": FAKE_ID })).unwrap(),
         )
         .unwrap();
+        // A real run's folder holds the participant's token, ignored by Git.
+        let folder = self.run_folder();
+        std::fs::write(folder.join(".env.local"), "GH_TOKEN=x\n").unwrap();
+        std::fs::write(folder.join(".gitignore"), ".env*\n").unwrap();
     }
 
     /// The run directories `goalcup start` made (`goalcup-<16 hex>`): beside the folder it ran

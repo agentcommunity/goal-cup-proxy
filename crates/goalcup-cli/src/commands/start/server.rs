@@ -46,7 +46,7 @@ pub(super) fn uploading(
     }
     // The one sentence `run goalcup setup first`.
     crate::prep_file::read_prep(cfg)?;
-    super::project::refuse_unready_project(cfg, project)?;
+    super::project::refuse_unready_project(cfg, project, opts.mode != RunMode::Practice)?;
     Ok(Some(Serving {
         url: server.url,
         cfg: std::fs::canonicalize(cfg).unwrap_or_else(|_| cfg.to_path_buf()),

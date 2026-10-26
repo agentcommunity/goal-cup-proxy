@@ -46,8 +46,9 @@ pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
     let mut lines = vec![String::new()];
     match (continued, l.mode) {
         (true, _) => lines.push(RUN_GOES_ON.to_string()),
-        (false, Some(RunMode::Practice)) => lines
-            .push("Your practice run is open. It does not count, and it never pushes.".to_string()),
+        (false, Some(RunMode::Practice)) => lines.push(
+            "Your practice run is open. It does not count, and needs no repository.".to_string(),
+        ),
         (false, Some(RunMode::Competition)) => {
             lines.push("Your competition run is open.".to_string())
         }

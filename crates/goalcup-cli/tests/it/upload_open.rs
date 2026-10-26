@@ -251,6 +251,8 @@ mod server_runs {
         let rig = Rig::new();
         let server = server(&rig);
         rig.prepare_for(&server.url());
+        // A practice run pushes nothing: no token is asked for.
+        std::fs::remove_file(rig.run_folder().join(".env.local")).unwrap();
         let ended = run_to_end(&rig, true);
         let run_id = server.run_ids()[0].clone();
         assert_eq!(
@@ -750,12 +752,13 @@ mod server_runs {
     /// A key file that no `.gitignore` line covers would be published by the agent's first
     /// `git add .`, token and all: the start is refused before the approval and prints the lines
     /// to add. A token line the printed push line cannot read (here `export`, quotes and a CR) is
-    /// refused too, showing the form and never the value. Covered and plain, it starts.
+    /// refused too, showing the form and never the value, as is a real run with no token line.
+    /// Covered and plain (with a `.DS_Store` beside), it starts.
     #[test]
     fn a_key_file_no_gitignore_line_covers_is_refused_before_the_approval() {
         const VALUE: &str = "SECRET-VALUE-0123";
         let quoted = format!("export GH_TOKEN=\"{VALUE}\"\r\n");
-        let rows: [(&str, Option<&str>, &str, &str); 4] = [
+        let rows: [(&str, Option<&str>, &str, &str); 5] = [
             ("no .gitignore", None, "GH_TOKEN=x\n", ".env.*"),
             (
                 "another file ignored",
@@ -775,6 +778,12 @@ mod server_runs {
                 &quoted,
                 "GH_TOKEN=<",
             ),
+            (
+                "a real run with no token line",
+                Some(".env*\n"),
+                "OTHER=1\n",
+                "GH_TOKEN=<",
+            ),
         ];
         for (name, ignore, key_file, phrase) in rows {
             let rig = Rig::new();
@@ -782,8 +791,9 @@ mod server_runs {
             rig.prepare_for(&server.url());
             let project = rig.run_folder();
             std::fs::write(project.join(".env.local"), key_file).unwrap();
-            if let Some(ignore) = ignore {
-                std::fs::write(project.join(".gitignore"), ignore).unwrap();
+            match ignore {
+                Some(ignore) => std::fs::write(project.join(".gitignore"), ignore).unwrap(),
+                None => std::fs::remove_file(project.join(".gitignore")).unwrap(),
             }
             let said = refused_before_the_approval(&rig, &server, &project);
             assert!(
@@ -798,6 +808,8 @@ mod server_runs {
         let project = rig.run_folder();
         std::fs::write(project.join(".env.local"), "GH_TOKEN=x\n").unwrap();
         std::fs::write(project.join(".gitignore"), "# keys\n/.env\n.env.*\n").unwrap();
+        // macOS leaves a `.DS_Store` in a folder opened in Finder: part of the kit.
+        std::fs::write(project.join(".DS_Store"), "x").unwrap();
         run_to_end(&rig, false);
         assert_eq!(server.run_ids().len(), 1);
     }
@@ -842,7 +854,7 @@ mod server_runs {
     /// A real run's launch block names the repository, the token file and the git identity, for
     /// the participant's prompt, and its lines work: run in a new repository, git gets the token
     /// from the key file for github.com (and for no other host), and the token is in no setting.
-    /// A practice run, which never pushes, prints none of it.
+    /// A practice run, which needs no repository, prints none of it.
     #[test]
     fn a_real_run_prints_where_and_as_whom_the_agent_pushes() {
         const TOKEN: &str = "SYNTHETIC-gh-token-0123456789abcdef";

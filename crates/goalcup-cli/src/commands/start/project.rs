@@ -19,7 +19,14 @@ pub const TOKEN_VARIABLE: &str = "GH_TOKEN";
 pub const TOKEN_FILE: &str = ".env.local";
 
 /// Every check of a new run's project folder, in the order a participant fixes them.
-pub(super) fn refuse_unready_project(cfg: &Path, project: &Path) -> Result<(), CliError> {
+///
+/// `needs_token` is true for every run but a practice run: the agent of a real run pushes with the
+/// token in the key files, so a folder without one is refused here, not after the approval.
+pub(super) fn refuse_unready_project(
+    cfg: &Path,
+    project: &Path,
+    needs_token: bool,
+) -> Result<(), CliError> {
     refuse_beside_goalcup(cfg, project)?;
     let real = std::fs::canonicalize(project).map_err(|source| CliError::Io {
         path: project.display().to_string(),
@@ -45,15 +52,20 @@ pub(super) fn refuse_unready_project(cfg: &Path, project: &Path) -> Result<(), C
             &uncovered,
         )));
     }
-    refuse_unreadable_token_line(project, &names)
+    refuse_unreadable_token_line(project, &names, needs_token)
 }
 
 /// The push line the launch block prints reads the token with `sed -n s/^GH_TOKEN=//p`, so a key
 /// file that names `GH_TOKEN` must do so in that form: exactly one `GH_TOKEN=<value>` line in all
 /// the key files, with no `export`, no quotes, no spaces and no CR, and a value. Anything else
 /// would fail the agent's first push, after the approval; it is refused here instead, naming the
-/// file and the form, never the value. A folder with no `GH_TOKEN` line is not refused here.
-fn refuse_unreadable_token_line(project: &Path, names: &[String]) -> Result<(), CliError> {
+/// file and the form, never the value. A folder with no `GH_TOKEN` line is refused too when
+/// `needs_token` (a real run), and allowed for a practice run, which pushes nothing.
+fn refuse_unreadable_token_line(
+    project: &Path,
+    names: &[String],
+    needs_token: bool,
+) -> Result<(), CliError> {
     let mut found: Vec<(&str, bool)> = Vec::new();
     for name in names.iter().filter(|name| is_key_file(name)) {
         let Ok(bytes) = std::fs::read(project.join(name)) else {
@@ -66,7 +78,9 @@ fn refuse_unreadable_token_line(project: &Path, names: &[String]) -> Result<(), 
         }
     }
     match found.as_slice() {
-        [] | [(_, true)] => Ok(()),
+        [] if !needs_token => Ok(()),
+        [] => Err(CliError::Refused(crate::participant::token_line_missing())),
+        [(_, true)] => Ok(()),
         [(file, _), ..] => Err(CliError::Refused(crate::participant::token_line_form(file))),
     }
 }
@@ -115,7 +129,7 @@ fn kit_or_refuse(project: &Path) -> Result<Vec<String>, CliError> {
         };
         let name = entry.file_name().to_string_lossy().into_owned();
         let file = entry.file_type().is_ok_and(|t| t.is_file());
-        if file && (name == ".gitignore" || is_key_file(&name)) {
+        if file && (name == ".gitignore" || name == ".DS_Store" || is_key_file(&name)) {
             kit.push(name);
         } else {
             extra.push(name);
