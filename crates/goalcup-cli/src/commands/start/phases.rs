@@ -449,6 +449,8 @@ pub(super) fn create_and_gate<'a>(
         .then(|| crate::push_lines::path(cfg, &record.run_id));
     // The run's one reservation, taken here and released when the launch fails or the run ends.
     let mut reserve = None::<RunReserve>;
+    // Whether the push block went to the clipboard (D73), copied just before the spawn.
+    let mut on_clipboard = false;
     // The run's ids and folders, kept for its `host.log` and `goalcup status`, so the launch
     // block holds only what to do.
     let mut details: Vec<String> = session_note.into_iter().collect();
@@ -581,6 +583,13 @@ pub(super) fn create_and_gate<'a>(
         }
         // The only way a capture child is spawned (D40): forked and parked before `exec`,
         // and released only once its registration is durable.
+        // On the clipboard too, when the block is shown and a clipboard tool is there (D73).
+        // Before the spawn: on Linux `xclip` and `wl-copy` leave a selection server running,
+        // and one started before the harness is never swept as the harness's (`subreaper.rs`).
+        on_clipboard = crate::participant::shows_push_block(opens, model_calls_before)
+            && !prompt.is_empty()
+            && !crate::chat_without_terminal()
+            && crate::push_lines::copy_to_clipboard(&crate::push_lines::text(&prompt), env);
         let gated = spawn_gated(&plan, GATE_READY_WITHIN)?;
         Ok((proxied, plan, goal_stream, gated, bound))
     });
@@ -622,11 +631,6 @@ pub(super) fn create_and_gate<'a>(
             return Err(error);
         }
     };
-    // On the clipboard too, when the block is shown and a clipboard tool is there (D73).
-    let on_clipboard = crate::participant::shows_push_block(opens, model_calls_before)
-        && !prompt.is_empty()
-        && !crate::chat_without_terminal()
-        && crate::push_lines::copy_to_clipboard(&crate::push_lines::text(&prompt), env);
     let forked = Forked {
         client,
         cfg,

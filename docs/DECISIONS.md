@@ -1035,7 +1035,9 @@ chat --continue` resumes the last session in a `HERMES_HOME` and exits 1 when th
   `wl-copy` with a Wayland display, else `xclip -selection clipboard`; `clip.exe` under WSL),
   given a short list of the participant's variables, and says so only when the copy worked; a
   missing or failing tool never fails the start. `goalcup status` shows them for an open run.
-  Every `continue` that does not resume the conversation prints them again (and copies them).
+  Every `continue` of a run started on 0.7.1 or later that does not resume the conversation
+  prints them again (and copies them); a run started on 0.7.0 has no `push-lines.txt`, so its
+  continue and `goalcup status` show none.
   The lines name the token file, never its value.
 - **Not in the skill.** The goal-cup skill stays the same for every run and names no
   repository. A run-specific section was tried and dropped: it reaches only a connector with

@@ -199,7 +199,8 @@ the block indented by two spaces; paste it as it is. An example (yours differs; 
 screen then says "The push block is on your clipboard. Paste it (Cmd-V, or Ctrl-Shift-V on Linux)
 at the very start of your first prompt."; it uses `pbcopy` on a Mac, `wl-copy` or `xclip` on
 Linux, `clip.exe` under WSL2; otherwise it says to copy the block from the screen), in the file `push-lines.txt` in the run's folder (the screen
-gives its path), and in `goalcup status` while the run is open. Pasting it is the only way the
+gives its path), and in `goalcup status` while the run is open (for a run started before 0.7.1,
+only on the start screen). Pasting it is the only way the
 agent learns them: Goal Cup writes nothing into your project folder.
 
 The agent runs `git init` and those lines, then pushes with the token. Goal Cup makes no commit and
@@ -222,10 +223,12 @@ to do. [The appendix](#appendix-what-goalcup-status-says) lists the messages.
 
 If the agent stops before the deadline (a crash, a reboot, a closed window), run `goalcup continue`
 in a terminal you will leave open. It needs no new approval and keeps the same deadline, in the
-same folder. When the harness picks up its last conversation, type only "keep going" once the
-agent has stopped: your prompt is already in it. Hermes does this too, once the run has recorded
-model calls. When the harness opens a new conversation instead, `goalcup` prints the push block
-again (and copies it again): paste it before "keep going" so the agent knows where to push. Do not
+same folder. When the harness picks up its last conversation, do what the screen says: once the
+run has recorded model calls it says to type only "keep going" when the agent has stopped (your
+prompt is already in it); before that it says to send your prompt if you never did, and shows the
+push block. Hermes picks up its last conversation too, once the run has recorded model calls.
+When the harness opens a new conversation instead, `goalcup` prints the push block again (and
+copies it again; a run started before 0.7.1 kept no copy of it): paste it before "keep going" so the agent knows where to push. Do not
 delete or move the project folder. `goalcup seal` stops the agent and ends the
 current part. The run stays open, and `continue` goes on with it.
 

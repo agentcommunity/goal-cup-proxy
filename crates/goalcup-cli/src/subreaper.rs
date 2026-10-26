@@ -21,7 +21,9 @@
 //! - A child this process spawned and is still waiting for. None exists at the sweep: the only
 //!   `Command`s a capture run spawns are the daemon, the gated harness (whose spawn thread is
 //!   joined at its release), and the `/bin/ps` runs of `launch.rs` and `released_child.rs`, which
-//!   are `.output()`-waited on this same thread before the root's `wait`. No other thread (the
+//!   are `.output()`-waited on this same thread before the root's `wait`. The clipboard tool of
+//!   `push_lines.rs` (D73) runs before the harness is spawned; the selection server `xclip` or
+//!   `wl-copy` leaves behind started before the root, so the start filter keeps it out. No other thread (the
 //!   tees, the recording proxy, the daemon's reaper) spawns anything. The start filter keeps
 //!   anything this process inherited across its own `exec` out as well.
 //! - Threads: `/proc` lists thread-group leaders only, and this process's own threads are not
