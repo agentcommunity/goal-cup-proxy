@@ -100,7 +100,8 @@ STUB_TOKEN = "stub-gh-token-0123456789abcdef"  # what the gh stub prints for `gh
 def git_env():
     """What the kit gave this start of a git login: nothing (D71)."""
     names = ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GH_CONFIG_DIR", "SSH_AUTH_SOCK", "GH_TOKEN",
-             "GITHUB_TOKEN", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")
+             "GITHUB_TOKEN", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "SSH_AGENT_PID", "GIT_CONFIG_COUNT",
+             "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "XDG_CONFIG_HOME")
     return {k: os.environ.get(k) for k in names}
 
 def project_facts():
@@ -395,6 +396,7 @@ class World:
                  prompt_file: str | None = None) -> None:
         server = (env or {}).get("WORLD_SERVER") or "http://localhost:8787"
         token_file = (env or {}).get("WORLD_TOKEN_FILE")
+        self.stray: list[Path] = []  # files outside the scratch tree to remove afterwards
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.bin = self.root / "bin"
@@ -427,6 +429,11 @@ class World:
             "SSH_AUTH_SOCK": "/host/agent.sock",
             "GH_TOKEN": "gh-token-of-this-machine",
             "GITHUB_TOKEN": "github-token-of-this-machine",
+            "SSH_AGENT_PID": "4242",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "credential.helper",
+            "GIT_CONFIG_VALUE_0": "osxkeychain",
+            "XDG_CONFIG_HOME": "/host/config",
         }
         if prepared:
             # A configuration directory as `goalcup setup` leaves it (MATRIX_CONFIG_DIR).
@@ -440,11 +447,20 @@ class World:
             environment["MATRIX_PROMPT_FILE"] = str(path)
             del environment["MATRIX_PROMPT"]
         if token_file is not None:
-            # A token file for MATRIX_GH_TOKEN_FILE: "mode:text".
+            # A token file for MATRIX_GH_TOKEN_FILE: "mode:text"; mode "link" makes the path a
+            # symlink to a private file, "inside" a private file inside this checkout.
             mode, text = token_file.split(":", 1)
             path = self.root / "token-file"
-            path.write_text(text)
-            path.chmod(int(mode, 8))
+            if mode == "inside":
+                fd, name = tempfile.mkstemp(dir=MATRIX.parent.parent, prefix="scratch-token-")
+                os.close(fd)
+                path = Path(name)
+                self.stray.append(path)
+            real = self.root / "real-token" if mode == "link" else path
+            real.write_text(text)
+            real.chmod(0o600 if mode in ("link", "inside") else int(mode, 8))
+            if mode == "link":
+                path.symlink_to(real)
             environment["MATRIX_GH_TOKEN_FILE"] = str(path)
         for key, value in (env or {}).items():
             if key in ("WORLD_SERVER", "WORLD_TOKEN_FILE"):
@@ -584,6 +600,10 @@ SCENARIOS = {
     # The token from a file (a fine-grained one-repository token) instead of `gh auth token`.
     "test_token_file": ("stubchat", {"STUB_STOP": "0", "WORLD_TOKEN_FILE": "600:GH_TOKEN=" + FILE_TOKEN + "\n"},
                         TEST, True),
+    "test_token_file_link": ("stubchat", {"STUB_STOP": "0", "WORLD_TOKEN_FILE": "link:" + FILE_TOKEN + "\n"},
+                             TEST, True),
+    "test_token_file_inside": ("stubchat", {"STUB_STOP": "0", "WORLD_TOKEN_FILE": "inside:" + FILE_TOKEN + "\n"},
+                               TEST, True),
     "test_token_file_open": ("stubchat", {"STUB_STOP": "0", "WORLD_TOKEN_FILE": "644:" + FILE_TOKEN + "\n"},
                              TEST, True),
 }
@@ -601,6 +621,8 @@ class MatrixTests(unittest.TestCase):
             cls.worlds = {n: f.result() for n, f in futures.items()}
         for world in cls.worlds.values():
             cls.addClassCleanup(world.tmp.cleanup)
+            for stray in world.stray:
+                cls.addClassCleanup(stray.unlink, missing_ok=True)
 
     def test_a_run_without_the_seal_line_fails_the_row(self) -> None:
         w = self.worlds["no_seal"]
@@ -771,6 +793,22 @@ class MatrixTests(unittest.TestCase):
         self.assertIn("MATRIX_GH_TOKEN_FILE must be mode 0600", w.run.stderr)
         self.assertFalse(w.has("start.argv"))
         self.assertNotIn(FILE_TOKEN, w.everything_matrix_wrote())
+
+    def test_a_token_file_that_is_a_link_or_inside_the_checkout_is_refused(self) -> None:
+        for name, why in (("test_token_file_link", "must name a regular file"),
+                          ("test_token_file_inside", "is inside the checkout")):
+            w = self.worlds[name]
+            self.assertNotEqual(w.run.returncode, 0, name)
+            self.assertIn(why, w.run.stderr)
+            self.assertFalse(w.has("start.argv"), name)
+            self.assertNotIn(FILE_TOKEN, w.everything_matrix_wrote())
+
+    def test_the_cleanup_advice_follows_the_token_source(self) -> None:
+        # The file's token is not the login's: no advice to take the scope off the login again.
+        w = self.worlds["test_token_file"]
+        self.assertIn("the agent was given the token in MATRIX_GH_TOKEN_FILE", w.run.stderr)
+        self.assertNotIn("drop the scope again", w.run.stderr)
+        self.assertIn("drop the scope again", self.worlds["test_chat"].run.stderr)
 
     def test_a_test_run_makes_its_repository_and_passes_it_to_the_start(self) -> None:
         w = self.worlds["test_chat"]

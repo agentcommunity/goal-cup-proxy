@@ -225,8 +225,9 @@
 # and a .env.local holding `GH_TOKEN=<gh auth token>`, the agent's way to push to the run's
 # repository (made with umask 077, so mode 0600; the token is written straight from `gh auth
 # token` into the file and is in no argument, variable, log or output). `goalcup start` is run
-# from that folder, with `--repo` for a test run. The kit passes nothing of its machine's git
-# login to goalcup, and goalcup passes none to the agent (D71). The folder is under the cell's
+# from that folder, with `--repo` for a test run. The kit strips its machine's git login
+# variables from goalcup's environment, and goalcup builds the agent's environment from nothing (D71);
+# a --test cell keeps the real HOME, so goalcup's own process (not the agent) can see ~/.gitconfig. The folder is under the cell's
 # temporary directory, never beside the configuration directory. The token is removed from the
 # log if the agent ever printed it, and .env.local is deleted even with --keep. In a Docker cell
 # `gh auth token` is the container's own login (linux-matrix.sh github); the kit never copies a
@@ -717,13 +718,18 @@ cleanup() {
   }; fi
   if [ -n "$REPO_MADE" ]; then
     log "test repository made by the kit: $REPO_MADE"
-    # Whose token the agent was given: this machine's on a host, the cell's own in a Docker cell.
-    if [ -n "$CODES_FILE" ]; then
-      who="the login stored in this cell gave its agent its token"
+    # Whose token the agent was given: a file's (MATRIX_GH_TOKEN_FILE), the cell's own login in a
+    # Docker cell, or this machine's gh token on a host.
+    if [ -n "$TOKEN_FILE" ]; then
+      printf 'matrix: test repository made by the kit (delete it when done: first `gh auth refresh -s delete_repo`, which the default gh login lacks, then `gh repo delete %s --yes`; the agent was given the token in MATRIX_GH_TOKEN_FILE, not this login'"'"'s, so the scope may stay): %s\n' "$REPO_MADE" "$REPO_MADE" >&3
     else
-      who="this machine's gh token was given to the agent, so the login it came from can push"
+      if [ -n "$CODES_FILE" ]; then
+        who="the login stored in this cell gave its agent its token"
+      else
+        who="this machine's gh token was given to the agent, so the login it came from can push"
+      fi
+      printf 'matrix: test repository made by the kit (delete it when done: first `gh auth refresh -s delete_repo`, which the default gh login lacks, then `gh repo delete %s --yes`, then `gh auth refresh -r delete_repo` to drop the scope again: %s): %s\n' "$REPO_MADE" "$who" "$REPO_MADE" >&3
     fi
-    printf 'matrix: test repository made by the kit (delete it when done: first `gh auth refresh -s delete_repo`, which the default gh login lacks, then `gh repo delete %s --yes`, then `gh auth refresh -r delete_repo` to drop the scope again: %s): %s\n' "$REPO_MADE" "$who" "$REPO_MADE" >&3
   fi
   print_row
 }
@@ -815,8 +821,13 @@ scan_and_approve() {
 # approves through the test route or prints the address for you. (GOALCUP_TEST_NO_BROWSER is the
 # same switch for a build with test-support.)
 #
-# Nothing of this machine's git login is passed to goalcup (D71): no GH_TOKEN, no SSH agent, no
-# git configuration. A test run's token is a file in the project folder (make_project).
+# The kit strips this machine's git login variables from goalcup's environment (SSH agent and
+# askpass, tokens, git and gh configuration variables, including every GIT_CONFIG_KEY_n and
+# GIT_CONFIG_VALUE_n present). Goalcup itself builds the agent's environment from nothing: its own
+# HOME, GIT_CONFIG_NOSYSTEM=1 and a no-key ssh command (D71), so the agent gets only the token in
+# the project's .env.local. What the kit does not hide from goalcup's own process: a --test cell
+# runs with the real HOME (MATRIX_CONFIG_DIR), so ~/.gitconfig and ~/.config/gh are visible to
+# goalcup, not to the agent. A test run's token is a file in the project folder (project_token).
 # WRAP_DIR is where the command runs: the project folder for `goalcup start`, the neutral
 # $RUNS for the others. WRAP_EXTRA holds further NAME=value words for one command (the
 # refusals' test doors).
@@ -828,10 +839,14 @@ write_wrapper() { # file name "goalcup arguments" [stty]
     [ -z "${4:-}" ] || echo 'stty cols 120 rows 40 2>/dev/null'
     echo "echo \$\$ >$(shq "$ROOT/$2.pid")"
     echo "cd $(shq "${WRAP_DIR:-$RUNS}") || exit 1"
-    # Nothing of this machine's git login: its SSH agent, keyring, tokens and git/gh configuration.
-    printf 'exec env -u SSH_AUTH_SOCK -u XDG_RUNTIME_DIR -u DBUS_SESSION_BUS_ADDRESS -u GH_TOKEN -u GITHUB_TOKEN'
-    printf ' -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM'
-    printf ' -u GIT_CONFIG_NOSYSTEM -u GIT_ASKPASS -u GIT_SSH -u GIT_SSH_COMMAND -u GH_CONFIG_DIR'
+    # This machine's git login variables: SSH agent and askpass, keyring, tokens, git/gh configuration.
+    printf 'exec env -u SSH_AUTH_SOCK -u SSH_AGENT_PID -u SSH_ASKPASS -u XDG_RUNTIME_DIR -u XDG_CONFIG_HOME'
+    printf ' -u DBUS_SESSION_BUS_ADDRESS -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN'
+    printf ' -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST -u GH_CONFIG_DIR -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM'
+    printf ' -u GIT_CONFIG_NOSYSTEM -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_ASKPASS -u GIT_SSH'
+    printf ' -u GIT_SSH_COMMAND'
+    # Every GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n present, whatever n (names only are read).
+    for gv in $(env | grep -E '^GIT_CONFIG_(KEY|VALUE)_[0-9]+=' | cut -d= -f1); do printf ' -u %s' "$gv"; done
     printf ' HOME=%s GOALCUP_CONFIG_DIR=%s' "$(shq "$HOME_DIR")" "$(shq "$CFG")"
     [ -z "$CONNECTORS_ENV" ] || printf ' GOALCUP_CONNECTORS_DIR=%s' "$(shq "$CONNECTORS_ENV")"
     printf ' GOALCUP_NO_BROWSER=1 GOALCUP_TEST_NO_BROWSER=1 PATH=%s TERM=%s' "$(shq "$HARNESS_PATH")" "$MATRIX_TERM"
