@@ -20,6 +20,11 @@ line that links to your harness's section here (the run's `host.log` has it too)
 running, and check the settings in that section and the harness version. The line goes away once
 a session file is recorded.
 
+A run that has recorded no model call at all is a different `PROBLEM:` line (3 minutes into a practice
+run, 10 into a real one): it works for every harness, and means Goal Cup is not seeing the agent's
+calls. The line says what to do, and [PARTICIPANT-GUIDE](PARTICIPANT-GUIDE.md#appendix-what-goalcup-status-says)
+lists it.
+
 The facts here come from Goal Cup's own runs, most of them from the
 [local test day of 22 October 2026](research/results/2026-10-22-local-test-day.md). "Not measured"
 means that nobody at Goal Cup has tried it. The details are in each

@@ -141,6 +141,20 @@ pub(super) fn finish_run(
             let _ = say(out, &line);
         }
     }
+    // The tick's last verdict, repeated for a participant whose agent has closed: a run that
+    // recorded no model call is told so at its end too, local runs included.
+    let restart = if run_goes_on {
+        crate::participant::Restart::Continue {
+            run_id: &record.run_id,
+        }
+    } else if over {
+        crate::participant::Restart::Over
+    } else {
+        crate::participant::Restart::Cannot
+    };
+    for line in no_model_calls_block(&snapshot, &harness_name, restart) {
+        let _ = say(out, &line);
+    }
     // After the seal: the rest of the chain and the seal itself, within the finish budget.
     // A local run has nothing to upload, so there is nothing of it left to send.
     let mut sent_whole = !on_server;
@@ -411,4 +425,55 @@ pub(super) fn finish(
             .await;
     });
     sealed
+}
+
+/// The lines that repeat the watch tick's last "no model calls recorded" verdict at the end of
+/// `goalcup start`: none when the tick did not call the harness silent.
+fn no_model_calls_block(
+    snapshot: &crate::run::RunState,
+    harness: &str,
+    restart: crate::participant::Restart<'_>,
+) -> Vec<String> {
+    let Some(silent) = snapshot.no_model_calls else {
+        return Vec::new();
+    };
+    let line = crate::participant::problem_no_model_calls(
+        harness,
+        silent.minutes,
+        silent.tls_failing,
+        restart,
+    );
+    vec![
+        String::new(),
+        format!("{} {line}", crate::participant::PROBLEM),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::participant::{NO_MODEL_CALLS_MARK, Restart};
+    use crate::run::{NoModelCalls, RunState};
+
+    /// The end-of-run block repeats the tick's last verdict as a `PROBLEM:` line, and says
+    /// nothing when the tick never called the harness silent.
+    #[test]
+    fn the_end_of_run_repeats_the_ticks_last_no_model_calls_verdict() {
+        let mut state = RunState::launched("e1", Ok(()));
+        assert!(no_model_calls_block(&state, "Some Agent", Restart::Over).is_empty());
+        state.no_model_calls = Some(NoModelCalls {
+            minutes: 4,
+            tls_failing: false,
+        });
+        let run_id = "r0123456789abcdef";
+        let lines = no_model_calls_block(&state, "Some Agent", Restart::Continue { run_id });
+        let line = lines.last().expect("a line");
+        assert!(line.starts_with("PROBLEM:"), "{lines:?}");
+        assert!(line.contains(NO_MODEL_CALLS_MARK), "{lines:?}");
+        assert!(line.contains("4 minutes"), "{lines:?}");
+        assert!(
+            line.contains(&format!("goalcup continue {run_id}")),
+            "{lines:?}"
+        );
+    }
 }

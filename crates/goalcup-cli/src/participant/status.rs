@@ -434,6 +434,45 @@ pub fn problem_native_silent(harness: &str, requests: u64, guide: &str) -> Strin
     )
 }
 
+/// The words every no-model-calls line carries. Tests and scripts look for them.
+pub const NO_MODEL_CALLS_MARK: &str = "recorded no model calls";
+
+/// The recording proxy has recorded no model call `minutes` minutes into the part of the run
+/// the harness has been running, which is the safety net for a harness whose calls go round the
+/// proxy or fail its certificate. `tls_failing`: the proxy has seen connections from the harness
+/// fail the TLS handshake, which adds the one sentence that says why. The run goes on; `restart`
+/// says what to do. Said once per start or continue (in `host.log` while the harness owns the
+/// terminal) and kept by `goalcup status` until a model call is recorded.
+pub fn problem_no_model_calls(
+    harness: &str,
+    minutes: u64,
+    tls_failing: bool,
+    restart: Restart<'_>,
+) -> String {
+    let span = match minutes {
+        1 => "1 minute".to_string(),
+        n => format!("{n} minutes"),
+    };
+    let tls = if tls_failing {
+        " Your agent's connections to the model service fail because it does not trust Goal \
+         Cup's recording certificate."
+    } else {
+        ""
+    };
+    let fix = match restart {
+        Restart::Continue { run_id } => format!(
+            "Exit {harness}, then run: {CONTINUE_HINT} {run_id}. Run `goalcup doctor` if it \
+             happens again."
+        ),
+        Restart::Over | Restart::Cannot => "Run `goalcup doctor` to see why.".to_string(),
+    };
+    format!(
+        "Goal Cup has {NO_MODEL_CALLS_MARK} in {span}. If you have typed your prompt and \
+         {harness} is answering, Goal Cup is not seeing its calls.{tls} If you have not typed \
+         your prompt yet, type it. {fix}"
+    )
+}
+
 pub fn problem_sleep(why: &str) -> String {
     format!("this computer may go to sleep ({why}). Keep it on mains power with the lid open.")
 }
