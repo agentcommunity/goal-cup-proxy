@@ -400,8 +400,8 @@ pub fn prep_with(
             report.out,
             &format!(
                 "Ready.\n  Try it (10 min, no GitHub, never counts; a new \
-                 folder each time): cd \"$(mktemp -d ~/goalcup-practice-XXXX)\" && goalcup start \
-                 --harness {id} --practice\n  The real run, inside the start window: make your \
+                 folder each time): d=$(mktemp -d ~/goalcup-practice-XXXX) && cd \"$d\" && \
+                 goalcup start --harness {id} --practice\n  The real run, inside the start window: make your \
                  repo, token and folder first (the guide's folder step), then in that folder: \
                  goalcup start --harness {id} --repo <you>/<name>\n"
             ),
