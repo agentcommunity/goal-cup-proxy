@@ -1959,7 +1959,13 @@ mod segments {
             kill_agent(&rig);
             assert!(first.wait().success());
             let run_id = the_run(&server);
-            // What the agent made in the project folder.
+            // What the agent made in the project folder: its repository and a file.
+            let init = std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(rig.run_folder())
+                .output()
+                .unwrap();
+            assert!(init.status.success(), "{init:?}");
             std::fs::write(rig.run_folder().join("agent-work.txt"), "work").unwrap();
             let (files, reserves) = (project_contents(&rig), reserve_files(&rig));
             assert_eq!(reserves.len(), 1);
