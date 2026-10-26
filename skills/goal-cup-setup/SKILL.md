@@ -18,8 +18,10 @@ the rules are [docs/RULES.md](../../docs/RULES.md). This skill gets them as far 
   type into; it is a human step (below).
 - **Never type into the harness.** Not a prompt, not "keep going", nothing. Every message typed
   into a recorded harness is reviewed.
-- Never ask for, read, print or store a key or token. Goal Cup keeps none. A key the person gives
-  their agent goes in `goalcup-work/.env.local`, which they fill in themselves; never read it.
+- Never ask for, read, print or store a key or token. Goal Cup keeps none. The person's GitHub
+  token and any key their agent's product needs go in the `.env.local` of their own project folder
+  (guide, section 4), which they make and fill in themselves; never open it, create it for them or
+  copy a token anywhere.
 - Never write to `~/.claude`, `~/.codex` or any harness's own config, and never set a model base
   URL or a proxy variable. Goal Cup Proxy keeps its own home for each harness.
 
@@ -40,10 +42,13 @@ Say these plainly, once, before the first human step:
 - **Set the harness so it does not stop to ask for approvals.** During the run nobody may approve
   anything, so choose the harness's own setting for this before the run.
 - **The person types one prompt, and after that only "keep going".**
-- **GitHub comes at the start, not in setup.** Each real run's `goalcup start` asks the person to
-  name a new, empty, public repository, opens GitHub to create it, and checks that their own git
-  can push to it. A practice run needs no repository. If the computer has no GitHub login,
-  `goalcup start` says how to set one up (`gh auth login`); never create an account for them.
+- **GitHub comes at the start, not in setup.** Setup makes no GitHub call. A real run needs, in
+  this order, a new empty public repository, a fine-grained token for that one repository (Contents
+  read and write, 30 days), and a new folder holding `.env.local` (`GH_TOKEN=...`) and a
+  `.gitignore` with `.env*`. Then `goalcup start --harness <id> --repo <user>/<name>` runs in that
+  folder. The person does all of it themselves, from the guide's section 4; never make the
+  repository, the token or an account for them. A practice run needs none of it: an empty folder.
+  The person deletes the token after their run.
 
 ## The loop
 
@@ -60,11 +65,12 @@ Say these plainly, once, before the first human step:
    - `human` is `true` when the step needs the person;
    - `say` is what was found, what to do, or why it failed.
 
-   A flag setup refuses (a `--work-root` that is not a full path) gives no array: setup prints one
+   A flag setup refuses (a `--harness` that names no connector) gives no array: setup prints one
    plain sentence instead and exits non-zero. Show that sentence to the person verbatim.
 3. If every `state` is `ok`, tell the person they are ready: they may try a practice run
-   themselves (`goalcup start --harness <id> --practice`, no GitHub), and they start their run with
-   `goalcup start --harness <id>` inside the start window. The window opens on 7 November 2026 at
+   themselves, in an empty folder (`goalcup start --harness <id> --practice`, no GitHub), and they
+   make the repository, the token and the project folder as the guide's section 4 says, then start
+   their run with `goalcup start --harness <id> --repo <user>/<name>` inside the start window. The window opens on 7 November 2026 at
    00:00 UTC and lasts 24 hours. `goalcup start` asks for its own browser approval; that is the
    second approval, and it is normal. If the `machine` step's `say` asks them
    to keep the machine awake themselves, pass that on too. Stop.

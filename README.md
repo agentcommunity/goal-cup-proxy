@@ -36,16 +36,21 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    Run it until every step says `[ok]`. It needs no GitHub and keeps no key. For Hermes, install
    exactly `uv tool install hermes-agent==0.19.0`, not Hermes's own installer, which installs the
    newest release (it writes no session file). See [Hermes setup](docs/HARNESS-SETUP.md#hermes).
-3. **Practice** (optional): `goalcup start --harness <id> --practice`. About ten minutes in an
-   empty local folder, no GitHub, never counts. Do as many as you like.
-4. **Start** inside the start window: `goalcup start --harness <id>`. A dry run is open from
-   23 October, so you can start a rehearsal now
-   ([the dry run](docs/PARTICIPANT-GUIDE.md#the-dry-run-optional)). It asks you to name a new,
-   empty, public GitHub repository for this run, opens GitHub to create it, and checks that your
-   own git can push to it. Then approve the run in the browser. The harness opens in a fresh
-   clone of that repository and pushes with your own git login. Its own setup screens (sign-in,
-   folder trust, model choice) come before your prompt, and answering them is fine.
-5. **Type your one prompt** and press Enter. After it, the only message you may ever type is
+3. **Practice** (optional): in an empty folder, `goalcup start --harness <id> --practice`. About
+   ten minutes, no GitHub, no token, never counts. Do as many as you like.
+4. **Make the repository, the token and the folder**, in this order. Create a new, empty, public
+   GitHub repository (no README, `.gitignore` or licence). Make a fine-grained token for that one
+   repository: Contents read and write, expiry 30 days. Make a new folder holding `.env.local`
+   (`GH_TOKEN=...`) and a `.gitignore` with the line `.env*`. Details:
+   [the guide, section 4](docs/PARTICIPANT-GUIDE.md#4-your-run).
+5. **Start** inside the start window, in that folder:
+   `goalcup start --harness <id> --repo <user>/<name>`. A dry run is open from 23 October, so you
+   can start a rehearsal now ([the dry run](docs/PARTICIPANT-GUIDE.md#the-dry-run-optional)).
+   `goalcup` checks the folder and the repository before it asks for the browser approval. The
+   harness opens in the folder, and your agent runs `git init` and pushes with the token. Its own
+   setup screens (sign-in, folder trust, model choice) come before your prompt, and answering them
+   is fine. Delete the token after your run.
+6. **Type your one prompt** and press Enter. After it, the only message you may ever type is
    "keep going".
 
 **During the run.**
@@ -68,7 +73,7 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
 rest. You do nothing. What is judged is the last push to your repository's default branch that
 GitHub received before the deadline, by GitHub's timestamp. Your agent must push its own work;
 Goal Cup Proxy never pushes. Then hand in your demo video and questionnaire on the event site
-within 24 hours. More: [the deadline, and after it](docs/PARTICIPANT-GUIDE.md#9-the-deadline-and-after-it).
+within 24 hours. More: [the end](docs/PARTICIPANT-GUIDE.md#6-the-end).
 
 ## Commands
 
@@ -78,9 +83,9 @@ most runs have one, and `goalcup continue` starts the next. Every flag is in `go
 
 | Command | What it does |
 |---|---|
-| `goalcup setup [--harness <ID>] [--work-root <PATH>] [--json] [--dev]` | Check the four readiness steps. Never starts a run. `goalcup prep` is its old name. |
+| `goalcup setup [--harness <ID>] [--json] [--dev]` | Check the four readiness steps. Never starts a run. `goalcup prep` is its old name. |
 | `goalcup login [--server <URL>]` | Connect this computer to your Goal Cup account (once; `setup` does it for you). |
-| `goalcup start --harness <ID> [--practice \| --test] [--repo <NAME>] [--dev]` | Start a run: open the harness here and record it. A real run first asks for its own new GitHub repository. `--test` is for organizers. |
+| `goalcup start --harness <ID> [--practice \| --test] [--repo <NAME>] [--dev]` | Start a run: open the harness in the current folder and record it. Run it in the project folder (empty but for `.env.local` and `.gitignore`). A real run needs its own new, empty, public GitHub repository, given as `--repo <user>/<name>`; `start` checks it before the approval. `--test` is for organizers; `--dev` is for trying an unpinned connector and never competes. |
 | `goalcup status [<part-id>] [--json]` | Show the run: recording state, time left, upload, problems, `Next:`. `--json` prints the signed status document, with this machine's `local` facts and a `problems` array (the `PROBLEM:` lines' sentences, left out when there are none) beside it. |
 | `goalcup time-left` | Show how much time the run has left. The agent may run it too. |
 | `goalcup mcp` | Serve the time left as an MCP tool (`time_left`) for the agent. The harness starts it; add it as in [HARNESS-SETUP](docs/HARNESS-SETUP.md#add-the-goal-cup-time-left-tool). |
