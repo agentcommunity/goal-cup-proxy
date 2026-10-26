@@ -179,7 +179,8 @@ to start** (exit 2) unless it is told where the token comes from:
   repositories created under that owner (new, empty, public) and named with `MATRIX_REPO=<owner>/<name>`,
   required with the file (the kit makes no repository for it: it would make one with your gh login, which
   that token cannot reach). The file is a regular file (not a link), mode
-  0600, outside the checkout, with one line `GH_TOKEN=<value>` or the value alone. The log names the source,
+  0600, outside the checkout, with one line `GH_TOKEN=<value>` or the value alone; a gh login (`gho_`) or
+  classic (`ghp_`) token is refused, since it reaches every repository of its account. The log names the source,
   never the value.
 - `MATRIX_ALLOW_LOGIN_TOKEN=1`: the explicit say-so to give the agent `gh auth token`, the **whole login**
   (every scope, every repository of the account). One loud line says so. A Docker cell has only this
@@ -193,11 +194,19 @@ with the machine's GitHub login unless `MATRIX_REPO` names one (a cell with `MAT
 one line: run `gh auth login` here (HTTPS, and Yes to authenticate Git).
 
 What the kit does about the token it handed over:
-- **After the seal it looks for it.** `git log --all -p` of the project folder, and a fresh anonymous clone of
-  the cell's repository (into the temporary directory), are searched for the token, its base64 forms (three
-  alignments, both alphabets) and its percent-encoded forms. A hit FAILs the cell, loudly:
-  `the token was pushed: revoke it now`. A repository that cannot be cloned or read FAILs the cell too (the
-  check was not done). The value is never printed.
+- **After the seal it looks for it.** Every object of every git repository in the project folder (found
+  without following links) and of a fresh anonymous mirror clone of the cell's repository (into the
+  temporary directory) is read raw, `git cat-file --batch-all-objects --batch`: binary blobs and files a
+  `.gitattributes` keeps out of diffs, merge commits, annotated tag messages and unreachable objects
+  included, with no diff, textconv or external driver, so nothing in the agent's `.git/config` runs. The
+  bytes are searched for the token, its base64 forms (three alignments, both alphabets) and its
+  percent-encoded forms. A hit FAILs the cell, loudly: `the token was pushed: revoke it now`. A repository
+  that cannot be cloned or read FAILs the cell too (the check was not done). The token is read from the
+  private copy (below), never from an argument; the agent can reach that copy, so one that is gone or
+  rewritten (its SHA-256 is kept in the kit's shell) is made again from the token's source, and if that
+  fails the cell FAILs: `push check not run: the token copy is missing`. So does a temporary directory the
+  agent removed. The value is never printed. Not covered: what the agent pushed to another repository,
+  or to Git LFS, or inside a compressed or encrypted file.
 - **It scrubs what the kit keeps.** A token the agent printed is replaced in the log, the terminal capture,
   the run folders (`<config>-runs`) and the harness homes under the config folder (files newer than the
   run's start), found by its value (a private 0600 copy made when `.env.local` was, so this holds if the
@@ -207,7 +216,9 @@ What the kit does about the token it handed over:
   printed is in them. The log is created mode 0600.
 - **It cleans up.** `.env.local` and the private copy are deleted at the end even with `--keep`, and at the
   next start the kit deletes those two things (nothing else) from the temporary directories of dead runs
-  (`goalcup-matrix.XXXXXX` of this user whose `kit.pid` names no live `matrix.sh`).
+  (`goalcup-matrix.XXXXXX` of this user whose `kit.pid` names no live `matrix.sh`; a process `ps` cannot
+  describe counts as live). It never reaches through a link: `projects` or a project that is a link is
+  skipped, and files are listed with `find -P`.
 
 The kit never deletes a repository; it prints the name of one it made at the end (`gh repo delete <name> --yes`
 when done, after `gh auth refresh -s delete_repo`: the default `gh auth login` lacks that scope; the agent

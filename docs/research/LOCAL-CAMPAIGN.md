@@ -57,16 +57,17 @@ not prove: other platforms, other harness versions, model behaviour, or particip
    **Which token the agent gets.** The agent can read `.env.local`, and a staging trace could keep what it
    prints. The owner's whole gh login is never given by default: **`campaign.py check` and `run` refuse a
    cell without a token source.** Host cells: `MATRIX_GH_TOKEN_FILE=<file>` (mode 0600, outside the
-   checkout, one line `GH_TOKEN=<value>`), a **fine-grained token whose resource owner is a throwaway
-   account or organisation, Contents read and write only**, with each cell's repository created under that
-   owner and named by the cell's `repo` (or `MATRIX_REPO`), since the kit cannot make one that token can
-   reach. Otherwise `MATRIX_ALLOW_LOGIN_TOKEN=1` explicitly gives the agent `gh auth token`, the whole
+   checkout, one line `GH_TOKEN=<value>`), a **fine-grained token (`github_pat_`; a `gho_`/`ghp_` token is
+   refused) whose resource owner is a throwaway account or organisation, Contents read and write only**,
+   with each cell's repository created under that owner and named by the cell's `repo` (required: a
+   `MATRIX_REPO` in the campaign's shell does not reach the cells), since the kit cannot make one that
+   token can reach. Otherwise `MATRIX_ALLOW_LOGIN_TOKEN=1` explicitly gives the agent `gh auth token`, the whole
    login, and a loud line says so. A Docker cell has only the container's own login, so it needs
    `MATRIX_ALLOW_LOGIN_TOKEN=1`: **the agent in a Docker cell can use the GitHub login stored on the
    cell's volume, and the token in its project's `.env.local`, with all of that login's scopes** (it runs as
    the same user, with no sandbox, and `gh` reads the login from the volume's home), so sign the container
-   in with a throwaway account. After each run the kit searches the project's history and a fresh clone of
-   the cell's repository for the token (`the token was pushed: revoke it now` FAILs the cell) and scrubs
+   in with a throwaway account. After each run the kit searches every git object of the project's
+   repositories and of a fresh mirror clone of the cell's repository for the token (`the token was pushed: revoke it now` FAILs the cell) and scrubs
    it from the log, captures and run folders ([OPERATING](../OPERATING.md#the-matrix) says how). Nothing else secret is in a Docker cell's container:
    the staging key never enters it (the host approves the device codes the container writes down),
    and a Docker cell takes no database URL or R2 token ([OPERATING](../OPERATING.md), the Docker
