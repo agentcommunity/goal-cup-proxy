@@ -126,6 +126,16 @@ pub fn env_not_ignored(uncovered: &[String]) -> String {
     )
 }
 
+/// A key file of a new run's project folder (`file`) names `GH_TOKEN` in a form the push line
+/// cannot read, or more than once. The value is never shown.
+pub fn token_line_form(file: &str) -> String {
+    format!(
+        "Write your token in {file} as one line, exactly GH_TOKEN=<your token>: no export, no \
+         quotes, no spaces, and no second GH_TOKEN line in any .env file. The push line goalcup \
+         prints reads only that form. Nothing was created."
+    )
+}
+
 /// `goalcup start --dev` for a competition run on a server: the server refuses it at open, so it
 /// is refused here, before the approval.
 pub fn dev_competes() -> String {

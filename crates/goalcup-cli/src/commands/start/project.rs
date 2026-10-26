@@ -36,16 +36,61 @@ pub(super) fn refuse_unready_project(cfg: &Path, project: &Path) -> Result<(), C
     let names = kit_or_refuse(project)?;
     let ignore = std::fs::read_to_string(project.join(".gitignore")).unwrap_or_default();
     let uncovered: Vec<String> = names
-        .into_iter()
+        .iter()
         .filter(|name| is_key_file(name) && !ignored(&ignore, name))
+        .cloned()
         .collect();
-    if uncovered.is_empty() {
-        Ok(())
-    } else {
-        Err(CliError::Refused(crate::participant::env_not_ignored(
+    if !uncovered.is_empty() {
+        return Err(CliError::Refused(crate::participant::env_not_ignored(
             &uncovered,
-        )))
+        )));
     }
+    refuse_unreadable_token_line(project, &names)
+}
+
+/// The push line the launch block prints reads the token with `sed -n s/^GH_TOKEN=//p`, so a key
+/// file that names `GH_TOKEN` must do so in that form: exactly one `GH_TOKEN=<value>` line in all
+/// the key files, with no `export`, no quotes, no spaces and no CR, and a value. Anything else
+/// would fail the agent's first push, after the approval; it is refused here instead, naming the
+/// file and the form, never the value. A folder with no `GH_TOKEN` line is not refused here.
+fn refuse_unreadable_token_line(project: &Path, names: &[String]) -> Result<(), CliError> {
+    let mut found: Vec<(&str, bool)> = Vec::new();
+    for name in names.iter().filter(|name| is_key_file(name)) {
+        let Ok(bytes) = std::fs::read(project.join(name)) else {
+            continue;
+        };
+        for line in String::from_utf8_lossy(&bytes).split('\n') {
+            if names_token(line) {
+                found.push((name, plain_token_line(line)));
+            }
+        }
+    }
+    match found.as_slice() {
+        [] | [(_, true)] => Ok(()),
+        [(file, _), ..] => Err(CliError::Refused(crate::participant::token_line_form(file))),
+    }
+}
+
+/// Whether `line` sets `GH_TOKEN` in any form a key file might use (`export`, spaces around `=`).
+fn names_token(line: &str) -> bool {
+    let line = line.trim();
+    let line = line
+        .strip_prefix("export")
+        .filter(|rest| rest.starts_with(char::is_whitespace))
+        .map_or(line, str::trim_start);
+    line.strip_prefix(TOKEN_VARIABLE)
+        .is_some_and(|rest| rest.trim_start().starts_with('='))
+}
+
+/// Whether `line` is exactly `GH_TOKEN=<value>`, the value one or more visible ASCII characters
+/// that are not quotes.
+fn plain_token_line(line: &str) -> bool {
+    line.strip_prefix("GH_TOKEN=").is_some_and(|value| {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\'')
+    })
 }
 
 /// Whether `name` is one of the participant's key files: `.env`, or `.env.` and anything.

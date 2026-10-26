@@ -56,9 +56,9 @@ impl RunRepo {
     }
 }
 
-/// Said when GitHub's open API would not answer (its limit is 60 calls an hour per address).
-const UNCHECKED: &str = "  GitHub's API is busy, so it was not asked. The server checks that the \
-repo is public when the run opens.";
+/// Said when GitHub could not be asked (a rate limit, an outage): the start goes on.
+const UNCHECKED: &str = "  GitHub could not be asked just now, so the repo was not checked. The \
+server checks that it is public and empty when the run opens.";
 
 /// Ask for, and check, the repository of a new real run. `given` is `--repo`: `<owner>/<name>`
 /// or the repository's address. Every refusal says what to do and that nothing
@@ -153,11 +153,13 @@ pub fn choose(
         }
         match found {
             Found::Unchecked => say(out, UNCHECKED)?,
-            Found::PublicEmpty { owner_id: id } => owner_id = id,
+            Found::PublicEmpty { owner_id: id } => {
+                owner_id = id;
+                say(out, &format!("  {owner}/{repo}: public and empty."))?;
+            }
             Found::Missing => {}
         }
     }
-    say(out, &format!("  {owner}/{repo}: public and empty."))?;
     Ok(RunRepo { repo_url, owner_id })
 }
 
