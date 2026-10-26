@@ -591,6 +591,36 @@ fn the_machine_step_judges_power_space_git_and_the_network() {
     );
 }
 
+/// A key in `~/.ssh` with no passphrase is a `[warn]` line after the machine step, which keeps
+/// its state: a warning, never a refusal (D73).
+#[test]
+fn setup_warns_once_of_an_ssh_key_with_no_passphrase() {
+    let rig = Rig::chat_only();
+    if !Path::new("/usr/bin/ssh-keygen").exists() {
+        return;
+    }
+    let home = rig.root.join("ssh-home");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    let key = home.join(".ssh/id_ed25519");
+    let made = Command::new("/usr/bin/ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-C", "test", "-f"])
+        .arg(&key)
+        .stdin(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let out = prep_command(&rig, &[], &facts(&[]))
+        .env("GOALCUP_TEST_SSH_HOME", &home)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(line(&text, "machine").starts_with("[ok]"), "{text}");
+    let warned: Vec<&str> = text.lines().filter(|l| l.starts_with("[warn]")).collect();
+    assert_eq!(warned.len(), 1, "{text}");
+    assert!(warned[0].contains(&key.display().to_string()), "{text}");
+}
+
 /// With more than one harness and none chosen, the harness step lists the installed ones, the
 /// other supported ones with where to read how to install them, and how to add one's own; in a
 /// terminal it asks which one, the first installed one by default.

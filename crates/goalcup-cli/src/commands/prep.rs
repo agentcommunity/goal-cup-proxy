@@ -400,6 +400,18 @@ pub fn prep_with(
 
     // 4. machine
     report.push(machine_step(doors, cfg, env, connector.as_ref()))?;
+    // A warning beside the step, never a change of its state (D73): what the agent could push
+    // with the participant's own SSH keys.
+    if !report.json
+        && let Some(found) = crate::ssh_keys::look(env)
+    {
+        if let Some(warning) = found.key_warning() {
+            report.tell(&format!("[warn] {warning}"))?;
+        }
+        if let Some(note) = found.agent_note() {
+            report.tell(&format!("[note] {note}"))?;
+        }
+    }
 
     let all_ok = report.steps.iter().all(|s| s.state == State::Ok);
     if report.json {

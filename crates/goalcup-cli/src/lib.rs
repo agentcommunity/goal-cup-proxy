@@ -62,6 +62,8 @@ pub mod run;
 pub mod server;
 /// The goal-cup skill a chat-mode harness finds in its home (D57).
 pub mod skill;
+/// The SSH-key warning of `goalcup setup` and `goalcup doctor`, on this machine only (D73).
+pub mod ssh_keys;
 pub mod subreaper;
 pub mod upload;
 /// The disk and goalcup's own processes, as the heartbeats and `goalcup status` report them.
