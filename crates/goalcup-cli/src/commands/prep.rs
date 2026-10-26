@@ -772,8 +772,9 @@ fn home_step(
             "Next, {id} opens here in its own Goal Cup home (not your usual setup). Nothing is \
              recorded.\n  1. Sign in, or paste your API key when it asks. Goal Cup never \
              sees it.\n  2. Add the settings, MCP servers and skills you want your agent to \
-             have, and set it not to ask for permission (see the guide above).\n  3. Exit {id} \
-             the normal way.\nPress Enter to open {id}, or Ctrl-C to stop."
+             have, and set it not to ask for permission (see the guide above).\n  3. Quit {id} \
+             when you are done (for most agents: type /quit or /exit, or press Ctrl-C twice). \
+             Setup goes on once it has quit.\nPress Enter to open {id}, or Ctrl-C to stop."
         ))?;
         let entered = doors.wait_for_enter();
         if !entered {
