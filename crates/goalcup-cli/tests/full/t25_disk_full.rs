@@ -326,19 +326,6 @@ impl World {
     /// A long-running `goalcup` command (`start`, `continue`), its output in `logs/<name>.*`.
     fn spawn(&self, name: &str, args: &[&str]) -> Running {
         use std::os::unix::process::CommandExt;
-        // A run on the server works in its project folder, where a real agent runs `git init`
-        // first; this goalcup still needs that before a continue.
-        if args.first() == Some(&"continue")
-            && self.server_port.is_some()
-            && !self.project.join(".git").exists()
-        {
-            let init = Command::new("git")
-                .args(["init", "--quiet"])
-                .arg(&self.project)
-                .output()
-                .unwrap();
-            assert!(init.status.success(), "{init:?}");
-        }
         let logs = self.out.join("logs");
         let child = self
             .goalcup()

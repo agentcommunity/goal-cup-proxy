@@ -56,7 +56,7 @@ use goalcup_protocol::export::{
 };
 use goalcup_protocol::provenance::{Rfc3339Utc, Sha256Digest, TerminationOutcomeV1};
 use goalcup_protocol::receipt::StartReceipt;
-use goalcup_protocol::seal::{GitState, SealManifest};
+use goalcup_protocol::seal::{GitState, SealManifest, WalkCap};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufRead, BufReader, Read};
@@ -198,6 +198,11 @@ pub struct CaptureIntegrityReport {
     /// sentence each, when it could not. Either makes the report incomplete.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub git_unreadable: Vec<String>,
+    /// Why the seal's walk of the workspace stopped short (D71), when it did: `file_limit` or
+    /// `deadline`. The seal's `files` then lists a part of the folder. A warning to judges (the
+    /// `seal_walk_capped` finding), not damage: it changes neither the integrity nor the exit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seal_capped: Option<WalkCap>,
     pub verified_ack: Option<VerifiedAckPosition>,
     pub receipt_clock: Option<VerifiedReceiptClock>,
     pub terminal: Option<CaptureTerminalFacts>,
@@ -517,6 +522,7 @@ struct Scan<'k> {
     sealed: bool,
     terminal_facts: Option<CaptureTerminalFacts>,
     git_unreadable: Vec<String>,
+    seal_capped: Option<WalkCap>,
     /// The bound baseline recorded a clone's Git state, read or not.
     baseline_git: bool,
     /// The receipt's `deadline_at` in whole seconds, once its clocks read as ordered.
@@ -561,6 +567,7 @@ impl<'k> Scan<'k> {
             sealed: false,
             terminal_facts: None,
             git_unreadable: Vec::new(),
+            seal_capped: None,
             baseline_git: false,
             deadline_secs: None,
             records_after_deadline: 0,
@@ -1089,6 +1096,12 @@ impl<'k> Scan<'k> {
             return Ok(false);
         }
         self.git_read(&manifest, "seal");
+        // A walk that stopped short lists a part of the folder: a warning for judges, with
+        // the reason, and nothing more. The manifest is as written, so the chain still binds it.
+        if let Some(cap) = manifest.capped {
+            self.findings.add("seal_walk_capped");
+            self.seal_capped = Some(cap);
+        }
         // A clone's seal records its Git state, or why it could not: a walk instead (an older
         // daemon, or a removed `.git`) leaves the clone's work unproven (D56).
         if self.baseline_git && manifest.git.is_none() {
@@ -1171,6 +1184,7 @@ impl<'k> Scan<'k> {
             key_source: self.anchor.map_or(KeySource::None, |(_, source)| source),
             findings: self.findings.finish(),
             git_unreadable: self.git_unreadable,
+            seal_capped: self.seal_capped,
             verified_ack: self.verified_ack,
             receipt_clock,
             terminal: self.terminal_facts,

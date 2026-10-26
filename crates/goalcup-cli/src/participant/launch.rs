@@ -16,6 +16,9 @@ pub struct Launch<'a> {
     pub ends: Option<String>,
     /// The manifest's `participant.first_screen`.
     pub first_screen: Option<&'a str>,
+    /// What the participant puts at the start of their prompt ([`prompt_block`]); empty for a
+    /// run with no repository.
+    pub prompt: &'a [String],
 }
 
 /// How the harness opens for one part of a run.
@@ -67,6 +70,14 @@ pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
     if let Some(first) = l.first_screen {
         lines.push(first.to_string());
     }
+    if l.opens == Opens::First && !l.prompt.is_empty() {
+        lines.push(
+            "Put these lines at the start of your prompt, so the agent knows where to push and \
+             as whom:"
+                .to_string(),
+        );
+        lines.extend(l.prompt.iter().map(|line| format!("  {line}")));
+    }
     if l.opens == Opens::LastSession {
         lines.push(format!(
             "If the agent has stopped, type \"{KEEP_GOING}\" and press Enter. If you never sent \
@@ -89,4 +100,42 @@ pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
     ));
     lines.push(format!("{READY_MARK}: {h} opens now."));
     lines
+}
+
+/// The repository, the token file and the git identity, in the guide's order: the lines a real
+/// run's participant puts at the start of their prompt (E1), so the agent knows where to push and
+/// as whom. The token stays in its file: the credential helper reads it from there at each push,
+/// so it is never in the prompt, the agent's environment, `.git/config` or a remote's address.
+///
+/// `token_file` is the key file's name, `token_path` its absolute path, which the helper reads
+/// (its name alone, read in the folder git runs in, when the path holds a quote, `$`, `\` or a
+/// backquote, which the line cannot carry).
+pub fn prompt_block(
+    repo_url: &str,
+    name: &str,
+    email: &str,
+    token_file: &str,
+    token_path: &std::path::Path,
+) -> Vec<String> {
+    let path = token_path.display().to_string();
+    let path = if path.contains(['\'', '"', '$', '\\', '`']) {
+        token_file.to_string()
+    } else {
+        path
+    };
+    vec![
+        format!("Push to {repo_url}"),
+        format!(
+            "The token is GH_TOKEN in {token_file} in this folder. Never print it, and never write \
+             it into a file, a git setting or a remote address."
+        ),
+        "After git init, run:".to_string(),
+        format!("  git config user.name \"{name}\""),
+        format!("  git config user.email \"{email}\""),
+        format!(
+            "  git config credential.https://github.com.helper '!f() {{ echo \
+             username=x-access-token; echo \"password=$(sed -n s/^GH_TOKEN=//p \"{path}\")\"; }}; f'"
+        ),
+        format!("  git remote add origin {repo_url}.git"),
+    ]
 }

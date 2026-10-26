@@ -57,6 +57,9 @@ pub(super) struct Forked<'a> {
     pub(super) first_screen: Option<String>,
     /// A first launch, or a continue that picks up the last session or starts a new one.
     pub(super) opens: crate::participant::Opens,
+    /// What the participant puts at the start of their prompt, for a real run's first launch
+    /// ([`crate::participant::prompt_block`]); empty otherwise.
+    pub(super) prompt: Vec<String>,
     /// The run's ids and folders, held back from the launch block and written to its
     /// `host.log` once it is open.
     pub(super) details: Vec<String>,

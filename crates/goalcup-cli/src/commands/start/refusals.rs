@@ -123,6 +123,23 @@ pub(crate) fn check_run_folders(
     Ok(())
 }
 
+/// A test build's door past the local refusal of `--dev` in the competition
+/// ([`crate::participant::dev_competes`]): the test connectors are pinned by no build, so they
+/// run through `--dev`, and most tests are competition runs. It stands in for a pinned connector;
+/// the server's own refusal is not affected. A shipped build compiles none of this.
+#[cfg(feature = "test-support")]
+pub const TEST_DEV_COMPETES: &str = "GOALCUP_TEST_DEV_COMPETES";
+
+#[cfg(feature = "test-support")]
+pub(super) fn dev_competes_for_test(env: &BTreeMap<String, String>) -> bool {
+    env.get(TEST_DEV_COMPETES).is_some_and(|v| v == "1")
+}
+
+#[cfg(not(feature = "test-support"))]
+pub(super) fn dev_competes_for_test(_env: &BTreeMap<String, String>) -> bool {
+    false
+}
+
 /// A test build's door past the provider-host probe, so the harness contract kit can run the
 /// shipped connectors (whose hosts are real providers) with no network and reach no provider.
 /// A shipped build compiles none of this, and always probes.

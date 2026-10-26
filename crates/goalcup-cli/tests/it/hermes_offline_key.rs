@@ -404,11 +404,13 @@ fn the_uploaded_baseline_holds_only_the_name_size_and_digest_of_a_key_file() {
         fields.sort_unstable();
         assert_eq!(fields, ["bytes", "path", "sha256"], "{name}");
         assert_eq!(row["bytes"], content.len() as u64, "{name}");
-        assert_eq!(
-            row["sha256"],
-            hex::encode(Sha256::digest(&content)),
-            "{name}"
-        );
+        // A key file (`.env`, `.env.*`) is never hashed: its row carries the absent digest.
+        let expected = if name == ".env" {
+            "0".repeat(64)
+        } else {
+            hex::encode(Sha256::digest(&content))
+        };
+        assert_eq!(row["sha256"], expected, "{name}");
     }
     assert_no_fragment("the uploaded baseline", baseline.as_bytes(), &key);
     assert_no_fragment("the uploaded baseline", baseline.as_bytes(), &token);

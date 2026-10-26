@@ -40,7 +40,7 @@ fn each_refused_relationship_says_which_one_it_was() {
 
     let err = check_artifact_placement(Path::new("/Users/team/goalcup-spikes/artifacts"), ws)
         .expect_err("M0 §2.4: the agent ran `ls -la ..` on its first tool call");
-    assert!(format!("{err}").contains("sibling"), "got {err}");
+    assert!(format!("{err}").contains("folder of its own"), "got {err}");
 
     let err = check_artifact_placement(ws, ws).expect_err("identical paths");
     assert!(format!("{err}").contains("identical"), "got {err}");
@@ -66,10 +66,7 @@ fn a_symlinked_artifact_root_is_refused_by_task_1s_resolving_check() {
     let ws = t.path().join("link/../ws");
     let err = check_artifact_placement(&art, &ws)
         .expect_err("the workspace resolves to a directory inside the artifact root");
-    assert!(
-        format!("{err}").contains("symlinks are resolved"),
-        "got {err}"
-    );
+    assert!(format!("{err}").contains("links are followed"), "got {err}");
 }
 
 #[test]
@@ -84,7 +81,7 @@ fn a_workspace_inside_a_git_worktree_or_holding_files_is_refused() {
         workspace: inside,
         artifact_root: t.path().join("tracker/art"),
     };
-    let err = check_workspace_available(&roots).expect_err("R3: outside any Git worktree");
+    let err = check_workspace_available(&roots, false).expect_err("R3: outside any Git worktree");
     assert!(format!("{err}").contains("Git repository"), "got {err}");
 
     let ws = t.path().join("fresh");
@@ -94,14 +91,14 @@ fn a_workspace_inside_a_git_worktree_or_holding_files_is_refused() {
         workspace: ws,
         artifact_root: t.path().join("tracker/art"),
     };
-    let err = check_workspace_available(&roots).expect_err("R3: zero entries");
+    let err = check_workspace_available(&roots, false).expect_err("R3: zero entries");
     assert!(format!("{err}").contains("not empty"), "got {err}");
 
     let roots = Roots {
         workspace: t.path().join("not-yet"),
         artifact_root: t.path().join("tracker/art"),
     };
-    check_workspace_available(&roots).expect("a workspace that does not exist yet is empty");
+    check_workspace_available(&roots, false).expect("a workspace that does not exist yet is empty");
 }
 
 #[test]
@@ -126,7 +123,7 @@ fn the_seal_walk_and_the_baseline_walk_apply_the_same_exclusion_union() {
         ".git".to_string(),
         ".opencode/plugin/goalcup-tracker.ts".to_string(),
     ];
-    let m = list_workspace(&ws, "e1", "2026-09-08T00:00:00Z", &excluded).unwrap();
+    let m = list_workspace(&ws, "e1", "2026-09-08T00:00:00Z", &excluded, None).unwrap();
     let paths: Vec<&str> = m.files.iter().map(|f| f.path.as_str()).collect();
     assert!(paths.contains(&"main.py"));
     assert!(
@@ -184,7 +181,13 @@ fn the_seal_walk_finishes_over_a_fifo_a_device_link_and_an_unreadable_directory(
     let (tx, rx) = std::sync::mpsc::channel();
     let walked = ws.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(list_workspace(&walked, "e1", "2026-10-13T00:00:00Z", &[]));
+        let _ = tx.send(list_workspace(
+            &walked,
+            "e1",
+            "2026-10-13T00:00:00Z",
+            &[],
+            None,
+        ));
     });
     let listed = rx.recv_timeout(std::time::Duration::from_secs(10));
     std::fs::set_permissions(ws.join("locked"), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -427,97 +430,12 @@ fn an_agent_written_clean_filter_is_never_run() {
 }
 
 #[test]
-fn a_workspace_inside_another_work_tree_is_refused() {
-    let t = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(t.path().join("outer/.git")).unwrap();
-    let art = t.path().join("tracker/art");
-
-    // A clone inside another work tree: its own `.git` does not make it a root.
-    let nested = t.path().join("outer/ws");
-    std::fs::create_dir_all(nested.join(".git")).unwrap();
-    std::fs::write(nested.join("a.txt"), b"x").unwrap();
-    let err = check_workspace_available(&Roots {
-        workspace: nested,
-        artifact_root: art.clone(),
-    })
-    .expect_err("R3: a work tree inside another is refused");
-    // The message names the repository above the clone, not the clone's own `.git`, and the
-    // clone's path is not repeated.
-    let said = format!("{err}");
-    let outer = t.path().join("outer").display().to_string();
-    let inner = t.path().join("outer/ws").display().to_string();
-    assert!(said.contains("Git repository"), "got {said}");
-    assert!(
-        said.contains(&format!("repository ({outer}).")),
-        "got {said}"
-    );
-    // The work folder is the one configured (the clone's parent), never a fixed default.
-    assert!(
-        said.contains(&format!("Your work folder {outer} is inside")),
-        "got {said}"
-    );
-    assert!(
-        !said.contains(&inner),
-        "the clone's own path is named: {said}"
-    );
-    assert!(said.contains("goalcup setup --work-root <"), "got {said}");
-    assert!(
-        !said.contains("~/goalcup-work"),
-        "a fixed default is named: {said}"
-    );
-    // A work folder below the repository's root is named as it is configured.
-    let deeper = t.path().join("outer/work/goalcup-0123");
-    std::fs::create_dir_all(deeper.join(".git")).unwrap();
-    let said = check_workspace_available(&Roots {
-        workspace: deeper,
-        artifact_root: art.clone(),
-    })
-    .expect_err("R3: a clone in a work folder inside a repository is refused")
-    .to_string();
-    let work = t.path().join("outer/work").display().to_string();
-    assert!(
-        said.contains(&format!(
-            "Your work folder {work} is inside a Git repository ({outer})."
-        )),
-        "got {said}"
-    );
-
-    // A linked worktree (`.git` is a file) is not the root of its own clone.
-    let linked = t.path().join("linked");
-    std::fs::create_dir_all(&linked).unwrap();
-    std::fs::write(linked.join(".git"), b"gitdir: /elsewhere\n").unwrap();
-    let err = check_workspace_available(&Roots {
-        workspace: linked,
-        artifact_root: art.clone(),
-    })
-    .expect_err("only a `.git` directory makes a clone root");
-    assert!(format!("{err}").contains("Git repository"), "got {err}");
-
-    // The root of its own clone is admitted with its files.
-    let clone = t.path().join("clone");
-    std::fs::create_dir_all(clone.join(".git")).unwrap();
-    std::fs::write(clone.join("a.txt"), b"x").unwrap();
-    check_workspace_available(&Roots {
-        workspace: clone,
-        artifact_root: art,
-    })
-    .expect("a clone root is admitted non-empty");
-}
-
-#[test]
 fn a_non_git_workspace_still_walks() {
     let t = tempfile::tempdir().unwrap();
     let ws = t.path().join("ws");
     std::fs::create_dir_all(&ws).unwrap();
     std::fs::write(ws.join("main.py"), b"print(1)").unwrap();
-    let m = seal_workspace(
-        &ws,
-        is_clone_root(&ws),
-        "e1",
-        "2026-10-15T00:00:00Z",
-        BUDGET,
-    )
-    .unwrap();
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
     assert_eq!(m.git, None);
     assert_eq!(m.home, None);
     assert_eq!(m.files.len(), 1);
@@ -527,14 +445,7 @@ fn a_non_git_workspace_still_walks() {
     // A clone seals its Git state and walks nothing.
     let t = tempfile::tempdir().unwrap();
     let (ws, _home) = committed_clone(t.path());
-    let m = seal_workspace(
-        &ws,
-        is_clone_root(&ws),
-        "e1",
-        "2026-10-15T00:00:00Z",
-        BUDGET,
-    )
-    .unwrap();
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
     assert!(matches!(m.git, Some(GitState::Read(_))), "{:?}", m.git);
     assert!(m.files.is_empty(), "{:?}", m.files);
 }
@@ -561,14 +472,7 @@ fn a_broken_clone_seals_unreadable_never_walked() {
     let t = tempfile::tempdir().unwrap();
     let (ws, _home) = committed_clone(t.path());
     std::fs::write(ws.join(".git/HEAD"), b"not a ref\n").unwrap();
-    let m = seal_workspace(
-        &ws,
-        is_clone_root(&ws),
-        "e1",
-        "2026-10-15T00:00:00Z",
-        BUDGET,
-    )
-    .unwrap();
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
     unreadable(&m, &ws);
 }
 
@@ -577,14 +481,7 @@ fn a_broken_clone_seals_unreadable_never_walked() {
 fn a_clone_out_of_time_seals_unreadable() {
     let t = tempfile::tempdir().unwrap();
     let (ws, _home) = committed_clone(t.path());
-    let m = seal_workspace(
-        &ws,
-        true,
-        "e1",
-        "2026-10-15T00:00:00Z",
-        std::time::Duration::ZERO,
-    )
-    .unwrap();
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", std::time::Duration::ZERO).unwrap();
     assert_eq!(unreadable(&m, &ws), "the time to read it ran out");
 }
 
@@ -627,30 +524,12 @@ fn an_untracked_directory_git_cannot_open_makes_the_seal_unreadable() {
     std::fs::create_dir_all(ws.join("hidden")).unwrap();
     std::fs::write(ws.join("hidden/work.rs"), b"work").unwrap();
     std::fs::set_permissions(ws.join("hidden"), std::fs::Permissions::from_mode(0o000)).unwrap();
-    let m = seal_workspace(&ws, true, "e1", "2026-10-15T00:00:00Z", BUDGET);
+    let m = seal_workspace(&ws, "e1", "2026-10-15T00:00:00Z", BUDGET);
     std::fs::set_permissions(ws.join("hidden"), std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(
         unreadable(&m.unwrap(), &ws),
         "an untracked directory could not be read"
     );
-}
-
-/// The seal follows the baseline (D56): a workspace whose baseline was a clone is never walked,
-/// whatever the agent did to `.git` since. Without it, the state says so.
-#[test]
-fn a_clone_whose_git_is_gone_or_swapped_is_never_walked() {
-    let t = tempfile::tempdir().unwrap();
-    let (ws, _home) = committed_clone(t.path());
-    std::fs::remove_dir_all(ws.join(".git")).unwrap();
-    let m = seal_workspace(&ws, true, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
-    assert_eq!(unreadable(&m, &ws), "it has no .git directory");
-
-    let t = tempfile::tempdir().unwrap();
-    let (ws, _home) = committed_clone(t.path());
-    std::fs::rename(ws.join(".git"), t.path().join("moved")).unwrap();
-    std::os::unix::fs::symlink(t.path().join("moved"), ws.join(".git")).unwrap();
-    let m = seal_workspace(&ws, true, "e1", "2026-10-15T00:00:00Z", BUDGET).unwrap();
-    assert_eq!(unreadable(&m, &ws), "it has no .git directory");
 }
 
 /// Review C1: Git before 2.44 ignores `GIT_NO_LAZY_FETCH`. A promisor remote the agent writes,

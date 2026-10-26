@@ -12,7 +12,8 @@ pub(super) const FINISH_RESPONSE_MARGIN: Duration = Duration::from_secs(1);
 
 /// What the drain share leaves the seal of a clone's Git state, inside the budget (D56): a
 /// producer that never settles cannot starve it. A smaller budget leaves it all of it. Only a
-/// finish that reads Git reserves it.
+/// finish that reads Git reserves it: one whose workspace is a clone when the finish begins
+/// (D71).
 pub(super) const GIT_READ_FLOOR: Duration = goalcup_protocol::control::GIT_READ_FLOOR;
 
 /// The finish reason a local capture finish records on its `LocalFinish` record. A local
@@ -276,7 +277,9 @@ impl Daemon {
                 });
         };
         // Stage 0: a zero budget is refused before anything is closed or flagged.
-        let reads_git = capture.clone;
+        // Whether the workspace is a clone is asked of it now, not fixed at the create (D71): it
+        // sizes the drain share here, and the seal stage asks again for what it records.
+        let reads_git = workspace::is_clone_root(&capture.workspace);
         let budget = FinishBudget::from_request(request, reads_git)?;
         #[cfg(any(test, feature = "test-hooks"))]
         capture.finishing.store(true, Ordering::Release);
@@ -468,30 +471,28 @@ impl Daemon {
             return Err(capture.expire(FinishStage::WorkspaceWalk, None, Some(termination)));
         }
         let sealed_at = now_rfc3339();
-        // A clone's Git state may take what is left but the commit reserve; the drain share left
-        // it at least `GIT_READ_FLOOR` (D56).
-        let git_budget = budget
+        // The seal may take what is left but the commit reserve: a clone's Git read, or the walk of
+        // any other folder, whose deadline it is (D71). The drain share left it at least
+        // `GIT_READ_FLOOR` (D56).
+        let seal_budget = budget
             .deadline
             .checked_sub(FINISH_COMMIT_RESERVE)
             .map_or(Duration::ZERO, |end| {
                 end.saturating_duration_since(tokio::time::Instant::now())
             });
-        // A clone whose Git state could not be read seals with the reason in its place (D56).
-        let manifest = match workspace::seal_workspace(
-            &row.workspace,
-            capture.clone,
-            &entry_id,
-            &sealed_at,
-            git_budget,
-        ) {
-            Ok(manifest) => manifest,
-            Err(error) => {
-                // The harness was ended above; a later finish must not read that as "ended on
-                // its own".
-                capture.keep_termination(termination);
-                return Err(error);
-            }
-        };
+        // Whether the workspace is a clone is asked now (D71). A clone whose Git state could not
+        // be read seals with the reason in its place (D56); a walk that hits its file limit or
+        // its deadline seals as capped.
+        let manifest =
+            match workspace::seal_workspace(&row.workspace, &entry_id, &sealed_at, seal_budget) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    // The harness was ended above; a later finish must not read that as "ended on
+                    // its own".
+                    capture.keep_termination(termination);
+                    return Err(error);
+                }
+            };
 
         // Stage 8: the terminal. Once it begins it completes under the existing no-retry rule;
         // only its registry half (`commit_finish`) is retried as it stands.

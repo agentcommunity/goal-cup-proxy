@@ -385,6 +385,7 @@ fn ack_and_seal_round_trip() {
         excluded: vec![".claude/settings.json".into()],
         git: None,
         home: None,
+        capped: None,
     }
     .sorted();
     assert_eq!(
@@ -682,6 +683,7 @@ mod parts {
             excluded: Vec::new(),
             git: None,
             home: None,
+            capped: None,
         }
     }
 

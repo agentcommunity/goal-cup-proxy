@@ -1065,7 +1065,10 @@ async fn abandon_before_launch_leaves_nothing_and_later_is_refused() {
         "the chain is gone"
     );
     assert!(rig.daemon.registry().get(&info.entry_id).unwrap().is_none());
-    assert!(!workspace.exists(), "the still-empty workspace is gone");
+    assert!(
+        workspace.is_dir(),
+        "an abandon never removes the player's project folder, even when empty"
+    );
     let status = rig
         .client
         .get_no_token(&entry_route(&info.entry_id, SUFFIX_STATUS))
@@ -2762,11 +2765,11 @@ fn read_manifest(path: &Path) -> goalcup_protocol::seal::SealManifest {
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
-/// The participant's own clone is the workspace: admitted with its files, and neither the
-/// baseline nor the seal walks it. Both record the commit and the digest of what is
-/// uncommitted instead.
+/// A continued run's clone (a 0.6.1 run, or a folder the agent ran `git init` in) is admitted
+/// with its files, and neither the baseline nor the seal walks it. Both record the commit and the
+/// digest of what is uncommitted instead (D56).
 #[tokio::test]
-async fn a_clone_is_admitted_non_empty_and_not_walked() {
+async fn a_continued_clone_is_admitted_non_empty_and_not_walked() {
     let rig = Rig::start().await;
     let ws = rig.workspace("clone");
     let home = rig.root.join("git-home");
@@ -2789,7 +2792,7 @@ async fn a_clone_is_admitted_non_empty_and_not_walked() {
     git(&["commit", "-q", "-m", "first"]);
     let commit = git(&["rev-parse", "HEAD"]);
 
-    let created = rig.create("codex-cli", &ws, RESERVE).await;
+    let created = rig.create_continued("codex-cli", &ws, RESERVE).await;
     assert_eq!(created.status(), 200, "{}", created.body());
     let info: CaptureWorkspaceInfo = created.json().unwrap();
     let trace = rig.trace_dir(&info.entry_id);
@@ -2825,8 +2828,8 @@ async fn a_clone_is_admitted_non_empty_and_not_walked() {
     );
 }
 
-/// A clone whose Git state cannot be read is never walked instead, and is never refused either
-/// (D56 amended): the create is admitted and the finish seals at once, each manifest recording
+/// A continued clone whose Git state cannot be read is never walked instead, and is never refused
+/// either (D56 amended): the create is admitted and the finish seals at once, each manifest recording
 /// why in place of the state, so an agent that breaks its own `.git` makes only its own trace
 /// incomplete.
 #[tokio::test]
@@ -2858,7 +2861,7 @@ async fn a_clone_git_cannot_read_still_seals_never_walked() {
 
     let broken = clone("broken");
     std::fs::write(broken.join(".git/HEAD"), b"not a ref\n").unwrap();
-    let created = rig.create("codex-cli", &broken, RESERVE).await;
+    let created = rig.create_continued("codex-cli", &broken, RESERVE).await;
     assert_eq!(created.status(), 200, "{}", created.body());
     let info: CaptureWorkspaceInfo = created.json().unwrap();
     unreadable(&read_manifest(
@@ -2866,7 +2869,7 @@ async fn a_clone_git_cannot_read_still_seals_never_walked() {
     ));
 
     let ws = clone("later-broken");
-    let created = rig.create("codex-cli", &ws, RESERVE).await;
+    let created = rig.create_continued("codex-cli", &ws, RESERVE).await;
     assert_eq!(created.status(), 200, "{}", created.body());
     let info: CaptureWorkspaceInfo = created.json().unwrap();
     std::fs::write(ws.join(".git/HEAD"), b"not a ref\n").unwrap();
@@ -2877,52 +2880,209 @@ async fn a_clone_git_cannot_read_still_seals_never_walked() {
     ));
 }
 
-/// The seal follows the baseline (D56 amended): an entry created over a clone is never walked at
-/// its finish, whether the agent removed `.git` or swapped it for a link. The seal records why
-/// the state could not be read instead, which the verifier reports incomplete.
+/// Whether the workspace is a clone is decided at the finish (D71), not at the create: a new run
+/// whose agent ran `git init` and committed seals by its Git state, and a continued clone whose
+/// `.git` the agent removed is walked.
 #[tokio::test]
-async fn a_clone_whose_git_was_removed_or_swapped_still_seals_unwalked() {
+async fn the_finish_decides_whether_the_workspace_is_a_clone() {
     use goalcup_protocol::seal::GitState;
     let rig = Rig::start().await;
     let home = rig.root.join("git-home");
     std::fs::create_dir_all(&home).unwrap();
-    for (name, break_git) in [
+    let git = |ws: &Path, args: &[&str]| {
+        let out = goalcup_daemon::workspace_git::command(ws, &home)
+            .expect("git on PATH")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+    };
+
+    // A new run: no Git at the create, a commit by the finish.
+    let ws = rig.workspace("git-init-during-the-run");
+    let created = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let info: CaptureWorkspaceInfo = created.json().unwrap();
+    let baseline = read_manifest(&rig.trace_dir(&info.entry_id).join("baseline.json"));
+    assert_eq!(baseline.git, None, "no Git at the create");
+    git(&ws, &["init", "-q"]);
+    std::fs::write(ws.join("main.rs"), b"fn main() {}\n").unwrap();
+    git(&ws, &["add", "main.rs"]);
+    git(&ws, &["commit", "-q", "-m", "first"]);
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let seal = read_manifest(&rig.trace_dir(&info.entry_id).join("seal.json"));
+    assert!(
+        matches!(&seal.git, Some(GitState::Read(state)) if state.commit.is_some()),
+        "{:?}",
+        seal.git
+    );
+    assert_eq!(seal.files, [], "a clone is not walked");
+
+    // A continued clone whose `.git` is gone by the finish: walked.
+    let ws = rig.workspace("git-removed-during-the-run");
+    std::fs::create_dir_all(&ws).unwrap();
+    git(&ws, &["init", "-q"]);
+    let created = rig.create_continued("codex-cli", &ws, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let info: CaptureWorkspaceInfo = created.json().unwrap();
+    std::fs::remove_dir_all(ws.join(".git")).unwrap();
+    std::fs::write(ws.join("work.rs"), b"work").unwrap();
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let seal = read_manifest(&rig.trace_dir(&info.entry_id).join("seal.json"));
+    assert_eq!(seal.git, None);
+    assert_eq!(
+        seal.files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
+        ["work.rs"]
+    );
+}
+
+/// A new run's folder may hold the participant's starting kit, `.gitignore` and `.env` files
+/// (OD6): the create admits it, and the baseline and the seal list a key file by name and size,
+/// never by a digest of its bytes (D71). Anything else in the folder, a kit name that is a folder
+/// included, is refused.
+#[tokio::test]
+async fn the_starting_kit_is_admitted_and_a_key_file_is_never_hashed() {
+    let rig = Rig::start().await;
+    let ws = rig.workspace("kit");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join(".gitignore"), b".env*\n").unwrap();
+    std::fs::write(ws.join(".env.local"), b"KEY=low-entropy-secret\n").unwrap();
+    let created = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let info: CaptureWorkspaceInfo = created.json().unwrap();
+    let key = goalcup_protocol::seal::SealedFile {
+        path: ".env.local".to_string(),
+        bytes: 23,
+        sha256: "0".repeat(64),
+    };
+    let baseline = read_manifest(&rig.trace_dir(&info.entry_id).join("baseline.json"));
+    assert_eq!(
+        baseline.files,
+        [
+            key.clone(),
+            goalcup_protocol::seal::SealedFile {
+                path: ".gitignore".to_string(),
+                bytes: 6,
+                sha256: hex::encode(Sha256::digest(b".env*\n")),
+            },
+        ]
+    );
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let seal = read_manifest(&rig.trace_dir(&info.entry_id).join("seal.json"));
+    assert!(seal.files.contains(&key), "{:?}", seal.files);
+
+    for (name, plant) in [
         (
-            "removed",
-            (|ws: &Path| std::fs::remove_dir_all(ws.join(".git")).unwrap()) as fn(&Path),
+            "kit-name-folder",
+            (|ws: &Path| std::fs::create_dir_all(ws.join(".env")).unwrap()) as fn(&Path),
         ),
-        ("swapped", |ws: &Path| {
-            let moved = ws.with_file_name("moved-git");
-            std::fs::rename(ws.join(".git"), &moved).unwrap();
-            std::os::unix::fs::symlink(&moved, ws.join(".git")).unwrap();
+        ("other-file", |ws: &Path| {
+            std::fs::write(ws.join("README.md"), b"x").unwrap()
         }),
     ] {
         let ws = rig.workspace(name);
         std::fs::create_dir_all(&ws).unwrap();
-        let out = goalcup_daemon::workspace_git::command(&ws, &home)
-            .expect("git on PATH")
-            .args(["init", "-q"])
-            .output()
-            .unwrap();
-        assert!(out.status.success());
-        let created = rig.create("codex-cli", &ws, RESERVE).await;
-        assert_eq!(created.status(), 200, "{}", created.body());
-        let info: CaptureWorkspaceInfo = created.json().unwrap();
-
-        break_git(&ws);
-        std::fs::write(ws.join("work.rs"), b"work").unwrap();
-        let sealed = rig.seal(&info.entry_id, None).await;
-        assert_eq!(sealed.status(), 200, "{name}: {}", sealed.body());
-        let seal = read_manifest(&rig.trace_dir(&info.entry_id).join("seal.json"));
-        assert_eq!(seal.files, [], "{name}: the clone is not walked");
-        assert_eq!(
-            seal.git,
-            Some(GitState::Unreadable {
-                unreadable: "it has no .git directory".to_string()
-            }),
-            "{name}"
+        plant(&ws);
+        let refused = rig.create("codex-cli", &ws, RESERVE).await;
+        assert_eq!(refused.status(), 409, "{name}: {}", refused.body());
+        assert!(
+            refused.body().contains("not empty"),
+            "{name}: {}",
+            refused.body()
         );
     }
+}
+
+/// A key file is never hashed, a clone's Git digest included (D71): an untracked, un-ignored
+/// `.env.local`, and one inside an untracked nested repository, count by name and size, so the
+/// digest is the same whatever their bytes are. An empty one is listed with the absent digest.
+#[tokio::test]
+async fn a_key_file_in_a_clone_never_moves_the_dirty_digest() {
+    let rig = Rig::start().await;
+    let home = rig.root.join("git-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut digests = Vec::new();
+    for (name, secret) in [
+        ("clone-a", b"KEY=aaaaaaaaaaaa\n"),
+        ("clone-b", b"KEY=bbbbbbbbbbbb\n"),
+    ] {
+        let ws = rig.workspace(name);
+        std::fs::create_dir_all(ws.join("nested")).unwrap();
+        for dir in [&ws, &ws.join("nested")] {
+            let out = goalcup_daemon::workspace_git::command(dir, &home)
+                .expect("git on PATH")
+                .args(["init", "-q"])
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            std::fs::write(dir.join(".env.local"), secret).unwrap();
+        }
+        let created = rig.create_continued("codex-cli", &ws, RESERVE).await;
+        assert_eq!(created.status(), 200, "{}", created.body());
+        let info: CaptureWorkspaceInfo = created.json().unwrap();
+        let sealed = rig.seal(&info.entry_id, None).await;
+        assert_eq!(sealed.status(), 200, "{}", sealed.body());
+        let seal = read_manifest(&rig.trace_dir(&info.entry_id).join("seal.json"));
+        let Some(goalcup_protocol::seal::GitState::Read(git)) = seal.git else {
+            panic!("the seal records the Git state: {:?}", seal.git);
+        };
+        digests.push(git.dirty_sha256);
+    }
+    assert_eq!(
+        digests[0], digests[1],
+        "the bytes of a key file moved the digest"
+    );
+
+    let ws = rig.workspace("empty-key");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(ws.join(".env.local"), b"").unwrap();
+    let created = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let info: CaptureWorkspaceInfo = created.json().unwrap();
+    let baseline = read_manifest(&rig.trace_dir(&info.entry_id).join("baseline.json"));
+    assert_eq!(
+        baseline.files,
+        [goalcup_protocol::seal::SealedFile {
+            path: ".env.local".to_string(),
+            bytes: 0,
+            sha256: "0".repeat(64),
+        }]
+    );
+}
+
+/// The seal of a folder that is not a clone walks at most 50 000 files (D71): past them it seals
+/// at once, the manifest recording the walk as capped. Never an error.
+#[tokio::test]
+async fn a_walk_past_its_file_limit_seals_as_capped() {
+    let rig = Rig::start().await;
+    let ws = rig.workspace("node-modules");
+    let created = rig.create("codex-cli", &ws, RESERVE).await;
+    assert_eq!(created.status(), 200, "{}", created.body());
+    let info: CaptureWorkspaceInfo = created.json().unwrap();
+    let limit = goalcup_daemon::workspace::WORKSPACE_FILE_LIMIT;
+    for dir in 0..=(limit / 1000) {
+        let dir = ws.join(format!("node_modules/m{dir}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        for file in 0..1000 {
+            std::fs::File::create(dir.join(format!("f{file}"))).unwrap();
+        }
+    }
+    let sealed = rig.seal(&info.entry_id, None).await;
+    assert_eq!(sealed.status(), 200, "{}", sealed.body());
+    let seal = read_manifest(&rig.trace_dir(&info.entry_id).join("seal.json"));
+    assert_eq!(
+        seal.capped,
+        Some(goalcup_protocol::seal::WalkCap::FileLimit)
+    );
+    assert_eq!(seal.files.len(), limit);
 }
 
 /// The baseline lists the connector's config home as it was before the run, without the
@@ -2933,6 +3093,7 @@ async fn the_baseline_lists_the_harness_home_without_its_session_folder() {
     let config_home = rig.root.join("config-home");
     std::fs::create_dir_all(config_home.join("sessions/2026/10")).unwrap();
     std::fs::write(config_home.join("config.toml"), b"model = \"m\"\n").unwrap();
+    std::fs::write(config_home.join(".env"), b"KEY=secret\n").unwrap();
     std::fs::write(config_home.join("sessions/2026/10/old.jsonl"), b"{}\n").unwrap();
     // Over 64 MiB: its size alone, never read (a sparse file).
     std::fs::File::create(config_home.join("big.bin"))
@@ -2946,6 +3107,11 @@ async fn the_baseline_lists_the_harness_home_without_its_session_folder() {
     assert_eq!(
         home,
         [
+            goalcup_protocol::seal::SealedFile {
+                path: ".env".to_string(),
+                bytes: 11,
+                sha256: "0".repeat(64),
+            },
             goalcup_protocol::seal::SealedFile {
                 path: "big.bin".to_string(),
                 bytes: 64 * 1024 * 1024 + 1,
@@ -3269,25 +3435,15 @@ async fn a_symlinked_native_root_component_is_refused() {
 #[tokio::test]
 async fn a_continued_segment_takes_the_workspace_of_its_sealed_entry() {
     let rig = Rig::start().await;
-    // A clone root, so the next create is admitted whatever the last entry left in it (R3).
     let ws = rig.workspace("continued");
-    let home = rig.root.join("git-home");
-    std::fs::create_dir_all(&ws).unwrap();
-    std::fs::create_dir_all(&home).unwrap();
-    let init = goalcup_daemon::workspace_git::command(&ws, &home)
-        .expect("git on PATH")
-        .args(["init", "-q"])
-        .output()
-        .unwrap();
-    assert!(init.status.success(), "git init");
-
     let first: CaptureWorkspaceInfo = {
         let created = rig.create("codex-cli", &ws, RESERVE).await;
         assert_eq!(created.status(), 200, "{}", created.body());
         created.json().unwrap()
     };
+    std::fs::write(ws.join("work.rs"), b"work").unwrap();
     // Open and unsealed, it holds the workspace.
-    let held = rig.create("codex-cli", &ws, RESERVE).await;
+    let held = rig.create_continued("codex-cli", &ws, RESERVE).await;
     assert_eq!(held.status(), 409, "{}", held.body());
     assert!(
         held.body().contains("one workspace holds one entry"),
@@ -3297,13 +3453,13 @@ async fn a_continued_segment_takes_the_workspace_of_its_sealed_entry() {
 
     let sealed = rig.seal(&first.entry_id, None).await;
     assert_eq!(sealed.status(), 200, "{}", sealed.body());
-    let second = rig.create("codex-cli", &ws, RESERVE).await;
+    let second = rig.create_continued("codex-cli", &ws, RESERVE).await;
     assert_eq!(second.status(), 200, "{}", second.body());
     let second: CaptureWorkspaceInfo = second.json().unwrap();
     assert_ne!(second.entry_id, first.entry_id);
 
     // The new segment holds it in turn.
-    let held = rig.create("codex-cli", &ws, RESERVE).await;
+    let held = rig.create_continued("codex-cli", &ws, RESERVE).await;
     assert_eq!(held.status(), 409, "{}", held.body());
     assert!(
         held.body().contains("one workspace holds one entry"),
@@ -3317,16 +3473,6 @@ async fn a_continued_segment_takes_the_workspace_of_its_sealed_entry() {
 async fn restarted_over_a_lost_chain() -> (Rig, PathBuf, String) {
     let rig = Rig::start().await;
     let ws = rig.workspace("lost");
-    let home = rig.root.join("git-home");
-    std::fs::create_dir_all(&ws).unwrap();
-    std::fs::create_dir_all(&home).unwrap();
-    let init = goalcup_daemon::workspace_git::command(&ws, &home)
-        .expect("git on PATH")
-        .args(["init", "-q"])
-        .output()
-        .unwrap();
-    assert!(init.status.success(), "git init");
-
     let created = rig.create("codex-cli", &ws, RESERVE).await;
     assert_eq!(created.status(), 200, "{}", created.body());
     let first: CaptureWorkspaceInfo = created.json().unwrap();
@@ -3348,7 +3494,7 @@ async fn a_continued_segment_takes_the_workspace_of_an_entry_that_failed_to_reop
             .is_some_and(|e| e.contains("was not reopened")),
         "the lost chain was not reopened: {last:?}"
     );
-    let second = rig.create("codex-cli", &ws, RESERVE).await;
+    let second = rig.create_continued("codex-cli", &ws, RESERVE).await;
     assert_eq!(second.status(), 200, "{}", second.body());
 }
 

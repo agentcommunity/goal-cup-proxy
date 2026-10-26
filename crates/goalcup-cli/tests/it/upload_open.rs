@@ -640,8 +640,12 @@ mod server_runs {
         assert!(!rig.harness_started());
     }
 
-    /// A fake GitHub API that answers every request with `body`, and counts the requests.
-    fn fake_github(body: &'static str) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    /// A fake GitHub API that answers the repository with `body` and its list of commits with
+    /// `commits` (`409`: empty; `200`: a commit), and counts the requests.
+    fn fake_github(
+        body: &'static str,
+        commits: u16,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -655,8 +659,13 @@ mod server_runs {
                     head.push(byte[0]);
                 }
                 count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let listed = String::from_utf8_lossy(&head)
+                    .lines()
+                    .next()
+                    .is_some_and(|line| line.contains("/commits"));
+                let (status, body) = if listed { (commits, "[]") } else { (200, body) };
                 let reply = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
                      Connection: close\r\n\r\n{body}",
                     body.len()
                 );
@@ -671,8 +680,10 @@ mod server_runs {
     /// practice run never pushes, and is not asked.
     #[test]
     fn a_competition_or_test_start_refuses_a_repository_with_commits_and_practice_does_not() {
-        let (used, asked) =
-            fake_github(r#"{"private":false,"size":12,"permissions":{"push":true}}"#);
+        let (used, asked) = fake_github(
+            r#"{"private":false,"size":12,"permissions":{"push":true}}"#,
+            200,
+        );
         for mode in [RunMode::Competition, RunMode::Test] {
             let rig = Rig::new();
             let upload = server(&rig);
@@ -689,7 +700,7 @@ mod server_runs {
             assert_eq!(refused.exit_code(), 1, "{mode:?}: {refused}");
             let said = refused.to_string();
             assert!(
-                said.contains("is not empty (12 KB)") && said.contains("--repo"),
+                said.contains("must be empty when the run opens") && said.contains("--repo"),
                 "{mode:?}: {said}"
             );
             assert!(upload.device_requests().is_empty(), "{mode:?}: approval");
@@ -709,13 +720,330 @@ mod server_runs {
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2);
 
         // An empty repository lets a competition run start.
-        let (empty, _) = fake_github(r#"{"private":false,"size":0,"permissions":{"push":true}}"#);
+        let (empty, _) = fake_github(r#"{"private":false,"size":0}"#, 409);
         let rig = Rig::new();
         let upload = server(&rig);
         rig.prepare_for(&upload.url());
         rig.with_env(goalcup_cli::commands::start::TEST_GITHUB_API, &empty);
         run_to_end(&rig, false);
         assert_eq!(upload.run_ids().len(), 1);
+    }
+
+    /// A start refused before the approval: no device request, nothing asked of the server,
+    /// nothing created, no harness. The refusal's text.
+    fn refused_before_the_approval(rig: &Rig, server: &UploadServer, project: &Path) -> String {
+        let http = rig.client();
+        let client = Hooked::new(&http, rig);
+        let opts = rig.options(project, RESERVE);
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("the start was not refused");
+        assert_eq!(refused.exit_code(), 1, "{refused}");
+        assert!(server.device_requests().is_empty(), "{out}");
+        assert!(server.calls().is_empty(), "{:?}", server.calls());
+        assert!(client.book().creates.is_empty());
+        assert!(rig.run_dirs().is_empty());
+        assert!(!rig.harness_started());
+        refused.to_string()
+    }
+
+    /// A key file that no `.gitignore` line covers would be published by the agent's first
+    /// `git add .`, token and all: the start is refused before the approval and prints the lines
+    /// to add. A token line the printed push line cannot read (here `export`, quotes and a CR) is
+    /// refused too, showing the form and never the value. Covered and plain, it starts.
+    #[test]
+    fn a_key_file_no_gitignore_line_covers_is_refused_before_the_approval() {
+        const VALUE: &str = "SECRET-VALUE-0123";
+        let quoted = format!("export GH_TOKEN=\"{VALUE}\"\r\n");
+        let rows: [(&str, Option<&str>, &str, &str); 4] = [
+            ("no .gitignore", None, "GH_TOKEN=x\n", ".env.*"),
+            (
+                "another file ignored",
+                Some("node_modules\n.env\n"),
+                "GH_TOKEN=x\n",
+                ".env.*",
+            ),
+            (
+                "ignored, then re-included",
+                Some(".env*\n!.env.local\n"),
+                "GH_TOKEN=x\n",
+                ".env.*",
+            ),
+            (
+                "a token line in another form",
+                Some(".env*\n"),
+                &quoted,
+                "GH_TOKEN=<",
+            ),
+        ];
+        for (name, ignore, key_file, phrase) in rows {
+            let rig = Rig::new();
+            let server = server(&rig);
+            rig.prepare_for(&server.url());
+            let project = rig.run_folder();
+            std::fs::write(project.join(".env.local"), key_file).unwrap();
+            if let Some(ignore) = ignore {
+                std::fs::write(project.join(".gitignore"), ignore).unwrap();
+            }
+            let said = refused_before_the_approval(&rig, &server, &project);
+            assert!(
+                said.contains(".env.local") && said.contains(phrase),
+                "{name}: {said}"
+            );
+            assert!(!said.contains(VALUE), "{name}: {said}");
+        }
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let project = rig.run_folder();
+        std::fs::write(project.join(".env.local"), "GH_TOKEN=x\n").unwrap();
+        std::fs::write(project.join(".gitignore"), "# keys\n/.env\n.env.*\n").unwrap();
+        run_to_end(&rig, false);
+        assert_eq!(server.run_ids().len(), 1);
+    }
+
+    /// A project folder inside a Git repository, or beside goalcup's own folders (which the
+    /// recorder refuses as a workspace), is refused before the approval.
+    #[test]
+    fn a_folder_inside_a_repository_or_beside_goalcups_folders_is_refused_before_the_approval() {
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let project = rig.run_folder();
+        std::fs::create_dir(project.parent().unwrap().join(".git")).unwrap();
+        let said = refused_before_the_approval(&rig, &server, &project);
+        assert!(said.contains("inside the Git repository"), "{said}");
+
+        let rig = Rig::new();
+        let upload = self::server(&rig);
+        rig.prepare_for(&upload.url());
+        let beside = rig.cfg.with_file_name("my-run");
+        std::fs::create_dir(&beside).unwrap();
+        let said = refused_before_the_approval(&rig, &upload, &beside);
+        assert!(said.contains("next to it"), "{said}");
+    }
+
+    /// GitHub's `size` reads 0 for a repository whose only commit is the README it made: the
+    /// list of commits answers `200`, and the start is refused before the approval with the
+    /// server's own sentence.
+    #[test]
+    fn a_repository_with_only_a_readme_is_refused_before_the_approval() {
+        let (readme, asked) = fake_github(r#"{"private":false,"size":0}"#, 200);
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        rig.with_env(goalcup_cli::commands::start::TEST_GITHUB_API, &readme);
+        let project = rig.run_folder();
+        let said = refused_before_the_approval(&rig, &server, &project);
+        assert!(said.contains("must be empty when the run opens"), "{said}");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// A real run's launch block names the repository, the token file and the git identity, for
+    /// the participant's prompt, and its lines work: run in a new repository, git gets the token
+    /// from the key file for github.com (and for no other host), and the token is in no setting.
+    /// A practice run, which never pushes, prints none of it.
+    #[test]
+    fn a_real_run_prints_where_and_as_whom_the_agent_pushes() {
+        const TOKEN: &str = "SYNTHETIC-gh-token-0123456789abcdef";
+        let (empty, _) = fake_github(r#"{"private":false,"size":0,"owner":{"id":42}}"#, 409);
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        rig.with_env(goalcup_cli::commands::start::TEST_GITHUB_API, &empty);
+        let project = rig.run_folder();
+        std::fs::write(project.join(".gitignore"), ".env*\n").unwrap();
+        std::fs::write(project.join(".env.local"), format!("GH_TOKEN={TOKEN}\n")).unwrap();
+        let ended = run_to_end(&rig, false);
+        let out = &ended.out;
+        assert!(out.contains(&format!("Push to {PREP_REPO}")), "{out}");
+        assert!(out.contains("GH_TOKEN in .env.local"), "{out}");
+        assert!(
+            out.contains("git config user.email \"42+goal-cup@users.noreply.github.com\""),
+            "{out}"
+        );
+        assert!(!out.contains(TOKEN), "{out}");
+
+        // The `git` lines, run as the agent would in a repository of its own.
+        let repo = rig.root.join("agent-repo");
+        let git = |args: &[&str], input: &str| {
+            use std::io::Write;
+            let mut child = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env_clear()
+                .env("PATH", std::env::var("PATH").unwrap())
+                .env("HOME", &repo)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .unwrap();
+            child.wait_with_output().unwrap()
+        };
+        std::fs::create_dir(&repo).unwrap();
+        assert!(git(&["init", "--quiet"], "").status.success());
+        let lines: Vec<&str> = out
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("git "))
+            .collect();
+        for wanted in [
+            "git config credential.https://github.com.helper",
+            "git config user.email",
+        ] {
+            assert!(
+                lines.iter().any(|l| l.starts_with(wanted)),
+                "{wanted}: {out}"
+            );
+        }
+        for line in &lines {
+            let ran = std::process::Command::new("/bin/sh")
+                .args(["-c", line])
+                .current_dir(&repo)
+                .env("HOME", &repo)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(ran.status.success(), "{line}: {ran:?}");
+        }
+        let fill = |host: &str| {
+            let filled = git(
+                &["credential", "fill"],
+                &format!("protocol=https\nhost={host}\npath=goal-cup/demo.git\n\n"),
+            );
+            String::from_utf8_lossy(&filled.stdout).into_owned()
+        };
+        assert!(fill("github.com").contains(&format!("password={TOKEN}")));
+        assert!(!fill("example.org").contains(TOKEN));
+        let config = std::fs::read_to_string(repo.join(".git").join("config")).unwrap();
+        assert!(!config.contains(TOKEN), "{config}");
+        assert!(
+            config.contains("https://github.com/goal-cup/demo.git"),
+            "{config}"
+        );
+
+        let rig = Rig::new();
+        let upload = self::server(&rig);
+        rig.prepare_for(&upload.url());
+        let ended = run_to_end(&rig, true);
+        assert!(!ended.out.contains("Push to"), "{}", ended.out);
+    }
+
+    /// The GitHub token in the project folder's `.env.local` is a run secret: an agent that
+    /// reads it and sends it in a model request leaves no copy of it in the trace or the upload,
+    /// though the request itself is recorded and sent. The token is not shaped like any token
+    /// the recorder knows, so only its value can find it.
+    #[test]
+    fn a_harness_that_sends_the_token_uploads_no_copy_of_it() {
+        use crate::common::m2_cli_support::Upstream;
+        const TOKEN: &str = "SYNTHETIC-plain-value-0123456789abcdef";
+        const MARK: &str = "the agent says";
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let project = rig.run_folder();
+        std::fs::write(project.join(".gitignore"), ".env*\n").unwrap();
+        std::fs::write(project.join(".env.local"), format!("GH_TOKEN={TOKEN}\n")).unwrap();
+        let upstream = Upstream::start(&rig.runtime);
+        rig.tell(
+            "steps.sh",
+            &format!(
+                "tok=$(sed -n 's/^GH_TOKEN=//p' .env.local)\n\
+                 printf '{{\"n\":\"{MARK} %s\"}}' \"$tok\" > \"$M2_FAKE_OUT/body\"\n{}",
+                upstream.curl_body_file()
+            ),
+        );
+        rig.tell("stop", "");
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let mut opts = rig.options(&project, RESERVE);
+        opts.upload_policy = quick_policy();
+        let (result, out) = std::thread::scope(|s| {
+            rig.start(s, &client, opts, Some(upstream.roots()))
+                .join()
+                .unwrap()
+        });
+        let outcome = result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+        assert_eq!(rig.harness_file("curl.err").unwrap_or_default(), "");
+        let run_id = server.run_ids()[0].clone();
+
+        for (path, bytes) in files_below(&rig.trace(&outcome.entry_id)) {
+            assert!(
+                !contains(&bytes, TOKEN),
+                "{} holds the token",
+                path.display()
+            );
+        }
+        let chunks = server.chunks(&run_id);
+        assert!(!chunks.is_empty(), "nothing was uploaded");
+        let mut uploaded = Vec::new();
+        for chunk in &chunks {
+            let body =
+                zstd::decode_all(std::fs::read(&chunk.body_path).unwrap().as_slice()).unwrap();
+            assert!(!contains(&body, TOKEN), "an upload chunk holds the token");
+            uploaded.extend(segments(&body));
+        }
+        assert!(contains(&uploaded, MARK), "the request was not uploaded");
+        assert!(
+            !contains(&uploaded, TOKEN),
+            "the uploaded request holds the token"
+        );
+    }
+
+    /// Every `data_b64` value in the JSON lines of `body`, decoded and joined.
+    fn segments(body: &[u8]) -> Vec<u8> {
+        use base64::Engine as _;
+        fn walk(value: &serde_json::Value, out: &mut Vec<u8>) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    for (k, v) in map {
+                        match (k.as_str(), v) {
+                            ("data_b64", serde_json::Value::String(text)) => out.extend(
+                                base64::engine::general_purpose::STANDARD
+                                    .decode(text)
+                                    .unwrap(),
+                            ),
+                            _ => walk(v, out),
+                        }
+                    }
+                }
+                serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for line in body.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) {
+                walk(&value, &mut out);
+            }
+        }
+        out
+    }
+
+    /// `--dev` never competes: with a server, a competition start through it is refused before
+    /// the approval. A practice run through it is opened, and tells the server it came through
+    /// `--dev`.
+    #[test]
+    fn a_dev_start_competes_never_and_says_so_to_the_server() {
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        rig.with_env(goalcup_cli::commands::start::TEST_DEV_COMPETES, "0");
+        let project = rig.run_folder();
+        let said = refused_before_the_approval(&rig, &server, &project);
+        assert!(said.contains("--practice"), "{said}");
+
+        let ended = run_to_end(&rig, true);
+        assert_eq!(server.dev_of(&ended.outcome.entry_id), Some(true));
     }
 
     /// The last real run's repository is kept only once a run has opened with it: a start that

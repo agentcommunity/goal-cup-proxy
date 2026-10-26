@@ -12,8 +12,8 @@
 //! (`an_agent_written_clean_filter_is_never_run`). Content is hashed here, never through a diff
 //! driver.
 
-use crate::workspace::{ABSENT, HASH_LIMIT, measure, walk};
-use goalcup_protocol::seal::WorkspaceGit;
+use crate::workspace::{ABSENT, Bounds, HASH_LIMIT, is_key_file, measure, walk};
+use goalcup_protocol::seal::{WalkCap, WorkspaceGit};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -337,21 +337,37 @@ fn collapsed_files(
     deadline: Instant,
 ) -> Result<Vec<Line>, String> {
     // The walk's own error names the directory; the reason recorded must not.
-    let files = walk(full, &[], left + 1, HASH_LIMIT, Some(deadline)).map_err(|e| match e {
+    let walked = walk(
+        full,
+        &[],
+        Bounds {
+            limit: left,
+            hash_limit: HASH_LIMIT,
+            deadline: Some(deadline),
+            keys_unhashed: true,
+        },
+    )
+    .map_err(|e| match e {
         crate::DaemonError::Io { source, .. } => {
             format!("an untracked nested repository could not be read: {source}")
         }
         _ => "the time to read it ran out".to_string(),
     })?;
-    if files.len() > left {
-        return Err(format!(
-            "more than {COLLAPSED_FILE_LIMIT} files below untracked directories"
-        ));
+    match walked.capped {
+        Some(WalkCap::FileLimit) => {
+            return Err(format!(
+                "more than {COLLAPSED_FILE_LIMIT} files below untracked directories"
+            ));
+        }
+        Some(WalkCap::Deadline) => return Err("the time to read it ran out".to_string()),
+        None => {}
     }
+    let files = walked.files;
     Ok(files
         .into_iter()
         .map(|file| {
-            let value = if file.bytes > HASH_LIMIT {
+            let name = file.path.rsplit('/').next().unwrap_or_default();
+            let value = if file.bytes > HASH_LIMIT || is_key_file(name) {
                 format!("size:{}", file.bytes)
             } else {
                 file.sha256
@@ -370,10 +386,15 @@ fn split_tab(entry: &[u8]) -> Result<(&[u8], &[u8]), String> {
     Ok((&entry[..tab], &entry[tab + 1..]))
 }
 
-/// A file's value in the digest: `size:<n>` above [`HASH_LIMIT`], else what the seal walk
-/// records for it (the absent digest for anything but a readable regular file).
+/// A file's value in the digest: `size:<n>` above [`HASH_LIMIT`] or for a key file
+/// ([`is_key_file`], by name at any depth: its bytes are never read, so its content cannot
+/// move the digest), else what the seal walk records for it (the absent digest for anything
+/// but a readable regular file).
 fn describe(full: &Path, meta: &std::fs::Metadata) -> Vec<u8> {
-    if meta.is_file() && meta.len() > HASH_LIMIT {
+    let key = full
+        .file_name()
+        .is_some_and(|name| is_key_file(&name.to_string_lossy()));
+    if meta.is_file() && (meta.len() > HASH_LIMIT || key) {
         return format!("size:{}", meta.len()).into_bytes();
     }
     measure(full, u64::MAX).1.into_bytes()

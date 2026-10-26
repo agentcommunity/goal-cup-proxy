@@ -16,7 +16,7 @@
 //!
 //! In this order, each step settled before the next: the run and its credential are found; every
 //! refusal that needs no server is made (the connector is a chat-mode one, the terminal is
-//! there, the harness and its pin are usable, the run's clone is there); the shared harness home is locked (another run
+//! there, the harness and its pin are usable, the run's folder is there); the shared harness home is locked (another run
 //! recording there is refused, by name) and the run's reserve is looked at (a host still
 //! holding it is refused); each earlier segment not yet sent is looked at, and anything the
 //! tracker's daemon answers other than "not held" or "not open" is a refusal; the segments the
@@ -157,10 +157,11 @@ pub fn continue_with(
     // 0. Every refusal that needs no server and changes nothing, before the home is locked and
     //    before any segment is sealed or sent.
     continue_preflight(cfg, &connector, previous_entry.dev, env)?;
-    // The next segment goes on in the run's clone (D4), judged by the daemon's own clone rule.
-    // The daemon looks again when it makes the workspace; this look refuses before anything is
-    // closed or sent, and says which case it is.
-    clone_is_there(&run_id, &previous.entry_id, &record.workspace)?;
+    // The next segment goes on in the folder the run started in: it must still be a folder, with
+    // or without `.git` (the agent may not have run `git init` yet; a run started before 0.7
+    // works in its clone). The daemon looks again when it makes the workspace; this look refuses
+    // before anything is closed or sent, and says which case it is.
+    folder_is_there(&run_id, &previous.entry_id, &record.workspace)?;
 
     // 1. Another run recording on the shared harness home is refused, by name, before anything
     //    is closed or changed. Its host holds the lock until it has sealed.
@@ -295,19 +296,17 @@ pub fn continue_with(
     .map(|_| ())
 }
 
-/// The run's clone is at `workspace` ([`goalcup_platform::clone`], the rule the daemon applies),
-/// or the refusal for what is there instead.
-fn clone_is_there(run_id: &str, entry_id: &str, workspace: &Path) -> Result<(), CliError> {
-    use crate::participant::{NotAClone, clone_missing, clone_unreadable, not_a_clone};
-    use goalcup_platform::clone::{CloneRoot, clone_root};
-    let not = |why| not_a_clone(run_id, entry_id, workspace, why);
-    let refusal = match clone_root(workspace) {
-        CloneRoot::Clone => return Ok(()),
-        CloneRoot::Missing => clone_missing(run_id, entry_id, workspace),
-        CloneRoot::NotAFolder => not(NotAClone::NotAFolder),
-        CloneRoot::NoGitDirectory => not(NotAClone::NoGitDirectory),
-        CloneRoot::InsideRepository(outer) => not(NotAClone::InsideRepository(&outer)),
-        CloneRoot::Unreadable(kind) => clone_unreadable(workspace, &kind.to_string()),
+/// The run's folder is at `workspace` and is a directory (a link to one is followed), or the
+/// refusal for what is there instead. Whether it holds `.git` is not asked.
+fn folder_is_there(run_id: &str, entry_id: &str, workspace: &Path) -> Result<(), CliError> {
+    use crate::participant::{project_missing, project_not_a_folder, project_unreadable};
+    let refusal = match std::fs::metadata(workspace) {
+        Ok(meta) if meta.is_dir() => return Ok(()),
+        Ok(_) => project_not_a_folder(run_id, entry_id, workspace),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            project_missing(run_id, entry_id, workspace)
+        }
+        Err(error) => project_unreadable(workspace, &error.kind().to_string()),
     };
     Err(CliError::Refused(refusal))
 }
@@ -491,60 +490,5 @@ mod tests {
             .expect("a refusal")
             .to_string();
         assert!(said.contains("did not verify"), "{said}");
-    }
-
-    fn refused(result: Result<(), CliError>) -> String {
-        match result {
-            Err(CliError::Refused(text)) => text,
-            other => panic!("not a refusal: {other:?}"),
-        }
-    }
-
-    /// The clone rule is the daemon's: a clone, or a link to one, goes on; the case that is not
-    /// one is said for what it is, and the ways on name the last part's seal.
-    #[test]
-    fn the_clone_check_says_which_case_it_is() {
-        let t = tempfile::tempdir().unwrap();
-        let clone = t.path().join("bigger-disk").join("ws");
-        std::fs::create_dir_all(clone.join(".git")).unwrap();
-        clone_is_there("r1", "e1", &clone).unwrap();
-
-        // Moved to a bigger disk and linked back: the link is followed.
-        let linked = t.path().join("work").join("ws");
-        std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink(&clone, &linked).unwrap();
-        clone_is_there("r1", "e1", &linked).unwrap();
-
-        // Not there: put it back, or end the last part.
-        let gone = refused(clone_is_there("r1", "e1", &t.path().join("gone")));
-        assert!(gone.starts_with("Put the run's folder back at"), "{gone}");
-        assert!(
-            gone.contains("goalcup seal e1 --yes, then goalcup upload"),
-            "{gone}"
-        );
-        assert!(gone.ends_with("Nothing was changed."), "{gone}");
-
-        // There, but the agent removed `.git`: not called missing.
-        let bare = t.path().join("bare");
-        std::fs::create_dir_all(&bare).unwrap();
-        let no_git = refused(clone_is_there("r1", "e1", &bare));
-        assert!(no_git.starts_with("End the run's last part"), "{no_git}");
-        assert!(no_git.contains("has no .git directory"), "{no_git}");
-        assert!(
-            no_git.contains("goalcup seal e1 --yes, then goalcup upload"),
-            "{no_git}"
-        );
-        assert!(!no_git.contains("Put the run's folder back"), "{no_git}");
-
-        // A `.git` link in the clone is not the clone's own.
-        std::os::unix::fs::symlink(clone.join(".git"), bare.join(".git")).unwrap();
-        let git_link = refused(clone_is_there("r1", "e1", &bare));
-        assert!(git_link.contains("has no .git directory"), "{git_link}");
-
-        // A file where the folder was.
-        let file = t.path().join("file");
-        std::fs::write(&file, b"x").unwrap();
-        let not_folder = refused(clone_is_there("r1", "e1", &file));
-        assert!(not_folder.contains("is a file"), "{not_folder}");
     }
 }

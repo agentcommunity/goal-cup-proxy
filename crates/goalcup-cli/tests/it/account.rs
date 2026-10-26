@@ -40,13 +40,20 @@ struct FakeGithub {
 
 impl FakeGithub {
     /// Answers every request with `status` and `body`, and records its request line path and
-    /// `Authorization` header.
+    /// `Authorization` header. The list of commits answers `409`: the repository is empty.
     fn start(status: u16, body: &str) -> FakeGithub {
         FakeGithub::answers(&[(status, body)])
     }
 
-    /// Answers the n-th request with `answers[n]`, and every one after the last with the last.
+    /// Answers the n-th request with `answers[n]`, and every one after the last with the last;
+    /// the list of commits answers `409`.
     fn answers(answers: &[(u16, &str)]) -> FakeGithub {
+        FakeGithub::serve(answers, 409)
+    }
+
+    /// As [`FakeGithub::answers`], with the list of commits (`.../commits?per_page=1`) answering
+    /// `commits`, apart from the n-th count.
+    fn serve(answers: &[(u16, &str)], commits: u16) -> FakeGithub {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -71,12 +78,18 @@ impl FakeGithub {
                     .filter_map(|l| l.split_once(':'))
                     .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
                     .map(|(_, v)| v.trim().to_string());
+                let listed = path.contains("/commits");
                 let n = {
                     let mut seen = log.lock().unwrap();
                     seen.push((path, auth));
-                    seen.len() - 1
+                    seen.iter().filter(|(p, _)| !p.contains("/commits")).count()
                 };
-                let (status, body) = &answers[n.min(answers.len() - 1)];
+                let commits_answer = (commits, "[]".to_string());
+                let (status, body) = if listed {
+                    &commits_answer
+                } else {
+                    &answers[n.saturating_sub(1).min(answers.len() - 1)]
+                };
                 let reply = format!(
                     "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -99,6 +112,14 @@ impl FakeGithub {
             stop,
             port,
         }
+    }
+}
+
+impl FakeGithub {
+    /// How many times the repository itself was asked about (the list of commits not counted).
+    fn repo_asks(&self) -> usize {
+        let seen = self.requests.lock().unwrap();
+        seen.iter().filter(|(p, _)| !p.contains("/commits")).count()
     }
 }
 
@@ -138,18 +159,22 @@ fn read_head(stream: &mut TcpStream) -> String {
 
 /// GitHub's open API is asked with no login at all: a public, empty repository passes; one
 /// that cannot be seen (missing, or private) is `Missing`, for start to create; a rate limit
-/// (`403`, `429`) is `Unchecked`, never "used"; a repository with commits, or an answer that is
-/// not one, is refused in a sentence of its own.
+/// (`403`, `429`), an outage (`5xx`) or no answer at all is `Unchecked`, never "used", so GitHub
+/// being down never blocks a start; a repository with commits is refused in a sentence of its own.
 #[test]
 fn the_repository_check_sends_no_login_and_tells_missing_from_used() {
     let cases = [
-        (200, r#"{"private":false,"size":0}"#, Ok(Found::PublicEmpty)),
+        (
+            200,
+            r#"{"private":false,"size":0,"owner":{"id":7}}"#,
+            Ok(Found::PublicEmpty { owner_id: Some(7) }),
+        ),
         (404, r#"{"message":"Not Found"}"#, Ok(Found::Missing)),
         (200, r#"{"private":true,"size":0}"#, Ok(Found::Missing)),
         (
             200,
             r#"{"private":false,"size":12}"#,
-            Err("not empty (12 KB)"),
+            Err("must be empty when the run opens"),
         ),
         (
             403,
@@ -161,7 +186,7 @@ fn the_repository_check_sends_no_login_and_tells_missing_from_used() {
             r#"{"message":"Too Many Requests"}"#,
             Ok(Found::Unchecked),
         ),
-        (500, r#"{"message":"Server Error"}"#, Err("could not check")),
+        (500, r#"{"message":"Server Error"}"#, Ok(Found::Unchecked)),
     ];
     for (status, body, want) in cases {
         let fake = FakeGithub::start(status, body);
@@ -174,9 +199,11 @@ fn the_repository_check_sends_no_login_and_tells_missing_from_used() {
             other => panic!("{status} {body}: {other:?}"),
         }
         let seen = fake.requests.lock().unwrap().clone();
-        assert_eq!(seen.len(), 1, "{seen:?}");
         assert_eq!(seen[0].0, "/repos/acme/empty-repo");
-        assert_eq!(seen[0].1, None, "a login was sent");
+        assert!(
+            seen.iter().all(|(_, auth)| auth.is_none()),
+            "a login was sent"
+        );
     }
 }
 
@@ -237,7 +264,7 @@ fn a_real_run_names_its_repository_creates_it_and_checks_it() {
         ["https://github.com/new?name=my-goal-cup&owner=you&visibility=public"]
     );
     assert!(said.contains("you/my-goal-cup: public and empty"), "{said}");
-    assert_eq!(api.requests.lock().unwrap().len(), 2);
+    assert_eq!(api.repo_asks(), 2);
     assert!(
         goalcup_cli::prep_file::read_prep_lenient(&cfg)
             .repo_url
@@ -274,7 +301,7 @@ fn a_repository_that_is_used_is_refused() {
     .unwrap_err()
     .to_string();
     assert!(
-        refused.contains("not empty") && refused.contains("--repo"),
+        refused.contains("must be empty when the run opens") && refused.contains("--repo"),
         "{refused}"
     );
     assert!(
@@ -304,7 +331,7 @@ fn the_next_real_run_suggests_a_new_name_once_the_last_is_used() {
     let said = String::from_utf8(out).unwrap();
     assert!(said.contains("[you/my-goal-cup-2]"), "{said}");
     assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup-2");
-    assert_eq!(api.requests.lock().unwrap().len(), 1);
+    assert_eq!(api.repo_asks(), 1);
 }
 
 /// GitHub's open API allows 60 calls an hour per address. A rate limit (`403`) is not a used
@@ -322,7 +349,7 @@ fn a_rate_limited_github_is_said_and_never_counts_as_used() {
     )
     .unwrap();
     let said = String::from_utf8(out).unwrap();
-    assert!(said.contains("GitHub's API is busy"), "{said}");
+    assert!(said.contains("was not checked"), "{said}");
     assert_eq!(repo.repo_url, "https://github.com/you/my-goal-cup");
 }
 

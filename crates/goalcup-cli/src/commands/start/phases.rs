@@ -321,7 +321,7 @@ pub(super) fn create_and_gate<'a>(
     // everything it records (D60). It goes to the daemon in memory only.
     let credential = ProxyCredential::generate();
     let run_secrets = match RunSecret::new(credential.expose_secret().as_bytes()) {
-        Some(secret) => vec![secret],
+        Some(secret) => with_project_token(secret, upload.is_some().then_some(&run.workspace)),
         None => {
             let error =
                 CliError::Internal("the proxy credential is not one the daemon takes".to_string());
@@ -579,6 +579,10 @@ pub(super) fn create_and_gate<'a>(
         harness_name: c.display_name().to_string(),
         first_screen: c.first_screen().map(str::to_string),
         opens,
+        prompt: match upload.map(|u| &u.how) {
+            Some(UploadHow::Fresh(new)) => prompt_for(new),
+            _ => Vec::new(),
+        },
         details,
     };
     let gate = Gate {
@@ -588,6 +592,38 @@ pub(super) fn create_and_gate<'a>(
         gated,
     };
     Ok((forked, gate))
+}
+
+/// The run's secrets for the redactor: the proxy credential, and for a run on a server the
+/// GitHub token the participant keeps in the project folder (`GH_TOKEN` in a key file), which the
+/// agent reads to push and might print. A token the redactor cannot take by value (too short,
+/// or with a space) is left to its patterns.
+fn with_project_token(credential: RunSecret, project: Option<&PathBuf>) -> Vec<RunSecret> {
+    let mut secrets = vec![credential];
+    if let Some((_, Some(token))) = project.and_then(|p| super::project::token(p))
+        && secrets.len() < goalcup_protocol::run_secret::MAX_RUN_SECRETS
+        && !secrets.contains(&token)
+    {
+        secrets.push(token);
+    }
+    secrets
+}
+
+/// A real run's prompt lines (E1): its repository, the key file that holds the token (the
+/// guide's `.env.local` when none does yet) and the owner's private commit identity.
+fn prompt_for(new: &super::server::NewRun) -> Vec<String> {
+    let Some(repo) = &new.repo else {
+        return Vec::new();
+    };
+    let file = super::project::token(&new.project)
+        .map_or_else(|| super::project::TOKEN_FILE.to_string(), |(file, _)| file);
+    crate::participant::prompt_block(
+        &repo.repo_url,
+        repo.owner(),
+        &repo.commit_email(),
+        &file,
+        &new.project.join(&file),
+    )
 }
 
 /// Phase three, from the fork: take the parked child's handle, register it durably, and only
@@ -669,6 +705,7 @@ pub(super) fn register_and_release<'a>(
             opens: forked.opens,
             ends,
             first_screen: forked.first_screen.as_deref(),
+            prompt: &forked.prompt,
         });
         let _ = block
             .iter()
@@ -909,7 +946,7 @@ pub(super) fn run_harness<'a>(
                 },
                 time_left_file: Some(crate::run::time_left::file_path(cfg, &forked.record.run_id)),
                 native: Some(crate::run::watch::NativeWatch {
-                    silence: cx.opts.native_silence,
+                    silence: cx.opts.native_silence.for_run(forked.record.practice),
                     harness: forked.harness_name.clone(),
                     guide: crate::commands::prep::setup_guide_link(cx.connector),
                 }),
