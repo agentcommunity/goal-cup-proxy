@@ -698,7 +698,7 @@ cleanup() {
   # The shell's own notices about the jobs it ends here go to the log, not the terminal.
   exec 2>>"$LOG"
   if [ -n "$ROOT" ] && [ -d "$ROOT" ]; then {
-    : >"$ROOT/done" 2>/dev/null
+    : >"$(kit_file done)" 2>/dev/null
     # A test run that failed after its entry was found and before its seal was asked for would
     # go on for 168 hours: seal that entry (and only it) first, best effort and bounded.
     if [ "$TEST" = 1 ] && [ -n "$SEAL_ENTRY" ] && [ -z "$SEAL_ASKED_AT" ]; then
@@ -784,6 +784,16 @@ fail() {
   return 1
 }
 
+# A kit file's path under $ROOT, made fresh for a write: whatever is there (a file, or a link or a
+# folder the agent planted, since it runs as this user and can reach $ROOT) is removed first. Once
+# $ROOT exists the script runs with noclobber (set -C), so `>"$(kit_file NAME)"` creates the file
+# with O_EXCL and never follows a link that appears in between.
+kit_file() { # name
+  [ -n "$ROOT" ] || { printf '/nonexistent/%s\n' "$1"; return 1; }
+  rm -rf "$ROOT/$1" 2>/dev/null
+  printf '%s\n' "$ROOT/$1"
+}
+
 shq() { # a single-quoted shell word
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
@@ -824,7 +834,7 @@ scan_and_approve() {
   [ ! -s "$ROOT/seen.txt" ] || return 0
   code=$(codes_in "$1" | head -1)
   [ -n "$code" ] || return 0
-  printf '%s\n' "$code" >>"$ROOT/seen.txt"
+  printf '%s\n' "$code" >"$(kit_file seen.txt)"
   if [ -n "$CODES_FILE" ]; then
     printf '%s %s\n' "$PHASE" "$code" >>"$CODES_FILE" || {
       log "cannot write the device code to MATRIX_CODES_FILE"
@@ -871,10 +881,12 @@ scan_and_approve() {
 WRAP_EXTRA=""
 WRAP_DIR=""
 write_wrapper() { # file name "goalcup arguments" [stty]
+  # Always a path under $ROOT: fresh, and written with noclobber (kit_file).
+  rm -rf "$1" 2>/dev/null
   {
     echo '#!/bin/sh'
     [ -z "${4:-}" ] || echo 'stty cols 120 rows 40 2>/dev/null'
-    echo "echo \$\$ >$(shq "$ROOT/$2.pid")"
+    echo "rm -rf $(shq "$ROOT/$2.pid") && set -C && echo \$\$ >$(shq "$ROOT/$2.pid") || exit 1"
     echo "cd $(shq "${WRAP_DIR:-$RUNS}") || exit 1"
     # This machine's git login variables: SSH agent and askpass, keyring, tokens, git/gh configuration.
     printf 'exec env -u SSH_AUTH_SOCK -u SSH_AGENT_PID -u SSH_ASKPASS -u XDG_RUNTIME_DIR -u XDG_CONFIG_HOME'
@@ -925,7 +937,7 @@ project_token() {
       fail "gh is needed (https://cli.github.com): the test run's agent pushes with its token, from the project's .env.local (or give MATRIX_GH_TOKEN_FILE)" || return 1
     (
       umask 077
-      { printf 'GH_TOKEN='; gh auth token 2>"$ROOT/gh-token.err"; } >"$PROJECT/.env.local"
+      { printf 'GH_TOKEN='; gh auth token 2>"$(kit_file gh-token.err)"; } >"$PROJECT/.env.local"
     ) 2>>"$LOG"
     token_plain "$PROJECT/.env.local" ||
       { rm -f "$PROJECT/.env.local"; fail "no GitHub login found here: run \`gh auth login\` (HTTPS, and Yes to authenticate Git) in this environment, then run again (its token goes to the project's .env.local), or give MATRIX_GH_TOKEN_FILE" || return 1; }
@@ -967,7 +979,7 @@ token_copy_ready() {
     token_file_to "$ROOT/private/gh-token" 2>/dev/null || return 1
   else
     command -v gh >/dev/null 2>&1 || return 1
-    (umask 077 && { printf 'GH_TOKEN='; gh auth token 2>/dev/null; } >"$ROOT/private/gh-token") 2>/dev/null || return 1
+    (umask 077 && set -C && { printf 'GH_TOKEN='; gh auth token 2>/dev/null; } >"$ROOT/private/gh-token") 2>/dev/null || return 1
   fi
   [ "$(token_digest "$ROOT/private/gh-token")" = "$TOKEN_SHA" ]
 }
@@ -988,7 +1000,7 @@ PY
 # MATRIX_GH_TOKEN_FILE into .env.local: a regular file (not a link), mode 0600, outside this
 # checkout, one line `GH_TOKEN=<value>` or the value alone. Nothing of it is printed.
 project_token_from_file() {
-  token_file_to "$PROJECT/.env.local" 2>"$ROOT/token-file.err" ||
+  token_file_to "$PROJECT/.env.local" 2>"$(kit_file token-file.err)" ||
     fail "$(last_line "$ROOT/token-file.err")" || return 1
   say "GitHub token for the agent: from MATRIX_GH_TOKEN_FILE $TOKEN_FILE"
 }
@@ -1029,7 +1041,7 @@ PY
 
 # What the starting kit holds, by name, for the "agent changed something" check.
 project_kit_names() {
-  ls -A "$PROJECT" 2>/dev/null >"$ROOT/kit.txt"
+  ls -A "$PROJECT" 2>/dev/null >"$(kit_file kit.txt)"
 }
 
 # The token must never stay in what the kit keeps. If anything printed it (the agent's terminal),
@@ -1076,7 +1088,7 @@ def clean(data):
 
 def scrub(path):
     try:
-        with open(path, "r+b") as f:
+        with os.fdopen(os.open(path, os.O_RDWR | os.O_NOFOLLOW), "r+b") as f:
             data = f.read()
             new = clean(data)
             if new != data:
@@ -1116,15 +1128,16 @@ PY
 }
 
 # I1: after the seal, the token must not be in what the agent pushed. Every object of every git
-# repository in the project folder (its .git and any nested one, found without following a link),
-# and of a fresh mirror clone of the cell's repository (public: anonymous, into $ROOT/clone), is
-# read raw (`git cat-file --batch-all-objects --batch`: blobs binary or not, trees, commits of any
-# shape, annotated tags and their messages, unreachable objects too; no diff, no textconv, no
-# external driver, so nothing of the agent's .git/config runs) and searched for the token, its
-# base64 forms (three alignments, standard and URL alphabets) and its percent-encoded forms. A hit
-# FAILs the cell, loudly; the value is never printed. A clone or a repository that cannot be read
-# FAILs too, and so does a token copy that cannot be made good (token_copy_ready): the check was
-# not done.
+# repository in the project folder (any .git, any directory holding HEAD and objects/: nested,
+# bare, and submodule repositories under .git/modules; found without following a link), and of a
+# fresh mirror clone of the cell's repository (public: anonymous, into $ROOT/clone), is read raw
+# (`git cat-file --batch-all-objects --batch`: blobs binary or not, trees, commits of any shape,
+# annotated tags and their messages, unreachable objects too; no diff, no textconv, no external
+# driver, so nothing of the agent's .git/config runs) and searched for the token, its base64 forms
+# (three alignments, standard and URL alphabets) and its percent-encoded forms. A hit FAILs the
+# cell, loudly; the value is never printed. A project folder that is gone or a link, a clone or a
+# repository that cannot be read, and a token copy that cannot be made good (token_copy_ready, and
+# again in the matcher itself) FAIL too: the check was not done.
 check_token_pushed() {
   [ "$TEST" = 1 ] && [ "$START_LAUNCHED" = 1 ] || return 0
   leaked=""
@@ -1139,25 +1152,45 @@ check_token_pushed() {
   # Fresh: nothing the agent may have put under $ROOT steers the clone (an insteadOf, a helper).
   rm -rf "$ROOT/clone" "$ROOT/clone-home"
   mkdir -p "$ROOT/clone-home"
-  if [ -d "$PROJECT" ]; then
-    find -P "$PROJECT" -name .git -prune >"$ROOT/gitdirs.txt" 2>/dev/null ||
+  if [ -L "$PROJECT" ] || [ ! -d "$PROJECT" ]; then
+    unread="$unread the project folder (it is gone or a link);"
+  else
+    # Listed into a variable, not a file the agent could rewrite: .git entries that are files or
+    # links (a gitdir file, a link to a repository elsewhere), and every objects/ directory whose
+    # folder is a repository (it holds HEAD, or it is a .git or *.git folder or a submodule
+    # repository under .git/modules: one of those that git cannot read FAILs the check). Named by number, never by path (the agent names
+    # its folders: a name could be the token).
+    gitdirs=$(find -P "$PROJECT" \( -name .git ! -type d -print \) -o \( -type d -name objects -print \) 2>/dev/null) ||
       unread="$unread the project folder (it could not be listed);"
-    # Named by number, never by path: the agent names its folders (a name could be the token).
     gn=0
-    while IFS= read -r gd; do
+    ls_ifs=$IFS
+    IFS='
+'
+    set -f
+    for gd in $gitdirs; do
+      IFS=$ls_ifs
+      set +f
+      case $gd in
+        */objects)
+          gd=${gd%/objects}
+          case $gd in *.git | */.git/modules/*) ;; *) [ -f "$gd/HEAD" ] || continue ;; esac
+          ;;
+      esac
       gn=$((gn + 1))
-      if [ "$gd" = "$PROJECT/.git" ]; then where="the project folder's repository"; else where="the project folder's nested repository #$gn"; fi
+      if [ "$gd" = "$PROJECT/.git" ]; then where="the project folder's repository"; else where="the project folder's repository #$gn"; fi
       leak_scan "$where" "$gd"
       case $? in 1) leaked="$leaked $where;" ;; 2) unread="$unread $where;" ;; esac
-    done <"$ROOT/gitdirs.txt"
+    done
+    IFS=$ls_ifs
+    set +f
   fi
   if [ -n "$TEST_REPO" ]; then
     tries=0
-    until leak_git clone --quiet --mirror "https://github.com/$TEST_REPO.git" "$ROOT/clone" >/dev/null 2>"$ROOT/clone.err"; do
+    until clone_err=$(leak_git clone --quiet --mirror "https://github.com/$TEST_REPO.git" "$ROOT/clone" 2>&1 >/dev/null); do
       tries=$((tries + 1))
       rm -rf "$ROOT/clone"
       if [ "$tries" -ge 3 ]; then
-        log "push check: git clone of $TEST_REPO failed: $(last_line "$ROOT/clone.err")"
+        log "push check: git clone of $TEST_REPO failed: $(printf '%s\n' "$clone_err" | tail -n 1)"
         unread="$unread the pushed repository $TEST_REPO (it could not be cloned);"
         break
       fi
@@ -1167,6 +1200,8 @@ check_token_pushed() {
       leak_scan "the pushed repository $TEST_REPO" "$ROOT/clone"
       case $? in 1) leaked="$leaked the pushed repository $TEST_REPO;" ;; 2) unread="$unread the pushed repository $TEST_REPO (its objects could not be read);" ;; esac
     fi
+    # The clone may hold the token: never kept, even with --keep.
+    rm -rf "$ROOT/clone" "$ROOT/clone-home"
   fi
   if [ -n "$leaked" ]; then
     RESULT=FAIL
@@ -1194,22 +1229,26 @@ leak_git() {
 }
 
 # Search every object of the git repository $2 (a .git directory, a gitdir file, or a bare
-# repository) for the token in $ROOT/private/gh-token. Returns 0 when it is not there, 1 when it
-# is, 2 when the repository could not be read (an empty one is read: it has nothing). $1 is only a
-# name for the log.
+# repository) for the token. git's output goes straight into the matcher through a pipe (nothing on
+# disk the agent could swap), followed by git's exit status on a last line the matcher checks. The
+# matcher reads the private copy once and uses it only if its SHA-256 is TOKEN_SHA, passed as an
+# argument (a digest, not the token; the token itself is in no argument): a copy the agent changed
+# or removed after token_copy_ready is "not read", never "not found". Returns 0 when the token is
+# not there, 1 when it is, 2 when the repository or the token could not be read (an empty
+# repository is read: it has nothing). $1 is only a name for the log.
 leak_scan() { # name gitdir
   ls_name=$1
-  leak_git --git-dir="$2" cat-file --batch-all-objects --batch </dev/null >"$ROOT/leak.out" 2>"$ROOT/leak.err"
-  ls_git=$?
-  if [ "$ls_git" != 0 ]; then
-    # git's message names the path, which the agent chose: only the exit status is logged.
-    log "push check: $ls_name could not be read (git exit $ls_git)"
-    rm -f "$ROOT/leak.out"
-    return 2
-  fi
-  python3 -I -c '
-import base64, sys, urllib.parse
-tok = open(sys.argv[1], "rb").read().strip().split(b"=", 1)[1]
+  { leak_git --git-dir="$2" cat-file --batch-all-objects --batch </dev/null
+    printf '\n--git-exit %s\n' "$?"; } 2>/dev/null |
+    python3 -I -c '
+import base64, hashlib, re, sys, urllib.parse
+want, copy = sys.argv[1:3]
+try:
+    tok = open(copy, "rb").read().strip().split(b"=", 1)[1]
+except (OSError, IndexError):
+    tok = b""
+if not tok or hashlib.sha256(tok).hexdigest() != want:
+    sys.exit(4)
 forms = {tok, urllib.parse.quote(tok.decode(), safe="").encode(),
          urllib.parse.quote_plus(tok.decode()).encode()}
 for pad in range(3):
@@ -1219,24 +1258,30 @@ for pad in range(3):
     for enc in (base64.b64encode(raw), base64.urlsafe_b64encode(raw)):
         forms.add(enc.rstrip(b"=")[skip:whole])
 forms = [f for f in forms if len(f) >= 8]
-keep = max(len(f) for f in forms)
+keep = max(64, max(len(f) for f in forms))
 tail = b""
-with open(sys.argv[2], "rb") as src:
-    while True:
-        chunk = src.read(1 << 20)
-        if not chunk:
-            break
-        data = tail + chunk
-        if any(f in data for f in forms):
-            sys.exit(3)
-        tail = data[-keep:]
-' "$ROOT/private/gh-token" "$ROOT/leak.out"
+src = sys.stdin.buffer
+while True:
+    chunk = src.read(1 << 20)
+    if not chunk:
+        break
+    data = tail + chunk
+    if any(f in data for f in forms):
+        sys.exit(3)
+    tail = data[-keep:]
+# git ended with status 0, and this is the end of what it wrote.
+done = re.search(rb"\n--git-exit ([0-9]+)\n\Z", tail)
+sys.exit(0 if done and done.group(1) == b"0" else 2)
+' "$TOKEN_SHA" "$ROOT/private/gh-token" 2>/dev/null
   ls_rc=$?
-  rm -f "$ROOT/leak.out"
-  log "push check: $ls_name searched for the token: $([ "$ls_rc" = 3 ] && echo FOUND || echo not found)"
-  [ "$ls_rc" != 3 ] || return 1
-  [ "$ls_rc" = 0 ] || return 2
-  return 0
+  case $ls_rc in
+    0) log "push check: $ls_name searched for the token: not found"; return 0 ;;
+    3) log "push check: $ls_name searched for the token: FOUND"; return 1 ;;
+    4) log "push check: $ls_name not searched: the token's private copy changed during the check" ;;
+    # git's message names the path, which the agent chose: it is not logged.
+    *) log "push check: $ls_name could not be read" ;;
+  esac
+  return 2
 }
 
 # Crash leftovers: a dead kit's temporary directory (its kit.pid names no live matrix.sh) may hold
@@ -1260,7 +1305,7 @@ sweep_stale() {
     swept=""
     if [ -d "$sw/private" ] && [ ! -L "$sw/private" ]; then rm -rf "$sw/private" && swept="private copy"; fi
     if [ -d "$sw/projects" ] && [ ! -L "$sw/projects" ]; then
-      find -P "$sw/projects" -mindepth 2 -maxdepth 2 -type f -name .env.local >"$ROOT/sweep.txt" 2>/dev/null
+      find -P "$sw/projects" -mindepth 2 -maxdepth 2 -type f -name .env.local >"$(kit_file sweep.txt)" 2>/dev/null
       while IFS= read -r sw_env; do
         sw_dir=${sw_env%/.env.local}
         case ${sw_dir#"$sw/projects/"} in "" | .* | */*) continue ;; esac
@@ -1283,14 +1328,14 @@ test_repo() {
   fi
   command -v gh >/dev/null 2>&1 ||
     fail "gh is needed to make the test repository (https://cli.github.com), or set MATRIX_REPO" || return 1
-  owner=$(gh api user --jq .login 2>"$ROOT/gh.err" | tr -d '\r')
+  owner=$(gh api user --jq .login 2>"$(kit_file gh.err)" | tr -d '\r')
   case $owner in
     "" | *[!A-Za-z0-9-]*)
       fail "no GitHub login found here: run \`gh auth login\` (HTTPS, and Yes to authenticate Git) in this environment, then run again" || return 1
       ;;
   esac
   name="goalcup-kit-$CELL-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
-  gh repo create "$owner/$name" --public >"$ROOT/gh.out" 2>&1 ||
+  gh repo create "$owner/$name" --public >"$(kit_file gh.out)" 2>&1 ||
     fail "gh repo create $owner/$name --public: $(last_line "$ROOT/gh.out")" || return 1
   TEST_REPO="$owner/$name"
   REPO_MADE=$TEST_REPO
@@ -1318,7 +1363,7 @@ wait_job() { # rcfile outfile limit
 run_bounded() { # name limit "goalcup arguments"
   write_wrapper "$ROOT/$1-wrapper.sh" "$1" "$3"
   rm -f "$ROOT/$1.rc"
-  ( ( (sh "$ROOT/$1-wrapper.sh" >"$ROOT/$1.out" 2>"$ROOT/$1.err" </dev/null); echo $? >"$ROOT/$1.rc") 2>/dev/null & )
+  ( ( (sh "$ROOT/$1-wrapper.sh" >"$(kit_file "$1.out")" 2>"$(kit_file "$1.err")" </dev/null); echo $? >"$(kit_file "$1.rc")") 2>/dev/null & )
   rb_start=$(date +%s)
   while [ ! -s "$ROOT/$1.rc" ]; do
     if [ $(($(date +%s) - rb_start)) -ge "$2" ]; then
@@ -1351,7 +1396,7 @@ budget_left() {
 # this connector with exactly one entry (e + 16 hex digits), and `goalcup entries --json` lists
 # that entry with this connector. Sets SEAL_ENTRY; anything else fails and nothing is sealed.
 resolve_entry() {
-  fresh_runs >"$ROOT/fresh.txt"
+  fresh_runs >"$(kit_file fresh.txt)"
   n=$(grep -c . "$ROOT/fresh.txt")
   [ "$n" = 1 ] ||
     fail "cannot tell this run's entry: $n run records under $CFG/runs are as new as this start (want exactly one); nothing was sealed" || return 1
@@ -1418,7 +1463,7 @@ request_seal() { # why
   say "goalcup seal $SEAL_ENTRY: $1"
   write_wrapper "$ROOT/seal-wrapper.sh" seal "seal --yes $SEAL_ENTRY"
   rm -f "$ROOT/seal.rc"
-  ( ( (sh "$ROOT/seal-wrapper.sh" >"$ROOT/seal.out" 2>"$ROOT/seal.err" </dev/null); echo $? >"$ROOT/seal.rc") 2>/dev/null & )
+  ( ( (sh "$ROOT/seal-wrapper.sh" >"$(kit_file seal.out)" 2>"$(kit_file seal.err)" </dev/null); echo $? >"$(kit_file seal.rc)") 2>/dev/null & )
 }
 
 # Called every turn of the wait for `goalcup start`: notes when the prompt went in (and finds the
@@ -1493,7 +1538,7 @@ asked_before_approval() {
 # and answers 404 for any other.
 run_refusals() {
   HV=refusals
-  ( (python3 -I - "$ROOT/github.port" >"$ROOT/github.log" 2>&1 <<'PY'
+  ( (python3 -I - "$ROOT/github.port" >"$(kit_file github.log)" 2>&1 <<'PY'
 import http.server, json, os, sys
 
 REPOS = {"/repos/goalcup-kit/kit-has-size": {"private": False, "size": 12},
@@ -1591,7 +1636,7 @@ refusal() { # kind api
     env) printf 'GH_TOKEN=kit-refusal-placeholder\n' >"$PROJECT/.env.local" || return 1 ;;
   esac
   # The rows that are about the folder keep what they put in it (README, .git) beside the kit.
-  ls -A "$PROJECT" >"$ROOT/refuse-$1.before"
+  ls -A "$PROJECT" >"$(kit_file "refuse-$1.before")"
   WRAP_EXTRA=$doors
   WRAP_DIR=$PROJECT
   run_bounded "refuse-$1" 60 "start --harness $CONNECTOR $DEV_FLAG --test $args"
@@ -1653,12 +1698,14 @@ run_matrix() {
   }
   [ -n "$ROOT" ] || { ROOT=$made; fail "the temporary directory has no path" || return 1; }
   case $ROOT in *\'* | *" "*) fail "the temporary directory path holds a space or quote: $ROOT" || return 1 ;; esac
+  # From here every write under $ROOT goes through kit_file, with noclobber (see kit_file).
+  set -C
   RUNS="$ROOT/runs"
   mkdir -p "$RUNS"
-  : >"$ROOT/seen.txt"
+  : >"$(kit_file seen.txt)"
   # Who owns this directory (a later kit sweeps the leftovers of a dead one), and when the run began.
-  echo $$ >"$ROOT/kit.pid"
-  : >"$ROOT/start-marker"
+  echo $$ >"$(kit_file kit.pid)"
+  : >"$(kit_file start-marker)"
   if [ "$TEST" = 1 ] || [ "$REFUSE" = 1 ]; then sweep_stale; fi
 
   if [ -n "${MATRIX_CONFIG_DIR:-}" ]; then
@@ -1700,7 +1747,7 @@ run_matrix() {
   # The default writes one file, so that check 3 sees the workspace change.
   PROMPT=${MATRIX_PROMPT:-"Goal Cup matrix check: create a file named matrix-ok.txt in this folder holding the single word ok, then reply with the single word ok."}
   if [ -n "$PROMPT_FILE" ]; then
-    PROMPT=$(python3 -I - "$PROMPT_FILE" 2>"$ROOT/prompt.err" <<'PY'
+    PROMPT=$(python3 -I - "$PROMPT_FILE" 2>"$(kit_file prompt.err)" <<'PY'
 import sys
 try:
     text = open(sys.argv[1], "rb").read().decode("utf-8")
@@ -1744,7 +1791,7 @@ PY
   write_wrapper "$ROOT/login-wrapper.sh" login "login --server $(shq "$SERVER")"
   # (Started from a subshell that exits at once, so it is not a job of this shell: ending it
   # later prints no job notice. Its status is the file the loop waits for.)
-  ( ( (sh "$ROOT/login-wrapper.sh" >"$ROOT/login.out" 2>&1); echo $? >"$ROOT/login.rc") 2>/dev/null & )
+  ( ( (sh "$ROOT/login-wrapper.sh" >"$(kit_file login.out)" 2>&1); echo $? >"$(kit_file login.rc)") 2>/dev/null & )
   wait_job "$ROOT/login.rc" "$ROOT/login.out" 960
   w=$?
   log_file "goalcup login" "$ROOT/login.out"
@@ -1761,7 +1808,7 @@ PY
   fi
 
   # ---- start --practice (or --test)
-  : >"$ROOT/seen.txt"
+  : >"$(kit_file seen.txt)"
   PHASE=start
   WRAP="$ROOT/start-wrapper.sh"
   if [ "$TEST" = 1 ]; then RUN_FLAG="--test --repo $(shq "$TEST_REPO")"; else RUN_FLAG=--practice; fi
@@ -1793,9 +1840,9 @@ PY
     say "start --practice (the run lasts the server's practice length; waiting for its deadline)"
   fi
   if [ "$OS" = macos ]; then
-    ( ( (eval "$FEED") | (script -q /dev/null sh "$WRAP" >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
+    ( ( (eval "$FEED") | (script -q /dev/null sh "$WRAP" >"$(kit_file start.out)" 2>&1; echo $? >"$(kit_file start.rc)") 2>/dev/null ) & )
   else
-    ( ( (eval "$FEED") | (script -qec "sh $(shq "$WRAP")" /dev/null >"$ROOT/start.out" 2>&1; echo $? >"$ROOT/start.rc") 2>/dev/null ) & )
+    ( ( (eval "$FEED") | (script -qec "sh $(shq "$WRAP")" /dev/null >"$(kit_file start.out)" 2>&1; echo $? >"$(kit_file start.rc)") 2>/dev/null ) & )
   fi
   READY_AT=""
   PRE_AT=""
@@ -1803,7 +1850,7 @@ PY
     if [ -n "$READY_AT" ]; then
       now=$(date +%s)
       if [ -n "$PRE_KEYS" ] && [ -z "$PRE_AT" ] && [ $((now - READY_AT)) -ge "$PRE_DELAY" ]; then
-        : >"$ROOT/prekeys-send"
+        : >"$(kit_file prekeys-send)"
         PRE_AT=$now
         log "the first-run keys are typed"
       fi
@@ -1812,10 +1859,10 @@ PY
           # A harness that has switched bracketed paste on gets the prompt as one paste, so a
           # pty that splits a long write cannot turn it into keys and the Enter stays a submit.
           if grep -qF "$(printf '\033[?2004h')" "$ROOT/start.out" 2>/dev/null; then
-            : >"$ROOT/paste"
+            : >"$(kit_file paste)"
             log "the harness has bracketed paste on: the prompt goes as one bracketed paste"
           fi
-          : >"$ROOT/send"
+          : >"$(kit_file send)"
         fi
       fi
     fi
@@ -1835,7 +1882,7 @@ PY
   START_AT=$(date +%s)
   wait_job "$ROOT/start.rc" "$ROOT/start.out" "$TIMEOUT"
   w=$?
-  : >"$ROOT/done"
+  : >"$(kit_file done)"
   log_file "goalcup start (terminal)" "$ROOT/start.out"
   case $w in
     1) fail "the run did not finish within ${TIMEOUT}s" || return 1 ;;
@@ -1850,7 +1897,7 @@ PY
     log "goalcup start exit status: $START_RC (script's status; the harness is stopped by the deadline, so a non-zero status is not itself a failure)"
   fi
 
-  tr -d '\r' <"$ROOT/start.out" >"$ROOT/start.txt"
+  tr -d '\r' <"$ROOT/start.out" >"$(kit_file start.txt)"
 
   # ---- what the run left (the newest run record this start wrote)
   RUN_JSON=$(fresh_runs | head -1)
@@ -1873,7 +1920,7 @@ PY
   # goalcup's own words about how the run ended. The `deadline:` line goes to the run's host.log
   # (the terminal belongs to the harness), and `harness exited:` and `uploaded:` to the terminal:
   # so both files are read.
-  { cat "$ROOT/start.txt"; [ ! -f "$RUN_DIR/host.log" ] || tr -d '\r' <"$RUN_DIR/host.log"; } >"$ROOT/ended.txt"
+  { cat "$ROOT/start.txt"; [ ! -f "$RUN_DIR/host.log" ] || tr -d '\r' <"$RUN_DIR/host.log"; } >"$(kit_file ended.txt)"
 
   COPY_TRIES=6
   COPY_SLEEP=5
@@ -1890,8 +1937,8 @@ PY
       log_file "goalcup upload (output)" "$ROOT/upload.out"
       log_file "goalcup upload (stderr)" "$ROOT/upload.err"
       [ "$urc" = 0 ] || fail "goalcup upload $SEAL_ENTRY exited $urc" || return 1
-      tr -d '\r' <"$ROOT/upload.out" >>"$ROOT/ended.txt"
-      tr -d '\r' <"$ROOT/upload.err" >>"$ROOT/ended.txt"
+      ended=$(cat "$ROOT/ended.txt" 2>/dev/null)
+      { printf '%s\n' "$ended"; tr -d '\r' <"$ROOT/upload.out"; tr -d '\r' <"$ROOT/upload.err"; } >"$(kit_file ended.txt)"
     fi
     grep -Eq '^uploaded:.*(the|its) seal' "$ROOT/ended.txt" ||
       fail "neither goalcup start nor goalcup upload reported the upload finished with the seal" || return 1
@@ -1979,9 +2026,9 @@ PY
 agent_worked() { # trace
   rm -f "$ROOT/research.ndjson"
   if [ -n "$SKEY" ]; then
-    "$VERIFY" --research-json "$1" --output "$ROOT/research.ndjson" --dev-key "$SKEY" 2>"$ROOT/research.err"
+    "$VERIFY" --research-json "$1" --output "$(kit_file research.ndjson)" --dev-key "$SKEY" 2>"$(kit_file research.err)"
   else
-    "$VERIFY" --research-json "$1" --output "$ROOT/research.ndjson" 2>"$ROOT/research.err"
+    "$VERIFY" --research-json "$1" --output "$(kit_file research.ndjson)" 2>"$(kit_file research.err)"
   fi
   log "goalcup-verify --research-json $1: exit $?"
   log_file "goalcup-verify --research-json (stderr)" "$ROOT/research.err"
@@ -2037,7 +2084,7 @@ PY
 # the record's `started_at_unix`; a pushed commit counts too; only if the agent made a repository).
 # A model call alone (a title, an answer that stalled at a permission prompt) is not work.
 workspace_changed() { # run.json
-  worked=$(python3 -I - "$1" "$ROOT/kit.txt" 2>"$ROOT/workspace.err" <<'PY'
+  worked=$(python3 -I - "$1" "$ROOT/kit.txt" 2>"$(kit_file workspace.err)" <<'PY'
 import json, os, subprocess, sys
 
 rec = json.load(open(sys.argv[1]))
@@ -2110,7 +2157,7 @@ fetch_copy() { # entry
     if [ -n "$FETCH_CF_ACCOUNT" ]; then CLOUDFLARE_ACCOUNT_ID=$FETCH_CF_ACCOUNT; export CLOUDFLARE_ACCOUNT_ID; fi
     if [ -n "$FETCH_CF_TOKEN" ]; then CLOUDFLARE_API_TOKEN=$FETCH_CF_TOKEN; export CLOUDFLARE_API_TOKEN; fi
     exec sh "$FETCH_SCRIPT" "$@"
-  ) >"$ROOT/fetch.out" 2>"$ROOT/fetch.err" </dev/null &
+  ) >"$(kit_file fetch.out)" 2>"$(kit_file fetch.err)" </dev/null &
   fc_pid=$!
   fc_start=$(date +%s)
   while kill -0 "$fc_pid" 2>/dev/null; do
@@ -2133,7 +2180,7 @@ fetch_copy() { # entry
 # Every chain part left on this machine is byte for byte the server copy's bytes at its offset,
 # and the last one ends where the copy ends.
 same_tail() { # trace copy_chain
-  python3 -I - "$1" "$2" >"$ROOT/tail.out" 2>&1 <<'PY'
+  python3 -I - "$1" "$2" >"$(kit_file tail.out)" 2>&1 <<'PY'
 import os, re, sys
 trace, copy = sys.argv[1], sys.argv[2]
 parts = []
@@ -2169,7 +2216,7 @@ PY
 # verified under a key supplied for the run (--dev-key; MATRIX_SERVER_KEY, else the key in the
 # run's own receipt), and the log says so.
 verify_trace() { # trace [allow_incomplete]
-  "$VERIFY" --capture-integrity "$1" >"$ROOT/verify.out" 2>"$ROOT/verify.err"
+  "$VERIFY" --capture-integrity "$1" >"$(kit_file verify.out)" 2>"$(kit_file verify.err)"
   VRC=$?
   KEYNOTE="the pinned server key"
   VERIFY_NOTE=""
@@ -2177,7 +2224,7 @@ verify_trace() { # trace [allow_incomplete]
   if [ "$VRC" = 2 ] && grep -q receipt_key_not_accepted "$ROOT/verify.out"; then
     SKEY=${MATRIX_SERVER_KEY:-$(py_get "$1/receipt.json" public_key)}
     log "verify without a supplied key: exit $VRC; retrying with --dev-key (the server's own signing key is not pinned in this build for $SERVER)"
-    "$VERIFY" --capture-integrity "$1" --dev-key "$SKEY" >"$ROOT/verify.out" 2>"$ROOT/verify.err"
+    "$VERIFY" --capture-integrity "$1" --dev-key "$SKEY" >"$(kit_file verify.out)" 2>"$(kit_file verify.err)"
     VRC=$?
     KEYNOTE="a key supplied for this run (key_source: supplied)"
   fi
@@ -2224,7 +2271,7 @@ compare_copy() { # run_id entry_id trace credential_file strict
     [ "$tries" -lt "${COPY_TRIES:-6}" ] || break
     sleep "${COPY_SLEEP:-5}"
   done
-  python3 -I - "$ROOT/server.json" "$ROOT/verify.out" "$3/chain.jsonl" "$5" >"$ROOT/compare.out" 2>&1 <<'PY'
+  python3 -I - "$ROOT/server.json" "$ROOT/verify.out" "$3/chain.jsonl" "$5" >"$(kit_file compare.out)" 2>&1 <<'PY'
 import json, os, sys
 server = json.load(open(sys.argv[1]))
 verify = json.load(open(sys.argv[2]))
@@ -2292,7 +2339,7 @@ run_check() {
   # nothing run inside the loop can read the list from standard input.)
   python3 -I -c 'import json,sys
 for e in json.load(open(sys.argv[1]))["entries"]:
-    print(e["entry_id"] + "=" + e["trace_dir"])' "$RUN_JSON" >"$ROOT/entries.txt"
+    print(e["entry_id"] + "=" + e["trace_dir"])' "$RUN_JSON" >"$(kit_file entries.txt)"
   while IFS= read -r pair <&4; do
     entry=${pair%%=*}
     trace=${pair#*=}
@@ -2380,10 +2427,10 @@ make_fake_connector() {
     printf 'M2_FAKE_OUT=%s\nexport M2_FAKE_OUT\n' "$(shq "$ROOT/fake-out")"
     echo 'if [ "$1" = "--version" ]; then echo "matrix-fake-tui 1.0.0"; exit 0; fi'
     sed '1d' "$FIXTURE"
-  } >"$ROOT/bin/$FAKE_ID"
+  } >"$(kit_file "bin/$FAKE_ID")"
   # `#!/usr/bin/env node` as an npm harness has it: the `node` found is a stand-in on the PATH
   # the tracker gives the harness, which is the participant's own.
-  printf '#!/bin/sh\nexec /bin/sh "$@"\n' >"$ROOT/bin/node"
+  printf '#!/bin/sh\nexec /bin/sh "$@"\n' >"$(kit_file bin/node)"
   chmod 755 "$ROOT/bin/$FAKE_ID" "$ROOT/bin/node"
   HARNESS_PATH="$ROOT/bin:$PATH"
   cat >"$CONNECTORS_ENV/$FAKE_ID/harness.toml" <<EOF

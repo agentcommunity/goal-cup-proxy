@@ -213,6 +213,31 @@ def make_workspace(ws):
         git("init", "-q")
         git("add", ".gitattributes", "blob.bin")
         git("commit", "-q", "-m", "data")
+    elif mode == "leak-submodule":
+        # ...only in a submodule's repository under .git/modules, with no checkout pointing at it.
+        git("init", "-q")
+        sub = ws / ".git" / "modules" / "sub"
+        subprocess.run(["git", "init", "-q", "--bare", str(sub)], check=True)
+        subprocess.run(["git", "--git-dir", str(sub), "hash-object", "-w", "--stdin"],
+                       input=("GH_TOKEN=" + STUB_TOKEN + "\n").encode(), check=True, capture_output=True)
+    elif mode == "project-link":
+        # The agent moves its folder away and leaves a link in its place.
+        (ws / "matrix-ok.txt").write_text("ok\n")
+        moved = ws.with_name(ws.name + "-moved")
+        ws.rename(moved)
+        ws.symlink_to(moved)
+    victim = os.environ.get("STUB_PLANT_LINKS")
+    if victim:
+        # The agent plants links where the kit writes its own files, pointing at a file of the
+        # owner's: none of the kit's writes may go through them.
+        Path(victim).write_text("the owner's file\n")
+        # (Not the files whose presence the kit waits for: a link there only ends the cell early.)
+        for name in ("seal.out", "seal.err", "seal.pid", "entries.out", "start.txt", "ended.txt",
+                     "verify.out", "verify.err", "research.err", "compare.out"):
+            target = ws.parent.parent / name
+            if target.exists() or target.is_symlink():
+                target.unlink()
+            target.symlink_to(victim)
     tamper = os.environ.get("STUB_TAMPER_COPY")
     if tamper:
         # The agent reaches the kit's private copy of its token (../../private from its folder):
@@ -415,6 +440,11 @@ for a in "$@"; do
     for last; do :; done
     echo "$*" >"$STUB_OUT/git.clone"
     if [ "${{STUB_CLONE_FAIL:-}}" = 1 ]; then echo "fatal: unable to access" >&2; exit 128; fi
+    if [ "${{STUB_CLONE_SWAP_COPY:-}}" = 1 ]; then
+      # A process of the agent's still running swaps the kit's token copy while the clone runs
+      # (after the copy was checked): the scan must not search for the swapped value.
+      echo "GH_TOKEN=a-value-the-agent-chose" >"$(dirname "$last")/private/gh-token"
+    fi
     case " $* " in *" --mirror "*) {real} init -q --bare "$last" || exit 1 ;; *) {real} init -q "$last" || exit 1 ;; esac
     if [ -n "${{STUB_CLONE_LEAK:-}}" ]; then
       g="{real} --git-dir=$last -c user.name=stub -c user.email=stub@example.invalid"
@@ -744,6 +774,15 @@ SCENARIOS = {
                                          "STUB_CLONE_LEAK": "1"}, TEST, True),
     "test_copy_gone": ("stubchat", {"STUB_STOP": "0", "STUB_TAMPER_COPY": "delete",
                                     "STUB_GH_TOKEN_ONCE": "1"}, TEST, True),
+    # ...or swaps the copy during the check, after it was found good, and the token was pushed.
+    "test_copy_swapped": ("stubchat", {"STUB_STOP": "0", "STUB_CLONE_SWAP_COPY": "1",
+                                       "STUB_CLONE_LEAK": "1"}, TEST, True),
+    # The token only in a submodule repository; a project folder replaced by a link; links planted
+    # where the kit writes its own files.
+    "test_leak_submodule": ("stubchat", {"STUB_STOP": "0", "STUB_WS": "leak-submodule"}, TEST, True),
+    "test_project_link": ("stubchat", {"STUB_STOP": "0", "STUB_WS": "project-link"}, TEST, True),
+    "test_planted_links": ("stubchat", {"STUB_STOP": "0", "STUB_PLANT_LINKS": "{root}/victim.txt"},
+                           TEST, True),
     # Leftovers of dead runs in the temporary directory.
     "test_sweep": ("stubchat", {"STUB_STOP": "0", "WORLD_STALE": "1"}, TEST, True),
     # The token from a file (a fine-grained one-repository token) instead of `gh auth token`.
@@ -986,7 +1025,9 @@ class MatrixTests(unittest.TestCase):
                             ("test_leak_binary", "the project folder"),
                             ("test_leak_tag", "the pushed repository"),
                             # A rewritten private copy is made again from the token's source.
-                            ("test_copy_rewritten", "the pushed repository")):
+                            ("test_copy_rewritten", "the pushed repository"),
+                            # A submodule's repository under .git/modules is read too.
+                            ("test_leak_submodule", "the project folder")):
             w = self.worlds[name]
             self.assertEqual(w.run.returncode, 1, (name, w.said()))
             self.assertIn("the token was pushed: revoke it now", w.run.stderr)
@@ -996,6 +1037,8 @@ class MatrixTests(unittest.TestCase):
             said = w.said()  # (the agent's own files, kept with --keep, hold what it pushed)
             self.assertNotIn(TOKEN, said)
             self.assertNotIn(base64.b64encode(("x-access-token:" + TOKEN).encode()).decode(), said)
+            # The clone is never kept, even with --keep.
+            self.assertEqual(list(w.tmpdir.rglob("clone")), [], name)
         # A clean run was checked too (the repository was cloned), and a repository that cannot
         # be cloned fails the check instead of passing it.
         clean = self.worlds["test_chat"]
@@ -1012,6 +1055,23 @@ class MatrixTests(unittest.TestCase):
         self.assertIn("push check not run: the token copy is missing", w.run.stderr)
         self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ FAIL ")
         self.assertNotIn(TOKEN, w.said())
+        # A copy swapped after it was found good (while the clone ran) is never searched with:
+        # the scan says it could not check, it never says "not found".
+        w = self.worlds["test_copy_swapped"]
+        self.assertEqual(w.run.returncode, 1, w.said())
+        self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ FAIL ")
+        self.assertIn("could not be checked for the token", w.run.stderr)
+        self.assertIn("private copy changed during the check", w.log)
+        self.assertNotIn("searched for the token: not found", w.log)
+        # A project folder the agent replaced by a link is not checked, and says so.
+        w = self.worlds["test_project_link"]
+        self.assertEqual(w.run.returncode, 1, w.said())
+        self.assertIn("the project folder (it is gone or a link)", w.run.stderr)
+
+    def test_the_kit_never_writes_through_a_link_the_agent_planted_in_its_folder(self) -> None:
+        w = self.worlds["test_planted_links"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertEqual((w.root / "victim.txt").read_text(), "the owner's file\n")
 
     def test_leftovers_of_dead_runs_are_swept_and_nothing_else(self) -> None:
         w = self.worlds["test_sweep"]

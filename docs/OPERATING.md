@@ -195,17 +195,23 @@ one line: run `gh auth login` here (HTTPS, and Yes to authenticate Git).
 
 What the kit does about the token it handed over:
 - **After the seal it looks for it.** Every object of every git repository in the project folder (found
-  without following links) and of a fresh anonymous mirror clone of the cell's repository (into the
+  without following links: any `.git`, bare and nested repositories, submodule repositories under
+  `.git/modules`) and of a fresh anonymous mirror clone of the cell's repository (into the
   temporary directory) is read raw, `git cat-file --batch-all-objects --batch`: binary blobs and files a
   `.gitattributes` keeps out of diffs, merge commits, annotated tag messages and unreachable objects
   included, with no diff, textconv or external driver, so nothing in the agent's `.git/config` runs. The
-  bytes are searched for the token, its base64 forms (three alignments, both alphabets) and its
-  percent-encoded forms. A hit FAILs the cell, loudly: `the token was pushed: revoke it now`. A repository
-  that cannot be cloned or read FAILs the cell too (the check was not done). The token is read from the
-  private copy (below), never from an argument; the agent can reach that copy, so one that is gone or
-  rewritten (its SHA-256 is kept in the kit's shell) is made again from the token's source, and if that
-  fails the cell FAILs: `push check not run: the token copy is missing`. So does a temporary directory the
-  agent removed. The value is never printed. Not covered: what the agent pushed to another repository,
+  bytes go through a pipe straight into the matcher (nothing on disk to swap) and are searched for the
+  token, its base64 forms (three alignments, both alphabets) and its percent-encoded forms. A hit FAILs the
+  cell, loudly: `the token was pushed: revoke it now`. A repository that cannot be cloned or read, and a
+  project folder that is gone or was replaced by a link, FAIL the cell too (the check was not done). The
+  clone is deleted right after its scan, even with `--keep`. The token is read from the private copy
+  (below), never from an argument; the agent can reach that copy, so one that is gone or rewritten (its
+  SHA-256 is kept in the kit's shell) is made again from the token's source, and if that fails the cell
+  FAILs: `push check not run: the token copy is missing`. The matcher itself reads the copy once and
+  compares its SHA-256 with the kept one, so a copy swapped during the check is never searched with: that
+  repository is not checked, and the cell FAILs. So does a temporary directory the agent removed. Every
+  file the kit writes in its temporary directory is made fresh with noclobber, so a link the agent planted
+  there is never written through. The value is never printed. Not covered: what the agent pushed to another repository,
   or to Git LFS, or inside a compressed or encrypted file.
 - **It scrubs what the kit keeps.** A token the agent printed is replaced in the log, the terminal capture,
   the run folders (`<config>-runs`) and the harness homes under the config folder (files newer than the
