@@ -211,7 +211,7 @@ player's own SSH key, so "only the run's repository" is not a promise we can mak
 - **Make the "Push to" block harder to miss.** For example, copy it to the clipboard when it prints.
 - **A simpler setup screen.**
 - **Read Hermes's `state.db`** (the native record on 0.21.1 and later; not in 0.7.0).
-- **Hermes with Gemini is untested.** Its native client may need a look at the "no model calls" line.
+- **Hermes with Gemini is untested on a real run.** Since #268 its `:streamGenerateContent` POSTs count as model calls, so the "no model calls" line should stay quiet; one practice run would confirm it and that the `recorder` CA entry covers its client.
 - **Hermes's native Anthropic client does not record on 0.21.6 and later** (D72 known limit).
 
 ## Parked
