@@ -961,11 +961,6 @@ class CampaignRun(Base):
         camp.run()
         cfgdir = Path(cells[1]["config_dir"])
         self.assertFalse((cfgdir / "github.json").exists())
-        self.assertEqual((cfgdir / "prep.json").stat().st_mode & 0o777, 0o600)
-        # The host cell settled before its matrix.sh started.
-        settle = next(i for i, c in enumerate(runner.calls) if str(campaign.KIT) in c)
-        host = next(i for i, c in enumerate(runner.calls) if c[1].endswith("/matrix.sh"))
-        self.assertLess(settle, host)
         # matrix.sh names the repository it makes after the cell; a cell's repo goes instead.
         runs = [e for e in runner.envs if "MATRIX_CELL" in e]
         self.assertEqual(sorted(e["MATRIX_CELL"] for e in runs), ["lin", "mac"])
@@ -1009,18 +1004,6 @@ class CampaignRun(Base):
                 self.assertNotIn(n, env, n)
         for n in names:
             self.assertEqual(host[0][n], "/somewhere/" + n)
-
-    def test_a_host_cell_whose_settle_is_refused_never_starts(self):
-        cell = self.host_cell("mac", "m1")
-        (Path(cell["config_dir"]) / "prep.json").write_text("not JSON")  # the helper refuses it
-        runner = FakeRunner()
-        runner.real_kit = True
-        camp, _ = self.make([cell], runner)
-        self.assertEqual(camp.run(), 1)
-        self.assertFalse(any(c[1].endswith("/matrix.sh") for c in runner.calls if len(c) > 1))
-        res = json.loads((self.root / "out" / "mac" / "result.json").read_text())
-        self.assertEqual(res["verdict"], "FAIL")
-        self.assertIn("settle exited 1", res["error"])
 
     def host_run(self, cell, writes):
         """One host cell run with the real kit helper; the fake matrix.sh calls writes(cfgdir)
@@ -1215,14 +1198,12 @@ class Commands(Base):
             rc = campaign.main(["login", path, "mac"], runner=runner)
         return rc, cfgdir, out.getvalue() + err.getvalue()
 
-    def test_host_login_settles_when_prep_exits_1_with_the_home_signed_in(self):
+    def test_host_login_succeeds_when_prep_exits_1_with_the_home_signed_in(self):
         runner = FakeRunner()
         runner.on_interactive = self.fake_prep(rc=1)
         rc, cfgdir, said = self.login_host(runner)
         self.assertEqual(rc, 0, said)
-        self.assertTrue(any(str(campaign.KIT) in c for c in runner.calls))
         prep = json.loads((cfgdir / "prep.json").read_text())
-        self.assertEqual(prep["work_root"], str(cfgdir / "work"))
         self.assertIs(prep["home_ready"], True)
 
     def test_host_login_fails_when_prep_did_not_sign_the_home_in(self):
@@ -1235,7 +1216,6 @@ class Commands(Base):
                 rc, cfgdir, said = self.login_host(runner)
                 self.assertNotEqual(rc, 0)
                 self.assertIn("home_ready", said)
-                self.assertFalse(any(str(campaign.KIT) in c for c in runner.calls))
 
     def test_login_host_runs_login_then_prep_in_its_config_dir(self):
         cfgdir = self.root / "new-cfg"
@@ -1246,13 +1226,12 @@ class Commands(Base):
         rc = campaign.main(["login", path, "mac"], runner=runner)
         self.assertEqual(rc, 0)
         self.assertEqual(runner.calls[0][:3], ["goalcup", "login", "--server"])
-        self.assertEqual(runner.calls[1], ["goalcup", "setup", "--harness", "codex-cli",
-                                           "--work-root", str(cfgdir / "work")])
+        self.assertEqual(runner.calls[1], ["goalcup", "setup", "--harness", "codex-cli"])
         self.assertEqual(runner.envs[0]["GOALCUP_CONFIG_DIR"], str(cfgdir))
         self.assertTrue(cfgdir.is_dir())
         self.assertNotIn(campaign.KEY_ENV, runner.envs[0])
 
-    def test_host_login_leaves_prep_json_and_no_token(self):
+    def test_host_login_leaves_no_token_and_no_work_folder(self):
         cfgdir = self.root / "new-cfg"
         path = self.write([{"id": "mac", "where": "host", "test_member_id": "m1",
                             "config_dir": str(cfgdir)}])
@@ -1264,8 +1243,8 @@ class Commands(Base):
         self.assertEqual(rc, 0, buf.getvalue())
         prep = json.loads((cfgdir / "prep.json").read_text())
         self.assertNotIn("repo_url", prep)
-        self.assertEqual(prep["work_root"], str(cfgdir / "work"))
-        self.assertTrue((cfgdir / "work").is_dir())
+        self.assertNotIn("work_root", prep)
+        self.assertFalse((cfgdir / "work").exists())
         self.assertFalse((cfgdir / "github.json").exists())
 
     def test_login_docker_delegates_with_the_cell(self):

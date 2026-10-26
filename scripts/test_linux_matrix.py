@@ -767,7 +767,7 @@ class LinuxMatrixTests(unittest.TestCase):
 
 
 def container_copy(base: Path) -> Path:
-    """The script with its volume at base/vol, and the settle helper beside it."""
+    """The script with its volume at base/vol, and the kit-rules helper beside it."""
     script = base / "linux-matrix.sh"
     text = SCRIPT.read_text().replace("VOL=/vol\n", f"VOL={base / 'vol'}\n", 1)
     script.write_text(text)
@@ -819,7 +819,7 @@ class ContainerHalfTests(unittest.TestCase):
         (planted / "sitecustomize.py").write_text(f"open({str(marker)!r}, 'w').write('ran')\n")
         (planted / "usercustomize.py").write_text(f"open({str(marker)!r}, 'a').write('user')\n")
         for args in (("inner-home-config", "codex-cli"), ("inner-home-ready", "codex-cli"),
-                     ("inner-home-files", "codex-cli"), ("inner-settle",)):
+                     ("inner-home-files", "codex-cli")):
             with self.subTest(args=args):
                 marker.unlink(missing_ok=True)
                 run = self.inner(*args, PYTHONPATH=str(planted), PYTHONUSERBASE=str(planted),
@@ -1058,25 +1058,6 @@ echo "claude-code-cli linux-x86_64 2.1.283 PASS 2026-10-20"
                          TMPDIR=str(self.base / "tmp"), LINUX_MATRIX_SERVER="https://s.example")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(json.loads(got.read_text())["keys"], "")
-
-    def settle(self, **env: str) -> subprocess.CompletedProcess:
-        return self.inner("inner-settle", TMPDIR=str(self.base / "tmp"), **env)
-
-    def test_settle_sets_the_work_folder_and_writes_no_github_file(self) -> None:
-        cfg = self.base / "vol/cfg"
-        cfg.mkdir(parents=True)
-        (cfg / "prep.json").write_text(json.dumps({"harness": "codex-cli", "home_ready": True}))
-        run = self.settle()
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        prep = json.loads((cfg / "prep.json").read_text())
-        self.assertEqual(prep, {"harness": "codex-cli", "home_ready": True,
-                                "work_root": str(self.base / "vol/work")})
-        self.assertEqual(stat.S_IMODE((cfg / "prep.json").stat().st_mode), 0o600)
-        self.assertEqual(sorted(p.name for p in cfg.iterdir()), ["prep.json"])
-        # A work folder setup chose is kept.
-        (cfg / "prep.json").write_text(json.dumps({"harness": "codex-cli", "work_root": "/w"}))
-        self.assertEqual(self.settle().returncode, 0)
-        self.assertEqual(json.loads((cfg / "prep.json").read_text())["work_root"], "/w")
 
     def test_home_files_lists_names_never_contents(self) -> None:
         home = self.homes / "claude-code-cli"

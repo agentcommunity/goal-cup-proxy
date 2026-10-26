@@ -2,14 +2,9 @@
 """What the test kit settles in a goalcup configuration directory, for a Docker cell (called by
 scripts/linux-matrix.sh inside the container) and a host cell (called by scripts/campaign.py) alike.
 
-    kit_settle.py settle CFG WORK
     kit_settle.py home-config CFG CONNECTOR [EFFORT]
     kit_settle.py model-check CFG CONNECTOR MARKER [EFFORT]
 
-settle       prep.json gets `work_root` (kept when set, else WORK); its other keys are kept. 0600,
-             written atomically. goalcup keeps no GitHub key (D69): nothing writes github.json. A
-             test run's repository is named at `goalcup start --repo` (scripts/matrix.sh); its
-             git login is the machine's own.
 home-config  the owner's cheapest-model rules and the kit's no-permission-prompt setting, in the
              connector's tracker home (never ~/.codex or ~/.claude): codex-cli's config.toml gets
              `model = "gpt-5.6-luna"`, `model_reasoning_effort` = EFFORT (low, the default, or
@@ -105,18 +100,6 @@ def read_object(path, missing):
     if not isinstance(doc, dict):
         raise Refused(f"{path} is not a JSON object; not overwritten")
     return doc
-
-
-# --------------------------------------------------------------------------- settle
-
-def settle(cfg, work):
-    prep_path = os.path.join(cfg, "prep.json")
-    prep = read_object(prep_path, {})
-    if not prep.get("work_root"):
-        os.makedirs(work, mode=0o700, exist_ok=True)
-        prep["work_root"] = work
-    write_json(prep_path, prep)
-    say(f"prep.json: work folder {prep['work_root']}")
 
 
 # --------------------------------------------------------------------------- home-config
@@ -297,14 +280,11 @@ def model_check(cfg, connector, marker, effort):
 
 def main(argv):
     usage = __doc__.split("\n\n")[1]
-    if len(argv) < 3 or argv[0] not in ("settle", "home-config", "model-check"):
+    if len(argv) < 3 or argv[0] not in ("home-config", "model-check"):
         print(usage, file=sys.stderr)
         return 2
     cmd, cfg = argv[0], argv[1]
     try:
-        if cmd == "settle" and len(argv) == 3:
-            settle(cfg, argv[2])
-            return 0
         if cmd == "home-config" and len(argv) in (3, 4):
             home_config(cfg, argv[2], argv[3] if len(argv) == 4 else "low")
             return 0

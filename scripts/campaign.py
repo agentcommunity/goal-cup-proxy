@@ -36,14 +36,16 @@ drill is always undone (try/finally; on Ctrl-C too). Host: the campaign never ru
 command; it prints `DRILL-NOW cell=<id> kind=<kind> do: <command>` for the person or agent at the
 machine, then `DRILL-END ... do: <undo>` after `seconds`, and records both. `note` only prints.
 
-Repositories and git logins. Every cell is a test run, and a test run asks for its own new,
-empty, public GitHub repository at its start (D69). scripts/matrix.sh makes one per run with the
-GitHub login already there, `gh repo create <user>/goalcup-kit-<cell>-<random> --public`, and the
-agent pushes with that same login, as on a player's machine: this machine's for a host cell, the
-container's for a docker cell (`campaign.py login` runs `linux-matrix.sh github`, which signs in
-with `gh auth login` once on the cell's volume; nothing copies or mounts a login or a token). A
-cell's `repo` (<owner>/<name>) names one instead. The kit never deletes a repository: each
-cell's result.json and the summary list the ones made, and the run prints them at the end.
+Repositories and tokens. Every cell is a test run, and a test run asks for its own new, empty,
+public GitHub repository at its start (D69). scripts/matrix.sh makes one per run with the GitHub
+login already there, `gh repo create <user>/goalcup-kit-<cell>-<random> --public`, and starts the
+run in a project folder of its own holding a `.gitignore` and a `.env.local` with
+`GH_TOKEN=<gh auth token>` (mode 0600, never printed): the agent pushes with that token, as on a
+player's machine. The login is this machine's for a host cell, the container's for a docker cell
+(`campaign.py login` runs `linux-matrix.sh github`, which signs in with `gh auth login` once on
+the cell's volume; nothing copies or mounts a login or a token). A cell's `repo`
+(<owner>/<name>) names one instead. The kit never deletes a repository: each cell's result.json
+and the summary list the ones made, and the run prints them at the end.
 
 Secrets. The approval key is only ever a FILE whose path goes to the child scripts in
 GOALCUP_TEST_APPROVAL_KEY_FILE. This script never opens it, and the path is never in an argument.
@@ -546,12 +548,6 @@ def run_command(cfg, cell, cell_dir):
                 "--test", "--duration", str(d)] + extra + [
                 "--log", str(Path(cell_dir) / "matrix.log")]
     return argv, env
-
-
-def settle_command(cell):
-    """(argv, env) of scripts/kit_settle.py for a host cell: its prep.json's work folder."""
-    cd = cell["config_dir"]
-    return [sys.executable, str(KIT), "settle", cd, os.path.join(cd, "work")], child_env({})
 
 
 def kit_command(cell, *args):
@@ -1158,7 +1154,6 @@ class CellRun:
         if cell["where"] == "docker":
             (self.dir / "logs").mkdir(exist_ok=True)
         else:
-            self._settle()
             self._kit("home-config")
             # What the harness writes from here on is this run's (model-check reads the mtimes).
             marker.touch()
@@ -1191,17 +1186,6 @@ class CellRun:
         sampler_thread.join(timeout=30)
         self.stop_sampler()
         self.write_result(exit_code=rc, interrupted=camp.stopping.is_set())
-
-    def _settle(self):
-        """A host cell's prep.json, before its run (a docker cell settles in its container). A
-        refusal ends the cell before anything starts."""
-        argv, env = settle_command(self.cell)
-        rc, out = self.camp.runner.run(argv, env=env, timeout=60)
-        for line in out.splitlines():
-            self.logline(line, own=True)
-        self.event("settle", exit_code=rc)
-        if rc != 0:
-            raise RuntimeError(f"settle exited {rc}: {(out.strip().splitlines() or [''])[-1]}")
 
     def _kit(self, *args):
         """One scripts/kit_settle.py home-config or model-check for a host cell; (rc, last line).
@@ -1736,8 +1720,7 @@ def cmd_login(args, runner):
     rc = runner.interactive([goalcup, "login", "--server", cfg["server"]], env=env)
     if rc != 0:
         return rc
-    rc = runner.interactive([goalcup, "setup", "--harness", cell["connector"], "--work-root",
-                             os.path.join(cell["config_dir"], "work")], env=env)
+    rc = runner.interactive([goalcup, "setup", "--harness", cell["connector"]], env=env)
     # setup exits 1 while any of its steps is still to do (this machine's power or network, say):
     # what this login needs is the harness home signed in.
     prep = read_json(os.path.join(cell["config_dir"], "prep.json")) or {}
@@ -1747,11 +1730,8 @@ def cmd_login(args, runner):
         return rc or 1
     if rc != 0:
         print(f"note  cell {cell['id']}: goalcup setup exited {rc} with steps still to do; the "
-              f"{cell['connector']} home is signed in, so the kit settles the rest")
-    argv, env = settle_command(cell)
-    rc, out = runner.run(argv, env=env, timeout=60)
-    print(out, end="")
-    return rc
+              f"{cell['connector']} home is signed in, which is all a cell needs")
+    return 0
 
 
 def default_out(cfg, clock):

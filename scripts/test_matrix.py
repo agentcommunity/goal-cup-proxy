@@ -4,9 +4,10 @@
 `goalcup`, `goalcup-verify`, `goalcup-daemon`, `gh` and `curl` are stubs in a scratch directory (the
 real ones are covered by running the script, docs/OPERATING.md "The matrix"). The `goalcup` stub
 records what it was started with: its arguments, the parts of its environment that matter (the git
-login it was given among them) and what arrived on its standard input. Every connector is chat mode
-(D57), so every run is on a pseudo-terminal (script(1)); the refusals run with no terminal. Every
-key here is synthetic.
+git variables it was given among them), the folder it was started in and what that held, and what
+arrived on its standard input. Every connector is chat mode (D57), so every run is on a
+pseudo-terminal (script(1)); the refusals run with no terminal. Every key and token here is
+synthetic.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ MATRIX = Path(__file__).with_name("matrix.sh")
 
 PROMPT = "Goal Cup test prompt: say ok."
 GIVEN_REPO = "goalcup-kit/kit-given"
-HOST_SSH = "/host/agent.sock"
+TOKEN = "stub-gh-token-0123456789abcdef"
 
 GOALCUP = r'''#!/usr/bin/env python3
 import json, os, select, subprocess, sys, termios, time, tty
@@ -92,27 +93,34 @@ if args[0] == "upload":
 
 assert args[0] == "start", args
 
-def git_login():
-    """The git login this start was given: the variables goalcup reads it from, and the git config
-    the kit named."""
-    names = ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GH_CONFIG_DIR", "SSH_AUTH_SOCK",
-             "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "GH_TOKEN", "GITHUB_TOKEN")
-    seen = {k: os.environ.get(k) for k in names}
-    gc = Path(os.environ.get("GIT_CONFIG_GLOBAL", "/nonexistent"))
-    seen["gitconfig"] = subprocess.run(["git", "config", "--file", str(gc), "--list"],
-                                       capture_output=True, text=True).stdout.splitlines() if gc.is_file() else None
-    return seen
+STUB_TOKEN = "stub-gh-token-0123456789abcdef"  # what the gh stub prints for `gh auth token`
+
+def git_env():
+    """What the kit gave this start of a git login: nothing (D71)."""
+    names = ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GH_CONFIG_DIR")
+    return {k: os.environ.get(k) for k in names}
+
+def project_facts():
+    """The folder this start was run from, and what the starting kit in it looks like."""
+    here = Path.cwd()
+    env_local = here / ".env.local"
+    return {"cwd": str(here), "names": sorted(os.listdir(here)),
+            "gitignore": (here / ".gitignore").read_text() if (here / ".gitignore").is_file() else None,
+            "env_local_mode": oct(env_local.stat().st_mode & 0o777) if env_local.is_file() else None,
+            "env_local_has_token": env_local.is_file() and env_local.read_text() == "GH_TOKEN=%s\n" % STUB_TOKEN,
+            "token_in_argv": STUB_TOKEN in " ".join(args),
+            "token_in_env": any(STUB_TOKEN in v for v in os.environ.values())}
 
 if os.environ.get("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL") == "1":
-    # A refusal cell: the start's checks before the approval (run_repo.rs), as a test build makes
-    # them through its doors, with no terminal.
+    # A refusal cell: the start's checks before the approval, as a test build makes them through its
+    # doors, with no terminal. The folder is judged first, then the repository, as goalcup does.
+    # (The .gitignore and commits checks are the task 2b-CLI ones; the phrases are the short ones.)
     import urllib.error, urllib.request
-    repo = args[args.index("--repo") + 1] if "--repo" in args else None
-    kind = {None: "no-login"}.get(repo) or ("bare-name" if "/" not in repo else repo.split("/")[1][4:])
+    kind = Path.cwd().name.removeprefix("refuse-")
     doors = {k: os.environ.get(k) for k in ("GOALCUP_TEST_GITHUB_API", "GOALCUP_TEST_GITHUB_LOGIN",
                                             "GOALCUP_TEST_PUSH_REMOTE")}
     note("refuse.%s" % kind, json.dumps({"argv": args, "doors": doors, "tty": os.isatty(0),
-                                         "git": git_login()}))
+                                         "git": git_env(), "project": project_facts()}))
     def refuse(why):
         sys.stderr.write("goalcup: %s Nothing was created.\n" % why)
         sys.exit(1)
@@ -121,35 +129,41 @@ if os.environ.get("GOALCUP_TEST_CHAT_WITHOUT_TERMINAL") == "1":
     if os.environ.get("STUB_NEVER_REFUSES") == "1":
         print("Approve this run in your browser: the page shows the code ABCD-EFGH.", flush=True)
         sys.exit(1)
-    login = doors["GOALCUP_TEST_GITHUB_LOGIN"] or None
-    if login is None:
-        print("No GitHub login found on this computer. To set one up (about 5 minutes):")
+    names = sorted(os.listdir("."))
+    extra = [n for n in names if not (n == ".gitignore" or n.startswith(".env"))]
+    if extra:
+        refuse("Make a new, empty folder for this run. This folder also holds %s." % ", ".join(extra))
+    if any(n.startswith(".env") for n in names) and ".gitignore" not in names:
+        refuse("Add the lines .env and .env.* to a .gitignore here.")
+    repo = args[args.index("--repo") + 1] if "--repo" in args else None
     if repo is None:
-        refuse("A real run needs a new, empty, public GitHub repository. Run goalcup start in a "
-               "terminal and name it, or add --repo <owner>/<name>.")
-    if "/" not in repo and login is None:
-        refuse("No GitHub login was found on this computer. Give --repo <your user name>/%s." % repo)
+        refuse("A real run needs a new, empty, public GitHub repository.")
+    if "/" not in repo:
+        refuse("Give the repository with its owner: <your-user>/%s." % repo)
     api = doors["GOALCUP_TEST_GITHUB_API"]
     if api:
-        try:
-            doc = json.load(urllib.request.urlopen(api + "/repos/" + repo, timeout=10))
-        except urllib.error.HTTPError:
-            doc = None
+        def get(path):
+            try:
+                resp = urllib.request.urlopen(api + path, timeout=10)
+                return resp.status, json.load(resp)
+            except urllib.error.HTTPError as e:
+                return e.code, None
+        _, doc = get("/repos/" + repo)
         if doc is None or doc["private"]:
             refuse("GitHub does not show %s: it is not created yet, or it is private." % repo)
         if doc["size"]:
             refuse("The repository %s is not empty (%d KB), and a new run needs a new empty one."
                    % (repo, doc["size"]))
-    remote = doors["GOALCUP_TEST_PUSH_REMOTE"]
-    if remote and not os.path.exists(remote):
-        refuse("The agent's git cannot push to %s (no such remote)." % repo)
+        if get("/repos/%s/commits?per_page=1" % repo)[0] == 200:
+            refuse("The repository must be empty when the run opens.")
     print("Approve this run in your browser: the page shows the code ABCD-EFGH.", flush=True)
     sys.exit(1)
 
 note("start.argv", "\n".join(args))
 note("start.no_browser", os.environ.get("GOALCUP_NO_BROWSER", "unset"))
 note("start.stdin_is_tty", str(os.isatty(0)))
-note("start.git", json.dumps(git_login()))
+note("start.git", json.dumps(git_env()))
+note("start.project", json.dumps(project_facts()))
 test = "--test" in args
 if os.environ.get("STUB_ASK") == "1":
     # A real run's start asking for its repository, which nobody in the matrix can answer.
@@ -164,24 +178,20 @@ chain = (json.dumps({"body": {"harness_version":
                              os.environ.get("STUB_HV", "stub-harness 9.9.9")}}) + "\n").encode()
 
 def make_workspace(ws):
-    # The clone the agent works in, and what the agent left in it (STUB_WS): file (an untracked
-    # file, the default), commit (a commit, the tree clean), none (nothing), old (only a commit
-    # dated before the run: the clone's own history).
-    ws.mkdir(parents=True)
-    git = lambda *a, **env: subprocess.run(
-        ["git", "-C", str(ws), "-c", "user.name=stub", "-c", "user.email=stub@example.invalid", *a],
-        check=True, capture_output=True, env=dict(os.environ, **env))
-    git("init", "-q")
+    # What the agent left in the project folder it was started in (STUB_WS): file (a new file,
+    # the default), commit (an empty commit in a repository of its own, no new file), git (only
+    # a .git), none (nothing).
     mode = os.environ.get("STUB_WS", "file")
-    if mode == "old":
-        then = "2020-01-01T00:00:00Z"
-        git("commit", "-q", "--allow-empty", "-m", "seed", GIT_AUTHOR_DATE=then,
-            GIT_COMMITTER_DATE=then)
-    elif mode in ("file", "commit"):
+    git = lambda *a: subprocess.run(
+        ["git", "-C", str(ws), "-c", "user.name=stub", "-c", "user.email=stub@example.invalid", *a],
+        check=True, capture_output=True)
+    if mode == "file":
         (ws / "matrix-ok.txt").write_text("ok\n")
-        if mode == "commit":
-            git("add", "matrix-ok.txt")
-            git("commit", "-q", "-m", "ok")
+    elif mode == "commit":
+        git("init", "-q")
+        git("commit", "-q", "--allow-empty", "-m", "ok")
+    elif mode == "git":
+        git("init", "-q")
 
 def write_run():
     # A test run's record is written before the harness starts, as goalcup start does it.
@@ -201,7 +211,7 @@ def write_run():
         (trace / "chain.jsonl").write_bytes(chain)
     (run_dir / "credential").write_text(json.dumps({"credential": "c"}))
     started = int(time.time())
-    workspace = cfg / "work" / "goalcup-stub"
+    workspace = Path.cwd()
     make_workspace(workspace)
     (run_dir / "run.json").write_text(json.dumps({
         "run_id": "r1", "server_url": "http://localhost:8787", "test": test,
@@ -222,6 +232,9 @@ if os.environ.get("STUB_BRACKETED") == "1":
     # A TUI that switches bracketed paste on, as Codex, Claude Code and Amp do.
     sys.stdout.write("\x1b[?2004h")
 print("Recording in chat mode: stub starts now in this terminal.", flush=True)
+if os.environ.get("STUB_PRINT_TOKEN") == "1":
+    # An agent that prints its own token to the terminal the matrix logs.
+    print("agent said: " + (Path.cwd() / ".env.local").read_text().strip(), flush=True)
 chunks, t0 = [], time.time()
 while time.time() - t0 < 30:
     if select.select([0], [], [], 0.2)[0]:
@@ -315,7 +328,10 @@ url = args[-1]
 if "/v1/runs/" in url:
     size = int((out / "chain.size").read_text())
     body = {"offset": size, "next_seq": 1, "head": "a" * 64, "last_ack": {"hash": "a" * 64},
-            "final": {"seq": 0, "head": "a" * 64}, "status": "sealed",
+            "final": {"seq": 0, "head": "a" * 64},
+            # A run is sealed on the server only once it is over (its deadline has passed): a test
+            # run sealed after its duration is still `open` there (F2).
+            "status": "sealed" if os.environ.get("STUB_STOP", "1") == "1" else "open",
             "stop": os.environ.get("STUB_STOP", "1") == "1"}
 elif url.endswith("/v1/health"):
     body = {"status": "ok"}
@@ -325,17 +341,20 @@ Path(target).write_text(json.dumps(body))
 sys.stdout.write("200")
 '''
 
-# gh as the kit uses it to make a test run's repository with this machine's login (none with
-# STUB_GH_NO_LOGIN).
+# gh as the kit uses it: this machine's login makes a test run's repository and gives its token (no
+# login with STUB_GH_NO_LOGIN).
 GH = r'''#!/usr/bin/env python3
 import os, sys
 from pathlib import Path
 args = sys.argv[1:]
 out = Path(os.environ["STUB_OUT"])
+if os.environ.get("STUB_GH_NO_LOGIN") == "1" and args[:1] in (["api"], ["auth"]):
+    sys.exit("To get started with GitHub CLI, please run:  gh auth login")
 if args[:2] == ["api", "user"]:
-    if os.environ.get("STUB_GH_NO_LOGIN") == "1":
-        sys.exit("To get started with GitHub CLI, please run:  gh auth login")
     print("kit-tester")
+elif args[:2] == ["auth", "token"]:
+    (out / "gh.auth_token").write_text("asked")
+    print("stub-gh-token-0123456789abcdef")
 elif args[:2] == ["repo", "create"]:
     (out / "gh.repo_create").write_text("\n".join(args))
     print("https://github.com/" + args[2])
@@ -397,9 +416,6 @@ class World:
             "MATRIX_SUBMIT_DELAY": "1",
             "STUB_OUT": str(self.out),
             "STUB_PROMPT": PROMPT,
-            # This machine's own git login: a test run's goalcup sees it, no other cell's does.
-            "SSH_AUTH_SOCK": HOST_SSH,
-            "GH_TOKEN": "gh-token-of-this-machine",
         }
         if prepared:
             # A configuration directory as `goalcup setup` leaves it (MATRIX_CONFIG_DIR).
@@ -503,7 +519,7 @@ SCENARIOS = {
     "silent": ("stubchat", {"STUB_WORK": "none"}),
     # The model answered; what the agent left in its workspace decides.
     "ws_none": ("stubchat", {"STUB_WS": "none"}),
-    "ws_old": ("stubchat", {"STUB_WS": "old"}),
+    "ws_git_only": ("stubchat", {"STUB_WS": "git"}),
     "ws_commit": ("stubchat", {"STUB_WS": "commit"}),
     "ws_none_opt_out": ("stubchat", {"STUB_WS": "none", "MATRIX_EXPECT_FILES": "0"}),
     "bracketed": ("stubchat", {"STUB_BRACKETED": "1",
@@ -544,6 +560,8 @@ SCENARIOS = {
     "refusals": ("m2-fake-tui", {}, ("--refusals",)),
     "refusals_shipped": ("m2-fake-tui", {"STUB_SHIPPED": "1"}, ("--refusals",)),
     "refusals_pass_through": ("m2-fake-tui", {"STUB_NEVER_REFUSES": "1"}, ("--refusals",)),
+    # An agent that prints the token it was given to the terminal the matrix logs.
+    "test_prints_token": ("stubchat", {"STUB_STOP": "0", "STUB_PRINT_TOKEN": "1"}, TEST, True),
 }
 
 
@@ -609,9 +627,9 @@ class MatrixTests(unittest.TestCase):
             self.assertIn("agent work in the trace", w.log)
 
     def test_a_run_that_changed_nothing_in_its_workspace_fails_the_row(self) -> None:
-        # A model answer (a title, a stalled turn) with a clean clone; and a clone whose only
-        # commit predates the run.
-        for name in ("ws_none", "ws_old"):
+        # A model answer (a title, a stalled turn) with the project folder as it began; and one
+        # where the agent only made a repository.
+        for name in ("ws_none", "ws_git_only"):
             w = self.worlds[name]
             self.assertNotEqual(w.run.returncode, 0, name)
             self.assertIn("the agent changed nothing in its workspace", w.run.stderr)
@@ -661,7 +679,9 @@ class MatrixTests(unittest.TestCase):
         self.assertIn("mode=test duration=4s", w.log)
         self.assertIn(f"timeout={DURATION + 1800}s", w.log)
         self.assertNotIn("the run is over (stop)", w.log)
-        self.assertIn("ok    status is sealed", w.log)
+        # F2: the server keeps a test run `open` until its deadline; the committed end is the proof.
+        self.assertIn("ok    committed end (final).head", w.log)
+        self.assertNotIn("status is sealed", w.log)
 
     def test_a_multi_line_prompt_file_is_typed_on_one_line(self) -> None:
         w = self.worlds["test_chat"]
@@ -669,23 +689,50 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(chunks[0][1], TYPED)
         self.assertEqual(chunks[1][1], "\r")
 
-    def test_a_practice_run_has_no_git_login_and_never_the_machines(self) -> None:
+    def test_a_practice_run_starts_in_an_empty_project_folder_with_no_git_environment(self) -> None:
         w = self.worlds["chat"]
         self.assertEqual(w.run.returncode, 0, w.said())
-        git = w.seen_json("start.git")
-        # A git config of the run's own that resets every credential helper, the system config
-        # (macOS's names the keychain) off, and no SSH agent, keyring or token.
-        self.assertEqual(git["gitconfig"], ["credential.helper="])
-        # The script works in `pwd -P` paths (/private/var/... on macOS): compare resolved paths.
-        self.assertTrue(Path(git["GIT_CONFIG_GLOBAL"]).resolve().is_relative_to(w.tmpdir.resolve()))
-        self.assertEqual(git["GIT_CONFIG_NOSYSTEM"], "1")
-        self.assertTrue(Path(git["GH_CONFIG_DIR"]).resolve().is_relative_to(w.tmpdir.resolve()))
-        for name in ("SSH_AUTH_SOCK", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "GH_TOKEN"):
-            self.assertIsNone(git[name], name)
+        project = w.seen_json("start.project")
+        self.assertEqual(project["names"], [])
+        # The folder is the run's workspace, under the cell's temporary directory and no sibling of
+        # its configuration directory (the daemon refuses a workspace beside it).
+        cwd = Path(project["cwd"])
+        self.assertTrue(cwd.is_relative_to(w.tmpdir.resolve()), cwd)
+        [cfg] = [p for p in w.tmpdir.glob("goalcup-matrix.*/cfg")]
+        self.assertNotEqual(cwd.parent, cfg.resolve().parent)
+        self.assertEqual(w.seen_json("start.git"),
+                         {"GIT_CONFIG_GLOBAL": None, "GIT_CONFIG_NOSYSTEM": None, "GH_CONFIG_DIR": None})
         self.assertNotIn("--repo", w.seen("start.argv"))
         self.assertFalse(w.has("gh.repo_create"))
+        self.assertFalse(w.has("gh.auth_token"))
 
-    def test_a_test_run_makes_its_repository_and_uses_the_machines_own_login(self) -> None:
+    def test_a_test_run_starts_in_a_project_folder_with_its_kit_and_a_private_token(self) -> None:
+        w = self.worlds["test_chat"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        project = w.seen_json("start.project")
+        # What a player makes: a .gitignore covering .env*, and a .env.local holding the token of
+        # `gh auth token`, readable by its owner alone.
+        self.assertEqual(project["names"], [".env.local", ".gitignore"])
+        self.assertEqual(project["gitignore"], ".env*\n")
+        self.assertEqual(project["env_local_mode"], "0o600")
+        self.assertTrue(project["env_local_has_token"])
+        # It is in no argument and no environment of goalcup's, and the kit passes no git login.
+        self.assertFalse(project["token_in_argv"])
+        self.assertFalse(project["token_in_env"])
+        self.assertEqual(w.seen_json("start.git"),
+                         {"GIT_CONFIG_GLOBAL": None, "GIT_CONFIG_NOSYSTEM": None, "GH_CONFIG_DIR": None})
+        # The token is never printed or logged, and the file does not outlive the run (--keep).
+        self.assertNotIn(TOKEN, w.everything_matrix_wrote())
+        self.assertFalse((Path(project["cwd"]) / ".env.local").exists())
+
+    def test_a_token_the_agent_printed_is_taken_out_of_the_log(self) -> None:
+        w = self.worlds["test_prints_token"]
+        self.assertEqual(w.run.returncode, 0, w.said())
+        self.assertIn("agent said: ", (next(w.tmpdir.rglob("start.out"))).read_text())
+        self.assertNotIn(TOKEN, w.everything_matrix_wrote())
+        self.assertIn("agent said: GH_TOKEN=", w.everything_matrix_wrote())
+
+    def test_a_test_run_makes_its_repository_and_passes_it_to_the_start(self) -> None:
         w = self.worlds["test_chat"]
         self.assertEqual(w.run.returncode, 0, w.said())
         made = w.seen("gh.repo_create").split("\n")
@@ -696,21 +743,14 @@ class MatrixTests(unittest.TestCase):
         # The default `gh auth login` lacks the delete_repo scope: the advice adds it first.
         self.assertIn(f"test repository made by the kit (delete it when done: first `gh auth refresh -s "
                       f"delete_repo`, which the default gh login lacks, then `gh repo delete {made[2]} --yes`, "
-                      "then `gh auth refresh -r delete_repo` to drop the scope again: this machine's agents "
-                      "push with that login)", w.run.stderr)
-        # (A Docker cell says whose login its agent uses; see the cell test below.)
-        git = w.seen_json("start.git")
-        self.assertEqual(git["SSH_AUTH_SOCK"], HOST_SSH)
-        self.assertEqual(git["GH_TOKEN"], "gh-token-of-this-machine")
-        for name in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GH_CONFIG_DIR"):
-            self.assertIsNone(git[name], name)
+                      "then `gh auth refresh -r delete_repo` to drop the scope again: ", w.run.stderr)
 
     def test_in_a_docker_cell_the_scope_advice_names_the_cells_own_login(self) -> None:
         w = self.worlds["test_chat_cell"]
         self.assertEqual(w.run.returncode, 0, w.said())
         self.assertIn("then `gh auth refresh -r delete_repo` to drop the scope again", w.run.stderr)
         self.assertIn("the login stored in this cell", w.run.stderr)
-        self.assertNotIn("this machine's agents", w.run.stderr)
+        self.assertNotIn("this machine's gh token", w.run.stderr)
 
     def test_a_test_run_takes_the_repository_matrix_repo_names(self) -> None:
         w = self.worlds["test_chat_early"]
@@ -724,6 +764,8 @@ class MatrixTests(unittest.TestCase):
         self.assertIn("no GitHub login found here: run `gh auth login`", w.run.stderr)
         self.assertFalse(w.has("start.argv"))
         self.assertFalse(w.has("gh.repo_create"))
+        # No token file is left behind for a run that did not start.
+        self.assertEqual([p for p in w.tmpdir.rglob(".env.local")], [])
 
     def test_a_question_before_the_approval_fails_the_row_at_once(self) -> None:
         w = self.worlds["test_asks"]
@@ -732,44 +774,51 @@ class MatrixTests(unittest.TestCase):
         self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ FAIL ")
         self.assertLess(w.elapsed, 50)
 
-    def test_every_refusal_is_checked_through_a_test_builds_doors(self) -> None:
+    def test_every_refusal_is_checked_in_a_project_folder_through_a_test_builds_doors(self) -> None:
         w = self.worlds["refusals"]
         self.assertEqual(w.run.returncode, 0, w.said())
         self.assertRegex(w.run.stdout, r"(?m)^m2-fake-tui \S+ refusals PASS \d{4}-\d\d-\d\d$")
-        for kind in ("not-empty", "private", "missing", "push", "no-login", "bare-name"):
+        kinds = ("folder-not-empty", "git-present", "env-no-gitignore", "repo-has-size",
+                 "readme-repo", "private", "bare-name")
+        for kind in kinds:
             self.assertIn(f"refusal {kind}: PASS", w.run.stderr)
             seen = w.seen_json(f"refuse.{kind}")
             self.assertFalse(seen["tty"], kind)
             self.assertEqual(seen["argv"][:5], ["start", "--harness", "m2-fake-tui", "--dev", "--test"])
-            # No git login of any kind reaches a refusal cell.
-            self.assertEqual(seen["git"]["gitconfig"], ["credential.helper="], kind)
-            self.assertEqual(seen["git"]["GIT_CONFIG_NOSYSTEM"], "1", kind)
-            self.assertIsNone(seen["git"]["SSH_AUTH_SOCK"], kind)
-        # GitHub is asked only where the refusal is GitHub's answer; the login door is open only
-        # where a login is found.
-        for kind in ("not-empty", "private", "missing", "push"):
-            doors = w.seen_json(f"refuse.{kind}")["doors"]
-            self.assertTrue(doors["GOALCUP_TEST_GITHUB_API"].startswith("http://127.0.0.1:"))
-            self.assertEqual(doors["GOALCUP_TEST_GITHUB_LOGIN"], "goalcup-kit")
-        # Only the push refusal points the dry-run push at a remote that is not there.
-        self.assertFalse(Path(w.seen_json("refuse.push")["doors"]["GOALCUP_TEST_PUSH_REMOTE"]).exists())
-        self.assertIsNone(w.seen_json("refuse.missing")["doors"]["GOALCUP_TEST_PUSH_REMOTE"])
-        for kind in ("no-login", "bare-name"):
-            self.assertEqual(w.seen_json(f"refuse.{kind}")["doors"],
-                             {"GOALCUP_TEST_GITHUB_API": None, "GOALCUP_TEST_GITHUB_LOGIN": None,
-                              "GOALCUP_TEST_PUSH_REMOTE": None})
+            # Each row ran in a project folder of its own, with no git login of any kind.
+            self.assertEqual(Path(seen["project"]["cwd"]).name, f"refuse-{kind}")
+            self.assertEqual(seen["git"], {"GIT_CONFIG_GLOBAL": None, "GIT_CONFIG_NOSYSTEM": None,
+                                           "GH_CONFIG_DIR": None})
+            # The retired doors are not set.
+            self.assertIsNone(seen["doors"]["GOALCUP_TEST_GITHUB_LOGIN"], kind)
+            self.assertIsNone(seen["doors"]["GOALCUP_TEST_PUSH_REMOTE"], kind)
+        # The folders the rows are about.
+        names = {k: w.seen_json(f"refuse.{k}")["project"]["names"] for k in kinds}
+        self.assertEqual(names["folder-not-empty"], [".env.local", ".gitignore", "README.md"])
+        self.assertEqual(names["git-present"], [".env.local", ".git", ".gitignore"])
+        self.assertEqual(names["env-no-gitignore"], [".env.local"])
+        self.assertEqual(names["private"], [".env.local", ".gitignore"])
+        # GitHub is asked only where the refusal is GitHub's answer.
+        for kind in ("repo-has-size", "readme-repo", "private"):
+            api = w.seen_json(f"refuse.{kind}")["doors"]["GOALCUP_TEST_GITHUB_API"]
+            self.assertTrue(api.startswith("http://127.0.0.1:"), kind)
+        self.assertIsNone(w.seen_json("refuse.bare-name")["doors"]["GOALCUP_TEST_GITHUB_API"])
+        # The README repository reads size 0: only the commits call refuses it.
+        self.assertIn("/repos/goalcup-kit/kit-readme/commits", w.log)
+        # No refusal left a token anywhere: the rows hold a placeholder.
+        self.assertFalse(w.has("gh.auth_token"))
 
     def test_a_build_without_the_test_doors_fails_the_refusals(self) -> None:
         w = self.worlds["refusals_shipped"]
         self.assertNotEqual(w.run.returncode, 0)
         self.assertRegex(w.run.stdout, r"(?m)^m2-fake-tui \S+ refusals FAIL ")
-        self.assertIn("refusal not-empty: FAIL: it refused for another reason", w.run.stderr)
+        self.assertIn("refusal folder-not-empty: FAIL: it refused for another reason", w.run.stderr)
         self.assertIn("no test doors", w.run.stderr)
 
     def test_a_start_that_reaches_the_approval_fails_its_refusal(self) -> None:
         w = self.worlds["refusals_pass_through"]
         self.assertNotEqual(w.run.returncode, 0)
-        self.assertIn("refusal missing: FAIL: the run's approval was asked for", w.run.stderr)
+        self.assertIn("refusal private: FAIL: the run's approval was asked for", w.run.stderr)
         self.assertNotIn(": PASS", w.run.stderr)
 
     def test_a_test_run_whose_harness_ends_first_is_sealed_then_uploaded(self) -> None:

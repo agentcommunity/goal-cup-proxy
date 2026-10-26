@@ -15,7 +15,7 @@
 # (goalcup-linux-matrix-target-<n>) and, at every login and run, installed as packaging/install.sh
 # installs them: copied into the dev user's ~/.local/bin, which is first on the container's PATH
 # (/target/debug is not on it). The goalcup configuration directory, the harness's tracker home
-# in it, the work folder and HOME live on a named volume of the connector's (or cell's) own,
+# in it, and HOME live on a named volume of the connector's (or cell's) own,
 # goalcup-linux-matrix-<connector>[-<cell>], so a harness sign-in done once survives every later
 # run. `docker volume rm goalcup-linux-matrix-<connector>[-<cell>]` forgets it.
 #
@@ -32,15 +32,17 @@
 #         and writes them to login-<connector>[-<cell>]-<time>.log in the log directory.
 # github  `gh auth login` in this terminal, in the container, on the cell's volume (HOME is on
 #         it, so the login stays for every later run): what a test run's repository is made with
-#         and its agent pushes with, as on a player's machine. Choose HTTPS and say Yes to
-#         "Authenticate Git". The kit never copies or mounts this machine's login or a token.
-#         Signed in already: it says as whom and opens nothing. Needs no key.
+#         and where its token comes from (matrix.sh, in the container, writes `gh auth token`
+#         into the project folder's .env.local, which is how the agent pushes). Choose HTTPS and
+#         say Yes to "Authenticate Git". The kit never copies or mounts this machine's login or
+#         a token. Signed in already: it says as whom and opens nothing. Needs no key.
 # run     scripts/matrix.sh <connector> <server> in the container, with MATRIX_CONFIG_DIR on the
 #         volume. Options after `--` go to matrix.sh as they are; only --test, --duration N,
 #         --timeout N and --keep are accepted (e.g. `-- --test --duration 7200`: an organizer test
 #         run sealed after two hours; the member must be a test operator, and the container's
-#         GitHub login, from `github`, makes the run's repository and pushes to it). Without
-#         --test, a practice run: no repository and no git login. Prints the matrix row last,
+#         GitHub login, from `github`, makes the run's repository and gives the agent its token).
+#         Without --test, a practice run: an empty project folder and no repository. Prints the
+#         matrix row last,
 #         and exits with matrix.sh's status. (matrix.sh --refusals needs no harness and a test
 #         build of goalcup: run it on the host.)
 #
@@ -136,8 +138,8 @@
 # The script has no drill of its own: an orchestrator acts on the named container from outside.
 #
 # What the harness can read. It runs as the same user as the script's own steps, so it can read
-# everything in the container: the volume (the container's GitHub login among it, which a test run
-# pushes with, D69), the prompt file, the fetch index and bucket mirror when given, and the whole
+# everything in the container: the volume (the container's GitHub login among it, whose token a
+# test run's agent is given in the project's .env.local, D71), the prompt file, the fetch index and bucket mirror when given, and the whole
 # checkout at /src, untracked files included. No key or credential file is mounted. Run it from a clean checkout, never
 # one holding secrets (a Worker .dev.vars, for example).
 #
@@ -160,7 +162,7 @@ BIN=$VOL/home/.local/bin
 PROMPT_IN=/run/goalcup/prompt
 FETCH_INDEX_IN=/run/goalcup/fetch-index
 FETCH_STORE_IN=/run/goalcup/fetch-store
-# The settle helper beside this script (/src/scripts in the container).
+# The kit-rules helper beside this script (/src/scripts in the container).
 KIT=$(dirname "$0")/kit_settle.py
 # matrix.sh's settings this script passes on when they are set.
 PASS_ENV="MATRIX_PROMPT MATRIX_PROMPT_DELAY MATRIX_SUBMIT_DELAY MATRIX_PRE_PROMPT_KEYS MATRIX_PRE_PROMPT_DELAY MATRIX_REPO MATRIX_EXPECT_FILES"
@@ -265,13 +267,6 @@ print("yes" if prep.get("harness") == sys.argv[2] and prep.get("home_ready") els
 PY
 }
 
-# After setup: the work folder a run needs (scripts/kit_settle.py settle). A test run names its
-# repository at its start, and matrix.sh makes its git login; nothing about GitHub is kept here.
-inner_settle() {
-    mkdir -p "$VOL/work" || fail "work folder"
-    python3 -I "$KIT" settle "$CFG" "$VOL/work" || fail "settle prep.json"
-}
-
 # The rule the run is held to, in words.
 rule_of() { # connector
     case $1 in
@@ -297,7 +292,6 @@ inner_run() { # connector [matrix.sh options]
     # Every connector is chat mode (D57): it runs signed in, on this volume's home.
     [ "$(inner_home_ready "$h")" = yes ] ||
         fail "$h is not signed in on this volume: run scripts/linux-matrix.sh login $h first"
-    inner_settle
     export MATRIX_CONFIG_DIR=$CFG
     # Claude Code asks whether it may trust each new workspace, "No, exit" selected: Down, Enter.
     if [ "$h" = claude-code-cli ] && [ -z "${MATRIX_PRE_PROMPT_KEYS+set}" ]; then
@@ -333,7 +327,6 @@ inner-home-files) inner_home_files "$2"; exit 0 ;;
 inner-login) inner_home_config "$2"; inner_login; exit 0 ;;
 inner-home-ready) inner_home_ready "$2"; exit 0 ;;
 inner-model-check) inner_model_check "$2" "$3"; exit $? ;;
-inner-settle) inner_settle; exit 0 ;;
 inner-run) shift; inner_run "$@" ;;
 esac
 
@@ -687,9 +680,9 @@ docker run -d --name "$name" --label "$label" --init --cpus="$cpus" \
     -e PATH=$BIN:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     -w $VOL "$img" sleep infinity >/dev/null || fail "container"
 created=1
-owned="$VOL $VOL/home $VOL/tmp $VOL/work"
+owned="$VOL $VOL/home $VOL/tmp"
 [ "$prebuilt" = 1 ] || owned="/target $owned"
-docker exec -u 0 "$name" sh -c "mkdir -p $VOL/home $VOL/tmp $VOL/work && chown dev $owned" ||
+docker exec -u 0 "$name" sh -c "mkdir -p $VOL/home $VOL/tmp && chown dev $owned" ||
     fail "volume"
 
 if [ "$prebuilt" = 1 ]; then
@@ -805,7 +798,6 @@ login_job=$!
 watch_codes "$login_job" "login"
 wait "$login_job" || fail "login"
 if [ "$(docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-ready "$h")" = yes ]; then
-    step "settle" "$name" sh /src/scripts/linux-matrix.sh inner-settle
     record_home_files
     echo "linux-matrix: signed in ($h on volume $volume; setup recorded it before)"
     exit 0
@@ -856,9 +848,8 @@ its start.
 EOF
     ;;
 esac
-docker exec -it -u dev -e TERM=xterm-256color "$name" sh -c "cd $VOL/home && goalcup setup --harness $h --work-root $VOL/work"
+docker exec -it -u dev -e TERM=xterm-256color "$name" sh -c "cd $VOL/home && goalcup setup --harness $h"
 [ "$(docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-home-ready "$h")" = yes ] ||
     fail "setup did not record the sign-in ($h must exit with /exit, status 0); run login again"
-docker exec -u dev "$name" sh /src/scripts/linux-matrix.sh inner-settle || fail "settle"
 record_home_files
 echo "linux-matrix: signed in ($h on volume $volume)"
