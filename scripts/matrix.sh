@@ -12,8 +12,10 @@
 #   practice   (the default) an empty project folder and no repository, as a participant's
 #              practice run.
 #   --test     a test run in a project folder holding the starting kit (a .gitignore and a
-#              .env.local with GH_TOKEN from `gh auth token`), with a repository the kit makes
-#              (`gh repo create`) and passes as `goalcup start --test --repo`, as a player's.
+#              .env.local with GH_TOKEN from MATRIX_GH_TOKEN_FILE, or from `gh auth token` only
+#              with MATRIX_ALLOW_LOGIN_TOKEN=1), with the repository MATRIX_REPO names (or, for the
+#              login token, one the kit makes with `gh repo create`), passed as
+#              `goalcup start --test --repo`, as a player's.
 #   --refusals the start's refusals before the approval, with no harness and no token.
 #
 # The run is the real thing: `goalcup login`, `goalcup start --practice` (the device-flow
@@ -94,7 +96,8 @@
 #                              with this variable: the kit makes no repository for it). A regular
 #                              file, mode 0600, outside the checkout,
 #                              holding one line, `GH_TOKEN=<value>` or just the value (visible
-#                              ASCII, no quotes). Never echoed, never in an argument. The log says
+#                              ASCII, no quotes); a gh login (gho_) or classic (ghp_) token is
+#                              refused. Never echoed, never in an argument. The log says
 #                              which source was used. The agent can read .env.local, and a trace
 #                              could hold the token; `gh auth token` is the whole login, which
 #                              reaches all your repositories. Removed from the environment at once. A Docker cell ignores it (the
@@ -229,9 +232,10 @@
 # The project folder. `goalcup start` works in the folder it is run from (D71): the run's
 # workspace, which must hold nothing but a .gitignore and .env files. A practice cell gets an
 # empty one. A --test cell gets the starting kit a player makes: a .gitignore holding `.env*`
-# and a .env.local holding `GH_TOKEN=<gh auth token>`, the agent's way to push to the run's
-# repository (made with umask 077, so mode 0600; the token is written straight from `gh auth
-# token` into the file and is in no argument, variable, log or output). `goalcup start` is run
+# and a .env.local holding `GH_TOKEN=<token>`, the agent's way to push to the run's repository: the
+# token of MATRIX_GH_TOKEN_FILE, or `gh auth token` only with MATRIX_ALLOW_LOGIN_TOKEN=1 (without
+# either the cell refuses to start). Made with umask 077, so mode 0600; the token goes straight
+# into the file and is in no argument, variable, log or output. `goalcup start` is run
 # from that folder, with `--repo` for a test run. The kit strips its machine's git login
 # variables from goalcup's environment, and goalcup builds the agent's environment from nothing (D71);
 # a --test cell keeps the real HOME, so goalcup's own process (not the agent) can see ~/.gitconfig. The folder is under the cell's
@@ -663,6 +667,10 @@ SEAL_ASKED_AT=""
 EARLY=0
 START_LAUNCHED=0
 TOKEN_PUSHED=0
+# The SHA-256 of the token given to the agent (token_copy_ready); never exported (the unset drops
+# an export inherited from the environment).
+unset TOKEN_SHA
+TOKEN_SHA=""
 
 print_row() {
   [ "$ROW_PRINTED" = 0 ] || return 0
@@ -739,7 +747,13 @@ cleanup() {
       # The daemon's roots sit beside the configuration directory: ours only if ours.
       if [ "${OWN_CONFIG:-0}" = 1 ]; then rm -rf "$CFG-artifacts" "$CFG-runs" 2>/dev/null; fi
     fi
-  }; fi
+  }; elif [ "$TEST" = 1 ] && [ "$START_LAUNCHED" = 1 ]; then
+    # The agent can reach the kit's temporary directory: gone, the push check cannot run.
+    RESULT=FAIL
+    FAIL_REASON="push check not run: the kit's temporary directory $ROOT is gone; check ${TEST_REPO:-the repository} by hand, and revoke the token if in doubt"
+    TOKEN_PUSHED=1
+    printf 'matrix: *** %s ***\n' "$FAIL_REASON" >&3
+  fi
   if [ -n "$REPO_MADE" ]; then
     log "test repository made by the kit: $REPO_MADE"
     # Whose token the agent was given: a file's (MATRIX_GH_TOKEN_FILE), the cell's own login in a
@@ -894,10 +908,12 @@ project_gitignore() {
 
 # A .env.local holding `GH_TOKEN=<token>`: mode 0600 (umask 077), the token going into the file and
 # nowhere else (never an argument, a variable or the log), and checked without being read out: one
-# non-empty plain value. The token comes from MATRIX_GH_TOKEN_FILE when it is set, else from
-# `gh auth token` (the whole login: see the header). A private copy is kept under $ROOT/private
-# (mode 0600, deleted at cleanup) so the log can be scrubbed even if the agent deletes or rewrites
-# .env.local. The log names the source, never the value.
+# non-empty plain value. The token comes from MATRIX_GH_TOKEN_FILE when it is set; from
+# `gh auth token` (the whole login: see the header) only with MATRIX_ALLOW_LOGIN_TOKEN=1; with
+# neither there is no token and no run. A private copy is kept under $ROOT/private (mode 0600,
+# deleted at cleanup) for the push check and the log scrub, with its SHA-256 in this shell
+# (TOKEN_SHA, never exported): the agent can reach $ROOT, so a copy that is gone or rewritten is
+# made again from the source at the check (token_copy_ready). The log names the source, never the value.
 project_token() {
   mkdir -p "$ROOT/private" && chmod 700 "$ROOT/private" ||
     fail "cannot make $ROOT/private" || return 1
@@ -916,8 +932,44 @@ project_token() {
     say "WARNING: the agent is given the ACCOUNT-WIDE gh login token (MATRIX_ALLOW_LOGIN_TOKEN=1): every scope, every repository of this login. A fine-grained token in MATRIX_GH_TOKEN_FILE is safer."
   fi
   (umask 077 && cp "$PROJECT/.env.local" "$ROOT/private/gh-token") ||
-    fail "cannot keep a private copy of the token for the log scrub" || return 1
+    fail "cannot keep a private copy of the token for the push check and the log scrub" || return 1
+  TOKEN_SHA=$(token_digest "$ROOT/private/gh-token")
+  [ -n "$TOKEN_SHA" ] || fail "cannot read back the private copy of the token" || return 1
   log "project folder $PROJECT: .gitignore and .env.local (GH_TOKEN, mode 0600; never printed)"
+}
+
+# The SHA-256 of the token in a GH_TOKEN=<value> file (nothing when there is none): what the
+# private copy is checked against. Prints only the digest.
+token_digest() {
+  python3 -I -c '
+import hashlib, sys
+try:
+    tok = open(sys.argv[1], "rb").read().strip().split(b"=", 1)[1]
+except (OSError, IndexError):
+    sys.exit(1)
+if tok:
+    print(hashlib.sha256(tok).hexdigest())
+' "$1" 2>/dev/null
+}
+
+# The private copy as it was made, for the push check. The agent runs as this user and can reach
+# $ROOT/private (../../private from its folder), so a copy that is gone or rewritten (its digest is
+# not TOKEN_SHA) is made again from the token's source: the token file, or `gh auth token`.
+# 1 when that cannot be done: then the check cannot run.
+token_copy_ready() {
+  [ -n "$TOKEN_SHA" ] || return 1
+  [ "$(token_digest "$ROOT/private/gh-token")" != "$TOKEN_SHA" ] || return 0
+  log "push check: the token's private copy is missing or changed; making it again from its source"
+  if [ -L "$ROOT/private" ] || [ ! -d "$ROOT/private" ]; then rm -rf "$ROOT/private"; fi
+  mkdir -p "$ROOT/private" && chmod 700 "$ROOT/private" || return 1
+  rm -rf "$ROOT/private/gh-token"
+  if [ -n "$TOKEN_FILE" ]; then
+    token_file_to "$ROOT/private/gh-token" 2>/dev/null || return 1
+  else
+    command -v gh >/dev/null 2>&1 || return 1
+    (umask 077 && { printf 'GH_TOKEN='; gh auth token 2>/dev/null; } >"$ROOT/private/gh-token") 2>/dev/null || return 1
+  fi
+  [ "$(token_digest "$ROOT/private/gh-token")" = "$TOKEN_SHA" ]
 }
 
 # $1 is exactly one line GH_TOKEN=<plain value>, mode 0600 (nothing is printed).
@@ -936,7 +988,15 @@ PY
 # MATRIX_GH_TOKEN_FILE into .env.local: a regular file (not a link), mode 0600, outside this
 # checkout, one line `GH_TOKEN=<value>` or the value alone. Nothing of it is printed.
 project_token_from_file() {
-  python3 -I - "$TOKEN_FILE" "$REPO" "$PROJECT/.env.local" <<'PY' 2>"$ROOT/token-file.err" ||
+  token_file_to "$PROJECT/.env.local" 2>"$ROOT/token-file.err" ||
+    fail "$(last_line "$ROOT/token-file.err")" || return 1
+  say "GitHub token for the agent: from MATRIX_GH_TOKEN_FILE $TOKEN_FILE"
+}
+
+# The token of MATRIX_GH_TOKEN_FILE, checked, into the new file $1 (GH_TOKEN=<value>, mode 0600).
+# A gh login (gho_) or classic (ghp_) token is refused: it reaches every repository of its account.
+token_file_to() { # dest
+  python3 -I - "$TOKEN_FILE" "$REPO" "$1" <<'PY'
 import os, re, stat, sys
 src, repo, dest = sys.argv[1:4]
 def no(why):
@@ -958,12 +1018,13 @@ if value.startswith("GH_TOKEN="):
     value = value[len("GH_TOKEN="):]
 if not re.fullmatch(r"[!#-&(-~]+", value):
     no("must hold a token of visible characters, with no quote or space")
-fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+if value.startswith(("gho_", "ghp_")):
+    no("holds a gh login or classic token (gho_/ghp_), which reaches every repository of its "
+       "account: give a fine-grained token (github_pat_) of a throwaway owner")
+fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
 with os.fdopen(fd, "w") as f:
     f.write("GH_TOKEN=%s\n" % value)
 PY
-    fail "$(last_line "$ROOT/token-file.err")" || return 1
-  say "GitHub token for the agent: from MATRIX_GH_TOKEN_FILE $TOKEN_FILE"
 }
 
 # What the starting kit holds, by name, for the "agent changed something" check.
@@ -999,7 +1060,8 @@ if len(token) >= 8:
     # and the log prefixes each line.
     pats.append(rb"\s*".join(re.escape(bytes([c])) for c in token))
 RX = re.compile(b"|".join(b"(?:" + p + b")" for p in pats))
-ESC = re.compile(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
+# OSC, CSI, a character-set or other nF sequence (ESC ( B, as `tput sgr0` prints), a single-character one.
+ESC = re.compile(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[ -/]+[0-~]|\x1b[@-Z\\-_]")
 
 
 def clean(data):
@@ -1053,23 +1115,45 @@ PY
   [ "$PROJECT" = /nonexistent ] || rm -f "$PROJECT/.env.local"
 }
 
-# I1: after the seal, the token must not be in what the agent pushed. The project folder's history
-# (`git log --all -p`) and a fresh clone of the cell's repository (public: anonymous, into
-# $ROOT/clone) are searched for the token, its base64 forms (three alignments, standard and URL
-# alphabets) and its percent-encoded forms. A hit FAILs the cell, loudly; the value is never
-# printed. A clone that cannot be made FAILs too: the check was not done.
+# I1: after the seal, the token must not be in what the agent pushed. Every object of every git
+# repository in the project folder (its .git and any nested one, found without following a link),
+# and of a fresh mirror clone of the cell's repository (public: anonymous, into $ROOT/clone), is
+# read raw (`git cat-file --batch-all-objects --batch`: blobs binary or not, trees, commits of any
+# shape, annotated tags and their messages, unreachable objects too; no diff, no textconv, no
+# external driver, so nothing of the agent's .git/config runs) and searched for the token, its
+# base64 forms (three alignments, standard and URL alphabets) and its percent-encoded forms. A hit
+# FAILs the cell, loudly; the value is never printed. A clone or a repository that cannot be read
+# FAILs too, and so does a token copy that cannot be made good (token_copy_ready): the check was
+# not done.
 check_token_pushed() {
-  [ "$TEST" = 1 ] && [ "$START_LAUNCHED" = 1 ] && [ -f "$ROOT/private/gh-token" ] || return 0
+  [ "$TEST" = 1 ] && [ "$START_LAUNCHED" = 1 ] || return 0
   leaked=""
   unread=""
+  if ! token_copy_ready; then
+    RESULT=FAIL
+    FAIL_REASON="push check not run: the token copy is missing (the agent can reach the kit's folder, and the token could not be read again from its source); check ${TEST_REPO:-the repository} by hand, and revoke the token if in doubt"
+    TOKEN_PUSHED=1
+    printf 'matrix: *** %s ***\n' "$FAIL_REASON" >&3
+    return 0
+  fi
+  # Fresh: nothing the agent may have put under $ROOT steers the clone (an insteadOf, a helper).
+  rm -rf "$ROOT/clone" "$ROOT/clone-home"
   mkdir -p "$ROOT/clone-home"
-  if [ -d "$PROJECT/.git" ]; then
-    leak_scan "the project folder's history" -C "$PROJECT" log --all -p
-    case $? in 1) leaked="$leaked the project folder's history;" ;; 2) unread="$unread the project folder's history;" ;; esac
+  if [ -d "$PROJECT" ]; then
+    find -P "$PROJECT" -name .git -prune >"$ROOT/gitdirs.txt" 2>/dev/null ||
+      unread="$unread the project folder (it could not be listed);"
+    # Named by number, never by path: the agent names its folders (a name could be the token).
+    gn=0
+    while IFS= read -r gd; do
+      gn=$((gn + 1))
+      if [ "$gd" = "$PROJECT/.git" ]; then where="the project folder's repository"; else where="the project folder's nested repository #$gn"; fi
+      leak_scan "$where" "$gd"
+      case $? in 1) leaked="$leaked $where;" ;; 2) unread="$unread $where;" ;; esac
+    done <"$ROOT/gitdirs.txt"
   fi
   if [ -n "$TEST_REPO" ]; then
     tries=0
-    until leak_git clone --quiet "https://github.com/$TEST_REPO.git" "$ROOT/clone" >/dev/null 2>"$ROOT/clone.err"; do
+    until leak_git clone --quiet --mirror "https://github.com/$TEST_REPO.git" "$ROOT/clone" >/dev/null 2>"$ROOT/clone.err"; do
       tries=$((tries + 1))
       rm -rf "$ROOT/clone"
       if [ "$tries" -ge 3 ]; then
@@ -1080,8 +1164,8 @@ check_token_pushed() {
       sleep 3
     done
     if [ -d "$ROOT/clone" ]; then
-      leak_scan "the pushed repository $TEST_REPO" -C "$ROOT/clone" log --all -p
-      case $? in 1) leaked="$leaked the pushed repository $TEST_REPO;" ;; 2) unread="$unread the pushed repository $TEST_REPO (its history could not be read);" ;; esac
+      leak_scan "the pushed repository $TEST_REPO" "$ROOT/clone"
+      case $? in 1) leaked="$leaked the pushed repository $TEST_REPO;" ;; 2) unread="$unread the pushed repository $TEST_REPO (its objects could not be read);" ;; esac
     fi
   fi
   if [ -n "$leaked" ]; then
@@ -1097,23 +1181,29 @@ check_token_pushed() {
   fi
 }
 
-# git with none of this machine's login: its own HOME, no system config, no prompt.
+# git with none of this machine's login or repository settings: its own HOME, no system or global
+# config, no prompt, no lazy fetch, no fsmonitor or external diff, and none of git's own variables.
 leak_git() {
-  env -u SSH_AUTH_SOCK -u GH_TOKEN -u GITHUB_TOKEN -u GIT_CONFIG_GLOBAL -u GIT_ASKPASS \
-    HOME="$ROOT/clone-home" GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 git \
-    -c credential.helper= -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 "$@"
+  env -u SSH_AUTH_SOCK -u SSH_ASKPASS -u GH_TOKEN -u GITHUB_TOKEN -u GIT_ASKPASS -u XDG_CONFIG_HOME \
+    -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
+    -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE -u GIT_CONFIG -u GIT_CONFIG_PARAMETERS \
+    -u GIT_CONFIG_COUNT -u GIT_SSH -u GIT_SSH_COMMAND -u GIT_PROXY_COMMAND -u GIT_EXEC_PATH \
+    HOME="$ROOT/clone-home" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
+    GIT_NO_LAZY_FETCH=1 git -c credential.helper= -c core.fsmonitor= -c diff.external= \
+    -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 "$@"
 }
 
-# Search the output of a git command (its arguments after the name) for the token in
-# $ROOT/private/gh-token. Returns 0 when it is not there, 1 when it is, 2 when git could not be read
-# (an empty repository is read: it has nothing). $1 is only a name for the log.
-leak_scan() { # name git-args...
+# Search every object of the git repository $2 (a .git directory, a gitdir file, or a bare
+# repository) for the token in $ROOT/private/gh-token. Returns 0 when it is not there, 1 when it
+# is, 2 when the repository could not be read (an empty one is read: it has nothing). $1 is only a
+# name for the log.
+leak_scan() { # name gitdir
   ls_name=$1
-  shift
-  leak_git "$@" >"$ROOT/leak.out" 2>"$ROOT/leak.err"
+  leak_git --git-dir="$2" cat-file --batch-all-objects --batch </dev/null >"$ROOT/leak.out" 2>"$ROOT/leak.err"
   ls_git=$?
-  if [ "$ls_git" != 0 ] && ! grep -q 'does not have any commits' "$ROOT/leak.err"; then
-    log "push check: $ls_name could not be read: $(last_line "$ROOT/leak.err")"
+  if [ "$ls_git" != 0 ]; then
+    # git's message names the path, which the agent chose: only the exit status is logged.
+    log "push check: $ls_name could not be read (git exit $ls_git)"
     rm -f "$ROOT/leak.out"
     return 2
   fi
@@ -1151,18 +1241,34 @@ with open(sys.argv[2], "rb") as src:
 
 # Crash leftovers: a dead kit's temporary directory (its kit.pid names no live matrix.sh) may hold
 # the token's private copy and a cell's .env.local. Deleted here, at the next start, and only those
-# two things, only under this user's own goalcup-matrix.XXXXXX directories, never through a link.
+# two things, only under this user's own goalcup-matrix.XXXXXX directories, never through a link:
+# no path component under the temporary directory may be one (`projects` or `projects/<name>` as a
+# link would reach outside), and find -P lists without following any. The temporary directory is
+# resolved (/var is /private/var on macOS) so this run's own directory is recognised. A process
+# that ps cannot describe counts as live: nothing is deleted when in doubt.
 sweep_stale() {
-  for sw in "${TMPDIR:-/tmp}"/goalcup-matrix.??????; do
-    [ -d "$sw" ] && [ ! -L "$sw" ] && [ -O "$sw" ] && [ "$sw" != "$ROOT" ] && [ -f "$sw/kit.pid" ] || continue
+  sw_top=$(cd -P "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P) || return 0
+  for sw in "$sw_top"/goalcup-matrix.??????; do
+    [ -d "$sw" ] && [ ! -L "$sw" ] && [ -O "$sw" ] && [ "$sw" != "$ROOT" ] &&
+      [ -f "$sw/kit.pid" ] && [ ! -L "$sw/kit.pid" ] || continue
     sw_pid=$(cat "$sw/kit.pid" 2>/dev/null)
     case $sw_pid in "" | *[!0-9]*) continue ;; esac
-    if kill -0 "$sw_pid" 2>/dev/null && ps -p "$sw_pid" -o command= 2>/dev/null | grep -q 'matrix\.sh'; then continue; fi
+    if kill -0 "$sw_pid" 2>/dev/null; then
+      sw_cmd=$(ps -p "$sw_pid" -o command= 2>/dev/null) || continue
+      case $sw_cmd in *matrix.sh*) continue ;; esac
+    fi
     swept=""
     if [ -d "$sw/private" ] && [ ! -L "$sw/private" ]; then rm -rf "$sw/private" && swept="private copy"; fi
-    for sw_env in "$sw"/projects/*/.env.local; do
-      if [ -f "$sw_env" ] && [ ! -L "$sw_env" ]; then rm -f "$sw_env" && swept="$swept .env.local"; fi
-    done
+    if [ -d "$sw/projects" ] && [ ! -L "$sw/projects" ]; then
+      find -P "$sw/projects" -mindepth 2 -maxdepth 2 -type f -name .env.local >"$ROOT/sweep.txt" 2>/dev/null
+      while IFS= read -r sw_env; do
+        sw_dir=${sw_env%/.env.local}
+        case ${sw_dir#"$sw/projects/"} in "" | .* | */*) continue ;; esac
+        [ -d "$sw_dir" ] && [ ! -L "$sw_dir" ] && [ -f "$sw_env" ] && [ ! -L "$sw_env" ] || continue
+        rm -f "$sw_env" && swept="$swept .env.local"
+      done <"$ROOT/sweep.txt"
+      rm -f "$ROOT/sweep.txt"
+    fi
     [ -z "$swept" ] || log "swept the leftovers of a dead run in $sw:$swept"
   done
 }

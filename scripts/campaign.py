@@ -451,7 +451,9 @@ def validate_token_source(cell):
         return [f"a docker cell gives its agent the container's whole gh login (`gh auth token`): set "
                 f"{ALLOW_LOGIN_ENV}=1 to allow it, and sign the container in with a throwaway account"]
     if path:
-        if not cell.get("repo") and not os.environ.get("MATRIX_REPO"):
+        # The cell's own `repo` only: run_command sets MATRIX_REPO from it (none removes it), so a
+        # MATRIX_REPO in this environment never reaches matrix.sh.
+        if not cell.get("repo"):
             return [f"{TOKEN_FILE_ENV} needs the cell's own repository under the token's owner: set `repo` "
                     "(<owner>/<name>, new, empty and public)"]
         if not os.path.isabs(path) or not os.path.isfile(path) or os.path.islink(path):

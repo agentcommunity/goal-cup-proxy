@@ -212,6 +212,11 @@ class ConfigValidation(Base):
             self.assertIn("cell a", errors[0])
             tok.chmod(0o644)
             self.assertTrue(any("mode 0600" in e for e in self.errors(cfg)))
+            # The cell's own `repo` is what reaches matrix.sh, never a MATRIX_REPO of this shell.
+            tok.chmod(0o600)
+            os.environ["MATRIX_REPO"] = "throwaway/shared"
+            errors = self.errors(self.config([self.host_cell("c", "m3")]))
+            self.assertTrue(any("needs the cell's own repository" in e for e in errors), errors)
 
     def test_valid_config_passes(self):
         cfg = self.config([self.docker_cell("a", "m1"), self.host_cell("b", "m2")])

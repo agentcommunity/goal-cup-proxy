@@ -34,6 +34,7 @@ GIVEN_REPO = "goalcup-kit/kit-given"
 TOKEN = "stub-gh-token-0123456789abcdef"
 STUB_TOKEN_VALUE = TOKEN
 FILE_TOKEN = "github_pat_fine-grained-0123456789"
+CLASSIC_TOKEN = "ghp_classic0123456789abcdefABCDEF0123"
 
 GOALCUP = r'''#!/usr/bin/env python3
 import base64, hashlib, json, os, select, subprocess, sys, termios, time, tty
@@ -205,6 +206,22 @@ def make_workspace(ws):
         git("init", "-q")
         git("add", "leak.txt")
         git("commit", "-q", "-m", "oops")
+    elif mode == "leak-binary":
+        # ...in a binary file its .gitattributes keeps out of any diff (`git log -p` shows no bytes).
+        (ws / ".gitattributes").write_text("*.bin -diff\n")
+        (ws / "blob.bin").write_bytes(b"\0\1\2" + STUB_TOKEN.encode() + b"\0\xff")
+        git("init", "-q")
+        git("add", ".gitattributes", "blob.bin")
+        git("commit", "-q", "-m", "data")
+    tamper = os.environ.get("STUB_TAMPER_COPY")
+    if tamper:
+        # The agent reaches the kit's private copy of its token (../../private from its folder):
+        # it deletes it, or rewrites it so the push check would look for something else.
+        copy = ws.parent.parent / "private" / "gh-token"
+        if tamper == "delete":
+            copy.unlink()
+        else:
+            copy.write_text("GH_TOKEN=not-the-token-at-all\n")
 
 def write_run():
     # A test run's record is written before the harness starts, as goalcup start does it.
@@ -249,9 +266,10 @@ if os.environ.get("STUB_PRINT_TOKEN") in ("1", "wrapped"):
     # An agent that prints its own token to the terminal the matrix logs.
     said = (Path.cwd() / ".env.local").read_text().strip()
     if os.environ["STUB_PRINT_TOKEN"] == "wrapped":
-        # ...with an escape sequence and a line wrap inside it, and another token of the same shape.
+        # ...with escape sequences (a character set, as `tput sgr0` prints, and bold) and a line
+        # wrap inside it, and another token of the same shape.
         value = said.split("=", 1)[1]
-        said = "GH_TOKEN=" + value[:12] + "\x1b[1m" + value[12:20] + "\r\n" + value[20:]
+        said = "GH_TOKEN=" + value[:12] + "\x1b(B\x1b[1m" + value[12:20] + "\r\n" + value[20:]
         said += " and ghp_" + "a1B2c3D4e5" * 4
     print("agent said: " + said, flush=True)
     if os.environ.get("STUB_DELETE_ENV") == "1":
@@ -375,6 +393,9 @@ if os.environ.get("STUB_GH_NO_LOGIN") == "1" and args[:1] in (["api"], ["auth"])
 if args[:2] == ["api", "user"]:
     print("kit-tester")
 elif args[:2] == ["auth", "token"]:
+    if os.environ.get("STUB_GH_TOKEN_ONCE") == "1" and (out / "gh.auth_token").exists():
+        # The login is gone by the end of the run (signed out, or another machine's).
+        sys.exit("no oauth token found for github.com")
     (out / "gh.auth_token").write_text("asked")
     print("stub-gh-token-0123456789abcdef")
 elif args[:2] == ["repo", "create"]:
@@ -384,8 +405,9 @@ else:
     sys.exit("gh stub: " + " ".join(args))
 '''
 
-# git as the kit's push check uses it: `clone` makes a local repository (STUB_CLONE_LEAK: one that
-# holds the token; STUB_CLONE_FAIL: none), everything else is the real git.
+# git as the kit's push check uses it: `clone --mirror` makes a local bare repository
+# (STUB_CLONE_LEAK=1: one whose commit holds the token; =tag: one whose only trace of it is an
+# annotated tag's message; STUB_CLONE_FAIL: none), everything else is the real git.
 def git_stub(real: str) -> str:
     return f'''#!/bin/sh
 for a in "$@"; do
@@ -393,11 +415,18 @@ for a in "$@"; do
     for last; do :; done
     echo "$*" >"$STUB_OUT/git.clone"
     if [ "${{STUB_CLONE_FAIL:-}}" = 1 ]; then echo "fatal: unable to access" >&2; exit 128; fi
-    {real} init -q "$last" || exit 1
-    if [ "${{STUB_CLONE_LEAK:-}}" = 1 ]; then
-      echo "GH_TOKEN={STUB_TOKEN_VALUE}" >"$last/pushed.txt"
-      {real} -C "$last" add pushed.txt
-      {real} -C "$last" -c user.name=stub -c user.email=stub@example.invalid commit -q -m pushed
+    case " $* " in *" --mirror "*) {real} init -q --bare "$last" || exit 1 ;; *) {real} init -q "$last" || exit 1 ;; esac
+    if [ -n "${{STUB_CLONE_LEAK:-}}" ]; then
+      g="{real} --git-dir=$last -c user.name=stub -c user.email=stub@example.invalid"
+      [ -d "$last/.git" ] && g="{real} --git-dir=$last/.git -c user.name=stub -c user.email=stub@example.invalid"
+      if [ "$STUB_CLONE_LEAK" = tag ]; then text="ok"; else text="GH_TOKEN={STUB_TOKEN_VALUE}"; fi
+      blob=$(echo "$text" | $g hash-object -w --stdin) || exit 1
+      tree=$(printf '100644 blob %s\\tpushed.txt\\n' "$blob" | $g mktree) || exit 1
+      commit=$($g commit-tree -m pushed "$tree") || exit 1
+      $g update-ref refs/heads/main "$commit" || exit 1
+      if [ "$STUB_CLONE_LEAK" = tag ]; then
+        $g tag -a v1 -m "release notes: GH_TOKEN={STUB_TOKEN_VALUE}" "$commit" || exit 1
+      fi
     fi
     exit 0
   fi
@@ -448,6 +477,9 @@ class World:
         executable(self.bin / "curl", CURL)
         executable(self.bin / "gh", GH)
         executable(self.bin / "git", git_stub(shutil.which("git") or "git"))
+        # ps, failing for the one process STUB_PS_FAIL_PID names.
+        executable(self.bin / "ps", '#!/bin/sh\nfor a; do [ "$a" != "${STUB_PS_FAIL_PID:-none}" ] || exit 1; done\n'
+                   f'exec {shutil.which("ps") or "/bin/ps"} "$@"\n')
         executable(self.bin / "fake-fetch.sh", FETCH)
         self.connectors = self.root / "connectors"
         (self.connectors / "stubchat").mkdir(parents=True)
@@ -489,6 +521,7 @@ class World:
         self.stale = None
         if (env or {}).get("WORLD_STALE"):
             self.stale = self.plant_stale()
+            environment["STUB_PS_FAIL_PID"] = str(self.unsure.pid)
         if token_file is not None:
             # A token file for MATRIX_GH_TOKEN_FILE: "mode:text"; mode "link" makes the path a
             # symlink to a private file, "inside" a private file inside this checkout.
@@ -539,8 +572,9 @@ class World:
         )
         stop.set()
         if self.stale is not None:
-            self.live.kill()
-            self.live.wait()
+            for proc in (self.live, self.unsure):
+                proc.kill()
+                proc.wait()
         self.elapsed = time.time() - self.started
         self.log = log.read_text() if log.exists() else ""
 
@@ -562,6 +596,25 @@ class World:
             (d / "projects" / "run" / "keep.txt").write_text("not the kit's to delete\n")
             (d / "kit.pid").write_text(f"{pid}\n")
             planted[name] = d
+        # A live process that ps cannot describe (the ps stub fails for it): counted as live.
+        self.unsure = subprocess.Popen(["sleep", "120"])
+        d = self.tmpdir / "goalcup-matrix.PSFAIL"
+        (d / "projects" / "run").mkdir(parents=True)
+        (d / "projects" / "run" / ".env.local").write_text("GH_TOKEN=whatever-token-value\n")
+        (d / "kit.pid").write_text(f"{self.unsure.pid}\n")
+        planted["unsure"] = d
+        # Dead runs whose `projects`, or a project in it, is a link to a real folder elsewhere: the
+        # sweep must not reach through either.
+        for name, link_at in (("goalcup-matrix.SLINK1", "projects"), ("goalcup-matrix.SLINK2", "projects/run")):
+            d = self.tmpdir / name
+            target = self.root / ("real-" + name[-6:])
+            (target / "run").mkdir(parents=True)
+            (target / "run" / ".env.local").write_text("GH_TOKEN=a-real-project-of-the-owner\n")
+            (target / ".env.local").write_text("GH_TOKEN=a-real-project-of-the-owner\n")
+            (d / link_at).parent.mkdir(parents=True, exist_ok=True)
+            (d / link_at).symlink_to(target if link_at == "projects" else target / "run")
+            (d / "kit.pid").write_text(f"{dead.pid}\n")
+            planted[name] = target
         other = self.tmpdir / "not-a-kit-dir"
         (other / "projects" / "run").mkdir(parents=True)
         (other / "projects" / "run" / ".env.local").write_text("GH_TOKEN=somebody-elses\n")
@@ -682,6 +735,15 @@ SCENARIOS = {
     "test_leak_project": ("stubchat", {"STUB_STOP": "0", "STUB_WS": "leak"}, TEST, True),
     "test_leak_clone": ("stubchat", {"STUB_STOP": "0", "STUB_CLONE_LEAK": "1"}, TEST, True),
     "test_clone_fails": ("stubchat", {"STUB_STOP": "0", "STUB_CLONE_FAIL": "1"}, TEST, True),
+    # ...in a binary file no diff shows, or only in an annotated tag's message.
+    "test_leak_binary": ("stubchat", {"STUB_STOP": "0", "STUB_WS": "leak-binary"}, TEST, True),
+    "test_leak_tag": ("stubchat", {"STUB_STOP": "0", "STUB_CLONE_LEAK": "tag"}, TEST, True),
+    # The agent rewrites the kit's private copy of the token and pushes the real one; or deletes
+    # the copy when the token cannot be had again from its source.
+    "test_copy_rewritten": ("stubchat", {"STUB_STOP": "0", "STUB_TAMPER_COPY": "rewrite",
+                                         "STUB_CLONE_LEAK": "1"}, TEST, True),
+    "test_copy_gone": ("stubchat", {"STUB_STOP": "0", "STUB_TAMPER_COPY": "delete",
+                                    "STUB_GH_TOKEN_ONCE": "1"}, TEST, True),
     # Leftovers of dead runs in the temporary directory.
     "test_sweep": ("stubchat", {"STUB_STOP": "0", "WORLD_STALE": "1"}, TEST, True),
     # The token from a file (a fine-grained one-repository token) instead of `gh auth token`.
@@ -694,6 +756,9 @@ SCENARIOS = {
                              TEST, True),
     "test_token_file_inside": ("stubchat", {"STUB_STOP": "0", "MATRIX_REPO": GIVEN_REPO, "WORLD_TOKEN_FILE": "inside:" + FILE_TOKEN + "\n"},
                                TEST, True),
+    "test_token_file_classic": ("stubchat", {"STUB_STOP": "0", "MATRIX_REPO": GIVEN_REPO,
+                                             "WORLD_TOKEN_FILE": "600:GH_TOKEN=" + CLASSIC_TOKEN + "\n"},
+                                TEST, True),
     "test_token_file_open": ("stubchat", {"STUB_STOP": "0", "MATRIX_REPO": GIVEN_REPO, "WORLD_TOKEN_FILE": "644:" + FILE_TOKEN + "\n"},
                              TEST, True),
 }
@@ -892,13 +957,15 @@ class MatrixTests(unittest.TestCase):
         self.assertNotIn(FILE_TOKEN, w.everything_matrix_wrote())
 
     def test_a_token_file_that_is_a_link_or_inside_the_checkout_is_refused(self) -> None:
-        for name, why in (("test_token_file_link", "must name a regular file"),
-                          ("test_token_file_inside", "is inside the checkout")):
+        for name, why, value in (("test_token_file_link", "must name a regular file", FILE_TOKEN),
+                                 ("test_token_file_inside", "is inside the checkout", FILE_TOKEN),
+                                 # A classic or gh login token reaches every repository: refused.
+                                 ("test_token_file_classic", "gh login or classic token", CLASSIC_TOKEN)):
             w = self.worlds[name]
             self.assertNotEqual(w.run.returncode, 0, name)
             self.assertIn(why, w.run.stderr)
             self.assertFalse(w.has("start.argv"), name)
-            self.assertNotIn(FILE_TOKEN, w.everything_matrix_wrote())
+            self.assertNotIn(value, w.everything_matrix_wrote())
 
     def test_a_test_cell_refuses_to_start_without_a_token_source_and_says_so_loudly_when_given_the_login(self) -> None:
         w = self.worlds["test_no_token_source"]
@@ -914,7 +981,12 @@ class MatrixTests(unittest.TestCase):
 
     def test_a_token_in_the_agents_commits_or_the_pushed_repository_fails_the_cell(self) -> None:
         for name, where in (("test_leak_project", "the project folder"),
-                            ("test_leak_clone", "the pushed repository")):
+                            ("test_leak_clone", "the pushed repository"),
+                            # Every object is read raw: a binary blob no diff shows, a tag message.
+                            ("test_leak_binary", "the project folder"),
+                            ("test_leak_tag", "the pushed repository"),
+                            # A rewritten private copy is made again from the token's source.
+                            ("test_copy_rewritten", "the pushed repository")):
             w = self.worlds[name]
             self.assertEqual(w.run.returncode, 1, (name, w.said()))
             self.assertIn("the token was pushed: revoke it now", w.run.stderr)
@@ -933,6 +1005,14 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(w.run.returncode, 1, w.said())
         self.assertIn("could not be cloned", w.run.stderr)
 
+    def test_a_push_check_without_the_token_fails_the_cell_instead_of_passing_it(self) -> None:
+        # The agent deleted the kit's copy of its token, and the token cannot be had again.
+        w = self.worlds["test_copy_gone"]
+        self.assertEqual(w.run.returncode, 1, w.said())
+        self.assertIn("push check not run: the token copy is missing", w.run.stderr)
+        self.assertRegex(w.run.stdout, r"(?m)^stubchat \S+ \S+ FAIL ")
+        self.assertNotIn(TOKEN, w.said())
+
     def test_leftovers_of_dead_runs_are_swept_and_nothing_else(self) -> None:
         w = self.worlds["test_sweep"]
         self.assertEqual(w.run.returncode, 0, w.said())
@@ -945,6 +1025,11 @@ class MatrixTests(unittest.TestCase):
         self.assertTrue((live / "projects/run/.env.local").exists())
         self.assertTrue((w.stale["other"] / "projects/run/.env.local").exists())
         self.assertTrue((w.stale["outside"] / "projects/run/.env.local").exists())
+        # Nor a real folder a dead run's `projects` or project links to, nor a run whose process
+        # ps cannot describe (in doubt, live).
+        for name in ("goalcup-matrix.SLINK1", "goalcup-matrix.SLINK2"):
+            self.assertTrue((w.stale[name] / "run/.env.local").exists(), name)
+        self.assertTrue((w.stale["unsure"] / "projects/run/.env.local").exists())
 
     def test_a_token_is_scrubbed_by_shape_through_escape_sequences_and_wraps_and_the_log_is_private(self) -> None:
         w = self.worlds["test_prints_wrapped"]
