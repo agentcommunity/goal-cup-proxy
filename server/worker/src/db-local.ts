@@ -277,6 +277,8 @@ export class LocalDb implements Db {
   // ---- Db: runs --------------------------------------------------------------------------
 
   async openRun(a: OpenRunArgs): Promise<OpenRunResult> {
+    // Not modelled here: one competition repository per member and event (sql 20261027100000,
+    // tested by scripts/check-sql.sh) and the test-operator allowlist. The tests share one repository.
     // Times are RFC 3339 to the second, so they compare as text.
     const w = this.#window;
     if (a.mode === "competition" && w !== undefined) {
@@ -608,7 +610,7 @@ function withSignals(run: StoredRun, entry: StoredEntry, a: HeartbeatArgs): Stor
 
 /**
  * The run's vitals and disk pause after this heartbeat. Twin of the rule in
- * goal_cup_tracer.note_heartbeat (sql/pending/20261021100000_goal_cup_tracer_event_readiness.sql,
+ * goal_cup_tracer.note_heartbeat (website migration 20261021100000_goal_cup_tracer_event_readiness.sql,
  * section 3): change both together.
  */
 function diskPause(run: StoredRun, a: HeartbeatArgs): Pick<StoredRun, "last_vitals" | "disk_paused_at" | "disk_notice_at"> {

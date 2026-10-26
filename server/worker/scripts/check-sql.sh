@@ -227,6 +227,44 @@ BEGIN
     ASSERT NOT has_function_privilege('public', k, 'EXECUTE'), 'PUBLIC can call ' || k;
   END LOOP;
 
+  -- 7. One competition repository, one member (20261027100000). Member m2 cannot open a competition
+  --    run on m's repository, in any spelling; m may open it again, and a retried open is answered;
+  --    another event does not count.
+  INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, staging)
+  VALUES ('smoke-cup', 'competition', t0 - interval '1 hour', t0 + interval '1 hour', false),
+         ('smoke-cup-2', 'competition', t0 - interval '1 hour', t0 + interval '1 hour', false);
+  INSERT INTO goal_cup_tracer.consents (member_id, terms_version)
+  VALUES ('22222222-2222-2222-2222-222222222222'::uuid, goal_cup_tracer.current_terms_version());
+  INSERT INTO goal_cup_tracer.run_credentials (credential_hash, member_id, mode, expires_at, staging)
+  VALUES (repeat('d', 64), m::uuid, 'competition', t0 + interval '1 hour', false),
+         (repeat('e', 64), '22222222-2222-2222-2222-222222222222'::uuid, 'competition', t0 + interval '1 hour', false),
+         (repeat('f', 64), m::uuid, 'competition', t0 + interval '1 hour', false),
+         (repeat('9', 64), '22222222-2222-2222-2222-222222222222'::uuid, 'competition', t0 + interval '1 hour', false);
+  r := public.goal_cup_upload_open_run(m, 'smoke-cup', 'competition', 'r0000000000000011', 'e0000000000000011', t0::text,
+         (t0 + interval '7 days')::text, 'c', z, z, 'w', 's11', '1', '1', 'https://github.com/O/Shared', 'null'::jsonb,
+         NULL, NULL, repeat('d', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'created', 'repo: first open: ' || r::text;
+  r := public.goal_cup_upload_open_run('22222222-2222-2222-2222-222222222222', 'smoke-cup', 'competition', 'r0000000000000012',
+         'e0000000000000012', t0::text, (t0 + interval '7 days')::text, 'c', z, z, 'w', 's12', '1', '1',
+         'https://github.com/o/shared.git', 'null'::jsonb, NULL, NULL, repeat('e', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'forbidden' AND r ->> 'message' LIKE '%already uses this repository%', 'repo: other member: ' || r::text;
+  ASSERT (SELECT run_id IS NULL FROM goal_cup_tracer.run_credentials WHERE credential_hash = repeat('e', 64)), 'repo: refused open bound its credential';
+  r := public.goal_cup_upload_open_run(m, 'smoke-cup', 'competition', 'r0000000000000013', 'e0000000000000013', t0::text,
+         (t0 + interval '7 days')::text, 'c', z, z, 'w', 's13', '1', '1', 'https://github.com/o/shared/', 'null'::jsonb,
+         NULL, NULL, repeat('f', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'created', 'repo: same member again: ' || r::text;
+  -- A lost reply: the first open again, same credential and session, gets its own run back.
+  r := public.goal_cup_upload_open_run(m, 'smoke-cup', 'competition', 'r0000000000000015', 'e0000000000000015', t0::text,
+         (t0 + interval '7 days')::text, 'c', z, z, 'w', 's11', '1', '1', 'https://github.com/O/Shared', 'null'::jsonb,
+         NULL, NULL, repeat('d', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'existing' AND r -> 'run' ->> 'run_id' = 'r0000000000000011', 'repo: lost reply: ' || r::text;
+  r := public.goal_cup_upload_open_run('22222222-2222-2222-2222-222222222222', 'smoke-cup-2', 'competition', 'r0000000000000014',
+         'e0000000000000014', t0::text, (t0 + interval '7 days')::text, 'c', z, z, 'w', 's14', '1', '1',
+         'https://github.com/o/shared', 'null'::jsonb, NULL, NULL, repeat('9', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'created', 'repo: another event: ' || r::text;
+  ASSERT NOT has_function_privilege('anon', 'goal_cup_tracer.repo_key(text)', 'EXECUTE'), 'anon can call repo_key';
+  ASSERT NOT has_function_privilege('public', 'goal_cup_tracer.repo_key(text)', 'EXECUTE'), 'PUBLIC can call repo_key';
+
 END $$;
 SQL
 echo "check-sql: smoke calls passed"
