@@ -1106,7 +1106,10 @@ async fn a_capture_create_refuses_unusable_run_secrets_without_echoing_them() {
         |tag: &str| RunSecret::new(format!("SYNTHETIC-{tag}-0123456789abcdef").as_bytes()).unwrap();
     // A value `RunSecret::new` would refuse, as a client that skipped it would send it.
     let short: RunSecret = serde_json::from_str("\"SYNTHETIC-short\"").unwrap();
-    for (name, secrets) in [("two", vec![good("a"), good("b")]), ("short", vec![short])] {
+    for (name, secrets) in [
+        ("three", vec![good("a"), good("b"), good("c")]),
+        ("short", vec![short]),
+    ] {
         let mut request = capture_create_request(&h, name);
         request.run_secrets = secrets;
         let response = h
@@ -1136,7 +1139,7 @@ async fn a_capture_create_refuses_unusable_run_secrets_without_echoing_them() {
         response.body()
     );
     let mut request = capture_create_request(&h, "one");
-    request.run_secrets = vec![good("a")];
+    request.run_secrets = vec![good("a"), good("b")];
     let info: protocol::CaptureWorkspaceInfo = h
         .post_json(protocol::ROUTE_CAPTURE_WORKSPACES, &request)
         .await;
