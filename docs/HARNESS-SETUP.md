@@ -298,8 +298,12 @@ Cup never pushes for your agent.
 3. The agent pushes with the GitHub token in your project folder's `.env.local`
    ([guide, section 5](PARTICIPANT-GUIDE.md#5-your-run)). Goal Cup passes it nothing of your git
    login (D71), so it has no global git config: the agent must set `git config user.name` and
-   `git config user.email` in its repository. The block `goalcup start` prints says so. Put it at
-   the start of your prompt.
+   `git config user.email` in its repository. The block `goalcup start` prints (it starts with
+   "Push to") says so. Paste it at the very start of your first prompt: it is how the agent learns
+   the repository. The token needs Contents read and write; read-only fails with a 403.
+   The token reaches that one repository only, but the agent runs as you and can use an SSH key in
+   `~/.ssh`. Give the key a passphrase or a per-use confirmation
+   ([26 Oct results](research/results/2026-10-26-mac-retest.md)).
 4. A practice run has no repository and no token. So a practice run shows commits, not pushes.
 
 | Harness | Commits on 22 October | Push from a competition run |

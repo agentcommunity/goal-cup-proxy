@@ -199,6 +199,21 @@ Until 4 Nov 00:00 UTC anything on this list may land. From 4 Nov, only fixes: bu
 ship in the next point release (D70). Every change passes `gate.sh fast`; Worker changes also pass `npm test`; every release passes
 `gate.sh full` and `scripts/linux-check.sh`.
 
+## After the 26 Oct Mac re-test
+
+From the [26 Oct re-test](docs/research/results/2026-10-26-mac-retest.md). The agent can use the
+player's own SSH key, so "only the run's repository" is not a promise we can make
+([D71](docs/DECISIONS.md)). Order is by risk.
+
+- **Start-time SSH warning (0.7.x).** At start, say plainly when the player has an SSH key the agent
+  can use, and what to do (passphrase or per-use confirmation, or Docker).
+- **A macOS sandbox for the agent (later).** The real fix: the agent cannot read `~/.ssh`.
+- **Make the "Push to" block harder to miss.** For example, copy it to the clipboard when it prints.
+- **A simpler setup screen.**
+- **Read Hermes's `state.db`** (the native record on 0.21.1 and later; not in 0.7.0).
+- **Hermes with Gemini is untested on a real run.** Since #268 its `:streamGenerateContent` POSTs count as model calls, so the "no model calls" line should stay quiet; one practice run would confirm it and that the `recorder` CA entry covers its client.
+- **Hermes's native Anthropic client does not record on 0.21.6 and later** (D72 known limit).
+
 ## Parked
 
 - Native Windows.

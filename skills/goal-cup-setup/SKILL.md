@@ -48,7 +48,10 @@ Say these plainly, once, before the first human step:
   `.gitignore` with `.env*`. Then `goalcup start --harness <id> --repo <user>/<name>` runs in that
   folder. The person does all of it themselves, from the guide's section 5; never make the
   repository, the token or an account for them. A practice run needs none of it: an empty folder (`setup` prints the command).
-  The person deletes the token after their run.
+  The person deletes the token after their run. Tell them two things plainly: the block `goalcup
+  start` prints (it starts with "Push to") goes at the very start of their first prompt, and the
+  token reaches only that repository but their agent runs as them, so an SSH key it can use is not
+  covered: they should give it a passphrase or a per-use confirmation.
 
 ## The loop
 

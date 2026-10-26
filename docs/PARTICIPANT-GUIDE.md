@@ -106,7 +106,8 @@ repository to exist first.
 2. **Make a token for it.** On GitHub, Settings, Developer settings, Fine-grained personal access
    tokens, Generate new token:
    - Repository access: **only select repositories**, and pick that one repository.
-   - Permissions, Repository permissions, **Contents: Read and write**.
+   - Permissions, Repository permissions, **Contents: Read and write**. Read-only is not enough:
+     the push fails with a 403 "Permission denied".
    - Expiration: **30 days**.
 
    Copy it (it starts `github_pat_`). Your agent pushes with this token. Goal Cup passes the
@@ -114,6 +115,14 @@ repository to exist first.
    Goal Cup gives it. The token itself reaches this repository only. A real run needs it: `start` refuses
    a folder with no `GH_TOKEN` line. The agent still runs as you and
    can read what your programs can read, so keep no other secrets in the project folder.
+
+   **Your SSH key is not covered.** The token limits itself to one repository, but the agent is
+   you, and `ssh` reads your keys from `~/.ssh` whatever `HOME` says. In a test the agent used the
+   tester's own SSH key unprompted, within about two minutes; a push to any repository that key
+   reaches would have worked (nothing was pushed). If you have an SSH key, give it a passphrase
+   or make it ask before each use (for example the 1Password SSH agent with approval), or run in
+   a Docker container, as the organizers' Docker cells do ([LOCAL-CAMPAIGN](research/LOCAL-CAMPAIGN.md)).
+   See the [26 Oct results](research/results/2026-10-26-mac-retest.md).
 3. **Make the project folder.** This is where the agent works. Make a new folder that will hold
    only a `.gitignore` and a `.env.local` (a macOS `.DS_Store` is allowed). First the folder and
    the `.gitignore`:
@@ -164,9 +173,11 @@ repository to exist first.
    approving replaces it. Your 168 hours start when the server opens the run.
 
 The harness then opens in the project folder. It may first show its own screens (a sign-in, a
-trust question: answer Yes); answering them is allowed. `goalcup` then prints a block of lines. Put
-them at the start of your prompt: they tell the agent where to push and as whom. `goalcup` prints
-them indented by two spaces; paste them as they are. An example (yours differs; the long
+trust question: answer Yes); answering them is allowed. `goalcup` then prints a block of lines
+that starts with "Push to". **Paste that block at the very start of your first prompt**, before
+your own words. It is how the agent learns which repository to push to and how; without it the
+agent does not know the repository. Do not skip it. `goalcup` prints
+the block indented by two spaces; paste it as it is. An example (yours differs; the long
 `credential` line is one line, so copy it whole):
 
 ```

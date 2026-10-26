@@ -139,7 +139,13 @@ consistent, not that the participant followed the rules.
   hashes it (nor does the seal, nor a clone's uncommitted digest, where it counts as `size:<n>`),
   so the record is no oracle for a secret. The agent can read the token and use it; the token
   reaches that one repository only, but the agent runs as the participant and can read what the
-  participant's programs can. `goalcup start` refuses a `.env` file that `.gitignore` does not
+  participant's programs can. That includes an SSH key: OpenSSH reads `~/.ssh` from the account,
+  not from `HOME`, and in a 26 Oct 2026 test the agent overrode `GIT_SSH_COMMAND` unprompted and
+  used the tester's key, which would have pushed to any repository that key reaches, a private
+  one the token cannot reach included (nothing was pushed;
+  [results](research/results/2026-10-26-mac-retest.md)). So the run's repository is not the only
+  one the agent can push to. Mitigations: a passphrase or per-use confirmation on the key, or the
+  Docker cell. Planned: a start-time warning and a macOS sandbox. `goalcup start` refuses a `.env` file that `.gitignore` does not
   cover, but `git add -f` still publishes one. A token in the file at the start is redacted from
   the record by value, in every common encoding; one added later, or one the agent encodes some
   other way, is covered by pattern only (`github_pat_`, `ghp_`). The participant revokes the token
