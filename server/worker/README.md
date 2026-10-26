@@ -335,19 +335,28 @@ the dry-run row, which closed 6 Nov 00:00 UTC.
 
 ## Before launch: what only real services can prove
 
-Status on 16 Oct 2026: **neither check has a record.** The repository shows no run of either one on staging
-or on production. Treat both as open. When you run one, write the date and the result here, in the same pull request.
+Status on 26 Oct 2026: **both checks passed on staging** (Worker at main `d7762cab`, real R2 bucket
+`goalcup-traces-staging`, one open practice run). The lock case below is still open for production.
+Earlier status (16 Oct): neither check had a record. When you run one, write the date and the result
+here, in the same pull request.
 
-- **R2 checksum failure.** The Worker maps a failed `sha256` put to `422 digest_mismatch` by matching
-  the error text (`10037`, "checksum", "did not match"). That wording is proven only in the local
-  simulator. On a deployed Worker, upload a chunk with a wrong `Goalcup-Sha256` against real R2 and
-  confirm `422` and nothing stored. If it comes back `502`, the Worker log has a line starting
-  `r2-put-unrecognised-error` with the real wording: add it to the pattern in `src/chunks.ts`. (A
-  recognised failure logs `r2-put-digest-mismatch`.) Staging has a real R2 bucket, so staging can prove it.
-- **Create-only puts** (`onlyIf: { etagDoesNotMatch: "*" }`) must refuse to overwrite on real R2,
-  including under the bucket lock. Staging can prove the refusal. Staging has no bucket lock, so only
-  production can prove the lock case, and only on the locked prefix `traces/goalcup-cup-2026/`, which holds
-  data only after the EVENT_ID switch. Test runs use `traces/test/`, which is never locked.
+- 26 Oct, checksum: a chunk whose body did not match its `Goalcup-Sha256` got `422 digest_mismatch`,
+  and no object was stored under its key. The error-text match works against real R2.
+- 26 Oct, create-only: a decoy object was put at the exact key of the next valid chunk, then that
+  chunk was uploaded. The Worker answered 200 (as designed: an existing key is taken as an earlier
+  attempt), and R2 kept the decoy's bytes unchanged. The decoy was deleted afterwards. (A request
+  with Python's default User-Agent is refused by Cloudflare with `error code: 1010` before it reaches
+  the Worker; send a `goalcup/` User-Agent when testing by hand.)
+
+- **R2 checksum failure** (proven on staging, 26 Oct). The Worker maps a failed `sha256` put to
+  `422 digest_mismatch` by matching the error text (`10037`, "checksum", "did not match"). If R2 ever
+  changes that wording, uploads come back `502` and the Worker log has a line starting
+  `r2-put-unrecognised-error` with the new wording: add it to the pattern in `src/chunks.ts`. (A
+  recognised failure logs `r2-put-digest-mismatch`.)
+- **Create-only puts under the bucket lock** (still open). The refusal to overwrite is proven on
+  staging (26 Oct), which has no bucket lock. Only production can prove the lock case, and only on
+  the locked prefix `traces/goalcup-cup-2026/`, which holds data only after the EVENT_ID switch. Test
+  runs use `traces/test/`, which is never locked.
 
 ## Decisions where the contract is silent
 

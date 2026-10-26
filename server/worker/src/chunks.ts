@@ -214,10 +214,10 @@ async function storeBody(ctx: Ctx, request: Request, contentLength: number, key:
     });
   } catch (e) {
     const text = String(e);
-    // Recognising a checksum failure by its text is only proven in the local simulator (R2 error
-    // code 10037, "The SHA-256 checksum you specified did not match"). It must be re-proven
-    // against real R2 before launch (README, "Before launch"). Anything not recognised is logged
-    // under its own name, so a real-R2 wording difference shows up as 502s with this line.
+    // A checksum failure is recognised by its text (R2 error code 10037, "The SHA-256 checksum you
+    // specified did not match"), proven against real R2 on staging on 26 Oct 2026 (README, "Before
+    // launch"). Anything not recognised is logged under its own name, so a later R2 wording change
+    // shows up as 502s with this line.
     if (/10037|checksum|did not match/i.test(text)) {
       console.warn(`r2-put-digest-mismatch ${key}: ${text}`);
       throw new ApiError(422, "digest_mismatch", "The body's SHA-256 is not Goalcup-Sha256. Nothing was stored.");

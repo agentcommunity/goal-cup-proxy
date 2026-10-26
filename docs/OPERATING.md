@@ -94,7 +94,7 @@ CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy --env staging # staging
   the owner's password manager, never in a repo. Meanings: [server/worker/README](../server/worker/README.md#configuration).
 - Watch a deploy with `npx wrangler tail`. Useful log lines: `tick <step> <run_id>: …` (a cron step failed),
   `r2-put-unrecognised-error` (R2 refused a put for a reason the Worker does not know), `misconfigured: …`.
-- Before the first real upload, prove the two R2 behaviours listed in the worker README ("Before launch").
+- Two R2 behaviours were proven on staging on 26 Oct 2026; the bucket-lock case can only be proven on production after the EVENT_ID switch (worker README, "Before launch").
 
 ## Test runs
 
