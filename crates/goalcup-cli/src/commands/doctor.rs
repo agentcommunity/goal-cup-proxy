@@ -125,7 +125,7 @@ pub fn run_with(
         match &scope {
             Some(id) if from_prep => put(
                 out,
-                &format!("goalcup doctor — {id} (from goalcup prep)\n\n"),
+                &format!("goalcup doctor — {id} (from goalcup setup)\n\n"),
             )?,
             Some(id) => put(out, &format!("goalcup doctor — {id} only\n\n"))?,
             None => put(out, "goalcup doctor\n\n")?,

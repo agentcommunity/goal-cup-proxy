@@ -1098,10 +1098,9 @@ fn pause_points_exist_only_under_test_support() {
 /// builder, so another site would be another place a key could be forgotten or leaked. The
 /// daemon's start and the version probe carry no key: both clear their environment, which
 /// `run_scoped_daemon::the_started_daemon_inherits_none_of_the_clis_secrets_or_descriptors`
-/// observes for the daemon and `harness_version_probe` for the probe. The GitHub token is
-/// never given to a child: `git` is run with the repository's public URL and no token in its
-/// argv or environment (`account::the_token_never_appears_in_a_git_argv`), and gets the token
-/// only by running `goalcup git-credential` itself, later, from the agent's own `git push`.
+/// observes for the daemon and `harness_version_probe` for the probe. `github.rs` has two: the
+/// participant's own `git` for the clone, and their own `ssh`, `gh` and `git` for the login
+/// look and the dry-run push (D69). Goal Cup holds no key, so none is given to any of them.
 #[test]
 fn the_only_command_site_is_the_launch_builder() {
     fn sites(dir: &std::path::Path, found: &mut Vec<String>) {
@@ -1136,6 +1135,7 @@ fn the_only_command_site_is_the_launch_builder() {
         files,
         [
             "ca_bundle.rs",
+            "github.rs",
             "github.rs",
             "harness_version.rs",
             "launch.rs",

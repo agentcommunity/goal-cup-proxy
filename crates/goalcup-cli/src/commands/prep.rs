@@ -1,51 +1,54 @@
-//! `goalcup prep` — from install to a finished practice run, in six steps, and safe to run again.
+//! `goalcup setup` (once `goalcup prep`, still its hidden alias): from install to ready, in
+//! four steps, and safe to run again. No GitHub here: a real run asks for its repository at
+//! `goalcup start` (`commands::run_repo`), and a practice run needs none (D69).
 //!
 //! Each step is `[ok]`, `[todo] <what to do>` or `[fail] <why>`, and the command exits 0 only
-//! when all six are ok:
+//! when all four are ok:
 //!
-//! 1. **login**: `server.json` names an account. Prep does not run the device flow itself.
+//! 1. **login**: `server.json` names an account. In a terminal, a computer that is not connected
+//!    is logged in here, with `goalcup login`'s own device flow.
 //! 2. **harness**: one of the connectors that run in chat mode (`interactive = true`), picked
-//!    with `--harness` or because it is the only one, found on `PATH`, its version shown, and a
-//!    pointer to its section of the setup guide, `docs/HARNESS-SETUP.md` (the connector's
-//!    `participant.setup_section`), on every prep. When the connector names where its MCP
-//!    servers are listed (`participant.time_left_tool`, fix plan v9), the step also prints the
-//!    lines that add `goalcup mcp` there, with this binary's absolute path; it never writes them.
+//!    with `--harness`, before, or because it is the only one; in a terminal, the installed ones
+//!    and the other supported ones are listed and the participant picks. Found on `PATH`, its
+//!    version shown, and a pointer to its section of the setup guide, `docs/HARNESS-SETUP.md`
+//!    (the connector's `participant.setup_section`), on every setup. When the connector names
+//!    where its MCP servers are listed (`participant.time_left_tool`, fix plan v9), the step also
+//!    prints the lines that add `goalcup mcp` there, with this binary's absolute path; it never
+//!    writes them.
 //! 3. **harness home**: the harness is opened once in the home its runs will use, so the
-//!    participant signs in and adds settings, MCP servers and skills there
+//!    participant signs in (or pastes an API key into the harness's own sign-in, which Goal Cup
+//!    never sees) and adds settings, MCP servers and skills there
 //!    ([`crate::launch::prep_launch`]: no proxy, no capture, no daemon entry). The tracker
 //!    cannot see a vendor sign-in, so this step is the person's word: it is ok once the harness
 //!    they were given has exited 0, and that is recorded in `prep.json` (`home_ready`). When the
 //!    harness's config does not set a connector's `participant.no_prompts` setting, the step's
 //!    line also recommends it, with the setup guide's link (D67); that never changes the setting
 //!    or the step's state.
-//! 4. **GitHub**: the repository from `--repo` is public, empty and pushable with the stored
-//!    token ([`crate::account::github::check`]); with a terminal, the token is read unshown.
-//! 5. **machine**: mains power, free space for a run's reservation, the server's and the
+//! 4. **machine**: mains power, free space for a run's reservation, the server's and the
 //!    provider's hosts reachable, `git` on `PATH`, under WSL the WSL2 version and a work folder,
 //!    artifact root and configuration folder that are not on a Windows-host filesystem, the
 //!    same three folders on APFS, ext4 or XFS (not btrfs, ZFS, NFS, SMB, tmpfs, overlayfs or
 //!    FUSE), and a sleep lock the machine can take (one it cannot take is said, and is never a
 //!    `todo`).
-//! 6. **practice**: a practice run of this harness whose every entry was sealed and uploaded.
-//!    Prep never starts a run: it says `goalcup start --practice` and stops.
 //!
-//! # When prep acts, and when it only reports
+//! Once the work folder passes, setup makes `<work folder>/.env.local` if it is missing: empty
+//! but for a short comment, mode 0600, for keys the participant gives their agent. It says the
+//! path and, in a terminal, offers to open it. Goal Cup never reads it.
 //!
-//! Only in a terminal, and never with `--json`, prep asks (the token) and launches (the
-//! harness). `--json` prints `[{"step","state","human","say"}]` and nothing else; `human` marks
-//! the steps that need the person (login, the harness home, the GitHub token, the practice run),
-//! for the agent that is walking someone through the setup.
+//! # When setup acts, and when it only reports
+//!
+//! Only in a terminal, and never with `--json`, setup asks (the harness, whether to open the keys
+//! file), logs in and launches (the harness). `--json` prints `[{"step","state","human","say"}]`
+//! and nothing else; `human` marks the steps that need the person (login, the harness home), for
+//! the agent that is walking someone through the setup.
 //!
 //! # Re-running
 //!
-//! `<cfg>/prep.json` keeps what is settled: the harness, the repository, the work folder, and
-//! the one fact that cannot be re-observed (`home_ready`). A second prep
-//! skips the steps it has settled and keeps every value a flag does not change; changing the
-//! harness starts its home again. The GitHub step is asked on every prep: the repository is
-//! public, empty and pushable with the stored token, because a practice run never pushes.
+//! `<cfg>/prep.json` keeps what is settled: the harness, the work folder, and the one fact that
+//! cannot be re-observed (`home_ready`). A second setup skips the steps it has settled and keeps
+//! every value a flag does not change; changing the harness starts its home again.
 
 use crate::CliError;
-use crate::account::github::{self, GithubSetup};
 use crate::connector::{HarnessConnector, harness_dirs};
 use crate::folder_gate::Host;
 use crate::prep_file::{PrepFile, read_prep_lenient, write_prep};
@@ -64,8 +67,6 @@ pub const DEFAULT_WORK_ROOT_NAME: &str = "goalcup-work";
 pub struct PrepOptions {
     /// `--harness <id>`.
     pub harness: Option<String>,
-    /// `--repo <url>`.
-    pub repo: Option<String>,
     /// `--work-root <path>`: absolute.
     pub work_root: Option<PathBuf>,
     /// `--json`: print the steps as one JSON array, ask nothing, launch nothing.
@@ -96,10 +97,10 @@ impl State {
 /// One step of the report, and one element of `--json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Step {
-    /// `login`, `harness`, `harness_home`, `github`, `machine` or `practice`.
+    /// `login`, `harness`, `harness_home` or `machine`.
     pub step: &'static str,
     pub state: State,
-    /// The step needs the person (a sign-in, a token, a practice run), not only a command.
+    /// The step needs the person (a login, a sign-in), not only a command.
     pub human: bool,
     /// What was found, or what to do, or why it failed: one or two sentences.
     pub say: String,
@@ -109,9 +110,24 @@ pub struct Step {
 pub const STEP_LOGIN: &str = "login";
 pub const STEP_HARNESS: &str = "harness";
 pub const STEP_HARNESS_HOME: &str = "harness_home";
-pub const STEP_GITHUB: &str = "github";
 pub const STEP_MACHINE: &str = "machine";
-pub const STEP_PRACTICE: &str = "practice";
+
+/// What setup opens for the participant: the login's approval address, and the keys file. Both
+/// do nothing when `GOALCUP_NO_BROWSER` is set.
+pub struct Openers {
+    pub url: fn(&str) -> bool,
+    pub file: fn(&Path) -> bool,
+}
+
+/// The name of the keys file setup makes in the work folder.
+pub const KEYS_FILE_NAME: &str = ".env.local";
+
+/// What the keys file holds when setup makes it.
+const KEYS_FILE_TEXT: &str = "\
+# Keys for your agent (optional), one per line: NAME=value. Your agent can read them.
+# Goal Cup never reads this file. Never put keys in your repository.
+# Set them before your run starts; changing them during the run is outside help.
+";
 
 fn step(step: &'static str, state: State, human: bool, say: impl Into<String>) -> Step {
     Step {
@@ -138,10 +154,8 @@ pub trait Doors {
     fn hosts_reachable(&self, endpoints: &[(String, u16)]) -> Result<(), String>;
     /// Whether the machine can be kept awake (the lock is taken and let go at once).
     fn sleep_lock(&self) -> Result<(), String>;
-    /// GitHub's API, as `account::github::check` takes it.
-    fn github_api(&self) -> String;
-    /// The token for `repo_url`: asked for on the terminal, and read without showing it.
-    fn read_token(&self, repo_url: &str) -> Result<GithubSetup, CliError>;
+    /// One line typed by the participant, or `None` when the input ended.
+    fn read_line(&self) -> Option<String>;
     /// Wait for the participant to press Enter before the harness takes the terminal; `false`
     /// when the input ended without one (the participant chose not to go on).
     fn wait_for_enter(&self) -> bool;
@@ -186,31 +200,20 @@ impl Doors for Here {
     }
 
     fn sleep_lock(&self) -> Result<(), String> {
-        goalcup_platform::awake::hold("goalcup prep is checking that the machine can stay awake")
+        goalcup_platform::awake::hold("goalcup setup is checking that the machine can stay awake")
             .map(drop)
     }
 
-    fn github_api(&self) -> String {
-        github::GITHUB_API.to_string()
-    }
-
-    fn read_token(&self, repo_url: &str) -> Result<GithubSetup, CliError> {
-        // The echo is off before the question is on the screen, so nothing typed in answer to
-        // it can be shown.
-        let echo = goalcup_platform::terminal::EchoOff::take(libc::STDIN_FILENO);
-        println!(
-            "GitHub token for {repo_url} (a fine-grained token for that one repository, \
-             Contents read and write; not shown):"
-        );
-        let _ = std::io::stdout().flush();
-        let read = GithubSetup::read_token(repo_url, &mut std::io::stdin().lock());
-        drop(echo);
-        read
+    fn read_line(&self) -> Option<String> {
+        let mut line = String::new();
+        match std::io::stdin().lock().read_line(&mut line) {
+            Ok(n) if n > 0 => Some(line),
+            _ => None,
+        }
     }
 
     fn wait_for_enter(&self) -> bool {
-        let mut line = String::new();
-        matches!(std::io::stdin().lock().read_line(&mut line), Ok(n) if n > 0)
+        self.read_line().is_some()
     }
 
     fn open_harness(
@@ -279,7 +282,7 @@ impl Doors for Here {
     }
 }
 
-/// Where `goalcup prep` appends the output of the connector's `capture.configure` commands, in
+/// Where `goalcup setup` appends the output of the connector's `capture.configure` commands, in
 /// the configuration folder: nothing they print reaches the terminal.
 pub const PREP_LOG_NAME: &str = "prep.log";
 
@@ -305,13 +308,13 @@ fn configure_after_setup(
         workspace,
         &log,
         &format!(
-            "What it printed is in {}. Run `goalcup prep` again.",
+            "What it printed is in {}. Run `goalcup setup` again.",
             log_path.display()
         ),
     )
 }
 
-/// `goalcup prep`, with everything it reads handed in. Returns the exit code: 0 when all six
+/// `goalcup setup`, with everything it reads handed in. Returns the exit code: 0 when all four
 /// steps are ok, 1 otherwise. A mistyped flag is a refusal before anything is written.
 pub fn prep_with(
     doors: &dyn Doors,
@@ -319,14 +322,10 @@ pub fn prep_with(
     connectors: &Path,
     env: &BTreeMap<String, String>,
     opts: &PrepOptions,
+    open: &Openers,
     out: &mut dyn Write,
 ) -> Result<u8, CliError> {
     // What the flags say, judged before anything is asked or written.
-    let repo_flag = opts
-        .repo
-        .as_deref()
-        .map(github::checked_repo_url)
-        .transpose()?;
     if let Some(work_root) = &opts.work_root
         && !work_root.is_absolute()
     {
@@ -360,15 +359,28 @@ pub fn prep_with(
         steps: Vec::new(),
         out,
     };
+    report.tell("Goal Cup setup. 4 steps. Ctrl-C stops at any time; run it again to continue.")?;
 
-    // 1. login
-    report.push(login_step(cfg))?;
+    // 1. login, here and now when this computer is not connected and there is a terminal.
+    let mut login = login_step(cfg);
+    if login.state == State::Todo && acting {
+        report.tell("This computer is not connected to Goal Cup yet. Connecting it:")?;
+        let args = crate::commands::login::LoginArgs::default();
+        login = match crate::commands::login::run(&args, cfg, &open.url, report.out) {
+            Ok(()) => login_step(cfg),
+            Err(error) => step(STEP_LOGIN, State::Fail, true, error.to_string()),
+        };
+    }
+    report.push(login)?;
 
     // 2. harness
-    let wanted = opts
+    let mut wanted = opts
         .harness
         .clone()
         .or_else(|| (!file.harness.is_empty()).then(|| file.harness.clone()));
+    if wanted.is_none() && acting {
+        wanted = ask_harness(doors, connectors, env, opts.dev, &mut report)?;
+    }
     let (connector, harness) = harness_step(connectors, env, cfg, wanted.as_deref(), opts.dev);
     if let Some(c) = &connector {
         let id = c.loaded.manifest.id.clone();
@@ -387,7 +399,7 @@ pub fn prep_with(
             STEP_HARNESS_HOME,
             State::Todo,
             true,
-            "choose and install your agent first (the step above). Then `goalcup prep` opens it \
+            "choose and install your agent first (the step above). Then `goalcup setup` opens it \
              so you can sign in and add your settings, MCP servers and skills",
         ),
     };
@@ -404,42 +416,47 @@ pub fn prep_with(
     report.push(home)?;
     save(cfg, &file, &before)?;
 
-    // 4. GitHub
-    if let Some(url) = &repo_flag {
-        file.repo_url = url.clone();
-    }
-    let github_step = github_step(doors, cfg, &mut file, acting, &mut report)?;
-    report.push(github_step)?;
-    save(cfg, &file, &before)?;
-
-    // 5. machine
+    // 4. machine
     let machine = machine_step(doors, cfg, env, connector.as_ref(), &work_root);
     // A work folder is kept only once it has passed: a refused one must not replace a good one.
-    if machine.work_root_ok {
+    let keys = if machine.work_root_ok {
         file.work_root = work_root.display().to_string();
-    }
+        keys_file(&work_root)
+    } else {
+        None
+    };
     report.push(machine.step)?;
     save(cfg, &file, &before)?;
-
-    // 6. practice
-    report.push(practice_step(
-        cfg,
-        connector.as_ref().map(|c| c.loaded.manifest.id.as_str()),
-    ))?;
 
     let all_ok = report.steps.iter().all(|s| s.state == State::Ok);
     if report.json {
         let text = serde_json::to_string_pretty(&report.steps)?;
         put(report.out, &format!("{text}\n"))?;
-    } else if all_ok {
+        return Ok(u8::from(!all_ok));
+    }
+    // D69: nothing reads or writes `github.json` now but the old clones' helper. Its token stays
+    // valid on GitHub until the participant revokes it, so say where it is, never what it is.
+    let old_token = crate::account::github::github_path(cfg);
+    if old_token.exists() {
+        report.tell(&format!(
+            "An old GitHub token from an earlier goalcup is stored at {}. Goal Cup no longer uses \
+             it: delete the file and revoke the token on GitHub once your older dry run is over.",
+            old_token.display()
+        ))?;
+    }
+    if let Some((keys, made)) = &keys {
+        offer_keys_file(doors, keys, acting && *made, open, &mut report)?;
+    }
+    if all_ok {
         let id = connector
             .as_ref()
             .map_or("<id>", |c| c.loaded.manifest.id.as_str());
         put(
             report.out,
             &format!(
-                "goalcup prep: ready. Next: goalcup start --harness {id}, inside the start \
-                 window.\n"
+                "Ready.\n  Try it (10 min, no GitHub, never counts): goalcup start --harness {id} \
+                 --practice\n  The real run, inside the start window:  goalcup start --harness \
+                 {id}\n"
             ),
         )?;
     } else {
@@ -454,12 +471,65 @@ pub fn prep_with(
         put(
             report.out,
             &format!(
-                "goalcup prep: {waiting} of {} steps need you. Next: the {next} step above.\n",
+                "goalcup setup: {waiting} of {} steps need you. Next: the {next} step above.\n",
                 report.steps.len()
             ),
         )?;
     }
     Ok(u8::from(!all_ok))
+}
+
+/// `<work_root>/.env.local`, made when it is missing (with the folder): [`KEYS_FILE_TEXT`] only,
+/// mode 0600, never replaced and never read. With whether this setup made it; `None` when it
+/// cannot be made.
+fn keys_file(work_root: &Path) -> Option<(PathBuf, bool)> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = work_root.join(KEYS_FILE_NAME);
+    std::fs::create_dir_all(work_root).ok()?;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+    {
+        Ok(mut made) => made
+            .write_all(KEYS_FILE_TEXT.as_bytes())
+            .ok()
+            .map(|()| (path, true)),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Some((path, false)),
+        Err(_) => None,
+    }
+}
+
+/// Say where the keys file is and, when `ask` (setup has just made it, in a terminal), offer to
+/// open it.
+fn offer_keys_file(
+    doors: &dyn Doors,
+    keys: &Path,
+    ask: bool,
+    open: &Openers,
+    report: &mut Report<'_>,
+) -> Result<(), CliError> {
+    report.tell(&format!(
+        "Keys for your agent (optional): {}\n  Goal Cup never reads it. Your agent can read \
+         anything you give it.",
+        keys.display()
+    ))?;
+    if !ask {
+        return Ok(());
+    }
+    put(report.out, "  Open it now? [y/N] ")?;
+    report.out.flush().map_err(|source| CliError::Io {
+        path: "standard output".to_string(),
+        source,
+    })?;
+    let yes = doors
+        .read_line()
+        .is_some_and(|l| matches!(l.trim().to_ascii_lowercase().as_str(), "y" | "yes"));
+    if yes && !(open.file)(keys) {
+        report.tell(&format!("  Open it yourself: {}", keys.display()))?;
+    }
+    Ok(())
 }
 
 /// The steps so far, printed as they come in text mode and held for the JSON array otherwise.
@@ -538,6 +608,86 @@ fn loadable_connectors(connectors: &Path, dev: bool) -> Result<Vec<HarnessConnec
     Ok(found)
 }
 
+/// The bring-your-own-harness guide: how a harness Goal Cup does not ship becomes a connector.
+pub const OWN_HARNESS_GUIDE: &str =
+    "https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/HARNESS-ONBOARDING.md";
+
+/// The chat-mode harnesses, as setup lists them: the installed ones (found on `PATH`), the other
+/// supported ones with where to read how to install them, and the guide for one of the
+/// participant's own.
+fn harness_menu(chat: &[HarnessConnector], env: &BTreeMap<String, String>) -> String {
+    let (installed, other): (Vec<&HarnessConnector>, Vec<&HarnessConnector>) =
+        chat.iter().partition(|c| {
+            crate::commands::doctor::executable_check(c, env).level != crate::preflight::Level::Fail
+        });
+    let ids = |list: &[&HarnessConnector]| {
+        list.iter()
+            .map(|c| c.loaded.manifest.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut menu = format!(
+        "Installed: {}",
+        if installed.is_empty() {
+            "none yet".to_string()
+        } else {
+            ids(&installed)
+        }
+    );
+    if !other.is_empty() {
+        menu.push_str(&format!(
+            "\n  Also supported: {} (how to install: {SETUP_GUIDE})",
+            ids(&other)
+        ));
+    }
+    menu.push_str(&format!("\n  Your own harness? {OWN_HARNESS_GUIDE}"));
+    menu
+}
+
+/// In a terminal, with more than one chat-mode harness and none chosen yet: list them
+/// ([`harness_menu`]) and ask which one, the first installed one by default. `None` leaves the
+/// harness step to say what to do.
+fn ask_harness(
+    doors: &dyn Doors,
+    connectors: &Path,
+    env: &BTreeMap<String, String>,
+    dev: bool,
+    report: &mut Report<'_>,
+) -> Result<Option<String>, CliError> {
+    let Ok(chat) = loadable_connectors(connectors, dev) else {
+        return Ok(None);
+    };
+    if chat.len() < 2 {
+        return Ok(None);
+    }
+    let default = chat
+        .iter()
+        .find(|c| {
+            crate::commands::doctor::executable_check(c, env).level != crate::preflight::Level::Fail
+        })
+        .map(|c| c.loaded.manifest.id.clone());
+    report.tell(&harness_menu(&chat, env))?;
+    put(
+        report.out,
+        &format!(
+            "Which one?{} ",
+            default
+                .as_deref()
+                .map(|d| format!(" [{d}]"))
+                .unwrap_or_default()
+        ),
+    )?;
+    report.out.flush().map_err(|source| CliError::Io {
+        path: "standard output".to_string(),
+        source,
+    })?;
+    Ok(match doors.read_line().map(|l| l.trim().to_string()) {
+        Some(typed) if !typed.is_empty() => Some(typed),
+        Some(_) => default,
+        None => None,
+    })
+}
+
 fn harness_step(
     connectors: &Path,
     env: &BTreeMap<String, String>,
@@ -575,19 +725,14 @@ fn harness_step(
             }
             1 => 0,
             _ => {
+                let menu = harness_menu(&chat, env);
                 return (
                     None,
                     step(
                         STEP_HARNESS,
                         State::Todo,
                         false,
-                        format!(
-                            "choose your agent: {}",
-                            ids.iter()
-                                .map(|id| format!("`goalcup prep --harness {id}`"))
-                                .collect::<Vec<_>>()
-                                .join(" or ")
-                        ),
+                        format!("choose your agent: goalcup setup --harness <id>. {menu}",),
                     ),
                 );
             }
@@ -710,7 +855,7 @@ fn home_step(
     if let (Some(why), false) = (stale, acting) {
         return Ok(human(
             State::Todo,
-            format!("{why} Run `goalcup prep` in a terminal"),
+            format!("{why} Run `goalcup setup` in a terminal"),
         ));
     }
     if let Some(why) = stale {
@@ -720,9 +865,9 @@ fn home_step(
         return Ok(human(
             State::Todo,
             format!(
-                "run `goalcup prep` in a terminal. It opens {id} in its Goal Cup home ({}). \
-                 Sign in there, add your settings, MCP servers and skills, then exit {id} the \
-                 normal way",
+                "run `goalcup setup` in a terminal. It opens {id} in its Goal Cup home ({}). \
+                 Sign in there (or paste your API key; Goal Cup never sees it), add your \
+                 settings, MCP servers and skills, then exit {id} the normal way",
                 home.display()
             ),
         ));
@@ -731,9 +876,10 @@ fn home_step(
     let mut go = || -> Result<bool, CliError> {
         report.tell(&format!(
             "Next, {id} opens here in its own Goal Cup home (not your usual setup). Nothing is \
-             recorded.\n  1. Sign in.\n  2. Add the settings, MCP servers and skills you want \
-             your agent to have.\n  3. Exit {id} the normal way.\nPress Enter to open {id}, or \
-             Ctrl-C to stop."
+             recorded.\n  1. Sign in, or paste your API key when it asks. Goal Cup never \
+             sees it.\n  2. Add the settings, MCP servers and skills you want your agent to \
+             have, and set it not to ask for permission (see the guide above).\n  3. Exit {id} \
+             the normal way.\nPress Enter to open {id}, or Ctrl-C to stop."
         ))?;
         let entered = doors.wait_for_enter();
         if !entered {
@@ -746,12 +892,12 @@ fn home_step(
     match doors.open_harness(connector, cfg, env, &mut go) {
         Ok(None) => Ok(human(
             State::Todo,
-            format!("{id} was not opened. Run `goalcup prep` again, then press Enter"),
+            format!("{id} was not opened. Run `goalcup setup` again, then press Enter"),
         )),
         Ok(Some(true)) => match model_host_problem(cfg, connector) {
             Some(why) => Ok(human(
                 State::Todo,
-                format!("{why} Run `goalcup prep` again"),
+                format!("{why} Run `goalcup setup` again"),
             )),
             None => {
                 file.home_ready = true;
@@ -766,7 +912,7 @@ fn home_step(
         Ok(Some(false)) => Ok(human(
             State::Todo,
             format!(
-                "{id} did not exit normally. Run `goalcup prep` again, then exit {id} the \
+                "{id} did not exit normally. Run `goalcup setup` again, then exit {id} the \
                  normal way"
             ),
         )),
@@ -837,97 +983,7 @@ fn no_prompts_advice(cfg: &Path, connector: &HarnessConnector) -> Option<String>
     ))
 }
 
-// ------------------------------------------------------------------ 4. GitHub
-
-fn github_step(
-    doors: &dyn Doors,
-    cfg: &Path,
-    file: &mut PrepFile,
-    acting: bool,
-    report: &mut Report<'_>,
-) -> Result<Step, CliError> {
-    let fail = |say: String| step(STEP_GITHUB, State::Fail, true, say);
-    if file.repo_url.is_empty() {
-        return Ok(step(
-            STEP_GITHUB,
-            State::Todo,
-            true,
-            "create a new, empty, public repository on GitHub (no README, license or \
-             .gitignore). Then run: goalcup prep --repo https://github.com/<owner>/<repo>",
-        ));
-    }
-    let repo = file.repo_url.clone();
-    let api = doors.github_api();
-    // The token stored for this repository, if there is one.
-    let stored = GithubSetup::load(cfg)
-        .ok()
-        .filter(|setup| same_repo(&setup.repo_url, &repo));
-    // Public, empty and pushable, asked on every prep: a practice run never pushes, so the
-    // repository is still empty until the competition run, and a token that expired or was
-    // revoked, or a repository made private, is found now and not on the day.
-    let mut failed = None;
-    if let Some(setup) = &stored {
-        match github::check_access(&api, setup) {
-            Ok(()) => {
-                return Ok(match github::check_empty(&api, setup) {
-                    Ok(()) => step(
-                        STEP_GITHUB,
-                        State::Ok,
-                        false,
-                        format!("{repo} is public and empty, and the stored token can push to it"),
-                    ),
-                    // The token is fine; a new one would not empty the repository.
-                    Err(error) => fail(error.to_string()),
-                });
-            }
-            Err(error) => failed = Some(error.to_string()),
-        }
-    }
-    if !acting {
-        return Ok(match failed {
-            Some(why) => fail(why),
-            None => step(
-                STEP_GITHUB,
-                State::Todo,
-                true,
-                format!(
-                    "run `goalcup prep` in a terminal and paste a GitHub token for {repo} when \
-                     asked (a fine-grained token for that one repository, Contents set to read \
-                     and write; it is not shown)"
-                ),
-            ),
-        });
-    }
-    if let Some(why) = &failed {
-        report.tell(&format!("The stored token did not pass: {why}"))?;
-    }
-    let setup = match doors.read_token(&repo) {
-        Ok(setup) => setup,
-        Err(error) => return Ok(fail(error.to_string())),
-    };
-    // Stored only once it has passed the whole check.
-    if let Err(error) = github::check(&api, &setup) {
-        return Ok(fail(error.to_string()));
-    }
-    setup.store(cfg)?;
-    Ok(step(
-        STEP_GITHUB,
-        State::Ok,
-        false,
-        format!("{repo} is public and empty, and the token you gave can push to it; it is stored"),
-    ))
-}
-
-/// Two repository addresses in the one spelling they are compared in.
-fn same_repo(a: &str, b: &str) -> bool {
-    let spell = |url: &str| {
-        let url = url.trim().trim_end_matches('/');
-        url.strip_suffix(".git").unwrap_or(url).to_ascii_lowercase()
-    };
-    spell(a) == spell(b)
-}
-
-// ------------------------------------------------------------------ 5. the machine
+// ------------------------------------------------------------------ 4. the machine
 
 struct Machine {
     step: Step,
@@ -1164,9 +1220,9 @@ fn git_repository_of(path: &Path) -> Option<PathBuf> {
 fn work_in_git_message(work_root: &Path, repo: &Path, default: Option<&Path>) -> String {
     let fix = match default {
         Some(folder) if git_repository_of(folder).is_none() => {
-            format!("goalcup prep --work-root ~/{DEFAULT_WORK_ROOT_NAME}")
+            format!("goalcup setup --work-root ~/{DEFAULT_WORK_ROOT_NAME}")
         }
-        _ => "goalcup prep --work-root <full path of a folder outside any repository>".to_string(),
+        _ => "goalcup setup --work-root <full path of a folder outside any repository>".to_string(),
     };
     format!(
         "Your work folder {} is inside a Git repository ({}). Choose a folder outside any \
@@ -1201,64 +1257,6 @@ fn endpoint_of(url: &str) -> (String, u16) {
     (host.to_string(), port)
 }
 
-// ------------------------------------------------------------------ 6. practice
-
-fn practice_step(cfg: &Path, harness: Option<&str>) -> Step {
-    let id = harness.unwrap_or("<id>");
-    let start = format!("goalcup start --harness {id} --practice");
-    let Some(harness) = harness else {
-        return step(
-            STEP_PRACTICE,
-            State::Todo,
-            true,
-            format!("choose your agent first. Then do a practice run: {start}"),
-        );
-    };
-    let spool = cfg.join(crate::upload::UPLOADS_DIR_NAME);
-    let mut practice: Vec<_> = crate::run::all(cfg)
-        .into_iter()
-        .filter(|run| run.practice && run.connector_id == harness && run.server_url.is_some())
-        .collect();
-    practice.sort_by(|a, b| (b.started_at_unix, &b.run_id).cmp(&(a.started_at_unix, &a.run_id)));
-    let unsent = |run: &crate::run::RunRecord| {
-        run.entries
-            .iter()
-            .find(|entry| !crate::upload::uploader::is_sent(&spool, &entry.entry_id))
-            .map(|entry| entry.entry_id.clone())
-    };
-    if practice
-        .iter()
-        .any(|run| !run.entries.is_empty() && unsent(run).is_none())
-    {
-        return step(
-            STEP_PRACTICE,
-            State::Ok,
-            false,
-            "your practice run is done and uploaded".to_string(),
-        );
-    }
-    if let Some(entry) = practice.first().and_then(unsent) {
-        return step(
-            STEP_PRACTICE,
-            State::Todo,
-            true,
-            format!(
-                "your last practice run is not fully uploaded. Run: goalcup upload {entry}. Or \
-                 do a new practice run: {start}"
-            ),
-        );
-    }
-    step(
-        STEP_PRACTICE,
-        State::Todo,
-        true,
-        format!(
-            "do a 10-minute practice run: {start}. It does not count, never pushes, and never \
-             replaces your competition run"
-        ),
-    )
-}
-
 /// Every byte this command prints goes through here, so a closed pipe is a [`CliError::Io`]
 /// naming the stream.
 fn put(out: &mut dyn Write, text: &str) -> Result<(), CliError> {
@@ -1273,8 +1271,8 @@ fn put(out: &mut dyn Write, text: &str) -> Result<(), CliError> {
 
 /// The machine's facts as a test states them, in `GOALCUP_TEST_PREP`: comma-separated
 /// `ac=on|battery|unknown`, `free=<bytes>`, `wsl=0|1|2`, `fs=<path prefix>=<filesystem type>`
-/// (repeatable), `hosts=ok|<phrase>`, `awake=ok|<phrase>` and
-/// `github=<api base>`; everything it does not name is this machine's. A shipped build has no
+/// (repeatable), `hosts=ok|<phrase>` and `awake=ok|<phrase>`; everything it does not name is
+/// this machine's. A shipped build has no
 /// such door.
 #[cfg(feature = "test-support")]
 pub struct Injected {
@@ -1283,7 +1281,6 @@ pub struct Injected {
     host: Host,
     hosts: Option<Result<(), String>>,
     awake: Option<Result<(), String>>,
-    github: Option<String>,
 }
 
 #[cfg(feature = "test-support")]
@@ -1298,7 +1295,6 @@ impl Injected {
             host: Host::here(),
             hosts: None,
             awake: None,
-            github: None,
         };
         for part in spec.split(',').filter(|p| !p.is_empty()) {
             let (key, value) = part.split_once('=')?;
@@ -1322,7 +1318,6 @@ impl Injected {
                 }
                 "hosts" => door.hosts = Some(answer(value)),
                 "awake" => door.awake = Some(answer(value)),
-                "github" => door.github = Some(value.to_string()),
                 _ => return None,
             }
         }
@@ -1365,12 +1360,8 @@ impl Doors for Injected {
         }
     }
 
-    fn github_api(&self) -> String {
-        self.github.clone().unwrap_or_else(|| Here.github_api())
-    }
-
-    fn read_token(&self, repo_url: &str) -> Result<GithubSetup, CliError> {
-        Here.read_token(repo_url)
+    fn read_line(&self) -> Option<String> {
+        Here.read_line()
     }
 
     fn wait_for_enter(&self) -> bool {
@@ -1440,7 +1431,7 @@ mod tests {
             Some(default.as_path()),
         );
         assert!(
-            said.contains("goalcup prep --work-root <") && !said.contains("~/goalcup-work"),
+            said.contains("goalcup setup --work-root <") && !said.contains("~/goalcup-work"),
             "{said}"
         );
         // And with a home that is not a repository, the default folder is the fix.
@@ -1451,7 +1442,7 @@ mod tests {
             Some(clean.path().join("goalcup-work").as_path()),
         );
         assert!(
-            said.contains("goalcup prep --work-root ~/goalcup-work"),
+            said.contains("goalcup setup --work-root ~/goalcup-work"),
             "{said}"
         );
     }
