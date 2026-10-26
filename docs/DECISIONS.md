@@ -10,7 +10,7 @@ retained for references; some have been superseded or retired.
 
 ## Status
 
-Where each entry stands on 25 Oct 2026. "Current" means follow it as written. "Partly superseded"
+Where each entry stands on 26 Oct 2026. "Current" means follow it as written. "Partly superseded"
 means some clauses are replaced; the entry names which. Read the replacing entry for those clauses.
 Update this table in the same PR as any entry it lists.
 
@@ -36,7 +36,7 @@ Update this table in the same PR as any entry it lists.
 | D50 | superseded | D61 |
 | D51 to D55, D57 to D60 | current | |
 | D56 | partly superseded | D71 (a clone is decided at finish; the workspace admission rule) |
-| D61 | partly superseded | D62 (model traffic for listed providers only), D71 (the home's `.env` is not hashed) |
+| D61 | partly superseded | D62 (model traffic for listed providers only), D71 (the home's `.env` is not hashed), D72 (Hermes 0.22: a trust entry for the model URL; the session file is optional) |
 | D62, D63 | current | |
 | D64 | partly superseded | D65 (the disk watch pauses, never stops) |
 | D65, D66, D67 | current | |
@@ -44,6 +44,7 @@ Update this table in the same PR as any entry it lists.
 | D69 | partly superseded | D71 (the clone, the practice folder, the five login variables and the push check are gone; no keys held, the four-step setup and no GitHub in setup stand) |
 | D70 | current | |
 | D71 | current | |
+| D72 | current | |
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
@@ -955,3 +956,55 @@ approval (R1).
   claim it cannot reach one: the agent runs as the participant.
 - **`--dev` and old versions.** A `--dev` competition start is refused before the approval when a
   server is configured, and the server refuses it too (D70).
+
+## D72. Launch prep: the latest Hermes records through a trust entry and a fresh gateway.
+
+*26 Oct 2026, the 0.7 small patch.* Amends D61 for Hermes 0.22. Hermes 0.22 runs every model call
+in a gateway process, one per `HERMES_HOME`, which keeps the environment of whoever started it;
+and on macOS it ignores `HERMES_CA_BUNDLE`, trusting only a provider entry's `ssl_ca_cert`
+(`agent/ssl_verify.py` `resolve_httpx_verify`). Measured on 26 Oct (staging practice run 3,
+Hermes v0.22.5, DeepSeek): with no old gateway running and a `providers:` entry for the model's
+`base_url` whose `ssl_ca_cert` names a file holding the run's proxy CA, the run recorded 1.2 MB of
+model calls with no certificate error.
+
+- **`[launch_prep]`** (schema 1, additive, D68): an optional top-level table. `ca_file` names one
+  `.pem` file in the config home that goalcup gives the run's recording-proxy CA (alone, PEM, mode
+  0600, through a temporary file and a rename, never following a link) at every start and
+  continue. `commands` (at most 4) run as `capture.configure` runs (D61: the harness home, no
+  proxy, stdin `/dev/null`, 60 s each, output to `host.log`), after it and before the launch, at
+  every start and continue, never at setup. A command that fails is logged in its template form
+  and the run goes on, because an older harness may lack the command. goalcup's own log line
+  never holds the URL or the path; the harness's own output, also in `host.log` (local, 0600,
+  never uploaded), may.
+- **Two templates, one narrow exception.** A command argument may be exactly `{model_base_url}`
+  (the `https` URL `capture.model_host_from` read: host, port unless 443, path; no userinfo or
+  query) or `{ca_file}` (that file's absolute path), and only right after its key: an argument
+  with no `=` whose last `.`-separated part is exactly `base_url` or `ssl_ca_cert` respectively.
+  The deny lists admit that one word (`baseurl`, `cacert`) in that key and nothing else. So the
+  only value such a key can get is goalcup's own.
+- **Why D1 stands.** The `base_url` written is the one the participant's own config already
+  names, as the key of a trust entry: where the harness sends its calls does not change, and the
+  harness still reaches the model service only through `HTTPS_PROXY`. The CA file is the trust
+  `capture.ca` already hands the harness, in the form this harness reads.
+- **`warn_missing`** (schema 1, additive): a native row may say `warn_missing = false` (default
+  `true`). Then a run that records model calls and no file of that source gets no "no session
+  file" `PROBLEM:` line. The file is still read when it is written.
+- **The Hermes connector.** `ca_file = "recorder-ca.pem"`; commands `config set
+  providers.recorder.base_url {model_base_url}`, `config set providers.recorder.ssl_ca_cert
+  {ca_file}` and, last, `gateway stop -y`; `warn_missing = false`. The names say `recorder`
+  because a connector may not name the tracker (F7). `HERMES_CA_BUNDLE` and the
+  `sessions.write_json_snapshots` configure command stay for Hermes up to 0.21.0, which still
+  writes its session file. Hermes 0.19.0 has no `-y` on `gateway stop` and exits 2: logged only.
+- **Known limits** (each shows as the "no model calls recorded" line, none is silent): a
+  participant's own provider entry for the same URL is matched first; a bare `provider: custom`
+  may treat the `recorder` entry as the URL's owner (not verified); Hermes's native Anthropic
+  client ignores `ssl_ca_cert`, so Hermes 0.21.6 and later on the Anthropic provider record
+  nothing; a model URL with a query or a `user@` part does not match. `goalcup continue` opens a new Hermes session
+  on 0.21.1 and later, which write no session file. A gateway another process starts between the
+  stop and the launch keeps its old environment (CHEAT-CHECKLIST).
+- **The entry stays.** The `recorder` entry stays in Goal Cup's Hermes home after a run, naming
+  that run's now stale CA, and the run's gateway may stay up pointed at the closed recording
+  proxy. Hermes opened there outside a run (a second `goalcup setup`) may not reach the model
+  until `HERMES_HOME=<home> hermes gateway stop -y`; the next start fixes both by itself.
+- **Not in 0.7.0:** reading Hermes's `state.db`, a post-run gateway stop, a per-run Hermes home, a
+  Hermes version gate, a verifier finding, and setup writing Hermes's other keys itself.

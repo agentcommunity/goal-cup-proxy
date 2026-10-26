@@ -119,17 +119,34 @@ Amp needs no setting to run without permission prompts.
 
 ### Hermes
 
-**Install Hermes 0.19.0 from PyPI:** `uv tool install hermes-agent==0.19.0`. Newer Hermes
-releases (0.21.1 and later) no longer write the session file Goal Cup records, so Goal Cup could
-record only the model traffic, not Hermes's own side of the run. Hermes's own installer
-(`curl … install.sh | bash`) installs the newest release, so do not use it for Goal Cup. Check
-with `hermes --version`; it should print `Hermes Agent v0.19.0`
-([facts sheet](harnesses/hermes-cli.md)).
+**Install Hermes the normal way. The latest release is fine:** Goal Cup records its model calls.
+Hermes's own installer (`curl … install.sh | bash`) gives you the newest release. Before each
+start, Goal Cup adds a `recorder` entry for your model service to Hermes's config, with Goal
+Cup's recording certificate, and stops a Hermes gateway left running from before
+([facts sheet](harnesses/hermes-cli.md#hermes-022-the-gateway-and-certificate-trust)). You do not
+need to do anything for it.
 
-Goal Cup does not catch a newer Hermes. Setup and start check no Hermes version, and Hermes's own
-installer takes the newest. The only sign is a practice run: when Hermes makes model calls but
-writes no session file, `goalcup status` shows the no-session-file `PROBLEM:` line, within about
-three minutes in a practice run (ten in a real one). So install exactly 0.19.0 and do a practice run.
+What to expect from a recent Hermes:
+
+1. Hermes 0.21.1 and later write no session file, so Goal Cup records the model calls only, as
+   for Amp. `goalcup status` does not warn about the missing file.
+2. `goalcup continue` opens a new Hermes conversation. Your earlier one stays in Hermes.
+3. Recording works with an API-key service on an OpenAI-compatible endpoint, such as DeepSeek
+   or OpenRouter. It does not work with the setups below. For them, install Hermes 0.19.0
+   instead (`uv tool install hermes-agent==0.19.0`):
+   - Hermes's Anthropic provider (Hermes 0.21.6 and later record nothing with it);
+   - your own provider entry in `config.yaml` for the same address as your model service;
+   - a bare `provider: custom` setup (not tested);
+   - a model address with a `?` query part (such as Azure's `?api-version=`) or a `user@` part.
+4. The `recorder` entry stays in Goal Cup's Hermes home after a run. Do not pick it in `/model`.
+   After a run, the run's Hermes gateway may also stay up, pointed at Goal Cup's recorder, which
+   has closed, and the certificate file is out of date. So Hermes opened from Goal Cup's home
+   outside a run (for example when you run `goalcup setup` again) may not reach your model
+   service. Run `HERMES_HOME="<your capture-homes folder>/hermes-cli" hermes gateway stop -y`
+   first. The next start fixes both by itself.
+
+Do a practice run first. If Goal Cup records no model calls, `goalcup status` shows a `PROBLEM:`
+line after about three minutes in a practice run (ten in a real one).
 
 Add these keys to `hermes-cli/config.yaml`:
 
@@ -246,8 +263,8 @@ mcp_servers:
    `${GOALCUP_TIME_LEFT_FILE}` from its own environment. So keep the `env` lines (read from the
    source, `tools/mcp_tool.py`).
 2. Hermes needs its MCP support installed. Without it, `hermes mcp test goalcup` says to install
-   `hermes-agent[mcp]` (measured). Install it pinned, with the quotes, because zsh breaks on
-   unquoted brackets: `uv tool install 'hermes-agent[mcp]==0.19.0'`.
+   `hermes-agent[mcp]` (measured). For Hermes 0.19.0 from PyPI, install it pinned, with the
+   quotes, because zsh breaks on unquoted brackets: `uv tool install 'hermes-agent[mcp]==0.19.0'`.
 3. Hermes starting the tool, and the agent calling it: not measured.
 
 ## 1. Run without permission prompts

@@ -149,7 +149,7 @@ pub fn certificates(pem: &[u8]) -> Vec<Vec<u8>> {
 }
 
 /// One certificate as a PEM block, 64 base64 characters a line.
-fn pem_block(der: &[u8]) -> String {
+pub(crate) fn pem_block(der: &[u8]) -> String {
     let b64 = base64::engine::general_purpose::STANDARD.encode(der);
     let mut out = String::from("-----BEGIN CERTIFICATE-----\n");
     for chunk in b64.as_bytes().chunks(64) {

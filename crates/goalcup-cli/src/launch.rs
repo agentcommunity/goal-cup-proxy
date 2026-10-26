@@ -135,7 +135,9 @@
 use crate::CliError;
 use crate::connector::HarnessConnector;
 use crate::proxy::connect::PROXY_USERNAME;
-use goalcup_protocol::harness::{CaptureSpec, PlatformKey, Strategy};
+use goalcup_protocol::harness::{
+    CaptureSpec, LAUNCH_PREP_CA_FILE, LAUNCH_PREP_MODEL_BASE_URL, PlatformKey, Strategy,
+};
 use goalcup_protocol::manifest::{Kill, LaunchMode};
 use goalcup_protocol::process::{ProcessHandle, find_named, process_start_identity, snapshot};
 use goalcup_protocol::template::{TemplateVars, render};
@@ -1023,36 +1025,175 @@ pub fn configure_harness(
                 "{name} could not be set up for recording: `{shown}` {why}. {then}"
             ))
         };
-        // The one command builder: the plan's environment, built from nothing, and nothing
-        // else. Then this command's own stdio and a group of its own, so a timeout ends all it
-        // started.
-        let mut one = plan.clone();
-        one.argv = command.clone();
-        let (mut cmd, _) = build_command(&one);
-        cmd.stdin(std::process::Stdio::null());
-        let handles = (log.try_clone(), log.try_clone());
-        let (Ok(stdout), Ok(stderr)) = handles else {
-            return Err(refuse("could not be given its log".to_string()));
-        };
-        cmd.stdout(stdout).stderr(stderr);
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            cmd.process_group(0);
-        }
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| refuse(format!("could not be started ({e})")))?;
-        let Some(status) = crate::harness_version::wait_or_end_group(&mut child, CONFIGURE_TIMEOUT)
-        else {
-            return Err(refuse(format!(
-                "did not finish within {} seconds",
-                CONFIGURE_TIMEOUT.as_secs()
-            )));
-        };
+        let status = run_home_command(&plan, command.clone(), log).map_err(refuse)?;
         if !status.success() {
             return Err(refuse(format!("ended with {}", describe_status(&status))));
         }
+    }
+    Ok(())
+}
+
+/// Run one command of the harness's own program on `plan`'s environment (D61): that
+/// environment, built from nothing, and nothing else; stdin `/dev/null`; stdout and stderr
+/// appended to `log`; a process group of its own, so a timeout ends all it started. `Err` says
+/// why it did not run to an end within [`CONFIGURE_TIMEOUT`].
+fn run_home_command(
+    plan: &LaunchPlan,
+    argv: Vec<String>,
+    log: &std::fs::File,
+) -> Result<std::process::ExitStatus, String> {
+    let mut one = plan.clone();
+    one.argv = argv;
+    let (mut cmd, _) = build_command(&one);
+    cmd.stdin(std::process::Stdio::null());
+    let handles = (log.try_clone(), log.try_clone());
+    let (Ok(stdout), Ok(stderr)) = handles else {
+        return Err("could not be given its log".to_string());
+    };
+    cmd.stdout(stdout).stderr(stderr);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("could not be started ({e})"))?;
+    crate::harness_version::wait_or_end_group(&mut child, CONFIGURE_TIMEOUT).ok_or_else(|| {
+        format!(
+            "did not finish within {} seconds",
+            CONFIGURE_TIMEOUT.as_secs()
+        )
+    })
+}
+
+/// The run values a connector's `[launch_prep]` (D72) is given.
+pub struct LaunchPrepValues<'a> {
+    /// The recording proxy's CA certificate, DER-encoded: what `ca_file` is given, as PEM.
+    pub ca_certificate_der: &'a [u8],
+    /// The model service the run records, which `{model_base_url}` names; `None` for a
+    /// connector without `capture.model_host_from`.
+    pub model_host: Option<&'a crate::model_host::ModelHost>,
+}
+
+/// The `{model_base_url}` of a run (D72): `https://`, the host, `:port` unless it is 443, and
+/// the path goalcup read. Never a userinfo or a query, which [`crate::model_host`] never keeps.
+pub fn model_base_url(host: &crate::model_host::ModelHost) -> String {
+    let port = if host.port == 443 {
+        String::new()
+    } else {
+        format!(":{}", host.port)
+    };
+    format!("https://{}{port}{}", host.host, host.base_path)
+}
+
+/// Run the connector's `[launch_prep]` (D72) in the harness home, after
+/// [`configure_harness`] and before each launch, `goalcup start`'s and each `goalcup
+/// continue`'s: first the run's CA into `ca_file`, then each command in order, as
+/// `capture.configure` runs them ([`run_home_command`]), with `{ca_file}` and
+/// `{model_base_url}` filled in.
+///
+/// A command that fails, ends non-zero or runs too long does not stop the run (an older
+/// harness may lack the command): it is written to `log` in its template form, never with the
+/// path or the URL filled in. A CA file that cannot be written refuses, since it is goalcup's own
+/// write.
+pub fn launch_prep(
+    c: &HarnessConnector,
+    launch: &PrepLaunch<'_>,
+    workspace: &Path,
+    values: &LaunchPrepValues<'_>,
+    log: &std::fs::File,
+) -> Result<(), CliError> {
+    use std::io::Write as _;
+    let Some(prep) = &c.loaded.manifest.launch_prep else {
+        return Ok(());
+    };
+    let ca_file = match &prep.ca_file {
+        Some(name) => {
+            let path = launch.config_home.join(name);
+            write_ca_file(
+                &path,
+                &crate::ca_bundle::pem_block(values.ca_certificate_der),
+            )?;
+            Some(absolute_utf8("CA file", &path)?.to_string())
+        }
+        None => None,
+    };
+    if prep.commands.is_empty() {
+        return Ok(());
+    }
+    let mut vars = TemplateVars::new();
+    vars.set("workspace", workspace.display().to_string());
+    let plan = build_prep_launch(c, &vars, workspace, launch)?;
+    let base_url = values.model_host.map(model_base_url);
+    let program = &c.loaded.manifest.capture.executable.program;
+    for command in &prep.commands {
+        let shown = format!("{program} {}", command.join(" "));
+        let mut missing = false;
+        let argv: Vec<String> = command
+            .iter()
+            .map(|a| {
+                let value = match a.as_str() {
+                    LAUNCH_PREP_CA_FILE => ca_file.as_deref(),
+                    LAUNCH_PREP_MODEL_BASE_URL => base_url.as_deref(),
+                    _ => return a.clone(),
+                };
+                value.map(str::to_string).unwrap_or_else(|| {
+                    missing = true;
+                    String::new()
+                })
+            })
+            .collect();
+        let failed = if missing {
+            Some("was not run: a value it names is not known for this run".to_string())
+        } else {
+            match run_home_command(&plan, argv, log) {
+                Ok(status) if status.success() => None,
+                Ok(status) => Some(format!("ended with {}", describe_status(&status))),
+                Err(why) => Some(why),
+            }
+        };
+        if let Some(why) = failed {
+            let mut log = log;
+            let _ = writeln!(
+                log,
+                "goalcup: the launch prep command `{shown}` {why}; the run goes on"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Write `pem` to `path` with mode 0600 through a new temporary file beside it and a rename, so
+/// whatever is at `path` (a link included) is replaced, never followed or written through.
+fn write_ca_file(path: &Path, pem: &str) -> Result<(), CliError> {
+    use std::io::Write as _;
+    let io = |source: std::io::Error| CliError::Io {
+        path: path.display().to_string(),
+        source,
+    };
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+    let temp = dir.join(format!(
+        ".{}.{:016x}.tmp",
+        name.unwrap_or_default(),
+        rand::random::<u64>()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let written = options.open(&temp).and_then(|mut file| {
+        file.write_all(pem.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temp, path)
+    });
+    if let Err(source) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(io(source));
     }
     Ok(())
 }

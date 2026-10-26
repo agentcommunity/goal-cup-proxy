@@ -220,7 +220,45 @@ pub struct HarnessManifest {
     /// How core messages name the harness to the participant. Optional; see [`ParticipantSpec`].
     #[serde(default)]
     pub participant: Option<ParticipantSpec>,
+    /// What runs in the harness home just before each launch (D72). Optional; see
+    /// [`LaunchPrepSpec`].
+    #[serde(default)]
+    pub launch_prep: Option<LaunchPrepSpec>,
 }
+
+/// `[launch_prep]` (D72): what `goalcup start` and each `goalcup continue` do in the harness
+/// home after `capture.configure` and before the launch, for a harness that keeps a process
+/// of its own between launches (a gateway) or trusts a certificate file only through its own
+/// config. Never run by `goalcup prep`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct LaunchPrepSpec {
+    /// A file name in the config home that is given the run's recording-proxy CA (alone, PEM,
+    /// mode 0600) at every start and continue, written through a temporary file and a rename,
+    /// so a link at that name is replaced, never followed. `{ca_file}` names its absolute path.
+    #[serde(default)]
+    pub ca_file: Option<String>,
+    /// Commands of the harness's own program, run as `capture.configure` runs them, in order,
+    /// after it. Held to the `capture.configure` rules, plus the two templates
+    /// [`LAUNCH_PREP_TOKENS`], each a whole argument right after the key it fills. A command
+    /// that fails is written to `host.log` and never stops the run.
+    #[serde(default)]
+    pub commands: Vec<Vec<String>>,
+}
+
+/// The template `[launch_prep]` commands may name for the CA file's absolute path.
+pub const LAUNCH_PREP_CA_FILE: &str = "{ca_file}";
+/// The template `[launch_prep]` commands may name for the model service's URL as goalcup read
+/// it (`capture.model_host_from`): `https://`, the host, the port unless 443, and the path.
+pub const LAUNCH_PREP_MODEL_BASE_URL: &str = "{model_base_url}";
+/// The two `[launch_prep]` templates (D72), each with the deny-list word (lower case, no `-` or
+/// `_`) the deny lists then admit in the key argument before it, and the last `.`-separated part
+/// that key must have, exactly. The key holds no `=`, so it carries no value of its own.
+pub const LAUNCH_PREP_TOKENS: &[(&str, &str, &str)] = &[
+    (LAUNCH_PREP_MODEL_BASE_URL, "baseurl", "base_url"),
+    (LAUNCH_PREP_CA_FILE, "cacert", "ssl_ca_cert"),
+];
 
 /// The most commands `capture.configure` may hold.
 pub const MAX_CONFIGURE_COMMANDS: usize = 4;
@@ -615,6 +653,16 @@ pub struct NativeSpec {
     /// `identity.source = "none"` on a shared config home.
     #[serde(default)]
     pub since_run_start: bool,
+    /// Whether `goalcup status` says so when model calls are recorded and no file of this
+    /// source is (the "no session file" line). Default `true`; `false` for a harness whose
+    /// supported versions include ones that write no such file (D72). The file is still read
+    /// whenever it is written.
+    #[serde(default = "yes")]
+    pub warn_missing: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// `[capture.argv_guard]`: the generic form of a harness that acts on some of its own argv
@@ -1019,7 +1067,7 @@ impl TryFrom<ExtraPatternRow> for ExtraPattern {
 
 impl HarnessManifest {
     /// Every argument the launch may pass, `args`, `resume_args`, then each `configure`
-    /// command's, each with its field.
+    /// command's and each `launch_prep` command's, each with its field.
     pub(super) fn every_arg(&self) -> impl Iterator<Item = (&'static str, &String)> {
         let c = &self.capture;
         c.args
@@ -1032,6 +1080,18 @@ impl HarnessManifest {
                     .flatten()
                     .map(|a| ("capture.configure", a)),
             )
+            .chain(
+                self.launch_prep
+                    .iter()
+                    .flat_map(|p| p.commands.iter().flatten())
+                    .map(|a| ("launch_prep.commands", a)),
+            )
+    }
+
+    /// Whether a missing native file is worth a `PROBLEM:` line: some native source has
+    /// `warn_missing` on (D72).
+    pub fn warns_missing_native(&self) -> bool {
+        self.capture.native.iter().any(|n| n.warn_missing)
     }
 
     /// The termination spec with its defaults applied.

@@ -2,11 +2,12 @@
 
 use super::parse::refuse;
 use super::schema::{
-    CHAT_MODE_ONLY, CONFIGURE_DENIED_KEYS, ConfigHome, HarnessManifest, MAX_CONFIGURE_ARG_BYTES,
-    MAX_CONFIGURE_ARGS, MAX_CONFIGURE_COMMANDS, MAX_MODEL_HOST_KEY_PARTS, MAX_NO_PROMPT_SETTINGS,
-    MAX_NO_PROMPT_VALUES, MODEL_HOST_DENIED_WORDS, MODEL_HOST_FILE_EXTENSIONS, NativeForm, Origin,
-    ParticipantSpec, PlatformKey, RunHome, Strategy, display_name_problem, first_screen_problem,
-    no_prompt_value_problem, setup_section_problem,
+    CHAT_MODE_ONLY, CONFIGURE_DENIED_KEYS, ConfigHome, HarnessManifest, LAUNCH_PREP_TOKENS,
+    MAX_CONFIGURE_ARG_BYTES, MAX_CONFIGURE_ARGS, MAX_CONFIGURE_COMMANDS, MAX_MODEL_HOST_KEY_PARTS,
+    MAX_NO_PROMPT_SETTINGS, MAX_NO_PROMPT_VALUES, MODEL_HOST_DENIED_WORDS,
+    MODEL_HOST_FILE_EXTENSIONS, NativeForm, Origin, ParticipantSpec, PlatformKey, RunHome,
+    Strategy, display_name_problem, first_screen_problem, no_prompt_value_problem,
+    setup_section_problem,
 };
 use super::{MIGRATION_SENTENCE, SUPPORTED_SCHEMA_VERSIONS};
 use crate::ProtocolError;
@@ -14,9 +15,9 @@ use crate::capture_policy::{
     EnvContext, MAX_CAPTURE_ARG_BYTES, MAX_CAPTURE_ARGS, MAX_CAPTURE_ENV,
     MAX_CAPTURE_ENV_KEY_BYTES, MAX_CAPTURE_ENV_VALUE_BYTES, MAX_CAPTURE_HOSTS,
     MAX_CAPTURE_PATHS_PER_HOST, MAX_CONTINUATION_BYTES, arg_path_denied, ca_env_problem,
-    capture_arg_denied, capture_path_problem, env_key_denied, env_value_denied, has_duplicate,
-    is_capture_host, is_interpreter_program, is_tracker_host, local_host_problem, mentions_goalcup,
-    startup_file_problem,
+    capture_arg_denied, capture_arg_denied_except, capture_path_problem, env_key_denied,
+    env_value_denied, has_duplicate, is_capture_host, is_interpreter_program, is_tracker_host,
+    local_host_problem, mentions_goalcup, startup_file_problem,
 };
 use crate::hints::valid_hint;
 
@@ -64,6 +65,17 @@ fn check_template(
 /// One argument of `capture.args` or `capture.resume_args` under the D51 rules, refused as
 /// `field`.
 fn check_arg(field: &str, origin: Origin, a: &str) -> Result<(), ProtocolError> {
+    check_arg_admitting(field, origin, a, None)
+}
+
+/// [`check_arg`], with `admitted` the one deny-list word a `[launch_prep]` key argument may hold
+/// (D72, [`capture_arg_denied_except`]).
+fn check_arg_admitting(
+    field: &str,
+    origin: Origin,
+    a: &str,
+    admitted: Option<&str>,
+) -> Result<(), ProtocolError> {
     if a.len() > MAX_CAPTURE_ARG_BYTES || has_control(a) {
         return Err(refuse(
             field,
@@ -74,7 +86,11 @@ fn check_arg(field: &str, origin: Origin, a: &str) -> Result<(), ProtocolError> 
     // substituted (`@STAND_IN@`); its directory names (a checkout under `.../hook-fix/`) are
     // not flags, so the word rules do not read them.
     let substituted_path = origin == Origin::Dev && a.starts_with('/');
-    if !substituted_path && let Some(why) = capture_arg_denied(a) {
+    let denied = match admitted {
+        Some(word) => capture_arg_denied_except(a, word),
+        None => capture_arg_denied(a),
+    };
+    if !substituted_path && let Some(why) = denied {
         return Err(refuse(field, format!("`{a}` {why}")));
     }
     // N1: the one observable predicate. A pinned connector never needs an absolute path; the
@@ -85,6 +101,49 @@ fn check_arg(field: &str, origin: Origin, a: &str) -> Result<(), ProtocolError> 
         return Err(refuse(field, format!("`{a}` {why}")));
     }
     check_template(field, &format!("`{a}`"), a, ARG_TOKENS)
+}
+
+/// One argument of a `capture.configure` or `[launch_prep]` command, braces already handled:
+/// the `args` rules, then no `.`- or `=`-separated part may be a [`CONFIGURE_DENIED_KEYS`] word
+/// (compared whole, ignoring case and leading dashes, so `--model=x` and `provider=x` are
+/// refused as `model.x` is): a configure command changes how the harness stores its session,
+/// never how the agent behaves or what it signs in with (D61). `admitted` is the one word a
+/// `[launch_prep]` key may hold (D72): a part that is that word, ignoring `-` and `_`, passes.
+fn check_configure_arg(
+    field: &str,
+    origin: Origin,
+    a: &str,
+    admitted: Option<&str>,
+) -> Result<(), ProtocolError> {
+    check_arg_admitting(field, origin, a, admitted)?;
+    let is_admitted = |part: &str| {
+        admitted.is_some_and(|word| {
+            part.chars()
+                .filter(|c| *c != '-' && *c != '_')
+                .collect::<String>()
+                .eq_ignore_ascii_case(word)
+        })
+    };
+    if let Some(word) = a
+        .split(['.', '='])
+        .map(|part| part.trim_start_matches('-'))
+        .find(|part| {
+            !is_admitted(part)
+                && CONFIGURE_DENIED_KEYS
+                    .iter()
+                    .any(|denied| part.eq_ignore_ascii_case(denied))
+        })
+    {
+        return Err(refuse(
+            field,
+            format!(
+                "`{a}` names `{word}`. A configure command may change only how the harness \
+                 stores its session. It may not set the model, the provider, an address, or a \
+                 key, token or secret."
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn is_id(s: &str) -> bool {
@@ -483,6 +542,7 @@ impl HarnessManifest {
         self.check_executable(origin)?;
         self.check_args(origin)?;
         self.check_configure(origin)?;
+        self.check_launch_prep(origin)?;
         self.check_env()?;
         self.check_home()?;
         self.check_ca()?;
@@ -616,29 +676,111 @@ impl HarnessManifest {
                         ),
                     ));
                 }
-                check_arg(FIELD, origin, a)?;
-                // D61: a configure command changes how the harness stores its session, never how
-                // the agent behaves or what it signs in with. Each `.`- or `=`-separated part
-                // of an argument is compared whole, ignoring case and leading dashes, so
-                // `--model=x` and `provider=x` are refused as `model.x` is.
-                if let Some(word) = a
-                    .split(['.', '='])
-                    .map(|part| part.trim_start_matches('-'))
-                    .find(|part| {
-                        CONFIGURE_DENIED_KEYS
-                            .iter()
-                            .any(|denied| part.eq_ignore_ascii_case(denied))
-                    })
-                {
+                check_configure_arg(FIELD, origin, a, None)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `[launch_prep]` (D72): `ca_file` is one `.pem` file name, and each command follows the
+    /// `capture.configure` rules, with one exception. A whole argument `{model_base_url}` or
+    /// `{ca_file}` is admitted only right after its key: an argument with no `=` whose last
+    /// `.`-separated part is exactly `base_url` or `ssl_ca_cert`. That key is then admitted
+    /// although the deny lists refuse its word (`baseurl`, `cacert`): the only value such a key
+    /// can get is goalcup's own. Any other brace is refused.
+    fn check_launch_prep(&self, origin: Origin) -> Result<(), ProtocolError> {
+        const FIELD: &str = "launch_prep.commands";
+        let Some(prep) = &self.launch_prep else {
+            return Ok(());
+        };
+        if let Some(name) = &prep.ca_file {
+            let shaped = is_path_component(name)
+                && name.len() > 4
+                && name.to_ascii_lowercase().ends_with(".pem");
+            if !shaped {
+                return Err(refuse(
+                    "launch_prep.ca_file",
+                    format!(
+                        "`{name}` must be one file name of `[A-Za-z0-9._-]` (at most 64 bytes) \
+                         ending in `.pem`"
+                    ),
+                ));
+            }
+        }
+        if prep.commands.len() > MAX_CONFIGURE_COMMANDS {
+            return Err(refuse(
+                FIELD,
+                format!("holds more than {MAX_CONFIGURE_COMMANDS} commands"),
+            ));
+        }
+        // The template `a` is, with its deny-list word and the last part its key must have.
+        let token_of = |a: &str| {
+            LAUNCH_PREP_TOKENS
+                .iter()
+                .find(|(token, _, _)| *token == a)
+                .map(|(_, word, key)| (*word, *key))
+        };
+        // A key the template fills: no `=` (no value of its own), and its last `.`-separated
+        // part is exactly the one the template names.
+        let is_key_for = |a: &str, key: &str| !a.contains('=') && a.rsplit('.').next() == Some(key);
+        for command in &prep.commands {
+            if command.is_empty() || command.len() > MAX_CONFIGURE_ARGS {
+                return Err(refuse(
+                    FIELD,
+                    format!("a command must hold 1 to {MAX_CONFIGURE_ARGS} arguments"),
+                ));
+            }
+            for (i, a) in command.iter().enumerate() {
+                if a.is_empty() || a.len() > MAX_CONFIGURE_ARG_BYTES {
+                    return Err(refuse(
+                        FIELD,
+                        format!("an argument must be 1 to {MAX_CONFIGURE_ARG_BYTES} bytes"),
+                    ));
+                }
+                if let Some((word, key)) = token_of(a) {
+                    let after_key = i > 0 && is_key_for(&command[i - 1], key);
+                    if !after_key {
+                        return Err(refuse(
+                            FIELD,
+                            format!(
+                                "`{a}` must come right after the key it fills, an argument \
+                                 whose last `.` part is `{key}`, with no `=`"
+                            ),
+                        ));
+                    }
+                    let source = if word == "baseurl" {
+                        self.capture
+                            .model_host_from
+                            .is_none()
+                            .then_some("`capture.model_host_from`")
+                    } else {
+                        prep.ca_file.is_none().then_some("`launch_prep.ca_file`")
+                    };
+                    if let Some(needed) = source {
+                        return Err(refuse(
+                            FIELD,
+                            format!("`{a}` needs {needed}, which gives it its value"),
+                        ));
+                    }
+                    continue;
+                }
+                if a.contains(['{', '}']) {
                     return Err(refuse(
                         FIELD,
                         format!(
-                            "`{a}` names `{word}`. A configure command may change only how the \
-                             harness stores its session. It may not set the model, the \
-                             provider, an address, or a key, token or secret."
+                            "`{a}` holds a brace: a launch prep command takes only the \
+                             templates `{{model_base_url}}` and `{{ca_file}}`, each as a whole \
+                             argument after its key"
                         ),
                     ));
                 }
+                // The key of a pair: the next argument is the template its word stands for.
+                let admitted = command
+                    .get(i + 1)
+                    .and_then(|next| token_of(next))
+                    .filter(|(_, key)| is_key_for(a, key))
+                    .map(|(word, _)| word);
+                check_configure_arg(FIELD, origin, a, admitted)?;
             }
         }
         Ok(())
@@ -1130,6 +1272,14 @@ impl HarnessManifest {
                     format!("`{a}` names Goal Cup Proxy: a harness is delivery-agnostic"),
                 ));
             }
+        }
+        if let Some(name) = self.launch_prep.as_ref().and_then(|p| p.ca_file.as_ref())
+            && mentions_goalcup(name)
+        {
+            return Err(refuse(
+                "launch_prep.ca_file",
+                format!("`{name}` names Goal Cup Proxy: a harness is delivery-agnostic"),
+            ));
         }
         for (k, v) in &c.env {
             if k.to_ascii_uppercase().starts_with("GOALCUP_") || mentions_goalcup(v) {

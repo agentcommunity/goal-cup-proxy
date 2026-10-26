@@ -14,9 +14,9 @@ at each step that needs you.
 - A Mac or a Linux machine. On Windows, use WSL2 (Ubuntu inside Windows) and do everything inside it.
 - `git`, and a GitHub account.
 - A chat-mode harness (Claude Code, Codex CLI, Hermes or Amp) and the account or API key it uses.
-  Per-harness notes: [HARNESS-SETUP](HARNESS-SETUP.md). For Hermes, install exactly
-  `uv tool install hermes-agent==0.19.0`, not Hermes's own installer
-  ([why](HARNESS-SETUP.md#hermes)).
+  Per-harness notes: [HARNESS-SETUP](HARNESS-SETUP.md). For Hermes, the latest release from
+  Hermes's own installer is fine with an API-key service such as DeepSeek or OpenRouter
+  ([limits](HARNESS-SETUP.md#hermes)).
 - An Agent Community account signed up for the Goal Cup at
   [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup). You hand in your demo video
   and questionnaire there after the run.
@@ -29,8 +29,9 @@ goalcup --version
 ```
 
 It installs the latest release into `~/.local/bin`, with no `sudo`. If it says that folder is not
-on your `PATH`, run the `export` line it prints. Update later by running the same line, but never
-during a run: the installer refuses while a run is recording.
+on your `PATH`, run the `export` line it prints. Update later by running the same line, but only
+with no run open: the installer refuses while a run is recording. If a start is refused right
+after an update, wait a minute (the old recorder exits when idle) and start again.
 
 ## 2. Set up: `goalcup setup`
 

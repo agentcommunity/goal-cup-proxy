@@ -1,4 +1,5 @@
-# Hermes Agent 0.19.0, capture profile (D57, D61). Facts: docs/harnesses/hermes-cli.md.
+# Hermes Agent, capture profile (D57, D61, D72). Facts: docs/harnesses/hermes-cli.md.
+# The capture recipe was measured on 0.19.0; launch prep was measured on 0.22.5, 0.19.0 untested.
 schema_version = 1
 id = "hermes-cli"
 
@@ -96,13 +97,16 @@ mode = "replace"
 [capture.identity]
 source = "none"
 
-# Only session snapshots; never a request_dump_* file (D41). No native decoder yet.
+# Only session snapshots; never a request_dump_* file (D41). No native decoder yet. Hermes
+# 0.21.1 and later write no session file (D72): their model calls are recorded and nothing
+# else, so a missing file is not a problem worth a status line.
 [[capture.native]]
 name = "session"
 root = "{config_home}/sessions"
 pattern = "session_*.json"
 form = "snapshot"
 since_run_start = true
+warn_missing = false
 
 # Hermes scans raw argv for -p/--profile, --tui, --cli and -h before argparse, which abbreviates.
 [capture.argv_guard]
@@ -114,3 +118,20 @@ long_abbreviations = true
 [capture.termination]
 strategy = "process_group"
 grace_seconds = 10
+
+# D72: Hermes 0.22 sends every model call through a gateway process of its own, one per
+# HERMES_HOME, which keeps the environment of whoever started it and ignores HERMES_CA_BUNDLE;
+# on macOS only a provider entry's `ssl_ca_cert` makes it trust the recording proxy. So before
+# each launch the run's CA is written to `recorder-ca.pem` in the home, a provider entry for
+# the model service's URL names it, and a gateway left running from before is stopped, last,
+# so `hermes chat` starts a fresh one with the run's proxy. The entry and the file are named
+# `recorder` because a connector may not name the tracker (F7). Hermes 0.19.0 has no `-y` on
+# `gateway stop` and exits 2; a failed command is only logged. docs/harnesses/hermes-cli.md,
+# "Hermes 0.22: the gateway and certificate trust".
+[launch_prep]
+ca_file = "recorder-ca.pem"
+commands = [
+  ["config", "set", "providers.recorder.base_url", "{model_base_url}"],
+  ["config", "set", "providers.recorder.ssl_ca_cert", "{ca_file}"],
+  ["gateway", "stop", "-y"],
+]

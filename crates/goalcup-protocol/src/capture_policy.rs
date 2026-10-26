@@ -886,6 +886,18 @@ pub fn seed_content_problem(bytes: &[u8]) -> Option<&'static str> {
 /// lower-casing and dropping every `-` and `_`, so `--base-url`, `openai_base_url=`,
 /// `baseUrl` in a JSON value and `ANTHROPIC_BASE_URL` are one rule.
 pub fn capture_arg_denied(arg: &str) -> Option<&'static str> {
+    capture_arg_denied_but(arg, None)
+}
+
+/// [`capture_arg_denied`] with one substring word admitted once: the key argument of a
+/// `[launch_prep]` pair (D72), whose next argument is the template that word stands for
+/// (`baseurl` before `{model_base_url}`, `cacert` before `{ca_file}`). The whole-flag rules and
+/// every other word still apply, and a second occurrence of the word is still refused.
+pub fn capture_arg_denied_except(arg: &str, word: &str) -> Option<&'static str> {
+    capture_arg_denied_but(arg, Some(word))
+}
+
+fn capture_arg_denied_but(arg: &str, admitted: Option<&str>) -> Option<&'static str> {
     const WHOLE: &[(&str, &str)] = &[
         ("--remote", "runs the session somewhere else"),
         ("remote", "runs the session somewhere else"),
@@ -970,7 +982,10 @@ pub fn capture_arg_denied(arg: &str) -> Option<&'static str> {
             return Some(why);
         }
     }
-    let normal: String = lower.chars().filter(|c| *c != '-' && *c != '_').collect();
+    let mut normal: String = lower.chars().filter(|c| *c != '-' && *c != '_').collect();
+    if let Some(word) = admitted {
+        normal = normal.replacen(word, "", 1);
+    }
     SUBSTRING
         .iter()
         .find(|(needle, _)| normal.contains(needle))
