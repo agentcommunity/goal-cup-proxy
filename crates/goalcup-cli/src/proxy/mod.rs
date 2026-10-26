@@ -391,6 +391,20 @@ impl ProxyHandle {
         self.shared.emitter.recorded_requests_counter()
     }
 
+    /// The recording proxy's count of requests on a path with a protocol hint
+    /// ([`api::CaptureEmitter::generation_requests`]), shared as [`ProxyHandle::model_requests`]
+    /// is: the model calls, not a model list or a probe under the same base path.
+    pub fn generation_requests(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        self.shared.emitter.generation_requests_counter()
+    }
+
+    /// The recording proxy's count of harness connections whose TLS handshake failed
+    /// ([`AdmissionFailureCounts::client_tls`]), shared as [`ProxyHandle::model_requests`] is. A
+    /// harness that does not trust the recording certificate shows here.
+    pub fn client_tls_failures(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        Arc::clone(&self.shared.counters.admission_client_tls)
+    }
+
     /// A snapshot of the counters. It never waits on a connection or the sink.
     pub fn health(&self) -> ProxyHealth {
         self.shared.health()
@@ -732,7 +746,7 @@ struct Counters {
     admission_upstream_connect_tcp_last_permission_denied: AtomicU64,
     admission_upstream_connect_tcp_last_other: AtomicU64,
     admission_upstream_tls: AtomicU64,
-    admission_client_tls: AtomicU64,
+    admission_client_tls: Arc<AtomicU64>,
     admission_alpn_incompatible: AtomicU64,
     closed_complete: AtomicU64,
     closed_interrupted: AtomicU64,
@@ -1011,7 +1025,7 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
                     Some(&counters.admission_upstream_connect)
                 }
                 FailureClass::UpstreamTls => Some(&counters.admission_upstream_tls),
-                FailureClass::ClientTls => Some(&counters.admission_client_tls),
+                FailureClass::ClientTls => Some(&*counters.admission_client_tls),
                 FailureClass::AlpnIncompatible => Some(&counters.admission_alpn_incompatible),
             };
             if let Some(class) = class {

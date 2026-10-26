@@ -46,6 +46,11 @@ pub(super) fn finish_run(
     // A run's hold on the terminal (its hangup absorbed, its log open) lasts to the end
     // of this function: the seal and the upload's wrap-up below must outlive a closed window.
     let _chat = chat;
+    // The recording proxy's live count of model calls, which keeps its last value once the proxy
+    // stops: the tick's verdict can be up to a tick old, and a call recorded since overrides it.
+    let calls = proxied
+        .as_ref()
+        .map(|proxied| proxied.proxy.generation_requests());
     let deadline = std::time::Instant::now() + crate::finish_budget();
     let finished = match (finished_early, proxied) {
         (Some(finished), _) => finished,
@@ -140,6 +145,23 @@ pub(super) fn finish_run(
         for line in crate::participant::ending_block(&harness_name, ending) {
             let _ = say(out, &line);
         }
+    }
+    // The tick's last verdict, repeated for a participant whose agent has closed: a run that
+    // recorded no model call is told so at its end too, local runs included.
+    let restart = if run_goes_on {
+        crate::participant::Restart::Continue {
+            run_id: &record.run_id,
+        }
+    } else if over {
+        crate::participant::Restart::Over
+    } else {
+        crate::participant::Restart::Cannot
+    };
+    let recorded = calls
+        .as_ref()
+        .is_some_and(|calls| calls.load(std::sync::atomic::Ordering::SeqCst) > 0);
+    for line in no_model_calls_block(&snapshot, recorded, &harness_name, restart) {
+        let _ = say(out, &line);
     }
     // After the seal: the rest of the chain and the seal itself, within the finish budget.
     // A local run has nothing to upload, so there is nothing of it left to send.
@@ -411,4 +433,66 @@ pub(super) fn finish(
             .await;
     });
     sealed
+}
+
+/// The lines that repeat the watch tick's last "no model calls recorded" verdict at the end of
+/// `goalcup start`, in the past tense (the harness has exited): none when the tick did not call
+/// the harness silent, or when `recorded` says a model call was recorded after the tick's last
+/// look.
+fn no_model_calls_block(
+    snapshot: &crate::run::RunState,
+    recorded: bool,
+    harness: &str,
+    restart: crate::participant::Restart<'_>,
+) -> Vec<String> {
+    let Some(silent) = snapshot.no_model_calls.filter(|_| !recorded) else {
+        return Vec::new();
+    };
+    let line = crate::participant::problem_no_model_calls(
+        harness,
+        silent.minutes,
+        silent.tls_failing,
+        restart,
+        false,
+    );
+    vec![
+        String::new(),
+        format!("{} {line}", crate::participant::PROBLEM),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::participant::{NO_MODEL_CALLS_MARK, Restart};
+    use crate::run::{NoModelCalls, RunState};
+
+    /// The end-of-run block repeats the tick's last verdict as a `PROBLEM:` line in the past
+    /// tense (nothing to type, nothing to exit), and says nothing when the tick never called the
+    /// harness silent or a model call was recorded after its last look.
+    #[test]
+    fn the_end_of_run_repeats_the_ticks_last_no_model_calls_verdict() {
+        let mut state = RunState::launched("e1", Ok(()));
+        assert!(no_model_calls_block(&state, false, "Some Agent", Restart::Over).is_empty());
+        state.no_model_calls = Some(NoModelCalls {
+            minutes: 4,
+            tls_failing: false,
+        });
+        assert!(
+            no_model_calls_block(&state, true, "Some Agent", Restart::Over).is_empty(),
+            "a call recorded since the tick's look overrides it"
+        );
+        let run_id = "r0123456789abcdef";
+        let lines = no_model_calls_block(&state, false, "Some Agent", Restart::Continue { run_id });
+        let line = lines.last().expect("a line");
+        assert!(line.starts_with("PROBLEM:"), "{lines:?}");
+        assert!(line.contains(NO_MODEL_CALLS_MARK), "{lines:?}");
+        assert!(line.contains("4 minutes"), "{lines:?}");
+        assert!(
+            line.contains(&format!("goalcup continue {run_id}")),
+            "{lines:?}"
+        );
+        assert!(!line.contains("type it"), "{lines:?}");
+        assert!(!line.contains("Exit"), "{lines:?}");
+    }
 }

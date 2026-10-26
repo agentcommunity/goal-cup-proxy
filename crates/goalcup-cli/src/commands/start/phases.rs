@@ -864,9 +864,13 @@ pub(super) fn run_harness<'a>(
         &crate::run::run_dir(forked.cfg, &forked.record.run_id),
         launched,
     );
+    // Only a run with a recording proxy can tell that no model call was recorded.
+    let watches_calls = forked.proxied.is_some();
     let vitals = match forked.proxied.as_ref() {
         Some(proxied) => crate::run::RunSignals::counting(proxied.proxy.model_requests())
-            .recording_from(proxied.proxy.recorded_requests()),
+            .recording_from(proxied.proxy.recorded_requests())
+            .generations_from(proxied.proxy.generation_requests())
+            .client_tls_from(proxied.proxy.client_tls_failures()),
         None => crate::run::RunSignals::default(),
     };
     // A run on a server reports its disk and goalcup's own processes in its heartbeats.
@@ -954,6 +958,10 @@ pub(super) fn run_harness<'a>(
                     silence: cx.opts.native_silence.for_run(forked.record.practice),
                     harness: forked.harness_name.clone(),
                     guide: crate::commands::prep::setup_guide_link(cx.connector),
+                }),
+                no_calls: watches_calls.then(|| crate::run::watch::NoCallsWatch {
+                    after: crate::run::no_model_calls_after(forked.record.practice),
+                    harness: forked.harness_name.clone(),
                 }),
             }),
             pause: Some(pause.clone()),
