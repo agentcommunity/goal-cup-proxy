@@ -1035,9 +1035,14 @@ chat --continue` resumes the last session in a `HERMES_HOME` and exits 1 when th
   `wl-copy` with a Wayland display, else `xclip -selection clipboard`; `clip.exe` under WSL),
   given a short list of the participant's variables, and says so only when the copy worked; a
   missing or failing tool never fails the start. `goalcup status` shows them for an open run.
-  Every `continue` of a run started on 0.7.1 or later that does not resume the conversation
-  prints them again (and copies them); a run started on 0.7.0 has no `push-lines.txt`, so its
-  continue and `goalcup status` show none.
+  A `continue` shows (and copies) them again only while the run has recorded no model call
+  (`Some(0)`): the one prompt may not have been sent, and it still starts with them. **Owner,
+  26 Oct 2026: after the first prompt the participant types only "keep going", even when a
+  `continue` opens a new conversation.** So a continue after recorded calls, resumed or not
+  (`resume_failed` included), shows no block and says to type only "keep going". The agent's
+  git setup survives a new conversation in the repository's `.git/config`. The file and
+  `goalcup status` keep the lines for the participant's reference. A run started on 0.7.0 has
+  no `push-lines.txt`, so its continue and `goalcup status` show none.
   The lines name the token file, never its value.
 - **Not in the skill.** The goal-cup skill stays the same for every run and names no
   repository. A run-specific section was tried and dropped: it reaches only a connector with
@@ -1050,11 +1055,11 @@ chat --continue` resumes the last session in a `HERMES_HOME` and exits 1 when th
   session file exists, the earlier parts recorded a model call, and the home's conversation
   database (`state.db` or `state.db-wal` in the config home) was modified at or after the run's
   start. A part that resumed and exited non-zero within 10 s is recorded in `state.json`
-  (`resume_failed`), and the next `continue` opens a new conversation (and prints the block)
-  instead of failing the same way; this holds for every connector. Every other connector keeps
+  (`resume_failed`), and the next `continue` opens a new conversation instead of failing the
+  same way; this holds for every connector. Every other connector keeps
   the file rule (D57's `has_native_session`). A run started on 0.7.0 has no count and keeps that
-  rule. A launch that resumes says to type only "keep going" when the run has recorded model
-  calls. With none recorded (Claude Code writes its session file at startup, before any
+  rule. A continue says to type only "keep going" when the run has recorded model calls,
+  whether it resumes or opens a new conversation. With none recorded (Claude Code writes its session file at startup, before any
   message), the prompt may not have been sent: it keeps the 0.7.0 sentence ("If you never sent
   your prompt, send it now") and shows and copies the push block. A run with no count (started
   on 0.7.0) keeps the 0.7.0 text.

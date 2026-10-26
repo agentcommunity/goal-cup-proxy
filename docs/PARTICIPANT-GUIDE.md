@@ -223,13 +223,14 @@ to do. [The appendix](#appendix-what-goalcup-status-says) lists the messages.
 
 If the agent stops before the deadline (a crash, a reboot, a closed window), run `goalcup continue`
 in a terminal you will leave open. It needs no new approval and keeps the same deadline, in the
-same folder. When the harness picks up its last conversation, do what the screen says: once the
-run has recorded model calls it says to type only "keep going" when the agent has stopped (your
-prompt is already in it); before that it says to send your prompt if you never did, and shows the
-push block. Hermes picks up its last conversation too, once the run has recorded model calls.
-When the harness opens a new conversation instead, `goalcup` prints the push block again (and
-copies it again; a run started before 0.7.1 kept no copy of it): paste it before "keep going" so the agent knows where to push. Do not
-delete or move the project folder. `goalcup seal` stops the agent and ends the
+same folder. Once the run has recorded model calls, your prompt was sent, and from then on you
+type only "keep going" when the agent has stopped: also when the harness opens a new conversation
+instead of picking up its last one. Do not paste the push block or your prompt again. The
+agent's git setup does not live in the conversation: `git config` and `git remote add` saved it
+in the repository's `.git/config`, so an agent in a new conversation can still push. Hermes picks
+up its last conversation too, once the run has recorded model calls. If no model call was
+recorded yet, your prompt may never have been sent: the screen then shows the push block again
+and says to send your one prompt, block first. Do not delete or move the project folder. `goalcup seal` stops the agent and ends the
 current part. The run stays open, and `continue` goes on with it.
 
 **While it runs, change nothing the agent can read:** files, issues, messages, documents, websites.

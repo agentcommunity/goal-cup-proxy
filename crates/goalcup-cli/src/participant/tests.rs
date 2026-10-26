@@ -612,13 +612,14 @@ fn every_refusal_says_what_to_do_first_and_has_no_rule_code() {
     assert!(not_started_here(None).contains(NOT_STARTED_HERE));
 }
 
-/// A continue that opens a new conversation says the push lines again, with where they are kept
-/// and the clipboard when the copy worked; one that picks up the conversation does not (D73).
+/// The first launch shows the push lines, with where they are kept and the clipboard when the
+/// copy worked; a continue after recorded model calls shows none and asks only for "keep going",
+/// whether it picks up the conversation or opens a new one (D73, owner ruling).
 #[test]
-fn a_new_conversation_gets_the_push_lines_again() {
+fn the_push_lines_are_shown_at_the_first_launch_and_not_after_the_prompt() {
     let prompt = vec!["Push to https://github.com/someone/cup".to_string()];
     let file = std::path::Path::new("/cfg/runs/r1/push-lines.txt");
-    let launch = |opens, on_clipboard| {
+    let launch = |opens, on_clipboard, calls_before| {
         launch_block(&Launch {
             harness: "Some Agent",
             mode: Some(RunMode::Competition),
@@ -627,30 +628,42 @@ fn a_new_conversation_gets_the_push_lines_again() {
             prompt: &prompt,
             prompt_file: Some(file),
             on_clipboard,
-            calls_before: None,
+            calls_before,
             first_screen: None,
         })
         .join("\n")
     };
-    for opens in [Opens::First, Opens::NewSession] {
-        let text = launch(opens, true);
+    let text = launch(Opens::First, true, None);
+    assert!(
+        text.contains("  Push to https://github.com/someone/cup"),
+        "{text}"
+    );
+    assert!(text.contains("/cfg/runs/r1/push-lines.txt"), "{text}");
+    assert!(text.contains(PUSH_BLOCK_ON_CLIPBOARD), "{text}");
+    let copy = launch(Opens::First, false, None);
+    assert!(!copy.contains("clipboard"), "{copy}");
+    assert!(
+        copy.contains(
+            "Copy the push block below (also in /cfg/runs/r1/push-lines.txt) to the very \
+             start of your first prompt."
+        ),
+        "{copy}"
+    );
+    for opens in [Opens::NewSession, Opens::LastSession] {
+        let text = launch(opens, false, Some(3));
         assert!(
-            text.contains("  Push to https://github.com/someone/cup"),
+            !text.contains("Push to") && !text.contains("Paste"),
             "{text}"
         );
-        assert!(text.contains("/cfg/runs/r1/push-lines.txt"), "{text}");
-        assert!(text.contains(PUSH_BLOCK_ON_CLIPBOARD), "{text}");
-        let copy = launch(opens, false);
-        assert!(!copy.contains("clipboard"), "{copy}");
-        assert!(
-            copy.contains(
-                "Copy the push block below (also in /cfg/runs/r1/push-lines.txt) to the very \
-                 start of your first prompt."
-            ),
-            "{copy}"
-        );
+        assert!(text.contains("type only"), "{text}");
+        assert!(!text.contains("one prompt"), "{text}");
     }
-    assert!(!launch(Opens::LastSession, true).contains("Push to"));
+    // A new conversation before any call: the one prompt is still to send, block first.
+    let unsent = launch(Opens::NewSession, false, Some(0));
+    assert!(
+        unsent.contains("Push to") && unsent.contains("one prompt"),
+        "{unsent}"
+    );
 }
 
 /// A resume says "type only keep going" only once the run has recorded model calls; with none

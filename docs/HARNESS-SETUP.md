@@ -132,8 +132,9 @@ What to expect from a recent Hermes:
    for Amp. `goalcup status` does not warn about the missing file.
 2. `goalcup continue` picks up your last Hermes conversation once the run has recorded model
    calls: type only "keep going". Hermes 0.22.5 resumes with `--continue` (measured); a whole
-   `goalcup continue` of a Hermes run has not been tried yet. Before any call is recorded it
-   opens a new conversation and prints your push lines again.
+   `goalcup continue` of a Hermes run has not been tried yet. If it opens a new conversation
+   after calls were recorded, type only "keep going" there too. Before any call is recorded it
+   opens a new conversation and prints your push lines again, for your one prompt.
 3. Recording works with an API-key service on an OpenAI-compatible endpoint, such as DeepSeek
    or OpenRouter. It does not work with the setups below. For them, install Hermes 0.19.0
    instead (`uv tool install hermes-agent==0.19.0`):
