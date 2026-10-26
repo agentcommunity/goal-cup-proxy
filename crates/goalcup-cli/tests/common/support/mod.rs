@@ -331,6 +331,12 @@ pub fn clean_env() -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
     env.insert("PATH".to_string(), path);
+    // The test connectors are pinned by no build and run through `--dev`, and most server runs
+    // in the tests are competition runs: this stands in for a pinned connector.
+    env.insert(
+        goalcup_cli::commands::start::TEST_DEV_COMPETES.to_string(),
+        "1".to_string(),
+    );
     env
 }
 

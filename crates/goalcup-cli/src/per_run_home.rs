@@ -262,24 +262,44 @@ fn write_private_file(path: &Path, bytes: &[u8], mode: SeedMode) -> Result<(), C
     Ok(())
 }
 
+/// Which folder a run directory is judged by, so a refusal names the way out that fits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunFolder {
+    /// A run on a server: the run directory goes in `<config>-runs`.
+    ConfigRuns,
+    /// A run with no server: the run directory goes in the folder `goalcup start` was run from.
+    StartedFrom,
+}
+
 /// Refuse a directory that is inside a Git work tree: any ancestor, itself included, that holds
 /// a `.git` (a directory, or the file a linked work tree has).
 ///
 /// `dir` is made absolute and has its links resolved first, so a symlinked path is judged where
 /// it really is. A directory that cannot be resolved is refused too: a check that could not run
 /// is not a pass.
-pub fn refuse_inside_git_work_tree(dir: &Path) -> Result<(), CliError> {
+pub fn refuse_inside_git_work_tree(dir: &Path, whose: RunFolder) -> Result<(), CliError> {
     let resolved = std::fs::canonicalize(dir).map_err(|source| CliError::Io {
         path: dir.display().to_string(),
         source,
     })?;
     for ancestor in resolved.ancestors() {
         if std::fs::symlink_metadata(ancestor.join(".git")).is_ok() {
+            // The way out depends on whose folder it is: the config's, which the participant
+            // moves, or the one they started from, which they start somewhere else.
+            let way_out = match whose {
+                RunFolder::ConfigRuns => {
+                    "The config folder is inside a git repository: set GOALCUP_CONFIG_DIR to a \
+                     folder outside it."
+                }
+                RunFolder::StartedFrom => {
+                    "Start from a folder outside any git repository: this run has no server, \
+                     so its directory is made in the folder you start from."
+                }
+            };
             return Err(CliError::Refused(format!(
                 "this folder is inside a Git work tree ({}), and this run's directory would \
                  be made in it: it holds what the harness wrote, which can include \
-                 its login. Run goalcup start from a folder outside any \
-                 repository. Nothing was created.",
+                 its login. {way_out} Nothing was created.",
                 ancestor.display()
             )));
         }
@@ -315,34 +335,8 @@ pub fn refuse_synced_folder_probing(
     home: Option<&Path>,
     probe: &dyn Fn(&Path, &str) -> bool,
 ) -> Result<(), CliError> {
-    let resolved = std::fs::canonicalize(dir).map_err(|source| CliError::Io {
-        path: dir.display().to_string(),
-        source,
-    })?;
-    let names: Vec<String> = resolved
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect();
-    let synced = names
-        .windows(2)
-        .any(|w| w[0] == "Library" && (w[1] == "Mobile Documents" || w[1] == "CloudStorage"))
-        || names.iter().any(|n| {
-            n == "iCloud Drive"
-                || n == "Google Drive"
-                || n == "Dropbox"
-                || n.starts_with("Dropbox (")
-                || n == "OneDrive"
-                || n.starts_with("OneDrive - ")
-        })
-        || home
-            .filter(|h| !h.as_os_str().is_empty())
-            .and_then(|h| std::fs::canonicalize(h).ok())
-            .is_some_and(|home| {
-                ["Desktop", "Documents"]
-                    .iter()
-                    .any(|name| resolved.starts_with(home.join(name)) && probe(&home, name))
-            });
-    if synced {
+    let resolved = resolved_dir(dir)?;
+    if synced_by(&resolved, home, probe).is_some() {
         return Err(CliError::Refused(format!(
             "this folder is one a sync client uploads ({}), and this run's directory \
              would be made in it: it holds what the harness wrote, which can include its \
@@ -352,6 +346,77 @@ pub fn refuse_synced_folder_probing(
         )));
     }
     Ok(())
+}
+
+/// Refuse a new run's project folder that a sync client uploads, by the same signals as
+/// [`refuse_synced_folder_under`]: the service would upload the folder's `.env.local`, and the
+/// GitHub token in it. Judged before the approval, and again right after it.
+pub fn refuse_synced_project(project: &Path, home: Option<&Path>) -> Result<(), CliError> {
+    match synced_by(&resolved_dir(project)?, home, &icloud_folder_synced) {
+        Some(service) => Err(CliError::Refused(crate::participant::project_synced(
+            service,
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// `dir` with its links resolved; a directory that cannot be resolved is refused, since a check
+/// that could not run is not a pass.
+fn resolved_dir(dir: &Path) -> Result<PathBuf, CliError> {
+    std::fs::canonicalize(dir).map_err(|source| CliError::Io {
+        path: dir.display().to_string(),
+        source,
+    })
+}
+
+/// The sync service that uploads the resolved folder `resolved`, by name for a refusal to say;
+/// `None` when no signal says one does. `probe(home, name)` answers whether `<home>/<name>` is
+/// iCloud-synced, and is asked only with `home` known.
+fn synced_by(
+    resolved: &Path,
+    home: Option<&Path>,
+    probe: &dyn Fn(&Path, &str) -> bool,
+) -> Option<&'static str> {
+    let names: Vec<String> = resolved
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let by_folder = |n: &str| match n {
+        "iCloud Drive" => Some("iCloud Drive"),
+        "Google Drive" => Some("Google Drive"),
+        _ if n == "Dropbox" || n.starts_with("Dropbox (") => Some("Dropbox"),
+        _ if n == "OneDrive" || n.starts_with("OneDrive - ") => Some("OneDrive"),
+        _ => None,
+    };
+    // `Library/CloudStorage/<Provider>-<account>`: the File Provider clients.
+    let by_provider = |n: Option<&String>| match n.map(String::as_str) {
+        Some(n) if n.starts_with("GoogleDrive") => "Google Drive",
+        Some(n) if n.starts_with("OneDrive") => "OneDrive",
+        Some(n) if n.starts_with("Dropbox") => "Dropbox",
+        Some(n) if n.starts_with("iCloud") => "iCloud Drive",
+        _ => "A sync client",
+    };
+    let library = names
+        .windows(2)
+        .position(|w| w[0] == "Library" && (w[1] == "Mobile Documents" || w[1] == "CloudStorage"));
+    if let Some(at) = library {
+        return Some(if names[at + 1] == "Mobile Documents" {
+            "iCloud Drive"
+        } else {
+            by_provider(names.get(at + 2))
+        });
+    }
+    if let Some(service) = names.iter().find_map(|n| by_folder(n)) {
+        return Some(service);
+    }
+    home.filter(|h| !h.as_os_str().is_empty())
+        .and_then(|h| std::fs::canonicalize(h).ok())
+        .is_some_and(|home| {
+            ["Desktop", "Documents"]
+                .iter()
+                .any(|name| resolved.starts_with(home.join(name)) && probe(&home, name))
+        })
+        .then_some("iCloud Drive")
 }
 
 /// Whether macOS iCloud "Desktop & Documents" is syncing `<home>/<name>` (`Desktop` or

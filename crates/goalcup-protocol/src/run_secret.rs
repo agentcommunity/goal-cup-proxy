@@ -2,7 +2,9 @@
 //!
 //! Goal Cup Proxy hands a harness one secret of its own, which it knows exactly: the per-run proxy
 //! credential in `HTTPS_PROXY` (H8). It never handles a participant's API key: the harness holds
-//! that in its own config. The launcher passes the proxy credential to the daemon on the capture
+//! that in its own config. For a run on a server it also knows the GitHub token the participant
+//! keeps in the project folder for the agent to push with (D71), and names it too. The launcher
+//! passes these values to the daemon on the capture
 //! create ([`crate::control::CaptureWorkspaceRequest::run_secrets`]), in memory only, and the
 //! daemon redacts every form below from every recorded body before the chain hashes it. This
 //! module defines the forms and how they are found. It performs no redaction.
@@ -40,8 +42,9 @@ pub const MIN_RUN_SECRET_BYTES: usize = 20;
 /// The longest value a run may name.
 pub const MAX_RUN_SECRET_BYTES: usize = 256;
 
-/// The most values one capture create may carry: the proxy credential.
-pub const MAX_RUN_SECRETS: usize = 1;
+/// The most values one capture create may carry: the proxy credential, and the GitHub token the
+/// participant keeps in the project folder's `.env.local` (D71), which the agent reads to push.
+pub const MAX_RUN_SECRETS: usize = 2;
 
 /// The longest form of a value: every byte `\u`-escaped, six bytes each.
 pub const MAX_FORM_BYTES: usize = 6 * MAX_RUN_SECRET_BYTES;

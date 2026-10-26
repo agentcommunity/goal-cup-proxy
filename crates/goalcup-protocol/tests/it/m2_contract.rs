@@ -1624,6 +1624,7 @@ fn a_stamped_seq_that_is_not_the_next_is_refused_with_nothing_chained() {
             excluded: Vec::new(),
             git: None,
             home: None,
+            capped: None,
         },
     )
     .unwrap();

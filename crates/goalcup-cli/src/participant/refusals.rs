@@ -44,14 +44,49 @@ pub fn needs_terminal(harness: &str, then: &str) -> String {
     )
 }
 
-/// The run's folder would be made inside the work folder.
-pub fn inside_work_folder(work_root: &Path, here: &Path) -> String {
+/// What the folder checks call the folder `goalcup start` is run from, the run's workspace.
+pub const PROJECT_FOLDER: &str = "project folder";
+
+/// A new run's project folder is the workspace of run `run_id`, opened on a server and not over:
+/// the folder is that run's, and a new run there would be the wrong way back to it.
+/// `competition`: that run is a competition run, which a new competition run replaces when it
+/// opens (a practice or test run is never replaced), and which needs a repository of its own.
+pub fn project_of_open_run(run_id: &str, competition: bool) -> String {
+    let new_run = if competition {
+        "A new run needs a new folder and a new repository, and replaces this one."
+    } else {
+        "A new run needs a new folder."
+    };
     format!(
-        "Run the command from your home folder or another folder of your own, not from inside \
-         the work folder {} (the run's own folder would be made in {}). A run's own folder must \
-         never be inside a clone. Nothing was created.",
-        work_root.display(),
-        here.display()
+        "This folder belongs to run {run_id}. To see it: goalcup status. If the agent has \
+         exited: {CONTINUE_HINT}. {new_run} Nothing was created."
+    )
+}
+
+/// A new run's project folder is one `service` syncs off this computer: it would upload the
+/// folder's `.env.local`, and the token in it.
+pub fn project_synced(service: &str) -> String {
+    format!(
+        "{service} syncs this folder and would upload your .env.local and token: use a folder \
+         outside it, for example under ~/code. Nothing was created."
+    )
+}
+
+/// A new run's project folder holds more than the starting kit (`extra`, sorted): the run must
+/// start in a new, empty folder of its own.
+pub fn project_not_empty(project: &Path, extra: &[String]) -> String {
+    let shown: Vec<&str> = extra.iter().take(3).map(String::as_str).collect();
+    let more = if extra.len() > shown.len() {
+        format!(" and {} more", extra.len() - shown.len())
+    } else {
+        String::new()
+    };
+    format!(
+        "Make a new, empty folder for this run, put your .gitignore and .env.local in it, and run \
+         goalcup start there. This folder ({}) also holds {}{more}. A run starts in a folder \
+         with nothing but .gitignore and .env files in it. Nothing was created.",
+        project.display(),
+        shown.join(", ")
     )
 }
 
@@ -65,23 +100,99 @@ pub fn cannot_record_model_service(why: &str, id: &str) -> String {
 }
 
 /// The participant's repository has commits, so a competition or test run cannot use it: by
-/// GitHub's size in KB (`kb`), or, once cloned, by the clone's own commits (`None`). `goalcup
-/// prep` says it too.
+/// GitHub's size in KB (`kb`), or `None` when GitHub's list of commits said so (a README alone
+/// can leave the size at 0). The first two sentences are the server's own refusal.
 pub fn repository_not_empty(repo: &str, kb: Option<u64>) -> String {
     let size = kb.map(|kb| format!(" ({kb} KB)")).unwrap_or_default();
     format!(
-        "Create a new repository with no README, license or .gitignore, then run goalcup start \
-         again and name it (or add --repo <owner>/<name>). The repository {repo} is not \
-         empty{size}, and a new run needs a new empty one."
+        "The repository must be empty when the run opens. Create a new one with no README, \
+         .gitignore or license, and start again. {repo} already has commits{size}; name the new \
+         one when goalcup start asks, or add --repo <owner>/<name>."
     )
 }
 
+/// A new run's project folder is goalcup's own folder `root` (`what`), is inside it, holds it,
+/// or sits beside it: the agent would see goalcup's records.
+pub fn project_beside_goalcup(project: &Path, what: &str, root: &Path) -> String {
+    format!(
+        "Make a new folder for this run somewhere else, for example in your home folder, and run \
+         goalcup start there. This folder ({}) is goalcup's {what} {}, is inside it, holds it, \
+         or is next to it, and the agent must not see goalcup's own records. Nothing was created.",
+        project.display(),
+        root.display()
+    )
+}
+
+/// A new run's project folder is inside a Git repository (`outer`): the agent's `git init` would
+/// make a repository inside another one.
+pub fn project_inside_repository(project: &Path, outer: &Path) -> String {
+    format!(
+        "Make a new folder for this run outside any Git repository, put your .gitignore and \
+         .env.local in it, and run goalcup start there. This folder ({}) is inside the Git \
+         repository {}. Nothing was created.",
+        project.display(),
+        outer.display()
+    )
+}
+
+/// The two lines a project's `.gitignore` needs so that no `.env` file is ever committed.
+pub const GITIGNORE_LINES: [&str; 2] = [".env", ".env.*"];
+
+/// Some `.env` files of a new run's project folder (`uncovered`, sorted) are not covered by its
+/// `.gitignore`: the agent's first `git add .` would publish them, with the token.
+pub fn env_not_ignored(uncovered: &[String]) -> String {
+    format!(
+        "Add these two lines to the .gitignore in this folder, then run goalcup start again:\n  \
+         {}\n  {}\n.gitignore does not cover {}, so the agent's first `git add .` would publish \
+         it, and your token with it. Nothing was created.",
+        GITIGNORE_LINES[0],
+        GITIGNORE_LINES[1],
+        uncovered.join(", ")
+    )
+}
+
+/// A key file of a new run's project folder (`file`) names `GH_TOKEN` in a form the push line
+/// cannot read, or more than once. The value is never shown.
+pub fn token_line_form(file: &str) -> String {
+    format!(
+        "Write your token in {file} as one line, exactly GH_TOKEN=<your token>: no export, no \
+         quotes, no spaces, and no second GH_TOKEN line in any .env file. The push line goalcup \
+         prints reads only that form. Nothing was created."
+    )
+}
+
+/// A real run's project folder has no `GH_TOKEN` line in any key file: the agent's first push
+/// would fail after the approval. With no `.gitignore` there (`gitignore_missing`), the two lines
+/// it needs are said too, so both are fixed before the next try.
+pub fn token_line_missing(gitignore_missing: bool) -> String {
+    let ignore = if gitignore_missing {
+        format!(
+            " Also make a .gitignore in this folder with these two lines:\n  {}\n  {}\n",
+            GITIGNORE_LINES[0], GITIGNORE_LINES[1]
+        )
+    } else {
+        " ".to_string()
+    };
+    format!(
+        "Put your GitHub token in .env.local as one line, GH_TOKEN=<your token>.{ignore}Then \
+         run goalcup start again. Nothing was created."
+    )
+}
+
+/// `goalcup start --dev` for a competition run on a server: the server refuses it at open, so it
+/// is refused here, before the approval.
+pub fn dev_competes() -> String {
+    "Add --practice (or --test) to run a connector this build does not pin. A --dev run never \
+     enters the competition. Nothing was created."
+        .to_string()
+}
+
 /// A folder of a run is on a filesystem a run cannot keep its records on (`name`): what to do
-/// first, with no full stop at the end. The work folder moves by its flag, the others with the
-/// configuration folder, beside which the records are kept.
+/// first, with no full stop at the end. The project folder is made anew on another volume, the
+/// others move with the configuration folder, beside which the records are kept.
 pub fn unsupported_filesystem(what: &str, path: &str, name: &str) -> String {
-    let how = if what == "work folder" {
-        "for example: goalcup setup --work-root <a folder on that volume>"
+    let how = if what == PROJECT_FOLDER {
+        "for example: make your project folder on that volume and run goalcup start there"
     } else {
         "for example: set GOALCUP_CONFIG_DIR to a folder on that volume, and the records are kept \
          beside it"
@@ -136,15 +247,15 @@ pub fn run_over(run_id: &str) -> String {
     )
 }
 
-/// The command that ends a run's last part and sends it, which works without the clone.
+/// The command that ends a run's last part and sends it, which works without the run's folder.
 fn end_last_part(entry_id: &str) -> String {
     format!("goalcup seal {entry_id} --yes, then goalcup upload")
 }
 
-/// `goalcup continue` of a run whose clone is not where the run left it: moved, deleted, or on a
-/// disk that is not mounted. The agent's work is in that clone, so the next part needs it there;
-/// the part already recorded does not, and can still be ended and sent.
-pub fn clone_missing(run_id: &str, entry_id: &str, workspace: &Path) -> String {
+/// `goalcup continue` of a run whose folder is not where the run left it: moved, deleted, or on
+/// a disk that is not mounted. The agent's work is in that folder, so the next part needs it
+/// there; the part already recorded does not, and can still be ended and sent.
+pub fn project_missing(run_id: &str, entry_id: &str, workspace: &Path) -> String {
     format!(
         "Put the run's folder back at {} (a link to it there is fine) and run {CONTINUE_HINT} \
          again. If it is lost, end the run's last part so it still reaches the Goal Cup server: \
@@ -155,47 +266,23 @@ pub fn clone_missing(run_id: &str, entry_id: &str, workspace: &Path) -> String {
     )
 }
 
-/// Why a run's folder that is there is not its clone, for [`not_a_clone`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NotAClone<'a> {
-    /// A file, not a folder.
-    NotAFolder,
-    /// A folder with no `.git` directory: removed, or a `.git` file or link in its place.
-    NoGitDirectory,
-    /// A clone inside another Git repository, which a run's clone may not be.
-    InsideRepository(&'a Path),
-}
-
-/// `goalcup continue` of a run whose folder is there but is not its clone any more. Its Git
-/// history is what the next part goes on from, and is not there, so the only way on is to end the
-/// last part, which still reaches the server.
-pub fn not_a_clone(run_id: &str, entry_id: &str, workspace: &Path, why: NotAClone<'_>) -> String {
-    let ws = workspace.display();
-    let what = match why {
-        NotAClone::NotAFolder => format!("{ws} is a file, not the run's folder"),
-        NotAClone::NoGitDirectory => format!(
-            "the run's folder {ws} is there, but it has no .git directory: it was removed, or is \
-             a file or a link now"
-        ),
-        NotAClone::InsideRepository(outer) => format!(
-            "the run's folder {ws} is inside another Git repository, {}",
-            outer.display()
-        ),
-    };
+/// `goalcup continue` of a run whose folder's path now holds a file: the next part cannot go on
+/// there, so the only way on is to put the folder back or end the last part.
+pub fn project_not_a_folder(run_id: &str, entry_id: &str, workspace: &Path) -> String {
     format!(
-        "End the run's last part so it reaches the Goal Cup server: {}. Run {run_id} cannot go \
-         on: {what}, so it is not the run's clone any more. If you moved things, put the clone \
-         back as it was and run {CONTINUE_HINT} again. Nothing was changed.",
-        end_last_part(entry_id)
+        "Put the run's folder back at {ws} and run {CONTINUE_HINT} again, or end the run's last \
+         part so it reaches the Goal Cup server: {}. Run {run_id} cannot go on: {ws} is a file, \
+         not the run's folder. Nothing was changed.",
+        end_last_part(entry_id),
+        ws = workspace.display(),
     )
 }
 
 /// `goalcup continue` of a run whose folder this user cannot look in.
-pub fn clone_unreadable(workspace: &Path, why: &str) -> String {
+pub fn project_unreadable(workspace: &Path, why: &str) -> String {
     format!(
         "Make {} readable to you again, then run {CONTINUE_HINT} again. goalcup cannot look in \
-         the run's folder ({why}), so it cannot tell whether the run's clone is there. Nothing \
-         was changed.",
+         the run's folder ({why}), so it cannot tell whether it is there. Nothing was changed.",
         workspace.display()
     )
 }

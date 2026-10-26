@@ -1,30 +1,25 @@
 //! The GitHub repository of one real run, asked for by `goalcup start` before the approval (D69).
 //!
 //! A practice run has none. A real run (a dry run or the cup run) gets a new, empty, public
-//! repository of its own: [`choose`] asks its name (or takes `--repo`), finds the participant's
-//! GitHub user from their own login (and, with none, prints how to set one up and looks again),
-//! opens GitHub's "new repository" page with the name filled in when it does not exist yet, then
-//! checks that it is public and empty (GitHub's open API, no login) and that the agent's git sees
-//! no branch in it and can push to it (`git ls-remote` and a dry-run push in the agent's own
-//! environment). Goal Cup reads, stores and passes no key. Once the run has opened on the server
-//! ([`keep_for_next_run`]), the name is kept in `prep.json` only so that the next real run can
-//! suggest one, `<name>-2`; a denied approval or a Ctrl-C keeps nothing. A Ctrl-C at any question
-//! or check ends it, with nothing created.
+//! repository of its own: [`choose`] asks its name as `<owner>/<name>` (or takes `--repo`), opens
+//! GitHub's "new repository" page with the name filled in when it does not exist yet, then checks
+//! that it is public and empty (GitHub's open API, no login). It does not look for the
+//! participant's GitHub login and makes no test push: the agent pushes with the token the
+//! participant put in the project folder's `.env.local`. Goal Cup reads, stores and passes no
+//! key. Once the run has opened on the server ([`keep_for_next_run`]), the name is kept in
+//! `prep.json` only so that the next real run can suggest one, `<name>-2`; a denied approval or a
+//! Ctrl-C keeps nothing. A Ctrl-C at any question or check ends it, with nothing created.
 
 use crate::CliError;
-use crate::account::github::{self, Found, GithubLogin, PushRefused};
+use crate::account::github::{self, Found};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// What [`choose`] reads from, or does to, the machine and the network, so that a test can state
 /// them.
 pub trait Doors {
     /// GitHub's API base, or `None` when it is not asked (a test build without a fake).
     fn api(&self) -> Option<String>;
-    /// The participant's GitHub login as the agent will have it ([`github::find_login`]).
-    fn login(&self) -> GithubLogin;
-    /// Whether `remote` has no branch and the agent's git can push to it ([`github::push_test`]).
-    fn push_test(&self, remote: &str) -> Result<(), PushRefused>;
     /// One line typed by the participant, or `None` when there is no terminal, the input ended
     /// or a Ctrl-C came.
     fn read_line(&self) -> Option<String>;
@@ -32,9 +27,6 @@ pub trait Doors {
     fn interrupted(&self) -> bool;
     /// Open `url` in the browser; whether a program started.
     fn open(&self, url: &str) -> bool;
-    /// The participant's git config file the agent does not get, when they have two
-    /// ([`crate::launch::unused_git_config`]).
-    fn unused_git_config(&self) -> Option<PathBuf>;
 }
 
 /// The repository a real run pushes to.
@@ -42,32 +34,34 @@ pub trait Doors {
 pub struct RunRepo {
     /// `https://github.com/<owner>/<repo>`, what the server is told.
     pub repo_url: String,
-    /// The git remote the clone is made from and pushes to: SSH when the participant's SSH
-    /// login to GitHub works, else HTTPS ([`github::remote_url`]).
-    pub remote: String,
+    /// The owner's GitHub id, when GitHub said it: the agent commits as the owner's private
+    /// commit address ([`RunRepo::commit_email`]).
+    pub owner_id: Option<u64>,
 }
 
-/// What `goalcup start` prints when neither SSH nor `gh` names a GitHub login.
-pub const NO_LOGIN_GUIDE: &str = "\
-No GitHub login found on this computer. To set one up (about 5 minutes):
-  1. No account yet? Make one: https://github.com/signup
-  2. Install GitHub's command line tool: https://cli.github.com
-  3. Run: gh auth login   (choose GitHub.com, HTTPS, \"Login with a web browser\",
-     and say Yes to \"Authenticate Git with your GitHub credentials\")
-  Or type <your-user>/<name> as the repo name if your git already pushes to GitHub over HTTPS.
-Press Enter when done, or Ctrl-C to stop.";
+impl RunRepo {
+    /// The repository's owner, the name the agent commits under.
+    pub fn owner(&self) -> &str {
+        github::owner_repo(&self.repo_url).map_or("", |(owner, _)| owner)
+    }
 
-/// The one fix for a push test that failed.
-pub const PUSH_FIX: &str = "Your git login is not one the agent can use. Easiest: run `gh auth \
-login` (choose HTTPS and say Yes to Authenticate Git), or use an SSH key: \
-https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account";
+    /// GitHub's private commit address for the owner (`<id>+<owner>@users.noreply.github.com`,
+    /// or `<owner>@users.noreply.github.com` when the id is not known), so the agent's commits
+    /// carry no one's real email.
+    pub fn commit_email(&self) -> String {
+        match self.owner_id {
+            Some(id) => format!("{id}+{}@users.noreply.github.com", self.owner()),
+            None => format!("{}@users.noreply.github.com", self.owner()),
+        }
+    }
+}
 
-/// Said when GitHub's open API would not answer (its limit is 60 calls an hour per address).
-const UNCHECKED: &str = "  GitHub's API is busy, so it was not asked. The server checks that the \
-repo is public when the run opens, and goalcup that it is empty once it has cloned it.";
+/// Said when GitHub could not be asked (a rate limit, an outage): the start goes on.
+const UNCHECKED: &str = "  GitHub could not be asked just now, so the repo was not checked. The \
+server checks that it is public and empty when the run opens.";
 
-/// Ask for, and check, the repository of a new real run. `given` is `--repo`: a name,
-/// `<owner>/<name>` or the repository's address. Every refusal says what to do and that nothing
+/// Ask for, and check, the repository of a new real run. `given` is `--repo`: `<owner>/<name>`
+/// or the repository's address. Every refusal says what to do and that nothing
 /// was created.
 pub fn choose(
     doors: &dyn Doors,
@@ -93,38 +87,20 @@ pub fn choose(
         out,
         "Your run needs a new, empty, public GitHub repo. Each real run gets its own.",
     )?;
-    let mut login = doors.login();
-    if let Some(refusal) = stop() {
-        return Err(refusal);
-    }
-    if login.user.is_none() {
-        // No SSH login and no `gh` login: one short guide, then one more look once the
-        // participant says it is done. Goal Cup never makes an account for them.
-        say(out, NO_LOGIN_GUIDE)?;
-        if read()?.is_some() {
-            login = doors.login();
-        }
-    }
-    if let Some(unused) = doors.unused_git_config() {
-        say(
-            out,
-            &format!(
-                "  Your agent's git reads ~/.gitconfig; {} is not used.",
-                unused.display()
-            ),
-        )?;
-    }
-    let mut input = match given {
+    // No look for the participant's GitHub login and no test push: how the agent pushes is the
+    // participant's to set up (their token in `.env.local`). Only the name is
+    // asked here, always with its owner.
+    let input = match given {
         Some(given) => given.trim().to_string(),
         None => {
             // A suggestion only when an earlier real run named one: its repository is used.
             let last = crate::prep_file::read_prep_lenient(cfg).repo_url;
-            let suggested = suggestion(&last, login.user.as_deref());
+            let suggested = suggestion(&last);
             let shown = suggested
                 .as_ref()
                 .map(|s| format!(" [{s}]"))
                 .unwrap_or_default();
-            ask(out, &format!("  Name it{shown}: "))?;
+            ask(out, &format!("  Name it, as <your-user>/<name>{shown}: "))?;
             match read()? {
                 Some(typed) if !typed.is_empty() => typed,
                 Some(_) if suggested.is_some() => suggested.unwrap_or_default(),
@@ -138,31 +114,15 @@ pub fn choose(
             }
         }
     };
-    if !input.contains('/') && login.user.is_none() {
-        // A name alone cannot be placed without a user: asked once more, with the user.
-        ask(out, &format!("  Type <your-user>/{input}: "))?;
-        if let Some(typed) = read()?.filter(|t| t.contains('/')) {
-            input = typed;
-        }
+    if !input.contains('/') {
+        return Err(refused(format!(
+            "Give the repository with its owner: <your-user>/{input}, or add --repo \
+             <owner>/<name>."
+        )));
     }
-    let repo_url = if input.contains('/') {
-        github::checked_repo_url(&input)?
-    } else {
-        if !github::is_repo_name(&input) {
-            return Err(refused(format!(
-                "{input:?} is not a GitHub repository name: use letters, digits, `.`, `_` and \
-                 `-`."
-            )));
-        }
-        let Some(owner) = login.user.clone() else {
-            return Err(refused(format!(
-                "No GitHub login was found on this computer. Set one up as the steps above say, \
-                 or give --repo <your user name>/{input}."
-            )));
-        };
-        github::checked_repo_url(&format!("{owner}/{input}"))?
-    };
+    let repo_url = github::checked_repo_url(&input)?;
     let (owner, repo) = github::owner_repo(&repo_url)?;
+    let mut owner_id = None;
     if let Some(api) = doors.api() {
         let checked = |api: &str| {
             github::check_public_empty(api, &repo_url).map_err(|e| refused(e.to_string()))
@@ -191,38 +151,16 @@ pub fn choose(
                 )));
             }
         }
-        if found == Found::Unchecked {
-            say(out, UNCHECKED)?;
+        match found {
+            Found::Unchecked => say(out, UNCHECKED)?,
+            Found::PublicEmpty { owner_id: id } => {
+                owner_id = id;
+                say(out, &format!("  {owner}/{repo}: public and empty."))?;
+            }
+            Found::Missing => {}
         }
     }
-    let remote = github::remote_url(owner, repo, login.ssh);
-    let pushed = doors.push_test(&remote);
-    if let Some(refusal) = stop() {
-        return Err(refusal);
-    }
-    match pushed {
-        Ok(()) => {}
-        // GitHub's `size` can read 0 right after the repository was created with a README.
-        Err(PushRefused::HasBranches) => {
-            return Err(refused(crate::participant::repository_not_empty(
-                &format!("{owner}/{repo}"),
-                None,
-            )));
-        }
-        Err(PushRefused::Failed(why)) => {
-            return Err(refused(format!(
-                "The agent's git cannot push to {owner}/{repo} ({why}). {PUSH_FIX}"
-            )));
-        }
-    }
-    say(
-        out,
-        &format!(
-            "  {owner}/{repo}: public, empty, and your agent's git can push to it (a dry-run \
-             push; nothing was sent)."
-        ),
-    )?;
-    Ok(RunRepo { repo_url, remote })
+    Ok(RunRepo { repo_url, owner_id })
 }
 
 /// Keep `repo_url` in `prep.json` as the last real run's repository, for [`suggestion`]: called
@@ -237,17 +175,11 @@ pub fn keep_for_next_run(cfg: &Path, repo_url: &str) -> Result<(), CliError> {
     crate::prep_file::write_prep(cfg, &file)
 }
 
-/// The name to suggest after the last real run's repository, `<name>-2`: that one has been used.
-/// Shown as `<name>` when it is the participant's own, else `<owner>/<name>`. GitHub is not
-/// asked: its open API allows few calls.
-fn suggestion(last: &str, user: Option<&str>) -> Option<String> {
+/// The name to suggest after the last real run's repository, `<owner>/<name>-2`: that one has
+/// been used. GitHub is not asked: its open API allows few calls.
+fn suggestion(last: &str) -> Option<String> {
     let (owner, name) = github::owner_repo(last).ok()?;
-    let name = github::next_name(name);
-    Some(if user.is_some_and(|u| u.eq_ignore_ascii_case(owner)) {
-        name
-    } else {
-        format!("{owner}/{name}")
-    })
+    Some(format!("{owner}/{}", github::next_name(name)))
 }
 
 fn say(out: &mut dyn Write, line: &str) -> Result<(), CliError> {

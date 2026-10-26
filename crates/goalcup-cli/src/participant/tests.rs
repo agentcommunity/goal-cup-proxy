@@ -105,6 +105,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         mode: Some(RunMode::Competition),
         opens: Opens::First,
         ends: Some(ends.clone()),
+        prompt: &[],
         first_screen: Some("It asks whether you trust this folder. Choose Yes."),
     });
     let text = block.join("\n");
@@ -131,6 +132,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         mode: Some(RunMode::Competition),
         opens: Opens::LastSession,
         ends: Some(ends.clone()),
+        prompt: &[],
         first_screen: None,
     })
     .join("\n");
@@ -151,6 +153,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         mode: Some(RunMode::Competition),
         opens: Opens::NewSession,
         ends: Some(ends),
+        prompt: &[],
         first_screen: None,
     });
     let text = fresh.join("\n");
@@ -178,6 +181,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         mode: Some(RunMode::Practice),
         opens: Opens::First,
         ends: None,
+        prompt: &[],
         first_screen: None,
     })
     .join("\n");
@@ -552,7 +556,7 @@ fn every_refusal_says_what_to_do_first_and_has_no_rule_code() {
         home_busy("Some Agent", false),
         still_recording("Some Agent", "r1"),
         needs_terminal("Some Agent", "Nothing was created."),
-        inside_work_folder(tmp, &tmp.join("x")),
+        project_not_empty(tmp, &["README.md".to_string()]),
         not_started_here(Some("r1")),
         not_started_here(None),
         local_only("r1"),
@@ -565,7 +569,7 @@ fn every_refusal_says_what_to_do_first_and_has_no_rule_code() {
         server_unreachable("https://s.example", "refused"),
     ];
     let verbs = [
-        "Your", "Use", "Run", "Start", "Nothing", "Try", "Continue", "Check",
+        "Your", "Use", "Run", "Start", "Nothing", "Try", "Continue", "Check", "Make",
     ];
     for refusal in refusals {
         let first = refusal.split(' ').next().unwrap();

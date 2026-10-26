@@ -45,12 +45,25 @@ fn non_empty<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String
     Ok(reason)
 }
 
+/// Why a walked workspace's `files` stops short of the whole folder (D71): the walk lists at most
+/// 50 000 files and stops at the finish deadline. A capped walk still seals; the manifest says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WalkCap {
+    /// More files than the walk lists.
+    FileLimit,
+    /// The deadline came before the walk ended.
+    Deadline,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SealManifest {
     pub entry_id: String,
     pub sealed_at: String,
     pub workspace: String,
-    /// Every file of a walked workspace. Empty when `git` is set: a clone is not walked.
+    /// Every file of a walked workspace, at most 50 000 (see `capped`). A `.env` or `.env.*` file
+    /// has its size and the absent digest: a key file is never hashed (D71). Empty when `git` is
+    /// set: a clone is not walked.
     pub files: Vec<SealedFile>,
     /// Paths excluded by the connector's `workspace_exclusions[]` plus tracker config.
     pub excluded: Vec<String>,
@@ -62,6 +75,11 @@ pub struct SealManifest {
     /// roots, at most 10 000 files; one over 64 MiB has its size and the absent digest (D56).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<Vec<SealedFile>>,
+    /// Set when the walk of a workspace that is not its own clone stopped before its end (D71):
+    /// `files` is then a part of the folder, never an error. Absent from a whole walk and from a
+    /// clone, so a manifest written before it keeps its bytes and its digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capped: Option<WalkCap>,
 }
 
 impl SealManifest {

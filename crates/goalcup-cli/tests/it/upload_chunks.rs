@@ -690,6 +690,7 @@ mod retries {
                 proxy_version: "0.1.0".into(),
                 repo_url: "https://github.com/goal-cup/demo".into(),
                 machine: None,
+                dev: false,
             };
             let opened = open_run(&direct, &request).unwrap();
             let receipt =
@@ -1283,6 +1284,7 @@ mod retries {
             session_id: "00000000-0000-4000-8000-000000000002".into(),
             harness_version: "1".into(),
             proxy_version: "0.1.0".into(),
+            dev: false,
         };
         let segment = match continue_run(&client, &run.record.run_id, &request).unwrap() {
             Continued::Segment(segment) => segment,

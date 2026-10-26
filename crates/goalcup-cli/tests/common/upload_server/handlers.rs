@@ -335,6 +335,9 @@ struct ConnectorFields {
     harness_version: String,
     proxy_version: Option<String>,
     tracer_version: Option<String>,
+    /// Sent only by a `--dev` run; kept as sent (absent is `None`), not judged.
+    #[serde(default)]
+    dev: Option<bool>,
 }
 
 /// The client's version: `proxy_version`, or `tracer_version`, its name from before the rename
@@ -399,6 +402,7 @@ impl ConnectorFields {
                 .proxy_version
                 .or(self.tracer_version)
                 .unwrap_or_default(),
+            dev: self.dev,
             receipt: None,
             chunks: Vec::new(),
             seal: None,
@@ -1431,11 +1435,17 @@ async fn poll_device(State(s): St, body: Bytes) -> Result<Response, ApiError> {
     if now >= device.created_at + DEVICE_EXPIRES_IN || device.picked_up {
         return Err(gone());
     }
-    match device.approval {
+    // A held request follows whatever the test decides later.
+    let approval = match device.approval {
+        Approval::Hold => *s.approval.lock().unwrap_or_else(|e| e.into_inner()),
+        decided => decided,
+    };
+    match approval {
         Approval::Expire => return Err(gone()),
         Approval::Deny => {
             return Err(ApiError::new(403, "forbidden", "This sign-in was denied."));
         }
+        Approval::Hold => return Ok(json_response(202, json!({"status": "pending"}))),
         Approval::Auto => {}
     }
     device.picked_up = true;

@@ -2,28 +2,23 @@
 //!
 //! `goalcup start` asks for a real run's repository (`commands::run_repo`), opens GitHub's "new
 //! repository" page when it does not exist yet, and checks it with nothing of the participant's:
-//! [`check_public_empty`] asks GitHub's open API, with no login, that it is public and empty, and
-//! [`push_test`] asks the participant's own git for a dry-run push. [`clone_repo`] makes the
-//! clone the agent works in, with the participant's own git and login, over SSH when
-//! [`find_login`] saw SSH work. A practice run has no repository: [`init_local`]. Nothing here
-//! reads, stores or passes a key: the agent pushes with the participant's own git login, as
-//! their laptop already does.
+//! [`check_public_empty`] asks GitHub's open API, with no login, that it is public and empty.
+//! Goal Cup makes no clone and runs no git: the agent works in the participant's project folder,
+//! runs `git init` there and pushes with the token the participant put in that folder's
+//! `.env.local`, for this one repository.
 //!
 //! # The older token flow, kept for old clones
 //!
 //! Versions before D69 stored a token in `<cfg>/github.json` and set each clone's credential
 //! helper to `goalcup git-credential`. Those clones keep working: [`credential_helper`] still
 //! answers git from that file ([`GithubSetup::load`]), for that one repository. Nothing writes
-//! the file any more. Once the dry runs of the week of 23 Oct are over, this half can go.
+//! the file any more. Once the dry runs started on 0.6.1 are over, this half can go.
 
 use crate::CliError;
 use crate::upload::http::{ServerClient, ServerError};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::ffi::OsStr;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 /// `<cfg>/github.json`.
 pub const GITHUB_FILE_NAME: &str = "github.json";
@@ -97,8 +92,9 @@ impl GithubSetup {
     ///
     /// The file must be the owner's alone: one that the group or others can read is refused,
     /// naming the fix, because the token in it would no longer be the participant's alone.
-    /// Its URL and token are checked again as [`GithubSetup::new`] checked them. No file is
-    /// a refusal that says to run `goalcup setup`.
+    /// Its URL and token are checked again as [`GithubSetup::new`] checked them. No file (a
+    /// clone an older goalcup made, D69) is a refusal that says to finish that run with the older
+    /// goalcup, or start a new one.
     pub fn load(cfg: &Path) -> Result<GithubSetup, CliError> {
         let path = github_path(cfg);
         let io = |source: std::io::Error| CliError::Io {
@@ -109,9 +105,9 @@ impl GithubSetup {
             Ok(file) => file,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
                 return Err(CliError::Refused(
-                    "this clone was made by an older goalcup, and its GitHub token is gone. Push \
-                     with your own git login instead: git remote set-url origin \
-                     git@github.com:<owner>/<repo>.git"
+                    "this clone was made by an older goalcup, and its GitHub token is gone. \
+                     Finish or seal that run with the older goalcup that started it, or start a \
+                     new run with goalcup start."
                         .into(),
                 ));
             }
@@ -170,16 +166,6 @@ pub fn checked_repo_url(url: &str) -> Result<String, CliError> {
 /// `(owner, repo)` of a repository address in [`checked_repo_url`]'s form.
 pub fn owner_repo(url: &str) -> Result<(&str, &str), CliError> {
     parse_repo_url(url)
-}
-
-/// The two git remotes of a repository: over SSH, `git@github.com:<owner>/<repo>.git`, used when
-/// the participant's SSH login to GitHub works ([`find_login`]); otherwise over HTTPS.
-pub fn remote_url(owner: &str, repo: &str, ssh: bool) -> String {
-    if ssh {
-        format!("git@github.com:{owner}/{repo}.git")
-    } else {
-        format!("{URL_PREFIX}{owner}/{repo}.git")
-    }
 }
 
 /// `<cfg>/github.json`.
@@ -263,8 +249,16 @@ fn checked_token(token: &str) -> Result<String, CliError> {
 #[derive(Deserialize)]
 struct RepoAnswer {
     private: bool,
-    /// In kilobytes; 0 for a repository with no commits.
+    /// In kilobytes; 0 for a repository with no commits, and often for one whose only commit is
+    /// a README GitHub made, which [`check_public_empty`] asks about apart.
     size: u64,
+    #[serde(default)]
+    owner: Option<OwnerAnswer>,
+}
+
+#[derive(Deserialize)]
+struct OwnerAnswer {
+    id: u64,
 }
 
 /// What GitHub's open API says about a repository.
@@ -272,438 +266,78 @@ struct RepoAnswer {
 pub enum Found {
     /// No such repository can be seen without a login: it does not exist yet, or it is private.
     Missing,
-    /// It is public and has no commits.
-    PublicEmpty,
-    /// GitHub would not answer just now: its open API allows 60 calls an hour from one address
-    /// (`403` or `429`). Not a sign the repository is used. The server checks that it is public
-    /// when the run opens, and the clone that it is empty ([`clone_has_commits`]).
+    /// It is public and has no commits. `owner_id` is its owner's GitHub id, for the owner's
+    /// private commit address (`<id>+<owner>@users.noreply.github.com`), when GitHub said it.
+    PublicEmpty { owner_id: Option<u64> },
+    /// GitHub could not be asked just now: a rate limit (its open API allows 60 calls an hour
+    /// from one address), an outage, or no answer at all. Not a sign the repository is used, and
+    /// never a reason to stop a start: the server checks that it is public and empty when the run
+    /// opens.
     Unchecked,
 }
 
+/// How long one call to GitHub's open API may take before the check gives up on it: a GitHub
+/// that does not answer is not asked again, and the start goes on ([`Found::Unchecked`]).
+const GITHUB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Ask GitHub's API (`api_base`, [`GITHUB_API`] in production) about `repo_url` with no login
 /// at all, so nothing of the participant's is sent. A public, empty repository is
-/// [`Found::PublicEmpty`]; one that cannot be seen is [`Found::Missing`]; a rate limit is
-/// [`Found::Unchecked`]. A repository that is not empty, or any other failure, is refused in a
-/// sentence of its own.
+/// [`Found::PublicEmpty`]; one GitHub says is not there (`404`: missing, or private) is
+/// [`Found::Missing`]; any other failure to ask (another status, no answer, an answer that is not
+/// one) is [`Found::Unchecked`], so a GitHub outage never blocks a start. A repository that is not
+/// empty is refused in a sentence of its own.
+///
+/// Empty is asked twice. GitHub's `size` says 0 for a repository whose only commit is the README
+/// it made, so its list of commits is asked too (`GET /repos/{owner}/{repo}/commits?per_page=1`,
+/// as the server asks at open): `409` is an empty repository, `200` one with a commit, and any
+/// other answer leaves the `size` answer standing (the server asks again at open).
 pub fn check_public_empty(api_base: &str, repo_url: &str) -> Result<Found, CliError> {
     let (owner, repo) = parse_repo_url(repo_url)?;
-    let answer: RepoAnswer = match ServerClient::anonymous(api_base).json(
+    let github = ServerClient::anonymous(api_base);
+    let answer: RepoAnswer = match github.json_timed(
         "GET",
         &format!("/repos/{owner}/{repo}"),
         None::<&()>,
+        GITHUB_TIMEOUT,
     ) {
         Ok(answer) => answer,
         Err(ServerError::Status { status: 404, .. }) => return Ok(Found::Missing),
-        Err(ServerError::Status {
-            status: 403 | 429, ..
-        }) => return Ok(Found::Unchecked),
-        Err(other) => {
-            return Err(CliError::Refused(format!(
-                "could not check {owner}/{repo} on GitHub: {other}. Try again in a minute."
-            )));
-        }
+        Err(_) => return Ok(Found::Unchecked),
     };
     // GitHub answers a private repository with 404 to a caller with no login; this is a
     // belt-and-braces check of the answer.
     if answer.private {
         return Ok(Found::Missing);
     }
-    if answer.size != 0 {
-        return Err(CliError::Refused(crate::participant::repository_not_empty(
+    let not_empty = |kb| {
+        CliError::Refused(crate::participant::repository_not_empty(
             &format!("{owner}/{repo}"),
-            Some(answer.size),
-        )));
+            kb,
+        ))
+    };
+    if answer.size != 0 {
+        return Err(not_empty(Some(answer.size)));
     }
-    Ok(Found::PublicEmpty)
+    if github
+        .json_timed::<serde::de::IgnoredAny>(
+            "GET",
+            &format!("/repos/{owner}/{repo}/commits?per_page=1"),
+            None::<&()>,
+            GITHUB_TIMEOUT,
+        )
+        .is_ok()
+    {
+        return Err(not_empty(None));
+    }
+    Ok(Found::PublicEmpty {
+        owner_id: answer.owner.map(|o| o.id),
+    })
 }
 
 /// GitHub's page that creates a repository, with the name, the owner and public visibility
 /// filled in (GitHub documents these query parameters; one it cannot use is ignored).
 pub fn new_repo_page(owner: &str, repo: &str) -> String {
     format!("https://github.com/new?name={repo}&owner={owner}&visibility=public")
-}
-
-/// Whether the clone at `clone` has a commit: `git rev-parse --verify --quiet HEAD` in it, on
-/// this machine and exact. GitHub updates the `size` that [`check_public_empty`] reads with a
-/// delay, so a repository pushed to a moment ago can still read as empty there; a competition or
-/// test start asks this too, once it has cloned. A clone git cannot read has none.
-pub fn clone_has_commits(clone: &Path) -> bool {
-    run_git(
-        OsStr::new("git"),
-        [
-            OsStr::new("rev-parse"),
-            OsStr::new("--verify"),
-            OsStr::new("--quiet"),
-            OsStr::new("HEAD"),
-        ],
-        Some(clone),
-        CliError::Internal,
-        "git could not read the clone",
-    )
-    .is_ok()
-}
-
-// ------------------------------------------------------------------ the participant's own login
-
-/// Who the participant is on GitHub, as their own tools say, and whether SSH works.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct GithubLogin {
-    /// The GitHub user name, when SSH or `gh` named one.
-    pub user: Option<String>,
-    /// `ssh git@github.com` signed in: the clone's remote is SSH.
-    pub ssh: bool,
-}
-
-/// How long one look at the participant's login may take.
-const LOOK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-/// How long the dry-run push may take.
-const PUSH_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// The participant's GitHub login as the agent will have it, found with their own tools and
-/// nothing typed, in the agent's environment (`launch::agent_base_env`, with `scratch` as its
-/// `HOME`): first `ssh -T git@github.com`, which signs in with their SSH key and answers
-/// "Hi <user>!" (and exits 1, as GitHub gives no shell); then `gh api user --jq .login` when
-/// `gh` is on `PATH`. Each is bounded by a timeout and a Ctrl-C, never asks a question, and none
-/// of what they print is kept but the user name. A first SSH connection records GitHub's host
-/// key (`accept-new`).
-pub fn find_login(parent_env: &BTreeMap<String, String>, scratch: &Path) -> GithubLogin {
-    let Some(env) = agent_env(parent_env, scratch) else {
-        return GithubLogin::default();
-    };
-    let found = find_login_in(&env);
-    let _ = std::fs::remove_dir_all(scratch);
-    found
-}
-
-fn find_login_in(env: &BTreeMap<String, String>) -> GithubLogin {
-    let ssh = [
-        "-T",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "ConnectTimeout=10",
-        "git@github.com",
-    ];
-    if let Some((_, said)) = run_bounded(OsStr::new("ssh"), &ssh, env, LOOK_TIMEOUT)
-        && let Some(user) = ssh_greeting_user(&said)
-    {
-        return GithubLogin {
-            user: Some(user),
-            ssh: true,
-        };
-    }
-    if crate::preflight::resolve_on_path("gh", env).is_some() {
-        let gh = ["api", "user", "--jq", ".login"];
-        if let Some((true, said)) = run_bounded(OsStr::new("gh"), &gh, env, LOOK_TIMEOUT) {
-            let user = said.lines().next().unwrap_or("").trim().to_string();
-            if is_owner_name(&user) {
-                return GithubLogin {
-                    user: Some(user),
-                    ssh: false,
-                };
-            }
-        }
-    }
-    GithubLogin::default()
-}
-
-/// The agent's environment (`launch::agent_base_env`) with the new folder `scratch` as its
-/// `HOME`, or `None` when the folder cannot be made or named.
-fn agent_env(
-    parent_env: &BTreeMap<String, String>,
-    scratch: &Path,
-) -> Option<BTreeMap<String, String>> {
-    std::fs::create_dir_all(scratch).ok()?;
-    let home = scratch.to_str()?;
-    Some(crate::launch::agent_base_env(parent_env, home, true))
-}
-
-/// The user in GitHub's SSH greeting, `Hi <user>! You've successfully authenticated, ...`. A
-/// deploy key's greeting names `<owner>/<repo>`, which is no user, so it is `None`.
-pub fn ssh_greeting_user(said: &str) -> Option<String> {
-    let after = said.split("Hi ").nth(1)?;
-    let user = after.split('!').next()?;
-    is_owner_name(user).then(|| user.to_string())
-}
-
-/// A GitHub user or organisation name: 1 to 39 of `[A-Za-z0-9-]`.
-pub fn is_owner_name(name: &str) -> bool {
-    (1..=39).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-}
-
-/// A repository name: 1 to 100 of `[A-Za-z0-9._-]`, not `.` or `..`, not ending in `.git`.
-pub fn is_repo_name(name: &str) -> bool {
-    (1..=100).contains(&name.len())
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-        && name != "."
-        && name != ".."
-        && !name.ends_with(".git")
-}
-
-/// Why [`push_test`] did not pass.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PushRefused {
-    /// The repository already has a branch (`git ls-remote --heads`), so it is not new and empty.
-    /// GitHub's API can still say `size` 0 right after a repository is created with a README.
-    HasBranches,
-    /// git could not reach the repository or push to it: its last lines.
-    Failed(String),
-}
-
-/// Whether the agent's git can push to `remote`, a repository with no branch yet. First `git
-/// ls-remote --heads`: a repository that lists a branch is [`PushRefused::HasBranches`]. Then a
-/// dry-run push of a one-commit repository to a branch the repository does not have. Both run in
-/// the agent's own environment (`launch::agent_base_env`: the participant's `PATH` and the way
-/// to their git login, a scratch `HOME`, nothing else), so a login only the participant's shell
-/// has (a `store` or `cache` helper, an `include.path` under `~`, a `GH_TOKEN`) does not pass.
-/// Nothing is sent. A dry run still opens git's push connection, which GitHub gives only to a
-/// login with write access; a pass is git's exit 0 and nothing else. No hook or signing of theirs
-/// runs, and nothing may ask a question (no terminal). `scratch` is a new folder, removed
-/// afterwards.
-pub fn push_test(
-    git: &OsStr,
-    remote: &str,
-    scratch: &Path,
-    parent_env: &BTreeMap<String, String>,
-) -> Result<(), PushRefused> {
-    let done = match agent_env(parent_env, &scratch.join("home")) {
-        Some(env) => push_test_in(git, remote, &scratch.join("repo"), &env),
-        None => Err(PushRefused::Failed(format!(
-            "{} could not be made",
-            scratch.display()
-        ))),
-    };
-    let _ = std::fs::remove_dir_all(scratch);
-    done
-}
-
-fn push_test_in(
-    git: &OsStr,
-    remote: &str,
-    repo: &Path,
-    env: &BTreeMap<String, String>,
-) -> Result<(), PushRefused> {
-    let Some(dir) = repo.to_str() else {
-        return Err(PushRefused::Failed(format!(
-            "{} is not UTF-8",
-            repo.display()
-        )));
-    };
-    let run = |args: &[&str]| -> Result<String, PushRefused> {
-        let mut full = vec![
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgsign=false",
-        ];
-        full.extend_from_slice(args);
-        match run_bounded(git, &full, env, PUSH_TEST_TIMEOUT) {
-            Some((true, said)) => Ok(said),
-            Some((false, said)) => Err(PushRefused::Failed(last_lines(&said))),
-            None if crate::arming::interrupted() => {
-                Err(PushRefused::Failed("interrupted".to_string()))
-            }
-            None => Err(PushRefused::Failed(
-                "git did not finish within a minute".to_string(),
-            )),
-        }
-    };
-    let quiet = |args: &[&str]| run(args).map(|_| ());
-    // `<id>\trefs/heads/<name>` per branch; anything else git says (a warning) is not one.
-    let heads = run(&["ls-remote", "--heads", remote])?;
-    if heads.lines().any(|l| l.contains("\trefs/heads/")) {
-        return Err(PushRefused::HasBranches);
-    }
-    quiet(&["init", "--quiet", dir])?;
-    quiet(&[
-        "-C",
-        dir,
-        "-c",
-        "user.name=goalcup",
-        "-c",
-        "user.email=setup@goalcup.invalid",
-        "commit",
-        "--quiet",
-        "--allow-empty",
-        "-m",
-        "goalcup setup push test",
-    ])?;
-    quiet(&[
-        "-C",
-        dir,
-        "push",
-        "--dry-run",
-        "--quiet",
-        remote,
-        "HEAD:refs/heads/goalcup-setup-push-test",
-    ])
-}
-
-/// Run `program args` (the participant's own `ssh`, `gh` or `git`) in exactly `env` and no
-/// other variable, no stdin, no terminal prompt, in a session of its own with no controlling
-/// terminal (so nothing can stop to ask for a passphrase), for at most `timeout`: `(exit 0,
-/// stdout then stderr)`, or `None` when it could not start, did not finish, or a Ctrl-C came
-/// ([`crate::arming::interrupted`]); its group is then killed. Nothing passed here is a key.
-fn run_bounded(
-    program: &OsStr,
-    args: &[&str],
-    env: &BTreeMap<String, String>,
-    timeout: std::time::Duration,
-) -> Option<(bool, String)> {
-    use std::os::unix::process::CommandExt;
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .env_clear()
-        .envs(env)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // SAFETY: `setsid` is async-signal-safe and touches nothing of this process's memory.
-    unsafe {
-        command.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
-    let mut child = command.spawn().ok()?;
-    let read = |pipe: Option<Box<dyn Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(pipe) = pipe {
-                let _ = pipe.take(64 * 1024).read_to_end(&mut bytes);
-            }
-            bytes
-        })
-    };
-    let out = read(
-        child
-            .stdout
-            .take()
-            .map(|p| Box::new(p) as Box<dyn Read + Send>),
-    );
-    let err = read(
-        child
-            .stderr
-            .take()
-            .map(|p| Box::new(p) as Box<dyn Read + Send>),
-    );
-    let status = crate::harness_version::wait_or_end_group_unless(
-        &mut child,
-        timeout,
-        &crate::arming::interrupted,
-    );
-    let status = status?;
-    let mut said = out.join().unwrap_or_default();
-    said.extend(err.join().unwrap_or_default());
-    Some((
-        status.success(),
-        String::from_utf8_lossy(&said).into_owned(),
-    ))
-}
-
-/// The last few lines of what a command said, on one line, without control characters.
-fn last_lines(said: &str) -> String {
-    let lines: Vec<&str> = said.lines().filter(|l| !l.trim().is_empty()).collect();
-    let tail = lines[lines.len().saturating_sub(3)..].join(" / ");
-    tail.chars().filter(|c| !c.is_control()).take(400).collect()
-}
-
-// ------------------------------------------------------------------ the clone
-
-/// Clone `source` into `dest` with the participant's own git and login, and name `remote` as
-/// its `origin`. Nothing is written to the clone's configuration but that: no credential
-/// helper, no token, no user name. Its `.env*` files are never committed ([`exclude_env_files`]).
-/// In production `source` is `remote` itself; a test clones a local bare repository and names
-/// the GitHub address after.
-pub fn clone_repo(git: &OsStr, source: &str, remote: &str, dest: &Path) -> Result<(), CliError> {
-    run_git(
-        git,
-        [
-            OsStr::new("clone"),
-            OsStr::new("--quiet"),
-            OsStr::new("--"),
-            OsStr::new(source),
-            dest.as_os_str(),
-        ],
-        None,
-        CliError::Refused,
-        &format!("git could not clone {remote}"),
-    )?;
-    if source != remote {
-        run_git(
-            git,
-            ["remote", "set-url", "origin", remote].map(OsStr::new),
-            Some(dest),
-            CliError::Internal,
-            "git could not set the clone's origin",
-        )?;
-    }
-    exclude_env_files(dest)
-}
-
-/// A practice run's work folder: a new, empty git repository at `dest` with no remote. A practice
-/// run has no GitHub repository and pushes nowhere. Its agent reads no global or system git
-/// config (`launch::agent_base_env`), so the repository names an author of its own,
-/// [`PRACTICE_AUTHOR`], and the agent's commits work. It also gets no git login by default:
-/// OpenSSH reads `~/.ssh` from the user database, not from `HOME`, so the repository's own
-/// config gives git [`PRACTICE_SSH_COMMAND`], and an empty `credential.helper`, which empties any
-/// list of helpers read before it. An agent that tries hard can still get around this (D69).
-pub fn init_local(git: &OsStr, dest: &Path) -> Result<(), CliError> {
-    run_git(
-        git,
-        [OsStr::new("init"), OsStr::new("--quiet"), dest.as_os_str()],
-        None,
-        CliError::Refused,
-        "git could not make the practice folder",
-    )?;
-    for (key, value) in [
-        ("user.name", PRACTICE_AUTHOR.0),
-        ("user.email", PRACTICE_AUTHOR.1),
-        ("core.sshCommand", PRACTICE_SSH_COMMAND),
-        ("credential.helper", ""),
-    ] {
-        run_git(
-            git,
-            ["config", "--local", key, value].map(OsStr::new),
-            Some(dest),
-            CliError::Internal,
-            "git could not configure the practice folder",
-        )?;
-    }
-    exclude_env_files(dest)
-}
-
-/// The author a practice run's commits carry: no person's name.
-pub const PRACTICE_AUTHOR: (&str, &str) = ("Goal Cup practice", "practice@goalcup.invalid");
-
-/// The `ssh` a practice folder's git runs: no config file (`~/.ssh/config` names keys too), no
-/// key offered, no agent key, and no question.
-pub const PRACTICE_SSH_COMMAND: &str =
-    "ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes";
-
-/// Add `.env*` to the repository's own ignore list, `.git/info/exclude`, which is never
-/// committed: a key file the participant gives their agent is not pushed by mistake.
-fn exclude_env_files(dest: &Path) -> Result<(), CliError> {
-    let info = dest.join(".git").join("info");
-    let exclude = info.join("exclude");
-    std::fs::create_dir_all(&info)
-        .and_then(|()| {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&exclude)
-        })
-        .and_then(|mut file| file.write_all(b"\n# goalcup: never commit a key file\n.env*\n"))
-        .map_err(|source| CliError::Io {
-            path: exclude.display().to_string(),
-            source,
-        })
 }
 
 /// The name the next real run suggests after `name`, whose repository is used: `<name>-2`, and
@@ -717,58 +351,6 @@ pub fn next_name(name: &str) -> String {
         Some((base, n)) if n >= 1 => format!("{base}-{}", n + 1),
         _ => format!("{name}-2"),
     }
-}
-
-/// Run `git args` (in `dir` with `-C`, when given) with no terminal prompt and no stdin, and
-/// turn a failure into `fail("<what>: <last lines of git's stderr>")`. Nothing passed here
-/// carries a key, so nothing git says can.
-fn run_git<'a>(
-    git: &OsStr,
-    args: impl IntoIterator<Item = &'a OsStr>,
-    dir: Option<&Path>,
-    fail: fn(String) -> CliError,
-    what: &str,
-) -> Result<(), CliError> {
-    let mut command = Command::new(git);
-    if let Some(dir) = dir {
-        command.arg("-C").arg(dir);
-    }
-    let output = command
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        // A caller's repository or configuration must not redirect `-C <dest> config --local`
-        // into another repository, or add settings of its own to the clone.
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_CONFIG_PARAMETERS")
-        .env_remove("GIT_CONFIG_COUNT")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|source| {
-            if source.kind() == std::io::ErrorKind::NotFound {
-                CliError::Refused(
-                    "git is not installed or not on PATH. Install git (https://git-scm.com) \
-                     and run the command again."
-                        .into(),
-                )
-            } else {
-                CliError::Io {
-                    path: git.to_string_lossy().into_owned(),
-                    source,
-                }
-            }
-        })?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let lines: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
-    let tail = lines[lines.len().saturating_sub(5)..].join(" / ");
-    let tail: String = tail.chars().filter(|c| !c.is_control()).take(600).collect();
-    Err(fail(format!("{what}: {tail}")))
 }
 
 // ------------------------------------------------------------------ the credential helper

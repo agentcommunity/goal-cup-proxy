@@ -25,27 +25,25 @@
 //!    line also recommends it, with the setup guide's link (D67); that never changes the setting
 //!    or the step's state.
 //! 4. **machine**: mains power, free space for a run's reservation, the server's and the
-//!    provider's hosts reachable, `git` on `PATH`, under WSL the WSL2 version and a work folder,
-//!    artifact root and configuration folder that are not on a Windows-host filesystem, the
-//!    same three folders on APFS, ext4 or XFS (not btrfs, ZFS, NFS, SMB, tmpfs, overlayfs or
-//!    FUSE), and a sleep lock the machine can take (one it cannot take is said, and is never a
-//!    `todo`).
+//!    provider's hosts reachable, `git` on `PATH`, under WSL the WSL2 version and an artifact
+//!    root and configuration folder that are not on a Windows-host filesystem, the same two
+//!    folders on APFS, ext4 or XFS (not btrfs, ZFS, NFS, SMB, tmpfs, overlayfs or FUSE), and a
+//!    sleep lock the machine can take (one it cannot take is said, and is never a `todo`).
 //!
-//! Once the work folder passes, setup makes `<work folder>/.env.local` if it is missing: empty
-//! but for a short comment, mode 0600, for keys the participant gives their agent. It says the
-//! path and, in a terminal, offers to open it. Goal Cup never reads it.
+//! Setup makes no work folder and no keys file: a run works in the project folder `goalcup
+//! start` is run from, where the participant keeps their own `.gitignore` and `.env.local`.
 //!
 //! # When setup acts, and when it only reports
 //!
-//! Only in a terminal, and never with `--json`, setup asks (the harness, whether to open the keys
-//! file), logs in and launches (the harness). `--json` prints `[{"step","state","human","say"}]`
+//! Only in a terminal, and never with `--json`, setup asks (the harness), logs in and launches
+//! (the harness). `--json` prints `[{"step","state","human","say"}]`
 //! and nothing else; `human` marks the steps that need the person (login, the harness home), for
 //! the agent that is walking someone through the setup.
 //!
 //! # Re-running
 //!
-//! `<cfg>/prep.json` keeps what is settled: the harness, the work folder, and the one fact that
-//! cannot be re-observed (`home_ready`). A second setup skips the steps it has settled and keeps
+//! `<cfg>/prep.json` keeps what is settled: the harness, and the one fact that cannot be
+//! re-observed (`home_ready`). A second setup skips the steps it has settled and keeps
 //! every value a flag does not change; changing the harness starts its home again.
 
 use crate::CliError;
@@ -57,18 +55,13 @@ use goalcup_protocol::harness::Origin;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
-use std::path::{Path, PathBuf};
-
-/// The default work folder's name, beside the participant's other folders in their home.
-pub const DEFAULT_WORK_ROOT_NAME: &str = "goalcup-work";
+use std::path::Path;
 
 /// What the flags asked for.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PrepOptions {
     /// `--harness <id>`.
     pub harness: Option<String>,
-    /// `--work-root <path>`: absolute.
-    pub work_root: Option<PathBuf>,
     /// `--json`: print the steps as one JSON array, ask nothing, launch nothing.
     pub json: bool,
     /// `--dev`: accept a connector directory this build does not pin.
@@ -112,22 +105,11 @@ pub const STEP_HARNESS: &str = "harness";
 pub const STEP_HARNESS_HOME: &str = "harness_home";
 pub const STEP_MACHINE: &str = "machine";
 
-/// What setup opens for the participant: the login's approval address, and the keys file. Both
-/// do nothing when `GOALCUP_NO_BROWSER` is set.
+/// What setup opens for the participant: the login's approval address. It does nothing when
+/// `GOALCUP_NO_BROWSER` is set.
 pub struct Openers {
     pub url: fn(&str) -> bool,
-    pub file: fn(&Path) -> bool,
 }
-
-/// The name of the keys file setup makes in the work folder.
-pub const KEYS_FILE_NAME: &str = ".env.local";
-
-/// What the keys file holds when setup makes it.
-const KEYS_FILE_TEXT: &str = "\
-# Keys for your agent (optional), one per line: NAME=value. Your agent can read them.
-# Goal Cup never reads this file. Never put keys in your repository.
-# Set them before your run starts; changing them during the run is outside help.
-";
 
 fn step(step: &'static str, state: State, human: bool, say: impl Into<String>) -> Step {
     Step {
@@ -325,31 +307,6 @@ pub fn prep_with(
     open: &Openers,
     out: &mut dyn Write,
 ) -> Result<u8, CliError> {
-    // What the flags say, judged before anything is asked or written.
-    if let Some(work_root) = &opts.work_root
-        && !work_root.is_absolute()
-    {
-        return Err(CliError::Refused(format!(
-            "the work folder {} is not an absolute path. Give the whole path, for example \
-             `--work-root ~/goalcup-work` typed in full.",
-            work_root.display()
-        )));
-    }
-    let kept_work_root = read_prep_lenient(cfg).work_root;
-    let work_root = match (&opts.work_root, kept_work_root.as_str()) {
-        (Some(given), _) => given.clone(),
-        (None, kept) if !kept.is_empty() => PathBuf::from(kept),
-        (None, _) => crate::per_run_home::home_from(env)
-            .map_err(|_| {
-                CliError::Refused(
-                    "$HOME is not set, so there is no default work folder. Give one with \
-                     `--work-root <absolute path>`."
-                        .to_string(),
-                )
-            })?
-            .join(DEFAULT_WORK_ROOT_NAME),
-    };
-
     crate::config::create_private_dir(cfg)?;
     let acting = !opts.json && doors.has_terminal();
     let mut file = read_prep_lenient(cfg);
@@ -417,16 +374,7 @@ pub fn prep_with(
     save(cfg, &file, &before)?;
 
     // 4. machine
-    let machine = machine_step(doors, cfg, env, connector.as_ref(), &work_root);
-    // A work folder is kept only once it has passed: a refused one must not replace a good one.
-    let keys = if machine.work_root_ok {
-        file.work_root = work_root.display().to_string();
-        keys_file(&work_root)
-    } else {
-        None
-    };
-    report.push(machine.step)?;
-    save(cfg, &file, &before)?;
+    report.push(machine_step(doors, cfg, env, connector.as_ref()))?;
 
     let all_ok = report.steps.iter().all(|s| s.state == State::Ok);
     if report.json {
@@ -444,9 +392,6 @@ pub fn prep_with(
             old_token.display()
         ))?;
     }
-    if let Some((keys, made)) = &keys {
-        offer_keys_file(doors, keys, acting && *made, open, &mut report)?;
-    }
     if all_ok {
         let id = connector
             .as_ref()
@@ -454,9 +399,11 @@ pub fn prep_with(
         put(
             report.out,
             &format!(
-                "Ready.\n  Try it (10 min, no GitHub, never counts): goalcup start --harness {id} \
-                 --practice\n  The real run, inside the start window:  goalcup start --harness \
-                 {id}\n"
+                "Ready.\n  Try it (10 min, no GitHub, never counts; a new \
+                 folder each time): d=$(mktemp -d ~/goalcup-practice-XXXX) && cd \"$d\" && \
+                 goalcup start --harness {id} --practice\n  The real run, inside the start window: make your \
+                 repo, token and folder first (the guide's folder step), then in that folder: \
+                 goalcup start --harness {id} --repo <you>/<name>\n"
             ),
         )?;
     } else {
@@ -477,59 +424,6 @@ pub fn prep_with(
         )?;
     }
     Ok(u8::from(!all_ok))
-}
-
-/// `<work_root>/.env.local`, made when it is missing (with the folder): [`KEYS_FILE_TEXT`] only,
-/// mode 0600, never replaced and never read. With whether this setup made it; `None` when it
-/// cannot be made.
-fn keys_file(work_root: &Path) -> Option<(PathBuf, bool)> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let path = work_root.join(KEYS_FILE_NAME);
-    std::fs::create_dir_all(work_root).ok()?;
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)
-    {
-        Ok(mut made) => made
-            .write_all(KEYS_FILE_TEXT.as_bytes())
-            .ok()
-            .map(|()| (path, true)),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Some((path, false)),
-        Err(_) => None,
-    }
-}
-
-/// Say where the keys file is and, when `ask` (setup has just made it, in a terminal), offer to
-/// open it.
-fn offer_keys_file(
-    doors: &dyn Doors,
-    keys: &Path,
-    ask: bool,
-    open: &Openers,
-    report: &mut Report<'_>,
-) -> Result<(), CliError> {
-    report.tell(&format!(
-        "Keys for your agent (optional): {}\n  Goal Cup never reads it. Your agent can read \
-         anything you give it.",
-        keys.display()
-    ))?;
-    if !ask {
-        return Ok(());
-    }
-    put(report.out, "  Open it now? [y/N] ")?;
-    report.out.flush().map_err(|source| CliError::Io {
-        path: "standard output".to_string(),
-        source,
-    })?;
-    let yes = doors
-        .read_line()
-        .is_some_and(|l| matches!(l.trim().to_ascii_lowercase().as_str(), "y" | "yes"));
-    if yes && !(open.file)(keys) {
-        report.tell(&format!("  Open it yourself: {}", keys.display()))?;
-    }
-    Ok(())
 }
 
 /// The steps so far, printed as they come in text mode and held for the JSON array otherwise.
@@ -985,12 +879,6 @@ fn no_prompts_advice(cfg: &Path, connector: &HarnessConnector) -> Option<String>
 
 // ------------------------------------------------------------------ 4. the machine
 
-struct Machine {
-    step: Step,
-    /// The work folder passed its own check, and may be kept in `prep.json`.
-    work_root_ok: bool,
-}
-
 /// Free bytes a run needs to start at all, and to start without a warning.
 const FAIL_BELOW: u64 = RUN_RESERVE_BYTES + START_MARGIN;
 const OK_FROM: u64 = RUN_RESERVE_BYTES + LOW_DISK_BYTES;
@@ -1000,8 +888,7 @@ fn machine_step(
     cfg: &Path,
     env: &BTreeMap<String, String>,
     connector: Option<&HarnessConnector>,
-    work_root: &Path,
-) -> Machine {
+) -> Step {
     let mut worst = State::Ok;
     let mut problems: Vec<String> = Vec::new();
     let mut fine: Vec<String> = Vec::new();
@@ -1110,48 +997,25 @@ fn machine_step(
     } else {
         note(
             State::Fail,
-            "git is not on PATH: install it (https://git-scm.com), a run is a clone you push from"
+            "git is not on PATH: install it (https://git-scm.com), your agent pushes your run \
+             with it"
                 .to_string(),
         );
     }
 
-    // Under WSL: WSL1 cannot run this, and a Windows-host filesystem is refused for the work
-    // folder, the artifact root and the configuration folder. The work folder is judged alone,
-    // because only a refused one must not be kept.
+    // Under WSL: WSL1 cannot run this, and a Windows-host filesystem is refused for the artifact
+    // root and the configuration folder.
     let host = doors.wsl();
     let wsl = host.is_wsl();
-    let work_check = host.check(&[("work folder", work_root)]);
-    if let Err(why) = &work_check {
-        note(State::Fail, why.clone());
-    }
-    // Each run is a clone, and the daemon refuses a run folder inside a Git repository. Found
-    // here, it costs a command; found at `goalcup start`, it costs an approval and a clone.
-    let work_in_git = git_repository_of(work_root);
-    if let Some(repo) = &work_in_git {
-        let default = crate::per_run_home::home_from(env)
-            .ok()
-            .map(|home| home.join(DEFAULT_WORK_ROOT_NAME));
-        note(
-            State::Fail,
-            work_in_git_message(work_root, repo, default.as_deref()),
-        );
-    }
-    if host.version() != Some(1) {
-        let artifacts = artifact_root(cfg);
-        if let Err(why) = host.check(&[
-            ("artifact root", artifacts.as_path()),
-            ("config folder", cfg),
-        ]) {
-            note(State::Fail, why);
-        }
+    let artifacts = artifact_root(cfg);
+    if let Err(why) = host.check(&[
+        ("artifact root", artifacts.as_path()),
+        ("config folder", cfg),
+    ]) {
+        note(State::Fail, why);
     }
     // On any machine: a run keeps its records on APFS, ext4 or XFS only. Found here, the folder
-    // is moved before any approval or clone; the work folder is judged alone, as above.
-    let work_fs = host.check_filesystems(&[("work folder", work_root)]);
-    if let Err(why) = &work_fs {
-        note(State::Fail, why.clone());
-    }
-    let artifacts = artifact_root(cfg);
+    // is moved before any approval.
     if let Err(why) = host.check_filesystems(&[
         ("artifact root", artifacts.as_path()),
         ("config folder", cfg),
@@ -1188,48 +1052,7 @@ fn machine_step(
         }
         say.push_str(&keep_awake);
     }
-    Machine {
-        step: step(STEP_MACHINE, worst, false, say),
-        work_root_ok: work_check.is_ok() && work_fs.is_ok() && work_in_git.is_none(),
-    }
-}
-
-/// The nearest folder at or above `path` that holds a `.git` entry, file or directory (a linked
-/// worktree has a file): the same rule as the daemon's `git_worktree_of`, which the CLI cannot
-/// call (the CLI never links the daemon). A folder that does not exist yet is judged by its
-/// parents. A link on the way is followed as a second look: a work folder that is a link into a
-/// repository puts every clone inside it, though its own spelling is clean.
-fn git_repository_of(path: &Path) -> Option<PathBuf> {
-    let lexical = |path: &Path| {
-        path.ancestors()
-            .find(|dir| dir.join(".git").symlink_metadata().is_ok())
-            .map(Path::to_path_buf)
-    };
-    lexical(path).or_else(|| {
-        // The longest part of the path that exists, with its links resolved, and the rest as
-        // written.
-        let existing = path.ancestors().find(|dir| dir.exists())?;
-        let resolved = existing.canonicalize().ok()?;
-        lexical(&resolved.join(path.strip_prefix(existing).ok()?))
-    })
-}
-
-/// The refusal for a work folder inside a Git repository: what is wrong, then the command that
-/// fixes it. The suggested folder is `~/goalcup-work` unless that folder is inside a repository
-/// too (a home folder that is itself a repository), when only the shape of the fix is given.
-fn work_in_git_message(work_root: &Path, repo: &Path, default: Option<&Path>) -> String {
-    let fix = match default {
-        Some(folder) if git_repository_of(folder).is_none() => {
-            format!("goalcup setup --work-root ~/{DEFAULT_WORK_ROOT_NAME}")
-        }
-        _ => "goalcup setup --work-root <full path of a folder outside any repository>".to_string(),
-    };
-    format!(
-        "Your work folder {} is inside a Git repository ({}). Choose a folder outside any \
-         repository: {fix}",
-        work_root.display(),
-        repo.display()
-    )
+    step(STEP_MACHINE, worst, false, say)
 }
 
 /// The host and port of a server URL: the port the URL names, else the scheme's (443 for
@@ -1381,9 +1204,8 @@ impl Doors for Injected {
 
 #[cfg(test)]
 mod tests {
-    use super::{State, endpoint_of, git_repository_of, login_step, work_in_git_message};
+    use super::{State, endpoint_of, login_step};
     use crate::server::{DEFAULT_SERVER_URL, ServerConfig, write_server_config};
-    use std::path::Path;
 
     #[test]
     fn the_login_step_names_the_server_only_when_it_is_not_the_default() {
@@ -1403,48 +1225,6 @@ mod tests {
             assert!(step.say.contains("member-1"), "{url}: {}", step.say);
             assert_eq!(step.say.contains(&url), named, "{url}: {}", step.say);
         }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_work_folder_that_is_a_link_into_a_repository_is_inside_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = dir.path().join("repo");
-        std::fs::create_dir_all(repo.join(".git")).unwrap();
-        std::fs::create_dir_all(repo.join("sub")).unwrap();
-        // A link to a folder below the repository: its own spelling shows no `.git`.
-        let link = dir.path().join("link");
-        std::os::unix::fs::symlink(repo.join("sub"), &link).unwrap();
-        let found = git_repository_of(&link.join("not-yet/work")).expect("the repository");
-        assert_eq!(found, repo.canonicalize().unwrap());
-        assert!(git_repository_of(&dir.path().join("elsewhere/work")).is_none());
-    }
-
-    #[test]
-    fn the_work_folder_fix_is_not_the_default_folder_when_the_default_is_in_a_repository() {
-        let home = tempfile::tempdir().unwrap();
-        std::fs::create_dir(home.path().join(".git")).unwrap();
-        let default = home.path().join("goalcup-work");
-        let said = work_in_git_message(
-            &home.path().join("repo/work"),
-            home.path(),
-            Some(default.as_path()),
-        );
-        assert!(
-            said.contains("goalcup setup --work-root <") && !said.contains("~/goalcup-work"),
-            "{said}"
-        );
-        // And with a home that is not a repository, the default folder is the fix.
-        let clean = tempfile::tempdir().unwrap();
-        let said = work_in_git_message(
-            Path::new("/r/work"),
-            Path::new("/r"),
-            Some(clean.path().join("goalcup-work").as_path()),
-        );
-        assert!(
-            said.contains("goalcup setup --work-root ~/goalcup-work"),
-            "{said}"
-        );
     }
 
     #[test]

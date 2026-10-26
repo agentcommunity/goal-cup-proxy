@@ -54,7 +54,8 @@ pub const CHAT_HOME_ID: &str = "m2-fake-tui-home";
 /// (D61): `configure snapshots on`, which the fake writes into `<home>/settings.txt`.
 pub const CHAT_CONFIGURE_ID: &str = "m2-fake-tui-configure";
 
-/// The repository `prepare_for` says the participant made, and the made-up token for it.
+/// The repository a real run names, and the made-up token a participant keeps for it in their
+/// project folder's `.env.local`.
 pub const PREP_REPO: &str = "https://github.com/goal-cup/demo";
 pub const FAKE_GITHUB_TOKEN: &str = "github_pat_FAKE0123456789abcdefghijkl";
 
@@ -151,16 +152,14 @@ impl Rig {
         let mut opts = super::support::start_options(CHAT_ID);
         opts.disk = super::support::disk_of(reserve);
         opts.dev = true;
-        let runs = self.root.join("runs");
-        std::fs::create_dir_all(&runs).unwrap();
-        opts.run_folder = Some(runs);
+        opts.run_folder = Some(self.run_folder());
         opts
     }
 
     /// `goalcup start --harness m2-fake-tui --dev` (the binary), on a terminal of its own: a new
     /// session whose controlling terminal is a fresh pseudo-terminal, as a participant's shell
-    /// would start it. It runs in `<root>/runs`, so the run's folder is made there, against this
-    /// rig's daemon and connectors; `env` is added to its environment.
+    /// would start it. It runs in [`Rig::run_folder`], against this rig's daemon and
+    /// connectors; `env` is added to its environment.
     pub fn start_on_pty(&self, env: &[(&str, &str)]) -> OnPty {
         OnPty::spawn(self.chat_command(env, Launcher::Direct), None)
     }
@@ -178,12 +177,14 @@ impl Rig {
     }
 
     /// `goalcup continue [run]` (the binary) on a terminal of its own, as a participant's shell
-    /// would run it, in `<root>/runs`.
+    /// would run it, in `<root>`: a continued run goes on in its own project folder wherever
+    /// `goalcup continue` is run from.
     pub fn continue_on_pty(&self, env: &[(&str, &str)], run: Option<&str>) -> OnPty {
         OnPty::spawn(self.continue_command(env, run), None)
     }
 
-    /// The command [`Rig::continue_on_pty`] runs, without its terminal.
+    /// The command [`Rig::continue_on_pty`] runs, without its terminal. The fake agent never
+    /// runs `git init` in its project folder, and a continue does not need it to.
     pub fn continue_command(
         &self,
         env: &[(&str, &str)],
@@ -209,8 +210,11 @@ impl Rig {
         env: &[(&str, &str)],
         launcher: Launcher,
     ) -> std::process::Command {
-        let runs = self.root.join("runs");
-        std::fs::create_dir_all(&runs).unwrap();
+        // `goalcup start` runs in the project folder; `goalcup continue` anywhere.
+        let here = match launcher {
+            Launcher::Continue { .. } => self.root.clone(),
+            _ => self.run_folder(),
+        };
         let goalcup = env!("CARGO_BIN_EXE_goalcup");
         let mut command = match launcher {
             Launcher::Direct => {
@@ -247,12 +251,13 @@ impl Rig {
             }
         };
         command
-            .current_dir(&runs)
+            .current_dir(&here)
             .env_clear()
             .env("PATH", self.path())
             .env("GOALCUP_CONFIG_DIR", &self.cfg)
             .env("GOALCUP_CONNECTORS_DIR", &self.capture_connectors)
             .env("GOALCUP_TEST_NO_BROWSER", "1")
+            .env(goalcup_cli::commands::start::TEST_DEV_COMPETES, "1")
             .env("GOALCUP_TEST_FINISH_BUDGET_MS", "10000")
             .env("TERM", "dumb");
         for key in ["USER", "LOGNAME", "TMPDIR", "HOME"] {
@@ -347,12 +352,18 @@ impl Rig {
         HttpDaemonClient::from_config_dir(&self.cfg).unwrap()
     }
 
-    /// The folder `goalcup start` is run from (`<root>/runs`), which is where the run
-    /// directory is created.
+    /// The folder `goalcup start` is run from, made: where a run with no server makes its run
+    /// directory, and a run on the server's project folder and workspace.
     pub fn run_folder(&self) -> PathBuf {
-        let dir = self.root.join("runs");
+        let dir = self.run_folder_path();
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// [`Rig::run_folder`]'s path, `<root>/projects/runs`, not made. Not beside the
+    /// configuration folder or the artifact root, which the daemon refuses as a workspace.
+    pub fn run_folder_path(&self) -> PathBuf {
+        self.root.join("projects").join("runs")
     }
 
     /// `start_with` options for a v5 run of the fake connector from `folder`, which no build
@@ -381,10 +392,9 @@ impl Rig {
     }
 
     /// Make this rig a participant who has logged in to the server at `url` and run `goalcup
-    /// setup`: `server.json`, `prep.json`, an empty bare repository standing in for the
-    /// participant's GitHub repository (a real run names [`PREP_REPO`] with `--repo`), and the
-    /// work folder their runs are cloned into. The clone, and the dry-run push, go to the
-    /// stand-in repository through the test-only door, so nothing here reaches GitHub.
+    /// setup`: `server.json`, and a `prep.json` with the harness and no `work_root` (0.7's setup
+    /// writes none). A real run names [`PREP_REPO`] with `--repo`; with no fake GitHub API
+    /// named, it is not asked about.
     pub fn prepare_for(&self, url: &str) {
         goalcup_cli::server::write_server_config(
             &self.cfg,
@@ -394,51 +404,33 @@ impl Rig {
             },
         )
         .unwrap();
-        let source = self.root.join("github-source.git");
-        let git = std::process::Command::new("git")
-            .args(["init", "--quiet", "--bare"])
-            .arg(&source)
-            .output()
-            .unwrap();
-        assert!(git.status.success(), "{git:?}");
-        let work = self.root.join("work");
-        std::fs::create_dir_all(&work).unwrap();
         std::fs::write(
             goalcup_cli::prep_file::prep_path(&self.cfg),
-            serde_json::to_vec(&serde_json::json!({
-                "harness": FAKE_ID, "work_root": work,
-            }))
-            .unwrap(),
+            serde_json::to_vec(&serde_json::json!({ "harness": FAKE_ID })).unwrap(),
         )
         .unwrap();
-        self.with_env(
-            goalcup_cli::commands::start::TEST_CLONE_SOURCE,
-            &source.display().to_string(),
-        );
-        // A participant with a GitHub login (over HTTPS), so a real run asks nothing about it.
-        self.with_env(goalcup_cli::commands::start::TEST_GITHUB_LOGIN, "goal-cup");
+        // A real run's folder holds the participant's token, ignored by Git.
+        let folder = self.run_folder();
+        std::fs::write(folder.join(".env.local"), "GH_TOKEN=x\n").unwrap();
+        std::fs::write(folder.join(".gitignore"), ".env*\n").unwrap();
     }
 
-    /// The folder `prepare_for` made for the clones.
-    pub fn work_root(&self) -> PathBuf {
-        self.root.join("work")
-    }
-
-    /// The clones `goalcup start` made in the work folder.
-    pub fn clones(&self) -> Vec<PathBuf> {
-        let mut dirs: Vec<PathBuf> = std::fs::read_dir(self.work_root())
-            .map(|entries| entries.flatten().map(|e| e.path()).collect())
-            .unwrap_or_default();
-        dirs.sort();
-        dirs
-    }
-
-    /// The directories `goalcup start` made beside the goal file.
+    /// The run directories `goalcup start` made (`goalcup-<16 hex>`): beside the folder it ran
+    /// in for a run with no server, in `<cfg>-runs` for a run on a server.
     pub fn run_dirs(&self) -> Vec<PathBuf> {
-        let mut dirs: Vec<PathBuf> = std::fs::read_dir(self.root.join("runs"))
-            .map(|entries| entries.flatten().map(|e| e.path()).collect())
-            .unwrap_or_default();
-        dirs.retain(|p| p.is_dir());
+        let mut dirs: Vec<PathBuf> = [
+            self.run_folder_path(),
+            goalcup_cli::commands::start::run_folders(&self.cfg),
+        ]
+        .iter()
+        .filter_map(|folder| std::fs::read_dir(folder).ok())
+        .flat_map(|entries| entries.flatten().map(|e| e.path()))
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("goalcup-"))
+        })
+        .collect();
         dirs.sort();
         dirs
     }
@@ -1601,6 +1593,12 @@ impl Upstream {
             "head -c {bytes} /dev/zero | tr '\\0' a > \"$M2_FAKE_OUT/body\"\n{}",
             self.post("--data-binary \"@$M2_FAKE_OUT/body\"", 10, "")
         )
+    }
+
+    /// One shell line that posts the file `$M2_FAKE_OUT/body`, which an earlier line wrote,
+    /// through the recording proxy the harness was given.
+    pub fn curl_body_file(&self) -> String {
+        self.post("--data-binary \"@$M2_FAKE_OUT/body\"", 10, "")
     }
 
     /// One shell line that posts `body` through the recording proxy the harness was given.
