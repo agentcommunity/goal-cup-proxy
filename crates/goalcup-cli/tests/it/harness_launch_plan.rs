@@ -559,3 +559,134 @@ fn a_node_script_harness_resolves_only_with_node_on_the_path_it_is_given() {
     let resolved = capture_executable(&connector, profile, &env).expect("node is there now");
     assert_eq!(resolved.search_path(), bin.display().to_string());
 }
+
+/// D72: `[launch_prep]` writes the run's CA alone into the config home (mode 0600, replacing a
+/// link there rather than writing through it) before its commands run; the commands run in
+/// order in the harness home with `{model_base_url}` and `{ca_file}` filled in; and a command
+/// that ends non-zero is written to the log in its template form, never with the URL or the
+/// path, and the run goes on.
+#[test]
+fn launch_prep_writes_the_ca_then_runs_its_commands_and_only_logs_a_failure() {
+    use goalcup_cli::launch::{
+        LaunchPrepValues, PrepLaunch, launch_prep, resolve_harness_executable,
+    };
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let dir = write_unpinned(&root, "example", "example-cli");
+    let path = dir.join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap().replace(
+        "resume_args = [\"--continue\"]\n",
+        "resume_args = [\"--continue\"]\n\
+         model_host_from = { file = \"config.yaml\", key = \"model.base_url\" }\n",
+    ) + r#"
+[launch_prep]
+ca_file = "recorder-ca.pem"
+commands = [
+  ["config", "set", "providers.recorder.base_url", "{model_base_url}"],
+  ["config", "set", "providers.recorder.ssl_ca_cert", "{ca_file}"],
+  ["gateway", "stop", "-y"],
+]
+"#;
+    std::fs::write(&path, text).unwrap();
+    let connector = goalcup_cli::connector::load_harness(&root, "example-cli", true).unwrap();
+
+    // The stand-in notes each call's arguments and whether the CA file was there, and fails
+    // `gateway stop` as an older harness without `-y` does.
+    let exe = root.join("example-cli");
+    std::fs::write(
+        &exe,
+        "#!/bin/sh\n\
+         if [ -f \"$CHAT_CONFIG_DIR/recorder-ca.pem\" ]; then ca=ca; else ca=no-ca; fi\n\
+         printf '%s|' \"$@\" >> \"$CHAT_CONFIG_DIR/calls\"\n\
+         echo \"$ca\" >> \"$CHAT_CONFIG_DIR/calls\"\n\
+         [ \"$1\" = gateway ] && exit 2\n\
+         exit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let resolved = resolve_harness_executable(&exe).unwrap();
+    let (workspace, run_home, config_home) = (
+        root.join("workspace"),
+        root.join("run-home"),
+        root.join("config-home"),
+    );
+    for d in [&workspace, &run_home, &config_home] {
+        std::fs::create_dir(d).unwrap();
+    }
+    // A link where the CA file goes must be replaced, not written through.
+    let victim = root.join("victim");
+    std::fs::write(&victim, "keep\n").unwrap();
+    std::os::unix::fs::symlink(&victim, config_home.join("recorder-ca.pem")).unwrap();
+
+    let der = b"not really a certificate, but bytes".to_vec();
+    let model_host = goalcup_cli::model_host::ModelHost {
+        host: "api.models.example.test".into(),
+        port: 8443,
+        base_path: "/v1".into(),
+        from: "model.base_url in config.yaml".into(),
+    };
+    let parent: BTreeMap<String, String> = [("PATH".to_string(), "/usr/bin:/bin".to_string())]
+        .into_iter()
+        .collect();
+    let log_path = root.join("host.log");
+    let log = std::fs::File::create(&log_path).unwrap();
+    launch_prep(
+        &connector,
+        &PrepLaunch {
+            executable: &resolved,
+            run_home: &run_home,
+            config_home: &config_home,
+            parent_env: &parent,
+        },
+        &workspace,
+        &LaunchPrepValues {
+            ca_certificate_der: &der,
+            model_host: Some(&model_host),
+        },
+        &log,
+    )
+    .expect("a failed launch prep command does not stop the run");
+
+    let ca_path = config_home.join("recorder-ca.pem");
+    let meta = std::fs::symlink_metadata(&ca_path).unwrap();
+    assert!(
+        meta.file_type().is_file(),
+        "the link was replaced by a file"
+    );
+    assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
+    let pem = std::fs::read_to_string(&ca_path).unwrap();
+    assert!(pem.starts_with("-----BEGIN CERTIFICATE-----\n"), "{pem}");
+    assert!(pem.ends_with("-----END CERTIFICATE-----\n"), "{pem}");
+
+    let url = "https://api.models.example.test:8443/v1";
+    let ca = ca_path.display().to_string();
+    let calls = std::fs::read_to_string(config_home.join("calls")).unwrap();
+    assert_eq!(
+        calls.lines().collect::<Vec<_>>(),
+        vec![
+            format!("config|set|providers.recorder.base_url|{url}|ca"),
+            format!("config|set|providers.recorder.ssl_ca_cert|{ca}|ca"),
+            "gateway|stop|-y|ca".to_string(),
+        ]
+    );
+    let logged = std::fs::read_to_string(&log_path).unwrap();
+    assert!(
+        logged.contains("`example-cli gateway stop -y` ended with exit code 2"),
+        "{logged}"
+    );
+    assert_eq!(logged.lines().count(), 1, "{logged}");
+    assert!(!logged.contains(url) && !logged.contains(&ca), "{logged}");
+
+    // The URL leaves out a 443 port.
+    let default_port = goalcup_cli::model_host::ModelHost {
+        port: 443,
+        ..model_host
+    };
+    assert_eq!(
+        goalcup_cli::launch::model_base_url(&default_port),
+        "https://api.models.example.test/v1"
+    );
+}

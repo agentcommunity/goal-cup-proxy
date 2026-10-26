@@ -446,7 +446,9 @@ pub(super) fn create_and_gate<'a>(
         // (D61): the participant's own setup may have turned one off. Their output goes to the
         // run's `host.log`, never to the terminal or the trace. A run that fails here is
         // unmade, its log with it, so the refusal points at prep, which logs to its own file.
-        if !profile.configure.is_empty() {
+        // Then the connector's launch prep (D72), which logs a failed command and goes on.
+        let launch_prep = c.loaded.manifest.launch_prep.is_some();
+        if !profile.configure.is_empty() || launch_prep {
             let run_dir = crate::run::run_dir(cfg, &record.run_id);
             let (log, _) =
                 crate::host_log::open_for_child(&run_dir).map_err(|source| CliError::Io {
@@ -456,14 +458,15 @@ pub(super) fn create_and_gate<'a>(
                         .to_string(),
                     source,
                 })?;
+            let home_launch = crate::launch::PrepLaunch {
+                executable: &prep.executable,
+                run_home: &run.home,
+                config_home: &config_home,
+                parent_env: env,
+            };
             crate::launch::configure_harness(
                 c,
-                &crate::launch::PrepLaunch {
-                    executable: &prep.executable,
-                    run_home: &run.home,
-                    config_home: &config_home,
-                    parent_env: env,
-                },
+                &home_launch,
                 &run.workspace,
                 &log,
                 &format!(
@@ -473,6 +476,18 @@ pub(super) fn create_and_gate<'a>(
                     cfg.join(crate::commands::prep::PREP_LOG_NAME).display()
                 ),
             )?;
+            if launch_prep {
+                crate::launch::launch_prep(
+                    c,
+                    &home_launch,
+                    &run.workspace,
+                    &crate::launch::LaunchPrepValues {
+                        ca_certificate_der: proxied.proxy.ca_certificate_der(),
+                        model_host: cx.model_host,
+                    },
+                    &log,
+                )?;
+            }
         }
         let mut vars = goalcup_protocol::template::TemplateVars::new();
         vars.set("workspace", run.workspace.display().to_string());
@@ -950,11 +965,18 @@ pub(super) fn run_harness<'a>(
                     Arc::new(move || ask_recording(&cfg, &entry_id, &key))
                 },
                 time_left_file: Some(crate::run::time_left::file_path(cfg, &forked.record.run_id)),
-                native: Some(crate::run::watch::NativeWatch {
-                    silence: cx.opts.native_silence.for_run(forked.record.practice),
-                    harness: forked.harness_name.clone(),
-                    guide: crate::commands::prep::setup_guide_link(cx.connector),
-                }),
+                // A connector whose harness may write no session file says so (D72): then
+                // a missing one is not a problem worth a line.
+                native: cx
+                    .connector
+                    .loaded
+                    .manifest
+                    .warns_missing_native()
+                    .then(|| crate::run::watch::NativeWatch {
+                        silence: cx.opts.native_silence.for_run(forked.record.practice),
+                        harness: forked.harness_name.clone(),
+                        guide: crate::commands::prep::setup_guide_link(cx.connector),
+                    }),
             }),
             pause: Some(pause.clone()),
         })

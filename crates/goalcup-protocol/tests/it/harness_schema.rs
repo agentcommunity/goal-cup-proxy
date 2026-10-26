@@ -3651,6 +3651,180 @@ fn a_configure_command_is_held_to_the_argument_rules() {
     refused(&t, PINNED, &["capture.configure", "--tui"]);
 }
 
+/// D72: a native source warns when its file is missing unless it says `warn_missing = false`.
+#[test]
+fn a_native_source_warns_when_missing_unless_it_says_not_to() {
+    let m = parsed(&chat());
+    assert!(m.capture.native[0].warn_missing);
+    assert!(m.warns_missing_native());
+    let mut t = chat();
+    set(&mut t, &["capture", "native"], "warn_missing", false);
+    admitted(&t, PINNED);
+    let m = parsed(&t);
+    assert!(!m.capture.native[0].warn_missing);
+    assert!(!m.warns_missing_native());
+}
+
+/// `chat()` with `capture.model_host_from` and a `[launch_prep]` of `ca_file` and `commands`.
+fn with_launch_prep(ca_file: Option<&str>, items: &[&[&str]]) -> Table {
+    let mut t = chat();
+    let mut from = Table::new();
+    from.insert("file".into(), Value::String("config.yaml".into()));
+    from.insert("key".into(), Value::String("model.base_url".into()));
+    set(&mut t, &["capture"], "model_host_from", Value::Table(from));
+    let mut prep = Table::new();
+    if let Some(name) = ca_file {
+        prep.insert("ca_file".into(), Value::String(name.into()));
+    }
+    prep.insert("commands".into(), commands(items));
+    t.insert("launch_prep".into(), Value::Table(prep));
+    t
+}
+
+/// D72: `[launch_prep]` commands follow the `capture.configure` rules, except that a key that
+/// holds `base_url` or `cacert` is admitted when the next argument is exactly its template,
+/// `{model_base_url}` or `{ca_file}`. A template anywhere else, any other template, a path, and
+/// a trust or endpoint word outside such a pair are refused.
+#[test]
+fn launch_prep_admits_its_two_templates_only_after_their_keys() {
+    let hermes: &[&[&str]] = &[
+        &[
+            "config",
+            "set",
+            "providers.recorder.base_url",
+            "{model_base_url}",
+        ],
+        &[
+            "config",
+            "set",
+            "providers.recorder.ssl_ca_cert",
+            "{ca_file}",
+        ],
+        &["gateway", "stop", "-y"],
+    ];
+    let t = with_launch_prep(Some("recorder-ca.pem"), hermes);
+    admitted(&t, PINNED);
+    let m = parsed(&t);
+    let prep = m.launch_prep.expect("loaded");
+    assert_eq!(prep.ca_file.as_deref(), Some("recorder-ca.pem"));
+    assert_eq!(prep.commands.len(), 3);
+    // Absent is the default.
+    assert!(parsed(&chat()).launch_prep.is_none());
+
+    const FIELD: &str = "launch_prep.commands";
+    let cases: Vec<(Option<&str>, &[&str], &[&str])> = vec![
+        // An endpoint or trust key with a value of the connector's own.
+        (
+            Some("ca.pem"),
+            &[
+                "config",
+                "set",
+                "providers.x.base_url",
+                "https://evil.example",
+            ],
+            &[FIELD, "base_url"],
+        ),
+        (
+            Some("ca.pem"),
+            &["config", "set", "providers.x.ssl_ca_cert", "evil.pem"],
+            &[FIELD, "certificates"],
+        ),
+        // The wrong template for the key leaves the key refused; a template on its own, or
+        // after a key without its word, is refused.
+        (
+            Some("ca.pem"),
+            &["config", "set", "providers.x.base_url", "{ca_file}"],
+            &[FIELD, "model endpoint"],
+        ),
+        (
+            Some("ca.pem"),
+            &[
+                "config",
+                "set",
+                "providers.x.ssl_ca_cert",
+                "{model_base_url}",
+            ],
+            &[FIELD, "certificates"],
+        ),
+        (
+            Some("ca.pem"),
+            &["{ca_file}"],
+            &[FIELD, "right after the key"],
+        ),
+        (
+            Some("ca.pem"),
+            &["config", "set", "x", "{model_base_url}"],
+            &[FIELD, "right after the key"],
+        ),
+        // Any other template, or one inside an argument.
+        (
+            Some("ca.pem"),
+            &["config", "set", "x", "{workspace}"],
+            &[FIELD, "brace"],
+        ),
+        (
+            Some("ca.pem"),
+            &["config", "set", "x.base_url={model_base_url}"],
+            &[FIELD, "brace"],
+        ),
+        // An absolute path, and the tracker's name.
+        (
+            Some("ca.pem"),
+            &["config", "set", "x", "/etc/ca.pem"],
+            &[FIELD, "/etc/ca.pem"],
+        ),
+        (
+            Some("ca.pem"),
+            &[
+                "config",
+                "set",
+                "providers.goalcup.base_url",
+                "{model_base_url}",
+            ],
+            &[FIELD, "Goal Cup Proxy"],
+        ),
+        // A pair admits its own word only: `model` is still a denied key.
+        (
+            Some("ca.pem"),
+            &["config", "set", "model.base_url", "{model_base_url}"],
+            &[FIELD, "names `model`"],
+        ),
+        // `{ca_file}` needs a `ca_file`.
+        (
+            None,
+            &["config", "set", "providers.x.ssl_ca_cert", "{ca_file}"],
+            &[FIELD, "launch_prep.ca_file"],
+        ),
+    ];
+    for (ca_file, command, needles) in cases {
+        refused(&with_launch_prep(ca_file, &[command]), PINNED, needles);
+    }
+    // `{model_base_url}` needs `capture.model_host_from`.
+    let mut t = with_launch_prep(None, &[hermes[0]]);
+    tbl(&mut t, &["capture"]).remove("model_host_from");
+    refused(&t, PINNED, &[FIELD, "capture.model_host_from"]);
+    // The CA file is one `.pem` name that does not name the tracker.
+    for bad in [
+        "../ca.pem",
+        "sub/ca.pem",
+        "ca.txt",
+        ".pem",
+        "goalcup-ca.pem",
+    ] {
+        refused(
+            &with_launch_prep(Some(bad), hermes),
+            PINNED,
+            &["launch_prep.ca_file", bad],
+        );
+    }
+    // The configure bounds hold.
+    refused(
+        &with_launch_prep(Some("ca.pem"), &[hermes[2]; 5]),
+        PINNED,
+        &[FIELD, "4 commands"],
+    );
+}
+
 /// `capture.model_host_from` (D62): with it a profile may list no host; it needs the shared
 /// config home; its file is a YAML, JSON or TOML file inside it that names no key file, and its
 /// key is a dotted name that names no key.

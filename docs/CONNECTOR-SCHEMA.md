@@ -24,8 +24,8 @@ the owner approves it). The rest of this page is the field-by-field detail.
   `[[capture.hosts]]` or `providers` rows, each host row with `host` and at least one path, or
   `model_host_from`). Some pairs are required together, such as `home.env` with a
   `{config_home}` root ([Cross-field rules](#cross-field-rules)).
-  Optional, each with the default its table below gives: `[participant]`, `resume_args`,
-  `configure`, `auth_hosts`, `env`, `platform`, `reserved_env_prefixes`, `argv_guard`,
+  Optional, each with the default its table below gives: `[participant]`, `[launch_prep]`,
+  `resume_args`, `configure`, `auth_hosts`, `env`, `platform`, `reserved_env_prefixes`, `argv_guard`,
   `termination`, `providers`, `model_host_from`, the home's `skills_dir`, `per_run_dir`, `dirs`
   and `seed`, `version_args`, and `[redaction]`. The one-screen list is
   [What a chat connector writes](#what-a-chat-connector-writes).
@@ -50,8 +50,8 @@ the owner approves it). The rest of this page is the field-by-field detail.
     `GOALCUP_IN_HARNESS=1` (`goalcup seal` refuses under it) and `GOALCUP_TIME_LEFT_FILE` (the
     run's time-left file, D66).
 
-  `goalcup setup` and `capture.configure` commands get the same environment with no proxy, no CA
-  variable and no `GOALCUP_*` variable: they record nothing. The `version_args` probe gets only
+  `goalcup setup`, `capture.configure` and `[launch_prep]` commands get the same environment with
+  no proxy, no CA variable and no `GOALCUP_*` variable: they record nothing. The `version_args` probe gets only
   `PATH` and a throwaway `HOME`. The harness runs in the run's workspace, on the participant's
   terminal (stdin, stdout and stderr inherited). Its argv is `args`, then `resume_args` on a
   `goalcup continue` that finds a session file in its native store (or cannot read the store,
@@ -196,6 +196,8 @@ has each line with its comment. The full reference below has every rule.
 | `[redaction]` | Optional: plan, quota and billing fields the harness sends | `{ kind = "codex_plan_type", json_field = "plan_type", value = "string" }` |
 
 Only when needed: `capture.configure` (a setting with no environment variable, as Hermes has),
+`[launch_prep]` (a harness that keeps a process of its own between launches or trusts a CA file
+only through its own config, as Hermes 0.22 does),
 `capture.argv_guard` and `capture.reserved_env_prefixes` (a harness that scans its own options or
 has a safe-mode variable). A connector never writes `goal_flag`, an identity `binding` or
 selector, or `[capture.credential]`: each is refused. Seeds (`capture.home.seed`) are allowed but no shipped
@@ -216,7 +218,7 @@ those sources disagree, the sources refuse the manifest.
 `[capture.credential]` table there (D61), then
 deserializes every table with unknown fields denied, appends the `capture.providers` rows to
 `capture.hosts`, then validates in this fixed order:
-executable; arguments and goal; configure commands; environment; home; CA; identity;
+executable; arguments and goal; configure commands; launch prep; environment; home; CA; identity;
 native source; argument guard; termination; model host; hosts; redaction; delivery independence; cross-field
 rules; then each `capture.platform` entry, in the fixed order `linux-x86_64`, `linux-aarch64`,
 `macos-aarch64`, `macos-x86_64`, whatever order the file uses. The first refusal is deterministic. Unknown keys and
@@ -250,6 +252,7 @@ optional field or table is absent.
 | `capture` | required table | The complete launch-and-capture profile below. |
 | `participant` | optional, default absent | `[participant]`: the harness's display name and first-screen hint for messages to the participant; see below. |
 | `redaction` | optional, default absent | Connector-selected rows from the core redaction mirror. |
+| `launch_prep` | optional, default absent | `[launch_prep]`: a CA file and commands run in the harness home before each launch (D72). See [Launch prep](#launch-prep). |
 | `capture.args` | required | 0–64 strings in chat mode; each at most 4096 bytes and without control characters. |
 | `capture.goal_flag` | refused | Headless mode's goal option; refused as chat mode only (see below). |
 | `capture.interactive` | required: `true` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57). `false`, or leaving it out, is refused as chat mode only (see below). |
@@ -320,6 +323,51 @@ configure = [
   `auth.Token` are refused; `max_tokens` is not). The `args` rules also refuse the endpoint,
   credential, proxy and trust spellings, a profile switch and the connector's own guarded options.
   Review is the control for the rest.
+
+### Launch prep
+
+`[launch_prep]` (D72, schema 1, additive) is for a harness that keeps a process of its own
+between launches (Hermes 0.22's gateway, one per home, which keeps the environment of whoever
+started it) or that trusts a CA file only through its own config (Hermes 0.22 on macOS reads
+`HERMES_CA_BUNDLE` no more; a provider entry's `ssl_ca_cert` works). It is a top-level table.
+
+```toml
+[launch_prep]
+ca_file = "recorder-ca.pem"
+commands = [
+  ["config", "set", "providers.recorder.base_url", "{model_base_url}"],
+  ["config", "set", "providers.recorder.ssl_ca_cert", "{ca_file}"],
+  ["gateway", "stop", "-y"],
+]
+```
+
+- **`ca_file`** (optional). One file name in the config home, of `[A-Za-z0-9._-]` (at most 64
+  bytes), ending in `.pem`, that does not name the tracker. At every start and continue goalcup
+  writes the run's recording-proxy CA there, alone, as PEM, mode 0600, through a new temporary
+  file and a rename, so a link at that name is replaced and never followed. If that write fails,
+  the start is refused.
+- **`commands`** (optional, default `[]`). At most 4, each 1–16 arguments of 1–256 bytes, held
+  to every `capture.configure` rule, with one exception. Two templates exist, and each must be a
+  whole argument: `{model_base_url}` (the URL `capture.model_host_from` read: `https://`, the
+  host, `:port` unless 443, and the path; never a userinfo or a query) and `{ca_file}` (the
+  absolute path of `ca_file`). A template is admitted only right after a key argument that holds
+  its word: `base_url` (any case, `-` and `_` ignored) before `{model_base_url}`, `cacert` before
+  `{ca_file}`. That key is then admitted although the deny lists refuse that word, and only that
+  word: `model.base_url` is still refused for `model`. `{model_base_url}` needs
+  `capture.model_host_from`, and `{ca_file}` needs `ca_file`. Any other brace is refused.
+- **When and how.** At every `goalcup start` and `goalcup continue`, after `capture.configure`
+  and before the launch, never at `goalcup setup`: the CA file first, then each command in order,
+  run as configure commands run (the harness home, no proxy, stdin `/dev/null`, 60 seconds each,
+  output to `host.log`).
+- **Failure.** A command that cannot start, ends non-zero, is ended by a signal or outlives its
+  60 seconds does not stop the run: one line in `host.log` names it in its template form (never
+  with the URL or the path filled in) and the launch goes on. An older harness may lack a
+  command (Hermes 0.19.0 has no `-y` on `gateway stop`).
+- **What it may change.** Only the harness's trust of the recording proxy for the URL its own
+  config already names, and processes of its own that would keep an old environment. The pair
+  rule means the only value a `base_url` or `cacert` key can get is goalcup's own: the URL the
+  participant chose, and the run's CA (D1 stands: where the harness sends its calls does not
+  change).
 
 Argument templates (`args` and `resume_args`) admit only `{workspace}`.
 `capture.env` value templates also admit `{config_home}` (the isolated harness home) and
@@ -562,6 +610,7 @@ Exactly one native row is required.
 | `capture.native[].form` | required | Closed values: `append_only`, `snapshot`. `sqlite` is explicitly a core capability, not schema 1. |
 | `capture.native[].protocol_hint` | optional, default absent | `append_only` only; 1–64 bytes matching `^[a-z][a-z0-9.-]{0,63}$`. |
 | `capture.native[].since_run_start` | optional, default `false` | Boolean. `true` reads only the files new or written since the run started (D57). |
+| `capture.native[].warn_missing` | optional, default `true` | Boolean. `false` keeps the "no session file" `PROBLEM:` line quiet, for a harness whose supported versions include ones that write no such file (D72). The file is still read whenever it is written. |
 
 Pattern components admit `[A-Za-z0-9._-]`, `*` and `?`. Empty, `.` or `..` components,
 recursive `**`, braces (`{id}` included: no run names a session) and absolute paths are refused.

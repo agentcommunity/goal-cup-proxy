@@ -313,10 +313,10 @@ These look odd but are right. Do not "fix" them.
   wrong config home, does the same. Now said early: ten minutes after the first recorded request to
   the model service, with at least ten of them and no file taken by the admitted native reader,
   `goalcup status` keeps a `PROBLEM:` line (and `--json` a `problems` entry) until a file is
-  taken, and `host.log` has it once per start or continue; nothing stops. Hermes is pinned to
-  0.19.0 in HARNESS-SETUP, the guide and the setup skill (#249, #259). A setup warning for 0.21.1
-  and later was cut (D70): the practice run, with its shorter thresholds (five requests, three
-  minutes), is what catches it.
+  taken, and `host.log` has it once per start or continue; nothing stops. Since D72 the latest Hermes is
+  supported with model calls only: its connector sets `warn_missing = false`, so the line stays
+  quiet for Hermes, and the "no model calls recorded" line covers a run that records nothing.
+  Open: a reader for Hermes's `state.db` (not in 0.7.0).
 - **T24:** the release tarballs are unsigned. They carry every connector since #164.
 - **H-26:** when a stop cannot be confirmed (`Unresolved`), record the final pushed Git commit as a
   "last known state" marker. Open question: which branch counts when the work is not on main.

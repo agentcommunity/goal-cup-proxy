@@ -46,6 +46,17 @@ consistent, not that the participant followed the rules.
   through the recording proxy; and the research report's `analysis.cross_leg` notes
   `native_activity_without_wire_streams` when the session file shows model work the recording proxy did not
   record.
+- **A Hermes gateway started outside the run is not recorded (D72).** Hermes 0.22 makes every
+  model call in a gateway process, one per `HERMES_HOME`, which keeps the environment of whoever
+  started it. A gateway started outside the run (by `goalcup setup`, the participant, a kanban or
+  cron worker, or a launchd unit from `hermes gateway install`) has no recording proxy, so its
+  calls go straight to the model service and leave no record. The controls: `[launch_prep]` stops
+  the home's gateway just before each launch (`hermes gateway stop -y`, last, so `hermes chat`
+  starts a fresh one with the run's proxy), and a run that records no model calls gets the "no
+  model calls recorded" `PROBLEM:` line in `goalcup status` after 3 minutes (practice) or 10. A
+  gateway that another process starts in the seconds between the stop and the launch, or a stop
+  that fails (only logged in `host.log`), is caught by that line only. Hermes 0.21.1 and later
+  write no session file, so for them the native leg cannot show the gap either.
 - **Amp's native leg is a metadata log, not a transcript (owner ruling, 16 Oct 2026).** Amp keeps
   the conversation on `ampcode.com`. The `amp-cli` connector records Amp's per-thread log
   (`$HOME/.cache/amp/logs/threads/T-<uuid>.log`): transport states, JSON-RPC request names, server

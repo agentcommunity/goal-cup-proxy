@@ -33,9 +33,9 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    harnesses and lets you pick one, opens it once in its own isolated home so you sign in (or
    paste your API key; Goal Cup never sees it) and set it never to stop for approval
    ([set up your harness for a 168-hour run](docs/HARNESS-SETUP.md)), and checks this machine.
-   Run it until every step says `[ok]`. It needs no GitHub and keeps no key. For Hermes, install
-   exactly `uv tool install hermes-agent==0.19.0`, not Hermes's own installer, which installs the
-   newest release (it writes no session file). See [Hermes setup](docs/HARNESS-SETUP.md#hermes).
+   Run it until every step says `[ok]`. It needs no GitHub and keeps no key. For Hermes, the
+   newest release from Hermes's own installer is fine with an API-key service such as DeepSeek;
+   see [Hermes setup](docs/HARNESS-SETUP.md#hermes) for the setups that need 0.19.0.
 3. **Practice** (optional): in an empty folder, `goalcup start --harness <id> --practice`. About
    ten minutes, no GitHub, no token, never counts. Do as many as you like.
 4. **Make the repository, the token and the folder**, in this order. Create a new, empty, public

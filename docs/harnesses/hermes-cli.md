@@ -33,7 +33,7 @@ Headless (the recipe before D61, frozen at [`frozen-connectors/hermes-cli`](../.
 
 ## 2. Install and record a version
 
-- Distribution: the Python package `hermes-agent`. Goal Cup installs Hermes with `uv tool install hermes-agent==0.19.0` (see [Hermes setup](../HARNESS-SETUP.md#hermes)). PyPI's newest `hermes-agent` is 0.19.0 (20 Jul 2026); later releases (0.20 to 0.22) exist only as git tags (checked 22 Oct 2026). Hermes 0.21.0 (tag `v2026.8.31`) still writes the session file Goal Cup records; 0.21.1 (tag `v2026.9.7`) removed it (section 4). Hermes's own installer installs the newest release, `v0.22.4` on 21 Oct 2026, so Goal Cup does not use it. `harnesses/install.sh`, a research script, installs the latest PyPI version unpinned, and its `git clone --depth 1` fallback gets the source's `main`. `hermes-agent==0.19.0` is the measured version. The `==` spelling is standard uv/pip syntax, not run for this sheet. No build is pinned (D53). The connector's `version_args` is `--version`: `hermes --version` prints `Hermes Agent v0.19.0 (2026.7.20)` in under a second with a fresh HOME (measured 22 Oct 2026, macOS and Docker).
+- Distribution: the Python package `hermes-agent`. Goal Cup installs Hermes with `uv tool install hermes-agent==0.19.0` (see [Hermes setup](../HARNESS-SETUP.md#hermes)). PyPI's newest `hermes-agent` is 0.19.0 (20 Jul 2026); later releases (0.20 to 0.22) exist only as git tags (checked 22 Oct 2026). Hermes 0.21.0 (tag `v2026.8.31`) still writes the session file Goal Cup records; 0.21.1 (tag `v2026.9.7`) removed it (section 4). Hermes's own installer installs the newest release (`v0.22.4` on 21 Oct 2026, `v0.22.5` measured on 26 Oct); since D72 that is fine, with the limits in [Hermes 0.22](#hermes-022-the-gateway-and-certificate-trust). `harnesses/install.sh`, a research script, installs the latest PyPI version unpinned, and its `git clone --depth 1` fallback gets the source's `main`. `hermes-agent==0.19.0` is the measured version. The `==` spelling is standard uv/pip syntax, not run for this sheet. No build is pinned (D53). The connector's `version_args` is `--version`: `hermes --version` prints `Hermes Agent v0.19.0 (2026.7.20)` in under a second with a fresh HOME (measured 22 Oct 2026, macOS and Docker).
 - Requires Python `>=3.11,<3.14`; measured with CPython 3.13.13 (source; metadata).
 - Binary: `$UV_TOOL_BIN_DIR/hermes` is a 372-byte console script whose entry point is `hermes_cli.main:main`. The daemon records its SHA-256 (D53). Whether those bytes are the same on every install, OS and interpreter path: unknown.
 - Print the version: unknown (the connector does not use a version command; the installed distribution name and version are read from the package metadata).
@@ -53,7 +53,7 @@ Headless (the recipe before D61, frozen at [`frozen-connectors/hermes-cli`](../.
 - **State store.** `state.db` holds every session from every surface: `sessions` and `messages` tables with an `AUTOINCREMENT` message id, plus `session_model_usage` and `async_delegations` (measured on 0.19.0, schema 22). Compaction soft-archives rows (`active=0`, `compacted=1`) rather than deleting them; `hermes sessions delete/prune` hard-deletes (vendor docs).
 - **Snapshot Goal Cup reads.** `session_<id>.json` is one JSON object per session (`session_id`, `model`, `base_url`, `platform`, times, normalized system prompt, tools, messages), rewritten whole at every persistence point with a temp file, `fsync` and replace (source). It is a normalized, secret-redacted final state, not an event stream, and omits per-message timestamps and token counts (source). It is written with `indent=2`, so it is multi-line JSON, not JSON lines, and carries `message_count` (source, `run_agent.py:2694-2785` at tag `v2026.7.20`, the 0.19.0 release). It names no parent session. Goal Cup has no decoder for it yet; a snapshot stream has no protocol hint (connector schema 1 allows a hint on `append_only` stores only), so no decoder can select it.
 - **Removed upstream (source, public repository, not measured).** The snapshot was always opt-in (default off); Goal Cup gets it only because the connector sets `sessions.write_json_snapshots: true`. Hermes 0.21.1 (tag `v2026.9.7`) removed the opt-in snapshot: that setting is now ignored, `state.db` is the only store, and `/save json <path>` remains as an explicit export (`tests/agent/test_session_snapshot_removal.py`). 0.21.0 (tag `v2026.8.31`) still writes it. A run on 0.21.1 or later records no native file.
-- **Which version a participant gets (source, checked 22 Oct 2026, not measured).** Hermes's own README installs with `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`. That installer clones the repository and, by default (`--channel stable`), checks out the latest stable release tag: `v0.22.4` (21 Oct 2026), which writes no snapshot. So a participant who follows Hermes's documentation records no native file. `uv tool install hermes-agent` and `pip install hermes-agent==<v>` (`scripts/linux-matrix.sh`) reach only PyPI, which stops at 0.19.0; 0.21.0 or any later release can be installed only from its git tag (or the installer's `--commit`). Decided: Goal Cup pins 0.19.0 (HARNESS-SETUP).
+- **Which version a participant gets (source, checked 22 Oct 2026, not measured).** Hermes's own README installs with `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`. That installer clones the repository and, by default (`--channel stable`), checks out the latest stable release tag: `v0.22.4` (21 Oct 2026), which writes no snapshot. So a participant who follows Hermes's documentation records no native file. `uv tool install hermes-agent` and `pip install hermes-agent==<v>` (`scripts/linux-matrix.sh`) reach only PyPI, which stops at 0.19.0; 0.21.0 or any later release can be installed only from its git tag (or the installer's `--commit`). Decided since D72: the latest release is fine, and Goal Cup records its model calls ([Hermes 0.22](#hermes-022-the-gateway-and-certificate-trust), HARNESS-SETUP).
 - **One per session.** One snapshot file per session id; a resume appends to the same `sessions` row (measured, spike).
 - **Id.** `YYYYMMDD_HHMMSS_<six lowercase hex>`, generated at start (source; the reference row had `20261002_125737_dc0697`).
 - **Where the id first appears.** In chat mode, in the banner (`Session: <id>`) on the terminal and, after a message, as the snapshot's file name (measured 2026-10-16). Headless with `-Q`, on stderr as `session_id: <id>` after the final turn (source; measured on the reference row). Compression keeps the id in place by default; the connector sets `compression.in_place: false`, so each compaction starts a new id and a new snapshot, written since the run started and recorded (D61).
@@ -75,7 +75,7 @@ Headless (the recipe before D61, frozen at [`frozen-connectors/hermes-cli`](../.
 - **Other hosts.** `models.dev` is asked for model metadata by a bare `requests.get`, tunnels opaquely and has no switch (source; the reference row recorded no chain record for it). Hermes also downloads a `tirith` scanner from GitHub at start unless the participant's `security.tirith_enabled: false` stops it (source; the pre-D61 seed set it). It tunnels opaquely like any host not in `capture.hosts`. The 2026-09-03 spike saw a 32.8 MB binary downloaded mid-session (measured). The update-check host behind `.update_check`: unknown.
 - **Telemetry.** None by default (vendor docs: the FAQ says Hermes collects none). A built-in OTLP exporter is opt-in and content-free (vendor docs).
 - **Proxy.** `HTTPS_PROXY` is honoured; the reference row went through a loopback forward proxy with `NO_PROXY` for loopback only (measured).
-- **Custom CA.** `HERMES_CA_BUNDLE`, checked first by Hermes's provider clients; it replaces the trust roots rather than extending them, which fails closed (source; [D41](../DECISIONS.md#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) and connector `capture.ca`, mode `replace`). `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE` are not used by Goal Cup. `models.dev` calls keep certifi roots.
+- **Custom CA.** On Hermes 0.22, a provider entry's `ssl_ca_cert`, which goalcup sets before each launch ([Hermes 0.22](#hermes-022-the-gateway-and-certificate-trust), D72). Up to 0.21.0, `HERMES_CA_BUNDLE`, checked first by Hermes's provider clients; it replaces the trust roots rather than extending them, which fails closed (source; [D41](../DECISIONS.md#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules) and connector `capture.ca`, mode `replace`). `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE` are not used by Goal Cup. `models.dev` calls keep certifi roots.
 - **WebSocket / SSE.** SSE on the provider call (measured). `hermes serve` and the dashboard use WebSocket (vendor docs); not used.
 - **Base-URL overrides (Goal Cup never sets these).** `DEEPSEEK_BASE_URL`, `OPENAI_BASE_URL`, config `model.base_url`, `HERMES_INFERENCE_PROVIDER` (source).
 
@@ -105,6 +105,57 @@ Headless (the recipe before D61, frozen at [`frozen-connectors/hermes-cli`](../.
 - Known gap, OAuth-login providers (traced from source, not measured; to be run in the test round): Nous Portal refreshes its token through `hermes_cli/auth.py:5780` `resolve_nous_runtime_credentials`, whose TLS context `_resolve_verify` (`auth.py:4593`) is built from `HERMES_CA_BUNDLE`, which holds the recording proxy CA alone. The refresh goes to the login host (`portal.nousresearch.com`), not the approved `model.base_url` host, so it tunnels with its real certificate and fails its handshake. Model calls then fail with an auth error once the token minted at prep has expired, and the start does not refuse. Codex-OAuth and xAI-OAuth refreshes follow the same pattern. So API-key services work, and OAuth-login services may not, until a test-round run measures it.
 - The first reference row passed capture integrity but its trace has not been re-decoded; the claim stays capture-only ([reference row, D41](../DECISIONS.md#d41-m2-hermes-reference-row-model-ca-trust-key-fingerprint-and-key-fragment-rules)).
 - Open: every "unknown" above; the Linux and Windows `HERMES_HOME`; the update-check host; failure exit codes; whether the console script bytes are portable; whether `hermes profile use` inside the shared home redirects runs (the `active_profile` file is not guarded).
+
+## Hermes 0.22: the gateway and certificate trust
+
+Hermes 0.22 (measured with v0.22.5 on macOS, 26 Oct 2026, staging practice runs; source read at
+the v0.22.5 checkout) changed two things the 0.19.0 recipe relied on. The connector's
+`[launch_prep]` (D72) handles both.
+
+- **The gateway.** `hermes chat` is a thin client: every model call runs in a gateway process,
+  one per `HERMES_HOME`, which keeps the environment of whoever started it. A gateway left running
+  from `goalcup setup`, or from an earlier run, has no recording proxy in its environment, so its
+  calls go straight to the model service and nothing is recorded. With no gateway running,
+  `hermes chat` inside the run starts a fresh one with the run's environment (measured: born 1 s
+  after the start). So `[launch_prep]` ends with `hermes gateway stop -y`, last, nearest the
+  launch. It exits 0 when no gateway runs (measured). Hermes 0.19.0 has no `-y` there and exits 2;
+  goalcup logs that line in `host.log` and goes on.
+- **Trust.** Hermes 0.22 on macOS ignores `HERMES_CA_BUNDLE`. What it trusts for an endpoint is a
+  provider entry's `ssl_ca_cert`, matched by the endpoint's base URL (`agent/ssl_verify.py`
+  `resolve_httpx_verify`; entries from `providers:` and `custom_providers:`). That file replaces
+  the system roots for that endpoint, so a missing file fails closed. So before each launch
+  goalcup writes the run's proxy CA to `recorder-ca.pem` in the home (mode 0600) and runs
+  `hermes config set providers.recorder.base_url <the model.base_url goalcup read>` and
+  `hermes config set providers.recorder.ssl_ca_cert <that file>`. Both exit 0 and start no
+  gateway (measured). The entry covers the main chat client and the auxiliary client (titles,
+  compression). It does not change which provider or model Hermes uses: it has no key, model or
+  `api_mode`, and is picked only by its name. It does show in the `/model` picker and in
+  `hermes doctor`; picking it gives a provider with no key.
+- **Result.** With no old gateway and the entry in place, a staging practice run recorded 1.2 MB
+  of DeepSeek calls with no certificate error (measured, run 3).
+- **Session file.** Hermes 0.21.1 and later write no `session_<id>.json` (section 4). goalcup
+  records their model calls only, as for Amp. The connector's native row has
+  `warn_missing = false`, so `goalcup status` does not print the "no session file" line for them.
+  Old Hermes still writes and records its file. `HERMES_CA_BUNDLE` and the
+  `sessions.write_json_snapshots` configure command stay for Hermes up to 0.21.0.
+- **`goalcup continue`** opens a new Hermes session on 0.21.1 and later: with no session file it
+  cannot ask for `--continue`. The earlier conversation stays in Hermes's own `state.db`.
+
+Known limits (each shows up as the "no model calls recorded" line in `goalcup status`, none is
+silent):
+
+- A provider entry of your own for the same URL is matched first, so the recording CA is not
+  used and the calls fail.
+- A bare `provider: custom` setup may treat the `recorder` entry as the URL's owner (source,
+  `hermes_cli/runtime_provider_custom.py`; not verified).
+- Hermes's native Anthropic client ignores `ssl_ca_cert` (`agent/anthropic_adapter.py`), so Hermes
+  with the Anthropic provider records nothing on 0.21.6 and later. Use another provider, or Hermes
+  0.21.0 or older.
+- A model URL with a query string (Azure's `?api-version=`) does not match the entry, which holds
+  the host, port and path only.
+- A gateway another Hermes process starts between the stop and the launch (a kanban or cron
+  worker, or a launchd unit from `hermes gateway install`) keeps its old environment
+  ([CHEAT-CHECKLIST](../CHEAT-CHECKLIST.md)).
 
 ## Run without permission prompts
 
