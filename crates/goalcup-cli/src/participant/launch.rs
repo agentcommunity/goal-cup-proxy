@@ -23,6 +23,16 @@ pub struct Launch<'a> {
     pub prompt_file: Option<&'a std::path::Path>,
     /// The lines were copied to the clipboard.
     pub on_clipboard: bool,
+    /// The model calls the run's earlier parts recorded; `None` for a first launch, or a run a
+    /// build before 0.7.1 started, which kept no count (D73).
+    pub calls_before: Option<u64>,
+}
+
+/// Whether the launch block shows the push lines (D73): when the harness opens a new
+/// conversation, and when it picks up one in which no model call was ever recorded, so the
+/// prompt may not have been sent.
+pub fn shows_push_block(opens: Opens, calls_before: Option<u64>) -> bool {
+    opens != Opens::LastSession || calls_before == Some(0)
 }
 
 /// How the harness opens for one part of a run.
@@ -80,7 +90,7 @@ pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
         lines.push(first.to_string());
     }
     // A new conversation does not know where to push: the lines are said again (D73).
-    if l.opens != Opens::LastSession && !l.prompt.is_empty() {
+    if shows_push_block(l.opens, l.calls_before) && !l.prompt.is_empty() {
         if l.on_clipboard {
             lines.push(PUSH_BLOCK_ON_CLIPBOARD.to_string());
             if let Some(file) = l.prompt_file {
@@ -100,10 +110,16 @@ pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
         }
         lines.extend(l.prompt.iter().map(|line| format!("  {line}")));
     }
-    if l.opens == Opens::LastSession {
+    if l.opens == Opens::LastSession && l.calls_before.is_some_and(|calls| calls > 0) {
         // The harness picks up the conversation the prompt is in (D73).
         lines.push(format!(
             "If the agent has stopped, type only \"{KEEP_GOING}\" and press Enter."
+        ));
+    } else if l.opens == Opens::LastSession {
+        // No model call recorded yet, or a run with no count: the prompt may not have been sent.
+        lines.push(format!(
+            "If the agent has stopped, type \"{KEEP_GOING}\" and press Enter. If you never sent \
+             your prompt, send it now: it is still your one prompt."
         ));
     } else {
         lines.push(format!(

@@ -282,8 +282,7 @@ pub(super) fn create_and_gate<'a>(
         .and_then(|continuing| {
             crate::run::read_state(&crate::run::run_dir(cfg, &continuing.record.run_id))
         })
-        .and_then(|state| state.model_calls)
-        .unwrap_or(0);
+        .and_then(|state| state.model_calls);
     // A continued run picks up the harness's last session only when the run has one; one whose
     // harness closed before the first message opens the normal way, and the launch block says so.
     // A store that cannot be read cannot tell: the harness is resumed, and the run's log says why.
@@ -301,11 +300,11 @@ pub(super) fn create_and_gate<'a>(
                 started_at_unix,
             ) {
                 Ok(true) => crate::participant::Opens::LastSession,
-                Ok(false) if resumes_without_a_file(profile, model_calls_before) => {
+                Ok(false) if resumes_without_a_file(profile, model_calls_before.unwrap_or(0)) => {
                     session_note = Some(format!(
                         "no session file was found, and the run's earlier parts recorded \
-                         {model_calls_before} model calls, so the harness is asked to pick up \
-                         its last session"
+                         {} model calls, so the harness is asked to pick up its last session",
+                        model_calls_before.unwrap_or(0)
                     ));
                     crate::participant::Opens::LastSession
                 }
@@ -608,7 +607,7 @@ pub(super) fn create_and_gate<'a>(
         }
     };
     // On the clipboard too, when the block is shown and a clipboard tool is there (D73).
-    let on_clipboard = opens != crate::participant::Opens::LastSession
+    let on_clipboard = crate::participant::shows_push_block(opens, model_calls_before)
         && !prompt.is_empty()
         && !crate::chat_without_terminal()
         && crate::push_lines::copy_to_clipboard(&crate::push_lines::text(&prompt), env);
@@ -781,6 +780,7 @@ pub(super) fn register_and_release<'a>(
             prompt: &forked.prompt,
             prompt_file: forked.prompt_file.as_deref(),
             on_clipboard: forked.on_clipboard,
+            calls_before: forked.model_calls_before,
         });
         let _ = block
             .iter()
@@ -931,7 +931,7 @@ pub(super) fn run_harness<'a>(
     // What is left of the run, by the server's answer: the uploader keeps it from here (WP11).
     launched.time_left = forked.time_left();
     // The run's model calls so far, which the tick adds this part's to (D73).
-    launched.model_calls = Some(forked.model_calls_before);
+    launched.model_calls = Some(forked.model_calls_before.unwrap_or(0));
     let keeper = crate::run::StateKeeper::begin(
         &crate::run::run_dir(forked.cfg, &forked.record.run_id),
         launched,
@@ -945,7 +945,7 @@ pub(super) fn run_harness<'a>(
             .client_tls_from(proxied.proxy.client_tls_failures()),
         None => crate::run::RunSignals::default(),
     }
-    .model_calls_before(forked.model_calls_before);
+    .model_calls_before(forked.model_calls_before.unwrap_or(0));
     // A run on a server reports its disk and goalcup's own processes in its heartbeats.
     let vitals = match forked.upload.as_ref() {
         Some(start) => vitals.probing(crate::vitals::Probe::new(

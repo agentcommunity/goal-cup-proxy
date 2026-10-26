@@ -66,7 +66,8 @@ pub(super) struct Forked<'a> {
     /// They were copied to the clipboard.
     pub(super) on_clipboard: bool,
     /// The model calls the run's earlier parts recorded, by its `state.json` (D73).
-    pub(super) model_calls_before: u64,
+    /// `None` for a first launch, or a run whose earlier parts a build before 0.7.1 ran.
+    pub(super) model_calls_before: Option<u64>,
     /// The run's ids and folders, held back from the launch block and written to its
     /// `host.log` once it is open.
     pub(super) details: Vec<String>,

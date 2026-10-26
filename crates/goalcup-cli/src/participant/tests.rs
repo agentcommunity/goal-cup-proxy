@@ -108,6 +108,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         prompt: &[],
         prompt_file: None,
         on_clipboard: false,
+        calls_before: None,
         first_screen: Some("It asks whether you trust this folder. Choose Yes."),
     });
     let text = block.join("\n");
@@ -137,6 +138,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         prompt: &[],
         prompt_file: None,
         on_clipboard: false,
+        calls_before: None,
         first_screen: None,
     })
     .join("\n");
@@ -146,9 +148,8 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         "{continued}"
     );
     assert!(continued.contains(KEEP_GOING), "{continued}");
-    // A resumed conversation already holds the prompt: only "keep going" (D73).
-    assert!(continued.contains("type only"), "{continued}");
-    assert!(!continued.contains("one prompt"), "{continued}");
+    // A run with no count (started before 0.7.1) keeps the 0.7.0 sentence.
+    assert!(continued.contains("never sent your prompt"), "{continued}");
     // What this computer kept is the approval, never a "key" a reader takes for an API key.
     assert!(!continued.contains("key"), "{continued}");
 
@@ -162,6 +163,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         prompt: &[],
         prompt_file: None,
         on_clipboard: false,
+        calls_before: None,
         first_screen: None,
     });
     let text = fresh.join("\n");
@@ -192,6 +194,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         prompt: &[],
         prompt_file: None,
         on_clipboard: false,
+        calls_before: None,
         first_screen: None,
     })
     .join("\n");
@@ -624,6 +627,7 @@ fn a_new_conversation_gets_the_push_lines_again() {
             prompt: &prompt,
             prompt_file: Some(file),
             on_clipboard,
+            calls_before: None,
             first_screen: None,
         })
         .join("\n")
@@ -647,4 +651,36 @@ fn a_new_conversation_gets_the_push_lines_again() {
         );
     }
     assert!(!launch(Opens::LastSession, true).contains("Push to"));
+}
+
+/// A resume says "type only keep going" only once the run has recorded model calls; with none
+/// recorded the prompt may never have been sent, so the 0.7.0 sentence and the push block stay
+/// (D73).
+#[test]
+fn a_resume_with_no_recorded_calls_still_asks_for_the_prompt_and_shows_the_push_block() {
+    let prompt = vec!["Push to https://github.com/someone/cup".to_string()];
+    let resume = |calls_before| {
+        launch_block(&Launch {
+            harness: "Some Agent",
+            mode: Some(RunMode::Competition),
+            opens: Opens::LastSession,
+            ends: None,
+            prompt: &prompt,
+            prompt_file: None,
+            on_clipboard: false,
+            calls_before,
+            first_screen: None,
+        })
+        .join("\n")
+    };
+    let none_yet = resume(Some(0));
+    assert!(none_yet.contains("never sent your prompt"), "{none_yet}");
+    assert!(none_yet.contains("Push to"), "{none_yet}");
+    let called = resume(Some(4));
+    assert!(called.contains("type only"), "{called}");
+    assert!(
+        !called.contains("one prompt") && !called.contains("Push to"),
+        "{called}"
+    );
+    assert!(!resume(None).contains("Push to"));
 }

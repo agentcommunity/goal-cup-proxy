@@ -1047,7 +1047,11 @@ chat --continue` resumes the last session in a `HERMES_HOME` and exits 1 when th
   a native row of `warn_missing = false` (Hermes) is launched with its `resume_args` when no
   session file exists and the earlier parts recorded a model call. Every other connector keeps
   the file rule (D57's `has_native_session`). A run started on 0.7.0 has no count and keeps that
-  rule. A launch that resumes says to type only "keep going".
+  rule. A launch that resumes says to type only "keep going" when the run has recorded model
+  calls. With none recorded (Claude Code writes its session file at startup, before any
+  message), the prompt may not have been sent: it keeps the 0.7.0 sentence ("If you never sent
+  your prompt, send it now") and shows and copies the push block. A run with no count (started
+  on 0.7.0) keeps the 0.7.0 text.
 - **Also in 0.7.1.** `goalcup setup` deletes a connector's `[launch_prep] ca_file` from the
   config home before it opens the harness, and says nothing: it only ever held a past run's CA,
   and Hermes falls back to the system's trust when the file `ssl_ca_cert` names is missing. A
