@@ -159,10 +159,10 @@ replaced learns it from `stop`.
 credential opens a practice run, in the practice event.
 
 `dev` is an optional boolean on the open and the continue call (missing is `false`; anything else, `null`
-included, is `400`). A `dev` run is for Goal Cup admins: `403` when the run's mode is `competition`
-("A --dev run never enters the competition. Start without --dev."), else `403` when the member is
-not an admin ("--dev is for Goal Cup admins only. Start without --dev."). The server asks the
-database about the member only when `dev` is true. The Worker's `MIN_COMPETITION_VERSION` also
+included, is `400`). A `dev` run never enters the competition: `403` when the run's mode is
+`competition` ("A --dev run never enters the competition. Start without --dev."). In practice and
+test mode `dev` is open to every member (those runs count for nothing), so anyone may try an
+unpinned connector there. The Worker's `MIN_COMPETITION_VERSION` also
 refuses a competition device request and a competition open from a goalcup older than it, or of
 unknown version, with `403` "This goalcup (<version>) is too old for the cup. Update it when no run
 is open: <install line>"; a retried open of a run that exists is still answered. A minimum with no
@@ -179,6 +179,18 @@ a log.
 `repo_url` is `https://github.com/<owner>/<repo>` exactly: the owner is ASCII letters, digits and
 `-`; the repository is ASCII letters, digits, `-`, `_` and `.`, and is never `.` or `..`. Anything
 else is `400`.
+
+**The repository must be empty when the run opens.** With the GitHub check on (`GITHUB_CHECK=on`,
+which production and staging set), the open call asks GitHub twice, after the version and `dev`
+checks and before anything is created, with the same headers (the Worker's `GITHUB_TOKEN`, if set,
+only raises the rate limit). First `GET /repos/<owner>/<repo>`: the repository must exist and be
+public (`400` if not). Then `GET /repos/<owner>/<repo>/commits?per_page=1`: `409` is an empty
+repository and the open goes on; `200` means the repository already has a commit, and the open is
+`400 malformed` ("The repository must be empty when the run opens. Create a new one with no README,
+.gitignore or license, and start again."). Any other answer, or no answer, is `502 upstream_error`,
+which goalcup retries, so a GitHub outage never refuses a player; nothing is created in any of these
+cases. The check applies to every mode, and to the first open only: a retried open of a run that
+exists is answered before GitHub is asked, and `continue` never asks.
 
 **One main run per account.** A competition start by the account replaces its other open competition
 run: that run gets `replaced_at` = this run's `official_start`, in the same step, and ends then

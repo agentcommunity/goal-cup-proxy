@@ -2,11 +2,14 @@
 //! the token the participant keeps in it.
 //!
 //! A new run works in the folder `goalcup start` is run from. Before the participant is asked to
-//! approve anything, that folder must be: apart from goalcup's own folders (the daemon refuses a
-//! workspace inside, around or beside them), outside any Git work tree (the agent runs `git init`
-//! there), empty but for the starting kit (`.gitignore`, and `.env` / `.env.*` files), and every
-//! one of those `.env` files covered by a `.gitignore` line, so the agent's first `git add .`
-//! cannot publish the token. Each refusal says what to do, and that nothing was created.
+//! approve anything, and again right after, that folder must be: no run's on this computer that
+//! is not over (the way back to that run is `goalcup status` or `goalcup continue`), apart from
+//! goalcup's own folders (the daemon refuses a workspace inside, around or beside them), outside
+//! any Git work tree (the agent runs `git init` there), outside any folder a sync client uploads
+//! (it would upload the token), empty but for the starting kit (`.gitignore`, and `.env` /
+//! `.env.*` files), and every one of those `.env` files covered by a `.gitignore` line, so the
+//! agent's first `git add .` cannot publish the token. Each refusal says what to do, and that
+//! nothing was created.
 
 use crate::CliError;
 use goalcup_protocol::run_secret::RunSecret;
@@ -22,16 +25,30 @@ pub const TOKEN_FILE: &str = ".env.local";
 ///
 /// `needs_token` is true for every run but a practice run: the agent of a real run pushes with the
 /// token in the key files, so a folder without one is refused here, not after the approval.
+///
+/// `home` is the participant's `HOME`, for the iCloud Desktop & Documents signal of the sync
+/// check. `goalcup start` makes these checks twice: before the approval, and again right after it,
+/// before the run is opened on the server, since the folder can change while the participant
+/// approves (an editor adds its `.idea`).
 pub(super) fn refuse_unready_project(
     cfg: &Path,
     project: &Path,
+    home: Option<&Path>,
     needs_token: bool,
 ) -> Result<(), CliError> {
-    refuse_beside_goalcup(cfg, project)?;
     let real = std::fs::canonicalize(project).map_err(|source| CliError::Io {
         path: project.display().to_string(),
         source,
     })?;
+    // The folder of a run still going is that run's: the way back to it is `goalcup status` or
+    // `goalcup continue`, never a new, empty folder, which the checks below would advise.
+    if let Some(run) = open_run_in(cfg, &real) {
+        return Err(CliError::Refused(crate::participant::project_of_open_run(
+            &run.run_id,
+            !run.practice && !run.test,
+        )));
+    }
+    refuse_beside_goalcup(cfg, project)?;
     if let Some(outer) = real
         .parent()
         .and_then(goalcup_platform::clone::git_worktree_of)
@@ -40,6 +57,7 @@ pub(super) fn refuse_unready_project(
             crate::participant::project_inside_repository(project, &outer),
         ));
     }
+    crate::per_run_home::refuse_synced_project(&real, home)?;
     let names = kit_or_refuse(project)?;
     let ignore = std::fs::read_to_string(project.join(".gitignore")).unwrap_or_default();
     let uncovered: Vec<String> = names
@@ -53,6 +71,22 @@ pub(super) fn refuse_unready_project(
         )));
     }
     refuse_unreadable_token_line(project, &names, needs_token)
+}
+
+/// The run on this computer, opened on a server and not over, that works in the resolved folder
+/// `real`. A run with no server is never one: it has no deadline, so it is never over, replaces
+/// nothing, and `goalcup continue` cannot restart it, so it must not hold the folder.
+fn open_run_in(cfg: &Path, real: &Path) -> Option<crate::run::RunRecord> {
+    let now = crate::run::now_unix();
+    crate::run::all(cfg).into_iter().find(|run| {
+        run.server_url.is_some()
+            && std::fs::canonicalize(&run.workspace).is_ok_and(|workspace| workspace == real)
+            && !crate::run::is_over(
+                run,
+                crate::run::read_state(&crate::run::run_dir(cfg, &run.run_id)).as_ref(),
+                now,
+            )
+    })
 }
 
 /// The push line the launch block prints reads the token with `sed -n s/^GH_TOKEN=//p`, so a key
@@ -79,7 +113,9 @@ fn refuse_unreadable_token_line(
     }
     match found.as_slice() {
         [] if !needs_token => Ok(()),
-        [] => Err(CliError::Refused(crate::participant::token_line_missing())),
+        [] => Err(CliError::Refused(crate::participant::token_line_missing(
+            !project.join(".gitignore").exists(),
+        ))),
         [(_, true)] => Ok(()),
         [(file, _), ..] => Err(CliError::Refused(crate::participant::token_line_form(file))),
     }

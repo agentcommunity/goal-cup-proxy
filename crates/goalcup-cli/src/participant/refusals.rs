@@ -47,6 +47,31 @@ pub fn needs_terminal(harness: &str, then: &str) -> String {
 /// What the folder checks call the folder `goalcup start` is run from, the run's workspace.
 pub const PROJECT_FOLDER: &str = "project folder";
 
+/// A new run's project folder is the workspace of run `run_id`, opened on a server and not over:
+/// the folder is that run's, and a new run there would be the wrong way back to it.
+/// `competition`: that run is a competition run, which a new competition run replaces when it
+/// opens (a practice or test run is never replaced), and which needs a repository of its own.
+pub fn project_of_open_run(run_id: &str, competition: bool) -> String {
+    let new_run = if competition {
+        "A new run needs a new folder and a new repository, and replaces this one."
+    } else {
+        "A new run needs a new folder."
+    };
+    format!(
+        "This folder belongs to run {run_id}. To see it: goalcup status. If the agent has \
+         exited: {CONTINUE_HINT}. {new_run} Nothing was created."
+    )
+}
+
+/// A new run's project folder is one `service` syncs off this computer: it would upload the
+/// folder's `.env.local`, and the token in it.
+pub fn project_synced(service: &str) -> String {
+    format!(
+        "{service} syncs this folder and would upload your .env.local and token: use a folder \
+         outside it, for example under ~/code. Nothing was created."
+    )
+}
+
 /// A new run's project folder holds more than the starting kit (`extra`, sorted): the run must
 /// start in a new, empty folder of its own.
 pub fn project_not_empty(project: &Path, extra: &[String]) -> String {
@@ -137,11 +162,21 @@ pub fn token_line_form(file: &str) -> String {
 }
 
 /// A real run's project folder has no `GH_TOKEN` line in any key file: the agent's first push
-/// would fail after the approval.
-pub fn token_line_missing() -> String {
-    "Put your GitHub token in .env.local as one line, GH_TOKEN=<your token>, then run goalcup \
-     start again. Nothing was created."
-        .to_string()
+/// would fail after the approval. With no `.gitignore` there (`gitignore_missing`), the two lines
+/// it needs are said too, so both are fixed before the next try.
+pub fn token_line_missing(gitignore_missing: bool) -> String {
+    let ignore = if gitignore_missing {
+        format!(
+            " Also make a .gitignore in this folder with these two lines:\n  {}\n  {}\n",
+            GITIGNORE_LINES[0], GITIGNORE_LINES[1]
+        )
+    } else {
+        " ".to_string()
+    };
+    format!(
+        "Put your GitHub token in .env.local as one line, GH_TOKEN=<your token>.{ignore}Then \
+         run goalcup start again. Nothing was created."
+    )
 }
 
 /// `goalcup start --dev` for a competition run on a server: the server refuses it at open, so it

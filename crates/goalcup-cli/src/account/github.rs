@@ -92,8 +92,9 @@ impl GithubSetup {
     ///
     /// The file must be the owner's alone: one that the group or others can read is refused,
     /// naming the fix, because the token in it would no longer be the participant's alone.
-    /// Its URL and token are checked again as [`GithubSetup::new`] checked them. No file is
-    /// a refusal that says to run `goalcup setup`.
+    /// Its URL and token are checked again as [`GithubSetup::new`] checked them. No file (a
+    /// clone an older goalcup made, D69) is a refusal that says to finish that run with the older
+    /// goalcup, or start a new one.
     pub fn load(cfg: &Path) -> Result<GithubSetup, CliError> {
         let path = github_path(cfg);
         let io = |source: std::io::Error| CliError::Io {
@@ -104,9 +105,9 @@ impl GithubSetup {
             Ok(file) => file,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
                 return Err(CliError::Refused(
-                    "this clone was made by an older goalcup, and its GitHub token is gone. Push \
-                     with your own git login instead: git remote set-url origin \
-                     git@github.com:<owner>/<repo>.git"
+                    "this clone was made by an older goalcup, and its GitHub token is gone. \
+                     Finish or seal that run with the older goalcup that started it, or start a \
+                     new run with goalcup start."
                         .into(),
                 ));
             }
