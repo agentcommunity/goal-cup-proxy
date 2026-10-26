@@ -399,11 +399,11 @@ pub fn prep_with(
         put(
             report.out,
             &format!(
-                "Ready.\n  Try it (10 min, no GitHub, never counts): mkdir ~/goalcup-practice && \
-                 cd ~/goalcup-practice && goalcup start --harness {id} --practice\n  The real \
-                 run, inside the start window: make your repo, token and folder first (the \
-                 guide's folder step), then in that folder: goalcup start --harness {id} --repo \
-                 <you>/<name>\n"
+                "Ready.\n  Try it (10 min, no GitHub, never counts; a new \
+                 folder each time): d=$(mktemp -d ~/goalcup-practice-XXXX) && cd \"$d\" && \
+                 goalcup start --harness {id} --practice\n  The real run, inside the start window: make your \
+                 repo, token and folder first (the guide's folder step), then in that folder: \
+                 goalcup start --harness {id} --repo <you>/<name>\n"
             ),
         )?;
     } else {

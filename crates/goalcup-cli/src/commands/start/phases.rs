@@ -123,11 +123,16 @@ pub(super) fn prepare(
     if per_run {
         // A run on a server makes `<config>-runs` only once approved: until then it is judged by
         // the folder it will be made in.
+        let whose = if beside == crate::home::run_folders(cx.cfg) {
+            crate::per_run_home::RunFolder::ConfigRuns
+        } else {
+            crate::per_run_home::RunFolder::StartedFrom
+        };
         let beside = beside
             .ancestors()
             .find(|folder| folder.exists())
             .unwrap_or(beside);
-        crate::per_run_home::refuse_inside_git_work_tree(beside)?;
+        crate::per_run_home::refuse_inside_git_work_tree(beside, whose)?;
         crate::per_run_home::refuse_synced_folder_under(beside, env.get("HOME").map(Path::new))?;
     }
     Ok(CapturePrep {

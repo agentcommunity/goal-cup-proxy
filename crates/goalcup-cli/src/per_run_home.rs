@@ -262,24 +262,44 @@ fn write_private_file(path: &Path, bytes: &[u8], mode: SeedMode) -> Result<(), C
     Ok(())
 }
 
+/// Which folder a run directory is judged by, so a refusal names the way out that fits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunFolder {
+    /// A run on a server: the run directory goes in `<config>-runs`.
+    ConfigRuns,
+    /// A run with no server: the run directory goes in the folder `goalcup start` was run from.
+    StartedFrom,
+}
+
 /// Refuse a directory that is inside a Git work tree: any ancestor, itself included, that holds
 /// a `.git` (a directory, or the file a linked work tree has).
 ///
 /// `dir` is made absolute and has its links resolved first, so a symlinked path is judged where
 /// it really is. A directory that cannot be resolved is refused too: a check that could not run
 /// is not a pass.
-pub fn refuse_inside_git_work_tree(dir: &Path) -> Result<(), CliError> {
+pub fn refuse_inside_git_work_tree(dir: &Path, whose: RunFolder) -> Result<(), CliError> {
     let resolved = std::fs::canonicalize(dir).map_err(|source| CliError::Io {
         path: dir.display().to_string(),
         source,
     })?;
     for ancestor in resolved.ancestors() {
         if std::fs::symlink_metadata(ancestor.join(".git")).is_ok() {
+            // The way out depends on whose folder it is: the config's, which the participant
+            // moves, or the one they started from, which they start somewhere else.
+            let way_out = match whose {
+                RunFolder::ConfigRuns => {
+                    "The config folder is inside a git repository: set GOALCUP_CONFIG_DIR to a \
+                     folder outside it."
+                }
+                RunFolder::StartedFrom => {
+                    "Start from a folder outside any git repository: this run has no server, \
+                     so its directory is made in the folder you start from."
+                }
+            };
             return Err(CliError::Refused(format!(
                 "this folder is inside a Git work tree ({}), and this run's directory would \
                  be made in it: it holds what the harness wrote, which can include \
-                 its login. The config folder is inside a git repository: set \
-                 GOALCUP_CONFIG_DIR to a folder outside it. Nothing was created.",
+                 its login. {way_out} Nothing was created.",
                 ancestor.display()
             )));
         }
