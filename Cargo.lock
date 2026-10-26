@@ -599,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "goalcup-cli"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "goalcup-daemon"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "goalcup-platform"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "libc",
  "serde",
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "goalcup-protocol"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "ed25519-dalek",
  "goalcup-platform",
@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "goalcup-verifier"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
