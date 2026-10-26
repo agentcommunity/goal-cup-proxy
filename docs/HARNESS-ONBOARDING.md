@@ -19,15 +19,27 @@ steps of its own. Three other documents complete it:
 
 ## Quick path: add and test a connector
 
-1. [Check capture support](#row-0). Unknown isolation/auth/transport facts or a required core
-   change mean **facts only**; that is still a useful contribution.
-2. Follow [the steps](#steps): fill the [facts template](../skills/adding-a-capture-harness/templates/harness-facts.md),
-   then the [chat-mode connector template](../skills/adding-a-capture-harness/templates/connector-harness.toml).
-   Use the existing schema; no Rust code belongs in an ordinary connector PR.
-3. Regenerate pins and the connector's goldens. A connector needs no test or kit case of its own.
-   [Test it](#test-a-connector), then review and open the PR.
-4. A passing stand-in check is synthetic evidence. [Real practice and event qualification](#getting-a-harness-into-the-event)
-   are separate. A connector can capture an unfamiliar format before it has a semantic decoder.
+Four steps. Nothing here needs a Rust build until step 3, and nothing needs an organizer.
+
+1. [Check capture support](#row-0), then write the connector: a short [facts
+   sheet](../skills/adding-a-capture-harness/templates/harness-facts.md) with the required facts
+   (where it signs in, that it honours `HTTPS_PROXY`, the session file path, the setting that stops
+   it asking for permission, the version command), and `harness.toml` from the [chat-mode
+   template](../skills/adding-a-capture-harness/templates/connector-harness.toml). Unknown
+   isolation, auth or transport facts, or a required core change, mean **facts only**; that is still
+   a useful contribution. No Rust code belongs in an ordinary connector PR.
+2. [Try it](#test-a-connector) with the installed release: point `GOALCUP_CONNECTORS_DIR` at a
+   folder holding only your connector, then run `goalcup start --harness <id> --dev --practice`.
+   Anyone with a Goal Cup account may do this. A `--dev` run never competes.
+3. Run `sh scripts/check-connector.sh <id>`. A new connector fails its goldens step because its
+   golden files are not there yet: that is expected, say so in the PR, and do not regenerate them.
+   Every other step must pass.
+4. Open the PR with the facts sheet. A maintainer regenerates the goldens, runs the gate, and ships
+   the connector in the next release.
+
+A passing stand-in check is synthetic evidence. [A real practice run and event
+qualification](#getting-a-harness-into-the-event) are separate. A connector can capture an
+unfamiliar format before it has a semantic decoder.
 
 The [research target](RESEARCH-TARGET.md) defines the coverage to establish with a real harness.
 Check context-visible tool calls/results and subagent conversations separately. Full independent
@@ -42,24 +54,46 @@ traces after the separate stored-byte fetch.
 
 ## Test a connector
 
-Run from the repository root after the one-time dependency setup and after filling the connector
-and facts sheet. Replace `<id>` with its connector id. Pins are compiled in; rebuild after edits.
+**First try, with no Rust build.** Install the latest release
+([guide](PARTICIPANT-GUIDE.md#1-install)) and run `goalcup setup` once if you have not. Then give
+`goalcup` a folder that holds only your connector. `--dev` refuses a directory that a build also
+pins, so it must not hold the shipped connectors:
 
 ```sh
-sh scripts/pin-manifests.sh
-GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-cli --test it harness_contract_golden::
-GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-daemon --test it harness_contract_golden::
-sh scripts/check-connector.sh <id>
-sh scripts/gate.sh fast
+mkdir -p "$HOME/my-connector"
+cp -R connectors/<id> "$HOME/my-connector/<id>"      # from a checkout, or write it there
+export GOALCUP_CONNECTORS_DIR="$HOME/my-connector"
+mkdir "$HOME/my-connector-run" && cd "$HOME/my-connector-run"   # an empty folder
+goalcup setup --harness <id> --dev
+goalcup start --harness <id> --dev --practice
 ```
 
-Review the pin/golden diff before committing. Expect `check-connector: <id>: 6 passed, 0 failed,
-0 skipped` on macOS, or `6 passed, 0 failed, 1 skipped` on Linux (Mac live golden still needed),
-then `gate fast: PASS in <N>s`. The checker regenerates pins and tests the shared stand-ins;
-it does not run your installed harness or prove real model traffic.
+Setup opens the harness once so you sign in and set it not to ask for permission. The start asks for
+the usual browser approval. Any member of the Goal Cup may run `--dev`; the server opens it as a
+practice or test run, and a `--dev` run never competes: it is refused as a competition run, and
+`goalcup` refuses `--dev` on a competition start before the approval. The run needs no repository
+and no token. Type a small task, let the harness answer, and let the server's practice deadline
+stop, seal and upload the run, or end it early with `goalcup seal` from another terminal. A practice
+run catches a harness that writes no session file within about three minutes. Keep the config and
+the trace for diagnosis. `goalcup status` in another terminal shows progress.
 
-**One real chat-mode smoke run.** Install the harness version recorded in your facts sheet.
-Use a fresh test config and launch folder on APFS/ext4/XFS outside any Git repository:
+**Check it.** From the repository root, after the one-time setup in step 1 below (Rust, 3 GB of
+`target/`):
+
+```sh
+sh scripts/check-connector.sh <id>
+```
+
+For a new connector expect `check-connector: <id>: 4 passed, 2 failed, 0 skipped` on macOS, or
+`5 passed, 1 failed, 1 skipped` on Linux. The failures are the goldens lines only: `<id>.json` and
+`<id>.daemon.json` do not exist yet, and a maintainer writes them when the PR merges. Ignore the
+checker's hint to regenerate them. Any other failure is yours to fix. The checker regenerates the
+pin and tests the shared stand-ins; it does not run your installed harness or prove real model
+traffic. Do not run `scripts/gate.sh`: the maintainer does, and CI does not run the CLI tests on a
+PR.
+
+**A fuller local smoke from a checkout** (for a maintainer, or an author who wants the daemon's own
+trace):
 
 ```sh
 export PATH="$PWD/target/debug:$PATH"
@@ -68,15 +102,15 @@ goalcup_test_root=$(mktemp -d "$HOME/goalcup-connector.XXXXXX")
 export GOALCUP_CONFIG_DIR="$goalcup_test_root/config"
 mkdir "$goalcup_test_root/launch"
 cd "$goalcup_test_root/launch"
-goalcup prep --harness <id>
+goalcup setup --harness <id>
 goalcup doctor --harness <id>
 goalcup start --harness <id>
 ```
 
-Do not log this fresh config into the server for a local smoke. In prep, sign into the harness in
-its isolated home and exit normally; server/GitHub/practice `[todo]` steps are expected locally.
+Do not log this fresh config into the server for a local smoke. In setup, sign into the harness in
+its isolated home and exit normally; the login `[todo]` step is expected locally.
 In start, type a small task, let the harness respond, then exit normally. Goal Cup Proxy seals the run.
-A pinned connector needs no `--dev`. Keep the config/trace for diagnosis. In another terminal with
+A pinned connector needs no `--dev`. In another terminal with
 the same config, `goalcup status` shows progress and `goalcup seal` ends the run early.
 
 Copy the exact `trace:` path printed by start/seal. With a new output file outside that trace:
@@ -93,22 +127,12 @@ undecoded formats, and record task success and termination separately. Integrity
 can occur with no model traffic. Unknown semantics may honestly be capture-only. Neither real
 traces nor research NDJSON belongs in a public PR; even reports can contain excerpts.
 
-**Server delivery is a practice run, explicitly.** In the dedicated test config, with an approved
-server that accepts the new connector:
-
-```sh
-goalcup login --server <approved-server-url>
-goalcup setup --harness <id> --work-root <absolute-folder-outside-git>
-goalcup start --harness <id> --practice
-```
-
-Finish setup's human steps and the run approval; the [participant guide](PARTICIPANT-GUIDE.md)
-explains them. A practice run needs no GitHub repository. A real run (a dry run or the cup run)
-asks for its own new, empty, public repository at `goalcup start`, or takes
-`--repo <owner>/<name>`. Let the server's practice deadline stop, seal and upload the run. Use `goalcup entries`
-and `goalcup upload <entry>` if delivery is pending, verify the resulting trace, and check signed
+**Server delivery is the `--dev --practice` run above.** It opens on the Goal Cup server like any
+practice run, so the same run proves delivery. A practice run needs no GitHub repository and no
+token. Let the server's practice deadline stop, seal and upload the run. Use `goalcup entries` and
+`goalcup upload <entry>` if delivery is pending, verify the resulting trace, and check signed
 acknowledgement through the terminal. See
-[event qualification](#getting-a-harness-into-the-event) for the contributor report and organizer run.
+[event qualification](#getting-a-harness-into-the-event) for what to send with the PR.
 
 ## What Goal Cup Proxy does
 
@@ -132,7 +156,6 @@ A harness is data. A contribution has no `.rs` file:
 
 - `connectors/<id>/harness.toml` and its seed files (`files/**`);
 - one line in `crates/goalcup-protocol/pins/connector-dirs.txt`;
-- the regenerated golden files;
 - the facts sheet `docs/harnesses/<id>.md`.
 
 No test is written for a new connector. The connector contract runs for every folder under
@@ -181,13 +204,13 @@ Known gaps. The connector works, but the record is partial. Write each one in th
 
 ## What you need
 
-- A Mac (Apple silicon or Intel), or Linux. Every step runs on both. Only the daemon's live
-  golden (`<id>.daemon.json`) is macOS-only: on Linux say in the PR that you did not regenerate
-  it, and a maintainer does it on a Mac.
-- Rust from [rustup](https://rustup.rs) (1.99 or later), the Xcode command line tools and
-  `python3`. If Homebrew also installed Rust, `which cargo` must print `~/.cargo/bin/cargo`.
-- A network for the first build only, and about 3 GB of disk for `target/`.
-- The harness installed (note the version you measure) and a GitHub account.
+- A Mac (Apple silicon or Intel), or Linux. Every step runs on both.
+- The harness installed (note the version you measure), a GitHub account for the PR, and the
+  latest Goal Cup Proxy release ([guide](PARTICIPANT-GUIDE.md#1-install)). That is all the first
+  try needs.
+- For `check-connector.sh` only: Rust from [rustup](https://rustup.rs) (1.99 or later), the Xcode
+  command line tools and `python3`. If Homebrew also installed Rust, `which cargo` must print
+  `~/.cargo/bin/cargo`. A network for the first build only, and about 3 GB of disk for `target/`.
 
 ## Stop rules
 
@@ -208,7 +231,8 @@ is the harness executable. Run every command from the repository root.
 0. **Can it be captured?** Read [Check first](#row-0). Stop on any item under "Cannot be
    captured".
 1. **Set up.** Fork the repository and branch as in [CONTRIBUTING](../CONTRIBUTING.md), and read
-   [AGENTS.md](../AGENTS.md) once. Then, online, once per checkout:
+   [AGENTS.md](../AGENTS.md) once. The Rust setup below is needed only for step 9, so you can write
+   and try the connector first. Then, online, once per checkout:
    ```sh
    cargo nextest --version || cargo install cargo-nextest --locked
    cargo fetch --locked
@@ -296,7 +320,7 @@ is the harness executable. Run every command from the repository root.
    The closest complete example is [connectors/codex-cli](../connectors/codex-cli/harness.toml)
    (chat mode). [connectors/hermes-cli](../connectors/hermes-cli/harness.toml) is chat mode too,
    with a `configure` command: a harness whose session file needs a setting that has no
-   environment variable names its own command for it, and prep and start run it in the harness
+   environment variable names its own command for it, and setup and start run it in the harness
    home (D61). Seeds go in
    `connectors/<id>/files/` and `capture.home.seed` must name each one; the loader refuses any other
    file in the folder. Field rules: [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md). Check that no
@@ -309,31 +333,31 @@ is the harness executable. Run every command from the repository root.
    `git diff --stat -- crates/*/pins` must show `crates/goalcup-protocol/pins/connector-dirs.txt`
    with one line added for `<id>`, and nothing else. Run it again after every edit under
    `connectors/<id>/`. Never edit a pin by hand.
-7. **Regenerate the goldens.**
+7. **Goldens: not yours.** `crates/goalcup-cli/tests/fixtures/harness-golden/<id>.json` and
+   `<id>.daemon.json` are written by a maintainer when your PR merges, so leave them out. The
+   maintainer runs, one command each:
    ```sh
    GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-cli --test it harness_contract_golden::
    GOALCUP_REGEN_HARNESS_GOLDEN=1 cargo test --offline -p goalcup-daemon --test it harness_contract_golden::
-   git status --short crates/goalcup-cli/tests/fixtures/harness-golden
    ```
-   Expect both `test result: ok.`, a new `<id>.json` and `<id>.daemon.json`, and no other
-   change: the shared goldens name no connector. On Linux the daemon command writes no
-   `<id>.daemon.json`: it is macOS-only, so say so in the PR. Any other changed golden did not
-   change because of your connector: run `git checkout -- <file>` and name it in the PR. Set the variable per command, never `export` it.
+   expects a new `<id>.json` and `<id>.daemon.json` (the second only on a Mac) and no other
+   change, since the shared goldens name no connector.
 8. **No kit case.** A connector needs no test or kit case of its own: the connector contract
    runs every connector through one stand-in that reads its `harness.toml` (the program, `args`,
    the native root and pattern, `skills_dir`, the CA variables, the identity). Go to step 9.
 9. **Run the connector check.** `sh scripts/check-connector.sh <id>`. It runs files, pins, schema,
-   both goldens, and the kit with the connector contract (both halves), on macOS and on Linux. Expect the last line `check-connector: <id>: 6
-   passed, 0 failed, 0 skipped` on macOS, and `6 passed, 0 failed, 1 skipped` on Linux (the
-   daemon's live goldens). A kit or contract failure prints only `FAIL kit` in the summary. Read
+   both goldens, and the kit with the connector contract (both halves), on macOS and on Linux. For a new connector expect the last line
+   `check-connector: <id>: 4 passed, 2 failed, 0 skipped` on macOS, and `5 passed, 1 failed, 1
+   skipped` on Linux. The failures are the goldens lines, which step 7 explains. A kit or contract failure prints only `FAIL kit` in the summary. Read
    the Rust assertion above it: it names the connector, `left` is what the run captured and
    `right` is what the connector's `harness.toml` predicts.
    Fix the field that the `right` side came from.
-10. **Run the gate.** `sh scripts/gate.sh fast`. Expect the last line `gate fast: PASS in <N>s`.
+10. **The gate is the maintainer's.** You need not run `sh scripts/gate.sh fast`; CI does not run
+    the CLI tests on a PR, so the maintainer runs it (and `gate full` before a release).
 11. **Review your own diff** against the [reviewer checklist](#reviewing-a-connector-pr).
-    For a real trial, use the fresh-config [local smoke](#test-a-connector), or choose the
-    explicit `--practice` server path there. Plain `start` with a logged-in config can select
-    competition mode. Put no real trace or private research report in the PR.
+    For a real trial, use the [first try](#test-a-connector) (`--dev --practice`) or the
+    fresh-config local smoke there. Plain `start` with a logged-in config can select competition
+    mode. Put no real trace or private research report in the PR.
 12. **Open the PR** (next section).
 
 Fast loop while fixing schema errors: `cargo test --offline -p goalcup-protocol --test it --
@@ -347,11 +371,10 @@ Exactly these, which `git status --short` must confirm:
 
 - `connectors/<id>/` (the `harness.toml` and `files/**` seeds);
 - the one new line in `crates/goalcup-protocol/pins/connector-dirs.txt`;
-- the golden JSON from step 7;
 - `docs/harnesses/<id>.md`;
 - the harness's section in `docs/HARNESS-SETUP.md` (step 5), named by `setup_section`.
 
-In the description paste the last line of steps 9 and 10, name anything restored or not run, say
+In the description paste the last line of step 9, name anything restored or not run, say
 which parts an agent wrote, and say that a person read the whole diff. Claim only what passed. The
 kit shows that Goal Cup Proxy works with a stand-in shaped like the harness. It does not show that
 the real harness ran. A maintainer replies within 7 days and runs the checks again on a Mac.
@@ -363,7 +386,7 @@ the real harness ran. A maintainer replies within 7 days and runs the checks aga
 | A field or value is refused | [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md), then step 3 |
 | `declares id ..., which is not the folder name` | `id` must equal the folder name |
 | The pin test fails after an edit | Run step 6 again and commit what it writes |
-| A golden mismatch | Step 7, then read the JSON diff |
+| A golden is missing (a new connector) | Expected. A maintainer writes it on merge (step 7) |
 
 <a id="do-i-need-a-core-change"></a>
 
@@ -487,8 +510,8 @@ It does not make a careless seed safe. A code owner reads every field and every 
 9. **Identity.** `source = "none"`, and the native row reads only this run's files (a per-run
    root, or `since_run_start` on a shared home).
 10. **Pin, goldens, kit.** Re-run `sh scripts/pin-manifests.sh` and confirm one pin-line diff.
-    Confirm the golden diff only adds the new connector. Run the kit and the connector contract
-    after a workspace build. A
+    Regenerate the goldens (step 7) and confirm the diff only adds the new connector. Run the
+    gate, the kit and the connector contract after a workspace build. A
     policy row or a decoder belongs in its own PR.
 
 What each manifest field must establish:
@@ -522,16 +545,18 @@ qualification.
 
 ## Getting a harness into the event
 
-A harness can join until the last release, **6 Nov 2026 12:00 UTC**. A connector runs without
-`--dev` only when a release pins it. Before that it runs only with `--dev`, which marks the run a
-development run ([pinned, or `--dev` only](CONNECTOR-SCHEMA.md#pinned-or---dev-only)), so the PR
-must merge in time for that release. After a connector PR merges:
+A harness joins by being merged and shipped in a release (D70). Releases continue during the cup,
+so there is no cutoff: a merged connector ships in the next point release. A connector runs without
+`--dev` only when a release pins it. Before that it runs only with `--dev`, which never competes
+([pinned, or `--dev` only](CONNECTOR-SCHEMA.md#pinned-or---dev-only)). A player has to install the
+release that carries the connector before they start a run. Point releases keep
+`CONTROL_API_VERSION`, so a running run is never broken by an update. To get yours in:
 
-1. Follow the [server practice setup](#test-a-connector): login to the approved server, complete
-   prep, then explicitly run `goalcup start --harness <id> --practice`. Verify the sealed trace
-   with `goalcup-verify --capture-integrity <trace>`. Send that integrity report (never the
-   transcript or research NDJSON) to goalcup@agentcommunity.org or attach it to the PR.
-2. The organizers run a 1-hour test run of the harness themselves before it ships.
+1. Do the [first try](#test-a-connector): one `--dev --practice` run by you, sealed and uploaded.
+   Verify the sealed trace with `goalcup-verify --capture-integrity <trace>`. Send that integrity
+   report (never the transcript or research NDJSON) to goalcup@agentcommunity.org or attach it to
+   the PR.
+2. A maintainer does one practice run of the harness too, before it ships.
 3. Model access for testing: if the harness lets you pick the model provider, the organizers can
    supply test API access. If the model comes only through the harness's own subscription and there
    are no free credits, the organizers ask you how to test it.

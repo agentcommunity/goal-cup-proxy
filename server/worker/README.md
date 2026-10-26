@@ -141,7 +141,7 @@ commit. It installs the pinned wrangler. Check that `npx wrangler --version` pri
 
 [Deploy checks](#deploy-checks) · [Maintenance](#maintenance-on-and-off) · [Rollback](#rollback) ·
 [Logs](#logs) · [Change a start window](#change-a-start-window) · [Add a test operator](#add-a-test-operator) ·
-[Clean up test runs](#clean-up-test-runs) · [EVENT_ID switch](#event_id-switch-6-nov-2026-with-the-last-release)
+[Clean up test runs](#clean-up-test-runs) · [EVENT_ID switch](#event_id-switch-6-nov-2026)
 
 ### Deploy checks
 
@@ -253,7 +253,7 @@ cannot find a good version, switch maintenance on and ask the owner.
 
 A start window is a row of `goal_cup_tracer.events` in the website's database. The Worker reads it on each
 open. A window change needs no Worker deploy. (A change of `EVENT_ID` does: see the
-[EVENT_ID switch](#event_id-switch-6-nov-2026-with-the-last-release).) Steps 1 to 6 run in the website
+[EVENT_ID switch](#event_id-switch-6-nov-2026).) Steps 1 to 6 run in the website
 checkout (`agentCommunity_PAGE`), not in `server/worker`.
 
 1. Add a migration in `supabase/migrations/` with `goal_cup_tracer` in its file name. It holds an
@@ -304,9 +304,10 @@ environment. `DATABASE_URL` is the website database URL: set it from `DATABASE_U
 
 More on test runs: [OPERATING](../../docs/OPERATING.md#test-runs).
 
-## EVENT_ID switch: 6 Nov 2026, with the last release
+## EVENT_ID switch: 6 Nov 2026
 
-Production `EVENT_ID` stays `goalcup-dryrun-2026` until then. The start windows are database rows
+Do the switch between 6 Nov 00:00 and 7 Nov 00:00 UTC. It does not wait for a release: releases
+continue during the cup (D70). Production `EVENT_ID` stays `goalcup-dryrun-2026` until then. The start windows are database rows
 (website migration `20261016120000_goal_cup_tracer_event_windows.sql`): the dry run closes
 6 Nov 00:00 UTC and the cup opens 7 Nov 00:00 UTC, so any time on 6 Nov is safe. If the switch is
 missed, every cup start on 7 Nov is refused ("after the start window ..."): competition starts read

@@ -88,10 +88,13 @@ the cells first, then sign in.
 Two kinds of cells:
 
 - **Infrastructure cells** (most of them): test runs with
-  [campaign-workload.txt](campaign-workload.txt) (commit locally, never push). The kit makes each
-  run's public, empty repository with the GitHub login already on the machine (the container's for
-  a Docker cell, LOCAL-CAMPAIGN "One-time setup"), passes it as `--repo`, and lists it at the end;
-  the agent pushes with that same login (D69).
+  [campaign-workload.txt](campaign-workload.txt) (commit locally, never push). Each run needs a
+  new, empty, public repository, passed as `--repo`. The agent pushes with the token in the project
+  folder's `.env.local` (D71). Give the kit a fine-grained token of a throwaway account, Contents read
+  and write only, with `MATRIX_GH_TOKEN_FILE` and the repository with `MATRIX_REPO`. Only with
+  `MATRIX_ALLOW_LOGIN_TOKEN=1` does the kit make the repository with the machine's GitHub login and
+  give the agent that whole login (a Docker cell: the container's own login). See
+  [OPERATING, The matrix](../OPERATING.md#the-matrix).
 - **Full-flow cells**: the agent pushes to its repository, so the judged-commit path is tested
   end to end. Each run gets a new repository the same way. Use
   [campaign-build-workload.txt](campaign-build-workload.txt): it pushes after each step, keeps

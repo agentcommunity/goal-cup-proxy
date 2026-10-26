@@ -37,12 +37,13 @@ the owner approves it). The rest of this page is the field-by-field detail.
   - the connector's `capture.env`, with the running platform's `capture.platform.<key>.env` over
     it, rendered. An entry here wins over the same name from the shell;
   - `HOME`, the run's home, and the connector's `capture.home.env` pointed at its config home;
-  - the way to the participant's own git login, for a real run (a test, dry or cup run) only, as
-    paths or sockets and only when set or present, never a key
-    ([D69](DECISIONS.md#d69-goal-cup-proxy-holds-no-keys-the-agent-pushes-with-the-participants-own-git-login)):
-    `SSH_AUTH_SOCK`, `GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`, `XDG_RUNTIME_DIR` and
-    `DBUS_SESSION_BUS_ADDRESS`. A practice run, and the launch `goalcup setup` makes, get none of
-    them and `GIT_CONFIG_NOSYSTEM=1` instead;
+  - nothing of the participant's git login, for any run. No `SSH_AUTH_SOCK`, `GIT_CONFIG_GLOBAL`,
+    `GH_CONFIG_DIR`, `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS` reaches the harness
+    ([D71](DECISIONS.md#d71-the-project-folder-is-the-workspace-the-agent-pushes-with-the-participants-one-repo-token),
+    which ends the D69 pass-throughs). Every launch also sets `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1` (the system
+    git config can name a keychain helper) and `GIT_SSH_COMMAND` as an `ssh` that reads no config
+    and offers no key; a connector cannot name a `GIT_` variable. The agent pushes with the token in
+    the project folder's `.env.local`, and sets its own git identity in its repository;
   - for a recorded launch: `HTTPS_PROXY` and `https_proxy` (the loopback recording proxy, with
     a per-run credential), `NO_PROXY` and `no_proxy` (`127.0.0.1,localhost`), each `capture.ca.env`
     name pointed at the file its row names ([Credential and CA](#credential-and-ca)),
@@ -152,7 +153,7 @@ sentence that names the field and says what to do. The rule above applies from D
 A connector runs without `--dev` only when this `goalcup` build pins its folder
 ([`connector-dirs.txt`](../crates/goalcup-protocol/pins/connector-dirs.txt), compiled in). So a
 participant's own harness needs its connector PR merged and a `goalcup` release that pins it.
-For Goal Cup 2026 the last release is **6 Nov 2026 12:00 UTC**
+Releases continue during the cup (D70), so a merged connector ships in the next point release
 ([event qualification](HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)). An unpinned
 connector runs only through `goalcup start --dev`. That load (`Origin::Dev`,
 `harness/check.rs`) relaxes three rules: the interpreter refusal for `program`; the argument
@@ -160,12 +161,12 @@ path rules (an absolute, home-relative, parent-relative or expanding path in `ar
 `resume_args`), with the word rules skipped for an argument that is an absolute path; and the
 loopback and single-label host refusal for `hosts` and `auth_hosts`. Every other rule holds,
 and it refuses a directory whose id or digest a build pins. The start says "This run is a development run and its results are not a judged entry's", and the local
-entry record says `dev`. What the code does not do today: refuse a `--dev` run in competition
-mode, or tell the server. A `--dev` run opens a server run and uploads like any other
-(`commands/start/server.rs`); the server stores the connector id and directory digest and
-compares neither with a list. The verifier's research report labels the run `Dev/unpinned`
-(`run.connector`), and the integrity verdict does not change. Whether a `--dev` run can count
-is an open owner question (D68).
+entry record says `dev`. A `--dev` run never competes (D70). The CLI refuses `--dev` on a competition start
+before the approval, sends `dev` when it opens or continues a server run, and the server refuses
+a `dev` competition run. Any member may run `--dev` for a practice or test run; those count for
+nothing. The server stores the connector id and directory digest and compares neither with a
+list. The verifier's research report labels the run `Dev/unpinned` (`run.connector`), and the
+integrity verdict does not change.
 
 To be pinned, a connector also needs what `harness_conformance.rs` checks for every folder under
 `connectors/`, beyond the schema: a `[participant]` table with `display_name`, a `setup_section`
@@ -289,7 +290,7 @@ environment variable (Hermes writes `sessions/session_<id>.json` only with
 `sessions.write_json_snapshots` on, and keeps writing it after a compaction only with
 `compression.in_place` off). Each entry is an argument list for the harness's own
 `capture.executable.program`. Only a chat-mode profile (`interactive = true`) takes it: the
-commands run with the environment, and in the home, that `goalcup prep` opens the harness with.
+commands run with the environment, and in the home, that `goalcup setup` opens the harness with.
 
 ```toml
 configure = [
@@ -298,7 +299,7 @@ configure = [
 ]
 ```
 
-- **When.** `goalcup prep` runs them in the harness home after the participant's own setup, once
+- **When.** `goalcup setup` runs them in the harness home after the participant's own setup, once
   the harness it opened has exited 0. `goalcup start` and `goalcup continue` run them again before
   each launch, after the goal-cup skill is put in place, because the participant may have changed
   the setting since. So each command must be safe to run again.
@@ -310,7 +311,7 @@ configure = [
   trace.
 - **Failure.** A command that exits non-zero, is ended by a signal or outlives its 60 seconds
   stops at once. Prep marks the home not ready (`[fail] harness_home`, naming the command and how
-  it ended); start launches nothing and says to run `goalcup prep --harness <id>` again.
+  it ended); start launches nothing and says to run `goalcup setup --harness <id>` again.
 - **What it may change.** Only how the harness stores its session (capture and storage settings), in
   the harness home. Never how the agent behaves: not the model, the provider, the tools, the
   prompts, or whether compression is on. Core refuses an argument that has `model`, `provider`,
@@ -670,9 +671,9 @@ in the harness, and the harness saves its address in its own config. There is no
   Goal Cup, and an authentication host. The refusal names the value (`<scheme>://<host>:<port>`
   only), the reason and the way to change it: "`<display name>` is set to use `<value>`, which Goal
   Cup cannot record: `<reason>`. Goal Cup records only an https model service that is not on this
-  computer. Run goalcup prep --harness `<id>`, choose such a service there, then run the command
+  computer. Run goalcup setup --harness `<id>`, choose such a service there, then run the command
   again." Nothing is created. `goalcup continue` checks it before it closes an earlier segment.
-  `goalcup prep` makes the same check: while the value cannot be recorded the home is not ready,
+  `goalcup setup` makes the same check: while the value cannot be recorded the home is not ready,
   and prep says why and opens the harness again. Only the address the config names is checked; a
   login the harness refreshes at another host is not (D62).
 - **Schema rules.** `file` is a relative path of at most 4 components with a `.yaml`, `.yml`,
@@ -694,9 +695,9 @@ Both strings are printed to a terminal, so they are held to plain text.
 |---|---|---|
 | `participant.display_name` | required when the table is present | The name as a person says it ("Claude Code"). 1–40 characters. |
 | `participant.first_screen` | optional, default absent | What the harness shows first and what to do about it, shown just before the harness opens. 1–200 characters. Leave it out when the harness asks nothing. |
-| `participant.no_prompts` | optional, default `[]` | Up to 4 `{ file, key, values }` rows (D67): a setting in the harness's own config that makes it run without permission prompts, and the 1–4 values (as text, `true` for a boolean; the first is the one recommended) that mean so. `file` and `key` follow the `capture.model_host_from` rules (a `.yaml`, `.yml`, `.json` or `.toml` file in the shared config home, a dotted key, neither naming a key file or a key); requires `config_home = "shared"`; no row twice. `goalcup prep` reads them and, for each one not set to a listed value, recommends it in its harness home step with a link to the harness's `setup_section`. `docs/harnesses/<id>.md` must have a "Run without permission prompts" section. Goal Cup never writes them, and prep never fails for them. |
-| `participant.setup_section` | optional, default absent | The anchor of the harness's section in [HARNESS-SETUP](HARNESS-SETUP.md), the participant's setup guide (`setup_section = "codex"` for `### Codex`). 1–40 lower-case letters and digits joined by single `-`. `goalcup prep` links there on its harness step ("Before a long run, read ...") and in a `no_prompts` recommendation; without it the link names the guide alone. `harness_conformance.rs` requires every shipped connector to name one, and the guide to have that heading. |
-| `participant.time_left_tool` | optional, default absent | `{ file, key, pass_env }` (fix plan v9): where the participant adds `goalcup mcp`, the time-left MCP tool, in the harness's own config. `file` and `key` follow the `no_prompts` rules, but `file` is relative to the home `goalcup prep` opens (the shared config home, else the shared run `HOME`; one of the two is required). `key` is the file's table of MCP servers: dotted table names in TOML, one top-level key written as it is in JSON and YAML (`amp.mcpServers` is one JSON key). `pass_env` says how the harness hands the server `GOALCUP_TIME_LEFT_FILE`: `inherited` (default; its whole environment), `env_vars` (only the names an `env_vars` list gives) or `env_template` (only an `env` map, whose `${VAR}` values it fills). `goalcup prep` prints the lines for the file's type, with goalcup's absolute path, on its harness step. Goal Cup never writes them (D67). |
+| `participant.no_prompts` | optional, default `[]` | Up to 4 `{ file, key, values }` rows (D67): a setting in the harness's own config that makes it run without permission prompts, and the 1–4 values (as text, `true` for a boolean; the first is the one recommended) that mean so. `file` and `key` follow the `capture.model_host_from` rules (a `.yaml`, `.yml`, `.json` or `.toml` file in the shared config home, a dotted key, neither naming a key file or a key); requires `config_home = "shared"`; no row twice. `goalcup setup` reads them and, for each one not set to a listed value, recommends it in its harness home step with a link to the harness's `setup_section`. `docs/harnesses/<id>.md` must have a "Run without permission prompts" section. Goal Cup never writes them, and prep never fails for them. |
+| `participant.setup_section` | optional, default absent | The anchor of the harness's section in [HARNESS-SETUP](HARNESS-SETUP.md), the participant's setup guide (`setup_section = "codex"` for `### Codex`). 1–40 lower-case letters and digits joined by single `-`. `goalcup setup` links there on its harness step ("Before a long run, read ...") and in a `no_prompts` recommendation; without it the link names the guide alone. `harness_conformance.rs` requires every shipped connector to name one, and the guide to have that heading. |
+| `participant.time_left_tool` | optional, default absent | `{ file, key, pass_env }` (fix plan v9): where the participant adds `goalcup mcp`, the time-left MCP tool, in the harness's own config. `file` and `key` follow the `no_prompts` rules, but `file` is relative to the home `goalcup setup` opens (the shared config home, else the shared run `HOME`; one of the two is required). `key` is the file's table of MCP servers: dotted table names in TOML, one top-level key written as it is in JSON and YAML (`amp.mcpServers` is one JSON key). `pass_env` says how the harness hands the server `GOALCUP_TIME_LEFT_FILE`: `inherited` (default; its whole environment), `env_vars` (only the names an `env_vars` list gives) or `env_template` (only an `env` map, whose `${VAR}` values it fills). `goalcup setup` prints the lines for the file's type, with goalcup's absolute path, on its harness step. Goal Cup never writes them (D67). |
 
 Both strings (and each `no_prompts` value) are an allow-list: printable ASCII only (0x20 to 0x7E), no leading or trailing space,
 and no two spaces in a row. That refuses every control character (ESC and so any ANSI sequence,

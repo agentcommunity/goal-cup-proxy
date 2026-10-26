@@ -31,8 +31,8 @@ Sources: [Sandbox](https://vercel.com/docs/sandbox), [Concepts](https://vercel.c
 | Goal Cup requirement (where) | Vercel Sandbox fact (source) | Fit | What to test |
 |---|---|---|---|
 | macOS or Linux, arm64 or x86_64 (`README.md` Platforms) | Firecracker microVM with its own kernel. Default image is Ubuntu 26.04. Images must be `linux/amd64` (Concepts, Images). | Yes, but on the weakest platform | Linux x86_64 is the least measured Goal Cup platform: a no-login smoke on a hosted runner, no logged-in run, no run over 2 hours (`README.md` Platforms, `TODO.md` Linux). Run a logged-in practice first. |
-| Trace folders on APFS, ext4 or XFS. `goalcup prep` fails on overlayfs, btrfs, ZFS, NFS, SMB, tmpfs, FUSE; `start` warns (`crates/goalcup-cli/src/folder_gate.rs`, `README.md`) | Each sandbox gets "64 GB of ephemeral NVMe storage". The filesystem type is not documented. Drives are a separate mount, type not documented (Pricing, Drives). | **Unknown** | `findmnt -no FSTYPE -T "$HOME"` and `df -T`. If it is overlay, try a loop-mounted ext4 image with `sudo` (root is available). Drives: same check. |
-| A 3 GiB reservation by `fallocate`; warns under 5 GiB free; pauses the agent under 1 GiB (`crates/goalcup-platform/src/disk.rs`, `docs/PARTICIPANT-GUIDE.md`) | 64 GB disk on every plan (Pricing). | Yes, if the filesystem is ext4/XFS | `goalcup prep` step 5 (`machine`) says `[ok]`. |
+| Trace folders on APFS, ext4 or XFS. `goalcup setup` fails on overlayfs, btrfs, ZFS, NFS, SMB, tmpfs, FUSE; `start` warns (`crates/goalcup-cli/src/folder_gate.rs`, `README.md`) | Each sandbox gets "64 GB of ephemeral NVMe storage". The filesystem type is not documented. Drives are a separate mount, type not documented (Pricing, Drives). | **Unknown** | `findmnt -no FSTYPE -T "$HOME"` and `df -T`. If it is overlay, try a loop-mounted ext4 image with `sudo` (root is available). Drives: same check. |
+| A 3 GiB reservation by `fallocate`; warns under 5 GiB free; pauses the agent under 1 GiB (`crates/goalcup-platform/src/disk.rs`, `docs/PARTICIPANT-GUIDE.md`) | 64 GB disk on every plan (Pricing). | Yes, if the filesystem is ext4/XFS | `goalcup setup` step 4 (`machine`) says `[ok]`. |
 | 168 hours on the server's clock; the harness keeps running (`docs/RULES.md`) | Max session: **45 minutes on Hobby, 24 hours on Pro and Enterprise**. Default timeout 5 minutes; `extendTimeout()` up to the plan maximum (Pricing). A stop snapshots the **filesystem**; nothing says memory or processes survive (Persistence, Duration guide). | **No, as is** | A 168-hour run needs at least seven sessions. Each boundary kills goalcup, the daemon and the harness. Test a stop and resume mid-run (recipe step 7). Ask Vercel for longer sessions. |
 | After a crash or reboot, `goalcup continue` closes the dead segment with one `IngestLost` gap; that segment verifies exit 1, the next one is clean; a torn tail is exit 2 (`docs/OPERATING.md` drill 5) | Unknown whether a session stop is a clean shutdown (signals, `sync`) before the snapshot (Concepts says only "the session shuts down"). | **Unknown** | Stop the sandbox during a practice run, resume, run `goalcup continue`, verify both parts. A cleaner path: `goalcup seal <part>` from a second terminal before the limit, then `continue` after resume. |
 | A terminal the participant types into; it stays open (`README.md` During the run) | `sandbox exec --interactive --tty <name> -- bash`. tmux is preinstalled in the universal image (Concepts, universal image). Detached commands exist; nothing says whether a dropped `exec` connection kills its processes. | Probably, with tmux | Run goalcup inside tmux, drop the `exec` connection, reattach. |
@@ -140,15 +140,16 @@ fine-grained token. Practice runs last about ten minutes, never push and never c
    ```
    Hermes is the one harness the gateway is recorded for today. Install it as its docs say, native
    binary first on `PATH`.
-5. **Prep** (~5 min):
+5. **Setup** (~5 min):
    ```sh
-   goalcup prep --harness hermes-cli
-   goalcup prep --repo https://github.com/<owner>/<repo>
+   goalcup setup --harness hermes-cli
    ```
-   Prep opens Hermes's setup. Choose a custom OpenAI-compatible endpoint with base URL
-   `https://ai-gateway.vercel.sh/v1` and your AI Gateway key. Repeat `goalcup prep` until steps 1 to
-   5 say `[ok]`. Step 5 (`machine`) checks disk space and the folders' filesystem. If it fails on
-   the filesystem, stop here and send the output: that is blocker 1.
+   Setup opens Hermes's setup. Choose a custom OpenAI-compatible endpoint with base URL
+   `https://ai-gateway.vercel.sh/v1` and your AI Gateway key. Repeat `goalcup setup` until its four
+   steps say `[ok]`. The last (`machine`) checks disk space and the folders' filesystem. If it fails
+   on the filesystem, stop here and send the output: that is blocker 1. A real run's repository,
+   token and project folder come later (the participant's guide, section 5); a practice run needs
+   none.
 6. **Practice** (~10 min):
    ```sh
    goalcup start --harness hermes-cli --practice

@@ -1,5 +1,13 @@
 # The release is the list; `--dev` is for admins (proposed D70)
 
+> **Cut down on 25 Oct 2026. D70 as accepted is smaller than this design.** Four parts of it were
+> not built and are not part of D70: the latest-release nudge (2.2), known-bad harness versions
+> (2.6, `bad_versions`), the practice reminder at start (half of 2.7), and the admin-only `--dev`
+> rule with its migration (2.5, `DEV_NOT_ADMIN`). Any member may run `--dev` practice or test; a
+> `--dev` run never competes. What stands: the release is the list, `MIN_COMPETITION_VERSION`, the
+> installer guard, the frozen `CONTROL_API_VERSION`, and the shorter practice thresholds. Read
+> [D70 and D71](../DECISIONS.md#d70-the-release-is-the-list-the-server-refuses-old-versions-in-the-competition---dev-never-competes). The text below is kept as written.
+
 *Proposed 23 Oct 2026 after a discussion with the owner, owner to approve. Plan:
 [`docs/plans/2026-10-23-release-is-the-list.md`](../plans/2026-10-23-release-is-the-list.md).*
 

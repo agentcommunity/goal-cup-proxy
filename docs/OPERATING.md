@@ -50,7 +50,7 @@ All times UTC.
 | Release cut | Prepare the version PR if needed, merge under the `main` ruleset, run the full gate and separate `scripts/linux-check.sh` on merged `origin/main`, then tag that commit with `scripts/release.sh tag` |
 | 23 Oct to 6 Nov 00:00 | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
 | 4 Nov 00:00 | Feature stop: fixes only |
-| 6 Nov | `EVENT_ID` switch and last release (12:00). See [EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026-with-the-last-release). |
+| 6 Nov | `EVENT_ID` switch and last release (12:00). See [EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026). |
 | 7 Nov 00:00 | Start window opens. It lasts 24 hours. |
 | 8 Nov 00:00 | Start window closes |
 | 168 hours after each start | That run's deadline. The latest run ends 192 hours after the window opens. |
@@ -61,7 +61,7 @@ Before the window opens:
    `2026-11-07T00:00:00Z` and `start_window_closes` = `2026-11-08T00:00:00Z`. This is applied in
    production. The dry-run row closes on 6 Nov, 00:00.
 2. Do the `EVENT_ID` switch on 6 Nov. The steps are in
-   [server/worker/README.md](../server/worker/README.md#event_id-switch-6-nov-2026-with-the-last-release).
+   [server/worker/README.md](../server/worker/README.md#event_id-switch-6-nov-2026).
    Staging keeps its own event ids.
 3. Run the matrix on staging for each shipped connector ([The matrix](#the-matrix)).
 4. Confirm `GET https://ingest.agentcommunity.org/v1/health` answers `{"status":"ok"}`, then run one
@@ -209,7 +209,11 @@ What the kit does about the token it handed over:
   SHA-256 is kept in the kit's shell) is made again from the token's source, and if that fails the cell
   FAILs: `push check not run: the token copy is missing`. The matcher itself reads the copy once and
   compares its SHA-256 with the kept one, so a copy swapped during the check is never searched with: that
-  repository is not checked, and the cell FAILs. So does a temporary directory the agent removed. Every
+  repository is not checked, and the cell FAILs. So does a temporary directory the agent removed. A
+  repository whose `.git/objects` is a link is still found, and git reads its objects through the link.
+  A name with a line break anywhere in the project folder FAILs the cell as not checked (`a name in it
+  holds a line break`), since such a name could hide a repository. A Git LFS store under
+  `.git/modules/<name>/lfs` is not a repository and is skipped. Every
   file the kit writes in its temporary directory is made fresh with noclobber, so a link the agent planted
   there is never written through. The value is never printed. Not covered: what the agent pushed to another repository,
   or to Git LFS, or inside a compressed or encrypted file.
@@ -218,7 +222,8 @@ What the kit does about the token it handed over:
   run's start), found by its value (a private 0600 copy made when `.env.local` was, so this holds if the
   agent deleted or rewrote `.env.local`) and by its shape (`gh[opusr]_...`, `github_pat_...`), through
   terminal escape sequences and line wraps (a file with a token behind an escape sequence is rewritten
-  without its escape sequences). The trace's chain files are not touched, and cannot be: a token the agent
+  without its escape sequences). If the private copy is gone or changed at the end and cannot be made
+  again, the scrub uses the shape only, and the log says `scrub by shape only`. The trace's chain files are not touched, and cannot be: a token the agent
   printed is in them. The log is created mode 0600.
 - **It cleans up.** `.env.local` and the private copy are deleted at the end even with `--keep`, and at the
   next start the kit deletes those two things (nothing else) from the temporary directories of dead runs
@@ -227,8 +232,8 @@ What the kit does about the token it handed over:
   skipped, and files are listed with `find -P`.
 
 The kit never deletes a repository; it prints the name of one it made at the end (`gh repo delete <name> --yes`
-when done, after `gh auth refresh -s delete_repo`: the default `gh auth login` lacks that scope; the agent
-was given that login's token, so drop the scope again afterwards with `gh auth refresh -r delete_repo`). A question the start asks before the approval (a repository GitHub does
+when done, after `gh auth refresh -s delete_repo`: the default `gh auth login` lacks that scope; in a
+login-token cell the agent was given that login's token, so drop the scope again afterwards with `gh auth refresh -r delete_repo`). A question the start asks before the approval (a repository GitHub does
 not show) also FAILs the row at once.
 
 `--refusals` checks, with no harness and no terminal, that a real run's start refuses before any
@@ -388,8 +393,8 @@ and `hermes-cli`. For long runs in parallel: `linux-matrix.sh build` once, then
 gives each cell its own volume, sign-in and container. A test run in Docker uses the container's own
 GitHub login (its token goes to the project's `.env.local` in the container; it needs `MATRIX_ALLOW_LOGIN_TOKEN=1`, because it is the whole login, so sign the container in with a throwaway account): sign in once with `LINUX_MATRIX_CELL=<cell> sh scripts/linux-matrix.sh github <id>`
 (`gh auth login` in the container; it stays on the cell's volume). The kit never copies or mounts this
-machine's login or a token. `matrix.sh --test --duration <s>` does the same on a host, with the host's
-login and token. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
+machine's login or a token. `matrix.sh --test --duration <s>` does the same on a host, with the token from
+`MATRIX_GH_TOKEN_FILE`, or the host's whole login only with `MATRIX_ALLOW_LOGIN_TOKEN=1`. The [local campaign](research/LOCAL-CAMPAIGN.md) drives both with `scripts/campaign.py`.
 
 **`--check-copy`.** For a run you made by hand, verifies every entry of the run locally and compares each
 with the server's position, using the run's credential from the configuration directory. It starts and

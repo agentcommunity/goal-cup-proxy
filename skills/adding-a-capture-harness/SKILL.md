@@ -34,5 +34,6 @@ Rules that never bend:
 - Never put a key or token in a file, argv, log, facts sheet, PR or chat. Never open a key file.
 - Never commit `harnesses/`, `target/` or `spikes/*/out/`.
 - On a stop rule in the guide, stop. A facts sheet with `Status: facts only` is a complete PR.
-- A connector runs without `--dev` only once a release pins it. For Goal Cup 2026 the last
-  release is 6 Nov 2026 12:00 UTC.
+- A connector runs without `--dev` only once a release pins it. Releases continue during the
+  cup (D70): a merged connector ships in the next point release. `--dev --practice` lets any
+  member try one before that.

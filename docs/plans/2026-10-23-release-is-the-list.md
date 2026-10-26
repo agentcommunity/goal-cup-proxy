@@ -1,5 +1,10 @@
 # The release is the list; `--dev` for admins (D70) Implementation Plan
 
+> **Partly cancelled on 25 Oct 2026.** Task 1 (the admin migration), Task 5 (the update nudge and
+> the practice reminder) and Task 6 (known-bad versions and the Hermes pin change) were cut, with
+> the parts of Task 7 and Task 8 that depend on them. The rest stands. See
+> [D70 and D71](../DECISIONS.md#d70-the-release-is-the-list-the-server-refuses-old-versions-in-the-competition---dev-never-competes). The text below is kept as written.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Players run the latest release (nudged, and the server refuses old versions in the competition), nobody updates over a recording run, `--dev` works only for admins and never competes, and setup warns about harness versions known not to record.

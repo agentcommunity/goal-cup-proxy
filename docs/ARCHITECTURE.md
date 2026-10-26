@@ -60,7 +60,7 @@ TypeScript).
 | Part | Does | Code |
 |---|---|---|
 | `goalcup start` | Preflight; creates the entry; runs the recording proxy in process; gates and launches the harness; seals when it exits; uploads | [commands/start/](../crates/goalcup-cli/src/commands/start/) |
-| `goalcup login`, `prep`, `continue`, `upload` | Device-flow login; machine and repository readiness; next segment of a run; finish an upload | [commands/](../crates/goalcup-cli/src/commands/), [account/](../crates/goalcup-cli/src/account/), [upload/](../crates/goalcup-cli/src/upload/) |
+| `goalcup login`, `setup`, `continue`, `upload` | Device-flow login; machine and repository readiness; next segment of a run; finish an upload | [commands/](../crates/goalcup-cli/src/commands/), [account/](../crates/goalcup-cli/src/account/), [upload/](../crates/goalcup-cli/src/upload/) |
 | `goalcup seal`, `status`, `entries`, `doctor` | End a run early; read status; list runs; check the machine | [commands/](../crates/goalcup-cli/src/commands/) |
 | Recording proxy | Loopback CONNECT proxy. Relays bytes unchanged; tees decoded bodies as frames | [proxy/](../crates/goalcup-cli/src/proxy/mod.rs) |
 | Daemon | Control API on loopback; ingest; per-producer redaction; chain append; native-file capture; finish; termination | [runtime/capture/](../crates/goalcup-daemon/src/runtime/capture/mod.rs) |
@@ -140,7 +140,8 @@ CLI phases are in `commands/start/phases.rs` (`prepare`, `create_and_gate`, `reg
 [finish.rs](../crates/goalcup-daemon/src/runtime/capture/finish.rs).
 
 1. **Prepare.** Refuse an unsafe profile, executable, credential or home before anything is
-   allocated. On the server path: approve the run in the browser, clone the repository, open the run.
+   allocated. On the server path: check the project folder and the repository, approve the run in the browser,
+   then start the recorder and open the run (D71).
 2. **Create.** The daemon compares connector digests (D46) and then writes `baseline.json` and the
    seq-0 `Baseline`. The chain is quota-only. The run host holds one disk reservation per run
    (D40 as amended). The recording proxy starts and the goal marker is recorded.
@@ -155,7 +156,8 @@ CLI phases are in `commands/start/phases.rs` (`prepare`, `create_and_gate`, `reg
    boundary and final deadline move by actual termination time. The launcher sees the child exit
    and stops its recording proxy; competing finishes share one terminal.
 6. **Finish capture.** Close admission, drain the existing producers, persist explicit loss,
-   stop the owner, read the workspace state (Git for a clone, a file walk otherwise), then write
+   stop the owner, read the workspace state (Git if the workspace is a clone, decided now; otherwise a
+   file walk bounded by a file limit and the finish deadline, D71), then write
    `LocalFinish` plus `seal.json`. A refused finish writes no terminal and retains its termination
    outcome for retry. The capture budget is `LOCAL_CAPTURE_FINISH_BUDGET` (180 s) with a 2 s commit
    reserve (D40, D56). Control operations that can wait on the entry lock run on the blocking
@@ -166,7 +168,7 @@ CLI phases are in `commands/start/phases.rs` (`prepare`, `create_and_gate`, `reg
 A restart reopens an unfinished entry with status and seal authority only. Every other
 authenticated mutator refuses. A launched entry gets one `IngestLost` gap. An entry that never
 launched and handed nothing off is abandoned after `UNLAUNCHED_LIMIT` (15 minutes).
-`goalcup continue` opens the next segment of a run as a new entry in the same clone.
+`goalcup continue` opens the next segment of a run as a new entry in the same project folder.
 
 ## 7. Chain, records and verdicts
 

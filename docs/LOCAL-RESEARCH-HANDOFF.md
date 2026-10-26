@@ -42,11 +42,10 @@ Start in this Goal Cup Proxy checkout. Use absolute paths once terminals change 
 ```sh
 export TRACER_REPO="$(git rev-parse --show-toplevel)"
 export GOALCUP_CONFIG_DIR="$HOME/goalcup-research-night/config"
-export RESEARCH_WORK_ROOT="$HOME/goalcup-research-night/work"
 export RESEARCH_LAUNCH_ROOT="$HOME/goalcup-research-night/launch"
 export RESEARCH_RESULTS="$HOME/goalcup-research-night/results"
 umask 077
-mkdir -p "$GOALCUP_CONFIG_DIR" "$RESEARCH_WORK_ROOT" "$RESEARCH_LAUNCH_ROOT" "$RESEARCH_RESULTS"
+mkdir -p "$GOALCUP_CONFIG_DIR" "$RESEARCH_LAUNCH_ROOT" "$RESEARCH_RESULTS"
 ```
 
 Use an existing dedicated logged-in test home if one is already available; do not clone its auth
@@ -89,18 +88,19 @@ Use staging explicitly and a disposable empty public repository owned by the tes
 
 ```sh
 goalcup login --server https://goalcup-ingest-staging.b-9a5.workers.dev
-goalcup setup --harness codex-cli --work-root "$RESEARCH_WORK_ROOT"
+goalcup setup --harness codex-cli
 ```
 
-Setup asks for no repository and no token: each real run asks for its own new, empty, public
-repository at `goalcup start` (the `--test` start below names it with `--repo`), and the agent
-pushes with your own git login. Follow setup's interactive sign-in; never put key values in
-arguments or chat. The account must be authorized as a staging test operator.
-Inspect setup's actual output. The server start path requires the work folder setup settled; do
-not forge it. A short practice run first is optional; if you run one, use a small useful prompt
+Setup asks for no repository and no token. A real run needs its own new, empty, public repository,
+a fine-grained token for it (Contents read and write, 30 days) and a project folder holding
+`.env.local` (`GH_TOKEN=...`) and a `.gitignore` with `.env*`
+([guide, section 5](PARTICIPANT-GUIDE.md#5-your-run)). The `--test` start below names the
+repository with `--repo`, from inside that folder, and the agent pushes with that token. Follow
+setup's interactive sign-in; never put key values in arguments or chat. The account must be
+authorized as a staging test operator. Inspect setup's actual output. A short practice run first is optional; if you run one, use a small useful prompt
 and the same Luna settings.
 
-Prep opens Codex in the home Goal Cup Proxy owns. Exit that setup session before editing its config.
+Setup opens Codex in the home Goal Cup Proxy owns. Exit that setup session before editing its config.
 The persistent path is `$GOALCUP_CONFIG_DIR/capture-homes/codex-cli/config.toml`. Merge these
 participant-owned settings there, preserving unrelated tables and avoiding duplicate keys:
 
@@ -137,7 +137,7 @@ no model (unlike `linux-matrix.sh`), so set the harness home to Luna/high first.
 organizer `--test` run with a manual local cutoff:
 
 ```sh
-cd "$RESEARCH_LAUNCH_ROOT"
+cd "$RESEARCH_LAUNCH_ROOT"   # the project folder: only .gitignore (.env*) and .env.local (GH_TOKEN=...)
 goalcup start --harness codex-cli --test --repo OWNER/EMPTY-RESEARCH-REPO
 ```
 

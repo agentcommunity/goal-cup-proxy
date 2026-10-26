@@ -20,10 +20,10 @@ hermes chat
 
 - `hermes chat` (and a bare `hermes`) opens the classic prompt_toolkit REPL. The Ink TUI needs `--tui`, `HERMES_TUI=1` or `display.interface: tui` in `config.yaml`; the connector passes none of them, and the TUI writes the same session file if the participant chose it (measured).
 - The participant types the prompt at the `❯` prompt. `/exit`, `/quit` or Ctrl-D at an empty prompt end Hermes with exit 0 (measured). Ctrl-C at the setup question exits 1 (measured).
-- First launch in a home with no provider: Hermes prints `It looks like Hermes isn't configured yet -- no API keys or providers found.` and asks `Run setup now? [Y/n]`. Enter or `y` runs its own setup wizard (Quick Setup with Nous Portal, Full setup, or Blank Slate; arrow keys and Enter). `n` exits 1. `goalcup prep` opens Hermes there, so the participant answers it once (measured).
+- First launch in a home with no provider: Hermes prints `It looks like Hermes isn't configured yet -- no API keys or providers found.` and asks `Run setup now? [Y/n]`. Enter or `y` runs its own setup wizard (Quick Setup with Nous Portal, Full setup, or Blank Slate; arrow keys and Enter). `n` exits 1. `goalcup setup` opens Hermes there, so the participant answers it once (measured).
 - The banner prints `Session: <id>` on the terminal. Goal Cup Proxy does not read the terminal: the connector's identity is `none`, and the run's sessions are the snapshots written since it started (D57).
 - `hermes chat --continue` resumes the most recent session (`↻ Resumed session <id>`); it is the connector's `resume_args` for `goalcup continue` (measured).
-- The session file needs `sessions.write_json_snapshots: true`, which has no environment variable and is off by default. The connector's first `configure` command, `hermes config set sessions.write_json_snapshots true`, writes that one key into `config.yaml` (output `✓ Set sessions.write_json_snapshots = True in <HERMES_HOME>/config.yaml`, exit 0, other keys kept; measured). `goalcup prep` runs it after the participant's setup, and `goalcup start` before each launch (D61).
+- The session file needs `sessions.write_json_snapshots: true`, which has no environment variable and is off by default. The connector's first `configure` command, `hermes config set sessions.write_json_snapshots true`, writes that one key into `config.yaml` (output `✓ Set sessions.write_json_snapshots = True in <HERMES_HOME>/config.yaml`, exit 0, other keys kept; measured). `goalcup setup` runs it after the participant's setup, and `goalcup start` before each launch (D61).
 - The session file keeps changing after a compaction only with `compression.in_place: false` (default `true`, `hermes_cli/config.py:1515`; read at `agent/agent_init.py:1667`). In place, a compaction keeps the id with fewer messages and `_save_session_log` never overwrites a snapshot that holds more (`run_agent.py:2754`), so the file freezes. Off, the compaction starts a new id (`agent/conversation_compression.py:1247`) and the next save writes `session_<new id>.json` (`run_agent.py:2723`). The connector's second `configure` command, `hermes config set compression.in_place false`, sets it (exit 0, measured). It changes how the session is stored, not whether Hermes compacts (D61).
 - Setup closes Hermes: after the first-run wizard it exits 0 and opens no chat (`hermes_cli/main.py:2521-2523`). `hermes chat --continue` in a home with no session prints `No previous CLI session found to continue.` and exits 1 (measured). Such a run has no session file yet, so `goalcup continue` opens `hermes chat` without `--continue`, and the setup stays in the home: the way on after a setup in a run is `goalcup continue`.
 - Hermes scans raw `sys.argv` before `argparse`: `-p`/`--profile` switches `HERMES_HOME`, and `--tui`, `--cli`, `-h` are matched, with abbreviations. Goal Cup guards these (code: `[capture.argv_guard]`).
@@ -62,8 +62,8 @@ Headless (the recipe before D61, frozen at [`frozen-connectors/hermes-cli`](../.
 
 ## 5. Auth
 
-- **The participant's own setup (D61).** Goal Cup Proxy passes no provider key. Hermes's setup wizard (opened by `goalcup prep`, or `hermes setup` / `hermes model` in that home) keeps the provider and model in `$HERMES_HOME/config.yaml` (`model.provider`, `model.default`, `model.base_url`) and an API key in `$HERMES_HOME/.env` (mode 0600). `hermes chat` loads `.env` itself, over a same-named variable in its environment (source). OAuth providers (Nous Portal and others) keep their tokens in `auth.json` (source).
-- **What Goal Cup Proxy records of them.** Nothing of their content. The native source reads `sessions/session_*.json` only. The uploaded baseline lists `.env` and `auth.json` by name, size and SHA-256, as every file of the harness home (D56).
+- **The participant's own setup (D61).** Goal Cup Proxy passes no provider key. Hermes's setup wizard (opened by `goalcup setup`, or `hermes setup` / `hermes model` in that home) keeps the provider and model in `$HERMES_HOME/config.yaml` (`model.provider`, `model.default`, `model.base_url`) and an API key in `$HERMES_HOME/.env` (mode 0600). `hermes chat` loads `.env` itself, over a same-named variable in its environment (source). OAuth providers (Nous Portal and others) keep their tokens in `auth.json` (source).
+- **What Goal Cup Proxy records of them.** Nothing of their content. The native source reads `sessions/session_*.json` only. The uploaded baseline lists `auth.json` by name, size and SHA-256, as every file of the harness home (D56), and `.env` by name and size only: a key file is never hashed (D71).
 - **File derived from the key.** Hermes copies an environment or `.env` key into a credential-pool entry in `auth.json` with `secret_fingerprint`, the first 16 hex digits of the key's SHA-256, and no raw key (source; the pre-D61 seed suppressed this).
 - **Key fragments on disk.** After a failed request, `sessions/request_dump_*.json` carries `key[:8]` (measured 2026-10-16 with a synthetic key). The native pattern never matches it. A key the agent prints into the session is removed by the daemon's shape rules when printed raw or JSON-escaped, and not when encoded ([CHEAT-CHECKLIST](../CHEAT-CHECKLIST.md#provider-keys-d61-what-goal-cup-proxy-does-not-hold)).
 - **Credential seeding from the host.** Hermes copied a host-level CLI's token into its isolated home with no user action, and the same code path reads two more credential files in the home directory (measured, 2026-09-03). Goal Cup therefore runs with an empty private `HOME`.
@@ -114,7 +114,7 @@ waits. Hermes 0.19.0 asks only before a shell command it deems dangerous: with t
 60 s timeout (`hermes_cli/config.py:2667-2678`, source, not measured). Goal Cup recommends turning
 the prompt off and never sets it for you (D67). It goes in `config.yaml` in Hermes's Goal Cup home
 (`HERMES_HOME`, under `capture-homes/hermes-cli/` in your Goal Cup configuration folder;
-`goalcup prep` prints the full path when it is missing):
+`goalcup setup` prints the full path when it is missing):
 
 ```yaml
 approvals:
@@ -129,7 +129,7 @@ approvals:
 - File edits are not gated (only memory and skill writes are, `tools/write_approval.py`).
 - What we saw: the Hermes practice runs of the local test day (lx-hermes, mac-hermes) made their
   commits with no approval stall.
-- `goalcup prep` reads `approvals.mode` and, while it is not off, adds the recommendation to its
+- `goalcup setup` reads `approvals.mode` and, while it is not off, adds the recommendation to its
   harness home step. It never changes it and never fails for it.
 - Evidence: [local test day](../research/results/2026-10-22-local-test-day.md),
   [plan v4](../research/results/2026-10-22-fix-plan-v4.md).

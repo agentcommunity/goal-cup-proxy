@@ -110,7 +110,7 @@ The connector runs Claude Code in its normal chat mode in the participant's term
 
 Measured on macOS arm64, Claude Code 2.1.283, 2026-10-14, by driving the TUI on a pseudo-terminal (120x40) in a fresh `git init` workspace, with `CLAUDE_CONFIG_DIR` Goal Cup Proxy's isolated home and a `HOME` holding only `Library/Keychains`. That home was **logged out** (the assistant answered "Not logged in · Please run /login"), so no model reply was seen:
 
-- A new workspace shows "Quick safety check: Is this a project you created or one you trust?" with the cursor on **"No, exit"**. The participant must pick "Yes, I trust this folder" (Down, then Enter). Every fresh clone of a run shows it once. The participant answers it themselves, and the rules allow that: it is a start-up dialog of the harness, not a message to the agent ([RULES](../RULES.md#one-prompt-then-only-keep-going)). Goal Cup Proxy says so before the harness opens, from the connector's `participant.first_screen` (`Claude Code may ask whether you trust this folder. Choose Yes.`). Goal Cup Proxy never answers it. Choosing "No, exit" ends Claude Code at once.
+- A new workspace shows "Quick safety check: Is this a project you created or one you trust?" with the cursor on **"No, exit"**. The participant must pick "Yes, I trust this folder" (Down, then Enter). Every new project folder shows it once. The participant answers it themselves, and the rules allow that: it is a start-up dialog of the harness, not a message to the agent ([RULES](../RULES.md#one-prompt-then-only-keep-going)). Goal Cup Proxy says so before the harness opens, from the connector's `participant.first_screen` (`Claude Code may ask whether you trust this folder. Choose Yes.`). Goal Cup Proxy never answers it. Choosing "No, exit" ends Claude Code at once.
 - The transcript is **not** created at startup or after the trust prompt. It is created when the first message is submitted, at `projects/<cwd with / replaced by ->/<session uuid>.jsonl`.
 - The typed message is a `type: "user"` record whose `message.content` is the text.
 - `/exit` prints `Resume this session with: claude --resume <uuid>`.
@@ -128,7 +128,7 @@ During a run you may type only "keep going" ([RULES](../RULES.md)), so a Claude 
 "This command requires approval" waits until the deadline. Goal Cup recommends these two settings
 and never sets them for you (D67). They go in `settings.json` in Claude Code's Goal Cup home
 (`CLAUDE_CONFIG_DIR`, under `capture-homes/claude-code-cli/` in your Goal Cup configuration folder;
-`goalcup prep` prints the full path when one is missing), beside your other keys:
+`goalcup setup` prints the full path when one is missing), beside your other keys:
 
 ```json
 {
@@ -151,7 +151,7 @@ and never sets them for you (D67). They go in `settings.json` in Claude Code's G
   (lx-claude rerun, local test day). The Mac run on 2.1.299 stayed in auto mode.
 - Bypass mode lets the agent's commands change anything your user can. Run it on a machine or in a
   container you are content to let it change.
-- `goalcup prep` reads both keys and, while one is not set this way, adds the recommendation to its
+- `goalcup setup` reads both keys and, while one is not set this way, adds the recommendation to its
   harness home step. It never changes them and never fails for them. The test kit
   (`scripts/kit_settle.py`) sets both in its own cells.
 - Evidence: [local test day](../research/results/2026-10-22-local-test-day.md),

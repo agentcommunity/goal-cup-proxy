@@ -5,7 +5,8 @@ machine. The step-by-step path is the [participant's guide](PARTICIPANT-GUIDE.md
 [TODO](../TODO.md).
 
 **How Goal Cup Proxy runs.** `goalcup start` opens your harness in its normal chat mode, in your own
-terminal, in a clone of your new, empty, public GitHub repository. You approve each run in the
+terminal, in the project folder you start it from. That folder is the workspace; your agent pushes
+its work to your new, empty, public GitHub repository. You approve each run in the
 browser with your Agent Community account. Two approvals are normal: `goalcup login` signs this
 computer in once and starts nothing, and each `goalcup start` approves that one run. You type the
 prompt as the first message; after it, the only message you may type is "keep going". Goal Cup Proxy
@@ -34,10 +35,12 @@ All times are UTC.
   with `curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh`
   ([guide](PARTICIPANT-GUIDE.md#1-install)).
 - **23 October to 6 November, 00:00:** the dry-run window is open; you can start dry runs on any
-  day. The last scheduled release is on 6 November, 12:00. A dry run is a 168-hour rehearsal
+  day. A release is planned for 6 November, 12:00; it is not a cutoff, and releases may follow (D70). A dry run is a 168-hour rehearsal
   that does not count ([guide](PARTICIPANT-GUIDE.md#the-dry-run-optional)).
 - **Before the window:** you prepare with `goalcup setup` and practice runs. Practice is not limited
   to the window.
+- **A dry run started on 0.6.1:** seal it, then update. The installer that shipped with 0.6.1 does not
+  check for a recording run; the current one does, but seal first anyway ([guide](PARTICIPANT-GUIDE.md#the-dry-run-optional)).
 - **7 November 2026, 00:00:** the 24-hour start window opens. It closes at 00:00 on 8 November.
 - **During the window:** you finalize your prompt and start your run.
 - **The run's start:** the server opens the run, stamps its official start on its own clock, and
@@ -61,16 +64,16 @@ The latest possible run ends 192 hours after the window opens.
   ([agentcommunity.org/goalcup](https://agentcommunity.org/goalcup)) before a run can be approved.
 - **One main run per account.** You approve every competition run in the browser. A new competition
   start inside the start window becomes your main run and replaces any earlier one: the server stops
-  the earlier run, and only the main run counts. A replacement run needs a new, empty repository,
-  because `goalcup start` refuses a repository that already has commits. After the window closes,
+  the earlier run, and only the main run counts. A replacement run needs a new, empty repository
+  and a token for it, because `goalcup start` refuses a repository that already has commits. After the window closes,
   an account can only `goalcup continue` its main run.
 - There is no separate registration. Every approved competition start creates a run.
 - A run is made of parts. A part is one unbroken stretch of recording. When the agent stops before
   the deadline (a crash, a reboot, a closed window), `goalcup continue` starts the next part of the
   same run, with the same deadline, on the same machine.
 - **Practice runs** (`goalcup start --practice`) are short, unlimited, separate from the competition,
-  and never replace your main run. A practice run needs no GitHub repository: the agent works in an
-  empty local folder, and nothing is pushed.
+  and never replace your main run. A practice run needs no GitHub repository and no token: the agent
+  works in the empty folder you start from, and nothing is pushed.
 - **Organizer test runs** (`goalcup start --test`) are opened only by organizer accounts. They do not
   count, and they are deleted from the server afterwards.
 - Your run needs its own prompt, root agent and empty repository.
@@ -129,13 +132,24 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
 - Models, skills, rules files, memory, MCP servers, custom tools, services, accounts, compute and
   external websites may be prepared before the run. You keep full freedom of model, effort and
   settings, and the network is on.
-- **A GitHub repository is required for each real run.** `goalcup start` asks you to name a new,
-  empty, public repository, opens GitHub to create it, and checks that your own git can push to it.
-  The run's workspace is a clone of that repository, so it starts with no README, source,
-  configuration, hidden starter files or existing product. Goal Cup Proxy adds nothing to it: its own
-  `goal-cup` skill goes in the harness's home, not the workspace.
-- The agent pushes its work to that repository with your own git login, as you do. The commit the
-  server records at the deadline is what is judged.
+- **A GitHub repository is required for each real run.** You create a new, empty, public
+  repository (no README, `.gitignore` or licence) and give it to `goalcup start` as
+  `--repo <user>/<name>`. Your repository must be empty when the run opens: `goalcup start` checks
+  it before the approval, and the server checks again when it opens the run, by asking GitHub
+  whether the repository has any commit. A repository with one is refused.
+- **The workspace is the folder you start from.** It starts with no README, source, configuration,
+  hidden starter files or existing product. It may hold only a `.gitignore`, a macOS `.DS_Store` and `.env` or
+  `.env.*` files (your token and your agent's keys; `.envrc` is not one), must be outside any Git repository and not beside
+  goalcup's own folders, and every `.env` file must be covered by the `.gitignore`;
+  `goalcup start` checks all of this before the approval. The record lists each such key file by
+  name and size, never its content or a hash of it, in the folder and in the harness's home; git's
+  `.git-credentials` is treated the same. Goal Cup Proxy adds nothing to the folder and makes no
+  commit or push in it (at the stop it only reads the repository, to seal it): its own
+  `goal-cup` skill goes in the harness's home, not the workspace. Your agent makes the repository
+  itself (`git init`) and pushes.
+- The agent pushes its work to the repository with the token you made for it (see Keys). Goal Cup
+  Proxy passes the agent no git login, SSH agent or `gh` configuration. It does not claim the agent
+  cannot reach one: the agent runs as you. The commit the server records at the deadline is what is judged.
 - Prepared capabilities may help the agent work. A prebuilt product, substantial product code or an
   existing application may not be smuggled in as "context". The judged result must be a fresh build.
 - Participant-controlled instructions and task context available to the agent at the start are frozen
@@ -167,9 +181,22 @@ disclosure and no-side-channel rules.
 
 ## Keys
 
-- Never put keys in your repository.
-- You may give your agent keys in `~/goalcup-work/.env.local`. Set them up before the start;
-  changing them during the run is outside help.
+- Never put keys in your repository. Your project folder's `.gitignore` must cover every `.env` and `.env.*`
+  file in it (`.env*` does), and `goalcup start` refuses to start otherwise. Residual: the agent can still force
+  a file in (`git add -f`). Goal Cup Proxy cannot stop that, and a token published that way is
+  yours to revoke.
+- Keys go in the project folder's `.env.local`. Set them up before the start; changing them during
+  the run is outside help. The GitHub token must be one line, exactly `GH_TOKEN=<token>`. The
+  recorder redacts the token's value from everything it records (every common encoding) if it was
+  in the folder at the start; a token added later is covered by its `github_pat_` pattern only. So is a token after a
+  recorder restart: a reopened entry has no run secrets, and the pattern covers fine-grained
+  tokens. A real run needs the token line (a practice run does not). Model keys there are for your agent's own product. The harness's own
+  sign-in happened in setup and does not go there.
+- **One token kind: a GitHub fine-grained personal access token for the one cup repository, with
+  Contents read and write and an expiry of 30 days,** saved as `GH_TOKEN=...` in `.env.local`. You
+  make it after the repository exists. A broader token (a classic token, or one for all your
+  repositories) lets the agent reach more than you meant to give.
+- **Delete the token after your run,** on GitHub, and delete `.env.local`.
 - Your agent can use any service and make its own accounts. What it does is in the record and is
   what counts.
 
@@ -220,8 +247,16 @@ disclosure and no-side-channel rules.
 - The official open-source Goal Cup Proxy and Agent Community Auth are required for the full run.
 - `goalcup login` records nothing. Recording begins only when you start a run with `goalcup start` and
   approve it in the browser.
-- `goalcup start` is a terminal command. It clones your repository as the workspace, opens the run on
-  the server, starts the recording proxy, and opens the harness in chat mode in your terminal.
+- `goalcup start` is a terminal command. It checks the folder you run it in and your repository,
+  opens the run on the server after you approve it, starts the recording proxy, and opens the
+  harness in chat mode in that folder. It makes no commit or push there; it only reads git, to seal.
+- **GitHub calls.** `goalcup setup` makes none. `goalcup start` makes a few public, unauthenticated
+  calls to `api.github.com` for the repository check (public, and no commits). If GitHub cannot
+  be asked, it says so and goes on, and the server checks when it opens the run. The Worker calls
+  GitHub when it opens the run, and again at judging to read the last push. Nothing of your git
+  login is passed to the agent: not your SSH agent, your `gh` configuration or your credential
+  helper. Your agent runs as you, so it can still read what any program of yours can read (next
+  bullets).
 - **Platforms.** macOS (Apple silicon and Intel) and Linux (x86_64 and arm64). On Windows, use WSL2
   for the event. Native Windows comes later.
 - **Desktop apps are not supported.** The Codex desktop app and Claude Desktop cannot be launched with
@@ -333,20 +368,21 @@ records platform measurements and capture/decoder limits. Current chat-mode conn
 | Hermes Agent | `hermes-cli` | Its own setup keeps provider/login state; native snapshots are capture-only. |
 | Amp CLI | `amp-cli` | Conversation snapshots are decoded from the recording proxy; local metadata is not a transcript. |
 
-Other harnesses can join through the [connector process](HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)
-before the last release. The supported list is final when the start window opens. A harness
+Other harnesses can join through the [connector process](HARNESS-ONBOARDING.md#getting-a-harness-into-the-event).
+Releases continue during the cup, and a merged connector ships in the next one. A harness
 without a shipped, tested connector has no supported recording path and its runs do not count.
 Source inclusion, event qualification and actual platform measurements remain distinct.
 
 ## Submission
 
-- The submission is your run's GitHub repository. At the deadline the server stops the run. The judged
+- The submission is your run's GitHub repository. It must be empty when the run opens; the server
+  checks. At the deadline the server stops the run. The judged
   version is the last push to the repository's default branch that GitHub received before your deadline,
   by GitHub's own timestamp; commit dates are ignored. Later pushes are not judged and are flagged, and a
   force-push during the run is flagged. Your agent pushes its own work; Goal Cup Proxy never pushes, makes
   no commit of its own and never force-pushes. Work not pushed by the deadline is not in the submission.
-- At the stop Goal Cup Proxy also records the commit your clone had, and a digest of any uncommitted
-  changes, in the sealed record.
+- At the stop Goal Cup Proxy also records the git commit your project folder had (if the agent made
+  a repository there), and a digest of any uncommitted changes, in the sealed record.
 - The MIT License must exist in the submitted repository. The result must be a fresh, usable or
   executable product.
 - **`GOALCUP.md` is required.** The submitted repository has a `GOALCUP.md` at its root that
