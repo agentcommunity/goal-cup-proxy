@@ -3093,6 +3093,7 @@ async fn the_baseline_lists_the_harness_home_without_its_session_folder() {
     let config_home = rig.root.join("config-home");
     std::fs::create_dir_all(config_home.join("sessions/2026/10")).unwrap();
     std::fs::write(config_home.join("config.toml"), b"model = \"m\"\n").unwrap();
+    std::fs::write(config_home.join(".env"), b"KEY=secret\n").unwrap();
     std::fs::write(config_home.join("sessions/2026/10/old.jsonl"), b"{}\n").unwrap();
     // Over 64 MiB: its size alone, never read (a sparse file).
     std::fs::File::create(config_home.join("big.bin"))
@@ -3106,6 +3107,11 @@ async fn the_baseline_lists_the_harness_home_without_its_session_folder() {
     assert_eq!(
         home,
         [
+            goalcup_protocol::seal::SealedFile {
+                path: ".env".to_string(),
+                bytes: 11,
+                sha256: "0".repeat(64),
+            },
             goalcup_protocol::seal::SealedFile {
                 path: "big.bin".to_string(),
                 bytes: 64 * 1024 * 1024 + 1,

@@ -66,10 +66,7 @@ fn a_symlinked_artifact_root_is_refused_by_task_1s_resolving_check() {
     let ws = t.path().join("link/../ws");
     let err = check_artifact_placement(&art, &ws)
         .expect_err("the workspace resolves to a directory inside the artifact root");
-    assert!(
-        format!("{err}").contains("symlinks are resolved"),
-        "got {err}"
-    );
+    assert!(format!("{err}").contains("links are followed"), "got {err}");
 }
 
 #[test]

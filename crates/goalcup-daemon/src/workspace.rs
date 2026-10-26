@@ -53,21 +53,22 @@ pub struct Roots {
 pub fn check_artifact_placement(artifact_root: &Path, workspace: &Path) -> Result<(), DaemonError> {
     if artifact_root == workspace {
         return Err(DaemonError::Guard(format!(
-            "artifact root {} is identical to the workspace: the run's own evidence would \
-             be the first thing the agent lists",
+            "the project folder {} is identical to goalcup's own folder for this run: use a \
+             folder of its own",
             artifact_root.display()
         )));
     }
     if workspace.starts_with(artifact_root) {
         return Err(DaemonError::Guard(format!(
-            "artifact root {} is an ancestor of workspace {}",
+            "goalcup's own folder {} is an ancestor of the project folder {}: use a folder of \
+             its own",
             artifact_root.display(),
             workspace.display()
         )));
     }
     if artifact_root.starts_with(workspace) {
         return Err(DaemonError::Guard(format!(
-            "artifact root {} is inside workspace {}",
+            "goalcup's own folder {} is inside the project folder {}: use a folder of its own",
             artifact_root.display(),
             workspace.display()
         )));
@@ -85,8 +86,8 @@ pub fn check_artifact_placement(artifact_root: &Path, workspace: &Path) -> Resul
     // reads as. This is the pass that resolves them, and it is called rather than copied.
     if crate::config::nests(artifact_root, workspace) {
         return Err(DaemonError::Guard(format!(
-            "artifact root {} and workspace {} are entangled once symlinks are resolved: \
-             the directory the agent actually enumerates is not the one either path spells",
+            "goalcup's own folder {} and the project folder {} overlap once links are \
+             followed: use a folder of its own",
             artifact_root.display(),
             workspace.display()
         )));
@@ -94,17 +95,17 @@ pub fn check_artifact_placement(artifact_root: &Path, workspace: &Path) -> Resul
     Ok(())
 }
 
-/// The machine-wide roots against the workspace (review R4 I5): `check_artifact_placement`
-/// compares it with this entry's own artifact directory only, which a workspace inside the
+/// The machine-wide roots against the project folder (review R4 I5): `check_artifact_placement`
+/// compares it with this entry's own artifact directory only, which a project folder inside the
 /// artifact root's other subtrees, or inside the configuration directory (`control.json` and
-/// its bearer), passes. Refused: the workspace equal to, inside, or an ancestor of a root
-/// (symlinks resolved), or its sibling, since an agent enumerates its parent first.
+/// its bearer), passes. Refused: the project folder equal to, inside, or an ancestor of a root
+/// (symlinks resolved), or next to it, since an agent lists the folder above its project first.
 pub fn check_machine_roots(workspace: &Path, roots: &[(&str, &Path)]) -> Result<(), DaemonError> {
     for (name, root) in roots {
         if crate::config::nests(workspace, root) || workspace.parent() == root.parent() {
             return Err(DaemonError::Guard(format!(
-                "workspace {} is nested in, or beside, the tracker's {name} {}: the agent would \
-                 enumerate the tracker's own files",
+                "the project folder {} is in, around, or next to the tracker's {name} {}: use a \
+                 folder of its own",
                 workspace.display(),
                 root.display()
             )));
@@ -218,7 +219,7 @@ pub fn list_home(home: &Path, excluded: &[String]) -> Option<Vec<SealedFile>> {
             limit: HOME_FILE_LIMIT,
             hash_limit: HASH_LIMIT,
             deadline: None,
-            keys_unhashed: false,
+            keys_unhashed: true,
         },
     )
     .ok()?
@@ -238,7 +239,7 @@ pub(crate) struct Bounds {
     pub(crate) deadline: Option<std::time::Instant>,
     /// A key file ([`is_key_file`]) is listed with its size and the absent digest, unread: a
     /// digest of a low-entropy secret file would be a confirmation oracle for it (D71; the
-    /// redactor's own rule, `redact.rs`). The harness home keeps D61's hashed `.env`.
+    /// redactor's own rule, `redact.rs`). Every walk sets it: a key file is never hashed.
     pub(crate) keys_unhashed: bool,
 }
 
