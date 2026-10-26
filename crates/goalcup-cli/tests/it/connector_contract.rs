@@ -565,6 +565,9 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
         "TMPDIR",
         "GOALCUP_IN_HARNESS",
         "GOALCUP_TIME_LEFT_FILE",
+        // OD9: no system git config and no ssh key of the participant's.
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_SSH_COMMAND",
     ] {
         allowed.insert(pin.to_string());
     }
@@ -638,7 +641,8 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
 /// OD9: the agent pushes with the token the participant puts in the project folder's
 /// `.env.local`, for the run's one repository, and nothing else of their git login. A launch
 /// carries none of it, even when the participant has every piece of it set up: no SSH agent, no
-/// git config, no `gh` folder, no keyring sockets, and no token from their environment.
+/// git config, no `gh` folder, no keyring sockets, and no token from their environment; and it
+/// turns off the system git config and the participant's ssh keys.
 #[test]
 fn a_launch_carries_nothing_of_the_participants_git_login() {
     let tmp = tempfile::tempdir().unwrap();
@@ -686,9 +690,13 @@ fn a_launch_carries_nothing_of_the_participants_git_login() {
         assert!(!plan.env_set.contains_key(k), "`{k}` was carried");
     }
     assert!(plan.env_set.values().all(|v| !v.contains(KEY)));
+    let get = |k: &str| plan.env_set.get(k).map(String::as_str);
+    assert_eq!(get("HOME"), l.run_home.to_str());
+    // No system git config (a keychain helper) and no ssh key of the participant's.
+    assert_eq!(get("GIT_CONFIG_NOSYSTEM"), Some("1"));
     assert_eq!(
-        plan.env_set.get("HOME").map(String::as_str),
-        l.run_home.to_str()
+        get("GIT_SSH_COMMAND"),
+        Some("ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes")
     );
 }
 

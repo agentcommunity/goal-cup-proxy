@@ -43,6 +43,8 @@
     "env_remove": [],
     "env_set": {
       "AMP_SKIP_UPDATE_CHECK": "1",
+      "GIT_CONFIG_NOSYSTEM": "1",
+      "GIT_SSH_COMMAND": "ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes",
       "GOALCUP_IN_HARNESS": "1",
       "GOALCUP_TIME_LEFT_FILE": "<TMP>/time-left/entry-0001",
       "HOME": "<TMP>/run-home",
