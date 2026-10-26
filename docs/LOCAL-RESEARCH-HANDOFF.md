@@ -89,14 +89,16 @@ Use staging explicitly and a disposable empty public repository owned by the tes
 
 ```sh
 goalcup login --server https://goalcup-ingest-staging.b-9a5.workers.dev
-goalcup prep --harness codex-cli --repo https://github.com/OWNER/EMPTY-RESEARCH-REPO --work-root "$RESEARCH_WORK_ROOT"
+goalcup setup --harness codex-cli --work-root "$RESEARCH_WORK_ROOT"
 ```
 
-Replace the repository placeholder. Follow prep's interactive sign-in and token prompts; never
-put token values in arguments or chat. The account must be authorized as a staging test operator.
-Inspect prep's actual output: it also reports practice readiness. The server start path requires
-valid prepared repository/work-root state; do not forge it. If prep requests a short practice,
-complete that separately, with a small useful prompt and the same Luna settings.
+Setup asks for no repository and no token: each real run asks for its own new, empty, public
+repository at `goalcup start` (the `--test` start below names it with `--repo`), and the agent
+pushes with your own git login. Follow setup's interactive sign-in; never put key values in
+arguments or chat. The account must be authorized as a staging test operator.
+Inspect setup's actual output. The server start path requires the work folder setup settled; do
+not forge it. A short practice run first is optional; if you run one, use a small useful prompt
+and the same Luna settings.
 
 Prep opens Codex in the home Goal Cup Proxy owns. Exit that setup session before editing its config.
 The persistent path is `$GOALCUP_CONFIG_DIR/capture-homes/codex-cli/config.toml`. Merge these
@@ -136,7 +138,7 @@ organizer `--test` run with a manual local cutoff:
 
 ```sh
 cd "$RESEARCH_LAUNCH_ROOT"
-goalcup start --harness codex-cli --test
+goalcup start --harness codex-cli --test --repo OWNER/EMPTY-RESEARCH-REPO
 ```
 
 Approve the staging run when asked. Once Codex is ready, establish the watchdog below before

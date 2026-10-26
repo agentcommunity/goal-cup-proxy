@@ -241,11 +241,12 @@ fn start_refuses_each_run_folder_on_a_windows_host_filesystem_under_wsl2() {
     assert!(said.contains("work folder /odd/place/work"), "{said}");
 }
 
-/// `goalcup git-credential` is what a run's clone calls; it is not for the participant, so
-/// `--help` does not list it, and `start` has no `--repo` any more (the repository comes from
-/// `goalcup prep`) but has `--practice`.
+/// `goalcup git-credential` is what an older version's clone calls; it is not for the
+/// participant, so `--help` does not list it, and it still answers for those clones (D69).
+/// `start` takes `--practice` and a real run's `--repo`. `goalcup setup` is listed, and its old
+/// name `goalcup prep` is a hidden alias that still runs it.
 #[test]
-fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
+fn the_git_credential_command_is_hidden_and_prep_is_a_hidden_alias_of_setup() {
     let goalcup = env!("CARGO_BIN_EXE_goalcup");
     let help = std::process::Command::new(goalcup)
         .arg("--help")
@@ -254,9 +255,22 @@ fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
     let help = String::from_utf8_lossy(&help.stdout);
     assert!(!help.contains("git-credential"), "{help}");
     for shown in [
-        "start", "status", "entries", "seal", "doctor", "login", "upload",
+        "setup", "start", "status", "entries", "seal", "doctor", "login", "upload",
     ] {
         assert!(help.contains(shown), "{shown}: {help}");
+    }
+    assert!(!help.contains("prep"), "{help}");
+    let help_of = |command: &str| {
+        let out = std::process::Command::new(goalcup)
+            .args([command, "--help"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    for command in ["setup", "prep"] {
+        let said = help_of(command);
+        assert!(said.contains("--work-root"), "{command}: {said}");
     }
     let start = std::process::Command::new(goalcup)
         .args(["start", "--help"])
@@ -265,7 +279,7 @@ fn the_git_credential_command_is_hidden_and_start_takes_practice_not_repo() {
     let start = String::from_utf8_lossy(&start.stdout);
     assert!(start.contains("--practice"), "{start}");
     assert!(start.contains("--test"), "{start}");
-    assert!(!start.contains("--repo"), "{start}");
+    assert!(start.contains("--repo"), "{start}");
     // `--test` and `--practice` are two different kinds of run: clap refuses both together.
     let both = std::process::Command::new(goalcup)
         .args(["start", "--harness", "any-harness", "--test", "--practice"])
@@ -854,6 +868,31 @@ mod chat {
         let run_id = &server.run_ids()[0];
         assert_eq!(server.entry_ids(run_id).len(), 2, "two segments");
         assert!(home.is_dir(), "the shared run home is never removed");
+    }
+
+    /// A Ctrl-C at a question a real run's start asks before the approval (here the no-login
+    /// guide's "Press Enter") ends the start at once, with nothing approved or created.
+    #[test]
+    fn a_ctrl_c_at_a_start_question_ends_it_with_nothing_created() {
+        let rig = Rig::chat();
+        let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+        rig.prepare_for(&server.url());
+        // No GitHub login on this computer: start shows the guide and waits for Enter.
+        rig.with_env(goalcup_cli::commands::start::TEST_GITHUB_LOGIN, "");
+        let mut start = rig.start_on_pty(&[DISK]);
+        start.wait_shown("Press Enter when done");
+        start.type_bytes("\u{3}");
+        let status = start.wait();
+        let shown = start.shown();
+        assert!(!status.success(), "{shown}");
+        assert!(
+            shown.contains("interrupted before the run began"),
+            "{shown}"
+        );
+        assert!(server.device_requests().is_empty(), "{shown}");
+        assert!(server.run_ids().is_empty(), "{shown}");
+        assert!(rig.clones().is_empty(), "{shown}");
+        assert!(!rig.harness_started(), "{shown}");
     }
 
     /// A harness that closed before the first message (a trust question answered "no", a setup

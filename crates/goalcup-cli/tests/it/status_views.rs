@@ -1737,7 +1737,7 @@ fn the_binary_leads_with_chat_mode_start() {
     let said = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{said}");
     assert!(
-        said.contains("goalcup prep, then goalcup start --harness <id>"),
+        said.contains("goalcup setup, then goalcup start --harness <id>"),
         "{said}"
     );
     assert!(!said.contains("--goal-file"), "{said}");

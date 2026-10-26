@@ -354,7 +354,7 @@ pub fn check_workspace_available(roots: &Roots) -> Result<(), DaemonError> {
     {
         return Err(DaemonError::Guard(format!(
             "Your work folder {} is inside a Git repository ({}). Choose a folder outside any \
-             repository: goalcup prep --work-root <full path of a folder outside any repository>",
+             repository: goalcup setup --work-root <full path of a folder outside any repository>",
             work_root.display(),
             outer.display()
         )));

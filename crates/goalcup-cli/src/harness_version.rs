@@ -155,11 +155,22 @@ pub(crate) fn wait_or_end_group(
     child: &mut std::process::Child,
     timeout: Duration,
 ) -> Option<std::process::ExitStatus> {
+    wait_or_end_group_unless(child, timeout, &|| false)
+}
+
+/// [`wait_or_end_group`] that also ends the group as soon as `stop` says so: `goalcup start`'s
+/// GitHub checks (the participant's `ssh`, `gh` and `git`, D69, never a recorded run) end at a
+/// Ctrl-C ([`crate::arming::interrupted`]).
+pub(crate) fn wait_or_end_group_unless(
+    child: &mut std::process::Child,
+    timeout: Duration,
+    stop: &dyn Fn() -> bool,
+) -> Option<std::process::ExitStatus> {
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
+            Ok(None) if Instant::now() < deadline && !stop() => std::thread::sleep(POLL),
             _ => break,
         }
     }

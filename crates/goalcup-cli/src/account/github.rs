@@ -1,35 +1,25 @@
-//! The public GitHub repository a run pushes to, and the token that can push only there.
+//! The public GitHub repository a real run pushes to. Goal Cup holds no key for it (D69).
 //!
-//! `goalcup prep` asks the participant for an empty public repository and a GitHub token that
-//! can push to that one repository. [`check`] refuses a repository that is private, not empty
-//! or not pushable; [`clone_into`] makes the clone the agent works in; and
-//! [`credential_helper`] is what `goalcup git-credential` runs when git asks for a password,
-//! so the agent pushes with a plain `git push`.
+//! `goalcup start` asks for a real run's repository (`commands::run_repo`), opens GitHub's "new
+//! repository" page when it does not exist yet, and checks it with nothing of the participant's:
+//! [`check_public_empty`] asks GitHub's open API, with no login, that it is public and empty, and
+//! [`push_test`] asks the participant's own git for a dry-run push. [`clone_repo`] makes the
+//! clone the agent works in, with the participant's own git and login, over SSH when
+//! [`find_login`] saw SSH work. A practice run has no repository: [`init_local`]. Nothing here
+//! reads, stores or passes a key: the agent pushes with the participant's own git login, as
+//! their laptop already does.
 //!
-//! # The token stays here
+//! # The older token flow, kept for old clones
 //!
-//! The token lives in one file, `<cfg>/github.json`, at mode 0600 under the tracker's own
-//! configuration directory, and is handed out in exactly two places:
-//!
-//! - to GitHub's API, as the bearer of [`check`]'s one request;
-//! - to git, on its standard input and output, by [`credential_helper`], and only for a
-//!   request naming `https://github.com/<owner>/<repo>` for this very repository.
-//!
-//! It is never in the clone's configuration, a remote URL, a command line or an environment
-//! variable (the helper is a command that reads the file when git runs it); never printed or
-//! logged ([`GithubSetup`]'s `Debug` prints `<redacted>`, and no message in this module
-//! formats the token); and never read from a command line (`goalcup prep` reads it from stdin
-//! with echo off, [`GithubSetup::read_token`]).
-//!
-//! Mode 0600 keeps other users out, not the agent: the agent runs as the participant, so it
-//! can read the file and can ask the helper for the token. What bounds the damage is the
-//! token itself: it can push to one public, empty-at-the-start repository and nothing else,
-//! and the participant can revoke it on GitHub (docs/CHEAT-CHECKLIST.md).
+//! Versions before D69 stored a token in `<cfg>/github.json` and set each clone's credential
+//! helper to `goalcup git-credential`. Those clones keep working: [`credential_helper`] still
+//! answers git from that file ([`GithubSetup::load`]), for that one repository. Nothing writes
+//! the file any more. Once the dry runs of the week of 23 Oct are over, this half can go.
 
 use crate::CliError;
-use crate::config::write_secret_file;
 use crate::upload::http::{ServerClient, ServerError};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
@@ -38,7 +28,8 @@ use std::process::{Command, Stdio};
 /// `<cfg>/github.json`.
 pub const GITHUB_FILE_NAME: &str = "github.json";
 
-/// GitHub's API. [`check`] takes the base as an argument so a test can point it at a fake.
+/// GitHub's API. [`check_public_empty`] takes the base as an argument so a test can point it at
+/// a fake.
 pub const GITHUB_API: &str = "https://api.github.com";
 
 /// The most of `github.json` [`GithubSetup::load`] reads. The document is a URL and a token.
@@ -59,7 +50,7 @@ const URL_PREFIX: &str = "https://github.com/";
 /// The username GitHub accepts with an access token as the password.
 const HELPER_USERNAME: &str = "x-access-token";
 
-/// The repository and the token for it, as `goalcup prep` stored them.
+/// The repository and the token for it, as `goalcup prep` stored them before D69.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GithubSetup {
@@ -79,8 +70,7 @@ impl std::fmt::Debug for GithubSetup {
 }
 
 impl GithubSetup {
-    /// `repo_url` and `token` checked and normalised ([`GithubSetup::read_token`] reads the
-    /// token from a line instead).
+    /// `repo_url` and `token` checked and normalised.
     pub fn new(repo_url: &str, token: &str) -> Result<GithubSetup, CliError> {
         let (owner, repo) = parse_repo_url(repo_url)?;
         Ok(GithubSetup {
@@ -89,40 +79,17 @@ impl GithubSetup {
         })
     }
 
-    /// `repo_url` checked, then ONE line of `input` as the token: bounded, so a paste of a
-    /// whole file is not read into memory before it is refused. `goalcup prep` calls it with
-    /// terminal echo off.
-    pub fn read_token(repo_url: &str, input: &mut dyn BufRead) -> Result<GithubSetup, CliError> {
-        // The URL first: a participant with a bad URL is not asked to paste a token twice.
-        parse_repo_url(repo_url)?;
-        let mut line = String::new();
-        // Bounded: a token is at most TOKEN_MAX_LEN characters, and a paste of a whole file
-        // must not be read into memory whole before it is refused.
-        Read::take(&mut *input, 4 * TOKEN_MAX_LEN as u64)
-            .read_line(&mut line)
-            .map_err(|source| CliError::Io {
-                path: "stdin".to_string(),
-                source,
-            })?;
-        GithubSetup::new(repo_url, &line)
-    }
-
-    /// `(owner, repo)` of [`GithubSetup::repo_url`]. A `repo_url` that was set by hand to
-    /// something that is not the normal form gives two empty strings, which no check or
-    /// clone accepts.
-    pub fn owner_repo(&self) -> (&str, &str) {
-        parse_repo_url(&self.repo_url).unwrap_or(("", ""))
-    }
-
     /// `(owner, repo)`, or the refusal for a `repo_url` that was set by hand.
     fn parts(&self) -> Result<(&str, &str), CliError> {
         parse_repo_url(&self.repo_url)
     }
 
-    /// Store at `<cfg>/github.json`, mode 0600, replacing any earlier one.
+    /// Store at `<cfg>/github.json`, mode 0600, replacing any earlier one. Only a test writes
+    /// the file now, to stand in for a clone an older version made (D69): no shipped build can.
+    #[cfg(feature = "test-support")]
     pub fn store(&self, cfg: &Path) -> Result<PathBuf, CliError> {
         let path = github_path(cfg);
-        write_secret_file(&path, &serde_json::to_vec_pretty(self)?)?;
+        crate::config::write_secret_file(&path, &serde_json::to_vec_pretty(self)?)?;
         Ok(path)
     }
 
@@ -131,7 +98,7 @@ impl GithubSetup {
     /// The file must be the owner's alone: one that the group or others can read is refused,
     /// naming the fix, because the token in it would no longer be the participant's alone.
     /// Its URL and token are checked again as [`GithubSetup::new`] checked them. No file is
-    /// a refusal that says to run `goalcup prep`.
+    /// a refusal that says to run `goalcup setup`.
     pub fn load(cfg: &Path) -> Result<GithubSetup, CliError> {
         let path = github_path(cfg);
         let io = |source: std::io::Error| CliError::Io {
@@ -142,7 +109,10 @@ impl GithubSetup {
             Ok(file) => file,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
                 return Err(CliError::Refused(
-                    "no GitHub repository is set up; run `goalcup prep`".into(),
+                    "this clone was made by an older goalcup, and its GitHub token is gone. Push \
+                     with your own git login instead: git remote set-url origin \
+                     git@github.com:<owner>/<repo>.git"
+                        .into(),
                 ));
             }
             Err(source) => return Err(io(source)),
@@ -183,11 +153,33 @@ impl GithubSetup {
 }
 
 /// `url` as `https://github.com/<owner>/<repo>` (no `.git`, no trailing slash), or the refusal
-/// that names the form. `goalcup prep` checks the address it was given before it asks for a
-/// token, so a mistyped address costs no paste.
+/// that names the form. `<owner>/<repo>` alone is read as that address.
 pub fn checked_repo_url(url: &str) -> Result<String, CliError> {
+    let trimmed = url.trim();
+    let full;
+    let url = if !trimmed.contains("://") && trimmed.matches('/').count() == 1 {
+        full = format!("{URL_PREFIX}{trimmed}");
+        full.as_str()
+    } else {
+        url
+    };
     let (owner, repo) = parse_repo_url(url)?;
     Ok(format!("{URL_PREFIX}{owner}/{repo}"))
+}
+
+/// `(owner, repo)` of a repository address in [`checked_repo_url`]'s form.
+pub fn owner_repo(url: &str) -> Result<(&str, &str), CliError> {
+    parse_repo_url(url)
+}
+
+/// The two git remotes of a repository: over SSH, `git@github.com:<owner>/<repo>.git`, used when
+/// the participant's SSH login to GitHub works ([`find_login`]); otherwise over HTTPS.
+pub fn remote_url(owner: &str, repo: &str, ssh: bool) -> String {
+    if ssh {
+        format!("git@github.com:{owner}/{repo}.git")
+    } else {
+        format!("{URL_PREFIX}{owner}/{repo}.git")
+    }
 }
 
 /// `<cfg>/github.json`.
@@ -211,8 +203,8 @@ fn parse_repo_url(url: &str) -> Result<(&str, &str), CliError> {
     let refused = || {
         CliError::Refused(format!(
             "the repository address {shown} is not of the form {URL_FORM}. Give the https \
-             address of the repository's page on github.com, with no user name, query or \
-             extra path."
+             address of the repository's page on github.com, or <owner>/<repo>, with no user \
+             name, query or extra path."
         ))
     };
     let rest = url.trim().strip_prefix(URL_PREFIX).ok_or_else(refused)?;
@@ -273,43 +265,68 @@ struct RepoAnswer {
     private: bool,
     /// In kilobytes; 0 for a repository with no commits.
     size: u64,
-    /// Absent for a caller that cannot see what it may do: read as "cannot push".
-    #[serde(default)]
-    permissions: Option<Permissions>,
 }
 
-#[derive(Deserialize)]
-struct Permissions {
-    #[serde(default)]
-    push: bool,
+/// What GitHub's open API says about a repository.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Found {
+    /// No such repository can be seen without a login: it does not exist yet, or it is private.
+    Missing,
+    /// It is public and has no commits.
+    PublicEmpty,
+    /// GitHub would not answer just now: its open API allows 60 calls an hour from one address
+    /// (`403` or `429`). Not a sign the repository is used. The server checks that it is public
+    /// when the run opens, and the clone that it is empty ([`clone_has_commits`]).
+    Unchecked,
 }
 
-/// Ask GitHub (`api_base`, [`GITHUB_API`] in production) about the repository with the token,
-/// and refuse unless it is public, empty and pushable: three different sentences, in that
-/// order, each saying what to do. A wrong token, a repository the token cannot see, and any
-/// other failure are refused in a sentence of their own.
-pub fn check(api_base: &str, s: &GithubSetup) -> Result<(), CliError> {
-    judge(api_base, s, true, true)
+/// Ask GitHub's API (`api_base`, [`GITHUB_API`] in production) about `repo_url` with no login
+/// at all, so nothing of the participant's is sent. A public, empty repository is
+/// [`Found::PublicEmpty`]; one that cannot be seen is [`Found::Missing`]; a rate limit is
+/// [`Found::Unchecked`]. A repository that is not empty, or any other failure, is refused in a
+/// sentence of its own.
+pub fn check_public_empty(api_base: &str, repo_url: &str) -> Result<Found, CliError> {
+    let (owner, repo) = parse_repo_url(repo_url)?;
+    let answer: RepoAnswer = match ServerClient::anonymous(api_base).json(
+        "GET",
+        &format!("/repos/{owner}/{repo}"),
+        None::<&()>,
+    ) {
+        Ok(answer) => answer,
+        Err(ServerError::Status { status: 404, .. }) => return Ok(Found::Missing),
+        Err(ServerError::Status {
+            status: 403 | 429, ..
+        }) => return Ok(Found::Unchecked),
+        Err(other) => {
+            return Err(CliError::Refused(format!(
+                "could not check {owner}/{repo} on GitHub: {other}. Try again in a minute."
+            )));
+        }
+    };
+    // GitHub answers a private repository with 404 to a caller with no login; this is a
+    // belt-and-braces check of the answer.
+    if answer.private {
+        return Ok(Found::Missing);
+    }
+    if answer.size != 0 {
+        return Err(CliError::Refused(crate::participant::repository_not_empty(
+            &format!("{owner}/{repo}"),
+            Some(answer.size),
+        )));
+    }
+    Ok(Found::PublicEmpty)
 }
 
-/// [`check`]'s access half: the repository is public and the token can push to it. A token that
-/// expired or was revoked, or a repository made private, fails it; it is what tells `goalcup
-/// prep` that the participant must give a new token.
-pub fn check_access(api_base: &str, s: &GithubSetup) -> Result<(), CliError> {
-    judge(api_base, s, true, false)
-}
-
-/// [`check`]'s other half: the repository has no commits. A practice run never pushes, so the
-/// repository stays empty until the competition run, and `goalcup prep` asks this every time.
-/// A new token would not change the answer, which is why it is asked apart from the access.
-pub fn check_empty(api_base: &str, s: &GithubSetup) -> Result<(), CliError> {
-    judge(api_base, s, false, true)
+/// GitHub's page that creates a repository, with the name, the owner and public visibility
+/// filled in (GitHub documents these query parameters; one it cannot use is ignored).
+pub fn new_repo_page(owner: &str, repo: &str) -> String {
+    format!("https://github.com/new?name={repo}&owner={owner}&visibility=public")
 }
 
 /// Whether the clone at `clone` has a commit: `git rev-parse --verify --quiet HEAD` in it, on
-/// this machine and exact. GitHub updates the `size` that [`check_empty`] reads with a delay, so
-/// a repository pushed to a moment ago can still read as empty there; a competition or test
-/// start asks this too, once it has cloned. A clone git cannot read has none.
+/// this machine and exact. GitHub updates the `size` that [`check_public_empty`] reads with a
+/// delay, so a repository pushed to a moment ago can still read as empty there; a competition or
+/// test start asks this too, once it has cloned. A clone git cannot read has none.
 pub fn clone_has_commits(clone: &Path) -> bool {
     run_git(
         OsStr::new("git"),
@@ -326,171 +343,285 @@ pub fn clone_has_commits(clone: &Path) -> bool {
     .is_ok()
 }
 
-/// One request to GitHub, judged on the halves asked for, in the order public, empty, pushable.
-fn judge(api_base: &str, s: &GithubSetup, access: bool, empty: bool) -> Result<(), CliError> {
-    let (owner, repo) = s.parts()?;
-    let answer = ask(api_base, s)?;
-    if access && answer.private {
-        return Err(CliError::Refused(format!(
-            "the repository {owner}/{repo} is private, and Goal Cup needs a public one. Make it \
-             public (Settings, then Danger Zone, then Change visibility) or create a new public \
-             repository, then run `goalcup prep` again."
-        )));
-    }
-    if empty && answer.size != 0 {
-        return Err(CliError::Refused(crate::participant::repository_not_empty(
-            &format!("{owner}/{repo}"),
-            Some(answer.size),
-        )));
-    }
-    if access && !answer.permissions.is_some_and(|p| p.push) {
-        return Err(CliError::Refused(format!(
-            "the token cannot push to {owner}/{repo}. Create a fine-grained token for that one \
-             repository with Contents set to read and write, then run `goalcup prep` again."
-        )));
-    }
-    Ok(())
+// ------------------------------------------------------------------ the participant's own login
+
+/// Who the participant is on GitHub, as their own tools say, and whether SSH works.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GithubLogin {
+    /// The GitHub user name, when SSH or `gh` named one.
+    pub user: Option<String>,
+    /// `ssh git@github.com` signed in: the clone's remote is SSH.
+    pub ssh: bool,
 }
 
-/// GitHub's answer about the repository, asked with the token. A wrong token, a repository the
-/// token cannot see, and any other failure are refused in a sentence of their own.
-fn ask(api_base: &str, s: &GithubSetup) -> Result<RepoAnswer, CliError> {
-    let (owner, repo) = s.parts()?;
-    let client = ServerClient::bearer(api_base, &s.token);
-    client
-        .json("GET", &format!("/repos/{owner}/{repo}"), None::<&()>)
-        .map_err(|e| match e {
-            ServerError::Status { status, .. } if status == 401 || status == 403 => {
-                CliError::Refused(format!(
-                    "GitHub refused the token (HTTP {status}). It may be mistyped, expired or \
-                     revoked. Create a fine-grained token for {owner}/{repo} with Contents set \
-                     to read and write, then run `goalcup prep` again."
-                ))
+/// How long one look at the participant's login may take.
+const LOOK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long the dry-run push may take.
+const PUSH_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The participant's GitHub login as the agent will have it, found with their own tools and
+/// nothing typed, in the agent's environment (`launch::agent_base_env`, with `scratch` as its
+/// `HOME`): first `ssh -T git@github.com`, which signs in with their SSH key and answers
+/// "Hi <user>!" (and exits 1, as GitHub gives no shell); then `gh api user --jq .login` when
+/// `gh` is on `PATH`. Each is bounded by a timeout and a Ctrl-C, never asks a question, and none
+/// of what they print is kept but the user name. A first SSH connection records GitHub's host
+/// key (`accept-new`).
+pub fn find_login(parent_env: &BTreeMap<String, String>, scratch: &Path) -> GithubLogin {
+    let Some(env) = agent_env(parent_env, scratch) else {
+        return GithubLogin::default();
+    };
+    let found = find_login_in(&env);
+    let _ = std::fs::remove_dir_all(scratch);
+    found
+}
+
+fn find_login_in(env: &BTreeMap<String, String>) -> GithubLogin {
+    let ssh = [
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ConnectTimeout=10",
+        "git@github.com",
+    ];
+    if let Some((_, said)) = run_bounded(OsStr::new("ssh"), &ssh, env, LOOK_TIMEOUT)
+        && let Some(user) = ssh_greeting_user(&said)
+    {
+        return GithubLogin {
+            user: Some(user),
+            ssh: true,
+        };
+    }
+    if crate::preflight::resolve_on_path("gh", env).is_some() {
+        let gh = ["api", "user", "--jq", ".login"];
+        if let Some((true, said)) = run_bounded(OsStr::new("gh"), &gh, env, LOOK_TIMEOUT) {
+            let user = said.lines().next().unwrap_or("").trim().to_string();
+            if is_owner_name(&user) {
+                return GithubLogin {
+                    user: Some(user),
+                    ssh: false,
+                };
             }
-            ServerError::Status {
-                status: 301 | 302 | 307 | 308,
-                ..
-            } => CliError::Refused(format!(
-                "GitHub says {owner}/{repo} has moved or been renamed. Open the repository on \
-                 GitHub, copy its current address, then run `goalcup prep` again with it."
+        }
+    }
+    GithubLogin::default()
+}
+
+/// The agent's environment (`launch::agent_base_env`) with the new folder `scratch` as its
+/// `HOME`, or `None` when the folder cannot be made or named.
+fn agent_env(
+    parent_env: &BTreeMap<String, String>,
+    scratch: &Path,
+) -> Option<BTreeMap<String, String>> {
+    std::fs::create_dir_all(scratch).ok()?;
+    let home = scratch.to_str()?;
+    Some(crate::launch::agent_base_env(parent_env, home, true))
+}
+
+/// The user in GitHub's SSH greeting, `Hi <user>! You've successfully authenticated, ...`. A
+/// deploy key's greeting names `<owner>/<repo>`, which is no user, so it is `None`.
+pub fn ssh_greeting_user(said: &str) -> Option<String> {
+    let after = said.split("Hi ").nth(1)?;
+    let user = after.split('!').next()?;
+    is_owner_name(user).then(|| user.to_string())
+}
+
+/// A GitHub user or organisation name: 1 to 39 of `[A-Za-z0-9-]`.
+pub fn is_owner_name(name: &str) -> bool {
+    (1..=39).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// A repository name: 1 to 100 of `[A-Za-z0-9._-]`, not `.` or `..`, not ending in `.git`.
+pub fn is_repo_name(name: &str) -> bool {
+    (1..=100).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        && name != "."
+        && name != ".."
+        && !name.ends_with(".git")
+}
+
+/// Why [`push_test`] did not pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushRefused {
+    /// The repository already has a branch (`git ls-remote --heads`), so it is not new and empty.
+    /// GitHub's API can still say `size` 0 right after a repository is created with a README.
+    HasBranches,
+    /// git could not reach the repository or push to it: its last lines.
+    Failed(String),
+}
+
+/// Whether the agent's git can push to `remote`, a repository with no branch yet. First `git
+/// ls-remote --heads`: a repository that lists a branch is [`PushRefused::HasBranches`]. Then a
+/// dry-run push of a one-commit repository to a branch the repository does not have. Both run in
+/// the agent's own environment (`launch::agent_base_env`: the participant's `PATH` and the way
+/// to their git login, a scratch `HOME`, nothing else), so a login only the participant's shell
+/// has (a `store` or `cache` helper, an `include.path` under `~`, a `GH_TOKEN`) does not pass.
+/// Nothing is sent. A dry run still opens git's push connection, which GitHub gives only to a
+/// login with write access; a pass is git's exit 0 and nothing else. No hook or signing of theirs
+/// runs, and nothing may ask a question (no terminal). `scratch` is a new folder, removed
+/// afterwards.
+pub fn push_test(
+    git: &OsStr,
+    remote: &str,
+    scratch: &Path,
+    parent_env: &BTreeMap<String, String>,
+) -> Result<(), PushRefused> {
+    let done = match agent_env(parent_env, &scratch.join("home")) {
+        Some(env) => push_test_in(git, remote, &scratch.join("repo"), &env),
+        None => Err(PushRefused::Failed(format!(
+            "{} could not be made",
+            scratch.display()
+        ))),
+    };
+    let _ = std::fs::remove_dir_all(scratch);
+    done
+}
+
+fn push_test_in(
+    git: &OsStr,
+    remote: &str,
+    repo: &Path,
+    env: &BTreeMap<String, String>,
+) -> Result<(), PushRefused> {
+    let Some(dir) = repo.to_str() else {
+        return Err(PushRefused::Failed(format!(
+            "{} is not UTF-8",
+            repo.display()
+        )));
+    };
+    let run = |args: &[&str]| -> Result<String, PushRefused> {
+        let mut full = vec![
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+        ];
+        full.extend_from_slice(args);
+        match run_bounded(git, &full, env, PUSH_TEST_TIMEOUT) {
+            Some((true, said)) => Ok(said),
+            Some((false, said)) => Err(PushRefused::Failed(last_lines(&said))),
+            None if crate::arming::interrupted() => {
+                Err(PushRefused::Failed("interrupted".to_string()))
+            }
+            None => Err(PushRefused::Failed(
+                "git did not finish within a minute".to_string(),
             )),
-            ServerError::Status { status: 404, .. } => CliError::Refused(format!(
-                "the repository {owner}/{repo} was not found, or the token cannot see it. \
-                 Check the address, and that the token was created for this repository, then \
-                 run `goalcup prep` again."
-            )),
-            other => CliError::Refused(format!(
-                "could not check {owner}/{repo} on GitHub: {other}. Try again in a minute."
-            )),
+        }
+    };
+    let quiet = |args: &[&str]| run(args).map(|_| ());
+    // `<id>\trefs/heads/<name>` per branch; anything else git says (a warning) is not one.
+    let heads = run(&["ls-remote", "--heads", remote])?;
+    if heads.lines().any(|l| l.contains("\trefs/heads/")) {
+        return Err(PushRefused::HasBranches);
+    }
+    quiet(&["init", "--quiet", dir])?;
+    quiet(&[
+        "-C",
+        dir,
+        "-c",
+        "user.name=goalcup",
+        "-c",
+        "user.email=setup@goalcup.invalid",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "goalcup setup push test",
+    ])?;
+    quiet(&[
+        "-C",
+        dir,
+        "push",
+        "--dry-run",
+        "--quiet",
+        remote,
+        "HEAD:refs/heads/goalcup-setup-push-test",
+    ])
+}
+
+/// Run `program args` (the participant's own `ssh`, `gh` or `git`) in exactly `env` and no
+/// other variable, no stdin, no terminal prompt, in a session of its own with no controlling
+/// terminal (so nothing can stop to ask for a passphrase), for at most `timeout`: `(exit 0,
+/// stdout then stderr)`, or `None` when it could not start, did not finish, or a Ctrl-C came
+/// ([`crate::arming::interrupted`]); its group is then killed. Nothing passed here is a key.
+fn run_bounded(
+    program: &OsStr,
+    args: &[&str],
+    env: &BTreeMap<String, String>,
+    timeout: std::time::Duration,
+) -> Option<(bool, String)> {
+    use std::os::unix::process::CommandExt;
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .env_clear()
+        .envs(env)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // SAFETY: `setsid` is async-signal-safe and touches nothing of this process's memory.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().ok()?;
+    let read = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(pipe) = pipe {
+                let _ = pipe.take(64 * 1024).read_to_end(&mut bytes);
+            }
+            bytes
         })
+    };
+    let out = read(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let err = read(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let status = crate::harness_version::wait_or_end_group_unless(
+        &mut child,
+        timeout,
+        &crate::arming::interrupted,
+    );
+    let status = status?;
+    let mut said = out.join().unwrap_or_default();
+    said.extend(err.join().unwrap_or_default());
+    Some((
+        status.success(),
+        String::from_utf8_lossy(&said).into_owned(),
+    ))
+}
+
+/// The last few lines of what a command said, on one line, without control characters.
+fn last_lines(said: &str) -> String {
+    let lines: Vec<&str> = said.lines().filter(|l| !l.trim().is_empty()).collect();
+    let tail = lines[lines.len().saturating_sub(3)..].join(" / ");
+    tail.chars().filter(|c| !c.is_control()).take(400).collect()
 }
 
 // ------------------------------------------------------------------ the clone
 
-/// Clone the repository into `dest` and set the clone up to push with `goalcup git-credential`.
-///
-/// The clone itself carries no token: the repository is public, so `git clone` needs none.
-/// Afterwards the clone's own configuration (never the participant's global one) gets:
-///
-/// - an empty `credential.https://github.com.helper`, git's documented reset, so the
-///   participant's own helpers (a keychain, `gh auth git-credential`) are not asked about
-///   this repository and cannot answer with someone else's login;
-/// - `credential.https://github.com.helper = "!GOALCUP_CONFIG_DIR=<cfg> <goalcup_exe>
-///   git-credential"`, both shell-quoted. The agent's git runs it in the harness's
-///   environment, where `$HOME` and `$GOALCUP_CONFIG_DIR` may differ from the tracker's, so
-///   the configuration directory is named in the command;
-/// - `credential.useHttpPath = true`, so git sends the repository's path and the helper can
-///   answer for this repository alone.
-///
-/// `goalcup_exe` and `cfg` are absolute: the helper runs from wherever the agent is.
-pub fn clone_into(
-    s: &GithubSetup,
-    dest: &Path,
-    goalcup_exe: &Path,
-    cfg: &Path,
-) -> Result<(), CliError> {
-    clone_with(
-        OsStr::new("git"),
-        &s.repo_url,
-        s,
-        dest,
-        Some((goalcup_exe, cfg)),
-    )
-}
-
-/// The clone of a **practice** run: the same anonymous clone, and **no way to push**. A practice
-/// run never pushes: the competition repository stays empty until the competition run. So no
-/// `goalcup git-credential` helper is installed; only the empty `credential.https://github.com
-/// .helper`, git's documented reset, so that no helper the participant has (a keychain, `gh auth
-/// git-credential`) can supply a login for the repository either. A `git push` from it asks for
-/// a password and, with no terminal, fails.
-pub fn clone_readonly_into(s: &GithubSetup, dest: &Path) -> Result<(), CliError> {
-    clone_with(OsStr::new("git"), &s.repo_url, s, dest, None)
-}
-
-/// [`clone_into`] with this `git` program and a clone `source` that is not the repository: a
-/// local bare repository, in a test. The clone's `origin` is then set to the repository's URL,
-/// so it looks exactly as production's does. Shipped builds have no such door.
-#[cfg(feature = "test-support")]
-pub fn clone_from(
-    git: &Path,
-    source: &str,
-    s: &GithubSetup,
-    dest: &Path,
-    goalcup_exe: &Path,
-    cfg: &Path,
-) -> Result<(), CliError> {
-    clone_with(git.as_os_str(), source, s, dest, Some((goalcup_exe, cfg)))
-}
-
-/// [`clone_readonly_into`] with this `git` program and clone `source`, as [`clone_from`].
-#[cfg(feature = "test-support")]
-pub fn clone_readonly_from(
-    git: &Path,
-    source: &str,
-    s: &GithubSetup,
-    dest: &Path,
-) -> Result<(), CliError> {
-    clone_with(git.as_os_str(), source, s, dest, None)
-}
-
-fn clone_with(
-    git: &OsStr,
-    source: &str,
-    s: &GithubSetup,
-    dest: &Path,
-    helper_paths: Option<(&Path, &Path)>,
-) -> Result<(), CliError> {
-    s.parts()?;
-    // `None`: the clone of a practice run, which is given no helper at all.
-    let helper = match helper_paths {
-        None => None,
-        Some((goalcup_exe, cfg)) => {
-            for (what, path) in [("goalcup", goalcup_exe), ("configuration directory", cfg)] {
-                if !path.is_absolute() {
-                    return Err(CliError::Refused(format!(
-                        "the {what} path {} is not absolute. The agent's git runs the \
-                         credential helper from wherever it is, so the helper's paths must \
-                         not depend on that.",
-                        path.display()
-                    )));
-                }
-            }
-            let (Some(exe), Some(cfg)) = (goalcup_exe.to_str(), cfg.to_str()) else {
-                return Err(CliError::Refused(
-                    "the goalcup path and the configuration directory must be valid UTF-8 to \
-                     be put in a git configuration."
-                        .into(),
-                ));
-            };
-            Some(format!(
-                "!GOALCUP_CONFIG_DIR={} {} git-credential",
-                shell_quote(cfg),
-                shell_quote(exe)
-            ))
-        }
-    };
-
+/// Clone `source` into `dest` with the participant's own git and login, and name `remote` as
+/// its `origin`. Nothing is written to the clone's configuration but that: no credential
+/// helper, no token, no user name. Its `.env*` files are never committed ([`exclude_env_files`]).
+/// In production `source` is `remote` itself; a test clones a local bare repository and names
+/// the GitHub address after.
+pub fn clone_repo(git: &OsStr, source: &str, remote: &str, dest: &Path) -> Result<(), CliError> {
     run_git(
         git,
         [
@@ -502,46 +633,95 @@ fn clone_with(
         ],
         None,
         CliError::Refused,
-        &format!("git could not clone {}", s.repo_url),
+        &format!("git could not clone {remote}"),
     )?;
-    let in_clone = |args: &[&str]| -> Result<(), CliError> {
-        let mut full: Vec<&OsStr> = vec![OsStr::new("config"), OsStr::new("--local")];
-        full.extend(args.iter().map(OsStr::new));
+    if source != remote {
         run_git(
             git,
-            full,
-            Some(dest),
-            CliError::Internal,
-            "git could not configure the clone",
-        )
-    };
-    if source != s.repo_url {
-        run_git(
-            git,
-            [
-                OsStr::new("remote"),
-                OsStr::new("set-url"),
-                OsStr::new("origin"),
-                OsStr::new(&s.repo_url),
-            ],
+            ["remote", "set-url", "origin", remote].map(OsStr::new),
             Some(dest),
             CliError::Internal,
             "git could not set the clone's origin",
         )?;
     }
-    in_clone(&["--add", HELPER_KEY, ""])?;
-    if let Some(helper) = &helper {
-        in_clone(&["--add", HELPER_KEY, helper])?;
-    }
-    in_clone(&["credential.useHttpPath", "true"])
+    exclude_env_files(dest)
 }
 
-/// The configuration key of git's credential helpers for `https://github.com`.
-const HELPER_KEY: &str = "credential.https://github.com.helper";
+/// A practice run's work folder: a new, empty git repository at `dest` with no remote. A practice
+/// run has no GitHub repository and pushes nowhere. Its agent reads no global or system git
+/// config (`launch::agent_base_env`), so the repository names an author of its own,
+/// [`PRACTICE_AUTHOR`], and the agent's commits work. It also gets no git login by default:
+/// OpenSSH reads `~/.ssh` from the user database, not from `HOME`, so the repository's own
+/// config gives git [`PRACTICE_SSH_COMMAND`], and an empty `credential.helper`, which empties any
+/// list of helpers read before it. An agent that tries hard can still get around this (D69).
+pub fn init_local(git: &OsStr, dest: &Path) -> Result<(), CliError> {
+    run_git(
+        git,
+        [OsStr::new("init"), OsStr::new("--quiet"), dest.as_os_str()],
+        None,
+        CliError::Refused,
+        "git could not make the practice folder",
+    )?;
+    for (key, value) in [
+        ("user.name", PRACTICE_AUTHOR.0),
+        ("user.email", PRACTICE_AUTHOR.1),
+        ("core.sshCommand", PRACTICE_SSH_COMMAND),
+        ("credential.helper", ""),
+    ] {
+        run_git(
+            git,
+            ["config", "--local", key, value].map(OsStr::new),
+            Some(dest),
+            CliError::Internal,
+            "git could not configure the practice folder",
+        )?;
+    }
+    exclude_env_files(dest)
+}
+
+/// The author a practice run's commits carry: no person's name.
+pub const PRACTICE_AUTHOR: (&str, &str) = ("Goal Cup practice", "practice@goalcup.invalid");
+
+/// The `ssh` a practice folder's git runs: no config file (`~/.ssh/config` names keys too), no
+/// key offered, no agent key, and no question.
+pub const PRACTICE_SSH_COMMAND: &str =
+    "ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes";
+
+/// Add `.env*` to the repository's own ignore list, `.git/info/exclude`, which is never
+/// committed: a key file the participant gives their agent is not pushed by mistake.
+fn exclude_env_files(dest: &Path) -> Result<(), CliError> {
+    let info = dest.join(".git").join("info");
+    let exclude = info.join("exclude");
+    std::fs::create_dir_all(&info)
+        .and_then(|()| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&exclude)
+        })
+        .and_then(|mut file| file.write_all(b"\n# goalcup: never commit a key file\n.env*\n"))
+        .map_err(|source| CliError::Io {
+            path: exclude.display().to_string(),
+            source,
+        })
+}
+
+/// The name the next real run suggests after `name`, whose repository is used: `<name>-2`, and
+/// `<base>-<n+1>` for a name that already ends in `-<n>`.
+pub fn next_name(name: &str) -> String {
+    let numbered = name.rsplit_once('-').and_then(|(base, n)| {
+        let digits = !n.is_empty() && n.len() <= 6 && n.bytes().all(|b| b.is_ascii_digit());
+        (!base.is_empty() && digits).then(|| (base, n.parse::<u32>().unwrap_or(0)))
+    });
+    match numbered {
+        Some((base, n)) if n >= 1 => format!("{base}-{}", n + 1),
+        _ => format!("{name}-2"),
+    }
+}
 
 /// Run `git args` (in `dir` with `-C`, when given) with no terminal prompt and no stdin, and
 /// turn a failure into `fail("<what>: <last lines of git's stderr>")`. Nothing passed here
-/// carries the token, so nothing git says can.
+/// carries a key, so nothing git says can.
 fn run_git<'a>(
     git: &OsStr,
     args: impl IntoIterator<Item = &'a OsStr>,
@@ -591,15 +771,10 @@ fn run_git<'a>(
     Err(fail(format!("{what}: {tail}")))
 }
 
-/// `text` as one POSIX shell word: single-quoted, with each `'` as `'\''`.
-fn shell_quote(text: &str) -> String {
-    format!("'{}'", text.replace('\'', "'\\''"))
-}
-
 // ------------------------------------------------------------------ the credential helper
 
 /// What `goalcup git-credential <op>` does: git's credential-helper protocol, for this
-/// repository alone.
+/// repository alone. Only a clone made before D69 names it; no new clone does.
 ///
 /// For `get`, with `protocol=https`, `host=github.com` (any case) and a `path` that is
 /// `<owner>/<repo>` or `<owner>/<repo>.git` of the stored repository (any ASCII case, as

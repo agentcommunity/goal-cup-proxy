@@ -270,7 +270,7 @@ pub fn status_next(next: &Next<'_>) -> String {
 /// `goalcup status` on a computer that has not started a run. The command comes first; the phrase
 /// "no run has been started from this machine" is read by tests.
 pub fn no_run_yet() -> String {
-    "Run goalcup prep, then goalcup start --harness <id> --practice: no run has been started from \
+    "Run goalcup setup, then goalcup start --harness <id> --practice: no run has been started from \
      this machine yet. Nothing to show."
         .to_string()
 }

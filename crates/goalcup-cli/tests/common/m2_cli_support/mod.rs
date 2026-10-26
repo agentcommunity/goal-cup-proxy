@@ -215,7 +215,7 @@ impl Rig {
         let mut command = match launcher {
             Launcher::Direct => {
                 let mut command = std::process::Command::new(goalcup);
-                command.args(["start", "--harness", id, "--dev"]);
+                command.args(["start", "--harness", id, "--dev", "--repo", PREP_REPO]);
                 command
             }
             Launcher::Continue { run } => {
@@ -237,7 +237,10 @@ impl Rig {
                 let mut command = std::process::Command::new("/bin/sh");
                 command.args([
                     "-c",
-                    &format!("set -m; \"$0\" start --harness {id} --dev; echo \"shell: $?\""),
+                    &format!(
+                        "set -m; \"$0\" start --harness {id} --dev --repo {PREP_REPO}; \
+                         echo \"shell: $?\""
+                    ),
                     goalcup,
                 ]);
                 command
@@ -378,10 +381,10 @@ impl Rig {
     }
 
     /// Make this rig a participant who has logged in to the server at `url` and run `goalcup
-    /// prep`: `server.json`, `prep.json`, `github.json` (a made-up token), an empty bare
-    /// repository standing in for the participant's GitHub repository, and the work folder
-    /// their runs are cloned into. The clone is taken from the stand-in repository through the
-    /// test-only door, so nothing here reaches GitHub.
+    /// setup`: `server.json`, `prep.json`, an empty bare repository standing in for the
+    /// participant's GitHub repository (a real run names [`PREP_REPO`] with `--repo`), and the
+    /// work folder their runs are cloned into. The clone, and the dry-run push, go to the
+    /// stand-in repository through the test-only door, so nothing here reaches GitHub.
     pub fn prepare_for(&self, url: &str) {
         goalcup_cli::server::write_server_config(
             &self.cfg,
@@ -400,14 +403,10 @@ impl Rig {
         assert!(git.status.success(), "{git:?}");
         let work = self.root.join("work");
         std::fs::create_dir_all(&work).unwrap();
-        goalcup_cli::account::github::GithubSetup::new(PREP_REPO, FAKE_GITHUB_TOKEN)
-            .unwrap()
-            .store(&self.cfg)
-            .unwrap();
         std::fs::write(
             goalcup_cli::prep_file::prep_path(&self.cfg),
             serde_json::to_vec(&serde_json::json!({
-                "harness": FAKE_ID, "repo_url": PREP_REPO, "work_root": work,
+                "harness": FAKE_ID, "work_root": work,
             }))
             .unwrap(),
         )
@@ -416,6 +415,8 @@ impl Rig {
             goalcup_cli::commands::start::TEST_CLONE_SOURCE,
             &source.display().to_string(),
         );
+        // A participant with a GitHub login (over HTTPS), so a real run asks nothing about it.
+        self.with_env(goalcup_cli::commands::start::TEST_GITHUB_LOGIN, "goal-cup");
     }
 
     /// The folder `prepare_for` made for the clones.

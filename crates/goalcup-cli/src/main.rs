@@ -50,10 +50,9 @@ struct Args {
 /// guide is, and the exit codes.
 const AFTER_HELP: &str = "\
 Steps:
-  1. goalcup login                               connect this computer (once)
-  2. goalcup prep                                run it until every step is ok
-  3. goalcup start --harness <id> --practice     a 10-minute practice run
-  4. goalcup start --harness <id>                your run, inside the start window
+  1. goalcup setup                               run it until every step is ok
+  2. goalcup start --harness <id> --practice     a 10-minute try, no GitHub (optional)
+  3. goalcup start --harness <id>                your run, inside the start window
 While it runs: goalcup status (in another terminal). If the agent stopped early: goalcup continue.
 To check a finished run: goalcup-verify --capture-integrity <trace-dir>
 
@@ -73,7 +72,7 @@ run records which one ran.
 Exit codes: 0 every check passed; 1 something failed, including a harness that is not \
 installed. No daemon running is not a failure: `goalcup start` starts one.
 
-Without `--harness` it checks the harness you chose in `goalcup prep`; pass `--harness <id>` to \
+Without `--harness` it checks the harness you chose in `goalcup setup`; pass `--harness <id>` to \
 check another one, or `--harness all` to check every shipped harness (one you have not \
 installed then makes this command exit 1).";
 
@@ -81,7 +80,35 @@ installed then makes this command exit 1).";
 /// is deliberately absent: see `AFTER_HELP`.
 #[derive(Subcommand)]
 enum Command {
-    /// Step 1. Connect this computer to your Goal Cup account.
+    /// Step 1. Get this computer ready for your run.
+    ///
+    /// Four steps: this computer is connected to your Goal Cup account (it logs in if not);
+    /// you choose your agent (the harness) and it is installed; you open it once here, sign in
+    /// or paste your API key, and add your settings, MCP servers and skills; and this computer
+    /// has the power, the disk, the network and a work folder outside any Git repository that a
+    /// week-long run needs. Each step prints `[ok]`, `[todo]` or `[fail]`, and the last line
+    /// says what to do next. Run it again as often as you like: what passed is not repeated. It
+    /// never starts a run, and Goal Cup keeps no key.
+    #[command(alias = "prep")]
+    Setup {
+        /// Your agent, for example `codex-cli` or `claude-code-cli`. Without it, the one you
+        /// chose before, or it asks.
+        #[arg(long, value_name = "ID")]
+        harness: Option<String>,
+        /// The folder each run's clone is made in, as a full path. It must be outside any Git
+        /// repository. Default: `goalcup-work` in your home folder. Under WSL2 it must not be
+        /// on a Windows drive.
+        #[arg(long, value_name = "PATH")]
+        work_root: Option<std::path::PathBuf>,
+        /// Print the four steps as one JSON array (`step`, `state`, `human`, `say`), and nothing
+        /// else. It asks nothing and opens nothing.
+        #[arg(long)]
+        json: bool,
+        /// For connector developers: accept a connector directory this build does not pin.
+        #[arg(long)]
+        dev: bool,
+    },
+    /// Connect this computer to your Goal Cup account. `goalcup setup` does this for you.
     ///
     /// Your browser opens on a page with a short code. Check that the code is the same as in
     /// your terminal, then approve. You do this once per computer. No password is typed or
@@ -93,44 +120,13 @@ enum Command {
         #[arg(long, value_name = "URL")]
         server: Option<String>,
     },
-    /// Step 2. Get this computer ready for your run.
+    /// Step 2. Start a run: open your agent here and record what it does.
     ///
-    /// Six steps: you are logged in; you choose your agent (the harness) and it is installed;
-    /// you open it once here, sign in, and add your settings, MCP servers and skills; your new,
-    /// empty, public GitHub repository is checked, with a token for it; this computer has the
-    /// power, the disk, the network and a work folder outside any Git repository that a
-    /// week-long run needs; and a practice run is recorded and uploaded. Each step prints
-    /// `[ok]`, `[todo]` or `[fail]`, and the last line says what to do next. Run it again as
-    /// often as you like: what passed is not repeated. It never starts a run.
-    Prep {
-        /// Your agent, for example `codex-cli` or `claude-code-cli`. Without it, the one you
-        /// chose before, or the only one this build offers.
-        #[arg(long, value_name = "ID")]
-        harness: Option<String>,
-        /// The address of your new, empty, public GitHub repository,
-        /// `https://github.com/<owner>/<repo>`. You are asked for a token for it, and what you
-        /// type is not shown.
-        #[arg(long, value_name = "URL")]
-        repo: Option<String>,
-        /// The folder each run's clone is made in, as a full path. It must be outside any Git
-        /// repository. Default: `goalcup-work` in your home folder. Under WSL2 it must not be
-        /// on a Windows drive.
-        #[arg(long, value_name = "PATH")]
-        work_root: Option<std::path::PathBuf>,
-        /// Print the six steps as one JSON array (`step`, `state`, `human`, `say`), and nothing
-        /// else. It asks nothing and opens nothing.
-        #[arg(long)]
-        json: bool,
-        /// For connector developers: accept a connector directory this build does not pin.
-        #[arg(long)]
-        dev: bool,
-    },
-    /// Steps 3 and 4. Start a run: open your agent here and record what it does.
-    ///
-    /// Your agent opens in this terminal. Type your prompt there, and after it only
-    /// "keep going". Until the agent exits, goalcup prints nothing here; open a second terminal
-    /// and run `goalcup status` to see the run. The run's folder is created in the folder you
-    /// run `goalcup start` from.
+    /// A real run first asks for its own new, empty, public GitHub repository and checks that
+    /// your git can push to it; a practice run needs none. Your agent opens in this terminal.
+    /// Type your prompt there, and after it only "keep going". Until the agent exits, goalcup
+    /// prints nothing here; open a second terminal and run `goalcup status` to see the run. The
+    /// run's folder is created in the folder you run `goalcup start` from.
     Start {
         /// Which harness to run, for example `claude-code-cli` or `codex-cli` (`goalcup doctor`
         /// lists every one this build ships).
@@ -141,10 +137,14 @@ enum Command {
         #[arg(long)]
         dev: bool,
         /// A practice run: the server keeps it apart from the competition, and it never
-        /// replaces your competition run. Needs `goalcup login` and `goalcup prep` first,
-        /// like a competition run.
+        /// replaces your competition run. The agent works in a new local folder with no GitHub
+        /// repository. Needs `goalcup setup` first, like a competition run.
         #[arg(long, conflicts_with = "test")]
         practice: bool,
+        /// This run's new, empty, public GitHub repository: its name, `<owner>/<name>` or its
+        /// address. Without it, a real run asks. A practice run has none, and ignores it.
+        #[arg(long, value_name = "NAME")]
+        repo: Option<String>,
         /// An organizer test run: full length like a competition run, opened only by
         /// organizer accounts, and deleted from the server in one go afterwards. Not for
         /// participants.
@@ -174,7 +174,7 @@ enum Command {
     /// Serve the time left as an MCP tool, `time_left`, for your agent to call.
     ///
     /// Your harness starts this command itself, by its full path, when you add it to the
-    /// harness's MCP servers (`goalcup prep` prints the lines for your harness). It speaks MCP
+    /// harness's MCP servers (`goalcup setup` prints the lines for your harness). It speaks MCP
     /// on standard input and output, answers what `goalcup time-left` prints, and only reads:
     /// it writes no file and opens no port. You never run it yourself.
     Mcp,
@@ -227,13 +227,13 @@ enum Command {
         #[arg(long)]
         json: bool,
         /// Check this harness only, and set the exit code from it alone. Without it the harness
-        /// you chose in `goalcup prep` is checked. `--harness all` checks every shipped harness,
+        /// you chose in `goalcup setup` is checked. `--harness all` checks every shipped harness,
         /// and any failure makes the exit code 1.
         #[arg(long, value_name = "ID")]
         harness: Option<String>,
     },
-    /// The command git runs to ask for the GitHub token of your run's repository. It is set
-    /// in each run's clone by `goalcup start`; you never run it yourself.
+    /// The command git runs to ask for the GitHub token of a run's repository, in clones that
+    /// older versions made (D69). You never run it yourself.
     #[command(name = "git-credential", hide = true)]
     GitCredential {
         /// What git asks for: `get`, `store` or `erase`.
@@ -289,10 +289,12 @@ fn run(command: Command) -> Result<u8, CliError> {
             harness,
             dev,
             practice,
+            repo,
             test,
         } => start(commands::start::StartOptions {
             harness,
             dev,
+            repo,
             run_folder: std::env::current_dir().ok(),
             disk: disk_policy()?,
             native_silence: native_silence()?,
@@ -323,15 +325,13 @@ fn run(command: Command) -> Result<u8, CliError> {
             doctor(commands::doctor::DoctorOptions { json, harness })
         }
         Command::Login { server } => login(server).map(|()| 0),
-        Command::Prep {
+        Command::Setup {
             harness,
-            repo,
             work_root,
             json,
             dev,
         } => prep(commands::prep::PrepOptions {
             harness,
-            repo,
             work_root,
             json,
             dev,
@@ -455,11 +455,16 @@ fn native_silence() -> Result<goalcup_cli::run::NativeSilence, CliError> {
 /// (a test must never start a browser on its machine). The address and code are printed either
 /// way, so the participant, or `scripts/matrix.sh` with its test approval key, approves them.
 fn browser_opener() -> fn(&str) -> bool {
+    browser_opener_unless(browsers_off())
+}
+
+/// Whether nothing may be opened: `GOALCUP_NO_BROWSER`, or a test build's [`TEST_NO_BROWSER`].
+fn browsers_off() -> bool {
     #[cfg(feature = "test-support")]
     if std::env::var_os(TEST_NO_BROWSER).is_some() {
-        return |_| false;
+        return true;
     }
-    browser_opener_unless(no_browser_set(std::env::var_os(NO_BROWSER).as_deref()))
+    no_browser_set(std::env::var_os(NO_BROWSER).as_deref())
 }
 
 /// Whether `GOALCUP_NO_BROWSER` asks for no browser: set to something. An empty value is not a
@@ -473,6 +478,20 @@ fn browser_opener_unless(no_browser: bool) -> fn(&str) -> bool {
         return |_| false;
     }
     goalcup_platform::machine::open_url
+}
+
+/// What `goalcup setup` opens: the login's approval address, and the keys file. Both are off
+/// when [`browser_opener`] is.
+fn openers() -> commands::prep::Openers {
+    let off = browsers_off();
+    commands::prep::Openers {
+        url: browser_opener_unless(off),
+        file: if off {
+            |_| false
+        } else {
+            goalcup_platform::machine::open_file
+        },
+    }
 }
 
 /// The shipped switch that keeps `goalcup` from opening a browser.
@@ -494,8 +513,8 @@ fn login(server: Option<String>) -> Result<(), CliError> {
     )
 }
 
-/// `goalcup prep`, with what it reads from this machine resolved here, as `start` does. It
-/// starts no daemon: it records nothing.
+/// `goalcup setup` (and its old name, `goalcup prep`), with what it reads from this machine
+/// resolved here, as `start` does. It starts no daemon: it records nothing.
 fn prep(opts: commands::prep::PrepOptions) -> Result<u8, CliError> {
     let cfg = goalcup_cli::config::config_dir()?;
     let connectors = goalcup_cli::config::connectors_dir()?;
@@ -506,7 +525,15 @@ fn prep(opts: commands::prep::PrepOptions) -> Result<u8, CliError> {
         let door = commands::prep::Injected::parse(&spec).ok_or_else(|| {
             CliError::Refused(format!("{} is malformed", commands::prep::Injected::VAR))
         })?;
-        return commands::prep::prep_with(&door, &cfg, &connectors, &env, &opts, &mut out);
+        return commands::prep::prep_with(
+            &door,
+            &cfg,
+            &connectors,
+            &env,
+            &opts,
+            &openers(),
+            &mut out,
+        );
     }
     commands::prep::prep_with(
         &commands::prep::Here,
@@ -514,6 +541,7 @@ fn prep(opts: commands::prep::PrepOptions) -> Result<u8, CliError> {
         &connectors,
         &env,
         &opts,
+        &openers(),
         &mut out,
     )
 }
