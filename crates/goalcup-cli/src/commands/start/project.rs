@@ -62,7 +62,12 @@ fn kit_or_refuse(project: &Path) -> Result<Vec<String>, CliError> {
     })?;
     let mut kit = Vec::new();
     let mut extra = Vec::new();
-    for entry in entries.filter_map(Result::ok) {
+    // An entry that cannot be read is not known to be the kit: refused like anything else.
+    for entry in entries {
+        let Ok(entry) = entry else {
+            extra.push("an entry that could not be read".to_string());
+            continue;
+        };
         let name = entry.file_name().to_string_lossy().into_owned();
         let file = entry.file_type().is_ok_and(|t| t.is_file());
         if file && (name == ".gitignore" || is_key_file(&name)) {
