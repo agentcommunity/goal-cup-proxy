@@ -84,6 +84,10 @@ pub fn line_at(chain: &Chain, seq: u64) -> Option<(String, u64)> {
 /// chaining its own traffic and native-file records by then. How many land before `Launch` is a
 /// race (a few KiB on macOS, tens to over a hundred KiB on a Linux debug build hashing a 6.6 MB
 /// interpreter), and none of it is baseline.
+///
+/// It fails loudly rather than return a smaller sum: the goal `Open` must exist, there must be
+/// exactly one Baseline and one Launch line, the goal stream must have a segment and an `End`,
+/// its producer a `ProducerClosed`, and the Launch record must name the goal stream found.
 pub fn launch_baseline_bytes(chain: &Chain) -> u64 {
     let envelopes: Vec<(u64, Envelope)> = chain
         .bytes
@@ -94,33 +98,55 @@ pub fn launch_baseline_bytes(chain: &Chain) -> u64 {
             (raw.len() as u64, envelope)
         })
         .collect();
-    let goal: Option<StreamKey> = envelopes.iter().find_map(|(_, e)| match &e.body {
-        EventBody::Capture {
-            record:
-                CaptureRecord::Open {
-                    stream,
-                    source: CaptureSource::Goal,
-                    ..
-                },
-        } => Some(stream.clone()),
-        _ => None,
-    });
-    envelopes
+    let goal: StreamKey = envelopes
         .iter()
-        .filter(|(_, e)| match &e.body {
-            EventBody::Baseline { .. } => true,
-            EventBody::Capture { record } => match record {
-                CaptureRecord::Launch { .. } => true,
-                CaptureRecord::Open { stream, .. }
-                | CaptureRecord::Segment { stream, .. }
-                | CaptureRecord::End { stream, .. } => goal.as_ref() == Some(stream),
-                CaptureRecord::ProducerClosed { producer, .. } => {
-                    goal.as_ref().is_some_and(|g| &g.producer == producer)
-                }
-                _ => false,
-            },
-            _ => false,
+        .find_map(|(_, e)| match &e.body {
+            EventBody::Capture {
+                record:
+                    CaptureRecord::Open {
+                        stream,
+                        source: CaptureSource::Goal,
+                        ..
+                    },
+            } => Some(stream.clone()),
+            _ => None,
         })
-        .map(|(len, _)| len)
-        .sum()
+        .expect("the goal stream's Open record is in the chain");
+    let (mut sum, mut baselines, mut launches) = (0u64, 0u32, 0u32);
+    let (mut segments, mut ends, mut closes) = (0u32, 0u32, 0u32);
+    for (len, envelope) in &envelopes {
+        let EventBody::Capture { record } = &envelope.body else {
+            if matches!(envelope.body, EventBody::Baseline { .. }) {
+                baselines += 1;
+                sum += len;
+            }
+            continue;
+        };
+        match record {
+            CaptureRecord::Launch { goal_stream, .. } => {
+                assert_eq!(
+                    goal_stream, &goal,
+                    "the Launch record names a different goal stream than the one opened"
+                );
+                launches += 1;
+            }
+            CaptureRecord::Open { stream, .. } if *stream == goal => {}
+            CaptureRecord::Segment { stream, .. } if *stream == goal => segments += 1,
+            CaptureRecord::End { stream, .. } if *stream == goal => ends += 1,
+            CaptureRecord::ProducerClosed { producer, .. } if *producer == goal.producer => {
+                closes += 1;
+            }
+            _ => continue,
+        }
+        sum += len;
+    }
+    assert_eq!(baselines, 1, "exactly one Baseline line");
+    assert_eq!(launches, 1, "exactly one Launch line");
+    assert!(segments >= 1, "the goal stream has no Segment record");
+    assert!(ends >= 1, "the goal stream has no End record");
+    assert!(
+        closes >= 1,
+        "the goal producer has no ProducerClosed record"
+    );
+    sum
 }
