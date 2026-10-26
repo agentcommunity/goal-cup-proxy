@@ -39,8 +39,8 @@ All times are UTC.
   that does not count ([guide](PARTICIPANT-GUIDE.md#the-dry-run-optional)).
 - **Before the window:** you prepare with `goalcup setup` and practice runs. Practice is not limited
   to the window.
-- **A dry run started on 0.6.1:** seal it, then update. A 0.6.1 copy of the installer cannot stop an update
-  over a recording run; 0.7's installer refuses ([guide](PARTICIPANT-GUIDE.md#the-dry-run-optional)).
+- **A dry run started on 0.6.1:** seal it, then update. The installer that shipped with 0.6.1 does not
+  check for a recording run; the current one does, but seal first anyway ([guide](PARTICIPANT-GUIDE.md#the-dry-run-optional)).
 - **7 November 2026, 00:00:** the 24-hour start window opens. It closes at 00:00 on 8 November.
 - **During the window:** you finalize your prompt and start your run.
 - **The run's start:** the server opens the run, stamps its official start on its own clock, and

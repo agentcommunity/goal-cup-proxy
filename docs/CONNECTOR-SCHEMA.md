@@ -151,7 +151,7 @@ sentence that names the field and says what to do. The rule above applies from D
 A connector runs without `--dev` only when this `goalcup` build pins its folder
 ([`connector-dirs.txt`](../crates/goalcup-protocol/pins/connector-dirs.txt), compiled in). So a
 participant's own harness needs its connector PR merged and a `goalcup` release that pins it.
-For Goal Cup 2026 the last release is **6 Nov 2026 12:00 UTC**
+Releases continue during the cup (D70), so a merged connector ships in the next point release
 ([event qualification](HARNESS-ONBOARDING.md#getting-a-harness-into-the-event)). An unpinned
 connector runs only through `goalcup start --dev`. That load (`Origin::Dev`,
 `harness/check.rs`) relaxes three rules: the interpreter refusal for `program`; the argument
@@ -159,12 +159,12 @@ path rules (an absolute, home-relative, parent-relative or expanding path in `ar
 `resume_args`), with the word rules skipped for an argument that is an absolute path; and the
 loopback and single-label host refusal for `hosts` and `auth_hosts`. Every other rule holds,
 and it refuses a directory whose id or digest a build pins. The start says "This run is a development run and its results are not a judged entry's", and the local
-entry record says `dev`. What the code does not do today: refuse a `--dev` run in competition
-mode, or tell the server. A `--dev` run opens a server run and uploads like any other
-(`commands/start/server.rs`); the server stores the connector id and directory digest and
-compares neither with a list. The verifier's research report labels the run `Dev/unpinned`
-(`run.connector`), and the integrity verdict does not change. Whether a `--dev` run can count
-is an open owner question (D68).
+entry record says `dev`. A `--dev` run never competes (D70). The CLI refuses `--dev` on a competition start
+before the approval, sends `dev` when it opens or continues a server run, and the server refuses
+a `dev` competition run. Any member may run `--dev` for a practice or test run; those count for
+nothing. The server stores the connector id and directory digest and compares neither with a
+list. The verifier's research report labels the run `Dev/unpinned` (`run.connector`), and the
+integrity verdict does not change.
 
 To be pinned, a connector also needs what `harness_conformance.rs` checks for every folder under
 `connectors/`, beyond the schema: a `[participant]` table with `display_name`, a `setup_section`

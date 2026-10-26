@@ -43,7 +43,9 @@ GitHub.
 
 1. **This computer.** Your browser opens an approval page. Check that it shows the same code as the
    terminal, approve, and **return to the terminal now**. You do this once per computer.
-2. **Harness.** Pick the harness you will use, or pass `--harness <id>`.
+2. **Harness.** Pick the harness you will use, or pass `--harness <id>`. The id is the connector's
+   name: `claude-code-cli`, `codex-cli`, `hermes-cli` or `amp-cli`. Use it wherever this page
+   says `<id>`.
 3. **Sign in.** Press Enter and the harness opens in a home Goal Cup keeps for it (never your own
    `~/.claude` or `~/.codex`). Sign in, or paste your API key when it asks. That is the harness's
    own file; Goal Cup never sees it. Then set the harness to **never stop and ask you for
@@ -67,13 +69,32 @@ goalcup start --harness <id> --practice
 Approve the run in the browser and return to the terminal. The harness opens in that folder. Type
 any prompt. After about ten minutes the server stops the run, and `goalcup` seals and uploads it.
 A practice run needs no repository and no token, so the agent has nowhere to push. It never counts.
-Do as many as you like. If the harness never writes a session file, `goalcup` tells you within
+Do as many as you like. It is not the dry run: a practice run lasts ten minutes and needs no
+repository; a [dry run](#the-dry-run-optional) is a full 168-hour rehearsal that needs both.
+If the harness never writes a session file, `goalcup` tells you within
 minutes. Fix it now.
+
+## The dry run (optional)
+
+From 23 October to 6 November you may start a full rehearsal, with the steps of section 4 in the
+same order. It lasts 168 hours and does not count. It needs its own new repository and token; your cup run then
+needs another pair. A second dry run replaces the first.
+
+**Started a dry run on 0.6.1 before 0.7 came out?** Seal it, then update. Run `goalcup seal` from
+another terminal and wait for `Upload done.`, then run the installer.
+
+The installer that shipped with 0.6.1 does not check for a recording run. The one the command in
+section 1 downloads now does. Still seal first.
+
+A dry run that is still recording when the cup start window opens must be sealed the same way
+before you start your cup run.
 
 ## 4. Your run
 
-Inside the 24-hour start window (7 Nov 2026, 00:00 to 8 Nov, 00:00 UTC), do these four things in
-this order. The order matters: a token for one repository needs the repository to exist first.
+Start inside the 24-hour start window (7 Nov 2026, 00:00 to 8 Nov, 00:00 UTC). Steps 1 to 3 can
+be done before it opens. For a [dry run](#the-dry-run-optional) the window is open now, so use
+this section as it is. Do the four steps in this order: a token for one repository needs the
+repository to exist first.
 
 1. **Create the repository.** On [github.com/new](https://github.com/new): public, and empty. Add
    no README, no `.gitignore`, no licence. A repository with any commit is refused, and the server
@@ -86,7 +107,8 @@ this order. The order matters: a token for one repository needs the repository t
 
    Copy it (it starts `github_pat_`). Your agent pushes with this token. Goal Cup passes the
    agent none of your git login, SSH agent or `gh` settings, so the token is the one thing that
-   lets it push. The token itself reaches this repository only.
+   lets it push. The token itself reaches this repository only. The agent still runs as you and
+   can read what your programs can read, so keep no other secrets in the project folder.
 3. **Make the project folder.** This is where the agent works. Make a new folder that will hold
    only two files:
 
@@ -94,17 +116,21 @@ this order. The order matters: a token for one repository needs the repository t
    mkdir my-cup-run && cd my-cup-run
    ```
 
-   Create `.env.local` with the token:
+   Make `.gitignore` first, with one line:
 
-   ```
-   GH_TOKEN=github_pat_...
+   ```sh
+   printf '.env*\n' > .gitignore
    ```
 
-   Create `.gitignore` with this line:
+   Then copy the token on GitHub, and write `.env.local` from the clipboard, so the token never
+   enters your shell history:
 
+   ```sh
+   printf 'GH_TOKEN=%s\n' "$(pbpaste)" > .env.local && chmod 600 .env.local
    ```
-   .env*
-   ```
+
+   `pbpaste` is the Mac clipboard. On Linux, use your own clipboard tool (`xclip -o`, `wl-paste`)
+   in its place, or write the file in an editor with one line, `GH_TOKEN=github_pat_...`.
 
    Keys your agent's own product needs may go in `.env.local` too, one `NAME=value` per line. Do
    not put the harness's sign-in there; you did that in setup. `goalcup` refuses a `.env*` file
@@ -125,8 +151,20 @@ this order. The order matters: a token for one repository needs the repository t
 The harness then opens in the project folder. First it may show its own screens (a sign-in, a
 trust question: Claude Code asks whether you created or trust the folder; answer Yes).
 Answering them is allowed. `goalcup` prints a block with the repository, the token file and the git identity. Put
-that block at the start of your prompt, so the agent knows where to push and as whom. The agent
-runs `git init` itself and pushes with the token. Goal Cup never runs git for it.
+that block at the start of your prompt, so the agent knows where to push and as whom. An example;
+`goalcup` prints yours:
+
+```
+Push to https://github.com/<user>/<name>
+The token is GH_TOKEN in .env.local in this folder.
+Before the first commit, run:
+  git config user.name "<a name>"
+  git config user.email "<an email>"
+```
+
+The agent runs `git init` itself and pushes with the token. Goal Cup never runs git for it. Never
+paste the token itself into your prompt; the agent reads it from `.env.local`. Do not ask the agent
+to force-add `.env.local`.
 
 Your prompt should also ask for the MIT License and a `GOALCUP.md` (what the project is, how to run
 it, what works). Write it in a file first, then paste it and press Enter once. After it, you may
@@ -168,17 +206,6 @@ Then:
   tokens, Delete), and delete `.env.local`. Log the harness out, or rotate its key.
 - Hand in your demo video and questionnaire on
   [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup) within 24 hours.
-
-## The dry run (optional)
-
-From 23 October to 6 November you may start a full rehearsal, with the steps of section 4 in the
-same order. It lasts 168 hours and does not count. It needs its own new repository and token; your cup run then
-needs another pair. A second dry run replaces the first.
-
-**Started a dry run on 0.6.1 before 0.7 came out?** Seal it, then update: run `goalcup seal` from
-another terminal, wait for `Upload done.`, then run the installer. A 0.6.1 copy of the installer
-cannot stop an update over a recording run, so do not rely on it; 0.7's installer refuses. A dry run still recording when the cup start window
-opens must be sealed the same way before you start your cup run.
 
 ## Help
 

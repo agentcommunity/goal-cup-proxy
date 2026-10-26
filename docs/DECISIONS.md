@@ -911,10 +911,11 @@ approval (R1).
   named residual (RULES, Keys).
 - **Nothing of the participant's git login is passed.** The five variables (`SSH_AUTH_SOCK`,
   `GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`),
-  `GIT_CONFIG_NOSYSTEM` and the practice git isolation are removed, so the token really limits the
-  agent to one repository. The agent has no global git config and sets `git config user.name` and
+  `GIT_CONFIG_NOSYSTEM` and the practice git isolation are removed, so the token limits what the
+  agent can push with it to one repository. The agent still runs as the participant and can read
+  what the participant's programs can read (RULES, Privacy). The agent has no global git config and sets `git config user.name` and
   `user.email` in its repository; `start` prints the repository, the token file and those lines.
-  D69's "agent can push to any repo" cost no longer applies. D69's no-keys rule for Goal Cup
+  D69's "agent can push to any repo" cost is gone for pushes. D69's no-keys rule for Goal Cup
   Proxy, the four-step setup and its lack of GitHub stand. Setup no longer makes a keys file.
   The hidden `goalcup git-credential` and the `github.json` loader stay until after 15 Nov for
   runs started on 0.6.1.
