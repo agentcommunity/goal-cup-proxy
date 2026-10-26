@@ -307,6 +307,9 @@ impl World {
             serde_json::to_vec(&json!({ "harness": CONNECTOR })).unwrap(),
         )
         .unwrap();
+        // A real run's folder holds the participant's token, ignored by Git.
+        std::fs::write(self.project.join(".env.local"), "GH_TOKEN=x\n").unwrap();
+        std::fs::write(self.project.join(".gitignore"), ".env*\n").unwrap();
     }
 
     /// `goalcup` with this world's environment and every test-build door these rows use.

@@ -278,8 +278,8 @@ pub fn refuse_inside_git_work_tree(dir: &Path) -> Result<(), CliError> {
             return Err(CliError::Refused(format!(
                 "this folder is inside a Git work tree ({}), and this run's directory would \
                  be made in it: it holds what the harness wrote, which can include \
-                 its login. Run goalcup start from a folder outside any \
-                 repository. Nothing was created.",
+                 its login. The config folder is inside a git repository: set \
+                 GOALCUP_CONFIG_DIR to a folder outside it. Nothing was created.",
                 ancestor.display()
             )));
         }

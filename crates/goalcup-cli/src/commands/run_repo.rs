@@ -88,7 +88,7 @@ pub fn choose(
         "Your run needs a new, empty, public GitHub repo. Each real run gets its own.",
     )?;
     // No look for the participant's GitHub login and no test push: how the agent pushes is the
-    // participant's to set up (their key in `.env.local`, their own git login). Only the name is
+    // participant's to set up (their token in `.env.local`). Only the name is
     // asked here, always with its owner.
     let input = match given {
         Some(given) => given.trim().to_string(),

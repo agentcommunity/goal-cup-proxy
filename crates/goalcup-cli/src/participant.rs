@@ -42,7 +42,7 @@ pub use refusals::{
     needs_terminal, not_started_here, project_beside_goalcup, project_inside_repository,
     project_missing, project_not_a_folder, project_not_empty, project_unreadable,
     repository_not_empty, run_over, server_answer_unusable, still_recording, token_line_form,
-    unsupported_filesystem,
+    token_line_missing, unsupported_filesystem,
 };
 pub use seal::{
     SealDone, seal_done, seal_inside_harness, seal_needs_terminal, seal_not_confirmed,

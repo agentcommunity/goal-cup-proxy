@@ -568,6 +568,7 @@ fn assert_connector_launch_environment(c: &HarnessConnector) {
         // OD9: no system git config and no ssh key of the participant's.
         "GIT_CONFIG_NOSYSTEM",
         "GIT_SSH_COMMAND",
+        "GIT_TERMINAL_PROMPT",
     ] {
         allowed.insert(pin.to_string());
     }
@@ -694,6 +695,7 @@ fn a_launch_carries_nothing_of_the_participants_git_login() {
     assert_eq!(get("HOME"), l.run_home.to_str());
     // No system git config (a keychain helper) and no ssh key of the participant's.
     assert_eq!(get("GIT_CONFIG_NOSYSTEM"), Some("1"));
+    assert_eq!(get("GIT_TERMINAL_PROMPT"), Some("0"));
     assert_eq!(
         get("GIT_SSH_COMMAND"),
         Some("ssh -F /dev/null -o IdentitiesOnly=yes -o IdentityFile=none -o BatchMode=yes")

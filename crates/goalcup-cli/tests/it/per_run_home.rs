@@ -282,6 +282,7 @@ fn a_goal_directory_inside_a_git_work_tree_is_refused() {
         assert!(matches!(err, CliError::Refused(_)), "{err:?}");
         assert_eq!(err.exit_code(), 1);
         assert!(err.to_string().contains("Git work tree"), "{err}");
+        assert!(err.to_string().contains("GOALCUP_CONFIG_DIR"), "{err}");
         assert!(err.to_string().contains("Nothing was created"), "{err}");
     }
 

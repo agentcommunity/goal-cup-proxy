@@ -136,6 +136,14 @@ pub fn token_line_form(file: &str) -> String {
     )
 }
 
+/// A real run's project folder has no `GH_TOKEN` line in any key file: the agent's first push
+/// would fail after the approval.
+pub fn token_line_missing() -> String {
+    "Put your GitHub token in .env.local as one line, GH_TOKEN=<your token>, then run goalcup \
+     start again. Nothing was created."
+        .to_string()
+}
+
 /// `goalcup start --dev` for a competition run on a server: the server refuses it at open, so it
 /// is refused here, before the approval.
 pub fn dev_competes() -> String {

@@ -2954,6 +2954,7 @@ async fn the_starting_kit_is_admitted_and_a_key_file_is_never_hashed() {
     std::fs::create_dir_all(&ws).unwrap();
     std::fs::write(ws.join(".gitignore"), b".env*\n").unwrap();
     std::fs::write(ws.join(".env.local"), b"KEY=low-entropy-secret\n").unwrap();
+    std::fs::write(ws.join(".DS_Store"), b"fs").unwrap();
     let created = rig.create("codex-cli", &ws, RESERVE).await;
     assert_eq!(created.status(), 200, "{}", created.body());
     let info: CaptureWorkspaceInfo = created.json().unwrap();
@@ -2966,6 +2967,11 @@ async fn the_starting_kit_is_admitted_and_a_key_file_is_never_hashed() {
     assert_eq!(
         baseline.files,
         [
+            goalcup_protocol::seal::SealedFile {
+                path: ".DS_Store".to_string(),
+                bytes: 2,
+                sha256: hex::encode(Sha256::digest(b"fs")),
+            },
             key.clone(),
             goalcup_protocol::seal::SealedFile {
                 path: ".gitignore".to_string(),
@@ -3024,6 +3030,7 @@ async fn a_key_file_in_a_clone_never_moves_the_dirty_digest() {
                 .unwrap();
             assert!(out.status.success());
             std::fs::write(dir.join(".env.local"), secret).unwrap();
+            std::fs::write(dir.join(".git-credentials"), secret).unwrap();
         }
         let created = rig.create_continued("codex-cli", &ws, RESERVE).await;
         assert_eq!(created.status(), 200, "{}", created.body());
@@ -3094,6 +3101,7 @@ async fn the_baseline_lists_the_harness_home_without_its_session_folder() {
     std::fs::create_dir_all(config_home.join("sessions/2026/10")).unwrap();
     std::fs::write(config_home.join("config.toml"), b"model = \"m\"\n").unwrap();
     std::fs::write(config_home.join(".env"), b"KEY=secret\n").unwrap();
+    std::fs::write(config_home.join(".git-credentials"), b"https://u:p@h\n").unwrap();
     std::fs::write(config_home.join("sessions/2026/10/old.jsonl"), b"{}\n").unwrap();
     // Over 64 MiB: its size alone, never read (a sparse file).
     std::fs::File::create(config_home.join("big.bin"))
@@ -3110,6 +3118,11 @@ async fn the_baseline_lists_the_harness_home_without_its_session_folder() {
             goalcup_protocol::seal::SealedFile {
                 path: ".env".to_string(),
                 bytes: 11,
+                sha256: "0".repeat(64),
+            },
+            goalcup_protocol::seal::SealedFile {
+                path: ".git-credentials".to_string(),
+                bytes: 14,
                 sha256: "0".repeat(64),
             },
             goalcup_protocol::seal::SealedFile {

@@ -410,16 +410,18 @@ pub(crate) fn measure(path: &Path, hash_limit: u64) -> (u64, String) {
     (total, hex::encode(hasher.finalize()))
 }
 
-/// A key file: `.env` or `.env.<anything>`. The workspace walk lists it by name and size and
-/// never hashes it (D71).
+/// A key file: `.env`, `.env.<anything>`, or git's `.git-credentials`. The workspace walk, the
+/// harness home and the clone's dirty digest list it by name and size and never hash it (D71).
 pub(crate) fn is_key_file(name: &str) -> bool {
-    name == ".env" || name.starts_with(".env.")
+    name == ".env" || name.starts_with(".env.") || name == ".git-credentials"
 }
 
 /// A name a new run's folder may hold before the run, as a regular file (OD6): the
-/// participant's keys ([`is_key_file`]) and a `.gitignore` that keeps them out of the repository.
+/// participant's `.env` files, a `.gitignore` that keeps them out of the repository, and the
+/// `.DS_Store` macOS makes in a folder opened in Finder. (`.git-credentials` is a key file when
+/// the walk meets it, but is not part of the starting kit.)
 fn is_starting_kit(name: &str) -> bool {
-    name == ".gitignore" || is_key_file(name)
+    name == ".gitignore" || name == ".DS_Store" || name == ".env" || name.starts_with(".env.")
 }
 
 /// Every reason a workspace is refused, in one place, and **without writing anything**.

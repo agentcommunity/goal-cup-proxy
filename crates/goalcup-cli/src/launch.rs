@@ -379,6 +379,8 @@ pub fn agent_base_env(
     env.insert("PATH".into(), harness_path(parent_env));
     env.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
     env.insert("GIT_SSH_COMMAND".into(), AGENT_GIT_SSH_COMMAND.into());
+    // Git fails instead of asking for a login on the harness screen.
+    env.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
     env
 }
 
