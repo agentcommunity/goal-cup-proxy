@@ -47,7 +47,9 @@ not prove: other platforms, other harness versions, model behaviour, or particip
    <user>/goalcup-kit-<cell>-<random> --public`) with the GitHub login already there, then makes the
    project folder a player makes (a `.gitignore` holding `.env*` and a `.env.local` holding
    `GH_TOKEN=<gh auth token>`, mode 0600, never printed) and runs `goalcup start --test --repo` from
-   it. The agent pushes with that token (D71); goalcup passes it no git login. Host cells: this
+   it. The agent pushes with that token (D71): goalcup builds its environment from nothing, and the kit
+   strips this machine's git login variables from goalcup's own (a `--test` host cell keeps the real
+   `HOME`, so goalcup, not the agent, can still see `~/.gitconfig`). Host cells: this
    machine's login (`gh auth login`, HTTPS, Yes to authenticate Git). Docker cells: the container's,
    made once per cell by `campaign.py login` (it runs `linux-matrix.sh github`, which opens `gh auth
    login` in the container; it stays on the cell's volume). The kit never copies or mounts a login

@@ -157,9 +157,13 @@ connector id that is not the fake needs its
 
 **The project folder and the token (D69, D71).** `goalcup start` works in the folder it is run from, as a
 player's does, and the kit makes that folder: `<temporary directory>/projects/<name>`, never beside the
-configuration directory. The kit strips this machine's git login from goalcup's environment
-(`SSH_AUTH_SOCK`, `GH_TOKEN`, `GITHUB_TOKEN`, the keyring and git/gh configuration variables), and goalcup
-passes the agent none.
+configuration directory. The kit strips this machine's git login variables from goalcup's environment
+(`SSH_AUTH_SOCK`, `SSH_AGENT_PID`, `SSH_ASKPASS`, `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`, `XDG_CONFIG_HOME`,
+the keyring variables and every git/gh configuration variable, `GIT_CONFIG_KEY_n` and `GIT_CONFIG_VALUE_n`
+included). Goalcup builds the agent's environment from nothing (its own `HOME`, `GIT_CONFIG_NOSYSTEM=1`, a
+no-key ssh command), so the agent gets only the token in `.env.local`. A `--test` cell keeps the real `HOME`
+(`MATRIX_CONFIG_DIR`), so goalcup's own process can still see `~/.gitconfig` and `~/.config/gh`; the agent
+cannot.
 
 | Cell | What it runs | The project folder |
 |---|---|---|
