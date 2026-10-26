@@ -40,9 +40,9 @@ pub use refusals::{
     GITIGNORE_LINES, PROJECT_FOLDER, cannot_record_model_service, continued_elsewhere,
     dev_competes, env_not_ignored, filesystem_warning, home_busy, last_part_closing, local_only,
     needs_terminal, not_started_here, project_beside_goalcup, project_inside_repository,
-    project_missing, project_not_a_folder, project_not_empty, project_unreadable,
-    repository_not_empty, run_over, server_answer_unusable, still_recording, token_line_form,
-    token_line_missing, unsupported_filesystem,
+    project_missing, project_not_a_folder, project_not_empty, project_of_open_run, project_synced,
+    project_unreadable, repository_not_empty, run_over, server_answer_unusable, still_recording,
+    token_line_form, token_line_missing, unsupported_filesystem,
 };
 pub use seal::{
     SealDone, seal_done, seal_inside_harness, seal_needs_terminal, seal_not_confirmed,

@@ -46,7 +46,12 @@ pub(super) fn uploading(
     }
     // The one sentence `run goalcup setup first`.
     crate::prep_file::read_prep(cfg)?;
-    super::project::refuse_unready_project(cfg, project, opts.mode != RunMode::Practice)?;
+    super::project::refuse_unready_project(
+        cfg,
+        project,
+        env.get("HOME").map(Path::new),
+        opts.mode != RunMode::Practice,
+    )?;
     Ok(Some(Serving {
         url: server.url,
         cfg: std::fs::canonicalize(cfg).unwrap_or_else(|_| cfg.to_path_buf()),
@@ -108,9 +113,10 @@ pub(super) struct Serving {
 
 impl Serving {
     /// For a real run, ask for its GitHub repository and check it ([`crate::commands::run_repo`]);
-    /// then ask the participant to approve this run in the browser, and wait for them. Nothing has
-    /// been created before this, and a refused repository, a denial, an expired code, a Ctrl-C or
-    /// a server that cannot be reached leaves it so (the refusal says so).
+    /// then ask the participant to approve this run in the browser, wait for them, and check the
+    /// project folder again. Nothing has been created before this, and a refused repository, a
+    /// denial, an expired code, a Ctrl-C, a server that cannot be reached or a folder that changed
+    /// meanwhile leaves it so (the refusal says so).
     pub(super) fn approved(
         self,
         opts: &StartOptions,
@@ -166,6 +172,14 @@ impl Serving {
                 ));
             }
         };
+        // The folder may have changed while the participant approved (an editor adds its
+        // `.idea`): checked again before the run is opened or anything is made.
+        super::project::refuse_unready_project(
+            &self.cfg,
+            &self.project,
+            self.env.get("HOME").map(Path::new),
+            !opts.mode.is_practice(),
+        )?;
         Ok(Uploading {
             server: crate::upload::http::ServerClient::with_credential(&self.url, &credential),
             how: UploadHow::Fresh(Box::new(NewRun {

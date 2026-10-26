@@ -752,45 +752,51 @@ mod server_runs {
     /// A key file that no `.gitignore` line covers would be published by the agent's first
     /// `git add .`, token and all: the start is refused before the approval and prints the lines
     /// to add. A token line the printed push line cannot read (here `export`, quotes and a CR) is
-    /// refused too, showing the form and never the value, as is a real run with no token line.
+    /// refused too, showing the form and never the value, as is a real run with no token line
+    /// (with the `.gitignore` lines too when there is no `.gitignore`).
     /// Covered and plain (with a `.DS_Store` beside), it starts.
     #[test]
     fn a_key_file_no_gitignore_line_covers_is_refused_before_the_approval() {
         const VALUE: &str = "SECRET-VALUE-0123";
         let quoted = format!("export GH_TOKEN=\"{VALUE}\"\r\n");
-        let rows: [(&str, Option<&str>, &str, &str); 5] = [
-            ("no .gitignore", None, "GH_TOKEN=x\n", ".env.*"),
+        let rows: [(&str, Option<&str>, Option<&str>, &str); 6] = [
+            ("no .gitignore", None, Some("GH_TOKEN=x\n"), ".env.*"),
             (
                 "another file ignored",
                 Some("node_modules\n.env\n"),
-                "GH_TOKEN=x\n",
+                Some("GH_TOKEN=x\n"),
                 ".env.*",
             ),
             (
                 "ignored, then re-included",
                 Some(".env*\n!.env.local\n"),
-                "GH_TOKEN=x\n",
+                Some("GH_TOKEN=x\n"),
                 ".env.*",
             ),
             (
                 "a token line in another form",
                 Some(".env*\n"),
-                &quoted,
+                Some(&quoted),
                 "GH_TOKEN=<",
             ),
             (
                 "a real run with no token line",
                 Some(".env*\n"),
-                "OTHER=1\n",
+                Some("OTHER=1\n"),
                 "GH_TOKEN=<",
             ),
+            // A first-timer's empty folder: the token line and the .gitignore lines at once.
+            ("an empty folder", None, None, ".env.*"),
         ];
         for (name, ignore, key_file, phrase) in rows {
             let rig = Rig::new();
             let server = server(&rig);
             rig.prepare_for(&server.url());
             let project = rig.run_folder();
-            std::fs::write(project.join(".env.local"), key_file).unwrap();
+            match key_file {
+                Some(text) => std::fs::write(project.join(".env.local"), text).unwrap(),
+                None => std::fs::remove_file(project.join(".env.local")).unwrap(),
+            }
             match ignore {
                 Some(ignore) => std::fs::write(project.join(".gitignore"), ignore).unwrap(),
                 None => std::fs::remove_file(project.join(".gitignore")).unwrap(),
@@ -814,8 +820,9 @@ mod server_runs {
         assert_eq!(server.run_ids().len(), 1);
     }
 
-    /// A project folder inside a Git repository, or beside goalcup's own folders (which the
-    /// recorder refuses as a workspace), is refused before the approval.
+    /// A project folder inside a Git repository, beside goalcup's own folders (which the
+    /// recorder refuses as a workspace), belonging to a run that is not over, or in a folder a
+    /// sync client uploads, is refused before the approval.
     #[test]
     fn a_folder_inside_a_repository_or_beside_goalcups_folders_is_refused_before_the_approval() {
         let rig = Rig::new();
@@ -833,6 +840,82 @@ mod server_runs {
         std::fs::create_dir(&beside).unwrap();
         let said = refused_before_the_approval(&rig, &upload, &beside);
         assert!(said.contains("next to it"), "{said}");
+
+        // The folder of a run that is not over, with the agent's work in it: the way back is
+        // that run, not a new, empty folder.
+        let rig = Rig::new();
+        let upload = self::server(&rig);
+        rig.prepare_for(&upload.url());
+        let project = rig.run_folder();
+        std::fs::write(project.join("README.md"), "the agent's work\n").unwrap();
+        goalcup_cli::run::write(
+            &rig.cfg,
+            &goalcup_cli::run::RunRecord {
+                run_id: "r00000000000000aa".to_string(),
+                server_url: Some(upload.url()),
+                practice: false,
+                test: false,
+                connector_id: crate::common::m2_cli_support::FAKE_ID.to_string(),
+                workspace: project.clone(),
+                started_at_unix: goalcup_cli::run::now_unix(),
+                deadline_at: Some("2099-01-01T00:00:00Z".to_string()),
+                entries: Vec::new(),
+            },
+        )
+        .unwrap();
+        let said = refused_before_the_approval(&rig, &upload, &project);
+        assert!(said.contains("belongs to run r00000000000000aa"), "{said}");
+
+        // A folder a sync client uploads would upload `.env.local`, token and all.
+        let rig = Rig::new();
+        let upload = self::server(&rig);
+        rig.prepare_for(&upload.url());
+        let synced = rig.root.join("Dropbox").join("my-run");
+        std::fs::create_dir_all(&synced).unwrap();
+        std::fs::write(synced.join(".env.local"), "GH_TOKEN=x\n").unwrap();
+        std::fs::write(synced.join(".gitignore"), ".env*\n").unwrap();
+        let said = refused_before_the_approval(&rig, &upload, &synced);
+        assert!(said.contains("Dropbox syncs this folder"), "{said}");
+    }
+
+    /// The project folder an editor changes during the approval: [`add_idea_on_open`] adds an
+    /// `.idea` there when the browser is asked to open, as an IDE can while the participant
+    /// approves.
+    static CHANGED_DURING_APPROVAL: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+    fn add_idea_on_open(_url: &str) -> bool {
+        if let Some(project) = CHANGED_DURING_APPROVAL.lock().unwrap().as_ref() {
+            std::fs::create_dir(project.join(".idea")).unwrap();
+        }
+        false
+    }
+
+    /// The project folder is checked again right after the approval: one that changed meanwhile
+    /// is refused before the run is opened on the server or anything is made.
+    #[test]
+    fn a_folder_that_changes_during_the_approval_is_refused_before_the_run_opens() {
+        let rig = Rig::new();
+        let server = server(&rig);
+        rig.prepare_for(&server.url());
+        let project = rig.run_folder();
+        *CHANGED_DURING_APPROVAL.lock().unwrap() = Some(project.clone());
+        let http = rig.client();
+        let client = Hooked::new(&http, &rig);
+        let mut opts = rig.options(&project, RESERVE);
+        opts.open_url = add_idea_on_open;
+        let (result, out) =
+            std::thread::scope(|s| rig.start(s, &client, opts, None).join().unwrap());
+        let refused = result.expect_err("the changed folder was not refused");
+        assert!(refused.to_string().contains(".idea"), "{refused}");
+        assert_eq!(server.device_requests().len(), 1, "{out}");
+        assert!(
+            !server.calls().iter().any(|c| c == "POST /v1/runs"),
+            "{:?}",
+            server.calls()
+        );
+        assert!(client.book().creates.is_empty());
+        assert!(rig.run_dirs().is_empty());
+        assert!(!rig.harness_started());
     }
 
     /// GitHub's `size` reads 0 for a repository whose only commit is the README it made: the
