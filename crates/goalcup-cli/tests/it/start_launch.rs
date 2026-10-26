@@ -996,6 +996,37 @@ mod chat {
         assert_eq!(server.entry_ids(run_id).len(), 3, "three segments");
     }
 
+    /// A continued run goes on in the folder it started in, whether the agent has made it a
+    /// Git repository yet or not: before its `git init`, and after it.
+    #[test]
+    fn a_continue_goes_on_in_the_folder_with_or_without_git() {
+        let rig = Rig::chat();
+        let server = UploadServer::start(&rig.root.join("server"), ServerOptions::default());
+        rig.prepare_for(&server.url());
+        let mut first = rig.start_on_pty(&[DISK, BEATING]);
+        first.wait_shown("tui: ready");
+        first.type_line("/exit");
+        assert!(first.wait().success(), "{}", first.shown());
+
+        for git in [false, true] {
+            if git {
+                let init = std::process::Command::new("git")
+                    .args(["init", "--quiet"])
+                    .arg(rig.run_folder())
+                    .output()
+                    .unwrap();
+                assert!(init.status.success(), "{init:?}");
+            }
+            let mut next = rig.continue_on_pty(&[DISK, BEATING], None);
+            next.wait_shown("tui: ready");
+            next.type_line("/exit");
+            let status = next.wait();
+            assert!(status.success(), "git {git}: {status:?}\n{}", next.shown());
+        }
+        let run_id = &server.run_ids()[0];
+        assert_eq!(server.entry_ids(run_id).len(), 3, "three segments");
+    }
+
     /// A chat-mode run needs its terminal for input and for output: from a pipe, or with its
     /// output in a file, it is refused before anything is created.
     #[test]

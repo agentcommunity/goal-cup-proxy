@@ -1591,6 +1591,12 @@ impl Upstream {
         )
     }
 
+    /// One shell line that posts the file `$M2_FAKE_OUT/body`, which an earlier line wrote,
+    /// through the recording proxy the harness was given.
+    pub fn curl_body_file(&self) -> String {
+        self.post("--data-binary \"@$M2_FAKE_OUT/body\"", 10, "")
+    }
+
     /// One shell line that posts `body` through the recording proxy the harness was given.
     pub fn curl(&self, body: &str) -> String {
         self.post(&format!("--data '{body}'"), 10, "")
