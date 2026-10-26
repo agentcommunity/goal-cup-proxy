@@ -177,7 +177,7 @@ fn setup_reports_each_step_and_exits_1_until_all_are_ok() {
     let tail: Vec<&str> = text.lines().rev().take(3).collect();
     assert!(
         tail[2] == "Ready."
-            && tail[1].contains("mkdir ~/goalcup-practice && cd ~/goalcup-practice")
+            && tail[1].contains("mktemp -d ~/goalcup-practice-XXXX")
             && tail[1].ends_with("goalcup start --harness m2-fake-tui --practice")
             && tail[0].contains("folder step")
             && tail[0].ends_with("goalcup start --harness m2-fake-tui --repo <you>/<name>"),

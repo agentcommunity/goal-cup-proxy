@@ -212,6 +212,8 @@ fn a_run_folder_inside_a_git_work_tree_refuses_before_anything_is_created() {
     let error = result.expect_err("a work tree is refused");
     assert!(matches!(error, CliError::Refused(_)), "{error:?}");
     assert!(error.to_string().contains("Git work tree"), "{error}");
+    // No server here, so the run folder is the one started from, not the config's.
+    assert!(error.to_string().contains("Start from a folder"), "{error}");
     assert!(client.names().is_empty(), "{:?}", client.names());
     // The run folder holds the `.git` this test made, and no run directory.
     assert!(
