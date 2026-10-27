@@ -137,13 +137,16 @@ test("on: an empty repository (409) opens", async () => {
   assert.equal(opened.length, 1);
 });
 
-test("on: the empty check is for every mode, not only the competition", async () => {
-  stubRepoAndCommits(() => new Response("[]", { status: 200 }));
+test("on: a test run is checked like a competition run; a practice run never asks GitHub", async () => {
+  const calls = stubRepoAndCommits(() => new Response("[]", { status: 200 }));
   const { ctx, opened } = ctxWith(true);
-  for (const mode of ["practice", "test"] as const) {
-    await assert.rejects(openRun(ctx, { ...AUTH, mode }, req()), (e) => e instanceof ApiError && e.status === 400 && e.message === EMPTY_REPO_REFUSAL);
-  }
+  await assert.rejects(openRun(ctx, { ...AUTH, mode: "test" }, req()), (e) => e instanceof ApiError && e.status === 400 && e.message === EMPTY_REPO_REFUSAL);
   assert.equal(opened.length, 0);
+  calls.length = 0;
+  // The shared practice repository has a commit: the practice run opens all the same.
+  assert.equal((await openRun(ctx, { ...AUTH, mode: "practice" }, req())).status, 201);
+  assert.equal(calls.length, 0);
+  assert.equal(opened[0]!.mode, "practice");
 });
 
 test("on: GitHub failing the empty check is 502 (goalcup retries) and nothing is created", async () => {

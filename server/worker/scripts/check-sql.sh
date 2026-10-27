@@ -2,10 +2,13 @@
 # Try the pending website migration on a throwaway Postgres before anyone applies it to the shared
 # database (sql/pending/README.md). It:
 #   1. starts a private PostgreSQL in a temporary directory (unix socket only, trust auth);
-#   2. stubs what Supabase provides (the anon, authenticated, service_role and authenticator roles,
-#      auth.users, public.admins, public.email_suppression_list, public.member_profiles);
+#   2. stubs what Supabase and the website provide (the anon, authenticated, service_role and
+#      authenticator roles, auth.users, public.admins, public.email_suppression_list,
+#      public.member_profiles, public.email_tracking, public.email_queue, public.registrations);
 #   3. applies the mirror sql/goal-cup-tracer-upload.sql up to its first pending section, in one
-#      transaction: the database as it is today;
+#      transaction: every website *goal_cup* migration, so each mirrored function has its latest
+#      body (the sign-up gate in open_run included). That is production plus 20261021120400 (terms
+#      version and sign-up switch only), which the base holds though production has not applied it;
 #   4. checks that the mirror's pending sections are the files in sql/pending/, byte for byte;
 #   5. applies each pending file with the production command (psql -X -1 -v ON_ERROR_STOP=1 -f);
 #   6. smoke-calls the new and the old-signature functions, then stops and deletes everything.
@@ -67,6 +70,11 @@ CREATE TABLE auth.users (id uuid PRIMARY KEY, email text, email_confirmed_at tim
 CREATE TABLE public.admins (email text NOT NULL);
 CREATE TABLE public.email_suppression_list (email text NOT NULL, expires_at timestamptz);
 CREATE TABLE public.member_profiles (user_id uuid NOT NULL, slug text, is_listed boolean);
+CREATE TABLE public.email_tracking (email_type text CONSTRAINT email_tracking_email_type_check CHECK (email_type IN ('welcome')));
+CREATE TABLE public.email_queue (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, template text, recipient_email text,
+  data jsonb, source text, user_id uuid, metadata jsonb, writer text, kind text, list_key text, content_id text);
+CREATE TABLE public.registrations (id uuid PRIMARY KEY, user_id uuid, full_name text, organization_name text,
+  registration_type text, created_at timestamptz);
 SQL
 
 # The mirror up to the line before its first pending section, and the check that the rest of it is
@@ -226,6 +234,65 @@ BEGIN
     ASSERT NOT has_function_privilege('authenticated', k, 'EXECUTE'), 'authenticated can call ' || k;
     ASSERT NOT has_function_privilege('public', k, 'EXECUTE'), 'PUBLIC can call ' || k;
   END LOOP;
+
+  -- 7. One competition repository, one member (20261027100000). Member m2 cannot open a competition
+  --    run on m's repository, in any spelling; m may open it again, and a retried open is answered;
+  --    another event, and staging, do not count. The sign-up gate of 20261021120200 stays, before the
+  --    repository check. (Test and practice runs cannot share an event with competition runs: open_run
+  --    refuses a mode that is not the event's kind, so they never count.)
+  INSERT INTO goal_cup_tracer.events (id, mode, start_window_opens, start_window_closes, staging, requires_signup)
+  VALUES ('smoke-cup', 'competition', t0 - interval '1 hour', t0 + interval '1 hour', false, true),
+         ('smoke-cup-2', 'competition', t0 - interval '1 hour', t0 + interval '1 hour', false, false),
+         ('smoke-cup-st', 'competition', t0 - interval '1 hour', t0 + interval '1 hour', true, false);
+  INSERT INTO goal_cup_tracer.consents (member_id, terms_version)
+  VALUES ('22222222-2222-2222-2222-222222222222'::uuid, goal_cup_tracer.current_terms_version()),
+         ('33333333-3333-3333-3333-333333333333'::uuid, goal_cup_tracer.current_terms_version());
+  INSERT INTO goal_cup_tracer.signups (event_id, member_id, entry_no, name)
+  VALUES ('smoke-cup', m::uuid, 1, 'M'), ('smoke-cup', '22222222-2222-2222-2222-222222222222'::uuid, 2, 'M2');
+  INSERT INTO goal_cup_tracer.run_credentials (credential_hash, member_id, mode, expires_at, staging)
+  VALUES (repeat('d', 64), m::uuid, 'competition', t0 + interval '1 hour', false),
+         (repeat('e', 64), '22222222-2222-2222-2222-222222222222'::uuid, 'competition', t0 + interval '1 hour', false),
+         (repeat('f', 64), m::uuid, 'competition', t0 + interval '1 hour', false),
+         (repeat('9', 64), '22222222-2222-2222-2222-222222222222'::uuid, 'competition', t0 + interval '1 hour', false),
+         (repeat('8', 64), '33333333-3333-3333-3333-333333333333'::uuid, 'competition', t0 + interval '1 hour', false),
+         (repeat('7', 64), '22222222-2222-2222-2222-222222222222'::uuid, 'competition', t0 + interval '1 hour', true);
+  r := public.goal_cup_upload_open_run(m, 'smoke-cup', 'competition', 'r0000000000000011', 'e0000000000000011', t0::text,
+         (t0 + interval '7 days')::text, 'c', z, z, 'w', 's11', '1', '1', 'https://github.com/O/Shared', 'null'::jsonb,
+         NULL, NULL, repeat('d', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'created', 'repo: first open: ' || r::text;
+  r := public.goal_cup_upload_open_run('22222222-2222-2222-2222-222222222222', 'smoke-cup', 'competition', 'r0000000000000012',
+         'e0000000000000012', t0::text, (t0 + interval '7 days')::text, 'c', z, z, 'w', 's12', '1', '1',
+         'https://github.com/o/shared.git', 'null'::jsonb, NULL, NULL, repeat('e', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'forbidden' AND r ->> 'message' LIKE '%already uses this repository%', 'repo: other member: ' || r::text;
+  ASSERT (SELECT run_id IS NULL FROM goal_cup_tracer.run_credentials WHERE credential_hash = repeat('e', 64)), 'repo: refused open bound its credential';
+  r := public.goal_cup_upload_open_run(m, 'smoke-cup', 'competition', 'r0000000000000013', 'e0000000000000013', t0::text,
+         (t0 + interval '7 days')::text, 'c', z, z, 'w', 's13', '1', '1', 'https://github.com/o/SHARED', 'null'::jsonb,
+         NULL, NULL, repeat('f', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'created', 'repo: same member again: ' || r::text;
+  -- A lost reply: the first open again, same credential and session, gets its own run back.
+  r := public.goal_cup_upload_open_run(m, 'smoke-cup', 'competition', 'r0000000000000015', 'e0000000000000015', t0::text,
+         (t0 + interval '7 days')::text, 'c', z, z, 'w', 's11', '1', '1', 'https://github.com/O/Shared', 'null'::jsonb,
+         NULL, NULL, repeat('d', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'existing' AND r -> 'run' ->> 'run_id' = 'r0000000000000011', 'repo: lost reply: ' || r::text;
+  r := public.goal_cup_upload_open_run('22222222-2222-2222-2222-222222222222', 'smoke-cup-2', 'competition', 'r0000000000000014',
+         'e0000000000000014', t0::text, (t0 + interval '7 days')::text, 'c', z, z, 'w', 's14', '1', '1',
+         'https://github.com/o/shared', 'null'::jsonb, NULL, NULL, repeat('9', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'created', 'repo: another event: ' || r::text;
+  -- Not signed up: the sign-up message, not the repository one.
+  r := public.goal_cup_upload_open_run('33333333-3333-3333-3333-333333333333', 'smoke-cup', 'competition', 'r0000000000000016',
+         'e0000000000000016', t0::text, (t0 + interval '7 days')::text, 'c', z, z, 'w', 's16', '1', '1',
+         'https://github.com/o/shared', 'null'::jsonb, NULL, NULL, repeat('8', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'forbidden' AND r ->> 'message' LIKE 'Sign up for Goal Cup%', 'repo: sign-up gate: ' || r::text;
+  -- Staging: the staging Worker's own event, the same repository, opens.
+  PERFORM set_config('request.jwt.claims', '{"role": "goal_cup_ingest_staging"}', true);
+  r := public.goal_cup_upload_open_run('22222222-2222-2222-2222-222222222222', 'smoke-cup-st', 'competition', 'r0000000000000017',
+         'e0000000000000017', t0::text, (t0 + interval '7 days')::text, 'c', z, z, 'w', 's17', '1', '1',
+         'https://github.com/o/shared', 'null'::jsonb, NULL, NULL, repeat('7', 64), (t0 + interval '8 days')::text);
+  ASSERT r ->> 'result' = 'created', 'repo: staging: ' || r::text;
+  PERFORM set_config('request.jwt.claims', '', true);
+  ASSERT NOT has_function_privilege('anon', 'goal_cup_tracer.repo_key(text)', 'EXECUTE'), 'anon can call repo_key';
+  ASSERT NOT has_function_privilege('authenticated', 'goal_cup_tracer.repo_key(text)', 'EXECUTE'), 'authenticated can call repo_key';
+  ASSERT NOT has_function_privilege('public', 'goal_cup_tracer.repo_key(text)', 'EXECUTE'), 'PUBLIC can call repo_key';
 
 END $$;
 SQL

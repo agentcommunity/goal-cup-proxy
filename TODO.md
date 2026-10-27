@@ -112,7 +112,7 @@ Status (21 Oct, branch `smart/zen-gates-d9tmbh`, not yet released):
 - WP-B part 1 done: acknowledged parts are deleted at once when the disk is short. The quiet-time
   upload trigger waits for WP-0 gap data.
 - WP-D done in the Worker, plus parallel test runs (test runs no longer replace each other). Both
-  need the website migrations in `server/worker/sql/pending/`, applied before that Worker deploys.
+  need website migration `20261021100000`, applied to the shared database on 22 Oct.
   Check the website approval page wording for test runs.
 - WP-E docs done (H-29 widened, login guidance, StorageFull rule). The verifier scan moves to the
   post-event export step (owner, 21 Oct): flagged traces are cleaned before anyone gets them.
@@ -268,6 +268,9 @@ These look odd but are right. Do not "fix" them.
 
 ## Open owner questions
 
+- Apply website migration `20261027100000` (a competition repository belongs to one member per
+  event; 0.7.0 security review I2) before 7 Nov 00:00 UTC: needs the owner's OK. Steps:
+  [`server/worker/sql/pending/README.md`](server/worker/sql/pending/README.md).
 - WP0: the owner completed Linux Codex sign-in and Amp's private-home macOS sign-in. A rebuilt
   Mac binary may need a new Little Snitch approval. Claude remains deferred until quota returns;
   Linux Amp task coverage is still outstanding. (22 Oct: Claude Code and Linux Amp ran; see the

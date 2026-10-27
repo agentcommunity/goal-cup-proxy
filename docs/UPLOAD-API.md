@@ -189,8 +189,19 @@ repository and the open goes on; `200` means the repository already has a commit
 `400 malformed` ("The repository must be empty when the run opens. Create a new one with no README,
 .gitignore or license, and start again."). Any other answer, or no answer, is `502 upstream_error`,
 which goalcup retries, so a GitHub outage never refuses a player; nothing is created in any of these
-cases. The check applies to every mode, and to the first open only: a retried open of a run that
-exists is answered before GitHub is asked, and `continue` never asks.
+cases. The check applies to competition and test runs, and to the first open only: a retried open
+of a run that exists is answered before GitHub is asked, and `continue` never asks. A practice run
+skips both GitHub checks, because it judges nothing (0.7 practice runs all name one shared
+repository, and one commit there must not stop every practice start).
+
+**One competition repository, one member.** A competition open is `403` ("Another member's run in
+this event already uses this repository. Create a new empty public repository and start again.") when its
+`repo_url` is already the repository of another member's competition run in the same event, in any
+state. URLs compare in lower case with a trailing `.git` removed (a trailing `/` is already `400`). The same member may name it
+again, and a retried open of a run that exists is answered as before. Practice and test runs are not
+checked. An open the sign-up gate refuses gets the sign-up message first. The database decides it
+(website migration `20261027100000`, on top of the sign-up gate `20261021120200`, pending the owner's OK to
+apply: `server/worker/sql/pending/README.md`); until it is applied, there is no such check.
 
 **One main run per account.** A competition start by the account replaces its other open competition
 run: that run gets `replaced_at` = this run's `official_start`, in the same step, and ends then

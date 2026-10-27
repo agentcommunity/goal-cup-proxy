@@ -50,7 +50,7 @@ All times UTC.
 | Release cut | Prepare the version PR if needed, merge under the `main` ruleset, run the full gate and separate `scripts/linux-check.sh` on merged `origin/main`, then tag that commit with `scripts/release.sh tag` |
 | 23 Oct to 6 Nov 00:00 | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
 | 4 Nov 00:00 | Feature stop: fixes only |
-| 6 Nov | `EVENT_ID` switch and last release (12:00). See [EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026). |
+| 6 Nov | `EVENT_ID` switch. See [EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026). A release is planned for 12:00; it is not the last one, releases continue during the cup (D70). |
 | 7 Nov 00:00 | Start window opens. It lasts 24 hours. |
 | 8 Nov 00:00 | Start window closes |
 | 168 hours after each start | That run's deadline. The latest run ends 192 hours after the window opens. |
@@ -63,12 +63,18 @@ Before the window opens:
 2. Do the `EVENT_ID` switch on 6 Nov. The steps are in
    [server/worker/README.md](../server/worker/README.md#event_id-switch-6-nov-2026).
    Staging keeps its own event ids.
-3. Run the matrix on staging for each shipped connector ([The matrix](#the-matrix)).
-4. Confirm `GET https://ingest.agentcommunity.org/v1/health` answers `{"status":"ok"}`, then run one
+3. Set `MIN_COMPETITION_VERSION = "0.7.1"` in `wrangler.toml` `[vars]` through a PR, then deploy.
+   Only after the 0.7.1 release is published and GitHub's `releases/latest` serves it: the
+   refusal's install line installs the latest release, so set too early it installs an older
+   goalcup that is refused again. Never set it in the dashboard; the next deploy wipes it. Steps
+   and checks: [Set the minimum competition version](../server/worker/README.md#set-the-minimum-competition-version).
+   It may go in the `EVENT_ID` PR if 0.7.1 is already latest then.
+4. Run the matrix on staging for each shipped connector ([The matrix](#the-matrix)).
+5. Confirm `GET https://ingest.agentcommunity.org/v1/health` answers `{"status":"ok"}`, then run one
    practice run against production by hand.
-5. Delete the test runs ([Test runs](#test-runs)) and confirm the bucket lock rule still covers
+6. Delete the test runs ([Test runs](#test-runs)) and confirm the bucket lock rule still covers
    `traces/goalcup-cup-2026/`.
-6. Check that `MAINTENANCE` is `off`.
+7. Check that `MAINTENANCE` is `off`.
 
 Emails go out at most 20 each 5-minute tick (240 an hour). A burst of 1,500 `started` mails at the
 window opening drains over about six hours. The limit is `NOTICES_PER_TICK` in `server/worker/src/mail.ts`.
@@ -87,6 +93,10 @@ CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy --env staging # staging
   `npm test` passes.
 - Never set `DB_BACKEND=local` or `TEST_APPROVAL_KEY` in the production block. `test/config.test.ts`
   fails if you do.
+- Variables come from `wrangler.toml` only: a deploy replaces every `[vars]` value, so a dashboard
+  edit is gone after the next deploy. Change one through a PR. After every production deploy once
+  the cup's minimum is set, `npx wrangler versions view <version-id>` shows
+  `MIN_COMPETITION_VERSION` = `0.7.1`.
 - Roll back with `npx wrangler rollback` (the same account variable). Wrangler keeps recent versions.
 - Secrets are set with `wrangler secret put <NAME>` (add `--env staging` for staging):
   `RECEIPT_SIGNING_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `RATE_LIMIT_KEY`, `GITHUB_TOKEN`,
@@ -131,6 +141,10 @@ then `sh scripts/linux-check.sh` on the merged versioned commit. The Linux check
 privileged-container support. A release
 tarball carries every folder under `connectors/`; a merged connector ships by being merged, but the
 pins are compiled in, so a connector merged after a release needs a point release.
+
+The cup requires 0.7.1 (`MIN_COMPETITION_VERSION`). Set it only after the 0.7.1 release is
+published and `releases/latest` serves it, then deploy:
+[Set the minimum competition version](../server/worker/README.md#set-the-minimum-competition-version).
 
 ## The matrix
 
