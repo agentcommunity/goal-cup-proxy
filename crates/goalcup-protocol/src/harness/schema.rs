@@ -246,11 +246,13 @@ pub struct LaunchPrepSpec {
     #[serde(default)]
     pub commands: Vec<Vec<String>>,
     /// Commands of the harness's own program, run as `commands` run, in order, each time the
-    /// harness exits (its own quit, a crash or a signal, or goalcup's stop at the deadline) and
-    /// before goalcup waits for the recording proxy to drain (D72, 0.7.1): a gateway the harness
-    /// left running would hold the proxy's connections open. Held to the `capture.configure`
-    /// rules, with no template at all. A command that fails or runs too long is written to
-    /// `host.log` and never stops the run.
+    /// harness exits (D72, 0.7.1). After its own quit, a crash or a signal they run before
+    /// goalcup waits for the recording proxy to drain: a gateway the harness left running would
+    /// hold the proxy's connections open. After goalcup's stop at the deadline they run once the
+    /// proxy was stopped within its short bound and the part sealed, and only end what the
+    /// harness left. Held to the `capture.configure` rules, with no template at all. A command
+    /// that fails or runs too long is written to `host.log` and never stops the run; goalcup then
+    /// stops the proxy within its short bound instead of waiting on those connections.
     #[serde(default)]
     pub after_exit: Vec<Vec<String>>,
 }

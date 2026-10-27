@@ -753,7 +753,7 @@ after_exit = [["gateway", "stop", "-y"], ["gateway", "status"]]
         .collect();
     let log_path = root.join("host.log");
     let log = std::fs::File::create(&log_path).unwrap();
-    after_exit(
+    let ended = after_exit(
         &connector,
         &PrepLaunch {
             executable: &resolved,
@@ -764,6 +764,8 @@ after_exit = [["gateway", "stop", "-y"], ["gateway", "status"]]
         &workspace,
         &log,
     );
+    // The failed stop is reported, so the caller stops the proxy within its short bound.
+    assert!(!ended);
 
     let calls = std::fs::read_to_string(config_home.join("calls")).unwrap();
     assert_eq!(

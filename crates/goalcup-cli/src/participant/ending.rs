@@ -11,6 +11,16 @@ pub fn details_heading(host_log: Option<&Path>) -> String {
     }
 }
 
+/// The words that end [`helper_not_stopped`], for a test to find it.
+pub const OPEN_CALLS_CUT: &str = "so it stopped recording its open calls now.";
+
+/// Said when the connector's after-exit commands (D72) did not stop what the harness left
+/// running, so goalcup stops the recording proxy within its short bound instead of waiting on
+/// the open connections of a process that would hold them until its own idle exit.
+pub fn helper_not_stopped(harness: &str) -> String {
+    format!("goalcup could not stop {harness}'s background helper, {OPEN_CALLS_CUT}")
+}
+
 /// What a practice run that is sealed and uploaded points to: the real run.
 pub const PRACTICE_NEXT: &str =
     "Next: your real run, inside the start window: goalcup start --harness <your harness>.";

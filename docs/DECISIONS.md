@@ -1014,8 +1014,8 @@ model calls with no certificate error.
   on 0.21.1 and later, which write no session file. A gateway another process starts between the
   stop and the launch keeps its old environment (CHEAT-CHECKLIST).
 - **The entry stays.** The `recorder` entry stays in Goal Cup's Hermes home after a run, naming
-  that run's now stale CA, and the run's gateway may stay up pointed at the closed recording
-  proxy. Hermes opened there outside a run (a second `goalcup setup`) may not reach the model
+  that run's now stale CA. Since 0.7.1 the run's gateway is stopped when Hermes exits; only when
+  that stop failed may it stay up pointed at the closed recording proxy. Hermes opened there outside a run (a second `goalcup setup`) may not reach the model
   until `HERMES_HOME=<home> hermes gateway stop -y`; the next start fixes both by itself.
 - **Not in 0.7.0:** reading Hermes's `state.db`, a post-run gateway stop, a per-run Hermes home, a
   Hermes version gate, a verifier finding, and setup writing Hermes's other keys itself.
@@ -1030,6 +1030,14 @@ model calls with no certificate error.
   `host.log` and the run goes on. The Hermes connector says `after_exit = [["gateway", "stop",
   "-y"]]`. At the deadline the proxy is already stopped within its short bound; the stop then
   only ends what the harness left running.
+- **26 Oct 2026, 0.7.1: a failed stop is no silent wait.** When an `after_exit` command fails,
+  runs past its 15 s or cannot be run, the gateway may still hold the proxy's connections open.
+  goalcup then stops the recording proxy within the same 2 s bound as at a deadline (open streams
+  recorded `Interrupted`) instead of waiting the drain share, writes one line in `host.log`, and
+  tells the participant in one plain line that it could not stop the harness's background helper
+  and stopped recording its open calls. What reached the proxy is sealed and uploaded as always.
+  When every command succeeds, or a connector has none, nothing changes. The terminal is given
+  back and `goalcup status` says the harness exited before the commands run, not after.
 
 ## D73. The push lines are never lost, and `continue` resumes a harness with no session file.
 

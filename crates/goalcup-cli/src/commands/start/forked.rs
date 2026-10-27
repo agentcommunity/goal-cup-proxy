@@ -291,6 +291,10 @@ pub(super) struct Exited<'a> {
     pub(super) status: Result<ExitStatus, CliError>,
     /// The finish a deadline made while the harness was still running, if one did.
     pub(super) finished_early: Option<Result<CaptureFinishReport, CliError>>,
+    /// A connector's after-exit command (D72) did not end cleanly, or none could be run: what
+    /// the harness left (Hermes's gateway) may still hold the recording proxy's connections
+    /// open, so its stop is bounded as at a deadline.
+    pub(super) helper_left: bool,
     /// The uploader, for a run opened on a server.
     pub(super) uploading: Option<crate::upload::uploader::Running>,
     /// The wrap-up after the stop, which the seal and the upload's finish share.

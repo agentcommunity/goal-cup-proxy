@@ -722,6 +722,86 @@ mod chat {
         }
     }
 
+    /// D72 (0.7.1): when the after-exit command fails, what the harness left running may still
+    /// hold a recording proxy connection open. `goalcup start` then stops the proxy within its
+    /// short bound instead of waiting the drain share for that connection, says so in one line
+    /// and in `host.log`, and still seals. The finish budget here makes the drain share 28 s,
+    /// so a start that waited on the held connection would take far longer than the bound below.
+    #[test]
+    fn a_failed_after_exit_command_does_not_wait_on_a_held_proxy_connection() {
+        let rig = Rig::chat_with_after_exit();
+        rig.tell("tui.after_exit.fail", "");
+        let budget = ("GOALCUP_TEST_FINISH_BUDGET_MS", "60000");
+        let mut run = OnPty::spawn(
+            rig.chat_command_for(
+                CHAT_AFTER_EXIT_ID,
+                &[DISK, LOCAL_WRAP_UP, budget],
+                Launcher::Direct,
+            ),
+            None,
+        );
+        run.wait_shown("tui: ready");
+        run.type_line("/hold");
+        run.wait_shown("tui: holding");
+        let holder: i32 = harness(&rig, "tui.holder.pid").parse().unwrap();
+        let tui: i32 = harness(&rig, "tui.pid").parse().unwrap();
+        // SAFETY: integers; the pid is the fake harness's own.
+        assert_eq!(unsafe { libc::kill(tui, libc::SIGKILL) }, 0);
+        let killed = std::time::Instant::now();
+        let status = run.wait();
+        let took = killed.elapsed();
+        let shown = run.shown();
+        // The helper (`sleep | nc`, in the harness's process group) is ended here, whatever the
+        // run did with it; never the test's own group.
+        // SAFETY: integers only.
+        unsafe {
+            let group = libc::getpgid(holder);
+            if group > 0 && group != libc::getpgrp() {
+                libc::killpg(group, libc::SIGKILL);
+            }
+        }
+        assert!(status.success(), "{status:?}\n{shown}");
+        assert!(
+            took < std::time::Duration::from_secs(15),
+            "goalcup start ended {took:?} after the harness; it waited on the held connection\n{shown}"
+        );
+        assert_eq!(
+            harness(&rig, "tui.after_exit"),
+            "gateway stop -y gone proxy-open no-proxy",
+            "{shown}"
+        );
+        assert!(
+            shown.contains(goalcup_cli::participant::OPEN_CALLS_CUT),
+            "{shown}"
+        );
+        let log = std::fs::read_to_string(run_dir(&rig).join("host.log")).unwrap();
+        assert!(log.contains("ended with exit code 4"), "{log}");
+        assert!(log.contains("open connections cut"), "{log}");
+        let (report, _) = rig.read_trace(&newest_entry(&rig));
+        assert!(report.sealed, "{:?}", report.findings);
+    }
+
+    /// With every after-exit command ending cleanly, nothing is cut and nothing is said.
+    #[test]
+    fn a_clean_after_exit_command_says_nothing_of_open_calls() {
+        let rig = Rig::chat_with_after_exit();
+        let mut run = OnPty::spawn(
+            rig.chat_command_for(CHAT_AFTER_EXIT_ID, &[DISK, LOCAL_WRAP_UP], Launcher::Direct),
+            None,
+        );
+        run.wait_shown("tui: ready");
+        run.type_line("/exit");
+        let status = run.wait();
+        let shown = run.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+        assert!(
+            !shown.contains(goalcup_cli::participant::OPEN_CALLS_CUT),
+            "{shown}"
+        );
+        let log = std::fs::read_to_string(run_dir(&rig).join("host.log")).unwrap();
+        assert!(!log.contains("open connections cut"), "{log}");
+    }
+
     /// A panic on one of the host's threads while it is quiet is a message like any other: it is
     /// in `host.log`, and the terminal does not show it.
     #[test]

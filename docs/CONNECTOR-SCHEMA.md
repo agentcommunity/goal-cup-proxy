@@ -367,11 +367,14 @@ after_exit = [["gateway", "stop", "-y"]]
   goes to `host.log`, may repeat the URL or the path. An older harness may lack a
   command (Hermes 0.19.0 has no `-y` on `gateway stop`).
 - **`after_exit`** (optional, default `[]`, added 26 Oct 2026, D72). Commands run each time
-  the harness exits: its own quit, a crash or a signal, or goalcup's stop at the deadline. They
-  run before goalcup waits for the recording proxy to drain and seals the part, as `commands` run
-  but with 15 seconds each. Held to every `capture.configure` rule, with no template at all (the
-  two above included). A failure is one line in `host.log` and never stops the run. Hermes stops
-  its gateway here, which otherwise keeps the proxy's connections open.
+  the harness exits, as `commands` run but with 15 seconds each. After its own quit, a crash or a
+  signal they run before goalcup waits for the recording proxy to drain and seals the part. After
+  goalcup's stop at the deadline they run once the proxy was stopped within its short bound and
+  the part sealed, and only end what the harness left. Held to every `capture.configure` rule,
+  with no template at all (the two above included). A failure is one line in `host.log` and never
+  stops the run; goalcup then stops the proxy within its short bound (2 seconds) instead of
+  waiting on the open connections, and says so in one line. Hermes stops its gateway here, which
+  otherwise keeps the proxy's connections open.
 - **What it may change.** Only the harness's trust of the recording proxy for the URL its own
   config already names, and processes of its own that would keep an old environment. The pair
   rule means the only value a `base_url` or `cacert` key can get is goalcup's own: the URL the

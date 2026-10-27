@@ -1196,25 +1196,14 @@ pub(super) fn run_harness<'a>(
     pause.end();
     // How long the harness ran, taken before the after-exit commands below can add their time.
     let ran = released_at.elapsed();
-    // The connector's after-exit commands (D72, 0.7.1), on every way the harness ended, and
-    // before the recording proxy is stopped and drained (`finish_run`): a process the harness
-    // left running (Hermes's gateway) would hold the proxy's connections open until its own
-    // idle exit. At a deadline the proxy was stopped above, within its short bound, and the
-    // commands still end what the harness left.
-    if let Some(after) = forked.after_exit.take() {
-        run_after_exit(cx, &forked, &after);
-    }
-    // The harness has exited: the terminal is this command's again, if it is still there.
+    // The harness has exited: the terminal is this command's again, if it is still there. First,
+    // so a harness that crashed in raw mode does not leave the terminal raw, with Ctrl-C absorbed,
+    // while the after-exit commands below run.
     if let Some(chat) = forked.chat.as_mut() {
         chat.harness_exited();
     }
-    // The technical lines that follow (the stop, the seal, the upload) go under one heading; what
-    // the participant does next is said after them, last (`finish_run`).
-    let _ = say(out, "");
-    let _ = say(
-        out,
-        &crate::participant::details_heading(forked.chat.as_ref().map(|chat| chat.quiet.path())),
-    );
+    // Before the after-exit commands too, so `goalcup status` says the harness has exited while
+    // they run.
     keeper.update(|state| {
         state.disk.disk_paused = false;
         // The count at the harness's exit, which the tick's last look may be behind (D73).
@@ -1228,6 +1217,24 @@ pub(super) fn run_harness<'a>(
             },
         };
     });
+    // The connector's after-exit commands (D72, 0.7.1), on every way the harness ended, and
+    // before the recording proxy is stopped and drained (`finish_run`): a process the harness
+    // left running (Hermes's gateway) would hold the proxy's connections open until its own
+    // idle exit. At a deadline the proxy was stopped above, within its short bound, and the
+    // commands still end what the harness left. When one of them failed, what the harness left
+    // may still hold those connections, and `finish_run` stops the proxy within its short bound
+    // instead of waiting for them.
+    let helper_left = match forked.after_exit.take() {
+        Some(after) => !run_after_exit(cx, &forked, &after, forked.proxied.is_some()),
+        None => false,
+    };
+    // The technical lines that follow (the stop, the seal, the upload) go under one heading; what
+    // the participant does next is said after them, last (`finish_run`).
+    let _ = say(out, "");
+    let _ = say(
+        out,
+        &crate::participant::details_heading(forked.chat.as_ref().map(|chat| chat.quiet.path())),
+    );
     // A run that ended on its own stopped just now.
     let wrap_up = stopped_wrap
         .into_inner()
@@ -1261,6 +1268,7 @@ pub(super) fn run_harness<'a>(
         forked,
         status,
         finished_early,
+        helper_left,
         uploading,
         wrap_up,
         left_running: swept.and_then(|swept| swept.refusal(&entry_id)),
@@ -1269,19 +1277,28 @@ pub(super) fn run_harness<'a>(
 }
 
 /// Run the connector's `[launch_prep] after_exit` commands (D72, 0.7.1) in the harness home, with
-/// their output and any failure in the run's `host.log`. Nothing here stops the run.
-fn run_after_exit(cx: &CaptureRun<'_>, forked: &Forked<'_>, after: &AfterExit) {
+/// their output and any failure in the run's `host.log`. Nothing here stops the run. Answers
+/// whether every command ran and ended cleanly; when one did not and `proxy_running` (the
+/// recording proxy still runs, so `finish_run` will stop it), the log also says the proxy is
+/// stopped within its short bound.
+fn run_after_exit(
+    cx: &CaptureRun<'_>,
+    forked: &Forked<'_>,
+    after: &AfterExit,
+    proxy_running: bool,
+) -> bool {
+    use std::io::Write as _;
     let run_dir = crate::run::run_dir(forked.cfg, &forked.record.run_id);
-    let log = match crate::host_log::open_for_child(&run_dir) {
+    let mut log = match crate::host_log::open_for_child(&run_dir) {
         Ok((log, _)) => log,
         Err(e) => {
             crate::host_log::say(&format!(
                 "the harness's after-exit commands were not run: its log could not be opened ({e})"
             ));
-            return;
+            return false;
         }
     };
-    crate::launch::after_exit(
+    let ended = crate::launch::after_exit(
         cx.connector,
         &crate::launch::PrepLaunch {
             executable: &after.executable,
@@ -1292,6 +1309,15 @@ fn run_after_exit(cx: &CaptureRun<'_>, forked: &Forked<'_>, after: &AfterExit) {
         &after.workspace,
         &log,
     );
+    if !ended && proxy_running {
+        let _ = writeln!(
+            log,
+            "goalcup: an after-exit command did not end cleanly, so the recording proxy is \
+             stopped within {} seconds, its open connections cut, instead of waiting for them",
+            super::finish::RUNNING_HARNESS_PROXY_DRAIN.as_secs()
+        );
+    }
+    ended
 }
 
 /// The cleanup every abandon takes: ask the daemon, and remove the local record only where it

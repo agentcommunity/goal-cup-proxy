@@ -1170,23 +1170,26 @@ pub const AFTER_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 /// [`launch_prep`] runs its `commands` ([`run_home_command`]: the harness's own environment, no
 /// proxy, stdin `/dev/null`, output to `log`), each within [`AFTER_EXIT_TIMEOUT`]. Called once
 /// the harness has exited, however it ended, and before goalcup waits for the recording proxy
-/// to drain (D72, 0.7.1): a gateway the harness left running would hold the proxy's
-/// connections open until its own idle exit.
+/// to drain (D72, 0.7.1; at a deadline, after the proxy's bounded stop): a gateway the harness
+/// left running would hold the proxy's connections open until its own idle exit.
 ///
 /// Nothing here stops the run: a command that cannot be started, ends non-zero or runs too long
-/// is written to `log`, and the next one runs.
+/// is written to `log`, and the next one runs. Answers whether every command ran and ended with
+/// exit code 0 (true when there is none); false tells the caller that what the harness left may
+/// still hold the proxy's connections open, so it stops the proxy within its short bound.
+#[must_use]
 pub fn after_exit(
     c: &HarnessConnector,
     launch: &PrepLaunch<'_>,
     workspace: &Path,
     log: &std::fs::File,
-) {
+) -> bool {
     use std::io::Write as _;
     let Some(prep) = &c.loaded.manifest.launch_prep else {
-        return;
+        return true;
     };
     if prep.after_exit.is_empty() {
-        return;
+        return true;
     }
     let log_line = |line: String| {
         let mut log = log;
@@ -1200,10 +1203,11 @@ pub fn after_exit(
             log_line(format!(
                 "goalcup: the after-exit commands were not run ({e}); the run goes on"
             ));
-            return;
+            return false;
         }
     };
     let program = &c.loaded.manifest.capture.executable.program;
+    let mut all_ended = true;
     for command in &prep.after_exit {
         let shown = format!("{program} {}", command.join(" "));
         let failed = match run_home_command(&plan, command.clone(), log, AFTER_EXIT_TIMEOUT) {
@@ -1212,11 +1216,13 @@ pub fn after_exit(
             Err(why) => Some(why),
         };
         if let Some(why) = failed {
+            all_ended = false;
             log_line(format!(
                 "goalcup: the after-exit command `{shown}` {why}; the run goes on"
             ));
         }
     }
+    all_ended
 }
 
 /// Write `pem` to `path` with mode 0600 through a new temporary file beside it and a rename, so

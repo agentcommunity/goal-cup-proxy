@@ -26,6 +26,7 @@ pub(super) fn finish_run(
         forked,
         status,
         finished_early,
+        helper_left,
         uploading,
         wrap_up,
         left_running,
@@ -51,6 +52,12 @@ pub(super) fn finish_run(
     let calls = proxied
         .as_ref()
         .map(|proxied| proxied.proxy.generation_requests());
+    // What the harness left running when its after-exit commands failed (D72) would hold the
+    // proxy's connections open until its own idle exit: the stop cuts them as at a deadline,
+    // and says so. What reached the proxy is sealed and uploaded as always.
+    if helper_left && finished_early.is_none() && proxied.is_some() {
+        let _ = say(out, &crate::participant::helper_not_stopped(&harness_name));
+    }
     let deadline = std::time::Instant::now() + crate::finish_budget();
     let finished = match (finished_early, proxied) {
         (Some(finished), _) => finished,
@@ -61,7 +68,7 @@ pub(super) fn finish_run(
             deadline,
             wrap_up,
             termination_bound(0),
-            false,
+            helper_left,
             Some(cfg),
             out,
         ),
@@ -322,8 +329,9 @@ pub(super) fn finish_unlaunched(
 /// replacement). They do not end then: a model's streaming answer or a kept-alive WebSocket stays
 /// open as long as the harness does. So the stop cuts them almost at once (each open stream
 /// recorded `Interrupted`), and the seal, which ends the harness, follows within seconds instead of
-/// after the whole drain share.
-const RUNNING_HARNESS_PROXY_DRAIN: Duration = Duration::from_secs(2);
+/// after the whole drain share. The same bound applies when the harness exited but its connector's
+/// after-exit commands (D72) failed, so what it left running may hold its connections open.
+pub(super) const RUNNING_HARNESS_PROXY_DRAIN: Duration = Duration::from_secs(2);
 
 /// How long the sender may take to end its connection, before the seal, when the harness still
 /// runs and the recording proxy could not queue its producer's close. Without it the daemon's
@@ -348,7 +356,9 @@ const RUNNING_HARNESS_SINK_SHUTDOWN: Duration = Duration::from_secs(1);
 /// budget (H-10 4a)").
 ///
 /// `harness_running` is true when the run is stopped while the harness still runs (its
-/// deadline, the server's stop, a full disk, a replacement): the recording proxy's stop then waits
+/// deadline, the server's stop, a full disk, a replacement), or when the harness exited but its
+/// connector's after-exit commands (D72) did not stop what it left running, whose connections
+/// would stay open just the same: the recording proxy's stop then waits
 /// [`RUNNING_HARNESS_PROXY_DRAIN`] at most, because the harness's open connections would not end
 /// before the seal ends the harness. If the recording proxy could not queue its producer's close,
 /// the sender is ended too before the seal ([`RUNNING_HARNESS_SINK_SHUTDOWN`]).
