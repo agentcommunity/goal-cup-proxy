@@ -14,12 +14,12 @@
 --   grep -lE 'FUNCTION +(public|goal_cup_tracer)\.' supabase/migrations/*.sql | xargs grep -lE 'FUNCTION +(public\.goal_cup|goal_cup_tracer\.)' | grep -v goal_cup
 -- It must print only 20261017110000_email_delivery_rules.sql. A new name there means a mirrored
 -- function may have a newer body outside this file: widen the glob or stop.
--- Applied to the shared database: everything up to 20261021100000 (the last on 2026-10-22), and
--- 20261021120000 to 20261021120200 (2026-10-23). NOT applied as of 2026-10-26:
+-- Applied to the shared database: everything up to 20261021100000 (the last on 2026-10-22),
+-- 20261021120000 to 20261021120200 (2026-10-23), and 20261027100000 (2026-10-27, owner approved,
+-- pnpm db:check passed). NOT applied as of 2026-10-27:
 -- 20261021120400_goal_cup_terms_2026_10_23.sql (website GOAL-CUP-SIGNUP-RUNBOOK, step 4).
--- PENDING (2026-10-26): the last section, 20261027100000_goal_cup_tracer_competition_repo_owner.sql,
--- was written here first and is not yet in the website repo nor applied anywhere: see sql/pending/README.md.
--- Once it merges there, regenerate as above; the output must equal this file below REGEN-END.
+-- No migration is pending here (sql/pending/ is empty). Regenerated from website main 6e607d64:
+-- unchanged below REGEN-END.
 -- REGEN-END
 
 -- ======================== 20261015120000_goal_cup_tracer_upload.sql ========================
