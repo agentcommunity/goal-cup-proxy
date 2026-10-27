@@ -252,7 +252,7 @@ optional field or table is absent.
 | `capture` | required table | The complete launch-and-capture profile below. |
 | `participant` | optional, default absent | `[participant]`: the harness's display name and first-screen hint for messages to the participant; see below. |
 | `redaction` | optional, default absent | Connector-selected rows from the core redaction mirror. |
-| `launch_prep` | optional, default absent | `[launch_prep]`: a CA file and commands run in the harness home before each launch (D72). See [Launch prep](#launch-prep). |
+| `launch_prep` | optional, default absent | `[launch_prep]`: a CA file and commands run in the harness home before each launch, and commands run after the harness exits (D72). See [Launch prep](#launch-prep). |
 | `capture.args` | required | 0–64 strings in chat mode; each at most 4096 bytes and without control characters. |
 | `capture.goal_flag` | refused | Headless mode's goal option; refused as chat mode only (see below). |
 | `capture.interactive` | required: `true` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57). `false`, or leaving it out, is refused as chat mode only (see below). |
@@ -339,6 +339,7 @@ commands = [
   ["config", "set", "providers.recorder.ssl_ca_cert", "{ca_file}"],
   ["gateway", "stop", "-y"],
 ]
+after_exit = [["gateway", "stop", "-y"]]
 ```
 
 - **`ca_file`** (optional). One file name in the config home, of `[A-Za-z0-9._-]` (at most 64
@@ -365,6 +366,15 @@ commands = [
   with the URL or the path filled in) and the launch goes on. The harness's own output, which also
   goes to `host.log`, may repeat the URL or the path. An older harness may lack a
   command (Hermes 0.19.0 has no `-y` on `gateway stop`).
+- **`after_exit`** (optional, default `[]`, added 26 Oct 2026, D72). Commands run each time
+  the harness exits, as `commands` run but with 15 seconds each. After its own quit, a crash or a
+  signal they run before goalcup waits for the recording proxy to drain and seals the part. After
+  goalcup's stop at the deadline they run once the proxy was stopped within its short bound and
+  the part sealed, and only end what the harness left. Held to every `capture.configure` rule,
+  with no template at all (the two above included). A failure is one line in `host.log` and never
+  stops the run; goalcup then stops the proxy within its short bound (2 seconds) instead of
+  waiting on the open connections, and tells the participant in one line only if it cut one. Hermes stops its gateway here, which
+  otherwise keeps the proxy's connections open.
 - **What it may change.** Only the harness's trust of the recording proxy for the URL its own
   config already names, and processes of its own that would keep an old environment. The pair
   rule means the only value a `base_url` or `cacert` key can get is goalcup's own: the URL the

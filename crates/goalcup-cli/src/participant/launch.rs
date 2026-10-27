@@ -17,8 +17,23 @@ pub struct Launch<'a> {
     /// The manifest's `participant.first_screen`.
     pub first_screen: Option<&'a str>,
     /// What the participant puts at the start of their prompt ([`prompt_block`]); empty for a
-    /// run with no repository.
+    /// run with no repository. Shown when the harness opens a new conversation (D73).
     pub prompt: &'a [String],
+    /// Where the run keeps those lines ([`crate::push_lines`]), when they were written.
+    pub prompt_file: Option<&'a std::path::Path>,
+    /// The lines were copied to the clipboard.
+    pub on_clipboard: bool,
+    /// The model calls the run's earlier parts recorded; `None` for a first launch, or a run a
+    /// build before 0.7.1 started, which kept no count (D73).
+    pub calls_before: Option<u64>,
+}
+
+/// Whether the launch block shows the push lines (D73): at the first launch, and at a continue
+/// of a run that has recorded no model call yet (`Some(0)`), whose one prompt may not have been
+/// sent. Once calls are recorded the prompt was sent, and after it the participant may type only
+/// "keep going" (owner, 26 Oct 2026), even in a new conversation: no block, nothing to paste.
+pub fn shows_push_block(opens: Opens, calls_before: Option<u64>) -> bool {
+    opens == Opens::First || calls_before == Some(0)
 }
 
 /// How the harness opens for one part of a run.
@@ -33,6 +48,10 @@ pub enum Opens {
     /// way, with a new session.
     NewSession,
 }
+
+/// What the launch block says when the push block was copied to the clipboard (D73).
+pub const PUSH_BLOCK_ON_CLIPBOARD: &str = "The push block is on your clipboard. Paste it (Cmd-V, or \
+     Ctrl-Shift-V on Linux) at the very start of your first prompt.";
 
 /// The first line of a continued run's launch block.
 pub const RUN_GOES_ON: &str =
@@ -71,18 +90,43 @@ pub fn launch_block(l: &Launch<'_>) -> Vec<String> {
     if let Some(first) = l.first_screen {
         lines.push(first.to_string());
     }
-    if l.opens == Opens::First && !l.prompt.is_empty() {
-        lines.push(
-            "Put these lines at the start of your prompt, so the agent knows where to push and \
-             as whom:"
-                .to_string(),
-        );
+    // Before the one prompt is sent: the lines it starts with (D73).
+    if shows_push_block(l.opens, l.calls_before) && !l.prompt.is_empty() {
+        if l.on_clipboard {
+            lines.push(PUSH_BLOCK_ON_CLIPBOARD.to_string());
+            if let Some(file) = l.prompt_file {
+                lines.push(format!("The push block, also in {}:", file.display()));
+            }
+        } else {
+            lines.push(match l.prompt_file {
+                Some(file) => format!(
+                    "Copy the push block below (also in {}) to the very start of your first \
+                     prompt.",
+                    file.display()
+                ),
+                None => {
+                    "Copy the push block below to the very start of your first prompt.".to_string()
+                }
+            });
+        }
         lines.extend(l.prompt.iter().map(|line| format!("  {line}")));
     }
-    if l.opens == Opens::LastSession {
+    if l.opens != Opens::First && l.calls_before.is_some_and(|calls| calls > 0) {
+        // The prompt was sent: after it only "keep going", whether the harness picks up the
+        // conversation or opens a new one (D73, owner ruling).
+        lines.push(format!(
+            "If the agent has stopped, type only \"{KEEP_GOING}\" and press Enter."
+        ));
+    } else if l.opens == Opens::LastSession {
+        // No model call recorded yet, or a run with no count: the prompt may not have been sent.
         lines.push(format!(
             "If the agent has stopped, type \"{KEEP_GOING}\" and press Enter. If you never sent \
              your prompt, send it now: it is still your one prompt."
+        ));
+    } else if l.opens == Opens::NewSession && l.calls_before.is_none() {
+        // A run started before 0.7.1 kept no count: the prompt may have been sent already.
+        lines.push(format!(
+            "If you never sent your prompt, send it now. Otherwise type only \"{KEEP_GOING}\"."
         ));
     } else {
         lines.push(format!(

@@ -54,6 +54,10 @@ pub const CHAT_HOME_ID: &str = "m2-fake-tui-home";
 /// (D61): `configure snapshots on`, which the fake writes into `<home>/settings.txt`.
 pub const CHAT_CONFIGURE_ID: &str = "m2-fake-tui-configure";
 
+/// [`CHAT_ID`]'s harness under a connector whose `[launch_prep]` has an `after_exit` command
+/// (D72, 0.7.1): `gateway stop -y`, which the fake notes in `tui.after_exit`.
+pub const CHAT_AFTER_EXIT_ID: &str = "m2-fake-tui-after-exit";
+
 /// The repository a real run names, and the made-up token a participant keeps for it in their
 /// project folder's `.env.local`.
 pub const PREP_REPO: &str = "https://github.com/goal-cup/demo";
@@ -138,6 +142,13 @@ impl Rig {
     pub fn chat_with_configure() -> Rig {
         let rig = Rig::chat();
         write_configure_connector(&rig.connectors);
+        rig
+    }
+
+    /// [`Rig::chat`] with the connector [`CHAT_AFTER_EXIT_ID`] beside [`CHAT_ID`].
+    pub fn chat_with_after_exit() -> Rig {
+        let rig = Rig::chat();
+        write_after_exit_connector(&rig.connectors);
         rig
     }
 
@@ -824,6 +835,17 @@ fn write_configure_connector(connectors: &Path) {
         1,
     );
     std::fs::write(dir.join("harness.toml"), configured).unwrap();
+}
+
+fn write_after_exit_connector(connectors: &Path) {
+    let harness = std::fs::read_to_string(connectors.join(CHAT_ID).join("harness.toml")).unwrap();
+    let dir = connectors.join(CHAT_AFTER_EXIT_ID);
+    std::fs::create_dir_all(&dir).unwrap();
+    let from = format!("id = \"{CHAT_ID}\"");
+    assert!(harness.contains(&from), "{from}");
+    let with = harness.replacen(&from, &format!("id = \"{CHAT_AFTER_EXIT_ID}\""), 1)
+        + "\n[launch_prep]\nafter_exit = [[\"gateway\", \"stop\", \"-y\"]]\n";
+    std::fs::write(dir.join("harness.toml"), with).unwrap();
 }
 
 /// How [`Rig::chat_command`] starts `goalcup start`.

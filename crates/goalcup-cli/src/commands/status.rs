@@ -293,8 +293,13 @@ fn run_report(cfg: &Path, connectors: Option<&Path>, record: &EntryRecord, now: 
                 mode,
             }
         };
+        let push = if over {
+            String::new()
+        } else {
+            push_section(cfg, &run.run_id)
+        };
         let text = format!(
-            "{banner}{}\n{}\n",
+            "{banner}{}\n{push}{}\n",
             header.join("\n"),
             participant::status_next(&next)
         );
@@ -444,8 +449,14 @@ fn run_report(cfg: &Path, connectors: Option<&Path>, record: &EntryRecord, now: 
         .map(|problem| format!("{} {problem}\n", participant::PROBLEM))
         .collect();
     let finished = finished.map(|line| format!("{line}\n")).unwrap_or_default();
+    // An open run with a repository: the lines the prompt starts with, never lost (D73).
+    let push = if done {
+        String::new()
+    } else {
+        push_section(cfg, &run.run_id)
+    };
     let text = format!(
-        "{banner}{}\n{lines}{finished}{}\n",
+        "{banner}{}\n{lines}{finished}{push}{}\n",
         header.join("\n"),
         participant::status_next(&next)
     );
@@ -454,6 +465,23 @@ fn run_report(cfg: &Path, connectors: Option<&Path>, record: &EntryRecord, now: 
         run_id: Some(run.run_id),
         problems: problems.iter().map(|problem| plain(problem)).collect(),
     }
+}
+
+/// The push lines of the run `run_id` ([`crate::push_lines`]) and where they are kept, or
+/// nothing for a run that has none (a practice run, a local run, a run started before 0.7.1).
+fn push_section(cfg: &Path, run_id: &str) -> String {
+    let file = crate::push_lines::path(cfg, run_id);
+    let Some(lines) = crate::push_lines::read(&file) else {
+        return String::new();
+    };
+    let mut text = format!(
+        "Your prompt starts with these lines (also in {}):\n",
+        file.display()
+    );
+    for line in lines {
+        text.push_str(&format!("  {line}\n"));
+    }
+    text
 }
 
 /// How long after its start a run may be without a state before it is called not started.

@@ -704,3 +704,78 @@ commands = [
         "https://api.models.example.test/v1"
     );
 }
+
+/// D72 (0.7.1): `[launch_prep] after_exit` runs its commands in order in the harness home, with
+/// the harness's own environment and no proxy; a command that ends non-zero is written to the log
+/// and the next one still runs; and the launch prep `commands` are not run again.
+#[test]
+fn after_exit_runs_its_commands_in_order_and_only_logs_a_failure() {
+    use goalcup_cli::launch::{PrepLaunch, after_exit, resolve_harness_executable};
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let dir = write_unpinned(&root, "example", "example-cli");
+    let path = dir.join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap()
+        + r#"
+[launch_prep]
+commands = [["config", "set", "before", "launch"]]
+after_exit = [["gateway", "stop", "-y"], ["gateway", "status"]]
+"#;
+    std::fs::write(&path, text).unwrap();
+    let connector = goalcup_cli::connector::load_harness(&root, "example-cli", true).unwrap();
+
+    // The stand-in notes each call's arguments and whether a proxy is in its environment, and
+    // fails `gateway stop` as Hermes 0.19.0 does.
+    let exe = root.join("example-cli");
+    std::fs::write(
+        &exe,
+        "#!/bin/sh\n\
+         printf '%s|' \"$@\" >> \"$CHAT_CONFIG_DIR/calls\"\n\
+         echo \"${HTTPS_PROXY:-no-proxy}\" >> \"$CHAT_CONFIG_DIR/calls\"\n\
+         [ \"$2\" = stop ] && exit 2\n\
+         exit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let resolved = resolve_harness_executable(&exe).unwrap();
+    let (workspace, run_home, config_home) = (
+        root.join("workspace"),
+        root.join("run-home"),
+        root.join("config-home"),
+    );
+    for d in [&workspace, &run_home, &config_home] {
+        std::fs::create_dir(d).unwrap();
+    }
+    let parent: BTreeMap<String, String> = [("PATH".to_string(), "/usr/bin:/bin".to_string())]
+        .into_iter()
+        .collect();
+    let log_path = root.join("host.log");
+    let log = std::fs::File::create(&log_path).unwrap();
+    let ended = after_exit(
+        &connector,
+        &PrepLaunch {
+            executable: &resolved,
+            run_home: &run_home,
+            config_home: &config_home,
+            parent_env: &parent,
+        },
+        &workspace,
+        &log,
+    );
+    // The failed stop is reported, so the caller stops the proxy within its short bound.
+    assert!(!ended);
+
+    let calls = std::fs::read_to_string(config_home.join("calls")).unwrap();
+    assert_eq!(
+        calls.lines().collect::<Vec<_>>(),
+        vec!["gateway|stop|-y|no-proxy", "gateway|status|no-proxy"]
+    );
+    let logged = std::fs::read_to_string(&log_path).unwrap();
+    assert!(
+        logged.contains("`example-cli gateway stop -y` ended with exit code 2; the run goes on"),
+        "{logged}"
+    );
+    assert_eq!(logged.lines().count(), 1, "{logged}");
+}

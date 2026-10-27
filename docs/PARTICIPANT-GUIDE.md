@@ -53,7 +53,12 @@ GitHub.
    permission**, because nobody may answer during the run
    ([how, per harness](HARNESS-SETUP.md#1-run-without-permission-prompts)). Exit it normally.
 4. **This machine.** Mains power, free disk, network. Keep the machine awake yourself where it
-   says so (always under WSL2).
+   says so (always under WSL2). If an SSH key in your `~/.ssh` has no passphrase, a `[warn]` line
+   names it: during a run your agent could use it to push to any of your GitHub repositories.
+   Add a passphrase (`ssh-keygen -p -f <key>`), use an SSH agent that asks before each use, or
+   run in Docker. A softer `[note]` says when your SSH agent holds keys. Neither stops setup, and
+   `goalcup doctor` says the same. The check stays on this computer: it connects nowhere and
+   asks your SSH agent for its list only, never to use a key.
 
 It ends with `Ready.`, the practice command, and a pointer to the folder step for your real run. If a firewall such as Little Snitch asks about
 `goalcup`, allow it, and again after each update.
@@ -121,7 +126,7 @@ repository to exist first.
    tester's own SSH key unprompted, within about two minutes; a push to any repository that key
    reaches would have worked (nothing was pushed). If you have an SSH key, give it a passphrase
    or make it ask before each use (for example the 1Password SSH agent with approval), or run in
-   a Docker container, as the organizers' Docker cells do ([LOCAL-CAMPAIGN](research/LOCAL-CAMPAIGN.md)).
+   a Docker container (`goalcup setup` and `goalcup doctor` warn of a key with no passphrase), as the organizers' Docker cells do ([LOCAL-CAMPAIGN](research/LOCAL-CAMPAIGN.md)).
    See the [26 Oct results](research/results/2026-10-26-mac-retest.md).
 3. **Make the project folder.** This is where the agent works. Make a new folder that will hold
    only a `.gitignore` and a `.env.local` (a macOS `.DS_Store` is allowed). First the folder and
@@ -190,6 +195,14 @@ the block indented by two spaces; paste it as it is. An example (yours differs; 
     git remote add origin https://github.com/<user>/<name>.git
 ```
 
+**The block is never lost.** It is also on your clipboard when `goalcup` could copy it there (the
+screen then says "The push block is on your clipboard. Paste it (Cmd-V, or Ctrl-Shift-V on Linux)
+at the very start of your first prompt."; it uses `pbcopy` on a Mac, `wl-copy` or `xclip` on
+Linux, `clip.exe` under WSL2; otherwise it says to copy the block from the screen), in the file `push-lines.txt` in the run's folder (the screen
+gives its path), and in `goalcup status` while the run is open (for a run started before 0.7.1,
+only on the start screen). Pasting it is the only way the
+agent learns them: Goal Cup writes nothing into your project folder.
+
 The agent runs `git init` and those lines, then pushes with the token. Goal Cup makes no commit and
 no push for it. Never paste the token into your prompt, and do not ask the agent to force-add `.env.local`.
 
@@ -210,7 +223,16 @@ to do. [The appendix](#appendix-what-goalcup-status-says) lists the messages.
 
 If the agent stops before the deadline (a crash, a reboot, a closed window), run `goalcup continue`
 in a terminal you will leave open. It needs no new approval and keeps the same deadline, in the
-same folder. Do not delete or move the project folder. `goalcup seal` stops the agent and ends the
+same folder. Once the run has recorded model calls, your prompt was sent, and from then on you
+type only "keep going" when the agent has stopped: also when the harness opens a new conversation
+instead of picking up its last one. Do not paste the push block or your prompt again. The
+agent's git setup does not live in the conversation: if the agent ran the push block's `git
+config` and `git remote add` lines in the repository, they are saved in its `.git/config`, and an
+agent in a new conversation can still push. If it did not, the new conversation has no remote to
+push to. Hermes picks
+up its last conversation too, once the run has recorded model calls. If no model call was
+recorded yet, your prompt may never have been sent: the screen then shows the push block again
+and says to send your one prompt, block first. Do not delete or move the project folder. `goalcup seal` stops the agent and ends the
 current part. The run stays open, and `continue` goes on with it.
 
 **While it runs, change nothing the agent can read:** files, issues, messages, documents, websites.

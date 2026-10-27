@@ -44,7 +44,8 @@ Update this table in the same PR as any entry it lists.
 | D69 | partly superseded | D71 (the clone, the practice folder, the five login variables and the push check are gone; no keys held, the four-step setup and no GitHub in setup stand) |
 | D70 | current | |
 | D71 | current | |
-| D72 | current | |
+| D72 | partly superseded | D73 (`goalcup continue` resumes Hermes once model calls are recorded; setup removes the stale CA file) |
+| D73 | current | |
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
@@ -1007,6 +1008,8 @@ model calls with no certificate error.
   because a connector may not name the tracker (F7). `HERMES_CA_BUNDLE` and the
   `sessions.write_json_snapshots` configure command stay for Hermes up to 0.21.0, which still
   writes its session file. Hermes 0.19.0 has no `-y` on `gateway stop` and exits 2: logged only.
+  The same failure in `after_exit` (0.7.1) also bounds the proxy's stop short, which cuts nothing
+  on 0.19.0 (it has no gateway holding calls open), so the participant is told nothing.
 - **Known limits** (each shows as the "no model calls recorded" line, none is silent): a
   participant's own provider entry for the same URL is matched first; a bare `provider: custom`
   may treat the `recorder` entry as the URL's owner (not verified); Hermes's native Anthropic
@@ -1015,8 +1018,84 @@ model calls with no certificate error.
   on 0.21.1 and later, which write no session file. A gateway another process starts between the
   stop and the launch keeps its old environment (CHEAT-CHECKLIST).
 - **The entry stays.** The `recorder` entry stays in Goal Cup's Hermes home after a run, naming
-  that run's now stale CA, and the run's gateway may stay up pointed at the closed recording
-  proxy. Hermes opened there outside a run (a second `goalcup setup`) may not reach the model
+  that run's now stale CA. Since 0.7.1 the run's gateway is stopped when Hermes exits; only when
+  that stop failed may it stay up pointed at the closed recording proxy. Hermes opened there outside a run (a second `goalcup setup`) may not reach the model
   until `HERMES_HOME=<home> hermes gateway stop -y`; the next start fixes both by itself.
 - **Not in 0.7.0:** reading Hermes's `state.db`, a post-run gateway stop, a per-run Hermes home, a
   Hermes version gate, a verifier finding, and setup writing Hermes's other keys itself.
+- **26 Oct 2026, 0.7.1: the gateway is stopped after Hermes exits.** Measured with v0.22.5: after
+  `hermes chat` was killed, its detached gateway (parent pid 1, its own process group) kept the
+  agent's turn going and two connections to the recording proxy open, and `goalcup start` waited
+  silently after the support heading until they closed (up to the gateway's 600 s idle exit).
+  So `[launch_prep]` gets `after_exit` (optional, at most 4 commands, the `capture.configure`
+  rules with no template): run in the harness home, as `commands` run but 15 s each, every time
+  the harness exits (its own quit, a crash or a signal, goalcup's stop at the deadline), before
+  goalcup waits for the recording proxy to drain and seals the part. A failure is logged in
+  `host.log` and the run goes on. The Hermes connector says `after_exit = [["gateway", "stop",
+  "-y"]]`. At the deadline the proxy is already stopped within its short bound; the stop then
+  only ends what the harness left running.
+- **26 Oct 2026, 0.7.1: a failed stop is no silent wait.** When an `after_exit` command fails,
+  runs past its 15 s or cannot be run, the gateway may still hold the proxy's connections open.
+  goalcup then stops the recording proxy within the same 2 s bound as at a deadline (open streams
+  recorded `Interrupted`) instead of waiting the drain share and writes one line in `host.log`.
+  Only if that stop actually cut a connection is the participant told, in one plain line after
+  the stop, that goalcup could not stop the harness's background helper and stopped recording its
+  open calls. A failed stop with nothing open (Hermes 0.19.0, or a helper the Linux sweep already
+  ended) says nothing to the participant. The sender is not cut early as at a deadline: the
+  harness has exited. What reached the proxy is sealed and uploaded as always.
+  When every command succeeds, or a connector has none, nothing changes. The terminal is given
+  back and `goalcup status` says the harness exited before the commands run, not after.
+
+## D73. The push lines are never lost, and `continue` resumes a harness with no session file.
+
+*26 Oct 2026, the 0.7.1 patch.* Amends D71 (how the push lines reach the agent) and D72 (the
+Hermes continue clause). The start screen was the only place the push lines were said, and a
+continue that opened a new conversation did not say them. Owner, 26 Oct 2026: Goal Cup writes no
+file into the project folder (no `AGENTS.md` or `CLAUDE.md`), and the push lines reach the agent
+only through the participant pasting them. Measured on 26 Oct 2026 (Mac, Hermes v0.22.5): `hermes
+chat --continue` resumes the last session in a `HERMES_HOME` and exits 1 when there is none.
+
+- **Delivery of the push lines.** For a run with a repository, `goalcup start` writes the lines
+  of D71 (`prompt_block`) to `push-lines.txt` in the run's directory (`<cfg>/runs/<run_id>/`, mode
+  0600) and says its path; copies them to the clipboard when a clipboard tool is there (`pbcopy`;
+  `wl-copy` with a Wayland display, else `xclip -selection clipboard`; `clip.exe` under WSL),
+  given a short list of the participant's variables, and says so only when the copy worked; a
+  missing or failing tool never fails the start. `goalcup status` shows them for an open run.
+  A `continue` shows (and copies) them again only while the run has recorded no model call
+  (`Some(0)`): the one prompt may not have been sent, and it still starts with them. **Owner,
+  26 Oct 2026: after the first prompt the participant types only "keep going", even when a
+  `continue` opens a new conversation.** So a continue after recorded calls, resumed or not
+  (`resume_failed` included), shows no block and says to type only "keep going". The agent's
+  git setup survives a new conversation in the repository's `.git/config`. The file and
+  `goalcup status` keep the lines for the participant's reference. A run started on 0.7.0 has
+  no `push-lines.txt`, so its continue and `goalcup status` show none.
+  The lines name the token file, never its value.
+- **Not in the skill.** The goal-cup skill stays the same for every run and names no
+  repository. A run-specific section was tried and dropped: it reaches only a connector with
+  `[capture.home] skills_dir` (Codex and Claude Code), and Codex did not open the skill's body
+  (measured), so it would not have carried the lines where they are needed.
+- **The resume rule.** `state.json` keeps `model_calls`, the model calls recorded in the run so
+  far (every part), local to the CLI like `no_model_calls`; the daemon and the control API
+  (v12) are unchanged, so a running 0.7.0 daemon keeps working. At `continue`, a connector with
+  a native row of `warn_missing = false` (Hermes) is launched with its `resume_args` when no
+  session file exists, the earlier parts recorded a model call, and the home's conversation
+  database (`state.db` or `state.db-wal` in the config home) was modified at or after the run's
+  start. A part that resumed and exited non-zero within 10 s is recorded in `state.json`
+  (`resume_failed`), and the next `continue` opens a new conversation instead of failing the
+  same way; this holds for every connector. Every other connector keeps
+  the file rule (D57's `has_native_session`). A run started on 0.7.0 has no count and keeps that
+  rule. A continue says to type only "keep going" when the run has recorded model calls,
+  whether it resumes or opens a new conversation. With none recorded (Claude Code writes its session file at startup, before any
+  message), the prompt may not have been sent: it keeps the 0.7.0 sentence ("If you never sent
+  your prompt, send it now") and shows and copies the push block. A run with no count (started
+  on 0.7.0) keeps the 0.7.0 text on a resume; on a new conversation it says "If you never sent
+  your prompt, send it now. Otherwise type only "keep going"", never "Type your one prompt".
+- **Also in 0.7.1.** `goalcup setup` deletes a connector's `[launch_prep] ca_file` from the
+  config home before it opens the harness, and says nothing: it only ever held a past run's CA,
+  and Hermes falls back to the system's trust when the file `ssl_ca_cert` names is missing. A
+  gateway left up from a run (D72) still needs `gateway stop`. `goalcup setup` and `goalcup
+  doctor` warn of a private key in `~/.ssh` (the user database's home) that `ssh-keygen -y -P ""`
+  opens, and note keys an SSH agent lists (`ssh-add -l`): local only, no connection, no signing,
+  a warning and never a refusal (D71's planned warning).
+- **Not in 0.7.1:** push lines in the skill or in any file in the project folder, and a post-run
+  gateway stop.

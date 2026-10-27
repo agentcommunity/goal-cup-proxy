@@ -11,7 +11,7 @@ use crate::run::reserve::RunReserve;
 use crate::upload::policy::WrapUp;
 use goalcup_protocol::control::{CaptureFinishReport, CaptureWorkspaceInfo, DaemonClient};
 use goalcup_protocol::process::{ProcessHandle, termination_bound};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus};
 
 /// A capture entry from the moment its child is forked: from here the entry is sealed, never
@@ -57,12 +57,33 @@ pub(super) struct Forked<'a> {
     pub(super) first_screen: Option<String>,
     /// A first launch, or a continue that picks up the last session or starts a new one.
     pub(super) opens: crate::participant::Opens,
-    /// What the participant puts at the start of their prompt, for a real run's first launch
-    /// ([`crate::participant::prompt_block`]); empty otherwise.
+    /// What the participant puts at the start of their prompt, for a run with a repository
+    /// ([`crate::participant::prompt_block`]); empty otherwise. Shown when the harness opens a
+    /// new conversation (D73).
     pub(super) prompt: Vec<String>,
+    /// Where the run keeps those lines ([`crate::push_lines`]).
+    pub(super) prompt_file: Option<PathBuf>,
+    /// They were copied to the clipboard.
+    pub(super) on_clipboard: bool,
+    /// The model calls the run's earlier parts recorded, by its `state.json` (D73).
+    /// `None` for a first launch, or a run whose earlier parts a build before 0.7.1 ran.
+    pub(super) model_calls_before: Option<u64>,
     /// The run's ids and folders, held back from the launch block and written to its
     /// `host.log` once it is open.
     pub(super) details: Vec<String>,
+    /// What runs the connector's `[launch_prep] after_exit` once the harness has exited; `None`
+    /// when it has none.
+    pub(super) after_exit: Option<AfterExit>,
+}
+
+/// What the connector's `[launch_prep] after_exit` commands (D72, 0.7.1) run with once the
+/// harness has exited: the harness file the launch resolved, the two homes and the workspace
+/// it was launched with.
+pub(super) struct AfterExit {
+    pub(super) executable: crate::launch::ResolvedExecutable,
+    pub(super) run_home: PathBuf,
+    pub(super) config_home: PathBuf,
+    pub(super) workspace: PathBuf,
 }
 
 /// What a chat-mode run holds while the harness owns the terminal (D57): the terminal's signals
@@ -215,6 +236,7 @@ impl Forked<'_> {
                 termination_bound(0),
                 false,
                 None,
+                None,
                 out,
             );
         }
@@ -270,6 +292,10 @@ pub(super) struct Exited<'a> {
     pub(super) status: Result<ExitStatus, CliError>,
     /// The finish a deadline made while the harness was still running, if one did.
     pub(super) finished_early: Option<Result<CaptureFinishReport, CliError>>,
+    /// A connector's after-exit command (D72) did not end cleanly, or none could be run: what
+    /// the harness left (Hermes's gateway) may still hold the recording proxy's connections
+    /// open, so its stop is bounded as at a deadline (and the participant told, if it cut one).
+    pub(super) helper_left: bool,
     /// The uploader, for a run opened on a server.
     pub(super) uploading: Option<crate::upload::uploader::Running>,
     /// The wrap-up after the stop, which the seal and the upload's finish share.

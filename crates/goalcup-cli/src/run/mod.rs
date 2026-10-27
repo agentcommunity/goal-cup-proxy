@@ -259,6 +259,16 @@ pub struct RunState {
     /// know nothing of it. Absent from a `state.json` an older build wrote.
     #[serde(default)]
     pub no_model_calls: Option<NoModelCalls>,
+    /// The model calls the recording proxy recorded in this run so far, every part of it: what
+    /// `goalcup continue` reads to tell whether there is a conversation to pick up (D73). Local
+    /// to `state.json`, like `no_model_calls`. Absent from a `state.json` an older build wrote.
+    #[serde(default)]
+    pub model_calls: Option<u64>,
+    /// This part asked the harness to pick up its last session and the harness exited non-zero
+    /// at once: the next `goalcup continue` opens a new conversation (D73). Absent from a
+    /// `state.json` an older build wrote.
+    #[serde(default)]
+    pub resume_failed: bool,
 }
 
 /// What the watch tick saw when it called the run's harness silent: no model call recorded.
@@ -434,6 +444,8 @@ impl RunState {
             time_left: None,
             native_silent: None,
             no_model_calls: None,
+            model_calls: None,
+            resume_failed: false,
         }
     }
 
@@ -597,6 +609,8 @@ pub struct RunSignals {
     recorded_requests: Arc<AtomicU64>,
     /// The recording proxy's count of requests on a path with a protocol hint (model calls).
     generation_requests: Arc<AtomicU64>,
+    /// The model calls the run's earlier parts recorded ([`RunState::model_calls`]).
+    model_calls_before: u64,
     /// The recording proxy's count of harness connections that failed its TLS handshake.
     client_tls: Arc<AtomicU64>,
     upload: Arc<Mutex<UploadVital>>,
@@ -647,6 +661,7 @@ impl RunSignals {
             model_requests: counter,
             recorded_requests: Arc::default(),
             generation_requests: Arc::default(),
+            model_calls_before: 0,
             client_tls: Arc::default(),
             upload: Arc::default(),
             time_left: Arc::default(),
@@ -665,6 +680,18 @@ impl RunSignals {
     pub fn generations_from(mut self, counter: Arc<AtomicU64>) -> RunSignals {
         self.generation_requests = counter;
         self
+    }
+
+    /// These signals, with `calls` model calls recorded by the run's earlier parts.
+    pub fn model_calls_before(mut self, calls: u64) -> RunSignals {
+        self.model_calls_before = calls;
+        self
+    }
+
+    /// The model calls recorded in the run so far: its earlier parts' and this part's.
+    pub fn model_calls(&self) -> u64 {
+        self.model_calls_before
+            .saturating_add(self.generation_requests())
     }
 
     /// These signals, with failed harness TLS handshakes read from `counter` (the recording

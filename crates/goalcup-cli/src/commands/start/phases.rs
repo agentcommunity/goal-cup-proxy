@@ -3,7 +3,9 @@
 //! fifth, `finish_run`, is in [`super::finish`].
 
 use super::finish::{describe_exit, finish};
-use super::forked::{ChatTerminal, Exited, Forked, Gate, Released, UploadStart, release_and_say};
+use super::forked::{
+    AfterExit, ChatTerminal, Exited, Forked, Gate, Released, UploadStart, release_and_say,
+};
 use super::proxy::{Proxied, admitted, entry_is_sealed, raise_open_file_limit};
 use super::refusals::{
     holds_the_terminal, interrupted_before_launch, interrupted_refusal, offline_upstreams_for_test,
@@ -275,12 +277,32 @@ pub(super) fn create_and_gate<'a>(
         Some(continuing) => continuing.record.started_at_unix,
         None => crate::run::now_unix(),
     };
+    // The model calls the run's earlier parts recorded, by the last part's `state.json`; none
+    // for a run started by a build that did not count them (D73).
+    let previous = cx.continuing.and_then(|continuing| {
+        crate::run::read_state(&crate::run::run_dir(cfg, &continuing.record.run_id))
+    });
+    let model_calls_before = previous.as_ref().and_then(|state| state.model_calls);
+    // The last part resumed and its harness failed at once (D73): this one opens a new
+    // conversation rather than fail the same way again.
+    let resume_failed = previous.as_ref().is_some_and(|state| state.resume_failed);
     // A continued run picks up the harness's last session only when the run has one; one whose
     // harness closed before the first message opens the normal way, and the launch block says so.
     // A store that cannot be read cannot tell: the harness is resumed, and the run's log says why.
+    // A harness that may write no session file (a native row with `warn_missing = false`, D72)
+    // is resumed when the run's earlier parts recorded model calls: there is a conversation to
+    // pick up, which its own store keeps (D73).
     let mut session_note = None;
     let opens = match cx.continuing {
         None => crate::participant::Opens::First,
+        Some(_) if resume_failed => {
+            session_note = Some(
+                "the last part asked the harness to pick up its last session and it exited at \
+                 once, so this part opens a new one"
+                    .to_string(),
+            );
+            crate::participant::Opens::NewSession
+        }
         Some(_) => {
             match crate::launch::has_native_session(
                 profile,
@@ -289,6 +311,21 @@ pub(super) fn create_and_gate<'a>(
                 started_at_unix,
             ) {
                 Ok(true) => crate::participant::Opens::LastSession,
+                Ok(false)
+                    if resumes_without_a_file(
+                        profile,
+                        model_calls_before.unwrap_or(0),
+                        &config_home,
+                        started_at_unix,
+                    ) =>
+                {
+                    session_note = Some(format!(
+                        "no session file was found, and the run's earlier parts recorded \
+                         {} model calls, so the harness is asked to pick up its last session",
+                        model_calls_before.unwrap_or(0)
+                    ));
+                    crate::participant::Opens::LastSession
+                }
                 Ok(false) => crate::participant::Opens::NewSession,
                 Err(why) => {
                     session_note = Some(format!(
@@ -400,8 +437,22 @@ pub(super) fn create_and_gate<'a>(
             entries: vec![new_entry],
         },
     };
+    // What the participant puts at the start of their prompt, for a run with a repository: made
+    // at the first launch, and read back from the run's file at a continue (D73).
+    let prompt = match (cx.continuing, upload.map(|u| &u.how)) {
+        (Some(continuing), _) => {
+            crate::push_lines::read(&crate::push_lines::path(cfg, &continuing.record.run_id))
+                .unwrap_or_default()
+        }
+        (None, Some(UploadHow::Fresh(new))) => prompt_for(new),
+        _ => Vec::new(),
+    };
+    let mut prompt_file = (cx.continuing.is_some() && !prompt.is_empty())
+        .then(|| crate::push_lines::path(cfg, &record.run_id));
     // The run's one reservation, taken here and released when the launch fails or the run ends.
     let mut reserve = None::<RunReserve>;
+    // Whether the push block went to the clipboard (D73), copied just before the spawn.
+    let mut on_clipboard = false;
     // The run's ids and folders, kept for its `host.log` and `goalcup status`, so the launch
     // block holds only what to do.
     let mut details: Vec<String> = session_note.into_iter().collect();
@@ -409,6 +460,15 @@ pub(super) fn create_and_gate<'a>(
     let launched = write_entry(cfg, &template).and_then(|()| {
         // The record first: a reservation always has a record to say whose it is.
         crate::run::write(cfg, &record)?;
+        // The push lines, kept in the run's directory so they are never lost (D73). A write
+        // that fails costs only the path on the screen.
+        if cx.continuing.is_none() && !prompt.is_empty() {
+            let file = crate::push_lines::path(cfg, &record.run_id);
+            match crate::push_lines::write(&file, &prompt) {
+                Ok(()) => prompt_file = Some(file),
+                Err(e) => details.push(format!("the push lines could not be kept: {e}")),
+            }
+        }
         #[cfg(unix)]
         if let Some(lock) = &prep.shared_home_lock {
             note_home_holder(lock, &record.run_id);
@@ -525,6 +585,13 @@ pub(super) fn create_and_gate<'a>(
         }
         // The only way a capture child is spawned (D40): forked and parked before `exec`,
         // and released only once its registration is durable.
+        // On the clipboard too, when the block is shown and a clipboard tool is there (D73).
+        // Before the spawn: on Linux `xclip` and `wl-copy` leave a selection server running,
+        // and one started before the harness is never swept as the harness's (`subreaper.rs`).
+        on_clipboard = crate::participant::shows_push_block(opens, model_calls_before)
+            && !prompt.is_empty()
+            && !crate::chat_without_terminal()
+            && crate::push_lines::copy_to_clipboard(&crate::push_lines::text(&prompt), env);
         let gated = spawn_gated(&plan, GATE_READY_WITHIN)?;
         Ok((proxied, plan, goal_stream, gated, bound))
     });
@@ -599,11 +666,23 @@ pub(super) fn create_and_gate<'a>(
         harness_name: c.display_name().to_string(),
         first_screen: c.first_screen().map(str::to_string),
         opens,
-        prompt: match upload.map(|u| &u.how) {
-            Some(UploadHow::Fresh(new)) => prompt_for(new),
-            _ => Vec::new(),
-        },
+        prompt,
+        prompt_file,
+        on_clipboard,
+        model_calls_before,
         details,
+        after_exit: c
+            .loaded
+            .manifest
+            .launch_prep
+            .as_ref()
+            .is_some_and(|p| !p.after_exit.is_empty())
+            .then(|| AfterExit {
+                executable: prep.executable.clone(),
+                run_home: run.home.clone(),
+                config_home: config_home.clone(),
+                workspace: run.workspace.clone(),
+            }),
     };
     let gate = Gate {
         plan,
@@ -612,6 +691,54 @@ pub(super) fn create_and_gate<'a>(
         gated,
     };
     Ok((forked, gate))
+}
+
+/// Whether a continue resumes a harness that left no session file (D73): the connector says a
+/// missing file is no problem (a native row with `warn_missing = false`, D72), the run's earlier
+/// parts recorded model calls, and the harness home's conversation database was written since
+/// the run started. Every other connector keeps the file rule.
+fn resumes_without_a_file(
+    profile: &goalcup_protocol::harness::CaptureSpec,
+    calls: u64,
+    config_home: &Path,
+    since_unix: u64,
+) -> bool {
+    calls > 0
+        && profile.native.iter().any(|native| !native.warn_missing)
+        && session_db_written_since(config_home, since_unix)
+}
+
+/// The conversation database a harness with no session file keeps in its home (Hermes 0.21.1
+/// and later: `state.db`, with its write-ahead log beside it), D73.
+const SESSION_DB_FILES: &[&str] = &["state.db", "state.db-wal"];
+
+/// Whether one of [`SESSION_DB_FILES`] in `config_home` was modified at or after `since_unix`
+/// (whole seconds, as D57's native floor), never through a link.
+fn session_db_written_since(config_home: &Path, since_unix: u64) -> bool {
+    SESSION_DB_FILES.iter().any(|name| {
+        std::fs::symlink_metadata(config_home.join(name))
+            .ok()
+            .filter(std::fs::Metadata::is_file)
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .is_some_and(|at| at.as_secs() >= since_unix)
+    })
+}
+
+/// How soon after its release a resumed harness that exits non-zero counts as a failed resume
+/// (D73): `hermes chat --continue` with no session to pick up exits 1 at once.
+const RESUME_FAILS_WITHIN: Duration = Duration::from_secs(10);
+
+/// Whether this part's exit was a failed resume: it was asked to pick up its last session and
+/// ended non-zero within [`RESUME_FAILS_WITHIN`].
+fn failed_resume(
+    opens: crate::participant::Opens,
+    status: &Result<std::process::ExitStatus, CliError>,
+    ran: Duration,
+) -> bool {
+    opens == crate::participant::Opens::LastSession
+        && status.as_ref().is_ok_and(|status| !status.success())
+        && ran < RESUME_FAILS_WITHIN
 }
 
 /// The run's secrets for the redactor: the proxy credential, and for a run on a server the
@@ -726,6 +853,9 @@ pub(super) fn register_and_release<'a>(
             ends,
             first_screen: forked.first_screen.as_deref(),
             prompt: &forked.prompt,
+            prompt_file: forked.prompt_file.as_deref(),
+            on_clipboard: forked.on_clipboard,
+            calls_before: forked.model_calls_before,
         });
         let _ = block
             .iter()
@@ -812,6 +942,8 @@ pub(super) fn run_harness<'a>(
     // and is swept between the root's exit and the seal. Armed first, while the root is certainly
     // unreaped.
     let sweep = crate::subreaper::Sweep::for_root(handed.pid);
+    // How long the harness ran, for a failed resume (D73).
+    let released_at = std::time::Instant::now();
     let (client, entry_id) = (forked.client, forked.info.entry_id.clone());
     // A seal that raced in between the registration and the release cannot have ended a
     // harness that was still parked, so one that is sealed now is a harness running on a
@@ -875,6 +1007,8 @@ pub(super) fn run_harness<'a>(
     launched.continuable = forked.record.server_url.is_some();
     // What is left of the run, by the server's answer: the uploader keeps it from here (WP11).
     launched.time_left = forked.time_left();
+    // The run's model calls so far, which the tick adds this part's to (D73).
+    launched.model_calls = Some(forked.model_calls_before.unwrap_or(0));
     let keeper = crate::run::StateKeeper::begin(
         &crate::run::run_dir(forked.cfg, &forked.record.run_id),
         launched,
@@ -887,7 +1021,8 @@ pub(super) fn run_harness<'a>(
             .generations_from(proxied.proxy.generation_requests())
             .client_tls_from(proxied.proxy.client_tls_failures()),
         None => crate::run::RunSignals::default(),
-    };
+    }
+    .model_calls_before(forked.model_calls_before.unwrap_or(0));
     // A run on a server reports its disk and goalcup's own processes in its heartbeats.
     let vitals = match forked.upload.as_ref() {
         Some(start) => vitals.probing(crate::vitals::Probe::new(
@@ -1045,6 +1180,7 @@ pub(super) fn run_harness<'a>(
                 wrap_up,
                 termination_bound(grace),
                 true,
+                None,
                 Some(cfg),
                 &mut said,
             );
@@ -1059,19 +1195,22 @@ pub(super) fn run_harness<'a>(
     forked.proxied = proxy_slot.into_inner().unwrap_or_else(|e| e.into_inner());
     // What the harness left frozen is continued before the sweep below signals it (D65).
     pause.end();
-    // The harness has exited: the terminal is this command's again, if it is still there.
+    // How long the harness ran, taken before the after-exit commands below can add their time.
+    let ran = released_at.elapsed();
+    // The harness has exited: the terminal is this command's again, if it is still there. First,
+    // so a harness that crashed in raw mode does not leave the terminal raw, with Ctrl-C absorbed,
+    // while the after-exit commands below run.
     if let Some(chat) = forked.chat.as_mut() {
         chat.harness_exited();
     }
-    // The technical lines that follow (the stop, the seal, the upload) go under one heading; what
-    // the participant does next is said after them, last (`finish_run`).
-    let _ = say(out, "");
-    let _ = say(
-        out,
-        &crate::participant::details_heading(forked.chat.as_ref().map(|chat| chat.quiet.path())),
-    );
+    // Before the after-exit commands too, so `goalcup status` says the harness has exited while
+    // they run.
     keeper.update(|state| {
         state.disk.disk_paused = false;
+        // The count at the harness's exit, which the tick's last look may be behind (D73).
+        state.model_calls = Some(vitals.model_calls());
+        // A resume that failed at once makes the next continue open a new conversation.
+        state.resume_failed = failed_resume(forked.opens, &status, ran);
         state.harness = crate::run::HarnessState::Exited {
             status: match &status {
                 Ok(status) => describe_exit(status),
@@ -1079,6 +1218,24 @@ pub(super) fn run_harness<'a>(
             },
         };
     });
+    // The connector's after-exit commands (D72, 0.7.1), on every way the harness ended, and
+    // before the recording proxy is stopped and drained (`finish_run`): a process the harness
+    // left running (Hermes's gateway) would hold the proxy's connections open until its own
+    // idle exit. At a deadline the proxy was stopped above, within its short bound, and the
+    // commands still end what the harness left. When one of them failed, what the harness left
+    // may still hold those connections, and `finish_run` stops the proxy within its short bound
+    // instead of waiting for them.
+    let helper_left = match forked.after_exit.take() {
+        Some(after) => !run_after_exit(cx, &forked, &after, forked.proxied.is_some()),
+        None => false,
+    };
+    // The technical lines that follow (the stop, the seal, the upload) go under one heading; what
+    // the participant does next is said after them, last (`finish_run`).
+    let _ = say(out, "");
+    let _ = say(
+        out,
+        &crate::participant::details_heading(forked.chat.as_ref().map(|chat| chat.quiet.path())),
+    );
     // A run that ended on its own stopped just now.
     let wrap_up = stopped_wrap
         .into_inner()
@@ -1112,11 +1269,56 @@ pub(super) fn run_harness<'a>(
         forked,
         status,
         finished_early,
+        helper_left,
         uploading,
         wrap_up,
         left_running: swept.and_then(|swept| swept.refusal(&entry_id)),
         keeper,
     })
+}
+
+/// Run the connector's `[launch_prep] after_exit` commands (D72, 0.7.1) in the harness home, with
+/// their output and any failure in the run's `host.log`. Nothing here stops the run. Answers
+/// whether every command ran and ended cleanly; when one did not and `proxy_running` (the
+/// recording proxy still runs, so `finish_run` will stop it), the log also says the proxy is
+/// stopped within its short bound.
+fn run_after_exit(
+    cx: &CaptureRun<'_>,
+    forked: &Forked<'_>,
+    after: &AfterExit,
+    proxy_running: bool,
+) -> bool {
+    use std::io::Write as _;
+    let run_dir = crate::run::run_dir(forked.cfg, &forked.record.run_id);
+    let mut log = match crate::host_log::open_for_child(&run_dir) {
+        Ok((log, _)) => log,
+        Err(e) => {
+            crate::host_log::say(&format!(
+                "the harness's after-exit commands were not run: its log could not be opened ({e})"
+            ));
+            return false;
+        }
+    };
+    let ended = crate::launch::after_exit(
+        cx.connector,
+        &crate::launch::PrepLaunch {
+            executable: &after.executable,
+            run_home: &after.run_home,
+            config_home: &after.config_home,
+            parent_env: cx.env,
+        },
+        &after.workspace,
+        &log,
+    );
+    if !ended && proxy_running {
+        let _ = writeln!(
+            log,
+            "goalcup: an after-exit command did not end cleanly, so the recording proxy is \
+             stopped within {} seconds, its open connections cut, instead of waiting for them",
+            super::finish::RUNNING_HARNESS_PROXY_DRAIN.as_secs()
+        );
+    }
+    ended
 }
 
 /// The cleanup every abandon takes: ask the daemon, and remove the local record only where it
@@ -1244,6 +1446,80 @@ fn unmake(
 mod tests {
     use super::*;
     use crate::daemon::MockDaemonClient;
+
+    /// A continue resumes Hermes, whose native row says a missing file is no problem, once the
+    /// run has recorded model calls and its home's `state.db` was written since the run started;
+    /// a connector that always writes its file keeps the file rule (D73).
+    #[test]
+    fn a_harness_with_no_session_file_is_resumed_only_after_model_calls() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
+        let hermes = crate::connector::load_harness(&dir, "hermes-cli", false).unwrap();
+        let codex = crate::connector::load_harness(&dir, "codex-cli", false).unwrap();
+        let hermes = &hermes.loaded.manifest.capture;
+        let codex = &codex.loaded.manifest.capture;
+        let home = tempfile::tempdir().unwrap();
+        let now = crate::run::now_unix();
+        assert!(
+            !resumes_without_a_file(hermes, 3, home.path(), now - 5),
+            "no state.db"
+        );
+        std::fs::write(home.path().join("state.db"), b"").unwrap();
+        assert!(resumes_without_a_file(hermes, 3, home.path(), now - 5));
+        assert!(
+            !resumes_without_a_file(hermes, 3, home.path(), now + 60),
+            "written before"
+        );
+        assert!(!resumes_without_a_file(hermes, 0, home.path(), now - 5));
+        assert!(!resumes_without_a_file(codex, 3, home.path(), now - 5));
+    }
+
+    /// A resumed harness that exits non-zero at once is a failed resume, and the next continue
+    /// opens a new conversation; a slow or clean exit, or a part that did not resume, is not
+    /// (D73).
+    #[test]
+    fn a_resume_that_fails_at_once_is_recorded() {
+        use crate::participant::Opens;
+        use std::os::unix::process::ExitStatusExt;
+        let failed: Result<std::process::ExitStatus, CliError> =
+            Ok(std::process::ExitStatus::from_raw(1 << 8));
+        let clean: Result<std::process::ExitStatus, CliError> =
+            Ok(std::process::ExitStatus::from_raw(0));
+        let soon = Duration::from_secs(2);
+        assert!(failed_resume(Opens::LastSession, &failed, soon));
+        assert!(!failed_resume(Opens::LastSession, &clean, soon));
+        assert!(!failed_resume(
+            Opens::LastSession,
+            &failed,
+            Duration::from_secs(600)
+        ));
+        assert!(!failed_resume(Opens::NewSession, &failed, soon));
+    }
+
+    /// The count of model calls survives in `state.json` across parts, and a state an older
+    /// build wrote reads as none (D73).
+    #[test]
+    fn the_runs_model_calls_are_counted_across_parts() {
+        let counter = Arc::new(std::sync::atomic::AtomicU64::new(2));
+        let signals = crate::run::RunSignals::default()
+            .generations_from(counter)
+            .model_calls_before(5);
+        assert_eq!(signals.model_calls(), 7);
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = crate::run::RunState::launched("e1", Ok(()));
+        state.model_calls = Some(7);
+        crate::run::StateKeeper::begin(dir.path(), state);
+        let read = crate::run::read_state(dir.path()).unwrap();
+        assert_eq!(read.model_calls, Some(7));
+        let file = dir.path().join(crate::run::STATE_FILE_NAME);
+        let mut old: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        old.as_object_mut().unwrap().remove("model_calls");
+        std::fs::write(&file, serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(
+            crate::run::read_state(dir.path()).unwrap().model_calls,
+            None
+        );
+    }
 
     /// The interrupt flag is process-global; the tests that move it take turns.
     static FLAG: std::sync::Mutex<()> = std::sync::Mutex::new(());

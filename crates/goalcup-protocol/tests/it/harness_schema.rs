@@ -3862,6 +3862,92 @@ fn launch_prep_admits_its_two_templates_only_after_their_keys() {
     );
 }
 
+/// `chat()` with a `[launch_prep]` that holds only `after_exit`.
+fn with_after_exit(items: &[&[&str]]) -> Table {
+    let mut t = chat();
+    let mut prep = Table::new();
+    prep.insert("after_exit".into(), commands(items));
+    t.insert("launch_prep".into(), Value::Table(prep));
+    t
+}
+
+/// D72 (0.7.1): `[launch_prep] after_exit` holds commands run after the harness exits, under the
+/// `capture.configure` rules with no template: neither launch prep template, nor any other, is
+/// admitted, and the deny lists, the path rule, the tracker's name and the bounds all apply.
+#[test]
+fn launch_prep_after_exit_follows_the_configure_rules_with_no_template() {
+    let stop: &[&str] = &["gateway", "stop", "-y"];
+    let t = with_after_exit(&[stop]);
+    admitted(&t, PINNED);
+    let prep = parsed(&t).launch_prep.expect("loaded");
+    assert_eq!(prep.after_exit, vec![vec!["gateway", "stop", "-y"]]);
+    assert!(prep.commands.is_empty() && prep.ca_file.is_none());
+    // Absent is the default, beside `commands`.
+    let prep = parsed(&with_launch_prep(Some("ca.pem"), &[stop]))
+        .launch_prep
+        .expect("loaded");
+    assert!(prep.after_exit.is_empty());
+
+    const FIELD: &str = "launch_prep.after_exit";
+    let cases: [(&[&str], &[&str]); 11] = [
+        // The two launch prep templates, and any other template.
+        (
+            &["config", "set", "x", "{model_base_url}"],
+            &[FIELD, "brace"],
+        ),
+        (&["config", "set", "x", "{ca_file}"], &[FIELD, "brace"]),
+        (&["config", "set", "x", "{workspace}"], &[FIELD, "brace"]),
+        // A launch prep pair is not admitted either: its key is the deny lists' as usual.
+        (
+            &[
+                "config",
+                "set",
+                "providers.recorder.base_url",
+                "{model_base_url}",
+            ],
+            &[FIELD, "model endpoint"],
+        ),
+        (
+            &[
+                "config",
+                "set",
+                "providers.recorder.ssl_ca_cert",
+                "{ca_file}",
+            ],
+            &[FIELD, "certificates"],
+        ),
+        // The deny lists.
+        (&["config", "set", "model", "x"], &[FIELD, "names `model`"]),
+        (
+            &[
+                "config",
+                "set",
+                "providers.x.base_url",
+                "https://evil.example",
+            ],
+            &[FIELD, "base_url"],
+        ),
+        (&["--api-key=x"], &[FIELD]),
+        // An absolute path, and the tracker's name.
+        (
+            &["config", "set", "x", "/etc/ca.pem"],
+            &[FIELD, "/etc/ca.pem"],
+        ),
+        (
+            &["config", "set", "goalcup", "x"],
+            &[FIELD, "Goal Cup Proxy"],
+        ),
+        // The argument bounds.
+        (&[], &[FIELD, "1 to 16 arguments"]),
+    ];
+    for (command, needles) in cases {
+        refused(&with_after_exit(&[command]), PINNED, needles);
+    }
+    // At most as many commands as `capture.configure`.
+    admitted(&with_after_exit(&[stop; 4]), PINNED);
+    refused(&with_after_exit(&[stop; 5]), PINNED, &[FIELD, "4 commands"]);
+}
+
 /// `capture.model_host_from` (D62): with it a profile may list no host; it needs the shared
 /// config home; its file is a YAML, JSON or TOML file inside it that names no key file, and its
 /// key is a dotted name that names no key.

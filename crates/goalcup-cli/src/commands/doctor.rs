@@ -58,6 +58,9 @@ pub struct DoctorOptions {
 #[derive(Debug, Serialize)]
 struct DoctorReport<'a> {
     daemon: &'a Check,
+    /// This machine's SSH keys (D73): warnings only, left out when there is nothing to say.
+    #[serde(skip_serializing_if = "<[Check]>::is_empty")]
+    ssh: &'a [Check],
     connectors: &'a [PreflightReport],
 }
 
@@ -85,6 +88,7 @@ pub fn run_with(
     // diagnostic that goes looking at this directory is the right place to take it away.
     preflight::sweep_stale_probes(cfg);
     let daemon = daemon_check(client, cfg);
+    let ssh = ssh_checks(env);
     let mut reports = connector_reports(connectors, env)?;
     // `--harness <id>` narrows both the report and the number. Everything is still
     // loaded first — `connector_reports` is what refuses two directories declaring one id,
@@ -115,6 +119,7 @@ pub fn run_with(
     if opts.json {
         let document = DoctorReport {
             daemon: &daemon,
+            ssh: &ssh,
             connectors: &reports,
         };
         put(
@@ -131,6 +136,9 @@ pub fn run_with(
             None => put(out, "goalcup doctor\n\n")?,
         }
         put(out, &daemon.render())?;
+        for check in &ssh {
+            put(out, &check.render())?;
+        }
         for report in &reports {
             put(out, "\n")?;
             put(out, &report.render())?;
@@ -416,6 +424,34 @@ fn reopen_failed_check(up: String, ids: &[String], cfg: &Path) -> Check {
         format!("{up} {}", said.join(" ")),
         &next.join(" "),
     )
+}
+
+/// The SSH-key warnings (D73), as `Warn` checks that never fail the report: a key in `~/.ssh`
+/// with no passphrase, and keys an SSH agent holds. None when there is nothing to say or no
+/// `ssh-keygen` to ask.
+fn ssh_checks(env: &BTreeMap<String, String>) -> Vec<Check> {
+    let Some(found) = crate::ssh_keys::look(env) else {
+        return Vec::new();
+    };
+    let mut checks = Vec::new();
+    if let Some(warning) = found.key_warning() {
+        checks.push(Check::new(
+            "ssh_key",
+            Level::Warn,
+            warning,
+            "add a passphrase to the key, use an SSH agent that asks before each use, or run in \
+             Docker",
+        ));
+    }
+    if let Some(note) = found.agent_note() {
+        checks.push(Check::new(
+            "ssh_agent",
+            Level::Warn,
+            note.to_string(),
+            "have your SSH agent ask before each use of a key during the run",
+        ));
+    }
+    checks
 }
 
 /// Every byte this command prints goes through here, so a closed pipe is a [`CliError::Io`]

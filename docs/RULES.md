@@ -97,7 +97,9 @@ The latest possible run ends 192 hours after the window opens.
   allowed. Hidden context is not, and there is nowhere to hide it.
 - **After the first prompt, the only human message permitted is "keep going".** Goal Cup Proxy records
   every message a human sends to the agent, by any channel, so the review can see it. Any other human
-  message is reviewed, and it may remove the run at review. Harness commands typed after the prompt
+  message is reviewed, and it may remove the run at review. This holds after `goalcup continue`
+  too, also when the harness opens a new conversation: do not send the prompt or the push lines
+  again. Harness commands typed after the prompt
   (for example `/model` to switch model) count as typing: they are recorded and reviewed, never
   blocked. Choose your model in setup.
 - Answering a permission prompt is typing too, so set your harness up in setup to run without them.

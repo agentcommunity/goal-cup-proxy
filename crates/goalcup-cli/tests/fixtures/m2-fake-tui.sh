@@ -7,7 +7,10 @@
 # its config home (`$CODEX_HOME/sessions/`, the connector's native root), as a measured harness
 # does when the first message is submitted, and every line is appended to that file as one JSON
 # record. `/call` runs $M2_FAKE_OUT/tui.call.sh (a model request the test wrote) and writes no
-# session file, then prints `tui: called`.
+# session file, then prints `tui: called`. `/hold` leaves a helper in the background, as
+# Hermes's gateway is, holding one connection to the recording proxy open without a byte sent
+# (`sleep 120 | nc`, the pid of `nc` in `tui.holder.pid`), and prints `tui: holding` once it
+# is connected.
 # `/exit` ends it with status 0 and writes no session file of its own. `/suspend` stops
 # it (`kill -TSTP $$`) as a TUI's own Ctrl-Z handling does, and `/suspend-group` stops its whole
 # process group; each prints `tui: resumed` once it is continued.
@@ -41,6 +44,31 @@ if [ "$1" = configure ]; then
   mkdir -p "$home"
   echo "$2=$3" >> "$home/settings.txt"
   echo "tui: configured $2"
+  exit 0
+fi
+# A connector's `[launch_prep] after_exit` command (`gateway stop -y`, D72): it appends one line
+# to `tui.after_exit`: its argv, whether the harness it follows still runs (`tui.pid`), whether
+# the recording proxy the harness was handed (`tui.env`) still accepts connections, and whether
+# a proxy is in its own environment. With $M2_FAKE_OUT/tui.after_exit.fail it then fails with
+# status 4, as a `gateway stop` of another Hermes version may.
+if [ "$1" = gateway ]; then
+  pid=$(cat "$out/tui.pid" 2>/dev/null)
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then harness=running; else harness=gone; fi
+  proxy=$(sed -n 's/^HTTPS_PROXY=//p' "$out/tui.env")
+  hostport=${proxy##*@}
+  hostport=${hostport%/}
+  if [ -n "$proxy" ] && nc -z 127.0.0.1 "${hostport##*:}" 2>/dev/null; then
+    listening=proxy-open
+  else
+    listening=proxy-closed
+  fi
+  if [ -n "$HTTPS_PROXY" ]; then own=with-proxy; else own=no-proxy; fi
+  echo "$* $harness $listening $own" >> "$out/tui.after_exit"
+  if [ -f "$out/tui.after_exit.fail" ]; then
+    echo "tui: gateway stop failed"
+    exit 4
+  fi
+  echo "tui: gateway stopped"
   exit 0
 fi
 echo "$HOME" > "$out/tui.home"
@@ -102,6 +130,17 @@ while :; do
     /call)
       [ -f "$out/tui.call.sh" ] && . "$out/tui.call.sh"
       echo "tui: called"
+      continue
+      ;;
+    /hold)
+      proxy=$(sed -n 's/^HTTPS_PROXY=//p' "$out/tui.env")
+      hostport=${proxy##*@}
+      hostport=${hostport%/}
+      sleep 120 | nc 127.0.0.1 "${hostport##*:}" > /dev/null 2>&1 &
+      echo $! > "$out/tui.holder.pid"
+      # `nc` connects to loopback at once; a second is ample.
+      sleep 1
+      echo "tui: holding"
       continue
       ;;
     /suspend)

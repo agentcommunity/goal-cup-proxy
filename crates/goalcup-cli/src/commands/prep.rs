@@ -242,6 +242,9 @@ impl Doors for Here {
             },
             parent_env: env,
         };
+        // The CA file a past run's launch prep left (D72) names that run's closed recording
+        // proxy, and the harness may refuse every connection while its config points at it.
+        forget_stale_ca_file(connector, launch.config_home);
         let opened = crate::config::create_private_dir(&run.workspace)
             .and_then(|()| crate::launch::prep_launch(connector, &launch, &run.workspace));
         // After the participant's own setup, the settings the capture needs (D61). A home they
@@ -261,6 +264,28 @@ impl Doors for Here {
             configured?;
         }
         Ok(Some(status.success()))
+    }
+}
+
+/// Remove the connector's `[launch_prep] ca_file` (D72) from `config_home` before setup opens
+/// the harness there. It only ever held a past run's recording-proxy CA, and goalcup writes it
+/// again at every start and continue. With it gone, a provider entry whose `ssl_ca_cert` still
+/// names it falls back to the system's trust (Hermes 0.22, `agent/ssl_verify.py`), so the
+/// harness reaches its model outside a run. A link is removed, never followed; a folder of that
+/// name is left as it is. Nothing is said: it is goalcup's own file.
+pub(crate) fn forget_stale_ca_file(connector: &HarnessConnector, config_home: &Path) {
+    let Some(name) = connector
+        .loaded
+        .manifest
+        .launch_prep
+        .as_ref()
+        .and_then(|prep| prep.ca_file.as_ref())
+    else {
+        return;
+    };
+    let path = config_home.join(name);
+    if std::fs::symlink_metadata(&path).is_ok_and(|meta| !meta.is_dir()) {
+        let _ = std::fs::remove_file(&path);
     }
 }
 
@@ -375,6 +400,18 @@ pub fn prep_with(
 
     // 4. machine
     report.push(machine_step(doors, cfg, env, connector.as_ref()))?;
+    // A warning beside the step, never a change of its state (D73): what the agent could push
+    // with the participant's own SSH keys.
+    if !report.json
+        && let Some(found) = crate::ssh_keys::look(env)
+    {
+        if let Some(warning) = found.key_warning() {
+            report.tell(&format!("[warn] {warning}"))?;
+        }
+        if let Some(note) = found.agent_note() {
+            report.tell(&format!("[note] {note}"))?;
+        }
+    }
 
     let all_ok = report.steps.iter().all(|s| s.state == State::Ok);
     if report.json {
@@ -1206,6 +1243,24 @@ impl Doors for Injected {
 #[cfg(test)]
 mod tests {
     use super::{State, endpoint_of, login_step};
+
+    /// Setup removes the CA file a past run left in the Hermes home before it opens Hermes
+    /// there, and touches nothing for a connector with no launch prep (D72, D73).
+    #[test]
+    fn setup_removes_a_past_runs_ca_file_before_it_opens_the_harness() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
+        let hermes = crate::connector::load_harness(&dir, "hermes-cli", false).unwrap();
+        let codex = crate::connector::load_harness(&dir, "codex-cli", false).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let ca = home.path().join("recorder-ca.pem");
+        std::fs::write(&ca, "-----BEGIN CERTIFICATE-----\n").unwrap();
+        super::forget_stale_ca_file(&codex, home.path());
+        assert!(ca.exists());
+        super::forget_stale_ca_file(&hermes, home.path());
+        assert!(!ca.exists());
+        // Gone already: nothing to do, and nothing fails.
+        super::forget_stale_ca_file(&hermes, home.path());
+    }
     use crate::server::{DEFAULT_SERVER_URL, ServerConfig, write_server_config};
 
     #[test]

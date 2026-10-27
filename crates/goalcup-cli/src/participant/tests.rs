@@ -106,6 +106,9 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         opens: Opens::First,
         ends: Some(ends.clone()),
         prompt: &[],
+        prompt_file: None,
+        on_clipboard: false,
+        calls_before: None,
         first_screen: Some("It asks whether you trust this folder. Choose Yes."),
     });
     let text = block.join("\n");
@@ -133,6 +136,9 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         opens: Opens::LastSession,
         ends: Some(ends.clone()),
         prompt: &[],
+        prompt_file: None,
+        on_clipboard: false,
+        calls_before: None,
         first_screen: None,
     })
     .join("\n");
@@ -142,6 +148,7 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         "{continued}"
     );
     assert!(continued.contains(KEEP_GOING), "{continued}");
+    // A run with no count (started before 0.7.1) keeps the 0.7.0 sentence.
     assert!(continued.contains("never sent your prompt"), "{continued}");
     // What this computer kept is the approval, never a "key" a reader takes for an API key.
     assert!(!continued.contains("key"), "{continued}");
@@ -154,6 +161,9 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         opens: Opens::NewSession,
         ends: Some(ends),
         prompt: &[],
+        prompt_file: None,
+        on_clipboard: false,
+        calls_before: None,
         first_screen: None,
     });
     let text = fresh.join("\n");
@@ -171,10 +181,13 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         ),
         "{text}"
     );
+    // With no count (a run started before 0.7.1) the prompt may have been sent: never "Type
+    // your one prompt" (D73).
     assert!(
-        text.contains("Type your one prompt and press Enter"),
+        text.contains("If you never sent your prompt, send it now. Otherwise type only"),
         "{text}"
     );
+    assert!(!text.contains("Type your one prompt"), "{text}");
 
     let practice = launch_block(&Launch {
         harness: "A",
@@ -182,6 +195,9 @@ fn the_launch_block_says_the_prompt_rule_the_end_and_ends_with_the_ready_mark() 
         opens: Opens::First,
         ends: None,
         prompt: &[],
+        prompt_file: None,
+        on_clipboard: false,
+        calls_before: None,
         first_screen: None,
     })
     .join("\n");
@@ -597,4 +613,90 @@ fn every_refusal_says_what_to_do_first_and_has_no_rule_code() {
     assert!(home_busy("A", true).contains("replaces your current competition run"));
     assert!(needs_terminal("A", "").contains("foreground of a terminal"));
     assert!(not_started_here(None).contains(NOT_STARTED_HERE));
+}
+
+/// The first launch shows the push lines, with where they are kept and the clipboard when the
+/// copy worked; a continue after recorded model calls shows none and asks only for "keep going",
+/// whether it picks up the conversation or opens a new one (D73, owner ruling).
+#[test]
+fn the_push_lines_are_shown_at_the_first_launch_and_not_after_the_prompt() {
+    let prompt = vec!["Push to https://github.com/someone/cup".to_string()];
+    let file = std::path::Path::new("/cfg/runs/r1/push-lines.txt");
+    let launch = |opens, on_clipboard, calls_before| {
+        launch_block(&Launch {
+            harness: "Some Agent",
+            mode: Some(RunMode::Competition),
+            opens,
+            ends: None,
+            prompt: &prompt,
+            prompt_file: Some(file),
+            on_clipboard,
+            calls_before,
+            first_screen: None,
+        })
+        .join("\n")
+    };
+    let text = launch(Opens::First, true, None);
+    assert!(
+        text.contains("  Push to https://github.com/someone/cup"),
+        "{text}"
+    );
+    assert!(text.contains("/cfg/runs/r1/push-lines.txt"), "{text}");
+    assert!(text.contains(PUSH_BLOCK_ON_CLIPBOARD), "{text}");
+    let copy = launch(Opens::First, false, None);
+    assert!(!copy.contains("clipboard"), "{copy}");
+    assert!(
+        copy.contains(
+            "Copy the push block below (also in /cfg/runs/r1/push-lines.txt) to the very \
+             start of your first prompt."
+        ),
+        "{copy}"
+    );
+    for opens in [Opens::NewSession, Opens::LastSession] {
+        let text = launch(opens, false, Some(3));
+        assert!(
+            !text.contains("Push to") && !text.contains("Paste"),
+            "{text}"
+        );
+        assert!(text.contains("type only"), "{text}");
+        assert!(!text.contains("one prompt"), "{text}");
+    }
+    // A new conversation before any call: the one prompt is still to send, block first.
+    let unsent = launch(Opens::NewSession, false, Some(0));
+    assert!(
+        unsent.contains("Push to") && unsent.contains("one prompt"),
+        "{unsent}"
+    );
+}
+
+/// A resume says "type only keep going" only once the run has recorded model calls; with none
+/// recorded the prompt may never have been sent, so the 0.7.0 sentence and the push block stay
+/// (D73).
+#[test]
+fn a_resume_with_no_recorded_calls_still_asks_for_the_prompt_and_shows_the_push_block() {
+    let prompt = vec!["Push to https://github.com/someone/cup".to_string()];
+    let resume = |calls_before| {
+        launch_block(&Launch {
+            harness: "Some Agent",
+            mode: Some(RunMode::Competition),
+            opens: Opens::LastSession,
+            ends: None,
+            prompt: &prompt,
+            prompt_file: None,
+            on_clipboard: false,
+            calls_before,
+            first_screen: None,
+        })
+        .join("\n")
+    };
+    let none_yet = resume(Some(0));
+    assert!(none_yet.contains("never sent your prompt"), "{none_yet}");
+    assert!(none_yet.contains("Push to"), "{none_yet}");
+    let called = resume(Some(4));
+    assert!(called.contains("type only"), "{called}");
+    assert!(
+        !called.contains("one prompt") && !called.contains("Push to"),
+        "{called}"
+    );
+    assert!(!resume(None).contains("Push to"));
 }

@@ -56,6 +56,35 @@ pub fn facts(artifact_root: &Path) -> MachineFacts {
     }
 }
 
+/// This account's home folder from the user database (`getpwuid_r`), not from `$HOME`: the
+/// folder OpenSSH reads `~/.ssh` from, whatever `HOME` says. A helper, never a recorded fact.
+/// `None` when the database has no entry or no home for this user.
+pub fn account_home() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt as _;
+    let mut buffer = vec![0 as libc::c_char; 16 * 1024];
+    // SAFETY: an all-zero `passwd` is a valid value of a plain C struct of pointers and ints.
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut found: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY: every pointer is to a live local of the size passed, and `getpwuid_r` writes the
+    // strings it returns into `buffer`, which outlives their use below.
+    let rc = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            &mut entry,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut found,
+        )
+    };
+    if rc != 0 || found.is_null() || entry.pw_dir.is_null() {
+        return None;
+    }
+    // SAFETY: `pw_dir` is non-null and points at a NUL-terminated string inside `buffer`.
+    let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
+    let bytes = dir.to_bytes();
+    (!bytes.is_empty()).then(|| PathBuf::from(std::ffi::OsString::from_vec(bytes.to_vec())))
+}
+
 /// Whether this is Linux running under the Windows Subsystem for Linux, of either version.
 pub fn is_wsl() -> bool {
     wsl_version().is_some()
