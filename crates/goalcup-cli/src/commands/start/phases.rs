@@ -1194,6 +1194,8 @@ pub(super) fn run_harness<'a>(
     forked.proxied = proxy_slot.into_inner().unwrap_or_else(|e| e.into_inner());
     // What the harness left frozen is continued before the sweep below signals it (D65).
     pause.end();
+    // How long the harness ran, taken before the after-exit commands below can add their time.
+    let ran = released_at.elapsed();
     // The connector's after-exit commands (D72, 0.7.1), on every way the harness ended, and
     // before the recording proxy is stopped and drained (`finish_run`): a process the harness
     // left running (Hermes's gateway) would hold the proxy's connections open until its own
@@ -1218,7 +1220,7 @@ pub(super) fn run_harness<'a>(
         // The count at the harness's exit, which the tick's last look may be behind (D73).
         state.model_calls = Some(vitals.model_calls());
         // A resume that failed at once makes the next continue open a new conversation.
-        state.resume_failed = failed_resume(forked.opens, &status, released_at.elapsed());
+        state.resume_failed = failed_resume(forked.opens, &status, ran);
         state.harness = crate::run::HarnessState::Exited {
             status: match &status {
                 Ok(status) => describe_exit(status),
