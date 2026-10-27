@@ -3,7 +3,9 @@
 //! fifth, `finish_run`, is in [`super::finish`].
 
 use super::finish::{describe_exit, finish};
-use super::forked::{ChatTerminal, Exited, Forked, Gate, Released, UploadStart, release_and_say};
+use super::forked::{
+    AfterExit, ChatTerminal, Exited, Forked, Gate, Released, UploadStart, release_and_say,
+};
 use super::proxy::{Proxied, admitted, entry_is_sealed, raise_open_file_limit};
 use super::refusals::{
     holds_the_terminal, interrupted_before_launch, interrupted_refusal, offline_upstreams_for_test,
@@ -669,6 +671,18 @@ pub(super) fn create_and_gate<'a>(
         on_clipboard,
         model_calls_before,
         details,
+        after_exit: c
+            .loaded
+            .manifest
+            .launch_prep
+            .as_ref()
+            .is_some_and(|p| !p.after_exit.is_empty())
+            .then(|| AfterExit {
+                executable: prep.executable.clone(),
+                run_home: run.home.clone(),
+                config_home: config_home.clone(),
+                workspace: run.workspace.clone(),
+            }),
     };
     let gate = Gate {
         plan,
@@ -1180,6 +1194,14 @@ pub(super) fn run_harness<'a>(
     forked.proxied = proxy_slot.into_inner().unwrap_or_else(|e| e.into_inner());
     // What the harness left frozen is continued before the sweep below signals it (D65).
     pause.end();
+    // The connector's after-exit commands (D72, 0.7.1), on every way the harness ended, and
+    // before the recording proxy is stopped and drained (`finish_run`): a process the harness
+    // left running (Hermes's gateway) would hold the proxy's connections open until its own
+    // idle exit. At a deadline the proxy was stopped above, within its short bound, and the
+    // commands still end what the harness left.
+    if let Some(after) = forked.after_exit.take() {
+        run_after_exit(cx, &forked, &after);
+    }
     // The harness has exited: the terminal is this command's again, if it is still there.
     if let Some(chat) = forked.chat.as_mut() {
         chat.harness_exited();
@@ -1242,6 +1264,32 @@ pub(super) fn run_harness<'a>(
         left_running: swept.and_then(|swept| swept.refusal(&entry_id)),
         keeper,
     })
+}
+
+/// Run the connector's `[launch_prep] after_exit` commands (D72, 0.7.1) in the harness home, with
+/// their output and any failure in the run's `host.log`. Nothing here stops the run.
+fn run_after_exit(cx: &CaptureRun<'_>, forked: &Forked<'_>, after: &AfterExit) {
+    let run_dir = crate::run::run_dir(forked.cfg, &forked.record.run_id);
+    let log = match crate::host_log::open_for_child(&run_dir) {
+        Ok((log, _)) => log,
+        Err(e) => {
+            crate::host_log::say(&format!(
+                "the harness's after-exit commands were not run: its log could not be opened ({e})"
+            ));
+            return;
+        }
+    };
+    crate::launch::after_exit(
+        cx.connector,
+        &crate::launch::PrepLaunch {
+            executable: &after.executable,
+            run_home: &after.run_home,
+            config_home: &after.config_home,
+            parent_env: cx.env,
+        },
+        &after.workspace,
+        &log,
+    );
 }
 
 /// The cleanup every abandon takes: ask the daemon, and remove the local record only where it

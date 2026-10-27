@@ -43,6 +43,26 @@ if [ "$1" = configure ]; then
   echo "tui: configured $2"
   exit 0
 fi
+# A connector's `[launch_prep] after_exit` command (`gateway stop -y`, D72): it appends one line
+# to `tui.after_exit`: its argv, whether the harness it follows still runs (`tui.pid`), whether
+# the recording proxy the harness was handed (`tui.env`) still accepts connections, and whether
+# a proxy is in its own environment.
+if [ "$1" = gateway ]; then
+  pid=$(cat "$out/tui.pid" 2>/dev/null)
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then harness=running; else harness=gone; fi
+  proxy=$(sed -n 's/^HTTPS_PROXY=//p' "$out/tui.env")
+  hostport=${proxy##*@}
+  hostport=${hostport%/}
+  if [ -n "$proxy" ] && nc -z 127.0.0.1 "${hostport##*:}" 2>/dev/null; then
+    listening=proxy-open
+  else
+    listening=proxy-closed
+  fi
+  if [ -n "$HTTPS_PROXY" ]; then own=with-proxy; else own=no-proxy; fi
+  echo "$* $harness $listening $own" >> "$out/tui.after_exit"
+  echo "tui: gateway stopped"
+  exit 0
+fi
 echo "$HOME" > "$out/tui.home"
 echo run >> "$HOME/tui-runs.txt"
 echo $$ > "$out/tui.pid.tmp" && mv "$out/tui.pid.tmp" "$out/tui.pid"

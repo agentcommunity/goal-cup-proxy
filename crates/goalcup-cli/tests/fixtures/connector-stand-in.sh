@@ -11,11 +11,14 @@
 #   KIT_SKILLS_DIR    where the goal-cup skill should be, or empty when the connector has none;
 #   KIT_CA_VARS       the connector's `capture.ca.env` names, space-separated;
 #   KIT_CONFIGURE     the connector's `capture.configure` commands, one per line, each argument
-#                     list joined by spaces (empty: none).
+#                     list joined by spaces (empty: none);
+#   KIT_AFTER_EXIT    the connector's `[launch_prep] after_exit` commands, the same way.
 #
 # Called with the arguments of one of KIT_CONFIGURE's commands, it appends that line and its
 # stdin kind to `configure`, writes its environment to `configure.env`, prints one
-# `kit: configured` line and exits 0, writing none of the reports below.
+# `kit: configured` line and exits 0, writing none of the reports below. Called with one of
+# KIT_AFTER_EXIT's, it appends that line and its stdin kind to `after_exit` and exits 0, writing
+# none of them either.
 #
 # It reports its argv (one per line), environment, stdin kind, what the goal-cup skill folder
 # held at its start, and a copy of the file each CA variable names; every byte it prints starts
@@ -32,6 +35,11 @@ if [ -n "$KIT_CONFIGURE" ] && printf '%s\n' "$KIT_CONFIGURE" | grep -Fxq -- "$*"
   echo "$* $stdin" >> "$out/configure"
   env > "$out/configure.env"
   echo "kit: configured"
+  exit 0
+fi
+if [ -n "$KIT_AFTER_EXIT" ] && printf '%s\n' "$KIT_AFTER_EXIT" | grep -Fxq -- "$*"; then
+  if [ -t 0 ]; then stdin=tty; else stdin=not-a-tty; fi
+  echo "$* $stdin" >> "$out/after_exit"
   exit 0
 fi
 # One argument per line; no arguments is an empty file (printf would print one empty line).

@@ -227,9 +227,9 @@ pub struct HarnessManifest {
 }
 
 /// `[launch_prep]` (D72): what `goalcup start` and each `goalcup continue` do in the harness
-/// home after `capture.configure` and before the launch, for a harness that keeps a process
-/// of its own between launches (a gateway) or trusts a certificate file only through its own
-/// config. Never run by `goalcup prep`.
+/// home after `capture.configure` and before the launch, and after the harness exits, for a
+/// harness that keeps a process of its own between launches (a gateway) or trusts a certificate
+/// file only through its own config. Never run by `goalcup prep`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
@@ -245,6 +245,14 @@ pub struct LaunchPrepSpec {
     /// that fails is written to `host.log` and never stops the run.
     #[serde(default)]
     pub commands: Vec<Vec<String>>,
+    /// Commands of the harness's own program, run as `commands` run, in order, each time the
+    /// harness exits (its own quit, a crash or a signal, or goalcup's stop at the deadline) and
+    /// before goalcup waits for the recording proxy to drain (D72, 0.7.1): a gateway the harness
+    /// left running would hold the proxy's connections open. Held to the `capture.configure`
+    /// rules, with no template at all. A command that fails or runs too long is written to
+    /// `host.log` and never stops the run.
+    #[serde(default)]
+    pub after_exit: Vec<Vec<String>>,
 }
 
 /// The template `[launch_prep]` commands may name for the CA file's absolute path.
@@ -1067,7 +1075,8 @@ impl TryFrom<ExtraPatternRow> for ExtraPattern {
 
 impl HarnessManifest {
     /// Every argument the launch may pass, `args`, `resume_args`, then each `configure`
-    /// command's and each `launch_prep` command's, each with its field.
+    /// command's and each `launch_prep` command's (`commands`, then `after_exit`), each with its
+    /// field.
     pub(super) fn every_arg(&self) -> impl Iterator<Item = (&'static str, &String)> {
         let c = &self.capture;
         c.args
@@ -1085,6 +1094,12 @@ impl HarnessManifest {
                     .iter()
                     .flat_map(|p| p.commands.iter().flatten())
                     .map(|a| ("launch_prep.commands", a)),
+            )
+            .chain(
+                self.launch_prep
+                    .iter()
+                    .flat_map(|p| p.after_exit.iter().flatten())
+                    .map(|a| ("launch_prep.after_exit", a)),
             )
     }
 

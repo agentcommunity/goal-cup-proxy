@@ -340,7 +340,9 @@ fn the_git_credential_command_is_hidden_and_prep_is_a_hidden_alias_of_setup() {
 /// and still seals and uploads when the window is closed.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod chat {
-    use crate::common::m2_cli_support::{CHAT_HOME_ID, CHAT_ID, Launcher, OnPty, Rig};
+    use crate::common::m2_cli_support::{
+        CHAT_AFTER_EXIT_ID, CHAT_HOME_ID, CHAT_ID, Launcher, OnPty, Rig,
+    };
     use crate::common::upload_server::{ServerOptions, UploadServer};
     use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
     use std::collections::BTreeMap;
@@ -677,6 +679,47 @@ mod chat {
         );
         let (report, _) = rig.read_trace(&newest_entry(&rig));
         assert!(report.sealed, "{:?}", report.findings);
+    }
+
+    /// D72 (0.7.1): a connector's `[launch_prep] after_exit` command runs once the harness has
+    /// exited, whether it quit or was killed, and before the recording proxy is stopped (a
+    /// gateway the harness left would hold the proxy's connections open): the fake's `gateway
+    /// stop -y` finds the harness gone and the proxy still accepting, with no proxy in its own
+    /// environment. It does not run before the launch, and the run seals.
+    #[test]
+    fn the_after_exit_command_runs_after_the_harness_and_before_the_proxy_stops() {
+        for crash in [false, true] {
+            let rig = Rig::chat_with_after_exit();
+            let mut run = OnPty::spawn(
+                rig.chat_command_for(CHAT_AFTER_EXIT_ID, &[DISK, LOCAL_WRAP_UP], Launcher::Direct),
+                None,
+            );
+            run.wait_shown("tui: ready");
+            assert!(
+                rig.harness_file("tui.after_exit").is_none(),
+                "not before the launch"
+            );
+            if crash {
+                let tui: i32 = harness(&rig, "tui.pid").parse().unwrap();
+                // SAFETY: an integer; the pid is the fake harness's own.
+                assert_eq!(unsafe { libc::kill(tui, libc::SIGKILL) }, 0);
+            } else {
+                run.type_line("/exit");
+            }
+            let status = run.wait();
+            let shown = run.shown();
+            assert!(status.success(), "crash {crash}: {status:?}\n{shown}");
+            assert_eq!(
+                harness(&rig, "tui.after_exit"),
+                "gateway stop -y gone proxy-open no-proxy",
+                "crash {crash}: {shown}"
+            );
+            assert!(!shown.contains("tui: gateway stopped"), "{shown}");
+            let log = std::fs::read_to_string(run_dir(&rig).join("host.log")).unwrap();
+            assert!(log.contains("tui: gateway stopped"), "{log}");
+            let (report, _) = rig.read_trace(&newest_entry(&rig));
+            assert!(report.sealed, "crash {crash}: {:?}", report.findings);
+        }
     }
 
     /// A panic on one of the host's threads while it is quiet is a message like any other: it is

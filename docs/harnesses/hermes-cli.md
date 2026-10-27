@@ -119,7 +119,11 @@ the v0.22.5 checkout) changed two things the 0.19.0 recipe relied on. The connec
   `hermes chat` inside the run starts a fresh one with the run's environment (measured: born 1 s
   after the start). So `[launch_prep]` ends with `hermes gateway stop -y`, last, nearest the
   launch. It exits 0 when no gateway runs (measured). Hermes 0.19.0 has no `-y` there and exits 2;
-  goalcup logs that line in `host.log` and goes on.
+  goalcup logs that line in `host.log` and goes on. From goalcup 0.7.1 goalcup also stops the
+  gateway after Hermes exits, however it ended (`after_exit`), before it waits for the recording
+  proxy and seals the part. The gateway runs on detached: after a crashed `hermes chat` it kept
+  the agent's turn going and two connections to the proxy open, and `goalcup start` waited
+  silently until they closed (measured with v0.22.5, 26 Oct 2026).
 - **Trust.** Hermes 0.22 on macOS ignores `HERMES_CA_BUNDLE`. What it trusts for an endpoint is a
   provider entry's `ssl_ca_cert`, matched by the endpoint's base URL (`agent/ssl_verify.py`
   `resolve_httpx_verify`; entries from `providers:` and `custom_providers:`). That file replaces
@@ -165,12 +169,12 @@ silent):
   entry, which holds the host, port and path only (Hermes keeps the userinfo in its route
   identity, `hermes_cli/route_identity.py`).
 - The `recorder` entry stays in Goal Cup's Hermes home after a run, naming that run's CA, which
-  is now stale; picking `recorder` in `/model` gives a provider with no key. The run's gateway may
-  also stay up after the run, its `HTTPS_PROXY` pointed at the recording proxy's closed port
-  (goalcup does not stop it after a run, D72). So Hermes opened from that home outside a run (by
-  hand, or by a second `goalcup setup`) may not reach the model service until
-  `HERMES_HOME=<home> hermes gateway stop -y`. The next start stops the gateway and rewrites the
-  file by itself. A stale `recorder-ca.pem` alone made Hermes hang outside a run (measured, 26
+  is now stale; picking `recorder` in `/model` gives a provider with no key. From goalcup 0.7.1
+  the run's gateway is stopped when Hermes exits. A gateway left up anyway (an older goalcup, or
+  a stop that failed, which `host.log` shows) points its `HTTPS_PROXY` at the recording proxy's
+  closed port, and Hermes opened from that home outside a run (by hand, or by a second
+  `goalcup setup`) may not reach the model service until `HERMES_HOME=<home> hermes gateway stop
+  -y`. The next start stops the gateway and rewrites the file by itself. A stale `recorder-ca.pem` alone made Hermes hang outside a run (measured, 26
   Oct 2026): from goalcup 0.7.1, `goalcup setup` deletes that file before it opens Hermes, and
   with the file named by `ssl_ca_cert` missing Hermes falls back to the system's trust
   (`agent/ssl_verify.py` `resolve_httpx_verify`). A gateway left up from a run still needs the

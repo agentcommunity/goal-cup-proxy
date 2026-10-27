@@ -1019,6 +1019,17 @@ model calls with no certificate error.
   until `HERMES_HOME=<home> hermes gateway stop -y`; the next start fixes both by itself.
 - **Not in 0.7.0:** reading Hermes's `state.db`, a post-run gateway stop, a per-run Hermes home, a
   Hermes version gate, a verifier finding, and setup writing Hermes's other keys itself.
+- **26 Oct 2026, 0.7.1: the gateway is stopped after Hermes exits.** Measured with v0.22.5: after
+  `hermes chat` was killed, its detached gateway (parent pid 1, its own process group) kept the
+  agent's turn going and two connections to the recording proxy open, and `goalcup start` waited
+  silently after the support heading until they closed (up to the gateway's 600 s idle exit).
+  So `[launch_prep]` gets `after_exit` (optional, at most 4 commands, the `capture.configure`
+  rules with no template): run in the harness home, as `commands` run but 15 s each, every time
+  the harness exits (its own quit, a crash or a signal, goalcup's stop at the deadline), before
+  goalcup waits for the recording proxy to drain and seals the part. A failure is logged in
+  `host.log` and the run goes on. The Hermes connector says `after_exit = [["gateway", "stop",
+  "-y"]]`. At the deadline the proxy is already stopped within its short bound; the stop then
+  only ends what the harness left running.
 
 ## D73. The push lines are never lost, and `continue` resumes a harness with no session file.
 

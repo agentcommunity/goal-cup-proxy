@@ -20,7 +20,7 @@ use crate::common::support;
 
 use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
 use goalcup_protocol::capture_policy::SHARED_CA_ENV;
-use goalcup_protocol::harness::{CaptureSpec, Origin};
+use goalcup_protocol::harness::{CaptureSpec, HarnessManifest, Origin};
 use goalcup_protocol::pins::shipped_connector_ids;
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
@@ -45,8 +45,20 @@ fn configure_lines(c: &CaptureSpec) -> String {
         .join("\n")
 }
 
+/// The connector's `[launch_prep] after_exit` commands (D72), one per line, each argument list
+/// joined by spaces: how the stand-in recognises one.
+fn after_exit_lines(m: &HarnessManifest) -> String {
+    m.launch_prep
+        .iter()
+        .flat_map(|p| p.after_exit.iter())
+        .map(|command| command.join(" "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The stand-in's variables, as shell assignments, derived from the connector alone.
-fn stand_in_header(c: &CaptureSpec, out: &Path) -> String {
+fn stand_in_header(m: &HarnessManifest, out: &Path) -> String {
+    let c = &m.capture;
     let config_home = format!("${{{}}}", c.home.env.as_deref().unwrap_or("HOME"));
     let native = c
         .native
@@ -66,13 +78,14 @@ fn stand_in_header(c: &CaptureSpec, out: &Path) -> String {
     format!(
         "KIT_OUT={out}\nKIT_VERSION_ARGV={version}\n\
          KIT_NATIVE_FILE=\"{root}/{pattern}\"\nKIT_SKILLS_DIR=\"{skills}\"\nKIT_CA_VARS={ca}\n\
-         KIT_CONFIGURE={configure}\n\
+         KIT_CONFIGURE={configure}\nKIT_AFTER_EXIT={after_exit}\n\
          export KIT_OUT KIT_VERSION_ARGV KIT_NATIVE_FILE KIT_SKILLS_DIR KIT_CA_VARS \
-         KIT_CONFIGURE\n",
+         KIT_CONFIGURE KIT_AFTER_EXIT\n",
         out = sh_quote(&out.display().to_string()),
         version = sh_quote(&c.executable.version_args.join(" ")),
         ca = sh_quote(&c.ca.env.join(" ")),
         configure = sh_quote(&configure_lines(c)),
+        after_exit = sh_quote(&after_exit_lines(m)),
     )
 }
 
@@ -124,7 +137,7 @@ fn run_connector(id: &str, from: Folder) {
     let program = bin.join(&c.executable.program);
     std::fs::write(
         &program,
-        format!("{shebang}\n{}{body}", stand_in_header(c, &out)),
+        format!("{shebang}\n{}{body}", stand_in_header(&manifest, &out)),
     )
     .unwrap();
     std::fs::write(bin.join("node"), "#!/bin/sh\nexec /bin/sh \"$@\"\n").unwrap();
@@ -196,6 +209,19 @@ fn run_connector(id: &str, from: Folder) {
         .map(|l| format!("{l} not-a-tty"))
         .collect();
     assert_eq!(configured, want_configured, "{id}: the configure commands");
+    // The `[launch_prep] after_exit` commands ran, in order, last, with no terminal for their
+    // input (D72). A launch prep command of the same words (Hermes's `gateway stop -y`) also ran
+    // before the launch, so only the tail is theirs.
+    let after: Vec<String> = report("after_exit").lines().map(str::to_string).collect();
+    let want_after: Vec<String> = after_exit_lines(&manifest)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| format!("{l} not-a-tty"))
+        .collect();
+    assert!(
+        after.ends_with(&want_after),
+        "{id}: the after-exit commands: {after:?}, want {want_after:?} last"
+    );
     if !c.configure.is_empty() {
         let configure_env = report("configure.env");
         assert!(

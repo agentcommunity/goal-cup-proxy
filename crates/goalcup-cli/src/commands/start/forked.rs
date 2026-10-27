@@ -71,6 +71,19 @@ pub(super) struct Forked<'a> {
     /// The run's ids and folders, held back from the launch block and written to its
     /// `host.log` once it is open.
     pub(super) details: Vec<String>,
+    /// What runs the connector's `[launch_prep] after_exit` once the harness has exited; `None`
+    /// when it has none.
+    pub(super) after_exit: Option<AfterExit>,
+}
+
+/// What the connector's `[launch_prep] after_exit` commands (D72, 0.7.1) run with once the
+/// harness has exited: the harness file the launch resolved, the two homes and the workspace
+/// it was launched with.
+pub(super) struct AfterExit {
+    pub(super) executable: crate::launch::ResolvedExecutable,
+    pub(super) run_home: PathBuf,
+    pub(super) config_home: PathBuf,
+    pub(super) workspace: PathBuf,
 }
 
 /// What a chat-mode run holds while the harness owns the terminal (D57): the terminal's signals

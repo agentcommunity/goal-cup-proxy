@@ -143,8 +143,9 @@ What to expect from a recent Hermes:
    - a bare `provider: custom` setup (not tested);
    - a model address with a `?` query part (such as Azure's `?api-version=`) or a `user@` part.
 4. The `recorder` entry stays in Goal Cup's Hermes home after a run. Do not pick it in `/model`.
-   After a run, the run's Hermes gateway may also stay up, pointed at Goal Cup's recorder, which
-   has closed. `goalcup setup` deletes the out-of-date certificate file before it opens Hermes,
+   Goal Cup stops the run's Hermes gateway when Hermes exits. If that stop failed (the run's
+   `host.log` says so), the gateway may stay up, pointed at Goal Cup's recorder, which has
+   closed. `goalcup setup` deletes the out-of-date certificate file before it opens Hermes,
    so Hermes trusts your system's certificates again. If Hermes opened from Goal Cup's home
    outside a run still cannot reach your model service, run
    `HERMES_HOME="<your capture-homes folder>/hermes-cli" hermes gateway stop -y` first. The next

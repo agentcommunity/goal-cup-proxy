@@ -146,6 +146,45 @@ fn check_configure_arg(
     Ok(())
 }
 
+/// A list of harness commands under the `capture.configure` rules (D61), refused as `field`:
+/// at most [`MAX_CONFIGURE_COMMANDS`], each of 1 to [`MAX_CONFIGURE_ARGS`] arguments of 1 to
+/// [`MAX_CONFIGURE_ARG_BYTES`] bytes, no brace (so no template, `no_template` says why), and
+/// each argument held to [`check_configure_arg`] with no word admitted.
+fn check_templateless_commands(
+    field: &str,
+    commands: &[Vec<String>],
+    origin: Origin,
+    no_template: &str,
+) -> Result<(), ProtocolError> {
+    if commands.len() > MAX_CONFIGURE_COMMANDS {
+        return Err(refuse(
+            field,
+            format!("holds more than {MAX_CONFIGURE_COMMANDS} commands"),
+        ));
+    }
+    for command in commands {
+        if command.is_empty() || command.len() > MAX_CONFIGURE_ARGS {
+            return Err(refuse(
+                field,
+                format!("a command must hold 1 to {MAX_CONFIGURE_ARGS} arguments"),
+            ));
+        }
+        for a in command {
+            if a.is_empty() || a.len() > MAX_CONFIGURE_ARG_BYTES {
+                return Err(refuse(
+                    field,
+                    format!("an argument must be 1 to {MAX_CONFIGURE_ARG_BYTES} bytes"),
+                ));
+            }
+            if a.contains(['{', '}']) {
+                return Err(refuse(field, format!("`{a}` holds a brace: {no_template}")));
+            }
+            check_configure_arg(field, origin, a, None)?;
+        }
+    }
+    Ok(())
+}
+
 fn is_id(s: &str) -> bool {
     let mut b = s.bytes();
     (2..=48).contains(&s.len())
@@ -645,41 +684,13 @@ impl HarnessManifest {
     /// command runs before any run value exists, so it cannot name the goal, the workspace or a
     /// session.
     fn check_configure(&self, origin: Origin) -> Result<(), ProtocolError> {
-        const FIELD: &str = "capture.configure";
-        let commands = &self.capture.configure;
-        if commands.len() > MAX_CONFIGURE_COMMANDS {
-            return Err(refuse(
-                FIELD,
-                format!("holds more than {MAX_CONFIGURE_COMMANDS} commands"),
-            ));
-        }
-        for command in commands {
-            if command.is_empty() || command.len() > MAX_CONFIGURE_ARGS {
-                return Err(refuse(
-                    FIELD,
-                    format!("a command must hold 1 to {MAX_CONFIGURE_ARGS} arguments"),
-                ));
-            }
-            for a in command {
-                if a.is_empty() || a.len() > MAX_CONFIGURE_ARG_BYTES {
-                    return Err(refuse(
-                        FIELD,
-                        format!("an argument must be 1 to {MAX_CONFIGURE_ARG_BYTES} bytes"),
-                    ));
-                }
-                if a.contains(['{', '}']) {
-                    return Err(refuse(
-                        FIELD,
-                        format!(
-                            "`{a}` holds a brace: a configure command takes no template (no goal, \
-                             workspace or session), because it runs before any run exists"
-                        ),
-                    ));
-                }
-                check_configure_arg(FIELD, origin, a, None)?;
-            }
-        }
-        Ok(())
+        check_templateless_commands(
+            "capture.configure",
+            &self.capture.configure,
+            origin,
+            "a configure command takes no template (no goal, workspace or session), because it \
+             runs before any run exists",
+        )
     }
 
     /// `[launch_prep]` (D72): `ca_file` is one `.pem` file name, and each command follows the
@@ -687,7 +698,8 @@ impl HarnessManifest {
     /// `{ca_file}` is admitted only right after its key: an argument with no `=` whose last
     /// `.`-separated part is exactly `base_url` or `ssl_ca_cert`. That key is then admitted
     /// although the deny lists refuse its word (`baseurl`, `cacert`): the only value such a key
-    /// can get is goalcup's own. Any other brace is refused.
+    /// can get is goalcup's own. Any other brace is refused. `after_exit` follows the
+    /// `capture.configure` rules exactly, with no template.
     fn check_launch_prep(&self, origin: Origin) -> Result<(), ProtocolError> {
         const FIELD: &str = "launch_prep.commands";
         let Some(prep) = &self.launch_prep else {
@@ -783,7 +795,14 @@ impl HarnessManifest {
                 check_configure_arg(FIELD, origin, a, admitted)?;
             }
         }
-        Ok(())
+        // `after_exit` (0.7.1): the `capture.configure` rules exactly, with no template. It runs
+        // after the harness is gone, where no value of the run is wanted.
+        check_templateless_commands(
+            "launch_prep.after_exit",
+            &prep.after_exit,
+            origin,
+            "an after-exit command takes no template",
+        )
     }
 
     fn check_env(&self) -> Result<(), ProtocolError> {

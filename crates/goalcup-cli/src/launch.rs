@@ -1025,7 +1025,8 @@ pub fn configure_harness(
                 "{name} could not be set up for recording: `{shown}` {why}. {then}"
             ))
         };
-        let status = run_home_command(&plan, command.clone(), log).map_err(refuse)?;
+        let status =
+            run_home_command(&plan, command.clone(), log, CONFIGURE_TIMEOUT).map_err(refuse)?;
         if !status.success() {
             return Err(refuse(format!("ended with {}", describe_status(&status))));
         }
@@ -1036,11 +1037,12 @@ pub fn configure_harness(
 /// Run one command of the harness's own program on `plan`'s environment (D61): that
 /// environment, built from nothing, and nothing else; stdin `/dev/null`; stdout and stderr
 /// appended to `log`; a process group of its own, so a timeout ends all it started. `Err` says
-/// why it did not run to an end within [`CONFIGURE_TIMEOUT`].
+/// why it did not run to an end within `timeout`.
 fn run_home_command(
     plan: &LaunchPlan,
     argv: Vec<String>,
     log: &std::fs::File,
+    timeout: std::time::Duration,
 ) -> Result<std::process::ExitStatus, String> {
     let mut one = plan.clone();
     one.argv = argv;
@@ -1059,12 +1061,8 @@ fn run_home_command(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("could not be started ({e})"))?;
-    crate::harness_version::wait_or_end_group(&mut child, CONFIGURE_TIMEOUT).ok_or_else(|| {
-        format!(
-            "did not finish within {} seconds",
-            CONFIGURE_TIMEOUT.as_secs()
-        )
-    })
+    crate::harness_version::wait_or_end_group(&mut child, timeout)
+        .ok_or_else(|| format!("did not finish within {} seconds", timeout.as_secs()))
 }
 
 /// The run values a connector's `[launch_prep]` (D72) is given.
@@ -1147,7 +1145,7 @@ pub fn launch_prep(
         let failed = if missing {
             Some("was not run: a value it names is not known for this run".to_string())
         } else {
-            match run_home_command(&plan, argv, log) {
+            match run_home_command(&plan, argv, log, CONFIGURE_TIMEOUT) {
                 Ok(status) if status.success() => None,
                 Ok(status) => Some(format!("ended with {}", describe_status(&status))),
                 Err(why) => Some(why),
@@ -1162,6 +1160,63 @@ pub fn launch_prep(
         }
     }
     Ok(())
+}
+
+/// How long one `[launch_prep] after_exit` command may run before it is ended: short, because
+/// the run's seal waits on it, and a stuck harness program must never hold the run open.
+pub const AFTER_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Run the connector's `[launch_prep] after_exit` commands in the harness home, in order, as
+/// [`launch_prep`] runs its `commands` ([`run_home_command`]: the harness's own environment, no
+/// proxy, stdin `/dev/null`, output to `log`), each within [`AFTER_EXIT_TIMEOUT`]. Called once
+/// the harness has exited, however it ended, and before goalcup waits for the recording proxy
+/// to drain (D72, 0.7.1): a gateway the harness left running would hold the proxy's
+/// connections open until its own idle exit.
+///
+/// Nothing here stops the run: a command that cannot be started, ends non-zero or runs too long
+/// is written to `log`, and the next one runs.
+pub fn after_exit(
+    c: &HarnessConnector,
+    launch: &PrepLaunch<'_>,
+    workspace: &Path,
+    log: &std::fs::File,
+) {
+    use std::io::Write as _;
+    let Some(prep) = &c.loaded.manifest.launch_prep else {
+        return;
+    };
+    if prep.after_exit.is_empty() {
+        return;
+    }
+    let log_line = |line: String| {
+        let mut log = log;
+        let _ = writeln!(log, "{line}");
+    };
+    let mut vars = TemplateVars::new();
+    vars.set("workspace", workspace.display().to_string());
+    let plan = match build_prep_launch(c, &vars, workspace, launch) {
+        Ok(plan) => plan,
+        Err(e) => {
+            log_line(format!(
+                "goalcup: the after-exit commands were not run ({e}); the run goes on"
+            ));
+            return;
+        }
+    };
+    let program = &c.loaded.manifest.capture.executable.program;
+    for command in &prep.after_exit {
+        let shown = format!("{program} {}", command.join(" "));
+        let failed = match run_home_command(&plan, command.clone(), log, AFTER_EXIT_TIMEOUT) {
+            Ok(status) if status.success() => None,
+            Ok(status) => Some(format!("ended with {}", describe_status(&status))),
+            Err(why) => Some(why),
+        };
+        if let Some(why) = failed {
+            log_line(format!(
+                "goalcup: the after-exit command `{shown}` {why}; the run goes on"
+            ));
+        }
+    }
 }
 
 /// Write `pem` to `path` with mode 0600 through a new temporary file beside it and a rename, so

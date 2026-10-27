@@ -126,8 +126,10 @@ grace_seconds = 10
 # the model service's URL names it, and a gateway left running from before is stopped, last,
 # so `hermes chat` starts a fresh one with the run's proxy. The entry and the file are named
 # `recorder` because a connector may not name the tracker (F7). Hermes 0.19.0 has no `-y` on
-# `gateway stop` and exits 2; a failed command is only logged. docs/harnesses/hermes-cli.md,
-# "Hermes 0.22: the gateway and certificate trust".
+# `gateway stop` and exits 2; a failed command is only logged. After Hermes exits, however it
+# ended, the gateway is stopped again: it runs on detached and would keep the recording proxy's
+# connections open, so the run would not seal until its idle exit (0.7.1). docs/harnesses/
+# hermes-cli.md, "Hermes 0.22: the gateway and certificate trust".
 [launch_prep]
 ca_file = "recorder-ca.pem"
 commands = [
@@ -135,3 +137,4 @@ commands = [
   ["config", "set", "providers.recorder.ssl_ca_cert", "{ca_file}"],
   ["gateway", "stop", "-y"],
 ]
+after_exit = [["gateway", "stop", "-y"]]
