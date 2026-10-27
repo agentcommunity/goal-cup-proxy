@@ -268,9 +268,6 @@ These look odd but are right. Do not "fix" them.
 
 ## Open owner questions
 
-- Apply website migration `20261027100000` (a competition repository belongs to one member per
-  event; 0.7.0 security review I2) before 7 Nov 00:00 UTC: needs the owner's OK. Steps:
-  [`server/worker/sql/pending/README.md`](server/worker/sql/pending/README.md).
 - WP0: the owner completed Linux Codex sign-in and Amp's private-home macOS sign-in. A rebuilt
   Mac binary may need a new Little Snitch approval. Claude remains deferred until quota returns;
   Linux Amp task coverage is still outstanding. (22 Oct: Claude Code and Linux Amp ran; see the

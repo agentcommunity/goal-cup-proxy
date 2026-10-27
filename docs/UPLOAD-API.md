@@ -200,8 +200,8 @@ this event already uses this repository. Create a new empty public repository an
 state. URLs compare in lower case with a trailing `.git` removed (a trailing `/` is already `400`). The same member may name it
 again, and a retried open of a run that exists is answered as before. Practice and test runs are not
 checked. An open the sign-up gate refuses gets the sign-up message first. The database decides it
-(website migration `20261027100000`, on top of the sign-up gate `20261021120200`, pending the owner's OK to
-apply: `server/worker/sql/pending/README.md`); until it is applied, there is no such check.
+(website migration `20261027100000`, on top of the sign-up gate `20261021120200`, applied to the shared
+database on 27 Oct 2026).
 
 **One main run per account.** A competition start by the account replaces its other open competition
 run: that run gets `replaced_at` = this run's `official_start`, in the same step, and ends then
