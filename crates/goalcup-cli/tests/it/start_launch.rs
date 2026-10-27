@@ -727,6 +727,9 @@ mod chat {
     /// short bound instead of waiting the drain share for that connection, says so in one line
     /// and in `host.log`, and still seals. The finish budget here makes the drain share 28 s,
     /// so a start that waited on the held connection would take far longer than the bound below.
+    /// The held connection sends no byte, so it is cut in admission, not as an intercepted stream.
+    /// The timing guards the fallback on macOS only: on Linux the sweep ends the helper (a
+    /// descendant of the harness) before the proxy stops, and the test passes either way.
     #[test]
     fn a_failed_after_exit_command_does_not_wait_on_a_held_proxy_connection() {
         let rig = Rig::chat_with_after_exit();
@@ -777,6 +780,37 @@ mod chat {
         let log = std::fs::read_to_string(run_dir(&rig).join("host.log")).unwrap();
         assert!(log.contains("ended with exit code 4"), "{log}");
         assert!(log.contains("open connections cut"), "{log}");
+        let (report, _) = rig.read_trace(&newest_entry(&rig));
+        assert!(report.sealed, "{:?}", report.findings);
+    }
+
+    /// A failed after-exit command with no connection left open (Hermes 0.19.0 has no `-y` on
+    /// `gateway stop` and always fails it): the stop is bounded short and `host.log` says so, but
+    /// nothing was cut, so the participant is told nothing.
+    #[test]
+    fn a_failed_after_exit_command_with_nothing_open_says_nothing_of_open_calls() {
+        let rig = Rig::chat_with_after_exit();
+        rig.tell("tui.after_exit.fail", "");
+        let mut run = OnPty::spawn(
+            rig.chat_command_for(CHAT_AFTER_EXIT_ID, &[DISK, LOCAL_WRAP_UP], Launcher::Direct),
+            None,
+        );
+        run.wait_shown("tui: ready");
+        run.type_line("/exit");
+        let status = run.wait();
+        let shown = run.shown();
+        assert!(status.success(), "{status:?}\n{shown}");
+        assert!(
+            !shown.contains(goalcup_cli::participant::OPEN_CALLS_CUT),
+            "{shown}"
+        );
+        let log = std::fs::read_to_string(run_dir(&rig).join("host.log")).unwrap();
+        assert!(log.contains("ended with exit code 4"), "{log}");
+        assert!(log.contains("open connections cut"), "{log}");
+        assert!(
+            !log.contains(goalcup_cli::participant::OPEN_CALLS_CUT),
+            "{log}"
+        );
         let (report, _) = rig.read_trace(&newest_entry(&rig));
         assert!(report.sealed, "{:?}", report.findings);
     }

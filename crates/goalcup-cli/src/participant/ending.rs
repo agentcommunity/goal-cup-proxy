@@ -14,9 +14,9 @@ pub fn details_heading(host_log: Option<&Path>) -> String {
 /// The words that end [`helper_not_stopped`], for a test to find it.
 pub const OPEN_CALLS_CUT: &str = "so it stopped recording its open calls now.";
 
-/// Said when the connector's after-exit commands (D72) did not stop what the harness left
-/// running, so goalcup stops the recording proxy within its short bound instead of waiting on
-/// the open connections of a process that would hold them until its own idle exit.
+/// Said once the recording proxy's stop is done, when the connector's after-exit commands (D72)
+/// did not stop what the harness left running and the stop, bounded short instead of waiting on
+/// connections such a process would hold until its own idle exit, cut at least one.
 pub fn helper_not_stopped(harness: &str) -> String {
     format!("goalcup could not stop {harness}'s background helper, {OPEN_CALLS_CUT}")
 }

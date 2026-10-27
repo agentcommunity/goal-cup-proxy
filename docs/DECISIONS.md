@@ -1006,6 +1006,8 @@ model calls with no certificate error.
   because a connector may not name the tracker (F7). `HERMES_CA_BUNDLE` and the
   `sessions.write_json_snapshots` configure command stay for Hermes up to 0.21.0, which still
   writes its session file. Hermes 0.19.0 has no `-y` on `gateway stop` and exits 2: logged only.
+  The same failure in `after_exit` (0.7.1) also bounds the proxy's stop short, which cuts nothing
+  on 0.19.0 (it has no gateway holding calls open), so the participant is told nothing.
 - **Known limits** (each shows as the "no model calls recorded" line, none is silent): a
   participant's own provider entry for the same URL is matched first; a bare `provider: custom`
   may treat the `recorder` entry as the URL's owner (not verified); Hermes's native Anthropic
@@ -1033,9 +1035,12 @@ model calls with no certificate error.
 - **26 Oct 2026, 0.7.1: a failed stop is no silent wait.** When an `after_exit` command fails,
   runs past its 15 s or cannot be run, the gateway may still hold the proxy's connections open.
   goalcup then stops the recording proxy within the same 2 s bound as at a deadline (open streams
-  recorded `Interrupted`) instead of waiting the drain share, writes one line in `host.log`, and
-  tells the participant in one plain line that it could not stop the harness's background helper
-  and stopped recording its open calls. What reached the proxy is sealed and uploaded as always.
+  recorded `Interrupted`) instead of waiting the drain share and writes one line in `host.log`.
+  Only if that stop actually cut a connection is the participant told, in one plain line after
+  the stop, that goalcup could not stop the harness's background helper and stopped recording its
+  open calls. A failed stop with nothing open (Hermes 0.19.0, or a helper the Linux sweep already
+  ended) says nothing to the participant. The sender is not cut early as at a deadline: the
+  harness has exited. What reached the proxy is sealed and uploaded as always.
   When every command succeeds, or a connector has none, nothing changes. The terminal is given
   back and `goalcup status` says the harness exited before the commands run, not after.
 

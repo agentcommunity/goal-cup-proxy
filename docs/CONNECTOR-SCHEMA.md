@@ -373,7 +373,7 @@ after_exit = [["gateway", "stop", "-y"]]
   the part sealed, and only end what the harness left. Held to every `capture.configure` rule,
   with no template at all (the two above included). A failure is one line in `host.log` and never
   stops the run; goalcup then stops the proxy within its short bound (2 seconds) instead of
-  waiting on the open connections, and says so in one line. Hermes stops its gateway here, which
+  waiting on the open connections, and tells the participant in one line only if it cut one. Hermes stops its gateway here, which
   otherwise keeps the proxy's connections open.
 - **What it may change.** Only the harness's trust of the recording proxy for the URL its own
   config already names, and processes of its own that would keep an old environment. The pair

@@ -236,6 +236,7 @@ impl Forked<'_> {
                 termination_bound(0),
                 false,
                 None,
+                None,
                 out,
             );
         }
@@ -293,7 +294,7 @@ pub(super) struct Exited<'a> {
     pub(super) finished_early: Option<Result<CaptureFinishReport, CliError>>,
     /// A connector's after-exit command (D72) did not end cleanly, or none could be run: what
     /// the harness left (Hermes's gateway) may still hold the recording proxy's connections
-    /// open, so its stop is bounded as at a deadline.
+    /// open, so its stop is bounded as at a deadline (and the participant told, if it cut one).
     pub(super) helper_left: bool,
     /// The uploader, for a run opened on a server.
     pub(super) uploading: Option<crate::upload::uploader::Running>,

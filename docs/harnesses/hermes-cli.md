@@ -119,7 +119,9 @@ the v0.22.5 checkout) changed two things the 0.19.0 recipe relied on. The connec
   `hermes chat` inside the run starts a fresh one with the run's environment (measured: born 1 s
   after the start). So `[launch_prep]` ends with `hermes gateway stop -y`, last, nearest the
   launch. It exits 0 when no gateway runs (measured). Hermes 0.19.0 has no `-y` there and exits 2;
-  goalcup logs that line in `host.log` and goes on. From goalcup 0.7.1 goalcup also stops the
+  goalcup logs that line in `host.log` and goes on. After Hermes exits the same failure also makes
+  goalcup stop the recording proxy within 2 seconds; on 0.19.0 nothing is open, nothing is cut,
+  and the participant is told nothing. From goalcup 0.7.1 goalcup also stops the
   gateway after Hermes exits, however it ended (`after_exit`), before it waits for the recording
   proxy and seals the part. The gateway runs on detached: after a crashed `hermes chat` it kept
   the agent's turn going and two connections to the proxy open, and `goalcup start` waited

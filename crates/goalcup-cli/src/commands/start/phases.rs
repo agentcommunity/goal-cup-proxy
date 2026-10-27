@@ -1180,6 +1180,7 @@ pub(super) fn run_harness<'a>(
                 wrap_up,
                 termination_bound(grace),
                 true,
+                None,
                 Some(cfg),
                 &mut said,
             );
