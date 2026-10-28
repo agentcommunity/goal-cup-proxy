@@ -492,44 +492,6 @@ mod tests {
     }
 
     #[test]
-    fn a_lone_get_and_header_streams_do_not_outrank_native() {
-        let mut operations = crate::capture_analysis::operations::Operations::default();
-        let open = |hint: Option<&str>, method: Option<&str>| CaptureRecord::Open {
-            stream: StreamKey {
-                producer: "producer".to_string(),
-                stream: 1,
-            },
-            observed: time("producer", 1),
-            source: CaptureSource::WireRequest,
-            metadata: CaptureMeta {
-                wire: None,
-                label: "unit".to_string(),
-                protocol_hint: hint.map(str::to_string),
-                method: method.map(str::to_string),
-                host: None,
-                path: None,
-                status: None,
-                content_type: None,
-            },
-        };
-        operations.record(&open(None, Some("GET")));
-        operations.record(&open(Some("http-head-v1"), None));
-        operations.record(&open(Some("http-head-v1"), None));
-        // Native model work, no decoded request: the lone GET and the header streams are not
-        // model requests, so the session file is the evidence.
-        assert_eq!(
-            evidence(1, operations.model_request_opens(), 0),
-            "native_only"
-        );
-        // A model request that no decoder read still outranks nothing: it is undecoded.
-        operations.record(&open(Some("openai-chat-completions"), Some("POST")));
-        assert_eq!(
-            evidence(1, operations.model_request_opens(), 0),
-            "wire_undecoded"
-        );
-    }
-
-    #[test]
     fn a_lone_get_beside_native_work_labels_native_only_through_the_report() {
         // The label is read on the whole report path, not only by `evidence`. A lone GET (no
         // hint, not a POST) is a wire stream that no decoder reads and not a model request, so

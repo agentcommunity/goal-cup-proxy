@@ -24,6 +24,13 @@ pub use crate::capture_status::{
 /// The protocol version of every envelope this crate writes or reads (D54).
 pub const M2_PROTOCOL_VERSION: u32 = 5;
 
+/// Protocol hint on a recorded HTTP header stream (a request's start line and headers, with
+/// credential values masked). It names a recorded artifact, not a model request.
+pub const HTTP_HEAD_HINT: &str = "http-head-v1";
+/// Protocol hint on the sealed-connection list (`goalcup-tunnels-v1`). It names a side
+/// artifact, not a model request.
+pub const TUNNEL_LIST_HINT: &str = "goalcup-tunnels-v1";
+
 /// Bound on one source chunk and, separately, on one sanitized segment's bytes.
 pub const MAX_SEGMENT_BYTES: usize = 64 * 1024;
 /// Launch resource bound on the decoded goal.
