@@ -24,7 +24,7 @@ on Tenki come later, after the build is clear and good.
 | 1 | Record every request on an opened host | merged in #292 (bf8ce8b); gate PASS, live PASS |
 | 2 | Clean model address; never Goal Cup's own host | merged in #291 (86b9dae); gate PASS, live PASS |
 | 3 | Upload reads only its own tunnel list | merged in #290 (444aa15); gate PASS, live PASS |
-| 4 | Probe only what the run needs | not started |
+| 4 | Probe only what the run needs | merged in #294 (a3987d6); gate PASS, live PASS; the container restart lost the pipeline once, resumed by hand |
 | 5 | Up to 8 session-file rows; Claude subagents captured | not started |
 | 6 | Copy a harness database once, after exit | not started |
 | 7 | Header stream per exchange, credentials masked | merged in #293 (1919549); gate PASS, live PASS (44 header streams, [masked] present, no Bearer) |
@@ -56,3 +56,4 @@ on Tenki come later, after the build is clear and good.
 - Open for the owner: the redaction change in Task 1 (keep in Task 1 or split); the per-reason gap dedupe; the 16-byte floor; the Claude Co-Authored-By line rule (the attribution reminder asks for it, the system rule forbids a model id in commits). Earlier commits carrying a model name are listed above and not rewritten.
 - Open item: the excluded-upgrade test was stale and is now upgrade_on_an_opened_host_is_captured_whatever_its_path.
 - 28 Oct: Task 7 merged in #293 (1919549). The sandbox gate failed one kit test on the first two heads: the kit matcher counted the new header stream as a second request. The test now skips artifact-hint streams (fce86a4). Owner notes: known-prefix credentials in non-credential headers rely on the daemon redactor; query masking is wider than the spec wording.
+- 28 Oct: Task 4 merged in #294 (a3987d6). One rule for hard and warn hosts (model_host::provider_hosts), used by start and setup. Test-only seam GOALCUP_TEST_PROBE_ANSWERS needs owner awareness. D74 needs a line for the default-host change. The container restarted during the Task 4 fix round; the uncommitted refactor was compiled, tested, committed and reviewed by hand.
