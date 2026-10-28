@@ -8,11 +8,12 @@
 //! only to know where a message ends (keep-alive, pipelining, the upgrade boundary); a request
 //! is never reserialized.
 //!
-//! **What is captured.** Only an exchange whose Host names the admitted host and whose
-//! query-free path the host profile selects ([`crate::proxy::metadata`]). A request whose Host
-//! (or absolute-form authority) names any other host turns the connection into an opaque relay,
-//! counted and chained as a loss: another host's traffic never rides uncaptured inside an
-//! admitted connection. Its request body is a
+//! **What is captured.** Every exchange whose Host names the admitted host, whatever its path,
+//! as long as its method is retainable; the host profile only picks each exchange's decoder hint
+//! ([`crate::proxy::metadata`]). An exchange relayed but not retained leaves a `LimitExceeded`
+//! loss in the chain. A request whose Host (or absolute-form authority) names any other host
+//! turns the connection into an opaque relay, counted and chained as a loss: another host's
+//! traffic never rides uncaptured inside an admitted connection. Its request body is a
 //! `WireRequest` stream, its final response body a `WireResponse` stream; both carry the typed
 //! [`goalcup_protocol::capture::WireIdentity`] of this physical connection and a per-connection
 //! exchange counter (starting at one), with `message_index: None`. Informational (1xx) heads
@@ -46,7 +47,7 @@
 //! content-coding tokens of a body left undecoded, sanitized and bounded, in `host.log` only.
 
 use crate::proxy::api::{
-    BoxIo, CaptureEmitter, CapturePolicy, HttpOutcome, RelayContext, RelayPair, Upgrade,
+    BoxIo, CaptureEmitter, CapturePolicy, HttpOutcome, ProxyLoss, RelayContext, RelayPair, Upgrade,
 };
 use crate::proxy::metadata::{self, ExchangeMeta, SafeTarget};
 use brotli_decompressor::{
@@ -144,6 +145,7 @@ pub async fn relay_http(pair: RelayPair, context: RelayContext) -> io::Result<Ht
                 exchange,
                 extensions,
                 capture,
+                named_by_row,
             } = *hand;
             Ok(HttpOutcome::WebSocket(Upgrade {
                 exchange,
@@ -156,6 +158,7 @@ pub async fn relay_http(pair: RelayPair, context: RelayContext) -> io::Result<Ht
                 upstream_prefix: upstream_in.buf,
                 extensions,
                 capture,
+                named_by_row,
             }))
         }
         _ => Err(io::Error::other(
@@ -203,6 +206,9 @@ struct Pending {
 /// A selected exchange: its retained metadata, and whether its request is being captured.
 struct ExchangeCapture {
     meta: ExchangeMeta,
+    /// True when a host-policy row names the path (a wire row or the base-prefix row). Every
+    /// exchange is recorded, but only one under the base path can be a model call on a POST.
+    named_by_row: bool,
     request_content_type: Option<String>,
     /// True while the request's stream is open or ended normally; false if it never opened
     /// or its capture was lost. A response is captured only behind a captured request.
@@ -249,6 +255,7 @@ struct Handoff {
     exchange: u64,
     extensions: Option<String>,
     capture: Option<CaptureMeta>,
+    named_by_row: bool,
 }
 
 // ---------------------------------------------------------------------------------------
@@ -296,13 +303,24 @@ async fn relay_requests(
         shared.emitter.record_model_request();
         let at = src.at.clone();
         let capture = select(shared, &request, target.as_ref(), exchange);
-        if let Some(capture) = &capture {
-            shared.emitter.record_recorded_request();
-            // A model call is a request on a hinted path, or a POST on any other recorded path
-            // (a provider's own generate route under the base path); a GET there is a model
-            // list or a probe.
-            if capture.meta.protocol_hint.is_some() || capture.meta.method == "POST" {
-                shared.emitter.record_generation_request();
+        match &capture {
+            Some(capture) => {
+                shared.emitter.record_recorded_request();
+                // A model call is decided by `ExchangeMeta::counts_as_model_call`, the one rule the
+                // WebSocket relay also reads.
+                if ExchangeMeta::counts_as_model_call(
+                    capture.meta.protocol_hint.as_deref(),
+                    &capture.meta.method,
+                    capture.named_by_row,
+                ) {
+                    shared.emitter.record_generation_request();
+                }
+            }
+            // Relayed unchanged but not retained: the chain says so, once per reason.
+            None => {
+                let _ = shared
+                    .emitter
+                    .proxy_loss(metadata::capture_time(), ProxyLoss::ExchangeOverLimit);
             }
         }
         let request_ok = capture.as_ref().map(|c| c.request_ok.clone());
@@ -389,8 +407,10 @@ async fn relay_requests(
     }
 }
 
-/// Decide whether this exchange is captured: the admitted host, a retainable method and
-/// path, and a path the host policy selects.
+/// Decide whether this exchange is captured. Every exchange on the admitted host is, whatever
+/// its path, as long as its method can be retained; the host policy only supplies the decoder
+/// hint for the path (none when no row names it). `None` means the exchange is relayed but
+/// not retained.
 fn select(
     shared: &Shared<'_>,
     request: &RequestHead,
@@ -398,7 +418,8 @@ fn select(
     exchange: u64,
 ) -> Option<ExchangeCapture> {
     let target = target.filter(|_| metadata::is_method(&request.method))?;
-    let path = metadata::select(shared.policy, &target.path)?;
+    let row = metadata::select(shared.policy, &target.path);
+    let protocol_hint = row.and_then(|row| row.protocol_hint.clone());
     Some(ExchangeCapture {
         meta: ExchangeMeta {
             connection: shared.connection.to_string(),
@@ -406,8 +427,9 @@ fn select(
             host: shared.host.to_string(),
             method: request.method.clone(),
             path: target.path.clone(),
-            protocol_hint: path.protocol_hint.clone(),
+            protocol_hint,
         },
+        named_by_row: row.is_some(),
         request_content_type: request.fields.content_type.clone(),
         request_ok: Arc::new(AtomicBool::new(false)),
     })
@@ -516,15 +538,20 @@ async fn relay_responses(
             if ask.decision.send(Decision::WebSocket).is_err() {
                 return Err(io::Error::other("the request side of an upgrade is gone"));
             }
-            let capture = pending
-                .capture
-                .map(|c| c.meta.request(c.request_content_type));
+            let (capture, named_by_row) = match pending.capture {
+                Some(c) => {
+                    let named_by_row = c.named_by_row;
+                    (Some(c.meta.request(c.request_content_type)), named_by_row)
+                }
+                None => (None, false),
+            };
             return Ok(ResponseEnd::Upgraded(Box::new(Handoff {
                 upstream: src,
                 client: dst,
                 exchange: pending.exchange,
                 extensions: response.extensions(),
                 capture,
+                named_by_row,
             })));
         }
 

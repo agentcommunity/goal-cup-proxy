@@ -40,6 +40,9 @@ pub enum ProxyLoss {
     OpaqueFallback,
     /// A connection cut by the shutdown before it settled.
     CutUnsettled,
+    /// An exchange on an opened host that the recorder cannot retain, such as a method over
+    /// the metadata limit. It is relayed unchanged; the chain says it was not recorded.
+    ExchangeOverLimit,
 }
 
 impl ProxyLoss {
@@ -47,7 +50,7 @@ impl ProxyLoss {
     pub fn gap_reason(self) -> GapReason {
         match self {
             ProxyLoss::FailOpenTunnel | ProxyLoss::OpaqueFallback => GapReason::DecodeFailed,
-            ProxyLoss::CaptureTableFull => GapReason::LimitExceeded,
+            ProxyLoss::CaptureTableFull | ProxyLoss::ExchangeOverLimit => GapReason::LimitExceeded,
             ProxyLoss::CutUnsettled => GapReason::ShutdownDeadline,
         }
     }
@@ -99,6 +102,10 @@ pub struct Upgrade {
     pub upstream_prefix: Vec<u8>,
     pub extensions: Option<String>,
     pub capture: Option<CaptureMeta>,
+    /// True when a host-policy row names the handshake's path. The WebSocket relay reads the
+    /// model-call rule (`ExchangeMeta::counts_as_model_call`) with it, the handshake's hint and
+    /// its method, so the HTTP and WebSocket counts cannot disagree.
+    pub named_by_row: bool,
 }
 
 /// How an HTTP relay ended.
@@ -140,6 +147,7 @@ impl std::fmt::Debug for Upgrade {
             .field("upstream_prefix_len", &self.upstream_prefix.len())
             .field("extensions", &self.extensions)
             .field("capture", &self.capture.is_some())
+            .field("named_by_row", &self.named_by_row)
             .finish_non_exhaustive()
     }
 }
@@ -356,10 +364,11 @@ impl CaptureEmitter {
 
     /// Requests the recording proxy selected that are model calls: each on a path that carries a
     /// protocol hint (`/chat/completions`, `/messages`, `/responses`, a provider's reviewed
-    /// paths), and each POST on a recorded path without one (a provider's own generate route,
-    /// such as `:streamGenerateContent`). A GET under a model host's base path (a model list, a
-    /// health probe) is recorded ([`CaptureEmitter::recorded_requests`]) but is not counted
-    /// here, so this is what "the agent made a model call" means.
+    /// paths), and each POST under a model host's base path without one (a provider's own
+    /// generate route, such as `:streamGenerateContent`). A GET under the base path (a model
+    /// list, a health probe), and a POST outside every row (a token refresh), are recorded
+    /// ([`CaptureEmitter::recorded_requests`]) but are not counted here, so this is what "the
+    /// agent made a model call" means.
     pub fn generation_requests(&self) -> u64 {
         self.generation_requests.load(Ordering::SeqCst)
     }

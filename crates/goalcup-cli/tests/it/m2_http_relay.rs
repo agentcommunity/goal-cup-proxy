@@ -1430,8 +1430,9 @@ async fn two_requests_on_one_connection_count_two() {
 
 /// The run's "no model calls" line counts model calls, not every recorded request: a model list
 /// under the same base path (a `model_host_from` host records the whole base, without a hint) is
-/// recorded but is no call, and a request on a hinted path, or a POST on any recorded path, is
-/// both.
+/// recorded but is no call, and a request on a hinted path, or a POST under the base path, is
+/// both recorded and a call. A POST outside every row is recorded but is no call: it is not
+/// under the base path.
 #[tokio::test]
 async fn only_a_request_on_a_hinted_path_counts_as_a_model_call() {
     let sink = RecordingSink::new();
@@ -1477,6 +1478,24 @@ async fn only_a_request_on_a_hinted_path_counts_as_a_model_call() {
     .await;
     assert_eq!(h.emitter.recorded_requests(), 3);
     assert_eq!(h.emitter.generation_requests(), 2);
+    // A POST outside every row (a token refresh on the same host) is recorded but is no model call.
+    round_trip(
+        &mut h,
+        &request(
+            "POST",
+            "/oauth/token",
+            &[&length(b"grant_type=refresh_token")],
+            b"grant_type=refresh_token",
+        ),
+        &ok,
+    )
+    .await;
+    assert_eq!(h.emitter.recorded_requests(), 4);
+    assert_eq!(
+        h.emitter.generation_requests(),
+        2,
+        "a POST outside the base path is no call"
+    );
     close_both(h).await;
 }
 
@@ -1637,9 +1656,14 @@ async fn accepted_upgrade_hands_off_both_prefixes_once() {
     );
 }
 
+/// Every exchange on an opened host is captured whatever its path. A row only supplies the
+/// protocol hint, so an upgrade on an unnamed path keeps its metadata with no hint.
 #[tokio::test]
-async fn excluded_upgrade_relays_without_capture() {
-    for (path, selected) in [("/ws/telemetry", false), ("/v1/realtime", true)] {
+async fn upgrade_on_an_opened_host_is_captured_whatever_its_path() {
+    for (path, hint) in [
+        ("/ws/telemetry", None),
+        ("/v1/realtime", Some("openai-realtime")),
+    ] {
         let sink = RecordingSink::new();
         let mut h = start(
             emitter_for(sink.clone()),
@@ -1655,16 +1679,13 @@ async fn excluded_upgrade_relays_without_capture() {
             .into_iter()
             .filter(|f| f.stream.stream != 0)
             .count();
-        if selected {
-            let capture = upgrade.capture.expect("selected path keeps its metadata");
-            assert_eq!(capture.path.as_deref(), Some(path));
-            assert_eq!(capture.protocol_hint.as_deref(), Some("openai-realtime"));
-            assert_eq!(capture.wire.map(|w| w.exchange), Some(1));
-            assert_eq!(payload_frames, 4, "handshake request and response");
-        } else {
-            assert_eq!(upgrade.capture, None, "relay-only");
-            assert_eq!(payload_frames, 0, "no evidence for an unselected path");
-        }
+        let capture = upgrade
+            .capture
+            .unwrap_or_else(|| panic!("{path} on an opened host keeps its metadata"));
+        assert_eq!(capture.path.as_deref(), Some(path));
+        assert_eq!(capture.protocol_hint.as_deref(), hint, "{path}");
+        assert_eq!(capture.wire.map(|w| w.exchange), Some(1));
+        assert_eq!(payload_frames, 4, "{path}: handshake request and response");
     }
 }
 

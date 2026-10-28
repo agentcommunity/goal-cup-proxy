@@ -698,7 +698,7 @@ fn corpus() -> Vec<u8> {
     c.extend_from_slice(b"Authorization: Bearer abcdefghijklmnop.qrstuvwxyz-0123\n");
     c.extend_from_slice(b"export OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123\n");
     c.extend_from_slice(b"token = 'ABCDEFGHIJKLMNOP1234' and password: hunter2hunter2hunter2\n");
-    c.extend_from_slice(b"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 AKIAABCDEFGHIJKLMNOP ");
+    c.extend_from_slice(b"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 AKIAIOSFODNN7EXAMPLE ");
     c.extend_from_slice(b"AKIAABCDEFGHIJKLMNO (short) xoxb-1234567890-abcdef ");
     c.extend_from_slice(
         b"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLXN5bnRoZXRpYw\n",
@@ -2213,7 +2213,7 @@ fn metadata_is_redacted_without_retaining_query() {
 
     // Redaction can lengthen a string; it stays within the string bound and stays redacted.
     let mut p = Producer::new(P1);
-    let label = "AKIAABCDEFGHIJKLMNOP ".repeat(48);
+    let label = "AKIAIOSFODNN7EXAMPLE ".repeat(48);
     assert!(label.len() <= MAX_METADATA_STRING_BYTES);
     let records = p.push(
         1,
@@ -2237,6 +2237,56 @@ fn metadata_is_redacted_without_retaining_query() {
     assert!(metadata.label.len() <= MAX_METADATA_STRING_BYTES);
     assert!(!metadata.label.contains("AKIAABCD"));
     assert!(metadata.validate().is_ok());
+}
+
+/// A refresh token in the body of a request to a token endpoint on an opened host never reaches a
+/// segment in the clear. The proxy records every request on an opened host and hands the body over
+/// unchanged, so this redactor is the only thing between the token and the chain. Checked on the
+/// decoded segment bytes (`all_segment_bytes`), not on the base64 text, and not vacuously: the
+/// body's other key is retained.
+#[test]
+fn a_token_in_a_body_on_an_opened_host_is_masked_in_the_chain() {
+    const TOKEN: &[u8] = b"rt-0123456789abcdefghij";
+    let body = br#"{"grant_type":"refresh_token","refresh_token":"rt-0123456789abcdefghij"}"#;
+    let mut p = Producer::new(P1);
+    let mut records = p.open(1, CaptureSource::WireRequest);
+    records.extend(p.bytes(1, body));
+    records.extend(p.end(1, EndReason::Complete));
+    let retained = all_segment_bytes(&records);
+    assert!(
+        contains(&retained, b"grant_type"),
+        "the body was retained: {}",
+        String::from_utf8_lossy(&retained)
+    );
+    assert!(
+        !contains(&retained, TOKEN),
+        "the refresh token reached a segment in the clear: {}",
+        String::from_utf8_lossy(&retained)
+    );
+}
+
+/// An OAuth refresh request is form-encoded (RFC 6749 section 6), and its token is percent-encoded
+/// or dotted. The same rule holds for that body: the token never reaches a segment in the clear,
+/// and the body's other field is retained.
+#[test]
+fn a_form_encoded_refresh_token_on_an_opened_host_is_masked_in_the_chain() {
+    const TOKEN: &[u8] = b"0gAbCdEfGhIjKlMnOpQrStUv";
+    let body = b"grant_type=refresh_token&refresh_token=1%2F%2F0gAbCdEfGhIjKlMnOpQrStUv";
+    let mut p = Producer::new(P1);
+    let mut records = p.open(1, CaptureSource::WireRequest);
+    records.extend(p.bytes(1, body));
+    records.extend(p.end(1, EndReason::Complete));
+    let retained = all_segment_bytes(&records);
+    assert!(
+        contains(&retained, b"grant_type"),
+        "the body was retained: {}",
+        String::from_utf8_lossy(&retained)
+    );
+    assert!(
+        !contains(&retained, TOKEN),
+        "the form refresh token reached a segment in the clear: {}",
+        String::from_utf8_lossy(&retained)
+    );
 }
 
 /// A PEM body far past the bound (one MiB) never grows the hold: its first `PEM_BODY_MAX` bytes are
@@ -2324,7 +2374,7 @@ fn long_private_key_does_not_grow_pending_buffer() {
 
 #[test]
 fn many_short_matches_fit_envelope_budget() {
-    let key = b"AKIAABCDEFGHIJKLMNOP ";
+    let key = b"AKIAIOSFODNN7EXAMPLE ";
     let mut input = Vec::new();
     while input.len() + key.len() <= MAX_SEGMENT_BYTES {
         input.extend_from_slice(key);
@@ -2424,7 +2474,7 @@ fn audit_offsets_are_source_absolute() {
     let mut input = vec![b','; 40_000];
     let aws_at = 55_000;
     input.extend(vec![b','; 30_000]);
-    input[aws_at..aws_at + 20].copy_from_slice(b"AKIAABCDEFGHIJKLMNOP");
+    input[aws_at..aws_at + 20].copy_from_slice(b"AKIAIOSFODNN7EXAMPLE");
     // A token that straddles the second push boundary (70_000).
     let ghp_at = 69_990;
     input[ghp_at - 1] = b' ';

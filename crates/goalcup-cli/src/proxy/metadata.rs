@@ -131,9 +131,10 @@ pub(crate) fn host_matches(expected: &str, host_headers: &[String], target: &Saf
             .is_none_or(|authority| host_part(authority) == expected)
 }
 
-/// The first capture path of the matched host profile that selects `path`, exactly or as an
-/// explicit prefix, against the path without its query or fragment. An empty policy selects
-/// nothing.
+/// The first row of the matched host profile that names `path`, exactly or as an explicit
+/// prefix, against the path without its query or fragment. It supplies the exchange's protocol
+/// hint only: an exchange on the host is captured whether or not a row names it. An empty policy
+/// names nothing.
 pub(crate) fn select<'a>(policy: &'a CapturePolicy, path: &str) -> Option<&'a CapturePath> {
     policy.paths.iter().find(|candidate| {
         if candidate.prefix {
@@ -189,6 +190,20 @@ fn label(prefix: &str, path: &str) -> String {
 }
 
 impl ExchangeMeta {
+    /// The model-call rule, written once. A request is a model call when a host-policy row hints
+    /// its path, or when it is a POST on a path a row names with no hint (a provider's own
+    /// generate route). A GET there is a model list or a probe, and a POST outside every row (a
+    /// token refresh, say) is recorded but is no call. The HTTP relay counts each request with
+    /// this, and the WebSocket relay counts each message of a captured connection with the same
+    /// inputs, carried from the handshake, so the two cannot drift.
+    pub(crate) fn counts_as_model_call(
+        protocol_hint: Option<&str>,
+        method: &str,
+        named_by_row: bool,
+    ) -> bool {
+        protocol_hint.is_some() || (named_by_row && method == "POST")
+    }
+
     /// The path as it may be retained: whole, or not at all.
     fn retained_path(&self) -> Option<String> {
         (self.path.len() <= MAX_METADATA_STRING_BYTES).then(|| self.path.clone())

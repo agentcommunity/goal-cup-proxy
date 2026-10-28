@@ -299,6 +299,47 @@ fn space(u: Unit) -> bool {
 fn json_key(u: Unit) -> bool {
     token_folded(u)
 }
+
+/// One unit of the shell literal's value after a `=` with no space, as its two alternatives read
+/// it. `token_only` and `run` track the first alternative, `[A-Za-z0-9_\-]{16,}`: it is decided
+/// once it has sixteen units and a unit outside its class arrives, so the candidate ends there.
+/// The second is the form-encoded value, a run of `%XX` escapes and units of the class
+/// `[A-Za-z0-9_.~+/=\-]`, which needs sixteen units and a `%XX` escape or the dotted shape (see
+/// `redact.rs`). Its match ends at the end of that run, so this keeps every unit of the class
+/// live past the first alternative, and the regex then decides the exact span. `None` ends the
+/// candidate.
+fn encoded_step(run: u8, token_only: bool, hex: u8, u: Unit) -> Option<Shell> {
+    if hex > 0 {
+        return ascii_where(u, |b| b.is_ascii_hexdigit()).then_some(Shell::Encoded {
+            run,
+            token_only: false,
+            hex: hex - 1,
+        });
+    }
+    if token_folded(u) {
+        return Some(Shell::Encoded {
+            run: (run + 1).min(16),
+            token_only,
+            hex: 0,
+        });
+    }
+    if token_only && run >= 16 {
+        return None;
+    }
+    match u {
+        Unit::Char('%') => Some(Shell::Encoded {
+            run,
+            token_only: false,
+            hex: 2,
+        }),
+        Unit::Char('.' | '~' | '+' | '/' | '=') => Some(Shell::Encoded {
+            run,
+            token_only: false,
+            hex: 0,
+        }),
+        Unit::Char(_) => None,
+    }
+}
 /// `[^{}]` in Unicode mode: any scalar value but a brace.
 fn object_char(u: Unit) -> bool {
     matches!(u, Unit::Char(c) if c != '{' && c != '}')
@@ -488,12 +529,12 @@ static SHAPES: [Shape; 23] = [
     ),
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)\\{0,7}"(?:[A-Za-z0-9_\-]{0,999}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"([^"\\]{16,})\\{0,7}""#,
+        source: r#"(?i)\\{0,7}"[A-Za-z0-9_\-]{0,1000}(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"((?:[^"\\]|\\{1,7}[^"\\]){16,})\\{0,7}""#,
         form: Form::JsonAssignment,
     },
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?(?:[A-Za-z0-9_\-]{16,})"#,
+        source: r#"(?i)(?:api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}|=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,}))"#,
         form: Form::ShellAssignment,
     },
     Shape {
@@ -910,6 +951,17 @@ enum Shell {
     Quoted,
     /// Value characters, capped at sixteen.
     Value(u8),
+    /// Just after `=` with no space: the form-encoded literal's value may start here.
+    Direct,
+    /// Inside the form-encoded literal's value (see [`encoded_step`]).
+    Encoded {
+        /// Token-class units so far, capped at sixteen.
+        run: u8,
+        /// True while every unit so far is a token-class unit.
+        token_only: bool,
+        /// Hex digits still owed by a `%XX` escape.
+        hex: u8,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1385,15 +1437,22 @@ impl Json {
                     true
                 }
             },
-            // The quote completes the match, which the regex then sees; anything else but one
-            // more backslash ends it.
-            JsonPhase::ValueEnd(k) => match more(k) {
+            // Backslashes after a value character: one to seven, then either one character that
+            // is not a quote (an escaped unit of the value, `\/`), or the quote that closes it.
+            // The closing quote completes the match, which the regex then sees.
+            JsonPhase::ValueEnd(k) if is(u, b'\\') => match more(k) {
                 Some(k) => {
                     self.phase = JsonPhase::ValueEnd(k);
                     true
                 }
                 None => false,
             },
+            JsonPhase::ValueEnd(_) if is(u, b'"') => false,
+            JsonPhase::ValueEnd(_) => {
+                self.phase = JsonPhase::Value;
+                self.n = (self.n + 1).min(16);
+                true
+            }
         }
     }
 }
@@ -1445,12 +1504,29 @@ impl Shell {
                     Shell::ApiKey(p + 1)
                 }
             }
-            Shell::BeforeSep if is(u, b'=') || is(u, b':') => Shell::AfterSep,
+            Shell::BeforeSep if is(u, b'=') => Shell::Direct,
+            Shell::BeforeSep if is(u, b':') => Shell::AfterSep,
+            // Only a `=` with no space after it can start the form-encoded value.
+            Shell::Direct if space(u) => Shell::AfterSep,
             Shell::BeforeSep | Shell::AfterSep if space(u) => return true,
-            Shell::AfterSep if is(u, b'\\') => Shell::Escape(1),
+            Shell::AfterSep | Shell::Direct if is(u, b'\\') => Shell::Escape(1),
             Shell::Escape(k) if is(u, b'\\') && k < MAX_QUOTE_ESCAPES => Shell::Escape(k + 1),
-            Shell::AfterSep | Shell::Escape(_) if is(u, b'\'') || is(u, b'"') => Shell::Quoted,
+            Shell::AfterSep | Shell::Direct | Shell::Escape(_) if is(u, b'\'') || is(u, b'"') => {
+                Shell::Quoted
+            }
             Shell::AfterSep | Shell::Quoted if token_folded(u) => Shell::Value(1),
+            Shell::Direct => match encoded_step(0, true, 0, u) {
+                Some(next) => next,
+                None => return false,
+            },
+            Shell::Encoded {
+                run,
+                token_only,
+                hex,
+            } => match encoded_step(run, token_only, hex, u) {
+                Some(next) => next,
+                None => return false,
+            },
             Shell::Value(n) if token_folded(u) => Shell::Value((n + 1).min(16)),
             _ => return false,
         };
@@ -1655,7 +1731,7 @@ impl Candidate {
                 matches!(json.phase, JsonPhase::Value | JsonPhase::ValueEnd(_))
                     .then_some(json.value_start)
             }
-            (Walk::Shell(Shell::Value(_)), _) => Some(self.start),
+            (Walk::Shell(Shell::Value(_) | Shell::Encoded { .. }), _) => Some(self.start),
             // A connector field's value has begun: from there it is the rule's span.
             (Walk::Field(field), Form::Field { value, .. }) => match field.phase {
                 FieldPhase::Object(_) | FieldPhase::String(_) | FieldPhase::Scalar { .. } => {

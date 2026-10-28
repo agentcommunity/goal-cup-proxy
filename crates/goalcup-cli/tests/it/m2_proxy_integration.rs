@@ -475,6 +475,221 @@ async fn unknown_protocol_hint_is_captured_without_a_decoder() {
     assert_eq!(views[1].bytes, b"\x01opaque-response\xfe");
 }
 
+/// One `GET path` on a keep-alive connection, answered with `reply`; both ends are checked byte
+/// for byte.
+async fn get_exchange(
+    client: &mut ClientTls,
+    upstream: &mut UpstreamTls,
+    path: &str,
+    reply: &[u8],
+) {
+    let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").into_bytes();
+    send(client, &request).await;
+    let (head, got) = read_request(upstream).await;
+    assert_eq!([head, got].concat(), request, "upstream saw other bytes");
+    let response = ok_response("application/json", reply);
+    send(upstream, &response).await;
+    let mut seen = Vec::new();
+    read_at_least(client, &mut seen, response.len()).await;
+    assert_eq!(seen, response, "client saw other bytes");
+}
+
+/// Every request on an opened host is recorded, whatever its path and method: the host policy
+/// only picks the decoder hint. The policy is the production rule for a URL with no path
+/// (`ModelHost::approved`), not a single-path test policy. So `POST /v1/messages` gets its
+/// hint from the `/v1` wire row, `GET /v1/models` is recorded with no hint through the `/v1/`
+/// base-prefix row, and `POST /x/other`, outside every row, is recorded with no hint too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_request_on_an_opened_host_is_recorded() {
+    let clock = clock_start();
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut config = RigConfig::new(&pki);
+    config.approved = vec![
+        goalcup_cli::model_host::ModelHost {
+            host: "localhost".into(),
+            port: 443,
+            base_path: String::new(),
+            from: "test config".into(),
+        }
+        .approved(),
+    ];
+    let mut rig = Rig::start(config, sink.clone()).await;
+    let mut client = rig.client(upstream.addr.port()).await;
+    let mut up = upstream.accept().await.tls;
+    exchange(
+        &mut client,
+        &mut up,
+        "/v1/messages",
+        b"{\"messages\":[]}",
+        b"{\"id\":\"m\"}",
+    )
+    .await;
+    get_exchange(&mut client, &mut up, "/v1/models", b"{\"data\":[]}").await;
+    exchange(
+        &mut client,
+        &mut up,
+        "/x/other",
+        b"outside-every-row",
+        b"{\"ok\":true}",
+    )
+    .await;
+    close_both(client, up).await;
+    rig.wait_closed(1).await;
+    let recorded = rig
+        .handle()
+        .recorded_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let model_calls = rig
+        .handle()
+        .generation_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    assert_all_clean(&rig.stop().await);
+    sink.settle().await;
+
+    let frames = sink.frames();
+    check_frames(&frames);
+    check_clock(&frames, clock, clock_now());
+    let views = streams(&frames);
+    let requests: Vec<&StreamView> = views
+        .iter()
+        .filter(|v| v.source == CaptureSource::WireRequest)
+        .collect();
+    let responses = views
+        .iter()
+        .filter(|v| v.source == CaptureSource::WireResponse)
+        .count();
+    assert_eq!((requests.len(), responses), (3, 3), "{views:?}");
+    assert_eq!(recorded, 3);
+    // Only the hinted POST is a model call: the GET model list and the POST outside every
+    // row are not.
+    assert_eq!(model_calls, 1);
+    let paths: Vec<&str> = requests
+        .iter()
+        .map(|v| v.meta.path.as_deref().expect("a retained path"))
+        .collect();
+    assert_eq!(paths, ["/v1/messages", "/v1/models", "/x/other"]);
+    let hints: Vec<Option<&str>> = requests
+        .iter()
+        .map(|v| v.meta.protocol_hint.as_deref())
+        .collect();
+    assert_eq!(hints, [Some("anthropic-messages"), None, None]);
+    let exchanges: Vec<u64> = requests.iter().map(|v| v.exchange()).collect();
+    assert_eq!(exchanges, [1, 2, 3]);
+    assert_eq!(requests[2].bytes, b"outside-every-row");
+}
+
+/// A refresh-token request to a token endpoint on an opened host is recorded like any other
+/// request: the proxy hands its body over unchanged. Masking happens in the daemon's redactor,
+/// before a segment is written; that is pinned on decoded segment bytes in the daemon's
+/// `capture_redaction` suite. Sign-in hosts stay sealed (auth hosts), which is a separate rule.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_token_refresh_on_an_opened_host_is_recorded() {
+    let clock = clock_start();
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut rig = Rig::start(RigConfig::new(&pki), sink.clone()).await;
+    let mut client = rig.client(upstream.addr.port()).await;
+    let mut up = upstream.accept().await.tls;
+    let body = br#"{"grant_type":"refresh_token","refresh_token":"rt-0123456789abcdefghij"}"#;
+    exchange(
+        &mut client,
+        &mut up,
+        "/oauth/token",
+        body,
+        br#"{"access_token":"at-0123456789abcdefghij"}"#,
+    )
+    .await;
+    close_both(client, up).await;
+    rig.wait_closed(1).await;
+    let model_calls = rig
+        .handle()
+        .generation_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    assert_all_clean(&rig.stop().await);
+    sink.settle().await;
+
+    let frames = sink.frames();
+    check_frames(&frames);
+    check_clock(&frames, clock, clock_now());
+    assert_eq!(model_calls, 0, "a token refresh is no model call");
+    let views = streams(&frames);
+    let refresh = views
+        .iter()
+        .find(|v| v.source == CaptureSource::WireRequest)
+        .expect("the refresh request is recorded");
+    assert_eq!(refresh.meta.path.as_deref(), Some("/oauth/token"));
+    assert_eq!(refresh.meta.protocol_hint, None);
+    assert_eq!(refresh.bytes, body);
+}
+
+/// An exchange the recorder cannot retain (a method over the metadata limit) is still relayed
+/// unchanged and leaves one `LimitExceeded` loss in the chain: it never vanishes silently. The
+/// connection carries on, and the next exchange is recorded under its own exchange number.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_exchange_the_recorder_cannot_retain_is_a_loss() {
+    let clock = clock_start();
+    let pki = TestPki::new("upstream test CA");
+    let mut upstream = Upstream::start(&pki, &["localhost"]).await;
+    let sink = DirectSink::new(QUEUE_BYTES);
+    let mut rig = Rig::start(RigConfig::new(&pki), sink.clone()).await;
+    let mut client = rig.client(upstream.addr.port()).await;
+    let mut up = upstream.accept().await.tls;
+    let method = "M".repeat(65);
+    let request = format!(
+        "{method} /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\nhi"
+    )
+    .into_bytes();
+    send(&mut client, &request).await;
+    let (head, got) = read_request(&mut up).await;
+    assert_eq!([head, got].concat(), request, "upstream saw other bytes");
+    let response = ok_response("text/plain", b"ok");
+    send(&mut up, &response).await;
+    let mut seen = Vec::new();
+    read_at_least(&mut client, &mut seen, response.len()).await;
+    assert_eq!(seen, response, "client saw other bytes");
+    exchange(
+        &mut client,
+        &mut up,
+        "/v1/responses",
+        b"{\"after\":1}",
+        b"{}",
+    )
+    .await;
+    close_both(client, up).await;
+    rig.wait_closed(1).await;
+    let handle = rig.handle();
+    let model = handle
+        .model_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let recorded = handle
+        .recorded_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let report = rig.stop().await;
+    assert!(
+        report.is_clean_drain() && report.transport_failures() == 0,
+        "{report:?}"
+    );
+    sink.settle().await;
+
+    let frames = sink.frames();
+    check_frames(&frames);
+    check_clock(&frames, clock, clock_now());
+    assert_eq!((model, recorded), (2, 1));
+    assert_eq!(
+        losses(&frames)
+            .into_iter()
+            .map(|(_, r)| r)
+            .collect::<Vec<_>>(),
+        vec![GapReason::LimitExceeded]
+    );
+    let views = streams(&frames);
+    assert_eq!(views.len(), 2, "{views:?}");
+    assert!(views.iter().all(|v| v.exchange() == 2));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn direct_sink_recovery_preserves_relay() {
     let clock = clock_start();
