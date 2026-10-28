@@ -1085,6 +1085,26 @@ mod chat {
         assert!(!rig.cfg.join("runs").exists(), "no run record");
     }
 
+    /// A harness with no model service names two default hosts (Codex's ChatGPT sign-in, then its
+    /// API-key host). The first answers and the second does not: the run starts with no warning,
+    /// because only the first host is probed without a service.
+    #[test]
+    fn a_second_default_host_that_does_not_answer_does_not_stop_a_run() {
+        let rig = Rig::chat();
+        crate::model_host_from::add_default_host(&rig, CHAT_ID, "api.first.example");
+        crate::model_host_from::add_default_host(&rig, CHAT_ID, "api.second.example");
+        let probes = "api.first.example=ok,api.second.example=unreachable";
+        let mut run = rig.start_on_pty(&[DISK, LOCAL_WRAP_UP, (PROBES, probes)]);
+        run.wait_shown("tui: ready");
+        let shown = run.shown();
+        assert!(!shown.contains("could not be reached"), "{shown}");
+        assert!(!shown.contains("Nothing was created."), "{shown}");
+        run.type_line("/exit");
+        let status = run.wait();
+        assert!(status.success(), "{status:?}\n{}", run.shown());
+        assert!(run.shown().contains(LAUNCH_LINE), "{}", run.shown());
+    }
+
     /// A shared home that an older Goal Cup made 0755 (open to the group and the world) is this
     /// user's own: start sets it to 0700, says so in one line, and the run goes on.
     #[test]

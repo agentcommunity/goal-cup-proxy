@@ -116,8 +116,15 @@ extra_patterns = [
   { kind = "codex_turn_state", json_field = "x-codex-turn-state", value = "scalar" },
 ]
 
-# The default model host: Codex's ChatGPT login.
+# The default model hosts. `chatgpt.com` is Codex's ChatGPT login. `api.openai.com` is Codex's
+# API-key login: its Responses requests go to `/v1/responses`, which the row approves with the
+# same decoder hint.
 [[capture.hosts]]
 host = "chatgpt.com"
 evidence_paths = ["/backend-api/codex/responses"]
+protocol_hint = "openai-responses"
+
+[[capture.hosts]]
+host = "api.openai.com"
+evidence_paths = ["/v1/responses"]
 protocol_hint = "openai-responses"

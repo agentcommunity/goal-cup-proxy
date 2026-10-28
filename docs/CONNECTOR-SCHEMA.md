@@ -689,6 +689,9 @@ One to 16 unique host rows are required, counting the rows `capture.providers` a
 with `capture.model_host_from` and `absent = "refuse"` may list none: its model host comes from
 the harness's config at each start.
 
+The first row is the default login host, and it is the only default host probed when no model
+service is set. Other rows are recorded but not probed in that case.
+
 A model provider's host row is written once, in the shared provider table
 `crates/goalcup-protocol/providers.toml`, which is compiled into `goalcup`. A connector names
 rows there with `capture.providers = ["anthropic"]`. The loader appends each named row to
@@ -726,7 +729,7 @@ list. The shipped forms:
 |---|---|---|
 | `hermes-cli` | `{ file = "config.yaml", key = "model.base_url" }` | refused |
 | `claude-code-cli` | `{ file = "settings.json", key = "env.ANTHROPIC_BASE_URL", absent = "defaults" }` | `api.anthropic.com` (`providers = ["anthropic"]`) |
-| `codex-cli` | `{ file = "config.toml", key = "model_providers.*.base_url", via = "model_provider", absent = "defaults" }` | `chatgpt.com` (its own host row) |
+| `codex-cli` | `{ file = "config.toml", key = "model_providers.*.base_url", via = "model_provider", absent = "defaults" }` | `chatgpt.com` (its own host row); `api.openai.com` (its API-key row, `/v1/responses`) when the harness uses an API key |
 
 - **What is read.** `goalcup start` and each `goalcup continue` open `file` in the shared config
   home (`<cfg>/capture-homes/<id>/`), before anything is created, and read the one string at
