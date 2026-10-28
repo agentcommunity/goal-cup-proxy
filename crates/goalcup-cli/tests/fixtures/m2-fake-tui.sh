@@ -7,10 +7,7 @@
 # its config home (`$CODEX_HOME/sessions/`, the connector's native root), as a measured harness
 # does when the first message is submitted, and every line is appended to that file as one JSON
 # record. `/call` runs $M2_FAKE_OUT/tui.call.sh (a model request the test wrote) and writes no
-# session file, then prints `tui: called`. `/hold` leaves a helper in the background, as
-# Hermes's gateway is, holding one connection to the recording proxy open without a byte sent
-# (`sleep 120 | nc`, the pid of `nc` in `tui.holder.pid`), and prints `tui: holding` once it
-# is connected.
+# session file, then prints `tui: called`.
 # `/exit` ends it with status 0 and writes no session file of its own. `/suspend` stops
 # it (`kill -TSTP $$`) as a TUI's own Ctrl-Z handling does, and `/suspend-group` stops its whole
 # process group; each prints `tui: resumed` once it is continued.
@@ -130,17 +127,6 @@ while :; do
     /call)
       [ -f "$out/tui.call.sh" ] && . "$out/tui.call.sh"
       echo "tui: called"
-      continue
-      ;;
-    /hold)
-      proxy=$(sed -n 's/^HTTPS_PROXY=//p' "$out/tui.env")
-      hostport=${proxy##*@}
-      hostport=${hostport%/}
-      sleep 120 | nc 127.0.0.1 "${hostport##*:}" > /dev/null 2>&1 &
-      echo $! > "$out/tui.holder.pid"
-      # `nc` connects to loopback at once; a second is ample.
-      sleep 1
-      echo "tui: holding"
       continue
       ;;
     /suspend)
