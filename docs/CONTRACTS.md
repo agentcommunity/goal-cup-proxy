@@ -525,7 +525,15 @@ Every capture child of `goalcup start` is spawned through `launch::spawn_gated`.
 - **Side artifacts.** `receipt.json`, `acks.jsonl` and the `StartReceipt` and `AckCheckpoint` types
   are versioned by their own domain tags (`goalcup-receipt-v1`, ...) and are outside the record
   freeze. The v5 reader reads only the named files. An absent receipt or ack file is not an error,
-  and it opens no other file in the trace directory.
+  and it opens no other file in the trace directory. The sealed-connection list
+  `tunnels-<entry_id>.jsonl` (format tag `goalcup-tunnels-v1`, D74) is one too: written once at
+  finish in the run's directory (mode 0600), not in the trace directory. Its first line is
+  `{"format":"goalcup-tunnels-v1","entry_id":...}`, then one line per tunnel (`host`, `port`,
+  `reason`, `opened`, `closed` in RFC 3339 UTC, `up_bytes`, `down_bytes`, the bytes `null` when the
+  tunnel ended in an error or was cut at the stop), at most 10,000 of them, and last
+  `{"dropped":N}`. It is sent with the seal and kept beside it. No hash binds it, and the v5
+  verifier never reads it. A run that ends without a finish (a crash, a killed process) has no
+  list.
 - **Not frozen.** The seven `FrameEvent` kinds are the producer-to-daemon seam; a change bumps
   `CONTROL_API_VERSION`. The status projection (`capture_status.rs`) is not a record.
 - **Reader rule.** A verifier change may not turn a previously valid v5 trace invalid without a

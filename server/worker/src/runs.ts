@@ -24,7 +24,7 @@ import {
 
 const JSON_BODY_MAX = 64 * 1024;
 const SEAL_DOC_MAX = 16 * 1024 * 1024; // each document, bytes
-const SEAL_BODY_MAX = 2 * SEAL_DOC_MAX + JSON_BODY_MAX; // two documents plus the JSON around them
+const SEAL_BODY_MAX = 3 * SEAL_DOC_MAX + JSON_BODY_MAX; // two documents and the tunnel list, plus the JSON around them
 
 /**
  * Read a JSON object body of at most `max` bytes. The raw bytes and the decoded text live only
@@ -47,7 +47,8 @@ export async function readJson(request: Request, max: number): Promise<Record<st
 
 /**
  * Take one document string out of the parsed body as UTF-8 bytes, and remove the string from the
- * body so it can be freed: a seal carries two documents of up to 16 MiB, and the Worker has 128 MB.
+ * body so it can be freed: a seal carries up to three documents of up to 16 MiB, and the Worker
+ * has 128 MB.
  */
 function takeDocument(body: Record<string, unknown>, name: string): Uint8Array {
   const text = body[name];
@@ -518,14 +519,22 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
   if (!isEntryId(entry_id)) throw malformed("entry_id must be e and 16 lowercase hex digits.");
   const sealBytes = takeDocument(b, "seal_json");
   const baselineBytes = takeDocument(b, "baseline_json");
+  // The sealed-connection list (`goalcup-tunnels-v1`), optional: a side artifact kept beside the
+  // seal and outside the chain. It never takes part in the repeat or conflict rule below.
+  const tunnelsBytes = b.tunnels_jsonl === undefined ? null : takeDocument(b, "tunnels_jsonl");
   const { run, entry } = await requireRun(ctx, member, runId, entry_id);
+  const prefix = `traces/${run.event_id}/${run.run_id}/${entry.entry_id}`;
 
   const sealSha = await sha256Hex(sealBytes);
   const baselineSha = await sha256Hex(baselineBytes);
 
   // Already sealed: same documents is a repeat (200), different documents is a conflict.
   if (entry.sealed_at !== null) {
-    if (entry.seal_sha256 === sealSha && entry.baseline_sha256 === baselineSha) return json(200, { status: "sealed", run_status: run.status });
+    if (entry.seal_sha256 === sealSha && entry.baseline_sha256 === baselineSha) {
+      // A repeat may be the retry of a seal whose list was not kept.
+      await keepTunnels(ctx, prefix, tunnelsBytes);
+      return json(200, { status: "sealed", run_status: run.status });
+    }
     throw conflict("This entry is sealed with different documents.");
   }
   requireAccepting(ctx, run);
@@ -543,11 +552,11 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
 
   // Store the documents first, under names that contain their hash (so they can never be
   // overwritten with different content), then record the seal.
-  const prefix = `traces/${run.event_id}/${run.run_id}/${entry.entry_id}`;
   const sealKey = `${prefix}/seal-${sealSha}.json`;
   const baselineKey = `${prefix}/baseline-${baselineSha}.json`;
   await putDocument(ctx, sealKey, sealBytes, sealSha);
   await putDocument(ctx, baselineKey, baselineBytes, baselineSha);
+  await keepTunnels(ctx, prefix, tunnelsBytes);
 
   const r = await ctx.db.sealRun({
     member_id: member,
@@ -576,12 +585,26 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
   }
 }
 
+/**
+ * The sealed-connection list beside the seal, as `tunnels-<sha256>.jsonl`. Best effort: a list
+ * that cannot be kept is logged and never fails the seal. No database row names it.
+ */
+async function keepTunnels(ctx: Ctx, prefix: string, bytes: Uint8Array | null): Promise<void> {
+  if (bytes === null) return;
+  const sha = await sha256Hex(bytes);
+  try {
+    await putDocument(ctx, `${prefix}/tunnels-${sha}.jsonl`, bytes, sha, "application/x-ndjson");
+  } catch {
+    // putDocument logged it.
+  }
+}
+
 /** Create-only put; "already there" is fine because the name contains the content's hash. */
-async function putDocument(ctx: Ctx, key: string, bytes: Uint8Array, sha256: string): Promise<void> {
+async function putDocument(ctx: Ctx, key: string, bytes: Uint8Array, sha256: string, contentType = "application/json"): Promise<void> {
   try {
     await ctx.env.TRACES.put(key, bytes, {
       sha256,
-      httpMetadata: { contentType: "application/json" },
+      httpMetadata: { contentType },
       onlyIf: { etagDoesNotMatch: "*" },
     });
   } catch (e) {

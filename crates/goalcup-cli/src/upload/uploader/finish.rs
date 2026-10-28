@@ -217,11 +217,7 @@ impl Uploader {
     /// `POST /v1/runs/{id}/seal` with the two documents: the run is over.
     /// Answers whether the server says the run itself is over.
     fn seal(&self, documents: &(String, String), timeout: Duration) -> Result<bool, ServerError> {
-        let request = SealRequest {
-            entry_id: self.record.entry_id.clone(),
-            seal_json: documents.0.clone(),
-            baseline_json: documents.1.clone(),
-        };
+        let request = seal_request(&self.record, documents);
         self.server
             .json_timed::<StatusAnswer>(
                 "POST",
@@ -230,6 +226,21 @@ impl Uploader {
                 timeout,
             )
             .map(|answer| answer.run_ended())
+    }
+}
+
+/// The seal's body: the two documents, and the sealed-connection list when the finish wrote one
+/// (D74). A list that is missing, empty, unreadable or over the bound is left out: the seal never
+/// waits on it.
+fn seal_request(record: &crate::upload::UploadRecord, documents: &(String, String)) -> SealRequest {
+    SealRequest {
+        entry_id: record.entry_id.clone(),
+        seal_json: documents.0.clone(),
+        baseline_json: documents.1.clone(),
+        tunnels_jsonl: record
+            .tunnels_file
+            .as_deref()
+            .and_then(|file| read_document(Path::new(file))),
     }
 }
 
@@ -244,4 +255,39 @@ fn read_document(path: &Path) -> Option<String> {
         .read_to_string(&mut text)
         .ok()?;
     (!text.is_empty() && text.len() as u64 <= MAX_DOCUMENT_BYTES).then_some(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The finish wrote the list: it goes with the seal, verbatim. No list (or an older record,
+    /// which names none): the body is the one an older server has always taken.
+    #[test]
+    fn the_seal_carries_the_tunnel_list_when_it_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let documents = ("{\"seal\":1}".to_string(), "{\"baseline\":1}".to_string());
+        let list = dir.path().join("tunnels-e1.jsonl");
+        let text = "{\"format\":\"goalcup-tunnels-v1\",\"entry_id\":\"e1\"}\n{\"dropped\":0}\n";
+        std::fs::write(&list, text).unwrap();
+        let record = crate::upload::UploadRecord {
+            tunnels_file: Some(list.display().to_string()),
+            ..super::super::record_in(dir.path())
+        };
+        assert_eq!(
+            seal_request(&record, &documents).tunnels_jsonl.as_deref(),
+            Some(text)
+        );
+
+        std::fs::remove_file(&list).unwrap();
+        let request = seal_request(&record, &documents);
+        assert_eq!(request.tunnels_jsonl, None);
+        let body = serde_json::to_value(&request).unwrap();
+        assert!(body.get("tunnels_jsonl").is_none(), "{body}");
+
+        let mut old = serde_json::to_value(super::super::record_in(dir.path())).unwrap();
+        old.as_object_mut().unwrap().remove("tunnels_file");
+        let old: crate::upload::UploadRecord = serde_json::from_value(old).unwrap();
+        assert_eq!(old.tunnels_file, None);
+    }
 }

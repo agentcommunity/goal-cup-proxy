@@ -322,10 +322,17 @@ checked later by the verify job, which runs `goalcup-verify` over the reassemble
 ## `POST /v1/runs/{run_id}/seal` — an entry is over
 
 ```json
-{"entry_id": "e…", "seal_json": "<seal.json, verbatim>", "baseline_json": "<baseline.json, verbatim>"}
+{"entry_id": "e…", "seal_json": "<seal.json, verbatim>", "baseline_json": "<baseline.json, verbatim>",
+ "tunnels_jsonl": "<tunnels-<entry_id>.jsonl, verbatim>"}
 ```
 
-Each document at most 16 MiB. Sent after the entry's final heartbeat and its last chunk: a seal
+Each document at most 16 MiB. `tunnels_jsonl` is optional: the entry's sealed-connection list
+(`goalcup-tunnels-v1`, [CONTRACTS](CONTRACTS.md) "Side artifacts"), sent when the finish wrote it.
+The server keeps it create-only as `traces/<event>/<run>/<entry>/tunnels-<sha256>.jsonl`, on the
+first seal and on a repeat. Keeping it is best effort: storage that fails is logged and the seal
+still answers. It takes no part in the repeat and conflict rule, which looks at `seal_json` and
+`baseline_json` only. A value that is not a non-empty string is `400`. An older server ignores
+the field. Sent after the entry's final heartbeat and its last chunk: a seal
 needs the entry's committed end, and the server holding the chain up to it, checked in the step that
 seals. Without a final heartbeat the answer is `409` ("send the final heartbeat first"), or `503
 awaiting_final` once the run is over; a chain the server does not yet hold up to the end is `409`.

@@ -496,6 +496,11 @@ impl Uploading {
             official_start: opened.run.official_start.clone(),
             deadline_at: opened.run.deadline_at.clone(),
             workspace: opened.request.workspace.clone(),
+            tunnels_file: Some(
+                crate::run::tunnels_path(cfg, &opened.run.run_id, &opened.run.entry_id)
+                    .display()
+                    .to_string(),
+            ),
         };
         crate::upload::keep_run(cfg, &record, &receipt)?;
         let line = match opened.segment {
