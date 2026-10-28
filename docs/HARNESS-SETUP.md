@@ -105,7 +105,7 @@ profiles. Goal Cup reads only `model_providers.<model_provider>.base_url` and re
 ([D74](DECISIONS.md#d74-the-model-host-is-the-connectors-default-or-the-one-address-the-harnesss-own-config-names)).
 When `model_provider` is not set, or names a built-in provider with no table, Goal Cup opens
 `chatgpt.com`, the model service of a ChatGPT sign-in. The address must be `https` and not on
-this computer, or the start is refused. Measured 28 Oct in a sandbox (Claude Code 2.1.312, Codex
+this computer, or the start is refused. Measured 28 Oct in a sandbox (Codex
 0.165.0): every model call recorded ([results](research/results/2026-10-vercel-gateway.md#round-3-28-oct-one-capture-system-sandbox)).
 
 ### Claude Code
@@ -153,7 +153,7 @@ Goal Cup reads only `env.ANTHROPIC_BASE_URL` and records that address
 Without it, Goal Cup opens `api.anthropic.com`. The address must be `https` and not on this computer,
 or the start is refused. Set it in this file only: a base URL in a workspace's `.claude/` settings
 or in managed settings is not read, so that traffic is sealed and not recorded. Measured 28 Oct
-in a sandbox (Claude Code 2.1.312, Codex 0.165.0): every model call recorded ([results](research/results/2026-10-vercel-gateway.md#round-3-28-oct-one-capture-system-sandbox)).
+in a sandbox (Claude Code 2.1.312): every model call recorded ([results](research/results/2026-10-vercel-gateway.md#round-3-28-oct-one-capture-system-sandbox)).
 
 ### Amp
 

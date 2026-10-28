@@ -21,14 +21,14 @@ cd goal-cup-proxy && git pull && cargo build --release --locked
 export PATH="$PWD/target/release:$PATH" && goalcup --version
 ```
 
-`<home>` below is `~/Library/Application Support/goalcup` on macOS and `~/.config/goalcup` on
-Linux.
+`<home>` below is `"$HOME/Library/Application Support/goalcup"` on macOS (keep the quotes: the
+path has a space) and `"$HOME/.config/goalcup"` on Linux.
 
 ```bash
 goalcup login
 ```
 
-After each run, set `TRACE` to the path on the finish output's `trace:` line (it is under
+After each run, set `TRACE="<the path on the finish output's trace: line>"` (quoted; it is under
 `<home>-artifacts/artifacts/<entry id>/trace`), then read its label:
 
 ```bash
@@ -36,7 +36,7 @@ goalcup-verify --capture-integrity "$TRACE"
 ```
 
 ```bash
-goalcup-verify --research-json "$TRACE" --output /tmp/report.ndjson && tail -n 1 /tmp/report.ndjson | jq '{evidence: .analysis.evidence, cross_leg: .analysis.cross_leg}'
+rm -f /tmp/report.ndjson && goalcup-verify --research-json "$TRACE" --output /tmp/report.ndjson && tail -n 1 /tmp/report.ndjson | jq '{evidence: .analysis.evidence, cross_leg: .analysis.cross_leg}'
 ```
 
 The finish output also has a `sealed hosts:` line; the full list is the `tunnels-<entry id>.jsonl`
@@ -61,7 +61,7 @@ Type "Build a chess game in Python.", wait about 3 minutes, exit Claude Code.
 
 Pass:
 - the start is not refused;
-- the run's `host.log` has a `model service:` line saying `env.ANTHROPIC_BASE_URL` is not set;
+- `<home>/runs/<run id>/host.log` has a `model service:` line saying `env.ANTHROPIC_BASE_URL` is not set;
 - integrity `valid`, `evidence` is `wire_and_native`, `wire_model_requests` above 0;
 - `api.anthropic.com` is not in the `sealed hosts:` line (it was opened and recorded);
 - `platform.claude.com`, if listed, has reason `sign_in` in the tunnels file.

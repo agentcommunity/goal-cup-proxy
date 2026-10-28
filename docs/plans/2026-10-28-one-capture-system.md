@@ -357,12 +357,12 @@ measured runs.
   - Codex, provider `vercel` with the key in `$CODEX_HOME/.env`. Pass: the same, evidence `wire_and_native`.
   - Hermes, built-in `ai-gateway` provider. Pass: evidence `wire_only`, unchanged from 28 Oct.
   - Each run's `tunnels-<entry>.jsonl` lists hosts with bytes; none is the model host.
-- [x] **Step 4: Merge** in this order: Task 1 PR, Task 5 PR, Task 6+7 PR, Task 2-4 PR, Task 8 PR. Rebase each on the new `main`; rerun the gate only when the rebase changed Rust files. Re-pin with `sh scripts/pin-manifests.sh` on the merged tree if the OpenCode/OpenClaw PR landed first.
-- [ ] **Step 5: Tell the OpenCode/OpenClaw session** the new connector shape (`via`, `absent`, zero native rows, `prefix_paths` for `/v3/ai/`), and that its connectors should start on it.
+- [ ] **Step 4: Merge** in this order: Task 1 PR, Task 5 PR, Task 6+7 PR, Task 2-4 PR, Task 8 PR. Rebase each on the new `main`; rerun the gate only when the rebase changed Rust files. Re-pin with `sh scripts/pin-manifests.sh` on the merged tree if the OpenCode/OpenClaw PR landed first.
+- [x] **Step 5: Tell the OpenCode/OpenClaw session** the new connector shape (`via`, `absent`, zero native rows, `prefix_paths` for `/v3/ai/`), and that its connectors should start on it.
 - [x] **Step 6: Update the results file** with the measured runs; delete sandboxes and their snapshots, except the gate snapshot until the release.
 
 ### Task 10: Owner steps (not for agents)
 
 - [ ] Deploy the Worker (`server/worker`) with the `tunnels_jsonl` change before participants upload.
 - [ ] Laptop runs: Claude Code with a subscription login and no base URL (evidence `wire_and_native`, `api.anthropic.com` recorded); Codex with a ChatGPT login (`chatgpt.com` recorded); Codex with an OpenAI API key (is `api.openai.com` tunnelled? decides a future row).
-- [ ] Release: 0.7.1 is merged but not tagged. Decide whether this work ships as the next patch after tagging 0.7.1, or folds into it, then `scripts/release.sh prepare` and `tag`.
+- [ ] Release: the last release prep is merged but not tagged. Decide whether this work ships in it or in the next patch, then `scripts/release.sh prepare` and `tag`.
