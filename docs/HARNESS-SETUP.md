@@ -67,8 +67,10 @@ The Goal Cup homes are in the `capture-homes` folder of your Goal Cup configurat
 | Hermes | `hermes-cli/` (Hermes's `HERMES_HOME`) | `config.yaml` |
 
 Keep the other keys in the file. Add only the keys below. `goalcup setup` makes each home with
-mode 0700; if you make one yourself, `chmod 700` it, as Goal Cup refuses a shared home with any
-other mode.
+mode 0700. A home of yours that is open to other users (for example mode 0755, which older Goal Cup
+versions made) is set to 0700 when the next `goalcup start` or `goalcup setup` reads it, and Goal Cup
+says so in one line. Goal Cup refuses a shared home with any other unsafe mode: if you make one
+yourself, `chmod 700` it.
 
 ## Your harness
 

@@ -1023,6 +1023,90 @@ mod chat {
         assert!(home.is_dir(), "the shared run home is never removed");
     }
 
+    /// The probe answers a test build states (`TEST_PROBE_ANSWERS`): the settings' service and
+    /// the default host, each `ok` or unreachable.
+    const PROBES: &str = goalcup_cli::commands::start::TEST_PROBE_ANSWERS;
+
+    /// A harness whose settings name a service (`gateway`) and whose default host (`default`)
+    /// the network blocks: the run starts, and the one line says what happened and what to do.
+    #[test]
+    fn a_gateway_user_whose_network_blocks_the_default_host_starts_with_a_warning() {
+        let rig = Rig::chat();
+        let from = crate::model_host_from::reads_model_host(&rig, CHAT_ID);
+        crate::model_host_from::add_default_host(&rig, CHAT_ID, "api.default.example");
+        let home = rig.cfg.join("capture-homes").join(CHAT_ID);
+        crate::common::support::write_model_host_config(
+            &home,
+            &from,
+            "https://gateway.example.test/v1",
+        );
+        let probes = "gateway.example.test=ok,api.default.example=unreachable";
+        let mut run = rig.start_on_pty(&[DISK, LOCAL_WRAP_UP, (PROBES, probes)]);
+        run.wait_shown("tui: ready");
+        let shown = run.shown();
+        assert!(
+            shown.contains(
+                "warning: api.default.example:443 could not be reached; your settings use \
+                 gateway.example.test:443, so the run goes on."
+            ),
+            "{shown}"
+        );
+        assert!(!shown.contains("refuses this run"), "{shown}");
+        run.type_line("/exit");
+        let status = run.wait();
+        assert!(status.success(), "{status:?}\n{}", run.shown());
+        assert!(run.shown().contains(LAUNCH_LINE), "{}", run.shown());
+    }
+
+    /// The service the settings name is the one host a run cannot go without: when it does not
+    /// answer, start refuses as it always has, names it and the firewall fix, and makes nothing.
+    #[test]
+    fn an_unreachable_gateway_still_refuses() {
+        let rig = Rig::chat();
+        let from = crate::model_host_from::reads_model_host(&rig, CHAT_ID);
+        crate::model_host_from::add_default_host(&rig, CHAT_ID, "api.default.example");
+        let home = rig.cfg.join("capture-homes").join(CHAT_ID);
+        crate::common::support::write_model_host_config(
+            &home,
+            &from,
+            "https://gateway.example.test/v1",
+        );
+        let probes = "gateway.example.test=unreachable,api.default.example=ok";
+        let mut run = rig.start_on_pty(&[DISK, LOCAL_WRAP_UP, (PROBES, probes)]);
+        let status = run.wait();
+        let shown = run.shown();
+        assert!(!status.success(), "{shown}");
+        assert!(
+            shown.contains("the provider host gateway.example.test:443 could not be reached"),
+            "{shown}"
+        );
+        assert!(shown.contains("Nothing was created."), "{shown}");
+        assert!(!shown.contains(LAUNCH_LINE), "{shown}");
+        assert!(!rig.cfg.join("runs").exists(), "no run record");
+    }
+
+    /// A shared home that an older Goal Cup made 0755 (open to the group and the world) is this
+    /// user's own: start sets it to 0700, says so in one line, and the run goes on.
+    #[test]
+    fn a_home_goal_cup_made_with_a_loose_mode_is_fixed() {
+        use std::os::unix::fs::PermissionsExt;
+        let rig = Rig::chat();
+        let home = rig.chat_home();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut run = rig.start_on_pty(&[DISK, LOCAL_WRAP_UP]);
+        run.wait_shown("tui: ready");
+        let shown = run.shown();
+        assert!(shown.contains("0755") && shown.contains("0700"), "{shown}");
+        assert_eq!(
+            std::fs::metadata(&home).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        run.type_line("/exit");
+        let status = run.wait();
+        assert!(status.success(), "{status:?}\n{}", run.shown());
+    }
+
     /// A Ctrl-C at a question a real run's start asks before the approval (here the repository's
     /// name) ends the start at once, with nothing approved or created.
     #[test]

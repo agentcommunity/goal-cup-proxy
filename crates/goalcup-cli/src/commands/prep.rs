@@ -2,8 +2,9 @@
 //! four steps, and safe to run again. No GitHub here: a real run asks for its repository at
 //! `goalcup start` (`commands::run_repo`), and a practice run needs none (D69).
 //!
-//! Each step is `[ok]`, `[todo] <what to do>` or `[fail] <why>`, and the command exits 0 only
-//! when all four are ok:
+//! Each step is `[ok]`, `[warn] <what it means and what to do>`, `[todo] <what to do>` or
+//! `[fail] <why>`, and the command exits 0 when no step is todo or failed (a warning does not
+//! hold a step back):
 //!
 //! 1. **login**: `server.json` names an account. In a terminal, a computer that is not connected
 //!    is logged in here, with `goalcup login`'s own device flow.
@@ -68,11 +69,12 @@ pub struct PrepOptions {
     pub dev: bool,
 }
 
-/// How a step stands.
+/// How a step stands. A warning says what happened and what to do, and the run can go on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum State {
     Ok,
+    Warn,
     Todo,
     Fail,
 }
@@ -81,9 +83,15 @@ impl State {
     fn word(self) -> &'static str {
         match self {
             State::Ok => "ok",
+            State::Warn => "warn",
             State::Todo => "todo",
             State::Fail => "fail",
         }
+    }
+
+    /// Whether the step needs nothing more from the person: ok, or a warning.
+    fn settled(self) -> bool {
+        matches!(self, State::Ok | State::Warn)
     }
 }
 
@@ -134,6 +142,12 @@ pub trait Doors {
     fn wsl(&self) -> Host;
     /// Every `(host, port)` answers a TCP connect; else the first that does not, in a phrase.
     fn hosts_reachable(&self, endpoints: &[(String, u16)]) -> Result<(), String>;
+    /// The harness's own default hosts, when its settings name a model service the run records
+    /// instead: the first that does not answer, in a phrase. A failure here is a warning. The
+    /// default is [`Doors::hosts_reachable`].
+    fn default_hosts_reachable(&self, endpoints: &[(String, u16)]) -> Result<(), String> {
+        self.hosts_reachable(endpoints)
+    }
     /// Whether the machine can be kept awake (the lock is taken and let go at once).
     fn sleep_lock(&self) -> Result<(), String>;
     /// One line typed by the participant, or `None` when the input ended.
@@ -413,7 +427,7 @@ pub fn prep_with(
         }
     }
 
-    let all_ok = report.steps.iter().all(|s| s.state == State::Ok);
+    let all_ok = report.steps.iter().all(|s| s.state.settled());
     if report.json {
         let text = serde_json::to_string_pretty(&report.steps)?;
         put(report.out, &format!("{text}\n"))?;
@@ -444,13 +458,13 @@ pub fn prep_with(
             ),
         )?;
     } else {
-        let waiting = report.steps.iter().filter(|s| s.state != State::Ok).count();
+        let waiting = report.steps.iter().filter(|s| !s.state.settled()).count();
         // The last line on the screen points at the next action: the first step that needs the
         // person. That step's own line says what to do, so it is said once, not again here.
         let next = report
             .steps
             .iter()
-            .find(|s| s.state != State::Ok)
+            .find(|s| !s.state.settled())
             .map_or("", |s| s.step);
         put(
             report.out,
@@ -945,7 +959,8 @@ fn machine_step(
         } else {
             worst = match (worst, state) {
                 (State::Fail, _) | (_, State::Fail) => State::Fail,
-                _ => State::Todo,
+                (State::Todo, _) | (_, State::Todo) => State::Todo,
+                _ => State::Warn,
             };
             problems.push(sentence);
         }
@@ -1000,26 +1015,43 @@ fn machine_step(
         ),
     }
 
+    // The hosts that must answer: the server, and the model service the settings name. Without a
+    // model service, the harness's own hosts (its profile's and sign-in hosts) must answer too.
     let mut hosts: Vec<(String, u16)> = Vec::new();
     if let Ok(Some(server)) = crate::server::read_server_config(cfg) {
         hosts.push(endpoint_of(&server.url));
     }
+    // The harness's own hosts, when a model service is named: a run records that service instead,
+    // so their failure is a warning.
+    let mut defaults: Vec<(String, u16)> = Vec::new();
+    let mut service = None;
     // Whether a model host is probed too, so the line says only what was probed.
     let mut provider = false;
     if let Some(c) = connector {
         let profile = &c.loaded.manifest.capture;
-        hosts.extend(profile.hosts.iter().map(|h| (h.host.clone(), 443)));
-        hosts.extend(profile.auth_hosts.iter().map(|h| (h.clone(), 443)));
+        let own: Vec<(String, u16)> = profile
+            .hosts
+            .iter()
+            .map(|h| (h.host.clone(), 443))
+            .chain(profile.auth_hosts.iter().map(|h| (h.clone(), 443)))
+            .collect();
         provider = !profile.hosts.is_empty();
         // The model service the harness's config names (D62), once it names one.
-        if let Ok(Some(m)) = crate::model_host::check(cfg, c) {
-            hosts.push((m.host, m.port));
-            provider = true;
+        match crate::model_host::check(cfg, c) {
+            Ok(Some(m)) => {
+                hosts.push((m.host.clone(), m.port));
+                defaults = own;
+                service = Some(m);
+                provider = true;
+            }
+            _ => hosts.extend(own),
         }
     }
-    hosts.retain(|(host, _)| !host.is_empty());
-    hosts.sort();
-    hosts.dedup();
+    for list in [&mut hosts, &mut defaults] {
+        list.retain(|(host, _)| !host.is_empty());
+        list.sort();
+        list.dedup();
+    }
     match doors.hosts_reachable(&hosts) {
         Ok(()) => note(
             State::Ok,
@@ -1037,6 +1069,20 @@ fn machine_step(
                  goalcup's connections"
             ),
         ),
+    }
+    if let Some(m) = &service
+        && !defaults.is_empty()
+        && let Err(why) = doors.default_hosts_reachable(&defaults)
+    {
+        note(
+            State::Warn,
+            format!(
+                "{why}; your settings use {}, so the run goes on. The run does not \
+                 need that host. To use it, check the network or a firewall such as Little \
+                 Snitch, then run setup again",
+                m.authority()
+            ),
+        );
     }
 
     if crate::preflight::resolve_on_path("git", env).is_some() {
@@ -1141,15 +1187,16 @@ fn put(out: &mut dyn Write, text: &str) -> Result<(), CliError> {
 
 /// The machine's facts as a test states them, in `GOALCUP_TEST_PREP`: comma-separated
 /// `ac=on|battery|unknown`, `free=<bytes>`, `wsl=0|1|2`, `fs=<path prefix>=<filesystem type>`
-/// (repeatable), `hosts=ok|<phrase>` and `awake=ok|<phrase>`; everything it does not name is
-/// this machine's. A shipped build has no
-/// such door.
+/// (repeatable), `hosts=ok|<phrase>`, `defaults=ok|<phrase>` (the harness's own hosts, when its
+/// settings name a service) and `awake=ok|<phrase>`; everything it does not name is this
+/// machine's. A shipped build has no such door.
 #[cfg(feature = "test-support")]
 pub struct Injected {
     ac: Option<Option<bool>>,
     free: Option<u64>,
     host: Host,
     hosts: Option<Result<(), String>>,
+    defaults: Option<Result<(), String>>,
     awake: Option<Result<(), String>>,
 }
 
@@ -1164,6 +1211,7 @@ impl Injected {
             free: None,
             host: Host::here(),
             hosts: None,
+            defaults: None,
             awake: None,
         };
         for part in spec.split(',').filter(|p| !p.is_empty()) {
@@ -1187,6 +1235,7 @@ impl Injected {
                     }
                 }
                 "hosts" => door.hosts = Some(answer(value)),
+                "defaults" => door.defaults = Some(answer(value)),
                 "awake" => door.awake = Some(answer(value)),
                 _ => return None,
             }
@@ -1220,6 +1269,13 @@ impl Doors for Injected {
         match &self.hosts {
             Some(answer) => answer.clone(),
             None => Here.hosts_reachable(endpoints),
+        }
+    }
+
+    fn default_hosts_reachable(&self, endpoints: &[(String, u16)]) -> Result<(), String> {
+        match &self.defaults {
+            Some(answer) => answer.clone(),
+            None => self.hosts_reachable(endpoints),
         }
     }
 

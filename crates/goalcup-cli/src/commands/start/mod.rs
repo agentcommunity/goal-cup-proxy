@@ -82,7 +82,9 @@ pub use crate::home::run_folders;
 pub use crate::home::validate_shared_capture_home_for_uid;
 pub use phases::CHAT_MODE_GOAL;
 #[cfg(feature = "test-support")]
-pub use refusals::{TEST_DEV_COMPETES, TEST_GITHUB_API, TEST_OFFLINE_UPSTREAMS};
+pub use refusals::{
+    TEST_DEV_COMPETES, TEST_GITHUB_API, TEST_OFFLINE_UPSTREAMS, TEST_PROBE_ANSWERS,
+};
 pub(crate) use refusals::{check_run_folders, continue_preflight, interrupted_refusal};
 pub use server::PRACTICE_REPO_URL;
 

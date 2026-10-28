@@ -20,9 +20,6 @@ use std::time::Duration;
 /// The whole preflight's bound, all hosts together.
 pub(crate) const PREFLIGHT_BUDGET: Duration = Duration::from_secs(10);
 
-/// The port every provider host is probed on.
-pub(crate) const PREFLIGHT_PORT: u16 = 443;
-
 /// A provider host the preflight could not reach. Its `Display` is the whole refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Unreachable {
@@ -171,21 +168,8 @@ pub(crate) fn resolves_only_to_loopback_with(
     }
 }
 
-/// The preflight `goalcup start` runs: every non-loopback host on [`PREFLIGHT_PORT`] within
-/// [`PREFLIGHT_BUDGET`]. Blocks the calling thread for at most the budget.
-pub(crate) fn upstreams_reachable<'a>(
-    hosts: impl IntoIterator<Item = &'a str>,
-) -> Result<(), Unreachable> {
-    let hosts: Vec<String> = hosts
-        .into_iter()
-        .filter(|host| !is_loopback_host(host))
-        .map(str::to_owned)
-        .collect();
-    probe(hosts, PREFLIGHT_PORT, PREFLIGHT_BUDGET)
-}
-
-/// [`upstreams_reachable`] for endpoints that name their own port (`goalcup prep`'s server
-/// address may): every non-loopback `(host, port)` within [`PREFLIGHT_BUDGET`].
+/// The preflight `goalcup start` and `goalcup prep` run: every non-loopback `(host, port)` within
+/// [`PREFLIGHT_BUDGET`] (`goalcup prep`'s server address and a model service name their own port).
 pub(crate) fn endpoints_reachable<'a>(
     endpoints: impl IntoIterator<Item = (&'a str, u16)>,
 ) -> Result<(), Unreachable> {
@@ -197,13 +181,8 @@ pub(crate) fn endpoints_reachable<'a>(
     probe_endpoints(endpoints, PREFLIGHT_BUDGET)
 }
 
-/// Connects to every host on `port` at once, within `budget`; the first host (in the given
-/// order) that could not be reached is the answer.
-fn probe(hosts: Vec<String>, port: u16, budget: Duration) -> Result<(), Unreachable> {
-    probe_endpoints(hosts.into_iter().map(|host| (host, port)).collect(), budget)
-}
-
-/// [`probe`] with a port for each host.
+/// Connects to every `(host, port)` at once, within `budget`; the first (in the given order) that
+/// could not be reached is the answer.
 fn probe_endpoints(endpoints: Vec<(String, u16)>, budget: Duration) -> Result<(), Unreachable> {
     if endpoints.is_empty() {
         return Ok(());
@@ -265,7 +244,7 @@ mod tests {
     fn an_unreachable_host_is_named_with_its_subtype_and_this_binary() {
         let port = dark_port();
         let started = std::time::Instant::now();
-        let refused = probe(vec!["127.0.0.1".into()], port, Duration::from_secs(1))
+        let refused = probe_endpoints(vec![("127.0.0.1".into(), port)], Duration::from_secs(1))
             .expect_err("nothing listens there");
         assert!(
             started.elapsed() < Duration::from_secs(2),
@@ -315,12 +294,14 @@ mod tests {
         let listening = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listening.local_addr().unwrap().port();
         assert_eq!(
-            probe(vec!["127.0.0.1".into()], port, Duration::from_secs(2)),
+            probe_endpoints(vec![("127.0.0.1".into(), port)], Duration::from_secs(2)),
             Ok(())
         );
-        let refused = probe(
-            vec!["127.0.0.1".into(), "preflight-unreachable.invalid".into()],
-            port,
+        let refused = probe_endpoints(
+            vec![
+                ("127.0.0.1".into(), port),
+                ("preflight-unreachable.invalid".into(), port),
+            ],
             Duration::from_secs(2),
         )
         .expect_err("a name that cannot resolve");
@@ -338,7 +319,7 @@ mod tests {
         }
         // Nothing listens on 443 here, so only a skip passes.
         assert_eq!(
-            upstreams_reachable(["localhost", "api.e00.localhost"]),
+            endpoints_reachable([("localhost", 443), ("api.e00.localhost", 443)]),
             Ok(())
         );
     }

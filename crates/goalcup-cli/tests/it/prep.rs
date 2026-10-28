@@ -1495,3 +1495,43 @@ fn prep_keeps_the_home_not_ready_while_the_model_service_cannot_be_recorded() {
     );
     assert!(line(&out, "harness_home").starts_with("[ok]"), "{out}");
 }
+
+/// A harness whose settings name a model service: its default host (a host the run does not use
+/// while the service answers) that the network blocks is a `[warn]` on the machine step, which
+/// keeps the step's state, and the run would go on. Without a service the same host is a failure,
+/// as it always was.
+#[test]
+fn prep_warns_for_a_default_host_the_run_does_not_use_when_settings_name_a_service() {
+    let rig = Rig::chat_only();
+    let from = crate::model_host_from::reads_model_host(&rig, CHAT_ID);
+    crate::model_host_from::add_default_host(&rig, CHAT_ID, "api.default.example");
+    let home = rig.cfg.join("capture-homes").join(CHAT_ID);
+    crate::common::support::write_model_host_config(&home, &from, "https://models.example.test/v1");
+    let facts = facts(&["defaults=api.default.example:443_could_not_be_reached"]);
+    let (_, out) = prep(&rig, &[], &facts);
+    let machine = line(&out, "machine");
+    assert!(
+        machine.starts_with("[warn] machine:")
+            && machine.contains("api.default.example:443 could not be reached")
+            && machine.contains("so the run goes on"),
+        "{out}"
+    );
+    assert!(!machine.contains("[fail]"), "{out}");
+}
+
+/// No service in the settings: the same unreachable host is a failure of the machine step, as it
+/// has always been.
+#[test]
+fn prep_still_fails_an_unreachable_default_host_when_no_service_is_named() {
+    let rig = Rig::chat_only();
+    let (_, out) = prep(
+        &rig,
+        &[],
+        &facts(&["hosts=api.default.example:443_could_not_be_reached"]),
+    );
+    let machine = line(&out, "machine");
+    assert!(
+        machine.starts_with("[fail] machine:") && machine.contains("api.default.example"),
+        "{out}"
+    );
+}

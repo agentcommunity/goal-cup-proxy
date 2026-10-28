@@ -8,7 +8,8 @@ use super::forked::{
 };
 use super::proxy::{Proxied, admitted, entry_is_sealed, raise_open_file_limit};
 use super::refusals::{
-    holds_the_terminal, interrupted_before_launch, interrupted_refusal, offline_upstreams_for_test,
+    default_host_warning, holds_the_terminal, interrupted_before_launch, interrupted_refusal,
+    offline_upstreams_for_test, reachable,
 };
 use super::server::{UploadHow, open_competition_run, remove_run_keeping_pending_credential};
 use super::{CaptureRun, panic_while_quiet_for_test, pause_at};
@@ -22,6 +23,7 @@ use crate::home::{
 use crate::launch::{gated_handle, spawn_gated};
 use crate::preflight::Level;
 use crate::proxy::connect::ProxyCredential;
+use crate::proxy::preflight::Unreachable;
 use crate::proxy::tls::UpstreamRoots;
 use crate::retry::{retry_busy, retry_busy_entry, retry_busy_process};
 use crate::run::reserve::{RunReserve, artifact_root, reserve_path};
@@ -106,25 +108,33 @@ pub(super) fn prepare(
     // anything is created (the recording proxy module's preflight; it names a firewall holding this
     // binary when they do not).
     if !offline_upstreams_for_test(env) {
-        // A model service whose name resolves only to this computer is refused before the probe.
-        // This whole block is behind the test-only offline seam, so no integration test reaches
-        // the check; its unit test is `refuse_if_on_this_computer_uses_the_name_and_reason`.
-        if let Some(model) = model_host {
-            crate::model_host::refuse_if_on_this_computer(model).map_err(|refused| {
-                CliError::Refused(refused.refusal(c.display_name(), &c.loaded.manifest.id))
-            })?;
+        let refusal = |unreachable: Unreachable| {
+            CliError::Refused(unreachable.refusal(cx.continuing.map(|c| c.record.run_id.as_str())))
+        };
+        // The harness's own default hosts, which a run whose settings name a model service does
+        // not need: their failure is one warning line, not a refusal.
+        let defaults: Vec<(&str, u16)> = profile
+            .hosts
+            .iter()
+            .map(|h| (h.host.as_str(), 443))
+            .collect();
+        match model_host {
+            Some(model) => {
+                // A model service whose name resolves only to this computer is refused before the
+                // probe. This whole block is behind the test-only offline seam, so no integration
+                // test reaches the check; its unit test is
+                // `refuse_if_on_this_computer_uses_the_name_and_reason`.
+                crate::model_host::refuse_if_on_this_computer(model).map_err(|refused| {
+                    CliError::Refused(refused.refusal(c.display_name(), &c.loaded.manifest.id))
+                })?;
+                // The service the settings name is the one host the run cannot go without.
+                reachable(env, &[(model.host.as_str(), model.port)]).map_err(refusal)?;
+                if let Err(missing) = reachable(env, &defaults) {
+                    say(out, &default_host_warning(&missing, model))?;
+                }
+            }
+            None => reachable(env, &defaults).map_err(refusal)?,
         }
-        crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
-            .and_then(|()| {
-                crate::proxy::preflight::endpoints_reachable(
-                    model_host.map(|m| (m.host.as_str(), m.port)),
-                )
-            })
-            .map_err(|unreachable| {
-                CliError::Refused(
-                    unreachable.refusal(cx.continuing.map(|c| c.record.run_id.as_str())),
-                )
-            })?;
     }
     // A per-run home is made inside the run directory below. A run directory inside a Git work
     // tree is refused before anything is created: it would hold what the

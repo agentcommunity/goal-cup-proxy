@@ -42,6 +42,19 @@ pub(crate) fn reads_model_host(rig: &Rig, id: &str) -> ModelHostFrom {
         .expect("the field loads")
 }
 
+/// Give the rig connector `id` one default host of its own, `host`, as a shipped connector lists:
+/// the host the harness uses while its settings name no service. [`reads_model_host`] takes the
+/// connector's hosts away, so a test that wants one adds it back after.
+pub(crate) fn add_default_host(rig: &Rig, id: &str, host: &str) {
+    let path = rig.connectors.join(id).join("harness.toml");
+    let mut text = std::fs::read_to_string(&path).unwrap();
+    text.push_str(&format!(
+        "\n[[capture.hosts]]\nhost = \"{host}\"\nevidence_paths = [\"/v1/responses\"]\n\
+         protocol_hint = \"openai-responses\"\n"
+    ));
+    std::fs::write(&path, text).unwrap();
+}
+
 fn home(rig: &Rig, id: &str) -> std::path::PathBuf {
     rig.cfg.join(CAPTURE_HOMES_DIR).join(id)
 }

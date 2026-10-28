@@ -347,8 +347,42 @@ pub(crate) fn ensure_shared_home(config_home: &Path) -> Result<SharedCaptureHome
     }
     // SAFETY: reading the effective uid has no preconditions or memory effects.
     let owner = unsafe { libc::geteuid() };
+    repair_loose_shared_home(config_home, owner);
     SharedCaptureHome::load(config_home, owner)
 }
+
+/// A shared home an older Goal Cup made with a loose mode (0755 was the default): one under
+/// `capture-homes`, owned by this user, that is a folder and not a link, and open to its group or
+/// the world. Its mode is set to 0700, as a new home is made, and one line says so. Every other
+/// home is left as it is for [`SharedCaptureHome::load`] to refuse.
+#[cfg(unix)]
+fn repair_loose_shared_home(config_home: &Path, owner: u32) {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let under_capture_homes = config_home
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == CAPTURE_HOMES_DIR);
+    if !under_capture_homes {
+        return;
+    }
+    let Ok(leaf) = std::fs::symlink_metadata(config_home) else {
+        return;
+    };
+    let mode = leaf.mode() & 0o7777;
+    if !leaf.is_dir() || leaf.uid() != owner || mode & 0o077 == 0 {
+        return;
+    }
+    if std::fs::set_permissions(config_home, std::fs::Permissions::from_mode(0o700)).is_ok() {
+        crate::host_log::say(&format!(
+            "the shared home {} was open to other users (mode {mode:04o}); Goal Cup set it to \
+             0700 so only you can read it. Nothing else to do.",
+            config_home.display()
+        ));
+    }
+}
+
+#[cfg(not(unix))]
+fn repair_loose_shared_home(_config_home: &Path, _owner: u32) {}
 
 fn shared_home_refusal(alias: &Path, why: &str) -> CliError {
     CliError::Refused(format!(
@@ -908,5 +942,53 @@ mod tests {
         probe.try_lock().expect("the old file is not held");
         drop(probe);
         drop(taken);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod loose_home_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn dir_with_mode(path: &Path, mode: u32) {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o7777
+    }
+
+    /// A shared home an older Goal Cup made 0755 under `capture-homes` is set to 0700 and opens.
+    #[test]
+    fn a_home_under_capture_homes_made_loose_is_set_to_0700_and_opens() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(CAPTURE_HOMES_DIR).join("chat");
+        dir_with_mode(&home, 0o755);
+        assert!(ensure_shared_home(&home).is_ok());
+        assert_eq!(mode_of(&home), 0o700);
+    }
+
+    /// The other unsafe homes keep the refusal and are not changed: a restricted mode with no
+    /// group or world bits, a loose home outside `capture-homes`, and an alias to a loose folder.
+    #[test]
+    fn other_unsafe_homes_keep_the_refusal_and_are_not_changed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let restricted = tmp.path().join(CAPTURE_HOMES_DIR).join("restricted");
+        dir_with_mode(&restricted, 0o500);
+        assert!(ensure_shared_home(&restricted).is_err());
+        assert_eq!(mode_of(&restricted), 0o500);
+
+        let elsewhere = tmp.path().join("elsewhere").join("chat");
+        dir_with_mode(&elsewhere, 0o755);
+        assert!(ensure_shared_home(&elsewhere).is_err());
+        assert_eq!(mode_of(&elsewhere), 0o755);
+
+        let target = tmp.path().join("target");
+        dir_with_mode(&target, 0o755);
+        let alias = tmp.path().join(CAPTURE_HOMES_DIR).join("alias");
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        assert!(ensure_shared_home(&alias).is_err());
+        assert_eq!(mode_of(&target), 0o755);
     }
 }
