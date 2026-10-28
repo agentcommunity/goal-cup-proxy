@@ -810,7 +810,7 @@ fn mixed_observations_end_in_one_bound_summary() {
     assert_eq!(&result.summary, summary);
     assert_eq!(result.exit_code, 0, "{summary:#}");
     assert_eq!(summary["exit_code"], 0);
-    assert_eq!(summary["schema_version"], 4);
+    assert_eq!(summary["schema_version"], 5);
     assert_eq!(
         summary["verifier_version"],
         goalcup_verifier::VERIFIER_VERSION
@@ -966,7 +966,7 @@ fn the_report_echoes_launch_keys_and_presents_connector_pin_provenance() {
     assert_eq!(summary["run"]["connector"], "Dev/unpinned");
     assert_eq!(
         hex::encode(Sha256::digest(unversioned(&bytes))),
-        "1dc81c319c1e7733fc57dc54709df6b079feaaf886f7b6d2969e2fa7f396012b"
+        "92115836bab97f013ffa50d16ca4e55a23bde86598d088fb0cf1a8d06dd9d3d1"
     );
 
     let (pinned_id, pinned_digest) = CONNECTOR_DIR_SHA256S[0];
@@ -1609,6 +1609,28 @@ fn a_session_with_model_work_and_no_wire_stream_is_noted_not_failed() {
         summary["analysis"]["models"],
         json!([{"decoder": "codex-native", "model": "gpt-5.6-luna", "count": 1}])
     );
+}
+
+/// Each run says what it holds: decoded wire requests, the session file, or both. A run with
+/// decoded requests also says when the first and last of them were recorded.
+#[test]
+fn each_run_carries_an_evidence_label() {
+    let label = |records: &[CaptureRecord]| {
+        let trace = make_report_trace(GOAL_TEXT, records, Some(confirmed()));
+        let (_, _, lines) = report_bytes(trace.path());
+        summary_of(&lines)["analysis"].clone()
+    };
+    let native = label(&codex_records());
+    assert_eq!(native["evidence"], "native_only");
+    assert_eq!(native["cross_leg"]["wire_request_range"], Value::Null);
+
+    let wire = label(&openai_records());
+    assert_eq!(wire["evidence"], "wire_only");
+    let range = &wire["cross_leg"]["wire_request_range"];
+    let (first, last) = (range["first"].as_str(), range["last"].as_str());
+    assert!(first.is_some() && first <= last, "{range:#}");
+
+    assert_eq!(label(&mixed_records())["evidence"], "wire_and_native");
 }
 
 #[test]
