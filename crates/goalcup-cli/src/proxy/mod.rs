@@ -67,6 +67,7 @@
 
 pub mod api;
 pub mod connect;
+pub mod headers;
 pub mod http;
 pub mod ingest;
 pub mod metadata;

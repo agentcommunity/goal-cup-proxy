@@ -42,13 +42,16 @@
 //! Either way the fallback is counted on the emitter when it happens, however the connection
 //! then ends, and a relay that ends cleanly after it returns [`HttpOutcome::Opaque`].
 //!
-//! No header value, query, cookie or credential is retained, logged or put in an error: the
-//! parsed heads keep only framing fields, and errors carry fixed text. The one exception is the
-//! content-coding tokens of a body left undecoded, sanitized and bounded, in `host.log` only.
+//! Header values reach the chain only through the header streams (`http-head-v1`, see
+//! [`crate::proxy::headers`]), where credential values and credential-named query values are
+//! masked. The parsed heads keep only framing fields, and errors carry fixed text. The one other
+//! exception is the content-coding tokens of a body left undecoded, sanitized and bounded, in
+//! `host.log` only.
 
 use crate::proxy::api::{
     BoxIo, CaptureEmitter, CapturePolicy, HttpOutcome, ProxyLoss, RelayContext, RelayPair, Upgrade,
 };
+use crate::proxy::headers::{HEADERS_HINT, masked_head};
 use crate::proxy::metadata::{self, ExchangeMeta, SafeTarget};
 use brotli_decompressor::{
     Allocator, BrotliDecompressStream, BrotliResult, BrotliState, SliceWrapper, SliceWrapperMut,
@@ -356,10 +359,20 @@ async fn relay_requests(
             return requests_opaque(shared, tx, src, dst).await;
         }
 
-        // Recovery only here, at the head of a newly begun selected request.
+        // Recovery only here, at the head of a newly begun selected request. The request's head
+        // stream comes first; without it the body is not opened either, so the response is not
+        // captured behind a request whose head was lost.
         let mut body = BodyCapture::none(shared.emitter);
         if let (Some(meta), Some(flag)) = (meta, request_ok) {
-            if shared.emitter.try_recover(at.clone()) == SubmitResult::Queued {
+            if shared.emitter.try_recover(at.clone()) == SubmitResult::Queued
+                && capture_head(
+                    shared.emitter,
+                    CaptureSource::WireRequest,
+                    meta.clone(),
+                    &src.buf[..end],
+                    &at,
+                )
+            {
                 body = BodyCapture::open(
                     shared.emitter,
                     CaptureSource::WireRequest,
@@ -513,6 +526,13 @@ async fn relay_responses(
                 .and_then(|a| a.websocket_key.as_deref())
                 .is_some_and(|key| response.accepts_websocket(key));
             if let Some(meta) = response_meta {
+                capture_head(
+                    shared.emitter,
+                    CaptureSource::WireResponse,
+                    meta.clone(),
+                    &src.buf[..end],
+                    &at,
+                );
                 let mut stream = BodyCapture::open(
                     shared.emitter,
                     CaptureSource::WireResponse,
@@ -555,6 +575,17 @@ async fn relay_responses(
             })));
         }
 
+        // The final response's head stream opens before framing, so even a response this relay
+        // cannot frame has one.
+        if let Some(meta) = &response_meta {
+            capture_head(
+                shared.emitter,
+                CaptureSource::WireResponse,
+                meta.clone(),
+                &src.buf[..end],
+                &at,
+            );
+        }
         let (head_request, connect) = pending
             .as_ref()
             .map_or((false, false), |p| (p.head, p.connect));
@@ -1273,6 +1304,25 @@ where
 // ---------------------------------------------------------------------------------------
 // The capture side channel for one body.
 // ---------------------------------------------------------------------------------------
+
+/// One exchange's header stream: its head, masked ([`masked_head`]), under the header hint and with
+/// no method, so it is never a model call. Opened, written and ended the way a body stream is,
+/// and not gated by the body's own state. Returns whether the stream was opened.
+fn capture_head(
+    emitter: &CaptureEmitter,
+    source: CaptureSource,
+    mut meta: CaptureMeta,
+    head: &[u8],
+    at: &CaptureTime,
+) -> bool {
+    meta.protocol_hint = Some(HEADERS_HINT.to_string());
+    meta.method = None;
+    let mut stream = BodyCapture::open(emitter, source, meta, &[], at, None);
+    let opened = stream.is_open();
+    stream.feed(&masked_head(head), at);
+    stream.finish(true, at);
+    opened
+}
 
 /// One body's capture stream. Never blocks and never fails the relay: every refusal just
 /// ends or abandons the stream. Dropped while open (cancellation), it ends `Interrupted`.

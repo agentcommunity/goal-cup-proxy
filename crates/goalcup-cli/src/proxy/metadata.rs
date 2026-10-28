@@ -24,7 +24,7 @@
 
 use crate::proxy::api::{CapturePath, CapturePolicy};
 use goalcup_protocol::capture::{
-    CaptureMeta, CaptureTime, MAX_METADATA_STRING_BYTES, WireIdentity,
+    CaptureMeta, CaptureTime, MAX_METADATA_STRING_BYTES, WireIdentity, is_artifact_hint,
 };
 use goalcup_protocol::clock::ContinuousOrigin;
 use std::sync::OnceLock;
@@ -201,7 +201,12 @@ impl ExchangeMeta {
         method: &str,
         named_by_row: bool,
     ) -> bool {
-        protocol_hint.is_some() || (named_by_row && method == "POST")
+        // An artifact stream (a header stream, or a sealed-connection list) is not a request: it is
+        // excluded before any other clause, so no method or row can make it a call.
+        if let Some(hint) = protocol_hint {
+            return !is_artifact_hint(hint);
+        }
+        named_by_row && method == "POST"
     }
 
     /// The path as it may be retained: whole, or not at all.
@@ -250,6 +255,7 @@ impl ExchangeMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proxy::headers::HEADERS_HINT;
 
     #[test]
     fn query_and_fragment_are_removed_entirely() {
@@ -366,6 +372,27 @@ mod tests {
         assert!(select(&policy, "/v1/responses/x").is_some_and(|p| p.prefix));
         assert!(select(&policy, "/v2/responses").is_none());
         assert!(select(&CapturePolicy::default(), "/v1/responses").is_none());
+    }
+
+    #[test]
+    fn header_streams_are_never_model_calls() {
+        // The artifact hint is checked first, so no method or row can make a header stream a call.
+        for (method, named) in [
+            ("POST", true),
+            ("POST", false),
+            ("GET", true),
+            ("GET", false),
+        ] {
+            assert!(
+                !ExchangeMeta::counts_as_model_call(Some(HEADERS_HINT), method, named),
+                "{method} named={named}"
+            );
+        }
+        assert!(ExchangeMeta::counts_as_model_call(
+            Some("openai-chat-completions"),
+            "POST",
+            true
+        ));
     }
 
     #[test]
