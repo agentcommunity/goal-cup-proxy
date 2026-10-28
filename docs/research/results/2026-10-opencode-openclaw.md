@@ -4,13 +4,14 @@ Can Goal Cup Proxy record OpenCode and OpenClaw by the repository's own connecto
 in a Claude Code cloud container (Linux x86_64, kernel 6.18.44, ext4 `HOME` and `/tmp`, user
 namespaces available). Every probe used a private `HOME`. No key, token or trace is in this file.
 
-**Verdict: both are `facts only`.** Both harnesses now keep their sessions only in SQLite, which
-the guide lists under "Cannot be captured" (stop at step 0). No connector was added and no pin
-changed. Transport looks good for both: each honours `HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS`, and
-each reads its key from its own home file with no environment variable. No real model reply and no
-Goal Cup run were possible here (see "What blocked the runs"). Facts sheets:
-[opencode-cli](../../harnesses/opencode-cli.md), [openclaw-cli](../../harnesses/openclaw-cli.md).
-Next steps for a session that has the keys: [handover](2026-10-opencode-openclaw-handover.md).
+**Verdict: both are `facts only`, and both record under Goal Cup.** Both harnesses keep their
+sessions only in SQLite, which the guide lists under "Cannot be captured" (stop at step 0). No
+connector was added and no pin changed. The light proof passed for both: in a Vercel Sandbox,
+with the unpinned proof connectors under `--dev`, Goal Cup intercepted every model call of
+OpenCode and OpenClaw, through the Gateway and through DeepSeek, and every trace verified valid
+(see "Runs"). Facts sheets: [opencode-cli](../../harnesses/opencode-cli.md),
+[openclaw-cli](../../harnesses/openclaw-cli.md). The first session's notes are in the
+[handover](2026-10-opencode-openclaw-handover.md).
 
 ## Versions and machine
 
@@ -72,24 +73,68 @@ strings in each harness's own key file. Each case ran the harness's one-shot com
 
 ## Runs
 
-| Run | Result |
-|---|---|
-| OpenCode, Gateway `poolside/laguna-s-2.1-free` | not run: no valid key (Gateway answered 401 to the container's key) |
-| OpenCode, DeepSeek | not run: `DEEPSEEK_API_KEY` not set |
-| OpenClaw, Gateway | not run: as above |
-| OpenClaw, DeepSeek | not run: as above |
-| Goal Cup local run (any) | not run: this container cannot host one (all egress goes through a re-signing proxy that goalcup's recorder does not use; no IPv6 for the gate) |
-| Vercel Sandbox runs | not run: `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID` not set in this session |
-| `scripts/check-connector.sh` | not applicable: no connector |
-| `sh scripts/gate.sh fast` | not run (instructed: the container cannot host the gate); docs-only change |
+Second session, 28 Oct 2026 UTC, in one Vercel Sandbox (`gc-connectors`, 4 vCPUs, Ubuntu
+26.04.1, x86_64, XFS, Node 24.22.1, direct egress). goalcup 0.7.0 from the release `install.sh`
+(the release binary accepted the proof connectors; no build needed). OpenCode 1.19.4 (the image
+already had the npm `opencode-ai` package; the installer kept it). OpenClaw 2026.10.8 (dc2523e)
+from its installer, on the image's Node 24.22.1. Each run: local, no account, `goalcup start
+--harness <id> --dev` in tmux, prompt "Build a chess game in Python.", about 2 to 3 minutes,
+exit, then the printed `verify:` command. Pass: integrity valid, intercepted above 0, model host
+not tunnelled.
 
-No verifier line, `proxy admission:` line or tunnelled-host list exists for either harness yet.
+| Run | Entry | `proxy admission:` | Model calls recorded | Native row | Result |
+|---|---|---|---|---|---|
+| OpenCode, Gateway `nvidia/nemotron-3.5-lightning-free` | `e2a683d83e83a43e9` | `accepted=19 intercepted=1 tunneled_not_approved=18` | 27 `POST ai-gateway.vercel.sh/v3/ai/language-model`: 15 × 200, 12 × 429 | `opencode.log` | **PASS** |
+| OpenClaw, Gateway `nvidia/nemotron-3.5-lightning-free` | `e2479e7457d0d0166` | `accepted=19 intercepted=19` | 17 `POST ai-gateway.vercel.sh/v1/messages`: 12 × 200, 5 × 429 | `openclaw.log` | **PASS** (stop not confirmed, below) |
+| OpenCode, DeepSeek `deepseek/deepseek-v4-flash` | `ea5775bead446dc93` | `accepted=2 intercepted=1 tunneled_not_approved=1` | 2 `POST ai-gateway.vercel.sh/v3/ai/language-model`, both 403: OpenCode fell back to a paid Gateway model (below) | `opencode.log` | not a DeepSeek proof |
+| OpenCode, DeepSeek `deepseek/deepseek-flash` | `ee0eae0f61b275c0e` | `accepted=1 intercepted=1` | 4 `POST api.deepseek.com/chat/completions`: 4 × 200 | `opencode.log` | **PASS** |
+| OpenClaw, DeepSeek `deepseek/deepseek-flash` | `e55f4dd6ac0ff37fb` | `accepted=4 intercepted=4` | 2 `POST api.deepseek.com/chat/completions`: 2 × 200 | `openclaw.log` | **PASS** |
 
-## What blocked the runs
+Every run's verifier line: `goalcup-verify: capture integrity valid (anchor local_only, exit 0,
+findings: none)`. In no run was the model host tunnelled. `intercepted` counts connections, not
+requests: OpenCode kept one connection open for all 27 Gateway calls. goalcup does not log the
+names of tunnelled hosts; for OpenCode they are expected to be `models.opencode.ai` and
+`registry.npmjs.org` (first session), not checked here.
 
-The session's environment was read at start. Keys added to the environment afterwards did not
-reach it: `AI_GATEWAY_API_KEY` held a one-character value, and the DeepSeek and Vercel variables
-were absent. A new session picks up the current values.
+What the runs showed:
+
+- **Gateway free tier.** `poolside/laguna-s-2.1-free` answered 429 at once: 5 requests per minute
+  per team, shared with the other session. The runs used the fallback model; both harnesses hit
+  429s and retried. The 429 exchanges are recorded like any other.
+- **OpenCode falls back to a paid model without saying so.** `deepseek/deepseek-v4-flash` is not
+  in OpenCode's catalog, so the TUI opened on `google/gemini-3-pro-image` ("Nano Banana Pro")
+  through the Gateway. The Gateway answered 403 to both calls; the run was stopped at once.
+  DeepSeek's own `/models` now lists `deepseek-flash` and `deepseek-v4-pro` (`deepseek-v4-flash`
+  still answers); both harnesses' catalogs match that. Check the model line in the TUI before
+  typing.
+- **OpenClaw rejects an unknown model.** `config set ... deepseek/deepseek-v4-flash` answered
+  "Unknown model". After `openclaw models list --refresh --provider deepseek`,
+  `deepseek/deepseek-flash` was accepted and called (not the Gateway).
+- **Exiting.** OpenCode: Escape, then Ctrl-C twice, seals at once (`AlreadyStopped`). OpenClaw:
+  while it waited on 429 retries ("finishing context"), Ctrl-C and `/exit` were refused ("wait for
+  it to finish before aborting"); `goalcup seal --yes` from another window stopped it, but goalcup
+  logged `harness termination: Unresolved ... (reason: ProcessAuthorityUnavailable)`. No OpenClaw
+  process was left afterwards. In the DeepSeek run, Escape then `/exit` exited cleanly.
+- **Setup without an account.** `goalcup setup` in a terminal starts the device login first and
+  waits up to 15 minutes. To reach the harness-home step locally, a `server.json` naming a closed
+  loopback port made the login fail at once; it was removed before `goalcup start`. `goalcup
+  start` itself needs no login. A shared run home made by hand must be mode 0700, or start
+  refuses it.
+- **Open questions settled.** `openclaw chat` (`tui --local`) records under chat mode; OpenCode's
+  TUI writes `opencode.log` during a run, so the native row finds it; both DeepSeek providers call
+  `/chat/completions`.
+
+Not run: `scripts/check-connector.sh` (no connector) and `sh scripts/gate.sh fast` (docs-only
+change). Keys were deleted inside the sandbox before it was stopped and removed. `sandbox stop`
+saved an automatic snapshot (30-day expiry) holding the run folders and traces but no key file;
+deleting it is left to the owner.
+
+## What blocked the first session
+
+Its environment was read at start: `AI_GATEWAY_API_KEY` held one character, and the DeepSeek and
+Vercel variables were absent. It also could not host a Goal Cup run (all egress through a
+re-signing proxy, no IPv6 for the gate). The second session had all five variables and used a
+Vercel Sandbox.
 
 ## Proof connectors (not shipped)
 

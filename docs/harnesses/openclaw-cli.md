@@ -9,15 +9,16 @@ executable is a Node script (row 10), and its own proxy settings override `HTTPS
 Source words: "measured" means run on Linux x86_64, OpenClaw 2026.10.8 (dc2523e) on Node 26.12.1,
 2026-10-28, with a private `HOME`, through a local test proxy; "vendor docs" means the OpenClaw
 docs source (`github.com/openclaw/openclaw`, `docs/`, 2026-10-27; docs.openclaw.ai was not
-reachable from the container); "unknown" means not measured or read. No real model reply was
-measured: the container had no valid Gateway or DeepSeek key (see the
-[results file](../research/results/2026-10-opencode-openclaw.md)).
+reachable from the container); "unknown" means not measured or read. "Measured in a run" means a
+local Goal Cup run (goalcup 0.7.0, `--dev`, the unpinned proof connector) in a Vercel Sandbox,
+Linux x86_64, OpenClaw 2026.10.8 on Node 24.22.1, 2026-10-28, with real Gateway and DeepSeek
+replies (see the [results file](../research/results/2026-10-opencode-openclaw.md)).
 
 ## 1. Run one prompt, in chat mode first
 
 - Chat mode: `openclaw chat`, an alias for `openclaw tui --local` (help text). Plain
-  `openclaw tui` connects to a Gateway daemon (`ws://127.0.0.1:18789`) instead. Not driven on a
-  terminal here: unmeasured.
+  `openclaw tui` connects to a Gateway daemon (`ws://127.0.0.1:18789`) instead. Driven under
+  `goalcup start` in tmux: it records (measured in a run).
 - One-shot mode (used only for the probes below): `openclaw agent --local --agent main --message "<prompt>"`.
 - [RULES](../RULES.md) lists `--local`, `agent exec`, `--profile`, `--dev`, `proxy` and incognito
   threads as modes that switch capture off. That was measured on 2026.8.2 against the Gateway
@@ -78,9 +79,13 @@ measured: the container had no valid Gateway or DeepSeek key (see the
   measured). A URL is in the file only with `models.providers.<id>.baseUrl` (vendor docs). So
   `model_host_from` has nothing to read by default.
 - Wire, measured with an invented key: Gateway `POST https://ai-gateway.vercel.sh/v1/messages`
-  (Anthropic Messages). It retries 8 times with 30 s waits on a reset. DeepSeek: unmeasured (after
-  `config set agents.defaults.model.primary deepseek/deepseek-v4-flash` the probe still called the
-  Gateway; cause not checked).
+  (Anthropic Messages). It retries 8 times with 30 s waits on a reset. Same with a real key
+  (measured in a run); on a 429 it retries after 27 s, then 60 s (up to 9 times, its log).
+  DeepSeek `deepseek/deepseek-flash`: `POST https://api.deepseek.com/chat/completions` (measured
+  in a run). `config set ... deepseek/deepseek-v4-flash` is refused as "Unknown model" (measured;
+  that likely explains the first session's Gateway call). After
+  `openclaw models list --refresh --provider deepseek` the catalog lists `deepseek/deepseek-flash`
+  and `deepseek/deepseek-v4-pro`.
 - Requests carry `HTTP-Referer: https://openclaw.ai` and `X-Title: OpenClaw` (vendor docs).
 - Other hosts: `telemetry.openclaw.ai` daily update check, off with `OPENCLAW_NO_AUTO_UPDATE=1`
   or `update.checkOnStart: false`; npm and ClawHub for plugins (vendor docs).
@@ -88,8 +93,10 @@ measured: the container had no valid Gateway or DeepSeek key (see the
 ## 7. Process model
 
 Embedded agent in the CLI process for `--local`/`chat`; a separate Gateway daemon otherwise (vendor
-docs). The daemon keeps its own environment, like the Hermes gateway (D72): unmeasured. SIGTERM,
-Ctrl-C, subagents: unmeasured.
+docs). The daemon keeps its own environment, like the Hermes gateway (D72): unmeasured. Exit
+(measured in a run): Escape, then `/exit`. While a turn waits on retries ("finishing context"),
+Ctrl-C and `/exit` are refused; `goalcup seal --yes` stopped it, with termination logged as
+`Unresolved` (`ProcessAuthorityUnavailable`) and no process left. SIGTERM, subagents: unmeasured.
 
 ## 8. Things Goal Cup cannot isolate
 
@@ -101,8 +108,10 @@ Ctrl-C, subagents: unmeasured.
 
 ## 9. Quirks and open questions
 
-- Is `openclaw chat` (`tui --local`) a chat mode Goal Cup accepts, given the RULES list?
-- What does the DeepSeek plugin call (`/chat/completions` or `/anthropic/v1/messages`)?
+- Is `openclaw chat` (`tui --local`) a chat mode Goal Cup accepts, given the RULES list? It
+  records (measured in a run); the rules question is still open.
+- With `logging.file` set into the home, the log is written during a run and the native row finds
+  it (measured in a run).
 
 ## Run without permission prompts
 

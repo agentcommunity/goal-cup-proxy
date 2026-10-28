@@ -7,15 +7,15 @@ capture ([Cannot be captured](../HARNESS-ONBOARDING.md#row-0), "A database sessi
 
 Source words: "measured" means run on Linux x86_64 (kernel 6.18), OpenCode 1.19.4, 2026-10-28,
 with a private `HOME`, through a local test proxy; "vendor docs" means opencode.ai/docs as fetched
-on 2026-10-28; "unknown" means not measured or read. No real model reply was measured: the
-container had no valid Gateway or DeepSeek key (see the
-[results file](../research/results/2026-10-opencode-openclaw.md)). Every fact that needs a reply
-or a Goal Cup run is marked "unmeasured".
+on 2026-10-28; "unknown" means not measured or read. "Measured in a run" means a local Goal Cup
+run (goalcup 0.7.0, `--dev`, the unpinned proof connector) in a Vercel Sandbox, Linux x86_64,
+2026-10-28, with real Gateway and DeepSeek replies (see the [results file](../research/results/2026-10-opencode-openclaw.md)).
 
 ## 1. Run one prompt, in chat mode first
 
 - Chat mode: `opencode` with no argument opens the TUI in the current folder (help text:
-  `opencode [project]  start opencode tui [default]`). Not driven on a terminal here: unmeasured.
+  `opencode [project]  start opencode tui [default]`). Driven under `goalcup start` in tmux: it
+  records (measured in a run). Exit: Escape, then Ctrl-C twice; the run seals at once.
 - Reopen the last session: `opencode --continue` (`-c`), or `--session <id>` (help text).
 - One-shot mode (not chat mode, used only for the probes below): `opencode run "<prompt>"`.
 - Modes that switch capture off are listed in [RULES](../RULES.md): `--pure`, `OPENCODE_PURE=1`,
@@ -81,8 +81,13 @@ Provider packages are installed at first use into `$HOME/.config/opencode/node_m
   `provider.<id>.options.baseURL` in `opencode.json` names one (vendor docs; measured: our config
   had none). So `model_host_from` has nothing to read by default.
 - Wire, measured with an invented key: Gateway `POST https://ai-gateway.vercel.sh/v3/ai/language-model`
-  (the AI SDK gateway protocol, not `/chat/completions`). DeepSeek: unmeasured (the run stopped at
-  the models.dev fetch through the test proxy).
+  (the AI SDK gateway protocol, not `/chat/completions`). Same with a real key (measured in a
+  run: 27 calls on one connection). DeepSeek `deepseek/deepseek-flash`:
+  `POST https://api.deepseek.com/chat/completions` (measured in a run).
+- **Unknown model id falls back to a paid model.** `deepseek/deepseek-v4-flash` is not in the
+  catalog; the TUI then opened on `google/gemini-3-pro-image` through the Gateway with no warning
+  (measured in a run; the Gateway answered 403). The catalog (`opencode models deepseek`) lists
+  `deepseek/deepseek-flash` and `deepseek/deepseek-v4-pro`.
 - Other hosts, measured from a fresh home: `models.opencode.ai` (`GET /api.json`, the model
   catalog), `registry.npmjs.org` (provider packages). Off switches: `OPENCODE_DISABLE_MODELS_FETCH`,
   `OPENCODE_DISABLE_AUTOUPDATE` or `"autoupdate": false`, `"share": "disabled"` (vendor docs).
@@ -93,8 +98,8 @@ Provider packages are installed at first use into `$HOME/.config/opencode/node_m
 ## 7. Process model
 
 One binary; the TUI talks to its own local HTTP server. Tools run as child shells (`/usr/bin/bash`
-here, measured). `opencode run` exits 1 on a provider error (measured). SIGTERM, Ctrl-C and
-subagents: unmeasured.
+here, measured). `opencode run` exits 1 on a provider error (measured). Ctrl-C twice ends the
+TUI (measured in a run). SIGTERM and subagents: unmeasured.
 
 ## 8. Things Goal Cup cannot isolate
 
@@ -109,10 +114,13 @@ subagents: unmeasured.
 - Two `opencode run` probes hung at `init` for 90 s and then later ones worked with the same
   settings (measured, cause unknown).
 - Could the Gateway's `/v3/ai/language-model` wire be decoded? No decoder exists today.
+- The TUI writes `$HOME/.local/share/opencode/log/opencode.log` during a run, so a native log row
+  finds a file changed since the run started (measured in a run).
 
 ## Run without permission prompts
 
 `opencode.json`: `"permission": "allow"` or `"permission": {"edit": "allow", "bash": "allow"}`
 (vendor docs). Most permissions already default to `allow`; `external_directory`, `doom_loop` and
 reads of `*.env` default to `ask` (vendor docs). `opencode run --auto` approves for one run. The
-setting was written in the probes; whether the TUI then asks nothing is unmeasured.
+setting was written; with it, the TUI wrote and edited `chess.py`, and no permission prompt
+showed in the screens captured (measured in a run).

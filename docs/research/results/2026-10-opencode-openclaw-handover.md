@@ -5,6 +5,11 @@ facts sheets ([opencode-cli](../../harnesses/opencode-cli.md),
 [openclaw-cli](../../harnesses/openclaw-cli.md)). Branch: `opencode-openclaw` (draft PR open).
 Written 2026-10-28.
 
+**Status: done 2026-10-28** by a second session; the light proof passed for both harnesses. See the
+[results](2026-10-opencode-openclaw.md#runs). Two notes for anyone reusing this file: the free
+Gateway model below is rate limited to 5 requests per minute per team, and `deepseek-v4-flash` is
+not in either harness's catalog; use `deepseek/deepseek-flash`.
+
 ## Where things stand
 
 - Both harnesses were installed and probed with a private `HOME` and invented keys. Both honour
