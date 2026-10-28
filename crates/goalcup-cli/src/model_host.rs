@@ -326,7 +326,7 @@ const LOOPBACK_REASON: &str =
 /// Why a model address whose path the recorder cannot follow is refused.
 const UNCLEAN_PATH_REASON: &str = "it names an address with an unusual path that the recorder \
      cannot follow safely. Write the address plainly, for example \
-     https://ai-gateway.vercel.sh/claude-code";
+     https://ai-gateway.vercel.sh/v1";
 
 /// Whether a model address's path cannot be recorded as the harness sends it: a dot segment
 /// (`.` or `..`, which a client resolves before sending), `%2e` in either case (a dot written as
@@ -641,6 +641,15 @@ fn parse_url(value: &str) -> Option<Url> {
     };
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let (authority, tail) = rest.split_at(end);
+    // A WHATWG parser ends the authority at a backslash (it reads it as `/`) and removes or refuses
+    // a control byte, so an authority holding either would be sent to another host than the one
+    // checked here. Refused whole, the userinfo included.
+    if authority
+        .bytes()
+        .any(|b| b <= b' ' || b == 0x7f || b == b'\\')
+    {
+        return None;
+    }
     let path_end = tail.find(['?', '#']).unwrap_or(tail.len());
     let path = &tail[..path_end];
     if path.bytes().any(|b| b <= b' ' || b == 0x7f) || path.len() > 512 {
@@ -1029,9 +1038,7 @@ absent = "defaults""#;
                 "{url}: {refused:?}"
             );
             assert!(
-                refused
-                    .reason
-                    .contains("https://ai-gateway.vercel.sh/claude-code"),
+                refused.reason.contains("https://ai-gateway.vercel.sh/v1"),
                 "the refusal says what to type: {refused:?}"
             );
         }
@@ -1042,6 +1049,24 @@ absent = "defaults""#;
         ] {
             assert!(matches!(read_claude(url), Ok(Some(_))), "{url}");
         }
+    }
+
+    /// A backslash or a control byte in the authority is refused: a WHATWG parser would send the
+    /// harness to another host than the one checked here. A plain userinfo is still read.
+    #[test]
+    fn an_authority_that_splits_differently_is_refused() {
+        for url in [
+            "https://127.0.0.1\\@gateway.example.test/v1",
+            "https://gateway.example.test\\@127.0.0.1/v1",
+            "https://gateway.example.test\\v1",
+            "https://gateway\texample.test/v1",
+        ] {
+            assert!(read_claude(url).is_err(), "{url}");
+        }
+        assert!(matches!(
+            read_claude("https://key@gateway.example.test/v1"),
+            Ok(Some(_))
+        ));
     }
 
     #[test]

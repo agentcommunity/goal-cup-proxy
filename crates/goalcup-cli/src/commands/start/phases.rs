@@ -69,6 +69,22 @@ pub const CHAT_MODE_GOAL: &str = "chat mode (D57): the harness was given no goal
      participant typed the prompt in the harness's own terminal, and it is recorded in the \
      harness's session files.";
 
+/// The refusal for a model service whose name resolves only to this computer, or `None`. The
+/// recorder would connect to it here, unrecorded as a remote host, so `prepare` refuses it before
+/// the probe (checked here, not by spelling alone; a later change of DNS is not seen). `resolves`
+/// is [`crate::proxy::preflight::resolves_only_to_loopback`], or a test's answer to it.
+fn refuse_model_host_on_this_computer(
+    model: Option<&crate::model_host::ModelHost>,
+    resolves: impl Fn(&str, u16) -> bool,
+) -> Option<crate::model_host::Unrecordable> {
+    let model = model?;
+    if resolves(&model.host, model.port) {
+        Some(crate::model_host::resolves_only_here(model))
+    } else {
+        None
+    }
+}
+
 /// Phase one: every refusal that comes before anything is created.
 pub(super) fn prepare(
     cx: &CaptureRun<'_>,
@@ -106,15 +122,12 @@ pub(super) fn prepare(
     // anything is created (the recording proxy module's preflight; it names a firewall holding this
     // binary when they do not).
     if !offline_upstreams_for_test(env) {
-        // A model service whose name resolves only to this computer is refused before the probe:
-        // the recorder would connect to it here, unrecorded as a remote host (checked here, not
-        // by spelling alone; a later change of DNS is not seen).
-        if let Some(model) = model_host
-            && crate::proxy::preflight::resolves_only_to_loopback(&model.host, model.port)
-        {
+        if let Some(refused) = refuse_model_host_on_this_computer(
+            model_host,
+            crate::proxy::preflight::resolves_only_to_loopback,
+        ) {
             return Err(CliError::Refused(
-                crate::model_host::resolves_only_here(model)
-                    .refusal(c.display_name(), &c.loaded.manifest.id),
+                refused.refusal(c.display_name(), &c.loaded.manifest.id),
             ));
         }
         crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
@@ -1627,5 +1640,42 @@ mod tests {
         let reopened = crate::arming::interrupted();
         crate::arming::clear_interrupt();
         assert!(reopened, "the next start's window is open again");
+    }
+
+    /// A model service whose name resolves only to this computer is refused before the probe,
+    /// with the loopback sentence; one that resolves elsewhere, or no service, is not.
+    #[test]
+    fn a_model_service_that_resolves_only_here_is_refused_before_the_probe() {
+        let model = crate::model_host::ModelHost {
+            host: "gateway.example.test".into(),
+            port: 443,
+            base_path: String::new(),
+            from: "env.ANTHROPIC_BASE_URL in settings.json".into(),
+        };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let refused = refuse_model_host_on_this_computer(Some(&model), |host, port| {
+            asked.borrow_mut().push((host.to_string(), port));
+            true
+        })
+        .expect("a name that resolves here is refused");
+        assert_eq!(
+            *asked.borrow(),
+            vec![("gateway.example.test".to_string(), 443)],
+            "the name is the one checked"
+        );
+        assert_eq!(refused.shown, "https://gateway.example.test:443");
+        assert!(
+            refused.reason.contains("on this computer"),
+            "{}",
+            refused.reason
+        );
+        assert!(
+            refuse_model_host_on_this_computer(Some(&model), |_, _| false).is_none(),
+            "a name that resolves elsewhere is not refused here"
+        );
+        assert!(
+            refuse_model_host_on_this_computer(None, |_, _| true).is_none(),
+            "no model service, nothing to refuse"
+        );
     }
 }
