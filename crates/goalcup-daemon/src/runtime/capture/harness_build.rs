@@ -108,12 +108,34 @@ mod tests {
         }
     }
 
+    /// Wait until `pid` runs `program`. A plain `Command::spawn` (std uses `posix_spawn`, a vfork)
+    /// returns when the child lets go of this process's memory, which on Linux is a moment before
+    /// the kernel installs the new image, so `/proc/<pid>/exe` can still name this test binary.
+    /// The daemon never sees that window: the launcher's gated spawn (`launch::spawn_gated` in
+    /// goalcup-cli) forks, and returns only after `exec` has closed std's close-on-exec pipe, which
+    /// is after the new image is in place, and only then posts the launch.
+    fn wait_for_exec(pid: u32, program: &str) {
+        let want = std::fs::canonicalize(program).unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while goalcup_platform::process_image::executable_path(pid)
+            .and_then(|path| std::fs::canonicalize(path).ok())
+            != Some(want.clone())
+        {
+            assert!(
+                std::time::Instant::now() < until,
+                "pid {pid} did not exec {program}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     #[test]
     fn a_running_child_has_both_digests_and_a_relative_program_has_none() {
         let mut child = std::process::Command::new("/bin/sleep")
             .arg("30")
             .spawn()
             .unwrap();
+        wait_for_exec(child.id(), "/bin/sleep");
         let expected = sha256_file(Path::new("/bin/sleep")).unwrap();
         let build = observe(&handle(child.id(), "/bin/sleep"));
         assert_eq!(build.program_sha256.as_deref(), Some(expected.as_str()));
