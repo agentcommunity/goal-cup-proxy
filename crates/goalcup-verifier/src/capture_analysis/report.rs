@@ -19,7 +19,7 @@
 use super::api::{Disposition, Observation, ObservationSink, kinds};
 use super::reader::{CaptureIntegrityReport, scan_capture_trace};
 use super::registry::DecoderRegistry;
-use super::session::{DecodeOutcome, DecodeSession, DecoderOutcome, Undecoded};
+use super::session::{DecodeOutcome, DecodeSession, DecoderOutcome, Undecoded, widen};
 use super::wire::cut;
 use crate::VerifyOptions;
 use goalcup_protocol::capture::CaptureRecord;
@@ -27,6 +27,7 @@ use goalcup_protocol::capture_status::AnalysisState;
 use goalcup_protocol::pins::connector_dir_is_pinned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::Path;
@@ -36,8 +37,9 @@ use std::path::Path;
 /// Version 3 adds `delivery.records_after_deadline`, `delivery.last_seq_at_or_before_deadline`
 /// and `delivery.last_ack_at`, copied from the integrity report. Version 4 adds
 /// `analysis.undecoded` (a cut hint adds `hint_truncated`) and `analysis.undecoded_omitted`, and drops the constant
-/// `options.dev_mode`. Each decoder entry keeps `measured` and `synthetic_only`.
-const RESEARCH_SCHEMA_VERSION: u32 = 4;
+/// `options.dev_mode`. Each decoder entry keeps `measured` and `synthetic_only`. Version 5 adds
+/// `analysis.evidence` and `analysis.cross_leg.wire_request_range`.
+const RESEARCH_SCHEMA_VERSION: u32 = 5;
 /// The longest observation line written, newline included.
 const MAX_OBSERVATION_LINE_BYTES: usize = 2 * 1024 * 1024;
 /// The longest summary line written, newline included.
@@ -225,10 +227,11 @@ pub fn research_summary(
         (None, _) if integrity.receipt_clock.is_some() => "none_acknowledged",
         (None, _) => "local_only",
     };
+    let legs = Legs::of(outcome);
     let explicit = operations.counts().get("assistance").copied().unwrap_or(0);
     let markers = tally.human_messages();
     // No explicit evidence is never a finding of zero assistance.
-    let evidence = if explicit > 0 || markers > 0 {
+    let assistance = if explicit > 0 || markers > 0 {
         "observed"
     } else {
         "none_observed"
@@ -276,14 +279,15 @@ pub fn research_summary(
         "assistance": {
             "explicit_records": explicit,
             "positive_native_markers": markers,
-            "evidence": evidence,
+            "evidence": assistance,
         },
         "analysis": {
             "state": analysis,
             "decoders": decoders.iter().map(entry).collect::<Vec<_>>(),
             "models": models(decoders),
             "models_omitted": models_omitted(decoders),
-            "cross_leg": cross_leg(outcome),
+            "evidence": evidence(legs.native, legs.wire_streams, legs.wire_requests),
+            "cross_leg": cross_leg(outcome, &legs),
             "undecoded": outcome.undecoded.iter().map(undecoded).collect::<Vec<_>>(),
             "undecoded_omitted": outcome.undecoded_omitted,
         },
@@ -326,24 +330,43 @@ fn models_omitted(decoders: &[DecoderOutcome]) -> Value {
 /// recording proxy, or a fake). It never changes the exit code. `unchecked` when there is no native
 /// model activity to compare, or wire streams were recorded but no model request was decoded from
 /// them (a compressed or oversized body, a degraded decoder): the calls may be there unread.
-fn cross_leg(outcome: &DecodeOutcome) -> Value {
-    let native: u64 = outcome
-        .decoders
-        .iter()
-        .map(|d| d.observations.native_model_activity)
-        .sum();
-    let wire_requests: u64 = outcome
-        .decoders
-        .iter()
-        .map(|d| d.observations.wire_model_requests)
-        .sum();
-    let wire_streams = outcome.operations.wire_opens();
+/// `wire_request_range` is the wall-clock span of the decoded wire requests, `null` without one.
+fn cross_leg(outcome: &DecodeOutcome, legs: &Legs) -> Value {
+    let (mut first, mut last) = (None, None);
+    for counts in outcome.decoders.iter().map(|d| &d.observations) {
+        if let (Some(a), Some(b)) = (&counts.wire_first, &counts.wire_last) {
+            widen(&mut first, a, Ordering::Less);
+            widen(&mut last, b, Ordering::Greater);
+        }
+    }
+    let range = first
+        .zip(last)
+        .map(|(first, last)| json!({"first": first, "last": last}));
     json!({
-        "native_model_activity": native,
-        "wire_streams": wire_streams,
-        "wire_model_requests": wire_requests,
-        "state": cross_leg_state(native, wire_streams, wire_requests),
+        "native_model_activity": legs.native,
+        "wire_streams": legs.wire_streams,
+        "wire_model_requests": legs.wire_requests,
+        "wire_request_range": range,
+        "state": cross_leg_state(legs.native, legs.wire_streams, legs.wire_requests),
     })
+}
+
+/// Each leg's count, summed across its decoders.
+struct Legs {
+    native: u64,
+    wire_streams: u64,
+    wire_requests: u64,
+}
+
+impl Legs {
+    fn of(outcome: &DecodeOutcome) -> Self {
+        let sum = |leg: fn(&DecoderOutcome) -> u64| outcome.decoders.iter().map(leg).sum();
+        Self {
+            native: sum(|d| d.observations.native_model_activity),
+            wire_streams: outcome.operations.wire_opens(),
+            wire_requests: sum(|d| d.observations.wire_model_requests),
+        }
+    }
 }
 
 /// The one rule behind `analysis.cross_leg.state`.
@@ -356,6 +379,25 @@ fn cross_leg_state(native: u64, wire_streams: u64, wire_requests: u64) -> &'stat
         "unchecked"
     } else {
         "consistent"
+    }
+}
+
+/// The one rule behind `analysis.evidence`: what the run holds, decoded wire requests first.
+/// Wire streams with no decoded request outrank the session file, since the calls may be there
+/// unread.
+fn evidence(native: u64, wire_streams: u64, wire_requests: u64) -> &'static str {
+    if wire_requests > 0 {
+        if native > 0 {
+            "wire_and_native"
+        } else {
+            "wire_only"
+        }
+    } else if wire_streams > 0 {
+        "wire_undecoded"
+    } else if native > 0 {
+        "native_only"
+    } else {
+        "none"
     }
 }
 
@@ -433,6 +475,17 @@ mod tests {
         assert_eq!(cross_leg_state(5, 3, 0), "unchecked");
         assert_eq!(cross_leg_state(0, 4, 4), "unchecked");
         assert_eq!(cross_leg_state(0, 0, 0), "unchecked");
+    }
+
+    #[test]
+    fn the_evidence_label_follows_decoded_requests_first() {
+        assert_eq!(evidence(1, 1, 1), "wire_and_native");
+        assert_eq!(evidence(0, 1, 1), "wire_only");
+        assert_eq!(evidence(0, 1, 0), "wire_undecoded");
+        assert_eq!(evidence(1, 0, 0), "native_only");
+        assert_eq!(evidence(0, 0, 0), "none");
+        // Wire streams with no decoded request outrank the session file.
+        assert_eq!(evidence(1, 1, 0), "wire_undecoded");
     }
     use crate::capture_analysis::api::{
         DecoderFailure, DecoderSummary, DecoderV1, ObservationTimeRange, SourceRef, StreamOpen,
