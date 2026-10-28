@@ -23,12 +23,12 @@ on Tenki come later, after the build is clear and good.
 |---|---|---|
 | 1 | Record every request on an opened host | not started |
 | 2 | Clean model address; never Goal Cup's own host | not started |
-| 3 | Upload reads only its own tunnel list | branch pushed; review fixes in db9e352; final checks running |
+| 3 | Upload reads only its own tunnel list | merged to main in #290 (444aa15); gate PASS, live PASS |
 | 4 | Probe only what the run needs | not started |
 | 5 | Up to 8 session-file rows; Claude subagents captured | not started |
 | 6 | Copy a harness database once, after exit | not started |
 | 7 | Header stream per exchange, credentials masked | not started |
-| 8 | Evidence label counts model requests only | PR #289 open: sandbox gate PASS, live Claude PASS (same as BEFORE) |
+| 8 | Evidence label counts model requests only | PR #289 open; main merged into it (1eda6db); gate re-running; live PASS before the merge |
 | 9 | Codex records an API-key login | not started |
 | 10 | Proxy restarts itself on the same port | not started |
 | 11 | Participant sees "recording works" and the right file | not started |
@@ -47,3 +47,5 @@ on Tenki come later, after the build is clear and good.
   uses gpt-5.6-luna. The live check settles it with a real call and the name that worked is recorded.
 - 28 Oct: Live kit proven on main for claude-code-cli, codex-cli (gpt-5.6-luna, since gpt-6.1-luma returned 404) and hermes-cli (deepseek-flash). Sandbox gate on main PASS in 306s.
 - 28 Oct: Task 8 review: one medium finding (a test that would not catch a revert) fixed; one low finding fixed (WebSocket client messages). Owner calls: schema version bump, and the Hermes and Amp wording.
+- 28 Oct: Task 3 merged in #290 (444aa15). Gate PASS in 146s with Worker tests. Live Claude run PASS, but 7 wire calls against 10 BEFORE; the kit does not print the tunnel-list line, so acceptance is inferred. Deploy the Worker before any client from main seals (owner step).
+- 28 Oct: Commit messages. Two earlier ledger commits and one Task 3 commit (3f6f055 is clean; 4b7b8fa, 35abe88, fddcf87 and fcf13ee carry a model name in a Co-Authored-By line). Not rewritten: owner to decide. The system rule says no model id in commits.
