@@ -14,7 +14,7 @@ use crate::proxy::{MAX_CONNECTION_TASKS, ProxyConfig, ProxyHandle};
 use crate::retry::retry_busy;
 use goalcup_protocol::capture::CaptureSink;
 use goalcup_protocol::control::{CaptureWorkspaceInfo, DaemonClient, SignedStatus};
-use goalcup_protocol::harness::CaptureSpec;
+use goalcup_protocol::harness::{CaptureSpec, HostSpec};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -115,7 +115,7 @@ impl Proxied {
         let config = ProxyConfig {
             listener,
             ca_dir: run.ca.clone(),
-            approved: approved_hosts(profile, model_host),
+            approved: approved_hosts(&profile.hosts, model_host),
             auth_hosts: profile.auth_hosts.clone(),
             credential,
             upstream_roots: roots,
@@ -148,16 +148,10 @@ impl Proxied {
 /// The profile's hosts as the recording proxy's host rules: exact paths, then prefixes, each with
 /// the host's protocol hint.
 fn approved_hosts(
-    profile: &CaptureSpec,
+    hosts: &[HostSpec],
     model_host: Option<&crate::model_host::ModelHost>,
 ) -> Vec<ApprovedHost> {
-    // The model service the harness's config names (D62) joins them; a host the profile lists
-    // keeps the profile's reviewed rule.
-    let model = model_host
-        .filter(|m| !profile.hosts.iter().any(|h| h.host == m.host))
-        .map(|m| m.approved());
-    profile
-        .hosts
+    let mut approved: Vec<ApprovedHost> = hosts
         .iter()
         .map(|h| {
             let exact = h.evidence_paths.iter().map(|p| (p, false));
@@ -175,8 +169,19 @@ fn approved_hosts(
                 policy: CapturePolicy { paths },
             }
         })
-        .chain(model)
-        .collect()
+        .collect();
+    // The model service the harness's config names (D62) joins them. When the profile already
+    // lists its host, the model's paths are added after the profile's reviewed rows, which keep
+    // their order and hints (the first row that names a path wins). Dropping the model's rule
+    // there would lose the hint of a path only the model's rule names, such as a base path with
+    // a version segment the profile does not list.
+    if let Some(model) = model_host.map(|m| m.approved()) {
+        match approved.iter_mut().find(|h| h.host == model.host) {
+            Some(existing) => existing.policy.paths.extend(model.policy.paths),
+            None => approved.push(model),
+        }
+    }
+    approved
 }
 
 /// Wait, within [`CAPTURE_STARTUP`], for the entry's own status to show the recording proxy's
@@ -355,6 +360,83 @@ mod tests {
             proxy_admission_line(&health, &none),
             "proxy admission: accepted=9 intercepted=4 fail_open=5 fail_open_unparsed=1 \
              fail_open_no_sni=1 fail_open_sni_mismatch=2 fail_open_not_tls=1"
+        );
+    }
+
+    /// The hosts the Codex connector ships, read from its own manifest, so the test checks the
+    /// rule a run gets.
+    #[derive(serde::Deserialize)]
+    struct ShippedCapture {
+        capture: ShippedHosts,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ShippedHosts {
+        hosts: Vec<HostSpec>,
+    }
+
+    fn shipped_codex_hosts() -> Vec<HostSpec> {
+        let manifest = include_str!("../../../../../connectors/codex-cli/harness.toml");
+        let shipped: ShippedCapture = toml::from_str(manifest).unwrap();
+        shipped.capture.hosts
+    }
+
+    /// The protocol hint the approved rule for `host` gives `path`, or `None` when no row names it.
+    fn hint_for(approved: &[ApprovedHost], host: &str, path: &str) -> Option<String> {
+        let rule = approved
+            .iter()
+            .find(|h| h.host == host)
+            .expect("an approved host");
+        crate::proxy::metadata::select(&rule.policy, path).and_then(|p| p.protocol_hint.clone())
+    }
+
+    /// A Responses exchange on the API-key host (`/v1/responses`) gets the Responses hint.
+    #[test]
+    fn the_api_key_host_records_its_responses_exchange_with_the_hint() {
+        let hosts = shipped_codex_hosts();
+        let approved = approved_hosts(&hosts, None);
+        assert_eq!(
+            hint_for(&approved, "api.openai.com", "/v1/responses").as_deref(),
+            Some("openai-responses")
+        );
+    }
+
+    /// When the config names the API-key host at a base path (`/x/v1`), that base's Responses
+    /// exchange keeps its hint even though the profile lists the host: the model's rule joins the
+    /// profile's one rule for it, not a second rule for the host, and a host the profile does not
+    /// list still gets its own rule.
+    #[test]
+    fn a_model_service_on_a_profile_host_keeps_its_own_paths_hints() {
+        let hosts = shipped_codex_hosts();
+        let profile_rules = approved_hosts(&hosts, None).len();
+        let model = crate::model_host::ModelHost {
+            host: "api.openai.com".to_string(),
+            port: 443,
+            base_path: "/x/v1".to_string(),
+            from: String::new(),
+        };
+        let approved = approved_hosts(&hosts, Some(&model));
+        assert_eq!(approved.len(), profile_rules, "one rule per host");
+        assert_eq!(
+            hint_for(&approved, "api.openai.com", "/x/v1/responses").as_deref(),
+            Some("openai-responses")
+        );
+        assert_eq!(
+            hint_for(&approved, "api.openai.com", "/v1/responses").as_deref(),
+            Some("openai-responses")
+        );
+
+        let gateway = crate::model_host::ModelHost {
+            host: "gateway.example.test".to_string(),
+            port: 443,
+            base_path: String::new(),
+            from: String::new(),
+        };
+        let approved = approved_hosts(&hosts, Some(&gateway));
+        assert_eq!(approved.len(), profile_rules + 1);
+        assert_eq!(
+            hint_for(&approved, "gateway.example.test", "/v1/responses").as_deref(),
+            Some("openai-responses")
         );
     }
 }

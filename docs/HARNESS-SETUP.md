@@ -107,7 +107,8 @@ profiles. Goal Cup reads only `model_providers.<model_provider>.base_url` and re
 ([D74](DECISIONS.md#d74-the-model-host-is-the-connectors-default-or-the-one-address-the-harnesss-own-config-names)).
 When `model_provider` is not set, or names a built-in provider with no table, Goal Cup opens
 `chatgpt.com`, the model service of a ChatGPT sign-in, and `api.openai.com`, the one an API key
-uses (below). The address must be `https` and not on
+uses (below). Setup and start check only `chatgpt.com` in that case, so a network that cannot reach
+`api.openai.com` does not stop a run; its requests are still recorded if a run sends them there. The address must be `https` and not on
 this computer, or the start is refused. Measured 28 Oct in a sandbox (Codex
 0.165.0): every model call recorded ([results](research/results/2026-10-vercel-gateway.md#round-3-28-oct-one-capture-system-sandbox)).
 

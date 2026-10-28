@@ -237,8 +237,11 @@ pub(crate) struct ProviderHosts {
 ///   it, and it is the host the run records.
 /// - With a model service, the harness's own hosts (its profile's `hosts`, and for setup its
 ///   sign-in hosts) only warn, because a run that records the service does not need them.
-/// - Without a model service, the harness's own hosts are hard, and for setup its sign-in hosts
-///   are hard too.
+/// - Without a model service, the harness's first host is hard, and so are the sign-in hosts
+///   for setup. The first host is the one the harness's default login uses (Codex's ChatGPT
+///   sign-in is its first row). Its other hosts are possible paths only, such as an API key's
+///   host, so they are not probed: a run that does not use them is never refused for them, and
+///   their exchanges are recorded whatever a probe would say.
 /// - Sign-in hosts (`capture.auth_hosts`) are asymmetric by caller. `goalcup setup` probes them,
 ///   as hard hosts without a model service and as warnings with one. `goalcup start` never
 ///   probes them, so a sign-in host that does not answer neither stops nor warns a start.
@@ -248,22 +251,27 @@ pub(crate) fn provider_hosts<'a>(
     sign_in: impl IntoIterator<Item = &'a str>,
     caller: Caller,
 ) -> ProviderHosts {
-    let mut own: Vec<(String, u16)> = harness
+    let harness: Vec<(String, u16)> = harness
         .into_iter()
         .map(|host| (host.to_owned(), 443))
         .collect();
     // Only setup probes the sign-in hosts. Start leaves them out of both lists, so they never
     // refuse or warn a start.
-    if caller == Caller::Setup {
-        own.extend(sign_in.into_iter().map(|host| (host.to_owned(), 443)));
-    }
+    let sign_in: Vec<(String, u16)> = if caller == Caller::Setup {
+        sign_in
+            .into_iter()
+            .map(|host| (host.to_owned(), 443))
+            .collect()
+    } else {
+        Vec::new()
+    };
     match model {
         Some(model) => ProviderHosts {
             hard: vec![(model.host.clone(), model.port)],
-            warn: own,
+            warn: harness.into_iter().chain(sign_in).collect(),
         },
         None => ProviderHosts {
-            hard: own,
+            hard: harness.into_iter().take(1).chain(sign_in).collect(),
             warn: Vec::new(),
         },
     }
@@ -1260,8 +1268,9 @@ absent = "defaults""#;
         (host.to_string(), port)
     }
 
-    /// Without a service the harness's own hosts are hard. With one, the service is the only hard
-    /// host and the harness's own hosts only warn. Sign-in hosts are setup's alone.
+    /// Without a service the harness's first host is hard and its other hosts are not probed.
+    /// With one, the service is the only hard host and the harness's own hosts only warn.
+    /// Sign-in hosts are setup's alone.
     #[test]
     fn start_never_probes_sign_in_hosts_and_setup_does() {
         let model = ModelHost {
@@ -1309,6 +1318,29 @@ absent = "defaults""#;
             ProviderHosts {
                 hard: vec![named("gateway.example.test", 443)],
                 warn: vec![named("api.default.example", 443)],
+            }
+        );
+    }
+
+    /// Codex's two shipped rows, ChatGPT's first: without a service only the first is hard, so an
+    /// API-key host that does not answer neither refuses nor warns a run, for either caller. The
+    /// sign-in hosts keep their setup-only probe.
+    #[test]
+    fn a_second_default_host_is_never_probed_without_a_service() {
+        let harness = ["chatgpt.com", "api.openai.com"];
+        let sign_in = ["auth.example.test"];
+        assert_eq!(
+            provider_hosts(None, harness, sign_in, Caller::Start),
+            ProviderHosts {
+                hard: vec![named("chatgpt.com", 443)],
+                warn: Vec::new(),
+            }
+        );
+        assert_eq!(
+            provider_hosts(None, harness, sign_in, Caller::Setup),
+            ProviderHosts {
+                hard: vec![named("chatgpt.com", 443), named("auth.example.test", 443)],
+                warn: Vec::new(),
             }
         );
     }
