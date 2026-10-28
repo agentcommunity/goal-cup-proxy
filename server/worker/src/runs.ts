@@ -24,7 +24,8 @@ import {
 
 const JSON_BODY_MAX = 64 * 1024;
 const SEAL_DOC_MAX = 16 * 1024 * 1024; // each document, bytes
-const SEAL_BODY_MAX = 3 * SEAL_DOC_MAX + JSON_BODY_MAX; // two documents and the tunnel list, plus the JSON around them
+const TUNNELS_MAX = 8 * 1024 * 1024; // the sealed-connection list, bytes
+const SEAL_BODY_MAX = 2 * SEAL_DOC_MAX + TUNNELS_MAX + JSON_BODY_MAX; // two documents and the list, plus the JSON around them
 
 /**
  * Read a JSON object body of at most `max` bytes. The raw bytes and the decoded text live only
@@ -47,16 +48,16 @@ export async function readJson(request: Request, max: number): Promise<Record<st
 
 /**
  * Take one document string out of the parsed body as UTF-8 bytes, and remove the string from the
- * body so it can be freed: a seal carries up to three documents of up to 16 MiB, and the Worker
- * has 128 MB.
+ * body so it can be freed: a seal carries two documents of up to 16 MiB and a list of up to 8 MiB,
+ * and the Worker has 128 MB.
  */
-function takeDocument(body: Record<string, unknown>, name: string): Uint8Array {
+function takeDocument(body: Record<string, unknown>, name: string, max = SEAL_DOC_MAX): Uint8Array {
   const text = body[name];
   if (typeof text !== "string" || text === "") throw malformed(`${name} must be a non-empty string.`);
   if (!text.isWellFormed()) throw malformed(`${name} is not well-formed Unicode.`);
   delete body[name];
   const bytes = new TextEncoder().encode(text);
-  if (bytes.length > SEAL_DOC_MAX) throw tooLarge(`${name} is over 16 MiB.`);
+  if (bytes.length > max) throw tooLarge(`${name} is over ${max / (1024 * 1024)} MiB.`);
   return bytes;
 }
 
@@ -521,7 +522,7 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
   const baselineBytes = takeDocument(b, "baseline_json");
   // The sealed-connection list (`goalcup-tunnels-v1`), optional: a side artifact kept beside the
   // seal and outside the chain. It never takes part in the repeat or conflict rule below.
-  const tunnelsBytes = b.tunnels_jsonl === undefined ? null : takeDocument(b, "tunnels_jsonl");
+  const tunnelsBytes = b.tunnels_jsonl === undefined ? null : takeDocument(b, "tunnels_jsonl", TUNNELS_MAX);
   const { run, entry } = await requireRun(ctx, member, runId, entry_id);
   const prefix = `traces/${run.event_id}/${run.run_id}/${entry.entry_id}`;
 
@@ -531,7 +532,7 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
   // Already sealed: same documents is a repeat (200), different documents is a conflict.
   if (entry.sealed_at !== null) {
     if (entry.seal_sha256 === sealSha && entry.baseline_sha256 === baselineSha) {
-      // A repeat may be the retry of a seal whose list was not kept.
+      // A repeat may be the retry of a seal whose list was not kept; one already kept stays.
       await keepTunnels(ctx, prefix, tunnelsBytes);
       return json(200, { status: "sealed", run_status: run.status });
     }
@@ -586,20 +587,19 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
 }
 
 /**
- * The sealed-connection list beside the seal, as `tunnels-<sha256>.jsonl`. Best effort: a list
- * that cannot be kept is logged and never fails the seal. No database row names it.
+ * The sealed-connection list beside the seal: one object per entry, `tunnels.jsonl`, create-only,
+ * so the first list kept wins and a repeat with another list stores nothing. A put that fails is
+ * a 502 like the documents', and the client's retry fills it in. No database row names it.
  */
 async function keepTunnels(ctx: Ctx, prefix: string, bytes: Uint8Array | null): Promise<void> {
   if (bytes === null) return;
-  const sha = await sha256Hex(bytes);
-  try {
-    await putDocument(ctx, `${prefix}/tunnels-${sha}.jsonl`, bytes, sha, "application/x-ndjson");
-  } catch {
-    // putDocument logged it.
-  }
+  await putDocument(ctx, `${prefix}/tunnels.jsonl`, bytes, await sha256Hex(bytes), "application/x-ndjson");
 }
 
-/** Create-only put; "already there" is fine because the name contains the content's hash. */
+/**
+ * Create-only put; "already there" is fine: a seal or baseline name contains the content's hash,
+ * and the entry's list is the first one kept.
+ */
 async function putDocument(ctx: Ctx, key: string, bytes: Uint8Array, sha256: string, contentType = "application/json"): Promise<void> {
   try {
     await ctx.env.TRACES.put(key, bytes, {

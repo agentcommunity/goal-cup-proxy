@@ -531,9 +531,9 @@ Every capture child of `goalcup start` is spawned through `launch::spawn_gated`.
   `{"format":"goalcup-tunnels-v1","entry_id":...}`, then one line per tunnel (`host`, `port`,
   `reason`, `opened`, `closed` in RFC 3339 UTC, `up_bytes`, `down_bytes`, the bytes `null` when the
   tunnel ended in an error or was cut at the stop), at most 10,000 of them, and last
-  `{"dropped":N}`. It is sent with the seal and kept beside it. No hash binds it, and the v5
-  verifier never reads it. A run that ends without a finish (a crash, a killed process) has no
-  list.
+  `{"dropped":N}`. It goes to the event server with the seal (at most 8 MiB) and is kept beside
+  it. No hash binds it, and the v5 verifier never reads it. A run that ends without a finish (a
+  crash, a killed process) has no list.
 - **Not frozen.** The seven `FrameEvent` kinds are the producer-to-daemon seam; a change bumps
   `CONTROL_API_VERSION`. The status projection (`capture_status.rs`) is not a record.
 - **Reader rule.** A verifier change may not turn a previously valid v5 trace invalid without a

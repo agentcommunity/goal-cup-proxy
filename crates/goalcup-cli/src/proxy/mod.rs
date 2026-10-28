@@ -441,7 +441,9 @@ impl ProxyHandle {
     /// [`ProxyHandle::stop`] inside `bound` instead, never longer than the configured
     /// [`ProxyConfig::shutdown_deadline`]. For a stop while the harness still runs (the run's
     /// deadline): its open connections do not end on their own then, so waiting the whole
-    /// shutdown deadline for them only delays the stop.
+    /// shutdown deadline for them only delays the stop. A tunnel still open in a task that is not
+    /// reaped (the accept loop lost, or `unterminated > 0`) gets no note in
+    /// [`ProxyHealth::tunnels`].
     pub async fn stop_within(mut self, bound: Duration) -> ProxyStopReport {
         let bound = bound.min(self.shutdown_deadline);
         let deadline = Instant::now() + bound;

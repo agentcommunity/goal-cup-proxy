@@ -143,11 +143,14 @@ pub fn summary_line(entry_id: &str, notes: &[TunnelNote], dropped: u64) -> Optio
     if notes.is_empty() && dropped == 0 {
         return None;
     }
-    let mut hosts = std::collections::BTreeMap::<(&str, u16), (u64, u64)>::new();
+    // Per host: tunnels, and bytes both ways (`None` while every tunnel's bytes are unknown).
+    let mut hosts = std::collections::BTreeMap::<(&str, u16), (u64, Option<u64>)>::new();
     for note in notes {
         let (count, bytes) = hosts.entry((&note.host, note.port)).or_default();
         *count += 1;
-        *bytes += note.up_bytes.unwrap_or(0) + note.down_bytes.unwrap_or(0);
+        if let (Some(up), Some(down)) = (note.up_bytes, note.down_bytes) {
+            *bytes = Some(bytes.unwrap_or(0) + up + down);
+        }
     }
     let mut hosts: Vec<_> = hosts.into_iter().collect();
     // Most bytes first; the map's order breaks ties, so the line is the same for the same notes.
@@ -156,7 +159,13 @@ pub fn summary_line(entry_id: &str, notes: &[TunnelNote], dropped: u64) -> Optio
         .iter()
         .take(SUMMARY_HOSTS)
         .map(|((host, port), (count, bytes))| {
-            format!("{host}:{port} x{count} {} KiB", bytes / 1024)
+            let kib = bytes.map_or_else(|| "?".to_string(), |b| (b / 1024).to_string());
+            // An IPv6 literal is bracketed, as in a CONNECT authority.
+            if host.contains(':') {
+                format!("[{host}]:{port} x{count} {kib} KiB")
+            } else {
+                format!("{host}:{port} x{count} {kib} KiB")
+            }
         })
         .collect();
     let mut line = format!("sealed hosts: {}", named.join(", "));
@@ -242,5 +251,29 @@ mod tests {
             "sealed hosts: github.com:443 x1 2048 KiB, registry.npmjs.org:443 x1 300 KiB"
         );
         assert_eq!(summary_line("e0123456789abcdef", &[], 0), None);
+    }
+
+    #[test]
+    fn the_summary_says_where_the_rest_is() {
+        let mut notes: Vec<_> = (1..=5)
+            .map(|n| note(&format!("h{n}.test"), n * 2048))
+            .collect();
+        let mut cut = note("::1", 0);
+        (cut.up_bytes, cut.down_bytes) = (None, None);
+        notes.push(cut);
+        let line = summary_line("e0123456789abcdef", &notes, 3).unwrap();
+        assert!(
+            line.starts_with("sealed hosts: h5.test:443 x1 10 KiB, "),
+            "{line}"
+        );
+        assert!(!line.contains("[::1]"), "{line}");
+        assert!(
+            line.ends_with(
+                " (+1 more, 3 past the list's 10000 rows, list in tunnels-e0123456789abcdef.jsonl)"
+            ),
+            "{line}"
+        );
+        let line = summary_line("e0123456789abcdef", &notes[5..], 0).unwrap();
+        assert_eq!(line, "sealed hosts: [::1]:443 x1 ? KiB");
     }
 }
