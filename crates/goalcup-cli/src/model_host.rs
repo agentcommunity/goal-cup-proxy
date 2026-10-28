@@ -114,15 +114,62 @@ impl ModelHost {
 pub struct Unrecordable {
     pub shown: String,
     pub reason: String,
+    /// The setting a value read came from (`` `env.ANTHROPIC_BASE_URL` in settings.json ``),
+    /// when the reason does not already say it.
+    pub set_by: Option<String>,
+    /// The config file is there but cannot be read: then the advice is about the file, not the
+    /// service.
+    pub file: Option<Box<UnreadableFile>>,
+}
+
+/// A config file that is there but that Goal Cup cannot read: its path, why, and what fixes it.
+/// Never anything of its contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadableFile {
+    pub path: std::path::PathBuf,
+    pub problem: FileProblem,
+}
+
+/// Why a config file that is there cannot be read, and what the participant does about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileProblem {
+    /// After "the file": `is a link`.
+    pub reason: &'static str,
+    /// A whole instruction: `Replace the link with a copy of the file`.
+    pub fix: &'static str,
 }
 
 impl Unrecordable {
-    /// "`<name>` is set to use `<shown>`, which Goal Cup cannot record: `<reason>`."
+    /// "`<name>` is set to use `<shown>`, which Goal Cup cannot record: `<reason>` (set by
+    /// `<key>` in `<file>`)." For a file that cannot be read: "Goal Cup cannot read `<path>`,
+    /// where `<name>` keeps its model service setting: the file `<reason>`. `<fix>`."
     pub fn sentence(&self, name: &str) -> String {
+        if let Some(file) = &self.file {
+            return format!(
+                "Goal Cup cannot read {}, where {name} keeps its model service setting: the \
+                 file {}. {}.",
+                file.path.display(),
+                file.problem.reason,
+                file.problem.fix
+            );
+        }
+        let set_by = self
+            .set_by
+            .as_ref()
+            .map(|s| format!(" (set by {s})"))
+            .unwrap_or_default();
         format!(
-            "{name} is set to use {}, which Goal Cup cannot record: {}.",
+            "{name} is set to use {}, which Goal Cup cannot record: {}{set_by}.",
             self.shown, self.reason
         )
+    }
+
+    /// The whole refusal `goalcup start` and `goalcup continue` give, for connector `id`.
+    pub fn refusal(&self, name: &str, id: &str) -> String {
+        if self.file.is_some() {
+            return format!("{} Then run the command again.", self.sentence(name));
+        }
+        crate::participant::cannot_record_model_service(&self.sentence(name), id)
     }
 }
 
@@ -133,10 +180,7 @@ impl Unrecordable {
 /// ([`crate::participant::cannot_record_model_service`]).
 pub fn for_run(cfg: &Path, connector: &HarnessConnector) -> Result<Option<ModelHost>, CliError> {
     check(cfg, connector).map_err(|why| {
-        CliError::Refused(crate::participant::cannot_record_model_service(
-            &why.sentence(connector.display_name()),
-            &connector.loaded.manifest.id,
-        ))
+        CliError::Refused(why.refusal(connector.display_name(), &connector.loaded.manifest.id))
     })
 }
 
@@ -163,6 +207,8 @@ pub fn read(
     let refuse = |shown: &str, reason: String| Unrecordable {
         shown: shown.to_string(),
         reason,
+        set_by: None,
+        file: None,
     };
     let missing = |key: &str| match from.absent {
         ModelHostAbsent::Defaults => Ok(None),
@@ -172,11 +218,15 @@ pub fn read(
         )),
     };
     // A file that is there but cannot be read is refused whatever `absent` says: it may name a
-    // service, which would then pass unrecorded. Only its name is said, never its contents.
-    let unreadable = |why: &str| {
-        refuse(
+    // service, which would then pass unrecorded. Only its path is said, never its contents.
+    let unreadable = |problem: FileProblem| Unrecordable {
+        file: Some(Box::new(UnreadableFile {
+            path: path.clone(),
+            problem,
+        })),
+        ..refuse(
             "an address Goal Cup cannot read",
-            format!("{} in the harness's Goal Cup home {why}", from.file),
+            problem.reason.to_string(),
         )
     };
     // An empty value is no value, as the harness itself takes it.
@@ -249,7 +299,10 @@ pub fn read(
         None
     };
     if let Some(reason) = reason {
-        return Err(refuse(&shown, reason.into()));
+        return Err(Unrecordable {
+            set_by: Some(source),
+            ..refuse(&shown, reason.into())
+        });
     }
     Ok(Some(ModelHost {
         host: url.host,
@@ -262,7 +315,7 @@ pub fn read(
 /// The string at `key` in the file at `path` (named `name` in the manifest): `Ok(None)` when
 /// the file is missing or the key is absent or not a string, `Err` with the reason when the file
 /// is there but cannot be read ([`read_text`]).
-fn read_value(path: &Path, name: &str, key: &str) -> Result<Option<String>, &'static str> {
+fn read_value(path: &Path, name: &str, key: &str) -> Result<Option<String>, FileProblem> {
     Ok(read_text(path, name)?.and_then(|text| lookup(&text, name, key, false)))
 }
 
@@ -275,13 +328,18 @@ pub fn read_setting(path: &Path, name: &str, key: &str) -> Option<String> {
     lookup(&text, name, key, true)
 }
 
-/// The text of the config file at `path`: `Ok(None)` when there is none, `Err` with the reason
-/// when it is there but is not a regular file of at most [`MAX_CONFIG_BYTES`] (a link is never
-/// followed), cannot be read, or is not UTF-8 JSON or TOML its parser takes. A YAML file is
-/// read by [`yaml_lookup`], which takes what it cannot follow as no value.
-fn read_text(path: &Path, name: &str) -> Result<Option<String>, &'static str> {
+/// The text of the config file at `path`: `Ok(None)` when there is none or it holds only
+/// white space, `Err` with the reason and the fix when it is there but is not a regular file of
+/// at most [`MAX_CONFIG_BYTES`] (a link is never followed), cannot be read, or is not UTF-8
+/// JSON or TOML its parser takes. A YAML file is read by [`yaml_lookup`], which takes what it
+/// cannot follow as no value.
+fn read_text(path: &Path, name: &str) -> Result<Option<String>, FileProblem> {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
+    const UNREADABLE: FileProblem = FileProblem {
+        reason: "cannot be read by your user",
+        fix: "Make it readable by your user (chmod u+r)",
+    };
     let file = match std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -290,33 +348,66 @@ fn read_text(path: &Path, name: &str) -> Result<Option<String>, &'static str> {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
-            return Err("is a link, and Goal Cup reads only a regular file");
+            return Err(FileProblem {
+                reason: "is a link, and Goal Cup reads only a regular file",
+                fix: "Replace the link with a copy of the file",
+            });
         }
-        Err(_) => return Err("cannot be read"),
+        Err(_) => return Err(UNREADABLE),
     };
-    let meta = file.metadata().map_err(|_| "cannot be read")?;
+    let meta = file.metadata().map_err(|_| UNREADABLE)?;
     if !meta.is_file() {
-        return Err("is not a regular file");
+        return Err(FileProblem {
+            reason: "is not a regular file",
+            fix: "Replace it with a regular file",
+        });
     }
     if meta.len() > MAX_CONFIG_BYTES {
-        return Err("is larger than the 1 MiB Goal Cup reads");
+        return Err(FileProblem {
+            reason: "is over 1 MiB, the most Goal Cup reads",
+            fix: "Make it smaller than 1 MiB",
+        });
     }
     let mut bytes = Vec::new();
     file.take(MAX_CONFIG_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| "cannot be read")?;
-    let text = String::from_utf8(bytes).map_err(|_| "is not UTF-8 text")?;
+        .map_err(|_| UNREADABLE)?;
+    let text = String::from_utf8(bytes).map_err(|_| FileProblem {
+        reason: "is not UTF-8 text",
+        fix: "Save it as UTF-8 text",
+    })?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
-    let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
-    let parses = match extension.as_deref() {
-        Some("json") => serde_json::from_str::<serde_json::Value>(&text).is_ok(),
-        Some("toml") => text.parse::<toml::Table>().is_ok(),
-        _ => true,
-    };
-    if !parses {
-        return Err("cannot be parsed");
+    if text.trim().is_empty() {
+        return Ok(None);
     }
-    Ok(Some(text))
+    let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    match extension.as_deref() {
+        Some("json") if serde_json::from_str::<serde_json::Value>(&text).is_err() => {
+            Err(FileProblem {
+                reason: "is not valid JSON",
+                fix: "Fix the JSON: Goal Cup reads plain JSON, without comments or trailing commas",
+            })
+        }
+        Some("toml") if text.parse::<toml::Table>().is_err() => Err(FileProblem {
+            reason: "is not valid TOML",
+            fix: "Fix the TOML",
+        }),
+        _ => Ok(Some(text)),
+    }
+}
+
+/// The model service line of the run's details (`host.log`) when the config names none and the
+/// run records the connector's own hosts (`absent = "defaults"`), in the style of
+/// [`ModelHost::detail`].
+pub fn defaults_detail(from: &ModelHostFrom) -> String {
+    let setting = match &from.via {
+        Some(via) => format!("`{}` through `{via}`", from.key),
+        None => format!("`{}`", from.key),
+    };
+    format!(
+        "model service: the connector's default hosts ({setting} not set in {})",
+        from.file
+    )
 }
 
 /// The scalar at `key` in `text`, read as `name`'s extension says.
@@ -611,6 +702,11 @@ key = "env.ANTHROPIC_BASE_URL""#;
         assert_eq!(read_in(&defaults, "settings.json", "{}"), Ok(None));
         let missing = read_in(&defaults, "other.json", "{}");
         assert_eq!(missing, Ok(None), "no settings.json at all");
+        assert_eq!(
+            read_in(&defaults, "settings.json", " \n"),
+            Ok(None),
+            "an empty file"
+        );
         let refused = read_in(CLAUDE, "settings.json", "{}").unwrap_err();
         assert!(refused.reason.contains("is not set"), "{refused:?}");
     }
@@ -622,8 +718,10 @@ key = "env.ANTHROPIC_BASE_URL"
 absent = "defaults""#;
         let broken = r#"{"env":{"ANTHROPIC_BASE_URL":"https://gw.example/sk-secret"#;
         let refused = read_in(from, "settings.json", broken).unwrap_err();
-        assert!(refused.reason.contains("settings.json"), "{refused:?}");
-        assert!(!refused.reason.contains("gw.example"), "{refused:?}");
+        let said = refused.sentence("Claude Code");
+        assert!(said.contains("/settings.json, where Claude Code"), "{said}");
+        assert!(said.contains("is not valid JSON"), "{said}");
+        assert!(!said.contains("gw.example"), "{said}");
     }
 
     #[test]
@@ -646,6 +744,14 @@ absent = "defaults""#;
             (
                 "https://auth.example.test/v1",
                 "it is a sign-in host, which is never recorded",
+            ),
+            (
+                "https://203.0.113.7/v1",
+                "it is an IP address, and Goal Cup records a service by its DNS name",
+            ),
+            (
+                "https://gateway/v1",
+                "it is on this computer or the local network, which is never recorded",
             ),
         ] {
             let settings = format!(r#"{{"env":{{"ANTHROPIC_BASE_URL":"{url}"}}}}"#);

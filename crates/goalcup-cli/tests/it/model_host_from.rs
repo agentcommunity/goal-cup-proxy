@@ -200,8 +200,8 @@ fn other_hosts_stay_opaque_tunnels() {
     assert!(!out.contains(OTHER_HOST), "{out}");
 }
 
-/// `absent = "defaults"` with no config at all: the start is not refused, no model service is
-/// named, and the connector's own host row is opened and recorded as it is without the field.
+/// `absent = "defaults"` with no config at all: the start is not refused, the details say the
+/// connector's own hosts are recorded, and its host row is opened as it is without the field.
 #[test]
 fn a_missing_setting_records_the_connector_hosts() {
     let rig = Rig::new();
@@ -230,7 +230,13 @@ fn a_missing_setting_records_the_connector_hosts() {
         .unwrap()
     });
     result.unwrap_or_else(|e| panic!("{e}\n{out}"));
-    assert!(!out.contains("model service:"), "{out}");
+    assert!(
+        out.contains(
+            "model service: the connector's default hosts (`model.base_url` not set in \
+             config.yaml)"
+        ),
+        "{out}"
+    );
     let (report, records) = rig.read_trace(&client.created().entry_id);
     assert!(report.sealed, "{:?}", report.findings);
     let opens = wire_opens(&records);

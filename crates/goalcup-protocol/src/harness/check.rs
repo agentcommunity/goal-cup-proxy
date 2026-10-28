@@ -281,12 +281,15 @@ fn config_key_problem(
             ),
         ));
     }
-    if via_part && parts.iter().filter(|p| **p == MODEL_HOST_VIA_PART).count() != 1 {
+    if via_part
+        && (parts.iter().filter(|p| **p == MODEL_HOST_VIA_PART).count() != 1
+            || parts.last() == Some(&MODEL_HOST_VIA_PART))
+    {
         return Err(refuse(
             field,
             format!(
-                "`{key}` must hold exactly one `{MODEL_HOST_VIA_PART}` part, which the name \
-                 `via` reads stands for"
+                "`{key}` must hold exactly one `{MODEL_HOST_VIA_PART}` part, not its last, \
+                 which the name `via` reads stands for"
             ),
         ));
     }

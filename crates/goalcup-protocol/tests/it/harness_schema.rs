@@ -4100,11 +4100,13 @@ fn a_model_host_from_names_one_indirection_and_a_fallback() {
         PINNED,
         &["capture.model_host_from.key", "*"],
     );
-    refused(
-        &with("config.toml", "a.*.*.b", &[("via", "model_provider")]),
-        PINNED,
-        &["capture.model_host_from.key", "one"],
-    );
+    for key in ["a.*.*.b", "env.*"] {
+        refused(
+            &with("config.toml", key, &[("via", "model_provider")]),
+            PINNED,
+            &["capture.model_host_from.key", "one"],
+        );
+    }
     for via in ["x.*", "auth.provider"] {
         refused(
             &with("config.toml", "model_providers.*.base_url", &[("via", via)]),

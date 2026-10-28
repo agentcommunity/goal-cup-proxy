@@ -836,6 +836,8 @@ pub(super) const MODEL_HOST_DENIED_WORDS: &[&str] = &[
     "key",
     "keys",
     "api_key",
+    "apikey",
+    "password",
 ];
 
 /// The shared provider host table, `crates/goalcup-protocol/providers.toml`, compiled in.

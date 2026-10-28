@@ -72,13 +72,14 @@ resume_args = ["<RESUME-FLAG>"]
 # section 6 says where. Goal Cup Proxy reads that one value at each start and continue and records
 # that host; every other host stays an opaque tunnel. The default for any harness whose model
 # service is the participant's choice. Needs config_home = "shared"; the file and key may not
-# name a key file or a key (auth, credential, secret, token, key, api_key).
+# name a key file or a key (auth, credential, secret, token, key, api_key, apikey, password).
 # - via: when the URL sits in a table that another key names (`model_provider = "x"` and
 #   `[model_providers.x] base_url`), that key; the `key` then holds one `*` part for the name.
 # - absent = "defaults": a harness that has default hosts (its rows below) and takes a gateway
 #   only when the participant sets one. A missing file, key or `via` value then records those
 #   rows instead of refusing the start; a value that is set is still refused if it cannot be
-#   recorded. The default, "refuse", needs the value.
+#   recorded. A file that is there but cannot be read (a link, not JSON or TOML its parser
+#   takes) is refused too. The default, "refuse", needs the value.
 model_host_from = { file = "<config.yaml>", key = "<model.base_url>" }
 # model_host_from = { file = "<config.toml>", key = "<model_providers.*.base_url>", via = "<model_provider>", absent = "defaults" }
 # A harness that can reach one fixed service only: its row from the shared provider table
