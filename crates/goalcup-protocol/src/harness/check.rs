@@ -21,8 +21,8 @@ use crate::capture_policy::{
 };
 use crate::hints::valid_hint;
 
-/// The most `[[capture.native]]` rows a schema-1 connector may declare. The daemon admits as many
-/// native sources (`MAX_NATIVE_SOURCES` in `goalcup-daemon`), and a test there holds the two equal.
+/// The most `[[capture.native]]` rows a schema-1 connector may declare. The daemon's
+/// `MAX_NATIVE_SOURCES` is this constant, so every row a valid connector declares is admitted.
 pub const MAX_NATIVE_ROWS: usize = 8;
 
 /// Template variables an `args` element may use.

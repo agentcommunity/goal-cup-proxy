@@ -98,8 +98,11 @@ protocol_hint = "claude-code-jsonl"
 since_run_start = true
 
 # Subagents (D57). Each subagent writes its own transcript and a meta file beside the session it
-# serves: `<session-id>/subagents/agent-<id>.jsonl`. A subagent started by a workflow script
-# writes one level deeper, under `subagents/workflows/<workflow-id>/`, so it has its own rows.
+# serves: `<session-id>/subagents/agent-<id>.jsonl`. That direct shape is from vendor docs, not
+# re-fetched, and no Goal Cup run has observed it yet (none of that shape existed on the machine
+# where the workflow shape was seen, 28 Oct 2026). A subagent started by a workflow script
+# writes one level deeper, under `subagents/workflows/<workflow-id>/`, which was observed on
+# disk, so it has its own rows.
 # Large tool output spills to `<session-id>/tool-results/`. Every row reads from the run's start,
 # as the main row does (D57). Older binaries refuse this connector: schema 1 grew (D68 is proposed).
 [[capture.native]]

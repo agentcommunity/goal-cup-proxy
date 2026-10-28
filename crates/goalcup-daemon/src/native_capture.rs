@@ -169,8 +169,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-/// Most native sources one adapter reads.
-pub(crate) const MAX_NATIVE_SOURCES: usize = 8;
+/// Most native sources one capture reads: the protocol's schema-1 row bound, so the two cannot
+/// drift apart.
+pub(crate) const MAX_NATIVE_SOURCES: usize = goalcup_protocol::harness::MAX_NATIVE_ROWS;
 /// Most components in one source pattern.
 pub(crate) const MAX_NATIVE_PATTERN_DEPTH: usize = 8;
 /// Hard ceiling on [`NativeCaptureLimits::max_files`].

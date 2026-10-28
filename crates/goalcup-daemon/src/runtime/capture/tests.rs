@@ -1702,15 +1702,9 @@ fn schema_native_plan_copies_label_hint_form_and_root() {
 }
 
 /// Every `[[capture.native]]` row is planned, in order: three rows give three specs, each with
-/// its own name, pattern and root, and the daemon admits as many sources as the protocol admits
-/// rows.
+/// its own name, pattern and root.
 #[test]
 fn every_native_row_is_planned() {
-    assert_eq!(
-        crate::native_capture::MAX_NATIVE_SOURCES,
-        goalcup_protocol::harness::MAX_NATIVE_ROWS,
-        "the daemon admits as many native sources as the protocol admits rows"
-    );
     let mut manifest = manifest_at(&frozen_manifest_paths().remove(0));
     let first = manifest.capture.native[0].clone();
     manifest.capture.native = (0..3)
@@ -2092,6 +2086,69 @@ fn a_tracked_file_that_never_gets_a_stream_slot_is_a_streamless_gap_at_finish() 
             .count(),
         2,
         "the two files that got a slot are captured as before"
+    );
+}
+
+/// The default native stream budget is a quarter of the entry's allowance (32 of
+/// `MAX_OPEN_STREAMS`), shared by every row. Append-only streams keep their slot until the finish,
+/// so the 33rd append-only file in a run waits for the whole run and the chain marks it as one
+/// streamless gap. This pins today's ceiling. Raising the budget or ending idle streams is an
+/// owner decision, because wire capture shares the entry's open-stream allowance.
+#[test]
+fn an_append_only_file_past_the_default_stream_budget_is_one_gap_at_finish() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let budget = NativeCaptureLimits::default().max_open_streams;
+    for i in 0..=budget {
+        std::fs::write(home.path().join(format!("f{i:02}.jsonl")), b"x\n").unwrap();
+    }
+    let writer = writer(dir.path(), 64 << 20);
+    let sink = Arc::new(OwnerSink::default());
+    let native = NativeCapture::new(
+        NativeCaptureConfig {
+            sources: vec![NativeSourceSpec {
+                name: "store".into(),
+                root: home.path().to_path_buf(),
+                pattern: "*.jsonl".into(),
+                form: NativeStoreForm::AppendOnly,
+                hint: None,
+                modified_since: None,
+            }],
+            limits: NativeCaptureLimits::default(),
+        },
+        sink.clone(),
+        Box::new(SystemNativeClock::new()),
+    )
+    .unwrap();
+    let mut owner = Owner::new(
+        sink,
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        Some(native),
+    );
+    for _ in 0..3 {
+        owner.poll_native();
+    }
+    let control = OwnerControl::default();
+    control.stop.store(true, Ordering::Release);
+    owner.run(&control);
+    assert!(control.drained.load(Ordering::Acquire));
+    let chain = records(dir.path());
+    assert_eq!(
+        streamless(&chain, GapReason::LimitExceeded),
+        1,
+        "the file past the budget waits for a slot that never frees before the finish"
+    );
+    assert_eq!(
+        chain
+            .iter()
+            .filter(|r| matches!(r, CaptureRecord::Open { .. }))
+            .count(),
+        budget,
+        "the first {budget} files get a slot and are captured as before"
     );
 }
 

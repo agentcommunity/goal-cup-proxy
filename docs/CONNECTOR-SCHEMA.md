@@ -24,8 +24,8 @@ the owner approves it). The rest of this page is the field-by-field detail.
   one path, or `model_host_from`, which with `absent = "defaults"` needs one row too). Some pairs
   are required together, such as `home.env` with a `{config_home}` root
   ([Cross-field rules](#cross-field-rules)).
-  Optional, each with the default its table below gives: zero to eight `[[capture.native]]` rows (each with
-  `name`, `root`, `pattern` and `form`), `[participant]`, `[launch_prep]`,
+  Optional, each with the default its table below gives: zero to eight `[[capture.native]]` rows
+  (each with `name`, `root`, `pattern` and `form`), `[participant]`, `[launch_prep]`,
   `resume_args`, `configure`, `auth_hosts`, `env`, `platform`, `reserved_env_prefixes`, `argv_guard`,
   `termination`, `providers`, `model_host_from`, the home's `skills_dir`, `per_run_dir`, `dirs`
   and `seed`, `version_args`, and `[redaction]`. The one-screen list is
@@ -125,8 +125,9 @@ and `prefix_paths` (`schema1-per-run`); one host row and no native row, so the w
 record (`schema1-wire-only`); two native rows under one config home, each planned as its own
 source, so a run records both streams (`schema1-two-native`); and the required fields only, with
 no home variable and a shared run `HOME` (`schema1-minimal`, which pins the defaults). They load,
-take the launch checks (`tests/it/connector_contract.rs`) and run once with a stand-in through the real binaries
-(`tests/full/connector_contract.rs`; the fixtures through `--dev`). A connector made from the
+take the launch checks (`tests/it/connector_contract.rs`) and run once with a stand-in through
+the real binaries (`tests/full/connector_contract.rs`; the fixtures through `--dev`). A
+connector made from the
 [template](../skills/adding-a-capture-harness/templates/connector-harness.toml) loads with no
 Rust change (`goalcup-protocol` `connector_template.rs`), and no core string literal names a
 harness (`no_family_literals.rs`). A change that makes one of these fail is a break of the

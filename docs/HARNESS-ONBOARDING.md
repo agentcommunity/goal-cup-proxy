@@ -195,6 +195,11 @@ Known gaps. The connector works, but the record is partial. Write each one in th
 
 - Subagents with their own transcript files. Only the files a declared `[[capture.native]]` row
   matches are recorded. A subagent file no row matches is seen only as model traffic.
+- A per-run native ceiling. All native rows of one run share 32 open streams and 1024 tracked
+  files (the defaults). An append-only file past the 32nd waits until the finish, and a file past
+  the 1024th is not tracked. Each loss is marked as a streamless gap, not dropped silently. A
+  connector with several append-only rows can reach this in a long run. The Claude facts sheet
+  (`harnesses/claude-code-cli.md`, section 11) states the numbers.
 - A binary that updates itself with no flag or variable to stop that. The daemon hashes the build
   at launch. An update during the run is not recorded.
 - A model service the participant switches to inside a running session. The host is read from
