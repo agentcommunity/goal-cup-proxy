@@ -306,7 +306,8 @@ fn a_missing_setting_records_the_connector_hosts() {
 
 /// The shipped Claude Code and Codex connectors read a gateway from the participant's own
 /// settings and, with none set (a subscription login, Codex's built-in provider), are not
-/// refused: the run records their default hosts, `api.anthropic.com` and `chatgpt.com`.
+/// refused: the run records their default hosts, `api.anthropic.com`, `chatgpt.com` (Codex's
+/// ChatGPT login) and `api.openai.com` (Codex's API-key login, `/v1/responses`).
 #[test]
 fn the_shipped_claude_and_codex_rows_fall_back_without_a_setting() {
     let cfg = tempfile::tempdir().unwrap();
@@ -317,7 +318,23 @@ fn the_shipped_claude_and_codex_rows_fall_back_without_a_setting() {
         hosts.iter().map(|h| h.host.clone()).collect()
     };
     assert_eq!(hosts(&claude), ["api.anthropic.com"]);
-    assert_eq!(hosts(&codex), ["chatgpt.com"]);
+    assert_eq!(hosts(&codex), ["chatgpt.com", "api.openai.com"]);
+    // The API-key row approves exactly the Responses path, with its decoder hint, as the run's
+    // host rule does (`approved_hosts` turns `evidence_paths` into exact rules with this hint).
+    let api_key_row = codex
+        .loaded
+        .manifest
+        .capture
+        .hosts
+        .iter()
+        .find(|h| h.host == "api.openai.com")
+        .expect("the Codex API-key row");
+    assert_eq!(api_key_row.evidence_paths, ["/v1/responses"]);
+    assert!(api_key_row.prefix_paths.is_empty(), "{api_key_row:?}");
+    assert_eq!(
+        api_key_row.protocol_hint.as_deref(),
+        Some("openai-responses")
+    );
     let check = |c| goalcup_cli::model_host::check(cfg.path(), c);
     assert_eq!(check(&claude), Ok(None));
     assert_eq!(check(&codex), Ok(None));
