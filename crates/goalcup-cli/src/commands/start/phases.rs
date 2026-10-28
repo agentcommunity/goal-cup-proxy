@@ -106,6 +106,17 @@ pub(super) fn prepare(
     // anything is created (the recording proxy module's preflight; it names a firewall holding this
     // binary when they do not).
     if !offline_upstreams_for_test(env) {
+        // A model service whose name resolves only to this computer is refused before the probe:
+        // the recorder would connect to it here, unrecorded as a remote host (checked here, not
+        // by spelling alone; a later change of DNS is not seen).
+        if let Some(model) = model_host
+            && crate::proxy::preflight::resolves_only_to_loopback(&model.host, model.port)
+        {
+            return Err(CliError::Refused(
+                crate::model_host::resolves_only_here(model)
+                    .refusal(c.display_name(), &c.loaded.manifest.id),
+            ));
+        }
         crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
             .and_then(|()| {
                 crate::proxy::preflight::endpoints_reachable(

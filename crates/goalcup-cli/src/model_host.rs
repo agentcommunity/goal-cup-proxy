@@ -14,7 +14,8 @@
 //! TOML by the parsers this binary already links.
 //!
 //! A value goalcup cannot record (missing, not a URL, plain `http`, loopback, an address
-//! literal, an authentication host) is refused with the reason and the way to change it
+//! literal, Goal Cup's own or an authentication host, a path the recorder cannot follow) is
+//! refused with the reason and the way to change it
 //! ([`crate::participant::cannot_record_model_service`]); `goalcup prep` makes the same check
 //! and keeps the home not ready until the harness names a service that can be recorded. Under
 //! `absent = "defaults"` a missing value is no refusal: the run records the connector's own
@@ -26,7 +27,9 @@ use crate::CliError;
 use crate::connector::HarnessConnector;
 use crate::proxy::api::{CapturePath, CapturePolicy};
 use crate::proxy::connect::ApprovedHost;
-use goalcup_protocol::capture_policy::{is_capture_host, local_host_problem, mentions_goalcup};
+use goalcup_protocol::capture_policy::{
+    capture_path_problem, is_capture_host, is_tracker_host, local_host_problem, mentions_goalcup,
+};
 use goalcup_protocol::harness::{
     CAPTURE_HOMES_DIR, MODEL_HOST_VIA_PART, ModelHostAbsent, ModelHostFrom,
 };
@@ -286,15 +289,18 @@ pub fn read(
     } else if ip.is_some_and(|ip| ip.is_loopback())
         || (ip.is_none() && local_host_problem(&url.host).is_some())
     {
-        Some("it is on this computer or the local network, which is never recorded")
+        Some(LOOPBACK_REASON)
     } else if ip.is_some() {
         Some("it is an IP address, and Goal Cup records a service by its DNS name")
     } else if !is_capture_host(&url.host) {
         Some("it is not a DNS name Goal Cup can record")
-    } else if mentions_goalcup(&url.host) {
+    } else if mentions_goalcup(&url.host) || is_tracker_host(&url.host) {
+        // The event server (a subdomain of the project's domain) is Goal Cup's own host too.
         Some("it is Goal Cup's own host")
     } else if auth_hosts.contains(&url.host) {
         Some("it is a sign-in host, which is never recorded")
+    } else if unclean_path(&url.path) {
+        Some(UNCLEAN_PATH_REASON)
     } else {
         None
     };
@@ -310,6 +316,39 @@ pub fn read(
         base_path: url.path,
         from: format!("{key} in {}", from.file),
     }))
+}
+
+/// Why a service on this computer or the local network is refused. The same words serve a
+/// loopback address written in the config and a name that resolves only to this computer.
+const LOOPBACK_REASON: &str =
+    "it is on this computer or the local network, which is never recorded";
+
+/// Why a model address whose path the recorder cannot follow is refused.
+const UNCLEAN_PATH_REASON: &str = "it names an address with an unusual path that the recorder \
+     cannot follow safely. Write the address plainly, for example \
+     https://ai-gateway.vercel.sh/claude-code";
+
+/// Whether a model address's path cannot be recorded as the harness sends it: a dot segment
+/// (`.` or `..`, which a client resolves before sending), `%2e` in either case (a dot written as
+/// an escape), or a byte that a WHATWG URL parser changes or does not keep as written (a
+/// backslash, which it reads as `/`; a quote, angle bracket, backtick or brace; any non-ASCII
+/// byte). The empty path is no problem: the versioned API is recorded for it.
+fn unclean_path(path: &str) -> bool {
+    !path.is_empty()
+        && (capture_path_problem(path).is_some()
+            || path.to_ascii_lowercase().contains("%2e")
+            || path.bytes().any(|b| b > 0x7e || b"\"<>`{}\\".contains(&b)))
+}
+
+/// The refusal for a model service whose name resolves only to this computer. `prepare` finds
+/// it before it probes; it gets the same words a loopback address in the config gets.
+pub fn resolves_only_here(model: &ModelHost) -> Unrecordable {
+    Unrecordable {
+        shown: format!("https://{}:{}", model.host, model.port),
+        reason: LOOPBACK_REASON.into(),
+        set_by: Some(model.from.clone()),
+        file: None,
+    }
 }
 
 /// The string at `key` in the file at `path` (named `name` in the manifest): `Ok(None)` when
@@ -964,5 +1003,59 @@ sessions:
             host.detail(),
             "model service: models.example.test:443 (model.base_url in config.yaml)"
         );
+    }
+
+    /// `url` as the Claude Code settings' base URL, read the way a run reads it.
+    fn read_claude(url: &str) -> Result<Option<ModelHost>, Unrecordable> {
+        let from = r#"file = "settings.json"
+key = "env.ANTHROPIC_BASE_URL"
+absent = "defaults""#;
+        let settings = serde_json::json!({ "env": { "ANTHROPIC_BASE_URL": url } }).to_string();
+        read_in(from, "settings.json", &settings)
+    }
+
+    #[test]
+    fn an_unclean_base_path_is_refused() {
+        for url in [
+            "https://ai-gateway.vercel.sh/x/../claude-code",
+            "https://g.example.com/a/%2e%2e/v1",
+            "https://g.example.com/a/%2E/v1",
+            "https://g.example.com/a\\b",
+            "https://g.example.com/caf\u{e9}/v1",
+        ] {
+            let refused = read_claude(url).unwrap_err();
+            assert!(
+                refused.reason.contains("unusual path"),
+                "{url}: {refused:?}"
+            );
+            assert!(
+                refused
+                    .reason
+                    .contains("https://ai-gateway.vercel.sh/claude-code"),
+                "the refusal says what to type: {refused:?}"
+            );
+        }
+        for url in [
+            "https://ai-gateway.vercel.sh/claude-code",
+            "https://ai-gateway.vercel.sh/codex/v1",
+            "https://ai-gateway.vercel.sh",
+        ] {
+            assert!(matches!(read_claude(url), Ok(Some(_))), "{url}");
+        }
+    }
+
+    #[test]
+    fn the_event_server_is_never_a_model_host() {
+        for url in [
+            "https://ingest.agentcommunity.org/v1",
+            "https://agentcommunity.org/v1",
+        ] {
+            let refused = read_claude(url).unwrap_err();
+            assert_eq!(refused.reason, "it is Goal Cup's own host", "{url}");
+        }
+        assert!(matches!(
+            read_claude("https://gateway.example.test/v1"),
+            Ok(Some(_))
+        ));
     }
 }

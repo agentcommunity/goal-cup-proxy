@@ -117,13 +117,15 @@ pub fn ca_env_problem(name: &str, mode: CaMode) -> Option<&'static str> {
 }
 
 /// Hosts that belong to the tracker's own delivery path. A harness may name none of them, nor a
-/// subdomain (the delivery-agnostic rule, F7). Empty until a project domain is chosen; a host
-/// containing `goalcup` is refused anyway ([`mentions_goalcup`]), an IPv4 literal such as
-/// `127.0.0.1` by [`is_capture_host`], and a loopback name by [`local_host_problem`].
-pub(crate) const TRACKER_HOSTS: &[&str] = &[];
+/// subdomain (the delivery-agnostic rule, F7). The project's domain is `agentcommunity.org`, so
+/// its event server (`ingest.agentcommunity.org`) is one of them. A host containing `goalcup` is
+/// refused anyway ([`mentions_goalcup`]), an IPv4 literal such as `127.0.0.1` by
+/// [`is_capture_host`], and a loopback name by [`local_host_problem`].
+pub(crate) const TRACKER_HOSTS: &[&str] = &["agentcommunity.org"];
 
-/// Whether `host` equals, or is a subdomain of, a [`TRACKER_HOSTS`] entry.
-pub(crate) fn is_tracker_host(host: &str) -> bool {
+/// Whether `host` equals, or is a subdomain of, a [`TRACKER_HOSTS`] entry. The run's model
+/// service is checked against it too, so the event server is never a model host.
+pub fn is_tracker_host(host: &str) -> bool {
     TRACKER_HOSTS
         .iter()
         .any(|t| host == *t || host.strip_suffix(*t).is_some_and(|p| p.ends_with('.')))
@@ -1042,7 +1044,7 @@ pub fn local_host_problem(host: &str) -> Option<&'static str> {
 }
 
 /// Why a capture path is refused, or `None`.
-pub(crate) fn capture_path_problem(path: &str) -> Option<&'static str> {
+pub fn capture_path_problem(path: &str) -> Option<&'static str> {
     if !path.starts_with('/') {
         return Some("must start with `/`");
     }
@@ -1059,4 +1061,17 @@ pub(crate) fn capture_path_problem(path: &str) -> Option<&'static str> {
         return Some("contains a dot segment");
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tracker_domain_and_its_subdomains_are_tracker_hosts() {
+        assert!(is_tracker_host("agentcommunity.org"));
+        assert!(is_tracker_host("ingest.agentcommunity.org"));
+        assert!(!is_tracker_host("notagentcommunity.org"));
+        assert!(!is_tracker_host("agentcommunity.org.example.test"));
+    }
 }
