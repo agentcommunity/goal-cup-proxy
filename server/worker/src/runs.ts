@@ -50,7 +50,9 @@ export async function readJson(request: Request, max: number): Promise<Record<st
 /**
  * Take one document string out of the parsed body as UTF-8 bytes, and remove the string from the
  * body so it can be freed: a seal carries two documents of up to 16 MiB and a list of up to 8 MiB,
- * and the Worker has 128 MB.
+ * and the Worker has 128 MB. The optional `check` runs on the text after the size check; if it
+ * throws, the request is refused, so the sealed-connection list's first-line rule covers repeat
+ * seals too.
  */
 function takeDocument(body: Record<string, unknown>, name: string, max = SEAL_DOC_MAX, check?: (text: string) => void): Uint8Array {
   const text = body[name];

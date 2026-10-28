@@ -231,8 +231,8 @@ impl Uploader {
 }
 
 /// The seal's body: the two documents, and the sealed-connection list when the finish wrote one
-/// (D74). A list that is missing, empty, unreadable or over [`MAX_TUNNELS_BYTES`] is left out
-/// (one over the bound with a line in `host.log`): the seal never waits on it.
+/// (D74). A list that is missing, empty, unreadable, over [`MAX_TUNNELS_BYTES`] or not this
+/// entry's is left out, with one line in `host.log` saying why. The seal never waits on it.
 fn seal_request(
     record: &crate::upload::UploadRecord,
     seal_json: String,
