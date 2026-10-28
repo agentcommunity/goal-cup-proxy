@@ -32,9 +32,6 @@ key = "approvals.mode"
 values = ["off", "false"]
 
 [capture]
-# The OAuth providers' sign-in and token refresh hosts (Nous Portal, Codex, xAI): always sealed
-# tunnels, never a model host (docs/harnesses/hermes-cli.md section 9).
-auth_hosts = ["portal.nousresearch.com", "auth.openai.com", "auth.x.ai"]
 # Chat mode (D57): `hermes chat` opens Hermes's classic REPL in the participant's terminal and the
 # participant types the prompt; `/exit`, `/quit` or Ctrl-D end it with exit 0 (measured 16 Oct
 # 2026). No provider, model or key option (D61): Hermes uses whatever the participant set up in

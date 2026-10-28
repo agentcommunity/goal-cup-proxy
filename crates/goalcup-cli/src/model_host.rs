@@ -171,12 +171,24 @@ pub fn read(
             format!("`{key}` in {} is not set", from.file),
         )),
     };
+    // A file that is there but cannot be read is refused whatever `absent` says: it may name a
+    // service, which would then pass unrecorded. Only its name is said, never its contents.
+    let unreadable = |why: &str| {
+        refuse(
+            "an address Goal Cup cannot read",
+            format!("{} in the harness's Goal Cup home {why}", from.file),
+        )
+    };
     // An empty value is no value, as the harness itself takes it.
-    let value_at = |key: &str| read_value(&path, &from.file, key).filter(|v| !v.trim().is_empty());
+    let value_at = |key: &str| {
+        read_value(&path, &from.file, key)
+            .map(|v| v.filter(|v| !v.trim().is_empty()))
+            .map_err(unreadable)
+    };
     let key = match &from.via {
         None => from.key.clone(),
         Some(via) => {
-            let Some(name) = value_at(via) else {
+            let Some(name) = value_at(via)? else {
                 return missing(via);
             };
             // Only a plain name, never shown: it becomes one part of the key, so it may not
@@ -208,7 +220,7 @@ pub fn read(
         }
     };
     let source = format!("`{key}` in {}", from.file);
-    let Some(value) = value_at(&key) else {
+    let Some(value) = value_at(&key)? else {
         return missing(&key);
     };
     let Some(url) = parse_url(&value) else {
@@ -247,37 +259,68 @@ pub fn read(
     }))
 }
 
-/// The string at `key` in the file at `path` (named `name` in the manifest), or `None` when the
-/// file is missing, too large, a symlink or unparseable, or the key is absent or not a string.
-fn read_value(path: &Path, name: &str, key: &str) -> Option<String> {
-    read_scalar(path, name, key, false)
+/// The string at `key` in the file at `path` (named `name` in the manifest): `Ok(None)` when
+/// the file is missing or the key is absent or not a string, `Err` with the reason when the file
+/// is there but cannot be read ([`read_text`]).
+fn read_value(path: &Path, name: &str, key: &str) -> Result<Option<String>, &'static str> {
+    Ok(read_text(path, name)?.and_then(|text| lookup(&text, name, key, false)))
 }
 
 /// The scalar at `key` in the file at `path`, as text: a string as it is, and a boolean or a
-/// number of a JSON or TOML file as written (`true`, `3`). `None` as for [`read_value`]. For
-/// `participant.no_prompts` (D67), which is only read, never written.
+/// number of a JSON or TOML file as written (`true`, `3`). `None` when the file is missing or
+/// cannot be read, or the key is absent. For `participant.no_prompts` (D67), which is only read,
+/// never written.
 pub fn read_setting(path: &Path, name: &str, key: &str) -> Option<String> {
-    read_scalar(path, name, key, true)
+    let text = read_text(path, name).ok()??;
+    lookup(&text, name, key, true)
 }
 
-fn read_scalar(path: &Path, name: &str, key: &str, any_scalar: bool) -> Option<String> {
+/// The text of the config file at `path`: `Ok(None)` when there is none, `Err` with the reason
+/// when it is there but is not a regular file of at most [`MAX_CONFIG_BYTES`] (a link is never
+/// followed), cannot be read, or is not UTF-8 JSON or TOML its parser takes. A YAML file is
+/// read by [`yaml_lookup`], which takes what it cannot follow as no value.
+fn read_text(path: &Path, name: &str) -> Result<Option<String>, &'static str> {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
-    let file = std::fs::OpenOptions::new()
+    let file = match std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
-        .ok()?;
-    let meta = file.metadata().ok()?;
-    if !meta.is_file() || meta.len() > MAX_CONFIG_BYTES {
-        return None;
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
+            return Err("is a link, and Goal Cup reads only a regular file");
+        }
+        Err(_) => return Err("cannot be read"),
+    };
+    let meta = file.metadata().map_err(|_| "cannot be read")?;
+    if !meta.is_file() {
+        return Err("is not a regular file");
+    }
+    if meta.len() > MAX_CONFIG_BYTES {
+        return Err("is larger than the 1 MiB Goal Cup reads");
     }
     let mut bytes = Vec::new();
     file.take(MAX_CONFIG_BYTES + 1)
         .read_to_end(&mut bytes)
-        .ok()?;
-    let text = String::from_utf8(bytes).ok()?;
-    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+        .map_err(|_| "cannot be read")?;
+    let text = String::from_utf8(bytes).map_err(|_| "is not UTF-8 text")?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
+    let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    let parses = match extension.as_deref() {
+        Some("json") => serde_json::from_str::<serde_json::Value>(&text).is_ok(),
+        Some("toml") => text.parse::<toml::Table>().is_ok(),
+        _ => true,
+    };
+    if !parses {
+        return Err("cannot be parsed");
+    }
+    Ok(Some(text))
+}
+
+/// The scalar at `key` in `text`, read as `name`'s extension says.
+fn lookup(text: &str, name: &str, key: &str, any_scalar: bool) -> Option<String> {
     let parts: Vec<&str> = key.split('.').collect();
     let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     match extension.as_deref() {
@@ -570,6 +613,17 @@ key = "env.ANTHROPIC_BASE_URL""#;
         assert_eq!(missing, Ok(None), "no settings.json at all");
         let refused = read_in(CLAUDE, "settings.json", "{}").unwrap_err();
         assert!(refused.reason.contains("is not set"), "{refused:?}");
+    }
+
+    #[test]
+    fn a_file_that_is_there_but_unreadable_is_refused_even_with_defaults() {
+        let from = r#"file = "settings.json"
+key = "env.ANTHROPIC_BASE_URL"
+absent = "defaults""#;
+        let broken = r#"{"env":{"ANTHROPIC_BASE_URL":"https://gw.example/sk-secret"#;
+        let refused = read_in(from, "settings.json", broken).unwrap_err();
+        assert!(refused.reason.contains("settings.json"), "{refused:?}");
+        assert!(!refused.reason.contains("gw.example"), "{refused:?}");
     }
 
     #[test]
