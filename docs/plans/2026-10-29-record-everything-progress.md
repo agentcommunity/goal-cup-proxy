@@ -29,7 +29,7 @@ on Tenki come later, after the build is clear and good.
 | 6 | Copy a harness database once, after exit | not started |
 | 7 | Header stream per exchange, credentials masked | merged in #293 (1919549); gate PASS, live PASS (44 header streams, [masked] present, no Bearer) |
 | 8 | Evidence label counts model requests only | merged in #289 (5ce4b2a); gate PASS on rerun, live PASS |
-| 9 | Codex records an API-key login | not started |
+| 9 | Codex records an API-key login | merged in #295 (2bf49ac, squashed; a model-named trailer stayed off main); gate PASS, live PASS; subagent proof still needed in Task 13 |
 | 10 | Proxy restarts itself on the same port | not started |
 | 11 | Participant sees "recording works" and the right file | not started |
 | 12 | Seams, operations and docs | not started |
@@ -57,3 +57,4 @@ on Tenki come later, after the build is clear and good.
 - Open item: the excluded-upgrade test was stale and is now upgrade_on_an_opened_host_is_captured_whatever_its_path.
 - 28 Oct: Task 7 merged in #293 (1919549). The sandbox gate failed one kit test on the first two heads: the kit matcher counted the new header stream as a second request. The test now skips artifact-hint streams (fce86a4). Owner notes: known-prefix credentials in non-credential headers rely on the daemon redactor; query masking is wider than the spec wording.
 - 28 Oct: Task 4 merged in #294 (a3987d6). One rule for hard and warn hosts (model_host::provider_hosts), used by start and setup. Test-only seam GOALCUP_TEST_PROBE_ANSWERS needs owner awareness. D74 needs a line for the default-host change. The container restarted during the Task 4 fix round; the uncommitted refactor was compiled, tested, committed and reviewed by hand.
+- 28 Oct: Task 9 merged in #295 (squash, 2bf49ac). Review found that a ChatGPT-login run could be refused for the API host; fixed by probing only the first host without a model service. The fix commit carried a model-named Co-Authored-By line; the squash keeps it off main.
