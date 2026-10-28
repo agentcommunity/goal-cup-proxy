@@ -60,7 +60,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, ReadBuf};
 use tokio::net::TcpStream;
 
@@ -300,13 +300,26 @@ pub struct Intercepted {
     pub alpn: Option<String>,
 }
 
-/// A completed opaque tunnel: only its target host, why it was not intercepted, and how it
-/// ended. No content, header or credential is kept.
+/// A completed opaque tunnel: only its target host and port, why it was not intercepted, when it
+/// was decided and when it ended, and how. No content, header or credential is kept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tunneled {
     pub host: String,
+    pub port: u16,
     pub reason: TunnelReason,
     pub end: TunnelEnd,
+    pub opened: SystemTime,
+    pub closed: SystemTime,
+}
+
+/// A tunnel at the moment it is decided, before its first byte is relayed: what
+/// [`admit_observed`]'s hook is given.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TunnelStart<'a> {
+    pub host: &'a str,
+    pub port: u16,
+    pub reason: TunnelReason,
+    pub opened: SystemTime,
 }
 
 /// Why a connection was tunnelled rather than intercepted.
@@ -416,15 +429,15 @@ pub async fn admit<S: AsyncIo + 'static>(inbound: S, config: &AdmissionConfig) -
     admit_observed(inbound, config, |_| {}).await
 }
 
-/// [`admit`], calling `on_tunnel` with the reason at the moment a tunnel is decided, before the
-/// first byte of it is relayed. The tunnel runs inside this future until both directions close,
+/// [`admit`], calling `on_tunnel` with the tunnel's host, port and reason at the moment it is
+/// decided, before the first byte of it is relayed. The tunnel runs inside this future until both directions close,
 /// so a caller that must act when an uncaptured relay *begins* (the recording proxy chains it as a
 /// loss) cannot wait for the return value: a task cancelled or panicking mid-tunnel never gets
 /// there.
 pub(crate) async fn admit_observed<S: AsyncIo + 'static>(
     inbound: S,
     config: &AdmissionConfig,
-    on_tunnel: impl FnOnce(TunnelReason),
+    on_tunnel: impl FnOnce(TunnelStart<'_>),
 ) -> Admission {
     let mut host = None;
     let deadline = tokio::time::Instant::now() + config.admission_timeout;
@@ -446,13 +459,24 @@ pub(crate) async fn admit_observed<S: AsyncIo + 'static>(
             upstream,
             prefix,
             host,
+            port,
             reason,
         }) => {
-            on_tunnel(reason);
-            Admission::Tunneled(Tunneled {
-                end: run_tunnel(inbound, upstream, prefix).await,
-                host,
+            let opened = SystemTime::now();
+            on_tunnel(TunnelStart {
+                host: &host,
+                port,
                 reason,
+                opened,
+            });
+            let end = run_tunnel(inbound, upstream, prefix).await;
+            Admission::Tunneled(Tunneled {
+                host,
+                port,
+                reason,
+                end,
+                opened,
+                closed: SystemTime::now(),
             })
         }
     }
@@ -466,6 +490,7 @@ enum Decision<S> {
         upstream: TcpStream,
         prefix: Vec<u8>,
         host: String,
+        port: u16,
         reason: TunnelReason,
     },
     Failed(FailureClass),
@@ -534,6 +559,7 @@ async fn negotiate<S: AsyncIo + 'static>(
             upstream,
             prefix,
             host: target.host,
+            port: target.port,
             reason,
         };
     };
@@ -564,6 +590,7 @@ async fn negotiate<S: AsyncIo + 'static>(
             upstream,
             prefix,
             host: target.host,
+            port: target.port,
             reason,
         },
         Err(kind) => Decision::Failed(FailureClass::UpstreamConnect(kind)),

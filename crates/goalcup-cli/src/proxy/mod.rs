@@ -73,6 +73,7 @@ pub mod metadata;
 pub(crate) mod outage;
 pub mod preflight;
 pub mod tls;
+pub mod tunnels;
 pub mod websocket;
 
 use api::{CaptureEmitter, HttpOutcome, ProxyLoss, RelayContext, RelayPair};
@@ -275,6 +276,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle, StartError> {
         emitter,
         counters,
         outages: outage::OutageTracker::default(),
+        tunnels: tunnels::TunnelNotes::default(),
     });
     let (stop_tx, stop_rx) = oneshot::channel();
     let accept = tokio::spawn(accept_loop(
@@ -439,7 +441,9 @@ impl ProxyHandle {
     /// [`ProxyHandle::stop`] inside `bound` instead, never longer than the configured
     /// [`ProxyConfig::shutdown_deadline`]. For a stop while the harness still runs (the run's
     /// deadline): its open connections do not end on their own then, so waiting the whole
-    /// shutdown deadline for them only delays the stop.
+    /// shutdown deadline for them only delays the stop. A tunnel still open in a task that is not
+    /// reaped (the accept loop lost, or `unterminated > 0`) gets no note in
+    /// [`ProxyHealth::tunnels`].
     pub async fn stop_within(mut self, bound: Duration) -> ProxyStopReport {
         let bound = bound.min(self.shutdown_deadline);
         let deadline = Instant::now() + bound;
@@ -712,6 +716,12 @@ pub struct ProxyHealth {
     /// The most recent of those windows (at most [`outage::MAX_KEPT_OUTAGE_WINDOWS`]), oldest
     /// first; one still open has no `recovered` time.
     pub outage_windows: Vec<outage::OutageWindow>,
+    /// Every tunnel that ended, or was cut open at the stop, in the order they did (at most
+    /// [`tunnels::MAX_TUNNEL_NOTES`]): the sealed-connection list `goalcup start` writes at
+    /// finish (D74).
+    pub tunnels: Vec<tunnels::TunnelNote>,
+    /// Tunnels past that bound, counted only.
+    pub tunnels_dropped: u64,
 }
 
 #[derive(Default)]
@@ -826,9 +836,11 @@ impl Counters {
             task_panics: read(&self.task_panics),
             // Counted on the emitter by the relays; `Shared::health` fills it in.
             model_requests: 0,
-            // Kept by `Shared::outages`; `Shared::health` fills them in.
+            // Kept by `Shared::outages` and `Shared::tunnels`; `Shared::health` fills them in.
             upstream_outages: 0,
             outage_windows: Vec::new(),
+            tunnels: Vec::new(),
+            tunnels_dropped: 0,
         }
     }
 
@@ -852,12 +864,13 @@ impl Counters {
 }
 
 /// What every connection task shares: the immutable admission rules, the one emitter, the
-/// counters and the upstream outage windows.
+/// counters, the upstream outage windows and the tunnel notes.
 struct Shared {
     admission: AdmissionConfig,
     emitter: Arc<CaptureEmitter>,
     counters: Arc<Counters>,
     outages: outage::OutageTracker,
+    tunnels: tunnels::TunnelNotes,
 }
 
 impl Shared {
@@ -869,6 +882,7 @@ impl Shared {
         health.opaque_fallbacks = self.emitter.opaque_fallbacks();
         health.model_requests = self.emitter.model_requests();
         (health.upstream_outages, health.outage_windows) = self.outages.snapshot();
+        (health.tunnels, health.tunnels_dropped) = self.tunnels.snapshot();
         health
     }
 }
@@ -966,12 +980,15 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
     let counters = &shared.counters;
     let _ = tcp.set_nodelay(true);
     let unsettled = Unsettled::enter(shared);
+    let open_tunnel = OpenTunnel::new(&shared.tunnels);
     // A fail-open tunnel is chained as a loss when it is decided, before its first byte is
     // relayed: the tunnel runs inside `admit`, so a task that is cut or panics mid-relay
     // never reaches the counters below. Every decided tunnel settles there too: a cut one is
     // then either that loss, already chained, or opaque by design, which is no loss.
-    let admission = connect::admit_observed(tcp, &shared.admission, |reason| {
+    let admission = connect::admit_observed(tcp, &shared.admission, |start| {
+        let reason = start.reason;
         unsettled.settle();
+        open_tunnel.decided(start);
         // A tunnel is decided only once its upstream is connected; every reason but a host
         // that is not approved is a provider host's, or (a `SniMismatch` to another authority)
         // names one in its ClientHello.
@@ -1033,7 +1050,7 @@ async fn serve_connection(tcp: TcpStream, active: Active) {
                 bump(class);
             }
         }
-        Admission::Tunneled(tunnel) => match tunnel.reason {
+        Admission::Tunneled(tunnel) => match open_tunnel.ended(&tunnel) {
             connect::TunnelReason::AuthHost => bump(&counters.tunneled_auth_host),
             connect::TunnelReason::NotApproved => bump(&counters.tunneled_not_approved),
             // Counted at the decision, with its loss.
@@ -1127,6 +1144,51 @@ impl Drop for Unsettled<'_> {
                 .shared
                 .emitter
                 .proxy_loss(metadata::capture_time(), ProxyLoss::CutUnsettled);
+        }
+    }
+}
+
+/// A decided tunnel's note until it ends. One dropped before [`OpenTunnel::ended`] was cut open
+/// (the stop, or a panic): it is noted then, with the drop as its end and its bytes unknown.
+struct OpenTunnel<'a> {
+    notes: &'a tunnels::TunnelNotes,
+    open: std::sync::Mutex<Option<tunnels::TunnelNote>>,
+}
+
+impl<'a> OpenTunnel<'a> {
+    fn new(notes: &'a tunnels::TunnelNotes) -> Self {
+        Self {
+            notes,
+            open: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn decided(&self, start: connect::TunnelStart<'_>) {
+        *self.open.lock().unwrap_or_else(|e| e.into_inner()) = Some(tunnels::TunnelNote {
+            host: start.host.to_string(),
+            port: start.port,
+            reason: tunnels::reason_word(start.reason),
+            opened: start.opened,
+            closed: start.opened,
+            up_bytes: None,
+            down_bytes: None,
+        });
+    }
+
+    /// Notes the tunnel as it ended; answers its reason.
+    fn ended(&self, tunnel: &connect::Tunneled) -> connect::TunnelReason {
+        self.open.lock().unwrap_or_else(|e| e.into_inner()).take();
+        self.notes.push(tunnels::TunnelNote::of(tunnel));
+        tunnel.reason
+    }
+}
+
+impl Drop for OpenTunnel<'_> {
+    fn drop(&mut self) {
+        let open = self.open.get_mut().unwrap_or_else(|e| e.into_inner());
+        if let Some(mut cut) = open.take() {
+            cut.closed = std::time::SystemTime::now();
+            self.notes.push(cut);
         }
     }
 }

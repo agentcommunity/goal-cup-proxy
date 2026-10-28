@@ -265,6 +265,7 @@ mod tests {
             official_start: String::new(),
             deadline_at: String::new(),
             workspace: workspace.display().to_string(),
+            tunnels_file: None,
         };
         let (first, later) = ("a".repeat(40), "b".repeat(40));
         head(&first);

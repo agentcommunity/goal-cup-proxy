@@ -266,6 +266,10 @@ pub struct SealRequest {
     pub entry_id: String,
     pub seal_json: String,
     pub baseline_json: String,
+    /// The sealed-connection list (`goalcup-tunnels-v1`), verbatim: a side artifact outside the
+    /// chain, which an older server ignores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tunnels_jsonl: Option<String>,
 }
 
 /// A bare `{"status": …}` answer.

@@ -473,6 +473,30 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assertError(await api.call("POST", `/v1/runs/${run.run_id}/abandon`, { token, json: { reason: "x" } }), 409, "conflict"); // it holds chunks
     });
 
+    test("a seal may carry the tunnel list; it never changes the conflict rule", async () => {
+      const token = await credentialFor(api, "erin");
+      const run = (await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "erins-session" }) })).body;
+      const c = makeChunk(run.entry_id, 0, 3, GENESIS, "erin");
+      assert.equal((await api.call("PUT", `/v1/runs/${run.run_id}/chunks/0`, { token, body: c.body, headers: c.headers })).status, 200);
+      const final = await api.call("POST", `/v1/runs/${run.run_id}/heartbeat`, { token, json: { entry_id: run.entry_id, seq: c.lastSeq, head: c.head, offset_local: 1, final: true, repo_head: null } });
+      assert.equal(final.status, 200, JSON.stringify(final.body));
+      const seal = (body: Record<string, unknown>) => api.call("POST", `/v1/runs/${run.run_id}/seal`, { token, json: { entry_id: run.entry_id, ...body } });
+
+      assertError(await seal({ ...docs, tunnels_jsonl: 5 }), 400, "malformed");
+      const list = '{"format":"goalcup-tunnels-v1"}\n';
+      const r = await seal({ ...docs, tunnels_jsonl: list });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      const kept = () => r2Objects(worker.stateDir).filter((o) => o.key.startsWith("traces/") && o.key.includes(`/${run.entry_id}/tunnels`));
+      assert.deepEqual(kept().map((o) => [o.key.split("/").pop(), o.sha256]), [["tunnels.jsonl", sha256(list)]]);
+      // A repeat without the list, or with another one, is still a repeat: only the seal and the
+      // baseline decide it. The first list kept stays the entry's one.
+      assert.equal((await seal(docs)).status, 200);
+      assert.equal((await seal({ ...docs, tunnels_jsonl: '{"format":"goalcup-tunnels-v1"}\n{"dropped":0}\n' })).status, 200);
+      assert.deepEqual(kept().map((o) => [o.key.split("/").pop(), o.sha256]), [["tunnels.jsonl", sha256(list)]]);
+      assertError(await seal({ ...docs, tunnels_jsonl: "x".repeat(8 * 1024 * 1024 + 1) }), 413, "too_large");
+      assertError(await seal({ seal_json: '{"sealed":false}', baseline_json: docs.baseline_json, tunnels_jsonl: list }), 409, "conflict");
+    });
+
     test("a later start by the same account is a new run", async () => {
       const r = await api.call("POST", "/v1/runs", { token: await credentialFor(api, "alice"), json: openBody({ session_id: "second-run" }) });
       assert.equal(r.status, 201, JSON.stringify(r.body));

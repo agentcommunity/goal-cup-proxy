@@ -486,12 +486,24 @@ pub(super) fn create_and_gate<'a>(
             _ => None,
         };
         details.push(format!("entry {}", info.entry_id));
-        if let Some(model_host) = cx.model_host {
-            details.push(model_host.detail());
+        match (cx.model_host, &profile.model_host_from) {
+            (Some(model_host), _) => details.push(model_host.detail()),
+            // `absent = "defaults"` and no setting: the connector's own hosts are recorded.
+            (None, Some(from)) => details.push(crate::model_host::defaults_detail(from)),
+            (None, None) => {}
         }
         details.push(format!("run directory: {}", run.dir.display()));
         raise_open_file_limit(out)?;
-        let proxied = Proxied::start(&info, profile, cx.model_host, &run, roots, credential)?;
+        let tunnels_file = crate::run::tunnels_path(cfg, &record.run_id, &info.entry_id);
+        let proxied = Proxied::start(
+            &info,
+            profile,
+            cx.model_host,
+            &run,
+            roots,
+            credential,
+            tunnels_file,
+        )?;
         // A shared CA variable (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) gets the system's roots
         // plus the recording proxy's CA, so tool children keep their real trust; a harness's own
         // variable gets the recording proxy's CA alone (the launch picks per name).

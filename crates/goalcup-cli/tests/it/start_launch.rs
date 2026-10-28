@@ -728,8 +728,10 @@ mod chat {
     /// and in `host.log`, and still seals. The finish budget here makes the drain share 28 s,
     /// so a start that waited on the held connection would take far longer than the bound below.
     /// The held connection sends no byte, so it is cut in admission, not as an intercepted stream.
-    /// The timing guards the fallback on macOS only: on Linux the sweep ends the helper (a
-    /// descendant of the harness) before the proxy stops, and the test passes either way.
+    /// The test holds it itself, standing in for what the harness left: on Linux the sweep ends
+    /// every descendant of the harness before the proxy stops, so a helper of the harness's own
+    /// would leave nothing for the stop to cut, and the participant line would rightly stay
+    /// silent (D72). Held by the test, the connection is open at the stop on both systems.
     #[test]
     fn a_failed_after_exit_command_does_not_wait_on_a_held_proxy_connection() {
         let rig = Rig::chat_with_after_exit();
@@ -744,9 +746,14 @@ mod chat {
             None,
         );
         run.wait_shown("tui: ready");
-        run.type_line("/hold");
-        run.wait_shown("tui: holding");
-        let holder: i32 = harness(&rig, "tui.holder.pid").parse().unwrap();
+        let env = harness(&rig, "tui.env");
+        let proxy = env
+            .lines()
+            .find_map(|line| line.strip_prefix("HTTPS_PROXY="))
+            .expect("the harness was handed a proxy");
+        let port = proxy.trim_end_matches('/').rsplit(':').next().unwrap();
+        let held = std::net::TcpStream::connect(("127.0.0.1", port.parse::<u16>().unwrap()))
+            .expect("the recording proxy accepts a connection");
         let tui: i32 = harness(&rig, "tui.pid").parse().unwrap();
         // SAFETY: integers; the pid is the fake harness's own.
         assert_eq!(unsafe { libc::kill(tui, libc::SIGKILL) }, 0);
@@ -754,15 +761,7 @@ mod chat {
         let status = run.wait();
         let took = killed.elapsed();
         let shown = run.shown();
-        // The helper (`sleep | nc`, in the harness's process group) is ended here, whatever the
-        // run did with it; never the test's own group.
-        // SAFETY: integers only.
-        unsafe {
-            let group = libc::getpgid(holder);
-            if group > 0 && group != libc::getpgrp() {
-                libc::killpg(group, libc::SIGKILL);
-            }
-        }
+        drop(held);
         assert!(status.success(), "{status:?}\n{shown}");
         assert!(
             took < std::time::Duration::from_secs(15),

@@ -710,6 +710,7 @@ mod retries {
                 official_start: opened.official_start,
                 deadline_at: opened.deadline_at,
                 workspace: String::new(),
+                tunnels_file: None,
             };
             let spool = dir.path().join("uploads");
             std::fs::create_dir_all(&spool).unwrap();
