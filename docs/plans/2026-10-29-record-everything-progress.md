@@ -38,4 +38,10 @@ on Tenki come later, after the build is clear and good.
 
 ## Log
 
-- 29 Oct: Phase 0 read-only map started (`CONTEXT.md` in the session scratchpad).
+- 28 Oct: Phase 0 map done. Nine readers checked the plan against main. 99 claims true, 7 moved,
+  44 wrong, 4 conflicts. The wrong ones changed design for Tasks 2, 3, 4, 6, 7, 8, 10, 11, 12 and 13.
+- 28 Oct: Build decisions written (one page, for every builder). The spec wins over older decisions
+  where it narrows them; each such change goes in the ledger with the reason.
+- 28 Oct: crates.io reachable; local Rust 1.99.0 builds; `origin/main` is b6b220b.
+- Model names are not yet confirmed. Web search found no official "GPT-6.1 Luma" id, and the repo
+  uses gpt-5.6-luna. The live check settles it with a real call and the name that worked is recorded.
