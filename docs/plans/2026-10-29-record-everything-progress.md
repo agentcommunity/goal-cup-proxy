@@ -27,7 +27,7 @@ on Tenki come later, after the build is clear and good.
 | 4 | Probe only what the run needs | not started |
 | 5 | Up to 8 session-file rows; Claude subagents captured | not started |
 | 6 | Copy a harness database once, after exit | not started |
-| 7 | Header stream per exchange, credentials masked | not started |
+| 7 | Header stream per exchange, credentials masked | merged in #293 (1919549); gate PASS, live PASS (44 header streams, [masked] present, no Bearer) |
 | 8 | Evidence label counts model requests only | merged in #289 (5ce4b2a); gate PASS on rerun, live PASS |
 | 9 | Codex records an API-key login | not started |
 | 10 | Proxy restarts itself on the same port | not started |
@@ -55,3 +55,4 @@ on Tenki come later, after the build is clear and good.
 - 28 Oct: Task 1 merged in #292 (bf8ce8b). Review found a high gap: form-encoded refresh tokens were not masked. Fixed in the same PR; redaction changes sit outside the Task 1 file list, flagged to the owner. Push protection refused two fake test fixtures; rewritten in unpushed commits. Gate PASS, live PASS (10 model calls, 46 wire streams).
 - Open for the owner: the redaction change in Task 1 (keep in Task 1 or split); the per-reason gap dedupe; the 16-byte floor; the Claude Co-Authored-By line rule (the attribution reminder asks for it, the system rule forbids a model id in commits). Earlier commits carrying a model name are listed above and not rewritten.
 - Open item: the excluded-upgrade test was stale and is now upgrade_on_an_opened_host_is_captured_whatever_its_path.
+- 28 Oct: Task 7 merged in #293 (1919549). The sandbox gate failed one kit test on the first two heads: the kit matcher counted the new header stream as a second request. The test now skips artifact-hint streams (fce86a4). Owner notes: known-prefix credentials in non-credential headers rely on the daemon redactor; query masking is wider than the spec wording.
