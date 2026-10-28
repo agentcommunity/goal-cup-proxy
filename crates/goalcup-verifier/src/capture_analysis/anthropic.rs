@@ -10,8 +10,9 @@
 //! **Selection.** Only a stream whose `Open` carries the protocol hint exactly
 //! `anthropic-messages` is looked at; every other stream is ignored and holds no state. Of
 //! those, a `WireRequest` `POST /v1/messages` `application/json` body is one logical JSON
-//! record; a `WireResponse` for `/v1/messages` is framed as server-sent events when its
-//! content type is `text/event-stream`, or read as one JSON error document when it is
+//! record (or `<base>/messages` under a gateway base path, v4); a `WireResponse` for that
+//! path is framed as server-sent events when its content type is `text/event-stream`, or
+//! read as one JSON error document when it is
 //! `application/json` with a non-2xx status. Content-type checks apply to HTTP streams only.
 //! This protocol has no WebSocket form, so a hinted `WsClient`/`WsServer`
 //! stream, like any other endpoint, method, content type or 2xx JSON body, is counted once as
@@ -81,7 +82,7 @@ use std::io;
 /// The decoder identity declared in its summary.
 pub const DECODER_ID: &str = "anthropic-messages";
 /// The interpretation version. Any change to emitted observations changes it.
-pub const DECODER_VERSION: &str = "3";
+pub const DECODER_VERSION: &str = "4";
 /// The exact protocol hint of a stream this decoder reads.
 pub const PROTOCOL_HINT: &str = "anthropic-messages";
 
@@ -91,7 +92,10 @@ fn selects(hint: Option<&str>) -> bool {
     hint == Some(PROTOCOL_HINT)
 }
 
-const ENDPOINT: &str = "/v1/messages";
+/// The endpoint's last path segment. The CLI hints `<base>/messages` and `<base>/v1/messages`
+/// for a gateway model host (`model_host.rs` `WIRE_PATHS`), so a base prefix such as
+/// `/claude-code` comes before it; `/v1/messages/count_tokens` and the like do not end in it.
+const ENDPOINT_SUFFIX: &str = "/messages";
 /// Open content blocks tracked per message; the provider streams them one at a time.
 const MAX_OPEN_BLOCKS: usize = 64;
 /// A provider code or type: short and from a conservative alphabet.
@@ -533,7 +537,10 @@ impl Tracked {
 
 fn select(source: CaptureSource, meta: &CaptureMeta) -> Body {
     let content_type = meta.content_type.as_deref();
-    let endpoint = meta.path.as_deref() == Some(ENDPOINT);
+    let endpoint = meta
+        .path
+        .as_deref()
+        .is_some_and(|path| path.ends_with(ENDPOINT_SUFFIX));
     match source {
         CaptureSource::WsClient | CaptureSource::WsServer => {
             Body::Unsupported("unsupported_transport")

@@ -376,7 +376,7 @@
     },
     {
       "decoder": "anthropic-messages",
-      "decoder_version": "3"
+      "decoder_version": "4"
     },
     {
       "decoder": "openai-chat-completions",

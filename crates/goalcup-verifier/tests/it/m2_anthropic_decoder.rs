@@ -1638,6 +1638,40 @@ fn unsupported_and_foreign_streams_are_counted_not_decoded() {
     assert_eq!(got, summary(&observations, 5, false));
 }
 
+/// One request recorded under a gateway base path, as Vercel AI Gateway serves Claude Code.
+fn gateway_request(path: &str) -> Vec<Observation> {
+    let mut metadata = meta(
+        CaptureSource::WireRequest,
+        wire(CONN_A, 1),
+        "application/json",
+    );
+    metadata.path = Some(path.to_string());
+    let body = json!({"model": "claude-test-model", "max_tokens": 1,
+        "messages": [{"role": "user", "content": "hi"}]});
+    let mut records = vec![open(1, CaptureSource::WireRequest, metadata)];
+    records.extend(segments(1, body.to_string().as_bytes(), &[]));
+    records.push(end(1, EndReason::Complete));
+    decode(&records).0
+}
+
+#[test]
+fn messages_under_a_gateway_base_path_decode() {
+    let observations = gateway_request("/claude-code/v1/messages");
+    let requests = of_kind(&observations, "model_request");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].fields["endpoint"], "/claude-code/v1/messages");
+    assert!(of_kind(&observations, "unknown").is_empty());
+}
+
+#[test]
+fn count_tokens_under_a_gateway_base_path_stays_unsupported() {
+    let observations = gateway_request("/claude-code/v1/messages/count_tokens");
+    assert!(of_kind(&observations, "model_request").is_empty());
+    let unknown = of_kind(&observations, "unknown");
+    assert_eq!(unknown.len(), 1);
+    assert_eq!(unknown[0].fields["reason"], "unsupported_endpoint");
+}
+
 #[test]
 fn lost_producer_and_unterminated_streams_stay_incomplete() {
     let started = [
