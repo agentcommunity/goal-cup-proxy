@@ -7,7 +7,8 @@
 #   KIT_OUT           its report directory, outside the run;
 #   KIT_VERSION_ARGV  the connector's `version_args`, joined by spaces (empty: none);
 #   KIT_NATIVE_FILE   the session file its first `[[capture.native]]` source finds: the root,
-#                     then the pattern with each `*` as `kit` and each `?` as `k`;
+#                     then the pattern with each `*` as `kit` and each `?` as `k` (empty: the
+#                     connector declares none, so the stand-in writes no session file);
 #   KIT_SKILLS_DIR    where the goal-cup skill should be, or empty when the connector has none;
 #   KIT_CA_VARS       the connector's `capture.ca.env` names, space-separated;
 #   KIT_CONFIGURE     the connector's `capture.configure` commands, one per line, each argument
@@ -56,13 +57,15 @@ for var in $KIT_CA_VARS; do
   eval "file=\${$var:-}"
   if [ -n "$file" ] && [ -f "$file" ]; then cp "$file" "$out/ca-$var"; fi
 done
-mkdir -p "$(dirname "$KIT_NATIVE_FILE")"
+if [ -n "$KIT_NATIVE_FILE" ]; then mkdir -p "$(dirname "$KIT_NATIVE_FILE")"; fi
 echo "kit: ready"
 while IFS= read -r line; do
   if [ "$line" = /exit ]; then
     echo "kit: bye"
     exit 0
   fi
-  printf '{"type":"user","text":"%s"}\n' "$line" >> "$KIT_NATIVE_FILE"
+  if [ -n "$KIT_NATIVE_FILE" ]; then
+    printf '{"type":"user","text":"%s"}\n' "$line" >> "$KIT_NATIVE_FILE"
+  fi
   echo "kit: noted $line"
 done

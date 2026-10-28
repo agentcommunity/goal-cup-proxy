@@ -485,7 +485,7 @@ pub struct CaptureSpec {
     pub home: HomeSpec,
     pub ca: CaSpec,
     pub identity: IdentitySpec,
-    /// Exactly one entry in schema 1 (an array so that 1..=N is a later additive widening).
+    /// Zero or one entry in schema 1 (an array so that 1..=N is a later additive widening).
     #[serde(default)]
     pub native: Vec<NativeSpec>,
     #[serde(default)]
