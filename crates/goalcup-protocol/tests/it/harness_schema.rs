@@ -390,6 +390,25 @@ fn two_rows_with_one_root_and_pattern_are_refused() {
     refused(&t, PINNED, &["capture.native", "same root and pattern"]);
 }
 
+/// The duplicate rule ignores ASCII case: `Projects` and `projects` are one directory on a
+/// case-insensitive home, so rows that differ only so are the same rows.
+#[test]
+fn two_rows_with_one_root_and_pattern_in_other_case_are_refused() {
+    let mut t = with_native_rows(2);
+    native_row(&mut t, 0).insert("pattern".into(), "Row0/*.jsonl".into());
+    native_row(&mut t, 1).insert("pattern".into(), "row0/*.jsonl".into());
+    refused(&t, PINNED, &["capture.native", "same root and pattern"]);
+}
+
+#[test]
+fn two_rows_whose_roots_differ_only_in_case_are_refused() {
+    let mut t = with_native_rows(2);
+    native_row(&mut t, 0).insert("root".into(), "{config_home}/Sessions".into());
+    native_row(&mut t, 1).insert("root".into(), "{config_home}/sessions".into());
+    native_row(&mut t, 1).insert("pattern".into(), "row0/*.jsonl".into());
+    refused(&t, PINNED, &["capture.native", "same root and pattern"]);
+}
+
 /// Every row meets every row rule, not only the first: a second row on a shared root with no
 /// `since_run_start` is refused as the first would be. Claude's config home is shared (Hermes's is
 /// per run, so its rows owe no `since_run_start`).

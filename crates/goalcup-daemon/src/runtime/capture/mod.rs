@@ -20,8 +20,9 @@
 //!
 //! The goal is accepted once: redacted by the profile's streaming redactor, appended as one
 //! `Goal` stream, closed, and synced before its key is answered. The launch record names that
-//! stream and is appended after the harness is spawned. The profile's one native source names no
-//! session (chat mode) and is read from the create on. Records are durable from the next sync.
+//! stream and is appended after the harness is spawned. The profile's native sources (zero to
+//! eight rows, each its own source) name no session (chat mode) and are read from the create on.
+//! Records are durable from the next sync.
 //!
 //! # Local finish
 //!

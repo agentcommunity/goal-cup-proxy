@@ -115,16 +115,17 @@ bound, a new closed value or a newly admitted pair of values. None of those brea
 A connector that uses a widened bound (zero native rows, D74, or several native rows) needs a binary
 that admits it; an older binary refuses it with its own message.
 
-The promise is held by tests. Every shipped connector, and five frozen fixtures for harnesses
+The promise is held by tests. Every shipped connector, and six frozen fixtures for harnesses
 nobody ships (`crates/goalcup-cli/tests/fixtures/schema-1-connectors/`), take the connector
 contract. The fixtures are a plain chat shape (`schema1-chat`); a shared config home with
 `model_host_from`, `providers`, every `[participant]` field, `configure`, platform env, a
 reserved prefix, an argv guard, `native_pid` and redaction rows (`schema1-optional`); a per-run
 config home with `per_run_dir`, `dirs` and seeds, a `keychain_link` run home, a shared CA row
 and `prefix_paths` (`schema1-per-run`); one host row and no native row, so the wire is the only
-record (`schema1-wire-only`); and the required fields only, with no home variable and
-a shared run `HOME` (`schema1-minimal`, which pins the defaults). They load, take the launch checks
-(`tests/it/connector_contract.rs`) and run once with a stand-in through the real binaries
+record (`schema1-wire-only`); two native rows under one config home, each planned as its own
+source, so a run records both streams (`schema1-two-native`); and the required fields only, with
+no home variable and a shared run `HOME` (`schema1-minimal`, which pins the defaults). They load,
+take the launch checks (`tests/it/connector_contract.rs`) and run once with a stand-in through the real binaries
 (`tests/full/connector_contract.rs`; the fixtures through `--dev`). A connector made from the
 [template](../skills/adding-a-capture-harness/templates/connector-harness.toml) loads with no
 Rust change (`goalcup-protocol` `connector_template.rs`), and no core string literal names a
@@ -982,7 +983,7 @@ schema 2.
 ## Examples
 
 Read the shipped connectors. Conformance tests load each as `Origin::Pinned` and compare its
-directory with its pin. The five frozen
+directory with its pin. The six frozen
 [schema-1 fixtures](../crates/goalcup-cli/tests/fixtures/schema-1-connectors/) are complete
 connectors for harnesses nobody ships, one per shape ([what each covers](#the-compatibility-promise)).
 

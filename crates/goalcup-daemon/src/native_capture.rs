@@ -93,7 +93,9 @@
 //! owner records a stream-less `CaptureRecord::Gap { LimitExceeded }` when it first rises and
 //! again when it grows. The
 //! finish walks a whole discovery cycle when its budget allows; one that could not is
-//! [`NativeFinishReport::discovery_capped`], and the owner records that too. An entry
+//! [`NativeFinishReport::discovery_capped`], and the owner records that too. A tracked file that
+//! never got a stream slot before the finish is [`NativeFinishReport::uncaptured_files`]; the owner
+//! records one stream-less gap for either at finish. An entry
 //! unavailable in one poll is retried in the next and is not a loss. A finish report with none
 //! of them still does not prove the expected file existed: the owner checks it saw the `Open`
 //! it expected.

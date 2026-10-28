@@ -1639,7 +1639,7 @@ fn manifest_at(path: &Path) -> HarnessManifest {
     HarnessManifest::from_toml_str(&text).unwrap()
 }
 
-/// The plan copies what each connector declares: its one source's label, hint, form and
+/// The plan copies what each connector declares: each source's label, hint, form and
 /// resolved root. Every frozen fixture, every shipped connector and the controlled workload are
 /// read; none is named here.
 #[test]
@@ -2032,6 +2032,66 @@ fn a_native_file_past_max_files_is_one_streamless_gap_until_the_count_grows() {
             .count(),
         2,
         "the tracked files are captured as before"
+    );
+}
+
+#[test]
+fn a_tracked_file_that_never_gets_a_stream_slot_is_a_streamless_gap_at_finish() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c"] {
+        std::fs::write(home.path().join(format!("{name}.jsonl")), b"x\n").unwrap();
+    }
+    let writer = writer(dir.path(), 64 << 20);
+    let sink = Arc::new(OwnerSink::default());
+    let native = NativeCapture::new(
+        NativeCaptureConfig {
+            sources: vec![NativeSourceSpec {
+                name: "store".into(),
+                root: home.path().to_path_buf(),
+                pattern: "*.jsonl".into(),
+                form: NativeStoreForm::AppendOnly,
+                hint: None,
+                modified_since: None,
+            }],
+            limits: NativeCaptureLimits {
+                max_open_streams: 2,
+                ..NativeCaptureLimits::default()
+            },
+        },
+        sink.clone(),
+        Box::new(SystemNativeClock::new()),
+    )
+    .unwrap();
+    let mut owner = Owner::new(
+        sink,
+        writer.clone(),
+        clock(),
+        &[],
+        Default::default(),
+        None,
+        Some(native),
+    );
+    for _ in 0..3 {
+        owner.poll_native();
+    }
+    let control = OwnerControl::default();
+    control.stop.store(true, Ordering::Release);
+    owner.run(&control);
+    assert!(control.drained.load(Ordering::Acquire));
+    let chain = records(dir.path());
+    assert_eq!(
+        streamless(&chain, GapReason::LimitExceeded),
+        1,
+        "the third file waits for a slot that never frees before the finish, so the chain marks it"
+    );
+    assert_eq!(
+        chain
+            .iter()
+            .filter(|r| matches!(r, CaptureRecord::Open { .. }))
+            .count(),
+        2,
+        "the two files that got a slot are captured as before"
     );
 }
 

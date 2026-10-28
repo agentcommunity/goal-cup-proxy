@@ -342,7 +342,8 @@ mod live {
         })
     }
 
-    /// The native streams a connector's entry opens, labelled and hinted: the label is
+    /// The native streams a connector's entry opens, labelled and hinted, one per
+    /// `[[capture.native]]` row, sorted by label: the label is
     /// `<source name>:<path relative to the source root>#g<generation>`, so it names the root
     /// and pattern each connector's native source resolves to.
     async fn native_opens(id: &str) -> Value {
@@ -351,25 +352,34 @@ mod live {
             &std::fs::read_to_string(dir.path().join(id).join("harness.toml")).unwrap(),
         )
         .unwrap();
-        let Some(native) = harness.capture.native.first() else {
+        let rows = &harness.capture.native;
+        if rows.is_empty() {
             return json!([]);
-        };
+        }
         let path = dir.path().to_path_buf();
         let rig = Rig::start_with(move |config| config.connectors_dir = path).await;
         let config_home = rig.root.join("config-home");
-        // The native file the first `[[capture.native]]` entry names, each `*` read as `unknown`.
-        let file = PathBuf::from(
-            native
-                .root
-                .replace("{config_home}", config_home.to_str().unwrap())
-                .replace("{run_home}", rig.run_home_for(id).to_str().unwrap()),
-        )
-        .join(native.pattern.replace('*', "unknown"));
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        // The native file each `[[capture.native]]` row names, each `*` read as `unknown`.
+        let files: Vec<PathBuf> = rows
+            .iter()
+            .map(|native| {
+                let file = PathBuf::from(
+                    native
+                        .root
+                        .replace("{config_home}", config_home.to_str().unwrap())
+                        .replace("{run_home}", rig.run_home_for(id).to_str().unwrap()),
+                )
+                .join(native.pattern.replace('*', "unknown"));
+                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                file
+            })
+            .collect();
         let info = rig.created_at_its_home(id).await;
         // Written after the create, so a `since_run_start` source (which reads from the create
         // time, in whole seconds) never misses it at a second boundary.
-        std::fs::write(&file, b"{\"type\":\"native\"}\n").unwrap();
+        for file in &files {
+            std::fs::write(file, b"{\"type\":\"native\"}\n").unwrap();
+        }
         let goal = rig.goal_accepted(&info.entry_id, b"say hi").await;
         assert_eq!(
             rig.launch(&info.entry_id, &launch_request(&goal))
@@ -377,19 +387,29 @@ mod live {
                 .status(),
             204
         );
-        let opened = |records: &[CaptureRecord]| {
-            records.iter().any(|r| {
-                matches!(
-                    r,
+        // Every row's file must open before the golden is read, so a row that stops opening
+        // fails here rather than leaving the golden short.
+        let expected = rows.len();
+        let distinct_native_labels = |records: &[CaptureRecord]| {
+            records
+                .iter()
+                .filter_map(|r| match r {
                     CaptureRecord::Open {
                         source: CaptureSource::Native,
+                        metadata,
                         ..
-                    }
-                )
-            })
+                    } => Some(metadata.label.clone()),
+                    _ => None,
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
         };
-        let records = rig.records_when(&info.entry_id, opened).await;
-        let opens: Vec<Value> = records
+        let records = rig
+            .records_when(&info.entry_id, |records| {
+                distinct_native_labels(records) == expected
+            })
+            .await;
+        let mut opens: Vec<Value> = records
             .iter()
             .filter_map(|r| match r {
                 CaptureRecord::Open {
@@ -403,6 +423,7 @@ mod live {
                 _ => None,
             })
             .collect();
+        opens.sort_by(|a, b| a["label"].as_str().cmp(&b["label"].as_str()));
         json!(opens)
     }
 

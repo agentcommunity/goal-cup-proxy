@@ -1091,7 +1091,12 @@ impl HarnessManifest {
                         ),
                     ));
                 }
-                if earlier.root == n.root && earlier.pattern == n.pattern {
+                // Compared without ASCII case: a home on a case-insensitive filesystem (APFS,
+                // NTFS) resolves `Projects` and `projects` to one directory, so such rows would
+                // track the same files twice. Distinct patterns that overlap are not caught here.
+                if earlier.root.eq_ignore_ascii_case(&n.root)
+                    && earlier.pattern.eq_ignore_ascii_case(&n.pattern)
+                {
                     return Err(refuse(
                         "capture.native",
                         format!(
