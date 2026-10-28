@@ -31,6 +31,14 @@ pub const HTTP_HEAD_HINT: &str = "http-head-v1";
 /// artifact, not a model request.
 pub const TUNNEL_LIST_HINT: &str = "goalcup-tunnels-v1";
 
+/// Whether a protocol hint names a recorded artifact rather than a model request. Every side
+/// artifact hint belongs here, so the producer's model-call rule and the verifier's count
+/// exclude the same set.
+#[must_use]
+pub fn is_artifact_hint(hint: &str) -> bool {
+    hint == HTTP_HEAD_HINT || hint == TUNNEL_LIST_HINT
+}
+
 /// Bound on one source chunk and, separately, on one sanitized segment's bytes.
 pub const MAX_SEGMENT_BYTES: usize = 64 * 1024;
 /// Launch resource bound on the decoded goal.

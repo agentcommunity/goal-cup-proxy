@@ -23,9 +23,8 @@
 //! a builder here, so none can reach a frame through this module.
 
 use crate::proxy::api::{CapturePath, CapturePolicy};
-use crate::proxy::headers::HEADERS_HINT;
 use goalcup_protocol::capture::{
-    CaptureMeta, CaptureTime, MAX_METADATA_STRING_BYTES, WireIdentity,
+    CaptureMeta, CaptureTime, MAX_METADATA_STRING_BYTES, WireIdentity, is_artifact_hint,
 };
 use goalcup_protocol::clock::ContinuousOrigin;
 use std::sync::OnceLock;
@@ -202,12 +201,12 @@ impl ExchangeMeta {
         method: &str,
         named_by_row: bool,
     ) -> bool {
-        // A header stream is an artifact of the exchange, not a request: it is excluded before
-        // any other clause, so no method or row can make it a call.
-        if protocol_hint == Some(HEADERS_HINT) {
-            return false;
+        // An artifact stream (a header stream, or a sealed-connection list) is not a request: it is
+        // excluded before any other clause, so no method or row can make it a call.
+        if let Some(hint) = protocol_hint {
+            return !is_artifact_hint(hint);
         }
-        protocol_hint.is_some() || (named_by_row && method == "POST")
+        named_by_row && method == "POST"
     }
 
     /// The path as it may be retained: whole, or not at all.
@@ -256,6 +255,7 @@ impl ExchangeMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proxy::headers::HEADERS_HINT;
 
     #[test]
     fn query_and_fragment_are_removed_entirely() {

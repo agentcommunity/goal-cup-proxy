@@ -7,8 +7,8 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use goalcup_protocol::capture::{
-    CaptureMeta, CaptureRecord, CaptureSource, ConnectionEvent, EndReason, HTTP_HEAD_HINT,
-    StreamKey, TUNNEL_LIST_HINT,
+    CaptureMeta, CaptureRecord, CaptureSource, ConnectionEvent, EndReason, StreamKey,
+    is_artifact_hint,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -168,10 +168,6 @@ impl Operations {
     }
 }
 
-/// Hints that name a recorded artifact rather than a model request: a header stream and the
-/// sealed-connection list.
-const NOT_MODEL_HINTS: [&str; 2] = [HTTP_HEAD_HINT, TUNNEL_LIST_HINT];
-
 /// Whether a wire open is a model request by the proxy's own rule: a request stream on a hinted
 /// path, or a POST on any other path, or a message the harness sent on a WebSocket opened on a
 /// hinted path (the proxy counts each of those as a generation request). The artifact hints are
@@ -180,13 +176,13 @@ const NOT_MODEL_HINTS: [&str; 2] = [HTTP_HEAD_HINT, TUNNEL_LIST_HINT];
 fn is_model_request(source: CaptureSource, metadata: &CaptureMeta) -> bool {
     match source {
         CaptureSource::WireRequest => match metadata.protocol_hint.as_deref() {
-            Some(hint) => !NOT_MODEL_HINTS.contains(&hint),
+            Some(hint) => !is_artifact_hint(hint),
             None => metadata.method.as_deref() == Some("POST"),
         },
         CaptureSource::WsClient => metadata
             .protocol_hint
             .as_deref()
-            .is_some_and(|hint| !NOT_MODEL_HINTS.contains(&hint)),
+            .is_some_and(|hint| !is_artifact_hint(hint)),
         _ => false,
     }
 }
@@ -270,7 +266,7 @@ impl GoalExcerpt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use goalcup_protocol::capture::{CaptureMeta, CaptureTime};
+    use goalcup_protocol::capture::{CaptureMeta, CaptureTime, HTTP_HEAD_HINT, TUNNEL_LIST_HINT};
 
     fn open(source: CaptureSource, hint: Option<&str>, method: Option<&str>) -> CaptureRecord {
         CaptureRecord::Open {

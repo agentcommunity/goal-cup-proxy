@@ -1272,6 +1272,7 @@ async fn http_recovery_keeps_connection_exchange_identity() {
     assert_eq!(three.bytes, b"tres");
     // Stream and sequence numbering restart with the epoch; identity does not.
     assert_eq!(head_of(&views, WIRE_REQUEST, 3).key.stream, 1);
+    assert_eq!(find(&views, WIRE_REQUEST, 3).key.stream, 2);
     assert!(find(&views, WIRE_REQUEST, 3).open_at > recovery + 1);
     // Recorder-only recovery: nothing but observation controls and payload in the new epoch.
     for frame in frames.iter().filter(|f| f.stream.producer == fresh) {

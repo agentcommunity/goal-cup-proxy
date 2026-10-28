@@ -2,9 +2,9 @@
 //! values masked before they reach the chain.
 //!
 //! Each recorded exchange on an opened host gets one `WireRequest` and one `WireResponse` stream
-//! whose protocol hint is [`HEADERS_HINT`]. Its bytes are [`masked_head`]: the start line as
+//! whose protocol hint is [`HEADERS_HINT`]. Its bytes are `masked_head`: the start line as
 //! received, every header line as received, with the value of a credential-named header replaced
-//! by [`MASK`]. Inside the other values, URLs have their userinfo and credential-named query
+//! by `[masked]`. Inside the other values, URLs have their userinfo and credential-named query
 //! values masked, and a `Bearer` or `Basic` credential is masked. The daemon's redactor then runs
 //! on the stream like any other.
 //!
@@ -17,18 +17,11 @@ use goalcup_protocol::capture::HTTP_HEAD_HINT;
 pub const HEADERS_HINT: &str = HTTP_HEAD_HINT;
 
 /// What a masked value is replaced with.
-pub const MASK: &[u8] = b"[masked]";
+pub(crate) const MASK: &[u8] = b"[masked]";
 
-/// Header names whose values are always masked, compared case-insensitively.
-const CREDENTIAL_NAMES: [&str; 7] = [
-    "authorization",
-    "proxy-authorization",
-    "cookie",
-    "set-cookie",
-    "x-api-key",
-    "api-key",
-    "x-goog-api-key",
-];
+/// Header names whose values are always masked, compared case-insensitively. The substring rule
+/// in [`CREDENTIAL_PARTS`] covers every other credential header name.
+const CREDENTIAL_NAMES: [&str; 2] = ["cookie", "set-cookie"];
 
 /// Any header name containing one of these is masked, compared case-insensitively.
 const CREDENTIAL_PARTS: [&str; 5] = ["key", "token", "secret", "password", "auth"];
@@ -89,7 +82,7 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// The head with every credential masked. Names, start line and every other line are kept as
 /// received, including their line endings. Input is one head, through its blank line.
-pub fn masked_head(head: &[u8]) -> Vec<u8> {
+pub(crate) fn masked_head(head: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(head.len());
     let mut started = false;
     // The previous header was masked, so a folded continuation line belongs to its value.
