@@ -30,6 +30,11 @@ values = ["danger-full-access"]
 
 [capture]
 auth_hosts = ["auth.openai.com"]
+# The model provider the participant's own `config.toml` names (D74): `model_provider` names a
+# `[model_providers.<name>]` table, whose `base_url` is the gateway (Codex posts to
+# `<base_url>/responses`). A built-in provider (`openai`, no table of its own) or no
+# `model_provider` at all records the default host at the end of this file.
+model_host_from = { file = "config.toml", key = "model_providers.*.base_url", via = "model_provider", absent = "defaults" }
 # Chat mode (D57): Codex opens in the participant's terminal and the participant types the prompt.
 # No model, effort, approval, sandbox or permission option (owner direction, 2026-10-14; D57):
 # the harness's own defaults and the participant's own settings. The workspace is trusted, so no
@@ -111,6 +116,7 @@ extra_patterns = [
   { kind = "codex_turn_state", json_field = "x-codex-turn-state", value = "scalar" },
 ]
 
+# The default model host: Codex's ChatGPT login.
 [[capture.hosts]]
 host = "chatgpt.com"
 evidence_paths = ["/backend-api/codex/responses"]

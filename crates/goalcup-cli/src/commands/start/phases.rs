@@ -486,8 +486,11 @@ pub(super) fn create_and_gate<'a>(
             _ => None,
         };
         details.push(format!("entry {}", info.entry_id));
-        if let Some(model_host) = cx.model_host {
-            details.push(model_host.detail());
+        match (cx.model_host, &profile.model_host_from) {
+            (Some(model_host), _) => details.push(model_host.detail()),
+            // `absent = "defaults"` and no setting: the connector's own hosts are recorded.
+            (None, Some(from)) => details.push(crate::model_host::defaults_detail(from)),
+            (None, None) => {}
         }
         details.push(format!("run directory: {}", run.dir.display()));
         raise_open_file_limit(out)?;

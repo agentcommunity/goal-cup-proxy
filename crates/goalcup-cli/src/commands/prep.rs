@@ -857,6 +857,10 @@ fn home_step(
 fn model_host_problem(cfg: &Path, connector: &HarnessConnector) -> Option<String> {
     let why = crate::model_host::check(cfg, connector).err()?;
     let name = connector.display_name();
+    // A file Goal Cup cannot read is fixed in the file, not by choosing another service.
+    if why.file.is_some() {
+        return Some(why.sentence(name));
+    }
     Some(format!(
         "{} In {name}, choose an https model service that is not on this computer, then exit \
          {name}.",
