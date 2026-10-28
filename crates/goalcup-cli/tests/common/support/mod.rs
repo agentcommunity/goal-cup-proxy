@@ -186,7 +186,8 @@ pub fn connectors_dir_with_edited_harness(id: &str) -> PathBuf {
 
 /// The harness config a connector's `capture.model_host_from` names, written into its shared
 /// config home `home` (made 0700) with `url` at the key, in the format the file's extension
-/// says (D62): what a participant's own setup of the harness leaves there.
+/// says (D62): what a participant's own setup of the harness leaves there. With `via`, the
+/// provider `recorder` is named there and its table holds the URL (D74).
 #[cfg(unix)]
 pub fn write_model_host_config(
     home: &Path,
@@ -194,24 +195,47 @@ pub fn write_model_host_config(
     url: &str,
 ) {
     use std::os::unix::fs::PermissionsExt;
-    let parts: Vec<&str> = from.key.split('.').collect();
-    let (last, tables) = parts.split_last().unwrap();
-    let text = match from.file.rsplit_once('.').map(|(_, e)| e) {
-        Some("json") => {
-            let mut value = serde_json::json!(url);
-            for part in parts.iter().rev() {
-                value = serde_json::json!({ *part: value });
-            }
-            value.to_string()
+    const PROVIDER: &str = "recorder";
+    let key = from
+        .key
+        .replace(goalcup_protocol::harness::MODEL_HOST_VIA_PART, PROVIDER);
+    let mut values = vec![(key.as_str(), url)];
+    if let Some(via) = &from.via {
+        values.insert(0, (via.as_str(), PROVIDER));
+    }
+    let mut tree = serde_json::Map::new();
+    for (key, value) in &values {
+        let parts: Vec<&str> = key.split('.').collect();
+        let (last, tables) = parts.split_last().unwrap();
+        let mut at = &mut tree;
+        for part in tables {
+            at = at
+                .entry(part.to_string())
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .unwrap();
         }
-        Some("toml") if tables.is_empty() => format!("{last} = \"{url}\"\n"),
-        Some("toml") => format!("[{}]\n{last} = \"{url}\"\n", tables.join(".")),
+        at.insert(last.to_string(), serde_json::json!(value));
+    }
+    let tree = serde_json::Value::Object(tree);
+    let text = match from.file.rsplit_once('.').map(|(_, e)| e) {
+        Some("json") => tree.to_string(),
+        Some("toml") => toml::to_string(&tree).unwrap(),
         _ => {
-            let mut text = String::new();
-            for (depth, part) in tables.iter().enumerate() {
-                text.push_str(&format!("{}{part}:\n", "  ".repeat(depth)));
+            fn yaml(value: &serde_json::Value, depth: usize, text: &mut String) {
+                for (k, v) in value.as_object().unwrap() {
+                    let pad = "  ".repeat(depth);
+                    match v.as_str() {
+                        Some(s) => text.push_str(&format!("{pad}{k}: {s}\n")),
+                        None => {
+                            text.push_str(&format!("{pad}{k}:\n"));
+                            yaml(v, depth + 1, text);
+                        }
+                    }
+                }
             }
-            text.push_str(&format!("{}{last}: {url}\n", "  ".repeat(tables.len())));
+            let mut text = String::new();
+            yaml(&tree, 0, &mut text);
             text
         }
     };
