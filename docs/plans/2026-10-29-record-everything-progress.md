@@ -21,8 +21,8 @@ on Tenki come later, after the build is clear and good.
 
 | Task | What | Status |
 |---|---|---|
-| 1 | Record every request on an opened host | not started |
-| 2 | Clean model address; never Goal Cup's own host | not started |
+| 1 | Record every request on an opened host | merged in #292 (bf8ce8b); gate PASS, live PASS |
+| 2 | Clean model address; never Goal Cup's own host | merged in #291 (86b9dae); gate PASS, live PASS |
 | 3 | Upload reads only its own tunnel list | merged in #290 (444aa15); gate PASS, live PASS |
 | 4 | Probe only what the run needs | not started |
 | 5 | Up to 8 session-file rows; Claude subagents captured | not started |
@@ -51,3 +51,7 @@ on Tenki come later, after the build is clear and good.
 - 28 Oct: Commit messages. Four commits carry a model name in a Co-Authored-By line: 4b7b8fa, 35abe88, fddcf87 and 3f6f055. The system rule says no model id in commits. Not rewritten; owner to decide. From now on they are left out.
 - 28 Oct: Task 8 merged in #289 (5ce4b2a). First gate run on the merged head failed one proxy test (an_upstream_outage_is_one_window_closed_by_the_next_reach). It passed 5 of 5 locally on main and on the rerun of the gate, so it is treated as a timing flake. Open item: the test reserves a port, drops it, then reconnects; a parallel test can take the port. Not fixed yet.
 - 28 Oct: Task 2 pipeline started (build, review, fit, gate, live).
+- 28 Oct: Task 2 merged in #291 (86b9dae). Review found two medium security gaps (a backslash in the URL authority; 0.0.0.0 and mapped loopback names). Both fixed before merge. Gate PASS, live PASS.
+- 28 Oct: Task 1 merged in #292 (bf8ce8b). Review found a high gap: form-encoded refresh tokens were not masked. Fixed in the same PR; redaction changes sit outside the Task 1 file list, flagged to the owner. Push protection refused two fake test fixtures; rewritten in unpushed commits. Gate PASS, live PASS (10 model calls, 46 wire streams).
+- Open for the owner: the redaction change in Task 1 (keep in Task 1 or split); the per-reason gap dedupe; the 16-byte floor; the Claude Co-Authored-By line rule (the attribution reminder asks for it, the system rule forbids a model id in commits). Earlier commits carrying a model name are listed above and not rewritten.
+- Open item: the excluded-upgrade test was stale and is now upgrade_on_an_opened_host_is_captured_whatever_its_path.
