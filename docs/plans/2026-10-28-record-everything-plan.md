@@ -199,7 +199,8 @@ window because no shipped connector uses them), `docs/plans/2026-10-28-one-captu
 - [ ] **Step 2:** OPERATING and the Worker README: deploy order (Worker first, then the client
   release; a new client sealing against an old Worker loses that entry's list for good), the new
   R2 object, `MIN_COMPETITION_VERSION` after the release.
-- [ ] **Step 3:** PARTICIPANT-GUIDE: what the `sealed hosts:` line means and that host names,
+- [ ] **Step 3:** HARNESS-SETUP: with a gateway, set the subagent model too (Codex chose its own
+  model for subagents in the measured run, and the gateway refused it). PARTICIPANT-GUIDE: what the `sealed hosts:` line means and that host names,
   intranet ones included, go to the event server with the seal. TODO.md stale lines. The registry
   records the measured Claude Code 2.1.312 gateway run and the `.../messages` rule.
 - [ ] **Step 4:** Plan Task 10 release line: v0.7.0 is tagged (26 Oct); `main` holds D73 and D74
@@ -223,11 +224,21 @@ window because no shipped connector uses them), `docs/plans/2026-10-28-one-captu
 
 ### Task 9: Measure, then record the whole session folder
 
-**Measurement first (no code):** a sandbox run of Claude Code and Codex through the free gateway
-(or DeepSeek if a key is present), prompt "Build a working copy of PayPal … use subagents", five
-minutes. Results in the ledger: every file in the session folder with size and kind, what is
-captured today, trace size, repetition, and compression (Task 10). Decide per harness which
-files to add and the size cap.
+**Measured 28 Oct** (sandbox, free gateway model, PayPal prompt with subagents, about 12
+minutes, both traces `valid` and `wire_and_native`):
+
+| | Claude Code 2.1.312 | Codex 0.165.0 |
+|---|---|---|
+| Session folder | 7 files, 668 KB: main chat 269 KB, 3 subagent chats 398 KB, 3 `.meta.json` | 4 rollout files, 357 KB |
+| Captured as chat file today | main chat only: **subagent chats (60% of the bytes) missed** | all 4 |
+| Tool output spilled to a file | none in this run | none |
+| Trace | 9.6 MB, 97 model requests (70 were rate-limited) | 8.1 MB, 41 requests |
+| Repeated history in requests | 74.5% | 78.5% |
+
+So: add the Claude subagent rows (chat `append_only`, meta `snapshot`); keep a capped
+`tool-results/` row though no spill was seen; Codex needs no new row. Codex picked its own model
+(`gpt-6.1-sol`) for subagents, which the gateway refused: HARNESS-SETUP must say to set the
+subagent model too when using a gateway (Task 7).
 
 **Files:** `crates/goalcup-protocol/src/harness/check.rs` (`check_native` bound 0..=1 to 0..=N,
 N = 8), `schema.rs` doc, `crates/goalcup-daemon/src/runtime/capture/native_plan.rs` (several
@@ -251,10 +262,15 @@ Codex rows per the measurement, pins, goldens, CONNECTOR-SCHEMA, a frozen fixtur
 **Files:** `crates/goalcup-cli/src/upload/uploader/chunk.rs` (`ZSTD_LEVEL` :19, no long window
 today), `scripts/fetch-run.sh` (`zstd -dcq`), any server-side reader of chunks.
 
-- [ ] **Step 1:** If Task 9's measurement shows `--long=27` cuts the compressed chain clearly
-  (for example by half), enable long-distance matching with window log 27. Window log 27 is the
-  default decoder limit of both the zstd CLI and the Rust crate, so existing readers decode it
-  without a flag; a larger window would need every reader changed, so do not go above 27.
+**Measured 28 Oct** (`chain.jsonl` of the two runs above): level 3 today is about 19x; level 3
+with `--long=27` is 26x (Claude) and 23x (Codex), 18% to 27% smaller at no measurable extra time;
+level 19 with `--long=27` about 30x. The captured bodies are base64 in the chain, which hides most
+repeats: the same bytes decoded compress 3 to 4 times smaller again. The chain format is frozen
+(v5), so that larger gain is a later transport change, not this task.
+
+- [ ] **Step 1:** Enable long-distance matching with window log 27 at level 3. Window log 27 is
+  the default decoder limit of both the zstd CLI and the Rust crate, so existing readers decode it
+  without a flag; do not go above 27.
 - [ ] **Step 2: Test:** a chunk written with the long window decodes with the default decoder
   (`fetch-run.sh` path and the Rust reader); a test chain with repeated 1 MiB prefixes compresses
   smaller than at today's settings.
@@ -286,3 +302,5 @@ today), `scripts/fetch-run.sh` (`zstd -dcq`), any server-side reader of chunks.
 - A per-host count of exchanges on opened hosts in the finish line (moot once Task 2 records them).
 - The stitcher that rebuilds one chat per agent and subagent from repeated requests (server side).
 - A label for "chat files recorded, no decoder" (Hermes, Amp, OpenCode, OpenClaw).
+- Upload the captured bodies decoded from base64 (a transport form the server turns back into the
+  exact chain bytes): measured 3 to 4 times smaller than today's chunks.
