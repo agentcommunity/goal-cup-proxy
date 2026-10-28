@@ -13,22 +13,23 @@
 //! line is written. YAML is read by the block-mapping lookup below (no YAML crate); JSON and
 //! TOML by the parsers this binary already links.
 //!
-//! A value goalcup cannot record (missing, not a URL, plain `http`, loopback, an address
-//! literal, Goal Cup's own or an authentication host, a path the recorder cannot follow) is
-//! refused with the reason and the way to change it
-//! ([`crate::participant::cannot_record_model_service`]); `goalcup prep` makes the same check
-//! and keeps the home not ready until the harness names a service that can be recorded. Under
-//! `absent = "defaults"` a missing value is no refusal: the run records the connector's own
-//! hosts, as a connector without the field does. What is
-//! checked is the address the config names. A login the harness refreshes at another host (an
-//! OAuth provider's token endpoint) is not checked here (D62).
+//! A value goalcup cannot record (missing, not a URL, an authority with a backslash, a space or a
+//! control byte, plain `http`, loopback, an address literal, Goal Cup's own or an authentication
+//! host, a path the recorder cannot follow) is refused with the reason and the way to change it
+//! ([`crate::participant::cannot_record_model_service`]). A name that resolves only to this
+//! computer is refused too, by [`refuse_if_on_this_computer`], at `goalcup prep`, `goalcup start`
+//! and `goalcup continue`. `goalcup prep` makes the same checks and keeps the home not ready until
+//! the harness names a service that can be recorded. Under `absent = "defaults"` a missing value
+//! is no refusal: the run records the connector's own hosts, as a connector without the field
+//! does. What is checked is the address the config names. A login the harness refreshes at another
+//! host (an OAuth provider's token endpoint) is not checked here (D62).
 
 use crate::CliError;
 use crate::connector::HarnessConnector;
 use crate::proxy::api::{CapturePath, CapturePolicy};
 use crate::proxy::connect::ApprovedHost;
 use goalcup_protocol::capture_policy::{
-    capture_path_problem, is_capture_host, is_tracker_host, local_host_problem, mentions_goalcup,
+    is_capture_host, is_tracker_host, local_host_problem, mentions_goalcup, unclean_path,
 };
 use goalcup_protocol::harness::{
     CAPTURE_HOMES_DIR, MODEL_HOST_VIA_PART, ModelHostAbsent, ModelHostFrom,
@@ -276,11 +277,23 @@ pub fn read(
     let Some(value) = value_at(&key)? else {
         return missing(&key);
     };
-    let Some(url) = parse_url(&value) else {
-        return Err(refuse(
-            "an address Goal Cup cannot read",
-            format!("{source} is not an http or https URL"),
-        ));
+    let url = match parse_url(&value) {
+        Ok(url) => url,
+        Err(UrlProblem::NotHttp) => {
+            return Err(refuse(
+                "an address Goal Cup cannot read",
+                format!("{source} is not an http or https URL"),
+            ));
+        }
+        Err(UrlProblem::SplitAuthority) => {
+            return Err(Unrecordable {
+                set_by: Some(source),
+                ..refuse(
+                    "an address Goal Cup cannot read",
+                    AUTHORITY_REASON.to_string(),
+                )
+            });
+        }
     };
     let shown = url.shown();
     let ip = url.host.parse::<std::net::IpAddr>().ok();
@@ -323,31 +336,48 @@ pub fn read(
 const LOOPBACK_REASON: &str =
     "it is on this computer or the local network, which is never recorded";
 
-/// Why a model address whose path the recorder cannot follow is refused.
+/// Why a model address whose path the recorder cannot follow is refused. The rule itself is
+/// [`goalcup_protocol::capture_policy::unclean_path`], the one rule for every capture address.
 const UNCLEAN_PATH_REASON: &str = "it names an address with an unusual path that the recorder \
      cannot follow safely. Write the address plainly, for example \
      https://ai-gateway.vercel.sh/v1";
 
-/// Whether a model address's path cannot be recorded as the harness sends it: a dot segment
-/// (`.` or `..`, which a client resolves before sending), `%2e` in either case (a dot written as
-/// an escape), or a byte that a WHATWG URL parser changes or does not keep as written (a
-/// backslash, which it reads as `/`; a quote, angle bracket, backtick or brace; any non-ASCII
-/// byte). The empty path is no problem: the versioned API is recorded for it.
-fn unclean_path(path: &str) -> bool {
-    !path.is_empty()
-        && (capture_path_problem(path).is_some()
-            || path.to_ascii_lowercase().contains("%2e")
-            || path.bytes().any(|b| b > 0x7e || b"\"<>`{}\\".contains(&b)))
-}
+/// Why a model address whose host part holds a backslash, a space or a control byte is refused:
+/// a URL parser reads such an authority as another host, or refuses it, so the host checked would
+/// not be the host reached.
+const AUTHORITY_REASON: &str = "its host part has a backslash, a space or a control character, \
+     which a URL parser reads as a different host or refuses";
 
-/// The refusal for a model service whose name resolves only to this computer. `prepare` finds
-/// it before it probes; it gets the same words a loopback address in the config gets.
+/// The refusal for a model service whose name resolves only to this computer. It gets the same
+/// words a loopback address in the config gets.
 pub fn resolves_only_here(model: &ModelHost) -> Unrecordable {
     Unrecordable {
         shown: format!("https://{}:{}", model.host, model.port),
         reason: LOOPBACK_REASON.into(),
         set_by: Some(model.from.clone()),
         file: None,
+    }
+}
+
+/// Refuses a model service whose name resolves only to this computer: the recorder would connect
+/// to it here, unrecorded as a remote host. Every caller checks it at its own moment, `goalcup
+/// prep`, `goalcup start` (before anything is created) and `goalcup continue` (before an earlier
+/// segment is closed), and the answer is the name's point-in-time DNS result, so a later change of
+/// DNS is not seen. Under the test-only offline seam, `start` does not reach it.
+pub fn refuse_if_on_this_computer(model: &ModelHost) -> Result<(), Unrecordable> {
+    refuse_if_on_this_computer_with(model, crate::proxy::preflight::resolves_only_to_loopback)
+}
+
+/// [`refuse_if_on_this_computer`] with the answer to the name lookup given, so a test can answer
+/// it. `resolves` is asked the model's host and port, and nothing else.
+pub(crate) fn refuse_if_on_this_computer_with(
+    model: &ModelHost,
+    resolves: impl Fn(&str, u16) -> bool,
+) -> Result<(), Unrecordable> {
+    if resolves(&model.host, model.port) {
+        Err(resolves_only_here(model))
+    } else {
+        Ok(())
     }
 }
 
@@ -631,37 +661,46 @@ impl Url {
     }
 }
 
-/// An `http` or `https` URL with a host, or `None`.
-fn parse_url(value: &str) -> Option<Url> {
+/// Why a value is not a URL the reader keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UrlProblem {
+    /// Not an `http` or `https` URL with a host, a usable port and a short path.
+    NotHttp,
+    /// The host part holds a backslash, a space or a control byte ([`AUTHORITY_REASON`]).
+    SplitAuthority,
+}
+
+/// An `http` or `https` URL with a host.
+fn parse_url(value: &str) -> Result<Url, UrlProblem> {
     let value = value.trim();
     let (https, rest) = match value.split_once("://") {
         Some((scheme, rest)) if scheme.eq_ignore_ascii_case("https") => (true, rest),
         Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") => (false, rest),
-        _ => return None,
+        _ => return Err(UrlProblem::NotHttp),
     };
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let (authority, tail) = rest.split_at(end);
     // A WHATWG parser ends the authority at a backslash (it reads it as `/`) and removes or refuses
-    // a control byte, so an authority holding either would be sent to another host than the one
-    // checked here. Refused whole, the userinfo included.
+    // a control byte or a space, so an authority holding one would be sent to another host than the
+    // one checked here. Refused whole, the userinfo included.
     if authority
         .bytes()
         .any(|b| b <= b' ' || b == 0x7f || b == b'\\')
     {
-        return None;
+        return Err(UrlProblem::SplitAuthority);
     }
     let path_end = tail.find(['?', '#']).unwrap_or(tail.len());
     let path = &tail[..path_end];
     if path.bytes().any(|b| b <= b' ' || b == 0x7f) || path.len() > 512 {
-        return None;
+        return Err(UrlProblem::NotHttp);
     }
     // A userinfo is dropped here, before anything can show it.
     let hostport = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
     let (host, port) = if let Some(literal) = hostport.strip_prefix('[') {
-        let (literal, after) = literal.split_once(']')?;
+        let (literal, after) = literal.split_once(']').ok_or(UrlProblem::NotHttp)?;
         let port = match after {
             "" => None,
-            p => Some(p.strip_prefix(':')?),
+            p => Some(p.strip_prefix(':').ok_or(UrlProblem::NotHttp)?),
         };
         (literal.to_ascii_lowercase(), port)
     } else {
@@ -672,7 +711,7 @@ fn parse_url(value: &str) -> Option<Url> {
     };
     let host = host.strip_suffix('.').unwrap_or(&host).to_string();
     if host.is_empty() || host.bytes().any(|b| b <= b' ' || b == 0x7f) {
-        return None;
+        return Err(UrlProblem::NotHttp);
     }
     let port = match port {
         None => {
@@ -684,13 +723,13 @@ fn parse_url(value: &str) -> Option<Url> {
         }
         Some(p) if !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()) => {
             match p.parse::<u16>() {
-                Ok(0) | Err(_) => return None,
+                Ok(0) | Err(_) => return Err(UrlProblem::NotHttp),
                 Ok(port) => port,
             }
         }
-        Some(_) => return None,
+        Some(_) => return Err(UrlProblem::NotHttp),
     };
-    Some(Url {
+    Ok(Url {
         https,
         host,
         port,
@@ -969,7 +1008,7 @@ sessions:
             "https://x:99999",
             "https://x:a",
         ] {
-            assert!(parse_url(bad).is_none(), "{bad}");
+            assert!(parse_url(bad).is_err(), "{bad}");
         }
     }
 
@@ -1014,25 +1053,25 @@ sessions:
         );
     }
 
-    /// `url` as the Claude Code settings' base URL, read the way a run reads it.
-    fn read_claude(url: &str) -> Result<Option<ModelHost>, Unrecordable> {
-        let from = r#"file = "settings.json"
-key = "env.ANTHROPIC_BASE_URL"
+    /// `url` as the base URL under a neutral settings key, read the way a run reads it.
+    fn read_model_url(url: &str) -> Result<Option<ModelHost>, Unrecordable> {
+        let from = r#"file = "config.json"
+key = "env.MODEL_BASE_URL"
 absent = "defaults""#;
-        let settings = serde_json::json!({ "env": { "ANTHROPIC_BASE_URL": url } }).to_string();
-        read_in(from, "settings.json", &settings)
+        let config = serde_json::json!({ "env": { "MODEL_BASE_URL": url } }).to_string();
+        read_in(from, "config.json", &config)
     }
 
     #[test]
     fn an_unclean_base_path_is_refused() {
         for url in [
-            "https://ai-gateway.vercel.sh/x/../claude-code",
+            "https://gateway.example.test/x/../y",
             "https://g.example.com/a/%2e%2e/v1",
             "https://g.example.com/a/%2E/v1",
             "https://g.example.com/a\\b",
             "https://g.example.com/caf\u{e9}/v1",
         ] {
-            let refused = read_claude(url).unwrap_err();
+            let refused = read_model_url(url).unwrap_err();
             assert!(
                 refused.reason.contains("unusual path"),
                 "{url}: {refused:?}"
@@ -1043,16 +1082,17 @@ absent = "defaults""#;
             );
         }
         for url in [
-            "https://ai-gateway.vercel.sh/claude-code",
-            "https://ai-gateway.vercel.sh/codex/v1",
-            "https://ai-gateway.vercel.sh",
+            "https://gateway.example.test/y",
+            "https://gateway.example.test/v1/y",
+            "https://gateway.example.test",
         ] {
-            assert!(matches!(read_claude(url), Ok(Some(_))), "{url}");
+            assert!(matches!(read_model_url(url), Ok(Some(_))), "{url}");
         }
     }
 
-    /// A backslash or a control byte in the authority is refused: a WHATWG parser would send the
-    /// harness to another host than the one checked here. A plain userinfo is still read.
+    /// A backslash, a space or a control byte in the authority is refused under its own reason: a
+    /// WHATWG parser would send the harness to another host than the one checked here. A plain
+    /// userinfo is still read.
     #[test]
     fn an_authority_that_splits_differently_is_refused() {
         for url in [
@@ -1060,11 +1100,24 @@ absent = "defaults""#;
             "https://gateway.example.test\\@127.0.0.1/v1",
             "https://gateway.example.test\\v1",
             "https://gateway\texample.test/v1",
+            "https://gateway example.test/v1",
         ] {
-            assert!(read_claude(url).is_err(), "{url}");
+            let refused = read_model_url(url).unwrap_err();
+            assert!(
+                refused.reason.starts_with("its host part has a backslash"),
+                "{url}: {refused:?}"
+            );
+            assert_eq!(
+                refused.set_by.as_deref(),
+                Some("`env.MODEL_BASE_URL` in config.json")
+            );
+            assert!(
+                !refused.sentence("Harness").contains("is not an http"),
+                "{url}"
+            );
         }
         assert!(matches!(
-            read_claude("https://key@gateway.example.test/v1"),
+            read_model_url("https://key@gateway.example.test/v1"),
             Ok(Some(_))
         ));
     }
@@ -1075,12 +1128,46 @@ absent = "defaults""#;
             "https://ingest.agentcommunity.org/v1",
             "https://agentcommunity.org/v1",
         ] {
-            let refused = read_claude(url).unwrap_err();
+            let refused = read_model_url(url).unwrap_err();
             assert_eq!(refused.reason, "it is Goal Cup's own host", "{url}");
         }
         assert!(matches!(
-            read_claude("https://gateway.example.test/v1"),
+            read_model_url("https://gateway.example.test/v1"),
             Ok(Some(_))
         ));
+    }
+
+    /// The check is by name: a name that resolves only to this computer is refused with the
+    /// loopback sentence, naming the host and port it checked, and one that resolves elsewhere is
+    /// not. The lookup is injected here; the start-up ordering is not tested by this.
+    #[test]
+    fn refuse_if_on_this_computer_uses_the_name_and_reason() {
+        let model = ModelHost {
+            host: "gateway.example.test".into(),
+            port: 443,
+            base_path: String::new(),
+            from: "env.MODEL_BASE_URL in config.json".into(),
+        };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let refused = refuse_if_on_this_computer_with(&model, |host, port| {
+            asked.borrow_mut().push((host.to_string(), port));
+            true
+        })
+        .unwrap_err();
+        assert_eq!(
+            *asked.borrow(),
+            vec![("gateway.example.test".to_string(), 443)],
+            "the name is the one checked"
+        );
+        assert_eq!(refused.shown, "https://gateway.example.test:443");
+        assert_eq!(refused.reason, LOOPBACK_REASON);
+        assert_eq!(
+            refused.set_by.as_deref(),
+            Some("env.MODEL_BASE_URL in config.json")
+        );
+        assert!(
+            refuse_if_on_this_computer_with(&model, |_, _| false).is_ok(),
+            "a name that resolves elsewhere is not refused here"
+        );
     }
 }

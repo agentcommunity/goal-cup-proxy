@@ -766,17 +766,26 @@ list. The shipped forms:
   set in config.toml)``. A userinfo (`user:pass@`), the path and the query are never logged or
   recorded.
 - **Refused at start, and not ready at prep.** A missing file, key or `via` value (with
-  `absent = "refuse"`), a value that is not an
-  `http` or `https` URL, plain `http` (only `HTTPS_PROXY` is set, so it would pass around the
-  recorder), a loopback name, an address literal, a single-label name, a host that names
-  Goal Cup, and an authentication host. The refusal names the value (`<scheme>://<host>:<port>`
-  only), the reason, the setting and the way to change it: "`<display name>` is set to use
-  `<value>`, which Goal Cup cannot record: `<reason>` (set by `<key>` in `<file>`). Goal Cup
-  records only an https model service that is not on this computer. Run goalcup setup --harness
-  `<id>`, choose such a service there, then run the command again." Nothing is created. `goalcup continue` checks it before it closes an earlier segment.
-  `goalcup setup` makes the same check: while the value cannot be recorded the home is not ready,
-  and prep says why and opens the harness again. Only the address the config names is checked; a
-  login the harness refreshes at another host is not (D62).
+  `absent = "refuse"`); a value that is not an `http` or `https` URL; an authority (the part
+  before the path) with a backslash, a space or a control character, which a URL parser reads as
+  another host or refuses; plain `http` (only `HTTPS_PROXY` is set, so it would pass around the
+  recorder); a loopback name; an address literal; a single-label name; a host that names Goal Cup,
+  or the project's domain `agentcommunity.org` or a subdomain of it (its event server is Goal
+  Cup's own host); a sign-in host; and a path the recorder cannot follow (a `.` or `..` segment, a
+  `%2e` escape, a backslash, a quote, an angle bracket, a backtick, a brace or a non-ASCII byte).
+  A name that resolves only to this computer (to a loopback address, to `0.0.0.0`, to `::`, or to
+  an IPv4-mapped loopback address) is refused too, from a DNS lookup bounded by the preflight
+  budget. The refusal names the value (`<scheme>://<host>:<port>` only), the reason, the setting
+  and the way to change it: "`<display name>` is set to use `<value>`, which Goal Cup cannot
+  record: `<reason>` (set by `<key>` in `<file>`). Goal Cup records only an https model service
+  that is not on this computer. Run goalcup setup --harness `<id>`, choose such a service there,
+  then run the command again." Nothing is created. The name check runs at three points, each a
+  point-in-time lookup: `goalcup start` before anything is created, `goalcup continue` before it
+  closes an earlier segment, and `goalcup prep`. A name whose DNS changes to this computer after
+  its check is not seen; the gap is recorded in the one-capture-system ledger (L30).
+  `goalcup setup` makes the same checks: while the value cannot be recorded the home is not
+  ready, and prep says why and opens the harness again. Only the address the config names is
+  checked; a login the harness refreshes at another host is not (D62).
 - **Schema rules.** `file` is a relative path of at most 4 components with a `.yaml`, `.yml`,
   `.json` or `.toml` extension. `key` is 1–8 names of `[A-Za-z0-9_-]` (1–64 bytes each) joined
   with `.`; with `via` it holds exactly one `*` part, which is not its last, and without `via`

@@ -1063,6 +1063,18 @@ pub fn capture_path_problem(path: &str) -> Option<&'static str> {
     None
 }
 
+/// Whether a model address's path cannot be recorded as the harness sends it: a path that
+/// [`capture_path_problem`] refuses, `%2e` in either case (a dot written as an escape), or a byte
+/// that a WHATWG URL parser changes or does not keep as written (a backslash, which it reads as
+/// `/`; a quote, angle bracket, backtick or brace; any non-ASCII byte). The empty path is no
+/// problem: the versioned API is recorded for it.
+pub fn unclean_path(path: &str) -> bool {
+    !path.is_empty()
+        && (capture_path_problem(path).is_some()
+            || path.to_ascii_lowercase().contains("%2e")
+            || path.bytes().any(|b| b > 0x7e || b"\"<>`{}\\".contains(&b)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1073,5 +1085,22 @@ mod tests {
         assert!(is_tracker_host("ingest.agentcommunity.org"));
         assert!(!is_tracker_host("notagentcommunity.org"));
         assert!(!is_tracker_host("agentcommunity.org.example.test"));
+    }
+
+    #[test]
+    fn an_unclean_path_is_refused_by_one_rule() {
+        for path in [
+            "/x/../y",
+            "/a/%2E/b",
+            "/a/%2e%2e/v1",
+            "/a\\b",
+            "/caf\u{e9}",
+            "/a\"b",
+        ] {
+            assert!(unclean_path(path), "{path}");
+        }
+        for path in ["", "/v1/messages", "/a/b"] {
+            assert!(!unclean_path(path), "{path:?}");
+        }
     }
 }
