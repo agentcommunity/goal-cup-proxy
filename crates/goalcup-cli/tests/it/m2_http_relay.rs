@@ -1431,7 +1431,7 @@ async fn two_requests_on_one_connection_count_two() {
 /// The run's "no model calls" line counts model calls, not every recorded request: a model list
 /// under the same base path (a `model_host_from` host records the whole base, without a hint) is
 /// recorded but is no call, and a request on a hinted path, or a POST on any recorded path, is
-/// both.
+/// both. A POST outside every row is recorded but is no call: it is not under the base path.
 #[tokio::test]
 async fn only_a_request_on_a_hinted_path_counts_as_a_model_call() {
     let sink = RecordingSink::new();
@@ -1477,6 +1477,24 @@ async fn only_a_request_on_a_hinted_path_counts_as_a_model_call() {
     .await;
     assert_eq!(h.emitter.recorded_requests(), 3);
     assert_eq!(h.emitter.generation_requests(), 2);
+    // A POST outside every row (a token refresh on the same host) is recorded but is no model call.
+    round_trip(
+        &mut h,
+        &request(
+            "POST",
+            "/oauth/token",
+            &[&length(b"grant_type=refresh_token")],
+            b"grant_type=refresh_token",
+        ),
+        &ok,
+    )
+    .await;
+    assert_eq!(h.emitter.recorded_requests(), 4);
+    assert_eq!(
+        h.emitter.generation_requests(),
+        2,
+        "a POST outside the base path is no call"
+    );
     close_both(h).await;
 }
 

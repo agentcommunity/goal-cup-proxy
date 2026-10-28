@@ -541,6 +541,10 @@ async fn every_request_on_an_opened_host_is_recorded() {
         .handle()
         .recorded_requests()
         .load(std::sync::atomic::Ordering::SeqCst);
+    let model_calls = rig
+        .handle()
+        .generation_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
     assert_all_clean(&rig.stop().await);
     sink.settle().await;
 
@@ -558,6 +562,8 @@ async fn every_request_on_an_opened_host_is_recorded() {
         .count();
     assert_eq!((requests.len(), responses), (3, 3), "{views:?}");
     assert_eq!(recorded, 3);
+    // Only the hinted POST is a model call: the GET model list and the POST outside every row are not.
+    assert_eq!(model_calls, 1);
     let paths: Vec<&str> = requests
         .iter()
         .map(|v| v.meta.path.as_deref().expect("a retained path"))
@@ -597,12 +603,17 @@ async fn a_token_refresh_on_an_opened_host_is_recorded() {
     .await;
     close_both(client, up).await;
     rig.wait_closed(1).await;
+    let model_calls = rig
+        .handle()
+        .generation_requests()
+        .load(std::sync::atomic::Ordering::SeqCst);
     assert_all_clean(&rig.stop().await);
     sink.settle().await;
 
     let frames = sink.frames();
     check_frames(&frames);
     check_clock(&frames, clock, clock_now());
+    assert_eq!(model_calls, 0, "a token refresh is no model call");
     let views = streams(&frames);
     let refresh = views
         .iter()

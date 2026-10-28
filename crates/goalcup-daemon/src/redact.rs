@@ -179,10 +179,10 @@ pub(crate) fn match_view(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 /// source: `let token = entry.keys.signing_key` would become a span. So:
 ///
 /// 1. the JSON form matches `"<key>"\s*:\s*"<value>"`, where the value is sixteen or more
-///    bytes carrying no quote and no backslash. The value's own closing quote bounds the
-///    match, which is what keeps it off dotted code. **The value is a capture group, and
-///    that group is the span** ([`Pattern::span_group`]): the key, the colon and the
-///    quotes stay, so `{"api_key":"<redacted:…>"}` is still JSON for every reader
+///    units carrying no quote, and a backslash only as an escape of one non-quote unit
+///    (`\/`). The value's own closing quote bounds the match, which is what keeps it off
+///    dotted code. **The value is a capture group, and that group is the span**
+///    ([`Pattern::span_group`]): the key, the colon and the quotes stay, so `{"api_key":"<redacted:…>"}` is still JSON for every reader
 ///    downstream of this stage;
 /// 2. the shell/TOML form keeps the script's shape and the script's original narrow value
 ///    class, `[A-Za-z0-9_\-]{16,}`, and — also deliberately — the script's whole-match
@@ -246,24 +246,33 @@ const SHARED: &[(&str, &str)] = &[
     ),
     ("slack_token", r"xox[baprs]-[A-Za-z0-9\-]{10,}"),
     // (i) the JSON form: a quoted key, a quoted value. The key word may sit inside an
-    // `_`/`-`-joined compound (`refresh_token`, `client_secret`, `x-api-key`) but must be a
-    // whole segment of it, so `tokenizer` is not a token. Each side of the key word is at most
-    // 1,000 units, so a key is at most 2,008: a base64url run after a quote (a Codex
-    // `encrypted_content` value) is then not a key the stream must hold to its end. Each
-    // quote may follow up to seven backslashes: tool output and file contents reach every
-    // native transcript and request body as JSON escaped inside a string (`\"api_key\": \"…\"`),
-    // and a command's JSON argument inside that once more (`\\\"api_key\\\"`).
+    // `_`/`-`-joined compound (`refresh_token`, `client_secret`, `x-api-key`) or follow a
+    // camelCase prefix (`accessToken`, `clientSecret`), but must end its key or be a whole
+    // `_`/`-` segment after it, so `tokenizer` is not a token. The prefix is at most 1,000
+    // units and each side of the key word is at most 1,000, so a key is at most 2,008: a
+    // base64url run after a quote (a Codex `encrypted_content` value) is then not a key the
+    // stream must hold to its end. Each quote may follow up to seven backslashes: tool output
+    // and file contents reach every native transcript and request body as JSON escaped inside
+    // a string (`\"api_key\": \"…\"`), and a command's JSON argument inside that once more
+    // (`\\\"api_key\\\"`). The value may carry a backslash escape of anything but a quote or a
+    // backslash (`"1\/\/0gAb…"`, a PHP-style slash), so such a value is masked whole; an
+    // escaped quote still closes it.
     (
         "generic_secret_assignment",
-        r#"(?i)\\{0,7}"(?:[A-Za-z0-9_\-]{0,999}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"([^"\\]{16,})\\{0,7}""#,
+        r#"(?i)\\{0,7}"[A-Za-z0-9_\-]{0,1000}(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"((?:[^"\\]|\\{1,7}[^"\\]){16,})\\{0,7}""#,
     ),
     // (ii) the shell/TOML form, with redact.py's own value class. Widening this one is what
     // put source lines in spans; the JSON form above is what catches base64 secrets. The
     // opening quote may follow up to seven backslashes (`password: \"…\"` in an escaped
     // string); the span takes them, so no backslash is left dangling.
+    //
+    // The second alternative is a form-encoded value, `key=value` with no space around the
+    // `=`: an OAuth refresh request (RFC 6749 section 6) carries `refresh_token=` followed by
+    // a percent-encoded value (`1%2F%2F0gAb…`, `+` and `=` escaped) or a dotted one
+    // (`0.AXoA…`). The spaced form stays narrow, so `let token = entry.keys.x` is still code.
     (
         "generic_secret_assignment",
-        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?(?:[A-Za-z0-9_\-]{16,})"#,
+        r#"(?i)(?:api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}|=(?:%[0-9A-Fa-f]{2}|[A-Za-z0-9_.~+/=\-]){16,})"#,
     ),
     // The local part is at most 1,024 units, for the same reason as the JSON key: a bare token
     // run is not an address the stream must hold to its end. Not RFC 5321's 64: a URL

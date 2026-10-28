@@ -493,6 +493,57 @@ fn a_quoted_json_key_is_the_shape_the_daemon_actually_sees() {
     }
 }
 
+/// Token shapes a token-endpoint body on an opened host carries, which the name-based rules missed:
+/// a camelCase key (`accessToken`, `clientSecret`), a PHP-style escaped slash inside a JSON value
+/// (`1\/\/0gAb…`), and a form-encoded refresh request (RFC 6749 section 6): a percent-encoded
+/// value, or a dotted one. Each secret must leave the output; the match is named as generic.
+#[test]
+fn a_camel_case_key_an_escaped_value_and_a_form_refresh_token_are_masked() {
+    for (probe, secret) in [
+        (
+            r#"{"accessToken":"at-0123456789abcdefghij"}"#,
+            "at-0123456789abcdefghij",
+        ),
+        (
+            r#"{"clientSecret":"s3cr3t-value-0123456789"}"#,
+            "s3cr3t-value-0123456789",
+        ),
+        (
+            r#"{"refresh_token":"1\/\/0gAbCdEfGhIjKlMnOpQrStUv"}"#,
+            "0gAbCdEfGhIjKlMnOpQrStUv",
+        ),
+        (
+            "grant_type=refresh_token&refresh_token=1%2F%2F0gAbCdEfGhIjKlMnOpQrStUv",
+            "0gAbCdEfGhIjKlMnOpQrStUv",
+        ),
+        (
+            "grant_type=refresh_token&refresh_token=0.AXoA-bcdefghijklmnopqrstuvwxyz_0123",
+            "AXoA-bcdefghijklmnopqrstuvwxyz_0123",
+        ),
+    ] {
+        let mut r = Redactor::new();
+        let out = r.apply(probe.as_bytes());
+        assert!(!out.spans.is_empty(), "{probe} produced no span");
+        assert!(
+            out.spans
+                .iter()
+                .all(|s| s.kind == "generic_secret_assignment"),
+            "{probe}: {:?}",
+            out.spans
+        );
+        assert!(
+            !String::from_utf8_lossy(&out.bytes).contains(secret),
+            "{probe} left its secret in the output: {}",
+            String::from_utf8_lossy(&out.bytes)
+        );
+    }
+
+    // The spaced shell form is still code, and a form body with no secret-named key is untouched.
+    let mut r = Redactor::new();
+    let out = r.apply(b"grant_type=refresh_token&client_id=abc");
+    assert_eq!(out.spans.len(), 0, "a form body with no secret value");
+}
+
 /// The shell/TOML literal keeps `redact.py`'s original narrow value class. Widening it to
 /// `[A-Za-z0-9_\-+/=.]{16,}` to catch base64 would put every dotted expression after a
 /// `token =` inside a span — a source line, not a secret, removed from the chain
@@ -1400,8 +1451,8 @@ fn with_script(body: &str) -> String {
 const SCRIPT_RULE_SPELLING_DELTAS: &[(&str, &str, &str)] = &[
     (
         "generic_secret_assignment",
-        r#"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})"#,
-        r#"(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['"])?(?:[A-Za-z0-9_\-]{16,})"#,
+        r#"(?i)(api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})|=((?:%[0-9A-Fa-f]{2}|[A-Za-z0-9_.~+/=\-]){16,}))"#,
+        r#"(?i)(?:api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}|=(?:%[0-9A-Fa-f]{2}|[A-Za-z0-9_.~+/=\-]){16,})"#,
     ),
     (
         "email",
@@ -2263,7 +2314,7 @@ const PEM_PIECES: &[&str] = &[
     "MIIBOgIBAAJBAKj34GkxFhD9",
     "0vcNLYLInFEX6Ppy1tPf9Cnz+/=",
     "ghp_ABCDEFGHIJKLMNOPQRSTUVWX",
-    "AKIAABCDEFGHIJKLMNOP",
+    "AKIAIOSFODNN7EXAMPLE",
     "Bearer ",
     "abcdefgh",
     "KEY-----",

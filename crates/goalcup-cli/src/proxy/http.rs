@@ -204,6 +204,9 @@ struct Pending {
 /// A selected exchange: its retained metadata, and whether its request is being captured.
 struct ExchangeCapture {
     meta: ExchangeMeta,
+    /// True when a host-policy row names the path (a wire row or the base-prefix row). Every
+    /// exchange is recorded, but only one under the base path can be a model call on a POST.
+    named_by_row: bool,
     request_content_type: Option<String>,
     /// True while the request's stream is open or ended normally; false if it never opened
     /// or its capture was lost. A response is captured only behind a captured request.
@@ -300,10 +303,13 @@ async fn relay_requests(
         match &capture {
             Some(capture) => {
                 shared.emitter.record_recorded_request();
-                // A model call is a request on a hinted path, or a POST on any other recorded path
-                // (a provider's own generate route under the base path); a GET there is a model
-                // list or a probe.
-                if capture.meta.protocol_hint.is_some() || capture.meta.method == "POST" {
+                // A model call is a request on a hinted path, or a POST on a path under the base
+                // path with no hint (a provider's own generate route, such as
+                // `:streamGenerateContent`). A GET there is a model list or a probe, and a POST
+                // outside every row (a token refresh, say) is recorded but is no call.
+                if capture.meta.protocol_hint.is_some()
+                    || (capture.named_by_row && capture.meta.method == "POST")
+                {
                     shared.emitter.record_generation_request();
                 }
             }
@@ -409,8 +415,8 @@ fn select(
     exchange: u64,
 ) -> Option<ExchangeCapture> {
     let target = target.filter(|_| metadata::is_method(&request.method))?;
-    let protocol_hint =
-        metadata::select(shared.policy, &target.path).and_then(|row| row.protocol_hint.clone());
+    let row = metadata::select(shared.policy, &target.path);
+    let protocol_hint = row.and_then(|row| row.protocol_hint.clone());
     Some(ExchangeCapture {
         meta: ExchangeMeta {
             connection: shared.connection.to_string(),
@@ -420,6 +426,7 @@ fn select(
             path: target.path.clone(),
             protocol_hint,
         },
+        named_by_row: row.is_some(),
         request_content_type: request.fields.content_type.clone(),
         request_ok: Arc::new(AtomicBool::new(false)),
     })

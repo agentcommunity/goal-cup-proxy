@@ -359,10 +359,11 @@ impl CaptureEmitter {
 
     /// Requests the recording proxy selected that are model calls: each on a path that carries a
     /// protocol hint (`/chat/completions`, `/messages`, `/responses`, a provider's reviewed
-    /// paths), and each POST on a recorded path without one (a provider's own generate route,
-    /// such as `:streamGenerateContent`). A GET under a model host's base path (a model list, a
-    /// health probe) is recorded ([`CaptureEmitter::recorded_requests`]) but is not counted
-    /// here, so this is what "the agent made a model call" means.
+    /// paths), and each POST under a model host's base path without one (a provider's own
+    /// generate route, such as `:streamGenerateContent`). A GET under the base path (a model
+    /// list, a health probe), and a POST outside every row (a token refresh), are recorded
+    /// ([`CaptureEmitter::recorded_requests`]) but are not counted here, so this is what "the
+    /// agent made a model call" means.
     pub fn generation_requests(&self) -> u64 {
         self.generation_requests.load(Ordering::SeqCst)
     }

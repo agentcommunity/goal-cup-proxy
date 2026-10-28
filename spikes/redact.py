@@ -44,10 +44,11 @@ offset for offset; compare the redacted output, or the kinds.
 import hashlib, json, re, sys
 
 # The JSON form of generic_secret_assignment, the daemon's spelling: a quoted key whose `_`/`-`
-# segment is the key word, then a quoted value of sixteen or more characters with no quote and no
-# backslash. Each quote may follow up to seven backslashes (a secret inside an escaped string).
+# segment is the key word, or a camelCase prefix before it, then a quoted value of sixteen or more
+# units with no quote, and a backslash only as an escape of one non-quote unit (`\/`). Each quote
+# may follow up to seven backslashes (a secret inside an escaped string).
 # Only the value, group 1, is replaced (SPAN_GROUP below): the key, the colon and the quotes stay.
-GENERIC_JSON = re.compile(r'(?i)\\{0,7}"(?:[A-Za-z0-9_\-]{0,999}[_\-])?(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"([^"\\]{16,})\\{0,7}"')
+GENERIC_JSON = re.compile(r'(?i)\\{0,7}"[A-Za-z0-9_\-]{0,1000}(?:api[_-]?key|secret|token|password)(?:[_\-][A-Za-z0-9_\-]{0,999})?\\{0,7}"\s*:\s*\\{0,7}"((?:[^"\\]|\\{1,7}[^"\\]){16,})\\{0,7}"')
 
 PATTERNS = [
     ("anthropic_key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
@@ -61,7 +62,7 @@ PATTERNS = [
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}")),
     # The JSON form first, then the shell/TOML form, as the daemon lists them.
     ("generic_secret_assignment", GENERIC_JSON),
-    ("generic_secret_assignment", re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})")),
+    ("generic_secret_assignment", re.compile(r"(?i)(api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['\"])?([A-Za-z0-9_\-]{16,})|=((?:%[0-9A-Fa-f]{2}|[A-Za-z0-9_.~+/=\-]){16,}))")),
     ("email", re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")),
     # The tracer's own proxy credential (H8), as the daemon spells it: the userinfo of the
     # capture launch's HTTPS_PROXY=http://goalcup:<32 hex>@127.0.0.1:<port>, the same
