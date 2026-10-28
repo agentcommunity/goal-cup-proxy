@@ -306,6 +306,18 @@ fn tunnel_list(path: &Path, entry_id: &str) -> Result<String, String> {
     file.take(MAX_TUNNELS_BYTES + 1)
         .read_to_string(&mut text)
         .map_err(|e| format!("it is not readable text ({e})"))?;
+    list_text(text, entry_id)
+}
+
+/// The list's text once read. The bound is checked on what was read as well as on the size taken
+/// before the read, since the file may have grown in between.
+fn list_text(text: String, entry_id: &str) -> Result<String, String> {
+    if text.len() as u64 > MAX_TUNNELS_BYTES {
+        return Err(format!(
+            "it is over {} MiB",
+            MAX_TUNNELS_BYTES / (1024 * 1024)
+        ));
+    }
     if text.is_empty() {
         return Err("it is empty".into());
     }
@@ -409,6 +421,35 @@ mod tests {
         };
         let sent = seal_request(&record, "{\"seal\":1}".into(), "{\"baseline\":1}".into());
         assert_eq!(sent.tunnels_jsonl, None);
+    }
+
+    /// A list named for another entry is not this entry's to send, even when its first line names
+    /// this one: the name is checked before the file is opened.
+    #[test]
+    fn a_list_under_another_entrys_name_is_not_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let list = dir.path().join("tunnels-e2.jsonl");
+        std::fs::write(
+            &list,
+            "{\"format\":\"goalcup-tunnels-v1\",\"entry_id\":\"e1\"}\n",
+        )
+        .unwrap();
+        let record = crate::upload::UploadRecord {
+            tunnels_file: Some(list.display().to_string()),
+            ..super::super::record_in(dir.path())
+        };
+        let sent = seal_request(&record, "{\"seal\":1}".into(), "{\"baseline\":1}".into());
+        assert_eq!(sent.tunnels_jsonl, None);
+    }
+
+    /// The bound holds for what was read, not only for the size taken before the read: a list
+    /// that grew past it in between is not sent, and one within it is.
+    #[test]
+    fn a_list_read_over_the_bound_is_not_sent() {
+        let header = "{\"format\":\"goalcup-tunnels-v1\",\"entry_id\":\"e1\"}\n";
+        let grown = format!("{header}{}", "x".repeat(MAX_TUNNELS_BYTES as usize));
+        assert!(list_text(grown, "e1").is_err());
+        assert_eq!(list_text(header.to_string(), "e1").as_deref(), Ok(header));
     }
 
     /// A symbolic link is not followed: the seal never sends what it points at.
