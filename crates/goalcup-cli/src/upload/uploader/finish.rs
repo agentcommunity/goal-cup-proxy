@@ -231,26 +231,17 @@ impl Uploader {
 }
 
 /// The seal's body: the two documents, and the sealed-connection list when the finish wrote one
-/// (D74). A list that is missing, empty, unreadable or over [`MAX_TUNNELS_BYTES`] is left out
-/// (one over the bound with a line in `host.log`): the seal never waits on it.
+/// (D74). A list that is missing, empty, unreadable, over [`MAX_TUNNELS_BYTES`] or not this
+/// entry's is left out, with one line in `host.log` saying why. The seal never waits on it.
 fn seal_request(
     record: &crate::upload::UploadRecord,
     seal_json: String,
     baseline_json: String,
 ) -> SealRequest {
-    let tunnels_jsonl = record.tunnels_file.as_deref().and_then(|file| {
-        let path = Path::new(file);
-        let list = read_document(path, MAX_TUNNELS_BYTES);
-        if list.is_none()
-            && std::fs::metadata(path).is_ok_and(|meta| meta.len() > MAX_TUNNELS_BYTES)
-        {
-            crate::host_log::log_only(&format!(
-                "the sealed-connection list {file} is over {} MiB and is not sent",
-                MAX_TUNNELS_BYTES / (1024 * 1024)
-            ));
-        }
-        list
-    });
+    let tunnels_jsonl = record
+        .tunnels_file
+        .as_deref()
+        .and_then(|file| read_tunnels(Path::new(file), &record.entry_id));
     SealRequest {
         entry_id: record.entry_id.clone(),
         seal_json,
@@ -271,6 +262,94 @@ fn read_document(path: &Path, max: u64) -> Option<String> {
     let mut text = String::new();
     file.take(max + 1).read_to_string(&mut text).ok()?;
     (!text.is_empty() && text.len() as u64 <= max).then_some(text)
+}
+
+/// The entry's sealed-connection list for the seal, or `None` with one `host.log` line saying why.
+/// Sent only when [`tunnel_list`] accepts it.
+fn read_tunnels(path: &Path, entry_id: &str) -> Option<String> {
+    match tunnel_list(path, entry_id) {
+        Ok(text) => Some(text),
+        Err(why) => {
+            crate::host_log::log_only(&format!(
+                "the sealed-connection list {} is not sent: {why}",
+                path.display()
+            ));
+            None
+        }
+    }
+}
+
+/// The list's text if it is this entry's own: a regular file named `tunnels-<entry_id>.jsonl`
+/// (never a symbolic link, the file is opened without following one), at most
+/// [`MAX_TUNNELS_BYTES`], whose first line is a JSON object with the list's format and this
+/// entry's id. The keys are compared, not the bytes: the writer's key order is not part of the
+/// format.
+fn tunnel_list(path: &Path, entry_id: &str) -> Result<String, String> {
+    let name = crate::proxy::tunnels::file_name(entry_id);
+    if path.file_name().and_then(|n| n.to_str()) != Some(name.as_str()) {
+        return Err("it is not the list for this entry".into());
+    }
+    let file = open_without_following(path).map_err(|e| format!("it cannot be opened ({e})"))?;
+    let meta = file
+        .metadata()
+        .map_err(|e| format!("it cannot be read ({e})"))?;
+    if !meta.is_file() {
+        return Err("it is not a regular file".into());
+    }
+    if meta.len() > MAX_TUNNELS_BYTES {
+        return Err(format!(
+            "it is over {} MiB",
+            MAX_TUNNELS_BYTES / (1024 * 1024)
+        ));
+    }
+    let mut text = String::new();
+    file.take(MAX_TUNNELS_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(|e| format!("it is not readable text ({e})"))?;
+    list_text(text, entry_id)
+}
+
+/// The list's text once read. The bound is checked on what was read as well as on the size taken
+/// before the read, since the file may have grown in between.
+fn list_text(text: String, entry_id: &str) -> Result<String, String> {
+    if text.len() as u64 > MAX_TUNNELS_BYTES {
+        return Err(format!(
+            "it is over {} MiB",
+            MAX_TUNNELS_BYTES / (1024 * 1024)
+        ));
+    }
+    if text.is_empty() {
+        return Err("it is empty".into());
+    }
+    let first = text.lines().next().unwrap_or_default();
+    let head: serde_json::Value =
+        serde_json::from_str(first).map_err(|_| "its first line is not JSON".to_string())?;
+    let format_ok =
+        head.get("format").and_then(|v| v.as_str()) == Some(crate::proxy::tunnels::TUNNELS_FORMAT);
+    let entry_ok = head.get("entry_id").and_then(|v| v.as_str()) == Some(entry_id);
+    if !(format_ok && entry_ok) {
+        return Err("its first line is not the format line for this entry".into());
+    }
+    Ok(text)
+}
+
+/// Opens `path` for reading without following a symbolic link at its last component. Opening
+/// with `O_NONBLOCK` means a named pipe is refused by [`tunnel_list`] instead of waiting.
+#[cfg(unix)]
+fn open_without_following(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_without_following(path: &Path) -> std::io::Result<std::fs::File> {
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(std::io::Error::other("it is a symbolic link"));
+    }
+    std::fs::File::open(path)
 }
 
 #[cfg(test)]
@@ -307,5 +386,90 @@ mod tests {
         old.as_object_mut().unwrap().remove("tunnels_file");
         let old: crate::upload::UploadRecord = serde_json::from_value(old).unwrap();
         assert_eq!(old.tunnels_file, None);
+    }
+
+    /// The writer's own list goes with the seal, whatever order its keys come out in.
+    #[test]
+    fn the_writers_own_list_is_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let list = dir.path().join(crate::proxy::tunnels::file_name("e1"));
+        crate::proxy::tunnels::write(&list, "e1", &[], 0).unwrap();
+        let record = crate::upload::UploadRecord {
+            tunnels_file: Some(list.display().to_string()),
+            ..super::super::record_in(dir.path())
+        };
+        let sent = seal_request(&record, "{\"seal\":1}".into(), "{\"baseline\":1}".into());
+        assert_eq!(
+            sent.tunnels_jsonl.as_deref(),
+            Some(std::fs::read_to_string(&list).unwrap().as_str())
+        );
+    }
+
+    /// A list whose first line names another entry is not this entry's to send.
+    #[test]
+    fn a_list_for_another_entry_is_not_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let list = dir.path().join("tunnels-e1.jsonl");
+        std::fs::write(
+            &list,
+            "{\"format\":\"goalcup-tunnels-v1\",\"entry_id\":\"e2\"}\n",
+        )
+        .unwrap();
+        let record = crate::upload::UploadRecord {
+            tunnels_file: Some(list.display().to_string()),
+            ..super::super::record_in(dir.path())
+        };
+        let sent = seal_request(&record, "{\"seal\":1}".into(), "{\"baseline\":1}".into());
+        assert_eq!(sent.tunnels_jsonl, None);
+    }
+
+    /// A list named for another entry is not this entry's to send, even when its first line names
+    /// this one: the name is checked before the file is opened.
+    #[test]
+    fn a_list_under_another_entrys_name_is_not_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let list = dir.path().join("tunnels-e2.jsonl");
+        std::fs::write(
+            &list,
+            "{\"format\":\"goalcup-tunnels-v1\",\"entry_id\":\"e1\"}\n",
+        )
+        .unwrap();
+        let record = crate::upload::UploadRecord {
+            tunnels_file: Some(list.display().to_string()),
+            ..super::super::record_in(dir.path())
+        };
+        let sent = seal_request(&record, "{\"seal\":1}".into(), "{\"baseline\":1}".into());
+        assert_eq!(sent.tunnels_jsonl, None);
+    }
+
+    /// The bound holds for what was read, not only for the size taken before the read: a list
+    /// that grew past it in between is not sent, and one within it is.
+    #[test]
+    fn a_list_read_over_the_bound_is_not_sent() {
+        let header = "{\"format\":\"goalcup-tunnels-v1\",\"entry_id\":\"e1\"}\n";
+        let grown = format!("{header}{}", "x".repeat(MAX_TUNNELS_BYTES as usize));
+        assert!(list_text(grown, "e1").is_err());
+        assert_eq!(list_text(header.to_string(), "e1").as_deref(), Ok(header));
+    }
+
+    /// A symbolic link is not followed: the seal never sends what it points at.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_tunnel_list_is_not_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("elsewhere.txt");
+        std::fs::write(
+            &secret,
+            "{\"format\":\"goalcup-tunnels-v1\",\"entry_id\":\"e1\"}\nSECRET-BYTES\n",
+        )
+        .unwrap();
+        let list = dir.path().join("tunnels-e1.jsonl");
+        std::os::unix::fs::symlink(&secret, &list).unwrap();
+        let record = crate::upload::UploadRecord {
+            tunnels_file: Some(list.display().to_string()),
+            ..super::super::record_in(dir.path())
+        };
+        let sent = seal_request(&record, "{\"seal\":1}".into(), "{\"baseline\":1}".into());
+        assert_eq!(sent.tunnels_jsonl, None);
     }
 }
