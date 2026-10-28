@@ -15,7 +15,7 @@ use crate::common::m2_vertical_support;
 use crate::common::real_home_guard::{self, home_listing, with_real_home_guard};
 use crate::common::support;
 
-use goalcup_protocol::capture::{CaptureRecord, CaptureSource};
+use goalcup_protocol::capture::{CaptureRecord, CaptureSource, is_artifact_hint};
 use goalcup_protocol::harness::{IdentitySource, NativeForm, Origin};
 use goalcup_verifier::capture_analysis::api::{Disposition, Observation};
 use goalcup_verifier::capture_analysis::registry::DecoderRegistry;
@@ -409,7 +409,14 @@ fn assert_completed(run: &Completed) {
     let requests: Vec<_> = streams
         .values()
         .filter(|stream| {
+            // Header streams (http-head-v1) share the exchange's host and path; the body
+            // stream is the request this check means.
             stream.source == CaptureSource::WireRequest
+                && !stream
+                    .meta
+                    .protocol_hint
+                    .as_deref()
+                    .is_some_and(is_artifact_hint)
                 && stream.meta.host.as_deref() == Some(&expect.wire_host)
                 && stream.meta.path.as_deref() == Some(&expect.wire_path)
         })
@@ -424,6 +431,11 @@ fn assert_completed(run: &Completed) {
         .values()
         .filter(|stream| {
             stream.source == CaptureSource::WireResponse
+                && !stream
+                    .meta
+                    .protocol_hint
+                    .as_deref()
+                    .is_some_and(is_artifact_hint)
                 && stream.meta.host.as_deref() == Some(&expect.wire_host)
                 && stream.meta.path.as_deref() == Some(&expect.wire_path)
         })
