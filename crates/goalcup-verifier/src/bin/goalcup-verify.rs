@@ -178,12 +178,15 @@ fn research_json(trace: &Path, output: &Path, args: Args) -> std::process::ExitC
     match goalcup_verifier::write_research_report(trace, &options, &mut writer) {
         Ok(result) => {
             eprintln!(
-                "goalcup-verify: research report -> {}: capture {}, analysis {}, exit {}",
+                "goalcup-verify: research report -> {}: capture {}, analysis {}, evidence {}, exit {}",
                 output.display(),
                 result.summary["capture"]["integrity"]
                     .as_str()
                     .unwrap_or("unknown"),
                 result.summary["analysis"]["state"]
+                    .as_str()
+                    .unwrap_or("unknown"),
+                result.summary["analysis"]["evidence"]
                     .as_str()
                     .unwrap_or("unknown"),
                 result.exit_code
