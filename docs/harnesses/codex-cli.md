@@ -147,6 +147,7 @@ Compressed rollouts: vendor docs say a background job compresses rollouts older 
 ## 6. Network
 
 - **Model host.** `chatgpt.com`, path `/backend-api/codex/responses`, OpenAI Responses format (code: connector `[[capture.hosts]]`; measured on the 2026-09-28 wire capture). The transport was one WebSocket (`GET` upgrade, 101, permessage-deflate); each client message was a `response.create`. An HTTPS fallback was seen reconnecting in a failed run; a captured HTTP POST plus SSE exchange is not available (measured; Goal Cup fixtures list it as unobserved).
+- **Model host with an API key.** `api.openai.com`, path `/v1/responses`, OpenAI Responses format (code: the connector's second `[[capture.hosts]]` row). It is used only when Codex runs on an API key; see section 5. Measured with a key: not yet.
 - **Auth host.** `auth.openai.com` (code: `auth_hosts`).
 - **Other hosts seen as errors.** A model-list request and MCP / apps requests failed in one run; their hosts: unknown. `codex_apps` MCP server, remote plugin catalog and account plugins are fetched at start (measured as cache files); hosts: unknown.
 - **Telemetry.** OTel export is opt-in: `[otel] exporter` defaults to none (vendor docs). Other telemetry hosts: unknown.

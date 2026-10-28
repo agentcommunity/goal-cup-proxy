@@ -363,22 +363,12 @@ mod tests {
         );
     }
 
-    /// The hosts the Codex connector ships, read from its own manifest, so the test checks the
-    /// rule a run gets.
-    #[derive(serde::Deserialize)]
-    struct ShippedCapture {
-        capture: ShippedHosts,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct ShippedHosts {
-        hosts: Vec<HostSpec>,
-    }
-
+    /// The hosts the Codex connector ships, read through the same loader a run uses, so the test
+    /// checks the rule a run gets.
     fn shipped_codex_hosts() -> Vec<HostSpec> {
-        let manifest = include_str!("../../../../../connectors/codex-cli/harness.toml");
-        let shipped: ShippedCapture = toml::from_str(manifest).unwrap();
-        shipped.capture.hosts
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../connectors");
+        let codex = crate::connector::load_harness(&dir, "codex-cli", false).unwrap();
+        codex.loaded.manifest.capture.hosts.clone()
     }
 
     /// The protocol hint the approved rule for `host` gives `path`, or `None` when no row names it.
