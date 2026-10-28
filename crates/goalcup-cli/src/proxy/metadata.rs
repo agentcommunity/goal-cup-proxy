@@ -23,6 +23,7 @@
 //! a builder here, so none can reach a frame through this module.
 
 use crate::proxy::api::{CapturePath, CapturePolicy};
+use crate::proxy::headers::HEADERS_HINT;
 use goalcup_protocol::capture::{
     CaptureMeta, CaptureTime, MAX_METADATA_STRING_BYTES, WireIdentity,
 };
@@ -201,6 +202,11 @@ impl ExchangeMeta {
         method: &str,
         named_by_row: bool,
     ) -> bool {
+        // A header stream is an artifact of the exchange, not a request: it is excluded before
+        // any other clause, so no method or row can make it a call.
+        if protocol_hint == Some(HEADERS_HINT) {
+            return false;
+        }
         protocol_hint.is_some() || (named_by_row && method == "POST")
     }
 
@@ -366,6 +372,27 @@ mod tests {
         assert!(select(&policy, "/v1/responses/x").is_some_and(|p| p.prefix));
         assert!(select(&policy, "/v2/responses").is_none());
         assert!(select(&CapturePolicy::default(), "/v1/responses").is_none());
+    }
+
+    #[test]
+    fn header_streams_are_never_model_calls() {
+        // The artifact hint is checked first, so no method or row can make a header stream a call.
+        for (method, named) in [
+            ("POST", true),
+            ("POST", false),
+            ("GET", true),
+            ("GET", false),
+        ] {
+            assert!(
+                !ExchangeMeta::counts_as_model_call(Some(HEADERS_HINT), method, named),
+                "{method} named={named}"
+            );
+        }
+        assert!(ExchangeMeta::counts_as_model_call(
+            Some("openai-chat-completions"),
+            "POST",
+            true
+        ));
     }
 
     #[test]

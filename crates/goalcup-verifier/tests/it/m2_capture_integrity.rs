@@ -20,8 +20,8 @@ use ed25519_dalek::{Signer, SigningKey};
 use goalcup_protocol::ack::AckCheckpoint;
 use goalcup_protocol::capture::{
     CaptureMeta, CaptureRecord, CaptureSource, CaptureTime, ConnectionEvent, ConnectionOutcome,
-    EndReason, GapReason, M2_PROTOCOL_VERSION, MAX_ENVELOPE_BYTES, MAX_OPEN_CONNECTIONS,
-    MAX_OPEN_STREAMS, MAX_PRODUCERS, StreamKey, WireIdentity,
+    EndReason, GapReason, HTTP_HEAD_HINT, M2_PROTOCOL_VERSION, MAX_ENVELOPE_BYTES,
+    MAX_OPEN_CONNECTIONS, MAX_OPEN_STREAMS, MAX_PRODUCERS, StreamKey, WireIdentity,
 };
 use goalcup_protocol::capture_status::AnchorState;
 use goalcup_protocol::chain::Link;
@@ -3621,4 +3621,117 @@ fn a_signed_receipts_profile_claims_must_agree_with_launch() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+// ---------------------------------------------------------------------------------------
+// Header streams (`http-head-v1`) read by a reader that predates them.
+// ---------------------------------------------------------------------------------------
+
+/// One HTTP wire stream of the connection `conn_open` opened. Header streams carry no method.
+fn wire_stream(
+    source: CaptureSource,
+    stream: u64,
+    exchange: u64,
+    hint: &str,
+    method: Option<&str>,
+) -> CaptureRecord {
+    CaptureRecord::Open {
+        stream: key(WIRE, stream),
+        observed: at(WIRE, 10),
+        source,
+        metadata: CaptureMeta {
+            wire: Some(WireIdentity {
+                connection: CONN.to_string(),
+                exchange,
+                message_index: None,
+            }),
+            label: "POST /v1/responses".to_string(),
+            protocol_hint: Some(hint.to_string()),
+            method: method.map(str::to_string),
+            host: Some("api.example.test".to_string()),
+            path: Some("/v1/responses".to_string()),
+            status: (source == CaptureSource::WireResponse).then_some(200),
+            content_type: None,
+        },
+    }
+}
+
+/// An exchange with a masked request head and body, and a masked response head and body, on one
+/// connection. Frame sequence: connection open 0, four streams of open, bytes, end (1 to 12),
+/// connection close 13.
+fn header_stream_records() -> Vec<CaptureRecord> {
+    let head_request = b"POST /v1/responses HTTP/1.1\r\nAuthorization: [masked]\r\n\r\n";
+    let head_response = b"HTTP/1.1 200 OK\r\nSet-Cookie: [masked]\r\n\r\n";
+    let mut records = vec![conn_open(WIRE, false)];
+    records.push(wire_stream(
+        CaptureSource::WireRequest,
+        1,
+        1,
+        HTTP_HEAD_HINT,
+        None,
+    ));
+    records.push(segment(WIRE, 1, 0, 0, head_request));
+    records.push(end(WIRE, 1));
+    records.push(wire_stream(
+        CaptureSource::WireRequest,
+        2,
+        1,
+        "openai-responses",
+        Some("POST"),
+    ));
+    records.push(segment(WIRE, 2, 0, 0, REQUEST_BODY));
+    records.push(end(WIRE, 2));
+    records.push(wire_stream(
+        CaptureSource::WireResponse,
+        3,
+        1,
+        HTTP_HEAD_HINT,
+        None,
+    ));
+    records.push(segment(WIRE, 3, 0, 0, head_response));
+    records.push(end(WIRE, 3));
+    records.push(wire_stream(
+        CaptureSource::WireResponse,
+        4,
+        1,
+        "openai-responses",
+        None,
+    ));
+    records.push(segment(WIRE, 4, 0, 0, b"{\"id\":\"r\"}"));
+    records.push(end(WIRE, 4));
+    records.push(conn_close(WIRE));
+    records.push(closed(WIRE, Some(13)));
+    records
+}
+
+/// Header streams are ordinary v5 wire streams: a reader that knows nothing of the hint reads the
+/// trace as valid, and names the header streams as capture-only (no decoder accepts the hint).
+#[test]
+fn an_old_verifier_reads_a_trace_with_header_streams_as_valid() {
+    let dir = make_trace(&launched(header_stream_records()), true);
+    let (report, seen) = scan(dir.path());
+    assert_eq!(report.integrity, CaptureIntegrity::Valid, "{report:#?}");
+    assert_eq!(report.exit_code(), 0, "{report:#?}");
+
+    let (outcome, _) = decode_records(
+        seen.iter().cloned().map(Ok),
+        &DecoderRegistry::builtin(),
+        |_, _| Ok(Disposition::Kept),
+    )
+    .unwrap();
+    let heads: Vec<_> = outcome
+        .undecoded
+        .iter()
+        .filter(|u| u.protocol_hint.as_deref() == Some(HTTP_HEAD_HINT))
+        .map(|u| (u.source, u.streams))
+        .collect();
+    assert_eq!(
+        heads,
+        [
+            (CaptureSource::WireRequest, 1),
+            (CaptureSource::WireResponse, 1)
+        ],
+        "{:?}",
+        outcome.undecoded
+    );
 }
