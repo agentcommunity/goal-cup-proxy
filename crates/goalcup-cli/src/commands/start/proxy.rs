@@ -70,6 +70,9 @@ pub(super) struct Proxied {
     pub(super) sink: Arc<IngestSink>,
     /// `http://goalcup:<credential>@127.0.0.1:<port>`, handed to the harness and nowhere else.
     pub(super) proxy_url: String,
+    /// Where the finish writes the entry's sealed-connection list: `tunnels-<entry_id>.jsonl` in
+    /// the run's directory (D74).
+    pub(super) tunnels_file: std::path::PathBuf,
     pub(super) runtime: tokio::runtime::Runtime,
 }
 
@@ -81,6 +84,7 @@ impl Proxied {
         run: &RunDir,
         roots: UpstreamRoots,
         credential: ProxyCredential,
+        tunnels_file: std::path::PathBuf,
     ) -> Result<Proxied, CliError> {
         let refused = |what: &str, e: &dyn std::fmt::Display| {
             CliError::Refused(format!(
@@ -135,6 +139,7 @@ impl Proxied {
             proxy,
             sink,
             proxy_url,
+            tunnels_file,
             runtime,
         })
     }

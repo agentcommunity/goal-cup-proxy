@@ -1156,7 +1156,8 @@ async fn a_client_hello_without_a_server_name_counts_as_fail_open_no_sni() {
 
 /// Tunnels that are opaque by design (an authentication host, a host that is not approved),
 /// still held open at stop by a process that outlived the harness, were decided when their
-/// ClientHello arrived: cutting them is not a loss, and nothing is chained.
+/// ClientHello arrived: cutting them is not a loss, and nothing is chained. Each is still noted in
+/// the sealed-connection list, with its bytes unknown.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_open_tunnel_opaque_by_design_cut_at_stop_is_not_a_loss() {
     let pki = TestPki::new("upstream test CA");
@@ -1180,6 +1181,21 @@ async fn an_open_tunnel_opaque_by_design_cut_at_stop_is_not_a_loss() {
     assert_eq!(report.health.cut_unsettled, 0, "{report:?}");
     assert_eq!(report.producer_close, ProducerClose::Queued);
     assert!(!report.capture_loss(), "{report:?}");
+    // Both are still in the sealed-connection list, cut: how many bytes passed is not known.
+    let mut cut: Vec<_> = report
+        .health
+        .tunnels
+        .iter()
+        .map(|note| (note.host.as_str(), note.port, note.reason, note.up_bytes))
+        .collect();
+    cut.sort();
+    assert_eq!(
+        cut,
+        [
+            ("127.0.0.1", port, "not_model_host", None),
+            ("localhost", port, "sign_in", None)
+        ]
+    );
     let _ = read_to_end(&mut auth).await;
     let _ = read_to_end(&mut auth_up).await;
     let _ = read_to_end(&mut other).await;
