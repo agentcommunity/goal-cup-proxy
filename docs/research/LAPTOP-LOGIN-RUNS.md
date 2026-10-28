@@ -22,17 +22,14 @@ export PATH="$PWD/target/release:$PATH" && goalcup --version
 ```
 
 `<home>` below is `~/Library/Application Support/goalcup` on macOS and `~/.config/goalcup` on
-Linux. Traces are kept in `<home>-artifacts`.
+Linux.
 
 ```bash
 goalcup login
 ```
 
-After each run, find the newest trace and read its label (the same three lines every time):
-
-```bash
-TRACE=$(dirname "$(find "<home>-artifacts" -name chain.jsonl -print0 | xargs -0 ls -t | head -n 1)")
-```
+After each run, set `TRACE` to the path on the finish output's `trace:` line (it is under
+`<home>-artifacts/artifacts/<entry id>/trace`), then read its label:
 
 ```bash
 goalcup-verify --capture-integrity "$TRACE"
@@ -42,8 +39,8 @@ goalcup-verify --capture-integrity "$TRACE"
 goalcup-verify --research-json "$TRACE" --output /tmp/report.ndjson && tail -n 1 /tmp/report.ndjson | jq '{evidence: .analysis.evidence, cross_leg: .analysis.cross_leg}'
 ```
 
-The finish output ends with a `sealed hosts:` line, and `<home>/runs/<run id>/tunnels-<entry>.jsonl`
-holds the full list.
+The finish output also has a `sealed hosts:` line; the full list is the `tunnels-<entry id>.jsonl`
+file under `<home>/runs/`.
 
 ## 1. Claude Code with a Claude subscription, no gateway
 
