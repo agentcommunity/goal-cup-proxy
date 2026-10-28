@@ -23,12 +23,12 @@ on Tenki come later, after the build is clear and good.
 |---|---|---|
 | 1 | Record every request on an opened host | not started |
 | 2 | Clean model address; never Goal Cup's own host | not started |
-| 3 | Upload reads only its own tunnel list | not started |
+| 3 | Upload reads only its own tunnel list | branch pushed; review fixes in db9e352; final checks running |
 | 4 | Probe only what the run needs | not started |
 | 5 | Up to 8 session-file rows; Claude subagents captured | not started |
 | 6 | Copy a harness database once, after exit | not started |
 | 7 | Header stream per exchange, credentials masked | not started |
-| 8 | Evidence label counts model requests only | not started |
+| 8 | Evidence label counts model requests only | PR #289 open: sandbox gate PASS, live Claude PASS (same as BEFORE) |
 | 9 | Codex records an API-key login | not started |
 | 10 | Proxy restarts itself on the same port | not started |
 | 11 | Participant sees "recording works" and the right file | not started |
@@ -45,3 +45,5 @@ on Tenki come later, after the build is clear and good.
 - 28 Oct: crates.io reachable; local Rust 1.99.0 builds; `origin/main` is b6b220b.
 - Model names are not yet confirmed. Web search found no official "GPT-6.1 Luma" id, and the repo
   uses gpt-5.6-luna. The live check settles it with a real call and the name that worked is recorded.
+- 28 Oct: Live kit proven on main for claude-code-cli, codex-cli (gpt-5.6-luna, since gpt-6.1-luma returned 404) and hermes-cli (deepseek-flash). Sandbox gate on main PASS in 306s.
+- 28 Oct: Task 8 review: one medium finding (a test that would not catch a revert) fixed; one low finding fixed (WebSocket client messages). Owner calls: schema version bump, and the Hermes and Amp wording.
