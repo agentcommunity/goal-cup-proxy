@@ -528,6 +528,70 @@ mod tests {
             "wire_undecoded"
         );
     }
+
+    #[test]
+    fn a_lone_get_beside_native_work_labels_native_only_through_the_report() {
+        // The label is read on the whole report path, not only by `evidence`. A lone GET (no
+        // hint, not a POST) is a wire stream that no decoder reads and not a model request, so
+        // the session file's model work is the evidence. Reverting the label to `wire_streams`
+        // turns this run into `wire_undecoded`.
+        const WIRE: &str = "b1b2b3b4b5b6b7b8b9babbbcbdbebf00";
+        let stream = StreamKey {
+            producer: WIRE.to_string(),
+            stream: 1,
+        };
+        let lone_get = vec![
+            CaptureRecord::Connection {
+                producer: WIRE.to_string(),
+                connection: "c0ffee00c0ffee00c0ffee00c0ffee00".to_string(),
+                observed: time(WIRE, 1),
+                event: goalcup_protocol::capture::ConnectionEvent::Open {
+                    alpn: None,
+                    already_open: false,
+                },
+            },
+            CaptureRecord::Open {
+                stream: stream.clone(),
+                observed: time(WIRE, 2),
+                source: CaptureSource::WireRequest,
+                metadata: CaptureMeta {
+                    wire: Some(goalcup_protocol::capture::WireIdentity {
+                        connection: "c0ffee00c0ffee00c0ffee00c0ffee00".to_string(),
+                        exchange: 1,
+                        message_index: None,
+                    }),
+                    label: "unit".to_string(),
+                    protocol_hint: None,
+                    method: Some("GET".to_string()),
+                    host: None,
+                    path: None,
+                    status: None,
+                    content_type: None,
+                },
+            },
+            CaptureRecord::End {
+                stream,
+                observed: time(WIRE, 3),
+                reason: EndReason::Complete,
+            },
+            CaptureRecord::ProducerClosed {
+                producer: WIRE.to_string(),
+                observed: time("daemon", 4),
+                final_seq: Some(2),
+            },
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        write_trace_with(dir.path(), lone_get);
+        let mut out = Vec::new();
+        let result =
+            write_research_report(dir.path(), &VerifyOptions::default(), &mut out).unwrap();
+        let cross_leg = &result.summary["analysis"]["cross_leg"];
+        assert!(cross_leg["native_model_activity"].as_u64().unwrap() > 0);
+        assert_eq!(cross_leg["wire_streams"], json!(1));
+        assert_eq!(cross_leg["wire_model_request_streams"], json!(0));
+        assert_eq!(result.summary["analysis"]["evidence"], json!("native_only"));
+    }
+
     use crate::capture_analysis::api::{
         DecoderFailure, DecoderSummary, DecoderV1, ObservationTimeRange, SourceRef, StreamOpen,
     };
@@ -558,6 +622,11 @@ mod tests {
     /// A sealed local v5 trace: a goal stream, its Launch and one Codex rollout stream of
     /// one record, each stream in one segment.
     fn write_trace(root: &Path) {
+        write_trace_with(root, Vec::new());
+    }
+
+    /// [`write_trace`] with `extra` records after the rollout stream and before the Launch.
+    fn write_trace_with(root: &Path, extra: Vec<CaptureRecord>) {
         let manifest = SealManifest {
             entry_id: "entry-report-unit".to_string(),
             sealed_at: "2026-09-29T12:00:00Z".to_string(),
@@ -624,6 +693,7 @@ mod tests {
                 final_seq: Some(2),
             });
         }
+        records.extend(extra);
         records.push(CaptureRecord::Launch {
             observed: time("daemon", 6),
             goal_stream: StreamKey {

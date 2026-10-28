@@ -172,15 +172,21 @@ impl Operations {
 const NOT_MODEL_HINTS: [&str; 2] = ["http-head-v1", "goalcup-tunnels-v1"];
 
 /// Whether a wire open is a model request by the proxy's own rule: a request stream on a hinted
-/// path, or a POST on any other path. The artifact hints are excluded before the POST clause, so
-/// a header or tunnel stream never counts, whatever method its metadata carries.
+/// path, or a POST on any other path, or a message the harness sent on a WebSocket opened on a
+/// hinted path (the proxy counts each of those as a generation request). The artifact hints are
+/// excluded before the POST clause, so a header or tunnel stream never counts, whatever method
+/// its metadata carries. Server messages never count.
 fn is_model_request(source: CaptureSource, metadata: &CaptureMeta) -> bool {
-    if source != CaptureSource::WireRequest {
-        return false;
-    }
-    match metadata.protocol_hint.as_deref() {
-        Some(hint) => !NOT_MODEL_HINTS.contains(&hint),
-        None => metadata.method.as_deref() == Some("POST"),
+    match source {
+        CaptureSource::WireRequest => match metadata.protocol_hint.as_deref() {
+            Some(hint) => !NOT_MODEL_HINTS.contains(&hint),
+            None => metadata.method.as_deref() == Some("POST"),
+        },
+        CaptureSource::WsClient => metadata
+            .protocol_hint
+            .as_deref()
+            .is_some_and(|hint| !NOT_MODEL_HINTS.contains(&hint)),
+        _ => false,
     }
 }
 
@@ -326,17 +332,34 @@ mod tests {
                 Some("openai-chat-completions"),
                 None,
             ),
-            open(
-                CaptureSource::WsClient,
-                Some("openai-realtime"),
-                Some("GET"),
-            ),
             open(CaptureSource::Native, Some("codex-rollout"), None),
+            // Counted: a client message on a WebSocket opened on a hinted path, even when its
+            // handshake was not recorded (the proxy counts each such message as a generation
+            // request).
+            open(CaptureSource::WsClient, Some("openai-realtime"), None),
+            // Not counted: server messages, and client messages on an unhinted or artifact path.
+            open(CaptureSource::WsServer, Some("openai-realtime"), None),
+            open(CaptureSource::WsClient, None, None),
+            open(CaptureSource::WsClient, Some("http-head-v1"), None),
         ] {
             operations.record(&record);
         }
-        assert_eq!(operations.model_request_opens(), 3);
+        assert_eq!(operations.model_request_opens(), 4);
         // The proxy-side stream count stays what it was: every wire open, of any hint.
-        assert_eq!(operations.wire_opens(), 10);
+        assert_eq!(operations.wire_opens(), 13);
+    }
+
+    #[test]
+    fn a_websocket_message_on_a_hinted_path_alone_is_a_model_request() {
+        let mut operations = Operations::default();
+        operations.record(&open(
+            CaptureSource::WsClient,
+            Some("openai-realtime"),
+            None,
+        ));
+        // Wire streams with no decoded request, and no handshake recorded: the label must see
+        // the message as model traffic.
+        assert_eq!(operations.model_request_opens(), 1);
+        assert_eq!(operations.wire_opens(), 1);
     }
 }
