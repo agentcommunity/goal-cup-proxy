@@ -483,15 +483,23 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       const seal = (body: Record<string, unknown>) => api.call("POST", `/v1/runs/${run.run_id}/seal`, { token, json: { entry_id: run.entry_id, ...body } });
 
       assertError(await seal({ ...docs, tunnels_jsonl: 5 }), 400, "malformed");
-      const list = '{"format":"goalcup-tunnels-v1"}\n';
+      const list = `{"format":"goalcup-tunnels-v1","entry_id":"${run.entry_id}"}\n`;
+      // The first line must be this entry's format line: a list without the entry, or for another
+      // entry, is refused before the seal is looked at.
+      const other = `{"format":"goalcup-tunnels-v1","entry_id":"e${"2".repeat(16)}"}\n`;
+      assertError(await seal({ ...docs, tunnels_jsonl: '{"format":"goalcup-tunnels-v1"}\n' }), 400, "malformed");
+      assertError(await seal({ ...docs, tunnels_jsonl: other }), 400, "malformed");
+      assertError(await seal({ ...docs, tunnels_jsonl: "not json\n" }), 400, "malformed");
       const r = await seal({ ...docs, tunnels_jsonl: list });
       assert.equal(r.status, 200, JSON.stringify(r.body));
       const kept = () => r2Objects(worker.stateDir).filter((o) => o.key.startsWith("traces/") && o.key.includes(`/${run.entry_id}/tunnels`));
       assert.deepEqual(kept().map((o) => [o.key.split("/").pop(), o.sha256]), [["tunnels.jsonl", sha256(list)]]);
       // A repeat without the list, or with another one, is still a repeat: only the seal and the
-      // baseline decide it. The first list kept stays the entry's one.
+      // baseline decide it. The first list kept stays the entry's one. A repeat's list is checked
+      // too, so a bad one is refused even on the repeat path.
       assert.equal((await seal(docs)).status, 200);
-      assert.equal((await seal({ ...docs, tunnels_jsonl: '{"format":"goalcup-tunnels-v1"}\n{"dropped":0}\n' })).status, 200);
+      assertError(await seal({ ...docs, tunnels_jsonl: other }), 400, "malformed");
+      assert.equal((await seal({ ...docs, tunnels_jsonl: `${list}{"dropped":0}\n` })).status, 200);
       assert.deepEqual(kept().map((o) => [o.key.split("/").pop(), o.sha256]), [["tunnels.jsonl", sha256(list)]]);
       assertError(await seal({ ...docs, tunnels_jsonl: "x".repeat(8 * 1024 * 1024 + 1) }), 413, "too_large");
       assertError(await seal({ seal_json: '{"sealed":false}', baseline_json: docs.baseline_json, tunnels_jsonl: list }), 409, "conflict");

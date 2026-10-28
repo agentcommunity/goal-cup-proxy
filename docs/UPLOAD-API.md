@@ -334,7 +334,11 @@ server keeps one per entry, create-only, as `traces/<event>/<run>/<entry>/tunnel
 list kept stays, and a repeat with another list stores nothing. A repeat whose list was not kept yet
 fills it in. Storage that fails is `502`, as for the documents, and the client asks again. The list
 takes no part in the repeat and conflict rule, which looks at `seal_json` and `baseline_json` only.
-A value that is not a non-empty string is `400`, one over 8 MiB `413`. An older server ignores the
+A value that is not a non-empty string is `400`, one over 8 MiB `413`. The first line must be a JSON
+object whose `format` is `goalcup-tunnels-v1` and whose `entry_id` is this entry's id; any other
+first line is `400 malformed`. The server reads those two keys, not the bytes, so key order does not
+matter. The check runs on every seal, a repeat included, before the list is kept, and the size
+check comes first. An older server ignores the
 field. Sent after the entry's final heartbeat and its last chunk: a seal
 needs the entry's committed end, and the server holding the chain up to it, checked in the step that
 seals. Without a final heartbeat the answer is `409` ("send the final heartbeat first"), or `503
