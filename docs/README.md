@@ -66,7 +66,7 @@ You read traces and judge what they show.
 
 - [RESEARCH-TARGET](RESEARCH-TARGET.md): what the recorder should achieve, and what counts as coverage.
 - [Coverage matrix](research/coverage-matrix.md): measured harness and platform cells, and their limits.
-- [Report format](research/m2-report-format.md): the private research report (schema 4) written by `goalcup-verify --research-json`.
+- [Report format](research/m2-report-format.md): the private research report (schema 5) written by `goalcup-verify --research-json`.
 - [Replay comparison](research/replay-comparison.md): compare two traces you already have with one verifier.
 - [T25 disk full](research/t25-disk-full.md): what a run did on a really full disk (measured 21 Oct).
 - [LOCAL-RESEARCH-HANDOFF](LOCAL-RESEARCH-HANDOFF.md): the 18 Oct handoff for the first Codex Luna/high run (history).

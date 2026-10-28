@@ -77,7 +77,9 @@ impl Rfc3339Utc {
         &self.0
     }
 
-    fn chronological_cmp(&self, other: &Self) -> Ordering {
+    /// Order in time: whole seconds, then the fraction padded to nine digits, so `12:00:00.5Z`
+    /// is after `12:00:00Z`. The derived `Ord` is text order and does not say this.
+    pub fn chronological_cmp(&self, other: &Self) -> Ordering {
         let whole = self.0[..19].cmp(&other.0[..19]);
         if whole != Ordering::Equal {
             return whole;

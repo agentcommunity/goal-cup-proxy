@@ -42,7 +42,9 @@ use super::lineage::Lineage;
 use super::operations::Operations;
 use super::registry::{DecoderRegistry, Registered};
 use goalcup_protocol::capture::{CaptureRecord, CaptureSource, MAX_OPEN_STREAMS, StreamKey};
+use goalcup_protocol::provenance::Rfc3339Utc;
 use std::cell::Cell;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::io;
 use std::panic::{AssertUnwindSafe, PanicHookInfo, catch_unwind};
@@ -188,6 +190,11 @@ pub struct ObservationCounts {
     pub models: BTreeMap<String, u64>,
     /// `model` observations whose name was not kept: past the bound, too long or empty.
     pub models_omitted: u64,
+    /// The earliest `observed.first.wall` of the kept wire `model_request` observations: when
+    /// the first recorded model call began. `None` when there is none.
+    pub wire_first: Option<Rfc3339Utc>,
+    /// The latest `observed.last.wall` of the same observations.
+    pub wire_last: Option<Rfc3339Utc>,
 }
 
 /// The most distinct model names one decoder's counts keep.
@@ -220,6 +227,28 @@ impl ObservationCounts {
         } else {
             self.models_omitted += 1;
         }
+    }
+
+    /// Widens the wire request range by one kept wire `model_request` observed from `first`
+    /// to `last`. A wall time that is not RFC 3339 UTC is left out.
+    fn widen_wire_range(&mut self, first: &str, last: &str) {
+        if let Ok(first) = Rfc3339Utc::try_from(first) {
+            widen(&mut self.wire_first, &first, Ordering::Less);
+        }
+        if let Ok(last) = Rfc3339Utc::try_from(last) {
+            widen(&mut self.wire_last, &last, Ordering::Greater);
+        }
+    }
+}
+
+/// Keeps in `kept` whichever of it and `wall` lies further toward `toward` in time. Time order,
+/// never the derived text order: `12:00:00.5Z` is after `12:00:00Z`.
+pub(super) fn widen(kept: &mut Option<Rfc3339Utc>, wall: &Rfc3339Utc, toward: Ordering) {
+    if kept
+        .as_ref()
+        .is_none_or(|old| wall.chronological_cmp(old) == toward)
+    {
+        *kept = Some(wall.clone());
     }
 }
 
@@ -545,6 +574,10 @@ impl<'a, S: ObservationSink> Delivery<'a, S> {
         // The sink takes the observation, so the leg tally keeps the two small facts it needs.
         let wire = self.routed.get(&observation.source.stream).copied();
         let kind = observation.kind.clone();
+        let request = (kind == kinds::MODEL_REQUEST && wire == Some(true)).then(|| {
+            let observed = &observation.observed;
+            (observed.first.wall.clone(), observed.last.wall.clone())
+        });
         let (model, switch) = if kind == kinds::MODEL {
             let fields = &observation.fields;
             (
@@ -564,6 +597,9 @@ impl<'a, S: ObservationSink> Delivery<'a, S> {
             Ok(Ok(_)) => {
                 self.counts.kept += 1;
                 self.counts.tally(&kind, model.as_deref(), switch, wire);
+                if let Some((first, last)) = request {
+                    self.counts.widen_wire_range(&first, &last);
+                }
             }
         }
     }
@@ -843,6 +879,23 @@ where
 #[cfg(test)]
 mod tally_tests {
     use super::*;
+
+    #[test]
+    fn the_wire_request_range_orders_wall_times_by_time_not_text() {
+        let mut counts = ObservationCounts::default();
+        // As text, ".5Z" sorts before "Z"; in time it is half a second later.
+        counts.widen_wire_range("2026-09-29T12:00:00.5Z", "2026-09-29T12:00:00Z");
+        counts.widen_wire_range("2026-09-29T12:00:00Z", "2026-09-29T12:00:00.5Z");
+        counts.widen_wire_range("not a time", "not a time");
+        assert_eq!(
+            counts.wire_first.as_ref().map(Rfc3339Utc::as_str),
+            Some("2026-09-29T12:00:00Z")
+        );
+        assert_eq!(
+            counts.wire_last.as_ref().map(Rfc3339Utc::as_str),
+            Some("2026-09-29T12:00:00.5Z")
+        );
+    }
 
     #[test]
     fn model_counts_are_per_leg_and_bounded() {
