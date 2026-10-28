@@ -145,7 +145,11 @@ impl DecoderRegistry {
             Registered::new(
                 || Box::new(anthropic::AnthropicDecoder::new()),
                 "one real Claude Code 2.1.283 exchange",
-                &["the error event", "the JSON error document"],
+                &[
+                    "the error event",
+                    "the JSON error document",
+                    "a gateway base path (`<base>/v1/messages`)",
+                ],
             ),
             Registered::new(
                 || Box::new(chat::ChatCompletionsDecoder::new()),
