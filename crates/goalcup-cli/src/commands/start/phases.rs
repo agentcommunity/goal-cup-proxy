@@ -106,6 +106,14 @@ pub(super) fn prepare(
     // anything is created (the recording proxy module's preflight; it names a firewall holding this
     // binary when they do not).
     if !offline_upstreams_for_test(env) {
+        // A model service whose name resolves only to this computer is refused before the probe.
+        // This whole block is behind the test-only offline seam, so no integration test reaches
+        // the check; its unit test is `refuse_if_on_this_computer_uses_the_name_and_reason`.
+        if let Some(model) = model_host {
+            crate::model_host::refuse_if_on_this_computer(model).map_err(|refused| {
+                CliError::Refused(refused.refusal(c.display_name(), &c.loaded.manifest.id))
+            })?;
+        }
         crate::proxy::preflight::upstreams_reachable(profile.hosts.iter().map(|h| h.host.as_str()))
             .and_then(|()| {
                 crate::proxy::preflight::endpoints_reachable(

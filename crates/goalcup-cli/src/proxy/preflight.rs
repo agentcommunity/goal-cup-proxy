@@ -109,6 +109,68 @@ fn is_loopback_host(host: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
+/// Whether `host` resolves, on `port`, to addresses that all reach this computer: a name that is
+/// this computer under another spelling. The recording proxy connects by name on every round, so a
+/// model host that resolves here would be recorded as if it were remote (a loopback name, or an
+/// address literal, is refused by its spelling). The lookup is bounded by [`PREFLIGHT_BUDGET`]; one
+/// still blocked at the budget is abandoned. A lookup that fails, times out or finds nothing is
+/// `false`: the probe that follows names that failure.
+pub(crate) fn resolves_only_to_loopback(host: &str, port: u16) -> bool {
+    resolves_only_to_loopback_with(host, port, |host, port| {
+        lookup_within(host, port, PREFLIGHT_BUDGET)
+    })
+}
+
+/// The addresses `host` resolves to on `port`, answered within `budget`. The resolver's own lookup
+/// has no timeout, so it runs on a runtime that is shut down without waiting for it.
+fn lookup_within(
+    host: &str,
+    port: u16,
+    budget: Duration,
+) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return Err(std::io::Error::other("no runtime for the name lookup"));
+    };
+    let answer = runtime.block_on(async {
+        tokio::time::timeout(budget, tokio::net::lookup_host((host, port))).await
+    });
+    runtime.shutdown_background();
+    match answer {
+        Ok(found) => found.map(Iterator::collect),
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "the name lookup took longer than the preflight budget",
+        )),
+    }
+}
+
+/// Whether `address` reaches this computer: a loopback address, or the unspecified address (a
+/// connect to it lands here on Linux and macOS), in plain or IPv4-mapped IPv6 form.
+fn reaches_this_computer(address: std::net::IpAddr) -> bool {
+    let address = address.to_canonical();
+    address.is_loopback() || address.is_unspecified()
+}
+
+/// [`resolves_only_to_loopback`] with the lookup given, so a test can answer it.
+pub(crate) fn resolves_only_to_loopback_with(
+    host: &str,
+    port: u16,
+    lookup: impl Fn(&str, u16) -> std::io::Result<Vec<std::net::SocketAddr>>,
+) -> bool {
+    match lookup(host, port) {
+        Ok(addresses) => {
+            !addresses.is_empty()
+                && addresses
+                    .iter()
+                    .all(|address| reaches_this_computer(address.ip()))
+        }
+        Err(_) => false,
+    }
+}
+
 /// The preflight `goalcup start` runs: every non-loopback host on [`PREFLIGHT_PORT`] within
 /// [`PREFLIGHT_BUDGET`]. Blocks the calling thread for at most the budget.
 pub(crate) fn upstreams_reachable<'a>(
@@ -278,6 +340,83 @@ mod tests {
         assert_eq!(
             upstreams_reachable(["localhost", "api.e00.localhost"]),
             Ok(())
+        );
+    }
+
+    /// A lookup that answers `addresses` for every name.
+    fn answers(
+        addresses: Vec<std::net::IpAddr>,
+    ) -> impl Fn(&str, u16) -> std::io::Result<Vec<std::net::SocketAddr>> {
+        move |_, port| {
+            Ok(addresses
+                .iter()
+                .map(|ip| std::net::SocketAddr::new(*ip, port))
+                .collect())
+        }
+    }
+
+    #[test]
+    fn a_name_that_resolves_to_this_computer_is_refused() {
+        let loopback: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let public: std::net::IpAddr = "203.0.113.7".parse().unwrap();
+        assert!(resolves_only_to_loopback_with(
+            "localtest.me",
+            443,
+            answers(vec![loopback])
+        ));
+        assert!(resolves_only_to_loopback_with(
+            "localtest.me",
+            443,
+            answers(vec![loopback, "::1".parse().unwrap()])
+        ));
+        assert!(
+            !resolves_only_to_loopback_with("gateway.example.test", 443, answers(vec![public])),
+            "a public address is not this computer"
+        );
+        assert!(
+            !resolves_only_to_loopback_with(
+                "gateway.example.test",
+                443,
+                answers(vec![loopback, public])
+            ),
+            "one public address is enough to leave"
+        );
+        assert!(
+            !resolves_only_to_loopback_with("gateway.example.test", 443, answers(vec![])),
+            "no address is no answer for this check"
+        );
+        let failed = |_: &str, _: u16| Err(std::io::Error::other("no such host"));
+        assert!(
+            !resolves_only_to_loopback_with("gateway.example.test", 443, failed),
+            "a lookup that fails is left to the probe, which names the failure"
+        );
+    }
+
+    /// The unspecified address and the IPv4-mapped forms reach this computer too, so a name that
+    /// answers them is refused as well.
+    #[test]
+    fn a_name_that_resolves_to_an_unspecified_or_mapped_loopback_address_is_this_computer() {
+        for spelling in [
+            "0.0.0.0",
+            "::",
+            "::ffff:127.0.0.1",
+            "::ffff:127.1.2.3",
+            "::ffff:0.0.0.0",
+        ] {
+            let address: std::net::IpAddr = spelling.parse().unwrap();
+            assert!(
+                resolves_only_to_loopback_with("gateway.example.test", 443, answers(vec![address])),
+                "{spelling} reaches this computer"
+            );
+        }
+        let mapped_public: std::net::IpAddr = "::ffff:203.0.113.7".parse().unwrap();
+        assert!(
+            !resolves_only_to_loopback_with(
+                "gateway.example.test",
+                443,
+                answers(vec![mapped_public])
+            ),
+            "a mapped public address is not this computer"
         );
     }
 }

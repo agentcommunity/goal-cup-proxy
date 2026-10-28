@@ -853,9 +853,14 @@ fn home_step(
 }
 
 /// Why the model service the harness's config names cannot be recorded (D62), with what to do in
-/// the harness, or `None` when it can be or the connector reads none.
+/// the harness, or `None` when it can be or the connector reads none. The name is also looked up:
+/// one that resolves only to this computer is refused as `goalcup start` refuses it.
 fn model_host_problem(cfg: &Path, connector: &HarnessConnector) -> Option<String> {
-    let why = crate::model_host::check(cfg, connector).err()?;
+    let why = match crate::model_host::check(cfg, connector) {
+        Ok(Some(model)) => crate::model_host::refuse_if_on_this_computer(&model).err()?,
+        Ok(None) => return None,
+        Err(why) => why,
+    };
     let name = connector.display_name();
     // A file Goal Cup cannot read is fixed in the file, not by choosing another service.
     if why.file.is_some() {

@@ -50,8 +50,18 @@ pub(crate) fn continue_preflight(
         )));
     }
     crate::launch::capture_executable(connector, profile, env)?;
-    // Checked here, before anything is closed; the segment reads it again at its launch.
-    crate::model_host::for_run(cfg, connector)?;
+    // Checked here, before anything is closed; the segment reads it again at its launch. A name
+    // that resolves only to this computer is refused as `start` refuses it, behind the same
+    // test-only offline seam.
+    if let Some(model) = crate::model_host::for_run(cfg, connector)?
+        && !offline_upstreams_for_test(env)
+    {
+        crate::model_host::refuse_if_on_this_computer(&model).map_err(|refused| {
+            CliError::Refused(
+                refused.refusal(connector.display_name(), &connector.loaded.manifest.id),
+            )
+        })?;
+    }
     Ok(())
 }
 
