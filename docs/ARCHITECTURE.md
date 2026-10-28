@@ -303,7 +303,7 @@ chain files "parts"; read that as chain files.
 - **spawn gate**: the harness waits before `exec` until the daemon has durably registered it.
 - **anchor**: the external binding of the chain head: `LocalOnly` or `Signed`.
 - **run key**: the entry's per-run Ed25519 key. Its public half is `Launch.run_public_key`.
-- **research-report schema** (now 4): the private NDJSON report format. Not the same as harness-contract
+- **research-report schema** (now 5): the private NDJSON report format. Not the same as harness-contract
   schema 1 (`harness.toml`) or the decoder API version.
 
 **Names kept from "Goal Cup Tracer" on purpose.** The product is Goal Cup Proxy. These
