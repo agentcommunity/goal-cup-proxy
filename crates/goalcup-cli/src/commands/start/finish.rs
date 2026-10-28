@@ -6,6 +6,7 @@ use super::proxy::{Proxied, proxy_admission_line};
 use super::{StartOutcome, pause_at};
 use crate::CliError;
 use crate::commands::say;
+use crate::proxy::tunnels;
 use crate::run::reserve::artifact_root;
 use crate::upload::policy::WrapUp;
 use goalcup_protocol::control::{CaptureFinishReport, DaemonClient, ProxyCounters};
@@ -383,6 +384,7 @@ pub(super) fn finish(
         proxy,
         sink,
         runtime,
+        tunnels_file,
         ..
     } = proxied;
     // A harness that still runs keeps its connections open: they would hold the stop, and the
@@ -415,6 +417,14 @@ pub(super) fn finish(
     let _ = say(out, &proxy_admission_line(h, a));
     for line in crate::proxy::outage::finish_lines(h.upstream_outages, &h.outage_windows) {
         let _ = say(out, &line);
+    }
+    // The sealed-connection list (D74), written before the seal so the upload that follows it
+    // finds the file. A list that cannot be written costs only the list: the seal goes on.
+    if let Some(line) = tunnels::summary_line(entry_id, &h.tunnels, h.tunnels_dropped) {
+        let _ = say(out, &line);
+    }
+    if let Err(e) = tunnels::write(&tunnels_file, entry_id, &h.tunnels, h.tunnels_dropped) {
+        crate::host_log::log_only(&format!("the sealed-connection list was not written: {e}"));
     }
     let counters = ProxyCounters {
         tunneled_fail_open: h.tunneled_fail_open,

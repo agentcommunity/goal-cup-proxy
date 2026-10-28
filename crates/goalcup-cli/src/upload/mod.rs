@@ -57,6 +57,10 @@ pub struct UploadRecord {
     /// The run's workspace, whose repository's checked-out commit the final heartbeat names.
     #[serde(default)]
     pub workspace: String,
+    /// The entry's sealed-connection list (`tunnels-<entry_id>.jsonl` in the run's directory,
+    /// D74), sent with the seal when the finish wrote it. An older record has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tunnels_file: Option<String>,
 }
 
 /// `<cfg>/uploads/<entry_id>.json`.
