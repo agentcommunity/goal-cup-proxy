@@ -28,6 +28,7 @@ You run the event, the server and the test runs.
 - [How a run ends](research/HOW-A-RUN-ENDS.md): the plain-English plan for the end of a run.
 - [Restarts across session limits](research/RESTARTS-DESIGN.md): a run on a sandbox that stops every 24 hours, and `goalcup continue` after each stop.
 - [Event readiness plan](plans/2026-10-20-event-readiness.md): invariants and work packages from 20 Oct to 6 Nov.
+- [Record everything plan](plans/2026-10-29-record-everything-plan.md): the 28 Oct audit fixes and recording every request on opened hosts and the whole session folder.
 - [One capture system](plans/2026-10-28-one-capture-system-spec.md): one rule set for every harness (spec), its [plan](plans/2026-10-28-one-capture-system.md) and its [decision ledger](plans/2026-10-28-one-capture-system-ledger.md).
 - [Local next steps](research/LOCAL-NEXT-STEPS.md): what to do on real machines next, in order.
 - [Local test day](research/LOCAL-TEST-DAY.md): the 8-hour plan and handover for one day of local testing on every surface.
