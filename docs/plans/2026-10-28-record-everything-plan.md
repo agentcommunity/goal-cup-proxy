@@ -38,13 +38,13 @@ New decisions go into that ledger as L30 and on.
 7. **Labels are a hint.** Real analysis happens on the server; the verifier's `analysis.evidence`
    only needs to be a decent first guess.
 
-## Open owner decisions (answer before Task 6 merges)
+## Owner decisions on wording (28 Oct, taken)
 
-- **Goal sentence (L21).** Proposed `CHAT_MODE_GOAL`: "chat mode (D57): the harness was given no
-  goal; the participant typed the prompt in the harness's own terminal. It is recorded in the model
-  requests and, when the harness keeps one, in its session file." New runs only; the verifier and
-  Worker never match this text.
-- **Finish line.** Proposed `sealed hosts (passed through unread): github.com:443 x2 24992 KiB, …`,
+- **Goal sentence (L21): yes.** `CHAT_MODE_GOAL` becomes "chat mode (D57): the harness was given
+  no goal; the participant typed the prompt in the harness's own terminal. It is recorded in the
+  model requests and, when the harness keeps one, in its session file." New runs only; the
+  verifier and Worker never match this text.
+- **Finish line: yes.** `sealed hosts (passed through unread): github.com:443 x2 24992 KiB, …`,
   with `size unknown` instead of `? KiB` for cut tunnels.
 
 ## Global Constraints
@@ -173,8 +173,7 @@ fixtures (by `REGENERATE_REPORT_BYTES=1`).
 ### Task 6: What the participant reads
 
 **Files:** `crates/goalcup-cli/src/participant/refusals.rs` (:98), `commands/prep.rs` (~:863),
-`model_host.rs` (`defaults_detail`), `proxy/tunnels.rs` (`summary_line`, after the owner
-decision), `commands/start/phases.rs` (`CHAT_MODE_GOAL`, after the owner decision).
+`model_host.rs` (`defaults_detail`), `proxy/tunnels.rs` (`summary_line`), `commands/start/phases.rs` (`CHAT_MODE_GOAL`).
 
 - [ ] **Step 1:** For a connector whose model address is a key in a file (Claude Code, Codex), a
   refused value says what to do: "Edit or delete `<key>` in `<full path>`; without it Goal Cup
@@ -183,7 +182,8 @@ decision), `commands/start/phases.rs` (`CHAT_MODE_GOAL`, after the owner decisio
 - [ ] **Step 2:** The fallback line names the hosts it opens: `model service: api.anthropic.com:443
   (connector default; env.ANTHROPIC_BASE_URL not set in settings.json)`, and for Codex a set
   built-in provider is called set, not "not set".
-- [ ] **Step 3 (after the owner decision):** finish-line wording; `CHAT_MODE_GOAL` text.
+- [ ] **Step 3:** the finish-line wording and the `CHAT_MODE_GOAL` text above; update the two tests
+  that compare the goal constant (`tests/full/connector_contract.rs`, `tests/full/m2_synthetic_vertical.rs`).
 - [ ] **Step 4: Commit** `fix(cli): refusals say which file and key to edit`.
 
 ### Task 7: Operations and stale docs
@@ -273,7 +273,6 @@ today), `scripts/fetch-run.sh` (`zstd -dcq`), any server-side reader of chunks.
 
 ### Task 12: Owner steps (not for agents)
 
-- [ ] Answer the two open decisions above.
 - [ ] Deploy the Worker before any client from `main` seals (Task 1 adds a Worker check too).
 - [ ] Prepare and tag the next release; set `MIN_COMPETITION_VERSION`.
 - [ ] Laptop runs ([LAPTOP-LOGIN-RUNS](../research/LAPTOP-LOGIN-RUNS.md)), plus run 3 now confirms
