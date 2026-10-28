@@ -428,8 +428,8 @@ fn every_connector_runs_once_as_a_participant_runs_it() {
 /// harness nobody ships (the frozen fixtures, docs/CONNECTOR-SCHEMA.md "The connector contract"),
 /// keeps launching with no Rust change. Through `--dev` it passes the same participant-shaped run
 /// as a shipped connector: its configure commands, its own environment and CA file, its argv, its
-/// session file recorded with a hint no decoder knows, and a sealed trace the verifier reads as
-/// valid.
+/// session file recorded with a hint no decoder knows when it declares one, and a sealed trace
+/// the verifier reads as valid.
 #[test]
 fn a_schema_1_connector_written_today_keeps_launching() {
     with_real_home_guard(|| {
