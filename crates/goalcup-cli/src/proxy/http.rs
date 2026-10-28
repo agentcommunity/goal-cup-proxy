@@ -8,11 +8,12 @@
 //! only to know where a message ends (keep-alive, pipelining, the upgrade boundary); a request
 //! is never reserialized.
 //!
-//! **What is captured.** Only an exchange whose Host names the admitted host and whose
-//! query-free path the host profile selects ([`crate::proxy::metadata`]). A request whose Host
-//! (or absolute-form authority) names any other host turns the connection into an opaque relay,
-//! counted and chained as a loss: another host's traffic never rides uncaptured inside an
-//! admitted connection. Its request body is a
+//! **What is captured.** Every exchange whose Host names the admitted host, whatever its path,
+//! as long as its method is retainable; the host profile only picks each exchange's decoder hint
+//! ([`crate::proxy::metadata`]). An exchange relayed but not retained leaves a `LimitExceeded`
+//! loss in the chain. A request whose Host (or absolute-form authority) names any other host
+//! turns the connection into an opaque relay, counted and chained as a loss: another host's
+//! traffic never rides uncaptured inside an admitted connection. Its request body is a
 //! `WireRequest` stream, its final response body a `WireResponse` stream; both carry the typed
 //! [`goalcup_protocol::capture::WireIdentity`] of this physical connection and a per-connection
 //! exchange counter (starting at one), with `message_index: None`. Informational (1xx) heads
@@ -46,7 +47,7 @@
 //! content-coding tokens of a body left undecoded, sanitized and bounded, in `host.log` only.
 
 use crate::proxy::api::{
-    BoxIo, CaptureEmitter, CapturePolicy, HttpOutcome, RelayContext, RelayPair, Upgrade,
+    BoxIo, CaptureEmitter, CapturePolicy, HttpOutcome, ProxyLoss, RelayContext, RelayPair, Upgrade,
 };
 use crate::proxy::metadata::{self, ExchangeMeta, SafeTarget};
 use brotli_decompressor::{
@@ -296,13 +297,21 @@ async fn relay_requests(
         shared.emitter.record_model_request();
         let at = src.at.clone();
         let capture = select(shared, &request, target.as_ref(), exchange);
-        if let Some(capture) = &capture {
-            shared.emitter.record_recorded_request();
-            // A model call is a request on a hinted path, or a POST on any other recorded path
-            // (a provider's own generate route under the base path); a GET there is a model
-            // list or a probe.
-            if capture.meta.protocol_hint.is_some() || capture.meta.method == "POST" {
-                shared.emitter.record_generation_request();
+        match &capture {
+            Some(capture) => {
+                shared.emitter.record_recorded_request();
+                // A model call is a request on a hinted path, or a POST on any other recorded path
+                // (a provider's own generate route under the base path); a GET there is a model
+                // list or a probe.
+                if capture.meta.protocol_hint.is_some() || capture.meta.method == "POST" {
+                    shared.emitter.record_generation_request();
+                }
+            }
+            // Relayed unchanged but not retained: the chain says so, once per reason.
+            None => {
+                let _ = shared
+                    .emitter
+                    .proxy_loss(metadata::capture_time(), ProxyLoss::ExchangeOverLimit);
             }
         }
         let request_ok = capture.as_ref().map(|c| c.request_ok.clone());
@@ -389,8 +398,10 @@ async fn relay_requests(
     }
 }
 
-/// Decide whether this exchange is captured: the admitted host, a retainable method and
-/// path, and a path the host policy selects.
+/// Decide whether this exchange is captured. Every exchange on the admitted host is, whatever
+/// its path, as long as its method can be retained; the host policy only supplies the decoder
+/// hint for the path (none when no row names it). `None` means the exchange is relayed but
+/// not retained.
 fn select(
     shared: &Shared<'_>,
     request: &RequestHead,
@@ -398,7 +409,8 @@ fn select(
     exchange: u64,
 ) -> Option<ExchangeCapture> {
     let target = target.filter(|_| metadata::is_method(&request.method))?;
-    let path = metadata::select(shared.policy, &target.path)?;
+    let protocol_hint =
+        metadata::select(shared.policy, &target.path).and_then(|row| row.protocol_hint.clone());
     Some(ExchangeCapture {
         meta: ExchangeMeta {
             connection: shared.connection.to_string(),
@@ -406,7 +418,7 @@ fn select(
             host: shared.host.to_string(),
             method: request.method.clone(),
             path: target.path.clone(),
-            protocol_hint: path.protocol_hint.clone(),
+            protocol_hint,
         },
         request_content_type: request.fields.content_type.clone(),
         request_ok: Arc::new(AtomicBool::new(false)),

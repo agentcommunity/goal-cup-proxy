@@ -40,6 +40,9 @@ pub enum ProxyLoss {
     OpaqueFallback,
     /// A connection cut by the shutdown before it settled.
     CutUnsettled,
+    /// An exchange on an opened host that the recorder cannot retain, such as a method over
+    /// the metadata limit. It is relayed unchanged; the chain says it was not recorded.
+    ExchangeOverLimit,
 }
 
 impl ProxyLoss {
@@ -47,7 +50,7 @@ impl ProxyLoss {
     pub fn gap_reason(self) -> GapReason {
         match self {
             ProxyLoss::FailOpenTunnel | ProxyLoss::OpaqueFallback => GapReason::DecodeFailed,
-            ProxyLoss::CaptureTableFull => GapReason::LimitExceeded,
+            ProxyLoss::CaptureTableFull | ProxyLoss::ExchangeOverLimit => GapReason::LimitExceeded,
             ProxyLoss::CutUnsettled => GapReason::ShutdownDeadline,
         }
     }

@@ -77,9 +77,10 @@ impl ModelHost {
         format!("model service: {} ({})", self.authority(), self.from)
     }
 
-    /// The recording proxy's host rule: each [`WIRE_PATHS`] entry under the base path (and under
-    /// `<base>/v1`, where an SDK adds the version itself) with its hint, then every other path
-    /// under the base with none.
+    /// The recording proxy's host rule. Every exchange on the host is recorded, whatever its path;
+    /// these rows only pick each exchange's decoder hint. Each [`WIRE_PATHS`] entry sits under the
+    /// base path (and under `<base>/v1`, where an SDK adds the version itself) with its hint, and
+    /// the rest of the base is a row with no hint.
     pub fn approved(&self) -> ApprovedHost {
         let base = self.base_path.trim_end_matches('/');
         let mut paths = Vec::new();
@@ -92,8 +93,7 @@ impl ModelHost {
                 });
             }
         }
-        // The rest of the base, with no hint. A URL with no path records the versioned API
-        // (`/v1/`), never every request on the host (a reviewed row may not use `/` either).
+        // The rest of the base, with no hint: a URL with no path names the versioned API (`/v1/`).
         let rest = if base.is_empty() {
             "/v1/".to_string()
         } else {
@@ -1035,7 +1035,8 @@ sessions:
         );
         assert_eq!(hint("/v1/models"), Some(None));
         assert_eq!(hint("/v2/chat/completions"), None);
-        // A URL with no path records the versioned API, never every path on the host.
+        // A URL with no path names the versioned API; the rows only pick hints, and the proxy
+        // records every exchange on the host whether a row names it or not.
         let bare = ModelHost {
             base_path: String::new(),
             ..host.clone()

@@ -2239,6 +2239,32 @@ fn metadata_is_redacted_without_retaining_query() {
     assert!(metadata.validate().is_ok());
 }
 
+/// A refresh token in the body of a request to a token endpoint on an opened host never reaches a
+/// segment in the clear. The proxy records every request on an opened host and hands the body over
+/// unchanged, so this redactor is the only thing between the token and the chain. Checked on the
+/// decoded segment bytes (`all_segment_bytes`), not on the base64 text, and not vacuously: the
+/// body's other key is retained.
+#[test]
+fn a_token_in_a_body_on_an_opened_host_is_masked_in_the_chain() {
+    const TOKEN: &[u8] = b"rt-0123456789abcdefghij";
+    let body = br#"{"grant_type":"refresh_token","refresh_token":"rt-0123456789abcdefghij"}"#;
+    let mut p = Producer::new(P1);
+    let mut records = p.open(1, CaptureSource::WireRequest);
+    records.extend(p.bytes(1, body));
+    records.extend(p.end(1, EndReason::Complete));
+    let retained = all_segment_bytes(&records);
+    assert!(
+        contains(&retained, b"grant_type"),
+        "the body was retained: {}",
+        String::from_utf8_lossy(&retained)
+    );
+    assert!(
+        !contains(&retained, TOKEN),
+        "the refresh token reached a segment in the clear: {}",
+        String::from_utf8_lossy(&retained)
+    );
+}
+
 /// A PEM body far past the bound (one MiB) never grows the hold: its first `PEM_BODY_MAX` bytes are
 /// the block, and the rest leaves as it streams past, exactly as the whole-record policy
 /// redacts it (I-1).

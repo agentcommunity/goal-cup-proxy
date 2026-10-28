@@ -131,9 +131,10 @@ pub(crate) fn host_matches(expected: &str, host_headers: &[String], target: &Saf
             .is_none_or(|authority| host_part(authority) == expected)
 }
 
-/// The first capture path of the matched host profile that selects `path`, exactly or as an
-/// explicit prefix, against the path without its query or fragment. An empty policy selects
-/// nothing.
+/// The first row of the matched host profile that names `path`, exactly or as an explicit
+/// prefix, against the path without its query or fragment. It supplies the exchange's protocol
+/// hint only: an exchange on the host is captured whether or not a row names it. An empty policy
+/// names nothing.
 pub(crate) fn select<'a>(policy: &'a CapturePolicy, path: &str) -> Option<&'a CapturePath> {
     policy.paths.iter().find(|candidate| {
         if candidate.prefix {
