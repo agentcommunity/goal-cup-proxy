@@ -103,7 +103,7 @@ profiles. Goal Cup reads only `model_providers.<model_provider>.base_url` and re
 ([D74](DECISIONS.md#d74-the-model-host-is-the-connectors-default-or-the-one-address-the-harnesss-own-config-names)).
 When `model_provider` is not set, or names a built-in provider with no table, Goal Cup opens
 `chatgpt.com`, the model service of a ChatGPT sign-in. The address must be `https` and not on
-this computer, or the start is refused. Not measured yet.
+this computer, or the start is refused. Recording through Goal Cup: not measured yet.
 
 ### Claude Code
 
@@ -132,16 +132,25 @@ Add these keys to `claude-code-cli/settings.json`:
 {
   "env": {
     "ANTHROPIC_BASE_URL": "https://ai-gateway.vercel.sh/claude-code",
-    "ANTHROPIC_AUTH_TOKEN": "<your gateway key>"
+    "ANTHROPIC_AUTH_TOKEN": "<your gateway key>",
+    "ANTHROPIC_MODEL": "<gateway model id>",
+    "ANTHROPIC_SMALL_FAST_MODEL": "<gateway model id>",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "<gateway model id>",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "<gateway model id>",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "<gateway model id>"
   }
 }
 ```
+
+The five model keys are needed only when the gateway model is not a Claude model, so that
+background calls do not go to a model you did not pick.
 
 Goal Cup reads only `env.ANTHROPIC_BASE_URL` and records that address
 ([D74](DECISIONS.md#d74-the-model-host-is-the-connectors-default-or-the-one-address-the-harnesss-own-config-names)).
 Without it, Goal Cup opens `api.anthropic.com`. The address must be `https` and not on this computer,
 or the start is refused. Set it in this file only: a base URL in a workspace's `.claude/` settings
-or in managed settings is not read, so that traffic is sealed and not recorded. Not measured yet.
+or in managed settings is not read, so that traffic is sealed and not recorded. Recording through
+Goal Cup: not measured yet.
 
 ### Amp
 

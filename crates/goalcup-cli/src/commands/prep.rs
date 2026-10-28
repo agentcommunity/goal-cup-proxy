@@ -17,7 +17,7 @@
 //!    writes them.
 //! 3. **harness home**: the harness is opened once in the home its runs will use, so the
 //!    participant signs in (or pastes an API key into the harness's own sign-in, which Goal Cup
-//!    never sees) and adds settings, MCP servers and skills there
+//!    never reads or stores) and adds settings, MCP servers and skills there
 //!    ([`crate::launch::prep_launch`]: no proxy, no capture, no daemon entry). The tracker
 //!    cannot see a vendor sign-in, so this step is the person's word: it is ok once the harness
 //!    they were given has exited 0, and that is recorded in `prep.json` (`home_ready`). When the
@@ -797,8 +797,8 @@ fn home_step(
             State::Todo,
             format!(
                 "run `goalcup setup` in a terminal. It opens {id} in its Goal Cup home ({}). \
-                 Sign in there (or paste your API key; Goal Cup never sees it), add your \
-                 settings, MCP servers and skills, then quit {id} (most agents: /quit, /exit or Ctrl-C twice)",
+                 Sign in there (or paste your API key; Goal Cup never reads or stores it), add \
+                 your settings, MCP servers and skills, then quit {id} (most agents: /quit, /exit or Ctrl-C twice)",
                 home.display()
             ),
         ));
@@ -808,8 +808,8 @@ fn home_step(
         report.tell(&format!(
             "Next, {id} opens here in its own Goal Cup home (not your usual setup). Nothing is \
              recorded.\n  1. Sign in, or paste your API key when it asks. Goal Cup never \
-             sees it.\n  2. Add the settings, MCP servers and skills you want your agent to \
-             have, and set it not to ask for permission (see the guide above).\n  3. Quit {id} \
+             reads or stores it.\n  2. Add the settings, MCP servers and skills you want your \
+             agent to have, and set it not to ask for permission (see the guide above).\n  3. Quit {id} \
              when you are done (for most agents: type /quit or /exit, or press Ctrl-C twice). \
              Setup goes on once it has quit.\nPress Enter to open {id}, or Ctrl-C to stop."
         ))?;

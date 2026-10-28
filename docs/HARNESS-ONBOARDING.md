@@ -447,7 +447,8 @@ daemon.
    `CURL_CA_BUNDLE` and `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. See
    [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#credential-and-ca).
 8. **Native form.** `append_only` or `snapshot` only. A database store is refused.
-9. **One native row.** Schema 1 refuses zero native rows and more than one.
+9. **Zero or one native row (D74).** Schema 1 admits a connector with none, which records the
+   wire only, and refuses more than one.
 10. **Executable.** There is no `sha256` (D53). The CLI resolves `program` on `PATH`, follows
     symlinks, and runs the regular file at the end. Any build runs. A pinned `program` cannot be an
     interpreter (`python3`, `node`, `sh`, `env`). A shebang script is fine.

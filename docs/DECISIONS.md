@@ -36,7 +36,7 @@ Update this table in the same PR as any entry it lists.
 | D50 | superseded | D61 |
 | D51 to D55, D57 to D60 | current | |
 | D56 | partly superseded | D71 (a clone is decided at finish; the workspace admission rule) |
-| D61 | partly superseded | D62 (model traffic for listed providers only), D71 (the home's `.env` is not hashed), D72 (Hermes 0.22: a trust entry for the model URL; the session file is optional) |
+| D61 | partly superseded | D62 (model traffic for listed providers only), D71 (the home's `.env` is not hashed), D72 (Hermes 0.22: a trust entry for the model URL; the session file is optional), D74 (the token sentence) |
 | D62 | partly superseded | D74 (a missing value may fall back to the connector's hosts; `env` is no longer a deny word; one indirection through `via`) |
 | D63 | current | |
 | D64 | partly superseded | D65 (the disk watch pauses, never stops) |
@@ -1129,7 +1129,7 @@ from nothing.
   file, over 1 MiB, not UTF-8, or JSON or TOML its parser refuses): it may name a service, which
   would then pass unrecorded.
 - **`env` is no longer a deny word.** Claude Code keeps its base URL at `env.ANTHROPIC_BASE_URL`
-  in `settings.json`. Every other deny word stays.
+  in `settings.json`. Every other deny word stays, and `apikey` and `password` join them.
 - **The shipped connectors.** Claude Code reads `env.ANTHROPIC_BASE_URL` in `settings.json` with
   `absent = "defaults"` and keeps `providers = ["anthropic"]`. Codex reads
   `model_providers.*.base_url` via `model_provider` in `config.toml` with `absent = "defaults"` and
@@ -1155,9 +1155,8 @@ from nothing.
   no longer banned.
 - **`providers.toml` is frozen.** It keeps `anthropic` and `deepseek` (CONNECTOR-SCHEMA promise 6),
   and no row is added: no `vercel` row and no per-path hint in a host row.
-- **The access token.** The harness's access token passes through the recording proxy's memory on
-  its way to the model service; it is forwarded unread and never written
-  (`crates/goalcup-cli/src/proxy/http.rs`, "every other header is skipped unread").
+- **The access token.** README and SECURITY say it in one sentence
+  ([README](../README.md#the-access-token)): it is forwarded unread and never written.
 
 This supersedes D62's refusal of a missing value (it now holds only with `absent = "refuse"`), its
 `env` deny word and its one-key form.

@@ -560,9 +560,7 @@ any other `.profile` there (the participant's own, or a link) is kept as it is.
 ## Credential and CA
 
 A connector passes no provider key, and Goal Cup Proxy stores none (D61). The harness's access
-token passes through the recording proxy's memory on its way to the model service; it is
-forwarded unread and never written (`crates/goalcup-cli/src/proxy/http.rs`, "every other header
-is skipped unread"). A `[capture.credential]` table, in the base profile or in a
+token is forwarded unread and never written ([README](../README.md#the-access-token)). A `[capture.credential]` table, in the base profile or in a
 `[capture.platform.<key>]` override, is refused with "a connector may not pass a provider key;
 the harness keeps its own login in its home". A harness that reads its key from an environment variable only is set up with its own
 login command, which stores the key in its home.
@@ -744,8 +742,8 @@ list. The shipped forms:
   no table of that name, an empty or white-space value, or YAML the small lookup cannot follow.
   With `absent = "refuse"`, the default, it is refused at start (below). With `absent =
   "defaults"` it is not an error: the segment opens the connector's host rows only, so the
-  connector must list at least one, and `host.log` says `model service: the connector's default
-  hosts (<key> not set in <file>)`. Only a missing value falls back.
+  connector must list at least one, and `host.log` says so (below). Only a missing value falls
+  back.
 - **A file that cannot be read is refused under either setting**, since it may name a service
   that would then pass unrecorded: a link (never followed), not a regular file, over 1 MiB,
   unreadable by the user, not UTF-8, or JSON or TOML its parser refuses (plain JSON only: no
@@ -762,16 +760,20 @@ list. The shipped forms:
   in `capture.hosts` keeps that row. Every other host stays an opaque tunnel, counted in
   `proxy admission:`, listed in the run's `tunnels-<entry_id>.jsonl` and never opened.
 - **What is logged.** Only `model service: <host>:<port> (<key> in <file>)`, in the run's
-  `host.log`, where `<key>` is the resolved key (`model_providers.vercel.base_url`). A userinfo (`user:pass@`), the path and the query are never logged or recorded.
+  `host.log`, where `<key>` is the resolved key (`model_providers.vercel.base_url`). When the
+  run falls back, the line is `model service: the connector's default hosts (<key> not set in
+  <file>)`, with `via` written out: ``(`model_providers.*.base_url` through `model_provider` not
+  set in config.toml)``. A userinfo (`user:pass@`), the path and the query are never logged or
+  recorded.
 - **Refused at start, and not ready at prep.** A missing file, key or `via` value (with
   `absent = "refuse"`), a value that is not an
   `http` or `https` URL, plain `http` (only `HTTPS_PROXY` is set, so it would pass around the
   recorder), a loopback name, an address literal, a single-label name, a host that names
   Goal Cup, and an authentication host. The refusal names the value (`<scheme>://<host>:<port>`
   only), the reason, the setting and the way to change it: "`<display name>` is set to use
-  `<value>`, which Goal Cup cannot record: `<reason>` (set by `<key>` in `<file>`). Goal Cup records only an https model service that is not on this
-  computer. Run goalcup setup --harness `<id>`, choose such a service there, then run the command
-  again." Nothing is created. `goalcup continue` checks it before it closes an earlier segment.
+  `<value>`, which Goal Cup cannot record: `<reason>` (set by `<key>` in `<file>`). Goal Cup
+  records only an https model service that is not on this computer. Run goalcup setup --harness
+  `<id>`, choose such a service there, then run the command again." Nothing is created. `goalcup continue` checks it before it closes an earlier segment.
   `goalcup setup` makes the same check: while the value cannot be recorded the home is not ready,
   and prep says why and opens the harness again. Only the address the config names is checked; a
   login the harness refreshes at another host is not (D62).
@@ -781,8 +783,7 @@ list. The shipped forms:
   none. `via` follows the `key` rules, with no `*`. `absent` is the closed set `"refuse"`,
   `"defaults"`. No `.`, `-` or `_` separated part of the file's name, the key or `via` may be
   `auth`, `credential(s)`, `secret(s)`, `token(s)`, `key(s)`, `api_key`, `apikey` or `password`,
-  in any case: Goal Cup Proxy reads a service
-  address, never a key file or a key. `env` is allowed (D74), for Claude Code's
+  in any case: Goal Cup Proxy reads a service address, never a key file or a key. `env` is allowed (D74), for Claude Code's
   `env.ANTHROPIC_BASE_URL`; the same rule holds for the `participant.no_prompts` and
   `time_left_tool` keys, which share the check (ledger L15).
 - **A switch mid-run.** A service the participant switches to inside a running session is not

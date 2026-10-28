@@ -35,9 +35,9 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    harnesses and lets you pick one, opens it once in its own isolated home so you sign in (or
    paste your API key there) and set it never to stop for approval
    ([set up your harness for a 168-hour run](docs/HARNESS-SETUP.md)), and checks this machine.
-   Run it until every step says `[ok]`. It needs no GitHub and keeps no key. The harness's access
-   token passes through the recording proxy's memory on its way to the model service; it is
-   forwarded unread and never written
+   Run it until every step says `[ok]`. It needs no GitHub and keeps no key.
+   <a id="the-access-token"></a>The harness's access token passes through the recording proxy's
+   memory on its way to the model service; it is forwarded unread and never written
    ([`crates/goalcup-cli/src/proxy/http.rs`](crates/goalcup-cli/src/proxy/http.rs)). For Hermes, the
    newest release from Hermes's own installer is fine with an API-key service such as DeepSeek;
    see [Hermes setup](docs/HARNESS-SETUP.md#hermes) for the setups that need 0.19.0.
@@ -136,8 +136,8 @@ goalcup-verify reads a sealed trace offline: integrity check, research report an
 1. **The chat file.** If the harness keeps its own conversation file, Goal Cup records it. It is a
    backup of the wire record; a harness may have none.
 2. **Model traffic.** Goal Cup opens only the model service: the connector's default hosts, and the
-   one address the harness's own settings name. Every request under that address is recorded, and
-   the standard formats (`/chat/completions`, `/messages`, `/responses`) are decoded.
+   one address the harness's own settings name. Every request under the address the settings name is
+   recorded, and the standard formats (`/chat/completions`, `/messages`, `/responses`) are decoded.
 3. **Everything else is sealed.** Any other connection passes through closed, noted only as host,
    port, bytes each way, times and reason. Sign-in and token refresh are always sealed.
 4. **The label.** The verifier labels what each run holds. RULES says what each label is worth.

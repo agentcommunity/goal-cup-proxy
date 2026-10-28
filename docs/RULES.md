@@ -284,10 +284,8 @@ disclosure and no-side-channel rules.
   never copies your own settings into it: `goalcup setup` opens the harness there so you sign in and add
   the settings, MCP servers and skills you want. Claude Code's run `HOME` on macOS holds a link to your
   `~/Library/Keychains`, for your subscription login. Hermes uses one such home too, set up by its
-  own wizard when `goalcup setup` opens it. Each harness keeps its own login in its home. The
-  harness's access token passes through the recording proxy's memory on its way to the model
-  service; it is forwarded unread and never written
-  ([`crates/goalcup-cli/src/proxy/http.rs`](../crates/goalcup-cli/src/proxy/http.rs)).
+  own wizard when `goalcup setup` opens it. Each harness keeps its own login in its home, and its
+  access token is forwarded unread and never written ([README](../README.md#the-access-token)).
 - **Your agent can read your logins, and one recording gap remains.** The harness must read and
   refresh its own login all run, and its tools run as your user. So Goal Cup Proxy cannot stop your
   agent reading the harness's login files in Goal Cup Proxy's home (Codex `auth.json`, Hermes `.env`
@@ -309,7 +307,9 @@ disclosure and no-side-channel rules.
   (the model requests alone), `wire_undecoded` (model traffic recorded in a form no decoder reads
   yet) and `native_only` (the chat file alone). Each of these counts. `none` (no model traffic
   and no chat file) does not. "Native" means model work in the chat file: a chat file with no
-  model work in it labels `none`.
+  model work in it labels `none`. "Counts" means the run is admissible: a `native_only` run is
+  reviewed with its sealed-hosts list for why its model calls were not recorded, and routing model
+  work around Goal Cup Proxy on purpose is still grounds for disqualification (below).
 - Goal Cup Proxy downtime while the agent kept working is reviewed, not automatically penalized. Downtime
   while nothing happened is an outage.
 - **A full disk is a red flag.** When the disk fills, the record shows a `StorageFull` gap. It means
@@ -331,9 +331,10 @@ disclosure and no-side-channel rules.
   with the model provider, every request and every reply, by pointing that one process at a recording
   proxy on your machine through its own environment; nothing else on the machine goes through it. It
   records what you type into that agent, because the review must see every human message. Traffic from
-  the agent to any other address, and traffic on the provider's address that is not a model call, is
-  noted as the address, the port, the bytes each way, the times and the reason, nothing more, and
-  is never decrypted; that list is uploaded with the seal. This holds only for programs that use
+  the agent to any other address is noted as the address, the port, the bytes each way, the times
+  and the reason, nothing more, and is never decrypted; that list is uploaded with the seal.
+  Traffic on the model service's address that is not a model call is decrypted in memory and
+  relayed, but not recorded and not listed. This holds only for programs that use
   the `HTTPS_PROXY` setting: a tool that ignores it (`ssh`, a raw socket, a command that
   unsets `HTTPS_PROXY`) connects directly and is not seen at all. Sign-in and token refresh are never
   decrypted either. Your ChatGPT, Claude or other credentials are never stored: the recording proxy removes them

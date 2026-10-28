@@ -49,8 +49,8 @@ GitHub.
    says `<id>`.
 3. **Sign in.** Press Enter and the harness opens in a home Goal Cup keeps for it (never your own
    `~/.claude` or `~/.codex`). Sign in, or paste your API key when it asks. That is the harness's
-   own file. Its access token passes through the recording proxy's memory on its way to the model
-   service; it is forwarded unread and never written. Then set the harness to **never stop and ask you for
+   own file; its access token is forwarded unread and never written
+   ([README](../README.md#the-access-token)). Then set the harness to **never stop and ask you for
    permission**, because nobody may answer during the run
    ([how, per harness](HARNESS-SETUP.md#1-run-without-permission-prompts)). Exit it normally.
 4. **This machine.** Mains power, free disk, network. Keep the machine awake yourself where it
