@@ -1657,9 +1657,9 @@ fn schema_native_plan_copies_label_hint_form_and_root() {
     let mut planned = 0;
     for path in paths {
         let manifest = manifest_at(&path);
-        let Some(native) = manifest.capture.native.first() else {
+        if manifest.capture.native.is_empty() {
             continue;
-        };
+        }
         let plan = native_plan(
             &manifest.capture,
             Path::new("/run"),
@@ -1668,32 +1668,86 @@ fn schema_native_plan_copies_label_hint_form_and_root() {
         )
         .unwrap();
         let at = path.display();
-        let [source] = plan.as_slice() else {
-            panic!("{at}: one source, got {plan:?}");
-        };
-        let root = native
-            .root
-            .replace("{run_home}", "/run")
-            .replace("{config_home}", "/config");
-        assert_eq!(source.root, Path::new(&root), "{at}");
-        let form = match native.form {
-            goalcup_protocol::harness::NativeForm::AppendOnly => NativeStoreForm::AppendOnly,
-            goalcup_protocol::harness::NativeForm::Snapshot => NativeStoreForm::Snapshot,
-            other => panic!("{at}: form {other:?}"),
-        };
         assert_eq!(
-            (source.name.as_str(), source.form),
-            (native.name.as_str(), form),
-            "{at}"
+            plan.len(),
+            manifest.capture.native.len(),
+            "{at}: one source per row"
         );
-        assert_eq!(
-            source.hint.as_ref().map(NativeHint::as_str),
-            native.protocol_hint.as_deref(),
-            "{at}"
-        );
+        // Each source is its row, in row order.
+        for (source, native) in plan.iter().zip(&manifest.capture.native) {
+            let root = native
+                .root
+                .replace("{run_home}", "/run")
+                .replace("{config_home}", "/config");
+            assert_eq!(source.root, Path::new(&root), "{at}");
+            let form = match native.form {
+                goalcup_protocol::harness::NativeForm::AppendOnly => NativeStoreForm::AppendOnly,
+                goalcup_protocol::harness::NativeForm::Snapshot => NativeStoreForm::Snapshot,
+                other => panic!("{at}: form {other:?}"),
+            };
+            assert_eq!(
+                (source.name.as_str(), source.form),
+                (native.name.as_str(), form),
+                "{at}"
+            );
+            assert_eq!(
+                source.hint.as_ref().map(NativeHint::as_str),
+                native.protocol_hint.as_deref(),
+                "{at}"
+            );
+        }
         planned += 1;
     }
     assert!(planned >= 5, "{planned} planned");
+}
+
+/// Every `[[capture.native]]` row is planned, in order: three rows give three specs, each with
+/// its own name, pattern and root, and the daemon admits as many sources as the protocol admits
+/// rows.
+#[test]
+fn every_native_row_is_planned() {
+    assert_eq!(
+        crate::native_capture::MAX_NATIVE_SOURCES,
+        goalcup_protocol::harness::MAX_NATIVE_ROWS,
+        "the daemon admits as many native sources as the protocol admits rows"
+    );
+    let mut manifest = manifest_at(&frozen_manifest_paths().remove(0));
+    let first = manifest.capture.native[0].clone();
+    manifest.capture.native = (0..3)
+        .map(|i| {
+            let mut row = first.clone();
+            row.name = format!("row-{i}");
+            row.pattern = format!("row{i}/*.jsonl");
+            row
+        })
+        .collect();
+    let plan = native_plan(
+        &manifest.capture,
+        Path::new("/run"),
+        Path::new("/config"),
+        0,
+    )
+    .unwrap();
+    let planned: Vec<(&str, &str, &Path)> = plan
+        .iter()
+        .map(|source| {
+            (
+                source.name.as_str(),
+                source.pattern.as_str(),
+                source.root.as_path(),
+            )
+        })
+        .collect();
+    // The fixture's root is `{config_home}/projects`, so each row resolves under it.
+    let root = Path::new("/config/projects");
+    assert_eq!(
+        planned,
+        vec![
+            ("row-0", "row0/*.jsonl", root),
+            ("row-1", "row1/*.jsonl", root),
+            ("row-2", "row2/*.jsonl", root),
+        ]
+    );
 }
 
 /// A harness that keeps no conversation file declares no native source: its entry plans no

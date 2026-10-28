@@ -1,17 +1,17 @@
-//! The entry's native-store plan: its one schema-declared source, if it has one, the roots it
-//! resolves to and the isolation they are held to. Chat mode names no session
-//! (`identity.source = "none"`), so there is no scope to bind: the store is read from the
+//! The entry's native-store plan: one source for each schema-declared `[[capture.native]]` row,
+//! the roots they resolve to and the isolation they are held to. Chat mode names no session
+//! (`identity.source = "none"`), so there is no scope to bind: the stores are read from the
 //! entry's create on, and a `since_run_start` source reads only files changed at or after the
 //! run's start (D57).
 
 use super::*;
-use goalcup_protocol::harness::RunHome;
+use goalcup_protocol::harness::{NativeSpec, RunHome};
 
 /// Raw native bytes one poll may read: about an eighth of the queue once encoded.
 pub(super) const NATIVE_POLL_BYTES: u64 = 4 * MAX_SEGMENT_BYTES as u64;
 
-/// How an entry reads its harness's one schema-1 native store: the schema-declared source, or
-/// nothing for a harness that declares none.
+/// How an entry reads its harness's native stores: one source per schema-declared row, in row
+/// order, or nothing for a harness that declares none.
 /// `since` is the run's start in Unix seconds, from which a `since_run_start` source reads
 /// (D57) and which any other ignores: the request's `native_since`, or else the entry's own
 /// create time ([`create_time_floor`]).
@@ -23,9 +23,20 @@ pub(super) fn native_plan(
 ) -> Result<Vec<NativeSourceSpec>, DaemonError> {
     // A harness that keeps no conversation file of its own declares none: the entry records
     // the wire alone.
-    let Some(native) = capture.native.first() else {
-        return Ok(Vec::new());
-    };
+    capture
+        .native
+        .iter()
+        .map(|native| native_source(native, run_home, config_home, since))
+        .collect()
+}
+
+/// One `[[capture.native]]` row, planned.
+fn native_source(
+    native: &NativeSpec,
+    run_home: &Path,
+    config_home: &Path,
+    since: u64,
+) -> Result<NativeSourceSpec, DaemonError> {
     let modified_since = if native.since_run_start {
         Some(
             std::time::UNIX_EPOCH
@@ -55,14 +66,14 @@ pub(super) fn native_plan(
         .map(NativeHint::new)
         .transpose()
         .map_err(|error| DaemonError::Config(format!("native capture: {error}")))?;
-    Ok(vec![NativeSourceSpec {
+    Ok(NativeSourceSpec {
         name: native.name.clone(),
         root,
         pattern: native.pattern.clone(),
         form,
         hint,
         modified_since,
-    }])
+    })
 }
 
 /// The floor a `since_run_start` source reads from when the request names no run start: the
