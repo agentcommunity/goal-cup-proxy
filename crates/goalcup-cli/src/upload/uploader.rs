@@ -77,5 +77,6 @@ fn record_in(dir: &Path) -> UploadRecord {
         official_start: String::new(),
         deadline_at: String::new(),
         workspace: String::new(),
+        tunnels_file: None,
     }
 }

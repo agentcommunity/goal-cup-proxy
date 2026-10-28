@@ -155,8 +155,8 @@ fn the_model_host_from_the_harness_config_is_recorded() {
 }
 
 /// A CONNECT to any other host is relayed as a tunnel the recording proxy never opens: the harness
-/// sees the upstream's own certificate, the tunnel is counted in `proxy admission:`, and the chain
-/// holds no record of it.
+/// sees the upstream's own certificate, the tunnel is counted in `proxy admission:`, the chain
+/// holds no record of it, and the entry's sealed-connection list names its host and bytes.
 #[test]
 fn other_hosts_stay_opaque_tunnels() {
     let (rig, out, records) = headless_run(|_| {
@@ -197,7 +197,52 @@ fn other_hosts_stay_opaque_tunnels() {
         !opens.iter().any(|(host, ..)| host == OTHER_HOST),
         "{opens:?}"
     );
-    assert!(!out.contains(OTHER_HOST), "{out}");
+    // The tunnel is named only in the sealed-connection list and its one finish line (D74).
+    let sealed = out
+        .lines()
+        .find(|line| line.starts_with("sealed hosts: "))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(
+        sealed.contains(&format!("{OTHER_HOST}:443 x1 ")),
+        "{sealed}"
+    );
+    assert_eq!(out.matches(OTHER_HOST).count(), 1, "{out}");
+    let lists: Vec<_> = walk(&goalcup_cli::run::runs_dir(&rig.cfg))
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("tunnels-"))
+        })
+        .collect();
+    let [list] = lists.as_slice() else {
+        panic!("one list per entry: {lists:?}")
+    };
+    let lines: Vec<serde_json::Value> = std::fs::read_to_string(list)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines[0]["format"], "goalcup-tunnels-v1");
+    let other = lines
+        .iter()
+        .find(|line| line["host"] == OTHER_HOST)
+        .unwrap_or_else(|| panic!("{lines:?}"));
+    assert_eq!(other["reason"], "not_model_host");
+    assert!(other["up_bytes"].as_u64().unwrap() > 0, "{other}");
+}
+
+/// Every file under `dir`.
+fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(walk(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
 }
 
 /// `absent = "defaults"` with no config at all: the start is not refused, the details say the

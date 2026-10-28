@@ -91,6 +91,12 @@ fn tunneled(outcome: Admission) -> Tunneled {
     }
 }
 
+/// A tunnel's host, port, reason and end: everything but its clock times.
+fn facts(tunnel: &Tunneled) -> (&str, u16, TunnelReason, TunnelEnd) {
+    assert!(tunnel.opened <= tunnel.closed);
+    (&tunnel.host, tunnel.port, tunnel.reason, tunnel.end)
+}
+
 /// Every diagnostic surface of an outcome, as bytes.
 fn diagnostics(outcome: &Admission) -> Vec<u8> {
     let mut text = format!("{outcome:?}");
@@ -482,6 +488,7 @@ async fn split_connect_head_keeps_pipelined_tls_bytes() {
     // Tunnel: the same pipelining with a ClientHello for another name; the upstream must see
     // every post-head byte exactly once and in order, and the client the upstream's reply.
     let recorder = Recorder::start(b"UPSTREAM-REPLY".to_vec()).await;
+    let upstream_port = recorder.addr.port();
     let proxy = serve_one(config).await;
     let hello = client_hello(client_config(&[], &[H11], true), "other.test");
     let mut payload = hello.clone();
@@ -504,15 +511,16 @@ async fn split_connect_head_keeps_pipelined_tls_bytes() {
     assert_eq!(rest, b"UPSTREAM-REPLY");
     assert_eq!(recorder.bytes().await, payload);
     assert_eq!(
-        tunneled(proxy.outcome().await),
-        Tunneled {
-            host: "localhost".into(),
-            reason: TunnelReason::SniMismatch,
-            end: TunnelEnd::Closed {
+        facts(&tunneled(proxy.outcome().await)),
+        (
+            "localhost",
+            upstream_port,
+            TunnelReason::SniMismatch,
+            TunnelEnd::Closed {
                 client_to_upstream: payload.len() as u64,
                 upstream_to_client: 14
             }
-        }
+        )
     );
 }
 
@@ -539,8 +547,9 @@ async fn auth_and_non_capture_hosts_are_opaque_tunnels() {
     // fail-open tunnel the recording proxy chains as a loss: an approved host's traffic must not
     // leave uncaptured through an authentication host.
     let recorder = Recorder::start(reply.clone()).await;
+    let upstream_port = recorder.addr.port();
     let proxy = serve_one(config.clone()).await;
-    let target = format!("localhost:{}", recorder.addr.port());
+    let target = format!("localhost:{upstream_port}");
     assert_eq!(
         tunnel_round_trip(proxy.addr, &target, &payload).await,
         reply
@@ -553,15 +562,16 @@ async fn auth_and_non_capture_hosts_are_opaque_tunnels() {
         &["AUTH-SENTINEL", "Bearer", "api.test"],
     );
     assert_eq!(
-        tunneled(outcome),
-        Tunneled {
-            host: "localhost".into(),
-            reason: TunnelReason::SniMismatch,
-            end: TunnelEnd::Closed {
+        facts(&tunneled(outcome)),
+        (
+            "localhost",
+            upstream_port,
+            TunnelReason::SniMismatch,
+            TunnelEnd::Closed {
                 client_to_upstream: payload.len() as u64,
                 upstream_to_client: reply.len() as u64
             }
-        }
+        )
     );
 
     // A host that is neither approved nor an authentication host, whose ClientHello names a

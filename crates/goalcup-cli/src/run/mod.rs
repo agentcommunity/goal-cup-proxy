@@ -940,6 +940,12 @@ pub fn run_dir(cfg: &Path, run_id: &str) -> PathBuf {
     runs_dir(cfg).join(run_id)
 }
 
+/// Where the finish writes one entry's sealed-connection list, and where the upload reads it for
+/// the seal (D74): one file per entry, so each segment of a continued run keeps its own.
+pub fn tunnels_path(cfg: &Path, run_id: &str, entry_id: &str) -> PathBuf {
+    run_dir(cfg, run_id).join(crate::proxy::tunnels::file_name(entry_id))
+}
+
 /// Whether `id` can be a directory name here: ids come from the server and the daemon, and a
 /// path separator or a dot must not make one a path.
 fn is_safe_name(id: &str) -> bool {
