@@ -1,143 +1,173 @@
-# Vercel AI Gateway, cloud container, 28 Oct 2026 UTC (results)
+# Vercel AI Gateway and Vercel Sandbox, 28 Oct 2026 UTC (results)
 
-A Claude Code cloud container, build `a732e00` (goalcup 0.7.0, built from this checkout). Desk
-research for this round is [VERCEL-COMPAT](../VERCEL-COMPAT.md). No run was recorded, so no trace
-exists. No key or token is in this file; the AI Gateway key was present in the environment and
-was never printed or written.
+Two rounds on the same day. Round 1 tried a Claude Code cloud container and was blocked. Round 2
+ran in a Vercel Sandbox (`gc-gateway`, 4 vCPU, 40-minute timeout, region `iad1`) with goalcup
+0.7.0 from the release `install.sh`. Desk research: [VERCEL-COMPAT](../VERCEL-COMPAT.md). All runs
+were local runs with a fresh `GOALCUP_CONFIG_DIR` and no account, so nothing was uploaded. The
+traces, config homes and sandbox are deleted. No key or token is in this file. The AI Gateway key
+reached the sandbox as a copied file (mode 0600), never in argv or in output.
 
-**Verdict: blocked at step 2. This machine cannot host a goalcup run, so no harness was run and
-no code was changed.** All outbound traffic here goes through the session's own egress proxy,
-which re-signs TLS with a private CA. goalcup's recording proxy resolves and connects to upstream
-hosts itself and trusts only the Mozilla roots, so it cannot reach `ai-gateway.vercel.sh` from
-here. The `vercel` row is not added: `providers.toml` allows a row "only from a measured run",
-and the run could not happen. The proposed row, the Codex gap and the laptop commands are below.
+**Verdict.**
 
-## Facts
+1. **Vercel Sandbox can host a short goalcup run.** XFS, user namespaces, IPv6 on loopback and
+   direct egress all pass, with no TLS re-termination. goalcup's upstream TLS check passed against
+   `ai-gateway.vercel.sh`.
+2. **Hermes through the gateway is recorded.** With Hermes's built-in `ai-gateway` provider it
+   PASSES: 13 wire model requests, decoded as `openai-chat-completions`. With a bare
+   `provider: custom` endpoint the calls are recorded but fail with HTTP 401, because Hermes sends
+   no key.
+3. **Claude Code through the gateway is not recorded on the wire**, as expected. The native session
+   is recorded, but the verifier reports `native_activity_without_wire_streams` with 0 wire model
+   requests. The `vercel` row is the fix; it is not added yet, as asked.
+4. **`intercepted=` above 0 is not proof of a model record.** The Claude run shows `intercepted=20`
+   and still has no wire stream. Judge with the research JSON's `cross_leg.wire_model_requests`.
+
+## Round 2: Vercel Sandbox facts
 
 | Check | Result |
 |---|---|
-| `uname -a` | `Linux vm 6.18.44-fc-v180 #1 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux` |
-| `nproc` | 4 |
-| `free -g` | 15 GiB total, 15 free, no swap |
-| `df -T "$HOME" /tmp` | both `/dev/vda ext4`, 31 GB free |
-| `findmnt -no FSTYPE -T "$HOME"` | `ext4` |
+| `uname -a` | `Linux 7eab51a4-523 6.18.49 #1 SMP Thu Oct 1 14:49:36 UTC 2026 x86_64 GNU/Linux` |
+| OS | Ubuntu 26.04.1 LTS; user `ubuntu` (uid 1000, in `sudo`); `HOME=/vercel`, not `/home/ubuntu` |
+| `nproc` / memory | 4 / 8 GiB |
+| `df -T "$HOME" /tmp` | both `/dev/vdb xfs`, 64 GB, 63 GB free |
+| `findmnt -no FSTYPE -T "$HOME"` | `xfs` (goalcup accepts it) |
 | `unshare -Ur true` | `userns-ok` |
-| `curl -sI https://ai-gateway.vercel.sh` | `HTTP/2 308` to `vercel.com/ai-gateway`, but only through the session proxy (`HTTPS_PROXY`) |
-| `GET /v1/models` | both `poolside/laguna-s-2.1-free` and `nvidia/nemotron-3.5-lightning-free` listed, price 0, tag `tool-use` |
-| Direct DNS (`getent hosts ai-gateway.vercel.sh`) | **unresolved** (`github.com` and `api.anthropic.com` resolve) |
-| IPv6 | **none**: no `/proc/net/if_inet6`; `socket(AF_INET6)` fails with errno 97 |
-| User | root (the gate and Claude Code both want a normal user) |
-| Build | `cargo fetch --locked && cargo build --release --offline`: PASS, 1 m 48 s |
+| IPv6 on loopback | yes: `::1` on `lo`, bind works |
+| DNS and egress | `ai-gateway.vercel.sh` resolves directly; no proxy |
+| Tools present | `tmux`, `git`, `python3`, `curl`, `node`, `npm`, `sudo`; no `systemd-inhibit` |
+| goalcup | 0.7.0, from `releases/latest/download/install.sh`, into `~/.local/bin` |
+| Hermes | v0.22.5 (2026.9.24), Hermes's `install.sh --non-interactive --skip-browser --skip-computer-use` |
+| Claude Code | 2.1.312, native `claude.ai/install.sh` |
+| `goalcup doctor --harness hermes-cli` | PASS: manifest pin, executable, decoders |
 
-## Why the machine fails
+Sandbox findings for VERCEL-COMPAT:
 
-1. **No direct path to the gateway.** The session's egress goes through `HTTPS_PROXY`, a local
-   relay to a policy proxy that "re-terminates TLS" with a session CA (`/root/.ccr/README.md`).
-   `ai-gateway.vercel.sh` does not resolve without it. Going around that proxy is not allowed in
-   this session, and I did not try.
-2. **goalcup cannot use that proxy.** The recording proxy calls `lookup_host` and
-   `TcpStream::connect` itself (`crates/goalcup-cli/src/proxy/connect.rs:950`, `:988`). It has no
-   upstream proxy setting. It checks upstream TLS only against `webpki-roots`
-   (`crates/goalcup-cli/src/proxy/tls.rs:232`), so it would refuse the session CA anyway. That is
-   the same trap VERCEL-COMPAT section 1 names for Sandbox firewall brokering.
-3. **Effect on each run.** For 4a, the start preflight (`proxy/preflight.rs`) probes the
-   `model.base_url` host on port 443 and refuses the start. For 4b and 4c, the harness's CONNECT to
-   the gateway would be tunnelled by goalcup, then fail at DNS. No result here would say anything
-   about Vercel.
-4. **The gate would not pass here either.** It needs IPv6 on loopback (README, "The gate"), and
-   this kernel has no IPv6.
+- **Filesystem:** XFS, so blocker 1 is cleared. Drives were not tested.
+- **A stop takes a snapshot by default.** `sandbox stop` wrote a 1.9 GiB snapshot that expires in
+  30 days. A key left on disk would survive the sandbox in that snapshot. Delete keys before a
+  stop, or create the sandbox with `--non-persistent`. I deleted the snapshot.
+- **`sandbox exec` is not a terminal.** `goalcup start` refuses a pipe ("goalcup must hold the
+  foreground of a terminal"). Run goalcup inside `tmux` in the sandbox; this worked.
+- Session stop during a run (blocker 2) and the 24-hour limit were not tested: this was a light
+  proof, as asked.
 
-## Results
+## Round 2: runs
 
-| Run | Result | Verifier | `proxy admission:` | Harness version |
+Prompt each time: `Build a chess game in Python.`, then about 3 minutes, then exit the harness.
+Model `poolside/laguna-s-2.1-free`. Its free tier allows 5 requests a minute per team, so both
+harnesses hit HTTP 429 and retried by themselves. Hermes also saw "Provider temporarily
+unavailable" (503). No run needed the fallback model.
+
+| Run | Verifier | `proxy admission:` | Wire / native | Result |
 |---|---|---|---|---|
-| 4a Hermes, custom endpoint `/v1` | NOT RUN (blocked) | none | none | not installed |
-| 4b Claude Code, `ANTHROPIC_BASE_URL=.../claude-code` | NOT RUN (blocked) | none | none | not installed |
-| 4c Codex, Vercel's `config.toml` | NOT RUN (blocked) | none | none | not installed |
-| 5 change + `gate.sh fast` + rerun 4b | NOT DONE | none | none | none |
+| 4a-1 Hermes, `provider: custom`, `base_url` `https://ai-gateway.vercel.sh/v1`, key `OPENAI_API_KEY` in `.env` | `capture integrity valid (anchor local_only, exit 0, findings: none)` | `accepted=15 intercepted=2 tunneled_not_approved=12 auth_refused=1` | 2 intercepted calls, both answered HTTP 401 | **FAIL**: recorded, but the agent never got a model reply |
+| 4a-2 Hermes, `provider: ai-gateway`, same `base_url`, key `AI_GATEWAY_API_KEY` in `.env` | `capture integrity valid (anchor local_only, exit 0, findings: none)` | `accepted=20 intercepted=14 tunneled_not_approved=4 failed=2 client_tls=2` | `wire_model_requests=13`, `wire_streams=28`, 53 `openai-chat-completions` observations; 2 tool calls | **PASS** |
+| 4b Claude Code, `settings.json` `env` `ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh/claude-code`, `ANTHROPIC_AUTH_TOKEN` | `capture integrity valid (anchor local_only, exit 0, findings: none)` | `accepted=26 intercepted=20 tunneled_not_approved=6` | `cross_leg.state=native_activity_without_wire_streams`, `wire_model_requests=0`, `native_model_activity=7`, 49 `claude-code-native` observations | **FAIL, as expected**: gateway traffic tunnelled, not recorded |
 
-Expected results, from the code and docs, to confirm on a laptop:
+Notes:
 
-- **4a:** PASS. Hermes's connector reads `model.base_url` (D62), so `ai-gateway.vercel.sh` is
-  intercepted with `/v1/chat/completions` under the `openai-chat-completions` hint.
-- **4b:** native session recorded, `ai-gateway.vercel.sh` tunnelled (`tunneled_not_approved` above
-  0, `intercepted=0` for model calls), no wire record.
-- **4c:** the model call fails or is not recorded. See "The Codex gap".
+- **4a-1, why the key is missing.** The key is good: the same key, sent by `curl` from the sandbox,
+  got 503 (busy) on `/v1/chat/completions` and 200 on `/claude-code/v1/messages`, never 401. The gateway's 401 says no key arrived. The likely cause is
+  D72's known limit: goalcup's `providers.recorder` trust entry for the same URL has no key, and
+  with a bare `provider: custom` Hermes takes that entry as the URL's owner. That limit was marked
+  "unverified"; it now fails in a measured run. The exact Hermes code path is **unverified**.
+- **4a-2, the two `client_tls` failures** match Hermes's model-list and local-server probes
+  measured before (`docs/harnesses/hermes-cli.md`, model host). They are not model calls
+  (inference: the same counts, and every model call was recorded).
+- **4b, what `intercepted=20` is.** The Claude connector approves one host, `api.anthropic.com`.
+  The trace has 20 connection opens and closes and no `wire_request` record. So Claude Code still
+  talks to `api.anthropic.com` for non-model calls, and goalcup intercepts those connections, but
+  no path matches `/v1/messages`. The model calls went to the gateway (its configured base URL),
+  which is not approved, so they are among `tunneled_not_approved=6`.
+- **Tunnelled host names are not printed.** `proxy admission:` gives counts only, and
+  `host.log` has nothing more. "The model host was not tunnelled" is shown by the wire records,
+  not by that line.
+- Claude Code warned `Model "poolside/laguna-s-2.1-free" isn't recognized · context assumed to be
+  200k tokens`. Harmless here.
 
-## The change, as designed (not applied)
+## Round 1: Claude Code cloud container (blocked)
 
-**One hint per row is a blocker for the row as asked.** A `providers.toml` row is a `HostSpec`
-with one `protocol_hint` for all its paths (`crates/goalcup-protocol/src/harness/schema.rs`;
-`start/proxy.rs::approved_hosts` copies the row's hint to every path). A connector may list a host
-once (`harness/check.rs:1169`). So one `vercel` row cannot give `/v1/chat/completions`,
-`/v1/messages` and `/v1/responses` each their correct hint. A mixed row would decode two of the
-three formats with the wrong decoder. Only `model_host_from` has per-path hints today
-(`crates/goalcup-cli/src/model_host.rs`, `WIRE_PATHS`).
+Build `a732e00` from this checkout, `cargo build --release --offline`: PASS in 1 min 48 s. Facts:
+Linux 6.18.44 x86_64, 4 CPUs, 15 GiB, ext4, `userns-ok`, **no IPv6**. Blocked because:
 
-What I would add, once a laptop run measures it:
+1. All outbound traffic goes through the session's egress proxy, which re-signs TLS with its own
+   CA. `ai-gateway.vercel.sh` does not resolve without it. Going around it is not allowed.
+2. goalcup's recording proxy resolves and connects to upstream hosts itself
+   (`crates/goalcup-cli/src/proxy/connect.rs:950`, `:988`), with no upstream proxy setting. It
+   trusts only `webpki-roots` (`crates/goalcup-cli/src/proxy/tls.rs:232`). Any machine whose egress
+   re-signs TLS cannot host a run, by design. That includes a Vercel Sandbox with firewall
+   credential brokering on the model host.
+3. The gate needs IPv6 on loopback; that kernel has none.
+
+## The change, as designed (not applied yet)
+
+Run 4b is the measured "before" run the row needs. One problem with the row as first asked: a
+`providers.toml` row is a `HostSpec` with **one `protocol_hint` for all its paths**
+(`crates/goalcup-protocol/src/harness/schema.rs`; `start/proxy.rs::approved_hosts` copies it to
+every path), and a connector may list a host once (`harness/check.rs:1169`). So one `vercel` row
+cannot give `/v1/chat/completions`, `/v1/messages` and `/v1/responses` each their correct hint.
+
+Proposed, for the Claude Code connector only:
 
 ```toml
-# Vercel AI Gateway, the Anthropic Messages surface (measured with Claude Code, <results file>).
-# One hint per row: the gateway's OpenAI paths (/v1/chat/completions, /v1/responses,
-# /codex/v1/responses) need their own row or per-path hints.
+# Vercel AI Gateway, the Anthropic Messages surface (measured with Claude Code,
+# docs/research/results/2026-10-vercel-gateway.md). One hint per row: the gateway's OpenAI paths
+# need their own row or per-path hints.
 [vercel]
 host = "ai-gateway.vercel.sh"
 evidence_paths = ["/claude-code/v1/messages", "/v1/messages", "/coding-agent/v1/messages"]
 protocol_hint = "anthropic-messages"
 ```
 
-and in `connectors/claude-code-cli/harness.toml`: `providers = ["anthropic", "vercel"]`, then
-`sh scripts/pin-manifests.sh`. No DECISIONS entry is required for a new row: CONNECTOR-SCHEMA asks
-only for "a reviewed row… added from a measured run", and asks for a DECISIONS entry only to retire
-or tighten. Note D62 says `providers.toml` "stays for a harness that can reach one fixed service";
-Claude Code with a gateway reaches two, so the owner may want a line on that.
+Then `providers = ["anthropic", "vercel"]` in `connectors/claude-code-cli/harness.toml`, `sh
+scripts/pin-manifests.sh`, `sh scripts/gate.sh fast`, and a rerun of 4b that should show
+`wire_model_requests` above 0. No DECISIONS entry is required for a new row (CONNECTOR-SCHEMA asks
+only for a reviewed row from a measured run). But D62 says `providers.toml` is for a harness that
+reaches one fixed service, and Claude Code through a gateway reaches two, so the owner may want a
+line on that.
 
-**Start-probe cost, and the choice.** With the row, every Claude Code start also probes
-`ai-gateway.vercel.sh:443` and refuses the start if it does not answer within 10 s, even for a
-participant who uses only a Claude subscription. Measured cost of a reachable probe: none yet. I
-would take that cost: it is one TCP connect, and the refusal message names the host. The risk is a
-participant's network that blocks Vercel; measure that on the laptop run too. The other option is `model_host_from` on
-`settings.json` `env.ANTHROPIC_BASE_URL`, which probes only what the participant names, but D62
-forbids a key naming `env` and has no optional form. That is a DECISIONS change, not a row.
+**Start-probe cost, and the choice.** With the row, every Claude Code start also makes one TCP
+connect to `ai-gateway.vercel.sh:443` and refuses the start if it gets no answer within 10 s. That
+includes participants on a plain Claude subscription. I would take that cost: it is one connect,
+and the refusal names the host. The risk is a network that blocks Vercel. The alternative,
+`model_host_from` on `settings.json` `env.ANTHROPIC_BASE_URL`, probes only what the participant
+names, but D62 forbids a key that names `env` and has no optional form. That needs a DECISIONS
+change, not a row.
 
-**Owner question first.** Should the OpenAI paths go in at all? Hermes already records the
-gateway through `model_host_from`, and Codex cannot use a row until its key problem is solved. If
-yes, the clean fix is per-path hints in `HostSpec` (a schema change), not a second `vercel-openai`
-row, because a connector that needed both would list the host twice.
+**Owner questions:** should the gateway's OpenAI paths be covered at all? Hermes already records
+the gateway through `model_host_from`, and Codex cannot use a row until its key problem is solved.
+If yes, the clean fix is per-path hints in `HostSpec` (a schema change), not a second row.
 
 ## The Codex gap (not attempted)
 
-Vercel's Codex setup cannot work under goalcup as written:
-
 1. **The key never arrives.** `env_key = "AI_GATEWAY_API_KEY"` makes Codex read the key from its
-   environment. goalcup builds that environment from nothing (D36, D61), so the variable is absent
-   and Codex fails before any model call. A fix must keep the key in `config.toml` in Goal Cup's
-   home, for example `experimental_bearer_token` or a `[model_providers.vercel.auth]` command.
-   Both are unmeasured with goalcup.
+   environment. goalcup builds that environment from nothing (D36, D61), so Codex fails before any
+   model call. A fix keeps the key in `config.toml` in Goal Cup's home (`experimental_bearer_token`,
+   or a `[model_providers.vercel.auth]` command). Both are unmeasured with goalcup.
 2. **The wrong host is recorded.** The connector intercepts only `chatgpt.com`
-   (`/backend-api/codex/responses`). `ai-gateway.vercel.sh` tunnels, so even a working call leaves
-   no wire record.
-3. **What recording would need:** either a row for `ai-gateway.vercel.sh` with
-   `/codex/v1/responses`, `/v1/responses` and `/codex/v1/responses/compact` under `openai-responses`
-   (same probe cost; conflicts with a `vercel` Anthropic row in any connector that lists both), or
+   (`/backend-api/codex/responses`). `ai-gateway.vercel.sh` tunnels.
+3. **Recording would need** a row for `ai-gateway.vercel.sh` with `/codex/v1/responses`,
+   `/v1/responses` and `/codex/v1/responses/compact` under `openai-responses`, or
    `model_host_from = { file = "config.toml", key = "model_providers.vercel.base_url" }`, which
    refuses every ChatGPT-login participant unless D62 gains an optional form. `/codex/v1/models`
-   returns a proprietary shape and needs no capture. Leave `supports_websockets` off until measured.
+   needs no capture. Leave `supports_websockets` off until measured.
 
-## Laptop commands for later (step 6, not run)
+## The server test for later (not run)
 
-On a Mac or Linux laptop with direct internet, a Goal Cup account, Hermes and Claude Code installed
-as native binaries first on `PATH`, and an AI Gateway key. `<home>` is
-`~/Library/Application Support/goalcup` on macOS and `~/.config/goalcup` on Linux. Never paste the
-key into a terminal history you share or into a file outside `<home>/capture-homes/`.
+On a laptop or sandbox with direct egress, a Goal Cup account, Hermes and Claude Code installed as
+native binaries first on `PATH`, and an AI Gateway key. `<home>` is
+`~/Library/Application Support/goalcup` on macOS and `~/.config/goalcup` on Linux. Keep the key
+only in the files under `<home>/capture-homes/` named below.
 
 ```sh
 goalcup login
 ```
 
-**4a, Hermes, practice.** In setup, choose a custom OpenAI-compatible endpoint, base URL
-`https://ai-gateway.vercel.sh/v1`, your gateway key, model `poolside/laguna-s-2.1-free` (fall back
-to `nvidia/nemotron-3.5-lightning-free` if it cannot call tools). Repeat until all steps say `[ok]`.
+**4a, Hermes.** Use the built-in provider; a bare custom endpoint fails (4a-1). Run setup once,
+exit Hermes, then edit `<home>/capture-homes/hermes-cli/config.yaml` so `model` reads
+`provider: ai-gateway`, `base_url: https://ai-gateway.vercel.sh/v1`,
+`default: poolside/laguna-s-2.1-free`, and put `AI_GATEWAY_API_KEY=<key>` in `.env` there (mode
+0600). Repeat setup until every step says `[ok]`.
 
 ```sh
 goalcup setup --harness hermes-cli
@@ -147,14 +177,9 @@ goalcup setup --harness hermes-cli
 d=$(mktemp -d ~/goalcup-practice-XXXX) && cd "$d" && goalcup start --harness hermes-cli --practice
 ```
 
-Type `Write a tested fizzbuzz in Python and commit it.`, let it finish, exit Hermes, then run the
-printed `verify:` command. Pass: `integrity: valid`, `intercepted=` above 0, and
-`ai-gateway.vercel.sh` not tunnelled.
-
-**4b, Claude Code, practice.** Run setup once, then exit Claude Code and edit
+**4b, Claude Code.** Run setup once, exit, then write
 `<home>/capture-homes/claude-code-cli/settings.json` (gateway key only, never a Claude
-subscription). The `ANTHROPIC_MODEL` line is unverified with Claude Code's gateway model names; if
-it is refused, pick the model with `/model`.
+subscription). Pin every model alias to the free model so background calls do not use a paid one.
 
 ```sh
 goalcup setup --harness claude-code-cli
@@ -167,7 +192,11 @@ goalcup setup --harness claude-code-cli
     "ANTHROPIC_AUTH_TOKEN": "<your AI Gateway key>",
     "ANTHROPIC_API_KEY": "",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-    "ANTHROPIC_MODEL": "poolside/laguna-s-2.1-free"
+    "ANTHROPIC_MODEL": "poolside/laguna-s-2.1-free",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "poolside/laguna-s-2.1-free",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "poolside/laguna-s-2.1-free",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "poolside/laguna-s-2.1-free",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "poolside/laguna-s-2.1-free"
   },
   "permissions": { "defaultMode": "bypassPermissions" },
   "skipDangerousModePermissionPrompt": true
@@ -178,15 +207,21 @@ goalcup setup --harness claude-code-cli
 d=$(mktemp -d ~/goalcup-practice-XXXX) && cd "$d" && goalcup start --harness claude-code-cli --practice
 ```
 
-Same prompt, then the printed `verify:` command. Before the row: native session recorded,
-`tunneled_not_approved` above 0, no wire stream. Note `claude --version`, `hermes --version`,
-the verifier output and the `proxy admission:` line in a new results file. That run is the
-measurement the `vercel` row needs; then add the row, run `sh scripts/gate.sh fast`, and repeat
-4b to see `intercepted=` count the gateway calls.
+For each: type `Build a chess game in Python.`, wait about 3 minutes, exit the harness, then run
+the printed `verify:` command and the research JSON:
+
+```sh
+goalcup-verify --research-json <trace-dir> --output "$HOME/research.ndjson"
+```
+
+Pass: `capture integrity valid`, and the last line's `analysis.cross_leg.wire_model_requests` is
+above 0. Today 4a passes and 4b should not, until the `vercel` row lands.
 
 ## Follow-ups
 
-- Run step 6 on a laptop, then land the `vercel` row from that measured run.
-- Owner: per-path hints in `HostSpec`, or Anthropic-only `vercel` row (section "The change").
-- A goalcup run inside a TLS-re-terminating egress proxy (this container, Vercel Sandbox with
-  brokering) is impossible by design. Say so in the participant guide's machine section.
+- Land the `vercel` row, then rerun 4b in a sandbox to see `wire_model_requests` above 0.
+- Hermes: a bare `provider: custom` endpoint gets HTTP 401 under goalcup (4a-1). Say so in
+  HARNESS-SETUP's Hermes section, and point Vercel users to the built-in `ai-gateway` provider.
+- `proxy admission:` could name tunnelled hosts (host and count only), so a reviewer can see the
+  model host was not tunnelled without the research JSON.
+- Owner: per-path hints in `HostSpec`, or the Anthropic-only `vercel` row.
