@@ -789,9 +789,33 @@ pub struct ModelHostFrom {
     /// The config file, relative to the shared config home. Its extension says how it is read:
     /// [`MODEL_HOST_FILE_EXTENSIONS`].
     pub file: String,
-    /// The value's key, its table names joined with `.` (`model.base_url`).
+    /// The value's key, its table names joined with `.` (`model.base_url`). With [`Self::via`]
+    /// it holds exactly one [`MODEL_HOST_VIA_PART`] part, which the name `via` reads stands for.
     pub key: String,
+    /// A dotted key in the same file whose string value names one table
+    /// (`model_provider = "vercel"`): its value replaces the `*` part of [`Self::key`]. One
+    /// indirection, never two.
+    #[serde(default)]
+    pub via: Option<String>,
+    /// What a missing file, key or `via` value means. A value that is present is always held to
+    /// the refusals, whatever this says.
+    #[serde(default)]
+    pub absent: ModelHostAbsent,
 }
+
+closed_enum! {
+    /// `capture.model_host_from.absent`: what a missing value means.
+    #[derive(Default)]
+    ModelHostAbsent, "capture.model_host_from.absent", special: &[];
+    /// The run is refused (D62). The default.
+    #[default]
+    Refuse = "refuse",
+    /// The run records the connector's own host rows only.
+    Defaults = "defaults",
+}
+
+/// The one part of `capture.model_host_from.key` that the value `via` reads stands for.
+pub const MODEL_HOST_VIA_PART: &str = "*";
 
 /// The file extensions `capture.model_host_from.file` may have: YAML, JSON or TOML.
 pub const MODEL_HOST_FILE_EXTENSIONS: &[&str] = &["yaml", "yml", "json", "toml"];
@@ -812,7 +836,6 @@ pub(super) const MODEL_HOST_DENIED_WORDS: &[&str] = &[
     "key",
     "keys",
     "api_key",
-    "env",
 ];
 
 /// The shared provider host table, `crates/goalcup-protocol/providers.toml`, compiled in.
