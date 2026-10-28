@@ -399,8 +399,7 @@ pub async fn restart_empty_control_planting(
     daemon.stop().await;
     {
         let path = goalcup_daemon::registry::Registry::default_path(&config.artifact_root);
-        let registry = goalcup_daemon::registry::Registry::open(&path)
-            .expect("the stopped daemon's registry opens");
+        let registry = released_registry(&path).await;
         plant(&registry);
     }
     let daemon = Daemon::start(config.clone()).await?;
@@ -415,6 +414,32 @@ pub async fn restart_empty_control_planting(
         daemon,
         _dir,
     })
+}
+
+/// The stopped daemon's registry at `path`, once the daemon's last handle has let go of it.
+///
+/// `Daemon::stop` takes the listener down, but axum runs each accepted connection as its own
+/// task, which the abort does not reach (its own doc says so). That task holds the router's
+/// `Arc<Daemon>`, and with it redb's file lock, until it has shut its socket down and been
+/// dropped. The test client reads the last response to its end, which it can do before the
+/// task is dropped; on a loaded machine the gap was long enough for this open to be refused as
+/// "another daemon holds the registry" (4 in 160 runs under `-j 16`). A production stop is
+/// followed by the process exit, which releases the lock either way. So the open waits for
+/// the release, for a bounded time: a handle that is never released still fails here.
+async fn released_registry(path: &std::path::Path) -> goalcup_daemon::registry::Registry {
+    const HELD: &str = "another daemon holds the registry";
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match goalcup_daemon::registry::Registry::open(path) {
+            Ok(registry) => return registry,
+            Err(goalcup_daemon::DaemonError::Refused(why))
+                if why.contains(HELD) && std::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            Err(error) => panic!("the stopped daemon's registry opens: {error:?}"),
+        }
+    }
 }
 
 /// `from` copied to `to`, recursively, creating what it needs.
