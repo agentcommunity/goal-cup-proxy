@@ -375,7 +375,8 @@ fn repair_loose_shared_home(config_home: &Path, owner: u32) {
     if std::fs::set_permissions(config_home, std::fs::Permissions::from_mode(0o700)).is_ok() {
         crate::host_log::say(&format!(
             "the shared home {} was open to other users (mode {mode:04o}); Goal Cup set it to \
-             0700 so only you can read it. Nothing else to do.",
+             0700 so only you can read it. A key stored in it while it was open may have been \
+             readable by other users: if this computer was shared, rotate that key.",
             config_home.display()
         ));
     }
