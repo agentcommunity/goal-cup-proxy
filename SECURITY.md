@@ -42,10 +42,16 @@ one of those is known, not new, unless it shows that the stated bound does not h
   an isolated shared `HOME`. Runs sharing a home are serialized. Claude Code's per-run home
   links the macOS Keychains directory. Hermes's shared home is never seeded: its own setup
   keeps its provider and login there. Goal Cup Proxy passes no provider key and never writes
-  app-wide harness configuration such as `~/.claude`, `~/.codex` or `~/.hermes`.
+  app-wide harness configuration such as `~/.claude`, `~/.codex` or `~/.hermes`. The harness's
+  access token passes through the recording proxy's memory on its way to the model service; it is
+  forwarded unread and never written
+  ([`crates/goalcup-cli/src/proxy/http.rs`](crates/goalcup-cli/src/proxy/http.rs), "every other
+  header is skipped unread").
 - With `goalcup login`, talks to the Goal Cup server (`https://ingest.agentcommunity.org`) and to
   GitHub for the participant's repository. A run's credential is stored at mode 0600 under the
-  configuration directory and is never put in the harness's environment or argv.
+  configuration directory and is never put in the harness's environment or argv. The seal also
+  sends the list of sealed connections: host, port, times, bytes each way and reason, never their
+  content (D74).
 
 ## Assets and trust boundaries
 

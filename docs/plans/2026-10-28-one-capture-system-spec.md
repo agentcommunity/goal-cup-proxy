@@ -57,6 +57,15 @@ proxy's memory on its way to the model service; it is forwarded unread and never
 - **Frozen, not deleted.** `providers.toml` keeps `anthropic` and `deepseek` (CONNECTOR-SCHEMA promise
   6); no row is added. No `vercel` row. No per-path hint in `HostSpec`.
 
+## Changed while building (see [ledger](2026-10-28-one-capture-system-ledger.md))
+
+- The local list is `tunnels-<entry_id>.jsonl`, one per entry, not `tunnels.jsonl` (L26).
+- The server keeps it once per entry, create-only, as `traces/<event>/<run>/<entry>/tunnels.jsonl`,
+  and the list is capped at 8 MiB (L25).
+- Hermes keeps its `auth_hosts` as they were (L12).
+- A gateway the config names opens beside the connector's default hosts: the default hosts *and*
+  that address, not one or the other (L11).
+
 ## Out of scope
 
 Codex `api.openai.com` row (needs a measured API-key run); a decoder for OpenCode's

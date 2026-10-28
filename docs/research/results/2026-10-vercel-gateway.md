@@ -18,9 +18,71 @@ reached the sandbox as a copied file (mode 0600), never in argv or in output.
    no key.
 3. **Claude Code through the gateway is not recorded on the wire**, as expected. The native session
    is recorded, but the verifier reports `native_activity_without_wire_streams` with 0 wire model
-   requests. The `vercel` row is the fix; it is not added yet, as asked.
+   requests. The fix is D74 ([Decisions](#decisions-owner-28-oct)), not a `vercel` row; measured
+   after D74 it is recorded ([Round 3](#round-3-28-oct-one-capture-system-sandbox)).
 4. **`intercepted=` above 0 is not proof of a model record.** The Claude run shows `intercepted=20`
    and still has no wire stream. Judge with the research JSON's `cross_leg.wire_model_requests`.
+
+## Decisions (owner, 28 Oct)
+
+The `vercel` row below was not taken. The owner chose one capture rule set for every harness,
+recorded as [D74](../../DECISIONS.md#d74-the-model-host-is-the-connectors-default-or-the-one-address-the-harnesss-own-config-names): the model hosts are the connector's defaults and the one address
+the harness's own config names. Claude Code reads `env.ANTHROPIC_BASE_URL` in `settings.json` and
+Codex reads `model_providers.*.base_url` via `model_provider`, both falling back to their default
+hosts; `providers.toml` is frozen; every sealed connection is listed and uploaded with the seal;
+the verifier labels each run's evidence. The work is the
+[spec](../../plans/2026-10-28-one-capture-system-spec.md) and the
+[plan](../../plans/2026-10-28-one-capture-system.md).
+
+## Round 3: 28 Oct, one capture system (sandbox)
+
+Measured on the integrated build of the one capture system (Tasks 1 to 7), in a Vercel Sandbox
+(8 vCPU, `iad1`, non-persistent), as user `ubuntu`. Local runs: no `goalcup login`, so each run
+was `goalcup start --harness <id>` with anchor `local only`, and nothing was uploaded. Prompt
+"Build a chess game in Python.", about 3 minutes, then exit. Harnesses: Claude Code 2.1.312 (npm),
+Codex 0.165.0 (release binary), Hermes v0.22.5. Gateway key only, copied as a 0600 file; key files
+and settings were deleted and the sandboxes removed after the runs.
+
+**Model.** Every run used the free `nvidia/nemotron-3.5-lightning-free` for every model alias. The
+team has no paid gateway credits, so `deepseek/deepseek-v4.1-flash` answers 403 ("Free tier users
+do not have access to this model"). 429s were seen in all three runs, and the harnesses retried.
+
+| Run | `analysis.evidence` | `wire_model_requests` | `cross_leg` state | Integrity |
+|---|---|---|---|---|
+| Claude Code, `env.ANTHROPIC_BASE_URL` in `settings.json`, first run | `wire_undecoded` | 0 (19 calls recorded) | `unchecked` | valid, exit 0 |
+| Claude Code, rerun with the decoder fix (#286) | `wire_and_native` | 15 | `consistent` | valid, exit 0 |
+| Codex, provider `vercel`, key in `$CODEX_HOME/.env` | `wire_and_native` | 17 | `consistent` | valid, exit 0 |
+| Hermes, built-in `ai-gateway` provider | `wire_only` | 9 | `unchecked` (no session file) | valid, exit 0 |
+
+The first Claude Code run recorded 19 `POST ai-gateway.vercel.sh /claude-code/v1/messages`, but
+the Anthropic decoder accepted only the exact path `/v1/messages`, so it labelled them
+`wire_undecoded`. That is the bug the label was built to show. The fix accepts a hinted path
+ending in `/messages` (ledger L29). Codex posted to `/codex/v1/responses` over plain HTTPS, no
+WebSocket.
+
+**Sealed hosts.** The gateway is in no sealed-hosts line, so it was opened and recorded:
+
+- Claude Code (rerun): `sealed hosts: downloads.claude.ai:443 x2 7991 KiB, raw.githubusercontent.com:443 x1 369 KiB`
+- Codex: `sealed hosts: github.com:443 x2 24992 KiB, ab.chatgpt.com:443 x1 1031 KiB, raw.githubusercontent.com:443 x1 9 KiB`
+- Hermes: `sealed hosts: models.dev:443 x1 489 KiB, hermes-agent.nousresearch.com:443 x2 18 KiB, portal.nousresearch.com:443 x1 9 KiB, api.github.com:443 x2 0 KiB, github.com:443 x1 0 KiB (+2 more, list in tunnels-<entry_id>.jsonl)`
+
+Each tunnel file was mode 0600, tagged `goalcup-tunnels-v1`, with `dropped 0`; the Claude Code
+and Codex rows were all `not_model_host`. Hermes's 7 cut tunnels have null bytes, shown as "0 KiB" in this build (later
+"? KiB"). Tunnel times are whole seconds.
+
+**Refusal.** Claude Code with `ANTHROPIC_BASE_URL=http://localhost:4000` was refused at start,
+exit 1, nothing created: "goalcup: Claude Code is set to use http://localhost:4000, which Goal Cup
+cannot record: it is plain http, which goes around the recorder (set by `env.ANTHROPIC_BASE_URL`
+in settings.json). Goal Cup records only an https model service that is not on this computer. Run
+goalcup setup --harness claude-code-cli, choose such a service there, then run the command again."
+
+**Also seen.** A capture home made by hand with umask 022 is refused: it must be mode 0700. The
+finish output's `trace:` line gives the trace path; the tunnel list is at
+`<GOALCUP_CONFIG_DIR>/runs/<entry_id>/tunnels-<entry_id>.jsonl`.
+
+**Left for the laptop.** Subscription logins were not tried here: on a datacenter address they put
+the account at risk. Claude Code with a subscription and no base URL, Codex with a ChatGPT login,
+and Codex with an OpenAI API key: [the laptop guide](../LAPTOP-LOGIN-RUNS.md).
 
 ## Round 2: Vercel Sandbox facts
 
@@ -99,7 +161,7 @@ Linux 6.18.44 x86_64, 4 CPUs, 15 GiB, ext4, `userns-ok`, **no IPv6**. Blocked be
    credential brokering on the model host.
 3. The gate needs IPv6 on loopback; that kernel has none.
 
-## The change, as designed (not applied yet)
+## The change, as designed (not taken; see Decisions)
 
 Run 4b is the measured "before" run the row needs. One problem with the row as first asked: a
 `providers.toml` row is a `HostSpec` with **one `protocol_hint` for all its paths**
@@ -215,13 +277,13 @@ goalcup-verify --research-json <trace-dir> --output "$HOME/research.ndjson"
 ```
 
 Pass: `capture integrity valid`, and the last line's `analysis.cross_leg.wire_model_requests` is
-above 0. Today 4a passes and 4b should not, until the `vercel` row lands.
+above 0. Today 4a passes and 4b should not, until D74 lands.
 
 ## Follow-ups
 
-- Land the `vercel` row, then rerun 4b in a sandbox to see `wire_model_requests` above 0.
+- Done in Round 3: under D74 (no `vercel` row), Claude Code shows `wire_model_requests` 15.
 - Hermes: a bare `provider: custom` endpoint gets HTTP 401 under goalcup (4a-1). Say so in
   HARNESS-SETUP's Hermes section, and point Vercel users to the built-in `ai-gateway` provider.
-- `proxy admission:` could name tunnelled hosts (host and count only), so a reviewer can see the
-  model host was not tunnelled without the research JSON.
-- Owner: per-path hints in `HostSpec`, or the Anthropic-only `vercel` row.
+- Done by D74: the `sealed hosts:` finish line and the uploaded tunnel list name each tunnelled
+  host.
+- Owner: decided by D74. Neither per-path hints in `HostSpec` nor a `vercel` row.
