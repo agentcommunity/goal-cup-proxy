@@ -245,6 +245,102 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files
 }
 
+/// `absent = "defaults"` with no config at all: the start is not refused, the details say the
+/// connector's own hosts are recorded, and its host row is opened as it is without the field.
+#[test]
+fn a_missing_setting_records_the_connector_hosts() {
+    let rig = Rig::new();
+    let path = rig.connectors.join(FAKE_ID).join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap().replacen(
+        "[capture]\n",
+        "[capture]\nmodel_host_from = { file = \"config.yaml\", key = \"model.base_url\", \
+         absent = \"defaults\" }\n",
+        1,
+    );
+    std::fs::write(&path, text).unwrap();
+    let upstream = Upstream::start(&rig.runtime);
+    rig.tell("stop", "");
+    rig.tell("steps.sh", &upstream.curl(r#"{"n":1}"#));
+    let goal = rig.run_folder();
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let (result, out) = std::thread::scope(|s| {
+        rig.start(
+            s,
+            &client,
+            rig.options(&goal, RESERVE),
+            Some(upstream.roots()),
+        )
+        .join()
+        .unwrap()
+    });
+    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(
+        out.contains(
+            "model service: the connector's default hosts (`model.base_url` not set in \
+             config.yaml)"
+        ),
+        "{out}"
+    );
+    let (report, records) = rig.read_trace(&client.created().entry_id);
+    assert!(report.sealed, "{:?}", report.findings);
+    let opens = wire_opens(&records);
+    assert!(
+        opens.iter().any(|(host, ..)| host == "localhost"),
+        "{opens:?}"
+    );
+}
+
+/// The shipped Claude Code and Codex connectors read a gateway from the participant's own
+/// settings and, with none set (a subscription login, Codex's built-in provider), are not
+/// refused: the run records their default hosts, `api.anthropic.com` and `chatgpt.com`.
+#[test]
+fn the_shipped_claude_and_codex_rows_fall_back_without_a_setting() {
+    let cfg = tempfile::tempdir().unwrap();
+    let claude = support::connector("claude-code-cli");
+    let codex = support::connector("codex-cli");
+    let hosts = |c: &goalcup_cli::connector::HarnessConnector| -> Vec<String> {
+        let hosts = &c.loaded.manifest.capture.hosts;
+        hosts.iter().map(|h| h.host.clone()).collect()
+    };
+    assert_eq!(hosts(&claude), ["api.anthropic.com"]);
+    assert_eq!(hosts(&codex), ["chatgpt.com"]);
+    let check = |c| goalcup_cli::model_host::check(cfg.path(), c);
+    assert_eq!(check(&claude), Ok(None));
+    assert_eq!(check(&codex), Ok(None));
+
+    let home = |id: &str| {
+        let home = cfg.path().join(CAPTURE_HOMES_DIR).join(id);
+        std::fs::create_dir_all(&home).unwrap();
+        home
+    };
+    let codex_config = home("codex-cli").join("config.toml");
+    std::fs::write(&codex_config, "model_provider = \"openai\"\n").unwrap();
+    assert_eq!(check(&codex), Ok(None), "a built-in provider has no table");
+
+    std::fs::write(
+        home("claude-code-cli").join("settings.json"),
+        r#"{"env":{"ANTHROPIC_BASE_URL":"https://ai-gateway.vercel.sh/claude-code"}}"#,
+    )
+    .unwrap();
+    let m = check(&claude).unwrap().expect("the gateway is read");
+    assert_eq!(
+        (m.host.as_str(), m.base_path.as_str()),
+        ("ai-gateway.vercel.sh", "/claude-code")
+    );
+    std::fs::write(
+        &codex_config,
+        "model_provider = \"vercel\"\n[model_providers.vercel]\n\
+         base_url = \"https://ai-gateway.vercel.sh/codex/v1\"\nwire_api = \"responses\"\n",
+    )
+    .unwrap();
+    let m = check(&codex).unwrap().expect("the gateway is read");
+    assert_eq!(
+        (m.host.as_str(), m.base_path.as_str()),
+        ("ai-gateway.vercel.sh", "/codex/v1")
+    );
+}
+
 /// No config, no key, a loopback or address-literal service, plain `http`, an authentication
 /// host or a value that is not a URL: each start is refused with the one sentence, which shows
 /// at most `scheme://host:port`, and nothing is created.

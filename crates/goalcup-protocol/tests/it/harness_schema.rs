@@ -19,7 +19,9 @@ use goalcup_protocol::capture_policy::{
     SHELL_VALUES, STARTUP_BASENAMES, STARTUP_COMPONENTS, arg_path_denied, env_key_denied,
     env_value_denied, is_interpreter_program, startup_file_problem,
 };
-use goalcup_protocol::harness::{HarnessManifest, NEWER_SENTENCE, Origin, PlatformKey};
+use goalcup_protocol::harness::{
+    HarnessManifest, ModelHostAbsent, NEWER_SENTENCE, Origin, PlatformKey,
+};
 use std::path::{Path, PathBuf};
 use toml::{Table, Value};
 
@@ -319,15 +321,13 @@ fn a_missing_required_table_is_a_plain_parse_error() {
 // Refusal table: native source
 // ---------------------------------------------------------------------------------------
 
+/// A harness that keeps no conversation file of its own declares no native source: the
+/// chat file is optional and the run records the wire alone.
 #[test]
-fn no_native_source_is_refused() {
-    let mut t = hermes();
+fn a_harness_without_a_native_source_is_admitted() {
+    let mut t = codex();
     tbl(&mut t, &["capture"]).remove("native");
-    refused(
-        &t,
-        PINNED,
-        &["without a native session store", "exactly one"],
-    );
+    admitted(&t, PINNED);
 }
 
 #[test]
@@ -4051,6 +4051,79 @@ fn a_model_host_from_is_held_to_its_rules() {
         &per_run,
         PINNED,
         &["capture.model_host_from", "config_home"],
+    );
+}
+
+/// `capture.model_host_from.via` names the table the key's one `*` part stands for, and
+/// `absent = "defaults"` lets a missing value fall back to the connector's own host rows, which
+/// it then must list.
+#[test]
+fn a_model_host_from_names_one_indirection_and_a_fallback() {
+    fn with(file: &str, key: &str, extra: &[(&str, &str)]) -> Table {
+        let mut t = codex();
+        let mut from = Table::new();
+        from.insert("file".into(), Value::String(file.into()));
+        from.insert("key".into(), Value::String(key.into()));
+        for (k, v) in extra {
+            from.insert((*k).into(), Value::String((*v).into()));
+        }
+        set(&mut t, &["capture"], "model_host_from", Value::Table(from));
+        t
+    }
+    admitted(
+        &with(
+            "settings.json",
+            "env.ANTHROPIC_BASE_URL",
+            &[("absent", "defaults")],
+        ),
+        PINNED,
+    );
+    let codex_gateway = || {
+        with(
+            "config.toml",
+            "model_providers.*.base_url",
+            &[("via", "model_provider")],
+        )
+    };
+    admitted(&codex_gateway(), PINNED);
+    let from = parsed(&codex_gateway())
+        .capture
+        .model_host_from
+        .expect("loaded");
+    assert_eq!(from.via.as_deref(), Some("model_provider"));
+    assert_eq!(from.absent, ModelHostAbsent::Refuse);
+
+    refused(
+        &with("config.toml", "model_providers.*.base_url", &[]),
+        PINNED,
+        &["capture.model_host_from.key", "*"],
+    );
+    for key in ["a.*.*.b", "env.*"] {
+        refused(
+            &with("config.toml", key, &[("via", "model_provider")]),
+            PINNED,
+            &["capture.model_host_from.key", "one"],
+        );
+    }
+    for via in ["x.*", "auth.provider"] {
+        refused(
+            &with("config.toml", "model_providers.*.base_url", &[("via", via)]),
+            PINNED,
+            &["capture.model_host_from.via"],
+        );
+    }
+    let mut no_fallback = with("config.yaml", "model.base_url", &[("absent", "defaults")]);
+    set(
+        &mut no_fallback,
+        &["capture"],
+        "hosts",
+        Value::Array(vec![]),
+    );
+    refused(&no_fallback, PINNED, &["capture.hosts", "absent"]);
+    refused(
+        &with("config.yaml", "model.base_url", &[("absent", "sometimes")]),
+        PINNED,
+        &["capture.model_host_from.absent"],
     );
 }
 

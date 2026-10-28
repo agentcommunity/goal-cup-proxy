@@ -1696,6 +1696,24 @@ fn schema_native_plan_copies_label_hint_form_and_root() {
     assert!(planned >= 5, "{planned} planned");
 }
 
+/// A harness that keeps no conversation file declares no native source: its entry plans no
+/// native read, so it records the wire alone, and the create is not refused for it.
+#[test]
+fn a_capture_without_a_native_source_plans_nothing() {
+    let mut manifest = manifest_at(&frozen_manifest_paths().remove(0));
+    manifest.capture.native.clear();
+    let plan = native_plan(
+        &manifest.capture,
+        Path::new("/run"),
+        Path::new("/config"),
+        0,
+    );
+    assert!(
+        matches!(plan, Ok(ref sources) if sources.is_empty()),
+        "{plan:?}"
+    );
+}
+
 #[test]
 fn a_since_run_start_source_filters_from_the_run_start() {
     // The frozen Hermes, whose per-run source does not declare it.

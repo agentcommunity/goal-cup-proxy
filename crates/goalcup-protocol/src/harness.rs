@@ -52,10 +52,11 @@ pub use schema::{
     MAX_CONFIGURE_COMMANDS, MAX_DISPLAY_NAME_CHARS, MAX_FIRST_SCREEN_CHARS,
     MAX_MODEL_HOST_KEY_PARTS, MAX_NO_PROMPT_SETTINGS, MAX_NO_PROMPT_VALUE_CHARS,
     MAX_NO_PROMPT_VALUES, MAX_REDACTION_NAME_BYTES, MAX_SETUP_SECTION_CHARS,
-    MODEL_HOST_FILE_EXTENSIONS, ModelHostFrom, NativeForm, NativeSpec, NoPromptSetting, Origin,
-    ParticipantSpec, PassEnv, PlatformKey, PlatformOverride, RedactionRule, RedactionSpec, RunHome,
-    SeedFile, SeedMode, Strategy, TerminationSpec, TimeLeftTool, display_name_problem,
-    first_screen_problem, provider_hosts, setup_section_problem,
+    MODEL_HOST_FILE_EXTENSIONS, MODEL_HOST_VIA_PART, ModelHostAbsent, ModelHostFrom, NativeForm,
+    NativeSpec, NoPromptSetting, Origin, ParticipantSpec, PassEnv, PlatformKey, PlatformOverride,
+    RedactionRule, RedactionSpec, RunHome, SeedFile, SeedMode, Strategy, TerminationSpec,
+    TimeLeftTool, display_name_problem, first_screen_problem, provider_hosts,
+    setup_section_problem,
 };
 
 /// The schema versions this build reads. Reader policy: these only.

@@ -67,13 +67,21 @@ resume_args = ["<RESUME-FLAG>"]
 # configure = [["config", "set", "<sessions.save_transcripts>", "true"]]
 # Sign-in/token-refresh hosts, tunnelled opaquely and never recorded. Delete if none.
 # auth_hosts = ["<AUTH_HOST>"]
-# Where the harness saves the model service the participant picks (D62): a file in its config
-# home (.yaml, .yml, .json or .toml) and the dotted key of the service's URL. Facts sheet
+# Where the harness saves the model service the participant picks (D62, D74): a file in its
+# config home (.yaml, .yml, .json or .toml) and the dotted key of the service's URL. Facts sheet
 # section 6 says where. Goal Cup Proxy reads that one value at each start and continue and records
-# that host only; every other host stays an opaque tunnel. The default for any harness whose
-# model service is the participant's choice. Needs config_home = "shared"; the file and key may
-# not name a key file or a key (auth, credential, secret, token, key, env).
+# that host; every other host stays an opaque tunnel. The default for any harness whose model
+# service is the participant's choice. Needs config_home = "shared"; the file and key may not
+# name a key file or a key (auth, credential, secret, token, key, api_key, apikey, password).
+# - via: when the URL sits in a table that another key names (`model_provider = "x"` and
+#   `[model_providers.x] base_url`), that key; the `key` then holds one `*` part for the name.
+# - absent = "defaults": a harness that has default hosts (its rows below) and takes a gateway
+#   only when the participant sets one. A missing file, key or `via` value then records those
+#   rows instead of refusing the start; a value that is set is still refused if it cannot be
+#   recorded. A file that is there but cannot be read (a link, not JSON or TOML its parser
+#   takes) is refused too. The default, "refuse", needs the value.
 model_host_from = { file = "<config.yaml>", key = "<model.base_url>" }
+# model_host_from = { file = "<config.toml>", key = "<model_providers.*.base_url>", via = "<model_provider>", absent = "defaults" }
 # A harness that can reach one fixed service only: its row from the shared provider table
 # (crates/goalcup-protocol/providers.toml), or a [[capture.hosts]] row below. Delete if none.
 # providers = ["anthropic"]
@@ -185,10 +193,12 @@ grace_seconds = 10                      # 1-60
 #   { kind = "<harness>_billing_header", header_prefix = "x-<vendor>-billing-" },
 # ]
 
-# A fixed intercepted model host, for a harness that can reach one service only (with
-# model_host_from, none is needed). Up to 16, counting the `providers` rows; each needs at least
-# one recorded path. Traffic to a host neither listed nor named by model_host_from passes
-# through unrecorded. Delete the row if model_host_from or `providers` covers the service.
+# A fixed intercepted model host, for a harness that can reach one service only, or the default
+# host of one whose model_host_from says absent = "defaults" (at least one row then). With
+# model_host_from and absent = "refuse", none is needed. Up to 16, counting the `providers` rows;
+# each needs at least one recorded path. Traffic to a host neither listed nor named by
+# model_host_from passes through unrecorded. Delete the row if model_host_from or `providers`
+# covers the service.
 # [[capture.hosts]]
 # host = "<api.provider.example>"       # public DNS name; no scheme, port, wildcard or localhost
 # evidence_paths = ["</v1/chat/completions>"]

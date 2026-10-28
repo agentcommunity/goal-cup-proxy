@@ -5,9 +5,9 @@ use super::schema::{
     CHAT_MODE_ONLY, CONFIGURE_DENIED_KEYS, ConfigHome, HarnessManifest, LAUNCH_PREP_TOKENS,
     MAX_CONFIGURE_ARG_BYTES, MAX_CONFIGURE_ARGS, MAX_CONFIGURE_COMMANDS, MAX_MODEL_HOST_KEY_PARTS,
     MAX_NO_PROMPT_SETTINGS, MAX_NO_PROMPT_VALUES, MODEL_HOST_DENIED_WORDS,
-    MODEL_HOST_FILE_EXTENSIONS, NativeForm, Origin, ParticipantSpec, PlatformKey, RunHome,
-    Strategy, display_name_problem, first_screen_problem, no_prompt_value_problem,
-    setup_section_problem,
+    MODEL_HOST_FILE_EXTENSIONS, MODEL_HOST_VIA_PART, ModelHostAbsent, NativeForm, Origin,
+    ParticipantSpec, PlatformKey, RunHome, Strategy, display_name_problem, first_screen_problem,
+    no_prompt_value_problem, setup_section_problem,
 };
 use super::{MIGRATION_SENTENCE, SUPPORTED_SCHEMA_VERSIONS};
 use crate::ProtocolError;
@@ -223,16 +223,16 @@ fn relative_path_problem(path: &str, max: usize) -> Option<String> {
 
 /// The rules of a value read from the harness's own config (`capture.model_host_from`, D62, and
 /// `participant.no_prompts`, D67), refused under `<field>.file` or `<field>.key`: a YAML, JSON or
-/// TOML file relative to the config home, a dotted key, and neither naming a key file or a key
-/// (`why_not_secret` says what is read instead).
+/// TOML file relative to the config home, a dotted key ([`config_key_problem`]), and neither
+/// naming a key file or a key (`why_not_secret` says what is read instead).
 fn config_value_problem(
     field: &str,
     file: &str,
     key: &str,
     why_not_secret: &str,
+    via_part: bool,
 ) -> Result<(), ProtocolError> {
     let file_field = format!("{field}.file");
-    let key_field = format!("{field}.key");
     if let Some(why) = relative_path_problem(file, 4) {
         return Err(refuse(&file_field, format!("`{file}` {why}")));
     }
@@ -247,40 +247,72 @@ fn config_value_problem(
             ),
         ));
     }
+    if let Some(word) = denied_word(name) {
+        return Err(refuse(
+            &file_field,
+            format!("`{name}` names `{word}`: {why_not_secret}"),
+        ));
+    }
+    config_key_problem(&format!("{field}.key"), key, why_not_secret, via_part)
+}
+
+/// A dotted key in a harness's config, refused under `field`: 1 to [`MAX_MODEL_HOST_KEY_PARTS`]
+/// names, none a denied word. With `via_part` it holds exactly one part [`MODEL_HOST_VIA_PART`],
+/// which the name `capture.model_host_from.via` reads stands for at run time.
+fn config_key_problem(
+    field: &str,
+    key: &str,
+    why_not_secret: &str,
+    via_part: bool,
+) -> Result<(), ProtocolError> {
     let parts: Vec<&str> = key.split('.').collect();
     let part_ok = |p: &&str| {
-        (1..=64).contains(&p.len())
-            && p.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        (via_part && *p == MODEL_HOST_VIA_PART)
+            || ((1..=64).contains(&p.len())
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
     };
     if parts.len() > MAX_MODEL_HOST_KEY_PARTS || !parts.iter().all(part_ok) {
         return Err(refuse(
-            &key_field,
+            field,
             format!(
                 "`{key}` must be 1 to {MAX_MODEL_HOST_KEY_PARTS} names of `[A-Za-z0-9_-]` \
                  (1 to 64 bytes) joined with `.`"
             ),
         ));
     }
-    let denied = |text: &str| {
-        text.split(['.', '-', '_'])
-            .chain(text.split('.'))
-            .find(|w| {
-                MODEL_HOST_DENIED_WORDS
-                    .iter()
-                    .any(|d| w.eq_ignore_ascii_case(d))
-            })
-            .map(str::to_string)
-    };
-    for (field, text) in [(&file_field, name), (&key_field, key)] {
-        if let Some(word) = denied(text) {
-            return Err(refuse(
-                field,
-                format!("`{text}` names `{word}`: {why_not_secret}"),
-            ));
-        }
+    if via_part
+        && (parts.iter().filter(|p| **p == MODEL_HOST_VIA_PART).count() != 1
+            || parts.last() == Some(&MODEL_HOST_VIA_PART))
+    {
+        return Err(refuse(
+            field,
+            format!(
+                "`{key}` must hold exactly one `{MODEL_HOST_VIA_PART}` part, not its last, \
+                 which the name `via` reads stands for"
+            ),
+        ));
+    }
+    if let Some(word) = denied_word(key) {
+        return Err(refuse(
+            field,
+            format!("`{key}` names `{word}`: {why_not_secret}"),
+        ));
     }
     Ok(())
+}
+
+/// The first `.`, `-` or `_` separated part of `text`, or `.` separated part, that is one of
+/// [`MODEL_HOST_DENIED_WORDS`] (any case).
+fn denied_word(text: &str) -> Option<String> {
+    text.split(['.', '-', '_'])
+        .chain(text.split('.'))
+        .find(|w| {
+            MODEL_HOST_DENIED_WORDS
+                .iter()
+                .any(|d| w.eq_ignore_ascii_case(d))
+        })
+        .map(str::to_string)
 }
 
 /// A single-component glob matcher: `*` any run (including none), `?` one character, anything
@@ -485,6 +517,7 @@ impl HarnessManifest {
             &tool.file,
             &tool.key,
             "the lines go in the file that lists the harness's MCP servers, never a key file",
+            false,
         )
     }
 
@@ -516,6 +549,7 @@ impl HarnessManifest {
                 &s.key,
                 "Goal Cup reads a permission setting from the harness's config, never a key file \
                  or a key",
+                false,
             )?;
             if s.values.is_empty() || s.values.len() > MAX_NO_PROMPT_VALUES {
                 return Err(refuse(
@@ -994,20 +1028,15 @@ impl HarnessManifest {
 
     fn check_native(&self) -> Result<(), ProtocolError> {
         let c = &self.capture;
+        // No native source is a harness that keeps no conversation file of its own: its run
+        // records the wire alone.
         let n = match c.native.as_slice() {
+            [] => return Ok(()),
             [one] => one,
-            [] => {
-                return Err(refuse(
-                    "capture.native",
-                    "a harness without a native session store is refused: schema 1 needs exactly \
-                     one `[[capture.native]]`. Whether such a harness is capturable at all is a \
-                     core decision about claim level, not a manifest option",
-                ));
-            }
             _ => {
                 return Err(refuse(
                     "capture.native",
-                    "schema 1 holds exactly one `[[capture.native]]`",
+                    "schema 1 holds no native source or exactly one `[[capture.native]]`",
                 ));
             }
         };
@@ -1144,25 +1173,38 @@ impl HarnessManifest {
                  from the home the participant set the harness up in",
             ));
         }
+        const WHY: &str = "Goal Cup Proxy reads the model service's address from the harness's \
+                           config, never a key file or a key";
+        // `via` names the table the key's `*` part stands for (`model_provider`), so the key
+        // has that one part exactly when `via` is set.
         config_value_problem(
             "capture.model_host_from",
             &from.file,
             &from.key,
-            "Goal Cup Proxy reads the model service's address from the harness's config, never a \
-             key file or a key",
-        )
+            WHY,
+            from.via.is_some(),
+        )?;
+        match &from.via {
+            Some(via) => config_key_problem("capture.model_host_from.via", via, WHY, false),
+            None => Ok(()),
+        }
     }
 
     fn check_hosts(&self, origin: Origin) -> Result<(), ProtocolError> {
         let c = &self.capture;
-        // A profile that reads its model host from the harness's config (D62) may list none.
-        let least = usize::from(c.model_host_from.is_none());
+        // A profile that reads its model host from the harness's config (D62) may list none,
+        // unless a missing value falls back to the hosts it lists.
+        let least = usize::from(
+            c.model_host_from
+                .as_ref()
+                .is_none_or(|from| from.absent == ModelHostAbsent::Defaults),
+        );
         if c.hosts.len() < least || c.hosts.len() > MAX_CAPTURE_HOSTS {
             return Err(refuse(
                 "capture.hosts",
                 format!(
                     "must hold 1 to {MAX_CAPTURE_HOSTS} hosts, or none with \
-                     `capture.model_host_from`"
+                     `capture.model_host_from` and `absent = \"refuse\"`"
                 ),
             ));
         }
@@ -1350,22 +1392,30 @@ impl HarnessManifest {
             }
         }
 
+        // The one native source, if any, with the home its root names. With none, the checks
+        // below that bind a native root to the homes have nothing to bind.
+        let native = c.native.first().map(|n| {
+            let (home, rel) = split_native_root(&n.root).expect("checked by native");
+            (n, home, rel)
+        });
+
         // `none` must read a per-run root, or only what was written since the run started:
         // another run's sessions are not this run's, and runs on a shared home are serialized.
-        let native = &c.native[0];
-        let (root_home, root_rel) = split_native_root(&native.root).expect("checked by native");
-        let root_shared = match root_home {
-            RootHome::Config => !per_run,
-            RootHome::Run => run_shared,
-        };
-        if root_shared && !native.since_run_start {
-            return Err(refuse(
-                "capture.native.root",
-                "with `identity.source = \"none\"` the root must be per run: `{run_home}/...` \
-                 with a per-run `run_home`, or `{config_home}/...` with `config_home = \
-                 \"per_run\"`, unless the native source declares `since_run_start = true`; an \
-                 unscoped source in a shared home would read other runs' sessions",
-            ));
+        if let Some((native, root_home, _)) = native {
+            let root_shared = match root_home {
+                RootHome::Config => !per_run,
+                RootHome::Run => run_shared,
+            };
+            if root_shared && !native.since_run_start {
+                return Err(refuse(
+                    "capture.native.root",
+                    "with `identity.source = \"none\"` the root must be per run: \
+                     `{run_home}/...` with a per-run `run_home`, or `{config_home}/...` with \
+                     `config_home = \"per_run\"`, unless the native source declares \
+                     `since_run_start = true`; an unscoped source in a shared home would read \
+                     other runs' sessions",
+                ));
+            }
         }
 
         // A shared run `HOME` is for a harness with no home variable (D59). With one, the
@@ -1401,7 +1451,7 @@ impl HarnessManifest {
                     return Err(refuse(format!("capture.home.{field}"), WHY));
                 }
             }
-            if root_home == RootHome::Config {
+            if let Some((_, RootHome::Config, _)) = native {
                 return Err(refuse(
                     "capture.native.root",
                     format!("a `{{config_home}}` root {WHY}: use `{{run_home}}/...`"),
@@ -1416,43 +1466,45 @@ impl HarnessManifest {
         // checked both ways the two could meet: the same directory (the seeds read as paths under
         // the run home) and nested (`<per_run_dir>/<seed>` under it). Components compare
         // lower-cased, because APFS is case-insensitive and `Config.YAML` is `config.yaml`.
-        let seed_homes: Vec<Vec<String>> = match root_home {
-            RootHome::Config => vec![Vec::new()],
-            RootHome::Run => vec![Vec::new(), vec![h.per_run_dir_name().to_ascii_lowercase()]],
-        };
-        let pattern = native_pattern_components(&native.pattern).expect("checked by native");
-        let mut components: Vec<String> = if root_rel.is_empty() {
-            Vec::new()
-        } else {
-            root_rel.split('/').map(str::to_ascii_lowercase).collect()
-        };
-        components.extend(pattern.iter().map(|p| p.to_ascii_lowercase()));
-        for s in &h.seed {
-            for home in &seed_homes {
-                let dest: Vec<String> = home
-                    .iter()
-                    .cloned()
-                    .chain(s.file.split('/').map(str::to_ascii_lowercase))
-                    .collect();
-                if dest.len() == components.len()
-                    && dest
+        if let Some((native, root_home, root_rel)) = native {
+            let seed_homes: Vec<Vec<String>> = match root_home {
+                RootHome::Config => vec![Vec::new()],
+                RootHome::Run => vec![Vec::new(), vec![h.per_run_dir_name().to_ascii_lowercase()]],
+            };
+            let pattern = native_pattern_components(&native.pattern).expect("checked by native");
+            let mut components: Vec<String> = if root_rel.is_empty() {
+                Vec::new()
+            } else {
+                root_rel.split('/').map(str::to_ascii_lowercase).collect()
+            };
+            components.extend(pattern.iter().map(|p| p.to_ascii_lowercase()));
+            for s in &h.seed {
+                for home in &seed_homes {
+                    let dest: Vec<String> = home
                         .iter()
-                        .zip(&components)
-                        .all(|(d, p)| glob_matches(d, p))
-                {
-                    let coincide = if root_home == RootHome::Run {
-                        " (the per-run config home may be, or sit under, the run home)"
-                    } else {
-                        ""
-                    };
-                    return Err(refuse(
-                        "capture.native.pattern",
-                        format!(
-                            "`{}` under `{}` matches the seed `{}`{coincide}: a native source \
-                             may not read a file Goal Cup Proxy seeds",
-                            native.pattern, native.root, s.file
-                        ),
-                    ));
+                        .cloned()
+                        .chain(s.file.split('/').map(str::to_ascii_lowercase))
+                        .collect();
+                    if dest.len() == components.len()
+                        && dest
+                            .iter()
+                            .zip(&components)
+                            .all(|(d, p)| glob_matches(d, p))
+                    {
+                        let coincide = if root_home == RootHome::Run {
+                            " (the per-run config home may be, or sit under, the run home)"
+                        } else {
+                            ""
+                        };
+                        return Err(refuse(
+                            "capture.native.pattern",
+                            format!(
+                                "`{}` under `{}` matches the seed `{}`{coincide}: a native source \
+                                 may not read a file Goal Cup Proxy seeds",
+                                native.pattern, native.root, s.file
+                            ),
+                        ));
+                    }
                 }
             }
         }
