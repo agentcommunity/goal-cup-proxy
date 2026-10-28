@@ -16,7 +16,9 @@
 //! A value goalcup cannot record (missing, not a URL, plain `http`, loopback, an address
 //! literal, an authentication host) is refused with the reason and the way to change it
 //! ([`crate::participant::cannot_record_model_service`]); `goalcup prep` makes the same check
-//! and keeps the home not ready until the harness names a service that can be recorded. What is
+//! and keeps the home not ready until the harness names a service that can be recorded. Under
+//! `absent = "defaults"` a missing value is no refusal: the run records the connector's own
+//! hosts, as a connector without the field does. What is
 //! checked is the address the config names. A login the harness refreshes at another host (an
 //! OAuth provider's token endpoint) is not checked here (D62).
 
@@ -25,7 +27,9 @@ use crate::connector::HarnessConnector;
 use crate::proxy::api::{CapturePath, CapturePolicy};
 use crate::proxy::connect::ApprovedHost;
 use goalcup_protocol::capture_policy::{is_capture_host, local_host_problem, mentions_goalcup};
-use goalcup_protocol::harness::{CAPTURE_HOMES_DIR, ModelHostFrom};
+use goalcup_protocol::harness::{
+    CAPTURE_HOMES_DIR, MODEL_HOST_VIA_PART, ModelHostAbsent, ModelHostFrom,
+};
 use std::path::Path;
 
 /// The largest config file the reader opens.
@@ -123,8 +127,10 @@ impl Unrecordable {
 }
 
 /// The model service `connector`'s config names, for one segment, or `None` for a connector
-/// without `capture.model_host_from`. Reads the file once; refuses a value it cannot record with
-/// the reason and the way to change it ([`crate::participant::cannot_record_model_service`]).
+/// without `capture.model_host_from` or one whose config names none under `absent =
+/// "defaults"` (the run then records the connector's own hosts). Reads the file once; refuses a
+/// value it cannot record with the reason and the way to change it
+/// ([`crate::participant::cannot_record_model_service`]).
 pub fn for_run(cfg: &Path, connector: &HarnessConnector) -> Result<Option<ModelHost>, CliError> {
     check(cfg, connector).map_err(|why| {
         CliError::Refused(crate::participant::cannot_record_model_service(
@@ -141,26 +147,73 @@ pub fn check(cfg: &Path, connector: &HarnessConnector) -> Result<Option<ModelHos
         return Ok(None);
     };
     let home = cfg.join(CAPTURE_HOMES_DIR).join(&manifest.id);
-    read(&home, from, &manifest.capture.auth_hosts).map(Some)
+    read(&home, from, &manifest.capture.auth_hosts)
 }
 
-/// [`check`] on a given config home.
+/// [`check`] on a given config home. With `via`, the name read there stands for the key's `*`
+/// part (one indirection, never two). A missing file, key or `via` value is `Ok(None)` under
+/// `absent = "defaults"` and refused otherwise; a value that is present is held to every
+/// refusal whatever `absent` says.
 pub fn read(
     home: &Path,
     from: &ModelHostFrom,
     auth_hosts: &[String],
-) -> Result<ModelHost, Unrecordable> {
-    let source = format!("`{}` in {}", from.key, from.file);
-    let refuse = |shown: String, reason: String| Unrecordable { shown, reason };
-    let Some(value) = read_value(&home.join(&from.file), &from.file, &from.key) else {
-        return Err(refuse(
-            "no model service".into(),
-            format!("{source} is not set"),
-        ));
+) -> Result<Option<ModelHost>, Unrecordable> {
+    let path = home.join(&from.file);
+    let refuse = |shown: &str, reason: String| Unrecordable {
+        shown: shown.to_string(),
+        reason,
+    };
+    let missing = |key: &str| match from.absent {
+        ModelHostAbsent::Defaults => Ok(None),
+        _ => Err(refuse(
+            "no model service",
+            format!("`{key}` in {} is not set", from.file),
+        )),
+    };
+    // An empty value is no value, as the harness itself takes it.
+    let value_at = |key: &str| read_value(&path, &from.file, key).filter(|v| !v.trim().is_empty());
+    let key = match &from.via {
+        None => from.key.clone(),
+        Some(via) => {
+            let Some(name) = value_at(via) else {
+                return missing(via);
+            };
+            // Only a plain name, never shown: it becomes one part of the key, so it may not
+            // hold a `.` that would reach into another table.
+            let plain = (1..=64).contains(&name.len())
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+            if !plain {
+                return Err(refuse(
+                    "an address Goal Cup cannot read",
+                    format!(
+                        "`{via}` in {} names a value that is not a provider name",
+                        from.file
+                    ),
+                ));
+            }
+            from.key
+                .split('.')
+                .map(|part| {
+                    if part == MODEL_HOST_VIA_PART {
+                        name.as_str()
+                    } else {
+                        part
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(".")
+        }
+    };
+    let source = format!("`{key}` in {}", from.file);
+    let Some(value) = value_at(&key) else {
+        return missing(&key);
     };
     let Some(url) = parse_url(&value) else {
         return Err(refuse(
-            "an address Goal Cup cannot read".into(),
+            "an address Goal Cup cannot read",
             format!("{source} is not an http or https URL"),
         ));
     };
@@ -184,14 +237,14 @@ pub fn read(
         None
     };
     if let Some(reason) = reason {
-        return Err(refuse(shown, reason.into()));
+        return Err(refuse(&shown, reason.into()));
     }
-    Ok(ModelHost {
+    Ok(Some(ModelHost {
         host: url.host,
         port: url.port,
         base_path: url.path,
-        from: format!("{} in {}", from.key, from.file),
-    })
+        from: format!("{key} in {}", from.file),
+    }))
 }
 
 /// The string at `key` in the file at `path` (named `name` in the manifest), or `None` when the
@@ -466,6 +519,101 @@ fn parse_url(value: &str) -> Option<Url> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `from` (a `capture.model_host_from` table, TOML) read against a home holding `name`
+    /// with `text`.
+    fn read_in(from: &str, name: &str, text: &str) -> Result<Option<ModelHost>, Unrecordable> {
+        let from: ModelHostFrom = toml::from_str(from).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join(name), text).unwrap();
+        read(home.path(), &from, &["auth.example.test".to_string()])
+    }
+
+    const CODEX: &str = r#"
+file = "config.toml"
+key = "model_providers.*.base_url"
+via = "model_provider"
+absent = "defaults"
+"#;
+
+    #[test]
+    fn an_indirection_reads_the_named_table() {
+        let config = "model_provider = \"vercel\"\n\
+                      [model_providers.vercel]\n\
+                      base_url = \"https://ai-gateway.vercel.sh/codex/v1\"\n\
+                      wire_api = \"responses\"\n";
+        let m = read_in(CODEX, "config.toml", config).unwrap().unwrap();
+        assert_eq!(m.host, "ai-gateway.vercel.sh");
+        assert_eq!(m.base_path, "/codex/v1");
+        assert!(
+            m.from.contains("model_providers.vercel.base_url"),
+            "{}",
+            m.from
+        );
+        // Codex's `wire_api = "responses"` posts to `<base>/responses`, which carries its hint.
+        let rule = m.approved();
+        assert_eq!(
+            crate::proxy::metadata::select(&rule.policy, "/codex/v1/responses")
+                .and_then(|p| p.protocol_hint.clone())
+                .as_deref(),
+            Some("openai-responses")
+        );
+    }
+
+    #[test]
+    fn a_missing_value_falls_back_only_when_asked() {
+        const CLAUDE: &str = r#"file = "settings.json"
+key = "env.ANTHROPIC_BASE_URL""#;
+        let defaults = format!("{CLAUDE}\nabsent = \"defaults\"");
+        assert_eq!(read_in(&defaults, "settings.json", "{}"), Ok(None));
+        let missing = read_in(&defaults, "other.json", "{}");
+        assert_eq!(missing, Ok(None), "no settings.json at all");
+        let refused = read_in(CLAUDE, "settings.json", "{}").unwrap_err();
+        assert!(refused.reason.contains("is not set"), "{refused:?}");
+    }
+
+    #[test]
+    fn a_builtin_provider_without_a_table_falls_back() {
+        for config in ["model_provider = \"openai\"\n", "model = \"gpt-5\"\n"] {
+            assert_eq!(read_in(CODEX, "config.toml", config), Ok(None), "{config}");
+        }
+    }
+
+    #[test]
+    fn a_present_unrecordable_value_is_refused_even_with_defaults() {
+        let from = r#"file = "settings.json"
+key = "env.ANTHROPIC_BASE_URL"
+absent = "defaults""#;
+        for (url, reason) in [
+            (
+                "http://localhost:4000",
+                "it is plain http, which goes around the recorder",
+            ),
+            (
+                "https://auth.example.test/v1",
+                "it is a sign-in host, which is never recorded",
+            ),
+        ] {
+            let settings = format!(r#"{{"env":{{"ANTHROPIC_BASE_URL":"{url}"}}}}"#);
+            let refused = read_in(from, "settings.json", &settings).unwrap_err();
+            assert_eq!(refused.reason, reason);
+        }
+    }
+
+    #[test]
+    fn a_via_value_that_is_not_a_name_is_refused() {
+        for name in ["../x", "a.b"] {
+            let config = format!(
+                "model_provider = \"{name}\"\n[model_providers.x]\nbase_url = \"https://x.example\"\n"
+            );
+            let refused = read_in(CODEX, "config.toml", &config).unwrap_err();
+            assert!(
+                refused.reason.contains("is not a provider name"),
+                "{refused:?}"
+            );
+            assert!(!refused.reason.contains(name), "the value is never shown");
+        }
+    }
 
     #[test]
     fn the_yaml_reader_finds_one_nested_scalar_and_nothing_else() {

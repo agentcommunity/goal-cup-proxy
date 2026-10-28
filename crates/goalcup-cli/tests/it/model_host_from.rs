@@ -200,6 +200,46 @@ fn other_hosts_stay_opaque_tunnels() {
     assert!(!out.contains(OTHER_HOST), "{out}");
 }
 
+/// `absent = "defaults"` with no config at all: the start is not refused, no model service is
+/// named, and the connector's own host row is opened and recorded as it is without the field.
+#[test]
+fn a_missing_setting_records_the_connector_hosts() {
+    let rig = Rig::new();
+    let path = rig.connectors.join(FAKE_ID).join("harness.toml");
+    let text = std::fs::read_to_string(&path).unwrap().replacen(
+        "[capture]\n",
+        "[capture]\nmodel_host_from = { file = \"config.yaml\", key = \"model.base_url\", \
+         absent = \"defaults\" }\n",
+        1,
+    );
+    std::fs::write(&path, text).unwrap();
+    let upstream = Upstream::start(&rig.runtime);
+    rig.tell("stop", "");
+    rig.tell("steps.sh", &upstream.curl(r#"{"n":1}"#));
+    let goal = rig.run_folder();
+    let http = rig.client();
+    let client = Hooked::new(&http, &rig);
+    let (result, out) = std::thread::scope(|s| {
+        rig.start(
+            s,
+            &client,
+            rig.options(&goal, RESERVE),
+            Some(upstream.roots()),
+        )
+        .join()
+        .unwrap()
+    });
+    result.unwrap_or_else(|e| panic!("{e}\n{out}"));
+    assert!(!out.contains("model service:"), "{out}");
+    let (report, records) = rig.read_trace(&client.created().entry_id);
+    assert!(report.sealed, "{:?}", report.findings);
+    let opens = wire_opens(&records);
+    assert!(
+        opens.iter().any(|(host, ..)| host == "localhost"),
+        "{opens:?}"
+    );
+}
+
 /// No config, no key, a loopback or address-literal service, plain `http`, an authentication
 /// host or a value that is not a URL: each start is refused with the one sentence, which shows
 /// at most `scheme://host:port`, and nothing is created.
