@@ -23,12 +23,12 @@ on Tenki come later, after the build is clear and good.
 |---|---|---|
 | 1 | Record every request on an opened host | not started |
 | 2 | Clean model address; never Goal Cup's own host | not started |
-| 3 | Upload reads only its own tunnel list | merged to main in #290 (444aa15); gate PASS, live PASS |
+| 3 | Upload reads only its own tunnel list | merged in #290 (444aa15); gate PASS, live PASS |
 | 4 | Probe only what the run needs | not started |
 | 5 | Up to 8 session-file rows; Claude subagents captured | not started |
 | 6 | Copy a harness database once, after exit | not started |
 | 7 | Header stream per exchange, credentials masked | not started |
-| 8 | Evidence label counts model requests only | PR #289 open; main merged into it (1eda6db); gate re-running; live PASS before the merge |
+| 8 | Evidence label counts model requests only | merged in #289 (5ce4b2a); gate PASS on rerun, live PASS |
 | 9 | Codex records an API-key login | not started |
 | 10 | Proxy restarts itself on the same port | not started |
 | 11 | Participant sees "recording works" and the right file | not started |
@@ -49,3 +49,5 @@ on Tenki come later, after the build is clear and good.
 - 28 Oct: Task 8 review: one medium finding (a test that would not catch a revert) fixed; one low finding fixed (WebSocket client messages). Owner calls: schema version bump, and the Hermes and Amp wording.
 - 28 Oct: Task 3 merged in #290 (444aa15). Gate PASS in 146s with Worker tests. Live Claude run PASS, but 7 wire calls against 10 BEFORE; the kit does not print the tunnel-list line, so acceptance is inferred. Deploy the Worker before any client from main seals (owner step).
 - 28 Oct: Commit messages. Four commits carry a model name in a Co-Authored-By line: 4b7b8fa, 35abe88, fddcf87 and 3f6f055. The system rule says no model id in commits. Not rewritten; owner to decide. From now on they are left out.
+- 28 Oct: Task 8 merged in #289 (5ce4b2a). First gate run on the merged head failed one proxy test (an_upstream_outage_is_one_window_closed_by_the_next_reach). It passed 5 of 5 locally on main and on the rerun of the gate, so it is treated as a timing flake. Open item: the test reserves a port, drops it, then reconnects; a parallel test can take the port. Not fixed yet.
+- 28 Oct: Task 2 pipeline started (build, review, fit, gate, live).
