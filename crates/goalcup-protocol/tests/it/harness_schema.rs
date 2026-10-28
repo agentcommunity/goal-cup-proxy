@@ -319,15 +319,13 @@ fn a_missing_required_table_is_a_plain_parse_error() {
 // Refusal table: native source
 // ---------------------------------------------------------------------------------------
 
+/// A harness that keeps no conversation file of its own declares no native source: the
+/// chat file is optional and the run records the wire alone.
 #[test]
-fn no_native_source_is_refused() {
-    let mut t = hermes();
+fn a_harness_without_a_native_source_is_admitted() {
+    let mut t = codex();
     tbl(&mut t, &["capture"]).remove("native");
-    refused(
-        &t,
-        PINNED,
-        &["without a native session store", "exactly one"],
-    );
+    admitted(&t, PINNED);
 }
 
 #[test]

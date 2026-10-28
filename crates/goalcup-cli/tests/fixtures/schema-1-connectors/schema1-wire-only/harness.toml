@@ -1,0 +1,37 @@
+# FROZEN schema-1 contract fixture (docs/CONNECTOR-SCHEMA.md, "The connector contract").
+# A harness nobody ships, written on 28 Oct 2026 for the widened native bound: a harness that
+# keeps no conversation file of its own, so it declares no [[capture.native]] and its run
+# records the wire alone. A shared config home with its own home variable and one fixed model
+# host. The connector contract tests load it and run it with a stand-in through `--dev`. Never
+# edit this file to make a test pass: a core change that breaks it breaks every connector
+# written against schema 1, and needs the deprecation rule.
+schema_version = 1
+id = "schema1-wire-only"
+
+[capture]
+interactive = true
+continuation = "chat: the participant types the prompt and may type keep going"
+args = []
+resume_args = ["--continue"]
+
+[capture.executable]
+program = "schema-one-wire"
+version_args = ["--version"]
+
+[capture.home]
+run_home = "empty"
+config_home = "shared"
+env = "SCHEMAWIRE_HOME"
+real_dirs = ["{user_home}/.schemawire"]
+
+[capture.ca]
+env = ["SCHEMAWIRE_CA_CERT"]
+mode = "extend"
+
+[capture.identity]
+source = "none"
+
+[[capture.hosts]]
+host = "api.schema-wire.example"
+evidence_paths = ["/v1/chat/completions"]
+protocol_hint = "openai-chat-completions"
