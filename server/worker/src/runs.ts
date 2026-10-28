@@ -25,6 +25,7 @@ import {
 const JSON_BODY_MAX = 64 * 1024;
 const SEAL_DOC_MAX = 16 * 1024 * 1024; // each document, bytes
 const TUNNELS_MAX = 8 * 1024 * 1024; // the sealed-connection list, bytes
+const TUNNELS_FORMAT = "goalcup-tunnels-v1"; // the list's first line's format
 const SEAL_BODY_MAX = 2 * SEAL_DOC_MAX + TUNNELS_MAX + JSON_BODY_MAX; // two documents and the list, plus the JSON around them
 
 /**
@@ -51,14 +52,34 @@ export async function readJson(request: Request, max: number): Promise<Record<st
  * body so it can be freed: a seal carries two documents of up to 16 MiB and a list of up to 8 MiB,
  * and the Worker has 128 MB.
  */
-function takeDocument(body: Record<string, unknown>, name: string, max = SEAL_DOC_MAX): Uint8Array {
+function takeDocument(body: Record<string, unknown>, name: string, max = SEAL_DOC_MAX, check?: (text: string) => void): Uint8Array {
   const text = body[name];
   if (typeof text !== "string" || text === "") throw malformed(`${name} must be a non-empty string.`);
   if (!text.isWellFormed()) throw malformed(`${name} is not well-formed Unicode.`);
   delete body[name];
   const bytes = new TextEncoder().encode(text);
   if (bytes.length > max) throw tooLarge(`${name} is over ${max / (1024 * 1024)} MiB.`);
+  check?.(text);
   return bytes;
+}
+
+/**
+ * A sealed-connection list must start with its own format line: a JSON object whose `format` is
+ * `goalcup-tunnels-v1` and whose `entry_id` is the entry the seal names. The keys are read, not
+ * the bytes: the client's key order is not part of the format.
+ */
+function checkTunnelList(text: string, entryId: string): void {
+  const first = text.split("\n", 1)[0] ?? "";
+  let head: unknown;
+  try {
+    head = JSON.parse(first);
+  } catch {
+    throw malformed(`tunnels_jsonl must start with its format line, ${TUNNELS_FORMAT} for this entry.`);
+  }
+  const fields = typeof head === "object" && head !== null && !Array.isArray(head) ? (head as Record<string, unknown>) : {};
+  if (fields.format !== TUNNELS_FORMAT || fields.entry_id !== entryId) {
+    throw malformed(`tunnels_jsonl must start with its format line, ${TUNNELS_FORMAT} for this entry.`);
+  }
 }
 
 /** A run and one of its entries. */
@@ -522,7 +543,7 @@ export async function sealRun(ctx: Ctx, member: string, runId: string, request: 
   const baselineBytes = takeDocument(b, "baseline_json");
   // The sealed-connection list (`goalcup-tunnels-v1`), optional: a side artifact kept beside the
   // seal and outside the chain. It never takes part in the repeat or conflict rule below.
-  const tunnelsBytes = b.tunnels_jsonl === undefined ? null : takeDocument(b, "tunnels_jsonl", TUNNELS_MAX);
+  const tunnelsBytes = b.tunnels_jsonl === undefined ? null : takeDocument(b, "tunnels_jsonl", TUNNELS_MAX, (text) => checkTunnelList(text, entry_id));
   const { run, entry } = await requireRun(ctx, member, runId, entry_id);
   const prefix = `traces/${run.event_id}/${run.run_id}/${entry.entry_id}`;
 
