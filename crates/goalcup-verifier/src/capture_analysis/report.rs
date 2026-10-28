@@ -286,7 +286,7 @@ pub fn research_summary(
             "decoders": decoders.iter().map(entry).collect::<Vec<_>>(),
             "models": models(decoders),
             "models_omitted": models_omitted(decoders),
-            "evidence": evidence(legs.native, legs.wire_streams, legs.wire_requests),
+            "evidence": evidence(legs.native, legs.model_request_streams, legs.wire_requests),
             "cross_leg": cross_leg(outcome, &legs),
             "undecoded": outcome.undecoded.iter().map(undecoded).collect::<Vec<_>>(),
             "undecoded_omitted": outcome.undecoded_omitted,
@@ -345,6 +345,7 @@ fn cross_leg(outcome: &DecodeOutcome, legs: &Legs) -> Value {
     json!({
         "native_model_activity": legs.native,
         "wire_streams": legs.wire_streams,
+        "wire_model_request_streams": legs.model_request_streams,
         "wire_model_requests": legs.wire_requests,
         "wire_request_range": range,
         "state": cross_leg_state(legs.native, legs.wire_streams, legs.wire_requests),
@@ -355,6 +356,7 @@ fn cross_leg(outcome: &DecodeOutcome, legs: &Legs) -> Value {
 struct Legs {
     native: u64,
     wire_streams: u64,
+    model_request_streams: u64,
     wire_requests: u64,
 }
 
@@ -364,6 +366,7 @@ impl Legs {
         Self {
             native: sum(|d| d.observations.native_model_activity),
             wire_streams: outcome.operations.wire_opens(),
+            model_request_streams: outcome.operations.model_request_opens(),
             wire_requests: sum(|d| d.observations.wire_model_requests),
         }
     }
@@ -383,16 +386,16 @@ fn cross_leg_state(native: u64, wire_streams: u64, wire_requests: u64) -> &'stat
 }
 
 /// The one rule behind `analysis.evidence`: what the run holds, decoded wire requests first.
-/// Wire streams with no decoded request outrank the session file, since the calls may be there
-/// unread.
-fn evidence(native: u64, wire_streams: u64, wire_requests: u64) -> &'static str {
+/// Model request streams with no decoded request outrank the session file, since the calls may
+/// be there unread. Header, tunnel and lone GET streams are not model requests, so they do not.
+fn evidence(native: u64, model_request_streams: u64, wire_requests: u64) -> &'static str {
     if wire_requests > 0 {
         if native > 0 {
             "wire_and_native"
         } else {
             "wire_only"
         }
-    } else if wire_streams > 0 {
+    } else if model_request_streams > 0 {
         "wire_undecoded"
     } else if native > 0 {
         "native_only"
@@ -487,6 +490,70 @@ mod tests {
         // Wire streams with no decoded request outrank the session file.
         assert_eq!(evidence(1, 1, 0), "wire_undecoded");
     }
+
+    #[test]
+    fn a_lone_get_beside_native_work_labels_native_only_through_the_report() {
+        // The label is read on the whole report path, not only by `evidence`. A lone GET (no
+        // hint, not a POST) is a wire stream that no decoder reads and not a model request, so
+        // the session file's model work is the evidence. Reverting the label to `wire_streams`
+        // turns this run into `wire_undecoded`.
+        const WIRE: &str = "b1b2b3b4b5b6b7b8b9babbbcbdbebf00";
+        let stream = StreamKey {
+            producer: WIRE.to_string(),
+            stream: 1,
+        };
+        let lone_get = vec![
+            CaptureRecord::Connection {
+                producer: WIRE.to_string(),
+                connection: "c0ffee00c0ffee00c0ffee00c0ffee00".to_string(),
+                observed: time(WIRE, 1),
+                event: goalcup_protocol::capture::ConnectionEvent::Open {
+                    alpn: None,
+                    already_open: false,
+                },
+            },
+            CaptureRecord::Open {
+                stream: stream.clone(),
+                observed: time(WIRE, 2),
+                source: CaptureSource::WireRequest,
+                metadata: CaptureMeta {
+                    wire: Some(goalcup_protocol::capture::WireIdentity {
+                        connection: "c0ffee00c0ffee00c0ffee00c0ffee00".to_string(),
+                        exchange: 1,
+                        message_index: None,
+                    }),
+                    label: "unit".to_string(),
+                    protocol_hint: None,
+                    method: Some("GET".to_string()),
+                    host: None,
+                    path: None,
+                    status: None,
+                    content_type: None,
+                },
+            },
+            CaptureRecord::End {
+                stream,
+                observed: time(WIRE, 3),
+                reason: EndReason::Complete,
+            },
+            CaptureRecord::ProducerClosed {
+                producer: WIRE.to_string(),
+                observed: time("daemon", 4),
+                final_seq: Some(2),
+            },
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        write_trace_with(dir.path(), lone_get);
+        let mut out = Vec::new();
+        let result =
+            write_research_report(dir.path(), &VerifyOptions::default(), &mut out).unwrap();
+        let cross_leg = &result.summary["analysis"]["cross_leg"];
+        assert!(cross_leg["native_model_activity"].as_u64().unwrap() > 0);
+        assert_eq!(cross_leg["wire_streams"], json!(1));
+        assert_eq!(cross_leg["wire_model_request_streams"], json!(0));
+        assert_eq!(result.summary["analysis"]["evidence"], json!("native_only"));
+    }
+
     use crate::capture_analysis::api::{
         DecoderFailure, DecoderSummary, DecoderV1, ObservationTimeRange, SourceRef, StreamOpen,
     };
@@ -517,6 +584,11 @@ mod tests {
     /// A sealed local v5 trace: a goal stream, its Launch and one Codex rollout stream of
     /// one record, each stream in one segment.
     fn write_trace(root: &Path) {
+        write_trace_with(root, Vec::new());
+    }
+
+    /// [`write_trace`] with `extra` records after the rollout stream and before the Launch.
+    fn write_trace_with(root: &Path, extra: Vec<CaptureRecord>) {
         let manifest = SealManifest {
             entry_id: "entry-report-unit".to_string(),
             sealed_at: "2026-09-29T12:00:00Z".to_string(),
@@ -583,6 +655,7 @@ mod tests {
                 final_seq: Some(2),
             });
         }
+        records.extend(extra);
         records.push(CaptureRecord::Launch {
             observed: time("daemon", 6),
             goal_stream: StreamKey {
