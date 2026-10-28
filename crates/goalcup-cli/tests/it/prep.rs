@@ -306,6 +306,36 @@ fn a_second_setup_skips_passed_steps() {
     );
 }
 
+/// A chat home an older Goal Cup made with a loose mode (0755) is set to 0700 by setup, which
+/// says so in one line, and then opens the harness in it.
+#[test]
+fn setup_fixes_a_chat_home_made_with_a_loose_mode_and_says_so_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let rig = Rig::chat_only();
+    let home = rig.cfg.join("capture-homes").join(CHAT_ID);
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o755)).unwrap();
+    log_in(&rig, "http://127.0.0.1:1");
+
+    let mut setup = OnPty::spawn(prep_command(&rig, &[], &facts(&[])), None);
+    press_enter(&setup);
+    setup.wait_shown("tui: ready");
+    setup.type_line("/exit");
+    let status = setup.wait();
+    let shown = setup.shown();
+    assert_eq!(status.code(), Some(0), "{shown}");
+    assert_eq!(
+        std::fs::metadata(&home).unwrap().permissions().mode() & 0o777,
+        0o700,
+        "{shown}"
+    );
+    assert_eq!(
+        shown.matches("was open to other users").count(),
+        1,
+        "the repair is said once:\n{shown}"
+    );
+}
+
 #[test]
 fn setup_waits_for_enter_before_it_opens_the_harness() {
     let rig = Rig::chat_only();

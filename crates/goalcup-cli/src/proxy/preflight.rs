@@ -17,10 +17,15 @@ use super::connect::{ConnectFailureKind, DEFAULT_CONNECT_ATTEMPT_TIMEOUT, Retry,
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// The whole preflight's bound, all hosts together.
+/// The bound of one preflight probe. Every host in one call is probed together, and the call
+/// gives up at this budget. `goalcup start` makes two calls in sequence: the hard hosts, then,
+/// when a model service is named, the harness's default hosts. A blocked hard host ends the start
+/// after at most this budget. A blocked default host adds up to this budget to a start that goes
+/// on with a warning. `goalcup setup`'s machine step makes the same two calls.
 pub(crate) const PREFLIGHT_BUDGET: Duration = Duration::from_secs(10);
 
-/// A provider host the preflight could not reach. Its `Display` is the whole refusal.
+/// A provider host the preflight could not reach. Its `Display` is the whole refusal. Built by
+/// [`Unreachable::new`] wherever the preflight finds one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Unreachable {
     pub host: String,
@@ -52,6 +57,23 @@ impl std::fmt::Display for Unreachable {
 }
 
 impl Unreachable {
+    /// The one builder: the host, its port, what the connect failed with, the budget it failed
+    /// within, and this process's executable.
+    pub(crate) fn new(
+        host: impl Into<String>,
+        port: u16,
+        kind: ConnectFailureKind,
+        budget: Duration,
+    ) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            kind,
+            budget,
+            binary: std::env::current_exe().ok(),
+        }
+    }
+
     /// The whole refusal: `goalcup start`'s ([`Display`](std::fmt::Display)), or, for the next
     /// part of the open run `continuing`, one that says the run is still open and names
     /// `goalcup continue`. A start is never advised then: a new start replaces the run.
@@ -187,13 +209,8 @@ fn probe_endpoints(endpoints: Vec<(String, u16)>, budget: Duration) -> Result<()
     if endpoints.is_empty() {
         return Ok(());
     }
-    let unreachable = |(host, port): (String, u16), kind| Unreachable {
-        host,
-        port,
-        kind,
-        budget,
-        binary: std::env::current_exe().ok(),
-    };
+    let unreachable =
+        |(host, port): (String, u16), kind| Unreachable::new(host, port, kind, budget);
     // A runtime of its own, gone before the recording proxy's is built. One that cannot be built is
     // not a reason to refuse here: the recording proxy's own start would refuse it a moment later.
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()

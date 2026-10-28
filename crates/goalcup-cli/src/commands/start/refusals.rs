@@ -188,13 +188,12 @@ pub(super) fn reachable(
         match stated_answer_for_test(env, host) {
             Some(true) => {}
             Some(false) => {
-                return Err(Unreachable {
-                    host: host.to_string(),
+                return Err(Unreachable::new(
+                    host,
                     port,
-                    kind: ConnectFailureKind::TcpRefused,
-                    budget: PREFLIGHT_BUDGET,
-                    binary: std::env::current_exe().ok(),
-                });
+                    ConnectFailureKind::TcpRefused,
+                    PREFLIGHT_BUDGET,
+                ));
             }
             None => probed.push((host, port)),
         }
