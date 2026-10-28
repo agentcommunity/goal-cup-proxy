@@ -112,15 +112,18 @@ While Goal Cup Proxy reads schema 1:
 
 Schema 1 may still grow: a new optional field whose absence keeps today's behaviour, a wider
 bound, a new closed value or a newly admitted pair of values. None of those breaks a connector.
+A connector that uses a widened bound (zero native rows, D74) needs a binary that admits it; an
+older binary refuses it with its own message.
 
-The promise is held by tests. Every shipped connector, and four frozen fixtures for harnesses
+The promise is held by tests. Every shipped connector, and five frozen fixtures for harnesses
 nobody ships (`crates/goalcup-cli/tests/fixtures/schema-1-connectors/`), take the connector
 contract. The fixtures are a plain chat shape (`schema1-chat`); a shared config home with
 `model_host_from`, `providers`, every `[participant]` field, `configure`, platform env, a
 reserved prefix, an argv guard, `native_pid` and redaction rows (`schema1-optional`); a per-run
 config home with `per_run_dir`, `dirs` and seeds, a `keychain_link` run home, a shared CA row
-and `prefix_paths` (`schema1-per-run`); and the required fields only, with no home variable and
-a shared run `HOME` (`schema1-minimal`, which pins the defaults). They they load, take the launch checks
+and `prefix_paths` (`schema1-per-run`); one host row and no native row, so the wire is the only
+record (`schema1-wire-only`); and the required fields only, with no home variable and
+a shared run `HOME` (`schema1-minimal`, which pins the defaults). They load, take the launch checks
 (`tests/it/connector_contract.rs`) and run once with a stand-in through the real binaries
 (`tests/full/connector_contract.rs`; the fixtures through `--dev`). A connector made from the
 [template](../skills/adding-a-capture-harness/templates/connector-harness.toml) loads with no
@@ -260,7 +263,7 @@ optional field or table is absent.
 | `capture.args` | required | 0–64 strings in chat mode; each at most 4096 bytes and without control characters. |
 | `capture.goal_flag` | refused | Headless mode's goal option; refused as chat mode only (see below). |
 | `capture.interactive` | required: `true` | Boolean. `true` runs the harness in its chat mode in the participant's terminal, where the participant types the prompt (D57). `false`, or leaving it out, is refused as chat mode only (see below). |
-| `capture.resume_args` | optional, default `[]` | Strings appended after `capture.args` when a run is continued and already has a file in one of its `[[capture.native]]` stores; otherwise the harness opens the normal way. Each is held to every `args` rule, and `args` and `resume_args` together hold at most 64. |
+| `capture.resume_args` | optional, default `[]` | Strings appended after `capture.args` when a run is continued and already has a file in one of its `[[capture.native]]` stores, or has no native row; otherwise the harness opens the normal way. Each is held to every `args` rule, and `args` and `resume_args` together hold at most 64. |
 | `capture.configure` | optional, default `[]` | `interactive` only. At most 4 commands, each 1–16 arguments of 1–256 bytes. Each argument is held to every `args` rule and takes no template (`{` and `}` are refused). See [Configure commands](#configure-commands). |
 | `capture.continuation` | required | Non-blank, one line, 1–512 bytes; declarative provenance for unattended continuation. |
 | `capture.auth_hosts` | optional, default `[]` | At most 16 unique lowercase DNS hosts; always opaque tunnels. |
@@ -730,17 +733,27 @@ list. The shipped forms:
 - **What is read.** `goalcup start` and each `goalcup continue` open `file` in the shared config
   home (`<cfg>/capture-homes/<id>/`), before anything is created, and read the one string at
   `key`. The file is never read during the run. The format follows the extension: `.yaml` or
-  `.yml` (block mappings, read by a small lookup in core), `.json` or `.toml`. The file must be a
-  regular file, not a link, and at most 1 MiB. Nothing else in it is kept or logged.
+  `.yml` (block mappings, read by a small lookup in core), `.json` or `.toml`. Nothing else in
+  the file is kept or logged.
 - **One indirection (`via`).** With `via`, the string at `via` names one table, and it replaces
   the one `*` part of `key`: `model_provider = "vercel"` with `key =
   "model_providers.*.base_url"` reads `model_providers.vercel.base_url`. One indirection, never
-  two. A `via` value that is not a plain name (`[A-Za-z0-9_-]`, 1–64 bytes) is refused at start.
-- **A missing value (`absent`).** With `absent = "refuse"`, the default, a missing file, key or
-  `via` value is refused at start (below). With `absent = "defaults"` it is not an error: the
-  segment opens the connector's host rows only, so the connector must list at least one. Only a
-  missing value falls back: a value that is present is held to every refusal below under either
-  setting.
+  two. A `via` value that is not a plain name (`[A-Za-z0-9_-]`, 1–64 bytes) is refused at start,
+  without repeating the value.
+- **A missing value (`absent`).** Missing means: no file, an empty file, no key, no `via` value,
+  no table of that name, an empty or white-space value, or YAML the small lookup cannot follow.
+  With `absent = "refuse"`, the default, it is refused at start (below). With `absent =
+  "defaults"` it is not an error: the segment opens the connector's host rows only, so the
+  connector must list at least one, and `host.log` says `model service: the connector's default
+  hosts (<key> not set in <file>)`. Only a missing value falls back.
+- **A file that cannot be read is refused under either setting**, since it may name a service
+  that would then pass unrecorded: a link (never followed), not a regular file, over 1 MiB,
+  unreadable by the user, not UTF-8, or JSON or TOML its parser refuses (plain JSON only: no
+  comments or trailing commas). The refusal names the file's path, the problem and the fix: "Goal
+  Cup cannot read `<path>`, where `<display name>` keeps its model service setting: the file
+  `<problem>`. `<fix>`. Then run the command again."
+- **With a value, the default hosts and that address both open.** The configured address opens
+  beside the connector's host rows, never instead of them (ledger L11).
 - **What is recorded.** The value must be an `https` URL. Its host joins the intercepted hosts
   for that segment only, with the run's port; its path is the base under which requests are
   recorded. `<base>/chat/completions`, `<base>/messages` and `<base>/responses` (and the same under
@@ -749,14 +762,14 @@ list. The shipped forms:
   in `capture.hosts` keeps that row. Every other host stays an opaque tunnel, counted in
   `proxy admission:`, listed in the run's `tunnels-<entry_id>.jsonl` and never opened.
 - **What is logged.** Only `model service: <host>:<port> (<key> in <file>)`, in the run's
-  `host.log`. A userinfo (`user:pass@`), the path and the query are never logged or recorded.
+  `host.log`, where `<key>` is the resolved key (`model_providers.vercel.base_url`). A userinfo (`user:pass@`), the path and the query are never logged or recorded.
 - **Refused at start, and not ready at prep.** A missing file, key or `via` value (with
   `absent = "refuse"`), a value that is not an
   `http` or `https` URL, plain `http` (only `HTTPS_PROXY` is set, so it would pass around the
   recorder), a loopback name, an address literal, a single-label name, a host that names
   Goal Cup, and an authentication host. The refusal names the value (`<scheme>://<host>:<port>`
-  only), the reason and the way to change it: "`<display name>` is set to use `<value>`, which Goal
-  Cup cannot record: `<reason>`. Goal Cup records only an https model service that is not on this
+  only), the reason, the setting and the way to change it: "`<display name>` is set to use
+  `<value>`, which Goal Cup cannot record: `<reason>` (set by `<key>` in `<file>`). Goal Cup records only an https model service that is not on this
   computer. Run goalcup setup --harness `<id>`, choose such a service there, then run the command
   again." Nothing is created. `goalcup continue` checks it before it closes an earlier segment.
   `goalcup setup` makes the same check: while the value cannot be recorded the home is not ready,
@@ -764,12 +777,14 @@ list. The shipped forms:
   login the harness refreshes at another host is not (D62).
 - **Schema rules.** `file` is a relative path of at most 4 components with a `.yaml`, `.yml`,
   `.json` or `.toml` extension. `key` is 1–8 names of `[A-Za-z0-9_-]` (1–64 bytes each) joined
-  with `.`; with `via` it holds exactly one `*` part, and without `via` none. `via` follows the
-  `key` rules, with no `*`. `absent` is the closed set `"refuse"`, `"defaults"`. No `.`, `-` or
-  `_` separated part of the file's name, the key or `via` may be `auth`, `credential(s)`,
-  `secret(s)`, `token(s)`, `key(s)` or `api_key`, in any case: Goal Cup Proxy reads a service
+  with `.`; with `via` it holds exactly one `*` part, which is not its last, and without `via`
+  none. `via` follows the `key` rules, with no `*`. `absent` is the closed set `"refuse"`,
+  `"defaults"`. No `.`, `-` or `_` separated part of the file's name, the key or `via` may be
+  `auth`, `credential(s)`, `secret(s)`, `token(s)`, `key(s)`, `api_key`, `apikey` or `password`,
+  in any case: Goal Cup Proxy reads a service
   address, never a key file or a key. `env` is allowed (D74), for Claude Code's
-  `env.ANTHROPIC_BASE_URL`.
+  `env.ANTHROPIC_BASE_URL`; the same rule holds for the `participant.no_prompts` and
+  `time_left_tool` keys, which share the check (ledger L15).
 - **A switch mid-run.** A service the participant switches to inside a running session is not
   intercepted until the next segment. The participant guide says: exit the harness and run
   `goalcup continue`.
@@ -952,7 +967,7 @@ schema 2.
 ## Examples
 
 Read the shipped connectors. Conformance tests load each as `Origin::Pinned` and compare its
-directory with its pin. The four frozen
+directory with its pin. The five frozen
 [schema-1 fixtures](../crates/goalcup-cli/tests/fixtures/schema-1-connectors/) are complete
 connectors for harnesses nobody ships, one per shape ([what each covers](#the-compatibility-promise)).
 

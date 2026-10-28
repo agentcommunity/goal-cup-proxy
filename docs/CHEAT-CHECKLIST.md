@@ -133,6 +133,12 @@ consistent, not that the participant followed the rules.
   unrecorded. Bounded by: the gateway shows in the `sealed hosts:` line and the uploaded tunnel
   list, the run's label reads `native_only`, and `analysis.cross_leg` notes
   `native_activity_without_wire_streams`.
+- **The fallback trusts the absence of one key (D74, ledger L24).** Under `absent = "defaults"`,
+  a config that names no address opens only the connector's default hosts. A model service
+  chosen another way is not seen: a Codex `[profiles.*]` provider, a built-in local provider
+  (`ollama`) or Claude Code's Bedrock switch. Such traffic tunnels, sealed and unrecorded.
+  Bounded by: it shows in the `sealed hosts:` line and the uploaded tunnel list, and the run's
+  label reads `native_only`.
 - **The seal lists what it cannot read.** A workspace that is not a clone is walked, up to 50,000
   files and the finish deadline; a walk that hits either is recorded as capped, never as an error
   (D71). Inside the walk there is no time bound for one file. A symlink, FIFO, socket or device is listed with the absent digest and never

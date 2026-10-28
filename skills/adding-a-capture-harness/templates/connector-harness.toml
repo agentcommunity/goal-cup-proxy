@@ -163,7 +163,8 @@ mode = "<extend|replace>"
 # {config_home}/...:
 source = "none"
 
-# Exactly one local native artifact source (transcript or metadata). Never a request dump, credential or seed file.
+# Zero or one local native artifact source (transcript or metadata); delete this table if the harness
+# keeps none, and the wire is the only record (D74). Never a request dump, credential or seed file.
 [[capture.native]]
 name = "<session>"                      # label in the chain; [A-Za-z0-9._-]{1,64}
 root = "{config_home}/<sessions>"       # {config_home} (C1) or {run_home} (C2), plus relative parts

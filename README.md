@@ -135,7 +135,7 @@ goalcup-verify reads a sealed trace offline: integrity check, research report an
 
 1. **The chat file.** If the harness keeps its own conversation file, Goal Cup records it. It is a
    backup of the wire record; a harness may have none.
-2. **Model traffic.** Goal Cup opens only the model service: the connector's default hosts, or the
+2. **Model traffic.** Goal Cup opens only the model service: the connector's default hosts, and the
    one address the harness's own settings name. Every request under that address is recorded, and
    the standard formats (`/chat/completions`, `/messages`, `/responses`) are decoded.
 3. **Everything else is sealed.** Any other connection passes through closed, noted only as host,

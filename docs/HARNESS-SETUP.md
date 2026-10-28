@@ -98,7 +98,8 @@ env_key = "AI_GATEWAY_API_KEY"
 wire_api = "responses"
 ```
 
-Goal Cup reads only `model_providers.<model_provider>.base_url` and records that address
+Set `model_provider` at the top level, not in a `[profiles.*]` table: Goal Cup does not read
+profiles. Goal Cup reads only `model_providers.<model_provider>.base_url` and records that address
 ([D74](DECISIONS.md#d74-the-model-host-is-the-connectors-default-or-the-one-address-the-harnesss-own-config-names)).
 When `model_provider` is not set, or names a built-in provider with no table, Goal Cup opens
 `chatgpt.com`, the model service of a ChatGPT sign-in. The address must be `https` and not on

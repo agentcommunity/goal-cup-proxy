@@ -308,7 +308,8 @@ disclosure and no-side-channel rules.
   holds (D74): `wire_and_native` (the model requests and the harness's chat file), `wire_only`
   (the model requests alone), `wire_undecoded` (model traffic recorded in a form no decoder reads
   yet) and `native_only` (the chat file alone). Each of these counts. `none` (no model traffic
-  and no chat file) does not.
+  and no chat file) does not. "Native" means model work in the chat file: a chat file with no
+  model work in it labels `none`.
 - Goal Cup Proxy downtime while the agent kept working is reviewed, not automatically penalized. Downtime
   while nothing happened is an outage.
 - **A full disk is a red flag.** When the disk fills, the record shows a `StorageFull` gap. It means
