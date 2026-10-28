@@ -424,8 +424,8 @@ is a trust statement about the participant's machine, so the two modes and the C
 core; the CA variable's name is connector data. A redaction regex runs inside the signed
 daemon.
 
-1. **Provider key.** Goal Cup Proxy never sees, forwards or stores a participant's provider key
-   (D61): `[capture.credential]` is refused. The harness's own login keeps the key in its home.
+1. **Provider key.** A connector passes no provider key and Goal Cup Proxy stores none (D61):
+   `[capture.credential]` is refused. The harness's own login keeps the key in its home.
 4. **Session identity.** A chat connector takes `source = "none"`: Goal Cup Proxy reads no session
    id. The native root is private to the run, or the native row sets `since_run_start`, so every
    session file new or written since the start is this run's. Runs on a shared home are

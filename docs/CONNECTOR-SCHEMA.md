@@ -19,12 +19,13 @@ the owner approves it). The rest of this page is the field-by-field detail.
 - **Fields.** Required: `schema_version`, `id` (the folder name), and in `[capture]`:
   `interactive = true`, `continuation` and `args`; `[capture.executable]` with `program`;
   `[capture.home]` with `run_home`, `config_home` and `real_dirs` (1 to 4 paths);
-  `[capture.ca]` with `env` and `mode`; `[capture.identity]` with `source = "none"`; exactly one
-  `[[capture.native]]` with `name`, `root`, `pattern` and `form`; and a model host (one to 16
-  `[[capture.hosts]]` or `providers` rows, each host row with `host` and at least one path, or
-  `model_host_from`). Some pairs are required together, such as `home.env` with a
-  `{config_home}` root ([Cross-field rules](#cross-field-rules)).
-  Optional, each with the default its table below gives: `[participant]`, `[launch_prep]`,
+  `[capture.ca]` with `env` and `mode`; `[capture.identity]` with `source = "none"`; and a model
+  host (one to 16 `[[capture.hosts]]` or `providers` rows, each host row with `host` and at least
+  one path, or `model_host_from`, which with `absent = "defaults"` needs one row too). Some pairs
+  are required together, such as `home.env` with a `{config_home}` root
+  ([Cross-field rules](#cross-field-rules)).
+  Optional, each with the default its table below gives: zero or one `[[capture.native]]` (with
+  `name`, `root`, `pattern` and `form`), `[participant]`, `[launch_prep]`,
   `resume_args`, `configure`, `auth_hosts`, `env`, `platform`, `reserved_env_prefixes`, `argv_guard`,
   `termination`, `providers`, `model_host_from`, the home's `skills_dir`, `per_run_dir`, `dirs`
   and `seed`, `version_args`, and `[redaction]`. The one-screen list is
@@ -73,8 +74,10 @@ the owner approves it). The rest of this page is the field-by-field detail.
   `{run_home}`.
 - **Hosts.** Only the hosts the connector declares are opened and recorded: its `capture.hosts`
   rows, the rows its `providers` names from the shared table (`providers.toml`), and, with
-  `model_host_from`, the host its own config names, read at each start and continue. Every other
-  host is an opaque tunnel. `auth_hosts` are always tunnels.
+  `model_host_from`, the host its own config names, read at each start and continue (through one
+  `via` indirection, and with `absent = "defaults"` the connector's rows alone when the config
+  names none). Every other host is an opaque tunnel, listed at finish and sent with the seal
+  (D74). `auth_hosts` are always tunnels.
 - **`[participant]`.** `display_name`, `first_screen`, `setup_section`, `no_prompts` and
   `time_left_tool`. Core messages name a harness only through these. Goal Cup Proxy reads the
   `no_prompts` and `time_left_tool` files and never writes them (D67).
@@ -104,7 +107,8 @@ While Goal Cup Proxy reads schema 1:
    `capture-homes/<id>.run-home/` for a shared run `HOME`) and the native root templates keep their meaning,
    so a participant's login and settings survive an upgrade.
 5. A declared hint is recorded as declared. A new decoder never needs a connector change.
-6. A shipped `providers` row is not removed or narrowed.
+6. A shipped `providers` row is not removed or narrowed. The table is frozen (D74): no row is
+   added either, and a connector lists its default hosts in its own `[[capture.hosts]]`.
 
 Schema 1 may still grow: a new optional field whose absence keeps today's behaviour, a wider
 bound, a new closed value or a newly admitted pair of values. None of those breaks a connector.
@@ -189,8 +193,8 @@ has each line with its comment. The full reference below has every rule.
 | `[capture.home]` | `run_home`, `config_home`, the harness's home variable, its real folders, `skills_dir` | `config_home = "shared"`, `env = "CODEX_HOME"` |
 | `[capture.ca]` | The CA variable the harness reads, and `extend` or `replace` | `env = ["NODE_EXTRA_CA_CERTS"]`, `mode = "extend"` |
 | `[capture.identity]` | Always `source = "none"` | `source = "none"` |
-| `[[capture.native]]` | The session files: `name`, `root`, `pattern`, `form`, `protocol_hint`, `since_run_start = true` | `root = "{config_home}/sessions"` |
-| Model host | `model_host_from` when the participant picks the service; else `providers` or one `[[capture.hosts]]` row | `model_host_from = { file = "config.yaml", key = "model.base_url" }` |
+| `[[capture.native]]` | Zero or one. The session files: `name`, `root`, `pattern`, `form`, `protocol_hint`, `since_run_start = true` | `root = "{config_home}/sessions"` |
+| Model host | Default host rows (`[[capture.hosts]]` or `providers`), plus `model_host_from` when the harness's config may name another service | `model_host_from = { file = "settings.json", key = "env.ANTHROPIC_BASE_URL", absent = "defaults" }` |
 | `capture.auth_hosts` | Sign-in hosts, tunnelled and never recorded | `auth_hosts = ["auth.openai.com"]` |
 | `[capture.termination]` | `process_group`, or `native_pid` for an npm wrapper; a grace in seconds | `strategy = "process_group"`, `grace_seconds = 10` |
 | `[redaction]` | Optional: plan, quota and billing fields the harness sends | `{ kind = "codex_plan_type", json_field = "plan_type", value = "string" }` |
@@ -268,12 +272,12 @@ optional field or table is absent.
 | `capture.credential` | refused (D61) | A connector may not pass a provider key; the harness keeps its own login in its home. |
 | `capture.ca` | required table | The harness's CA variables and which file they get. |
 | `capture.identity` | required table | How this run's native-session identity is obtained and bound. |
-| `capture.native` | defaults to `[]`, validation requires exactly one | One `[[capture.native]]` table. |
+| `capture.native` | optional, default `[]` | Zero or one `[[capture.native]]` table (D74). |
 | `capture.argv_guard` | optional, default absent | Harness-specific pre-parser argument refusals. |
 | `capture.termination` | optional; effective defaults below | How the owned harness is stopped. |
-| `capture.hosts` | defaults to `[]`, validation requires 1–16 (with `providers`), or 0–16 with `model_host_from` | Intercepted model hosts and their recorded paths. |
+| `capture.hosts` | defaults to `[]`, validation requires 1–16 (with `providers`), or 0–16 with `model_host_from` and `absent = "refuse"` | Intercepted model hosts and their recorded paths. |
 | `capture.providers` | optional, default `[]` | Unique names from the shared provider table; each adds that provider's host row. See below. |
-| `capture.model_host_from` | optional, default absent | `{ file = "<path>", key = "<dotted key>" }`: where the harness's own config names its model service. Requires `config_home = "shared"`. See [The model host from the harness's config](#the-model-host-from-the-harnesss-config). |
+| `capture.model_host_from` | optional, default absent | `{ file = "<path>", key = "<dotted key>" }`, with optional `via = "<dotted key>"` and `absent = "refuse"` (default) or `"defaults"`: where the harness's own config names its model service. Requires `config_home = "shared"`. See [The model host from the harness's config](#the-model-host-from-the-harnesss-config). |
 
 With `interactive = true` (D57) there is no goal slot: the participant types the prompt in the
 harness. Its `args` may be empty, and its `identity.source` is `none`. Every argument and every `resume_args` entry passes the core deny policy and the
@@ -552,10 +556,12 @@ any other `.profile` there (the participant's own, or a link) is kept as it is.
 
 ## Credential and CA
 
-Goal Cup Proxy never sees, forwards or stores a participant's provider key (D61). A
-`[capture.credential]` table, in the base profile or in a `[capture.platform.<key>]` override, is
-refused with "a connector may not pass a provider key; the harness keeps its own login in its
-home". A harness that reads its key from an environment variable only is set up with its own
+A connector passes no provider key, and Goal Cup Proxy stores none (D61). The harness's access
+token passes through the recording proxy's memory on its way to the model service; it is
+forwarded unread and never written (`crates/goalcup-cli/src/proxy/http.rs`, "every other header
+is skipped unread"). A `[capture.credential]` table, in the base profile or in a
+`[capture.platform.<key>]` override, is refused with "a connector may not pass a provider key;
+the harness keeps its own login in its home". A harness that reads its key from an environment variable only is set up with its own
 login command, which stores the key in its home.
 
 | Field | Required/default | Contract |
@@ -612,7 +618,8 @@ Every other identity field (`binding`, `match_field`, `match_value`, `id_field`,
 
 ## `[[capture.native]]`
 
-Exactly one native row is required.
+Zero or one native row (D74). A connector with none records the wire only, and `goalcup
+continue` appends its `resume_args` as when a session file exists.
 
 | Field | Required/default | Contract |
 |---|---|---|
@@ -678,15 +685,16 @@ the grace is 10 seconds.
 ## `[[capture.hosts]]` and `capture.providers`
 
 One to 16 unique host rows are required, counting the rows `capture.providers` adds. A profile
-with `capture.model_host_from` may list none: its model host comes from the harness's config at
-each start.
+with `capture.model_host_from` and `absent = "refuse"` may list none: its model host comes from
+the harness's config at each start.
 
 A model provider's host row is written once, in the shared provider table
 `crates/goalcup-protocol/providers.toml`, which is compiled into `goalcup`. A connector names
 rows there with `capture.providers = ["anthropic"]`. The loader appends each named row to
 `capture.hosts`, after the connector's own rows, and every host rule below applies to it. An
-unknown or repeated name is refused, and so is a host that the connector also writes itself. A new
-provider is a reviewed row in that file, added from a measured run.
+unknown or repeated name is refused, and so is a host that the connector also writes itself. The
+table is frozen (D74): it keeps `anthropic` and `deepseek`, and a new connector lists its default
+hosts in its own `[[capture.hosts]]`.
 
 | Field | Required/default | Contract |
 |---|---|---|
@@ -709,24 +717,41 @@ overlap; model hosts belong in `capture.hosts`, not `auth_hosts`.
 ## The model host from the harness's config
 
 `capture.model_host_from = { file = "config.yaml", key = "model.base_url" }` is the default for a
-harness whose model service is the participant's choice (D62). The participant picks the service
-in the harness, and the harness saves its address in its own config. There is no provider list.
+harness whose model service is the participant's choice (D62, D74). The participant picks the
+service in the harness, and the harness saves its address in its own config. There is no provider
+list. The shipped forms:
+
+| Connector | `capture.model_host_from` | Without a value |
+|---|---|---|
+| `hermes-cli` | `{ file = "config.yaml", key = "model.base_url" }` | refused |
+| `claude-code-cli` | `{ file = "settings.json", key = "env.ANTHROPIC_BASE_URL", absent = "defaults" }` | `api.anthropic.com` (`providers = ["anthropic"]`) |
+| `codex-cli` | `{ file = "config.toml", key = "model_providers.*.base_url", via = "model_provider", absent = "defaults" }` | `chatgpt.com` (its own host row) |
 
 - **What is read.** `goalcup start` and each `goalcup continue` open `file` in the shared config
   home (`<cfg>/capture-homes/<id>/`), before anything is created, and read the one string at
   `key`. The file is never read during the run. The format follows the extension: `.yaml` or
   `.yml` (block mappings, read by a small lookup in core), `.json` or `.toml`. The file must be a
   regular file, not a link, and at most 1 MiB. Nothing else in it is kept or logged.
+- **One indirection (`via`).** With `via`, the string at `via` names one table, and it replaces
+  the one `*` part of `key`: `model_provider = "vercel"` with `key =
+  "model_providers.*.base_url"` reads `model_providers.vercel.base_url`. One indirection, never
+  two. A `via` value that is not a plain name (`[A-Za-z0-9_-]`, 1–64 bytes) is refused at start.
+- **A missing value (`absent`).** With `absent = "refuse"`, the default, a missing file, key or
+  `via` value is refused at start (below). With `absent = "defaults"` it is not an error: the
+  segment opens the connector's host rows only, so the connector must list at least one. Only a
+  missing value falls back: a value that is present is held to every refusal below under either
+  setting.
 - **What is recorded.** The value must be an `https` URL. Its host joins the intercepted hosts
   for that segment only, with the run's port; its path is the base under which requests are
   recorded. `<base>/chat/completions`, `<base>/messages` and `<base>/responses` (and the same under
   `<base>/v1`) carry the `openai-chat-completions`, `anthropic-messages` and `openai-responses`
   hints; every other path under the base is recorded with no hint. A host the connector also lists
   in `capture.hosts` keeps that row. Every other host stays an opaque tunnel, counted in
-  `proxy admission:` and never opened.
+  `proxy admission:`, listed in the run's `tunnels-<entry_id>.jsonl` and never opened.
 - **What is logged.** Only `model service: <host>:<port> (<key> in <file>)`, in the run's
   `host.log`. A userinfo (`user:pass@`), the path and the query are never logged or recorded.
-- **Refused at start, and not ready at prep.** A missing file or key, a value that is not an
+- **Refused at start, and not ready at prep.** A missing file, key or `via` value (with
+  `absent = "refuse"`), a value that is not an
   `http` or `https` URL, plain `http` (only `HTTPS_PROXY` is set, so it would pass around the
   recorder), a loopback name, an address literal, a single-label name, a host that names
   Goal Cup, and an authentication host. The refusal names the value (`<scheme>://<host>:<port>`
@@ -739,9 +764,12 @@ in the harness, and the harness saves its address in its own config. There is no
   login the harness refreshes at another host is not (D62).
 - **Schema rules.** `file` is a relative path of at most 4 components with a `.yaml`, `.yml`,
   `.json` or `.toml` extension. `key` is 1–8 names of `[A-Za-z0-9_-]` (1–64 bytes each) joined
-  with `.`. No `.`, `-` or `_` separated part of the file's name or of the key may be `auth`,
-  `credential(s)`, `secret(s)`, `token(s)`, `key(s)`, `api_key` or `env`, in any case: Goal Cup Proxy
-  reads a service address, never a key file or a key.
+  with `.`; with `via` it holds exactly one `*` part, and without `via` none. `via` follows the
+  `key` rules, with no `*`. `absent` is the closed set `"refuse"`, `"defaults"`. No `.`, `-` or
+  `_` separated part of the file's name, the key or `via` may be `auth`, `credential(s)`,
+  `secret(s)`, `token(s)`, `key(s)` or `api_key`, in any case: Goal Cup Proxy reads a service
+  address, never a key file or a key. `env` is allowed (D74), for Claude Code's
+  `env.ANTHROPIC_BASE_URL`.
 - **A switch mid-run.** A service the participant switches to inside a running session is not
   intercepted until the next segment. The participant guide says: exit the harness and run
   `goalcup continue`.
@@ -865,6 +893,8 @@ In addition to the local rules above, all of these apply:
     host may name Goal Cup, its reserved environment namespace or a Goal Cup host. There is no
     schema field for a server, upload or delivery credential.
 11. `run_home = "shared"` is refused with `capture.home.env` (D59).
+12. `capture.model_host_from` with `absent = "defaults"` needs at least one host row, its own or
+    from `providers` (D74).
 
 ## Folder/id/digest admission
 

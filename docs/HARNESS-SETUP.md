@@ -85,6 +85,25 @@ sandbox_mode = "danger-full-access"
 3. Without a sandbox, the agent's commands can change anything your user can. Run it on a machine
    or in a container that you are content to let it change.
 
+**Through a gateway (optional).** Name the provider in `codex-cli/config.toml`, and put its key in
+`codex-cli/.env` (Codex's `$CODEX_HOME/.env`), one line `AI_GATEWAY_API_KEY=<your key>`:
+
+```toml
+model_provider = "vercel"
+
+[model_providers.vercel]
+name = "Vercel AI Gateway"
+base_url = "https://ai-gateway.vercel.sh/codex/v1"
+env_key = "AI_GATEWAY_API_KEY"
+wire_api = "responses"
+```
+
+Goal Cup reads only `model_providers.<model_provider>.base_url` and records that address
+([D74](DECISIONS.md#d74-the-model-host-is-the-connectors-default-or-the-one-address-the-harnesss-own-config-names)).
+When `model_provider` is not set, or names a built-in provider with no table, Goal Cup opens
+`chatgpt.com`, the model service of a ChatGPT sign-in. The address must be `https` and not on
+this computer, or the start is refused. Not measured yet.
+
 ### Claude Code
 
 Add these keys to `claude-code-cli/settings.json`:
@@ -104,6 +123,24 @@ Add these keys to `claude-code-cli/settings.json`:
    auto mode, choose "No, keep bypass permissions".
 4. Bypass mode lets the agent's commands change anything your user can. Run it on a machine or in
    a container that you are content to let it change.
+
+**Through a gateway (optional).** Add the address and the gateway's key to the `env` block of
+`claude-code-cli/settings.json`:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://ai-gateway.vercel.sh/claude-code",
+    "ANTHROPIC_AUTH_TOKEN": "<your gateway key>"
+  }
+}
+```
+
+Goal Cup reads only `env.ANTHROPIC_BASE_URL` and records that address
+([D74](DECISIONS.md#d74-the-model-host-is-the-connectors-default-or-the-one-address-the-harnesss-own-config-names)).
+Without it, Goal Cup opens `api.anthropic.com`. The address must be `https` and not on this computer,
+or the start is refused. Set it in this file only: a base URL in a workspace's `.claude/` settings
+or in managed settings is not read, so that traffic is sealed and not recorded. Not measured yet.
 
 ### Amp
 

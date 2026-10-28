@@ -5,7 +5,10 @@
 #
 # This file is compiled into goalcup (`harness::provider_hosts`), so a row is a reviewed core
 # change, like a pin. A row names a provider's public API host, the request paths that carry
-# model turns, and the decoder hint for that wire format. Add a row only from a measured run.
+# model turns, and the decoder hint for that wire format.
+#
+# Frozen (D74): no new rows; a connector lists its default hosts in its own `[[capture.hosts]]`.
+# The rows below stay (docs/CONNECTOR-SCHEMA.md, promise 6).
 #
 # The key is the provider's name: a lowercase letter, then `[a-z0-9-]`, at most 32 bytes.
 

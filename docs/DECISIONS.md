@@ -10,7 +10,7 @@ retained for references; some have been superseded or retired.
 
 ## Status
 
-Where each entry stands on 26 Oct 2026. "Current" means follow it as written. "Partly superseded"
+Where each entry stands on 28 Oct 2026. "Current" means follow it as written. "Partly superseded"
 means some clauses are replaced; the entry names which. Read the replacing entry for those clauses.
 Update this table in the same PR as any entry it lists.
 
@@ -37,7 +37,8 @@ Update this table in the same PR as any entry it lists.
 | D51 to D55, D57 to D60 | current | |
 | D56 | partly superseded | D71 (a clone is decided at finish; the workspace admission rule) |
 | D61 | partly superseded | D62 (model traffic for listed providers only), D71 (the home's `.env` is not hashed), D72 (Hermes 0.22: a trust entry for the model URL; the session file is optional) |
-| D62, D63 | current | |
+| D62 | partly superseded | D74 (a missing value may fall back to the connector's hosts; `env` is no longer a deny word; one indirection through `via`) |
+| D63 | current | |
 | D64 | partly superseded | D65 (the disk watch pauses, never stops) |
 | D65, D66, D67 | current | |
 | D68 | proposed, owner to approve | The open pin question is settled by D70 |
@@ -46,6 +47,7 @@ Update this table in the same PR as any entry it lists.
 | D71 | current | |
 | D72 | partly superseded | D73 (`goalcup continue` resumes Hermes once model calls are recorded; setup removes the stale CA file) |
 | D73 | current | |
+| D74 | current | |
 
 ## D1. No API proxy. The harness's own transcript is the evidence.
 
@@ -1099,3 +1101,58 @@ chat --continue` resumes the last session in a `HERMES_HOME` and exits 1 when th
   a warning and never a refusal (D71's planned warning).
 - **Not in 0.7.1:** push lines in the skill or in any file in the project folder, and a post-run
   gateway stop.
+
+## D74. The model host is the connector's default, or the one address the harness's own config names.
+
+*28 Oct 2026, owner ruling in the Vercel Gateway session
+([results](research/results/2026-10-vercel-gateway.md)); the
+[spec](plans/2026-10-28-one-capture-system-spec.md) and [plan](plans/2026-10-28-one-capture-system.md)
+hold the detail.* Measured on 28 Oct: Claude Code pointed at Vercel AI Gateway sent its model calls
+through an opaque tunnel, 0 wire requests. Goal Cup Proxy picked its hosts three ways
+(`providers.toml`, `[[capture.hosts]]`, D62's `model_host_from`), so every gateway was a special
+case. One rule set now holds for every harness, with no vendor list. D1, D36 and D61 stand: Goal
+Cup Proxy never sets a model base URL, never reads a key file and builds the harness environment
+from nothing.
+
+- **Defaults first.** A connector lists its default model hosts in its own `[[capture.hosts]]`
+  (or `providers`). With `capture.model_host_from`, the one address the harness's own config
+  names joins them for that segment, as in D62.
+- **`via` and `absent`.** Two optional schema 1 fields on `capture.model_host_from`. `via` is a
+  dotted key in the same file whose string value names one table; the `key` then has exactly one
+  `*` part, replaced by that value. One indirection, never two, and the value must be a plain
+  name. `absent` is `"refuse"` (the default, D62's rule) or `"defaults"`: a missing file, key or
+  `via` value is then not an error, and the segment opens the connector's host rows only. A
+  connector with `"defaults"` must list at least one host row. A value that is present is held to
+  every D62 refusal (http, loopback, address literal, single label, Goal Cup host, sign-in host)
+  under either setting.
+- **`env` is no longer a deny word.** Claude Code keeps its base URL at `env.ANTHROPIC_BASE_URL`
+  in `settings.json`. Every other deny word stays.
+- **The shipped connectors.** Claude Code reads `env.ANTHROPIC_BASE_URL` in `settings.json` with
+  `absent = "defaults"` and keeps `providers = ["anthropic"]`. Codex reads
+  `model_providers.*.base_url` via `model_provider` in `config.toml` with `absent = "defaults"` and
+  keeps `chatgpt.com`. Hermes keeps its field (`absent` stays `"refuse"`) and lists its OAuth
+  refresh hosts in `auth_hosts`. Amp is unchanged.
+- **The chat file is optional.** A connector may declare zero or one `[[capture.native]]` row
+  (schema 1, a widened bound). A run with none records the wire only and resumes as before.
+- **Every sealed connection is listed.** Each completed or cut tunnel is noted as host, port,
+  reason, start and end time, and bytes each way. The reasons are `sign_in`, `not_model_host`,
+  `fail_open_no_sni`, `fail_open_sni_mismatch`, `fail_open_not_tls` and `fail_open_unparsed`. At
+  finish the list is written to `tunnels-<entry_id>.jsonl` in the run's directory (format tag
+  `goalcup-tunnels-v1`, at most 10,000 rows plus a dropped count, mode 0600), summed up on one
+  line (`sealed hosts: <host>:<port> x<n> <KiB> KiB, …`) and sent with the seal as the optional
+  `tunnels_jsonl` field. The server stores it create-only beside the seal, as
+  `traces/<event>/<run>/<entry>/tunnels-<sha256>.jsonl`. It is a side artifact: outside the v5
+  chain, and the v5 verifier never reads it.
+- **Evidence labels.** The research summary (schema 5) labels each run in `analysis.evidence`:
+  `wire_and_native`, `wire_only`, `wire_undecoded`, `native_only` or `none`, and gives the
+  wall-clock range of decoded wire model requests in `analysis.cross_leg.wire_request_range`.
+  In RULES every label counts except `none`, so OpenClaw `--local` (the chat in one process) is
+  no longer banned.
+- **`providers.toml` is frozen.** It keeps `anthropic` and `deepseek` (CONNECTOR-SCHEMA promise 6),
+  and no row is added: no `vercel` row and no per-path hint in a host row.
+- **The access token.** The harness's access token passes through the recording proxy's memory on
+  its way to the model service; it is forwarded unread and never written
+  (`crates/goalcup-cli/src/proxy/http.rs`, "every other header is skipped unread").
+
+This supersedes D62's refusal of a missing value (it now holds only with `absent = "refuse"`), its
+`env` deny word and its one-key form.

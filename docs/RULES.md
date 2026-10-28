@@ -217,7 +217,7 @@ disclosure and no-side-channel rules.
   produces a session with no evidence: Hermes `--safe-mode`, `HERMES_SAFE_MODE=1` and
   `--ignore-user-config`; OpenCode `--pure`, `OPENCODE_PURE=1`, `OPENCODE_DISABLE_PROJECT_CONFIG=1`,
   `--attach`, `share`, `import`, and the `instance/dispose` and `global/dispose` endpoints; OpenClaw
-  incognito threads, `agent exec`, `--local`, `--profile`, `--dev` and `proxy`; Codex `--ephemeral`,
+  incognito threads, `agent exec`, `--profile`, `--dev` and `proxy`; Codex `--ephemeral`,
   `--remote ws://`, `queue`, `fork` and `remote-control`; Cursor `-p` and `--print`, `--api-key` and
   `CURSOR_API_KEY`, `-e`/`--endpoint`, the `&` cloud handoff, `--worktree` and
   `AGENT_CLI_CREDENTIAL_STORE=file`; Claude `--no-session-persistence` and
@@ -284,8 +284,10 @@ disclosure and no-side-channel rules.
   never copies your own settings into it: `goalcup setup` opens the harness there so you sign in and add
   the settings, MCP servers and skills you want. Claude Code's run `HOME` on macOS holds a link to your
   `~/Library/Keychains`, for your subscription login. Hermes uses one such home too, set up by its
-  own wizard when `goalcup setup` opens it. Goal Cup Proxy never sees, forwards or stores your provider
-  key: each harness keeps its own login in its home.
+  own wizard when `goalcup setup` opens it. Each harness keeps its own login in its home. The
+  harness's access token passes through the recording proxy's memory on its way to the model
+  service; it is forwarded unread and never written
+  ([`crates/goalcup-cli/src/proxy/http.rs`](../crates/goalcup-cli/src/proxy/http.rs)).
 - **Your agent can read your logins, and one recording gap remains.** The harness must read and
   refresh its own login all run, and its tools run as your user. So Goal Cup Proxy cannot stop your
   agent reading the harness's login files in Goal Cup Proxy's home (Codex `auth.json`, Hermes `.env`
@@ -296,11 +298,17 @@ disclosure and no-side-channel rules.
   it is cleaned before anyone else gets it. An uploaded raw record cannot be rewritten. So use a
   login or account you can revoke, keep no unrelated secrets in the workspace or your home folder,
   and log out of the harness or rotate its login after the event.
-- **What the evidence covers.** Every token your agent saw is captured. Every byte a tool produced is
-  not: several harnesses truncate large tool output before writing it, and on some the untruncated
-  bytes exist nowhere on disk. A few internal model calls, such as title generators and follow-up
-  suggestion helpers, appear in no transcript on any harness we measured. Neither affects judging.
+- **What the evidence covers.** Every request your agent sent to the model service Goal Cup opened is
+  captured; a call that bypasses `HTTPS_PROXY` is not. Nor is every byte a tool produced: several
+  harnesses truncate large tool output before writing it, and on some the untruncated bytes exist
+  nowhere on disk. A few internal model calls, such as title generators and follow-up suggestion
+  helpers, appear in no transcript on any harness we measured. Neither affects judging.
   [CHEAT-CHECKLIST](CHEAT-CHECKLIST.md) lists what a verifier `pass` does not cover.
+- <a id="what-a-label-is-worth"></a>**What a label is worth.** The verifier labels what each run
+  holds (D74): `wire_and_native` (the model requests and the harness's chat file), `wire_only`
+  (the model requests alone), `wire_undecoded` (model traffic recorded in a form no decoder reads
+  yet) and `native_only` (the chat file alone). Each of these counts. `none` (no model traffic
+  and no chat file) does not.
 - Goal Cup Proxy downtime while the agent kept working is reviewed, not automatically penalized. Downtime
   while nothing happened is an outage.
 - **A full disk is a red flag.** When the disk fills, the record shows a `StorageFull` gap. It means
@@ -323,8 +331,9 @@ disclosure and no-side-channel rules.
   proxy on your machine through its own environment; nothing else on the machine goes through it. It
   records what you type into that agent, because the review must see every human message. Traffic from
   the agent to any other address, and traffic on the provider's address that is not a model call, is
-  noted as the address and the bytes each way, nothing more, and is never decrypted. That holds only
-  for programs that use the `HTTPS_PROXY` setting: a tool that ignores it (`ssh`, a raw socket, a command that
+  noted as the address, the port, the bytes each way, the times and the reason, nothing more, and
+  is never decrypted; that list is uploaded with the seal. This holds only for programs that use
+  the `HTTPS_PROXY` setting: a tool that ignores it (`ssh`, a raw socket, a command that
   unsets `HTTPS_PROXY`) connects directly and is not seen at all. Sign-in and token refresh are never
   decrypted either. Your ChatGPT, Claude or other credentials are never stored: the recording proxy removes them
   before anything is written, and keeps neither their values nor any fingerprint of them. Goal Cup Proxy

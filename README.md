@@ -33,9 +33,12 @@ also hand the setup to your own agent with the [goal-cup-setup skill](skills/goa
    For one particular release, add `-s -- --version <x.y.z>` after `sh`.
 2. **Set up**: `goalcup setup`. Four steps: it connects this computer to your account, lists the
    harnesses and lets you pick one, opens it once in its own isolated home so you sign in (or
-   paste your API key; Goal Cup never sees it) and set it never to stop for approval
+   paste your API key there) and set it never to stop for approval
    ([set up your harness for a 168-hour run](docs/HARNESS-SETUP.md)), and checks this machine.
-   Run it until every step says `[ok]`. It needs no GitHub and keeps no key. For Hermes, the
+   Run it until every step says `[ok]`. It needs no GitHub and keeps no key. The harness's access
+   token passes through the recording proxy's memory on its way to the model service; it is
+   forwarded unread and never written
+   ([`crates/goalcup-cli/src/proxy/http.rs`](crates/goalcup-cli/src/proxy/http.rs)). For Hermes, the
    newest release from Hermes's own installer is fine with an API-key service such as DeepSeek;
    see [Hermes setup](docs/HARNESS-SETUP.md#hermes) for the setups that need 0.19.0.
 3. **Practice** (optional): in an empty folder, `goalcup start --harness <id> --practice`. About
@@ -127,6 +130,20 @@ harness  --HTTPS_PROXY-->  recording proxy (in goalcup, loopback)  -->  model pr
 
 goalcup-verify reads a sealed trace offline: integrity check, research report and run stats.
 ```
+
+### How Goal Cup Proxy records
+
+1. **The chat file.** If the harness keeps its own conversation file, Goal Cup records it. It is a
+   backup of the wire record; a harness may have none.
+2. **Model traffic.** Goal Cup opens only the model service: the connector's default hosts, or the
+   one address the harness's own settings name. Every request under that address is recorded, and
+   the standard formats (`/chat/completions`, `/messages`, `/responses`) are decoded.
+3. **Everything else is sealed.** Any other connection passes through closed, noted only as host,
+   port, bytes each way, times and reason. Sign-in and token refresh are always sealed.
+4. **The label.** The verifier labels what each run holds. RULES says what each label is worth.
+
+The rules are [D74](docs/DECISIONS.md#d74-the-model-host-is-the-connectors-default-or-the-one-address-the-harnesss-own-config-names);
+the labels are in [RULES](docs/RULES.md#what-a-label-is-worth).
 
 - **The wire leg.** The harness reaches its model through a local recording proxy, set by
   `HTTPS_PROXY` for that one process only. Goal Cup Proxy never sets a model base URL. Bytes are

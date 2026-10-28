@@ -18,9 +18,20 @@ reached the sandbox as a copied file (mode 0600), never in argv or in output.
    no key.
 3. **Claude Code through the gateway is not recorded on the wire**, as expected. The native session
    is recorded, but the verifier reports `native_activity_without_wire_streams` with 0 wire model
-   requests. The `vercel` row is the fix; it is not added yet, as asked.
+   requests. The fix is D74 ([Decisions](#decisions-owner-28-oct)), not a `vercel` row.
 4. **`intercepted=` above 0 is not proof of a model record.** The Claude run shows `intercepted=20`
    and still has no wire stream. Judge with the research JSON's `cross_leg.wire_model_requests`.
+
+## Decisions (owner, 28 Oct)
+
+The `vercel` row below was not taken. The owner chose one capture rule set for every harness,
+recorded as [D74](../../DECISIONS.md#d74-the-model-host-is-the-connectors-default-or-the-one-address-the-harnesss-own-config-names): the model host is the connector's default, or the one address the
+harness's own config names. Claude Code reads `env.ANTHROPIC_BASE_URL` in `settings.json` and
+Codex reads `model_providers.*.base_url` via `model_provider`, both falling back to their default
+hosts; `providers.toml` is frozen; every sealed connection is listed and uploaded with the seal;
+the verifier labels each run's evidence. The work is the
+[spec](../../plans/2026-10-28-one-capture-system-spec.md) and the
+[plan](../../plans/2026-10-28-one-capture-system.md).
 
 ## Round 2: Vercel Sandbox facts
 
@@ -99,7 +110,7 @@ Linux 6.18.44 x86_64, 4 CPUs, 15 GiB, ext4, `userns-ok`, **no IPv6**. Blocked be
    credential brokering on the model host.
 3. The gate needs IPv6 on loopback; that kernel has none.
 
-## The change, as designed (not applied yet)
+## The change, as designed (not taken; see Decisions)
 
 Run 4b is the measured "before" run the row needs. One problem with the row as first asked: a
 `providers.toml` row is a `HostSpec` with **one `protocol_hint` for all its paths**
@@ -215,13 +226,13 @@ goalcup-verify --research-json <trace-dir> --output "$HOME/research.ndjson"
 ```
 
 Pass: `capture integrity valid`, and the last line's `analysis.cross_leg.wire_model_requests` is
-above 0. Today 4a passes and 4b should not, until the `vercel` row lands.
+above 0. Today 4a passes and 4b should not, until D74 lands.
 
 ## Follow-ups
 
-- Land the `vercel` row, then rerun 4b in a sandbox to see `wire_model_requests` above 0.
+- Rerun 4b in a sandbox under D74 (no `vercel` row) to see `wire_model_requests` above 0.
 - Hermes: a bare `provider: custom` endpoint gets HTTP 401 under goalcup (4a-1). Say so in
   HARNESS-SETUP's Hermes section, and point Vercel users to the built-in `ai-gateway` provider.
-- `proxy admission:` could name tunnelled hosts (host and count only), so a reviewer can see the
-  model host was not tunnelled without the research JSON.
-- Owner: per-path hints in `HostSpec`, or the Anthropic-only `vercel` row.
+- Done by D74: the `sealed hosts:` finish line and the uploaded tunnel list name each tunnelled
+  host.
+- Owner: decided by D74. Neither per-path hints in `HostSpec` nor a `vercel` row.

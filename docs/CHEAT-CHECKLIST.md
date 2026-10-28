@@ -45,7 +45,7 @@ consistent, not that the participant followed the rules.
   (CONNECTOR-SCHEMA, reviewer checklist); the wire leg records every model call that goes
   through the recording proxy; and the research report's `analysis.cross_leg` notes
   `native_activity_without_wire_streams` when the session file shows model work the recording proxy did not
-  record.
+  record (`analysis.evidence` then reads `native_only`).
 - **A Hermes gateway started outside the run is not recorded (D72).** Hermes 0.22 makes every
   model call in a gateway process, one per `HERMES_HOME`, which keeps the environment of whoever
   started it. A gateway started outside the run (by `goalcup setup`, the participant, a kanban or
@@ -93,8 +93,9 @@ consistent, not that the participant followed the rules.
   writes a session file and calls no model). Bounded by: the recorded build digests (D53) and the
   judges comparing the native session's model turns with the wire leg's model calls. The research
   report's `analysis.cross_leg` notes `native_activity_without_wire_streams` when the session file
-  shows model work and the recording proxy recorded no wire stream. `Launch.harness_version` is what the
-  harness printed for `version_args`: reported, not proven.
+  shows model work and the recording proxy recorded no wire stream, and `analysis.evidence` reads
+  `native_only`. `Launch.harness_version` is what the harness printed for `version_args`:
+  reported, not proven.
 - **The launch is not inode-bound execution.** The CLI resolves `program` on `PATH`, refuses a
   symlink or a non-regular file, and reads none of its bytes. A same-UID path replacement or an
   updater can change what `exec` runs. That is a different build, and the daemon's
@@ -119,7 +120,19 @@ consistent, not that the participant followed the rules.
   counts the completed ones (`tunneled_not_approved`, `tunneled_auth_host`). A tunnel still open
   at the stop is not counted, so `accepted` less `intercepted` can exceed the line. A connection
   the stop cut is counted as `cut`. A decided tunnel still open at
-  stop (a dev server that outlived the harness) is cut without a loss.
+  stop (a dev server that outlived the harness) is cut without a loss. Each completed or cut
+  tunnel is also listed, with host, port, reason, times and bytes each way, in
+  `tunnels-<entry_id>.jsonl` (`goalcup-tunnels-v1`, at most 10,000 rows plus a dropped count),
+  summed up on the `sealed hosts:` finish line and uploaded with the seal (D74). The list is
+  outside the chain and not hash-bound: the participant's machine wrote it, so it is a lead for
+  review, not proof.
+- **Claude Code reads settings from more files than Goal Cup does (D74).** Goal Cup reads
+  `env.ANTHROPIC_BASE_URL` in `settings.json` in Goal Cup's Claude Code home only. Claude Code
+  also takes settings from a workspace's `.claude/settings.json` and `.claude/settings.local.json`
+  and from managed settings. A gateway named there is not opened: its traffic tunnels, sealed and
+  unrecorded. Bounded by: the gateway shows in the `sealed hosts:` line and the uploaded tunnel
+  list, the run's label reads `native_only`, and `analysis.cross_leg` notes
+  `native_activity_without_wire_streams`.
 - **The seal lists what it cannot read.** A workspace that is not a clone is walked, up to 50,000
   files and the finish deadline; a walk that hits either is recorded as capped, never as an error
   (D71). Inside the walk there is no time bound for one file. A symlink, FIFO, socket or device is listed with the absent digest and never
@@ -250,8 +263,11 @@ consistent, not that the participant followed the rules.
 
 ## Provider keys (D61): what Goal Cup Proxy does not hold
 
-Goal Cup Proxy never sees, forwards or stores a participant's provider key. A harness keeps its key
-in its own home, from its own login. So there is no key-fragment scan and no `key-scan.txt`:
+Goal Cup Proxy holds no participant's provider key. A harness keeps its key in its own home, from
+its own login. The harness's access token passes through the recording proxy's memory on its way
+to the model service; it is forwarded unread and never written
+([`crates/goalcup-cli/src/proxy/http.rs`](../crates/goalcup-cli/src/proxy/http.rs)). So there
+is no key-fragment scan and no `key-scan.txt`:
 Goal Cup Proxy has no key to scan for. What keeps a key out of a trace is the daemon's redaction of what
 the harness records (the shared rules and `masked_key`), and these shapes it does not see.
 
