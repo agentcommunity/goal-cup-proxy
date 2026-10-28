@@ -192,9 +192,9 @@ pub struct ObservationCounts {
     pub models_omitted: u64,
     /// The earliest `observed.first.wall` of the kept wire `model_request` observations: when
     /// the first recorded model call began. `None` when there is none.
-    pub wire_first: Option<String>,
+    pub wire_first: Option<Rfc3339Utc>,
     /// The latest `observed.last.wall` of the same observations.
-    pub wire_last: Option<String>,
+    pub wire_last: Option<Rfc3339Utc>,
 }
 
 /// The most distinct model names one decoder's counts keep.
@@ -230,37 +230,26 @@ impl ObservationCounts {
     }
 
     /// Widens the wire request range by one kept wire `model_request` observed from `first`
-    /// to `last`.
+    /// to `last`. A wall time that is not RFC 3339 UTC is left out.
     fn widen_wire_range(&mut self, first: &str, last: &str) {
-        widen(&mut self.wire_first, first, Ordering::Less);
-        widen(&mut self.wire_last, last, Ordering::Greater);
+        if let Ok(first) = Rfc3339Utc::try_from(first) {
+            widen(&mut self.wire_first, &first, Ordering::Less);
+        }
+        if let Ok(last) = Rfc3339Utc::try_from(last) {
+            widen(&mut self.wire_last, &last, Ordering::Greater);
+        }
     }
 }
 
-/// Keeps in `kept` whichever of it and `wall` lies further toward `toward` in time. A wall
-/// time that is not RFC 3339 UTC is left out.
-pub(super) fn widen(kept: &mut Option<String>, wall: &str, toward: Ordering) {
-    let Some(new) = wall_order(wall) else {
-        return;
-    };
+/// Keeps in `kept` whichever of it and `wall` lies further toward `toward` in time. Time order,
+/// never the derived text order: `12:00:00.5Z` is after `12:00:00Z`.
+pub(super) fn widen(kept: &mut Option<Rfc3339Utc>, wall: &Rfc3339Utc, toward: Ordering) {
     if kept
-        .as_deref()
-        .and_then(wall_order)
-        .is_none_or(|old| new.cmp(&old) == toward)
+        .as_ref()
+        .is_none_or(|old| wall.chronological_cmp(old) == toward)
     {
-        *kept = Some(wall.to_string());
+        *kept = Some(wall.clone());
     }
-}
-
-/// An RFC 3339 UTC wall time's place in time: its whole seconds, then its fraction padded to
-/// nine digits, so `12:00:00.5Z` sorts after `12:00:00Z` (plain text order would not).
-fn wall_order(wall: &str) -> Option<(&str, [u8; 9])> {
-    Rfc3339Utc::try_from(wall).ok()?;
-    let mut fraction = [b'0'; 9];
-    if let Some(digits) = wall.get(20..wall.len() - 1) {
-        fraction[..digits.len()].copy_from_slice(digits.as_bytes());
-    }
-    Some((&wall[..19], fraction))
 }
 
 /// One decoder's result over one trace.
@@ -898,8 +887,14 @@ mod tally_tests {
         counts.widen_wire_range("2026-09-29T12:00:00.5Z", "2026-09-29T12:00:00Z");
         counts.widen_wire_range("2026-09-29T12:00:00Z", "2026-09-29T12:00:00.5Z");
         counts.widen_wire_range("not a time", "not a time");
-        assert_eq!(counts.wire_first.as_deref(), Some("2026-09-29T12:00:00Z"));
-        assert_eq!(counts.wire_last.as_deref(), Some("2026-09-29T12:00:00.5Z"));
+        assert_eq!(
+            counts.wire_first.as_ref().map(Rfc3339Utc::as_str),
+            Some("2026-09-29T12:00:00Z")
+        );
+        assert_eq!(
+            counts.wire_last.as_ref().map(Rfc3339Utc::as_str),
+            Some("2026-09-29T12:00:00.5Z")
+        );
     }
 
     #[test]
