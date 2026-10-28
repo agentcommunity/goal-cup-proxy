@@ -102,6 +102,10 @@ pub struct Upgrade {
     pub upstream_prefix: Vec<u8>,
     pub extensions: Option<String>,
     pub capture: Option<CaptureMeta>,
+    /// True when a host-policy row names the handshake's path. The WebSocket relay reads the
+    /// model-call rule (`ExchangeMeta::counts_as_model_call`) with it, the handshake's hint and
+    /// its method, so the HTTP and WebSocket counts cannot disagree.
+    pub named_by_row: bool,
 }
 
 /// How an HTTP relay ended.
@@ -143,6 +147,7 @@ impl std::fmt::Debug for Upgrade {
             .field("upstream_prefix_len", &self.upstream_prefix.len())
             .field("extensions", &self.extensions)
             .field("capture", &self.capture.is_some())
+            .field("named_by_row", &self.named_by_row)
             .finish_non_exhaustive()
     }
 }

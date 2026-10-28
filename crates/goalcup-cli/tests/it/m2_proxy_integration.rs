@@ -562,7 +562,8 @@ async fn every_request_on_an_opened_host_is_recorded() {
         .count();
     assert_eq!((requests.len(), responses), (3, 3), "{views:?}");
     assert_eq!(recorded, 3);
-    // Only the hinted POST is a model call: the GET model list and the POST outside every row are not.
+    // Only the hinted POST is a model call: the GET model list and the POST outside every
+    // row are not.
     assert_eq!(model_calls, 1);
     let paths: Vec<&str> = requests
         .iter()

@@ -145,6 +145,7 @@ pub async fn relay_http(pair: RelayPair, context: RelayContext) -> io::Result<Ht
                 exchange,
                 extensions,
                 capture,
+                named_by_row,
             } = *hand;
             Ok(HttpOutcome::WebSocket(Upgrade {
                 exchange,
@@ -157,6 +158,7 @@ pub async fn relay_http(pair: RelayPair, context: RelayContext) -> io::Result<Ht
                 upstream_prefix: upstream_in.buf,
                 extensions,
                 capture,
+                named_by_row,
             }))
         }
         _ => Err(io::Error::other(
@@ -253,6 +255,7 @@ struct Handoff {
     exchange: u64,
     extensions: Option<String>,
     capture: Option<CaptureMeta>,
+    named_by_row: bool,
 }
 
 // ---------------------------------------------------------------------------------------
@@ -303,13 +306,13 @@ async fn relay_requests(
         match &capture {
             Some(capture) => {
                 shared.emitter.record_recorded_request();
-                // A model call is a request on a hinted path, or a POST on a path under the base
-                // path with no hint (a provider's own generate route, such as
-                // `:streamGenerateContent`). A GET there is a model list or a probe, and a POST
-                // outside every row (a token refresh, say) is recorded but is no call.
-                if capture.meta.protocol_hint.is_some()
-                    || (capture.named_by_row && capture.meta.method == "POST")
-                {
+                // A model call is decided by `ExchangeMeta::counts_as_model_call`, the one rule the
+                // WebSocket relay also reads.
+                if ExchangeMeta::counts_as_model_call(
+                    capture.meta.protocol_hint.as_deref(),
+                    &capture.meta.method,
+                    capture.named_by_row,
+                ) {
                     shared.emitter.record_generation_request();
                 }
             }
@@ -535,15 +538,20 @@ async fn relay_responses(
             if ask.decision.send(Decision::WebSocket).is_err() {
                 return Err(io::Error::other("the request side of an upgrade is gone"));
             }
-            let capture = pending
-                .capture
-                .map(|c| c.meta.request(c.request_content_type));
+            let (capture, named_by_row) = match pending.capture {
+                Some(c) => {
+                    let named_by_row = c.named_by_row;
+                    (Some(c.meta.request(c.request_content_type)), named_by_row)
+                }
+                None => (None, false),
+            };
             return Ok(ResponseEnd::Upgraded(Box::new(Handoff {
                 upstream: src,
                 client: dst,
                 exchange: pending.exchange,
                 extensions: response.extensions(),
                 capture,
+                named_by_row,
             })));
         }
 

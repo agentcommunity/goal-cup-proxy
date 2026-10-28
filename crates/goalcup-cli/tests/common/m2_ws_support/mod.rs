@@ -584,6 +584,7 @@ pub struct Setup {
     pub upstream_preload: Vec<u8>,
     pub extensions: Option<String>,
     pub capture: Option<CaptureMeta>,
+    pub named_by_row: bool,
 }
 
 impl Setup {
@@ -596,6 +597,7 @@ impl Setup {
             upstream_preload: Vec::new(),
             extensions: None,
             capture: Some(request_meta(connection)),
+            named_by_row: true,
         }
     }
 
@@ -680,6 +682,7 @@ pub async fn start(emitter: &Arc<CaptureEmitter>, setup: Setup) -> Relay {
         upstream_prefix: setup.upstream_prefix,
         extensions: setup.extensions,
         capture: setup.capture,
+        named_by_row: setup.named_by_row,
     };
     Relay {
         client: Peer {

@@ -303,8 +303,11 @@ fn json_key(u: Unit) -> bool {
 /// One unit of the shell literal's value after a `=` with no space, as its two alternatives read
 /// it. `token_only` and `run` track the first alternative, `[A-Za-z0-9_\-]{16,}`: it is decided
 /// once it has sixteen units and a unit outside its class arrives, so the candidate ends there.
-/// The second, `%[0-9A-Fa-f]{2}|[A-Za-z0-9_.~+/=\-]`, carries the run on past that. `None` ends
-/// the candidate, and the regex then decides the complete match.
+/// The second is the form-encoded value, a run of `%XX` escapes and units of the class
+/// `[A-Za-z0-9_.~+/=\-]`, which needs sixteen units and a `%XX` escape or the dotted shape (see
+/// `redact.rs`). Its match ends at the end of that run, so this keeps every unit of the class
+/// live past the first alternative, and the regex then decides the exact span. `None` ends the
+/// candidate.
 fn encoded_step(run: u8, token_only: bool, hex: u8, u: Unit) -> Option<Shell> {
     if hex > 0 {
         return ascii_where(u, |b| b.is_ascii_hexdigit()).then_some(Shell::Encoded {
@@ -531,7 +534,7 @@ static SHAPES: [Shape; 23] = [
     },
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)(?:api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}|=(?:%[0-9A-Fa-f]{2}|[A-Za-z0-9_.~+/=\-]){16,})"#,
+        source: r#"(?i)(?:api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}|=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,}))"#,
         form: Form::ShellAssignment,
     },
     Shape {
