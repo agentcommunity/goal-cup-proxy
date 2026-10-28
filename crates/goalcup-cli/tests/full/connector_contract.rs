@@ -3,7 +3,7 @@
 //! binaries, with one stand-in (`fixtures/connector-stand-in.sh`) installed as its program.
 //!
 //! The stand-in knows no harness. The runner derives everything it needs from the connector's
-//! own `harness.toml`: its version probe, the session file its first native source finds, its
+//! own `harness.toml`: its version probe, the session file its native source finds (if any), its
 //! goal-cup skill folder and its CA variables. Every connector runs in chat mode (D57) on a
 //! terminal of its own. So a new connector folder is run here with no edit. The connector directory is copied byte for
 //! byte, so it loads as the pinned one without `--dev`. The frozen schema-1 fixtures
@@ -60,15 +60,15 @@ fn after_exit_lines(m: &HarnessManifest) -> String {
 fn stand_in_header(m: &HarnessManifest, out: &Path) -> String {
     let c = &m.capture;
     let config_home = format!("${{{}}}", c.home.env.as_deref().unwrap_or("HOME"));
-    let native = c
-        .native
-        .first()
-        .expect("a connector reads at least one native source");
-    let root = native
-        .root
-        .replace("{config_home}", &config_home)
-        .replace("{run_home}", "${HOME}");
-    let pattern = native.pattern.replace('*', "kit").replace('?', "k");
+    // A connector with no native source keeps no session file: the stand-in writes none.
+    let native_file = c.native.first().map_or_else(String::new, |native| {
+        let root = native
+            .root
+            .replace("{config_home}", &config_home)
+            .replace("{run_home}", "${HOME}");
+        let pattern = native.pattern.replace('*', "kit").replace('?', "k");
+        format!("{root}/{pattern}")
+    });
     let skills = c
         .home
         .skills_dir
@@ -77,7 +77,7 @@ fn stand_in_header(m: &HarnessManifest, out: &Path) -> String {
         .unwrap_or_default();
     format!(
         "KIT_OUT={out}\nKIT_VERSION_ARGV={version}\n\
-         KIT_NATIVE_FILE=\"{root}/{pattern}\"\nKIT_SKILLS_DIR=\"{skills}\"\nKIT_CA_VARS={ca}\n\
+         KIT_NATIVE_FILE=\"{native_file}\"\nKIT_SKILLS_DIR=\"{skills}\"\nKIT_CA_VARS={ca}\n\
          KIT_CONFIGURE={configure}\nKIT_AFTER_EXIT={after_exit}\n\
          export KIT_OUT KIT_VERSION_ARGV KIT_NATIVE_FILE KIT_SKILLS_DIR KIT_CA_VARS \
          KIT_CONFIGURE KIT_AFTER_EXIT\n",
@@ -351,19 +351,28 @@ fn run_connector(id: &str, from: Folder) {
         .filter(|s| s.source == CaptureSource::Native)
         .flat_map(|s| s.data.clone())
         .collect();
-    assert!(
-        String::from_utf8_lossy(&native).contains(PROMPT),
-        "{id}: the prompt is in the recorded session file"
-    );
     let (code, integrity) = world.verify(&entry);
     assert_eq!(integrity["sealed"], true, "{id}: {integrity}");
     assert_eq!(integrity["integrity"], "valid", "{id}: {integrity}");
     assert_eq!(code, 0, "{id}: {integrity}");
+    // A connector with no native source records the wire alone: no native stream, and the
+    // trace still seals as valid.
+    let Some(declared_native) = c.native.first() else {
+        assert!(
+            native.is_empty(),
+            "{id}: a native stream with no native source"
+        );
+        return;
+    };
+    assert!(
+        String::from_utf8_lossy(&native).contains(PROMPT),
+        "{id}: the prompt is in the recorded session file"
+    );
 
     // The session file is recorded under the hint the connector declared, as declared (D43). A
     // hint no decoder accepts is capture-only: the research report lists it under
     // `analysis.undecoded`, and the integrity verdict above is unchanged (D45).
-    let declared = c.native[0].protocol_hint.as_deref();
+    let declared = declared_native.protocol_hint.as_deref();
     let registry = goalcup_verifier::capture_analysis::registry::DecoderRegistry::builtin();
     let (_, summary) = world.research(&entry);
     let undecoded = summary["analysis"]["undecoded"]
@@ -400,7 +409,8 @@ fn run_connector(id: &str, from: Folder) {
 
 /// Every connector folder passes one participant-shaped run with no case of its own: it loads
 /// as the pinned directory, runs the one stand-in with the environment its manifest asks for,
-/// gets exactly its argv, records its prompt from the session file its native source reads,
+/// gets exactly its argv, records its prompt from the session file its native source reads (one
+/// with no native source records none),
 /// binds the pinned digest in `Launch`, and seals a trace the verifier reads as valid. Nothing
 /// under the real `HOME`'s app-wide harness homes changes.
 #[test]

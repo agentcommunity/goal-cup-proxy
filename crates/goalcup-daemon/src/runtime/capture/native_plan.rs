@@ -1,5 +1,5 @@
-//! The entry's native-store plan: its one schema-declared source, the roots it resolves to and
-//! the isolation they are held to. Chat mode names no session (`identity.source = "none"`), so
+//! The entry's native-store plan: its one schema-declared source, if it has one, the roots it
+//! resolves to and the isolation they are held to. Chat mode names no session (`identity.source = "none"`), so
 //! there is no scope to bind: the store is read from the entry's create on, and a
 //! `since_run_start` source reads only files changed at or after the run's start (D57).
 
@@ -9,7 +9,8 @@ use goalcup_protocol::harness::RunHome;
 /// Raw native bytes one poll may read: about an eighth of the queue once encoded.
 pub(super) const NATIVE_POLL_BYTES: u64 = 4 * MAX_SEGMENT_BYTES as u64;
 
-/// How an entry reads its harness's one schema-1 native store: the schema-declared source.
+/// How an entry reads its harness's one schema-1 native store: the schema-declared source, or
+/// nothing for a harness that declares none.
 /// `since` is the run's start in Unix seconds, from which a `since_run_start` source reads
 /// (D57) and which any other ignores: the request's `native_since`, or else the entry's own
 /// create time ([`create_time_floor`]).
@@ -19,10 +20,11 @@ pub(super) fn native_plan(
     config_home: &Path,
     since: u64,
 ) -> Result<Vec<NativeSourceSpec>, DaemonError> {
-    let native = capture
-        .native
-        .first()
-        .ok_or_else(|| DaemonError::Config("a schema-1 capture has no native source".into()))?;
+    // A harness that keeps no conversation file of its own declares none: the entry records
+    // the wire alone.
+    let Some(native) = capture.native.first() else {
+        return Ok(Vec::new());
+    };
     let modified_since = if native.since_run_start {
         Some(
             std::time::UNIX_EPOCH

@@ -994,20 +994,15 @@ impl HarnessManifest {
 
     fn check_native(&self) -> Result<(), ProtocolError> {
         let c = &self.capture;
+        // No native source is a harness that keeps no conversation file of its own: its run
+        // records the wire alone.
         let n = match c.native.as_slice() {
+            [] => return Ok(()),
             [one] => one,
-            [] => {
-                return Err(refuse(
-                    "capture.native",
-                    "a harness without a native session store is refused: schema 1 needs exactly \
-                     one `[[capture.native]]`. Whether such a harness is capturable at all is a \
-                     core decision about claim level, not a manifest option",
-                ));
-            }
             _ => {
                 return Err(refuse(
                     "capture.native",
-                    "schema 1 holds exactly one `[[capture.native]]`",
+                    "schema 1 holds no native source or exactly one `[[capture.native]]`",
                 ));
             }
         };
@@ -1350,22 +1345,30 @@ impl HarnessManifest {
             }
         }
 
+        // The one native source, if any, with the home its root names. With none, the checks
+        // below that bind a native root to the homes have nothing to bind.
+        let native = c.native.first().map(|n| {
+            let (home, rel) = split_native_root(&n.root).expect("checked by native");
+            (n, home, rel)
+        });
+
         // `none` must read a per-run root, or only what was written since the run started:
         // another run's sessions are not this run's, and runs on a shared home are serialized.
-        let native = &c.native[0];
-        let (root_home, root_rel) = split_native_root(&native.root).expect("checked by native");
-        let root_shared = match root_home {
-            RootHome::Config => !per_run,
-            RootHome::Run => run_shared,
-        };
-        if root_shared && !native.since_run_start {
-            return Err(refuse(
-                "capture.native.root",
-                "with `identity.source = \"none\"` the root must be per run: `{run_home}/...` \
-                 with a per-run `run_home`, or `{config_home}/...` with `config_home = \
-                 \"per_run\"`, unless the native source declares `since_run_start = true`; an \
-                 unscoped source in a shared home would read other runs' sessions",
-            ));
+        if let Some((native, root_home, _)) = native {
+            let root_shared = match root_home {
+                RootHome::Config => !per_run,
+                RootHome::Run => run_shared,
+            };
+            if root_shared && !native.since_run_start {
+                return Err(refuse(
+                    "capture.native.root",
+                    "with `identity.source = \"none\"` the root must be per run: \
+                     `{run_home}/...` with a per-run `run_home`, or `{config_home}/...` with \
+                     `config_home = \"per_run\"`, unless the native source declares \
+                     `since_run_start = true`; an unscoped source in a shared home would read \
+                     other runs' sessions",
+                ));
+            }
         }
 
         // A shared run `HOME` is for a harness with no home variable (D59). With one, the
@@ -1401,7 +1404,7 @@ impl HarnessManifest {
                     return Err(refuse(format!("capture.home.{field}"), WHY));
                 }
             }
-            if root_home == RootHome::Config {
+            if let Some((_, RootHome::Config, _)) = native {
                 return Err(refuse(
                     "capture.native.root",
                     format!("a `{{config_home}}` root {WHY}: use `{{run_home}}/...`"),
@@ -1416,43 +1419,45 @@ impl HarnessManifest {
         // checked both ways the two could meet: the same directory (the seeds read as paths under
         // the run home) and nested (`<per_run_dir>/<seed>` under it). Components compare
         // lower-cased, because APFS is case-insensitive and `Config.YAML` is `config.yaml`.
-        let seed_homes: Vec<Vec<String>> = match root_home {
-            RootHome::Config => vec![Vec::new()],
-            RootHome::Run => vec![Vec::new(), vec![h.per_run_dir_name().to_ascii_lowercase()]],
-        };
-        let pattern = native_pattern_components(&native.pattern).expect("checked by native");
-        let mut components: Vec<String> = if root_rel.is_empty() {
-            Vec::new()
-        } else {
-            root_rel.split('/').map(str::to_ascii_lowercase).collect()
-        };
-        components.extend(pattern.iter().map(|p| p.to_ascii_lowercase()));
-        for s in &h.seed {
-            for home in &seed_homes {
-                let dest: Vec<String> = home
-                    .iter()
-                    .cloned()
-                    .chain(s.file.split('/').map(str::to_ascii_lowercase))
-                    .collect();
-                if dest.len() == components.len()
-                    && dest
+        if let Some((native, root_home, root_rel)) = native {
+            let seed_homes: Vec<Vec<String>> = match root_home {
+                RootHome::Config => vec![Vec::new()],
+                RootHome::Run => vec![Vec::new(), vec![h.per_run_dir_name().to_ascii_lowercase()]],
+            };
+            let pattern = native_pattern_components(&native.pattern).expect("checked by native");
+            let mut components: Vec<String> = if root_rel.is_empty() {
+                Vec::new()
+            } else {
+                root_rel.split('/').map(str::to_ascii_lowercase).collect()
+            };
+            components.extend(pattern.iter().map(|p| p.to_ascii_lowercase()));
+            for s in &h.seed {
+                for home in &seed_homes {
+                    let dest: Vec<String> = home
                         .iter()
-                        .zip(&components)
-                        .all(|(d, p)| glob_matches(d, p))
-                {
-                    let coincide = if root_home == RootHome::Run {
-                        " (the per-run config home may be, or sit under, the run home)"
-                    } else {
-                        ""
-                    };
-                    return Err(refuse(
-                        "capture.native.pattern",
-                        format!(
-                            "`{}` under `{}` matches the seed `{}`{coincide}: a native source \
-                             may not read a file Goal Cup Proxy seeds",
-                            native.pattern, native.root, s.file
-                        ),
-                    ));
+                        .cloned()
+                        .chain(s.file.split('/').map(str::to_ascii_lowercase))
+                        .collect();
+                    if dest.len() == components.len()
+                        && dest
+                            .iter()
+                            .zip(&components)
+                            .all(|(d, p)| glob_matches(d, p))
+                    {
+                        let coincide = if root_home == RootHome::Run {
+                            " (the per-run config home may be, or sit under, the run home)"
+                        } else {
+                            ""
+                        };
+                        return Err(refuse(
+                            "capture.native.pattern",
+                            format!(
+                                "`{}` under `{}` matches the seed `{}`{coincide}: a native source \
+                                 may not read a file Goal Cup Proxy seeds",
+                                native.pattern, native.root, s.file
+                            ),
+                        ));
+                    }
                 }
             }
         }
