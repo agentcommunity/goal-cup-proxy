@@ -3,7 +3,10 @@
 
 use crate::CliError;
 use crate::connector::HarnessConnector;
+use crate::model_host::{Caller, ModelHost};
 use crate::preflight::Level;
+use crate::proxy::connect::ConnectFailureKind;
+use crate::proxy::preflight::{PREFLIGHT_BUDGET, Unreachable, endpoints_reachable};
 use crate::run::reserve::artifact_root;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -164,4 +167,63 @@ pub(super) fn offline_upstreams_for_test(env: &BTreeMap<String, String>) -> bool
 #[cfg(not(feature = "test-support"))]
 pub(super) fn offline_upstreams_for_test(_env: &BTreeMap<String, String>) -> bool {
     false
+}
+
+/// A test build's stated answers to the reachability probes `goalcup start` makes, as
+/// `host=ok,host=unreachable` pairs. A host it does not name is probed for real, as a shipped
+/// build probes every host. Lets a test state a network that blocks one host and reaches
+/// another, which no test machine can state for itself.
+#[cfg(feature = "test-support")]
+pub const TEST_PROBE_ANSWERS: &str = "GOALCUP_TEST_PROBE_ANSWERS";
+
+/// The reachability `goalcup start` asks of `endpoints`, in order: the first that does not answer
+/// is the answer. A host a test build states an answer for ([`TEST_PROBE_ANSWERS`]) is answered
+/// so; the rest are probed for real.
+pub(super) fn reachable(
+    env: &BTreeMap<String, String>,
+    endpoints: &[(&str, u16)],
+) -> Result<(), Unreachable> {
+    let mut probed = Vec::new();
+    for &(host, port) in endpoints {
+        match stated_answer_for_test(env, host) {
+            Some(true) => {}
+            Some(false) => {
+                return Err(Unreachable::new(
+                    host,
+                    port,
+                    ConnectFailureKind::TcpRefused,
+                    PREFLIGHT_BUDGET,
+                ));
+            }
+            None => probed.push((host, port)),
+        }
+    }
+    endpoints_reachable(probed)
+}
+
+/// The answer a test build states for `host`: `Some(true)` for `ok`, `Some(false)` for any other
+/// word, `None` when it states none.
+#[cfg(feature = "test-support")]
+fn stated_answer_for_test(env: &BTreeMap<String, String>, host: &str) -> Option<bool> {
+    let stated = env.get(TEST_PROBE_ANSWERS)?;
+    stated
+        .split(',')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(name, _)| *name == host)
+        .map(|(_, answer)| answer == "ok")
+}
+
+#[cfg(not(feature = "test-support"))]
+fn stated_answer_for_test(_env: &BTreeMap<String, String>, _host: &str) -> Option<bool> {
+    None
+}
+
+/// The one line `goalcup start` says when a default host the run does not use cannot be reached,
+/// because the settings name a model service that answers: what happened, and what to do.
+pub(super) fn default_host_warning(missing: &Unreachable, service: &ModelHost) -> String {
+    let head = format!("{}:{} could not be reached", missing.host, missing.port);
+    format!(
+        "warning: {}",
+        crate::model_host::default_host_sentence(&head, service, Caller::Start)
+    )
 }

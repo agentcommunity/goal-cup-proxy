@@ -62,22 +62,23 @@ Say these plainly, once, before the first human step:
 2. Run `goalcup setup --json`. It asks nothing and opens nothing. It prints one JSON array of four
    objects, in order, each `{"step", "state", "human", "say"}`:
    - `step` is `login`, `harness`, `harness_home` or `machine`;
-   - `state` is `ok`, `todo` or `fail`. An unavailable sleep lock never makes the `machine` step
-     not-ok: its `say` then tells the person to keep the machine awake themselves (under WSL2,
-     with the Windows power setting);
+   - `state` is `ok`, `warn`, `todo` or `fail`. `warn` is settled, like `ok`: the step needs
+     nothing more from the person, the run can go on, and its `say` says what to watch. An
+     unavailable sleep lock never makes the `machine` step not-ok: its `say` then tells the person
+     to keep the machine awake themselves (under WSL2, with the Windows power setting);
    - `human` is `true` when the step needs the person;
    - `say` is what was found, what to do, or why it failed.
 
    A flag setup refuses (a `--harness` that names no connector) gives no array: setup prints one
    plain sentence instead and exits non-zero. Show that sentence to the person verbatim.
-3. If every `state` is `ok`, tell the person they are ready: they may try a practice run
+3. If every `state` is `ok` or `warn`, tell the person they are ready: they may try a practice run
    themselves, in an empty folder (`goalcup start --harness <id> --practice`, no GitHub), and they
    make the repository, the token and the project folder as the guide's section 5 says, then start
    their run with `goalcup start --harness <id> --repo <user>/<name>` inside the start window. The window opens on 7 November 2026 at
    00:00 UTC and lasts 24 hours. `goalcup start` asks for its own browser approval; that is the
    second approval, and it is normal. If the `machine` step's `say` asks them
    to keep the machine awake themselves, pass that on too. Stop.
-4. Otherwise take the **first** step whose `state` is not `ok`:
+4. Otherwise take the **first** step whose `state` is `todo` or `fail`:
    - **`"human": false`**: do it yourself where a command can. Run the command its `say` names,
      always with `--json` added when it is `goalcup setup`, so setup never opens the harness or
      asks for anything inside your session. For the harness choice that is
@@ -95,7 +96,7 @@ Say these plainly, once, before the first human step:
      approve, and return to the terminal now) and opening the harness to sign in (or paste an API
      key into the harness) and add their settings. Both need `goalcup setup` run in the person's
      own terminal, because `--json` never asks or opens anything.
-5. Go back to step 2. Repeat until every step is `ok`.
+5. Go back to step 2. Repeat until every step is `ok` or `warn`.
 
 `goalcup setup` is safe to run again at any time: it does not redo what it has settled. A `fail`
 whose `say` you cannot act on goes to the person verbatim.

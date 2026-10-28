@@ -198,6 +198,90 @@ pub fn check(cfg: &Path, connector: &HarnessConnector) -> Result<Option<ModelHos
     read(&home, from, &manifest.capture.auth_hosts)
 }
 
+/// The command asking for provider hosts. It decides whether the harness's sign-in hosts are
+/// probed, and the command the default-host warning tells the participant to run again. It is
+/// not the clap `Command`: this is only the two callers that split hosts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Caller {
+    /// `goalcup setup` (`goalcup prep`): probes the sign-in hosts too.
+    Setup,
+    /// `goalcup start`: never probes the sign-in hosts.
+    Start,
+}
+
+impl Caller {
+    /// The last clause of a default-host warning: what the participant runs next.
+    fn rerun(self) -> &'static str {
+        match self {
+            Self::Setup => "run setup again",
+            Self::Start => "start again",
+        }
+    }
+}
+
+/// The provider hosts one caller probes, split into the ones a missing answer refuses and the
+/// ones whose missing answer is only a warning. Both lists keep the profile's order; a caller
+/// that needs them sorted or without duplicates does that itself.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ProviderHosts {
+    /// Must answer before the caller goes on.
+    pub hard: Vec<(String, u16)>,
+    /// Only a warning when they do not answer. Empty without a model service.
+    pub warn: Vec<(String, u16)>,
+}
+
+/// The one place that decides which provider hosts a run needs, and which of them only warn.
+/// `goalcup setup` and `goalcup start` both ask it; neither splits the hosts itself.
+///
+/// - The model service the settings name ([`ModelHost`]) is always hard: a run cannot go without
+///   it, and it is the host the run records.
+/// - With a model service, the harness's own hosts (its profile's `hosts`, and for setup its
+///   sign-in hosts) only warn, because a run that records the service does not need them.
+/// - Without a model service, the harness's own hosts are hard, and for setup its sign-in hosts
+///   are hard too.
+/// - Sign-in hosts (`capture.auth_hosts`) are asymmetric by caller. `goalcup setup` probes them,
+///   as hard hosts without a model service and as warnings with one. `goalcup start` never
+///   probes them, so a sign-in host that does not answer neither stops nor warns a start.
+pub(crate) fn provider_hosts<'a>(
+    model: Option<&ModelHost>,
+    harness: impl IntoIterator<Item = &'a str>,
+    sign_in: impl IntoIterator<Item = &'a str>,
+    caller: Caller,
+) -> ProviderHosts {
+    let mut own: Vec<(String, u16)> = harness
+        .into_iter()
+        .map(|host| (host.to_owned(), 443))
+        .collect();
+    // Only setup probes the sign-in hosts. Start leaves them out of both lists, so they never
+    // refuse or warn a start.
+    if caller == Caller::Setup {
+        own.extend(sign_in.into_iter().map(|host| (host.to_owned(), 443)));
+    }
+    match model {
+        Some(model) => ProviderHosts {
+            hard: vec![(model.host.clone(), model.port)],
+            warn: own,
+        },
+        None => ProviderHosts {
+            hard: own,
+            warn: Vec::new(),
+        },
+    }
+}
+
+/// The sentence for a default host that did not answer while the settings name a model service
+/// instead. `missing` says which host and why (`host:port could not be reached`, optionally with
+/// the reason); `service` is the model service the run records; `caller` picks the last clause.
+/// Callers add their own prefix: setup prints it as a `[warn]` line, start as `warning:`.
+pub(crate) fn default_host_sentence(missing: &str, service: &ModelHost, caller: Caller) -> String {
+    format!(
+        "{missing}; your settings use {}, so the run goes on. The run does not need that host. \
+         To use it, check the network or a firewall such as Little Snitch, then {}",
+        service.authority(),
+        caller.rerun()
+    )
+}
+
 /// [`check`] on a given config home. With `via`, the name read there stands for the key's `*`
 /// part (one indirection, never two). A missing file, key or `via` value is `Ok(None)` under
 /// `absent = "defaults"` and refused otherwise; a value that is present is held to every
@@ -1170,5 +1254,81 @@ absent = "defaults""#;
             refuse_if_on_this_computer_with(&model, |_, _| false).is_ok(),
             "a name that resolves elsewhere is not refused here"
         );
+    }
+
+    fn named(host: &str, port: u16) -> (String, u16) {
+        (host.to_string(), port)
+    }
+
+    /// Without a service the harness's own hosts are hard. With one, the service is the only hard
+    /// host and the harness's own hosts only warn. Sign-in hosts are setup's alone.
+    #[test]
+    fn start_never_probes_sign_in_hosts_and_setup_does() {
+        let model = ModelHost {
+            host: "gateway.example.test".to_string(),
+            port: 443,
+            base_path: String::new(),
+            from: String::new(),
+        };
+        let harness = ["api.default.example"];
+        let sign_in = ["auth.example.test"];
+
+        let setup_bare = provider_hosts(None, harness, sign_in, Caller::Setup);
+        assert_eq!(
+            setup_bare,
+            ProviderHosts {
+                hard: vec![
+                    named("api.default.example", 443),
+                    named("auth.example.test", 443)
+                ],
+                warn: Vec::new(),
+            }
+        );
+        let start_bare = provider_hosts(None, harness, sign_in, Caller::Start);
+        assert_eq!(
+            start_bare,
+            ProviderHosts {
+                hard: vec![named("api.default.example", 443)],
+                warn: Vec::new(),
+            }
+        );
+        let setup_named = provider_hosts(Some(&model), harness, sign_in, Caller::Setup);
+        assert_eq!(
+            setup_named,
+            ProviderHosts {
+                hard: vec![named("gateway.example.test", 443)],
+                warn: vec![
+                    named("api.default.example", 443),
+                    named("auth.example.test", 443)
+                ],
+            }
+        );
+        let start_named = provider_hosts(Some(&model), harness, sign_in, Caller::Start);
+        assert_eq!(
+            start_named,
+            ProviderHosts {
+                hard: vec![named("gateway.example.test", 443)],
+                warn: vec![named("api.default.example", 443)],
+            }
+        );
+    }
+
+    /// Both callers' warnings come from one sentence; only the last clause names the command the
+    /// participant runs again.
+    #[test]
+    fn the_default_host_warning_names_the_command_that_is_run_again() {
+        let model = ModelHost {
+            host: "gateway.example.test".to_string(),
+            port: 443,
+            base_path: String::new(),
+            from: String::new(),
+        };
+        let missing = "api.default.example:443 could not be reached";
+        let setup = default_host_sentence(missing, &model, Caller::Setup);
+        let start = default_host_sentence(missing, &model, Caller::Start);
+        assert!(setup.starts_with(missing) && start.starts_with(missing));
+        assert!(setup.contains("your settings use gateway.example.test:443, so the run goes on"));
+        assert!(setup.ends_with("then run setup again"), "{setup}");
+        assert!(start.ends_with("then start again"), "{start}");
     }
 }
