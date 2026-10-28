@@ -310,6 +310,10 @@ disclosure and no-side-channel rules.
   model work in it labels `none`. "Counts" means the run is admissible: a `native_only` run is
   reviewed with its sealed-hosts list for why its model calls were not recorded, and routing model
   work around Goal Cup Proxy on purpose is still grounds for disqualification (below).
+  The label is a hint for judges, not a judgement of the run. Only model requests count toward
+  `wire_undecoded`: a request on a recorded path with a protocol hint, or a POST. A lone GET (a
+  model list or a probe) and the sealed-connection list do not. Hermes and Amp keep their chat
+  files in a form with no native decoder yet, so their runs label `wire_only` or `none`.
 - Goal Cup Proxy downtime while the agent kept working is reviewed, not automatically penalized. Downtime
   while nothing happened is an outage.
 - **A full disk is a red flag.** When the disk fills, the record shows a `StorageFull` gap. It means

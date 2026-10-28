@@ -7,7 +7,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use goalcup_protocol::capture::{
-    CaptureRecord, CaptureSource, ConnectionEvent, EndReason, StreamKey,
+    CaptureMeta, CaptureRecord, CaptureSource, ConnectionEvent, EndReason, StreamKey,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -59,6 +59,9 @@ pub struct Operations {
     reference_bytes: usize,
     /// Wire streams opened, of any wire source: what the recording proxy recorded at all.
     wire_opens: u64,
+    /// Request opens that are model requests by the proxy's rule ([`is_model_request`]). Evidence
+    /// only: `wire_opens` keeps its meaning.
+    model_request_opens: u64,
 }
 
 impl Operations {
@@ -89,12 +92,20 @@ impl Operations {
         self.wire_opens
     }
 
+    /// Request streams the chain opened that are model requests by the proxy's rule: the count
+    /// the evidence label reads. Header and tunnel streams are not counted.
+    pub(crate) fn model_request_opens(&self) -> u64 {
+        self.model_request_opens
+    }
+
     pub(super) fn record(&mut self, record: &CaptureRecord) {
         *self.counts.entry(count_key(record)).or_default() += 1;
-        if let CaptureRecord::Open { source, .. } = record
-            && super::session::is_wire(*source)
+        if let CaptureRecord::Open {
+            source, metadata, ..
+        } = record
         {
-            self.wire_opens += 1;
+            self.wire_opens += u64::from(super::session::is_wire(*source));
+            self.model_request_opens += u64::from(is_model_request(*source, metadata));
         }
         match record {
             CaptureRecord::Open {
@@ -153,6 +164,23 @@ impl Operations {
         } else {
             self.references_omitted += 1;
         }
+    }
+}
+
+/// Hints that name a recorded artifact rather than a model request: a header stream and the
+/// sealed-connection list.
+const NOT_MODEL_HINTS: [&str; 2] = ["http-head-v1", "goalcup-tunnels-v1"];
+
+/// Whether a wire open is a model request by the proxy's own rule: a request stream on a hinted
+/// path, or a POST on any other path. The artifact hints are excluded before the POST clause, so
+/// a header or tunnel stream never counts, whatever method its metadata carries.
+fn is_model_request(source: CaptureSource, metadata: &CaptureMeta) -> bool {
+    if source != CaptureSource::WireRequest {
+        return false;
+    }
+    match metadata.protocol_hint.as_deref() {
+        Some(hint) => !NOT_MODEL_HINTS.contains(&hint),
+        None => metadata.method.as_deref() == Some("POST"),
     }
 }
 
@@ -229,5 +257,86 @@ impl GoalExcerpt {
             excerpt: text.to_string(),
             excerpt_truncated: self.truncated || text.len() < self.excerpt.len(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use goalcup_protocol::capture::{CaptureMeta, CaptureTime};
+
+    fn open(source: CaptureSource, hint: Option<&str>, method: Option<&str>) -> CaptureRecord {
+        CaptureRecord::Open {
+            stream: StreamKey {
+                producer: "producer".to_string(),
+                stream: 1,
+            },
+            observed: CaptureTime {
+                wall: "2026-10-29T12:00:00.000000001Z".to_string(),
+                mono_ns: 1,
+                clock_id: "producer".to_string(),
+            },
+            source,
+            metadata: CaptureMeta {
+                wire: None,
+                label: "unit".to_string(),
+                protocol_hint: hint.map(str::to_string),
+                method: method.map(str::to_string),
+                host: None,
+                path: None,
+                status: None,
+                content_type: None,
+            },
+        }
+    }
+
+    #[test]
+    fn model_request_opens_count_hinted_or_post_requests_only() {
+        let mut operations = Operations::default();
+        for record in [
+            // Counted: a hinted request, or a POST on any recorded path.
+            open(
+                CaptureSource::WireRequest,
+                Some("openai-chat-completions"),
+                Some("POST"),
+            ),
+            open(
+                CaptureSource::WireRequest,
+                Some("openai-chat-completions"),
+                Some("GET"),
+            ),
+            open(CaptureSource::WireRequest, None, Some("POST")),
+            // Not counted: a lone GET, header streams (even with POST metadata), tunnel
+            // lists, and every stream that is not a request.
+            open(CaptureSource::WireRequest, None, Some("GET")),
+            open(CaptureSource::WireRequest, Some("http-head-v1"), None),
+            open(
+                CaptureSource::WireRequest,
+                Some("http-head-v1"),
+                Some("POST"),
+            ),
+            open(CaptureSource::WireRequest, Some("goalcup-tunnels-v1"), None),
+            open(
+                CaptureSource::WireRequest,
+                Some("goalcup-tunnels-v1"),
+                Some("POST"),
+            ),
+            open(
+                CaptureSource::WireResponse,
+                Some("openai-chat-completions"),
+                None,
+            ),
+            open(
+                CaptureSource::WsClient,
+                Some("openai-realtime"),
+                Some("GET"),
+            ),
+            open(CaptureSource::Native, Some("codex-rollout"), None),
+        ] {
+            operations.record(&record);
+        }
+        assert_eq!(operations.model_request_opens(), 3);
+        // The proxy-side stream count stays what it was: every wire open, of any hint.
+        assert_eq!(operations.wire_opens(), 10);
     }
 }

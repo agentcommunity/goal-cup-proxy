@@ -286,7 +286,7 @@ pub fn research_summary(
             "decoders": decoders.iter().map(entry).collect::<Vec<_>>(),
             "models": models(decoders),
             "models_omitted": models_omitted(decoders),
-            "evidence": evidence(legs.native, legs.wire_streams, legs.wire_requests),
+            "evidence": evidence(legs.native, legs.model_request_streams, legs.wire_requests),
             "cross_leg": cross_leg(outcome, &legs),
             "undecoded": outcome.undecoded.iter().map(undecoded).collect::<Vec<_>>(),
             "undecoded_omitted": outcome.undecoded_omitted,
@@ -345,6 +345,7 @@ fn cross_leg(outcome: &DecodeOutcome, legs: &Legs) -> Value {
     json!({
         "native_model_activity": legs.native,
         "wire_streams": legs.wire_streams,
+        "wire_model_request_streams": legs.model_request_streams,
         "wire_model_requests": legs.wire_requests,
         "wire_request_range": range,
         "state": cross_leg_state(legs.native, legs.wire_streams, legs.wire_requests),
@@ -355,6 +356,7 @@ fn cross_leg(outcome: &DecodeOutcome, legs: &Legs) -> Value {
 struct Legs {
     native: u64,
     wire_streams: u64,
+    model_request_streams: u64,
     wire_requests: u64,
 }
 
@@ -364,6 +366,7 @@ impl Legs {
         Self {
             native: sum(|d| d.observations.native_model_activity),
             wire_streams: outcome.operations.wire_opens(),
+            model_request_streams: outcome.operations.model_request_opens(),
             wire_requests: sum(|d| d.observations.wire_model_requests),
         }
     }
@@ -383,16 +386,16 @@ fn cross_leg_state(native: u64, wire_streams: u64, wire_requests: u64) -> &'stat
 }
 
 /// The one rule behind `analysis.evidence`: what the run holds, decoded wire requests first.
-/// Wire streams with no decoded request outrank the session file, since the calls may be there
-/// unread.
-fn evidence(native: u64, wire_streams: u64, wire_requests: u64) -> &'static str {
+/// Model request streams with no decoded request outrank the session file, since the calls may
+/// be there unread. Header, tunnel and lone GET streams are not model requests, so they do not.
+fn evidence(native: u64, model_request_streams: u64, wire_requests: u64) -> &'static str {
     if wire_requests > 0 {
         if native > 0 {
             "wire_and_native"
         } else {
             "wire_only"
         }
-    } else if wire_streams > 0 {
+    } else if model_request_streams > 0 {
         "wire_undecoded"
     } else if native > 0 {
         "native_only"
@@ -486,6 +489,44 @@ mod tests {
         assert_eq!(evidence(0, 0, 0), "none");
         // Wire streams with no decoded request outrank the session file.
         assert_eq!(evidence(1, 1, 0), "wire_undecoded");
+    }
+
+    #[test]
+    fn a_lone_get_and_header_streams_do_not_outrank_native() {
+        let mut operations = crate::capture_analysis::operations::Operations::default();
+        let open = |hint: Option<&str>, method: Option<&str>| CaptureRecord::Open {
+            stream: StreamKey {
+                producer: "producer".to_string(),
+                stream: 1,
+            },
+            observed: time("producer", 1),
+            source: CaptureSource::WireRequest,
+            metadata: CaptureMeta {
+                wire: None,
+                label: "unit".to_string(),
+                protocol_hint: hint.map(str::to_string),
+                method: method.map(str::to_string),
+                host: None,
+                path: None,
+                status: None,
+                content_type: None,
+            },
+        };
+        operations.record(&open(None, Some("GET")));
+        operations.record(&open(Some("http-head-v1"), None));
+        operations.record(&open(Some("http-head-v1"), None));
+        // Native model work, no decoded request: the lone GET and the header streams are not
+        // model requests, so the session file is the evidence.
+        assert_eq!(
+            evidence(1, operations.model_request_opens(), 0),
+            "native_only"
+        );
+        // A model request that no decoder read still outranks nothing: it is undecoded.
+        operations.record(&open(Some("openai-chat-completions"), Some("POST")));
+        assert_eq!(
+            evidence(1, operations.model_request_opens(), 0),
+            "wire_undecoded"
+        );
     }
     use crate::capture_analysis::api::{
         DecoderFailure, DecoderSummary, DecoderV1, ObservationTimeRange, SourceRef, StreamOpen,
