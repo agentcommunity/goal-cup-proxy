@@ -111,13 +111,15 @@ pub(super) fn prepare(
         let refusal = |unreachable: Unreachable| {
             CliError::Refused(unreachable.refusal(cx.continuing.map(|c| c.record.run_id.as_str())))
         };
-        // The harness's own default hosts, which a run whose settings name a model service does
-        // not need: their failure is one warning line, not a refusal.
-        let defaults: Vec<(&str, u16)> = profile
-            .hosts
-            .iter()
-            .map(|h| (h.host.as_str(), 443))
-            .collect();
+        // Which hosts are hard and which only warn is decided by `provider_hosts`: the model
+        // service the settings name is the one host a run cannot go without, and the harness's
+        // own hosts are one warning line, not a refusal, when a service is named.
+        let split = crate::model_host::provider_hosts(
+            model_host,
+            profile.hosts.iter().map(|h| h.host.as_str()),
+            profile.auth_hosts.iter().map(String::as_str),
+            crate::model_host::Caller::Start,
+        );
         match model_host {
             Some(model) => {
                 // A model service whose name resolves only to this computer is refused before the
@@ -127,13 +129,12 @@ pub(super) fn prepare(
                 crate::model_host::refuse_if_on_this_computer(model).map_err(|refused| {
                     CliError::Refused(refused.refusal(c.display_name(), &c.loaded.manifest.id))
                 })?;
-                // The service the settings name is the one host the run cannot go without.
-                reachable(env, &[(model.host.as_str(), model.port)]).map_err(refusal)?;
-                if let Err(missing) = reachable(env, &defaults) {
+                reachable(env, &endpoint_refs(&split.hard)).map_err(refusal)?;
+                if let Err(missing) = reachable(env, &endpoint_refs(&split.warn)) {
                     say(out, &default_host_warning(&missing, model))?;
                 }
             }
-            None => reachable(env, &defaults).map_err(refusal)?,
+            None => reachable(env, &endpoint_refs(&split.hard)).map_err(refusal)?,
         }
     }
     // A per-run home is made inside the run directory below. A run directory inside a Git work
@@ -721,6 +722,13 @@ pub(super) fn create_and_gate<'a>(
         gated,
     };
     Ok((forked, gate))
+}
+
+/// The `(host, port)` pairs of a host list, borrowed, as `reachable` takes them.
+fn endpoint_refs(list: &[(String, u16)]) -> Vec<(&str, u16)> {
+    list.iter()
+        .map(|(host, port)| (host.as_str(), *port))
+        .collect()
 }
 
 /// Whether a continue resumes a harness that left no session file (D73): the connector says a

@@ -1015,37 +1015,32 @@ fn machine_step(
         ),
     }
 
-    // The hosts that must answer: the server, and the model service the settings name. Without a
-    // model service, the harness's own hosts (its profile's and sign-in hosts) must answer too.
+    // The hosts that must answer: the server, and the provider hosts `provider_hosts` makes hard
+    // for setup (the model service the settings name or, without one, the harness's own and
+    // sign-in hosts). Its warnings are the harness's own hosts when a model service is named.
     let mut hosts: Vec<(String, u16)> = Vec::new();
     if let Ok(Some(server)) = crate::server::read_server_config(cfg) {
         hosts.push(endpoint_of(&server.url));
     }
-    // The harness's own hosts, when a model service is named: a run records that service instead,
-    // so their failure is a warning.
     let mut defaults: Vec<(String, u16)> = Vec::new();
     let mut service = None;
     // Whether a model host is probed too, so the line says only what was probed.
     let mut provider = false;
     if let Some(c) = connector {
         let profile = &c.loaded.manifest.capture;
-        let own: Vec<(String, u16)> = profile
-            .hosts
-            .iter()
-            .map(|h| (h.host.clone(), 443))
-            .chain(profile.auth_hosts.iter().map(|h| (h.clone(), 443)))
-            .collect();
-        provider = !profile.hosts.is_empty();
-        // The model service the harness's config names (D62), once it names one.
-        match crate::model_host::check(cfg, c) {
-            Ok(Some(m)) => {
-                hosts.push((m.host.clone(), m.port));
-                defaults = own;
-                service = Some(m);
-                provider = true;
-            }
-            _ => hosts.extend(own),
-        }
+        // The model service the harness's config names (D62), once it names one. A config that
+        // cannot be read is no service: the harness's own hosts are then the hard ones.
+        let model = crate::model_host::check(cfg, c).ok().flatten();
+        let split = crate::model_host::provider_hosts(
+            model.as_ref(),
+            profile.hosts.iter().map(|h| h.host.as_str()),
+            profile.auth_hosts.iter().map(String::as_str),
+            crate::model_host::Caller::Setup,
+        );
+        provider = !profile.hosts.is_empty() || model.is_some();
+        hosts.extend(split.hard);
+        defaults = split.warn;
+        service = model;
     }
     for list in [&mut hosts, &mut defaults] {
         list.retain(|(host, _)| !host.is_empty());
@@ -1076,12 +1071,7 @@ fn machine_step(
     {
         note(
             State::Warn,
-            format!(
-                "{why}; your settings use {}, so the run goes on. The run does not \
-                 need that host. To use it, check the network or a firewall such as Little \
-                 Snitch, then run setup again",
-                m.authority()
-            ),
+            crate::model_host::default_host_sentence(&why, m, crate::model_host::Caller::Setup),
         );
     }
 

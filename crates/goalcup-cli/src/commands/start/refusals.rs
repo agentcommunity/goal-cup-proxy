@@ -3,7 +3,7 @@
 
 use crate::CliError;
 use crate::connector::HarnessConnector;
-use crate::model_host::ModelHost;
+use crate::model_host::{Caller, ModelHost};
 use crate::preflight::Level;
 use crate::proxy::connect::ConnectFailureKind;
 use crate::proxy::preflight::{PREFLIGHT_BUDGET, Unreachable, endpoints_reachable};
@@ -222,12 +222,9 @@ fn stated_answer_for_test(_env: &BTreeMap<String, String>, _host: &str) -> Optio
 /// The one line `goalcup start` says when a default host the run does not use cannot be reached,
 /// because the settings name a model service that answers: what happened, and what to do.
 pub(super) fn default_host_warning(missing: &Unreachable, service: &ModelHost) -> String {
+    let head = format!("{}:{} could not be reached", missing.host, missing.port);
     format!(
-        "warning: {}:{} could not be reached; your settings use {}, so the run goes on. The run does \
-         not need that host. To use it, check the network or a firewall such as Little Snitch, \
-         then start again.",
-        missing.host,
-        missing.port,
-        service.authority()
+        "warning: {}",
+        crate::model_host::default_host_sentence(&head, service, Caller::Start)
     )
 }

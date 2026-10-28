@@ -86,7 +86,8 @@ enum Command {
     /// you choose your agent (the harness) and it is installed; you open it once here, sign in
     /// or paste your API key, and add your settings, MCP servers and skills; and this computer
     /// has the power, the disk and the network that a week-long run needs. Each step prints
-    /// `[ok]`, `[todo]` or `[fail]`, and the last line says what to do next. Run it again as
+    /// `[ok]`, `[warn]`, `[todo]` or `[fail]`; a warning does not hold a step back, and the last
+    /// line says what to do next. Run it again as
     /// often as you like: what passed is not repeated. It never starts a run, and Goal Cup keeps
     /// no key.
     #[command(alias = "prep")]
