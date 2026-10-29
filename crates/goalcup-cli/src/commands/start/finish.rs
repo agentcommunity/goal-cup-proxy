@@ -72,7 +72,6 @@ pub(super) fn finish_run(
             // so if it cut any. What reached the proxy is sealed and uploaded as always.
             helper_left.then_some(harness_name.as_str()),
             Some(cfg),
-            true,
             out,
         ),
         (None, None) => Err(CliError::Internal(
@@ -332,7 +331,6 @@ pub(super) fn finish_unlaunched(
         false,
         None,
         None,
-        false,
         out,
     );
 }
@@ -375,10 +373,9 @@ const RUNNING_HARNESS_SINK_SHUTDOWN: Duration = Duration::from_secs(1);
 /// before the seal ends the harness. If the recording proxy could not queue its producer's close,
 /// the sender is ended too before the seal ([`RUNNING_HARNESS_SINK_SHUTDOWN`]).
 ///
-/// `harness_ran` is set for a run whose harness ran: once the recorder is stopped, a run that
-/// recorded model calls says so in one line, with the hosts those calls went to as the recorder
-/// observed them ([`recording_works_line`]). Unset, it says nothing of the recording (a run whose
-/// harness never ran).
+/// Once the recorder is stopped, a run that recorded model calls says so in one line, with the
+/// hosts those calls went to as the recorder observed them ([`recording_works_line`]). A run whose
+/// harness never ran records no calls, so it says nothing of the recording.
 ///
 /// `helper_left` names the harness when it exited but its connector's after-exit commands (D72)
 /// failed: what it left running (Hermes's gateway) may hold the proxy's connections open, so the
@@ -396,7 +393,6 @@ pub(super) fn finish(
     harness_running: bool,
     helper_left: Option<&str>,
     reconnect: Option<&Path>,
-    harness_ran: bool,
     out: &mut dyn std::io::Write,
 ) -> Result<CaptureFinishReport, CliError> {
     let Proxied {
@@ -410,7 +406,7 @@ pub(super) fn finish(
     let model_calls = proxy.generation_requests();
     // Read here as well, while the handle is still whole: the stop consumes it, and the hosts are
     // read once the recorder is stopped, from this shared set.
-    let generation_hosts = proxy.generation_hosts();
+    let generation_hosts = proxy.generation_hosts_shared();
     // A harness that still runs keeps its connections open: they would hold the stop, and the
     // seal that ends the harness, for the whole drain share. They are cut.
     let stopped = if harness_running || helper_left.is_some() {
@@ -441,12 +437,10 @@ pub(super) fn finish(
     let _ = say(out, &proxy_admission_line(h, a));
     // The recording, in one line, when the recorder saw model calls. None is said here: the end of
     // `goalcup start` says so in its no-model-calls block.
-    if harness_ran {
-        let calls = model_calls.load(std::sync::atomic::Ordering::SeqCst);
-        if calls > 0 {
-            let hosts = observed_hosts(&generation_hosts);
-            let _ = say(out, &recording_works_line(calls, &hosts));
-        }
+    let calls = model_calls.load(std::sync::atomic::Ordering::SeqCst);
+    if calls > 0 {
+        let hosts = observed_hosts(&generation_hosts);
+        let _ = say(out, &recording_works_line(calls, &hosts));
     }
     for line in crate::proxy::outage::finish_lines(h.upstream_outages, &h.outage_windows) {
         let _ = say(out, &line);

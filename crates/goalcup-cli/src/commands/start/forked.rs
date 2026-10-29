@@ -241,7 +241,6 @@ impl Forked<'_> {
                 false,
                 None,
                 None,
-                true,
                 out,
             );
         }

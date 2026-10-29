@@ -1235,7 +1235,6 @@ pub(super) fn run_harness<'a>(
                 true,
                 None,
                 Some(cfg),
-                true,
                 &mut said,
             );
             *early.lock().unwrap_or_else(|e| e.into_inner()) = Some((finished, said));

@@ -420,7 +420,9 @@ impl ProxyHandle {
 
     /// The hosts the counted model calls went to, observed on the requests, shared as
     /// [`ProxyHandle::generation_requests`] is ([`api::CaptureEmitter::generation_hosts_shared`]).
-    pub fn generation_hosts(&self) -> Arc<std::sync::Mutex<std::collections::BTreeSet<String>>> {
+    pub fn generation_hosts_shared(
+        &self,
+    ) -> Arc<std::sync::Mutex<std::collections::BTreeSet<String>>> {
         self.shared.emitter.generation_hosts_shared()
     }
 
