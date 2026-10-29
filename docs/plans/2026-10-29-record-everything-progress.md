@@ -74,3 +74,21 @@ on Tenki come later, after the build is clear and good.
 | Negative runs | covered by focused tests | | | Base path refusal, blocked-default-host start and mid-run accept restart are tested in the gate; no live run |
 
 Owner decisions: (1) redaction of emails and codex rate-limit blocks in the chain versus spec rule 3 and the byte-for-byte check; (2) a Hermes version with working delegation, or accept no measured subagent run for Hermes; (3) whether the kit's subagent counter is fixed before the next run; (4) the value-masking gap in headers (spec rule 3) noted in PR #300.
+
+## Owner decisions after phase 2 (29 Oct)
+
+- Less code is better: fewer places for things to break.
+- Goal: record everything we can. Runs may last a week with thousands of subagents. Never break the harness.
+- No cap of our own on subagents, calls or bytes. The 1024-file tracking cap goes. The limits that stay are
+  not choices: protocol v5 allows 128 open streams at once per entry (so quiet streams must be closed and
+  reopened), the participant's free disk (record a gap and keep the harness running), and the server's
+  per-run limit (`RUN_MAX_COMPRESSED_BYTES`, 64 GiB; raise it by a deploy if a run needs more).
+- Each subagent stream must link to its parent session and carry a time. A byte-for-byte match of
+  subagent files against disk is no longer a requirement.
+- Masking, option b: drop the email rule and the Codex rate-limit rules; keep every secret rule; add the
+  URL password rule first, because the email rule catches URL passwords today. Nothing more.
+- Tests run harnesses the way users do. Ask for subagents in the prompt, never force them by config.
+  If the provider rejects the requested model name, use one that works and note it.
+- The owner deploys the Worker from a local device.
+- The 2-hour run happens in a Vercel Sandbox. Tenki and week-long runs come later.
+- Design notes: [phase 2 notes](2026-10-29-record-everything-phase2-notes.md).
