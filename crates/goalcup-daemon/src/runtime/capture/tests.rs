@@ -1866,6 +1866,27 @@ fn a_final_snapshot_row_is_planned_as_a_final_snapshot_store() {
     assert_eq!(plan[0].hint, None);
 }
 
+/// A native row rooted at the config home itself drops only the files its pattern names from the
+/// baseline's listing of that home. The store and its sidecars are missing from the listing; the
+/// credential file, the other top-level file and the session file under `sessions/` stay listed.
+#[test]
+fn a_home_rooted_native_row_drops_only_the_files_its_pattern_names() {
+    let home = tempfile::tempdir().unwrap();
+    for name in ["state.db", "state.db-wal", ".env", "auth.json"] {
+        std::fs::write(home.path().join(name), b"x").unwrap();
+    }
+    std::fs::create_dir(home.path().join("sessions")).unwrap();
+    std::fs::write(home.path().join("sessions").join("x.jsonl"), b"x").unwrap();
+    // The fixture's run home is per-run, so the listed home is the config home.
+    let mut manifest = manifest_at(&frozen_manifest_paths().remove(0));
+    manifest.capture.native[0].root = "{config_home}".to_string();
+    manifest.capture.native[0].pattern = "state.db*".to_string();
+    let run_home = tempfile::tempdir().unwrap();
+    let listed = listed_home(&manifest.capture, run_home.path(), home.path()).unwrap();
+    let paths: Vec<&str> = listed.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(paths, vec![".env", "auth.json", "sessions/x.jsonl"]);
+}
+
 /// A harness that keeps no conversation file declares no native source: its entry plans no
 /// native read, so it records the wire alone, and the create is not refused for it.
 #[test]

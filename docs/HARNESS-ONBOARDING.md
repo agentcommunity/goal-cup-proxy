@@ -185,7 +185,7 @@ Cannot be captured:
 
 | Item | Why | What it would take |
 |---|---|---|
-| A database session store (SQLite, LevelDB) | `native.form` is `append_only` or `snapshot` only | A read-only snapshot native form |
+| A database session store the harness writes while the run goes (SQLite, LevelDB) | `native.form` admits `append_only`, `snapshot` and `final_snapshot`. A `final_snapshot` is a copy taken once, after the harness has exited, so a database the harness keeps writing during the run is refused: a copy taken mid-run is not a faithful record | A read-only native form for a live database. A store the harness only settles at exit can use `final_snapshot` |
 | HTTP/2-only or gRPC model traffic | The recording proxy speaks HTTP/1.1 and WebSocket upgrades; an `h2`-only client cannot connect | An `h2` proxy path and a decoder for its framing |
 | A local or loopback model | The recording proxy never sees loopback traffic. A connector that names a loopback or single-label host is refused | A loopback relay Goal Cup Proxy records |
 | A desktop or IDE app | Goal Cup Proxy starts one CLI from argv | Not planned |
@@ -451,7 +451,10 @@ daemon.
    ([CHEAT-CHECKLIST](CHEAT-CHECKLIST.md#anchoring-and-the-agents-reach)). `SSL_CERT_DIR`,
    `CURL_CA_BUNDLE` and `NODE_TLS_REJECT_UNAUTHORIZED` stay refused. See
    [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#credential-and-ca).
-8. **Native form.** `append_only` or `snapshot` only. A database store is refused.
+8. **Native form.** `append_only`, `snapshot` or `final_snapshot`. A `final_snapshot` is a database or
+   other store copied once, after the harness has exited; it is never read while the run goes. A
+   database the harness writes during the run, polled live, is refused. `protocol_hint` is refused on
+   `snapshot` and `final_snapshot`.
 9. **Zero to eight native rows (D74).** Schema 1 admits a connector with none, which records the
    wire only, and up to eight rows. Each row needs its own `name`, and no two rows may share a
    `root` and `pattern`.

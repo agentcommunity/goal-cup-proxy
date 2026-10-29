@@ -152,8 +152,8 @@ fn native_root(root: &str, run_home: &Path, config_home: &Path) -> Result<PathBu
 
 /// The baseline's listing of the harness home (D56): every file but the native roots inside it.
 /// The home is the config home, or the run `HOME` when that is shared (D59): the one kept
-/// across runs. Empty when a native root is the home itself; `None` when the home cannot be
-/// read.
+/// across runs. A native root that is the home itself drops only the files its pattern names;
+/// every other file stays listed. `None` when the home cannot be read.
 pub(super) fn listed_home(
     capture: &CaptureSpec,
     run_home: &Path,
