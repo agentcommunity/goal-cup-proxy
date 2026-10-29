@@ -417,6 +417,11 @@ impl UploadServer {
         self.with_entry(entry_id, |e| e.seal.clone()).flatten()
     }
 
+    /// The sealed-connection list the seal carried for `entry_id`, verbatim, once kept.
+    pub fn tunnels_of(&self, entry_id: &str) -> Option<String> {
+        self.with_entry(entry_id, |e| e.tunnels.clone()).flatten()
+    }
+
     pub fn receipt(&self, run_id: &str) -> Option<StartReceipt> {
         self.with_run(run_id, |r| r.current().receipt.clone())
             .flatten()

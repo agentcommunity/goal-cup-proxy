@@ -163,7 +163,8 @@ impl From<ConnectionEventWire> for ConnectionEvent {
 }
 
 /// The whitelisted, sanitized metadata of one stream. `path` never carries a query or
-/// fragment; there are no headers, cookies or arbitrary maps.
+/// fragment; the metadata has no headers, cookies or arbitrary maps. Header text is never here: a
+/// request's or response's head is its own header stream (`http-head-v1`), with credentials masked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureMeta {

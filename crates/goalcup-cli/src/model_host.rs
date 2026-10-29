@@ -1215,6 +1215,61 @@ sessions:
         );
     }
 
+    /// The hints the host rule hands out meet the decoders: for every base a harness can name
+    /// (a gateway prefix, the `/v1` the SDKs add, or none), each path the rule hints is selected
+    /// with that hint, and a stream carrying it is read by a registered decoder. The decoders
+    /// take their streams by hint; the Anthropic one also reads only an endpoint ending in
+    /// `/messages` (its `ENDPOINT_SUFFIX`), which every `WIRE_PATHS` entry under a base does.
+    #[test]
+    fn every_hinted_path_is_read_by_its_decoder() {
+        use goalcup_protocol::capture::{CaptureSource, StreamKey};
+        use goalcup_verifier::capture_analysis::api::StreamOpen;
+        use goalcup_verifier::capture_analysis::registry::DecoderRegistry;
+
+        let registry = DecoderRegistry::builtin();
+        let key = StreamKey {
+            producer: "proxy".into(),
+            stream: 1,
+        };
+        let mut hinted = 0;
+        for base in ["/claude-code", "/codex/v1", "/v1", ""] {
+            let host = ModelHost {
+                host: "models.example.test".into(),
+                port: 443,
+                base_path: base.into(),
+                from: "model.base_url in config.yaml".into(),
+                edit: None,
+            };
+            let rule = host.approved();
+            for row in rule.policy.paths.iter().filter(|row| !row.prefix) {
+                let Some(hint) = row.protocol_hint.as_deref() else {
+                    continue;
+                };
+                hinted += 1;
+                let picked = crate::proxy::metadata::select(&rule.policy, &row.path)
+                    .unwrap_or_else(|| panic!("{base:?}: {} is selected", row.path));
+                assert_eq!(picked.protocol_hint.as_deref(), Some(hint), "{}", row.path);
+                let open = StreamOpen::new(
+                    &key,
+                    CaptureSource::WireRequest,
+                    Some(hint),
+                    Some("application/json"),
+                );
+                let readers = registry.accepting(&open);
+                assert!(
+                    !readers.is_empty(),
+                    "{base:?}: no decoder reads {hint} for {}",
+                    row.path
+                );
+                if hint == "anthropic-messages" {
+                    assert!(row.path.ends_with("/messages"), "{}", row.path);
+                }
+            }
+        }
+        // Each of the three wire formats is hinted under every base: 2 prefixes x 3 paths x 4.
+        assert_eq!(hinted, 2 * 3 * 4);
+    }
+
     /// `url` as the base URL under a neutral settings key, read the way a run reads it.
     fn read_model_url(url: &str) -> Result<Option<ModelHost>, Unrecordable> {
         let from = r#"file = "config.json"

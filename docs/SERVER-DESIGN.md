@@ -76,7 +76,9 @@ for every table. Production and staging each have their own key and role.
 ## Storage
 
 - Chunk key: `traces/{event}/{run_id}/{entry_id}/{offset:016}-{sha256}.zst`. Seal documents sit
-  beside them as `seal-{sha256}.json` and `baseline-{sha256}.json`.
+  beside them as `seal-{sha256}.json` and `baseline-{sha256}.json`. The entry's sealed-connection
+  list sits there too, as `tunnels.jsonl` (one per entry, create-only; [CONTRACTS](CONTRACTS.md)
+  "Side artifacts"). No database row names it.
 - Every put is create-only and R2 checks the SHA-256, so a name holds only those bytes. The body is
   piped, never held in memory.
 - The bucket lock (180 days) covers the competition prefix only. The dry run, practice and test

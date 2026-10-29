@@ -49,6 +49,8 @@ cat "$FAKE_INDEX"
 
 FAKE_CURL = """#!/usr/bin/env python3
 # Reads curl's configuration from stdin, as the script gives it, and serves objects from FAKE_STORE.
+# As curl does: with `fail` a missing object (or a FAKE_FORBID one, refused as 403) is exit 22; without
+# it the error body is written and the status is what `write-out` names.
 import os, sys, urllib.parse
 with open(os.environ["FAKE_LOG"] + ".curl.args", "a") as f:
     f.write(" ".join(sys.argv[1:]) + "\\n")
@@ -66,10 +68,17 @@ if not url.startswith(prefix):
     sys.exit(22)
 key = urllib.parse.unquote(url[len(prefix):])
 src = os.path.join(os.environ["FAKE_STORE"], key)
-if not os.path.isfile(src):
+status = 200
+if key == os.environ.get("FAKE_FORBID"):
+    status = 403
+elif not os.path.isfile(src):
+    status = 404
+if status != 200 and "fail" in cfg:
     sys.exit(22)
-with open(src, "rb") as s, open(cfg["output"][0], "wb") as o:
-    o.write(s.read())
+with open(cfg["output"][0], "wb") as o:
+    o.write(open(src, "rb").read() if status == 200 else b'{"error":"not here"}')
+if "write-out" in cfg:
+    sys.stdout.write(cfg["write-out"][0].replace("%{http_code}", str(status)))
 """
 
 
@@ -356,6 +365,31 @@ class FetchRunTest(unittest.TestCase):
         self.assertFalse((trace / "receipt.json").exists())
         self.assertEqual(result.stderr.count("it was not sealed"), 0)
 
+    def test_the_sealed_connection_list_comes_back_beside_its_seal(self) -> None:
+        index = self.entry_index("sealed-websocket", ENTRY, 1)
+        prefix = f"traces/goalcup-cup-2026/{RUN}/{ENTRY}"
+        listing = (
+            json.dumps({"format": "goalcup-tunnels-v1", "entry_id": ENTRY}) + "\n"
+            + json.dumps({"host": "github.example.test", "port": 443, "reason": "sign_in"}) + "\n"
+            + json.dumps({"dropped": 0}) + "\n"
+        ).encode()
+        self.put(f"{prefix}/tunnels.jsonl", listing)
+        self.write_index(index)
+        result = self.fetch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        trace = self.out / ENTRY
+        self.assertEqual((trace / "tunnels.jsonl").read_bytes(), listing)
+        self.assertEqual(
+            sorted(p.name for p in trace.iterdir()),
+            ["acks.jsonl", "baseline.json", "chain.jsonl", "seal.json", "tunnels.jsonl"],
+        )
+
+    def test_an_entry_whose_seal_carried_no_list_gets_none(self) -> None:
+        self.write_index(self.entry_index("sealed-websocket", ENTRY, 1))
+        result = self.fetch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.out / ENTRY / "tunnels.jsonl").exists())
+
     def test_a_run_id_builds_every_entry_of_the_run(self) -> None:
         first = self.entry_index("sealed-websocket", ENTRY, 1)
         second = self.entry_index("sealed-websocket", ENTRY_2, 1)
@@ -456,6 +490,22 @@ class FetchRunTest(unittest.TestCase):
         os.killpg(proc.pid, signal.SIGTERM)
         proc.wait(timeout=20)
         self.assertEqual(list(self.out.iterdir()), [])
+
+    def test_the_list_of_each_entry_is_its_own_prefix_and_two_lists_stay_apart(self) -> None:
+        first = self.entry_index("sealed-websocket", ENTRY, 1)
+        second = self.entry_index("sealed-websocket", ENTRY_2, 1)
+        second["segment"] = 1
+        for entry in (ENTRY, ENTRY_2):
+            self.put(
+                f"traces/goalcup-cup-2026/{RUN}/{entry}/tunnels.jsonl",
+                json.dumps({"format": "goalcup-tunnels-v1", "entry_id": entry}).encode() + b"\n",
+            )
+        self.write_index(first, second)
+        result = self.fetch(RUN)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for entry in (ENTRY, ENTRY_2):
+            head = json.loads((self.out / entry / "tunnels.jsonl").read_text().splitlines()[0])
+            self.assertEqual(head["entry_id"], entry)
 
     def test_an_object_missing_from_the_bucket_is_refused(self) -> None:
         index = self.entry_index("sealed-websocket", ENTRY, 2)
@@ -589,6 +639,17 @@ class FetchRunTest(unittest.TestCase):
         self.assertIn("'fail'", cfg)
         self.assertIn("'max-time': ['600']", cfg)
         self.assertIn("'connect-timeout': ['15']", cfg)
+
+    def test_a_refused_list_read_is_not_an_absence(self) -> None:
+        # Only a 404 means the seal carried no list. Any other refusal fails the fetch, as it does
+        # for the seal, and leaves nothing behind.
+        self.put(f"traces/goalcup-cup-2026/{RUN}/{ENTRY}/tunnels.jsonl", b"{}\n")
+        self.write_index(self.entry_index("sealed-websocket", ENTRY, 1))
+        env = {**self.fakes(), "FAKE_FORBID": f"traces/goalcup-cup-2026/{RUN}/{ENTRY}/tunnels.jsonl"}
+        result = self.run_script("--index", str(self.index_path), ENTRY, str(self.out), env=env, path_first=self.bin)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("HTTP 403", result.stderr)
+        self.assertEqual(list(self.out.iterdir()), [], "a failed fetch leaves no directory")
 
     def test_the_rebuilt_files_are_private_to_the_organizer(self) -> None:
         self.write_index(self.entry_index("sealed-websocket", ENTRY, 1))

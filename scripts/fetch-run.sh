@@ -10,6 +10,8 @@
 #   acks.jsonl     the server's signed acknowledgement of each chunk, in offset order
 #   receipt.json   the signed start receipt, when the entry has one
 #   seal.json, baseline.json   the documents the seal call stored, when the entry is sealed
+#   tunnels.jsonl  the sealed-connection list the seal carried, when it carried one (no checksum:
+#                  the server keeps it beside the seal, and a missing one is not an error)
 # then prints each directory on stdout. It checks every chunk: the downloaded bytes match the
 # index's SHA-256, they decompress to exactly the indexed length, and the offsets run on from 0 with
 # no gap. A directory appears only when its entry is complete; a failure leaves nothing behind.
@@ -174,6 +176,12 @@ for e in entries:
         if key is not None and (not key_ok(key) or not (isinstance(sha, str) and HEX64.match(sha))):
             sys.exit(f"fetch-run: entry {entry} has a bad document key or digest in the index")
     plan.append(f"E {entry} {dash(seal_key)} {dash(e.get('seal_sha256'))} {dash(baseline_key)} {dash(e.get('baseline_sha256'))}")
+    if seal_key is not None:
+        # The server keeps the list under the entry's prefix, beside its seal (Worker sealRun).
+        prefix = seal_key.rsplit("/", 1)[0]
+        if not prefix.endswith("/" + entry):
+            sys.exit(f"fetch-run: entry {entry}: its seal key is not under the entry's own prefix")
+        plan.append(f"T {entry} {prefix}/tunnels.jsonl")
     expected = 0
     prev_last, prev_head, chunks_seen = -1, None, 0
     acks = []
@@ -239,6 +247,29 @@ get_object() {
   fi
 }
 
+# An object that may be absent: 0 when it was fetched into $2, 2 when the bucket has no such
+# object, 1 for any other failure. Only a 404 is an absence, so a refused token still fails.
+get_optional_object() {
+  if [ -n "$store" ]; then
+    [ -f "$store/$1" ] || return 2
+    cp "$store/$1" "$2"
+    return 0
+  fi
+  enc=$(printf '%s' "$1" | sed 's|/|%2F|g')
+  url="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$bucket/objects/$enc"
+  status=$({
+    printf 'url = "%s"\noutput = "%s"\n' "$url" "$2"
+    printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN"
+    printf 'silent\nshow-error\nconnect-timeout = 15\nmax-time = 600\n'
+    printf 'write-out = "%%{http_code}"\n'
+  } | curl -K -) || { rm -f "$2"; echo "fetch-run: could not read $1 from bucket $bucket" >&2; return 1; }
+  case $status in
+    200) return 0 ;;
+    404) rm -f "$2"; return 2 ;;
+    *) rm -f "$2"; echo "fetch-run: could not read $1 from bucket $bucket (HTTP $status)" >&2; return 1 ;;
+  esac
+}
+
 sha256_of() {
   python3 -I -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"
 }
@@ -275,6 +306,12 @@ while read -r kind a b c d e f; do
       fetch_document "$entry" seal "$b" "$c" || exit 1
       fetch_document "$entry" baseline "$d" "$e" || exit 1
       entries="$entries $entry"
+      ;;
+    T)
+      # The sealed-connection list: fetched when the seal carried one, else nothing is written.
+      rc=0
+      get_optional_object "$b" "$tmp/build-$a/tunnels.jsonl" || rc=$?
+      [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || exit 1
       ;;
     C)
       entry=$a offset=$b length=$c sha=$d key=$e

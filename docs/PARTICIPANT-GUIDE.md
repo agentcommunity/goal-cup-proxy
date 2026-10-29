@@ -200,7 +200,7 @@ the block indented by two spaces; paste it as it is. An example (yours differs; 
 screen then says "The push block is on your clipboard. Paste it (Cmd-V, or Ctrl-Shift-V on Linux)
 at the very start of your first prompt."; it uses `pbcopy` on a Mac, `wl-copy` or `xclip` on
 Linux, `clip.exe` under WSL2; otherwise it says to copy the block from the screen), in the file `push-lines.txt` in the run's folder (the screen
-gives its path), and in `goalcup status` while the run is open (for a run started before 0.7.1,
+gives its path), and in `goalcup status` while the run is open (for a run started before the cup's minimum release,
 only on the start screen). Pasting it is the only way the
 agent learns them: Goal Cup writes nothing into your project folder.
 
@@ -303,6 +303,16 @@ Next: nothing to do. The run ends by itself.
 
 Records waiting between sends are normal; `up to date` appears only when the server has
 acknowledged every record. A `PROBLEM:` line says what to do.
+
+When the agent stops, `goalcup start` ends with what it recorded. `Recording works: N model call(s)
+recorded from <host>` means your agent's model calls reached the recording, and names the model
+service they went to. If that line is missing and the block says no model calls were recorded,
+fix the setup before the next run. Every request to the model service is recorded, whatever its
+path, so a model list or a token refresh there is in the trace too. The `sealed hosts (passed
+through unread)` line names the other hosts your agent connected to, with the number of connections
+and their size. Those hosts are not read, and the model service is never among them. Your
+credentials are masked in the trace (`[masked]`), and the trace holds the files and paths on your
+machine that the agent read and wrote.
 
 | The line says | What it means | What to do |
 |---|---|---|

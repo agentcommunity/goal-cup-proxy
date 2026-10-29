@@ -297,7 +297,7 @@ disclosure and no-side-channel rules.
   login or account you can revoke, keep no unrelated secrets in the workspace or your home folder,
   and log out of the harness or rotate its login after the event.
 - **What the evidence covers.** Every request your agent sent to the model service Goal Cup opened is
-  captured; a call that bypasses `HTTPS_PROXY` is not. Nor is every byte a tool produced: several
+  captured, model calls and everything else on that service alike; a call that bypasses `HTTPS_PROXY` is not. Nor is every byte a tool produced: several
   harnesses truncate large tool output before writing it, and on some the untruncated bytes exist
   nowhere on disk. A few internal model calls, such as title generators and follow-up suggestion
   helpers, appear in no transcript on any harness we measured. Neither affects judging.
@@ -332,6 +332,12 @@ disclosure and no-side-channel rules.
   cannot be reached, the record waits on your disk and the upload retries; the run goes on. After the
   stop, Goal Cup Proxy seals and uploads for at most one hour. What is still unsent goes up
   by itself the next time you run any `goalcup` command, and `goalcup upload` sends it by hand.
+- **What a trace holds.** Everything your agent sent to the model service and everything it saw back:
+  the prompts and replies, the tool calls and their results, and the request and response headers of
+  each exchange, with every credential value replaced by `[masked]`. The trace also holds file contents
+  and file paths from your machine: the harness's own session and chat files, and the files its tools
+  read and wrote as the harness reports them. Paths are written as your machine names them. The
+  only other facts about your machine are the non-identifying ones listed below.
 - **What Goal Cup Proxy records, and what it never does.** It observes one process: the harness it
   launched for your run, and any program that harness starts. It records that agent's conversation
   with the model provider, every request and every reply, by pointing that one process at a recording
@@ -339,12 +345,12 @@ disclosure and no-side-channel rules.
   records what you type into that agent, because the review must see every human message. Traffic from
   the agent to any other address is noted as the address, the port, the bytes each way, the times
   and the reason, nothing more, and is never decrypted; that list is uploaded with the seal.
-  Traffic on the model service's address that is not a model call is decrypted in memory and
-  relayed, but not recorded and not listed. This holds only for programs that use
-  the `HTTPS_PROXY` setting: a tool that ignores it (`ssh`, a raw socket, a command that
-  unsets `HTTPS_PROXY`) connects directly and is not seen at all. Sign-in and token refresh are never
-  decrypted either. Your ChatGPT, Claude or other credentials are never stored: the recording proxy removes them
-  before anything is written, and keeps neither their values nor any fingerprint of them. Goal Cup Proxy
+  Traffic on the model service's address is decrypted and every request and reply on it is recorded,
+  whether or not it is a model call: a model list, or a token refresh the harness makes there. The
+  sign-in hosts are among the other addresses, and their traffic is never decrypted. This holds only
+  for programs that use the `HTTPS_PROXY` setting: a tool that ignores it (`ssh`, a raw socket, a
+  command that unsets `HTTPS_PROXY`) connects directly and is not seen at all. Your ChatGPT, Claude or
+  other credentials are never stored: the recording proxy removes them before anything is written, and keeps neither their values nor any fingerprint of them. Goal Cup Proxy
   does not watch other terminals, your browser, other processes or audio. It also records the harness
   build and non-identifying facts about the machine (operating system and version, architecture, CPU
   count, memory, disk size and free space, WSL2, container, mains power): no host name, user name or

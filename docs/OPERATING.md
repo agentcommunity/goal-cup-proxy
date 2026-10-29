@@ -63,12 +63,13 @@ Before the window opens:
 2. Do the `EVENT_ID` switch on 6 Nov. The steps are in
    [server/worker/README.md](../server/worker/README.md#event_id-switch-6-nov-2026).
    Staging keeps its own event ids.
-3. Set `MIN_COMPETITION_VERSION = "0.7.1"` in `wrangler.toml` `[vars]` through a PR, then deploy.
-   Only after the 0.7.1 release is published and GitHub's `releases/latest` serves it: the
-   refusal's install line installs the latest release, so set too early it installs an older
-   goalcup that is refused again. Never set it in the dashboard; the next deploy wipes it. Steps
-   and checks: [Set the minimum competition version](../server/worker/README.md#set-the-minimum-competition-version).
-   It may go in the `EVENT_ID` PR if 0.7.1 is already latest then.
+3. Set `MIN_COMPETITION_VERSION` in `wrangler.toml` `[vars]` through a PR, then deploy. The value is
+   the cup's minimum: the first release that carries the recording changes of this build. Set it
+   only after that release is published and GitHub's `releases/latest` serves it: the refusal's
+   install line installs the latest release, so set too early it installs an older goalcup that is
+   refused again. Never set it in the dashboard; the next deploy wipes it. Steps and checks:
+   [Set the minimum competition version](../server/worker/README.md#set-the-minimum-competition-version).
+   It may go in the `EVENT_ID` PR if that release is already latest then.
 4. Run the matrix on staging for each shipped connector ([The matrix](#the-matrix)).
 5. Confirm `GET https://ingest.agentcommunity.org/v1/health` answers `{"status":"ok"}`, then run one
    practice run against production by hand.
@@ -91,12 +92,16 @@ CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy --env staging # staging
 
 - Deploy staging first and run the matrix against it. Deploy production only from a tree whose
   `npm test` passes.
+- **Deploy the Worker before any client from `main` seals.** A seal from the new client carries
+  `tunnels_jsonl`, the sealed-connection list. A Worker that predates this change ignores that field,
+  so the seal is accepted and the list is not kept for that entry. Deploy the Worker from `main`
+  first, then release the client.
 - Never set `DB_BACKEND=local` or `TEST_APPROVAL_KEY` in the production block. `test/config.test.ts`
   fails if you do.
 - Variables come from `wrangler.toml` only: a deploy replaces every `[vars]` value, so a dashboard
   edit is gone after the next deploy. Change one through a PR. After every production deploy once
   the cup's minimum is set, `npx wrangler versions view <version-id>` shows
-  `MIN_COMPETITION_VERSION` = `0.7.1`.
+  `MIN_COMPETITION_VERSION` = the cup's minimum.
 - Roll back with `npx wrangler rollback` (the same account variable). Wrangler keeps recent versions.
 - Secrets are set with `wrangler secret put <NAME>` (add `--env staging` for staging):
   `RECEIPT_SIGNING_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `RATE_LIMIT_KEY`, `GITHUB_TOKEN`,
@@ -142,8 +147,8 @@ privileged-container support. A release
 tarball carries every folder under `connectors/`; a merged connector ships by being merged, but the
 pins are compiled in, so a connector merged after a release needs a point release.
 
-The cup requires 0.7.1 (`MIN_COMPETITION_VERSION`). Set it only after the 0.7.1 release is
-published and `releases/latest` serves it, then deploy:
+The cup's minimum is `MIN_COMPETITION_VERSION`: the first release that carries the recording changes
+of this build. Set it only after that release is published and `releases/latest` serves it, then deploy:
 [Set the minimum competition version](../server/worker/README.md#set-the-minimum-competition-version).
 
 ## The matrix
@@ -704,6 +709,7 @@ chunk index, never from an R2 listing, because a lost race can leave an orphan o
 that every chunk matches the index's SHA-256 and length and that the offsets run on from 0 with no gap, and it
 writes nothing into `<outdir>` unless the entry is whole. It never overwrites a directory. It writes
 `chain.jsonl`, `acks.jsonl`, `receipt.json` and, for a sealed entry, `seal.json` and `baseline.json`.
+It adds `tunnels.jsonl`, the sealed-connection list, when the seal carried one.
 
 It needs `zstd`, `python3`, `psql` and `curl`, and in the environment `DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID` and
 `CLOUDFLARE_API_TOKEN`. Use read-only credentials: a Postgres role that can only `SELECT` from
@@ -716,6 +722,11 @@ it writes are private to you (`umask 077`). It also checks the index reaches the
 goalcup-traces-staging` reads the staging bucket, and a staging or test trace also needs `--dev-key`.
 `--index FILE` and `--store DIR` replace the database and R2 with a saved index and a mirror of the bucket.
 `scripts/test_fetch_run.py` tests it against such a fake.
+
+Which harness ran each entry, and its build, is in the database: `goal_cup_tracer.entries.connector_id`
+and `harness_version`. Which models a run used is not a column. The research report
+(`goalcup-verify --research-json`) lists them under `analysis.models`, one row per decoder and model
+with its count of model observations.
 
 ## Pinning connectors
 

@@ -307,9 +307,8 @@ These look odd but are right. Do not "fix" them.
   with zero redactions. Even a whole `sk-ant-api03-AbCd` with the rest in the next delta leaks,
   because the rule needs 20 or more contiguous characters (`crates/goalcup-daemon/src/redact.rs:197-198`).
   The same text is redacted in the native transcript and in the next request's history. Only the
-  reply stream leaks. The harness's own login header is never stored: headers are skipped unread
-  (`crates/goalcup-cli/src/proxy/http.rs:726`; pinned by
-  `crates/goalcup-cli/tests/it/m2_http_relay.rs:662`). The agent can read the harness's login files
+  reply stream leaks. The harness's own login header is never stored in clear: header streams mask
+  credential values (`crates/goalcup-cli/src/proxy/headers.rs`). The agent can read the harness's login files
   and print them, so the model can echo them too (see
   [CHEAT-CHECKLIST](docs/CHEAT-CHECKLIST.md) "Redaction residuals").
   Owner decisions (20 and 21 Oct): for the event, the cheap path. The verifier scans the decoded,
